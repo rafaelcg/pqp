@@ -19,6 +19,7 @@ import {
 import {
   desktopContext,
   desktopPredatesScreenShare,
+  getDesktop,
   isDesktopApp,
 } from "@/lib/desktop";
 import {
@@ -30,6 +31,7 @@ import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
   buildAudioConstraints,
   defaultMicProcessing,
+  listAudioDevices,
   sameMicProcessing,
   type MicProcessing,
 } from "@/lib/audio-devices";
@@ -45,6 +47,7 @@ import {
   type RemotePeer,
 } from "@/lib/peer-connection-manager";
 import type { RealtimeTransport } from "@/lib/realtime";
+import { beaconVoiceLeave } from "@/lib/voice-leave-beacon";
 import {
   applyCameraQuality,
   cameraBitrateFor,
@@ -142,6 +145,18 @@ export interface VoiceState {
    */
   isTransmitting: boolean;
   error: string | null;
+  /**
+   * Set when `error` is about the microphone: the stage then offers a way
+   * into voice settings next to the message, since picking another device
+   * is the fix for every one of those.
+   */
+  errorKind: "mic" | "connection" | null;
+  /**
+   * Good news worth a line: the saved microphone could not start and the
+   * call went ahead on another one. Says which, so nobody wonders why the
+   * headset is silent. Cleared on leave.
+   */
+  notice: string | null;
   voiceChannelId: string | null;
   self: VoiceParticipant | null;
   speakingPeerIds: string[];
@@ -200,6 +215,20 @@ export interface VoiceState {
    * opted in, because nothing else asks for system audio any more.
    */
   isSharingSystemAudio: boolean;
+  /**
+   * True when the last attempt asked for sound and died AFTER the picker
+   * closed, which is the one share failure a person cannot act on by reading:
+   * they chose a screen, got nothing, and the culprit is a toggle they armed
+   * minutes ago on a different bar.
+   *
+   * The UI turns this into a button that shares the same screen without sound.
+   * It has to be a button and not a silent second attempt: `getDisplayMedia`
+   * consumes the click that authorised it, so a retry fired from inside this
+   * failure has no user activation left and would be refused on the spot. A
+   * click has one, and it also explains itself, which a picker reopening on
+   * its own does not.
+   */
+  screenShareAudioFailed: boolean;
   // --- conversation calls ---
   /**
    * Conversations currently ringing this device, oldest first. Lives on the
@@ -281,32 +310,133 @@ function isMissingDeviceError(err: unknown): boolean {
   );
 }
 
+/**
+ * The device is there but will not start.
+ *
+ * `NotReadableError` ("Could not start audio source") is what Chromium and
+ * Firefox throw when the microphone exists and permission is granted but the
+ * OS will not hand it over: another app holds it exclusively, a driver
+ * hiccup, a Bluetooth headset that is paired but asleep, a USB interface
+ * that answered enumeration and then died. `AbortError` is the same story
+ * from Safari. A person in the QG hit this on 1 Sep 2026 and found the fix
+ * themselves: pick a different microphone. So do that for them.
+ */
+function isUnreadableDeviceError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === "NotReadableError" ||
+      err.name === "AbortError" ||
+      err.name === "TrackStartError")
+  );
+}
+
+/** Every microphone on the machine failed to start. Carries the first error. */
+export class MicUnreadableError extends Error {
+  constructor(readonly original: unknown) {
+    super("No microphone could be started");
+    this.name = "MicUnreadableError";
+  }
+}
+
+/** How many other microphones to try after the chosen one and the default. */
+const MIC_FALLBACK_ATTEMPTS = 3;
+
+async function openMic(
+  deviceId: string | undefined,
+  processing: MicProcessing,
+): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({
+    audio: buildAudioConstraints(deviceId, processing),
+    video: false,
+  });
+}
+
+/** The label of the microphone behind a live stream, for the notice. */
+function micLabel(stream: MediaStream): string | null {
+  const track = stream.getAudioTracks()[0];
+  const label = track?.label?.trim();
+  return label ? label : null;
+}
+
+/**
+ * Open the microphone, and when the one asked for will not start, walk the
+ * others before giving up.
+ *
+ * The ladder, in order:
+ *  1. the chosen device (or the default when none is chosen);
+ *  2. a chosen device that no longer exists: the default, and forget the id
+ *     (`isMissingDeviceError`, the unplugged-headset case);
+ *  3. a device that exists but will not start: the default, then every other
+ *     microphone the browser lists, a few at most, and forget the id;
+ *  4. nothing started: `MicUnreadableError`, which the stage turns into
+ *     "pick another microphone" with a button into voice settings.
+ *
+ * Permission refusals are never retried: a second prompt right after a
+ * refusal is the one thing that makes people block a site for good.
+ *
+ * `onFallback` fires with the label of whatever did start when it is not the
+ * one asked for, so the call can say "using the built-in microphone".
+ */
 async function createMicPipeline(
   deviceId: string | undefined,
   inputVolume: number,
   processing: MicProcessing,
   onDeviceGone?: () => void,
+  onFallback?: (label: string | null) => void,
 ): Promise<MicPipeline> {
   let rawStream: MediaStream;
   try {
-    rawStream = await navigator.mediaDevices.getUserMedia({
-      audio: buildAudioConstraints(deviceId, processing),
-      video: false,
-    });
+    rawStream = await openMic(deviceId, processing);
   } catch (err) {
-    // Only retry when a specific device was asked for. With no `deviceId` there
-    // is nothing to fall back to, and a NotFoundError genuinely means the
-    // machine has no microphone at all, which is a real error worth showing.
-    if (!deviceId || !isMissingDeviceError(err)) {
+    if (err instanceof Error && err.name === "NotAllowedError") {
       throw err;
     }
-    rawStream = await navigator.mediaDevices.getUserMedia({
-      audio: buildAudioConstraints(undefined, processing),
-      video: false,
-    });
+    const missing = isMissingDeviceError(err);
+    const unreadable = isUnreadableDeviceError(err);
+    // With no device chosen, NotFoundError means the machine has no
+    // microphone at all: a real error worth showing, nothing to fall back to.
+    if (!(deviceId && missing) && !unreadable) {
+      throw err;
+    }
+
+    const tried = new Set<string>(deviceId ? [deviceId] : []);
+    const candidates: (string | undefined)[] = [];
+    if (deviceId) {
+      candidates.push(undefined);
+    }
+    if (unreadable) {
+      try {
+        const { inputs } = await listAudioDevices();
+        for (const input of inputs) {
+          if (input.deviceId && !tried.has(input.deviceId)) {
+            candidates.push(input.deviceId);
+            tried.add(input.deviceId);
+          }
+        }
+      } catch {
+        // No enumeration: the default alone is the whole ladder.
+      }
+    }
+
+    let opened: MediaStream | null = null;
+    for (const candidate of candidates.slice(0, MIC_FALLBACK_ATTEMPTS + 1)) {
+      try {
+        opened = await openMic(candidate, processing);
+        break;
+      } catch (next) {
+        if (next instanceof Error && next.name === "NotAllowedError") {
+          throw next;
+        }
+      }
+    }
+    if (!opened) {
+      throw unreadable ? new MicUnreadableError(err) : err;
+    }
+    rawStream = opened;
     // Forget the dead id so the next join does not repeat the round trip, and
     // so Settings stops showing a selection that resolves to nothing.
     onDeviceGone?.();
+    onFallback?.(micLabel(rawStream));
   }
 
   const audioContext = new AudioContext();
@@ -368,6 +498,12 @@ function micErrorMessage(err: unknown): string {
   if (err.name === "NotFoundError") {
     return translateMessage("voice.error.micMissing");
   }
+  // Every microphone was tried and none would start (see createMicPipeline).
+  // Name the fix, not the error: another app may be holding the mic, or the
+  // device needs re-plugging, and Settings is where a different one is picked.
+  if (err.name === "MicUnreadableError" || isUnreadableDeviceError(err)) {
+    return translateMessage("voice.error.micUnreadable", desktopContext());
+  }
   // A browser's own message, in the browser's own language. Better than a
   // generic sentence that throws away what actually went wrong.
   return err.message;
@@ -410,7 +546,14 @@ function screenShareErrorMessage(err: unknown): string {
     // share only does on Windows, never on macOS. Ticking "share audio" on a
     // source that has no audio to share is the common way to land here, so the
     // copy names the fix rather than the error.
-    return translateMessage("voice.error.shareAudioUnavailable");
+    // Context, because the browser advice is nonsense in the shell: its picker
+    // lists screens and windows and has never had a tab to offer. Telling a
+    // desktop user to pick a Chrome tab is telling them to find something that
+    // is not there.
+    return translateMessage(
+      "voice.error.shareAudioUnavailable",
+      desktopContext(),
+    );
   }
   return err.message;
 }
@@ -505,6 +648,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
     isTransmitting: false,
     error: null,
+    errorKind: null,
+    notice: null,
     voiceChannelId: null,
     self: null,
     speakingPeerIds: [],
@@ -520,6 +665,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     localScreenStream: null,
     isSharingScreenAudio: false,
     isSharingSystemAudio: false,
+    screenShareAudioFailed: false,
     incomingCalls: [],
     isCameraOn: false,
     localCameraStream: null,
@@ -620,8 +766,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         manager?.dispose();
         manager = null;
         sendLeave();
-        state.error =
-          "Voice connection timed out. Is the server running and WebSocket connected?";
+        state.error = translateMessage("voice.error.joinTimeout");
+        state.errorKind = "connection";
         state.status = "idle";
         state.peerId = null;
         state.self = null;
@@ -778,6 +924,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         audioOptions.inputVolume,
         audioOptions.processing,
         forgetInputDevice,
+        (label) => {
+          state.notice = label
+            ? translateMessage("voice.notice.micFallback", { label })
+            : translateMessage("voice.notice.micFallbackUnnamed");
+        },
       );
       stopMicPipeline(pipeline);
       pipeline = next;
@@ -1332,6 +1483,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       inputMode: state.inputMode,
       isTransmitting: false,
       error: null,
+      errorKind: null,
+      notice: null,
       voiceChannelId: null,
       self: null,
       speakingPeerIds: [],
@@ -1347,6 +1500,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       localScreenStream: null,
       isSharingScreenAudio: false,
       isSharingSystemAudio: false,
+      screenShareAudioFailed: false,
       incomingCalls: state.incomingCalls,
       isCameraOn: false,
       localCameraStream: null,
@@ -1611,6 +1765,30 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         break;
       }
+      case "peer-updated": {
+        // A rename or a new picture, not an arrival: no join cue, no new
+        // connection, and the tile keeps whatever media it already has.
+        const identity = toIdentity(message.peer);
+        identities.set(message.peer.peerId, identity);
+        manager?.setPeerIdentity(message.peer.peerId, identity);
+        if (state.self?.peerId === message.peer.peerId) {
+          state.self = message.peer;
+        }
+        // The SFU path builds `remotePeers` from LiveKit events, which a
+        // rename is not one of, so patch the roster we are already holding
+        // rather than waiting for the next thing to happen in the room.
+        state.remotePeers = state.remotePeers.map((peer) =>
+          peer.peerId === message.peer.peerId
+            ? {
+                ...peer,
+                displayName: message.peer.displayName,
+                avatarUrl: message.peer.avatarUrl,
+              }
+            : peer,
+        );
+        emit();
+        break;
+      }
       case "peer-left":
         knownPeerIds.delete(message.peerId);
         identities.delete(message.peerId);
@@ -1692,6 +1870,14 @@ export function createVoiceController(transport: RealtimeTransport) {
     globalThis.window.addEventListener("pagehide", () => {
       if (intendedChannelId && state.status !== "idle") {
         sendLeave();
+        // Chromium often closes `/ws` before the leave frame lands. The
+        // keepalive POST can still retire the orphan after the document dies.
+        if (state.peerId && resumeToken) {
+          beaconVoiceLeave({
+            resumePeerId: state.peerId,
+            resumeToken,
+          });
+        }
       }
     });
   }
@@ -1759,6 +1945,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         playCue("voiceJoin");
       }
       state.error = null;
+      state.errorKind = null;
+      state.notice = null;
       state.transportFailure = null;
       state.status = "joining";
       // A channel switch calls join() without leave(), so the previous room's
@@ -1814,6 +2002,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           audioOptions.inputVolume,
           audioOptions.processing,
           forgetInputDevice,
+          (label) => {
+            state.notice = label
+              ? translateMessage("voice.notice.micFallback", { label })
+              : translateMessage("voice.notice.micFallbackUnnamed");
+          },
         );
 
         // Abandoned (left, timed out, or superseded) while the permission
@@ -1835,6 +2028,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         pipeline = null;
         intendedChannelId = null;
         state.error = micErrorMessage(err);
+        state.errorKind = "mic";
         state.status = "idle";
         state.voiceChannelId = null;
         emit();
@@ -1978,14 +2172,24 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
 
+      // A share that succeeds supersedes the last one that failed, and the
+      // offer to retry without sound has to go with it.
+      const retryingAfterAudioFailure = state.screenShareAudioFailed;
+      state.screenShareAudioFailed = false;
+
+      const options = screenCaptureOptions(
+        shareSystemAudio,
+        screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null),
+      );
+      // What was actually asked for, not what was ticked. In a browser this is
+      // true even unticked, because a tab share carries the tab's own sound and
+      // that is a request which can fail on its own; in the shell it is only
+      // ever true where the platform can answer it.
+      const askedForAudio = options.audio !== false;
+
       let stream: MediaStream;
       try {
-        stream = await navigator.mediaDevices.getDisplayMedia(
-          screenCaptureOptions(
-            shareSystemAudio,
-            screenCaptureEnvironment(isDesktopApp()),
-          ),
-        );
+        stream = await navigator.mediaDevices.getDisplayMedia(options);
       } catch (err) {
         // A browser that refuses the *shape* of the request rather than the
         // request itself would otherwise cost the user their screen share
@@ -2000,6 +2204,15 @@ export function createVoiceController(transport: RealtimeTransport) {
           (err.name === "TypeError" || err.name === "NotSupportedError");
         if (!shapeRefused) {
           state.error = screenShareErrorMessage(err);
+          // Everything audio can do to a capture, it does to the whole capture:
+          // the video was fine and the person still got nothing. Offer the same
+          // share without sound rather than leaving them to work out that the
+          // toggle on the other bar is what took their screen away. Cancelling
+          // the picker lands here too and is not a failure to recover from.
+          state.screenShareAudioFailed =
+            askedForAudio &&
+            err instanceof Error &&
+            err.name !== "NotAllowedError";
           emit();
           return;
         }
@@ -2039,6 +2252,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       const hasAudio = stream.getAudioTracks().length > 0;
       watchScreenCapture(stream);
       screenCaptureStream = stream;
+      // The red strip is ours and it is now answering a question that has been
+      // resolved. Only the share failure is cleared: an unrelated error is not
+      // this attempt's to dismiss.
+      if (retryingAfterAudioFailure) {
+        state.error = null;
+      }
       state.isSharingScreen = true;
       state.localScreenStream = stream;
       state.isSharingScreenAudio = hasAudio;

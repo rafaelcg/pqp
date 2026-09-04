@@ -28,7 +28,9 @@ import {
 import { SCREEN_SHARE_LIMIT, MESH_VOICE_WARNING } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { VideoQuality } from "@/lib/video-quality";
+import { shareStreamHasAudio } from "@/lib/screen-capture-audio";
 import {
+  canShareScreenAudio,
   detectFullscreenMode,
   screenShareUnavailableMessage,
   supportsScreenShare,
@@ -63,6 +65,10 @@ import { isScreenShareAtCap } from "@/lib/screen-share-roster";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { PeerTileControls } from "@/components/voice/peer-tile-controls";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
+import {
+  requestConnectionCheck,
+  requestSettingsSection,
+} from "@/lib/settings-request";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -379,6 +385,12 @@ export interface CallStageProps {
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
+  /**
+   * Start the same share with no sound at all. Offered only after sound is
+   * what killed the last attempt, and separate from `onStartScreenShare`
+   * because it must also disarm the toggle: the tick is what failed.
+   */
+  onShareWithoutSound?: () => void;
   onStopScreenShare?: () => void;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
@@ -417,6 +429,7 @@ export function CallStage({
   onToggleCamera,
   onVideoQualityChange,
   onStartScreenShare,
+  onShareWithoutSound,
   onStopScreenShare,
   shareSystemAudio = false,
   onShareSystemAudioChange,
@@ -468,6 +481,7 @@ export function CallStage({
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
       onStartScreenShare={onStartScreenShare}
+      onShareWithoutSound={onShareWithoutSound}
       shareSystemAudio={shareSystemAudio}
       onShareSystemAudioChange={onShareSystemAudioChange}
       onStopScreenShare={onStopScreenShare}
@@ -502,6 +516,7 @@ function ActiveCall({
   onToggleCamera,
   onVideoQualityChange,
   onStartScreenShare,
+  onShareWithoutSound,
   onStopScreenShare,
   shareSystemAudio = false,
   onShareSystemAudioChange,
@@ -532,6 +547,12 @@ function ActiveCall({
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
   onStartScreenShare?: () => void;
+  /**
+   * Start the same share with no sound at all. Offered only after sound is
+   * what killed the last attempt, and separate from `onStartScreenShare`
+   * because it must also disarm the toggle: the tick is what failed.
+   */
+  onShareWithoutSound?: () => void;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
@@ -621,6 +642,17 @@ function ActiveCall({
     ) ?? screenTiles[0];
   const screenStream = focusedTile?.stream ?? null;
   const presenterName = focusedTile?.presenterName;
+  // Whose tile is on the big slot, which is not the same question as "am I
+  // sharing": a presenter watching somebody else's share was being told they
+  // were the one presenting.
+  const focusedIsLocal =
+    focusedTile != null && focusedTile.peerId === voiceState.peerId;
+  const receivedShareHasAudio = useReceivedShareAudio(
+    focusedIsLocal ? null : screenStream,
+  );
+  const focusedShareHasAudio = focusedIsLocal
+    ? voiceState.isSharingScreenAudio
+    : receivedShareHasAudio;
   const splitTwo =
     screenShareStageLayout(screenTiles.length, wide) === "split";
 
@@ -1190,8 +1222,57 @@ function ActiveCall({
 
       {/* --- overlays -------------------------------------------------------- */}
       {voiceState.error && (
-        <p className="absolute inset-x-0 top-0 z-20 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger">
-          {voiceState.error}
+        <div
+          role="alert"
+          data-voice-error
+          className="absolute inset-x-0 top-0 z-20 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-danger/15 px-3 py-1.5 text-center text-xs text-danger"
+        >
+          <span>{voiceState.error}</span>
+          {/* Every microphone error is fixed by picking another microphone,
+              so the banner carries the door to where that happens. */}
+          {voiceState.errorKind === "connection" && (
+            <button
+              type="button"
+              data-voice-error-check
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
+              onClick={() => requestConnectionCheck()}
+            >
+              {t("connection.check")}
+            </button>
+          )}
+          {/* Sound is the only part of a capture that can fail on its own and
+              take the picture with it. One click puts the share back, minus
+              the thing that broke it, and it has to be a click: the picker
+              already spent this attempt's user activation. */}
+          {voiceState.screenShareAudioFailed && onShareWithoutSound && (
+            <button
+              type="button"
+              data-voice-error-share-silent
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
+              onClick={onShareWithoutSound}
+            >
+              {t("voice.control.shareWithoutSound")}
+            </button>
+          )}
+          {voiceState.errorKind === "mic" && (
+            <button
+              type="button"
+              data-voice-error-settings
+              className="rounded-md bg-danger/20 px-2 py-0.5 font-semibold text-danger hover:bg-danger/30"
+              onClick={() => requestSettingsSection("voice")}
+            >
+              {t("voice.error.openVoiceSettings")}
+            </button>
+          )}
+        </div>
+      )}
+      {!voiceState.error && voiceState.notice && (
+        <p
+          role="status"
+          data-voice-notice
+          className="absolute inset-x-0 top-0 z-20 bg-ink/70 px-3 py-1.5 text-center text-xs text-paper-muted backdrop-blur-sm"
+        >
+          {voiceState.notice}
         </p>
       )}
 
@@ -1199,7 +1280,7 @@ function ActiveCall({
         className={cn(
           "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent px-3 py-2 transition-opacity duration-300 motion-reduce:transition-none",
           controlsIdle && "opacity-0",
-          voiceState.error && "mt-7",
+          (voiceState.error || voiceState.notice) && "mt-7",
         )}
       >
         <div className="min-w-0">
@@ -1221,17 +1302,19 @@ function ActiveCall({
             ))}
             {presenterName && screenStream && (
               <span className="ml-2 text-signal">
-                {voiceState.isSharingScreen
+                {focusedIsLocal
                   ? t("voice.share.youPresenting")
                   : t("voice.share.peerPresenting", { name: presenterName })}
-                {/* Only about our own share: whether someone else's carries
-                    sound is their business, and we would only be guessing. */}
-                {voiceState.isSharingScreen &&
-                  !voiceState.isSharingScreenAudio && (
-                    <span className="ml-1 text-paper-muted">
-                      ({t("voice.share.noAudioShort")})
-                    </span>
-                  )}
+                {/* Said to whoever is looking at the tile, about the tile they
+                    are looking at. For our own share we know what we captured;
+                    for somebody else's we know what arrived on this machine,
+                    which is the same question the person asking "why can't I
+                    hear it" is trying to answer. */}
+                {!focusedShareHasAudio && (
+                  <span className="ml-1 text-paper-muted">
+                    ({t("voice.share.noAudioShort")})
+                  </span>
+                )}
                 {/* Said while it is happening. The presenter's own machine is
                     playing what they shared, so they are the one person who
                     cannot hear the echo they are causing. */}
@@ -1274,6 +1357,50 @@ function ActiveCall({
  * quality control has anything to report to a watcher is whether a stream is
  * really there.
  */
+/**
+ * Whether a share we are receiving is carrying sound, kept current.
+ *
+ * A remote screen's audio track does not have to arrive with its video. In the
+ * mesh it lands on a later renegotiation, so a value read once at render is a
+ * value that says "sem som" over a share that gained sound a second later.
+ * `addtrack` / `removetrack` on the MediaStream are what make the label
+ * correct instead of merely first.
+ *
+ * Null for our own share: what we captured is already known from state, and
+ * reading our own tracks back would answer a slightly different question.
+ */
+function useReceivedShareAudio(stream: MediaStream | null): boolean {
+  const [hasAudio, setHasAudio] = useState(() =>
+    shareStreamHasAudio(stream?.getAudioTracks() ?? []),
+  );
+
+  useEffect(() => {
+    const sync = () =>
+      setHasAudio(shareStreamHasAudio(stream?.getAudioTracks() ?? []));
+    sync();
+    if (!stream) {
+      return;
+    }
+    stream.addEventListener("addtrack", sync);
+    stream.addEventListener("removetrack", sync);
+    // A track the presenter stops mid-share fires `ended` on the track itself
+    // and nothing on the stream, so the stream listeners alone would miss it.
+    const tracks = stream.getAudioTracks();
+    for (const track of tracks) {
+      track.addEventListener("ended", sync);
+    }
+    return () => {
+      stream.removeEventListener("addtrack", sync);
+      stream.removeEventListener("removetrack", sync);
+      for (const track of tracks) {
+        track.removeEventListener("ended", sync);
+      }
+    };
+  }, [stream]);
+
+  return hasAudio;
+}
+
 function receivingVideo(voiceState: VoiceState): boolean {
   return voiceState.remotePeers.some(
     (peer) => peer.cameraStream !== null || peer.screenStream !== null,
@@ -1517,6 +1644,9 @@ function CallControls({
       {canShare &&
         onStartScreenShare &&
         onShareSystemAudioChange &&
+        /* Hidden where the platform cannot deliver it. A dead toggle is not a
+           neutral thing here: arming it used to cost people the whole share. */
+        canShareScreenAudio() &&
         !voiceState.isSharingScreen && (
           /* The second line is the same one the channel bar gives this
              button, because it is the same button and the same consequence.

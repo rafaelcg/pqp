@@ -12,7 +12,7 @@ export const termsEn: LegalDocument = {
   description:
     "Terms for using the hosted pqp.gg service: what pqp actually is, eligibility (18+), acceptable use, moderation, reporting and takedowns.",
   heading: "Terms of Service",
-  updated: "7 August 2026",
+  updated: "2 September 2026",
   sections: [
     {
       id: "intro",
@@ -34,13 +34,17 @@ export const termsEn: LegalDocument = {
         <>
           <p>
             pqp is a personal project, built for fun by one person in their
-            spare time. There is no company behind it, no funding, no revenue,
-            and no support team — the person who reads your email is the person
-            who wrote the code. It is provided <strong>as is</strong>: there is
-            no uptime guarantee, no service level of any kind, and no promise
-            that pqp.gg will still be running next year. Features may change or
-            disappear, and the whole thing may stop. We would give notice if we
-            could, but we cannot promise even that.
+            spare time, with family helping on the product. There is no
+            company, no paid product, and no support team. The person who
+            reads your email is the person who wrote the code. People can send
+            a gift toward hosting via GitHub Sponsors or Pix, on{" "}
+            <Link to="/apoie">/apoie</Link>. That unlocks nothing: no badge, no
+            extra features, no refunds. It is provided{" "}
+            <strong>as is</strong>: there is no uptime guarantee, no service
+            level of any kind, and no promise that pqp.gg will still be running
+            next year. Features may change or disappear, and the whole thing may
+            stop. We would give notice if we could, but we cannot promise even
+            that.
           </p>
           <p>
             We put this at the top because moving a group of friends onto a chat
@@ -66,15 +70,18 @@ export const termsEn: LegalDocument = {
           </p>
           <p>
             If we learn that an account belongs to someone under 18, we will
-            terminate it and delete the associated data, without notice and
-            without appeal. We may do the same where we have a good-faith belief
-            the account holder is under 18 — for example, from what they say in
-            chat or from a report we receive.
+            terminate it and delete the associated data, without notice. Child
+            safety terminations are not appealable. If you typed the wrong date
+            on the 18+ check, write to <strong>contato@pqp.gg</strong> from
+            the email on that account: that is a mistyped date, not an appeal of
+            a child-safety decision. We may also terminate where we have a
+            good-faith belief the account holder is under 18 — for example,
+            from what they say in chat or from a report we receive.
           </p>
           <p>
             <strong>To report an account you believe belongs to a minor</strong>
             , write to <strong>contato@pqp.gg</strong> with the user tag (their{" "}
-            <code>name#1234</code> handle), the server or DM where you saw them,
+            <code>name#1234</code>), the server or DM where you saw them,
             and what led you to believe they are under 18. Reports about minors
             are handled ahead of everything else. You do not need an account to
             send one.
@@ -94,9 +101,11 @@ export const termsEn: LegalDocument = {
       body: (
         <p>
           pqp is a real-time chat and voice product: servers, text and voice
-          channels, direct messages, invites, and related features. It is free,
-          and there are no paid tiers today. We may change, pause, or
-          discontinue any of it.
+          channels, direct messages, invites, optional public profiles, optional
+          linked gaming accounts, and related features. It is free, and there
+          are no paid tiers. Donations on{" "}
+          <Link to="/apoie">/apoie</Link> do not change that. We may change,
+          pause, or discontinue any of it.
         </p>
       ),
     },
@@ -108,7 +117,7 @@ export const termsEn: LegalDocument = {
           <p>
             You sign in through Clerk, a third-party identity provider. Clerk
             holds your login credentials and email address; pqp itself stores a
-            display name, a <code>name#1234</code> handle, an avatar URL, and
+            display name, a <code>name#1234</code> tag, an avatar URL, and
             the domains of your verified email addresses. Keep your credentials
             safe. You are responsible for activity under your account. Provide
             accurate information and do not impersonate other people, brands, or
@@ -179,14 +188,17 @@ export const termsEn: LegalDocument = {
       heading: "Your content",
       body: (
         <p>
-          You keep ownership of messages, files, and other content you post. You
-          grant us a limited, non-exclusive licence to host, store, transmit,
-          and display that content so the product works — for example, showing
-          your message history to the members of your server. That licence
-          exists for operating the service and ends when the content is deleted,
-          except for copies we must keep to comply with a legal obligation. You
-          are responsible for what you post and for having the rights to post
-          it.
+            You keep ownership of messages, files, and other content you post,
+            including a public profile, a banner, depoimentos, and a Discord
+            layout you paste in when creating a server. You grant us a limited,
+            non-exclusive licence to host, store, transmit, and display that
+            content so the product works — for example, showing your message
+            history to the members of your server, or showing an approved
+            depoimento on a public page you published. That licence exists for
+            operating the service and ends when the content is deleted, except
+            for copies we must keep to comply with a legal obligation. You are
+            responsible for what you post and for having the rights to post it,
+            including any server icon you import.
         </p>
       ),
     },
@@ -235,8 +247,15 @@ export const termsEn: LegalDocument = {
       body: (
         <>
           <p>
-            To report content, a user, or a whole server, email{" "}
-            <strong>contato@pqp.gg</strong>. Include:
+            If you have an account, use the <strong>Report</strong> action on a
+            message, a member, or a community card. That is the reporting
+            channel. It sends a snapshot of the reported content to the people
+            who can act on it.
+          </p>
+          <p>
+            You can also email <strong>contato@pqp.gg</strong>. That is how to
+            report without an account, and how to report an account you believe
+            belongs to a minor. Include:
           </p>
           <ul>
             <li>What you are reporting — a message, a user, a server, a DM</li>
@@ -247,10 +266,6 @@ export const termsEn: LegalDocument = {
             <li>Why it breaks these terms, in a sentence or two</li>
             <li>Screenshots if you have them, and roughly when it happened</li>
           </ul>
-          <p>
-            We are building an in-app report button; until it ships, email is
-            the reporting channel. You can report without having an account.
-          </p>
           <p>
             <strong>What happens next, honestly.</strong> One person reads the
             reports. There is no moderation team, no rota and no out-of-hours
@@ -348,12 +363,15 @@ export const termsEn: LegalDocument = {
       body: (
         <p>
           Voice uses WebRTC. In the configuration pqp.gg runs today, audio
-          travels directly between participants and is not routed through,
-          recorded by, or stored on our servers. That design has a practical
-          ceiling: every person in a channel connects to every other one, so a
-          busy voice channel gets heavy on everybody&apos;s connection. Quality
-          depends on your network and your peers, and we do not guarantee
-          uninterrupted audio. See the <Link to="/privacy">Privacy Policy</Link>{" "}
+          and screen-share video travel directly between participants and are not
+          routed through, recorded by, or stored on our servers. A watch party
+          syncs a YouTube video on each person&apos;s device; we do not host
+          that stream. That design has a practical ceiling: every person in a
+          channel connects to every other one, so a busy voice channel gets
+          heavy on everybody&apos;s connection. Quality depends on your network
+          and your peers, and we do not guarantee uninterrupted audio. You are
+          responsible for what you share on screen and for what you play in a
+          watch party. See the <Link to="/privacy">Privacy Policy</Link>{" "}
           for what this means for your data.
         </p>
       ),

@@ -93,6 +93,19 @@ import {
   DiscordImportCapError,
   DiscordImportParseError,
   parseDiscordTemplateCode,
+  claimCommunityHomeMediaSchema,
+  COMMUNITY_HOME_MAX_BYTES,
+  pinCommunityHomePostSchema,
+  createCommunityHomeCommentSchema,
+  createCommunityHomeMediaUploadSchema,
+  createCommunityHomePostSchema,
+  communityHomeCommentBodySchema,
+  parseCommunityHomeBody,
+  parseCommunityHomeTeaser,
+  parseCommunityHomeTitle,
+  scheduleCommunityHomePostSchema,
+  updateCommunityHomePostSchema,
+  updateServerCommunityHomeConfigSchema,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -111,6 +124,7 @@ import {
   evictVoiceUsersExcept,
   forEachAuthenticatedSocket,
   notifyPermissionsUpdate,
+  notifyCommunityHomeUpdate,
   resolveEmbedInBackground,
   resolveStatuses,
 } from "../ws/index.js";
@@ -121,7 +135,9 @@ import {
   getVoiceChannelForUser,
   getVoicePeer,
   getVoicePeerIdentities,
+  leaveVoiceByResumeToken,
   notifyVoiceModeration,
+  refreshVoiceIdentity,
 } from "../ws/voice.js";
 // --- voice moderation ---
 import { setSfuUserMuted } from "../voice/admin.js";
@@ -184,6 +200,30 @@ import {
   setServerImage,
   verifyServerImageObject,
 } from "../services/server-images.js";
+import {
+  addCommunityHomeComment,
+  claimCommunityHomeMediaUpload,
+  CommunityHomeError,
+  countUnreadCommunityHomePosts,
+  markCommunityHomeRead,
+  setCommunityHomePostPinned,
+  createCommunityHomePost,
+  deleteCommunityHomeComment,
+  deleteCommunityHomePost,
+  getCommunityHomePost,
+  isCommunityHomeEnabled,
+  isCommunityHomeMediaConfigured,
+  isCommunityHomeVipEnabled,
+  listCommunityHomeComments,
+  listCommunityHomeDrafts,
+  listCommunityHomePosts,
+  mintCommunityHomeMediaUpload,
+  publishCommunityHomePost,
+  scheduleCommunityHomePost,
+  toggleCommunityHomeLike,
+  unpublishCommunityHomePost,
+  updateCommunityHomePost,
+} from "../services/community-home.js";
 import { buildServerExport } from "../services/export.js";
 import {
   CommunitySlugError,
@@ -273,6 +313,8 @@ import {
   removeChannelMember,
   renameServer,
   SERVER_COLUMNS,
+  getServer,
+  setCommunityHomeEnabled,
   transferOwnership,
   updateChannel,
   updateMessageRetention,
@@ -465,6 +507,20 @@ const searchLimiter = createRateLimiter({ capacity: 30, refillPerSecond: 1 });
  */
 const uploadLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 0.1 });
 /**
+ * Baú write budgets, tighter than the global one because each of these is
+ * cheap to send and expensive to serve: a comment is read by every member of
+ * the server, and a post is fanned out to all of them.
+ *
+ * A burst is allowed (people do reply twice in a row); a sustained flood is
+ * not. The global `writeLimiter` still applies underneath.
+ */
+const homeCommentLimiter = createRateLimiter({
+  capacity: 6,
+  refillPerSecond: 0.2,
+});
+const homeLikeLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 1 });
+const homePostLimiter = createRateLimiter({ capacity: 10, refillPerSecond: 0.05 });
+/**
  * User discovery is an enumeration surface over every account on the instance,
  * and unlike message search it is not scoped to anything the caller already
  * belongs to — it is the one endpoint that answers questions about people the
@@ -585,6 +641,15 @@ const publicCommunityLimiter = createRateLimiter({
   capacity: 60,
   refillPerSecond: 2,
 });
+/**
+ * Tab-close leave beacon. Unauthenticated on purpose: `pagehide` cannot wait
+ * for Clerk, and the resume HMAC is the credential. Own bucket so a flood
+ * here cannot spend the public-profile or webhook budgets.
+ */
+const voiceLeaveLimiter = createRateLimiter({
+  capacity: 30,
+  refillPerSecond: 2,
+});
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -594,6 +659,9 @@ export function resetApiRateLimits(): void {
   connectionLimiter.reset();
   searchLimiter.reset();
   uploadLimiter.reset();
+  homeCommentLimiter.reset();
+  homeLikeLimiter.reset();
+  homePostLimiter.reset();
   userSearchLimiter.reset();
   exportLimiter.reset();
   discordImportLimiter.reset();
@@ -608,6 +676,7 @@ export function resetApiRateLimits(): void {
   depoimentoLimiter.reset();
   publicProfileLimiter.reset();
   publicCommunityLimiter.reset();
+  voiceLeaveLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -1092,6 +1161,13 @@ function announceProfile(updated: DbUser): void {
     username: updated.username,
     tag: formatUserTag(updated.username, updated.discriminator),
     avatarUrl: updated.avatar_url,
+  });
+  // The frame above repaints chat, the member list and the person's own
+  // panel. A call they are already in copied their label when they joined,
+  // so without this it keeps showing the old one to everybody in the room.
+  void refreshVoiceIdentity(updated.id, {
+    display_name: updated.display_name,
+    avatar_url: updated.avatar_url,
   });
 }
 
@@ -2325,6 +2401,484 @@ router.post("/api/servers/:serverId/banner/claim", async (ctx, { serverId }) =>
 );
 router.delete("/api/servers/:serverId/banner", async ({ user }, { serverId }) =>
   clearServerImage("banner", user.id, serverId!),
+);
+
+// ---------------------------------------------------------- community home (Baú)
+
+function mapCommunityHomeError(error: unknown): never {
+  if (error instanceof CommunityHomeError) {
+    switch (error.code) {
+      case "not_found":
+        throw new NotFound(error.message);
+      case "forbidden":
+        throw new Forbidden(error.message);
+      case "storage_off":
+        throw new HttpError(503, error.message);
+      case "over_limit":
+        throw new HttpError(413, error.message);
+      default:
+        throw new HttpError(400, error.message);
+    }
+  }
+  throw error;
+}
+
+async function notifyHome(serverId: string): Promise<void> {
+  try {
+    await notifyCommunityHomeUpdate(serverId);
+  } catch (error) {
+    console.error("[community-home] notify failed:", error);
+  }
+}
+
+/**
+ * The gate every Baú route runs first. Same shape as communities: 404, not
+ * 503, because with the flag off the surface does not exist here and the
+ * paths below name nothing.
+ */
+/** Spend one token from a Baú budget, or answer 429 with a Retry-After. */
+function takeHomeBudget(
+  limiter: { take: (key: string) => boolean; retryAfter: (key: string) => number },
+  res: ServerResponse,
+  userId: string,
+): void {
+  const key = `home:${userId}`;
+  if (!limiter.take(key)) {
+    res.setHeader("Retry-After", String(limiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+}
+
+function requireCommunityHome(): void {
+  if (!isCommunityHomeEnabled()) {
+    throw new NotFound("Not found");
+  }
+}
+
+/**
+ * Still behind auth like every other `/api` route. Answers 200 with the
+ * flags rather than 404ing, so the client can tell "off" from "unreachable".
+ * `mediaEnabled` is the storage probe, folded in so the client needs one
+ * request rather than two before it can draw the composer.
+ */
+router.get("/api/community-home/config", async () => ({
+  enabled: isCommunityHomeEnabled(),
+  vipEnabled: isCommunityHomeVipEnabled(),
+  mediaEnabled: isCommunityHomeEnabled() && isCommunityHomeMediaConfigured(),
+}));
+
+/**
+ * This server's own opt-in. The instance flag says Baú exists here; this
+ * says the owner turned it on for this server (Server settings). Both gate
+ * the row and the landing on the client; only the instance flag gates the
+ * routes, so an owner can flip the setting through the same API.
+ */
+router.get(
+  "/api/servers/:serverId/home/config",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    const server = await getServer(serverId!);
+    if (!server) {
+      throw new NotFound("Server not found");
+    }
+    return { enabled: server.community_home_enabled ?? false };
+  },
+);
+
+router.patch(
+  "/api/servers/:serverId/home/config",
+  async ({ req, user }, { serverId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = updateServerCommunityHomeConfigSchema.parse(
+      await readJsonBody(req),
+    );
+    const server = await setCommunityHomeEnabled(serverId!, body.enabled);
+    return {
+      enabled: server.community_home_enabled ?? false,
+      server: mapServer(server),
+    };
+  },
+);
+
+router.get("/api/servers/:serverId/home/posts", async ({ user }, { serverId }) => {
+  requireCommunityHome();
+  requireCommunityHome();
+  await requireServerMember(serverId!, user.id);
+  try {
+    const posts = await listCommunityHomePosts(serverId!, user.id);
+    return { posts };
+  } catch (error) {
+    mapCommunityHomeError(error);
+  }
+});
+
+router.get(
+  "/api/servers/:serverId/home/drafts",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    try {
+      const posts = await listCommunityHomeDrafts(serverId!, user.id);
+      return { posts };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.get(
+  "/api/servers/:serverId/home/posts/:postId",
+  async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      const post = await getCommunityHomePost(serverId!, postId!, user.id);
+      return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts",
+  async ({ req, res, user }, { serverId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    takeHomeBudget(homePostLimiter, res, user.id);
+    const raw = createCommunityHomePostSchema.parse(await readJsonBody(req));
+    try {
+      const post = await createCommunityHomePost(serverId!, user.id, {
+        title: parseCommunityHomeTitle(raw.title),
+        body: parseCommunityHomeBody(raw.body),
+        teaser: parseCommunityHomeTeaser(raw.teaser),
+        visibility: raw.visibility,
+        commentsEnabled: raw.commentsEnabled !== false,
+        mediaUploadId: raw.mediaUploadId ?? null,
+        youtubeUrl: raw.youtubeUrl ?? null,
+        status: raw.status,
+        scheduledAt: raw.scheduledAt ?? null,
+        scheduleTimezone: raw.scheduleTimezone ?? null,
+      });
+      await notifyHome(serverId!);
+      return created({ post });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new HttpError(400, error.issues[0]?.message ?? "Invalid request");
+      }
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.patch(
+  "/api/servers/:serverId/home/posts/:postId",
+  async ({ req, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const raw = updateCommunityHomePostSchema.parse(await readJsonBody(req));
+    try {
+      const post = await updateCommunityHomePost(serverId!, postId!, user.id, {
+        title:
+          raw.title === undefined
+            ? undefined
+            : parseCommunityHomeTitle(raw.title),
+        body:
+          raw.body === undefined ? undefined : parseCommunityHomeBody(raw.body),
+        teaser:
+          raw.teaser === undefined
+            ? undefined
+            : parseCommunityHomeTeaser(raw.teaser),
+        visibility: raw.visibility,
+        commentsEnabled: raw.commentsEnabled,
+        mediaUploadId: raw.mediaUploadId,
+        youtubeUrl: raw.youtubeUrl,
+        clearMedia: raw.clearMedia,
+      });
+      await notifyHome(serverId!);
+      return { post };
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new HttpError(400, error.issues[0]?.message ?? "Invalid request");
+      }
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/home/posts/:postId",
+  async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    try {
+      await deleteCommunityHomePost(serverId!, postId!, user.id);
+      await notifyHome(serverId!);
+      return { ok: true };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+/**
+ * The Baú badge: how many posts this person has not seen. Its own endpoint
+ * rather than a field on the feed, because the sidebar row needs the number
+ * without loading the posts.
+ */
+router.get(
+  "/api/servers/:serverId/home/unread",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      return { count: await countUnreadCommunityHomePosts(serverId!, user.id) };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/read",
+  async ({ user }, { serverId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      await markCommunityHomeRead(serverId!, user.id);
+      return { ok: true };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/pin",
+  async ({ req, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = pinCommunityHomePostSchema.parse(await readJsonBody(req));
+    try {
+      const post = await setCommunityHomePostPinned(
+        serverId!,
+        postId!,
+        user.id,
+        body.pinned,
+      );
+      await notifyHome(serverId!);
+      return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/publish",
+  async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    try {
+      const post = await publishCommunityHomePost(serverId!, postId!, user.id);
+      await notifyHome(serverId!);
+      return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/unpublish",
+  async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    try {
+      const post = await unpublishCommunityHomePost(
+        serverId!,
+        postId!,
+        user.id,
+      );
+      await notifyHome(serverId!);
+      return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/schedule",
+  async ({ req, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = scheduleCommunityHomePostSchema.parse(await readJsonBody(req));
+    try {
+      const post = await scheduleCommunityHomePost(
+        serverId!,
+        postId!,
+        user.id,
+        body.scheduledAt,
+        body.scheduleTimezone,
+      );
+      await notifyHome(serverId!);
+      return { post };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.get(
+  "/api/servers/:serverId/home/posts/:postId/comments",
+  async ({ user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      const comments = await listCommunityHomeComments(
+        serverId!,
+        postId!,
+        user.id,
+      );
+      return { comments };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/comments",
+  async ({ req, res, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    takeHomeBudget(homeCommentLimiter, res, user.id);
+    const raw = createCommunityHomeCommentSchema.parse(await readJsonBody(req));
+    let body: string;
+    try {
+      body = communityHomeCommentBodySchema.parse(raw.body);
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new HttpError(400, error.issues[0]?.message ?? "Invalid comment");
+      }
+      throw error;
+    }
+    try {
+      const comment = await addCommunityHomeComment(
+        serverId!,
+        postId!,
+        user.id,
+        body,
+      );
+      // Deliberately no fan-out. The frame carries no payload, so every
+      // member would refetch the whole feed for one comment on one card —
+      // an amplifier a single chatty person could point at the server. The
+      // commenter sees their own comment immediately; everyone else sees it
+      // on their next load, which is what a comment list is for.
+      return created({ comment });
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/home/posts/:postId/comments/:commentId",
+  async ({ user }, { serverId, postId, commentId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    try {
+      await deleteCommunityHomeComment(
+        serverId!,
+        postId!,
+        commentId!,
+        user.id,
+      );
+      await notifyHome(serverId!);
+      return { ok: true };
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/posts/:postId/likes",
+  async ({ res, user }, { serverId, postId }) => {
+    requireCommunityHome();
+    await requireServerMember(serverId!, user.id);
+    takeHomeBudget(homeLikeLimiter, res, user.id);
+    try {
+      // No fan-out: a like on a 300-member server would make 300 clients
+      // refetch the feed. The actor gets the new count in the response and
+      // everybody else sees it on their next load.
+      return await toggleCommunityHomeLike(serverId!, postId!, user.id);
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.get("/api/servers/:serverId/home/media/config", async ({ user }, { serverId }) => {
+  requireCommunityHome();
+  await requireServerMember(serverId!, user.id);
+  return {
+    enabled: isCommunityHomeMediaConfigured(),
+    maxBytes: COMMUNITY_HOME_MAX_BYTES,
+  };
+});
+
+router.post(
+  "/api/servers/:serverId/home/media",
+  async (ctx, { serverId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, ctx.user.id, Permission.MANAGE_SERVER);
+    if (!isCommunityHomeMediaConfigured()) {
+      throw new HttpError(503, "Media uploads are not configured on this server");
+    }
+    const key = `home-media:${ctx.user.id}`;
+    if (!uploadLimiter.take(key)) {
+      ctx.res.setHeader("Retry-After", String(uploadLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+    const body = createCommunityHomeMediaUploadSchema.parse(
+      await readJsonBody(ctx.req),
+    );
+    try {
+      return created(
+        await mintCommunityHomeMediaUpload({
+          serverId: serverId!,
+          uploaderId: ctx.user.id,
+          contentType: body.contentType,
+          byteSize: body.byteSize,
+          filename: body.filename,
+        }),
+      );
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/home/media/claim",
+  async ({ req, user }, { serverId }) => {
+    requireCommunityHome();
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = claimCommunityHomeMediaSchema.parse(await readJsonBody(req));
+    try {
+      return await claimCommunityHomeMediaUpload({
+        serverId: serverId!,
+        uploaderId: user.id,
+        uploadId: body.uploadId,
+      });
+    } catch (error) {
+      mapCommunityHomeError(error);
+    }
+  },
 );
 
 // ------------------------------------------------------------- communities
@@ -3774,6 +4328,15 @@ router.patch(
         await requireOutranked(serverId!, user.id, userId!, "kick");
       }
       await setMemberNickname(serverId!, userId!, body.nickname);
+      // A nickname is what this person is called in this server, calls
+      // included: refresh any room they are sitting in right now.
+      const renamed = await getUserById(userId!);
+      if (renamed) {
+        void refreshVoiceIdentity(userId!, {
+          display_name: renamed.display_name,
+          avatar_url: renamed.avatar_url,
+        });
+      }
       await logAudit({
         serverId: serverId!,
         actorId: user.id,
@@ -5176,6 +5739,54 @@ async function handleWebhookExecute(
   sendJson(res, 200, { message: mapped }, req);
 }
 
+/**
+ * Tab close cannot wait for a Clerk token, and a WebSocket `leave-voice-room`
+ * sent from `pagehide` is often dropped with the socket. The resume HMAC is
+ * the credential, the same way a webhook URL is: whoever holds it can only
+ * retire that one peer. Invalid or unknown pairs still answer 204 so this
+ * is not an oracle for live peer ids.
+ */
+async function handleVoiceLeaveBeacon(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const key = `ip:${clientAddress(req as never)}`;
+  if (!voiceLeaveLimiter.take(key)) {
+    res.setHeader(
+      "Retry-After",
+      String(voiceLeaveLimiter.retryAfter(key)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+
+  let body: { resumePeerId?: unknown; resumeToken?: unknown };
+  try {
+    body = await readJsonBody(req);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      sendError(res, error.status, error.message, req);
+      return;
+    }
+    sendError(res, 400, "Invalid JSON body", req);
+    return;
+  }
+
+  const resumePeerId =
+    typeof body.resumePeerId === "string" ? body.resumePeerId : "";
+  const resumeToken =
+    typeof body.resumeToken === "string" ? body.resumeToken : "";
+  if (isUuid(resumePeerId) && resumeToken.length > 0) {
+    leaveVoiceByResumeToken(resumePeerId, resumeToken);
+  }
+
+  res.writeHead(204, {
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
+  });
+  res.end();
+}
+
 export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
@@ -5243,6 +5854,11 @@ export async function handleApi(
     req.method === "POST" ? WEBHOOK_EXECUTE_PATH.exec(pathname) : null;
   if (webhookMatch) {
     await handleWebhookExecute(req, res, webhookMatch[1]!, webhookMatch[2]!);
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/voice/leave") {
+    await handleVoiceLeaveBeacon(req, res);
     return;
   }
 

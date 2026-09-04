@@ -11,16 +11,16 @@ export const cookiesEn: LegalDocument = {
   description:
     "Exactly which cookies, local storage keys and caches pqp.gg puts on your device, and which third parties your browser contacts.",
   heading: "Cookie notice",
-  updated: "31 August 2026",
+  updated: "2 September 2026",
   sections: [
     {
       id: "intro",
       body: (
         <p>
-          This notice lists everything <strong>pqp.gg</strong> stores on your
-          device and every third party your browser contacts while you use it.
-          It is a complete list, not a category summary. Self-hosted instances
-          may differ depending on how they are configured.
+          This notice lists the cookies, storage keys and third parties{" "}
+          <strong>pqp.gg</strong> uses today. If a key is missing, that is a
+          bug in this page, not a secret. Self-hosted instances may differ
+          depending on how they are configured.
         </p>
       ),
     },
@@ -140,12 +140,48 @@ export const cookiesEn: LegalDocument = {
               an account, and never leaves your device. If you never sign up it
               is never written at all.
             </li>
+            <li>
+              <code>pqp-sounds</code> — whether message and call sounds play on
+              this device.
+            </li>
+            <li>
+              <code>pqp:arrived-servers</code> — servers you have already
+              walked into, so the first-visit card does not show twice.
+            </li>
+            <li>
+              <code>pqp:member-sidebar</code> — whether the member list is open
+              on this device.
+            </li>
+            <li>
+              <code>pqp:call-rating-asked</code> — when we last asked you to rate
+              a call, so the prompt does not nag every hang-up.
+            </li>
+            <li>
+              <code>pqp:whats-new</code>, <code>pqp:download-hint-dismissed</code>,{" "}
+              <code>pqp:mobile-beta-hint-2026-08</code>,{" "}
+              <code>pqp:qg-hint-2026-08</code>,{" "}
+              <code>pqp:cargos-hint-2026-08</code> — dismissed product cards
+              and hints, so they stay closed.
+            </li>
+            <li>
+              <code>pqp:pending-handle-claim</code>,{" "}
+              <code>pqp:pending-handle-add</code>,{" "}
+              <code>pqp:pending-community-join</code> — a public handle or
+              community you meant to claim or join before signing in, so we can
+              finish that after you create an account. Cleared once used.
+            </li>
           </ul>
           <p>
             Most of these settings are also saved to your account on our server
             so they follow you to another device — see the{" "}
             <Link to="/privacy">Privacy Policy</Link>. Clerk keeps its own
             entries here too, for the session.
+          </p>
+          <p>
+            <strong>Session storage</strong> (gone when you close the tab) holds{" "}
+            <code>pqp.connection.callback</code> and{" "}
+            <code>pqp.connection.error</code> for a Steam, Battle.net or Twitch
+            connect hop that leaves pqp.gg and comes back.
           </p>
           <p>
             <strong>Message drafts are not stored.</strong> Anything half-typed
@@ -213,6 +249,16 @@ export const cookiesEn: LegalDocument = {
               under &quot;Cookies&quot; from{" "}
               <code>www.googletagmanager.com</code>, on every page of pqp.gg.
             </li>
+            <li>
+              <strong>Steam, Battle.net and Twitch</strong> — only if you click
+              Connect. Your browser leaves pqp.gg, signs in with that provider,
+              and comes back. We do not keep their access tokens.
+            </li>
+            <li>
+              <strong>The Android APK download button</strong> on pqp.gg posts a
+              one-byte click count to our operator dashboard. No account travels
+              with it. The dashboard rate-limits by IP for a minute.
+            </li>
           </ul>
           <p>
             Link-preview images are the exception: we proxy those through our
@@ -229,11 +275,13 @@ export const cookiesEn: LegalDocument = {
         <>
           <p>
             No retargeting or remarketing pixel, no audience list, no session
-            recording, no error-reporting SDK, no device fingerprinting, and no
-            push-notification service. Desktop notifications are raised locally
-            by your own browser and are not routed through anyone else. The
-            Google tag under &quot;Cookies&quot; above is the one piece of
-            advertising machinery here, and it only ever counts sign-ups.
+            recording, no error-reporting SDK, and no device fingerprinting.
+            Desktop notifications are raised locally by your own browser.
+            Phone and web push exist when the hosted API is configured with
+            VAPID or APNs; those go through Apple or the browser&apos;s push
+            service, not through a third-party analytics SDK. The Google tag
+            under &quot;Cookies&quot; above is the one piece of advertising
+            machinery here, and it only ever counts sign-ups.
           </p>
           <p>
             We do use <strong>Cloudflare Web Analytics</strong> to count visits

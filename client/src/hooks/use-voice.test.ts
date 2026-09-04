@@ -31,6 +31,8 @@ interface ManagerStub {
    */
   sharingScreen: [string, boolean][];
   emitState: ((peers: RemotePeer[]) => void) | null;
+  /** Renames pushed onto live peers, so a profile edit can be observed. */
+  identities: [string, { displayName: string; avatarUrl: string | null }][];
 }
 
 const playCueMock = vi.hoisted(() => vi.fn());
@@ -40,6 +42,11 @@ vi.mock("@/lib/sounds", () => ({
   playCue: (...args: unknown[]) => playCueMock(...args),
   stopAllSoundLoops: () => {},
   whenCueSettled: () => whenCueSettledMock(),
+}));
+
+const beaconVoiceLeaveMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/voice-leave-beacon", () => ({
+  beaconVoiceLeave: (...args: unknown[]) => beaconVoiceLeaveMock(...args),
 }));
 
 vi.mock("@/lib/peer-connection-manager", () => ({
@@ -52,6 +59,7 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       screenStreams: [],
       sharingScreen: [],
       emitState: null,
+      identities: [],
     };
     managers.push(stub);
     return {
@@ -75,6 +83,10 @@ vi.mock("@/lib/peer-connection-manager", () => ({
           stub.peerIds.push(peerId);
         }
       },
+      setPeerIdentity: (
+        peerId: string,
+        identity: { displayName: string; avatarUrl: string | null },
+      ) => stub.identities.push([peerId, identity]),
       removePeer: (peerId: string) => {
         stub.removedPeerIds.push(peerId);
         stub.peerIds = stub.peerIds.filter((id) => id !== peerId);
@@ -276,6 +288,9 @@ function createTransport() {
     onStatusChange: () => {},
     getStatus: () => "online",
     isConnected: () => true,
+    retryNow: () => {},
+    getLastClose: () => null,
+    getUnauthorizedStreak: () => 0,
   };
   return { transport, sent };
 }
@@ -475,6 +490,55 @@ describe("screen share audio", () => {
     expect(displayMediaCalls).toHaveLength(1);
     expect(voice.getState().isSharingScreen).toBe(false);
     expect(voice.getState().error).not.toBeNull();
+  });
+
+  it("offers a silent retry when sound is what killed the capture", async () => {
+    // The 3 Sep 2026 report, in full: "o picker fecha e a stream não começa".
+    // Sound is the only part of a capture that can fail on its own and take the
+    // picture down with it, and the person has no way to know that: the toggle
+    // that did it lives on another bar and was armed minutes earlier. The flag
+    // is what puts a one-click way out into the error banner.
+    displayMedia = async () => {
+      const err = new Error("Could not start audio source");
+      err.name = "NotReadableError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().screenShareAudioFailed).toBe(true);
+  });
+
+  it("does not offer a silent retry when the person cancelled the picker", async () => {
+    // Backing out is not a failure, and a red banner offering to fix it would
+    // be the app arguing with a decision that was made on purpose.
+    displayMedia = async () => {
+      const err = new Error("Permission denied");
+      err.name = "NotAllowedError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+
+    expect(voice.getState().screenShareAudioFailed).toBe(false);
+  });
+
+  it("clears the failed banner once a silent share succeeds", async () => {
+    displayMedia = async () => {
+      const err = new Error("Could not start audio source");
+      err.name = "NotReadableError";
+      throw err;
+    };
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true);
+    expect(voice.getState().error).not.toBeNull();
+
+    displayMedia = async () => fakeCapture("screen", false);
+    await voice.startScreenShare(false);
+
+    expect(voice.getState().isSharingScreen).toBe(true);
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().screenShareAudioFailed).toBe(false);
   });
 
   it("explains a failed audio capture instead of quoting the browser", async () => {
@@ -1001,6 +1065,144 @@ describe("lobby presence sounds", () => {
     ).toBeUndefined();
   });
 
+  it("tries the default when the saved mic will not start, and says which mic it used", async () => {
+    // The QG case of 1 Sep 2026: the device is there, permission is granted,
+    // and the OS still refuses it (another app holds it). The person fixed it
+    // by picking a different microphone; the join should do that itself.
+    const unreadable = Object.assign(new Error("Could not start audio source"), {
+      name: "NotReadableError",
+    });
+    const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+      const audio = constraints.audio as MediaTrackConstraints;
+      if (audio && audio.deviceId) {
+        throw unreadable;
+      }
+      const stream = fakeStream("mic");
+      Object.defineProperty(stream.getAudioTracks()[0]!, "label", {
+        value: "MacBook Pro Microphone",
+      });
+      return stream;
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => [],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL, { inputDeviceId: "busy-headset" });
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(voice.getState().status).not.toBe("idle");
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().notice).toContain("MacBook Pro Microphone");
+  });
+
+  it("walks the other microphones when the default will not start either", async () => {
+    const unreadable = Object.assign(new Error("Could not start audio source"), {
+      name: "NotReadableError",
+    });
+    const getUserMedia = vi.fn(async (constraints: MediaStreamConstraints) => {
+      const audio = constraints.audio as MediaTrackConstraints;
+      const exact = (audio?.deviceId as { exact?: string } | undefined)?.exact;
+      if (exact === "usb-interface") {
+        return fakeStream("mic");
+      }
+      throw unreadable;
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => [
+          { kind: "audioinput", deviceId: "busy-headset", label: "Headset" },
+          { kind: "audioinput", deviceId: "usb-interface", label: "USB Audio" },
+          { kind: "audiooutput", deviceId: "speakers", label: "Speakers" },
+        ],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL, { inputDeviceId: "busy-headset" });
+
+    // Chosen, default, then the one other input: never the chosen one twice.
+    const asked = getUserMedia.mock.calls.map(
+      (call) =>
+        ((call[0].audio as MediaTrackConstraints).deviceId as
+          | { exact: string }
+          | undefined)?.exact ?? "default",
+    );
+    expect(asked).toEqual(["busy-headset", "default", "usb-interface"]);
+    expect(voice.getState().status).not.toBe("idle");
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().notice).toBeTruthy();
+  });
+
+  it("names the fix when no microphone will start, and marks the error as a mic error", async () => {
+    const unreadable = Object.assign(new Error("Could not start audio source"), {
+      name: "NotReadableError",
+    });
+    const getUserMedia = vi.fn(async () => {
+      throw unreadable;
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => [
+          { kind: "audioinput", deviceId: "a", label: "A" },
+          { kind: "audioinput", deviceId: "b", label: "B" },
+        ],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+
+    expect(voice.getState().status).toBe("idle");
+    expect(voice.getState().errorKind).toBe("mic");
+    // Not the browser's "Could not start audio source": the fix, in our words.
+    expect(voice.getState().error).toMatch(/microphone/i);
+    expect(voice.getState().error).not.toMatch(/audio source/);
+  });
+
+  it("does not retry after a permission refusal", async () => {
+    const refused = Object.assign(new Error("Permission denied"), {
+      name: "NotAllowedError",
+    });
+    const getUserMedia = vi.fn(async () => {
+      throw refused;
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia,
+        enumerateDevices: async () => [
+          { kind: "audioinput", deviceId: "a", label: "A" },
+        ],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL, { inputDeviceId: "a" });
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    expect(voice.getState().errorKind).toBe("mic");
+  });
+
   it("plays join when someone else enters the lobby, leave when they go", async () => {
     const { transport } = createTransport();
     const voice = createVoiceController(transport);
@@ -1026,6 +1228,48 @@ describe("lobby presence sounds", () => {
       peerId: other.peerId,
     } as never);
     expect(playCueMock).toHaveBeenCalledWith("voiceLeave");
+  });
+
+  it("renames a peer in place, with no join cue and no new connection", async () => {
+    // The bug this pins: a nickname or a profile rename reached every surface
+    // except the call, because the label is copied onto the peer at join.
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    // The mesh only exists once the room has welcomed us, and the mesh is
+    // what holds a tile's label.
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    const other = {
+      peerId: "peer-2",
+      userId: "22222222-2222-4222-8222-222222222222",
+      displayName: "Rafael Cammarano",
+      avatarUrl: null,
+      sharingScreen: false,
+      muted: false,
+      deafened: false,
+    };
+    voice.handleSignaling({ type: "peer-joined", peer: other } as never);
+    playCueMock.mockClear();
+
+    voice.handleSignaling({
+      type: "peer-updated",
+      peer: { ...other, displayName: "Qriox", avatarUrl: "https://x.test/a.png" },
+    } as never);
+
+    // The mesh holds the label for the tile, so that is where the rename
+    // has to land (`remotePeers` itself is the manager's own state, stubbed
+    // out here).
+    const manager = managers.at(-1)!;
+    expect(manager.identities).toContainEqual([
+      "peer-2",
+      expect.objectContaining({
+        displayName: "Qriox",
+        avatarUrl: "https://x.test/a.png",
+      }),
+    ]);
+    // Nobody walked in, so nobody hears anybody walk in.
+    expect(playCueMock).not.toHaveBeenCalledWith("voiceJoin");
   });
 
   it("plays leave when you hang up", async () => {
@@ -1062,6 +1306,7 @@ describe("voice session resume", () => {
     managers.length = 0;
     stoppedTracks.length = 0;
     playCueMock.mockReset();
+    beaconVoiceLeaveMock.mockReset();
   });
 
   const OTHER = "00000000-0000-4000-8000-0000000000dd";
@@ -1262,11 +1507,16 @@ describe("voice session resume", () => {
   it("sends leave-voice-room on pagehide so a closed tab is not an orphan", async () => {
     const { sent } = await connected();
     sent.length = 0;
+    beaconVoiceLeaveMock.mockClear();
     (globalThis as unknown as { window: { dispatchEvent: (e: { type: string }) => void } }).window.dispatchEvent(
       { type: "pagehide" },
     );
     expect(sent).toContainEqual({
       type: "leave-voice-room",
+      resumePeerId: PEER,
+      resumeToken: TOKEN,
+    });
+    expect(beaconVoiceLeaveMock).toHaveBeenCalledWith({
       resumePeerId: PEER,
       resumeToken: TOKEN,
     });

@@ -138,8 +138,7 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
             {t("report.thanks")}
           </p>
           <p>
-            If this person is bothering you directly, blocking them stops them
-            reaching you while the report is looked at.
+            {t("report.blockHint")}
           </p>
         </div>
       </Dialog>
@@ -148,7 +147,9 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
 
   const subject =
     target.subjectName ??
-    (target.kind === "community" ? "this community" : "this account");
+    (target.kind === "community"
+      ? t("report.thisCommunity")
+      : t("report.thisAccount"));
 
   return (
     <Dialog
@@ -189,12 +190,12 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
     >
       <div className="space-y-4 px-5 py-4">
         <p className="text-sm text-paper">
-          Reporting <span className="font-semibold">{subject}</span>.
+          {t("report.targeting", { name: subject })}
         </p>
 
         <fieldset className="space-y-1.5">
           <legend className="mb-2 font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
-            What is wrong?
+            {t("report.reasonLegend")}
           </legend>
           {REPORT_REASONS.map((value) => (
             <label
@@ -216,7 +217,7 @@ export function ReportDialog({ target, onClose }: ReportDialogProps) {
         </fieldset>
 
         <label className="block text-sm text-paper">
-          Anything else moderators should know? (optional)
+          {t("report.detailsLabel")}
           <textarea
             value={details}
             maxLength={REPORT_DETAILS_MAX_LENGTH}

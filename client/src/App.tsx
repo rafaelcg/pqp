@@ -1,5 +1,5 @@
 import { SignInButton, SignUpButton, useAuth, useUser } from "@clerk/clerk-react";
-import { FileText, Lock, Menu, Phone, Pin, Shield, Users, Video, WifiOff } from "lucide-react";
+import { FileText, Lock, Menu, Phone, Pin, Shield, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -44,6 +44,8 @@ import { WebhooksPanel } from "@/components/layout/webhooks-panel";
 import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
 import { DmCallStage } from "@/components/dm/dm-call-stage";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
+import { ConnectionBanner } from "@/components/layout/connection-banner";
+import { ConnectionDoctorDialog } from "@/components/layout/connection-doctor-dialog";
 import { DmToasts } from "@/components/dm/dm-toasts";
 import { WhatsNewPrompt } from "@/components/layout/whats-new-prompt";
 import { DmList } from "@/components/layout/dm-list";
@@ -121,6 +123,7 @@ import {
   deleteChannel,
   fetchBlocks,
   fetchChannels,
+  fetchCommunityHomeUnread,
   fetchConversations,
   fetchIceServers,
   fetchMe,
@@ -138,6 +141,7 @@ import {
   lookupCommunityBySlug,
   lookupUserByHandle,
   markChannelRead,
+  markCommunityHomeRead,
   moveChannel,
   setAuthTokenProvider,
   unblockUser,
@@ -200,8 +204,23 @@ import {
   loadAttachmentConfig,
 } from "@/lib/attachments";
 import type { MentionCandidate } from "@/lib/mention-autocomplete";
-import { usernameFromTag } from "@/lib/author-display";
+import { usernameFromTag, rankBadges } from "@/lib/author-display";
 import { devAuthToken, getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import {
+  onConnectionCheckRequest,
+  onSettingsRequest,
+} from "@/lib/settings-request";
+import {
+  COMMUNITY_HOME_CHANNEL_ID,
+  COMMUNITY_HOME_CONFIG_OFF,
+  isCommunityHomeChannelId,
+  isCommunityHomeEnabled,
+  isCommunityHomeRowNew,
+  loadCommunityHomeConfig,
+  markCommunityHomeRowSeen,
+  pickServerLandingTarget,
+} from "@/lib/community-home";
+import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
@@ -440,6 +459,34 @@ function MainAppContent({
     null,
   );
   const [connection, setConnection] = useState<RealtimeStatus>("idle");
+  // The connection check dialog; opened from the banner, the voice stage's
+  // timeout, and voice settings (through the request bus).
+  const [doctorOpen, setDoctorOpen] = useState(false);
+  useEffect(() => onConnectionCheckRequest(() => setDoctorOpen(true)), []);
+  /**
+   * "Sign in again" for a session the server keeps refusing.
+   *
+   * Through the Clerk global rather than `useClerk()`: `ClerkProvider` is
+   * not mounted under the dev auth bypass, so the hook would throw in local
+   * development, and this handler has to exist in both modes. Clerk's own
+   * sign-out clears the session on this device and lands on the homepage,
+   * which reads as having left rather than as an error; the bypass has no
+   * session to clear, so it simply reloads.
+   */
+  const signInAgain = useCallback(() => {
+    const clerk = (
+      window as unknown as {
+        Clerk?: { signOut?: (options?: { redirectUrl?: string }) => Promise<void> };
+      }
+    ).Clerk;
+    if (!isDevAuthBypassEnabled() && clerk?.signOut) {
+      void clerk.signOut({ redirectUrl: "/" }).catch(() => {
+        window.location.replace("/");
+      });
+      return;
+    }
+    window.location.reload();
+  }, []);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Non-null while a caller wants a specific section on open — the user
@@ -447,6 +494,16 @@ function MainAppContent({
   // The gear clears it so the dialog keeps its sticky last-visited section.
   const [settingsSection, setSettingsSection] =
     useState<SettingsSectionId | null>(null);
+  // Deep components ask for a section through `requestSettingsSection`
+  // (the call stage's mic banner), rather than a prop through two wrappers.
+  useEffect(
+    () =>
+      onSettingsRequest((section) => {
+        setSettingsSection(section);
+        setSettingsOpen(true);
+      }),
+    [],
+  );
   const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
   const [inviteMode, setInviteMode] = useState<"create" | "join" | null>(null);
   const [inviteCodeFromUrl, setInviteCodeFromUrl] = useState<string | null>(null);
@@ -516,6 +573,29 @@ function MainAppContent({
   const [memberRosterNudge, setMemberRosterNudge] = useState(0);
   const [lastProfileUpdate, setLastProfileUpdate] =
     useState<ProfileUpdate | null>(null);
+  // Bumped on `community-home-update` for the OPEN server only — Baú refetches
+  // its posts rather than the client trying to patch one row from the frame,
+  // since the frame carries no post id (see `communityHomeUpdateSchema`).
+  const [communityHomeUpdateNudge, setCommunityHomeUpdateNudge] = useState(0);
+  // The instance's Baú flags, resolved once before the first landing so the
+  // bootstrap can choose between Home and the first text channel. Off until
+  // the API answers; a ref mirrors it for the callbacks that pick a landing.
+  const [communityHomeConfig, setCommunityHomeConfig] = useState(
+    COMMUNITY_HOME_CONFIG_OFF,
+  );
+  const communityHomeConfigRef = useRef(COMMUNITY_HOME_CONFIG_OFF);
+  // "NEW" chip on the Baú row until it is opened once per server.
+  const [communityHomeRowNew, setCommunityHomeRowNew] = useState(false);
+  /** Unread Baú posts for the open server, for the sidebar row's badge. */
+  const [communityHomeUnread, setCommunityHomeUnread] = useState(0);
+  const communityHomeOn = useCallback(
+    () =>
+      isCommunityHomeEnabled({
+        config: communityHomeConfigRef.current,
+        allowLocalOverride: isDevAuthBypassEnabled(),
+      }),
+    [],
+  );
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [pinsOpen, setPinsOpen] = useState(false);
@@ -1260,6 +1340,13 @@ function MainAppContent({
       closeThreadPanelRef.current();
       setUnreadSince(null);
       setEditMessageId(null);
+
+      // Community Home is a client-only surface, not a channel the API knows.
+      if (isCommunityHomeChannelId(channelId)) {
+        setMessagesLoading(false);
+        return;
+      }
+
       const held = unreadHoldRef.current.has(channelId);
       setMessagesLoading(true);
       chat.joinChannel(channelId);
@@ -1534,10 +1621,15 @@ function MainAppContent({
           }
         }
 
-        const { servers: serverList } = await fetchServers();
+        const [{ servers: serverList }, homeConfig] = await Promise.all([
+          fetchServers(),
+          loadCommunityHomeConfig(),
+        ]);
         if (cancelled) {
           return;
         }
+        communityHomeConfigRef.current = homeConfig;
+        setCommunityHomeConfig(homeConfig);
         setServers(serverList);
 
         // Conversations and blocks are loaded whatever the first view is: the
@@ -1548,12 +1640,16 @@ function MainAppContent({
 
         let initialChannelId: string | null = null;
         const first = serverList[0];
-        // A URL that already names a channel owns the first navigation. Without
-        // this the bootstrap opens the first text channel anyway and `syncRoute`
-        // rewrites the address bar, so a shared `/message/<id>` link is thrown
-        // away before the deep-link effect below ever reads it — permalinks
-        // worked only in a tab that was already running.
+        // A URL that already names a server or channel owns the first
+        // navigation. Without this the bootstrap opens the first text channel
+        // anyway and `syncRoute` rewrites the address bar, so a shared
+        // `/message/<id>` link is thrown away before the deep-link effect
+        // below ever reads it — permalinks worked only in a tab that was
+        // already running. The same race hits `/app/server/<id>` (no channel):
+        // bootstrap's `onReady` openChannel(initial) can overwrite the deep
+        // link's landing (Home, or first text) and leave "Pick a channel".
         const deepLink = parseAppRoute(window.location.pathname);
+        const deepLinksServer = deepLink?.kind === "channel";
         const deepLinksChannel =
           deepLink?.kind === "channel" && deepLink.channelId !== null;
         // A conversation link owns the navigation outright: opening a server
@@ -1561,7 +1657,7 @@ function MainAppContent({
         // back, and the trip through a server is a fetch nobody asked for.
         const deepLinksConversation = deepLink?.kind === "conversation";
 
-        if (first && !deepLinksConversation) {
+        if (first && !deepLinksConversation && !deepLinksServer) {
           setSelection({ kind: "server", serverId: first.id });
           setChannelsLoading(true);
           try {
@@ -1570,9 +1666,15 @@ function MainAppContent({
               return;
             }
             setChannels(channelList);
-            initialChannelId = deepLinksChannel
+            const land = deepLinksChannel
               ? null
-              : (channelList.find((c) => c.type === "text")?.id ?? null);
+              : pickServerLandingTarget(
+                  channelList,
+                  communityHomeOn() && first.communityHomeEnabled === true,
+                  Boolean(first.isCommunity),
+                  isCommunityHomeRowNew(first.id),
+                );
+            initialChannelId = land?.id ?? null;
             void loadUnread(first.id);
           } finally {
             if (!cancelled) {
@@ -1762,6 +1864,17 @@ function MainAppContent({
               .catch(() => {
                 // Next navigation will refetch.
               });
+            return;
+          }
+
+          // Baú changed on some server — a publish, an unpublish, a like, a
+          // comment. The frame carries only the serverId (no post id, no
+          // diff), so the only thing to do with it is nudge a refetch, and
+          // only if that server's Baú is the one currently open.
+          if (message.type === "community-home-update") {
+            if (message.serverId === selectedServerIdRef.current) {
+              setCommunityHomeUpdateNudge((n) => n + 1);
+            }
             return;
           }
 
@@ -2002,11 +2115,13 @@ function MainAppContent({
       // The override matters when a server was only just chosen: `selection` is
       // still the previous one this render, and the URL has to name the server
       // whose channel is being opened rather than the one being left.
+      const nextSelection = serverIdOverride
+        ? { kind: "server" as const, serverId: serverIdOverride }
+        : selection;
+      // Home is not a real channel id in the address bar — keep `/app/server/<id>`.
       syncRoute(
-        serverIdOverride
-          ? { kind: "server", serverId: serverIdOverride }
-          : selection,
-        channelId,
+        nextSelection,
+        isCommunityHomeChannelId(channelId) ? null : channelId,
       );
       // Voice deliberately survives navigating away: leaving a call because you
       // clicked another channel is not how a chat app should behave.
@@ -2070,11 +2185,15 @@ function MainAppContent({
         setAppError(null);
         setChannels(list);
         void loadUnread(serverId);
-        const general =
-          list.find((c) => c.type === "text") ??
-          list.find((c) => c.type !== "category");
-        if (general) {
-          await selectChannel(general.id, serverId);
+        const server = serversRef.current.find((row) => row.id === serverId);
+        const land = pickServerLandingTarget(
+          list,
+          communityHomeOn() && server?.communityHomeEnabled === true,
+          Boolean(server?.isCommunity),
+          isCommunityHomeRowNew(serverId),
+        );
+        if (land) {
+          await selectChannel(land.id, serverId);
         } else {
           setSelectedChannelId(null);
           selectedChannelIdRef.current = null;
@@ -2092,7 +2211,7 @@ function MainAppContent({
         setChannelsLoading(false);
       }
     },
-    [loadUnread, selectChannel, syncRoute],
+    [communityHomeOn, loadUnread, selectChannel, syncRoute],
   );
 
   async function handleChannelPromptConfirm(name: string, isPrivate?: boolean) {
@@ -2502,18 +2621,27 @@ function MainAppContent({
         if (targetChannelId && !requested) {
           setAppError("That channel no longer exists or is private.");
         }
-        const target =
-          requested ??
-          list.find((c) => c.type === "text") ??
-          list.find((c) => c.type !== "category");
-        if (target) {
-          await selectChannel(target.id, targetServerId);
-          if (targetMessageId && target.id === targetChannelId) {
+        if (requested) {
+          await selectChannel(requested.id, targetServerId);
+          if (targetMessageId) {
             setHighlightMessageId(targetMessageId);
           }
         } else {
-          setSelectedChannelId(null);
-          selectedChannelIdRef.current = null;
+          const targetServer = serversRef.current.find(
+            (row) => row.id === targetServerId,
+          );
+          const land = pickServerLandingTarget(
+            list,
+            communityHomeOn() && targetServer?.communityHomeEnabled === true,
+            Boolean(targetServer?.isCommunity),
+            isCommunityHomeRowNew(targetServerId),
+          );
+          if (land) {
+            await selectChannel(land.id, targetServerId);
+          } else {
+            setSelectedChannelId(null);
+            selectedChannelIdRef.current = null;
+          }
         }
       } catch (error) {
         setAppError(
@@ -2527,7 +2655,7 @@ function MainAppContent({
         setChannelsLoading(false);
       }
     },
-    [loadUnread, selectChannel],
+    [communityHomeOn, loadUnread, selectChannel],
   );
 
   /**
@@ -2581,6 +2709,93 @@ function MainAppContent({
     void updatePreferences(patch).catch(() => {
       // Nothing to recover. The next bootstrap re-reads the truth, and the worst
       // case is the card offered once more.
+    });
+  }, []);
+
+  // Two switches gate the Baú row + feed: the instance flag (config probe,
+  // dev override) and this server's own opt-in from Server settings. Landing
+  // stays community-only on top (pickServerLandingTarget requires isCommunity).
+  // Computed here, above every early return, because the "New" chip below is
+  // a hook.
+  const communityHomeFeatureOn = isCommunityHomeEnabled({
+    config: communityHomeConfig,
+    allowLocalOverride: isDevAuthBypassEnabled(),
+  });
+  const communityHomeEnabled =
+    communityHomeFeatureOn &&
+    servers.find((s) => s.id === selectedServerId)?.communityHomeEnabled ===
+      true;
+  const communityHomeOpen =
+    selection.kind === "server" &&
+    isCommunityHomeChannelId(selectedChannelId) &&
+    communityHomeEnabled;
+  useEffect(() => {
+    if (!communityHomeEnabled || !selectedServerId) {
+      setCommunityHomeRowNew(false);
+      return;
+    }
+    if (communityHomeOpen) {
+      markCommunityHomeRowSeen(selectedServerId);
+      setCommunityHomeRowNew(false);
+      return;
+    }
+    setCommunityHomeRowNew(isCommunityHomeRowNew(selectedServerId));
+  }, [communityHomeEnabled, communityHomeOpen, selectedServerId]);
+
+  /**
+   * The Baú badge for the open server.
+   *
+   * Looking at the feed IS reading it: the count goes to zero and the read
+   * mark is stamped on the API, so it stays zero on the next device. Looking
+   * elsewhere refetches the count. `communityHomeUpdateNudge` is in the deps
+   * so a post published while this tab is open lands in whichever of the two
+   * halves applies, rather than waiting for a navigation.
+   */
+  useEffect(() => {
+    if (!communityHomeEnabled || !selectedServerId) {
+      setCommunityHomeUnread(0);
+      return;
+    }
+    if (communityHomeOpen) {
+      setCommunityHomeUnread(0);
+      void markCommunityHomeRead(selectedServerId).catch(() => {
+        // A failed mark costs one repeated badge, never a wrong feed.
+      });
+      return;
+    }
+    let cancelled = false;
+    void fetchCommunityHomeUnread(selectedServerId)
+      .then(({ count }) => {
+        if (!cancelled) {
+          setCommunityHomeUnread(count);
+        }
+      })
+      .catch(() => {
+        // Flag off, or a blip: no badge is better than a wrong one.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    communityHomeEnabled,
+    communityHomeOpen,
+    selectedServerId,
+    communityHomeUpdateNudge,
+  ]);
+
+  /**
+   * The Baú intro card is put away. Same optimistic shape as `settleFirstRun`:
+   * the local `user` is patched first so the card goes on the click.
+   */
+  const settleCommunityHomeIntro = useCallback(() => {
+    const patch = { communityHomeIntroDismissedAt: new Date().toISOString() };
+    setUser((previous) =>
+      previous
+        ? { ...previous, preferences: { ...previous.preferences, ...patch } }
+        : previous,
+    );
+    void updatePreferences(patch).catch(() => {
+      // Worst case the card is offered once more on the next bootstrap.
     });
   }, []);
 
@@ -3147,6 +3362,10 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
+  // Baú gating is computed above the early returns (it owns a hook); see
+  // `communityHomeEnabled` / `communityHomeOpen` near `settleCommunityHomeIntro`.
+  const meMember = serverMembers.find((member) => member.id === user?.id);
+  const meVip = rankBadges(meMember?.roleIds, serverRoles).vipBadge;
   const canManageChannels = perms.can(Permission.MANAGE_CHANNELS);
   const canManageRoles = perms.can(Permission.MANAGE_ROLES);
   const canManageServer = perms.can(Permission.MANAGE_SERVER);
@@ -3527,6 +3746,12 @@ function MainAppContent({
             onStartScreenShare={() =>
               void voice.startScreenShare(shareSystemAudio)
             }
+            onShareWithoutSound={() => {
+              // Disarm the opt-in too: it is what failed, and the next share
+              // this person starts on their own should not repeat it.
+              setShareSystemAudio(false);
+              void voice.startScreenShare(false);
+            }}
             onStopScreenShare={() => void voice.stopScreenShare()}
             shareSystemAudio={shareSystemAudio}
             onShareSystemAudioChange={setShareSystemAudio}
@@ -3566,6 +3791,10 @@ function MainAppContent({
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onStartScreenShare={() => void voice.startScreenShare(shareSystemAudio)}
+          onShareWithoutSound={() => {
+            setShareSystemAudio(false);
+            void voice.startScreenShare(false);
+          }}
           onStopScreenShare={() => void voice.stopScreenShare()}
           shareSystemAudio={shareSystemAudio}
           onShareSystemAudioChange={setShareSystemAudio}
@@ -3796,6 +4025,15 @@ function MainAppContent({
       )}
 
 
+      <ConnectionDoctorDialog
+        open={doctorOpen}
+        onClose={() => setDoctorOpen(false)}
+        transport={transport}
+        getToken={() => resolveTokenRef.current()}
+        onSignInAgain={signInAgain}
+        appVersion="web"
+      />
+
       {/* Also at the root: a DM finds you wherever you are in the app. */}
       <DmToasts
         conversations={conversations}
@@ -3933,6 +4171,17 @@ function MainAppContent({
           onOpenMembers={() => setMembersOpen(true)}
           onOpenServerSettings={() => setServerSettingsOpen(true)}
           footer={sidebarFooter}
+          communityHomeEnabled={communityHomeEnabled}
+          communityHomeShowNew={communityHomeRowNew}
+          communityHomeUnread={communityHomeUnread}
+          communityHomeSelected={communityHomeOpen}
+          onSelectCommunityHome={() => {
+            if (selectedServerId) {
+              markCommunityHomeRowSeen(selectedServerId);
+              setCommunityHomeRowNew(false);
+              void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
+            }
+          }}
         />
       )}
 
@@ -3943,17 +4192,13 @@ function MainAppContent({
           </div>
         )}
 
-        {(connection === "reconnecting" || connection === "unauthorized") && (
-          <div
-            className="flex items-center justify-center gap-2 border-b border-warning/30 bg-warning/10 px-4 py-1.5 text-xs text-warning"
-            role="status"
-          >
-            <WifiOff className="h-3.5 w-3.5" />
-            {connection === "unauthorized"
-              ? t("connection.unauthorized")
-              : t("connection.reconnecting")}
-          </div>
-        )}
+        <ConnectionBanner
+          status={connection}
+          refusedRepeatedly={transport.getUnauthorizedStreak() >= 2}
+          onRetry={() => transport.retryNow()}
+          onCheck={() => setDoctorOpen(true)}
+          onSignInAgain={signInAgain}
+        />
 
         {appError && (
           <div className="flex items-start gap-3 border-b border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
@@ -4029,7 +4274,10 @@ function MainAppContent({
           />
         )}
 
-        {selection.kind !== "dm" && !selectedChannel && !channelsLoading && (
+        {selection.kind !== "dm" &&
+          !selectedChannel &&
+          !communityHomeOpen &&
+          !channelsLoading && (
           <div className="flex flex-1 flex-col items-start justify-center gap-4 p-8">
             <button
               type="button"
@@ -4072,7 +4320,32 @@ function MainAppContent({
           </div>
         )}
 
-        {!selectedChannel && channelsLoading && (
+        {communityHomeOpen && selectedServer && user && (
+          <CommunityHomeFeed
+            serverId={selectedServer.id}
+            serverName={selectedServer.name}
+            me={{
+              id: user.id,
+              displayName: user.displayName,
+              username: user.username ?? null,
+              tag: user.tag ?? null,
+              avatarUrl: user.avatarUrl ?? null,
+            }}
+            canManageServer={canManageServer}
+            isOwner={selectedServer.role === "owner"}
+            isVip={meVip}
+            vipEnabled={communityHomeConfig.vipEnabled}
+            mediaEnabled={communityHomeConfig.mediaEnabled}
+            introDismissed={Boolean(
+              user.preferences?.communityHomeIntroDismissedAt,
+            )}
+            onDismissIntro={settleCommunityHomeIntro}
+            onOpenNav={() => setMobileNavOpen(true)}
+            refreshSignal={communityHomeUpdateNudge}
+          />
+        )}
+
+        {!selectedChannel && channelsLoading && !communityHomeOpen && (
           <div className="flex min-h-0 flex-1 flex-col">
             <header className="flex h-14 shrink-0 items-center border-b border-ink-4/60 px-4">
               <div className="h-5 w-36 animate-pulse rounded-md bg-ink-4/50" />
@@ -4239,11 +4512,34 @@ function MainAppContent({
           setServerSettingsOpen(false);
           setServerSettingsSection(undefined);
         }}
-        onRenamed={(server) =>
+        communityHomeFeatureOn={communityHomeFeatureOn}
+        onRenamed={(server) => {
           setServers((prev) =>
-            prev.map((s) => (s.id === server.id ? { ...s, ...server } : s)),
-          )
-        }
+            prev.map((current) =>
+              current.id === server.id
+                ? {
+                    ...current,
+                    ...server,
+                    // Settings writes update the server row, not this viewer's
+                    // membership row. Keep its role and profile opt-out.
+                    role: current.role,
+                    showOnProfile: current.showOnProfile,
+                  }
+                : current,
+            ),
+          );
+          // Baú turned off while it was open: step back to a real channel.
+          if (
+            server.id === selectedServerId &&
+            !server.communityHomeEnabled &&
+            isCommunityHomeChannelId(selectedChannelId)
+          ) {
+            const fallback = pickServerLandingTarget(channels, false);
+            if (fallback) {
+              void selectChannel(fallback.id, server.id);
+            }
+          }
+        }}
         onOwnershipTransferred={() => {
           void fetchServers().then(({ servers: list }) => setServers(list));
         }}
@@ -4263,7 +4559,15 @@ function MainAppContent({
           setChannels(newChannels);
           setAppError(null);
           const general = newChannels.find((c) => c.type === "text");
-          if (general) {
+          const land = pickServerLandingTarget(
+            newChannels,
+            communityHomeOn() && server.communityHomeEnabled === true,
+            Boolean(server.isCommunity),
+            isCommunityHomeRowNew(server.id),
+          );
+          if (land) {
+            await selectChannel(land.id, server.id);
+          } else if (general) {
             await selectChannel(general.id, server.id);
           }
         }}

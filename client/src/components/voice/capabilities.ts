@@ -9,7 +9,12 @@
  * Node test rather than only on a real iPhone.
  */
 
-import { desktopContext } from "@/lib/desktop";
+import { desktopContext, getDesktop, isDesktopApp } from "@/lib/desktop";
+import {
+  screenCaptureEnvironment,
+  shellCarriesScreenAudio,
+  type ScreenCaptureEnvironment,
+} from "@/lib/screen-capture-audio";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 
 export type ScreenShareUnavailableReason = "no-api" | "insecure-context";
@@ -163,4 +168,27 @@ export function supportsAudioOutputRouting(probe: {
   outputDeviceCount: number;
 }): boolean {
   return typeof probe.setSinkId === "function" && probe.outputDeviceCount > 0;
+}
+
+/**
+ * Should the "send this computer's sound" toggle be offered at all?
+ *
+ * False in a desktop shell that cannot capture sound, which is every platform
+ * but Windows: `electron/lib/display-sources.js` answers macOS and Linux with
+ * video alone, so the toggle there arms nothing. Worse than nothing, before
+ * `shellCarriesScreenAudio` existed: the request still reached Chromium via
+ * the system picker, which skips our handler, and an audio request macOS
+ * cannot honour rejects the whole capture. The person ticked a box and their
+ * screen share stopped working.
+ *
+ * True in every browser, including on macOS, because there the toggle governs
+ * tab audio, which every platform can hand over.
+ */
+export function canShareScreenAudio(
+  env: ScreenCaptureEnvironment = screenCaptureEnvironment(
+    isDesktopApp(),
+    getDesktop()?.platform ?? null,
+  ),
+): boolean {
+  return !env.isDesktopShell || shellCarriesScreenAudio(env);
 }

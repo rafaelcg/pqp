@@ -2,24 +2,37 @@ import { describe, expect, it } from "vitest";
 import {
   capturesSystemAudio,
   screenCaptureOptions,
+  shareStreamHasAudio,
+  shellCarriesScreenAudio,
   type ScreenCaptureEnvironment,
 } from "./screen-capture-audio";
 
 const browser: ScreenCaptureEnvironment = {
   isDesktopShell: false,
+  shellPlatform: null,
   supportsRestrictOwnAudio: true,
 };
 const oldBrowser: ScreenCaptureEnvironment = {
   isDesktopShell: false,
+  shellPlatform: null,
   supportsRestrictOwnAudio: false,
 };
+/** The installed v0.1.3 build on Windows: loopback is real there. */
 const shell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
+  shellPlatform: "win32",
   supportsRestrictOwnAudio: false,
 };
 const newShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
+  shellPlatform: "win32",
   supportsRestrictOwnAudio: true,
+};
+/** The same build on macOS, where no capture can carry the machine's sound. */
+const macShell: ScreenCaptureEnvironment = {
+  isDesktopShell: true,
+  shellPlatform: "darwin",
+  supportsRestrictOwnAudio: false,
 };
 
 describe("screenCaptureOptions", () => {
@@ -87,6 +100,23 @@ describe("screenCaptureOptions", () => {
     });
   });
 
+  it("asks a macOS shell for no audio even when the user opted in", () => {
+    // The 3 Sep 2026 report: ticking the box made the picker close and nothing
+    // happen. `useSystemPicker: true` means our video-only handler is skipped,
+    // the request reaches Chromium intact, and macOS has no system audio to
+    // give — which rejects the capture whole, video included.
+    expect(screenCaptureOptions(true, macShell).audio).toBe(false);
+    expect(screenCaptureOptions(true, macShell).systemAudio).toBe("exclude");
+  });
+
+  it("knows which shells can carry sound at all", () => {
+    expect(shellCarriesScreenAudio(shell)).toBe(true);
+    expect(shellCarriesScreenAudio(macShell)).toBe(false);
+    // A browser is not a shell, and the answer here is about the shell only:
+    // tab audio is a browser's own path and is never decided by this.
+    expect(shellCarriesScreenAudio(browser)).toBe(false);
+  });
+
   it("never offers our own tab as a surface", () => {
     expect(screenCaptureOptions(true, browser).selfBrowserSurface).toBe(
       "exclude",
@@ -138,5 +168,33 @@ describe("capturesSystemAudio", () => {
     expect(
       capturesSystemAudio({ displaySurface: null, hasAudio: true }),
     ).toBe(false);
+  });
+});
+describe("shareStreamHasAudio", () => {
+  it("is false when the share arrived with no audio track", () => {
+    // The whole reason this exists: the viewer of a silent share used to be
+    // told nothing and had to ask in chat.
+    expect(shareStreamHasAudio([])).toBe(false);
+  });
+
+  it("is true for a live audio track", () => {
+    expect(shareStreamHasAudio([{ readyState: "live" }])).toBe(true);
+  });
+
+  it("does not count a track the presenter already stopped", () => {
+    expect(shareStreamHasAudio([{ readyState: "ended" }])).toBe(false);
+  });
+
+  it("counts a track whose readyState the engine does not report", () => {
+    // Absent is not "ended". Guessing silence over a share that is audible is
+    // the worse of the two mistakes: it sends somebody to ask the presenter to
+    // fix a thing that is not broken.
+    expect(shareStreamHasAudio([{}])).toBe(true);
+  });
+
+  it("is true when one of several tracks is still live", () => {
+    expect(
+      shareStreamHasAudio([{ readyState: "ended" }, { readyState: "live" }]),
+    ).toBe(true);
   });
 });

@@ -227,6 +227,20 @@ describeDb("API authorization", () => {
     expect(res.status).toBe(401);
   });
 
+  it("accepts a tab-close voice leave beacon without a session", async () => {
+    // pagehide cannot wait for Clerk. The resume HMAC is the credential;
+    // a missing or unknown pair still answers 204 so this is not an oracle.
+    const res = await fetch(`${baseUrl}/api/voice/leave`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({
+        resumePeerId: "00000000-0000-4000-8000-000000000001",
+        resumeToken: "not-a-real-token",
+      }),
+    });
+    expect(res.status).toBe(204);
+  });
+
   it("only lists servers the caller belongs to", async () => {
     const { serverId } = await makeServer();
 
@@ -395,6 +409,33 @@ describeDb("API authorization", () => {
     expect((await call(owner, "DELETE", `/api/servers/${serverId}`)).status).toBe(
       200,
     );
+  });
+
+  it("stores Community Home opt-in per server behind MANAGE_SERVER", async () => {
+    // The per-server toggle only exists while the instance flag is on.
+    process.env.COMMUNITY_HOME_ENABLED = "true";
+    const { serverId } = await makeServer();
+    const path = `/api/servers/${serverId}/home/config`;
+
+    const initial = await call<{ enabled: boolean }>(member, "GET", path);
+    expect(initial.status).toBe(200);
+    expect(initial.body.enabled).toBe(false);
+    expect((await call(outsider, "GET", path)).status).toBe(404);
+    expect(
+      (await call(member, "PATCH", path, { enabled: true })).status,
+    ).toBe(403);
+
+    const enabled = await call<{
+      enabled: boolean;
+      server: { communityHomeEnabled: boolean };
+    }>(admin, "PATCH", path, { enabled: true });
+    expect(enabled.status).toBe(200);
+    expect(enabled.body.enabled).toBe(true);
+    expect(enabled.body.server.communityHomeEnabled).toBe(true);
+
+    const persisted = await call<{ enabled: boolean }>(member, "GET", path);
+    expect(persisted.body.enabled).toBe(true);
+    delete process.env.COMMUNITY_HOME_ENABLED;
   });
 
   it("refuses to let the owner leave and abandon the server", async () => {

@@ -24,7 +24,7 @@ import { pushChannelActivity, pushIncomingCall } from "../services/push.js";
 import { findTimeoutForChannel } from "../services/sanctions.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
 import { computeMemberPermissions } from "../services/permissions.js";
-import { canAccessChannel } from "../services/users.js";
+import { canAccessChannel, resolveMemberName } from "../services/users.js";
 import { broadcastToChannel } from "./chat.js";
 import { resolveStatus } from "./status.js";
 import {
@@ -256,6 +256,54 @@ function onLiveRoomMaybeEmpty(
       state: null,
     });
   }
+}
+
+/**
+ * Somebody's name or picture changed while they were in a call.
+ *
+ * A peer's label is copied into the room when they join and was never touched
+ * again, so a rename showed up everywhere in the app except the one place
+ * people were actually looking at each other. Both the in-call tiles
+ * (`peer-updated`) and the sidebar occupancy (`voice-roster`) are refreshed.
+ *
+ * Best effort by design: a call is live and a stale label is not worth an
+ * exception on the profile route that triggered this.
+ */
+export async function refreshVoiceIdentity(
+  userId: string,
+  profile: { display_name: string; avatar_url: string | null },
+): Promise<void> {
+  const mine = [...peers.values()].filter((peer) => peer.userId === userId);
+  if (mine.length === 0) {
+    return;
+  }
+  const rooms = new Set<string>();
+  for (const peer of mine) {
+    try {
+      const channel = await getChannel(peer.voiceChannelId);
+      peer.displayName = await resolveMemberName(
+        channel?.kind === "server" ? (channel.server_id ?? null) : null,
+        { id: userId, display_name: profile.display_name },
+      );
+      peer.avatarUrl = profile.avatar_url;
+      rooms.add(peer.voiceChannelId);
+      broadcastToRoom(peer.voiceChannelId, {
+        type: "peer-updated",
+        peer: toParticipant(peer),
+      });
+    } catch (error) {
+      logEvent("voice.refreshIdentityFailed", {
+        userId,
+        peerId: peer.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  // Awaited rather than fired off: the roster send is queued per room, and a
+  // caller that wants to know the room has caught up (a test, or a future
+  // caller that cares) can only find out if this waits. Every caller today
+  // starts it with `void`, so nothing blocks a request either way.
+  await Promise.all([...rooms].map((room) => broadcastRoster(room)));
 }
 
 // --- operator metrics ---------------------------------------------------
@@ -567,6 +615,32 @@ export function getVoicePeer(
     voiceChannelId: peer.voiceChannelId,
     displayName: peer.displayName,
   };
+}
+
+/**
+ * Tab close / hangup after `/ws` is already gone. The HMAC is the proof; the
+ * peer id is on every roster, so a bare id must not be enough to retire a seat.
+ * Returns whether a peer was removed.
+ */
+export function leaveVoiceByResumeToken(
+  resumePeerId: string,
+  resumeToken: string,
+): boolean {
+  const peer = peers.get(resumePeerId);
+  if (!peer) {
+    return false;
+  }
+  if (
+    !verifyVoiceResumeToken(resumeToken, {
+      userId: peer.userId,
+      peerId: resumePeerId,
+      voiceChannelId: peer.voiceChannelId,
+    })
+  ) {
+    return false;
+  }
+  removePeer(resumePeerId);
+  return true;
 }
 
 /**
@@ -995,11 +1069,19 @@ export async function handleVoiceMessage(
 
     const peerId =
       resume.kind === "reconstruct" ? resume.peerId : randomUUID();
+    // What this person is called *here*: their nickname in this server, or
+    // the name on their account. Every other surface already resolves it this
+    // way; voice used to read `display_name` straight, which is how somebody
+    // with a nickname had their account name shown to the whole call.
+    const shownName = await resolveMemberName(
+      channel.kind === "server" ? (channel.server_id ?? null) : null,
+      user,
+    );
     const peer: VoicePeer = {
       id: peerId,
       socket,
       userId: user.id,
-      displayName: user.display_name,
+      displayName: shownName,
       avatarUrl: user.avatar_url,
       voiceChannelId: payload.voiceChannelId,
       sharingScreen: false,
@@ -1048,20 +1130,8 @@ export async function handleVoiceMessage(
     // Hangup while `/ws` was down: this socket never owned the peer. The
     // resume pair proves this user still owns that orphan; drop it now so
     // the roster does not keep a 90s ghost.
-    const claimed = payload.resumePeerId;
-    if (claimed && payload.resumeToken) {
-      const peer = peers.get(claimed);
-      if (
-        peer &&
-        peer.userId === user.id &&
-        verifyVoiceResumeToken(payload.resumeToken, {
-          userId: user.id,
-          peerId: claimed,
-          voiceChannelId: peer.voiceChannelId,
-        })
-      ) {
-        removePeer(claimed);
-      }
+    if (payload.resumePeerId && payload.resumeToken) {
+      leaveVoiceByResumeToken(payload.resumePeerId, payload.resumeToken);
     }
     return;
   }

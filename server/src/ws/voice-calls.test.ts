@@ -59,6 +59,12 @@ vi.mock("../voice/backends.js", () => ({
 }));
 
 vi.mock("../services/users.js", () => ({
+  // Voice resolves the name to show through here now; the real one
+  // reads `server_members.nickname`, which these tests have no table for.
+  resolveMemberName: async (
+    _serverId: string | null,
+    user: { display_name: string },
+  ) => user.display_name,
   canAccessChannel: async () => true,
 }));
 

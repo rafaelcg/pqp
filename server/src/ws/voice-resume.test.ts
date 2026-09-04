@@ -19,6 +19,10 @@ vi.mock("../voice/backends.js", () => ({
 }));
 
 vi.mock("../services/users.js", () => ({
+  resolveMemberName: async (
+    _serverId: string | null,
+    user: { display_name: string },
+  ) => user.display_name,
   canAccessChannel: async () => true,
 }));
 
@@ -46,6 +50,7 @@ const {
   evictVoiceUser,
   getRoomTransport,
   handleVoiceMessage,
+  leaveVoiceByResumeToken,
   removeVoicePeerBySocket,
   resetVoicePeers,
   resetVoiceRateLimits,
@@ -366,6 +371,23 @@ describe("voice session resume", () => {
     });
     expect(frame(resumed, "welcome")?.peerId).toBe(peerId);
     expect(frame(resumed, "welcome")?.resumed).toBe(true);
+  });
+
+  it("removes an orphan when the tab-close beacon presents the resume pair", async () => {
+    const channel = randomUUID();
+    const userId = randomUUID();
+    const a = await join(recorder(), userId, channel);
+    const observer = await join(recorder(), randomUUID(), channel);
+    const peerId = frame(a, "welcome")?.peerId as string;
+    const token = frame(a, "welcome")?.resumeToken as string;
+
+    observer.frames.length = 0;
+    removeVoicePeerBySocket(a.socket);
+    expect(typesOf(observer)).not.toContain("peer-left");
+
+    expect(leaveVoiceByResumeToken(peerId, token)).toBe(true);
+    expect(frame(observer, "peer-left")?.peerId).toBe(peerId);
+    expect(leaveVoiceByResumeToken(peerId, token)).toBe(false);
   });
 
   it("removes an orphan when leave carries the resume pair on a new socket", async () => {

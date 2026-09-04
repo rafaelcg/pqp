@@ -8,6 +8,24 @@ import type {
   BlockListResponse,
   Channel,
   ChannelUnread,
+  ClaimCommunityHomeMediaRequest,
+  ClaimCommunityHomeMediaResponse,
+  CommunityHomeComment,
+  CommunityHomeCommentsResponse,
+  CommunityHomeConfig,
+  CommunityHomeUnreadResponse,
+  PinCommunityHomePostRequest,
+  ServerCommunityHomeConfig,
+  UpdateServerCommunityHomeConfig,
+  CommunityHomeLikeResponse,
+  CommunityHomePostResponse,
+  CommunityHomePostsResponse,
+  CreateCommunityHomeCommentRequest,
+  CreateCommunityHomeMediaUploadRequest,
+  CreateCommunityHomeMediaUploadResponse,
+  CreateCommunityHomePostRequest,
+  ScheduleCommunityHomePostRequest,
+  UpdateCommunityHomePostRequest,
   CommunityConfig,
   CommunityPage,
   CommunitySettings,
@@ -1311,6 +1329,152 @@ export const joinInvite = (code: string) =>
 
 export const previewInvite = (code: string) =>
   apiFetch<{ invite: Invite }>(`/api/invites/${encodeURIComponent(code)}`);
+
+// -------------------------------------------------------- community home (Baú)
+//
+// Durable posts, comments and likes for a server's Baú. Media bytes go through
+// the same mint / PUT / claim dance as attachments — see `uploadHomeMedia` in
+// `lib/community-home/media.ts` for the sequence in one place.
+
+/** The instance flags. Off is a 200 with `enabled: false`, never a 404. */
+export const fetchCommunityHomeConfig = () =>
+  apiFetch<CommunityHomeConfig>("/api/community-home/config");
+
+/** This server's own opt-in (owner-set in Server settings). */
+export const fetchServerCommunityHomeConfig = (serverId: string) =>
+  apiFetch<ServerCommunityHomeConfig>(`/api/servers/${serverId}/home/config`);
+
+export const updateServerCommunityHomeConfig = (
+  serverId: string,
+  body: UpdateServerCommunityHomeConfig,
+) =>
+  patch<ServerCommunityHomeConfig & { server: Server }>(
+    `/api/servers/${serverId}/home/config`,
+    body,
+  );
+
+export const fetchCommunityHomePosts = (serverId: string) =>
+  apiFetch<CommunityHomePostsResponse>(`/api/servers/${serverId}/home/posts`);
+
+/** Staff-only: drafts + scheduled, never mixed into the published feed. */
+export const fetchCommunityHomeDrafts = (serverId: string) =>
+  apiFetch<CommunityHomePostsResponse>(`/api/servers/${serverId}/home/drafts`);
+
+export const fetchCommunityHomePost = (serverId: string, postId: string) =>
+  apiFetch<CommunityHomePostResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}`,
+  );
+
+export const createCommunityHomePost = (
+  serverId: string,
+  body: CreateCommunityHomePostRequest,
+) => post<CommunityHomePostResponse>(`/api/servers/${serverId}/home/posts`, body);
+
+export const updateCommunityHomePost = (
+  serverId: string,
+  postId: string,
+  body: UpdateCommunityHomePostRequest,
+) =>
+  patch<CommunityHomePostResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}`,
+    body,
+  );
+
+export const deleteCommunityHomePost = (serverId: string, postId: string) =>
+  del<{ ok: boolean }>(`/api/servers/${serverId}/home/posts/${postId}`);
+
+/** The sidebar badge: posts this person has not seen. Cheap, no posts. */
+export const fetchCommunityHomeUnread = (serverId: string) =>
+  apiFetch<CommunityHomeUnreadResponse>(`/api/servers/${serverId}/home/unread`);
+
+/** Stamp the feed read up to now. Fire and forget; the badge is not truth. */
+export const markCommunityHomeRead = (serverId: string) =>
+  post<{ ok: boolean }>(`/api/servers/${serverId}/home/read`);
+
+/** Keep one post at the top. Pinning replaces whatever was pinned before. */
+export const pinCommunityHomePost = (
+  serverId: string,
+  postId: string,
+  body: PinCommunityHomePostRequest,
+) =>
+  post<CommunityHomePostResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/pin`,
+    body,
+  );
+
+export const publishCommunityHomePost = (serverId: string, postId: string) =>
+  post<CommunityHomePostResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/publish`,
+  );
+
+export const unpublishCommunityHomePost = (serverId: string, postId: string) =>
+  post<CommunityHomePostResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/unpublish`,
+  );
+
+export const scheduleCommunityHomePost = (
+  serverId: string,
+  postId: string,
+  body: ScheduleCommunityHomePostRequest,
+) =>
+  post<CommunityHomePostResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/schedule`,
+    body,
+  );
+
+export const fetchCommunityHomeComments = (serverId: string, postId: string) =>
+  apiFetch<CommunityHomeCommentsResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/comments`,
+  );
+
+export const createCommunityHomeComment = (
+  serverId: string,
+  postId: string,
+  body: CreateCommunityHomeCommentRequest,
+) =>
+  post<{ comment: CommunityHomeComment }>(
+    `/api/servers/${serverId}/home/posts/${postId}/comments`,
+    body,
+  );
+
+export const deleteCommunityHomeComment = (
+  serverId: string,
+  postId: string,
+  commentId: string,
+) =>
+  del<{ ok: boolean }>(
+    `/api/servers/${serverId}/home/posts/${postId}/comments/${commentId}`,
+  );
+
+/** Toggle: liking a liked post unlikes it. */
+export const toggleCommunityHomeLike = (serverId: string, postId: string) =>
+  post<CommunityHomeLikeResponse>(
+    `/api/servers/${serverId}/home/posts/${postId}/likes`,
+  );
+
+/** Whether this deployment can store Baú media, so the picker can be hidden. */
+export const fetchCommunityHomeMediaConfig = (serverId: string) =>
+  apiFetch<{ enabled: boolean; maxBytes: number }>(
+    `/api/servers/${serverId}/home/media/config`,
+  );
+
+export const createCommunityHomeMediaUpload = (
+  serverId: string,
+  body: CreateCommunityHomeMediaUploadRequest,
+) =>
+  post<CreateCommunityHomeMediaUploadResponse>(
+    `/api/servers/${serverId}/home/media`,
+    body,
+  );
+
+export const claimCommunityHomeMediaUpload = (
+  serverId: string,
+  body: ClaimCommunityHomeMediaRequest,
+) =>
+  post<ClaimCommunityHomeMediaResponse>(
+    `/api/servers/${serverId}/home/media/claim`,
+    body,
+  );
 
 // ------------------------------------------------------------------ reports
 
