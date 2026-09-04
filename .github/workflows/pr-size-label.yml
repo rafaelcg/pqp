@@ -1,0 +1,139 @@
+name: Label (PR size)
+
+# Puts a size/XS … size/XL label on every PR from the number of lines
+# changed, lockfiles excluded.
+#
+# WHY THESE BUCKETS
+# Google's review guide (eng-practices, "Small CLs") does not define labels.
+# It says 100 lines is usually a reasonable change and 1000 is usually too
+# large. Kubernetes published the size/XS–size/XXL names and colours that
+# the rest of GitHub copied. We keep those names and colours, and five
+# buckets (XS through XL, no XXL) so 1000+ is the one that means "probably
+# split this".
+#
+# The label is a review signal. It does not block merge. `drops-voice` stays
+# a human label, because "does this restart pqp-api" is a path question the
+# size of the diff cannot answer.
+#
+# WHY pull_request_target
+# Fork PRs get a read-only GITHUB_TOKEN on `pull_request`, so they could not
+# be labelled. This workflow never checks out the PR branch; it only reads
+# the GitHub API, so running it in the base-repo context is the safe way to
+# label forks. `pull_request` is also listed so this file can label the PR
+# that introduces it, before it exists on main. Same-repo events would
+# otherwise fire twice; concurrency cancels the loser, and fork
+# `pull_request` jobs are skipped.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: PR number to (re)label
+        required: true
+        type: string
+
+concurrency:
+  group: pr-size-label-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  size-label:
+    name: Apply size label
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Label from diff size
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "Invalid PR number: ${PR_NUMBER}"
+            exit 1
+          fi
+
+          echo "Labelling PR #${PR_NUMBER} in ${GH_REPO}"
+
+          # Kubernetes colours. Descriptions match the buckets below.
+          gh label create "size/XS" --color "009900" --description "0-9 lines, ignoring lockfiles" --force >/dev/null
+          gh label create "size/S"  --color "77bb00" --description "10-99 lines, ignoring lockfiles" --force >/dev/null
+          gh label create "size/M"  --color "eebb00" --description "100-249 lines, ignoring lockfiles" --force >/dev/null
+          gh label create "size/L"  --color "ee9900" --description "250-999 lines, ignoring lockfiles" --force >/dev/null
+          gh label create "size/XL" --color "ee5500" --description "1000+ lines, ignoring lockfiles" --force >/dev/null
+
+          ignored() {
+            local path="$1"
+            local base="${path##*/}"
+            case "$base" in
+              pnpm-lock.yaml|package-lock.json|yarn.lock|bun.lock|bun.lockb|Cargo.lock|composer.lock|Gemfile.lock|poetry.lock)
+                return 0
+                ;;
+            esac
+            case "$path" in
+              *.min.js|*.min.css)
+                return 0
+                ;;
+            esac
+            return 1
+          }
+
+          TOTAL=0
+          SKIPPED=0
+          while IFS=$'\t' read -r file additions deletions; do
+            if ignored "$file"; then
+              SKIPPED=$((SKIPPED + additions + deletions))
+              echo "ignore  +${additions} -${deletions}  ${file}"
+              continue
+            fi
+            TOTAL=$((TOTAL + additions + deletions))
+          done < <(gh api --paginate "repos/${GH_REPO}/pulls/${PR_NUMBER}/files" \
+            --jq '.[] | [.filename, (.additions // 0), (.deletions // 0)] | @tsv')
+
+          if [ "$TOTAL" -lt 10 ]; then
+            SIZE="size/XS"
+          elif [ "$TOTAL" -lt 100 ]; then
+            SIZE="size/S"
+          elif [ "$TOTAL" -lt 250 ]; then
+            SIZE="size/M"
+          elif [ "$TOTAL" -lt 1000 ]; then
+            SIZE="size/L"
+          else
+            SIZE="size/XL"
+          fi
+
+          echo "counted ${TOTAL} lines (skipped ${SKIPPED} in lockfiles/minified) → ${SIZE}"
+
+          EXISTING="$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name')"
+
+          remove_args=()
+          for label in size/XS size/S size/M size/L size/XL; do
+            if [ "$label" != "$SIZE" ] && printf '%s\n' "$EXISTING" | grep -Fxq "$label"; then
+              remove_args+=(--remove-label "$label")
+            fi
+          done
+
+          add_args=()
+          if ! printf '%s\n' "$EXISTING" | grep -Fxq "$SIZE"; then
+            add_args+=(--add-label "$SIZE")
+          fi
+
+          if [ ${#remove_args[@]} -eq 0 ] && [ ${#add_args[@]} -eq 0 ]; then
+            echo "Already labelled ${SIZE}"
+            exit 0
+          fi
+
+          gh pr edit "$PR_NUMBER" "${remove_args[@]}" "${add_args[@]}"
+          echo "Applied ${SIZE}"

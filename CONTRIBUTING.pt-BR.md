@@ -159,7 +159,8 @@ tá pedindo essa permissão adiantado.
 **Todo PR é revisado e mergeado por um mantenedor.** Nada entra na `main`
 sozinho, incluindo o nosso próprio trabalho. Isso aqui é projeto paralelo, então
 espera dias em vez de horas, e cutuca a gente se ficar quieto. Isso não é falta
-de educação, ajuda.
+de educação, ajuda. O CI também cola um selo `size/XS`–`size/XL` a partir do
+diff (lockfile não conta). É um sinal pra review, não uma trava de merge.
 
 **Alguns PRs vão ser recusados, e vale dizer o porquê adiantado.** Quase nunca
 porque o código tá ruim. Geralmente porque a funcionalidade puxa o pqp pra um
