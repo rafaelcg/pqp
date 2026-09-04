@@ -45,6 +45,9 @@ interface DmListProps {
    */
   friendRequestCount?: number;
   onHideConversation: (channelId: string) => void;
+  /** Channel ids currently pinned to the rail, so the row can offer unpin. */
+  pinnedChannelIds?: ReadonlySet<string>;
+  onTogglePin?: (channelId: string) => void;
   onBlockUser: (user: PublicUser) => void;
   onUnblockUser: (userId: string) => void;
   // --- conversation calls ---
@@ -79,6 +82,8 @@ export function DmList({
   onOpenFriends,
   friendRequestCount = 0,
   onHideConversation,
+  pinnedChannelIds,
+  onTogglePin,
   onBlockUser,
   onUnblockUser,
   onStartCall,
@@ -191,6 +196,12 @@ export function DmList({
                 onMobileClose?.();
               }}
               onHide={() => onHideConversation(conversation.channelId)}
+              pinned={pinnedChannelIds?.has(conversation.channelId) ?? false}
+              onTogglePin={
+                onTogglePin
+                  ? () => onTogglePin(conversation.channelId)
+                  : undefined
+              }
               onBlock={onBlockUser}
               onUnblock={onUnblockUser}
               hasActiveCall={
@@ -221,6 +232,8 @@ function ConversationRow({
   blockedUserIds,
   onSelect,
   onHide,
+  pinned,
+  onTogglePin,
   onBlock,
   onUnblock,
   hasActiveCall = false,
@@ -232,6 +245,8 @@ function ConversationRow({
   blockedUserIds: ReadonlySet<string>;
   onSelect: () => void;
   onHide: () => void;
+  pinned?: boolean;
+  onTogglePin?: () => void;
   onBlock: (user: PublicUser) => void;
   onUnblock: (userId: string) => void;
   hasActiveCall?: boolean;
@@ -281,6 +296,17 @@ function ConversationRow({
                 );
               }
             },
+          },
+        ]
+      : []),
+    ...(onTogglePin
+      ? [
+          {
+            id: "pin",
+            label: pinned
+              ? t("chrome.unpinConversation")
+              : t("chrome.pinConversation"),
+            onSelect: onTogglePin,
           },
         ]
       : []),

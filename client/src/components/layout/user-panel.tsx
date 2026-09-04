@@ -10,6 +10,7 @@ import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { isDesktopApp } from "@/lib/desktop";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
 import { isAndroidDevice, isIOSDevice } from "@/lib/downloads";
 import {
   dismissDownloadHint,
@@ -118,15 +119,20 @@ export function UserPanel({
       }
     }
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setOpen(false);
+      if (
+        event.key !== "Escape" ||
+        escapeOwnedByOverlay(event, popoverRef.current)
+      ) {
+        return;
       }
+      event.preventDefault();
+      setOpen(false);
     }
     document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown, true);
     return () => {
       document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("keydown", onKeyDown, true);
     };
   }, [open]);
 

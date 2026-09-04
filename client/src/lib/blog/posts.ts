@@ -18,19 +18,20 @@
  * So: metadata here, prose in `bodies.ts`, and nothing that reaches the edge
  * may import `bodies.ts`.
  *
- * WHY NOT A CMS, OR FRONTMATTER, OR A BUILD STEP. A release note is written by
- * the person who shipped the thing, in the same commit, and is then never
- * edited again. A markdown file next to a typed index gives that workflow a
- * compile error when the two disagree, which is the only guarantee that
- * actually matters here. `posts.test.ts` pins the rest: unique slugs, real
- * dates, both locales present, newest first.
+ * WHY NOT A CMS, OR FRONTMATTER, OR A BUILD STEP. A release note is a weekly
+ * catch-up, not a per-PR file. Write it with the whats-new skill, then never
+ * edit it once it is on `main`. A markdown file next to a typed index gives
+ * that workflow a compile error when the two disagree, which is the only
+ * guarantee that actually matters here. `blog-meta.test.ts` pins the rest:
+ * unique slugs, real dates, both locales present, newest first.
  *
  * ADDING A POST. Write the two markdown files under `content/blog/`, add the
  * entry at the TOP of `POSTS`, add both importers to `BODIES` in `bodies.ts`,
- * add the URL to `client/public/sitemap.xml`. Screenshots and short GIFs live
- * in `client/public/blog/<slug>/` and are referenced as `/blog/<slug>/file.png`
- * (the markdown is raw text, so a relative import next to the `.md` would 404).
- * Dates are the day the work reached people, not the day it was merged.
+ * add the URL to `client/public/sitemap.xml`. Screenshots are optional: if you
+ * have them, they live in `client/public/blog/<slug>/` and are referenced as
+ * `/blog/<slug>/file.png` (the markdown is raw text, so a relative import next
+ * to the `.md` would 404). Dates are the day the work reached people, not the
+ * day it was merged.
  */
 
 /**
@@ -62,6 +63,19 @@ export interface BlogPost {
  * failing test rather than a post that silently moves.
  */
 export const POSTS: readonly BlogPost[] = [
+  {
+    slug: "bau-e-o-dm-na-barra",
+    date: "2026-09-03",
+    title: {
+      "pt-BR": "O Baú, e o DM na barra",
+      en: "The Baú, and DMs on the rail",
+    },
+    summary: {
+      "pt-BR":
+        "Baú na comunidade, DM na barra, call que não cai no site e no PC, e o APK do Android.",
+      en: "The community Baú, pin a DM to the rail, a call that does not drop on the site and desktop, and an Android APK.",
+    },
+  },
   {
     slug: "call-que-se-conserta",
     date: "2026-09-03",

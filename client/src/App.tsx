@@ -65,6 +65,7 @@ import { ProfilePopoverProvider } from "@/components/user/user-profile-popover";
 import type { ProfileModerationContext } from "@/components/user/profile-relations";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
+import { WhatsNewView } from "@/components/layout/whats-new-view";
 import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
@@ -75,7 +76,11 @@ import { winningCornerHint } from "@/lib/corner-hints";
 import { useUpdatePromptShowing } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
-import { isWhatsNewSeen } from "@/lib/whats-new";
+import { isWhatsNewSeen, rememberWhatsNew } from "@/lib/whats-new";
+import {
+  hasUnseenWhatsNew,
+  rememberWhatsNewFeed,
+} from "@/lib/whats-new-feed";
 import { ServerSettingsDialog } from "@/components/layout/server-settings-dialog";
 import { CreateServerDialog } from "@/components/layout/create-server-dialog";
 import {
@@ -174,6 +179,14 @@ import {
   favoritesForServer,
   writeFavoritesForServer,
 } from "@/lib/channel-favorites";
+import {
+  addPinnedConversation,
+  isPinnedConversation,
+  PINNED_CONVERSATIONS_MAX,
+  prunePinnedConversations,
+  removePinnedConversation,
+  visiblePinnedConversations,
+} from "@/lib/pinned-conversations";
 import { queuePreferenceSync } from "@/lib/preferences";
 import { browserStorage, hasArrived, rememberArrival } from "@/lib/arrival";
 import { takeAcquisition } from "@/lib/acquisition";
@@ -427,6 +440,10 @@ function MainAppContent({
    * exactly that when closed.
    */
   const [directoryOpen, setDirectoryOpen] = useState(false);
+  const [whatsNewOpen, setWhatsNewOpen] = useState(false);
+  const [whatsNewUnread, setWhatsNewUnread] = useState(() =>
+    hasUnseenWhatsNew(),
+  );
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<DmSummary[]>([]);
   const [conversationsLoading, setConversationsLoading] = useState(false);
@@ -545,7 +562,7 @@ function MainAppContent({
    * waits). A refresh reads storage again and the queue moves on.
    */
   const [wantsMobileBeta] = useState(() => shouldShowMobileBetaHint());
-  const [wantsWhatsNew] = useState(
+  const [wantsWhatsNew, setWantsWhatsNew] = useState(
     () => !isAutomatedBrowser() && !isWhatsNewSeen(),
   );
   const [membersOpen, setMembersOpen] = useState(false);
@@ -2363,6 +2380,52 @@ function MainAppContent({
     queuePreferenceSync({ favoriteChannels: next }, { immediate: true });
   }
 
+  const handlePinnedConversationsChange = useCallback((ids: string[]) => {
+    setUser((previous) =>
+      previous
+        ? {
+            ...previous,
+            preferences: { ...previous.preferences, pinnedConversations: ids },
+          }
+        : previous,
+    );
+    queuePreferenceSync({ pinnedConversations: ids }, { immediate: true });
+  }, []);
+
+  function handleTogglePinnedConversation(channelId: string) {
+    const stored = user?.preferences?.pinnedConversations;
+    const current = conversationsLoading
+      ? [...(stored ?? [])]
+      : prunePinnedConversations(stored, conversations);
+    if (isPinnedConversation(current, channelId)) {
+      handlePinnedConversationsChange(
+        removePinnedConversation(current, channelId),
+      );
+      return;
+    }
+    const next = addPinnedConversation(current, channelId);
+    if (next.length === current.length) {
+      setClaimedHandle(null);
+      setAppNotice(
+        t("chrome.pinConversationFull", { count: PINNED_CONVERSATIONS_MAX }),
+      );
+      return;
+    }
+    handlePinnedConversationsChange(next);
+  }
+
+  const closeWhatsNew = useCallback(() => setWhatsNewOpen(false), []);
+
+  function handleOpenWhatsNew() {
+    setDirectoryOpen(false);
+    setWhatsNewOpen(true);
+    rememberWhatsNewFeed();
+    setWhatsNewUnread(false);
+    rememberWhatsNew();
+    setWantsWhatsNew(false);
+    setMobileNavOpen(false);
+  }
+
   const dropServer = useCallback(
     async (serverId: string) => {
       const nextServers = servers.filter((s) => s.id !== serverId);
@@ -3165,11 +3228,22 @@ function MainAppContent({
       );
       setConversations(remaining);
       conversationsRef.current = remaining;
+      if (isPinnedConversation(user?.preferences?.pinnedConversations, channelId)) {
+        handlePinnedConversationsChange(
+          prunePinnedConversations(
+            removePinnedConversation(
+              user?.preferences?.pinnedConversations,
+              channelId,
+            ),
+            remaining,
+          ),
+        );
+      }
       if (selectedChannelIdRef.current === channelId) {
         selectHome();
       }
     },
-    [selectHome],
+    [handlePinnedConversationsChange, selectHome, user],
   );
 
   const blockedUserIds = useMemo(
@@ -3263,6 +3337,26 @@ function MainAppContent({
   }, [notificationChannels, unread]);
 
   const conversationUnread = conversationUnreadTotals(conversations, unread);
+
+  const pinnedConversations = useMemo(
+    () =>
+      visiblePinnedConversations(
+        conversations,
+        user?.preferences?.pinnedConversations,
+      ),
+    [conversations, user?.preferences?.pinnedConversations],
+  );
+  const pinnedChannelIds = useMemo(
+    () => new Set(pinnedConversations.map((one) => one.channelId)),
+    [pinnedConversations],
+  );
+  const selectedPinnedId =
+    !whatsNewOpen &&
+    selection.kind === "dm" &&
+    selectedChannelId &&
+    pinnedChannelIds.has(selectedChannelId)
+      ? selectedChannelId
+      : null;
 
   /**
    * Conversations with somebody in their voice room right now, for the phone
@@ -3373,8 +3467,8 @@ function MainAppContent({
   const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
   /**
    * One corner card. QG first (the house), then the phone-app invite,
-   * then dice/polls, then cargos. WhatsNew used to mount outside this
-   * queue and stack on the others; it does not any more.
+   * then Novidades on the rail, then cargos. WhatsNew used to mount
+   * outside this queue and stack on the others; it does not any more.
    */
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
@@ -3420,7 +3514,7 @@ function MainAppContent({
    * an ongoing call and the mute button must not vanish because the reader
    * switched to their conversations.
    */
-  const sidebarFooter = (
+  const sidebarFooter = () => (
     <>
       {voiceState.status !== "idle" && (
         <VoiceStatusBar
@@ -4066,9 +4160,11 @@ function MainAppContent({
 
       <ServerRail
         servers={servers}
-        selectedServerId={selectedServerId}
+        selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}
-        homeSelected={selection.kind === "dm"}
+        homeSelected={
+          selection.kind === "dm" && !whatsNewOpen && selectedPinnedId === null
+        }
         homeUnread={conversationUnread}
         // Requests AND depoimentos waiting to be answered — see `waitingOnYou`
         // for why the two are one number on this badge and not two.
@@ -4080,13 +4176,32 @@ function MainAppContent({
         // Absent entirely with the flag off, which is what makes the compass
         // not exist rather than exist-and-refuse.
         onOpenCommunities={
-          communitiesEnabled ? () => setDirectoryOpen(true) : undefined
+          communitiesEnabled
+            ? () => {
+                setWhatsNewOpen(false);
+                setDirectoryOpen(true);
+              }
+            : undefined
         }
+        whatsNewSelected={whatsNewOpen}
+        whatsNewUnread={whatsNewUnread}
+        onOpenWhatsNew={handleOpenWhatsNew}
+        pinnedConversations={pinnedConversations}
+        pinnedUnread={unread}
+        selectedPinnedId={selectedPinnedId}
+        onSelectPinned={(channelId) => {
+          setWhatsNewOpen(false);
+          void selectConversation(channelId);
+          setMobileNavOpen(false);
+        }}
+        onUnpinConversation={handleTogglePinnedConversation}
         onSelectHome={() => {
+          setWhatsNewOpen(false);
           selectHome();
           setMobileNavOpen(true);
         }}
         onSelectServer={(id) => {
+          setWhatsNewOpen(false);
           setSelection({ kind: "server", serverId: id });
           void loadChannels(id);
           setMobileNavOpen(true);
@@ -4096,6 +4211,7 @@ function MainAppContent({
         onInvite={openInviteForServer}
         onOpenMembers={openMembersForServer}
         onOpenSettings={(id) => {
+          setWhatsNewOpen(false);
           setSelection({ kind: "server", serverId: id });
           setServerSettingsOpen(true);
         }}
@@ -4105,6 +4221,14 @@ function MainAppContent({
         }
       />
 
+      {/* Stay mounted under Novidades so a half-typed message is still there
+          when Escape puts the app back. `hidden` takes it out of layout. */}
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1",
+          whatsNewOpen && "hidden",
+        )}
+      >
       {selection.kind === "dm" ? (
         <DmList
           conversations={conversations}
@@ -4122,11 +4246,13 @@ function MainAppContent({
           friendRequestCount={friends.data.incoming.length}
           onOpenFriends={selectHome}
           onHideConversation={(id) => void handleHideConversation(id)}
+          pinnedChannelIds={pinnedChannelIds}
+          onTogglePin={handleTogglePinnedConversation}
           onBlockUser={(person) => void handleBlockUser(person.id)}
           onUnblockUser={(id) => void handleUnblockUser(id)}
           onStartCall={handleStartConversationCall}
           activeCallChannelIds={activeConversationCallIds}
-          footer={sidebarFooter}
+          footer={sidebarFooter()}
         />
       ) : (
         <ChannelList
@@ -4170,13 +4296,14 @@ function MainAppContent({
           onInvite={() => setInviteMode("create")}
           onOpenMembers={() => setMembersOpen(true)}
           onOpenServerSettings={() => setServerSettingsOpen(true)}
-          footer={sidebarFooter}
+          footer={sidebarFooter()}
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
           communityHomeSelected={communityHomeOpen}
           onSelectCommunityHome={() => {
             if (selectedServerId) {
+              setWhatsNewOpen(false);
               markCommunityHomeRowSeen(selectedServerId);
               setCommunityHomeRowNew(false);
               void selectChannel(COMMUNITY_HOME_CHANNEL_ID, selectedServerId);
@@ -4363,6 +4490,16 @@ function MainAppContent({
 
         {selectedChannel?.type === "voice" && chatPane}
       </main>
+      </div>
+      {whatsNewOpen && (
+        <WhatsNewView
+          mobileOpen={mobileNavOpen}
+          onMobileClose={() => setMobileNavOpen(false)}
+          onMobileOpen={() => setMobileNavOpen(true)}
+          onClose={closeWhatsNew}
+          footer={sidebarFooter()}
+        />
+      )}
 
       {/* A SIBLING OF `<main>`, not a child of the chat pane. The root is the
           app's flex row (rail | channels | chat), so slotting the roster here
@@ -4371,8 +4508,11 @@ function MainAppContent({
           voice channel's own two-pane layout needs no change — that lives
           inside `<main>` and simply gets a narrower box. A thread takes this
           same slot: overlaying it on the transcript while the roster stayed
-          put is what crushed #avisos on the QG. */}
+          put is what crushed #avisos on the QG. Stay mounted under Novidades
+          so a half-typed thread reply survives. `contents` keeps the aside as
+          the flex item when the feed is closed. */}
       {openThread && (
+      <div className={whatsNewOpen ? "hidden" : "contents"}>
         <ThreadPanel
           thread={openThread.thread}
           origin={openThread.origin}
@@ -4420,8 +4560,9 @@ function MainAppContent({
             isMuted: voiceState.isMuted,
           }}
         />
+      </div>
       )}
-      {memberSidebarAvailable && !openThread && (
+      {memberSidebarAvailable && !openThread && !whatsNewOpen && (
         <MemberSidebar
           open={memberSidebar.open}
           wide={memberSidebar.wide}
@@ -4730,7 +4871,10 @@ function MainAppContent({
           setServerSettingsOpen(true);
         }}
       />
-      <WhatsNewPrompt enabled={cornerHint === "whatsNew"} />
+      <WhatsNewPrompt
+        enabled={cornerHint === "whatsNew"}
+        onOpen={handleOpenWhatsNew}
+      />
       <MobileBetaHint enabled={cornerHint === "mobileBeta"} />
       <QgHint
         onShowingChange={handleQgHintShowingChange}

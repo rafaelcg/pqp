@@ -13,9 +13,45 @@ Read [`docs/I18N.md`](./docs/I18N.md) before adding copy.
 5. Electron menus live in `electron/locales/`. Do not put them in the client JSON.
 6. Leave Worker/OG meta, slash command **names**, `error-boundary.tsx`, and legal route files alone unless the task is those files.
 
+### PT-BR voice (QG, What's New, in-app)
+
+Write the Portuguese **first**. Do not write English and translate. Translated PT-BR is what sounds fake.
+
+It has to sound like a person in the QG. `você`. Short. What to click. The bar is `dados-discord-e-cargos.pt-BR.md`, not a press release.
+
+Do:
+
+- Read it out loud. If you would not send it in the QG, rewrite.
+- Concrete: the button, the menu, the slash command.
+- Gerund (`está fazendo`), not European `a fazer`. `você`, not `tu` / `a gente` as a system voice.
+
+Loanwords: Brazilian gaming Portuguese keeps a lot of English. Do not "fix" that.
+
+- Keep the word the QG already says: DM, chat, call, mute / mutar, kick / kickar, ban, staff, post, feed, login, app, APK, VIP, card, online, offline, Watch party, Chrome, Play Store, TestFlight. Full list in `docs/I18N.md`.
+- When you name a control, copy the pt-BR label (`Fixar na barra`, `Prévia`, `Rascunho`). Do not invent a more Portuguese one.
+- The other direction also sounds fake: do not leave English the UI already translated (`rail` is barra, `pin` is fixar, `settings` is Configurações).
+
+Do not:
+
+- Explain what it is not (`Não é chat, e não pinga`).
+- Meta about the notes (`o outro post`, `não ganhou post próprio`, `aqui é o que ficou de fora`).
+- Marketing (`cantinho`, `experiência`, `jornada`, `de verdade` as a heading garnish).
+- English rhythm: colon after a fragment (`Pagar por isso ainda não: …`), three-word stacks (`No site. No iPhone. Ainda não.`), `Cabe 15.`
+- `Não é X, é Y`. Em dashes. Wikipedia AI tells: `além disso`, `não apenas X, mas Y`, rule-of-three, empty adjectives.
+
+Screenshots: capture the app in **pt-BR**. English UI in a PT post reads as a translation. An English shot already in the PR can ship; the next one must be Portuguese.
+
+UI JSON in `translation.json` still follows `docs/I18N.md` (English keys first). What's New and QG replies do not.
+
 ## Game connections
 
 Read [`docs/CONNECTIONS.md`](./docs/CONNECTIONS.md) before adding a provider. Steam is OpenID 2.0. Battle.net and Twitch are OAuth. None of those is a Clerk login.
+
+## Release notes (What's New / `/blog`)
+
+The sparkle in the app and `/blog` are the same markdown. Mechanics: the header of `client/src/lib/blog/posts.ts`.
+
+Do **not** write a What's New post in a feature PR. Notes are a weekly catch-up, not a per-PR duty. When Andre asks to catch up, follow [`.cursor/skills/whats-new/SKILL.md`](.cursor/skills/whats-new/SKILL.md). Never edit a post already on `main`.
 
 ## How we ship
 

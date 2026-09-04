@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
 import { cn } from "@/lib/utils";
 
 /**
@@ -75,12 +76,14 @@ export function CornerCard({
       return;
     }
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onClose();
+      if (event.key !== "Escape" || escapeOwnedByOverlay(event)) {
+        return;
       }
+      event.preventDefault();
+      onClose();
     }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [open, onClose]);
 
   if (!mounted) {

@@ -1,5 +1,28 @@
 import type { BlogLocale } from "./posts";
 
+function utcStamp(iso: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!match) {
+    return null;
+  }
+  const [, year, month, day] = match;
+  return Date.UTC(Number(year), Number(month) - 1, Number(day));
+}
+
+function formatUtc(
+  iso: string,
+  locale: BlogLocale,
+  options: Intl.DateTimeFormatOptions,
+): string {
+  const at = utcStamp(iso);
+  if (at === null) {
+    return iso;
+  }
+  return new Intl.DateTimeFormat(locale, { ...options, timeZone: "UTC" }).format(
+    at,
+  );
+}
+
 /**
  * A post's `YYYY-MM-DD` as a readable date, in the reader's language.
  *
@@ -14,16 +37,17 @@ import type { BlogLocale } from "./posts";
  * this safe to call on data that only a test would ever get wrong.
  */
 export function formatPostDate(iso: string, locale: BlogLocale): string {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
-  if (!match) {
-    return iso;
-  }
-  const [, year, month, day] = match;
-  const at = Date.UTC(Number(year), Number(month) - 1, Number(day));
-  return new Intl.DateTimeFormat(locale, {
+  return formatUtc(iso, locale, {
     day: "numeric",
     month: "long",
     year: "numeric",
-    timeZone: "UTC",
-  }).format(at);
+  });
+}
+
+/** Compact date for a list of notes: day and month, no year. */
+export function formatPostShortDate(iso: string, locale: BlogLocale): string {
+  return formatUtc(iso, locale, {
+    day: "numeric",
+    month: "short",
+  });
 }

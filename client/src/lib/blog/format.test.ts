@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatPostDate } from "./format";
+import { formatPostDate, formatPostShortDate } from "./format";
 
 describe("formatPostDate", () => {
   it("renders the day it shipped, not the day the reader's clock says", () => {
@@ -20,5 +20,12 @@ describe("formatPostDate", () => {
   it("hands back anything that is not a date untouched", () => {
     expect(formatPostDate("nonsense", "en")).toBe("nonsense");
     expect(formatPostDate("2026-8-1", "en")).toBe("2026-8-1");
+  });
+
+  it("short form keeps the shipped day and drops the year", () => {
+    expect(formatPostShortDate("2026-08-21", "en")).toMatch(/21/);
+    expect(formatPostShortDate("2026-08-21", "en").toLowerCase()).toMatch(/aug/);
+    expect(formatPostShortDate("2026-08-21", "en")).not.toMatch(/2026/);
+    expect(formatPostShortDate("2026-08-21", "pt-BR")).toMatch(/21/);
   });
 });

@@ -45,7 +45,7 @@ describe("isWhatsNewSeen", () => {
     expect(
       isWhatsNewSeen(
         WHATS_NEW_PACK_ID,
-        fakeStorage({ [WHATS_NEW_STORAGE_KEY]: "roles" }),
+        fakeStorage({ [WHATS_NEW_STORAGE_KEY]: "chance-polls" }),
       ),
     ).toBe(false);
   });

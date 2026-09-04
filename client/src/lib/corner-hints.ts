@@ -1,7 +1,7 @@
 /**
  * One corner card at a time.
  *
- * The update card, QG, the Android/iOS beta invite, dice/polls, and cargos
+ * The update card, QG, the Android/iOS beta invite, Novidades, and cargos
  * all pin to `right-4 bottom-4`. Showing two is a stack, not a queue: the
  * one underneath still records its impression, so the person never sees it.
  * First match in this list is the only one allowed to mount.
@@ -11,7 +11,7 @@
  *     outside App; see `lib/update-prompt-state.ts` for how it reports in)
  *  2. qg — the house, first-run
  *  3. mobileBeta — phone browsers only; the campaign for the native apps
- *  4. whatsNew — feature note (dice / polls)
+ *  4. whatsNew — Novidades now lives on the rail
  *  5. cargos — staff who can manage roles
  */
 export const CORNER_HINT_ORDER = [

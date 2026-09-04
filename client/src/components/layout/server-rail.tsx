@@ -1,5 +1,5 @@
-import { Compass, MessageCircle, Plus, UserPlus } from "lucide-react";
-import type { Server } from "@pqp/shared";
+import { Compass, MessageCircle, Plus, Sparkles, UserPlus } from "lucide-react";
+import type { DmSummary, PublicUser, Server } from "@pqp/shared";
 import {
   formatBadgeCount,
   type UnreadState,
@@ -15,9 +15,12 @@ import { offersProfileVisibility } from "@/components/depoimentos/depoimentos-mo
 import {
   notificationLevelItems,
   serverNotificationControls,
+  useChannelNotificationLevel,
   useNotificationState,
 } from "@/hooks/use-notifications";
 import { useTranslation } from "@/lib/i18n";
+import { conversationTitle } from "@/lib/conversations";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { cn } from "@/lib/utils";
 
 interface ServerRailProps {
@@ -60,6 +63,23 @@ interface ServerRailProps {
    * exist-and-refuse.
    */
   onOpenCommunities?: () => void;
+  /** True while the in-app release notes are covering the channel columns. */
+  whatsNewSelected?: boolean;
+  /** A pip, not a count: something newer than last visit, or nothing. */
+  whatsNewUnread?: boolean;
+  onOpenWhatsNew?: () => void;
+  /**
+   * Conversations this person pinned to the rail, already filtered to ones
+   * still in the list, in pin order. Empty means the Home bubble is the only
+   * DM door, which is the usual case.
+   */
+  pinnedConversations?: DmSummary[];
+  /** Live unread for those conversations, same map the Home badge reads. */
+  pinnedUnread?: Record<string, UnreadState>;
+  /** The pinned conversation currently open, or null. */
+  selectedPinnedId?: string | null;
+  onSelectPinned?: (channelId: string) => void;
+  onUnpinConversation?: (channelId: string) => void;
   onSelectHome: () => void;
   onSelectServer: (serverId: string) => void;
   onCreateServer: () => void;
@@ -85,6 +105,14 @@ export function ServerRail({
   friendRequestCount = 0,
   communitiesSelected = false,
   onOpenCommunities,
+  whatsNewSelected = false,
+  whatsNewUnread = false,
+  onOpenWhatsNew,
+  pinnedConversations = [],
+  pinnedUnread = {},
+  selectedPinnedId = null,
+  onSelectPinned,
+  onUnpinConversation,
   onSelectHome,
   onSelectServer,
   onCreateServer,
@@ -155,6 +183,20 @@ export function ServerRail({
         )}
       </button>
       </Tooltip>
+      {pinnedConversations.map((conversation) => (
+        <PinnedConversationButton
+          key={conversation.channelId}
+          conversation={conversation}
+          unread={pinnedUnread[conversation.channelId] ?? { count: 0, mentions: 0 }}
+          selected={selectedPinnedId === conversation.channelId}
+          onSelect={() => onSelectPinned?.(conversation.channelId)}
+          onUnpin={
+            onUnpinConversation
+              ? () => onUnpinConversation(conversation.channelId)
+              : undefined
+          }
+        />
+      ))}
       <span
         aria-hidden="true"
         className="h-px w-8 shrink-0 rounded-full bg-ink-4/70"
@@ -280,24 +322,61 @@ export function ServerRail({
         </Button>
       </Tooltip>
 
-      {/* Communities, at the FOOT of the rail and separated from everything
-          above it.
-          The position is the point. Above this line the rail is the rooms you
-          are already in, in the order you put them; the compass is the only
-          thing here that leads somewhere you have not been, so it sits apart
-          and it sits still — `mt-auto` pins it to the bottom edge no matter how
-          many servers are stacked over it, which is what makes it findable
-          without being read. It is the same placement Discord gives discovery,
-          for the same reason.
-          NO BADGE, EVER. Every other icon on this rail earns its corner marks
-          by having something waiting for you; a directory has nothing waiting
-          for anybody, and a count here would be an invention. */}
-      {onOpenCommunities && (
+      {/* Product chrome, at the FOOT of the rail and separated from the halls.
+          The sparkle is not a hall: mixing it into the list would read as
+          another room. It sits with discovery, pinned to the bottom, the
+          same place Discord puts things that are not servers. A pip is
+          allowed here (unlike the compass) because a new post is something
+          waiting; a count is not, because this is not a mention. */}
+      {onOpenWhatsNew && (
         <>
           <span
             aria-hidden="true"
             className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
           />
+          <Tooltip
+            label={
+              whatsNewUnread ? t("whatsNew.rail.unread") : t("whatsNew.rail")
+            }
+            side="right"
+            tone="rail"
+          >
+            <button
+              type="button"
+              data-whats-new-rail
+              onClick={onOpenWhatsNew}
+              aria-current={whatsNewSelected ? "page" : undefined}
+              className={cn(
+                "group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl transition-all duration-200 hover:rounded-xl",
+                whatsNewSelected
+                  ? "rounded-xl bg-signal text-ink"
+                  : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
+              )}
+            >
+              <RailPill
+                kind={
+                  whatsNewSelected ? "selected" : whatsNewUnread ? "unread" : "none"
+                }
+              />
+              <Sparkles className="h-5 w-5" />
+              {whatsNewUnread && !whatsNewSelected && (
+                <span
+                  aria-hidden="true"
+                  className="absolute right-[-2px] top-[-2px] h-2.5 w-2.5 rounded-full bg-signal ring-[3px] ring-rail"
+                />
+              )}
+            </button>
+          </Tooltip>
+        </>
+      )}
+      {onOpenCommunities && (
+        <>
+          {!onOpenWhatsNew && (
+            <span
+              aria-hidden="true"
+              className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
+            />
+          )}
           <Tooltip label={t("communities.title")} side="right" tone="rail">
             <button
               type="button"
@@ -318,6 +397,123 @@ export function ServerRail({
         </>
       )}
     </nav>
+  );
+}
+
+const MAX_PINNED_AVATARS = 3;
+
+function PinnedConversationButton({
+  conversation,
+  unread,
+  selected,
+  onSelect,
+  onUnpin,
+}: {
+  conversation: DmSummary;
+  unread: UnreadState;
+  selected: boolean;
+  onSelect: () => void;
+  onUnpin?: () => void;
+}) {
+  const { t } = useTranslation();
+  const notifications = useChannelNotificationLevel({
+    id: conversation.channelId,
+    serverId: null,
+  });
+  const title = conversationTitle(conversation.participants);
+  const muted = notifications.level === "none";
+  const mentions = selected || muted ? 0 : unread.mentions;
+  const badge = mentions > 0 ? mentions : muted || selected ? 0 : unread.count;
+  const hasUnread = !selected && !muted && unread.count > 0;
+
+  const items: ContextMenuItemDef[] = onUnpin
+    ? [
+        {
+          id: "unpin",
+          label: t("chrome.unpinConversation"),
+          onSelect: onUnpin,
+        },
+      ]
+    : [];
+
+  const button = (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-label={title}
+      aria-current={selected ? "page" : undefined}
+      className={cn(
+        "group relative flex h-12 w-12 items-center justify-center rounded-full transition-colors",
+        selected
+          ? "bg-signal text-ink"
+          : "bg-ink-3 text-paper hover:bg-signal hover:text-ink",
+        muted && !selected && "opacity-50",
+      )}
+    >
+      <RailPill kind={selected ? "selected" : hasUnread ? "unread" : "none"} />
+      <span className="flex h-full w-full items-center justify-center overflow-hidden rounded-full">
+        <PinnedAvatarStack participants={conversation.participants} />
+      </span>
+      {badge > 0 && <RailCountBadge count={badge} tone="danger" />}
+      {hasUnread && (
+        <span className="sr-only">
+          {mentions > 0
+            ? t("chrome.unreadMentions", { count: mentions })
+            : t("chrome.unreadMessagesSr")}
+        </span>
+      )}
+    </button>
+  );
+
+  return (
+    <Tooltip label={title} side="right" tone="rail">
+      <span className="relative inline-flex">
+        {items.length > 0 ? (
+          <ContextMenu items={items}>{button}</ContextMenu>
+        ) : (
+          button
+        )}
+      </span>
+    </Tooltip>
+  );
+}
+
+function PinnedAvatarStack({
+  participants,
+}: {
+  participants: readonly PublicUser[];
+}) {
+  const shown = participants.slice(0, MAX_PINNED_AVATARS);
+  if (shown.length === 0) {
+    return (
+      <span className="h-full w-full rounded-full bg-ink-4" aria-hidden="true" />
+    );
+  }
+  if (shown.length === 1) {
+    const person = shown[0]!;
+    return (
+      <UserAvatar
+        name={person.displayName}
+        avatarUrl={person.avatarUrl}
+        className="h-full w-full"
+        fallbackClassName="bg-ink-4 text-sm text-paper"
+        rounded="full"
+      />
+    );
+  }
+  return (
+    <span className="flex h-full w-full flex-wrap items-center justify-center gap-0 p-0.5" aria-hidden="true">
+      {shown.map((person) => (
+        <UserAvatar
+          key={person.id}
+          name={person.displayName}
+          avatarUrl={person.avatarUrl}
+          className="h-5 w-5"
+          fallbackClassName="bg-ink-4 text-[8px] text-paper"
+          rounded="full"
+        />
+      ))}
+    </span>
   );
 }
 

@@ -33,6 +33,7 @@ export function BlogMedia({ src, alt, caption }: BlogMediaProps) {
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
+        event.preventDefault();
         event.stopPropagation();
         setOpen(false);
       }
