@@ -188,6 +188,20 @@ export async function waitUntilVoiceConnected(page: Page): Promise<void> {
   });
 }
 
+/**
+ * Hang up while the page is still alive. Playwright `page.close()` often
+ * skips `pagehide`, so a voice-resume orphan can sit in the lobby for 90s
+ * and poison the next spec (two share tiles, or Share disabled).
+ */
+export async function leaveVoiceIfConnected(page: Page): Promise<void> {
+  const leave = page.getByRole("button", { name: "Leave", exact: true });
+  if (!(await leave.isVisible().catch(() => false))) {
+    return;
+  }
+  await leave.click();
+  await expect(leave).toBeHidden({ timeout: 10_000 });
+}
+
 /** Read a resolved CSS custom property off :root. */
 export function cssVar(page: Page, name: string): Promise<string> {
   return page.evaluate(

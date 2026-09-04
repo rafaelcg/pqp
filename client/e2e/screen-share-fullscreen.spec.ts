@@ -1,5 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openApp, waitUntilVoiceConnected } from "./fixtures";
+import {
+  leaveVoiceIfConnected,
+  openApp,
+  waitUntilVoiceConnected,
+} from "./fixtures";
 
 /**
  * Fullscreen on a shared screen, for the presenter and for whoever is watching.
@@ -110,6 +114,7 @@ test("the presenter can put their own share fullscreen", async ({ page }) => {
   await expect
     .poll(async () => (await measure(page)).fullscreen, { timeout: 10_000 })
     .toBe(false);
+  await leaveVoiceIfConnected(page);
 });
 
 test("a viewer can put someone else's share fullscreen", async ({
@@ -125,8 +130,8 @@ test("a viewer can put someone else's share fullscreen", async ({
     permissions: ["microphone"],
     viewport: { width: 1440, height: 900 },
   });
+  const viewer = await context.newPage();
   try {
-    const viewer = await context.newPage();
     await viewer.goto("/app");
     await joinLobby(viewer);
 
@@ -147,6 +152,8 @@ test("a viewer can put someone else's share fullscreen", async ({
     expect(after.width).toBe(after.viewport.width);
     expect(after.height).toBeGreaterThan(after.viewport.height * 0.9);
   } finally {
+    await leaveVoiceIfConnected(page);
+    await leaveVoiceIfConnected(viewer).catch(() => {});
     await context.close().catch(() => {});
   }
 });
@@ -268,8 +275,8 @@ test("a viewer can enlarge a screen share in a private call", async ({
   });
   await context.grantPermissions(["microphone", "camera"]);
 
+  const viewer = await context.newPage();
   try {
-    const viewer = await context.newPage();
     await openConversation(viewer, pair.conversationId, pair.calleeSuffix);
     await page.setViewportSize({ width: 1440, height: 900 });
     await openConversation(page, pair.conversationId, pair.callerSuffix);
@@ -343,6 +350,8 @@ test("a viewer can enlarge a screen share in a private call", async ({
       })
       .toBe(true);
   } finally {
+    await leaveVoiceIfConnected(page);
+    await leaveVoiceIfConnected(viewer).catch(() => {});
     await context.close().catch(() => {});
   }
 });
