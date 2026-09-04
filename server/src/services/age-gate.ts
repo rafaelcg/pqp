@@ -257,7 +257,7 @@ export async function recordAgeDeclaration(
  * stay open to somebody we are refusing" is a decision that should have to be
  * made deliberately, one route at a time, and be readable in one place.
  *
- * There are exactly two reasons to be on it:
+ * There are exactly three reasons to be on it:
  *
  *  1. Answering the gate at all. `GET /api/me` is how the client learns the
  *     status, and `POST /api/me/age-check` is the declaration itself. Without
@@ -268,6 +268,12 @@ export async function recordAgeDeclaration(
  *     alternative is a person who is locked out of the product AND locked away
  *     from their own data, which converts a safety measure into a data-rights
  *     violation.
+ *
+ *  3. Desktop handoff. `POST /api/desktop/handoff` only mints a one-shot
+ *     identity ticket so Electron can adopt a session finished in the system
+ *     browser. The age dialog lives inside `/app`; a brand-new sign-up has
+ *     never seen it. The ticket grants no extra access — Electron still hits
+ *     `/api/me` and renders the same pending/blocked dialog.
  *
  * Nothing that reads, writes or reaches another user belongs here. Note in
  * particular that `PATCH /api/me` is absent: a refused account has no business
@@ -282,6 +288,7 @@ const AGE_GATE_EXEMPT: ReadonlyArray<{ method: string; path: string }> = [
   { method: "DELETE", path: "/api/me" },
   // LGPD art. 18, V — portability.
   { method: "GET", path: "/api/me/export" },
+  { method: "POST", path: "/api/desktop/handoff" },
 ];
 
 export function isAgeGateExempt(method: string, pathname: string): boolean {

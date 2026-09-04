@@ -63,6 +63,38 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     return ipcRenderer.invoke("pqp:get-pending-deep-link");
   },
 
+  startDesktopAuth(mode) {
+    return ipcRenderer.invoke(
+      "pqp:start-desktop-auth",
+      mode === "sign-up" ? "sign-up" : "sign-in",
+    );
+  },
+
+  cancelDesktopAuth() {
+    return ipcRenderer.invoke("pqp:cancel-desktop-auth");
+  },
+
+  getDesktopAuthStatus() {
+    return ipcRenderer.invoke("pqp:desktop-auth-status");
+  },
+
+  getPendingDesktopAuthTicket() {
+    return ipcRenderer.invoke("pqp:get-pending-desktop-auth-ticket");
+  },
+
+  onDesktopAuthTicket(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const handler = (_event, ticket) => {
+      callback(ticket);
+    };
+    ipcRenderer.on("pqp:desktop-auth-ticket", handler);
+    return () => {
+      ipcRenderer.removeListener("pqp:desktop-auth-ticket", handler);
+    };
+  },
+
   /**
    * Mirror the resolved theme into the main process, which cannot read the
    * renderer's localStorage but has to paint the window background before the

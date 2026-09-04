@@ -25,6 +25,14 @@ const {
   mayPromptForPasskey,
 } = require("./lib/passkey-hint");
 const { initAutoUpdate } = require("./lib/updater");
+const http = require("node:http");
+const {
+  LISTENER_TTL_MS,
+  createState,
+  buildDesktopLoginUrl,
+  buildDoneUrl,
+  classifyCallbackRequest,
+} = require("./lib/desktop-auth");
 const {
   THUMBNAIL_SIZE,
   MAC_SCREEN_SETTINGS_URL,
@@ -62,6 +70,12 @@ let mainWindow = null;
 let staticServer = null;
 /** @type {string | null} */
 let pendingDeepLink = null;
+/** @type {string | null} */
+let sessionAppOrigin = null;
+/** @type {string | null} */
+let pendingDesktopAuthTicket = null;
+/** @type {{ server: import("http").Server, port: number, state: string, url: string, timer: ReturnType<typeof setTimeout> } | null} */
+let desktopAuthSession = null;
 /** @type {BrowserWindow | null} */
 let pickerWindow = null;
 
@@ -291,6 +305,117 @@ function focusMainWindow() {
   }
   mainWindow.show();
   mainWindow.focus();
+}
+
+function stopDesktopAuthSession() {
+  if (!desktopAuthSession) {
+    return;
+  }
+  clearTimeout(desktopAuthSession.timer);
+  desktopAuthSession.server.close();
+  desktopAuthSession = null;
+}
+
+function writeAuthResponse(res, status, extraHeaders, body) {
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    Connection: "close",
+    "Cache-Control": "no-store",
+    ...extraHeaders,
+  });
+  res.end(body);
+}
+
+function deliverDesktopAuthTicket(ticket) {
+  pendingDesktopAuthTicket = ticket;
+  sendToRenderer("pqp:desktop-auth-ticket", ticket);
+  try {
+    app.focus({ steal: true });
+  } catch {
+    // Electron without steal still gets show/focus below.
+  }
+  focusMainWindow();
+}
+
+function startDesktopAuthSession(mode) {
+  if (!sessionAppOrigin) {
+    return Promise.resolve({ ok: false, url: "" });
+  }
+
+  const open = async (url) => {
+    try {
+      await shell.openExternal(url);
+      return { ok: true, url };
+    } catch {
+      return { ok: false, url };
+    }
+  };
+
+  if (desktopAuthSession) {
+    const url =
+      buildDesktopLoginUrl({
+        appOrigin: sessionAppOrigin,
+        mode,
+        port: desktopAuthSession.port,
+        state: desktopAuthSession.state,
+      }) ?? desktopAuthSession.url;
+    desktopAuthSession.url = url;
+    return open(url);
+  }
+
+  return new Promise((resolve) => {
+    const state = createState();
+    const server = http.createServer((req, res) => {
+      const current = desktopAuthSession;
+      const decision = classifyCallbackRequest({
+        method: req.method ?? "GET",
+        url: req.url ?? "/",
+        host: req.headers.host ?? "",
+        expectedPort: current?.port,
+        expectedState: current?.state,
+      });
+      if (decision.action === "ignore") {
+        writeAuthResponse(res, 404, {}, "");
+        return;
+      }
+      if (decision.action === "reject") {
+        writeAuthResponse(res, 400, {}, "");
+        return;
+      }
+      const done = buildDoneUrl(sessionAppOrigin) ?? sessionAppOrigin;
+      writeAuthResponse(res, 302, { Location: done }, "<!doctype html><p>ok</p>");
+      const ticket = decision.ticket;
+      setImmediate(() => {
+        stopDesktopAuthSession();
+        deliverDesktopAuthTicket(ticket);
+      });
+    });
+
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port =
+        address && typeof address === "object" ? address.port : 0;
+      const url = buildDesktopLoginUrl({
+        appOrigin: sessionAppOrigin,
+        mode,
+        port,
+        state,
+      });
+      if (!url) {
+        server.close();
+        resolve({ ok: false, url: "" });
+        return;
+      }
+      const timer = setTimeout(() => {
+        stopDesktopAuthSession();
+      }, LISTENER_TTL_MS);
+      desktopAuthSession = { server, port, state, url, timer };
+      resolve(open(url));
+    });
+    server.on("error", () => {
+      resolve({ ok: false, url: "" });
+    });
+  });
 }
 
 /**
@@ -895,6 +1020,7 @@ function configureSessionSecurity(appOrigin) {
 }
 
 function createWindow(appUrl, allowedOrigin) {
+  sessionAppOrigin = allowedOrigin;
   const state = loadWindowState(app.getPath("userData"));
   const isMac = process.platform === "darwin";
 
@@ -1036,6 +1162,25 @@ if (!gotLock) {
     return value;
   });
 
+  ipcMain.handle("pqp:start-desktop-auth", (_event, mode) => {
+    return startDesktopAuthSession(mode === "sign-up" ? "sign-up" : "sign-in");
+  });
+
+  ipcMain.handle("pqp:cancel-desktop-auth", () => {
+    stopDesktopAuthSession();
+  });
+
+  ipcMain.handle("pqp:desktop-auth-status", () => ({
+    active: desktopAuthSession !== null,
+    url: desktopAuthSession?.url ?? null,
+  }));
+
+  ipcMain.handle("pqp:get-pending-desktop-auth-ticket", () => {
+    const value = pendingDesktopAuthTicket;
+    pendingDesktopAuthTicket = null;
+    return value;
+  });
+
   ipcMain.on("pqp:set-theme", (_event, theme) => {
     if (theme !== "dark" && theme !== "light") {
       return;
@@ -1109,6 +1254,7 @@ if (!gotLock) {
   });
 
   app.on("before-quit", () => {
+    stopDesktopAuthSession();
     if (staticServer) {
       const server = staticServer;
       staticServer = null;

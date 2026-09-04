@@ -143,7 +143,12 @@ import {
 } from "../ws/voice.js";
 // --- voice moderation ---
 import { setSfuUserMuted } from "../voice/admin.js";
-import { invalidateUserCache, resolveAuthSession } from "../auth/clerk.js";
+import {
+  createDesktopSignInToken,
+  invalidateUserCache,
+  isClerkUserId,
+  resolveAuthSession,
+} from "../auth/clerk.js";
 import {
   AGE_GATE_BLOCKED_MESSAGE,
   AGE_GATE_PENDING_MESSAGE,
@@ -502,6 +507,15 @@ const connectionLimiter = createRateLimiter({
   refillPerSecond: 0.2,
 });
 /**
+ * Minting a desktop handoff ticket hits Clerk on the request path. A handful
+ * of retries is a person clicking twice; a scripted flood would burn the
+ * Backend API quota and produce live sign-in tokens.
+ */
+const desktopHandoffLimiter = createRateLimiter({
+  capacity: 8,
+  refillPerSecond: 0.2,
+});
+/**
  * Search is also per-keystroke, but the expensive party is our own database
  * rather than a third party's quota: one query ranks every visible message in a
  * server. The burst covers a debounced session of typing plus paging through
@@ -667,6 +681,7 @@ export function resetApiRateLimits(): void {
   anonLimiter.reset();
   gifLimiter.reset();
   connectionLimiter.reset();
+  desktopHandoffLimiter.reset();
   searchLimiter.reset();
   uploadLimiter.reset();
   homeCommentLimiter.reset();
@@ -881,6 +896,30 @@ function refuseCharacterSelfService(user: DbUser): void {
     );
   }
 }
+
+// ---------------------------------------------------------------- desktop
+
+/**
+ * One-shot Clerk ticket so the Electron shell can adopt a session the user
+ * finished in their system browser. Age-gate exempt on purpose: a new sign-up
+ * has never seen the dialog, and the ticket only transfers identity.
+ */
+router.post("/api/desktop/handoff", async ({ res, user }) => {
+  if (!isClerkUserId(user.clerk_id)) {
+    throw new HttpError(403, "Desktop handoff is only for Clerk accounts");
+  }
+  const key = `user:${user.id}`;
+  if (!desktopHandoffLimiter.take(key)) {
+    res.setHeader("Retry-After", String(desktopHandoffLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  try {
+    const ticket = await createDesktopSignInToken(user.clerk_id);
+    return { ticket };
+  } catch {
+    throw new HttpError(503, "Could not start desktop sign-in");
+  }
+});
 
 // ---------------------------------------------------------------- profile
 

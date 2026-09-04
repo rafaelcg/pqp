@@ -231,6 +231,10 @@ function del<T>(path: string, body?: unknown) {
 
 export const fetchMe = () => apiFetch<User>("/api/me");
 
+/** One-shot Clerk ticket for the Electron shell. Browser page only. */
+export const mintDesktopHandoff = () =>
+  post<{ ticket: string }>("/api/desktop/handoff");
+
 export const updateMe = (body: {
   displayName?: string;
   username?: string;

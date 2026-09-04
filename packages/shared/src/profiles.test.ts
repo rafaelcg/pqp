@@ -95,6 +95,10 @@ describe("validateHandle", () => {
     expect(validateHandle("tela")).toBe("reserved");
   });
 
+  it("reserves the desktop browser-login path", () => {
+    expect(validateHandle("desktop-login")).toBe("reserved");
+  });
+
   it("reserves the Android beta landing's path", () => {
     expect(validateHandle("android")).toBe("reserved");
   });
