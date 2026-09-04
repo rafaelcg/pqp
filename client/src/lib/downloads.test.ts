@@ -246,9 +246,9 @@ describe("isAndroidDevice", () => {
   });
 });
 
-// The names below are the ones Electron run 31186452374 actually produced.
-// Version 0.1.0 is used here to prove the match survives a version bump, which
-// is the entire reason these are patterns and not constants.
+// The names below are the ones a real Electron release produces. Version 0.1.0
+// is used here to prove the match survives a version bump, which is the entire
+// reason these are patterns and not constants.
 const RELEASE_BODY = {
   tag_name: "v0.1.0",
   assets: [
@@ -260,6 +260,7 @@ const RELEASE_BODY = {
     "pqp-0.1.0-x64.zip.blockmap",
     "pqp-0.1.0-x64.exe",
     "pqp-0.1.0-x64.exe.blockmap",
+    "pqp-0.1.0-x64-portable.exe",
     "pqp-0.1.0-x86_64.AppImage",
     "pqp-0.1.0-amd64.deb",
     "latest-mac.yml",
@@ -290,10 +291,48 @@ describe("fetchLatestAssets", () => {
         "https://github.com/rafaelcg/pqp/releases/download/v0.1.0/pqp-0.1.0-x64.dmg",
       windows:
         "https://github.com/rafaelcg/pqp/releases/download/v0.1.0/pqp-0.1.0-x64.exe",
+      "windows-portable":
+        "https://github.com/rafaelcg/pqp/releases/download/v0.1.0/pqp-0.1.0-x64-portable.exe",
       "linux-appimage":
         "https://github.com/rafaelcg/pqp/releases/download/v0.1.0/pqp-0.1.0-x86_64.AppImage",
       "linux-deb":
         "https://github.com/rafaelcg/pqp/releases/download/v0.1.0/pqp-0.1.0-amd64.deb",
+    });
+  });
+
+  // The two Windows `.exe` files are the only pair of assets whose names can
+  // shadow each other, and the failure would be invisible: whichever pattern
+  // matched both would hand the same file to the person the fallback exists
+  // for. These are the literal names on the v0.1.4 release, sizes 119877744
+  // and 119073175, so this is a fact about the release and not about a fixture.
+  it("keeps the Windows installer and the portable build apart", async () => {
+    const windows = {
+      assets: ["pqp-0.1.4-x64.exe", "pqp-0.1.4-x64-portable.exe"].map(
+        (name) => ({ name, browser_download_url: `https://example.test/${name}` }),
+      ),
+    };
+    await expect(
+      fetchLatestAssets(() => Promise.resolve(jsonResponse(windows))),
+    ).resolves.toEqual({
+      windows: "https://example.test/pqp-0.1.4-x64.exe",
+      "windows-portable": "https://example.test/pqp-0.1.4-x64-portable.exe",
+    });
+  });
+
+  // Assets arrive in whatever order the GitHub API lists them, and the matcher
+  // keeps the first hit per id. Reversing the list would expose a portable
+  // pattern loose enough to claim the installer, or the reverse.
+  it("keeps them apart whichever order the release lists them in", async () => {
+    const reversed = {
+      assets: ["pqp-0.1.4-x64-portable.exe", "pqp-0.1.4-x64.exe"].map(
+        (name) => ({ name, browser_download_url: `https://example.test/${name}` }),
+      ),
+    };
+    await expect(
+      fetchLatestAssets(() => Promise.resolve(jsonResponse(reversed))),
+    ).resolves.toEqual({
+      windows: "https://example.test/pqp-0.1.4-x64.exe",
+      "windows-portable": "https://example.test/pqp-0.1.4-x64-portable.exe",
     });
   });
 

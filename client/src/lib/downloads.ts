@@ -60,21 +60,33 @@ export type AssetId =
   | "mac-arm64"
   | "mac-x64"
   | "windows"
+  | "windows-portable"
   | "linux-appimage"
   | "linux-deb";
 
 /**
  * How each artifact's filename looks, with the version left open.
  *
- * Confirmed against the artifacts of Electron run 31186452374 rather than
- * guessed — the Windows `.exe` in particular is one file, not two, because
- * `nsis` and `portable` both resolve to the same `artifactName` and the second
- * overwrites the first.
+ * Confirmed against a real release rather than guessed. Windows ships **two**
+ * `.exe` files and has since `electron/package.json` gave the `portable` target
+ * an `artifactName` of its own: before that both targets resolved to the same
+ * name and the second build overwrote the first, which also left `latest.yml`
+ * declaring a sha512 for a file that was no longer there. v0.1.4 therefore
+ * carries `pqp-0.1.4-x64.exe` (the NSIS installer, the one electron-updater
+ * selects) alongside `pqp-0.1.4-x64-portable.exe`.
+ *
+ * Which makes the two Windows patterns the fragile pair here, because a
+ * filename that matched both would silently offer the installer twice and the
+ * portable build never, the exact failure the fallback exists to prevent. The
+ * installer pattern is anchored so the name has to *end* in `-x64.exe`, which
+ * `-x64-portable.exe` does not; `downloads.test.ts` pins both directions
+ * against the real v0.1.4 filenames.
  */
 const ASSET_PATTERNS: Record<AssetId, RegExp> = {
   "mac-arm64": /^pqp-.+-arm64\.dmg$/,
   "mac-x64": /^pqp-.+-x64\.dmg$/,
   windows: /^pqp-.+-x64\.exe$/,
+  "windows-portable": /^pqp-.+-x64-portable\.exe$/,
   "linux-appimage": /^pqp-.+-x86_64\.AppImage$/i,
   "linux-deb": /^pqp-.+-amd64\.deb$/,
 };
