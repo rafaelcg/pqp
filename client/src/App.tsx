@@ -1810,7 +1810,8 @@ function MainAppContent({
             message.type === "message-deleted" ||
             message.type === "presence-update" ||
             message.type === "typing-broadcast" ||
-            message.type === "poll-update"
+            message.type === "poll-update" ||
+            message.type === "message-rejected"
           ) {
             chat.handleServerMessage(message);
             // --- threads --- both controllers hear every chat frame and each
