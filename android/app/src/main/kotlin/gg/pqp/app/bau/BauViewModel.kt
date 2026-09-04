@@ -54,10 +54,22 @@ class BauViewModel(
         viewModelScope.launch { load() }
     }
 
+    /**
+     * Read the feed, then say so.
+     *
+     * The read marker travels with the fetch rather than with the screen
+     * opening, because "seen" means the posts were actually on screen: a fetch
+     * that failed has shown nobody anything, and a nudge that arrives while
+     * the feed is open is read the moment the refetch lands. The marker is per
+     * person and shared across their clients, so before this call existed a
+     * Baú read entirely on the phone left the web's badge standing forever.
+     * The marker is best effort: a failure here is not a failure to read.
+     */
     private suspend fun load() {
         runCatching { session.api.bauPosts(serverId) }
             .onSuccess { posts ->
                 _state.value = _state.value.copy(posts = posts, loading = false, error = null)
+                runCatching { session.api.markBauRead(serverId) }
             }
             .onFailure { failure ->
                 _state.value = _state.value.copy(
@@ -70,13 +82,16 @@ class BauViewModel(
 
     private suspend fun listen() {
         session.realtime.frames.collect { frame ->
-            if (frame["type"]?.jsonPrimitive?.contentOrNull != "community-home-update") return@collect
-            if (frame["serverId"]?.jsonPrimitive?.contentOrNull != serverId) return@collect
-            // A nudge, not a payload: the server says something changed and
-            // the list is re-read. Expanded comment lists are dropped so a
-            // deleted comment does not survive on screen.
-            _state.value = _state.value.copy(expandedComments = emptyMap())
-            load()
+            when (frame["type"]?.jsonPrimitive?.contentOrNull) {
+                "community-home-update" -> {
+                    if (frame["serverId"]?.jsonPrimitive?.contentOrNull != serverId) return@collect
+                    // A nudge, not a payload: the server says something changed
+                    // and the list is re-read. Expanded comment lists are
+                    // dropped so a deleted comment does not survive on screen.
+                    _state.value = _state.value.copy(expandedComments = emptyMap())
+                    load()
+                }
+            }
         }
     }
 

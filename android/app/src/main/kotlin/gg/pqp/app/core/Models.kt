@@ -111,6 +111,13 @@ data class Channel(
     val isPrivate: Boolean = false,
     val topic: String? = null,
     val parentId: String? = null,
+    /**
+     * Seconds a member must wait between sends; 0 is off. Defaulted so a
+     * server that predates slow mode still parses. The composer reads it to
+     * start its own countdown, instead of learning about the rule from the
+     * first `message-rejected`.
+     */
+    val slowmodeSeconds: Int = 0,
 ) {
     val isText: Boolean get() = type == "text"
     val isVoice: Boolean get() = type == "voice"
