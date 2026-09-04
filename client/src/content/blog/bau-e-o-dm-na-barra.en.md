@@ -20,7 +20,7 @@ Right-click a conversation, **Pin to the rail**. Their face sits under the Home 
 
 ## Calls on the site and desktop
 
-In Chrome and the desktop app the call stays, even if we update in the middle.
+In Chrome and the desktop app the call does not drop, even if we update in the middle.
 
 On iPhone and Android it still drops. Rejoin.
 

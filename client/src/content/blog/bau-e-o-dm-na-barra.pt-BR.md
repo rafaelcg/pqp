@@ -20,7 +20,7 @@ Clica com o direito na conversa, **Fixar na barra**. A cara da pessoa fica embai
 
 ## Call no site e no PC
 
-No Chrome e no app do PC a call fica, mesmo se a gente atualizar no meio.
+No Chrome e no app do PC a call não cai, mesmo se a gente atualizar no meio.
 
 No iPhone e no Android ainda cai. Entra de novo.
 

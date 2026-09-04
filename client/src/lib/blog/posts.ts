@@ -72,8 +72,8 @@ export const POSTS: readonly BlogPost[] = [
     },
     summary: {
       "pt-BR":
-        "Baú na comunidade, DM na barra, call que fica no site e no PC, e o APK do Android.",
-      en: "The community Baú, pin a DM to the rail, a call that stays on the site and desktop, and an Android APK.",
+        "Baú na comunidade, DM na barra, call que não cai no site e no PC, e o APK do Android.",
+      en: "The community Baú, pin a DM to the rail, a call that does not drop on the site and desktop, and an Android APK.",
     },
   },
   {
