@@ -134,6 +134,12 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
   notes people wrote, which the client only asks for on a 3 or less
 - the five most active servers of the last 24h
 - first-touch acquisition and landing pages
+- **quem fica, por canal**: the same channels, judged on who stayed rather
+  than who arrived. A 30-day signup cohort (excluding the last 24h, since
+  those have not had a chance to return) against whether they posted in the
+  last 7 days. Reading counts as absent here, the same limit the returning-
+  writer share carries, so it is a tool for comparing channels and not for
+  quoting a retention rate. Cohorts under 10 are greyed as a short sample.
 - **game connections**: per provider, how many accounts linked Steam /
   Battle.net / Twitch and how many chose `public`, plus how many accounts linked
   *anything* — which is not the sum of the rows, since one person can link two

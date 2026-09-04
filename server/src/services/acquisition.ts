@@ -168,3 +168,98 @@ export async function acquisitionReport(days: number): Promise<AcquisitionReport
     })),
   };
 }
+
+export interface RetentionRow {
+  /**
+   * How a human would name the channel: the `ref` when there is one
+   * ("reddit"), else `source / medium` ("google / cpc"), else null for the
+   * unattributed majority. Deliberately coarser than `acquisitionReport`'s
+   * four-column grouping, because a retention rate over a cohort of three is
+   * noise and splitting by campaign manufactures cohorts of three.
+   */
+  channel: string | null;
+  /** Cohort size: signups in the window that have had time to come back. */
+  signups: number;
+  /** How many of them sent a message in the activity window. */
+  retained: number;
+}
+
+export interface RetentionReport {
+  since: string;
+  /** Cohort window, in days. */
+  days: number;
+  /** Activity window used to decide "came back", in days. */
+  activeWindowDays: number;
+  rows: RetentionRow[];
+}
+
+/**
+ * Does a channel bring people who stay?
+ *
+ * THE QUESTION THIS ANSWERS. `acquisitionReport` says a campaign produced 74
+ * signups. It cannot say whether those 74 are still here, and a channel whose
+ * users leave immediately costs the same per signup while being worth nothing.
+ * Comparing paid search against an organic referrer on signups alone is
+ * therefore comparing the wrong number, which is how ad budgets outlive their
+ * usefulness.
+ *
+ * WHAT "RETAINED" MEANS, AND WHAT IT DOES NOT. The same honest limit as
+ * `returning7d`: a message is the only per-user activity this database
+ * records, so somebody who reads every day and never posts counts as gone.
+ * That biases every channel downward, which is fine for COMPARING channels and
+ * wrong for quoting a retention rate on its own.
+ *
+ * WHY THE COHORT EXCLUDES THE LAST 24 HOURS. Somebody who signed up an hour
+ * ago has not failed to return, they have not had the chance. Including them
+ * makes a channel look worse the faster it is delivering, which would punish
+ * exactly the campaign that is working.
+ */
+export async function retentionBySource(
+  days: number,
+  activeWindowDays = 7,
+): Promise<RetentionReport> {
+  const result = await getPool().query<{
+    channel: string | null;
+    signups: string;
+    retained: string;
+  }>(
+    `WITH cohort AS (
+       SELECT u.id,
+              CASE
+                WHEN u.acquisition_ref IS NOT NULL THEN u.acquisition_ref
+                WHEN u.acquisition_source IS NOT NULL
+                  THEN u.acquisition_source
+                       || COALESCE(' / ' || u.acquisition_medium, '')
+                ELSE NULL
+              END AS channel
+         FROM users u
+        WHERE NOT u.is_webhook
+          AND NOT u.is_character
+          AND u.created_at >= now() - ($1::int * interval '1 day')
+          AND u.created_at < now() - interval '24 hours'
+     )
+     SELECT c.channel,
+            COUNT(*)::text AS signups,
+            COUNT(*) FILTER (
+              WHERE EXISTS (
+                SELECT 1 FROM messages m
+                 WHERE m.author_id = c.id
+                   AND m.created_at >= now() - ($2::int * interval '1 day')
+              )
+            )::text AS retained
+       FROM cohort c
+      GROUP BY 1
+      ORDER BY COUNT(*) DESC, 1 NULLS LAST`,
+    [days, activeWindowDays],
+  );
+  return {
+    since: new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString(),
+    days,
+    activeWindowDays,
+    rows: result.rows.map((row) => ({
+      channel: row.channel,
+      signups: Number(row.signups),
+      retained: Number(row.retained),
+    })),
+  };
+}

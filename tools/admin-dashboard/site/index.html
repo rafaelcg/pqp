@@ -1123,6 +1123,27 @@
           </table>
         </div>
       </div>
+
+      <!-- Signups are the wrong number on their own: a channel whose people
+           leave costs the same per signup and is worth nothing. This is the
+           other half, and the two tables are deliberately side by side. -->
+      <div class="card pad">
+        <p class="subtle-title">quem fica, por canal</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>canal</th>
+                <th class="r">cadastros</th>
+                <th class="r">voltaram</th>
+                <th class="r">taxa</th>
+              </tr>
+            </thead>
+            <tbody id="retBody"><!-- injected --></tbody>
+          </table>
+        </div>
+        <span class="note" id="retNote">carregando</span>
+      </div>
     </div>
   </section>
 
@@ -2053,6 +2074,48 @@
         '<td class="r num cell-strong">' + fmt(l.signups || 0) + '</td>';
       lbody.appendChild(tr);
     });
+  }
+
+  /* ---------------- render: retention by channel ----------------
+     Reads the same cohort the API built: signups old enough to have had a
+     chance to come back, and whether they posted since. A rate over a handful
+     of signups is noise, so the cohort size sits next to it rather than behind
+     a tooltip, and anything under 10 is greyed rather than dressed up as a
+     measurement. */
+  function renderRetention(ret) {
+    var body = $("retBody");
+    if (!body) return;
+    var rows = (ret && Array.isArray(ret.rows)) ? ret.rows : [];
+    body.innerHTML = "";
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="4" style="color:var(--faint)">nenhum cadastro maduro na janela</td></tr>';
+      setText("retNote", "sem dados suficientes");
+      return;
+    }
+    rows.forEach(function (r) {
+      var signups = r.signups || 0;
+      var retained = r.retained || 0;
+      var thin = signups < 10;
+      var label = r.channel || "sem etiqueta";
+      var tr = el("tr");
+      tr.innerHTML =
+        '<td>' + (r.channel
+          ? '<span class="srv-name">' + esc(label) + '</span>'
+          : '<span class="srv-name" style="color:var(--faint)">' + esc(label) + '</span>' +
+            '<div class="srv-cat">link postado sem utm</div>') + '</td>' +
+        '<td class="r num">' + fmt(signups) + '</td>' +
+        '<td class="r num">' + fmt(retained) + '</td>' +
+        '<td class="r num' + (thin ? '" style="color:var(--faint)' : ' cell-strong') + '">' +
+          fmtPct(retained, signups) + (thin ? ' <span class="srv-cat">amostra curta</span>' : '') +
+        '</td>';
+      body.appendChild(tr);
+    });
+    var sinceLabel = (ret && ret.since) ? fmtDay(ret.since) : "";
+    setText("retNote",
+      "cadastros de " + ((ret && ret.days) || 30) + " dias que mandaram mensagem nos últimos " +
+      ((ret && ret.activeWindowDays) || 7) + " dias" +
+      (sinceLabel ? " · desde " + sinceLabel : "") +
+      " · quem só lê conta como ausente");
   }
 
   /* ---------------- render: game connections ----------------
@@ -3158,6 +3221,7 @@
     skelRows("serversBody", 4, 4);
     skelRows("acqBody", 4, 4);
     skelRows("acqLandingBody", 3, 3);
+    skelRows("retBody", 3, 4);
     skelRows("connBody", 4, 3);
     skelRows("voiceBody", 4, 2);
     skelRows("topChannelsBody", 4, 5);
@@ -3285,6 +3349,7 @@
     renderCharts(usersHourly, msgsHourly);
 
     renderAcquisition(d.acquisition);
+    renderRetention(d.retention);
     renderConnections(d.connections);
 
     var top = Array.isArray(d.topServers24h) ? d.topServers24h : [];
