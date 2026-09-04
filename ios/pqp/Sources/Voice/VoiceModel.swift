@@ -561,6 +561,15 @@ final class VoiceModel {
                 ))
             }
 
+        case .voiceCameraDenied(let voiceChannelId):
+            guard voiceChannelId == channelId else { return }
+            Task {
+                await disableCamera()
+                cameraError = String(
+                    localized: "This call already has the maximum number of cameras."
+                )
+            }
+
         case .voiceRoomFull(let limit):
             status = .failed(String(localized: "This voice channel is full (max \(limit))."))
 

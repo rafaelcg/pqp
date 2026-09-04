@@ -47,6 +47,13 @@ describe("cameraConstraintsFor", () => {
     }
   });
 
+  it("pins a chosen device with exact, and only then", () => {
+    expect(JSON.stringify(cameraConstraintsFor("720p"))).not.toContain("exact");
+    expect(cameraConstraintsFor("720p", "cam-1").deviceId).toEqual({
+      exact: "cam-1",
+    });
+  });
+
   it("asks for 720p on auto rather than leaving it to the browser", () => {
     // The 480p ceiling this whole change exists to remove came from an
     // unconstrained request. Auto must still be a request.
@@ -128,6 +135,20 @@ describe("captureCamera", () => {
     const getUserMedia = vi.fn().mockRejectedValue(named("NotFoundError"));
     await expect(captureCamera(getUserMedia, "720p")).rejects.toThrow();
     expect(getUserMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries without a device when the saved one is gone", async () => {
+    const getUserMedia = vi
+      .fn()
+      .mockRejectedValueOnce(named("NotFoundError"))
+      .mockResolvedValueOnce(fakeStream("any"));
+    const stream = await captureCamera(getUserMedia, "720p", "gone");
+    expect(stream.id).toBe("any");
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(getUserMedia.mock.calls[1]![0]).toEqual({
+      video: cameraConstraintsFor("720p"),
+      audio: false,
+    });
   });
 
   it("surfaces the bare request's own failure rather than hiding it", async () => {

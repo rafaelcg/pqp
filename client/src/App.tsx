@@ -872,6 +872,10 @@ function MainAppContent({
     void voice.setVideoQuality(localSettings.videoQuality);
   }, [localSettings.videoQuality, voice]);
 
+  useEffect(() => {
+    void voice.setCameraDevice(localSettings.cameraDeviceId);
+  }, [localSettings.cameraDeviceId, voice]);
+
   const refresh = useCallback(() => setTick((t) => t + 1), []);
   // Stable: the message list schedules the jump in a frame, and a fresh
   // identity every render would cancel and re-schedule it forever.

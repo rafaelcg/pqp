@@ -127,6 +127,8 @@ export interface LocalSettings {
   muteOnJoin: boolean;
   compactPeers: boolean;
   inputDeviceId: string;
+  /** Webcam on this machine. Device-local, same reason as the mic id. */
+  cameraDeviceId: string;
   outputDeviceId: string;
   inputVolume: number;
   outputVolume: number;
@@ -169,6 +171,7 @@ export const defaultLocalSettings: LocalSettings = {
   muteOnJoin: false,
   compactPeers: false,
   inputDeviceId: "",
+  cameraDeviceId: "",
   outputDeviceId: "",
   inputVolume: 1,
   outputVolume: 1,
@@ -205,6 +208,10 @@ export function loadLocalSettings(): LocalSettings {
         typeof parsed.inputDeviceId === "string"
           ? parsed.inputDeviceId
           : defaultLocalSettings.inputDeviceId,
+      cameraDeviceId:
+        typeof parsed.cameraDeviceId === "string"
+          ? parsed.cameraDeviceId
+          : defaultLocalSettings.cameraDeviceId,
       outputDeviceId:
         typeof parsed.outputDeviceId === "string"
           ? parsed.outputDeviceId
@@ -722,6 +729,7 @@ function VoiceSection({
   patchLocal,
   inputs,
   outputs,
+  cameras,
   devicesError,
   voiceAnalyser,
   metering,
@@ -730,6 +738,7 @@ function VoiceSection({
   patchLocal: (partial: Partial<LocalSettings>) => void;
   inputs: MediaDeviceOption[];
   outputs: MediaDeviceOption[];
+  cameras: MediaDeviceOption[];
   devicesError: string | null;
   voiceAnalyser: AnalyserNode | null;
   metering: boolean;
@@ -942,6 +951,24 @@ function VoiceSection({
             percent: Math.round(draftLocal.outputVolume * 100),
           })}
         </span>
+      </label>
+
+      <label className="block">
+        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+          {t("settings.voice.cameraDevice")}
+        </span>
+        <select
+          value={draftLocal.cameraDeviceId}
+          onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
+          className={selectClass}
+        >
+          <option value="">{t("settings.voice.systemDefault")}</option>
+          {cameras.map((device) => (
+            <option key={device.deviceId} value={device.deviceId}>
+              {device.label}
+            </option>
+          ))}
+        </select>
       </label>
 
       <div>
@@ -2753,6 +2780,7 @@ export function SettingsModal({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [inputs, setInputs] = useState<MediaDeviceOption[]>([]);
+  const [cameras, setCameras] = useState<MediaDeviceOption[]>([]);
   const [outputs, setOutputs] = useState<MediaDeviceOption[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -2829,13 +2857,14 @@ export function SettingsModal({
         }
         return;
       }
-      const { inputs: nextInputs, outputs: nextOutputs } =
+      const { inputs: nextInputs, outputs: nextOutputs, cameras: nextCameras } =
         await listAudioDevices();
       if (cancelled) {
         return;
       }
       setInputs(nextInputs);
       setOutputs(nextOutputs);
+      setCameras(nextCameras);
     }
 
     void loadDevices();
@@ -2966,6 +2995,7 @@ export function SettingsModal({
                 patchLocal={patchLocal}
                 inputs={inputs}
                 outputs={outputs}
+                cameras={cameras}
                 devicesError={devicesError}
                 voiceAnalyser={voiceAnalyser}
                 metering={voiceVisible}

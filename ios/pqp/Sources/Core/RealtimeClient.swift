@@ -70,6 +70,8 @@ enum RealtimeEvent: Sendable {
     case voiceRoomFull(limit: Int)
     /// The call is already at the screen-share cap. Unicast to whoever tried.
     case voiceScreenShareDenied(voiceChannelId: String)
+    /// The call is already at the camera cap. Unicast to whoever tried.
+    case voiceCameraDenied(voiceChannelId: String)
     /// The server refused the join because this room is pinned to a transport
     /// we declared we cannot do. Nobody ever saw us in the roster.
     case voiceTransportUnsupported(voiceChannelId: String, transport: String)
@@ -744,6 +746,9 @@ actor RealtimeClient {
         case "screen-share-denied":
             guard let voiceChannelId = envelope.voiceChannelId else { return }
             event = .voiceScreenShareDenied(voiceChannelId: voiceChannelId)
+        case "camera-denied":
+            guard let voiceChannelId = envelope.voiceChannelId else { return }
+            event = .voiceCameraDenied(voiceChannelId: voiceChannelId)
         case "voice-transport-unsupported":
             guard let voiceChannelId = envelope.voiceChannelId,
                   let transport = envelope.transport else { return }

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
   isClientRelayMessage,
+  CAMERA_LIMIT,
   MESH_VOICE_LIMIT,
   SCREEN_SHARE_LIMIT,
   hasPermission,
@@ -1274,6 +1275,23 @@ export async function handleVoiceMessage(
     const peer = peers.get(existingPeerId);
     if (!peer) {
       return;
+    }
+    // Same rule as screen share: count everyone else, keep the check in the
+    // same tick as the write, and never refuse a live camera that is only
+    // re-declaring (a device switch sends a new stream id). Turning off is
+    // always allowed.
+    if (payload.streamId) {
+      const limit = CAMERA_LIMIT[getRoomTransport(peer.voiceChannelId)];
+      const othersOn = getRoomPeers(peer.voiceChannelId).filter(
+        (p) => p.id !== peer.id && p.cameraStreamId,
+      ).length;
+      if (othersOn >= limit) {
+        send(peer.socket, {
+          type: "camera-denied",
+          voiceChannelId: peer.voiceChannelId,
+        });
+        return;
+      }
     }
     peer.cameraStreamId = payload.streamId;
     await broadcastRoster(peer.voiceChannelId);
