@@ -81,7 +81,8 @@ export function ChannelMetaDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const formId = useId();
-  const showSlowMode = channel?.type === "text";
+  const showSlowMode = channel?.kind === "server" && channel.type === "text";
+  const slowModeHintId = `${formId}-slow-mode-hint`;
 
   useEffect(() => {
     if (open && channel) {
@@ -161,7 +162,8 @@ export function ChannelMetaDialog({
             </span>
             <select
               value={String(slowmodeSeconds)}
-              className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper"
+              aria-describedby={slowModeHintId}
+              className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper outline-none focus:border-signal"
               onChange={(e) => setSlowmodeSeconds(Number(e.target.value))}
             >
               {(SLOWMODE_SECONDS_PRESETS.includes(
@@ -175,6 +177,12 @@ export function ChannelMetaDialog({
                 </option>
               ))}
             </select>
+            <span
+              id={slowModeHintId}
+              className="mt-1 block text-xs text-paper-muted"
+            >
+              {t("channelMeta.slowMode.hint")}
+            </span>
           </label>
         )}
 

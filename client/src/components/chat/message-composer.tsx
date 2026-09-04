@@ -37,7 +37,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { PollComposer } from "@/components/chat/poll-composer";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   AUTOCOMPLETE_GRID_COLUMNS,
   AutocompleteMenu,
@@ -86,7 +86,8 @@ import {
   type SlashCommandMeta,
   type SlashFeedback,
 } from "@/lib/slash-commands";
-import { useTranslation } from "@/lib/i18n";
+import { remainingWaitSeconds } from "@/hooks/use-chat";
+import { translateMessage, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 export interface ComposerSlashContext {
@@ -297,6 +298,9 @@ export function MessageComposer({
   const [isRunningSlash, setIsRunningSlash] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  const [holdAnnouncement, setHoldAnnouncement] = useState("");
+  const announcedHoldRef = useRef<number | null>(null);
+  const holdHintId = useId();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const insertMenuRef = useRef<HTMLDivElement>(null);
@@ -317,10 +321,21 @@ export function MessageComposer({
     return () => clearInterval(id);
   }, [slowModeUntil]);
 
-  const slowModeRemaining =
-    slowModeUntil && slowModeUntil > now
-      ? Math.max(1, Math.ceil((slowModeUntil - now) / 1000))
-      : 0;
+  const slowModeRemaining = remainingWaitSeconds(slowModeUntil, now);
+
+  useEffect(() => {
+    if (!slowModeUntil || slowModeUntil <= Date.now()) {
+      announcedHoldRef.current = null;
+      setHoldAnnouncement("");
+      return;
+    }
+    if (announcedHoldRef.current === slowModeUntil) {
+      return;
+    }
+    announcedHoldRef.current = slowModeUntil;
+    const seconds = remainingWaitSeconds(slowModeUntil);
+    setHoldAnnouncement(translateMessage("composer.slowMode", { seconds }));
+  }, [slowModeUntil]);
 
   const rollPresets = useMemo(() => {
     if (!isRollPresetMenu(body)) {
@@ -1308,11 +1323,6 @@ export function MessageComposer({
           onClose={() => setIsPollComposerOpen(false)}
         />
       )}
-      {slowModeRemaining > 0 && (
-        <p className="mb-2 text-xs text-paper-muted" role="status">
-          {t("composer.slowMode", { seconds: slowModeRemaining })}
-        </p>
-      )}
       {pending.length > 0 && (
         <ul
           aria-label={t("composer.attachments")}
@@ -1513,12 +1523,13 @@ export function MessageComposer({
             aria-controls={menuKind ? MENU_ID : undefined}
             aria-autocomplete="list"
             aria-label={inputPlaceholder}
+            aria-describedby={slowModeRemaining > 0 ? holdHintId : undefined}
             onKeyDown={handleKeyDown}
           />
         </div>
         <Button
           type="submit"
-          className="h-10 shrink-0"
+          className="h-10 min-w-[5.5rem] shrink-0 tabular-nums"
           // An attachment is a message on its own, so an empty body is only a
           // reason to stay disabled when nothing is attached either.
           disabled={
@@ -1528,10 +1539,20 @@ export function MessageComposer({
             isUploading ||
             (!body.trim() && readyCount === 0)
           }
+          aria-label={
+            slowModeRemaining > 0
+              ? t("composer.slowMode", { seconds: slowModeRemaining })
+              : t("composer.send")
+          }
         >
-          {t("composer.send")}
+          {slowModeRemaining > 0
+            ? t("composer.sendWait", { seconds: slowModeRemaining })
+            : t("composer.send")}
         </Button>
       </div>
+      <p id={holdHintId} role="status" className="sr-only">
+        {holdAnnouncement}
+      </p>
     </form>
   );
 }
