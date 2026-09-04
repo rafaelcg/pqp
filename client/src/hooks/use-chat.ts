@@ -6,6 +6,7 @@ import type {
   Message,
   MessageBroadcast,
   MessageReaction,
+  MessageRejectReason,
   Poll,
   PollRequest,
   PresenceUpdate,
@@ -31,6 +32,95 @@ export interface ChatMessage extends Message {
   failed?: boolean;
   /** Correlates the optimistic bubble with the server's broadcast. */
   nonce?: string;
+  /** Set when the server answered `message-create` with `message-rejected`. */
+  rejectReason?: MessageRejectReason;
+  /** Epoch ms after which Retry is allowed again. */
+  retryAvailableAt?: number;
+}
+
+export function failedSendKey(
+  reason?: MessageRejectReason,
+):
+  | "chat.reject.rateLimited"
+  | "chat.reject.noAccess"
+  | "chat.reject.cannotSend"
+  | "chat.reject.undeliverable"
+  | "chat.reject.slowMode"
+  | "chat.failedSend" {
+  switch (reason) {
+    case "rate-limited":
+      return "chat.reject.rateLimited";
+    case "no-access":
+      return "chat.reject.noAccess";
+    case "cannot-send":
+      return "chat.reject.cannotSend";
+    case "undeliverable":
+      return "chat.reject.undeliverable";
+    case "slow-mode":
+      return "chat.reject.slowMode";
+    default:
+      return "chat.failedSend";
+  }
+}
+
+const PERMANENT_REJECT_REASONS = new Set<MessageRejectReason>([
+  "no-access",
+  "cannot-send",
+  "undeliverable",
+]);
+
+export function isPermanentRejectReason(
+  reason?: MessageRejectReason,
+): boolean {
+  return reason != null && PERMANENT_REJECT_REASONS.has(reason);
+}
+
+/** Whole seconds left on a hold. 0 means the control is ready. */
+export function remainingWaitSeconds(
+  until: number | null | undefined,
+  now = Date.now(),
+): number {
+  if (!until || until <= now) {
+    return 0;
+  }
+  return Math.max(1, Math.ceil((until - now) / 1000));
+}
+
+/** Another click can succeed: timeout, rate-limit, or slow mode. */
+export function messageCanRetry(
+  message: Pick<ChatMessage, "failed" | "rejectReason">,
+): boolean {
+  return Boolean(message.failed && !isPermanentRejectReason(message.rejectReason));
+}
+
+export function messageRetryReady(
+  message: Pick<ChatMessage, "failed" | "rejectReason" | "retryAvailableAt">,
+  now = Date.now(),
+): boolean {
+  return (
+    messageCanRetry(message) &&
+    remainingWaitSeconds(message.retryAvailableAt, now) === 0
+  );
+}
+
+/**
+ * Status on a failed bubble. A slow-mode wait uses the composer string so the
+ * row and Send tell the same remaining seconds.
+ */
+export function failedSendCopy(
+  message: Pick<ChatMessage, "rejectReason" | "retryAvailableAt">,
+  now = Date.now(),
+): {
+  key: ReturnType<typeof failedSendKey> | "composer.slowMode";
+  vars?: { seconds: number };
+} {
+  if (message.rejectReason === "slow-mode") {
+    const seconds = remainingWaitSeconds(message.retryAvailableAt, now);
+    if (seconds > 0) {
+      return { key: "composer.slowMode", vars: { seconds } };
+    }
+  }
+  return { key: failedSendKey(message.rejectReason) };
 }
 
 export interface TypingUser {
@@ -268,8 +358,24 @@ export function createChatController(
 
   const typing = new Map<string, { displayName: string; expiresAt: number }>();
   const sendTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const retryUnlockTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let lastTypingSentAt = 0;
   let typingSweep: ReturnType<typeof setInterval> | null = null;
+  let slowModeSeconds = 0;
+  let bypassSlowMode = false;
+  /**
+   * One hold per channel. A single timestamp used to follow you into the next
+   * channel, and `joinChannel` used to wipe it, so a hop looked like the wait
+   * had ended.
+   */
+  const slowModeHolds = new Map<
+    string,
+    {
+      until: number;
+      nonce: string | null;
+      timer: ReturnType<typeof setTimeout> | null;
+    }
+  >();
 
   function emit() {
     listener?.();
@@ -280,6 +386,122 @@ export function createChatController(
     if (timer) {
       clearTimeout(timer);
       sendTimers.delete(nonce);
+    }
+  }
+
+  function clearRetryUnlock(nonce: string) {
+    const timer = retryUnlockTimers.get(nonce);
+    if (timer) {
+      clearTimeout(timer);
+      retryUnlockTimers.delete(nonce);
+    }
+  }
+
+  function heldUntilFor(id: string | null): number {
+    if (!id) {
+      return 0;
+    }
+    const hold = slowModeHolds.get(id);
+    if (!hold || hold.until <= Date.now()) {
+      return 0;
+    }
+    return hold.until;
+  }
+
+  function clearSlowModeHold(id: string | null = channelId) {
+    if (!id) {
+      return;
+    }
+    const hold = slowModeHolds.get(id);
+    if (hold?.timer) {
+      clearTimeout(hold.timer);
+    }
+    slowModeHolds.delete(id);
+  }
+
+  function clearAllSlowModeHolds() {
+    for (const hold of slowModeHolds.values()) {
+      if (hold.timer) {
+        clearTimeout(hold.timer);
+      }
+    }
+    slowModeHolds.clear();
+  }
+
+  function applySlowModeHold(id: string, until: number, nonce: string | null) {
+    clearSlowModeHold(id);
+    const now = Date.now();
+    if (until <= now) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      const hold = slowModeHolds.get(id);
+      if (hold?.timer === timer) {
+        slowModeHolds.delete(id);
+        emit();
+      }
+    }, until - now);
+    slowModeHolds.set(id, { until, nonce, timer });
+  }
+
+  function startSlowModeHold(nonce: string, durationMs: number) {
+    if (!channelId || bypassSlowMode || durationMs <= 0) {
+      return;
+    }
+    applySlowModeHold(channelId, Date.now() + durationMs, nonce);
+  }
+
+  function markRejected(
+    nonce: string,
+    reason: MessageRejectReason,
+    retryAfterMs?: number,
+  ) {
+    clearSendTimer(nonce);
+    clearRetryUnlock(nonce);
+    let waitMs: number | undefined;
+    if (!isPermanentRejectReason(reason)) {
+      if (retryAfterMs && retryAfterMs > 0) {
+        waitMs = retryAfterMs;
+      } else if (reason === "slow-mode" && slowModeSeconds > 0) {
+        waitMs = slowModeSeconds * 1000;
+      }
+    }
+    const retryAvailableAt = waitMs ? Date.now() + waitMs : undefined;
+    let changed = false;
+    messages = messages.map((message) => {
+      if (message.nonce !== nonce || (!message.pending && !message.failed)) {
+        return message;
+      }
+      changed = true;
+      return {
+        ...message,
+        pending: false,
+        failed: true,
+        rejectReason: reason,
+        retryAvailableAt,
+      };
+    });
+    if (changed) {
+      if (reason === "slow-mode") {
+        startSlowModeHold(nonce, waitMs ?? 0);
+      } else if (channelId && slowModeHolds.get(channelId)?.nonce === nonce) {
+        clearSlowModeHold(channelId);
+      }
+      if (retryAvailableAt && waitMs) {
+        retryUnlockTimers.set(
+          nonce,
+          setTimeout(() => {
+            retryUnlockTimers.delete(nonce);
+            messages = messages.map((message) =>
+              message.nonce === nonce && message.retryAvailableAt
+                ? { ...message, retryAvailableAt: undefined }
+                : message,
+            );
+            emit();
+          }, waitMs),
+        );
+      }
+      emit();
     }
   }
 
@@ -355,6 +577,10 @@ export function createChatController(
       clearTimeout(timer);
     }
     sendTimers.clear();
+    for (const timer of retryUnlockTimers.values()) {
+      clearTimeout(timer);
+    }
+    retryUnlockTimers.clear();
     typing.clear();
     for (const message of messages) {
       revokeLocalPreviews(message);
@@ -446,6 +672,27 @@ export function createChatController(
 
     getChannelId() {
       return channelId;
+    },
+
+    getSlowModeHeldUntil() {
+      return heldUntilFor(channelId);
+    },
+
+    setSlowMode(options: { seconds: number; bypass: boolean }) {
+      const nextSeconds = Math.max(0, options.seconds);
+      const nextBypass = options.bypass;
+      if (nextSeconds === slowModeSeconds && nextBypass === bypassSlowMode) {
+        return;
+      }
+      slowModeSeconds = nextSeconds;
+      bypassSlowMode = nextBypass;
+      if (bypassSlowMode || slowModeSeconds <= 0) {
+        const hadHold = heldUntilFor(channelId) > 0;
+        clearSlowModeHold(channelId);
+        if (hadHold) {
+          emit();
+        }
+      }
     },
 
     hasMoreHistory() {
@@ -635,6 +882,9 @@ export function createChatController(
       if (!channelId || !currentUserId) {
         return;
       }
+      if (!bypassSlowMode && heldUntilFor(channelId) > 0) {
+        return;
+      }
       const clamped = clampChatNewlines(body);
       if (!clamped && attachments.length === 0) {
         return;
@@ -700,6 +950,9 @@ export function createChatController(
         nonce,
       };
       messages = [...messages, optimistic];
+      if (!bypassSlowMode && slowModeSeconds > 0) {
+        startSlowModeHold(nonce, slowModeSeconds * 1000);
+      }
       emit();
       transmit(
         nonce,
@@ -715,11 +968,27 @@ export function createChatController(
       if (!failed || !channelId) {
         return;
       }
+      if (!messageRetryReady(failed)) {
+        return;
+      }
+      if (!bypassSlowMode && heldUntilFor(channelId) > 0) {
+        return;
+      }
+      clearRetryUnlock(nonce);
       messages = messages.map((message) =>
         message.nonce === nonce
-          ? { ...message, pending: true, failed: false }
+          ? {
+              ...message,
+              pending: true,
+              failed: false,
+              rejectReason: undefined,
+              retryAvailableAt: undefined,
+            }
           : message,
       );
+      if (!bypassSlowMode && slowModeSeconds > 0) {
+        startSlowModeHold(nonce, slowModeSeconds * 1000);
+      }
       emit();
       // The rows are still unclaimed — a claim only happens on a message that
       // was actually stored — so the same ids are still the right ones to send.
@@ -734,6 +1003,7 @@ export function createChatController(
 
     discardMessage(nonce: string) {
       clearSendTimer(nonce);
+      clearRetryUnlock(nonce);
       for (const message of messages) {
         if (message.nonce === nonce) {
           revokeLocalPreviews(message);
@@ -973,6 +1243,7 @@ export function createChatController(
           // it does not appear twice and does not jump position.
           if (message.nonce) {
             clearSendTimer(message.nonce);
+            clearRetryUnlock(message.nonce);
             const index = messages.findIndex(
               (entry) => entry.nonce === message.nonce,
             );
@@ -1100,6 +1371,14 @@ export function createChatController(
           return;
         }
 
+        case "message-rejected": {
+          if (message.channelId !== channelId || !message.nonce) {
+            return;
+          }
+          markRejected(message.nonce, message.reason, message.retryAfterMs);
+          return;
+        }
+
         case "poll-update": {
           if (message.channelId !== channelId) {
             return;
@@ -1135,6 +1414,7 @@ export function createChatController(
         clearInterval(typingSweep);
         typingSweep = null;
       }
+      clearAllSlowModeHolds();
       listener = null;
     },
   };

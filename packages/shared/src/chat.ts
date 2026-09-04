@@ -6,6 +6,7 @@ import {
   messageReactionSchema,
   messageReplyRefSchema,
   reactionEmojiSchema,
+  SLOWMODE_SECONDS_MAX,
 } from "./api.js";
 import {
   attachmentSchema,
@@ -199,6 +200,51 @@ export const messageBroadcastSchema = z.object({
   nonce: z.string().optional(),
 });
 
+/**
+ * Why a `message-create` never became a broadcast.
+ *
+ * A WebSocket frame has no status code, so without this the sender's optimistic
+ * bubble sits pending until a 10s timer paints a generic failure. The reasons
+ * are machine tokens: the client i18n's them, the same way a 403 body would.
+ *
+ * Addressed to the sender only. Not a member of `CHAT_SERVER_MESSAGE_TYPES` —
+ * listing it there would let the cluster relay hand one person's refusal to
+ * everyone in the channel.
+ */
+export const messageRejectReasonSchema = z.enum([
+  "rate-limited",
+  "no-access",
+  "cannot-send",
+  /**
+   * A create that will not land, and the wire must not say why.
+   *
+   * Includes a blocked DM. `services/dms.ts` refuses to tell a caller whether
+   * a specific person has blocked them; this token must stay equally vague.
+   * In a 1:1 the only non-rate-limit refusal is a block, so any reject is
+   * already a weaker signal. Naming the block would make it an oracle.
+   */
+  "undeliverable",
+  /** Channel slow mode: this sender must wait before the next create. */
+  "slow-mode",
+]);
+export type MessageRejectReason = z.infer<typeof messageRejectReasonSchema>;
+
+export const messageRejectedSchema = z.object({
+  type: z.literal("message-rejected"),
+  channelId: z.string().uuid(),
+  /** Echo of the create frame, so the sender can match the optimistic bubble. */
+  nonce: z.string().min(1).max(64).optional(),
+  reason: messageRejectReasonSchema,
+  /** May be present when `reason` is `rate-limited` or `slow-mode`. */
+  retryAfterMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(SLOWMODE_SECONDS_MAX * 1000)
+    .optional(),
+});
+export type MessageRejected = z.infer<typeof messageRejectedSchema>;
+
 export const messageUpdateBroadcastSchema = z.object({
   type: z.literal("message-update"),
   message: broadcastMessageSchema,
@@ -316,6 +362,8 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   // and being in it is what lets `App.tsx` route it by name instead of letting
   // it fall through to the voice signaling handler.
   sanctionNoticeSchema,
+  // Same addressing as `sanction-notice`: one sender, never the channel.
+  messageRejectedSchema,
   // Addressed to one person, like `sanction-notice` and for the same reason —
   // see the note on `friendActivitySchema`, and its absence from the list
   // below.
@@ -406,6 +454,9 @@ export const CHAT_CLIENT_MESSAGE_TYPES: readonly string[] =
  * and the server delivers it straight to that socket. Listing it here would
  * make the relay willing to hand one member's sanction to everyone in the
  * channel, which is a disclosure this guard is the last thing standing between.
+ *
+ * `message-rejected` is absent for the same reason: it tells one sender
+ * their create did not land. The relay must not fan that out.
  *
  * `friend-activity` is absent on the same grounds. It is addressed to one
  * person, it names no channel, and it travels between instances on its own

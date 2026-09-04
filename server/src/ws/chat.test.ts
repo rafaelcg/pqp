@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
+import { Permission } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 
 /**
@@ -21,7 +22,7 @@ vi.mock("../services/users.js", () => ({
     _serverId: string | null,
     user: { display_name: string },
   ) => user.display_name,
-  canAccessChannel: async () => true,
+  canAccessChannel: vi.fn(async () => true),
 }));
 
 // The timeout chokepoint queries Postgres, and this suite deliberately runs
@@ -33,8 +34,8 @@ vi.mock("../services/sanctions.js", () => ({
 }));
 
 vi.mock("../services/dms.js", () => ({
-  isDmSendBlocked: async () => false,
-  restoreDmParticipants: async () => {},
+  isDmSendBlocked: vi.fn(async () => false),
+  restoreDmParticipants: vi.fn(async () => {}),
 }));
 
 vi.mock("../services/blocks.js", () => ({
@@ -46,7 +47,13 @@ vi.mock("../services/blocks.js", () => ({
 // test here.
 vi.mock("../services/servers.js", () => ({
   getChannelAudience: async () => null,
-  getChannel: async () => ({ kind: "dm", server_id: null }),
+  getChannel: vi.fn(async () => ({ kind: "dm", server_id: null })),
+}));
+
+vi.mock("../services/permissions.js", () => ({
+  bumpPermissionsVersion: async () => 1,
+  computeMemberPermissions: vi.fn(async () => 0n),
+  listServerMemberIds: async () => [],
 }));
 
 vi.mock("../services/embeds.js", () => ({
@@ -98,6 +105,12 @@ const {
 const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
   "./sockets.js"
 );
+const { canAccessChannel } = await import("../services/users.js");
+const { isDmSendBlocked, restoreDmParticipants } = await import(
+  "../services/dms.js"
+);
+const { getChannel } = await import("../services/servers.js");
+const { computeMemberPermissions } = await import("../services/permissions.js");
 
 interface Recorder {
   socket: WebSocket;
@@ -425,3 +438,235 @@ describe("deliverPermissionsUpdate", () => {
     expect(other.received).toHaveLength(0);
   });
 });
+
+describe("message-rejected", () => {
+  const nonce = "n1";
+
+  beforeEach(() => {
+    resetChatRateLimits();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.mocked(canAccessChannel).mockResolvedValue(true);
+    vi.mocked(isDmSendBlocked).mockResolvedValue(false);
+    vi.mocked(restoreDmParticipants).mockClear();
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "dm",
+      server_id: null,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(0n);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.mocked(canAccessChannel).mockReset();
+    vi.mocked(canAccessChannel).mockResolvedValue(true);
+    vi.mocked(isDmSendBlocked).mockReset();
+    vi.mocked(isDmSendBlocked).mockResolvedValue(false);
+    vi.mocked(getChannel).mockReset();
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "dm",
+      server_id: null,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockReset();
+    vi.mocked(computeMemberPermissions).mockResolvedValue(0n);
+  });
+
+  async function post(
+    recorder: Recorder,
+    userId: string,
+    channelId: string,
+    extra: { nonce?: string; body?: string } = {},
+  ) {
+    await handleChatMessage(
+      { socket: recorder.socket, user: asUser(userId) },
+      {
+        type: "message-create",
+        channelId,
+        body: extra.body ?? "hello",
+        nonce: extra.nonce ?? nonce,
+      },
+    );
+  }
+
+  it("tells the sender when the rate limiter refuses the create", async () => {
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+    for (let i = 0; i < 10; i += 1) {
+      await post(sender, "user-a", channelId, { nonce: `burst-${i}` });
+    }
+    sender.received.length = 0;
+
+    await post(sender, "user-a", channelId);
+
+    expect(framesOfType(sender.received, "message-broadcast")).toHaveLength(0);
+    expect(framesOfType(sender.received, "message-rejected")).toEqual([
+      {
+        type: "message-rejected",
+        channelId,
+        nonce,
+        reason: "rate-limited",
+        retryAfterMs: 1000,
+      },
+    ]);
+  });
+
+  it("tells the sender when they cannot access the channel", async () => {
+    vi.mocked(canAccessChannel).mockResolvedValue(false);
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+
+    await post(sender, "user-a", channelId);
+
+    expect(framesOfType(sender.received, "message-broadcast")).toHaveLength(0);
+    expect(framesOfType(sender.received, "message-rejected")).toEqual([
+      {
+        type: "message-rejected",
+        channelId,
+        nonce,
+        reason: "no-access",
+      },
+    ]);
+  });
+
+  it("tells the sender when SEND_MESSAGES is missing", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(1n << 6n);
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+
+    await post(sender, "user-a", channelId);
+
+    expect(framesOfType(sender.received, "message-broadcast")).toHaveLength(0);
+    expect(framesOfType(sender.received, "message-rejected")).toEqual([
+      {
+        type: "message-rejected",
+        channelId,
+        nonce,
+        reason: "cannot-send",
+      },
+    ]);
+  });
+
+  it("tells the sender, and only the sender, when the DM is blocked", async () => {
+    vi.mocked(isDmSendBlocked).mockResolvedValue(true);
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+    const other = recordingSocket();
+    await join(other, "user-b", channelId);
+    other.received.length = 0;
+
+    await post(sender, "user-a", channelId);
+
+    expect(framesOfType(sender.received, "message-rejected")).toEqual([
+      {
+        type: "message-rejected",
+        channelId,
+        nonce,
+        reason: "undeliverable",
+      },
+    ]);
+    expect(other.received).toHaveLength(0);
+    expect(restoreDmParticipants).not.toHaveBeenCalled();
+  });
+
+  it("tells a held member to wait, with the remaining interval", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+      type: "text",
+      slowmode_seconds: 5,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES,
+    );
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+
+    await post(sender, "user-a", channelId, { nonce: "first" });
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+    sender.received.length = 0;
+
+    await post(sender, "user-a", channelId);
+
+    expect(framesOfType(sender.received, "message-broadcast")).toHaveLength(0);
+    expect(framesOfType(sender.received, "message-rejected")).toEqual([
+      {
+        type: "message-rejected",
+        channelId,
+        nonce,
+        reason: "slow-mode",
+        retryAfterMs: 5000,
+      },
+    ]);
+  });
+
+  it("lets MANAGE_MESSAGES bypass slow mode", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+      type: "text",
+      slowmode_seconds: 5,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL |
+        Permission.SEND_MESSAGES |
+        Permission.MANAGE_MESSAGES,
+    );
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+
+    await post(sender, "user-a", channelId, { nonce: "first" });
+    await post(sender, "user-a", channelId, { nonce: "second" });
+
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+    expect(framesOfType(sender.received, "message-broadcast").length).toBeGreaterThanOrEqual(
+      2,
+    );
+  });
+
+  it("does not enforce slow mode on a voice channel", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+      type: "voice",
+      slowmode_seconds: 5,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES,
+    );
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+
+    await post(sender, "user-a", channelId, { nonce: "first" });
+    await post(sender, "user-a", channelId, { nonce: "second" });
+
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+  });
+
+  it("reads a thread's own interval, not a parent inherit", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+      type: "thread",
+      slowmode_seconds: 0,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES,
+    );
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+
+    await post(sender, "user-a", channelId, { nonce: "first" });
+    await post(sender, "user-a", channelId, { nonce: "second" });
+
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+  });
+});
+

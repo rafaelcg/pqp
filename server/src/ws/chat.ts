@@ -9,8 +9,10 @@ import {
   Permission,
   permissionsUpdateSchema,
   profileUpdateSchema,
+  SLOWMODE_SECONDS_MAX,
   type ChatServerMessage,
   type FriendActivity,
+  type MessageRejectReason,
   type ProfileUpdate,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
@@ -87,11 +89,27 @@ const messageLimiter = createRateLimiter({
 });
 const reactionLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 5 });
 const typingLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 1 });
+const slowModeLimiters = new Map<number, ReturnType<typeof createRateLimiter>>();
+
+function slowModeLimiterFor(seconds: number) {
+  let limiter = slowModeLimiters.get(seconds);
+  if (!limiter) {
+    limiter = createRateLimiter({
+      capacity: 1,
+      refillPerSecond: 1 / seconds,
+    });
+    slowModeLimiters.set(seconds, limiter);
+  }
+  return limiter;
+}
 
 export function resetChatRateLimits(): void {
   messageLimiter.reset();
   reactionLimiter.reset();
   typingLimiter.reset();
+  for (const limiter of slowModeLimiters.values()) {
+    limiter.reset();
+  }
 }
 
 /**
@@ -787,15 +805,13 @@ async function notifyChannelActivity(
 /**
  * Tell a timed-out sender why their frame went nowhere.
  *
- * A WebSocket frame has no status code, so every refusal on this socket is a
- * silent drop — which the client renders, after its send timer expires, as a
- * red bubble indistinguishable from a network failure. That is acceptable for a
- * malformed frame and unacceptable for a sanction: a person who does not know
- * they have been timed out has been given a broken app, not a consequence.
+ * A WebSocket frame has no status code, so a refusal that is not answered
+ * becomes a red bubble after the client's send timer expires. Timeouts use
+ * `sanction-notice`. Ordinary `message-create` refusals use `message-rejected`
+ * below. A malformed frame can still drop silently.
  *
- * `sanction-notice` is not a member of `chatServerMessageSchema` — see the long
- * note on `sanctionNoticeSchema` in shared for why, and what two lines in the
- * web client turn it into something visible. It is sent regardless, because a
+ * `sanction-notice` is not a member of `CHAT_SERVER_MESSAGE_TYPES` — see the
+ * note on `sanctionNoticeSchema` in shared. It is sent regardless, because a
  * frame a client drops costs nothing and a frame that was never sent can never
  * be rendered.
  */
@@ -816,6 +832,34 @@ function sendSanctionNotice(
       expiresAt: timeout.expiresAt.toISOString(),
       reason: timeout.reason,
       message: timeoutMessage(timeout),
+    }),
+  );
+}
+
+/**
+ * Tell the sender a `message-create` will not land.
+ *
+ * Same addressing as `sendSanctionNotice`: this socket only. The reasons
+ * cover the early returns of `message-create`. A blocked DM uses
+ * `undeliverable`, never a block-specific token.
+ */
+function sendMessageRejected(
+  socket: WebSocket,
+  channelId: string,
+  nonce: string | undefined,
+  reason: MessageRejectReason,
+  retryAfterMs?: number,
+): void {
+  if (socket.readyState !== 1) {
+    return;
+  }
+  socket.send(
+    encode({
+      type: "message-rejected",
+      channelId,
+      reason,
+      ...(nonce ? { nonce } : {}),
+      ...(retryAfterMs && retryAfterMs > 0 ? { retryAfterMs } : {}),
     }),
   );
 }
@@ -999,29 +1043,89 @@ export async function handleChatMessage(
   if (payload.type === "message-create") {
     // Throttle sends per user so a single socket can't flood the channel/DB.
     if (!messageLimiter.take(conn.user.id)) {
+      sendMessageRejected(
+        conn.socket,
+        payload.channelId,
+        payload.nonce,
+        "rate-limited",
+        messageLimiter.retryAfter(conn.user.id) * 1000,
+      );
       return;
     }
     if (!(await canAccessChannel(payload.channelId, conn.user.id))) {
+      sendMessageRejected(
+        conn.socket,
+        payload.channelId,
+        payload.nonce,
+        "no-access",
+      );
       return;
     }
     const channel = await getChannel(payload.channelId);
     let canMentionEveryone = false;
+    let memberPerms = 0n;
     if (channel?.kind === "server" && channel.server_id) {
-      const perms = await computeMemberPermissions(
+      memberPerms = await computeMemberPermissions(
         channel.server_id,
         conn.user.id,
         payload.channelId,
       );
-      if (!hasPermission(perms, Permission.SEND_MESSAGES)) {
+      if (!hasPermission(memberPerms, Permission.SEND_MESSAGES)) {
+        sendMessageRejected(
+          conn.socket,
+          payload.channelId,
+          payload.nonce,
+          "cannot-send",
+        );
         return;
       }
-      canMentionEveryone = hasPermission(perms, Permission.MENTION_EVERYONE);
+      canMentionEveryone = hasPermission(memberPerms, Permission.MENTION_EVERYONE);
     }
-    // A block closes a 1:1 in both directions. Dropped rather than answered,
-    // because a WS frame has no status code — gap #20's message-rejected path
-    // is what will eventually let the sender be told.
+    // A block closes a 1:1 in both directions. The sender is told the
+    // create will not land; the reason stays vague so this is not an
+    // oracle for "has this person blocked me". The conversation is not
+    // restored.
     if (await isDmSendBlocked(payload.channelId, conn.user.id)) {
+      sendMessageRejected(
+        conn.socket,
+        payload.channelId,
+        payload.nonce,
+        "undeliverable",
+      );
       return;
+    }
+
+    // Text and threads only. DMs stay 0 and never reach this; voice ignores
+    // the column even if someone wrote a value. A thread reads its own row.
+    if (
+      channel &&
+      channel.kind === "server" &&
+      (channel.type === "text" || channel.type === "thread")
+    ) {
+      const seconds = channel.slowmode_seconds ?? 0;
+      if (
+        seconds > 0 &&
+        !hasPermission(memberPerms, Permission.MANAGE_MESSAGES)
+      ) {
+        const limiter = slowModeLimiterFor(seconds);
+        // Channel ids are global UUIDs. The server id is in the key so a
+        // reused id in a fixture cannot charge the wrong room.
+        const key = `${channel.server_id ?? channel.kind}:${channel.id}:${conn.user.id}`;
+        if (!limiter.take(key)) {
+          const retryAfterMs = Math.min(
+            limiter.retryAfter(key) * 1000,
+            SLOWMODE_SECONDS_MAX * 1000,
+          );
+          sendMessageRejected(
+            conn.socket,
+            payload.channelId,
+            payload.nonce,
+            "slow-mode",
+            retryAfterMs,
+          );
+          return;
+        }
+      }
     }
 
     // A client that posts without ever sending `join-channel` is still viewing

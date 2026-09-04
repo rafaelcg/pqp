@@ -856,6 +856,7 @@ export const updateChannel = (
     isPrivate?: boolean;
     topic?: string | null;
     imageUrl?: string | null;
+    slowmodeSeconds?: number;
   },
 ) => patch<{ channel: Channel }>(`/api/channels/${channelId}`, body);
 
