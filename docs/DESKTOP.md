@@ -75,6 +75,14 @@ Auto-update (§5) only ships changes to the *shell* — main process, menus, dee
 links, permissions, entitlements. That is a much rarer event, which is why the
 shell updater is allowed to be patient.
 
+### Voice across an API restart
+
+The main `BrowserWindow` sets `webContents.setBackgroundThrottling(false)`.
+Chromium otherwise delays timers in a minimized window, and the voice resume
+TTL is 90 seconds. A minimized call must still reconnect before the server
+drops the orphaned peer. Auto-update that reloads the page is a tab reload:
+media is gone, same as the browser. iOS and Android do not resume yet.
+
 ---
 
 ## 2. Build locally

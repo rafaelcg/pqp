@@ -116,7 +116,11 @@ class FakePeerConnection {
     const type =
       description?.type ??
       (this.signalingState === "have-remote-offer" ? "answer" : "offer");
-    if (type === "offer" && this.signalingState !== "stable") {
+    if (
+      type === "offer" &&
+      this.signalingState !== "stable" &&
+      this.signalingState !== "have-local-offer"
+    ) {
       // Chrome's own words, copied from a real failure. This is what reached a
       // user's screen in Portuguese-language pqp on 23 Aug 2026, in English,
       // because the rejection travelled out of `setLocalScreenStream` and into
@@ -664,5 +668,35 @@ describe("a browser that still wants the offer handed to it", () => {
     );
 
     expect(ctx.offers().length - offersBefore).toBe(1);
+  });
+});
+
+describe("re-offering a dropped first offer", () => {
+  it("renegotiates when the existing PC is stuck in have-local-offer", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+    const offersBefore = ctx.offers().length;
+    ctx.pc().signalingState = "have-local-offer";
+    ctx.pc().connectionState = "new";
+
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+
+    expect(ctx.offers().length).toBe(offersBefore + 1);
+  });
+
+  it("does not re-offer a connected peer", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+    const offersBefore = ctx.offers().length;
+    ctx.pc().signalingState = "have-local-offer";
+    ctx.pc().connectionState = "connected";
+
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+
+    expect(ctx.offers().length).toBe(offersBefore);
   });
 });

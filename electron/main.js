@@ -934,6 +934,10 @@ function createWindow(appUrl, allowedOrigin) {
 
   trackWindowState(mainWindow, app.getPath("userData"));
 
+  // A minimized window otherwise throttles timers past the voice-resume TTL
+  // (90s). Held media still needs those timers to rejoin after an API restart.
+  mainWindow.webContents.setBackgroundThrottling(false);
+
   if (state.isMaximized) {
     mainWindow.maximize();
   }

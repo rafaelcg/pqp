@@ -70,10 +70,15 @@ export interface RealtimeTransport {
    * the first connect of a session, so callers can re-subscribe and re-sync
    * state that went stale while the socket was down.
    */
-  onReady(handler: (reconnected: boolean) => void): void;
+  onReady(handler: (reconnected: boolean) => void | Promise<void>): void;
   onError(handler: (message: string) => void): void;
   /** Fired once when an established connection is lost (before reconnect attempts). */
   onClose(handler: () => void): void;
+  /**
+   * Token provider returned null after we had already been online.
+   * Distinct from close 4401, which still retries with a refreshed token.
+   */
+  onAuthUnavailable(handler: () => void): void;
   /** Connection state for UI — drives the "reconnecting" banner. */
   onStatusChange(handler: (status: RealtimeStatus) => void): void;
   getStatus(): RealtimeStatus;
@@ -92,9 +97,10 @@ export interface RealtimeTransport {
 export function createRealtimeTransport(): RealtimeTransport {
   let socket: WebSocket | null = null;
   let handler: MessageHandler | null = null;
-  let readyHandler: ((reconnected: boolean) => void) | null = null;
+  let readyHandler: ((reconnected: boolean) => void | Promise<void>) | null = null;
   let errorHandler: ((message: string) => void) | null = null;
   let closeHandler: (() => void) | null = null;
+  let authUnavailableHandler: (() => void) | null = null;
   let statusHandler: ((status: RealtimeStatus) => void) | null = null;
   let status: RealtimeStatus = "idle";
   let isReady = false;
@@ -177,20 +183,24 @@ export function createRealtimeTransport(): RealtimeTransport {
     }, PING_INTERVAL_MS);
   }
 
-  function scheduleReconnect() {
+  function scheduleReconnect(immediate = false) {
     if (manualClose || reconnectTimer) {
       return;
     }
     setPendingStatus();
-    const delay = Math.min(
-      RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt,
-      RECONNECT_MAX_DELAY_MS,
-    );
-    reconnectAttempt += 1;
+    const delay = immediate
+      ? 0
+      : Math.min(
+          RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt,
+          RECONNECT_MAX_DELAY_MS,
+        );
+    if (!immediate) {
+      reconnectAttempt += 1;
+    }
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       void connectSocket();
-    }, delay + Math.random() * 500);
+    }, delay + (immediate ? 0 : Math.random() * 500));
   }
 
   function handleOnline() {
@@ -218,7 +228,11 @@ export function createRealtimeTransport(): RealtimeTransport {
   }
 
   // Idempotent per socket: reached from both the close event and pong timeout.
-  function handleConnectionLoss(ws: WebSocket, authFailed = false) {
+  function handleConnectionLoss(
+    ws: WebSocket,
+    authFailed = false,
+    closeCode?: number,
+  ) {
     if (ws !== socket) {
       return;
     }
@@ -226,8 +240,11 @@ export function createRealtimeTransport(): RealtimeTransport {
     const wasReady = isReady;
     isReady = false;
     stopKeepalive();
-    // Anything still undrained stays queued for the next connection.
+    // Anything still undrained stays queued for the next connection — except
+    // voice signaling: queued offers/ICE would flush before join-voice-room
+    // and race a session resume.
     stopFlushTimer();
+    voiceQueue.length = 0;
 
     if (manualClose) {
       return;
@@ -247,7 +264,7 @@ export function createRealtimeTransport(): RealtimeTransport {
     }
     setPendingStatus();
     errorHandler?.(translateMessage("connection.reconnecting"));
-    scheduleReconnect();
+    scheduleReconnect(closeCode === 1001);
   }
 
   async function connectSocket() {
@@ -258,9 +275,11 @@ export function createRealtimeTransport(): RealtimeTransport {
     setPendingStatus();
 
     let token: string | null = null;
+    let tokenFetchFailed = false;
     try {
       token = await tokenProvider();
     } catch {
+      tokenFetchFailed = true;
       token = null;
     }
     if (manualClose || socket) {
@@ -269,6 +288,15 @@ export function createRealtimeTransport(): RealtimeTransport {
     if (!token) {
       unauthorizedStreak += 1;
       setStatus("unauthorized");
+      // Clerk returns null (or throws) when the refresh cannot run offline.
+      // That is a blip, not sign-out. Hang up only when we are online and the
+      // provider resolved to null — the session is actually gone.
+      const offline =
+        tokenFetchFailed ||
+        (typeof navigator !== "undefined" && navigator.onLine === false);
+      if (hasConnectedOnce && !offline) {
+        authUnavailableHandler?.();
+      }
       scheduleReconnect();
       return;
     }
@@ -317,8 +345,20 @@ export function createRealtimeTransport(): RealtimeTransport {
           hasConnectedOnce = true;
           setStatus("online");
           startKeepalive(ws);
-          flushQueues();
-          readyHandler?.(reconnected);
+          // Join (and any other ready work) must go out before queued offers
+          // / ICE from the outage. Those frames are dropped if they arrive
+          // before this socket owns a peer. A sync handler still flushes in
+          // this turn; a promise delays the flush until join is sent.
+          const afterReady = readyHandler?.(reconnected);
+          if (afterReady && typeof afterReady.then === "function") {
+            void afterReady.finally(() => {
+              if (ws === socket && isReady) {
+                flushQueues();
+              }
+            });
+          } else {
+            flushQueues();
+          }
           return;
         }
 
@@ -348,7 +388,7 @@ export function createRealtimeTransport(): RealtimeTransport {
         reason: event.reason ?? "",
         at: Date.now(),
       };
-      handleConnectionLoss(ws, event.code === 4401);
+      handleConnectionLoss(ws, event.code === 4401, event.code);
     };
   }
 
@@ -445,7 +485,7 @@ export function createRealtimeTransport(): RealtimeTransport {
       handler = nextHandler;
     },
 
-    onReady(nextHandler: (reconnected: boolean) => void) {
+    onReady(nextHandler: (reconnected: boolean) => void | Promise<void>) {
       readyHandler = nextHandler;
     },
 
@@ -455,6 +495,10 @@ export function createRealtimeTransport(): RealtimeTransport {
 
     onClose(nextHandler: () => void) {
       closeHandler = nextHandler;
+    },
+
+    onAuthUnavailable(nextHandler: () => void) {
+      authUnavailableHandler = nextHandler;
     },
 
     onStatusChange(nextHandler: (status: RealtimeStatus) => void) {

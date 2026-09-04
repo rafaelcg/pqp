@@ -71,7 +71,7 @@ const { handleChatMessage, resetChatRateLimits } = await import(
 const {
   handleVoiceMessage,
   isSocketInVoice,
-  removeVoicePeerBySocket,
+  resetVoicePeers,
   resetVoiceRateLimits,
 } = await import("../ws/voice.js");
 
@@ -225,6 +225,20 @@ describeDb("API authorization", () => {
   it("rejects unauthenticated requests", async () => {
     const res = await call(null, "GET", "/api/servers");
     expect(res.status).toBe(401);
+  });
+
+  it("accepts a tab-close voice leave beacon without a session", async () => {
+    // pagehide cannot wait for Clerk. The resume HMAC is the credential;
+    // a missing or unknown pair still answers 204 so this is not an oracle.
+    const res = await fetch(`${baseUrl}/api/voice/leave`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({
+        resumePeerId: "00000000-0000-4000-8000-000000000001",
+        resumeToken: "not-a-real-token",
+      }),
+    });
+    expect(res.status).toBe(204);
   });
 
   it("only lists servers the caller belongs to", async () => {
@@ -3530,7 +3544,7 @@ describeDb("API authorization", () => {
         { type: "join-voice-room", voiceChannelId: channelId },
       );
       expect(isSocketInVoice(allowed)).toBe(true);
-      removeVoicePeerBySocket(allowed);
+      resetVoicePeers();
 
       await call(admin, "POST", "/api/blocks", { userId: member.id });
       const refused = fakeSocket();

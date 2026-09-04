@@ -43,6 +43,15 @@ import {
   getWatchPartyState,
   resetWatchPartyLimits,
 } from "./watch-party.js";
+import {
+  mintVoiceResumeToken,
+  verifyVoiceResumeToken,
+  VOICE_RESUME_TTL_MS,
+  VOICE_RESUME_TOKEN_TTL_MS,
+} from "./voice-resume-token.js";
+
+/** Re-exported so tests can fake the orphan window without importing the token module. */
+export { VOICE_RESUME_TTL_MS };
 
 interface VoicePeer {
   id: string;
@@ -64,6 +73,15 @@ interface VoicePeer {
   // state only: enforcement of anything never hangs off these flags.
   muted: boolean;
   deafened: boolean;
+  /** Set when the socket closed; cleared on resume. Absent = live. */
+  orphanedAt?: number;
+  orphanTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * The join that created this peer sent `resume: true`. Only those peers
+   * stay in the room after the socket closes. Phones and old tabs omit the
+   * flag and are removed immediately, so they do not occupy a mesh seat.
+   */
+  canResume: boolean;
 }
 
 /**
@@ -107,6 +125,8 @@ interface VoicePeer {
  */
 const peers = new Map<string, VoicePeer>();
 const socketToPeerId = new Map<WebSocket, string>();
+/** Peer ids removed in this process (leave / kick / TTL). Blocks reconstruct for the token's life so a hangup cannot resurrect the id. */
+const retiredPeerIds = new Map<string, ReturnType<typeof setTimeout>>();
 
 /**
  * A VOICE ROOM HAS ONE TRANSPORT, THIS PROCESS PICKS IT, AND IT DOES NOT CHANGE
@@ -180,6 +200,68 @@ export function resetVoiceRateLimits(): void {
 
 function getRoomPeers(voiceChannelId: string): VoicePeer[] {
   return [...peers.values()].filter((p) => p.voiceChannelId === voiceChannelId);
+}
+
+function getLiveRoomPeers(voiceChannelId: string): VoicePeer[] {
+  return getRoomPeers(voiceChannelId).filter((p) => p.orphanedAt === undefined);
+}
+
+function cancelOrphan(peer: VoicePeer): void {
+  if (peer.orphanTimer) {
+    clearTimeout(peer.orphanTimer);
+    peer.orphanTimer = undefined;
+  }
+  peer.orphanedAt = undefined;
+}
+
+function retirePeerId(peerId: string): void {
+  const existing = retiredPeerIds.get(peerId);
+  if (existing) {
+    clearTimeout(existing);
+  }
+  retiredPeerIds.set(
+    peerId,
+    setTimeout(() => {
+      retiredPeerIds.delete(peerId);
+    }, VOICE_RESUME_TOKEN_TTL_MS),
+  );
+}
+
+/**
+ * Watch party and unanswered rings follow *live* occupancy. Orphans are still
+ * in the call (media may be flowing). A lone watcher who only blips the socket
+ * keeps the film until they resume or the orphan TTL fires. Conversation rings
+ * start their empty-room grace when live occupancy hits zero; the timer's
+ * expiry check still sees orphans, so a blip that resumes in time does not
+ * kill the ring.
+ *
+ * The transport pin stays until the map is empty, including orphans, so a
+ * resume in the same process cannot flip mesh ↔ LiveKit under held media.
+ */
+function onLiveRoomMaybeEmpty(
+  voiceChannelId: string,
+  notifySocket?: WebSocket,
+): void {
+  if (getLiveRoomPeers(voiceChannelId).length > 0) {
+    return;
+  }
+  // Conversation rings: start the empty-room grace once nobody live is in
+  // the call. An orphan still counts as "in" for the timer's expiry check,
+  // so a blip that resumes in time does not kill the ring.
+  noteVoiceRoomEmptied(voiceChannelId);
+  // Watch party has no extra grace for the *next* arrival, but a lone
+  // watcher who only blipped the socket must keep the film until they
+  // resume or the orphan TTL fires.
+  if (getRoomPeers(voiceChannelId).length > 0) {
+    return;
+  }
+  if (endWatchParty(voiceChannelId) && notifySocket) {
+    send(notifySocket, {
+      type: "watch-party",
+      channelId: voiceChannelId,
+      state: null,
+    });
+  }
 }
 
 /**
@@ -423,49 +505,26 @@ function removePeer(peerId: string) {
   if (!peer) {
     return;
   }
+  cancelOrphan(peer);
   const { voiceChannelId } = peer;
   peers.delete(peerId);
   if (socketToPeerId.get(peer.socket) === peerId) {
     socketToPeerId.delete(peer.socket);
   }
-  // Empty room: forget the pin, so the next call in this channel picks up the
-  // current config instead of a decision taken before LiveKit was added,
-  // removed or fixed. Nobody is mid-call, so nobody's audio moves.
+  // Empty room (no orphans either): forget the pin, so the next call in this
+  // channel picks up the current config instead of a decision taken before
+  // LiveKit was added, removed or fixed. Nobody is mid-call, so nobody's audio
+  // moves. Orphans keep the pin so a resume cannot flip transport.
   if (getRoomPeers(voiceChannelId).length === 0) {
     roomTransports.delete(voiceChannelId);
-    // The last participant leaving tears the watch party down, so nobody who
-    // walks into this channel tomorrow inherits a film half-watched by people
-    // who have gone home.
-    //
-    // WHO IS TOLD. The room is empty by construction, so the only socket left
-    // to tell is the one that just left, and it is told rather than assumed to
-    // know: a peer removed by an eviction or a channel deletion did not choose
-    // to leave, and `state: null` is what lets it dismantle its player instead
-    // of sitting on a party that no longer exists.
-    //
-    // NO GRACE PERIOD, unlike the ring below. A reconnecting lone watcher does
-    // empty their room for a moment and does lose the held state, and the
-    // contract already covers that: an unechoed local state is retried, which
-    // is the same machinery that recovers a mid-video join. A grace period
-    // would instead hand the next arrival a party nobody is in, which is the
-    // failure that has no client-side repair.
-    if (endWatchParty(voiceChannelId)) {
-      send(peer.socket, {
-        type: "watch-party",
-        channelId: voiceChannelId,
-        state: null,
-      });
-    }
-    // A ring with nobody left in the room is a call that ended unanswered —
-    // after a grace period, because this same path runs mid-rejoin.
-    // See `// --- conversation calls ---` below.
-    noteVoiceRoomEmptied(voiceChannelId);
   }
+  retirePeerId(peerId);
+  onLiveRoomMaybeEmpty(voiceChannelId, peer.socket);
   logEvent("voice.leave", {
     peerId,
     userId: peer.userId,
     voiceChannelId,
-    roomSize: getRoomPeers(voiceChannelId).length,
+    roomSize: getLiveRoomPeers(voiceChannelId).length,
   });
   broadcastToRoom(voiceChannelId, { type: "peer-left", peerId });
   void broadcastRoster(voiceChannelId);
@@ -564,11 +623,81 @@ export function getVoicePeer(
   };
 }
 
+/**
+ * Tab close / hangup after `/ws` is already gone. The HMAC is the proof; the
+ * peer id is on every roster, so a bare id must not be enough to retire a seat.
+ * Returns whether a peer was removed.
+ */
+export function leaveVoiceByResumeToken(
+  resumePeerId: string,
+  resumeToken: string,
+): boolean {
+  const peer = peers.get(resumePeerId);
+  if (!peer) {
+    return false;
+  }
+  if (
+    !verifyVoiceResumeToken(resumeToken, {
+      userId: peer.userId,
+      peerId: resumePeerId,
+      voiceChannelId: peer.voiceChannelId,
+    })
+  ) {
+    return false;
+  }
+  removePeer(resumePeerId);
+  return true;
+}
+
+/**
+ * Socket closed. Peers that declared `resume: true` stay in the room for
+ * `VOICE_RESUME_TTL_MS` so a brief signaling outage can reattach the same
+ * id without broadcasting `peer-left`. Everyone else (phones, old tabs)
+ * is removed now. Intentional hangup is `leave-voice-room`.
+ */
 export function removeVoicePeerBySocket(socket: WebSocket) {
   const peerId = socketToPeerId.get(socket);
-  if (peerId) {
-    removePeer(peerId);
+  if (!peerId) {
+    return;
   }
+  const peer = peers.get(peerId);
+  if (!peer) {
+    socketToPeerId.delete(socket);
+    return;
+  }
+  socketToPeerId.delete(socket);
+  if (!peer.canResume) {
+    removePeer(peerId);
+    return;
+  }
+  cancelOrphan(peer);
+  peer.orphanedAt = Date.now();
+  peer.orphanTimer = setTimeout(() => {
+    peer.orphanTimer = undefined;
+    if (peers.get(peerId)?.orphanedAt !== undefined) {
+      removePeer(peerId);
+    }
+  }, VOICE_RESUME_TTL_MS);
+  onLiveRoomMaybeEmpty(peer.voiceChannelId, socket);
+  logEvent("voice.orphan", {
+    peerId,
+    userId: peer.userId,
+    voiceChannelId: peer.voiceChannelId,
+  });
+}
+
+/** Test hook: drop every peer, orphan timer, and retired-id window. */
+export function resetVoicePeers(): void {
+  for (const peer of peers.values()) {
+    cancelOrphan(peer);
+  }
+  for (const timer of retiredPeerIds.values()) {
+    clearTimeout(timer);
+  }
+  peers.clear();
+  socketToPeerId.clear();
+  retiredPeerIds.clear();
+  roomTransports.clear();
 }
 
 /** Whether a socket currently holds a voice peer (for disconnect diagnostics). */
@@ -608,6 +737,152 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
   );
 }
 
+type VoiceResumePlan =
+  | { kind: "reattach"; peer: VoicePeer }
+  | { kind: "reconstruct"; peerId: string; transport: VoiceRoomTransport }
+  | { kind: "cold" };
+
+function planVoiceResume(
+  userId: string,
+  payload: {
+    voiceChannelId: string;
+    resumePeerId?: string;
+    resumeToken?: string;
+  },
+  capabilities: VoiceRoomTransport[],
+): VoiceResumePlan {
+  const claimed = payload.resumePeerId;
+  if (!claimed || !payload.resumeToken) {
+    return { kind: "cold" };
+  }
+  const verified = verifyVoiceResumeToken(payload.resumeToken, {
+    userId,
+    peerId: claimed,
+    voiceChannelId: payload.voiceChannelId,
+  });
+  if (!verified) {
+    return { kind: "cold" };
+  }
+  if (!capabilities.includes(verified.transport)) {
+    return { kind: "cold" };
+  }
+
+  const existing = peers.get(claimed);
+  if (existing) {
+    if (
+      existing.userId !== userId ||
+      existing.voiceChannelId !== payload.voiceChannelId
+    ) {
+      return { kind: "cold" };
+    }
+    // The token already proves this user owns the peer. A Wi-Fi blip can
+    // reconnect before the heartbeat notices the old socket died, so the
+    // peer is still marked live. Adopt the new socket rather than cold-
+    // joining into a second seat.
+    return { kind: "reattach", peer: existing };
+  }
+
+  if (retiredPeerIds.has(claimed)) {
+    return { kind: "cold" };
+  }
+  const pinned = roomTransports.get(payload.voiceChannelId);
+  if (pinned && pinned !== verified.transport) {
+    return { kind: "cold" };
+  }
+  return {
+    kind: "reconstruct",
+    peerId: claimed,
+    transport: verified.transport,
+  };
+}
+
+async function welcomeVoicePeer(
+  peer: VoicePeer,
+  resumed: boolean,
+): Promise<void> {
+  const transport = getRoomTransport(peer.voiceChannelId);
+  const resumeToken = mintVoiceResumeToken({
+    userId: peer.userId,
+    peerId: peer.id,
+    voiceChannelId: peer.voiceChannelId,
+    transport,
+  });
+  const self = toParticipant(peer);
+  // Orphans stay on the roster (sidebar still shows them) but must not be
+  // in `welcome.peers`. A joiner that offered to a closed socket would sit
+  // in `have-local-offer` forever; on resume `connectToPeer` is a no-op.
+  const existingPeers = getLiveRoomPeers(peer.voiceChannelId)
+    .filter((p) => p.id !== peer.id)
+    .map(toParticipant);
+
+  send(peer.socket, {
+    type: "welcome",
+    peerId: peer.id,
+    peers: existingPeers,
+    voiceChannelId: peer.voiceChannelId,
+    self,
+    transport,
+    resumed: resumed || undefined,
+    resumeToken: resumeToken ?? undefined,
+  });
+
+  // What the room is watching, to this socket alone and only if there is a
+  // party. A joiner cannot ask for it: there is no request frame in the
+  // contract and adding one would be a second way to learn the same fact.
+  // Sent after `welcome` so the client already knows which room it is in,
+  // and before the room hears about the joiner, so the state is in hand
+  // before anything else can arrive about it.
+  const party = getWatchPartyState(peer.voiceChannelId);
+  if (party) {
+    send(peer.socket, {
+      type: "watch-party",
+      channelId: peer.voiceChannelId,
+      state: party,
+    });
+  }
+
+  broadcastToRoom(
+    peer.voiceChannelId,
+    { type: "peer-joined", peer: self },
+    peer.id,
+  );
+  noteConversationCallJoin(peer.voiceChannelId, peer.userId);
+  await broadcastRoster(peer.voiceChannelId);
+}
+
+async function reattachVoicePeer(
+  peer: VoicePeer,
+  socket: WebSocket,
+  user: DbUser,
+): Promise<void> {
+  const previous = socketToPeerId.get(socket);
+  if (previous && previous !== peer.id) {
+    removePeer(previous);
+  }
+  const previousSocket = peer.socket;
+  if (previousSocket !== socket) {
+    // Drop the old mapping *before* overwriting `peer.socket`. Otherwise the
+    // old socket's later `close` looks up this peer id and orphans the seat
+    // we just resumed onto.
+    socketToPeerId.delete(previousSocket);
+  }
+  cancelOrphan(peer);
+  peer.socket = socket;
+  socketToPeerId.set(socket, peer.id);
+  const channel = await getChannel(peer.voiceChannelId);
+  peer.displayName = await resolveMemberName(
+    channel?.kind === "server" ? (channel.server_id ?? null) : null,
+    user,
+  );
+  peer.avatarUrl = user.avatar_url;
+  logEvent("voice.resume", {
+    peerId: peer.id,
+    userId: peer.userId,
+    voiceChannelId: peer.voiceChannelId,
+  });
+  await welcomeVoicePeer(peer, true);
+}
+
 export async function handleVoiceMessage(
   session: { socket: WebSocket; user: DbUser },
   raw: unknown,
@@ -625,6 +900,14 @@ export async function handleVoiceMessage(
     if (!roomLimiter.take(user.id)) {
       return;
     }
+    const refuseResume = () => {
+      if (payload.resumePeerId) {
+        send(socket, {
+          type: "voice-join-refused",
+          voiceChannelId: payload.voiceChannelId,
+        });
+      }
+    };
     // A CHARACTER NEVER JOINS VOICE. The house cast is a frame that works in a
     // public text room and nowhere else — a fictional stranger in your ear is
     // something no disclosure setting makes comfortable, and there is no
@@ -637,9 +920,11 @@ export async function handleVoiceMessage(
     // peer that this refusal prevents from ever existing — including the one
     // that mints an SFU token.
     if (user.is_character) {
+      refuseResume();
       return;
     }
     if (!(await canAccessChannel(payload.voiceChannelId, user.id))) {
+      refuseResume();
       return;
     }
     // Ringing somebody is the loudest thing one account can do to another, so a
@@ -647,6 +932,7 @@ export async function handleVoiceMessage(
     // this, a blocked person keeps a working phone line to the person who
     // blocked them.
     if (await isDmSendBlocked(payload.voiceChannelId, user.id)) {
+      refuseResume();
       return;
     }
     // THE VOICE CHOKEPOINT for timeouts. `join-voice-room` is the only way into
@@ -664,6 +950,7 @@ export async function handleVoiceMessage(
     // and `findTimeoutForChannel` returns nothing for those — a server's
     // moderators do not get to hang up their members' DM calls.
     if (await findTimeoutForChannel(user.id, payload.voiceChannelId)) {
+      refuseResume();
       return;
     }
 
@@ -673,9 +960,11 @@ export async function handleVoiceMessage(
     // conversation, since they are all stored as text.
     const channel = await getChannel(payload.voiceChannelId);
     if (!channel) {
+      refuseResume();
       return;
     }
     if (channel.kind === "server" && channel.type !== "voice") {
+      refuseResume();
       return;
     }
     if (channel.kind === "server" && channel.server_id) {
@@ -685,6 +974,7 @@ export async function handleVoiceMessage(
         payload.voiceChannelId,
       );
       if (!hasPermission(perms, Permission.CONNECT)) {
+        refuseResume();
         return;
       }
     }
@@ -696,22 +986,21 @@ export async function handleVoiceMessage(
       return;
     }
 
-    // Read before any peer is removed or added: for a rejoin by the room's only
-    // occupant, removing them first would empty the room and drop the pin, and
-    // the join would silently re-decide the transport.
-    const transport = getRoomTransport(payload.voiceChannelId);
+    const capabilities: VoiceRoomTransport[] = payload.transports ?? [
+      "mesh",
+      "livekit",
+    ];
+    const resume = planVoiceResume(user.id, payload, capabilities);
+    const transport =
+      resume.kind === "reconstruct"
+        ? (roomTransports.get(payload.voiceChannelId) ?? resume.transport)
+        : getRoomTransport(payload.voiceChannelId);
 
     // A client that cannot run this room's transport is refused *here*, before
     // a peer exists. Admitting it and letting it discover the mismatch a round
     // trip later would put a participant in everyone's roster who cannot be
     // heard — the exact failure this is here to make impossible.
-    const capabilities: VoiceRoomTransport[] = payload.transports ?? [
-      "mesh",
-      "livekit",
-    ];
     if (!capabilities.includes(transport)) {
-      // Drop any peer this socket still holds: it is not going to be in the
-      // room, so leaving the previous one behind would leave a ghost.
       const stale = socketToPeerId.get(socket);
       if (stale) {
         removePeer(stale);
@@ -730,15 +1019,49 @@ export async function handleVoiceMessage(
       return;
     }
 
+    const resumePeerId =
+      resume.kind === "reattach"
+        ? resume.peer.id
+        : resume.kind === "reconstruct"
+          ? resume.peerId
+          : undefined;
+
+    // Occupying count for the mesh ceiling. A resume reattaches an existing
+    // slot: that peer must not count against itself.
+    const occupyingOf = () =>
+      getRoomPeers(payload.voiceChannelId).filter((p) => {
+        if (p.socket === socket) {
+          return false;
+        }
+        if (resumePeerId && p.id === resumePeerId) {
+          return false;
+        }
+        return true;
+      });
+
+    // Cold join after a blip: drop this user's orphans only when they are
+    // what makes the mesh full. A phone that cannot resume must not evict a
+    // holding web/Electron seat when the room still has space. Two seats for
+    // 90s is cosmetic; a rebuilt call is not. When the ghosts *are* the cap
+    // (e2e leftover Dev Users, a client that never sent the token) sweep so
+    // the next join is not refused as full.
+    let occupying = occupyingOf();
+    const meshIsFull = () =>
+      transport === "mesh" && occupying.length >= MESH_VOICE_LIMIT;
+    if (resume.kind === "cold" && meshIsFull()) {
+      for (const ghost of getRoomPeers(payload.voiceChannelId)) {
+        if (ghost.userId === user.id && ghost.orphanedAt !== undefined) {
+          removePeer(ghost.id);
+        }
+      }
+      occupying = occupyingOf();
+    }
+
     // Enforce the mesh ceiling server-side. Above it, each client would carry
     // one Opus uplink per peer and quality collapses — reject instead. The
     // ceiling is a property of the mesh, so it does not apply once media is
     // routed through an SFU.
-    const roomIsFull =
-      transport === "mesh" &&
-      getRoomPeers(payload.voiceChannelId).filter((p) => p.socket !== socket)
-        .length >= MESH_VOICE_LIMIT;
-    if (roomIsFull) {
+    if (meshIsFull()) {
       logEvent("voice.roomFull", {
         userId: user.id,
         voiceChannelId: payload.voiceChannelId,
@@ -752,12 +1075,19 @@ export async function handleVoiceMessage(
       return;
     }
 
+    if (resume.kind === "reattach") {
+      resume.peer.canResume = payload.resume === true;
+      await reattachVoicePeer(resume.peer, socket, user);
+      return;
+    }
+
     const currentPeerId = socketToPeerId.get(socket);
     if (currentPeerId) {
       removePeer(currentPeerId);
     }
 
-    const peerId = randomUUID();
+    const peerId =
+      resume.kind === "reconstruct" ? resume.peerId : randomUUID();
     // What this person is called *here*: their nickname in this server, or
     // the name on their account. Every other surface already resolves it this
     // way; voice used to read `display_name` straight, which is how somebody
@@ -781,64 +1111,47 @@ export async function handleVoiceMessage(
       // would otherwise erase a standing mute). See use of `set-voice-state`.
       muted: false,
       deafened: false,
+      canResume: payload.resume === true,
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
     noteRoomSizeForPeak(getRoomPeers(payload.voiceChannelId).length);
-    // Pinned only now that the room is non-empty, so `removePeer`'s cleanup
-    // above cannot race this write away.
-    roomTransports.set(payload.voiceChannelId, transport);
+    // Reconstruct pins the transport the token remembered, so a deploy cannot
+    // silently switch mesh ↔ LiveKit under held media. Cold join pins current
+    // config when the room is empty.
+    if (resume.kind === "reconstruct") {
+      roomTransports.set(payload.voiceChannelId, resume.transport);
+    } else if (!roomTransports.has(payload.voiceChannelId)) {
+      roomTransports.set(payload.voiceChannelId, transport);
+    }
     logEvent("voice.join", {
       peerId,
       userId: user.id,
       voiceChannelId: payload.voiceChannelId,
       roomSize: getRoomPeers(payload.voiceChannelId).length,
+      resumed: resume.kind === "reconstruct",
     });
 
-    const self = toParticipant(peer);
-    const existingPeers = getRoomPeers(payload.voiceChannelId)
-      .filter((p) => p.id !== peerId)
-      .map(toParticipant);
-
-    send(socket, {
-      type: "welcome",
-      peerId,
-      peers: existingPeers,
-      voiceChannelId: payload.voiceChannelId,
-      self,
-      transport,
-    });
-
-    // What the room is watching, to this socket alone and only if there is a
-    // party. A joiner cannot ask for it: there is no request frame in the
-    // contract and adding one would be a second way to learn the same fact.
-    // Sent after `welcome` so the client already knows which room it is in,
-    // and before the room hears about the joiner, so the state is in hand
-    // before anything else can arrive about it.
-    const party = getWatchPartyState(payload.voiceChannelId);
-    if (party) {
-      send(socket, {
-        type: "watch-party",
-        channelId: payload.voiceChannelId,
-        state: party,
-      });
-    }
-
-    broadcastToRoom(
-      payload.voiceChannelId,
-      { type: "peer-joined", peer: self },
-      peerId,
-    );
-    // A join into a conversation that is ringing this user IS the answer —
-    // see `// --- conversation calls ---` below.
-    noteConversationCallJoin(payload.voiceChannelId, user.id);
-    await broadcastRoster(payload.voiceChannelId);
+    await welcomeVoicePeer(peer, resume.kind === "reconstruct");
     return;
   }
 
   if (payload.type === "leave-voice-room") {
     if (existingPeerId) {
       removePeer(existingPeerId);
+      return;
+    }
+    for (const peer of peers.values()) {
+      if (peer.socket === socket) {
+        removePeer(peer.id);
+        return;
+      }
+    }
+    // Hangup while `/ws` was down: this socket never owned the peer. The
+    // resume pair proves this user still owns that orphan; drop it now so
+    // the roster does not keep a 90s ghost.
+    if (payload.resumePeerId && payload.resumeToken) {
+      leaveVoiceByResumeToken(payload.resumePeerId, payload.resumeToken);
     }
     return;
   }

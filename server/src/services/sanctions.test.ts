@@ -70,7 +70,7 @@ const { openConversation } = await import("./dms.js");
 const { handleChatMessage, resetChatRateLimits } = await import(
   "../ws/chat.js"
 );
-const { handleVoiceMessage, isSocketInVoice, removeVoicePeerBySocket } =
+const { handleVoiceMessage, isSocketInVoice, resetVoicePeers } =
   await import("../ws/voice.js");
 const { findTimeoutInServer, issueTimeout, pruneExpiredTimeouts } =
   await import("./sanctions.js");
@@ -311,7 +311,7 @@ describeDb("sanctions — timeouts", () => {
       { type: "join-voice-room", voiceChannelId },
     );
     expect(isSocketInVoice(rejoin)).toBe(false);
-    removeVoicePeerBySocket(rejoin);
+    resetVoicePeers();
   });
 
   // ------------------------------------------------------------ expiry

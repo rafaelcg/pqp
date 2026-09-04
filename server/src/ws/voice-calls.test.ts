@@ -149,8 +149,8 @@ const {
   MISSED_CALL_BODY,
   handleVoiceMessage,
   isConversationRinging,
-  removeVoicePeerBySocket,
   resetConversationCalls,
+  resetVoicePeers,
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
 } = await import("./voice.js");
@@ -251,12 +251,13 @@ beforeEach(() => {
   ]);
   resetVoiceRateLimits();
   resetVoiceRoomTransports();
+  resetVoicePeers();
   resetConversationCalls();
 });
 
 afterEach(() => {
+  resetVoicePeers();
   for (const socket of registered.splice(0)) {
-    removeVoicePeerBySocket(socket);
     deleteAuthenticatedSocket(socket);
   }
   resetConversationCalls();

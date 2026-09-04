@@ -83,6 +83,7 @@ vi.mock("@/lib/livekit-session", () => ({
     setScreenMaxBitrate: async () => {},
     unpublishCamera: async () => {},
     disconnect: async () => {},
+    isConnected: () => false,
   })),
 }));
 
@@ -169,6 +170,7 @@ function createTransport() {
     onReady: () => {},
     onError: () => {},
     onClose: () => {},
+    onAuthUnavailable: () => {},
     onStatusChange: () => {},
     getStatus: () => "online",
     isConnected: () => true,

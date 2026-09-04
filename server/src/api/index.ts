@@ -135,6 +135,7 @@ import {
   getVoiceChannelForUser,
   getVoicePeer,
   getVoicePeerIdentities,
+  leaveVoiceByResumeToken,
   notifyVoiceModeration,
   refreshVoiceIdentity,
 } from "../ws/voice.js";
@@ -640,6 +641,15 @@ const publicCommunityLimiter = createRateLimiter({
   capacity: 60,
   refillPerSecond: 2,
 });
+/**
+ * Tab-close leave beacon. Unauthenticated on purpose: `pagehide` cannot wait
+ * for Clerk, and the resume HMAC is the credential. Own bucket so a flood
+ * here cannot spend the public-profile or webhook budgets.
+ */
+const voiceLeaveLimiter = createRateLimiter({
+  capacity: 30,
+  refillPerSecond: 2,
+});
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -666,6 +676,7 @@ export function resetApiRateLimits(): void {
   depoimentoLimiter.reset();
   publicProfileLimiter.reset();
   publicCommunityLimiter.reset();
+  voiceLeaveLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -5728,6 +5739,54 @@ async function handleWebhookExecute(
   sendJson(res, 200, { message: mapped }, req);
 }
 
+/**
+ * Tab close cannot wait for a Clerk token, and a WebSocket `leave-voice-room`
+ * sent from `pagehide` is often dropped with the socket. The resume HMAC is
+ * the credential, the same way a webhook URL is: whoever holds it can only
+ * retire that one peer. Invalid or unknown pairs still answer 204 so this
+ * is not an oracle for live peer ids.
+ */
+async function handleVoiceLeaveBeacon(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<void> {
+  const key = `ip:${clientAddress(req as never)}`;
+  if (!voiceLeaveLimiter.take(key)) {
+    res.setHeader(
+      "Retry-After",
+      String(voiceLeaveLimiter.retryAfter(key)),
+    );
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+
+  let body: { resumePeerId?: unknown; resumeToken?: unknown };
+  try {
+    body = await readJsonBody(req);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      sendError(res, error.status, error.message, req);
+      return;
+    }
+    sendError(res, 400, "Invalid JSON body", req);
+    return;
+  }
+
+  const resumePeerId =
+    typeof body.resumePeerId === "string" ? body.resumePeerId : "";
+  const resumeToken =
+    typeof body.resumeToken === "string" ? body.resumeToken : "";
+  if (isUuid(resumePeerId) && resumeToken.length > 0) {
+    leaveVoiceByResumeToken(resumePeerId, resumeToken);
+  }
+
+  res.writeHead(204, {
+    ...SECURITY_HEADERS,
+    ...corsHeaders(req),
+  });
+  res.end();
+}
+
 export async function handleApi(
   req: IncomingMessage,
   res: ServerResponse,
@@ -5795,6 +5854,11 @@ export async function handleApi(
     req.method === "POST" ? WEBHOOK_EXECUTE_PATH.exec(pathname) : null;
   if (webhookMatch) {
     await handleWebhookExecute(req, res, webhookMatch[1]!, webhookMatch[2]!);
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/voice/leave") {
+    await handleVoiceLeaveBeacon(req, res);
     return;
   }
 

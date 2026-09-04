@@ -60,7 +60,7 @@ vi.mock("../voice/backends.js", () => ({
 
 const {
   handleVoiceMessage,
-  removeVoicePeerBySocket,
+  resetVoicePeers,
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
 } = await import("./voice.js");
@@ -135,9 +135,8 @@ describe("watch party over the voice room", () => {
   const viewers: Recorder[] = [];
 
   beforeEach(() => {
-    for (const rec of sockets.splice(0)) {
-      removeVoicePeerBySocket(rec.socket);
-    }
+    sockets.length = 0;
+    resetVoicePeers();
     for (const rec of viewers.splice(0)) {
       deleteAuthenticatedSocket(rec.socket);
     }

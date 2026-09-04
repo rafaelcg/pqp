@@ -123,6 +123,12 @@ interface MetricsBody {
     messages24h: number;
   }[];
   acquisition: { days: number; total: number; rows: unknown[] };
+  retention: {
+    days: number;
+    activeWindowDays: number;
+    since: string;
+    rows: { channel: string | null; signups: number; retained: number }[];
+  };
   connections: {
     ofUsers: number;
     anyProvider: number;
@@ -333,6 +339,15 @@ describeDb("GET /api/admin/metrics", () => {
 
     expect(body.acquisition.days).toBe(7);
     expect(body.acquisition.total).toBe(2);
+
+    // The other half of the acquisition question travels in the same payload,
+    // over a longer cohort: signups are counted over 7 days, whether they
+    // stayed over 30. Both accounts here were made moments ago, so the cohort
+    // correctly excludes them rather than filing them as churned.
+    expect(body.retention.days).toBe(30);
+    expect(body.retention.activeWindowDays).toBe(7);
+    expect(Date.parse(body.retention.since)).not.toBeNaN();
+    expect(body.retention.rows).toEqual([]);
 
     // Two people have linked something, three links between them; the webhook
     // row is not a person. The share is of `users.total`, so it is 2 of 2.

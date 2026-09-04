@@ -2,7 +2,12 @@ import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
 import { runtimeSnapshot, type RuntimeMetrics } from "../lib/runtime.js";
 import { getVoiceActivitySnapshot } from "../ws/voice.js";
-import { acquisitionReport, type AcquisitionReport } from "./acquisition.js";
+import {
+  acquisitionReport,
+  retentionBySource,
+  type AcquisitionReport,
+  type RetentionReport,
+} from "./acquisition.js";
 import { callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
@@ -116,6 +121,14 @@ export interface AdminMetrics {
     messages24h: number;
   }[];
   acquisition: AcquisitionReport;
+  /**
+   * Which channels bring people who stay, over a 30-day cohort.
+   *
+   * Sits beside `acquisition` because it is the other half of the same
+   * question: that block counts arrivals, this one counts the ones still
+   * here. A channel is only worth its cost per signup if the signups last.
+   */
+  retention: RetentionReport;
   /** Prompted call quality, last 7 days. Counts only; see call-ratings.ts. */
   callRatings: CallRatingSummary;
   /**
@@ -307,6 +320,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     messagesByHour,
     topServers,
     acquisition,
+    retention,
     callRatings,
     connections,
   ] = await Promise.all([
@@ -399,6 +413,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
         ORDER BY a.messages_24h DESC, s.name`,
     ),
     acquisitionReport(7),
+    retentionBySource(30),
     callRatingSummary(7),
     connectionAdoption(),
   ]);
@@ -694,6 +709,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       messages24h: Number(row.messages_24h),
     })),
     acquisition,
+    retention,
     callRatings,
     // The denominator travels with the numerators rather than leaving the
     // dashboard to pick one: it is the users total in this same payload.

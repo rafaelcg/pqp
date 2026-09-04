@@ -66,6 +66,8 @@ export interface LiveKitSession {
   /** Stop publishing the camera video track. */
   unpublishCamera(): Promise<void>;
   disconnect(): Promise<void>;
+  /** True while the LiveKit room is actually connected (not merely constructed). */
+  isConnected(): boolean;
 }
 
 export interface LiveKitIdentity {
@@ -425,6 +427,10 @@ export async function connectLiveKit({
       publishedCameraTrack = null;
       publishedScreenAudioTrack = null;
       await room.disconnect();
+    },
+
+    isConnected() {
+      return room.state === ConnectionState.Connected;
     },
   };
 }
