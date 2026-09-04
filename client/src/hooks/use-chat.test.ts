@@ -50,6 +50,7 @@ function createTransport() {
     onReady: () => {},
     onError: () => {},
     onClose: () => {},
+    onAuthUnavailable: () => {},
     onStatusChange: () => {},
     getStatus: () => (state.connected ? "online" : "reconnecting"),
     isConnected: () => state.connected,

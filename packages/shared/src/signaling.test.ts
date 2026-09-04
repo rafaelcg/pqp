@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  joinVoiceRoomMessageSchema,
+  leaveVoiceRoomMessageSchema,
   setSharingScreenMessageSchema,
   voiceParticipantSchema,
+  welcomeMessageSchema,
 } from "./signaling.js";
 
 /**
@@ -56,5 +59,53 @@ describe("screen-share audio is an optional addition to the wire", () => {
         audioStreamId: 7,
       }),
     ).toThrow();
+  });
+});
+
+describe("voice resume fields are optional additions", () => {
+  const channel = "00000000-0000-4000-8000-0000000000aa";
+
+  it("accepts a join from a client that has never heard of resume", () => {
+    const parsed = joinVoiceRoomMessageSchema.parse({
+      type: "join-voice-room",
+      voiceChannelId: channel,
+    });
+    expect(parsed.resumePeerId).toBeUndefined();
+    expect(parsed.resumeToken).toBeUndefined();
+    expect(parsed.resume).toBeUndefined();
+  });
+
+  it("accepts a join that declares resume support", () => {
+    const parsed = joinVoiceRoomMessageSchema.parse({
+      type: "join-voice-room",
+      voiceChannelId: channel,
+      resume: true,
+    });
+    expect(parsed.resume).toBe(true);
+  });
+
+  it("accepts a welcome from a server that has never heard of resume", () => {
+    const parsed = welcomeMessageSchema.parse({
+      type: "welcome",
+      peerId: "peer-1",
+      peers: [],
+      voiceChannelId: channel,
+      self: {
+        peerId: "peer-1",
+        userId: "00000000-0000-4000-8000-0000000000aa",
+        displayName: "Talker",
+        avatarUrl: null,
+      },
+    });
+    expect(parsed.resumed).toBeUndefined();
+    expect(parsed.resumeToken).toBeUndefined();
+  });
+
+  it("accepts a leave from a client that has never heard of resume", () => {
+    const parsed = leaveVoiceRoomMessageSchema.parse({
+      type: "leave-voice-room",
+    });
+    expect(parsed.resumePeerId).toBeUndefined();
+    expect(parsed.resumeToken).toBeUndefined();
   });
 });

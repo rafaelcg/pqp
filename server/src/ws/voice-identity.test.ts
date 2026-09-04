@@ -73,6 +73,7 @@ const {
   handleVoiceMessage,
   refreshVoiceIdentity,
   removeVoicePeerBySocket,
+  resetVoicePeers,
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
 } = await import("./voice.js");
@@ -112,9 +113,9 @@ describe("what a peer is called in a call", () => {
 
   beforeEach(() => {
     for (const rec of open.splice(0)) {
-      removeVoicePeerBySocket(rec.socket);
       deleteAuthenticatedSocket(rec.socket);
     }
+    resetVoicePeers();
     naming.shown.clear();
     resetVoiceRateLimits();
     resetVoiceRoomTransports();
@@ -180,6 +181,58 @@ describe("what a peer is called in a call", () => {
     const roster = framesOfType(watcher, "voice-roster").at(-1);
     const participants = roster?.participants as { displayName: string }[];
     expect(participants.map((p) => p.displayName)).toContain("Qriox");
+  });
+
+  it("keeps the server nickname when the same peer reattaches", async () => {
+    const previousClerk = process.env.CLERK_SECRET_KEY;
+    process.env.CLERK_SECRET_KEY = "sk_test_voice_identity";
+    try {
+      const qriox = randomUUID();
+      naming.shown.set(qriox, "Qriox");
+
+      const watcher = await join(randomUUID(), "Ana");
+      const rec = recorder();
+      open.push(rec);
+      const user = asUser(qriox, "Rafael Cammarano");
+      setAuthenticatedSocket(rec.socket, user);
+      await handleVoiceMessage(
+        { socket: rec.socket, user },
+        { type: "join-voice-room", voiceChannelId: VOICE, resume: true },
+      );
+      const [welcome] = framesOfType(rec, "welcome");
+      const peerId = welcome?.peerId as string;
+      const token = welcome?.resumeToken as string;
+      expect(peerId).toBeTruthy();
+      expect(token).toBeTruthy();
+
+      watcher.received.length = 0;
+      removeVoicePeerBySocket(rec.socket);
+      expect(framesOfType(watcher, "peer-left")).toHaveLength(0);
+
+      const again = recorder();
+      open.push(again);
+      setAuthenticatedSocket(again.socket, user);
+      await handleVoiceMessage(
+        { socket: again.socket, user },
+        {
+          type: "join-voice-room",
+          voiceChannelId: VOICE,
+          resume: true,
+          resumePeerId: peerId,
+          resumeToken: token,
+        },
+      );
+
+      const [joined] = framesOfType(watcher, "peer-joined");
+      expect((joined?.peer as { displayName: string }).displayName).toBe(
+        "Qriox",
+      );
+      expect(JSON.stringify(watcher.received)).not.toContain(
+        "Rafael Cammarano",
+      );
+    } finally {
+      process.env.CLERK_SECRET_KEY = previousClerk;
+    }
   });
 
   it("does nothing for somebody who is not in a call", async () => {

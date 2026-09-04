@@ -1378,6 +1378,18 @@ export function createPeerConnectionManager(
           applyIdentity(existing, identity);
           emitState();
         }
+        // First offer landed on a closed socket (joiner during an orphan
+        // window). The PC sits in have-local-offer / connectionState "new"
+        // and never fails, so ICE restart never runs. Re-offer.
+        if (
+          isImpolite(localPeerId, remotePeerId) &&
+          existing.pc.signalingState === "have-local-offer" &&
+          existing.pc.connectionState !== "connected" &&
+          existing.pc.connectionState !== "closed" &&
+          !existing.makingOffer
+        ) {
+          void negotiate(existing);
+        }
         return;
       }
 

@@ -63,7 +63,7 @@ vi.mock("../voice/admin.js", () => ({
 const {
   getRoomTransport,
   handleVoiceMessage,
-  removeVoicePeerBySocket,
+  resetVoicePeers,
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
   sendAllVoiceRosters,
@@ -142,9 +142,8 @@ describe("voice room transport", () => {
   let channel: string;
 
   beforeEach(() => {
-    for (const rec of sockets.splice(0)) {
-      removeVoicePeerBySocket(rec.socket);
-    }
+    sockets.length = 0;
+    resetVoicePeers();
     resetVoiceRateLimits();
     resetVoiceRoomTransports();
     backend.configured = "mesh";
@@ -321,7 +320,10 @@ describe("voice room transport", () => {
       expect(frame(joined, "welcome")?.transport).toBe("livekit");
 
       backend.configured = "mesh";
-      removeVoicePeerBySocket(joined.socket);
+      await handleVoiceMessage(
+        { socket: joined.socket, user: asUser("u2") },
+        { type: "leave-voice-room" },
+      );
 
       // Empty room, new config: the next call gets it without a restart.
       expect(getRoomTransport(channel)).toBe("mesh");

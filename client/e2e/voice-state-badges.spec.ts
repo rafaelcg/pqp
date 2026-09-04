@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { openApp } from "./fixtures";
+import { ensureServer, openApp } from "./fixtures";
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
 const DEV_TOKEN = "dev-local-token";
@@ -28,6 +28,7 @@ test.use({
 });
 
 async function ensureVoiceChannel(): Promise<void> {
+  await ensureServer();
   const res = await fetch(`${API}/api/servers`, { headers });
   const { servers } = (await res.json()) as { servers: { id: string }[] };
   const serverId = servers[0]!.id;
@@ -48,6 +49,9 @@ async function ensureVoiceChannel(): Promise<void> {
 }
 
 test.describe("voice state badges", () => {
+  // Two browsers plus the 20s join wait do not fit the 30s default. CI timed
+  // out at the budget before mute was even clicked.
+  test.describe.configure({ timeout: 60_000 });
   test.beforeEach(async () => {
     await ensureVoiceChannel();
   });

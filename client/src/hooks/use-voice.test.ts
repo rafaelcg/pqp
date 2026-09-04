@@ -1,6 +1,7 @@
 import type { VoiceSignalingMessage } from "@pqp/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTransport } from "@/lib/realtime";
+import type { RemotePeer } from "@/lib/peer-connection-manager";
 
 /**
  * The client obeys the room's transport, or leaves and says so.
@@ -17,6 +18,7 @@ const managers: ManagerStub[] = [];
 
 interface ManagerStub {
   peerIds: string[];
+  removedPeerIds: string[];
   disposed: boolean;
   /** Every capture handed to the mesh, in order. `null` means "stop sharing". */
   screenStreams: (MediaStream | null)[];
@@ -28,6 +30,7 @@ interface ManagerStub {
    * wiring is the whole of how a receiver learns a share ended.
    */
   sharingScreen: [string, boolean][];
+  emitState: ((peers: RemotePeer[]) => void) | null;
   /** Renames pushed onto live peers, so a profile edit can be observed. */
   identities: [string, { displayName: string; avatarUrl: string | null }][];
 }
@@ -41,14 +44,21 @@ vi.mock("@/lib/sounds", () => ({
   whenCueSettled: () => whenCueSettledMock(),
 }));
 
+const beaconVoiceLeaveMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/voice-leave-beacon", () => ({
+  beaconVoiceLeave: (...args: unknown[]) => beaconVoiceLeaveMock(...args),
+}));
+
 vi.mock("@/lib/peer-connection-manager", () => ({
   getDefaultIceServers: () => [],
   createPeerConnectionManager: vi.fn(() => {
     const stub: ManagerStub = {
       peerIds: [],
+      removedPeerIds: [],
       disposed: false,
       screenStreams: [],
       sharingScreen: [],
+      emitState: null,
       identities: [],
     };
     managers.push(stub);
@@ -65,13 +75,22 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       setPeerSharingScreen: (peerId: string, sharing: boolean) => {
         stub.sharingScreen.push([peerId, sharing]);
       },
-      onPeerStateChange: () => {},
-      connectToPeer: (peerId: string) => stub.peerIds.push(peerId),
+      onPeerStateChange: (handler: (peers: RemotePeer[]) => void) => {
+        stub.emitState = handler;
+      },
+      connectToPeer: (peerId: string) => {
+        if (!stub.peerIds.includes(peerId)) {
+          stub.peerIds.push(peerId);
+        }
+      },
       setPeerIdentity: (
         peerId: string,
         identity: { displayName: string; avatarUrl: string | null },
       ) => stub.identities.push([peerId, identity]),
-      removePeer: () => {},
+      removePeer: (peerId: string) => {
+        stub.removedPeerIds.push(peerId);
+        stub.peerIds = stub.peerIds.filter((id) => id !== peerId);
+      },
       handleOffer: async () => {},
       handleAnswer: async () => {},
       handleIceCandidate: async () => {},
@@ -105,6 +124,7 @@ vi.mock("@/lib/livekit-session", () => ({
     setScreenMaxBitrate: async () => {},
     unpublishCamera: async () => {},
     disconnect: async () => {},
+    isConnected: () => false,
   })),
 }));
 
@@ -200,6 +220,22 @@ function installBrowserStubs() {
   const g = globalThis as unknown as Record<string, unknown>;
   g.requestAnimationFrame = () => 1;
   g.cancelAnimationFrame = () => {};
+  const pagehideHandlers: Array<() => void> = [];
+  g.window = {
+    addEventListener: (type: string, handler: () => void) => {
+      if (type === "pagehide") {
+        pagehideHandlers.push(handler);
+      }
+    },
+    dispatchEvent: (event: { type: string }) => {
+      if (event.type === "pagehide") {
+        for (const handler of pagehideHandlers) {
+          handler();
+        }
+      }
+      return true;
+    },
+  };
   displayMediaCalls = [];
   displayMedia = async () => fakeCapture("screen", false);
   // Node exposes `navigator` as a getter-only global, so define the one
@@ -248,6 +284,7 @@ function createTransport() {
     onReady: () => {},
     onError: () => {},
     onClose: () => {},
+    onAuthUnavailable: () => {},
     onStatusChange: () => {},
     getStatus: () => "online",
     isConnected: () => true,
@@ -265,7 +302,7 @@ function welcome(
   transport?: "mesh" | "livekit",
   peers: { peerId: string; sharingScreen?: boolean }[] = [],
   voiceChannelId: string = CHANNEL,
-): VoiceSignalingMessage {
+): Extract<VoiceSignalingMessage, { type: "welcome" }> {
   const self = {
     peerId: PEER,
     userId: "00000000-0000-4000-8000-0000000000cc",
@@ -777,6 +814,7 @@ describe("voice transport is the server's decision", () => {
         type: "join-voice-room",
         voiceChannelId: CHANNEL,
         transports: ["mesh"],
+        resume: true,
       });
     });
 
@@ -1260,5 +1298,363 @@ describe("lobby presence sounds", () => {
       "voiceJoin",
     ]);
     await switching;
+  });
+});
+
+describe("voice session resume", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    stoppedTracks.length = 0;
+    playCueMock.mockReset();
+    beaconVoiceLeaveMock.mockReset();
+  });
+
+  const OTHER = "00000000-0000-4000-8000-0000000000dd";
+  const TOKEN = "resume-token-1";
+
+  function resumedWelcome(
+    extra?: Partial<{ transport: "mesh" | "livekit"; peerId: string }>,
+  ): Extract<VoiceSignalingMessage, { type: "welcome" }> {
+    const peerId = extra?.peerId ?? PEER;
+    return {
+      ...welcome(extra?.transport ?? "mesh"),
+      peerId,
+      self: {
+        peerId,
+        userId: "00000000-0000-4000-8000-0000000000cc",
+        displayName: "Me",
+        avatarUrl: null,
+        sharingScreen: false,
+        muted: false,
+        deafened: false,
+      },
+      resumed: true,
+      resumeToken: TOKEN,
+    };
+  }
+
+  async function connected(): Promise<{
+    voice: ReturnType<typeof createVoiceController>;
+    sent: { type: string; [key: string]: unknown }[];
+    transport: ReturnType<typeof createTransport>["transport"];
+  }> {
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling({
+      ...welcome("mesh", [{ peerId: OTHER }]),
+      resumeToken: TOKEN,
+    });
+    await settle();
+    return { voice, sent, transport };
+  }
+
+  it("holds the mesh across a disconnect and accepts a resumed welcome while connected", async () => {
+    const { voice, sent } = await connected();
+    expect(managers).toHaveLength(1);
+    expect(managers[0]?.disposed).toBe(false);
+
+    sent.length = 0;
+    voice.notifyDisconnected();
+    expect(voice.getState().status).toBe("connected");
+    expect(managers[0]?.disposed).toBe(false);
+
+    voice.handleSignaling(resumedWelcome());
+    await settle();
+
+    expect(sent.map((m) => m.type)).not.toContain("leave-voice-room");
+    expect(managers).toHaveLength(1);
+    expect(managers[0]?.disposed).toBe(false);
+    expect(voice.getState().status).toBe("connected");
+    expect(voice.getState().peerId).toBe(PEER);
+  });
+
+  it("sends resumePeerId on reconnect before any other voice frame", async () => {
+    const { voice, sent } = await connected();
+    voice.notifyDisconnected();
+    sent.length = 0;
+    await voice.notifyReconnected();
+
+    expect(sent[0]).toMatchObject({
+      type: "join-voice-room",
+      voiceChannelId: CHANNEL,
+      resume: true,
+      resumePeerId: PEER,
+      resumeToken: TOKEN,
+    });
+  });
+
+  it("does not wipe known peers when a roster arrives while holding", async () => {
+    const { voice } = await connected();
+    playCueMock.mockClear();
+    voice.notifyDisconnected();
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      participants: [],
+    });
+    voice.handleSignaling({
+      type: "peer-joined",
+      peer: {
+        peerId: OTHER,
+        userId: "00000000-0000-4000-8000-0000000000ee",
+        displayName: "Other",
+        avatarUrl: null,
+        sharingScreen: false,
+        muted: false,
+        deafened: false,
+      },
+    });
+    expect(playCueMock).not.toHaveBeenCalled();
+    expect(managers[0]?.peerIds).toEqual([OTHER]);
+  });
+
+  it("does not play join twice for a duplicate peer-joined", async () => {
+    const { voice } = await connected();
+    playCueMock.mockClear();
+    voice.handleSignaling({
+      type: "peer-joined",
+      peer: {
+        peerId: OTHER,
+        userId: "00000000-0000-4000-8000-0000000000ee",
+        displayName: "Other",
+        avatarUrl: null,
+        sharingScreen: false,
+        muted: false,
+        deafened: false,
+      },
+    });
+    expect(playCueMock).not.toHaveBeenCalled();
+    expect(managers[0]?.peerIds).toEqual([OTHER]);
+  });
+
+  it("rebuilds when welcome assigns a new peer id", async () => {
+    const { voice } = await connected();
+    const first = managers[0]!;
+    voice.notifyDisconnected();
+    const newId = "00000000-0000-4000-8000-0000000000ff";
+    voice.handleSignaling({
+      ...welcome("mesh"),
+      peerId: newId,
+      self: {
+        peerId: newId,
+        userId: "00000000-0000-4000-8000-0000000000cc",
+        displayName: "Me",
+        avatarUrl: null,
+        sharingScreen: false,
+        muted: false,
+        deafened: false,
+      },
+    });
+    await settle();
+    expect(first.disposed).toBe(true);
+    expect(managers).toHaveLength(2);
+    expect(voice.getState().peerId).toBe(newId);
+  });
+
+  it("rebuilds when the resumed welcome names a different transport", async () => {
+    const { voice } = await connected();
+    const first = managers[0]!;
+    voice.setSessionProvider(async () => sfuSession());
+    voice.notifyDisconnected();
+    voice.handleSignaling(resumedWelcome({ transport: "livekit" }));
+    await settle();
+    expect(first.disposed).toBe(true);
+    expect(voice.getState().usingSfu).toBe(true);
+  });
+
+  it("drops a failed ghost PC after resume when the roster no longer lists them", async () => {
+    const { voice } = await connected();
+    const mesh = managers[0]!;
+    expect(mesh.peerIds).toEqual([OTHER]);
+
+    voice.notifyDisconnected();
+    voice.handleSignaling(resumedWelcome());
+    await settle();
+    expect(mesh.disposed).toBe(false);
+    expect(mesh.peerIds).toEqual([OTHER]);
+
+    mesh.emitState?.([
+      {
+        peerId: OTHER,
+        connectionState: "failed",
+        stream: null,
+        screenStream: null,
+        cameraStream: null,
+        screenAudioStream: null,
+      },
+    ]);
+    // Still in the allowlist until an authoritative roster arrives: they may
+    // be reconstructing inside the orphan window.
+    expect(mesh.removedPeerIds).toEqual([]);
+
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      participants: [],
+    });
+    expect(mesh.removedPeerIds).toEqual([OTHER]);
+    expect(mesh.peerIds).toEqual([]);
+  });
+
+  it("hangs up held media when auth is gone for good", async () => {
+    const { voice } = await connected();
+    voice.notifyDisconnected();
+    expect(managers[0]?.disposed).toBe(false);
+    voice.notifyAuthLost();
+    expect(voice.getState().status).toBe("idle");
+    expect(managers[0]?.disposed).toBe(true);
+  });
+
+  it("sends leave-voice-room on pagehide so a closed tab is not an orphan", async () => {
+    const { sent } = await connected();
+    sent.length = 0;
+    beaconVoiceLeaveMock.mockClear();
+    (globalThis as unknown as { window: { dispatchEvent: (e: { type: string }) => void } }).window.dispatchEvent(
+      { type: "pagehide" },
+    );
+    expect(sent).toContainEqual({
+      type: "leave-voice-room",
+      resumePeerId: PEER,
+      resumeToken: TOKEN,
+    });
+    expect(beaconVoiceLeaveMock).toHaveBeenCalledWith({
+      resumePeerId: PEER,
+      resumeToken: TOKEN,
+    });
+  });
+
+  it("connects mesh peers that arrived during the outage", async () => {
+    const arrived = "00000000-0000-4000-8000-0000000000ee";
+    const { voice } = await connected();
+    expect(managers[0]?.peerIds).toEqual([OTHER]);
+
+    voice.notifyDisconnected();
+    voice.handleSignaling({
+      ...resumedWelcome(),
+      peers: [
+        {
+          peerId: OTHER,
+          userId: "00000000-0000-4000-8000-0000000000dd",
+          displayName: "Other",
+          avatarUrl: null,
+          sharingScreen: false,
+          muted: false,
+          deafened: false,
+        },
+        {
+          peerId: arrived,
+          userId: "00000000-0000-4000-8000-0000000000ee",
+          displayName: "Arrived",
+          avatarUrl: null,
+          sharingScreen: false,
+          muted: false,
+          deafened: false,
+        },
+      ],
+    });
+    await settle();
+
+    expect(managers).toHaveLength(1);
+    expect(managers[0]?.disposed).toBe(false);
+    expect(managers[0]?.peerIds).toEqual([OTHER, arrived]);
+  });
+
+  it("tears down held media when the room is full", async () => {
+    const { voice, sent } = await connected();
+    voice.notifyDisconnected();
+    sent.length = 0;
+    voice.handleSignaling({
+      type: "voice-room-full",
+      voiceChannelId: CHANNEL,
+      limit: 8,
+    });
+    expect(managers[0]?.disposed).toBe(true);
+    expect(voice.getState().status).toBe("idle");
+    expect(sent[0]).toMatchObject({
+      type: "leave-voice-room",
+      resumePeerId: PEER,
+      resumeToken: TOKEN,
+    });
+  });
+
+  it("cold-rejoins after the grace window instead of hanging up", async () => {
+    const { voice, sent, transport } = await connected();
+    transport.isConnected = () => false;
+    vi.useFakeTimers();
+    try {
+      voice.notifyDisconnected();
+      expect(voice.getState().status).toBe("connected");
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(voice.getState().status).toBe("joining");
+      expect(voice.getState().voiceChannelId).toBe(CHANNEL);
+      expect(managers[0]?.disposed).toBe(true);
+      sent.length = 0;
+      await voice.notifyReconnected();
+      expect(sent[0]).toMatchObject({
+        type: "join-voice-room",
+        voiceChannelId: CHANNEL,
+        resume: true,
+      });
+      expect(sent[0]).not.toHaveProperty("resumePeerId");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cold-joins when the grace window ends on a live socket", async () => {
+    const { voice, sent } = await connected();
+    vi.useFakeTimers();
+    try {
+      voice.notifyDisconnected();
+      sent.length = 0;
+      await voice.notifyReconnected();
+      expect(sent[0]).toMatchObject({
+        type: "join-voice-room",
+        resumePeerId: PEER,
+        resumeToken: TOKEN,
+      });
+      sent.length = 0;
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(voice.getState().status).toBe("joining");
+      expect(managers[0]?.disposed).toBe(true);
+      expect(sent[0]).toMatchObject({
+        type: "join-voice-room",
+        voiceChannelId: CHANNEL,
+        resume: true,
+      });
+      expect(sent[0]).not.toHaveProperty("resumePeerId");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("beacons leave when hanging up while the socket is down", async () => {
+    const { voice, transport } = await connected();
+    transport.isConnected = () => false;
+    beaconVoiceLeaveMock.mockClear();
+    voice.leave();
+    expect(beaconVoiceLeaveMock).toHaveBeenCalledWith({
+      resumePeerId: PEER,
+      resumeToken: TOKEN,
+    });
+  });
+
+  it("does not beacon leave when the socket can carry leave-voice-room", async () => {
+    const { voice } = await connected();
+    beaconVoiceLeaveMock.mockClear();
+    voice.leave();
+    expect(beaconVoiceLeaveMock).not.toHaveBeenCalled();
+  });
+
+  it("hangs up on voice-join-refused", async () => {
+    const { voice } = await connected();
+    voice.handleSignaling({
+      type: "voice-join-refused",
+      voiceChannelId: CHANNEL,
+    });
+    expect(voice.getState().status).toBe("idle");
+    expect(managers[0]?.disposed).toBe(true);
   });
 });
