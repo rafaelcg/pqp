@@ -12,9 +12,11 @@ name: Label (PR size)
 # split this".
 #
 # The label is a review signal. It does not block merge. `drops-voice` stays
-# a human label, because "will this hang up a live call" is a product
-# question the size of the diff cannot answer. An API restart alone does
-# not mean that (web and Electron resume after #162).
+# a human label, because "will this hang up a live call even after resume"
+# is a product question the size of the diff cannot answer. A server or
+# `packages/shared` change is `restarts-api`: Fly closes every `/ws`, but
+# an API restart alone does not earn `drops-voice` (web and Electron resume
+# after #162).
 #
 # WHY pull_request_target
 # Fork PRs get a read-only GITHUB_TOKEN on `pull_request`, so they could not

@@ -84,11 +84,14 @@ porque o middleware do Cloudflare Pages que injeta as tags de SEO não consegue
 ler o catálogo do i18n. Um teste prende as duas cópias, então se você editar o
 texto num lugar só e o CI reclamar, é por isso.
 
-**4. Mexer em `packages/` reinicia a API de produção e derruba todas as calls que
-estiverem acontecendo.** O servidor compila o `@pqp/shared` dentro dele, então
-mudança lá é mudança de servidor mesmo quando a funcionalidade é 100% client.
-Isso não é motivo pra evitar, só avisa no PR pra dar pra mergear numa hora
-decente. Detalhes em [`docs/DEPLOY.md`](./docs/DEPLOY.md).
+**4. Mexer em `server/` ou `packages/shared` é `restarts-api`, não hangup de
+voz.** O servidor compila o `@pqp/shared` dentro dele, então mudança lá é
+mudança de servidor mesmo quando a funcionalidade é 100% client. O Fly
+redeploya o `pqp-api` e fecha todo `/ws`. Depois do #162, web e Electron
+atualizados retomam o mesmo peer id; iOS, Android, resume que falhou e aba que
+não atualizou ainda saem da call. Fala `restarts-api` no PR pra dar pra mergear
+numa hora decente. `drops-voice` só quando a mudança em si derruba a call mesmo
+depois do resume. Detalhes em [`docs/DEPLOY.md`](./docs/DEPLOY.md).
 
 ## Antes de abrir o PR
 

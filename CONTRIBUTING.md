@@ -80,11 +80,14 @@ Cloudflare Pages middleware that injects SEO tags cannot read the i18n
 catalogue. A test pins the two copies together, so if you edit marketing copy in
 one place and CI complains, that is why.
 
-**4. Touching `packages/` restarts the production API and drops every live
-call.** The server compiles `@pqp/shared` into itself, so a change there is a
-server change even when the feature is entirely client-side. This is not a
-reason to avoid it, just something to say in the PR so it can be merged at a
-sensible hour. Details in [`docs/DEPLOY.md`](./docs/DEPLOY.md).
+**4. Touching `server/` or `packages/shared` is `restarts-api`, not a voice
+hangup.** The server compiles `@pqp/shared` into itself, so a change there is a
+server change even when the feature is entirely client-side. Fly redeploys
+`pqp-api` and every `/ws` closes. After #162, refreshed web and Electron resume
+the same peer id; iOS, Android, failed resume, and tabs that have not refreshed
+still drop out of voice. Say `restarts-api` in the PR so it can be merged at a
+sensible hour. Apply `drops-voice` only when the change itself will hang up a
+live call even after resume. Details in [`docs/DEPLOY.md`](./docs/DEPLOY.md).
 
 ## Before you open the PR
 
