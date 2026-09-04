@@ -206,6 +206,22 @@ export interface VoiceState {
    */
   focusedScreenPeerId: string | null;
   /**
+   * Shares this person has said no to. Peer ids, not user ids, and that is
+   * deliberate: a dismissal is about the share in front of you, not a grudge
+   * against its presenter. When they stop sharing the id leaves this list, so
+   * their next share arrives visible instead of mysteriously blank.
+   *
+   * Asked for in the QG on 4 Sep 2026: "e se eu apenas nao quiser assistir a
+   * transmissao do amigo".
+   *
+   * HONEST LIMIT: this hides and silences locally. On the mesh the bytes still
+   * arrive, because declining them properly means renegotiating with that peer
+   * (and on an SFU, unsubscribing). So it buys quiet and screen space, not
+   * bandwidth, and the day voice moves to LiveKit this is where the real
+   * saving gets wired in.
+   */
+  dismissedSharePeerIds: string[];
+  /**
    * Whose screen audio to play. Derived from the sharing set + focus, not
    * from whether the stage is on screen — navigating to a text channel must
    * not mute a live share.
@@ -683,6 +699,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     screenSharePeerIds: [],
     cameraPeerIds: [],
     focusedScreenPeerId: null,
+    dismissedSharePeerIds: [],
     audibleScreenPeerIds: [],
     localScreenStream: null,
     isSharingScreenAudio: false,
@@ -1128,7 +1145,14 @@ export function createVoiceController(transport: RealtimeTransport) {
     );
     state.screenSharePeerIds = nextIds;
     state.focusedScreenPeerId = focused;
-    state.audibleScreenPeerIds = audibleScreenPeerIds(nextIds, focused);
+    // A dismissal only lasts as long as the share it was about.
+    state.dismissedSharePeerIds = state.dismissedSharePeerIds.filter((id) =>
+      nextIds.includes(id),
+    );
+    state.audibleScreenPeerIds = audibleScreenPeerIds(
+      nextIds.filter((id) => !state.dismissedSharePeerIds.includes(id)),
+      focused,
+    );
   }
 
   /** Who has a camera on, from a roster snapshot. */
@@ -1539,6 +1563,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       screenSharePeerIds: [],
       cameraPeerIds: [],
       focusedScreenPeerId: null,
+      dismissedSharePeerIds: [],
       audibleScreenPeerIds: [],
       localScreenStream: null,
       isSharingScreenAudio: false,
@@ -2367,6 +2392,38 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.audibleScreenPeerIds = audibleScreenPeerIds(
         state.screenSharePeerIds,
         peerId,
+      );
+      emit();
+    },
+
+    /** Stop watching one share: no picture, no sound, tile kept as a way back. */
+    dismissShare(peerId: string) {
+      if (state.dismissedSharePeerIds.includes(peerId)) {
+        return;
+      }
+      state.dismissedSharePeerIds = [...state.dismissedSharePeerIds, peerId];
+      state.audibleScreenPeerIds = audibleScreenPeerIds(
+        state.screenSharePeerIds.filter(
+          (id) => !state.dismissedSharePeerIds.includes(id),
+        ),
+        state.focusedScreenPeerId,
+      );
+      emit();
+    },
+
+    /** Undo that. */
+    watchShare(peerId: string) {
+      if (!state.dismissedSharePeerIds.includes(peerId)) {
+        return;
+      }
+      state.dismissedSharePeerIds = state.dismissedSharePeerIds.filter(
+        (id) => id !== peerId,
+      );
+      state.audibleScreenPeerIds = audibleScreenPeerIds(
+        state.screenSharePeerIds.filter(
+          (id) => !state.dismissedSharePeerIds.includes(id),
+        ),
+        state.focusedScreenPeerId,
       );
       emit();
     },
