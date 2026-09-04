@@ -390,6 +390,12 @@ export const joinVoiceRoomMessageSchema = z.object({
   resumePeerId: z.string().uuid().optional(),
   /** HMAC issued on `welcome`. Missing or invalid → cold join, never 500. */
   resumeToken: z.string().min(1).optional(),
+  /**
+   * This client can hold media across a signaling drop and will try to
+   * reattach. Web and Electron send `true`. Phones and older tabs omit it.
+   * The server only keeps an orphan seat for peers that declared this.
+   */
+  resume: z.boolean().optional(),
 });
 
 export const leaveVoiceRoomMessageSchema = z.object({

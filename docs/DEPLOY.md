@@ -45,8 +45,10 @@ HMAC token (valid for hours, so a long call still resumes). A deploy that
 stays down longer than 90 seconds drops the held mesh and cold-rejoins when
 the socket is back. Reconnect still needs a Clerk token that can be fetched
 (cached JWT, or the browser is online). **iOS and Android**
-still cold-join (new peer id, call drops) until a follow-up. Tabs that have not
-refreshed since this shipped also cold-join.
+still cold-join (new peer id, call drops) until a follow-up. A join without
+`resume: true` is removed as soon as the socket closes, so phones and stale
+tabs do not occupy a mesh seat for 90 seconds. Tabs that have not refreshed
+since this shipped also cold-join.
 
 The PR that added resume still drops everyone once on merge: old clients do not
 send the token. After that refresh, later API deploys should not cut web/Electron

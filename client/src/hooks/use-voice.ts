@@ -693,6 +693,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       type: "join-voice-room",
       voiceChannelId,
       transports: transportCapabilities(),
+      resume: true,
       ...(state.peerId && resumeToken
         ? { resumePeerId: state.peerId, resumeToken }
         : {}),
@@ -1455,7 +1456,17 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
     clearJoinTimeout();
     clearResumeGrace();
+    const hangupPeerId = state.peerId;
+    const hangupToken = resumeToken;
     sendLeave();
+    // A second flap clears `voiceQueue` before the leave is flushed.
+    // The beacon does not depend on `/ws`.
+    if (!transport.isConnected() && hangupPeerId && hangupToken) {
+      beaconVoiceLeave({
+        resumePeerId: hangupPeerId,
+        resumeToken: hangupToken,
+      });
+    }
     holdingMedia = false;
     resumeToken = null;
     joinGeneration++;
@@ -2071,6 +2082,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.usingSfu = false;
         state.status = "joining";
         emit();
+        // Socket already came back but the resume join was never answered.
+        // Nobody else will send a join. Cold-join now, with a timeout.
+        if (transport.isConnected() && intendedChannelId) {
+          armJoinTimeout();
+          sendJoin(intendedChannelId);
+        }
       }, VOICE_RESUME_GRACE_MS);
       emit();
     },

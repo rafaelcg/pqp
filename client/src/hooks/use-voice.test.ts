@@ -814,6 +814,7 @@ describe("voice transport is the server's decision", () => {
         type: "join-voice-room",
         voiceChannelId: CHANNEL,
         transports: ["mesh"],
+        resume: true,
       });
     });
 
@@ -1336,6 +1337,7 @@ describe("voice session resume", () => {
   async function connected(): Promise<{
     voice: ReturnType<typeof createVoiceController>;
     sent: { type: string; [key: string]: unknown }[];
+    transport: ReturnType<typeof createTransport>["transport"];
   }> {
     const { transport, sent } = createTransport();
     const voice = createVoiceController(transport);
@@ -1345,7 +1347,7 @@ describe("voice session resume", () => {
       resumeToken: TOKEN,
     });
     await settle();
-    return { voice, sent };
+    return { voice, sent, transport };
   }
 
   it("holds the mesh across a disconnect and accepts a resumed welcome while connected", async () => {
@@ -1377,6 +1379,7 @@ describe("voice session resume", () => {
     expect(sent[0]).toMatchObject({
       type: "join-voice-room",
       voiceChannelId: CHANNEL,
+      resume: true,
       resumePeerId: PEER,
       resumeToken: TOKEN,
     });
@@ -1577,7 +1580,8 @@ describe("voice session resume", () => {
   });
 
   it("cold-rejoins after the grace window instead of hanging up", async () => {
-    const { voice, sent } = await connected();
+    const { voice, sent, transport } = await connected();
+    transport.isConnected = () => false;
     vi.useFakeTimers();
     try {
       voice.notifyDisconnected();
@@ -1591,11 +1595,57 @@ describe("voice session resume", () => {
       expect(sent[0]).toMatchObject({
         type: "join-voice-room",
         voiceChannelId: CHANNEL,
+        resume: true,
       });
       expect(sent[0]).not.toHaveProperty("resumePeerId");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("cold-joins when the grace window ends on a live socket", async () => {
+    const { voice, sent } = await connected();
+    vi.useFakeTimers();
+    try {
+      voice.notifyDisconnected();
+      sent.length = 0;
+      await voice.notifyReconnected();
+      expect(sent[0]).toMatchObject({
+        type: "join-voice-room",
+        resumePeerId: PEER,
+        resumeToken: TOKEN,
+      });
+      sent.length = 0;
+      await vi.advanceTimersByTimeAsync(90_000);
+      expect(voice.getState().status).toBe("joining");
+      expect(managers[0]?.disposed).toBe(true);
+      expect(sent[0]).toMatchObject({
+        type: "join-voice-room",
+        voiceChannelId: CHANNEL,
+        resume: true,
+      });
+      expect(sent[0]).not.toHaveProperty("resumePeerId");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("beacons leave when hanging up while the socket is down", async () => {
+    const { voice, transport } = await connected();
+    transport.isConnected = () => false;
+    beaconVoiceLeaveMock.mockClear();
+    voice.leave();
+    expect(beaconVoiceLeaveMock).toHaveBeenCalledWith({
+      resumePeerId: PEER,
+      resumeToken: TOKEN,
+    });
+  });
+
+  it("does not beacon leave when the socket can carry leave-voice-room", async () => {
+    const { voice } = await connected();
+    beaconVoiceLeaveMock.mockClear();
+    voice.leave();
+    expect(beaconVoiceLeaveMock).not.toHaveBeenCalled();
   });
 
   it("hangs up on voice-join-refused", async () => {

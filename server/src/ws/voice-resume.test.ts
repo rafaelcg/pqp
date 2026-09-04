@@ -37,7 +37,11 @@ vi.mock("../services/dms.js", () => ({
 
 vi.mock("../services/servers.js", () => ({
   getChannel: async () => ({ kind: "server", type: "voice" }),
-  getChannelAudience: async () => null,
+  getChannelAudience: async () => ({
+    serverId: null,
+    kind: "server",
+    has: () => true,
+  }),
 }));
 
 vi.mock("../voice/admin.js", () => ({
@@ -56,6 +60,9 @@ const {
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
 } = await import("./voice.js");
+const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
+  "./sockets.js"
+);
 
 interface Frame {
   type: string;
@@ -67,6 +74,8 @@ interface Recorder {
   frames: Frame[];
 }
 
+const open: Recorder[] = [];
+
 function recorder(): Recorder {
   const frames: Frame[] = [];
   const socket = {
@@ -74,7 +83,9 @@ function recorder(): Recorder {
     send: (payload: string) => frames.push(JSON.parse(payload) as Frame),
     on: () => {},
   } as unknown as WebSocket;
-  return { socket, frames };
+  const rec = { socket, frames };
+  open.push(rec);
+  return rec;
 }
 
 function asUser(id: string): DbUser {
@@ -108,6 +119,9 @@ beforeEach(() => {
 afterEach(() => {
   process.env.CLERK_SECRET_KEY = previousClerk;
   process.env.DEV_AUTH_BYPASS = previousBypass;
+  for (const rec of open.splice(0)) {
+    deleteAuthenticatedSocket(rec.socket);
+  }
   resetVoicePeers();
   vi.useRealTimers();
 });
@@ -116,13 +130,21 @@ async function join(
   rec: Recorder,
   userId: string,
   voiceChannelId: string,
-  extra?: { resumePeerId?: string; resumeToken?: string; transports?: ("mesh" | "livekit")[] },
+  extra?: {
+    resumePeerId?: string;
+    resumeToken?: string;
+    transports?: ("mesh" | "livekit")[];
+    resume?: boolean;
+  },
 ): Promise<Recorder> {
+  const user = asUser(userId);
+  setAuthenticatedSocket(rec.socket, user);
   await handleVoiceMessage(
-    { socket: rec.socket, user: asUser(userId) },
+    { socket: rec.socket, user },
     {
       type: "join-voice-room",
       voiceChannelId,
+      ...(extra?.resume === false ? {} : { resume: true }),
       ...(extra?.transports ? { transports: extra.transports } : {}),
       ...(extra?.resumePeerId ? { resumePeerId: extra.resumePeerId } : {}),
       ...(extra?.resumeToken ? { resumeToken: extra.resumeToken } : {}),
@@ -478,5 +500,37 @@ describe("voice session resume", () => {
     });
     expect(frame(rec, "welcome")?.peerId).not.toBe(peerId);
     expect(frame(rec, "welcome")?.transport).toBe("mesh");
+  });
+
+  it("omits orphans from a joiner's welcome peers and keeps them on the roster", async () => {
+    const channel = randomUUID();
+    const holding = await join(recorder(), randomUUID(), channel);
+    const orphanId = frame(holding, "welcome")?.peerId as string;
+    const live = await join(recorder(), randomUUID(), channel);
+    const liveId = frame(live, "welcome")?.peerId as string;
+    removeVoicePeerBySocket(holding.socket);
+
+    const joiner = await join(recorder(), randomUUID(), channel);
+    const peers = (frame(joiner, "welcome")?.peers as { peerId: string }[]) ?? [];
+    expect(peers.map((p) => p.peerId)).not.toContain(orphanId);
+    expect(peers.map((p) => p.peerId)).toContain(liveId);
+
+    const roster = joiner.frames.filter((f) => f.type === "voice-roster").at(-1);
+    const participants = (roster?.participants as { peerId: string }[]) ?? [];
+    expect(participants.map((p) => p.peerId)).toContain(orphanId);
+    expect(participants.map((p) => p.peerId)).toContain(liveId);
+  });
+
+  it("removes a peer immediately on socket close when join omitted resume", async () => {
+    const channel = randomUUID();
+    const phone = await join(recorder(), randomUUID(), channel, {
+      resume: false,
+    });
+    const observer = await join(recorder(), randomUUID(), channel);
+    const peerId = frame(phone, "welcome")?.peerId as string;
+
+    observer.frames.length = 0;
+    removeVoicePeerBySocket(phone.socket);
+    expect(frame(observer, "peer-left")?.peerId).toBe(peerId);
   });
 });

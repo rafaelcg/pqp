@@ -76,6 +76,12 @@ interface VoicePeer {
   /** Set when the socket closed; cleared on resume. Absent = live. */
   orphanedAt?: number;
   orphanTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * The join that created this peer sent `resume: true`. Only those peers
+   * stay in the room after the socket closes. Phones and old tabs omit the
+   * flag and are removed immediately, so they do not occupy a mesh seat.
+   */
+  canResume: boolean;
 }
 
 /**
@@ -644,9 +650,10 @@ export function leaveVoiceByResumeToken(
 }
 
 /**
- * Socket closed: keep the peer in the room for `VOICE_RESUME_TTL_MS` so a
- * brief signaling outage (Fly deploy, radio blip) can reattach the same id
- * without broadcasting `peer-left`. Intentional hangup is `leave-voice-room`.
+ * Socket closed. Peers that declared `resume: true` stay in the room for
+ * `VOICE_RESUME_TTL_MS` so a brief signaling outage can reattach the same
+ * id without broadcasting `peer-left`. Everyone else (phones, old tabs)
+ * is removed now. Intentional hangup is `leave-voice-room`.
  */
 export function removeVoicePeerBySocket(socket: WebSocket) {
   const peerId = socketToPeerId.get(socket);
@@ -659,6 +666,10 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
     return;
   }
   socketToPeerId.delete(socket);
+  if (!peer.canResume) {
+    removePeer(peerId);
+    return;
+  }
   cancelOrphan(peer);
   peer.orphanedAt = Date.now();
   peer.orphanTimer = setTimeout(() => {
@@ -797,7 +808,10 @@ async function welcomeVoicePeer(
     transport,
   });
   const self = toParticipant(peer);
-  const existingPeers = getRoomPeers(peer.voiceChannelId)
+  // Orphans stay on the roster (sidebar still shows them) but must not be
+  // in `welcome.peers`. A joiner that offered to a closed socket would sit
+  // in `have-local-offer` forever; on resume `connectToPeer` is a no-op.
+  const existingPeers = getLiveRoomPeers(peer.voiceChannelId)
     .filter((p) => p.id !== peer.id)
     .map(toParticipant);
 
@@ -854,9 +868,13 @@ async function reattachVoicePeer(
   }
   cancelOrphan(peer);
   peer.socket = socket;
-  peer.displayName = user.display_name;
-  peer.avatarUrl = user.avatar_url;
   socketToPeerId.set(socket, peer.id);
+  const channel = await getChannel(peer.voiceChannelId);
+  peer.displayName = await resolveMemberName(
+    channel?.kind === "server" ? (channel.server_id ?? null) : null,
+    user,
+  );
+  peer.avatarUrl = user.avatar_url;
   logEvent("voice.resume", {
     peerId: peer.id,
     userId: peer.userId,
@@ -1058,6 +1076,7 @@ export async function handleVoiceMessage(
     }
 
     if (resume.kind === "reattach") {
+      resume.peer.canResume = payload.resume === true;
       await reattachVoicePeer(resume.peer, socket, user);
       return;
     }
@@ -1092,6 +1111,7 @@ export async function handleVoiceMessage(
       // would otherwise erase a standing mute). See use of `set-voice-state`.
       muted: false,
       deafened: false,
+      canResume: payload.resume === true,
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);

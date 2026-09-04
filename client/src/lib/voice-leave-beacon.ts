@@ -13,11 +13,8 @@ export function beaconVoiceLeave(input: {
   resumePeerId: string;
   resumeToken: string;
 }): void {
-  const base = getApiBaseUrl();
-  if (!base) {
-    return;
-  }
-  const url = `${base}/api/voice/leave`;
+  // Empty `VITE_API_URL` is same-origin (the API serves the SPA).
+  const url = `${getApiBaseUrl()}/api/voice/leave`;
   const body = JSON.stringify({
     resumePeerId: input.resumePeerId,
     resumeToken: input.resumeToken,

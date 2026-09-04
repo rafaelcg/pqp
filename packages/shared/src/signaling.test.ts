@@ -72,6 +72,16 @@ describe("voice resume fields are optional additions", () => {
     });
     expect(parsed.resumePeerId).toBeUndefined();
     expect(parsed.resumeToken).toBeUndefined();
+    expect(parsed.resume).toBeUndefined();
+  });
+
+  it("accepts a join that declares resume support", () => {
+    const parsed = joinVoiceRoomMessageSchema.parse({
+      type: "join-voice-room",
+      voiceChannelId: channel,
+      resume: true,
+    });
+    expect(parsed.resume).toBe(true);
   });
 
   it("accepts a welcome from a server that has never heard of resume", () => {
