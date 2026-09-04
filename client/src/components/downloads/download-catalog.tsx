@@ -51,6 +51,9 @@ export function DownloadCatalog() {
 
   let primary: ReactNode;
   let note: ReactNode = null;
+  // A second, quieter escape hatch under the note. Only Windows has one, and
+  // only because the installer can fail in a way the app itself does not.
+  let fallback: ReactNode = null;
   // When the primary action already opens the browser, the quiet "open in the
   // browser" line under it would just repeat the button.
   let primaryIsBrowser = false;
@@ -60,6 +63,28 @@ export function DownloadCatalog() {
     note = (
       <>
         {t("download.windows.unsigned")} <DocsLink />
+      </>
+    );
+    // WHY A SECOND WINDOWS LINK. A user hit APPCRASH 0xc0000005 in one of the
+    // NSIS plugin DLLs, so the installer died before it ever wrote the app to
+    // disk. Not SmartScreen, not Defender: the same machine ran the portable
+    // build fine. The portable .exe has always been in the release and was
+    // never on this page, so the only path out of that crash was to give up.
+    // It stays a link rather than a second button because it is the wrong
+    // answer for almost everyone (no Start menu entry, no auto-update), and
+    // the person who needs it is reading this line precisely because the
+    // button above did not work.
+    fallback = (
+      <>
+        {t("download.windows.portable")}{" "}
+        <a
+          href={href("windows-portable")}
+          target="_blank"
+          rel="noopener"
+          className={QUIET_LINK}
+        >
+          {t("download.windows.portable.link")}
+        </a>
       </>
     );
   } else if (platform === "mac" && macArch) {
@@ -153,6 +178,12 @@ export function DownloadCatalog() {
         </p>
       )}
 
+      {fallback && (
+        <p className="mt-2 max-w-md text-sm leading-relaxed text-paper-muted">
+          {fallback}
+        </p>
+      )}
+
       {!primaryIsBrowser && (
         <p className="mt-5 text-sm text-paper-muted">
           <Link to="/app" className={QUIET_LINK}>
@@ -183,6 +214,15 @@ function PlatformList({ href }: { href: (id: AssetId) => string }) {
             href={href("windows")}
             label={t("downloadPage.list.download")}
             ariaLabel={t("download.windows")}
+          />
+          <Dot />
+          {/* The visitor who was sent this link may be the one whose installer
+              crashes, and they will never see the Windows note above unless
+              they are browsing from Windows. */}
+          <RowLink
+            href={href("windows-portable")}
+            label={t("download.windows.portableShort")}
+            ariaLabel={t("download.windows.portable.link")}
           />
         </PlatformRow>
         <PlatformRow name={t("downloadPage.mac")}>
