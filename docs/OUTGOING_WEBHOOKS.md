@@ -33,7 +33,7 @@ Every delivery is `POST` with `Content-Type: application/json` and:
 | Header | Meaning |
 |---|---|
 | `webhook-id` | Delivery UUID. Stable across retries. |
-| `webhook-timestamp` | Unix seconds. |
+| `webhook-timestamp` | Unix seconds of this POST attempt, not the message time. |
 | `webhook-signature` | `v1,<base64 hmac>` (two values, space-delimited, during rotation) |
 | optional auth header | Whatever you configured |
 
@@ -90,8 +90,8 @@ No row is enqueued when:
   (`is_character`), or a labeled bot (`is_bot`)
 - the author is on that hook's skip list (`skip_user_ids`)
 - the body is empty
-- no active hook lists that channel (a thread still fires if its parent
-  channel is on the allowlist)
+- no enabled hook lists that channel (`failing` still enqueues; `disabled`
+  does not). A thread still fires if its parent channel is on the allowlist
 
 Incoming `executeWebhook` does not enqueue.
 

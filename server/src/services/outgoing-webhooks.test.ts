@@ -469,6 +469,73 @@ describeDb("outgoing webhooks", () => {
     expect(parsed.author.isBot).toBe(false);
   });
 
+  it("still enqueues while the hook is failing, not when it is disabled", async () => {
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody(),
+    );
+    expect(created.status).toBe(201);
+
+    await getPool().query(
+      `UPDATE outgoing_webhooks SET status = 'failing' WHERE id = $1`,
+      [created.body.webhook.id],
+    );
+    await say(owner, channelId, "during the retry window");
+    expect(await deliveryCount()).toBe(1);
+
+    await getPool().query(
+      `UPDATE outgoing_webhooks SET status = 'disabled' WHERE id = $1`,
+      [created.body.webhook.id],
+    );
+    await say(owner, channelId, "after disable");
+    expect(await deliveryCount()).toBe(1);
+  });
+
+  it("signs webhook-timestamp as send time, not the message time", async () => {
+    const posts: Array<{ body: string; headers: Record<string, string> }> = [];
+    vi.mocked(safePost).mockImplementation(async (_url, options) => {
+      posts.push({
+        body: String(options.body),
+        headers: options.headers ?? {},
+      });
+      return {
+        statusCode: 200,
+        headers: {},
+        body: Buffer.from("ok"),
+        finalUrl: String(_url),
+      };
+    });
+
+    expect(
+      (await call(owner, "POST", `/api/servers/${serverId}/outgoing-webhooks`, createBody())).status,
+    ).toBe(201);
+
+    const createdAt = new Date(Date.now() - 60 * 60_000);
+    const before = Math.floor(Date.now() / 1000);
+    const inserted = await enqueueOutgoingMessageCreated({
+      channelId,
+      messageId: "00000000-0000-4000-8000-000000000099",
+      authorId: owner.id,
+      body: "an hour old",
+      createdAt,
+      replyToId: null,
+    });
+    expect(inserted).toBe(1);
+    await waitForSafePost(1);
+    const after = Math.floor(Date.now() / 1000);
+    expect(posts).toHaveLength(1);
+
+    const ts = Number(posts[0]!.headers["webhook-timestamp"]);
+    expect(ts).toBeGreaterThanOrEqual(before);
+    expect(ts).toBeLessThanOrEqual(after);
+    expect(ts).toBeGreaterThan(Math.floor(createdAt.getTime() / 1000) + 50);
+
+    const parsed = JSON.parse(posts[0]!.body) as { timestamp: string };
+    expect(Date.parse(parsed.timestamp)).toBe(createdAt.getTime());
+  });
+
   it("does not enqueue when the body is empty", async () => {
     expect(
       (await call(owner, "POST", `/api/servers/${serverId}/outgoing-webhooks`, createBody())).status,
