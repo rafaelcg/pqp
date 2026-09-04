@@ -119,7 +119,10 @@ export function UserPanel({
       }
     }
     function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape" || escapeOwnedByOverlay(event)) {
+      if (
+        event.key !== "Escape" ||
+        escapeOwnedByOverlay(event, popoverRef.current)
+      ) {
         return;
       }
       event.preventDefault();

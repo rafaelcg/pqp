@@ -4505,8 +4505,11 @@ function MainAppContent({
           voice channel's own two-pane layout needs no change — that lives
           inside `<main>` and simply gets a narrower box. A thread takes this
           same slot: overlaying it on the transcript while the roster stayed
-          put is what crushed #avisos on the QG. */}
-      {openThread && !whatsNewOpen && (
+          put is what crushed #avisos on the QG. Stay mounted under Novidades
+          so a half-typed thread reply survives. `contents` keeps the aside as
+          the flex item when the feed is closed. */}
+      {openThread && (
+      <div className={whatsNewOpen ? "hidden" : "contents"}>
         <ThreadPanel
           thread={openThread.thread}
           origin={openThread.origin}
@@ -4554,6 +4557,7 @@ function MainAppContent({
             isMuted: voiceState.isMuted,
           }}
         />
+      </div>
       )}
       {memberSidebarAvailable && !openThread && !whatsNewOpen && (
         <MemberSidebar
