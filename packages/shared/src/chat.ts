@@ -6,6 +6,7 @@ import {
   messageReactionSchema,
   messageReplyRefSchema,
   reactionEmojiSchema,
+  SLOWMODE_SECONDS_MAX,
 } from "./api.js";
 import {
   attachmentSchema,
@@ -223,6 +224,8 @@ export const messageRejectReasonSchema = z.enum([
    * already a weaker signal. Naming the block would make it an oracle.
    */
   "undeliverable",
+  /** Channel slow mode: this sender must wait before the next create. */
+  "slow-mode",
 ]);
 export type MessageRejectReason = z.infer<typeof messageRejectReasonSchema>;
 
@@ -232,8 +235,13 @@ export const messageRejectedSchema = z.object({
   /** Echo of the create frame, so the sender can match the optimistic bubble. */
   nonce: z.string().min(1).max(64).optional(),
   reason: messageRejectReasonSchema,
-  /** May be present when `reason` is `rate-limited`. */
-  retryAfterMs: z.number().int().min(0).max(3_600_000).optional(),
+  /** May be present when `reason` is `rate-limited` or `slow-mode`. */
+  retryAfterMs: z
+    .number()
+    .int()
+    .min(0)
+    .max(SLOWMODE_SECONDS_MAX * 1000)
+    .optional(),
 });
 export type MessageRejected = z.infer<typeof messageRejectedSchema>;
 

@@ -3387,6 +3387,42 @@ function MainAppContent({
     setQgHintShowing(showing);
   }, []);
 
+  useEffect(() => {
+    const conversation =
+      selection.kind === "dm" && selectedChannelId
+        ? conversations.find((one) => one.channelId === selectedChannelId)
+        : undefined;
+    const channel = conversation
+      ? conversationChannel(conversation)
+      : selection.kind === "server"
+        ? channels.find((c) => c.id === selectedChannelId)
+        : undefined;
+    chat.setSlowMode({
+      seconds:
+        channel?.kind === "server" && channel.type === "text"
+          ? (channel.slowmodeSeconds ?? 0)
+          : 0,
+      bypass: perms.can(Permission.MANAGE_MESSAGES, selectedChannelId),
+    });
+  }, [
+    chat,
+    perms.can,
+    selection.kind,
+    selectedChannelId,
+    conversations,
+    channels,
+  ]);
+
+  useEffect(() => {
+    threadChat.setSlowMode({
+      seconds: 0,
+      bypass: perms.can(
+        Permission.MANAGE_MESSAGES,
+        openThread?.thread.channelId ?? selectedChannelId,
+      ),
+    });
+  }, [threadChat, perms.can, openThread?.thread.channelId, selectedChannelId]);
+
   if (bootstrapError) {
     return (
       <AppBootstrapError
@@ -4025,6 +4061,7 @@ function MainAppContent({
           sendPoll: (request) => chat.sendPoll(request),
         }}
         disabled={!selectedChannelId || messagesLoading}
+        slowModeUntil={chat.getSlowModeHeldUntil() || null}
         placeholder={t("composer.placeholder", { name: selectedChannel.name })}
       />
     </div>

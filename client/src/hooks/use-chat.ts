@@ -45,6 +45,7 @@ export function failedSendKey(
   | "chat.reject.noAccess"
   | "chat.reject.cannotSend"
   | "chat.reject.undeliverable"
+  | "chat.reject.slowMode"
   | "chat.failedSend" {
   switch (reason) {
     case "rate-limited":
@@ -55,6 +56,8 @@ export function failedSendKey(
       return "chat.reject.cannotSend";
     case "undeliverable":
       return "chat.reject.undeliverable";
+    case "slow-mode":
+      return "chat.reject.slowMode";
     default:
       return "chat.failedSend";
   }
@@ -305,6 +308,11 @@ export function createChatController(
   const retryUnlockTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let lastTypingSentAt = 0;
   let typingSweep: ReturnType<typeof setInterval> | null = null;
+  let slowModeSeconds = 0;
+  let bypassSlowMode = false;
+  let slowModeHeldUntil = 0;
+  let slowModeHoldTimer: ReturnType<typeof setTimeout> | null = null;
+  let slowModeHoldNonce: string | null = null;
 
   function emit() {
     listener?.();
@@ -324,6 +332,42 @@ export function createChatController(
       clearTimeout(timer);
       retryUnlockTimers.delete(nonce);
     }
+  }
+
+  function clearSlowModeHoldTimer() {
+    if (slowModeHoldTimer) {
+      clearTimeout(slowModeHoldTimer);
+      slowModeHoldTimer = null;
+    }
+  }
+
+  function clearSlowModeHold() {
+    clearSlowModeHoldTimer();
+    slowModeHeldUntil = 0;
+    slowModeHoldNonce = null;
+  }
+
+  function applySlowModeHold(until: number) {
+    clearSlowModeHoldTimer();
+    const now = Date.now();
+    if (until <= now) {
+      slowModeHeldUntil = 0;
+      return;
+    }
+    slowModeHeldUntil = until;
+    slowModeHoldTimer = setTimeout(() => {
+      slowModeHoldTimer = null;
+      slowModeHeldUntil = 0;
+      emit();
+    }, until - now);
+  }
+
+  function startSlowModeHold(nonce: string, durationMs: number) {
+    if (bypassSlowMode || durationMs <= 0) {
+      return;
+    }
+    slowModeHoldNonce = nonce;
+    applySlowModeHold(Date.now() + durationMs);
   }
 
   function markRejected(
@@ -350,6 +394,15 @@ export function createChatController(
       };
     });
     if (changed) {
+      if (reason === "slow-mode") {
+        const wait =
+          retryAfterMs && retryAfterMs > 0
+            ? retryAfterMs
+            : slowModeSeconds * 1000;
+        startSlowModeHold(nonce, wait);
+      } else if (slowModeHoldNonce === nonce) {
+        clearSlowModeHold();
+      }
       if (retryAvailableAt && retryAfterMs) {
         retryUnlockTimers.set(
           nonce,
@@ -444,6 +497,7 @@ export function createChatController(
       clearTimeout(timer);
     }
     retryUnlockTimers.clear();
+    clearSlowModeHold();
     typing.clear();
     for (const message of messages) {
       revokeLocalPreviews(message);
@@ -535,6 +589,27 @@ export function createChatController(
 
     getChannelId() {
       return channelId;
+    },
+
+    getSlowModeHeldUntil() {
+      return slowModeHeldUntil > Date.now() ? slowModeHeldUntil : 0;
+    },
+
+    setSlowMode(options: { seconds: number; bypass: boolean }) {
+      const nextSeconds = Math.max(0, options.seconds);
+      const nextBypass = options.bypass;
+      if (nextSeconds === slowModeSeconds && nextBypass === bypassSlowMode) {
+        return;
+      }
+      slowModeSeconds = nextSeconds;
+      bypassSlowMode = nextBypass;
+      if (bypassSlowMode || slowModeSeconds <= 0) {
+        const hadHold = slowModeHeldUntil > Date.now();
+        clearSlowModeHold();
+        if (hadHold) {
+          emit();
+        }
+      }
     },
 
     hasMoreHistory() {
@@ -724,6 +799,9 @@ export function createChatController(
       if (!channelId || !currentUserId) {
         return;
       }
+      if (!bypassSlowMode && slowModeHeldUntil > Date.now()) {
+        return;
+      }
       const clamped = clampChatNewlines(body);
       if (!clamped && attachments.length === 0) {
         return;
@@ -789,6 +867,9 @@ export function createChatController(
         nonce,
       };
       messages = [...messages, optimistic];
+      if (!bypassSlowMode && slowModeSeconds > 0) {
+        startSlowModeHold(nonce, slowModeSeconds * 1000);
+      }
       emit();
       transmit(
         nonce,
@@ -807,6 +888,9 @@ export function createChatController(
       if (!messageRetryReady(failed)) {
         return;
       }
+      if (!bypassSlowMode && slowModeHeldUntil > Date.now()) {
+        return;
+      }
       clearRetryUnlock(nonce);
       messages = messages.map((message) =>
         message.nonce === nonce
@@ -819,6 +903,9 @@ export function createChatController(
             }
           : message,
       );
+      if (!bypassSlowMode && slowModeSeconds > 0) {
+        startSlowModeHold(nonce, slowModeSeconds * 1000);
+      }
       emit();
       // The rows are still unclaimed — a claim only happens on a message that
       // was actually stored — so the same ids are still the right ones to send.
@@ -1244,6 +1331,7 @@ export function createChatController(
         clearInterval(typingSweep);
         typingSweep = null;
       }
+      clearSlowModeHoldTimer();
       listener = null;
     },
   };

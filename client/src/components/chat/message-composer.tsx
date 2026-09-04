@@ -124,6 +124,8 @@ interface MessageComposerProps {
   onCancelReply?: () => void;
   mentionCandidates?: MentionCandidate[];
   disabled?: boolean;
+  /** Epoch ms until slow mode lets this sender post again. 0/null is off. */
+  slowModeUntil?: number | null;
   placeholder?: string;
   /**
    * ArrowUp with an empty composer: edit the reader's last message.
@@ -264,6 +266,7 @@ export function MessageComposer({
   onCancelReply,
   mentionCandidates = [],
   disabled,
+  slowModeUntil = null,
   placeholder,
   onEditLastOwn,
 }: MessageComposerProps) {
@@ -293,6 +296,7 @@ export function MessageComposer({
   const [feedback, setFeedback] = useState<SlashFeedback | null>(null);
   const [isRunningSlash, setIsRunningSlash] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const insertMenuRef = useRef<HTMLDivElement>(null);
@@ -303,6 +307,20 @@ export function MessageComposer({
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const uploadsRef = useRef(new Map<string, AbortController>());
+
+  useEffect(() => {
+    if (!slowModeUntil || slowModeUntil <= Date.now()) {
+      return;
+    }
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [slowModeUntil]);
+
+  const slowModeRemaining =
+    slowModeUntil && slowModeUntil > now
+      ? Math.max(1, Math.ceil((slowModeUntil - now) / 1000))
+      : 0;
 
   const rollPresets = useMemo(() => {
     if (!isRollPresetMenu(body)) {
@@ -932,6 +950,9 @@ export function MessageComposer({
 
   async function handleSubmit(event?: React.FormEvent) {
     event?.preventDefault();
+    if (slowModeRemaining > 0) {
+      return;
+    }
     const trimmed = body.trim();
     const ready = pending.filter(
       (item) => item.status === "ready" && item.attachmentId,
@@ -1287,6 +1308,11 @@ export function MessageComposer({
           onClose={() => setIsPollComposerOpen(false)}
         />
       )}
+      {slowModeRemaining > 0 && (
+        <p className="mb-2 text-xs text-paper-muted" role="status">
+          {t("composer.slowMode", { seconds: slowModeRemaining })}
+        </p>
+      )}
       {pending.length > 0 && (
         <ul
           aria-label={t("composer.attachments")}
@@ -1497,6 +1523,7 @@ export function MessageComposer({
           // reason to stay disabled when nothing is attached either.
           disabled={
             disabled ||
+            slowModeRemaining > 0 ||
             isRunningSlash ||
             isUploading ||
             (!body.trim() && readyCount === 0)

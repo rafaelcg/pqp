@@ -1,6 +1,6 @@
 import type { Message } from "@pqp/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createChatController } from "./use-chat";
+import { createChatController, failedSendKey } from "./use-chat";
 import type { RealtimeTransport } from "@/lib/realtime";
 
 const notifyOpenChannelMessage = vi.fn();
@@ -247,6 +247,78 @@ describe("optimistic sending", () => {
     expect(sent.length).toBe(before + 1);
     expect(chat.getMessages()[0]!.pending).toBe(true);
     expect(chat.getMessages()[0]!.rejectReason).toBeUndefined();
+  });
+
+  it("names a slow-mode rejection", () => {
+    expect(failedSendKey("slow-mode")).toBe("chat.reject.slowMode");
+  });
+
+  it("holds send after a slow-mode rejection until retryAfterMs", () => {
+    const { chat, sent } = setup();
+    chat.sendMessage("hi");
+    const nonce = chat.getMessages()[0]!.nonce!;
+
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce,
+      reason: "slow-mode",
+      retryAfterMs: 3000,
+    });
+
+    expect(chat.getMessages()[0]!.rejectReason).toBe("slow-mode");
+    expect(chat.getSlowModeHeldUntil()).toBeGreaterThan(Date.now());
+
+    const before = sent.length;
+    chat.sendMessage("again");
+    expect(sent.length).toBe(before);
+
+    vi.advanceTimersByTime(3000);
+    chat.sendMessage("again");
+    expect(sent.length).toBe(before + 1);
+  });
+
+  it("starts a countdown after a successful send when slow mode is on", () => {
+    const { chat, sent } = setup();
+    chat.setSlowMode({ seconds: 5, bypass: false });
+    chat.sendMessage("first");
+    expect(chat.getSlowModeHeldUntil()).toBeGreaterThan(Date.now());
+
+    const before = sent.length;
+    chat.sendMessage("second");
+    expect(sent.length).toBe(before);
+
+    vi.advanceTimersByTime(5000);
+    chat.sendMessage("second");
+    expect(sent.length).toBe(before + 1);
+  });
+
+  it("does not hold a sender who bypasses slow mode", () => {
+    const { chat, sent } = setup();
+    chat.setSlowMode({ seconds: 5, bypass: true });
+    chat.sendMessage("first");
+    expect(chat.getSlowModeHeldUntil()).toBe(0);
+    chat.sendMessage("second");
+    expect(
+      sent.filter((frame) => (frame as { type?: string }).type === "message-create"),
+    ).toHaveLength(2);
+  });
+
+  it("clears a proactive hold when the send is refused for another reason", () => {
+    const { chat } = setup();
+    chat.setSlowMode({ seconds: 5, bypass: false });
+    chat.sendMessage("hi");
+    const nonce = chat.getMessages()[0]!.nonce!;
+    expect(chat.getSlowModeHeldUntil()).toBeGreaterThan(0);
+
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce,
+      reason: "cannot-send",
+    });
+
+    expect(chat.getSlowModeHeldUntil()).toBe(0);
   });
 
   it("ignores a rejection for another channel", () => {

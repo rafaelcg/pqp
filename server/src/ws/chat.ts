@@ -9,6 +9,7 @@ import {
   Permission,
   permissionsUpdateSchema,
   profileUpdateSchema,
+  SLOWMODE_SECONDS_MAX,
   type ChatServerMessage,
   type FriendActivity,
   type MessageRejectReason,
@@ -88,11 +89,27 @@ const messageLimiter = createRateLimiter({
 });
 const reactionLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 5 });
 const typingLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 1 });
+const slowModeLimiters = new Map<number, ReturnType<typeof createRateLimiter>>();
+
+function slowModeLimiterFor(seconds: number) {
+  let limiter = slowModeLimiters.get(seconds);
+  if (!limiter) {
+    limiter = createRateLimiter({
+      capacity: 1,
+      refillPerSecond: 1 / seconds,
+    });
+    slowModeLimiters.set(seconds, limiter);
+  }
+  return limiter;
+}
 
 export function resetChatRateLimits(): void {
   messageLimiter.reset();
   reactionLimiter.reset();
   typingLimiter.reset();
+  for (const limiter of slowModeLimiters.values()) {
+    limiter.reset();
+  }
 }
 
 /**
@@ -823,7 +840,7 @@ function sendSanctionNotice(
  * Tell the sender a `message-create` will not land.
  *
  * Same addressing as `sendSanctionNotice`: this socket only. The reasons
- * cover the four early returns of `message-create`. A blocked DM uses
+ * cover the early returns of `message-create`. A blocked DM uses
  * `undeliverable`, never a block-specific token.
  */
 function sendMessageRejected(
@@ -1046,13 +1063,14 @@ export async function handleChatMessage(
     }
     const channel = await getChannel(payload.channelId);
     let canMentionEveryone = false;
+    let memberPerms = 0n;
     if (channel?.kind === "server" && channel.server_id) {
-      const perms = await computeMemberPermissions(
+      memberPerms = await computeMemberPermissions(
         channel.server_id,
         conn.user.id,
         payload.channelId,
       );
-      if (!hasPermission(perms, Permission.SEND_MESSAGES)) {
+      if (!hasPermission(memberPerms, Permission.SEND_MESSAGES)) {
         sendMessageRejected(
           conn.socket,
           payload.channelId,
@@ -1061,7 +1079,7 @@ export async function handleChatMessage(
         );
         return;
       }
-      canMentionEveryone = hasPermission(perms, Permission.MENTION_EVERYONE);
+      canMentionEveryone = hasPermission(memberPerms, Permission.MENTION_EVERYONE);
     }
     // A block closes a 1:1 in both directions. The sender is told the
     // create will not land; the reason stays vague so this is not an
@@ -1075,6 +1093,37 @@ export async function handleChatMessage(
         "undeliverable",
       );
       return;
+    }
+
+    // Text and threads only. DMs stay 0 and never reach this; voice ignores
+    // the column even if someone wrote a value. A thread reads its own row.
+    if (
+      channel &&
+      channel.kind === "server" &&
+      (channel.type === "text" || channel.type === "thread")
+    ) {
+      const seconds = channel.slowmode_seconds ?? 0;
+      if (
+        seconds > 0 &&
+        !hasPermission(memberPerms, Permission.MANAGE_MESSAGES)
+      ) {
+        const limiter = slowModeLimiterFor(seconds);
+        const key = `${payload.channelId}:${conn.user.id}`;
+        if (!limiter.take(key)) {
+          const retryAfterMs = Math.min(
+            limiter.retryAfter(key) * 1000,
+            SLOWMODE_SECONDS_MAX * 1000,
+          );
+          sendMessageRejected(
+            conn.socket,
+            payload.channelId,
+            payload.nonce,
+            "slow-mode",
+            retryAfterMs,
+          );
+          return;
+        }
+      }
     }
 
     // A client that posts without ever sending `join-channel` is still viewing

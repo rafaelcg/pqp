@@ -1711,6 +1711,21 @@ EXCEPTION
   WHEN others THEN NULL;
 END $$;
 
+-- Slow mode: seconds a member must wait between sends in this channel.
+-- 0 is off. Ceiling is Discord's 6 hours. DMs stay 0 and have no control;
+-- voice ignores the column; a thread reads its own row (no inherit in v1).
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS slowmode_seconds INTEGER NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+  ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_slowmode_seconds_check;
+  ALTER TABLE channels
+    ADD CONSTRAINT channels_slowmode_seconds_check
+    CHECK (slowmode_seconds BETWEEN 0 AND 21600);
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
 -- There is deliberately NO last_activity_at column and NO archival sweeper.
 -- "Archived" is computed at read time from the thread's newest message (an
 -- index-only lookup on idx_messages_channel_created), so a thread un-archives
