@@ -25,6 +25,22 @@ export async function ensureMediaPermission(): Promise<boolean> {
   }
 }
 
+/** Same job as the mic prompt, for webcam labels. */
+export async function ensureCameraPermission(): Promise<boolean> {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: true,
+    });
+    for (const track of stream.getTracks()) {
+      track.stop();
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export async function listAudioDevices(): Promise<{
   inputs: MediaDeviceOption[];
   outputs: MediaDeviceOption[];
@@ -54,7 +70,7 @@ export async function listAudioDevices(): Promise<{
         deviceId: device.deviceId,
         label: device.label || `Speaker ${outputIndex++}`,
       });
-    } else if (device.kind === "videoinput") {
+    } else if (device.kind === "videoinput" && device.deviceId) {
       cameras.push({
         deviceId: device.deviceId,
         label: device.label || `Camera ${cameraIndex++}`,
