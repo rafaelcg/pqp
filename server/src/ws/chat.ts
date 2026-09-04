@@ -105,6 +105,22 @@ function slowModeLimiterFor(seconds: number) {
   return limiter;
 }
 
+/**
+ * One send budget per user, whichever door the message comes through. The
+ * WebSocket `message-create` handler and `POST /api/channels/:id/messages`
+ * both charge this bucket, so a character cannot get a second, larger burst
+ * by switching from the socket to HTTP: the API's `writeLimiter` allows 30
+ * where this allows 10.
+ */
+export function takeMessageBudget(
+  userId: string,
+): { ok: true } | { ok: false; retryAfterMs: number } {
+  if (messageLimiter.take(userId)) {
+    return { ok: true };
+  }
+  return { ok: false, retryAfterMs: messageLimiter.retryAfter(userId) * 1000 };
+}
+
 export function resetChatRateLimits(): void {
   messageLimiter.reset();
   reactionLimiter.reset();
@@ -872,10 +888,11 @@ function sendMessageRejected(
  * send is the same message a person would have typed: history, mentions,
  * unread, outgoing-webhook skip (`is_character`), thread chips, embeds.
  *
- * Access, SEND_MESSAGES, blocks and slow mode are decided here. The WS
- * rate limiter stays in the socket handler (HTTP already has `writeLimiter`).
- * `beforeCreate` is the socket-only join/restore that HTTP has no connection
- * to run.
+ * Access, SEND_MESSAGES, blocks and slow mode are decided here. The per-user
+ * send budget is not: each caller charges `takeMessageBudget` before it gets
+ * here, so the socket can answer with its `rate-limited` frame and HTTP with a
+ * 429 plus `Retry-After`. `beforeCreate` is the socket-only join/restore that
+ * HTTP has no connection to run.
  */
 export type PostChannelMessageInput = {
   author: DbUser;
@@ -1239,13 +1256,14 @@ export async function handleChatMessage(
 
   if (payload.type === "message-create") {
     // Throttle sends per user so a single socket can't flood the channel/DB.
-    if (!messageLimiter.take(conn.user.id)) {
+    const budget = takeMessageBudget(conn.user.id);
+    if (!budget.ok) {
       sendMessageRejected(
         conn.socket,
         payload.channelId,
         payload.nonce,
         "rate-limited",
-        messageLimiter.retryAfter(conn.user.id) * 1000,
+        budget.retryAfterMs,
       );
       return;
     }
