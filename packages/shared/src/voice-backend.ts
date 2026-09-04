@@ -27,6 +27,20 @@ export const SCREEN_SHARE_LIMIT: Record<VoiceRoomTransport, number> = {
   livekit: 4,
 };
 
+/**
+ * How many people may publish a camera in one call at the same time.
+ *
+ * A mesh camera is another full-size video uplink per peer, so three is the
+ * ceiling that still fits a small friend call. LiveKit forwards and already
+ * runs dynacast, so eight matches the mesh room size rather than inventing a
+ * second, larger number. The server and the client both key this map off the
+ * room's stated transport.
+ */
+export const CAMERA_LIMIT: Record<VoiceRoomTransport, number> = {
+  mesh: 3,
+  livekit: 8,
+};
+
 export function getDefaultVoiceBackend(
   deployment: "hosted" | "selfhost",
 ): VoiceBackendType {

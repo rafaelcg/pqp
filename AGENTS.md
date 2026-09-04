@@ -63,6 +63,6 @@ New work goes on a new branch off latest `main`. One feature per branch.
 4. Member cards and composer: equal-width actions, no mid-label ellipsis, aligned send/emoji controls, overflow-y when the card is taller than the viewport.
 5. PR title and body in English, short, readable by a human who is not the author.
 6. Leave the PR merge-ready: CI green, conflicts gone, Farol 5/5 if it ran. Do not merge unless asked. Do not stash finished work off the PR.
-7. Say whether the PR deploys `pqp-api`. A server or schema change on `main` restarts Fly and drops live voice. Client-only Pages deploys do not. If it restarts the API, apply the `drops-voice` label. CI stamps `size/XS`–`size/XL` from the diff; leave those alone.
+7. Say whether the PR deploys `pqp-api`. A server or schema change on `main` restarts Fly and closes every `/ws`. After #162, refreshed web and Electron keep the media session and resume the same peer id. iOS, Android, failed resume, and tabs that have not refreshed still drop. Client-only Pages deploys do not restart the API. Apply `drops-voice` only when the change will hang up a live call, not merely because the API restarts. CI stamps `size/XS`–`size/XL` from the diff; leave those alone.
 8. Provider keys (Steam, Twitch, Battle.net) live on Fly, not in git. Merging the feature without those secrets must not break production.
 9. QG and in-app PT-BR replies must sound like the channel, not a model. If the person's question is unclear, ask Andre before drafting.

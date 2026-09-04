@@ -576,6 +576,15 @@ final class CallModel {
                 ))
             }
 
+        case .voiceCameraDenied(let voiceChannelId):
+            guard voiceChannelId == conversationId else { return }
+            Task {
+                await disableCamera()
+                errorMessage = String(
+                    localized: "This call already has the maximum number of cameras."
+                )
+            }
+
         case .voiceTransportUnsupported(let voiceChannelId, let transport):
             guard voiceChannelId == conversationId else { return }
             fail(String(localized: "This call runs on \(transport), which the iOS app cannot join yet."))

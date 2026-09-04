@@ -1,4 +1,5 @@
 import {
+  CAMERA_LIMIT,
   MESH_VOICE_WARNING,
   SCREEN_SHARE_LIMIT,
   type ClientRelayMessage,
@@ -9,6 +10,7 @@ import {
 } from "@pqp/shared";
 import {
   audibleScreenPeerIds,
+  isCameraAtCap,
   isScreenShareAtCap,
   nextScreenShareFocus,
 } from "@/lib/screen-share-roster";
@@ -182,6 +184,8 @@ export interface VoiceState {
   isSharingScreen: boolean;
   /** peerIds currently sharing, in roster order. */
   screenSharePeerIds: string[];
+  /** peerIds whose camera is on, from the roster's `cameraStreamId`. */
+  cameraPeerIds: string[];
   /**
    * Who occupies the large tile. Hook-owned so the audio sinks (mounted at
    * the app root) and both stage mounts can read the same value.
@@ -638,6 +642,8 @@ export function createVoiceController(transport: RealtimeTransport) {
    * `toggleCamera` will ask the hardware for.
    */
   let videoQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
+  /** Webcam id for the next capture. Empty means the browser default. */
+  let cameraDeviceId = "";
   let state: VoiceState = {
     status: "idle",
     peerId: null,
@@ -660,6 +666,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     roomTransport: null,
     isSharingScreen: false,
     screenSharePeerIds: [],
+    cameraPeerIds: [],
     focusedScreenPeerId: null,
     audibleScreenPeerIds: [],
     localScreenStream: null,
@@ -1108,6 +1115,13 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.audibleScreenPeerIds = audibleScreenPeerIds(nextIds, focused);
   }
 
+  /** Who has a camera on, from a roster snapshot. */
+  function applyCameraRoster(participants: VoiceParticipant[]) {
+    state.cameraPeerIds = participants
+      .filter((participant) => participant.cameraStreamId)
+      .map((participant) => participant.peerId);
+  }
+
   /**
    * The capture lost its audio but kept its picture.
    *
@@ -1506,6 +1520,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       roomTransport: null,
       isSharingScreen: false,
       screenSharePeerIds: [],
+      cameraPeerIds: [],
       focusedScreenPeerId: null,
       audibleScreenPeerIds: [],
       localScreenStream: null,
@@ -1565,6 +1580,7 @@ export function createVoiceController(transport: RealtimeTransport) {
               state.roomTransport = message.transport;
             }
             applyScreenShareRoster(message.participants);
+            applyCameraRoster(message.participants);
             applyCameraStreamIds(message.participants);
             applyScreenAudioStreamIds(message.participants);
             applySharingScreen(message.participants);
@@ -1580,6 +1596,16 @@ export function createVoiceController(transport: RealtimeTransport) {
         void stopScreenShareInternal();
         state.error = translateMessage("voice.error.shareLimit", {
           limit: SCREEN_SHARE_LIMIT[state.roomTransport ?? "mesh"],
+        });
+        emit();
+        break;
+      case "camera-denied":
+        if (message.voiceChannelId !== state.voiceChannelId) {
+          return;
+        }
+        void stopCameraInternal();
+        state.error = translateMessage("voice.error.cameraLimit", {
+          limit: CAMERA_LIMIT[state.roomTransport ?? "mesh"],
         });
         emit();
         break;
@@ -1637,6 +1663,7 @@ export function createVoiceController(transport: RealtimeTransport) {
             attachMeshPeers(welcomePeers);
           }
           applyScreenShareRoster([message.self, ...welcomePeers]);
+          applyCameraRoster([message.self, ...welcomePeers]);
           applyCameraStreamIds([message.self, ...welcomePeers]);
           applyScreenAudioStreamIds([message.self, ...welcomePeers]);
           applySharingScreen([message.self, ...welcomePeers]);
@@ -1660,6 +1687,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           knownPeerIds.add(peer.peerId);
         }
         applyScreenShareRoster([message.self, ...welcomePeers]);
+        applyCameraRoster([message.self, ...welcomePeers]);
         state.roomTransport = roomTransport;
 
         // Rejoin/channel-switch: tear the previous session down before building
@@ -1964,6 +1992,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // share ids would otherwise leak into the welcome diff and look like
       // newcomers. Empty previous is the locked "join into live shares" rule.
       state.screenSharePeerIds = [];
+      state.cameraPeerIds = [];
       state.focusedScreenPeerId = null;
       state.audibleScreenPeerIds = [];
       // Known from the moment we start, not only once the server says welcome —
@@ -2385,6 +2414,19 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
+      if (
+        isCameraAtCap(
+          state.cameraPeerIds,
+          state.peerId,
+          state.roomTransport,
+        )
+      ) {
+        state.error = translateMessage("voice.error.cameraLimit", {
+          limit: CAMERA_LIMIT[state.roomTransport ?? "mesh"],
+        });
+        emit();
+        return;
+      }
       let stream: MediaStream;
       try {
         // Asks for the chosen quality with `ideal` constraints and falls back
@@ -2394,6 +2436,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         stream = await captureCamera(
           (constraints) => navigator.mediaDevices.getUserMedia(constraints),
           videoQuality,
+          cameraDeviceId || undefined,
         );
       } catch (err) {
         state.error =
@@ -2486,6 +2529,86 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     getVideoQuality(): VideoQuality {
       return videoQuality;
+    },
+
+    /**
+     * Which webcam to ask for. Empty is the browser default.
+     *
+     * Stored even while the camera is off, so the next `toggleCamera` uses it.
+     * A change while the camera is already open re-captures and replaces the
+     * live track, the same way a mic switch does. The new track is swapped
+     * into the original MediaStream so the announced id stays put: mesh
+     * `replaceTrack` does not fire `ontrack`, and a late joiner must see the
+     * same msid the roster already has. Re-announcing a fresh stream id is
+     * what made a switched camera look like a screen share.
+     */
+    async setCameraDevice(deviceId: string) {
+      if (cameraDeviceId === deviceId) {
+        return;
+      }
+      cameraDeviceId = deviceId;
+      if (!cameraCaptureStream || state.status !== "connected") {
+        return;
+      }
+      let incoming: MediaStream;
+      try {
+        incoming = await captureCamera(
+          (constraints) => navigator.mediaDevices.getUserMedia(constraints),
+          videoQuality,
+          cameraDeviceId || undefined,
+        );
+      } catch (err) {
+        state.error =
+          err instanceof Error && err.name === "NotAllowedError"
+            ? translateMessage("voice.error.cameraBlocked", desktopContext())
+            : err instanceof Error && err.message
+              ? err.message
+              : translateMessage("voice.error.cameraFailed");
+        emit();
+        return;
+      }
+      const track = incoming.getVideoTracks()[0];
+      if (!track) {
+        for (const t of incoming.getTracks()) {
+          t.stop();
+        }
+        state.error = translateMessage("voice.error.cameraFailed");
+        emit();
+        return;
+      }
+      try {
+        track.contentHint = "motion";
+      } catch {
+        // Encoder defaults, working camera.
+      }
+      track.onended = () => {
+        void stopCameraInternal();
+        emit();
+      };
+      const current = cameraCaptureStream;
+      for (const old of current.getVideoTracks()) {
+        current.removeTrack(old);
+        old.stop();
+      }
+      incoming.removeTrack(track);
+      current.addTrack(track);
+      for (const leftover of incoming.getTracks()) {
+        leftover.stop();
+      }
+      emit();
+      try {
+        await manager?.setLocalCameraStream(current);
+        if (sfu) {
+          await sfu.publishCamera(current);
+        }
+      } catch (err) {
+        state.error =
+          err instanceof Error && err.message
+            ? err.message
+            : translateMessage("voice.error.cameraFailed");
+        await stopCameraInternal();
+        emit();
+      }
     },
 
     // --- end conversation calls ---------------------------------------------

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   audibleScreenPeerIds,
+  isCameraAtCap,
   isScreenShareAtCap,
   nextScreenShareFocus,
 } from "./screen-share-roster";
@@ -43,5 +44,18 @@ describe("isScreenShareAtCap", () => {
   it("uses the LiveKit cap of four", () => {
     expect(isScreenShareAtCap(["a", "b", "c"], "me", "livekit")).toBe(false);
     expect(isScreenShareAtCap(["a", "b", "c", "d"], "me", "livekit")).toBe(true);
+  });
+});
+
+describe("isCameraAtCap", () => {
+  it("uses the mesh cap of three, ignoring our own camera", () => {
+    expect(isCameraAtCap(["me", "a", "b"], "me", "mesh")).toBe(false);
+    expect(isCameraAtCap(["a", "b", "c"], "me", "mesh")).toBe(true);
+  });
+
+  it("uses the LiveKit cap of eight", () => {
+    const seven = ["a", "b", "c", "d", "e", "f", "g"];
+    expect(isCameraAtCap(seven, "me", "livekit")).toBe(false);
+    expect(isCameraAtCap([...seven, "h"], "me", "livekit")).toBe(true);
   });
 });
