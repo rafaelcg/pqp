@@ -340,6 +340,27 @@ export class ResilientSocket {
     this.#inner.send(body);
   }
 
+  /**
+   * Send as a reply to a specific message, or refuse (same policy as `send`).
+   *
+   * `PqpSocket.send` has no reply parameter because the cast never replies to
+   * anything in particular; the bot does, when it answers a newcomer's hello,
+   * because a bare "opa, chegou!" three messages below the "oi" reads as noise
+   * and the same line threaded under the "oi" reads as a reply. `replyToId` is
+   * the field `message-create` already accepts (`@pqp/shared` chat.ts).
+   */
+  reply(body, replyToId) {
+    if (!this.#inner) {
+      throw new Error(`${this.label}: socket is down (reconnecting)`);
+    }
+    this.#inner.sendFrame({
+      type: "message-create",
+      channelId: this.channelId,
+      body,
+      replyToId,
+    });
+  }
+
   /** What the heartbeat prints. */
   state() {
     return {
