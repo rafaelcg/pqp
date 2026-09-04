@@ -10,6 +10,7 @@ import android.os.Build
 import android.util.Log
 import gg.pqp.app.core.IceServer
 import gg.pqp.app.core.PqpJson
+import gg.pqp.app.core.RealtimeClient
 import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.core.VoiceParticipant
@@ -422,7 +423,17 @@ class VoiceController(
                 }
 
                 RealtimeState.Refused -> {
-                    if (wantedChannel != null) leave()
+                    if (wantedChannel == null) return@collect
+                    // One refusal is a stale token and the socket is about to
+                    // try again with a fresh one, so the call is held for the
+                    // rejoin like any other drop. Two in a row is a session
+                    // the server will not have back, and a call cannot outlive
+                    // that.
+                    if (RealtimeClient.refusedForGood(session.realtime.unauthorizedStreak.value)) {
+                        leave()
+                    } else {
+                        holdForRejoin()
+                    }
                 }
 
                 RealtimeState.Connecting,
@@ -430,27 +441,34 @@ class VoiceController(
                 RealtimeState.Idle,
                 -> {
                     if (wantedChannel == null) return@collect
-                    // The server has already dropped our peer. Say so rather
-                    // than keep showing a room we are no longer in.
-                    needsRejoin = true
-                    engine.stop()
-                    peerMedia.clear()
-                    _remoteScreens.value = emptyMap()
-                    // `engine.stop` released the capture, so the service must
-                    // stop claiming the projection type as well. A foreground
-                    // service that declares `mediaProjection` with no live
-                    // projection behind it is one the platform is entitled to
-                    // kill, which would take the rejoining call with it.
-                    VoiceService.dropProjection(context)
-                    _state.value = _state.value.copy(
-                        stage = VoiceStage.Joining,
-                        participants = emptyList(),
-                        unreachablePeers = 0,
-                        sharingScreen = false,
-                    )
+                    holdForRejoin()
                 }
             }
         }
+    }
+
+    /**
+     * The server has already dropped our peer. Say so rather than keep
+     * showing a room we are no longer in, and keep the intent so `Ready`
+     * can rebuild the call.
+     */
+    private fun holdForRejoin() {
+        needsRejoin = true
+        engine.stop()
+        peerMedia.clear()
+        _remoteScreens.value = emptyMap()
+        // `engine.stop` released the capture, so the service must stop
+        // claiming the projection type as well. A foreground service that
+        // declares `mediaProjection` with no live projection behind it is one
+        // the platform is entitled to kill, which would take the rejoining
+        // call with it.
+        VoiceService.dropProjection(context)
+        _state.value = _state.value.copy(
+            stage = VoiceStage.Joining,
+            participants = emptyList(),
+            unreachablePeers = 0,
+            sharingScreen = false,
+        )
     }
 
     private fun onWelcome(frame: JsonObject) {

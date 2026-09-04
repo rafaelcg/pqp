@@ -112,6 +112,33 @@
     <string name="connection_connecting">Connecting…</string>
     <string name="connection_offline">Offline. Trying to reconnect…</string>
     <string name="connection_retry">Retry</string>
+    <string name="connection_unauthorized">Session expired, reconnecting…</string>
+    <string name="connection_retry_now">Try now</string>
+    <string name="connection_check">Check connection</string>
+    <string name="connection_check_hint">Stuck on connecting? This tells you what is blocked and what to do.</string>
+    <string name="connection_sign_in_again">Sign in again</string>
+
+    <!-- The connection check. Same five checks, verdicts and advice as the web
+         client (`client/src/lib/connection-doctor.ts`), so a report pasted
+         into the QG reads the same whichever app it came from. -->
+    <string name="connection_doctor_title">Connection check</string>
+    <string name="connection_doctor_description">Five quick checks, a few seconds each. Nothing is sent anywhere.</string>
+    <string name="connection_doctor_running">Checking</string>
+    <string name="connection_doctor_run">Run again</string>
+    <string name="connection_doctor_copy">Copy report</string>
+    <string name="connection_doctor_copied">Copied</string>
+    <string name="connection_doctor_check_api">Reaching the pqp server</string>
+    <string name="connection_doctor_check_token">Getting a session token</string>
+    <string name="connection_doctor_check_socket">Realtime connection</string>
+    <string name="connection_doctor_check_stun">Finding your public address (STUN)</string>
+    <string name="connection_doctor_check_turn">Reaching the call relay (TURN)</string>
+    <string name="connection_doctor_advice_none">Everything answers. If a call still will not connect, the other person may be the one with the problem; ask them to run this too.</string>
+    <string name="connection_doctor_advice_api_unreachable">The pqp server cannot be reached at all. Check the internet connection, a VPN or a firewall, and try mobile data to compare. If other sites work, a DNS filter may be blocking pqp.gg.</string>
+    <string name="connection_doctor_advice_token_stuck">Your sign-in never answers. Something on this device or network is blocking the sign-in service (an ad blocker, a DNS filter, or a VPN). Pause it for pqp.gg, or try another network.</string>
+    <string name="connection_doctor_advice_sign_in_again">The server no longer accepts this session. Sign out and sign in again; that renews it on every device.</string>
+    <string name="connection_doctor_advice_socket_blocked">Web pages load but the live connection is blocked. Some office and school networks and some VPNs do this. Try mobile data or another network.</string>
+    <string name="connection_doctor_advice_relay_blocked">Chat works, but this network gives calls no way through. Try another network, or a VPN if you are on a corporate one.</string>
+    <string name="connection_doctor_advice_no_udp">This network blocks the traffic calls need. Chat works, voice will not. Try mobile data or another network.</string>
 
     <!-- Voice -->
     <string name="voice_leave">Leave</string>
@@ -155,6 +182,7 @@
     <string name="you_title">You</string>
     <string name="you_backend">Server</string>
     <string name="you_version">Version</string>
+    <string name="you_voice_title">Voice</string>
 
     <!-- Generic -->
     <string name="chat_untitled">Conversation</string>
