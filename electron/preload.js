@@ -95,6 +95,19 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     };
   },
 
+  onDesktopAuthEnded(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const handler = (_event, reason) => {
+      callback(reason === "expired" ? "expired" : "cancelled");
+    };
+    ipcRenderer.on("pqp:desktop-auth-ended", handler);
+    return () => {
+      ipcRenderer.removeListener("pqp:desktop-auth-ended", handler);
+    };
+  },
+
   /**
    * Mirror the resolved theme into the main process, which cannot read the
    * renderer's localStorage but has to paint the window background before the

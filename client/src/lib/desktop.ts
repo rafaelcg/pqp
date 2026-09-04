@@ -43,6 +43,7 @@ export interface PqpDesktop {
   getDesktopAuthStatus?(): Promise<{ active: boolean; url: string | null }>;
   getPendingDesktopAuthTicket?(): Promise<string | null>;
   onDesktopAuthTicket?(cb: (ticket: string) => void): () => void;
+  onDesktopAuthEnded?(cb: (reason: "expired" | "cancelled") => void): () => void;
 }
 
 export function getDesktop(): PqpDesktop | undefined {

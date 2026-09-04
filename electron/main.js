@@ -74,7 +74,7 @@ let pendingDeepLink = null;
 let sessionAppOrigin = null;
 /** @type {string | null} */
 let pendingDesktopAuthTicket = null;
-/** @type {{ server: import("http").Server, port: number, state: string, url: string, timer: ReturnType<typeof setTimeout> } | null} */
+/** @type {{ server: import("http").Server, port: number, state: string, url: string, timer: ReturnType<typeof setTimeout> | null } | null} */
 let desktopAuthSession = null;
 /** @type {BrowserWindow | null} */
 let pickerWindow = null;
@@ -291,9 +291,10 @@ function attachPasskeyHint(win) {
 
 function sendToRenderer(channel, ...args) {
   if (!mainWindow || mainWindow.isDestroyed()) {
-    return;
+    return false;
   }
   mainWindow.webContents.send(channel, ...args);
+  return true;
 }
 
 function focusMainWindow() {
@@ -307,13 +308,26 @@ function focusMainWindow() {
   mainWindow.focus();
 }
 
-function stopDesktopAuthSession() {
+function armDesktopAuthTimer() {
+  if (!desktopAuthSession) {
+    return;
+  }
+  clearTimeout(desktopAuthSession.timer);
+  desktopAuthSession.timer = setTimeout(() => {
+    stopDesktopAuthSession("expired");
+  }, LISTENER_TTL_MS);
+}
+
+function stopDesktopAuthSession(reason) {
   if (!desktopAuthSession) {
     return;
   }
   clearTimeout(desktopAuthSession.timer);
   desktopAuthSession.server.close();
   desktopAuthSession = null;
+  if (reason === "expired" || reason === "cancelled") {
+    sendToRenderer("pqp:desktop-auth-ended", reason);
+  }
 }
 
 function writeAuthResponse(res, status, extraHeaders, body) {
@@ -327,8 +341,8 @@ function writeAuthResponse(res, status, extraHeaders, body) {
 }
 
 function deliverDesktopAuthTicket(ticket) {
-  pendingDesktopAuthTicket = ticket;
-  sendToRenderer("pqp:desktop-auth-ticket", ticket);
+  const delivered = sendToRenderer("pqp:desktop-auth-ticket", ticket);
+  pendingDesktopAuthTicket = delivered ? null : ticket;
   try {
     app.focus({ steal: true });
   } catch {
@@ -360,6 +374,7 @@ function startDesktopAuthSession(mode) {
         state: desktopAuthSession.state,
       }) ?? desktopAuthSession.url;
     desktopAuthSession.url = url;
+    armDesktopAuthTimer();
     return open(url);
   }
 
@@ -406,10 +421,8 @@ function startDesktopAuthSession(mode) {
         resolve({ ok: false, url: "" });
         return;
       }
-      const timer = setTimeout(() => {
-        stopDesktopAuthSession();
-      }, LISTENER_TTL_MS);
-      desktopAuthSession = { server, port, state, url, timer };
+      desktopAuthSession = { server, port, state, url, timer: null };
+      armDesktopAuthTimer();
       resolve(open(url));
     });
     server.on("error", () => {
@@ -1167,7 +1180,7 @@ if (!gotLock) {
   });
 
   ipcMain.handle("pqp:cancel-desktop-auth", () => {
-    stopDesktopAuthSession();
+    stopDesktopAuthSession("cancelled");
   });
 
   ipcMain.handle("pqp:desktop-auth-status", () => ({
