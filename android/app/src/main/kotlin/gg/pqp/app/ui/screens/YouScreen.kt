@@ -19,31 +19,30 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.clerk.api.Clerk
 import gg.pqp.app.BuildConfig
 import gg.pqp.app.R
 import gg.pqp.app.account.ui.DeleteAccountDialog
 import gg.pqp.app.account.ui.YourDataSection
-import gg.pqp.app.core.AuthMode
 import gg.pqp.app.core.Backend
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.push.PushSettingsSection
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
+import gg.pqp.app.ui.components.ConnectionDoctorDialog
+import gg.pqp.app.ui.components.SectionLabel
 import gg.pqp.app.ui.components.SettingsRow
 import gg.pqp.app.ui.components.pqpTopBarColors
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
-import kotlinx.coroutines.launch
 
 /**
  * The account screen: who you are, then the handful of things you can do about
@@ -61,21 +60,23 @@ import kotlinx.coroutines.launch
 fun YouScreen(session: SessionStore, onBack: () -> Unit) {
     val phase by session.phase.collectAsStateWithLifecycle()
     val me = (phase as? SessionPhase.Ready)?.me
-    val scope = rememberCoroutineScope()
     var confirmingDelete by remember { mutableStateOf(false) }
+    var checkingConnection by remember { mutableStateOf(false) }
 
-    /**
-     * Ends the Clerk session first, while the call can still authenticate.
-     * Clearing local state first would leave a live session on the device with
-     * nothing able to revoke it.
-     */
-    fun signOut() {
-        scope.launch {
-            if (Backend.authMode == AuthMode.Clerk) {
-                runCatching { Clerk.auth.signOut() }
-            }
-            session.signOutLocally()
-        }
+    // Ends the Clerk session first, then forgets it locally; the order and
+    // the reason live on `SessionStore.signOut`, which the connection banner
+    // shares.
+    fun signOut() = session.signOut()
+
+    if (checkingConnection) {
+        ConnectionDoctorDialog(
+            session = session,
+            onDismiss = { checkingConnection = false },
+            onSignInAgain = {
+                checkingConnection = false
+                signOut()
+            },
+        )
     }
 
     // Hung off the screen rather than off the row that opens it, so that a
@@ -153,6 +154,21 @@ fun YouScreen(session: SessionStore, onBack: () -> Unit) {
             Spacer(Modifier.height(Spacing.lg))
             PushSettingsSection(
                 Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
+            )
+
+            // Voice. One row for now: the check that tells "fica conectando"
+            // apart from a refused session, a blocked socket and a network
+            // with no path to the relay. It lives here because voice is what
+            // people notice failing first, and because the banner that also
+            // offers it is only on screen while the socket is down.
+            SectionLabel(stringResource(R.string.you_voice_title))
+            SettingsRow(
+                icon = PqpIcons.VoiceChannel,
+                label = stringResource(R.string.connection_check),
+                value = stringResource(R.string.connection_check_hint),
+                navigates = true,
+                onClick = { checkingConnection = true },
+                modifier = Modifier.testTag("you.checkConnection"),
             )
 
             Spacer(Modifier.height(Spacing.sm))
