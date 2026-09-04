@@ -240,7 +240,14 @@ import {
   pickServerLandingTarget,
 } from "@/lib/community-home";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
-import { getDesktop, isDesktopApp } from "@/lib/desktop";
+import {
+  applyDesktopAuthStart,
+  desktopAuthEndedHandoff,
+  desktopSignedOutPath,
+  shouldRedeemDesktopTicket,
+  ticketSignInSucceeded,
+} from "@/lib/desktop-auth-flow";
+import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
   notifyChannelActivity,
@@ -344,16 +351,20 @@ function ClerkAppGate() {
         queuedTicketRef.current = ticket;
         return;
       }
-      if (lastTicketRef.current === ticket) {
+      if (!shouldRedeemDesktopTicket(lastTicketRef.current, ticket)) {
         return;
       }
       lastTicketRef.current = ticket;
       queuedTicketRef.current = null;
+      void getDesktop()?.getPendingDesktopAuthTicket?.();
       setHandoffError(null);
       try {
         const result = await currentSignIn.create({ strategy: "ticket", ticket });
-        if (result.createdSessionId) {
+        if (ticketSignInSucceeded(result)) {
           await currentSetActive({ session: result.createdSessionId });
+        } else {
+          setWaiting(false);
+          setHandoffError(t("signedOut.waiting.error"));
         }
       } catch {
         setWaiting(false);
@@ -388,9 +399,10 @@ function ClerkAppGate() {
       void redeemTicket(ticket);
     });
     const offEnded = desktop.onDesktopAuthEnded?.((reason) => {
-      setWaiting(false);
+      const ended = desktopAuthEndedHandoff(reason);
+      setWaiting(ended.waiting);
       setBrowserUrl(null);
-      if (reason === "expired") {
+      if (ended.expired) {
         setHandoffError(t("signedOut.waiting.expired"));
       }
     });
@@ -410,9 +422,14 @@ function ClerkAppGate() {
       setCopied(false);
       setWaiting(true);
       const result = await desktop.startDesktopAuth(mode);
-      setBrowserUrl(result.url);
+      const view = applyDesktopAuthStart(result);
+      setBrowserUrl(view.url || null);
+      setWaiting(view.waiting);
+      if (view.failed) {
+        setHandoffError(t("signedOut.waiting.error"));
+      }
     },
-    [desktop],
+    [desktop, t],
   );
 
   const cancelDesktopAuth = useCallback(() => {
@@ -665,7 +682,7 @@ function MainAppContent({
       }
     ).Clerk;
     if (!isDevAuthBypassEnabled() && clerk?.signOut) {
-      const home = isDesktopApp() ? "/app" : "/";
+      const home = desktopSignedOutPath();
       void clerk.signOut({ redirectUrl: home }).catch(() => {
         window.location.replace(home);
       });

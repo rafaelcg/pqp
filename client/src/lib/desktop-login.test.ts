@@ -14,10 +14,9 @@ describe("parseDesktopLoopbackReturn", () => {
   });
 
   it("normalises odd IPv4 spellings through URL parsing, then still requires 127.0.0.1", () => {
-    // `127.1` becomes 127.0.0.1 in some parsers; we re-check hostname after parse.
-    const parsed = parseDesktopLoopbackReturn("http://127.1:41234/callback");
-    expect(parsed === null || parsed === "http://127.0.0.1:41234/callback").toBe(
-      true,
+    // WHATWG parses `127.1` to 127.0.0.1; we re-check hostname after parse.
+    expect(parseDesktopLoopbackReturn("http://127.1:41234/callback")).toBe(
+      "http://127.0.0.1:41234/callback",
     );
   });
 
