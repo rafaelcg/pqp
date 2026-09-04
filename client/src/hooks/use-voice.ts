@@ -2536,8 +2536,11 @@ export function createVoiceController(transport: RealtimeTransport) {
      *
      * Stored even while the camera is off, so the next `toggleCamera` uses it.
      * A change while the camera is already open re-captures and replaces the
-     * live track, the same way a mic switch does, and announces the new
-     * stream id so receivers can keep filing the face as a face.
+     * live track, the same way a mic switch does. The new track is swapped
+     * into the original MediaStream so the announced id stays put: mesh
+     * `replaceTrack` does not fire `ontrack`, and a late joiner must see the
+     * same msid the roster already has. Re-announcing a fresh stream id is
+     * what made a switched camera look like a screen share.
      */
     async setCameraDevice(deviceId: string) {
       if (cameraDeviceId === deviceId) {
@@ -2547,9 +2550,9 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!cameraCaptureStream || state.status !== "connected") {
         return;
       }
-      let stream: MediaStream;
+      let incoming: MediaStream;
       try {
-        stream = await captureCamera(
+        incoming = await captureCamera(
           (constraints) => navigator.mediaDevices.getUserMedia(constraints),
           videoQuality,
           cameraDeviceId || undefined,
@@ -2564,9 +2567,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
-      const track = stream.getVideoTracks()[0];
+      const track = incoming.getVideoTracks()[0];
       if (!track) {
-        for (const t of stream.getTracks()) {
+        for (const t of incoming.getTracks()) {
           t.stop();
         }
         state.error = translateMessage("voice.error.cameraFailed");
@@ -2582,15 +2585,21 @@ export function createVoiceController(transport: RealtimeTransport) {
         void stopCameraInternal();
         emit();
       };
-      const previous = cameraCaptureStream;
-      cameraCaptureStream = stream;
-      state.localCameraStream = stream;
+      const current = cameraCaptureStream;
+      for (const old of current.getVideoTracks()) {
+        current.removeTrack(old);
+        old.stop();
+      }
+      incoming.removeTrack(track);
+      current.addTrack(track);
+      for (const leftover of incoming.getTracks()) {
+        leftover.stop();
+      }
       emit();
-      transport.sendVoice({ type: "set-camera", streamId: stream.id });
       try {
-        await manager?.setLocalCameraStream(stream);
+        await manager?.setLocalCameraStream(current);
         if (sfu) {
-          await sfu.publishCamera(stream);
+          await sfu.publishCamera(current);
         }
       } catch (err) {
         state.error =
@@ -2599,10 +2608,6 @@ export function createVoiceController(transport: RealtimeTransport) {
             : translateMessage("voice.error.cameraFailed");
         await stopCameraInternal();
         emit();
-        return;
-      }
-      for (const old of previous.getTracks()) {
-        old.stop();
       }
     },
 

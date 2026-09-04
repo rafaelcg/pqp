@@ -18,6 +18,7 @@ interface ManagerStub {
   /** Screen qualities handed to the manager, in order. */
   screenQualities: string[];
   disposed: boolean;
+  failNextCamera: boolean;
 }
 
 const managers: ManagerStub[] = [];
@@ -38,6 +39,7 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       screenQualities: [],
       localCameraStreams: [],
       disposed: false,
+      failNextCamera: false,
     };
     managers.push(stub);
     return {
@@ -45,6 +47,10 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       setLocalScreenStream: async () => {},
       setLocalCameraStream: async (stream: MediaStream | null) => {
         stub.localCameraStreams.push(stream);
+        if (stub.failNextCamera) {
+          stub.failNextCamera = false;
+          throw new Error("publish failed");
+        }
       },
       setCameraMaxBitrate: (maxBitrate: number) => {
         stub.cameraMaxBitrates.push(maxBitrate);
@@ -109,9 +115,18 @@ function fakeStream(label: string, kind: "audio" | "video" = "audio") {
   const tracks = [fakeTrack(label, kind)];
   return {
     id: `stream-${label}`,
-    getTracks: () => tracks,
+    getTracks: () => [...tracks],
     getAudioTracks: () => tracks.filter((t) => t.kind === "audio"),
     getVideoTracks: () => tracks.filter((t) => t.kind === "video"),
+    addTrack: (track: ReturnType<typeof fakeTrack>) => {
+      tracks.push(track);
+    },
+    removeTrack: (track: ReturnType<typeof fakeTrack>) => {
+      const index = tracks.indexOf(track);
+      if (index >= 0) {
+        tracks.splice(index, 1);
+      }
+    },
   };
 }
 
@@ -123,6 +138,8 @@ const videoRequests: unknown[] = [];
  * is the behaviour the fallback exists to guarantee.
  */
 let refuseConstrainedCamera = false;
+/** First camera stays `camera` so existing announce assertions keep working. */
+let cameraCaptures = 0;
 
 function installBrowserStubs() {
   const g = globalThis as unknown as Record<string, unknown>;
@@ -141,7 +158,10 @@ function installBrowserStubs() {
           err.name = "OverconstrainedError";
           throw err;
         }
-        return fakeStream("camera", "video");
+        cameraCaptures += 1;
+        const label =
+          cameraCaptures === 1 ? "camera" : `camera-${cameraCaptures}`;
+        return fakeStream(label, "video");
       },
     },
   });
@@ -237,6 +257,7 @@ beforeEach(() => {
   stoppedTracks.length = 0;
   videoRequests.length = 0;
   refuseConstrainedCamera = false;
+  cameraCaptures = 0;
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -560,6 +581,33 @@ describe("camera", () => {
     expect(videoRequests[0]).toMatchObject({
       deviceId: { exact: "cam-2" },
     });
+  });
+
+  it("keeps the announced stream when the webcam changes mid-call", async () => {
+    const { voice, sent } = await connectedController();
+    await voice.toggleCamera();
+    const opened = voice.getState().localCameraStream;
+    await voice.setCameraDevice("cam-2");
+
+    expect(sent.filter((m) => m.type === "set-camera")).toEqual([
+      { type: "set-camera", streamId: "stream-camera" },
+    ]);
+    expect(voice.getState().localCameraStream).toBe(opened);
+    expect(managers[0]!.localCameraStreams[1]).toBe(opened);
+    expect(stoppedTracks).toContain("camera");
+    expect(stoppedTracks).not.toContain("camera-2");
+    expect(voice.getState().isCameraOn).toBe(true);
+  });
+
+  it("stops both captures when a mid-call device switch fails to publish", async () => {
+    const { voice } = await connectedController();
+    await voice.toggleCamera();
+    managers[0]!.failNextCamera = true;
+    await voice.setCameraDevice("cam-2");
+
+    expect(voice.getState().isCameraOn).toBe(false);
+    expect(stoppedTracks).toContain("camera");
+    expect(stoppedTracks).toContain("camera-2");
   });
 
   it("feeds roster camera stream ids to the mesh for classification", async () => {
