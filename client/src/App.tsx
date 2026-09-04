@@ -3906,6 +3906,8 @@ function MainAppContent({
             onSetScreenVolume={(userId, volume) =>
               voice.setScreenVolume(userId, volume)
             }
+            onDismissShare={(peerId) => voice.dismissShare(peerId)}
+            onWatchShare={(peerId) => voice.watchShare(peerId)}
             onRetryPeer={(peerId) => {
               void voice.retryPeer(peerId);
             }}
