@@ -7,14 +7,14 @@
  * listener (favicon, a wrong state, a Host that is not 127.0.0.1).
  */
 
-const crypto = require("node:crypto");
+const { randomBytes, timingSafeEqual } = require("node:crypto");
 
 const LISTENER_TTL_MS = 10 * 60 * 1000;
 const MIN_PORT = 1024;
 const MAX_PORT = 65535;
 
 function createState() {
-  return crypto.randomBytes(16).toString("hex");
+  return randomBytes(16).toString("hex");
 }
 
 function statesEqual(left, right) {
@@ -26,7 +26,7 @@ function statesEqual(left, right) {
   if (a.length !== b.length || a.length === 0) {
     return false;
   }
-  return crypto.timingSafeEqual(a, b);
+  return timingSafeEqual(a, b);
 }
 
 function isAllowedAppOrigin(url, appOrigin) {
