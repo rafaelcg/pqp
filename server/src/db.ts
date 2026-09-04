@@ -183,12 +183,13 @@ export interface DbChannel {
   id: string;
   server_id: string;
   name: string;
-  type: "text" | "voice" | "category";
+  type: "text" | "voice" | "category" | "thread";
   position: number;
   is_private: boolean;
   topic: string | null;
   image_url: string | null;
   parent_id: string | null;
+  slowmode_seconds: number;
 }
 
 export interface DbMessage {

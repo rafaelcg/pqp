@@ -3,6 +3,7 @@ import {
   channelSchema,
   parseUserTag,
   publicUserSchema,
+  updateChannelSchema,
   updateProfileSchema,
   userSchema,
   userSearchQuerySchema,
@@ -111,6 +112,27 @@ describe("channelSchema", () => {
       isPrivate: false,
     });
     expect(parsed.kind).toBe("server");
+  });
+
+  it("defaults slow mode to off", () => {
+    const parsed = channelSchema.parse({
+      id: UUID_A,
+      serverId: UUID_B,
+      name: "general",
+      type: "text",
+      position: 0,
+      isPrivate: false,
+    });
+    expect(parsed.slowmodeSeconds).toBe(0);
+  });
+
+  it("accepts a slow-mode update and refuses a wait over 6 hours", () => {
+    expect(updateChannelSchema.parse({ slowmodeSeconds: 5 }).slowmodeSeconds).toBe(
+      5,
+    );
+    expect(
+      updateChannelSchema.safeParse({ slowmodeSeconds: 21_601 }).success,
+    ).toBe(false);
   });
 
   it("rejects an unknown kind", () => {

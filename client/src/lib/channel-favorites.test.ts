@@ -36,6 +36,7 @@ function channel(
     topic: null,
     imageUrl: null,
     parentId: null,
+    slowmodeSeconds: 0,
     ...extra,
   };
 }

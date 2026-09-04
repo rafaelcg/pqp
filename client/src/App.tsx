@@ -1,5 +1,5 @@
 import { SignInButton, SignUpButton, useAuth, useUser } from "@clerk/clerk-react";
-import { FileText, Lock, Menu, Phone, Pin, Shield, Users, Video } from "lucide-react";
+import { Lock, Menu, Phone, Pin, Settings, Shield, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -260,7 +260,7 @@ export type TokenResolver = (options?: {
   forceRefresh?: boolean;
 }) => Promise<string | null>;
 
-/** Equal-width icon tiles in the chat header (pins, topic, call, roster). */
+/** Equal-width icon tiles in the chat header (pins, channel settings, call, roster). */
 const HEADER_ACTION_TILE =
   "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper";
 
@@ -3387,6 +3387,42 @@ function MainAppContent({
     setQgHintShowing(showing);
   }, []);
 
+  useEffect(() => {
+    const conversation =
+      selection.kind === "dm" && selectedChannelId
+        ? conversations.find((one) => one.channelId === selectedChannelId)
+        : undefined;
+    const channel = conversation
+      ? conversationChannel(conversation)
+      : selection.kind === "server"
+        ? channels.find((c) => c.id === selectedChannelId)
+        : undefined;
+    chat.setSlowMode({
+      seconds:
+        channel?.kind === "server" && channel.type === "text"
+          ? (channel.slowmodeSeconds ?? 0)
+          : 0,
+      bypass: perms.can(Permission.MANAGE_MESSAGES, selectedChannelId),
+    });
+  }, [
+    chat,
+    perms.can,
+    selection.kind,
+    selectedChannelId,
+    conversations,
+    channels,
+  ]);
+
+  useEffect(() => {
+    threadChat.setSlowMode({
+      seconds: 0,
+      bypass: perms.can(
+        Permission.MANAGE_MESSAGES,
+        openThread?.thread.channelId ?? selectedChannelId,
+      ),
+    });
+  }, [threadChat, perms.can, openThread?.thread.channelId, selectedChannelId]);
+
   if (bootstrapError) {
     return (
       <AppBootstrapError
@@ -3739,14 +3775,14 @@ function MainAppContent({
               <Pin className="h-4 w-4" />
             </button>
           </Tooltip>
-          {canManageChannels && (
-            <Tooltip label={t("chrome.topic")}>
+          {canManageChannels && selectedChannel.kind === "server" && (
+            <Tooltip label={t("chrome.channelSettings")}>
               <button
                 type="button"
                 className={HEADER_ACTION_TILE}
                 onClick={() => setChannelMetaChannel(selectedChannel)}
               >
-                <FileText className="h-4 w-4" />
+                <Settings className="h-4 w-4" />
               </button>
             </Tooltip>
           )}
@@ -4025,6 +4061,7 @@ function MainAppContent({
           sendPoll: (request) => chat.sendPoll(request),
         }}
         disabled={!selectedChannelId || messagesLoading}
+        slowModeUntil={chat.getSlowModeHeldUntil() || null}
         placeholder={t("composer.placeholder", { name: selectedChannel.name })}
       />
     </div>

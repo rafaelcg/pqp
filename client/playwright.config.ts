@@ -76,7 +76,7 @@ export default defineConfig({
         NODE_ENV: "development",
         // Bypass boot would otherwise seed Sandbox. `ensureServer` then sees a
         // hall and never creates "E2E", so specs that look for that name, a
-        // solo-owner danger zone, or a Topic tile on a phone all miss.
+        // solo-owner danger zone, or a Channel settings tile on a phone all miss.
         DEV_SEED: "false",
         // Every test drives the same account and boots the app from scratch,
         // which no real user does. Raise the ceiling rather than lower it in

@@ -30,9 +30,21 @@ describe("message-rejected", () => {
       messageRejectedSchema.safeParse({
         type: "message-rejected",
         channelId: CHANNEL,
-        reason: "slow-mode",
+        reason: "not-a-reason",
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts a slow-mode refusal with a wait", () => {
+    const parsed = messageRejectedSchema.parse({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce: "n1",
+      reason: "slow-mode",
+      retryAfterMs: 5000,
+    });
+    expect(parsed.reason).toBe("slow-mode");
+    expect(parsed.retryAfterMs).toBe(5000);
   });
 
   it("accepts a rate-limit wait in milliseconds", () => {
