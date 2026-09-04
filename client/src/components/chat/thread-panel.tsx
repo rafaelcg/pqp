@@ -218,6 +218,7 @@ export function ThreadPanel({
           return true;
         }}
         disabled={isLoading}
+        slowModeUntil={controller.getSlowModeHeldUntil() || null}
         placeholder={t("thread.placeholder")}
         slashContext={
           slashContext

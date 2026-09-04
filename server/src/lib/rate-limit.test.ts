@@ -62,6 +62,24 @@ describe("createRateLimiter", () => {
     expect(limiter.take("a")).toBe(false);
   });
 
+  it("holds one send per interval when capacity is 1", () => {
+    const clock = fakeClock();
+    const limiter = createRateLimiter({
+      capacity: 1,
+      refillPerSecond: 1 / 5,
+      now: clock.now,
+    });
+
+    expect(limiter.take("channel:user")).toBe(true);
+    expect(limiter.take("channel:user")).toBe(false);
+    expect(limiter.retryAfter("channel:user")).toBe(5);
+
+    clock.advance(4_999);
+    expect(limiter.take("channel:user")).toBe(false);
+    clock.advance(1);
+    expect(limiter.take("channel:user")).toBe(true);
+  });
+
   it("reports a retry delay only when exhausted", () => {
     const clock = fakeClock();
     const limiter = createRateLimiter({

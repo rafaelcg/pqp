@@ -14,6 +14,13 @@ import { pollSchema } from "./polls.js";
 export const channelTypeSchema = z.enum(["text", "voice", "category"]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
 
+/** Per-channel slow mode. 0 is off. Ceiling matches Discord: 6 hours. */
+export const SLOWMODE_SECONDS_MAX = 21_600;
+
+export const SLOWMODE_SECONDS_PRESETS = [
+  0, 5, 10, 15, 30, 60, 120, 300, 600, 900, 3600, SLOWMODE_SECONDS_MAX,
+] as const;
+
 /**
  * What a channel row *is*, as opposed to what it carries (`type` above).
  *
@@ -548,6 +555,16 @@ export const channelSchema = z.object({
    * parses a response from an API that predates categories.
    */
   parentId: z.string().uuid().nullable().default(null),
+  /**
+   * Seconds a member must wait between sends. 0 is off. Defaulted so a
+   * response from an API that predates slow mode still parses as off.
+   */
+  slowmodeSeconds: z
+    .number()
+    .int()
+    .min(0)
+    .max(SLOWMODE_SECONDS_MAX)
+    .default(0),
 });
 
 /**
@@ -801,6 +818,12 @@ export const updateChannelSchema = z.object({
         [...value].length <= 8,
       "Use an image URL or a short emoji/icon",
     ),
+  slowmodeSeconds: z
+    .number()
+    .int()
+    .min(0)
+    .max(SLOWMODE_SECONDS_MAX)
+    .optional(),
 });
 
 /**

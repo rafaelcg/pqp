@@ -33,13 +33,12 @@ import {
   discardServerImageObject,
 } from "./server-images.js";
 import {
+  CHANNEL_COLUMNS,
   mapChannel,
   mapServer,
   SERVER_COLUMNS,
   type ChannelRow,
 } from "./servers.js";
-
-const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, topic, image_url, parent_id`;
 
 export class DiscordTemplateNotFoundError extends Error {
   constructor() {

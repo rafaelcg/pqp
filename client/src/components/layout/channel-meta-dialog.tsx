@@ -1,9 +1,31 @@
 import { useEffect, useId, useState, type FormEvent } from "react";
-import type { Channel } from "@pqp/shared";
+import {
+  SLOWMODE_SECONDS_PRESETS,
+  type Channel,
+} from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+
+const SLOWMODE_PRESET_KEYS: Record<number, MessageKey> = {
+  0: "channelMeta.slowMode.off",
+  5: "channelMeta.slowMode.5s",
+  10: "channelMeta.slowMode.10s",
+  15: "channelMeta.slowMode.15s",
+  30: "channelMeta.slowMode.30s",
+  60: "channelMeta.slowMode.1m",
+  120: "channelMeta.slowMode.2m",
+  300: "channelMeta.slowMode.5m",
+  600: "channelMeta.slowMode.10m",
+  900: "channelMeta.slowMode.15m",
+  3600: "channelMeta.slowMode.1h",
+  21600: "channelMeta.slowMode.6h",
+};
+
+function slowModeOptionKey(seconds: number): MessageKey {
+  return SLOWMODE_PRESET_KEYS[seconds] ?? "channelMeta.slowMode.custom";
+}
 
 const CHANNEL_ICON_PRESETS = ["📡", "💬", "🔊", "🎮", "☕", "🛠️", "🎵", "📌"];
 
@@ -42,6 +64,7 @@ interface ChannelMetaDialogProps {
   onSave: (updates: {
     topic: string | null;
     imageUrl: string | null;
+    slowmodeSeconds?: number;
   }) => Promise<void> | void;
 }
 
@@ -54,14 +77,17 @@ export function ChannelMetaDialog({
   const { t } = useTranslation();
   const [topic, setTopic] = useState("");
   const [imageUrl, setImageUrl] = useState("");
+  const [slowmodeSeconds, setSlowmodeSeconds] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const formId = useId();
+  const showSlowMode = channel?.type === "text";
 
   useEffect(() => {
     if (open && channel) {
       setTopic(channel.topic ?? "");
       setImageUrl(channel.imageUrl ?? "");
+      setSlowmodeSeconds(channel.slowmodeSeconds ?? 0);
       setError(null);
     }
   }, [open, channel]);
@@ -79,6 +105,7 @@ export function ChannelMetaDialog({
       await onSave({
         topic: topic.trim() || null,
         imageUrl: imageUrl.trim() || null,
+        ...(showSlowMode ? { slowmodeSeconds } : {}),
       });
       onClose();
     } catch (err) {
@@ -126,6 +153,30 @@ export function ChannelMetaDialog({
             autoFocus
           />
         </label>
+
+        {showSlowMode && (
+          <label className="mb-3 block">
+            <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+              {t("channelMeta.slowMode")}
+            </span>
+            <select
+              value={String(slowmodeSeconds)}
+              className="h-10 w-full rounded-md border border-ink-4 bg-ink px-3 text-sm text-paper"
+              onChange={(e) => setSlowmodeSeconds(Number(e.target.value))}
+            >
+              {(SLOWMODE_SECONDS_PRESETS.includes(
+                slowmodeSeconds as (typeof SLOWMODE_SECONDS_PRESETS)[number],
+              )
+                ? SLOWMODE_SECONDS_PRESETS
+                : [slowmodeSeconds, ...SLOWMODE_SECONDS_PRESETS]
+              ).map((seconds) => (
+                <option key={seconds} value={seconds}>
+                  {t(slowModeOptionKey(seconds), { seconds })}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
 
         <label className="mb-2 block">
           <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
