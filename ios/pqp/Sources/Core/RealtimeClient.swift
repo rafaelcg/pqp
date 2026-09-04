@@ -24,6 +24,16 @@ enum RealtimeEvent: Sendable {
     /// silent drop; this one is unicast to the person who tried, so the client
     /// can say why the send vanished instead of showing a bug-shaped nothing.
     case sanctionNotice(SanctionNotice)
+    /// The server refused a `message-create`, and said so. Unicast to the
+    /// sender like `sanctionNotice`; `nonce` is the echo of the create frame,
+    /// which is what finds the optimistic row to take down.
+    ///
+    /// For most of this app's life the only answer to a refused send was
+    /// silence: the row stayed dimmed at 55% forever, nothing reaped it short
+    /// of a reconnect, and the person walked away believing it had been sent.
+    /// The server has explained itself since the web client's PR #204; this
+    /// app dropped the explanation as `.other`.
+    case messageRejected(MessageRejection)
     /// Your friendships changed — re-read them.
     ///
     /// Unicast, like `sanctionNotice`, and CONTENT-FREE by design: it names
@@ -65,6 +75,11 @@ enum RealtimeEvent: Sendable {
     case voiceWelcome(peerId: String, voiceChannelId: String, peers: [VoiceParticipant],
                       selfPeer: VoiceParticipant, transport: String?)
     case voicePeerJoined(VoiceParticipant)
+    /// Somebody already in the room now shows a different name or picture.
+    /// Distinct from `voicePeerJoined` on purpose: that one opens a peer
+    /// connection, and a rename is not somebody walking in. The roster entry
+    /// is replaced and NOTHING is renegotiated.
+    case voicePeerUpdated(VoiceParticipant)
     case voicePeerLeft(peerId: String)
     case voiceRoster(voiceChannelId: String, participants: [VoiceParticipant])
     case voiceRoomFull(limit: Int)
@@ -97,6 +112,22 @@ enum RealtimeEvent: Sendable {
 enum FriendActivityKind: String, Sendable {
     case request
     case accepted
+}
+
+/// `message-rejected`, as the client keeps it. The reason is left as the
+/// wire token rather than an enum: a token this build has never heard of is
+/// still a refusal, and it must still take the dimmed row down and put the
+/// text back. The copy for an unknown token is the generic one.
+///
+/// `retryAfterMs` arrives for `slow-mode` (and may for `rate-limited`), and is
+/// what drives the countdown under the composer. It is a duration, not a
+/// deadline: the clocks on a phone and a server do not agree well enough for
+/// the server to send a timestamp.
+struct MessageRejection: Hashable, Sendable {
+    let channelId: String
+    let nonce: String?
+    let reason: String
+    let retryAfterMs: Int?
 }
 
 /// `sanctionNoticeSchema` — currently always a timeout. `message` is the whole
@@ -434,8 +465,9 @@ actor RealtimeClient {
     }
 
     /// Returns the nonce so the caller can match the echo back to its optimistic
-    /// row. There is no ack frame and no error frame — the nonce is the only
-    /// correlation the protocol offers.
+    /// row. There is no ack frame: the echo on `message-broadcast` is what
+    /// confirms a send, and `message-rejected` (same nonce) is what refuses
+    /// one. Anything else the server dislikes is still dropped silently.
     @discardableResult
     func sendMessage(
         channelId: String,
@@ -604,13 +636,16 @@ actor RealtimeClient {
         let reason: String?
         // Threads
         let thread: ThreadSummary?
+        /// `message-rejected` only: how long the sender must wait, when the
+        /// refusal is a temporary one.
+        let retryAfterMs: Int?
 
         enum CodingKeys: String, CodingKey {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
             case candidate, limit, transport, version
-            case conversationId, kind, caller, reason, thread
+            case conversationId, kind, caller, reason, thread, retryAfterMs
             // `self` is a Swift keyword, so the wire key is remapped.
             case selfPeer = "self"
         }
@@ -683,6 +718,18 @@ actor RealtimeClient {
         case "message-update":
             guard let message = envelope.message else { return }
             event = .messageUpdated(message)
+        case "message-rejected":
+            // `reason` is required by the schema; a frame without one is not
+            // a refusal this client can act on. `nonce` is optional on the
+            // wire, though this app always sends one, so a refusal that comes
+            // back without it is passed along and the model decides.
+            guard let channelId = envelope.channelId, let reason = envelope.reason else { return }
+            event = .messageRejected(MessageRejection(
+                channelId: channelId,
+                nonce: envelope.nonce,
+                reason: reason,
+                retryAfterMs: envelope.retryAfterMs
+            ))
         // Two spellings on the wire — `message-deleted` is a legacy duplicate
         // that is still emitted, so both are handled.
         case "message-delete", "message-deleted":
@@ -734,6 +781,9 @@ actor RealtimeClient {
         case "peer-joined":
             guard let peer = envelope.peer else { return }
             event = .voicePeerJoined(peer)
+        case "peer-updated":
+            guard let peer = envelope.peer else { return }
+            event = .voicePeerUpdated(peer)
         case "peer-left":
             guard let peerId = envelope.peerId else { return }
             event = .voicePeerLeft(peerId: peerId)

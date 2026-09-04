@@ -97,9 +97,16 @@ environment value traps inside SwiftUI with a stack that never mentions Clerk â€
 over `/ws`. That makes the socket load-bearing rather than an enhancement, which
 is why `RealtimeClient` reconnects with capped backoff instead of giving up.
 
-**There is no ack and no error frame.** An invalid frame is silently dropped
-server-side. The only correlation the protocol offers is the `nonce` echoed back
-on `message-broadcast`, so that is what retires an optimistic row.
+**There is no ack frame, and the error frames are the exception, not the
+rule.** A malformed frame is still silently dropped server-side. Two refusals
+explain themselves, both unicast to the sender: `sanction-notice` (you are
+timed out) and `message-rejected` (this create will not land, with a reason
+token and, for slow mode, a `retryAfterMs`). The `nonce` from `message-create`
+is the only correlation: echoed on `message-broadcast` it retires the optimistic
+row, echoed on `message-rejected` it removes the row and puts the text back in
+the composer. A frame the app does not recognise decodes to `.other` and is
+dropped, so a new server answer is invisible until `RealtimeClient.ingest`
+learns it; `WireDecodingTests` is where that is pinned.
 
 **Dates need a custom decoding strategy.** The server emits
 `Date.toISOString()`, which always carries milliseconds, and

@@ -170,6 +170,29 @@ struct Channel: Codable, Identifiable, Hashable, Sendable {
     let topic: String?
     let imageUrl: String?
     let parentId: String?
+    /// Seconds a member must wait between sends; 0 is off. Decoded by hand
+    /// because a synthesized `Codable` has no defaults: a key the server omits
+    /// (an API that predates slow mode, or a cached list written by a build
+    /// that did) would fail the whole decode rather than read as off. And
+    /// before this field existed the synthesized decoder simply ignored the
+    /// key, which is how a channel could be in slow mode and the composer
+    /// learn it only from a refusal.
+    let slowmodeSeconds: Int
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        serverId = try container.decodeIfPresent(String.self, forKey: .serverId)
+        kind = try container.decode(String.self, forKey: .kind)
+        name = try container.decode(String.self, forKey: .name)
+        type = try container.decode(String.self, forKey: .type)
+        position = try container.decode(Int.self, forKey: .position)
+        isPrivate = try container.decode(Bool.self, forKey: .isPrivate)
+        topic = try container.decodeIfPresent(String.self, forKey: .topic)
+        imageUrl = try container.decodeIfPresent(String.self, forKey: .imageUrl)
+        parentId = try container.decodeIfPresent(String.self, forKey: .parentId)
+        slowmodeSeconds = try container.decodeIfPresent(Int.self, forKey: .slowmodeSeconds) ?? 0
+    }
 
     var isText: Bool { type == "text" }
     var isVoice: Bool { type == "voice" }

@@ -43,6 +43,12 @@ struct ChatView: View {
     /// wrote is private does not have to type it twice.
     var initialDraft: String = ""
 
+    /// The channel's slow mode interval, from the channel list. Zero for a
+    /// conversation, a thread, or a channel with it off. The composer counts
+    /// down from it after each send instead of learning about the rule from a
+    /// refusal.
+    var slowmodeSeconds: Int = 0
+
     @State private var model = ChatModel()
     /// Applied once. Without the guard, coming back to this screen from a thread
     /// would overwrite whatever the person has since typed.
@@ -76,9 +82,11 @@ struct ChatView: View {
                 errorRow
                 composerContext
                 attachmentStrip
+                slowModeRow
                 Composer(
                     text: $model.draft,
                     isSending: model.isSending,
+                    isHeld: model.isHeldBySlowMode,
                     canAttach: model.attachmentsEnabled,
                     hasAttachments: !model.pendingAttachments.isEmpty,
                     isExpressing: showingExpression,
@@ -217,7 +225,19 @@ struct ChatView: View {
                 pickerItem = nil
             }
         }
-        .task { await model.open(channelId: channelId, session: session) }
+        .task {
+            // The server waives slow mode for MANAGE_MESSAGES. This app only
+            // knows the rank, and owner/admin are the ranks that always carry
+            // it; a custom role with the bit sees a countdown the server would
+            // not have enforced, which is the harmless direction to be wrong.
+            let isManager = server?.role == "owner" || server?.role == "admin"
+            await model.open(
+                channelId: channelId,
+                session: session,
+                slowmodeSeconds: slowmodeSeconds,
+                bypassesSlowMode: isManager
+            )
+        }
         // After `open`, which resets the model — seeding before it would be
         // overwritten by the load it is racing.
         .onAppear {
@@ -511,6 +531,30 @@ struct ChatView: View {
         }
     }
 
+    /// The slow mode countdown, directly above the composer like the other
+    /// notices, and only while there is something to count. It replaces the
+    /// send button rather than sitting beside a disabled one: a greyed arrow
+    /// says "broken", a number that shrinks says "wait".
+    @ViewBuilder
+    private var slowModeRow: some View {
+        if let notice = model.slowModeNotice {
+            HStack(spacing: 8) {
+                Image(systemName: "hourglass")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.paperMuted)
+                Text(notice)
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.paperMuted)
+                    .monospacedDigit()
+                    .accessibilityIdentifier("chat.slowMode")
+                Spacer()
+            }
+            .padding(.horizontal, Metrics.hPadding)
+            .padding(.vertical, 6)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+    }
+
     @ViewBuilder
     private var typingRow: some View {
         if !model.typingNames.isEmpty {
@@ -542,6 +586,9 @@ struct ChatView: View {
 struct Composer: View {
     @Binding var text: String
     let isSending: Bool
+    /// Slow mode is counting down. The draft stays editable; only sending is
+    /// withheld, because the server would refuse it anyway.
+    var isHeld: Bool = false
     var canAttach: Bool = false
     var hasAttachments: Bool = false
     /// Whether the expression panel is currently open. The smiley is a toggle,
@@ -557,7 +604,7 @@ struct Composer: View {
         // A photo with no caption is a valid message, so attachments alone
         // are enough to enable sending.
         (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || hasAttachments)
-            && !isSending
+            && !isSending && !isHeld
     }
 
     var body: some View {

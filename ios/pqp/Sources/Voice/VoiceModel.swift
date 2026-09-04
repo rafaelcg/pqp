@@ -536,6 +536,15 @@ final class VoiceModel {
                 }
             }
 
+        // A rename or a new picture mid-call. The entry is replaced and that
+        // is all: `voice.connect` here would renegotiate media with a peer
+        // that is already connected, for a change that never touched media.
+        // Only somebody already in the roster is updated; a frame for a peer
+        // this client never saw join is not an invitation to draw them.
+        case .voicePeerUpdated(let participant):
+            guard roster[participant.peerId] != nil else { return }
+            roster[participant.peerId] = participant
+
         case .voicePeerLeft(let peerId):
             roster[peerId] = nil
             Task { await voice.remove(peerId: peerId) }
