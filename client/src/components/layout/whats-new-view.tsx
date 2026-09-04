@@ -92,6 +92,7 @@ export function WhatsNewView({
       if (event.key !== "Escape" || event.defaultPrevented) {
         return;
       }
+      event.preventDefault();
       onClose();
     }
     document.addEventListener("keydown", onKeyDown);

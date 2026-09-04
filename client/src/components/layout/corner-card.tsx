@@ -80,8 +80,8 @@ export function CornerCard({
         onClose();
       }
     }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
   }, [open, onClose]);
 
   if (!mounted) {
