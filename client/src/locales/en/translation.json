@@ -809,6 +809,7 @@
   "voice.share.exitFullscreen": "Exit fullscreen",
   "voice.share.waiting": "Connecting to presenter's screen…",
   "voice.share.noAudio": "Sharing without sound. To send the audio too, share a Chrome tab and tick the share-tab-audio box.",
+  "voice.share.audioOf": "{name}'s screen audio",
   "voice.share.noAudioShort": "no sound",
   "voice.share.tickAudio": "Pick a Chrome tab and tick “Also share tab audio” to send the sound too.",
   "voice.share.systemAudioOn": "The whole computer's sound goes out, call voices included, so everyone hears themselves back. A Chrome tab sends only its own sound.",

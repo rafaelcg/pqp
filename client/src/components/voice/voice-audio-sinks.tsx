@@ -89,6 +89,12 @@ interface VoiceAudioSinksProps {
    * because they never make this list (the roster is the gate).
    */
   audibleScreenPeerIds?: string[];
+  /**
+   * userId → multiplier for SCREEN audio only. Separate from `peerVolumes`
+   * because turning down a loud game used to turn down the person talking
+   * over it: both sinks read the same number.
+   */
+  screenVolumes?: Record<string, number>;
 }
 
 /**
@@ -104,6 +110,7 @@ export function VoiceAudioSinks({
   outputDeviceId = "",
   outputVolume = 1,
   audibleScreenPeerIds = [],
+  screenVolumes = {},
 }: VoiceAudioSinksProps) {
   return (
     <>
@@ -133,7 +140,7 @@ export function VoiceAudioSinks({
             screenAudio
             outputDeviceId={outputDeviceId}
             outputVolume={outputVolume}
-            peerVolume={peerVolumes[peer.userId ?? peer.peerId] ?? 1}
+            peerVolume={screenVolumes[peer.userId ?? peer.peerId] ?? 1}
             isDeafened={isDeafened}
           />
         ))}
