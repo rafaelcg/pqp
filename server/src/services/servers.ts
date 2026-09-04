@@ -31,7 +31,7 @@ export type ChannelRow = Omit<DbChannel, "server_id"> & {
 };
 
 /** Every channel read selects the same columns, `kind` included. */
-const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, topic, image_url, parent_id`;
+export const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, topic, image_url, parent_id, slowmode_seconds`;
 
 /**
  * Every server read selects the same columns.
@@ -218,7 +218,7 @@ export async function listChannels(
 ): Promise<ChannelRow[]> {
   const result = await getPool().query<ChannelRow>(
     `SELECT c.id, c.server_id, c.name, c.type, c.position, c.is_private, c.kind,
-            c.topic, c.image_url, c.parent_id
+            c.topic, c.image_url, c.parent_id, c.slowmode_seconds
      FROM channels c
      JOIN server_members sm ON sm.server_id = c.server_id
      WHERE c.server_id = $1 AND sm.user_id = $2
@@ -402,6 +402,7 @@ export async function updateChannel(
     isPrivate?: boolean;
     topic?: string | null;
     imageUrl?: string | null;
+    slowmodeSeconds?: number;
   },
 ): Promise<ChannelRow | null> {
   const result = await getPool().query<ChannelRow>(
@@ -409,7 +410,8 @@ export async function updateChannel(
        name = COALESCE($2, name),
        is_private = COALESCE($3, is_private),
        topic = CASE WHEN $4::boolean THEN $5 ELSE topic END,
-       image_url = CASE WHEN $6::boolean THEN $7 ELSE image_url END
+       image_url = CASE WHEN $6::boolean THEN $7 ELSE image_url END,
+       slowmode_seconds = CASE WHEN $8::boolean THEN $9 ELSE slowmode_seconds END
      WHERE id = $1
      RETURNING ${CHANNEL_COLUMNS}`,
     [
@@ -420,6 +422,8 @@ export async function updateChannel(
       updates.topic === "" ? null : (updates.topic ?? null),
       updates.imageUrl !== undefined,
       updates.imageUrl === "" ? null : (updates.imageUrl ?? null),
+      updates.slowmodeSeconds !== undefined,
+      updates.slowmodeSeconds ?? 0,
     ],
   );
   const updated = result.rows[0] ?? null;
@@ -1328,6 +1332,7 @@ export function mapChannel(c: ChannelRow) {
     topic: c.topic ?? null,
     imageUrl: c.image_url ?? null,
     parentId: c.parent_id ?? null,
+    slowmodeSeconds: c.slowmode_seconds ?? 0,
   };
 }
 

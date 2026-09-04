@@ -45,6 +45,7 @@ export function failedSendKey(
   | "chat.reject.noAccess"
   | "chat.reject.cannotSend"
   | "chat.reject.undeliverable"
+  | "chat.reject.slowMode"
   | "chat.failedSend" {
   switch (reason) {
     case "rate-limited":
@@ -55,16 +56,71 @@ export function failedSendKey(
       return "chat.reject.cannotSend";
     case "undeliverable":
       return "chat.reject.undeliverable";
+    case "slow-mode":
+      return "chat.reject.slowMode";
     default:
       return "chat.failedSend";
   }
 }
 
+const PERMANENT_REJECT_REASONS = new Set<MessageRejectReason>([
+  "no-access",
+  "cannot-send",
+  "undeliverable",
+]);
+
+export function isPermanentRejectReason(
+  reason?: MessageRejectReason,
+): boolean {
+  return reason != null && PERMANENT_REJECT_REASONS.has(reason);
+}
+
+/** Whole seconds left on a hold. 0 means the control is ready. */
+export function remainingWaitSeconds(
+  until: number | null | undefined,
+  now = Date.now(),
+): number {
+  if (!until || until <= now) {
+    return 0;
+  }
+  return Math.max(1, Math.ceil((until - now) / 1000));
+}
+
+/** Another click can succeed: timeout, rate-limit, or slow mode. */
+export function messageCanRetry(
+  message: Pick<ChatMessage, "failed" | "rejectReason">,
+): boolean {
+  return Boolean(message.failed && !isPermanentRejectReason(message.rejectReason));
+}
+
 export function messageRetryReady(
-  message: ChatMessage,
+  message: Pick<ChatMessage, "failed" | "rejectReason" | "retryAvailableAt">,
   now = Date.now(),
 ): boolean {
-  return !message.retryAvailableAt || message.retryAvailableAt <= now;
+  return (
+    messageCanRetry(message) &&
+    remainingWaitSeconds(message.retryAvailableAt, now) === 0
+  );
+}
+
+/**
+ * Status on a failed bubble. A slow-mode wait uses the composer string so the
+ * row and Send tell the same remaining seconds.
+ */
+export function failedSendCopy(
+  message: Pick<ChatMessage, "rejectReason" | "retryAvailableAt">,
+  now = Date.now(),
+): {
+  key: ReturnType<typeof failedSendKey> | "composer.slowMode";
+  vars?: { seconds: number };
+} {
+  if (message.rejectReason === "slow-mode") {
+    const seconds = remainingWaitSeconds(message.retryAvailableAt, now);
+    if (seconds > 0) {
+      return { key: "composer.slowMode", vars: { seconds } };
+    }
+  }
+  return { key: failedSendKey(message.rejectReason) };
 }
 
 export interface TypingUser {
@@ -305,6 +361,21 @@ export function createChatController(
   const retryUnlockTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let lastTypingSentAt = 0;
   let typingSweep: ReturnType<typeof setInterval> | null = null;
+  let slowModeSeconds = 0;
+  let bypassSlowMode = false;
+  /**
+   * One hold per channel. A single timestamp used to follow you into the next
+   * channel, and `joinChannel` used to wipe it, so a hop looked like the wait
+   * had ended.
+   */
+  const slowModeHolds = new Map<
+    string,
+    {
+      until: number;
+      nonce: string | null;
+      timer: ReturnType<typeof setTimeout> | null;
+    }
+  >();
 
   function emit() {
     listener?.();
@@ -326,6 +397,60 @@ export function createChatController(
     }
   }
 
+  function heldUntilFor(id: string | null): number {
+    if (!id) {
+      return 0;
+    }
+    const hold = slowModeHolds.get(id);
+    if (!hold || hold.until <= Date.now()) {
+      return 0;
+    }
+    return hold.until;
+  }
+
+  function clearSlowModeHold(id: string | null = channelId) {
+    if (!id) {
+      return;
+    }
+    const hold = slowModeHolds.get(id);
+    if (hold?.timer) {
+      clearTimeout(hold.timer);
+    }
+    slowModeHolds.delete(id);
+  }
+
+  function clearAllSlowModeHolds() {
+    for (const hold of slowModeHolds.values()) {
+      if (hold.timer) {
+        clearTimeout(hold.timer);
+      }
+    }
+    slowModeHolds.clear();
+  }
+
+  function applySlowModeHold(id: string, until: number, nonce: string | null) {
+    clearSlowModeHold(id);
+    const now = Date.now();
+    if (until <= now) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      const hold = slowModeHolds.get(id);
+      if (hold?.timer === timer) {
+        slowModeHolds.delete(id);
+        emit();
+      }
+    }, until - now);
+    slowModeHolds.set(id, { until, nonce, timer });
+  }
+
+  function startSlowModeHold(nonce: string, durationMs: number) {
+    if (!channelId || bypassSlowMode || durationMs <= 0) {
+      return;
+    }
+    applySlowModeHold(channelId, Date.now() + durationMs, nonce);
+  }
+
   function markRejected(
     nonce: string,
     reason: MessageRejectReason,
@@ -333,8 +458,15 @@ export function createChatController(
   ) {
     clearSendTimer(nonce);
     clearRetryUnlock(nonce);
-    const retryAvailableAt =
-      retryAfterMs && retryAfterMs > 0 ? Date.now() + retryAfterMs : undefined;
+    let waitMs: number | undefined;
+    if (!isPermanentRejectReason(reason)) {
+      if (retryAfterMs && retryAfterMs > 0) {
+        waitMs = retryAfterMs;
+      } else if (reason === "slow-mode" && slowModeSeconds > 0) {
+        waitMs = slowModeSeconds * 1000;
+      }
+    }
+    const retryAvailableAt = waitMs ? Date.now() + waitMs : undefined;
     let changed = false;
     messages = messages.map((message) => {
       if (message.nonce !== nonce || (!message.pending && !message.failed)) {
@@ -350,7 +482,12 @@ export function createChatController(
       };
     });
     if (changed) {
-      if (retryAvailableAt && retryAfterMs) {
+      if (reason === "slow-mode") {
+        startSlowModeHold(nonce, waitMs ?? 0);
+      } else if (channelId && slowModeHolds.get(channelId)?.nonce === nonce) {
+        clearSlowModeHold(channelId);
+      }
+      if (retryAvailableAt && waitMs) {
         retryUnlockTimers.set(
           nonce,
           setTimeout(() => {
@@ -361,7 +498,7 @@ export function createChatController(
                 : message,
             );
             emit();
-          }, retryAfterMs),
+          }, waitMs),
         );
       }
       emit();
@@ -535,6 +672,27 @@ export function createChatController(
 
     getChannelId() {
       return channelId;
+    },
+
+    getSlowModeHeldUntil() {
+      return heldUntilFor(channelId);
+    },
+
+    setSlowMode(options: { seconds: number; bypass: boolean }) {
+      const nextSeconds = Math.max(0, options.seconds);
+      const nextBypass = options.bypass;
+      if (nextSeconds === slowModeSeconds && nextBypass === bypassSlowMode) {
+        return;
+      }
+      slowModeSeconds = nextSeconds;
+      bypassSlowMode = nextBypass;
+      if (bypassSlowMode || slowModeSeconds <= 0) {
+        const hadHold = heldUntilFor(channelId) > 0;
+        clearSlowModeHold(channelId);
+        if (hadHold) {
+          emit();
+        }
+      }
     },
 
     hasMoreHistory() {
@@ -724,6 +882,9 @@ export function createChatController(
       if (!channelId || !currentUserId) {
         return;
       }
+      if (!bypassSlowMode && heldUntilFor(channelId) > 0) {
+        return;
+      }
       const clamped = clampChatNewlines(body);
       if (!clamped && attachments.length === 0) {
         return;
@@ -789,6 +950,9 @@ export function createChatController(
         nonce,
       };
       messages = [...messages, optimistic];
+      if (!bypassSlowMode && slowModeSeconds > 0) {
+        startSlowModeHold(nonce, slowModeSeconds * 1000);
+      }
       emit();
       transmit(
         nonce,
@@ -807,6 +971,9 @@ export function createChatController(
       if (!messageRetryReady(failed)) {
         return;
       }
+      if (!bypassSlowMode && heldUntilFor(channelId) > 0) {
+        return;
+      }
       clearRetryUnlock(nonce);
       messages = messages.map((message) =>
         message.nonce === nonce
@@ -819,6 +986,9 @@ export function createChatController(
             }
           : message,
       );
+      if (!bypassSlowMode && slowModeSeconds > 0) {
+        startSlowModeHold(nonce, slowModeSeconds * 1000);
+      }
       emit();
       // The rows are still unclaimed — a claim only happens on a message that
       // was actually stored — so the same ids are still the right ones to send.
@@ -1244,6 +1414,7 @@ export function createChatController(
         clearInterval(typingSweep);
         typingSweep = null;
       }
+      clearAllSlowModeHolds();
       listener = null;
     },
   };

@@ -3361,6 +3361,7 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
     isPrivate: body.isPrivate,
     topic: body.topic,
     imageUrl: body.imageUrl,
+    slowmodeSeconds: body.slowmodeSeconds,
   });
   if (!updated) {
     throw new NotFound("Channel not found");
@@ -3394,6 +3395,7 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
       ["topic", channel.topic, updated.topic],
       ["isPrivate", channel.is_private, updated.is_private],
       ["imageUrl", channel.image_url, updated.image_url],
+      ["slowmodeSeconds", channel.slowmode_seconds, updated.slowmode_seconds],
     ] as const
   )
     .filter(([, oldValue, newValue]) => oldValue !== newValue)

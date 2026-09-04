@@ -156,11 +156,11 @@ const DIALOGS: {
     },
   },
   {
-    name: "channel topic",
-    title: /./,
+    name: "channel settings",
+    title: /Channel settings/,
     open: async (page) => {
       await closeDrawer(page);
-      await page.getByRole("button", { name: "Topic" }).first().click();
+      await page.getByRole("button", { name: "Channel settings" }).first().click();
     },
   },
   {

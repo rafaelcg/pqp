@@ -66,6 +66,7 @@ describe("conversationChannel", () => {
     expect(channel.kind).toBe("dm");
     expect(channel.name).toBe("Ana");
     expect(channel.type).toBe("text");
+    expect(channel.slowmodeSeconds).toBe(0);
   });
 
   it("is not marked private", () => {

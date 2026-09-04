@@ -87,6 +87,15 @@ describe("translateMessage", () => {
     }
   });
 
+  it("keeps the Slow mode wait on one interpolating string", () => {
+    expect(en["composer.slowMode"]).toContain("{seconds}");
+    expect(ptBR["composer.slowMode"]).toContain("{seconds}");
+    expect(ptBR["composer.slowMode"]).toContain("Slow mode");
+    expect(ptBR["channelMeta.slowMode"]).toBe("Slow mode");
+    expect(en["chat.retryWait"]).toContain("{seconds}");
+    expect(ptBR["chat.retryWait"]).toContain("{seconds}");
+  });
+
   it("still interpolates {count} on a non-plural family", () => {
     expect(translateMessage("publicProfile.depoimentos.more", { count: 4 })).toBe(
       "and 4 more",
