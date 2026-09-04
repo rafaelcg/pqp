@@ -64,7 +64,7 @@ export interface BlogPost {
  */
 export const POSTS: readonly BlogPost[] = [
   {
-    slug: "favoritos-camera-e-o-dm-te-acha",
+    slug: "bau-e-o-dm-na-barra",
     date: "2026-09-03",
     title: {
       "pt-BR": "O Baú, e o DM na barra",

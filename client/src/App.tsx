@@ -3349,6 +3349,7 @@ function MainAppContent({
   );
   const selectedPinnedId =
     !whatsNewOpen &&
+    selection.kind === "dm" &&
     selectedChannelId &&
     pinnedChannelIds.has(selectedChannelId)
       ? selectedChannelId
@@ -3510,7 +3511,7 @@ function MainAppContent({
    * an ongoing call and the mute button must not vanish because the reader
    * switched to their conversations.
    */
-  const sidebarFooter = (
+  const sidebarFooter = () => (
     <>
       {voiceState.status !== "idle" && (
         <VoiceStatusBar
@@ -4217,16 +4218,14 @@ function MainAppContent({
         }
       />
 
-      {whatsNewOpen ? (
-        <WhatsNewView
-          mobileOpen={mobileNavOpen}
-          onMobileClose={() => setMobileNavOpen(false)}
-          onMobileOpen={() => setMobileNavOpen(true)}
-          onClose={closeWhatsNew}
-          footer={sidebarFooter}
-        />
-      ) : (
-        <>
+      {/* Stay mounted under Novidades so a half-typed message is still there
+          when Escape puts the app back. `hidden` takes it out of layout. */}
+      <div
+        className={cn(
+          "flex min-h-0 min-w-0 flex-1",
+          whatsNewOpen && "hidden",
+        )}
+      >
       {selection.kind === "dm" ? (
         <DmList
           conversations={conversations}
@@ -4250,7 +4249,7 @@ function MainAppContent({
           onUnblockUser={(id) => void handleUnblockUser(id)}
           onStartCall={handleStartConversationCall}
           activeCallChannelIds={activeConversationCallIds}
-          footer={sidebarFooter}
+          footer={sidebarFooter()}
         />
       ) : (
         <ChannelList
@@ -4294,7 +4293,7 @@ function MainAppContent({
           onInvite={() => setInviteMode("create")}
           onOpenMembers={() => setMembersOpen(true)}
           onOpenServerSettings={() => setServerSettingsOpen(true)}
-          footer={sidebarFooter}
+          footer={sidebarFooter()}
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
@@ -4488,7 +4487,15 @@ function MainAppContent({
 
         {selectedChannel?.type === "voice" && chatPane}
       </main>
-        </>
+      </div>
+      {whatsNewOpen && (
+        <WhatsNewView
+          mobileOpen={mobileNavOpen}
+          onMobileClose={() => setMobileNavOpen(false)}
+          onMobileOpen={() => setMobileNavOpen(true)}
+          onClose={closeWhatsNew}
+          footer={sidebarFooter()}
+        />
       )}
 
       {/* A SIBLING OF `<main>`, not a child of the chat pane. The root is the

@@ -1,8 +1,8 @@
-import { Children, isValidElement, useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import { Link, useParams } from "react-router-dom";
 import remarkGfm from "remark-gfm";
-import { BlogMedia } from "@/components/blog/blog-media";
+import { blogMediaMarkdown } from "@/components/blog/blog-markdown";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
 import { Seo } from "@/components/marketing/seo";
@@ -33,17 +33,8 @@ const MARKDOWN_PLUGINS = [remarkGfm];
  * SPA and comes back through a cold boot. Everything else (http, mailto, an
  * in-page `#anchor`) is left exactly as authored.
  */
-function isBlogMedia(node: ReactNode): boolean {
-  return (
-    isValidElement(node) &&
-    typeof node.props === "object" &&
-    node.props !== null &&
-    "className" in node.props &&
-    String(node.props.className).includes("blog-media")
-  );
-}
-
 const MARKDOWN_COMPONENTS: Components = {
+  ...blogMediaMarkdown,
   a: ({ href, children, ...rest }) =>
     href?.startsWith("/") ? (
       <Link to={href} {...rest}>
@@ -54,25 +45,6 @@ const MARKDOWN_COMPONENTS: Components = {
         {children}
       </a>
     ),
-  img: ({ src, alt, title }) => {
-    if (!src) {
-      return null;
-    }
-    return (
-      <BlogMedia src={src} alt={alt ?? ""} caption={title || undefined} />
-    );
-  },
-  // A lone image is still wrapped in `<p>` by the markdown parser. A figure
-  // inside a paragraph is invalid HTML and some browsers then hide the caption.
-  p: ({ children }) => {
-    const items = Children.toArray(children).filter((child) =>
-      typeof child === "string" ? child.trim().length > 0 : true,
-    );
-    if (items.length === 1 && isBlogMedia(items[0])) {
-      return items[0];
-    }
-    return <p>{children}</p>;
-  },
 };
 
 export function BlogPostPage() {

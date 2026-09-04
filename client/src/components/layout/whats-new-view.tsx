@@ -1,15 +1,8 @@
-import {
-  Children,
-  isValidElement,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Menu, Sparkles, X } from "lucide-react";
-import { BlogMedia } from "@/components/blog/blog-media";
+import { blogMediaMarkdown } from "@/components/blog/blog-markdown";
 import { formatPostDate, formatPostShortDate } from "@/lib/blog/format";
 import { loadPostBody } from "@/lib/blog/bodies";
 import { POSTS, type BlogLocale, type BlogPost } from "@/lib/blog/posts";
@@ -19,17 +12,8 @@ import { cn } from "@/lib/utils";
 
 const MARKDOWN_PLUGINS = [remarkGfm];
 
-function isBlogMedia(node: ReactNode): boolean {
-  return (
-    isValidElement(node) &&
-    typeof node.props === "object" &&
-    node.props !== null &&
-    "className" in node.props &&
-    String(node.props.className).includes("blog-media")
-  );
-}
-
 const MARKDOWN_COMPONENTS: Components = {
+  ...blogMediaMarkdown,
   a: ({ href, children, ...rest }) => {
     if (!href) {
       return <a {...rest}>{children}</a>;
@@ -39,23 +23,6 @@ const MARKDOWN_COMPONENTS: Components = {
         {children}
       </a>
     );
-  },
-  img: ({ src, alt, title }) => {
-    if (!src) {
-      return null;
-    }
-    return (
-      <BlogMedia src={src} alt={alt ?? ""} caption={title || undefined} />
-    );
-  },
-  p: ({ children }) => {
-    const items = Children.toArray(children).filter((child) =>
-      typeof child === "string" ? child.trim().length > 0 : true,
-    );
-    if (items.length === 1 && isBlogMedia(items[0])) {
-      return items[0];
-    }
-    return <p>{children}</p>;
   },
 };
 
