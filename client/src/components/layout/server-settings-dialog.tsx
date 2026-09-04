@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   TriangleAlert,
   Users,
+  Webhook,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ import { ServerIdentitySection } from "@/components/layout/server-identity-secti
 import { CommunityHomeSettingsSection } from "@/components/community-home/community-home-settings-section";
 import { CommunitySettingsSection } from "@/components/communities/community-settings-section";
 import { RolesSettingsSection } from "@/components/layout/roles-settings-section";
+import { OutgoingWebhooksSection } from "@/components/layout/outgoing-webhooks-section";
 import { useCommunitiesEnabled } from "@/components/communities/use-communities-enabled";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -78,6 +80,14 @@ const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
     "serverSettings.audit.action.member.community_join",
   "webhook.create": "serverSettings.audit.action.webhook.create",
   "webhook.delete": "serverSettings.audit.action.webhook.delete",
+  "outgoing_webhook.create":
+    "serverSettings.audit.action.outgoing_webhook.create",
+  "outgoing_webhook.update":
+    "serverSettings.audit.action.outgoing_webhook.update",
+  "outgoing_webhook.delete":
+    "serverSettings.audit.action.outgoing_webhook.delete",
+  "outgoing_webhook.rotate":
+    "serverSettings.audit.action.outgoing_webhook.rotate",
   "report.resolve": "serverSettings.audit.action.report.resolve",
   "role.create": "serverSettings.audit.action.role.create",
   "role.update": "serverSettings.audit.action.role.update",
@@ -125,6 +135,7 @@ type SectionId =
   | "overview"
   | "access"
   | "roles"
+  | "integrations"
   | "moderation"
   | "audit"
   | "danger";
@@ -158,6 +169,13 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.roles",
     description: "serverSettings.roles.description",
     icon: Users,
+    ownerOnly: false,
+  },
+  {
+    id: "integrations",
+    label: "serverSettings.section.integrations",
+    description: "serverSettings.integrations.description",
+    icon: Webhook,
     ownerOnly: false,
   },
   {
@@ -459,6 +477,7 @@ interface ServerSettingsDialogProps {
   currentUserId: string | null;
   canManageRoles?: boolean;
   canManageServer?: boolean;
+  canManageWebhooks?: boolean;
   canModerateQueue?: boolean;
   /** Land on this pane when the dialog opens, if the viewer can see it. */
   requestedSection?: "roles";
@@ -483,6 +502,7 @@ export function ServerSettingsDialog({
   currentUserId,
   canManageRoles = false,
   canManageServer = false,
+  canManageWebhooks = false,
   canModerateQueue = false,
   requestedSection,
   onClose,
@@ -534,10 +554,16 @@ export function ServerSettingsDialog({
   const isOwner = server?.role === "owner";
   const canSeeOverview = isOwner || canManageServer;
   const canSeeRoles = canManageRoles;
+  const canSeeIntegrations = canManageWebhooks;
   const canSeeModeration = canModerateQueue || isOwner;
   const canSeeAudit = canManageServer;
   const canOpenSettings =
-    isOwner || canSeeOverview || canSeeRoles || canSeeModeration || canSeeAudit;
+    isOwner ||
+    canSeeOverview ||
+    canSeeRoles ||
+    canSeeIntegrations ||
+    canSeeModeration ||
+    canSeeAudit;
 
   // Seeded from a ref so a rename landing in the parent does not overwrite what
   // is being typed here; the form only resets when the dialog opens.
@@ -580,9 +606,11 @@ export function ServerSettingsDialog({
       ? "overview"
       : canSeeRoles
         ? "roles"
-        : canSeeModeration
-          ? "moderation"
-          : "audit";
+        : canSeeIntegrations
+          ? "integrations"
+          : canSeeModeration
+            ? "moderation"
+            : "audit";
   const openingSection: SectionId =
     requestedSection === "roles" && canSeeRoles ? "roles" : firstSection;
   // Apply on the closed→open render so the first paint is the requested pane,
@@ -774,6 +802,8 @@ export function ServerSettingsDialog({
         return isOwner;
       case "roles":
         return canSeeRoles;
+      case "integrations":
+        return canSeeIntegrations;
       case "moderation":
         return canSeeModeration;
       case "audit":
@@ -950,6 +980,10 @@ export function ServerSettingsDialog({
 
           {active.id === "roles" && serverId && (
             <RolesSettingsSection serverId={serverId} />
+          )}
+
+          {active.id === "integrations" && serverId && (
+            <OutgoingWebhooksSection serverId={serverId} />
           )}
 
           {active.id === "moderation" && (
