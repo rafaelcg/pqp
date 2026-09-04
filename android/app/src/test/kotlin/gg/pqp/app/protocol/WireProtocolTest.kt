@@ -126,9 +126,14 @@ class WireProtocolTest {
             "message-delete",
             "message-deleted",
             "typing-broadcast",
+            // The two refusals. Without them a message the server would not
+            // land looked sent, on the phone, until the app was restarted.
+            "message-rejected",
+            "sanction-notice",
             // voice
             "welcome",
             "peer-joined",
+            "peer-updated",
             "peer-left",
             "voice-roster",
             "voice-room-full",
@@ -136,6 +141,8 @@ class WireProtocolTest {
             "offer",
             "answer",
             "ice-candidate",
+            // the Baú's one live frame
+            "community-home-update",
             // handshake
             "ready",
         )
@@ -144,6 +151,89 @@ class WireProtocolTest {
             "Frames the app has stopped handling",
             emptySet<String>(),
             required - handled,
+        )
+    }
+
+    /**
+     * Frames the server sends that this client reads on purpose and does
+     * nothing with. Each entry says why, because the only acceptable reason to
+     * be on this list is that acting on the frame would be wrong or pointless
+     * on Android, not that nobody got to it yet.
+     *
+     * Kept small on purpose. Every frame here is a product gap somebody can see
+     * from the web, and the test below fails the moment one of them gains a
+     * branch, so the list cannot go stale in that direction either.
+     */
+    private val deliberatelyIgnored: Map<String, String> = mapOf(
+        // Sent only in answer to a `join-voice-room` that carried a
+        // `resumePeerId`, and this client never sends one: a socket drop
+        // rebuilds the call from scratch (VoiceController.followConnection).
+        "voice-join-refused" to "Android never resumes a peer id, so this refusal is never addressed to it",
+        // Only ever answers a `set-camera`, which Android does not send.
+        "camera-denied" to "Android has no camera publishing, so nothing here can be denied",
+        // Who is online in the channel. Android draws no member list yet.
+        "presence-update" to "no roster surface on the phone to render it in",
+        // Threads exist on the web only; the phone has no thread view.
+        "thread-update" to "no thread surface on the phone",
+        // Permissions are enforced server-side and this client draws no
+        // manager controls, so a version bump has nothing to invalidate.
+        "permissions-update" to "no permission-gated controls on the phone to refresh",
+        // Polls render as their message body; votes and closes are web only.
+        "poll-update" to "no poll surface on the phone",
+        // Conversation calls (ringing a DM) are not built on Android.
+        "call-incoming" to "no incoming-call surface on the phone",
+        "call-ring-cancelled" to "no incoming-call surface on the phone",
+        "call-declined" to "Android never rings anybody, so nobody can decline it",
+        // Watch party is a desktop feature by design (docs/ANDROID.md).
+        "watch-party" to "no watch party on the phone",
+    )
+
+    /**
+     * Every frame the server can send is either handled or on the list above.
+     *
+     * This is the test that was missing. The two checks above are one-way:
+     * "everything handled exists" and "these named frames are still handled".
+     * Neither says anything about a frame the server *started* sending, which
+     * is how `message-rejected` (PR #204) and `peer-updated` (PR #189) shipped
+     * with no branch on Android and no red anywhere. A `when` on a String
+     * ignores a new frame exactly as quietly as a renamed one.
+     */
+    @Test
+    fun `every frame the server sends is handled or deliberately ignored`() {
+        val server = RepoSources.serverFrameTypes()
+        assertTrue("Parsed too few server-to-client frames: $server", server.size > 10)
+        val handled = RepoSources.frameTypesHandled()
+
+        assertEquals(
+            "The server sends these frames and the Android client has no `when` branch for " +
+                "any of them. Either handle the frame or add it to `deliberatelyIgnored` with " +
+                "a reason. Doing neither is how a refused message looked sent for months.",
+            emptySet<String>(),
+            server - handled - deliberatelyIgnored.keys,
+        )
+        assertEquals(
+            "These frames are on the ignore list and also handled. Delete the entry.",
+            emptySet<String>(),
+            deliberatelyIgnored.keys.intersect(handled),
+        )
+        assertEquals(
+            "These frames are on the ignore list and the server no longer sends them. " +
+                "Delete the entry.",
+            emptySet<String>(),
+            deliberatelyIgnored.keys - server,
+        )
+    }
+
+    /**
+     * The refusal tokens. `MessageRejectReason.fromWire` returns null for a
+     * token it does not know and the composer then says "failed to send", so a
+     * token added on the server is not a crash, but it is a worse sentence.
+     */
+    @Test
+    fun `the message reject reasons match shared`() {
+        assertEquals(
+            RepoSources.enumValues(chat, "messageRejectReasonSchema").toSet(),
+            gg.pqp.app.ui.screens.MessageRejectReason.entries.map { it.wire }.toSet(),
         )
     }
 

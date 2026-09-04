@@ -311,10 +311,18 @@ optimistic row when it did not. A client that looks online and silently discards
 everything it is asked to say is the worst failure this class has, and iOS
 shipped exactly that once.
 
-**There is no ack and no error frame.** An invalid frame is dropped server-side
-in silence. The only correlation the protocol offers is the `nonce` echoed back
-on `message-broadcast`, so that is what retires an optimistic row. The
-optimistic row borrows the nonce as its id, which makes retiring it a filter.
+**There is no ack. There is a refusal.** A malformed frame is still dropped
+server-side in silence, but since PR #204 a well-formed `message-create` the
+server will not land is answered with `message-rejected` (sender only, same
+`nonce`, a reason token, `retryAfterMs` for slow mode and rate limits), and a
+timed-out sender gets `sanction-notice` with the sentence already written. The
+`nonce` echoed back on `message-broadcast` is what retires an optimistic row;
+the same nonce on `message-rejected` is what removes it, hands the text back to
+the composer and puts the reason under the box. The optimistic row borrows the
+nonce as its id, which makes both a filter. For months Android had no branch for
+either refusal, so a refused message looked sent on the phone until the app was
+restarted. `WireProtocolTest` now fails when the server grows a client-bound
+frame Android neither handles nor lists as deliberately ignored.
 
 **Both delete spellings are live.** The server broadcasts `message-delete`;
 `message-deleted` is the older name and is still relayed. Handling one leaves

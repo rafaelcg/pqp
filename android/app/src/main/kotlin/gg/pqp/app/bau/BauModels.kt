@@ -115,6 +115,18 @@ data class BauLikeResponse(val liked: Boolean, val likeCount: Int)
 data class CreateBauCommentRequest(val body: String)
 
 /**
+ * `GET /api/servers/:id/home/unread`: posts published since this person last
+ * opened the feed, their own excluded. Defaulted so an older server's empty
+ * body reads as nothing new rather than as a decode failure.
+ */
+@Serializable
+data class BauUnreadResponse(val count: Int = 0)
+
+/** `POST /api/servers/:id/home/read` answers `{ ok: true }` and nothing else. */
+@Serializable
+data class BauReadResponse(val ok: Boolean = true)
+
+/**
  * YouTube links, the one media kind that is a URL rather than an object.
  *
  * `videoId` is a port of `parseYoutubeVideoId` in shared: watch, youtu.be,

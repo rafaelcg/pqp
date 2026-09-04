@@ -64,6 +64,15 @@
     <string name="chat_attachment_unsupported">This server does not take that kind of file.</string>
     <string name="chat_attachment_too_many">A message carries at most %1$d files.</string>
     <string name="chat_attachment_unreadable">That file could not be read.</string>
+    <!-- Why the server refused a send (`message-rejected`). Same wording as the web's chat.reject.* keys. -->
+    <string name="chat_reject_rate_limited">You\'re sending too fast</string>
+    <string name="chat_reject_rate_limited_wait">You\'re sending too fast. Try again in %1$ds.</string>
+    <string name="chat_reject_no_access">You can\'t send in this channel</string>
+    <string name="chat_reject_cannot_send">You don\'t have permission to send here</string>
+    <string name="chat_reject_undeliverable">This message wasn\'t delivered</string>
+    <string name="chat_reject_slow_mode">Slow mode is on.</string>
+    <string name="chat_reject_generic">Failed to send</string>
+    <string name="chat_slow_mode_wait">Slow mode. You can send again in %1$ds.</string>
     <!-- The row between two calendar days. Older days are formatted dates. -->
     <string name="chat_day_today">Today</string>
     <string name="chat_day_yesterday">Yesterday</string>

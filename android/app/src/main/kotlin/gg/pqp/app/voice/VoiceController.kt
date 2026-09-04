@@ -384,6 +384,7 @@ class VoiceController(
             when (frame.str("type")) {
                 "welcome" -> onWelcome(frame)
                 "peer-joined" -> onPeerJoined(frame)
+                "peer-updated" -> onPeerUpdated(frame)
                 "peer-left" -> onPeerLeft(frame)
                 "voice-roster" -> onRoster(frame)
                 "voice-room-full" -> onRefused(frame, Refusal.RoomFull)
@@ -500,6 +501,32 @@ class VoiceController(
         applyVideoRoster(listOf(peer))
         _state.value = _state.value.copy(
             participants = _state.value.participants.filterNot { it.peerId == peer.peerId } + peer,
+        )
+    }
+
+    /**
+     * Somebody already in the room changed their name or picture.
+     *
+     * The same body as [onPeerJoined] minus `engine.addPeer`: the media path
+     * to this peer exists and is fine, and renegotiating it over a rename
+     * would drop their audio for the length of an ICE round trip. Before this
+     * branch existed the frame fell through the `when` and the roster kept
+     * the old name for the rest of the call, which is a small wrong thing
+     * that looks exactly like a bug in the rename.
+     *
+     * A peer the roster does not know is ignored rather than added. Adding one
+     * here would create a participant with no media path behind it; their
+     * `peer-joined` is the frame that carries the invitation to build one.
+     */
+    private fun onPeerUpdated(frame: JsonObject) {
+        if (!_state.value.isActive) return
+        val peer = frame.participant("peer") ?: return
+        if (_state.value.participants.none { it.peerId == peer.peerId }) return
+        applyVideoRoster(listOf(peer))
+        _state.value = _state.value.copy(
+            participants = _state.value.participants.map {
+                if (it.peerId == peer.peerId) peer else it
+            },
         )
     }
 

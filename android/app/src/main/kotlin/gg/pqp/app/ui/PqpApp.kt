@@ -62,7 +62,17 @@ import kotlinx.serialization.Serializable
  * blank when it is not, which `ChatScreen` renders as a placeholder rather than
  * as `#`.
  */
-@Serializable data class ChatRoute(val channelId: String, val channelName: String = "")
+@Serializable data class ChatRoute(
+    val channelId: String,
+    val channelName: String = "",
+    /**
+     * The channel's slow mode, so the composer can count down on its own
+     * rather than learn the rule from the first refusal. Defaults to off for
+     * the same notification-tap reason as the name: a push knows no channel
+     * record, and a countdown that is missing is only a refusal away.
+     */
+    val slowmodeSeconds: Int = 0,
+)
 
 @Serializable object YouRoute
 
@@ -202,7 +212,7 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController, push: Pus
                         serverName = route.serverName,
                         onBack = nav::popBackStack,
                         onOpenChannel = { channel ->
-                            nav.navigate(ChatRoute(channel.id, channel.name))
+                            nav.navigate(ChatRoute(channel.id, channel.name, channel.slowmodeSeconds))
                         },
                         onOpenBau = {
                             nav.navigate(BauRoute(route.serverId, route.serverName))
@@ -224,6 +234,7 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController, push: Pus
                         session = session,
                         channelId = route.channelId,
                         channelName = route.channelName,
+                        slowmodeSeconds = route.slowmodeSeconds,
                         onBack = nav::popBackStack,
                     )
                 }

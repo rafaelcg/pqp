@@ -103,6 +103,72 @@ object RepoSources {
             .flatMap { frameTypeLiterals("packages/shared/src/${it.name}") }
             .toSet()
 
+    /**
+     * The schema names listed in a `z.discriminatedUnion("type", [...])`.
+     *
+     * The unions are the one place the shared package says which direction a
+     * frame travels: `chatServerMessageSchema` and `voiceSignalingMessageSchema`
+     * are what the server sends, `chatClientMessageSchema` and
+     * `voiceClientMessageSchema` what it accepts. A flat set of every literal
+     * cannot tell `message-create` (ours to send) from `message-rejected`
+     * (ours to handle), and it was the second kind that went unread for months.
+     */
+    fun unionMembers(relativePath: String, unionName: String): List<String> {
+        val source = stripComments(read(relativePath))
+        val match = Regex("""const\s+$unionName\s*=\s*z\.discriminatedUnion\("type",\s*\[([^\]]*)]""")
+            .find(source)
+            ?: error("No z.discriminatedUnion named $unionName in $relativePath")
+        return Regex("""\b(\w+)\b""")
+            .findAll(match.groupValues[1])
+            .map { it.groupValues[1] }
+            .toList()
+    }
+
+    /**
+     * Every `const xSchema = z.object({ type: z.literal("x"), …})` in the shared
+     * package, as schema name to frame type.
+     *
+     * Read across the whole directory because a union in `chat.ts` names
+     * schemas that live in `friends.ts`, `sanctions.ts` and `permissions.ts`.
+     * Every frame schema in the package puts `type` first, and this fails
+     * loudly (in [serverFrameTypes]) rather than quietly on one that does not.
+     */
+    val sharedFrameSchemas: Map<String, String> by lazy {
+        File(root, "packages/shared/src")
+            .listFiles()
+            .orEmpty()
+            .filter { it.isFile && it.name.endsWith(".ts") && !it.name.endsWith(".test.ts") }
+            .sortedBy { it.name }
+            .flatMap { file ->
+                Regex("""const\s+(\w+)\s*=\s*z\.object\(\{\s*type:\s*z\.literal\("([^"]+)"\)""")
+                    .findAll(stripComments(file.readText()))
+                    .map { it.groupValues[1] to it.groupValues[2] }
+                    .toList()
+            }
+            .toMap()
+    }
+
+    /**
+     * Every frame type the server can put on a client's socket.
+     *
+     * The two server-to-client unions, resolved to their literals. Not the
+     * handshake (`ready`, `pong`), which has no schema and is pinned separately
+     * in `WireProtocolTest`.
+     */
+    fun serverFrameTypes(): Set<String> {
+        val members = unionMembers("packages/shared/src/chat.ts", "chatServerMessageSchema") +
+            unionMembers("packages/shared/src/signaling.ts", "voiceSignalingMessageSchema")
+        check(members.isNotEmpty()) { "Parsed no members out of the server-to-client unions" }
+        return members.map { name ->
+            sharedFrameSchemas[name]
+                ?: error(
+                    "$name is listed in a server-to-client union but no `const $name = " +
+                        "z.object({ type: z.literal(…)` was found in packages/shared/src. " +
+                        "Either the schema moved, or it no longer puts `type` first.",
+                )
+        }.toSet()
+    }
+
     fun enumValues(relativePath: String, schemaName: String): List<String> {
         val source = stripComments(read(relativePath))
         val match = Regex("""const\s+$schemaName\s*=\s*z\.enum\(\[([^\]]*)]""")
