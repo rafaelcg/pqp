@@ -4,9 +4,9 @@ import android.util.Log
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
 import kotlin.random.Random
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -26,6 +27,9 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 
 enum class RealtimeState { Idle, Connecting, Ready, Reconnecting, Refused }
+
+/** The last time the socket closed, for the connection check's report. */
+data class RealtimeClose(val code: Int, val reason: String, val atMillis: Long)
 
 /**
  * The one connection the app can say anything through.
@@ -69,6 +73,27 @@ class RealtimeClient(
     private var attempt = 0
     private var wanted = false
 
+    /** Completed by [retryNow] to cut the current backoff short. */
+    @Volatile private var skipBackoff: CompletableDeferred<Unit>? = null
+
+    @Volatile private var _lastClose: RealtimeClose? = null
+
+    /** The last socket close, for the connection check's report. */
+    val lastClose: RealtimeClose? get() = _lastClose
+
+    private val _unauthorizedStreak = MutableStateFlow(0)
+
+    /**
+     * How many connects in a row ended in a refused (4401) or missing token.
+     *
+     * One refusal is a stale token, and the next attempt, with a fresh one, is
+     * the fix. Two in a row means the server will not have this session at
+     * all, and no amount of reconnecting changes that: the banner has to stop
+     * saying "connecting" and say "sign in again". `Refused` alone cannot
+     * carry that distinction, so the count is published beside it.
+     */
+    val unauthorizedStreak: StateFlow<Int> = _unauthorizedStreak.asStateFlow()
+
     /** Re-sent after every `ready`, because the server forgets on reconnect. */
     @Volatile private var subscribedChannelId: String? = null
 
@@ -84,20 +109,57 @@ class RealtimeClient(
         connectJob = null
         socket?.close(1000, null)
         socket = null
+        _unauthorizedStreak.value = 0
         _state.value = RealtimeState.Idle
+    }
+
+    /**
+     * Skip the backoff and try to connect right now: the banner's "Try now".
+     *
+     * Only the *wait* is cut short. An attempt already in flight is left alone,
+     * because cancelling one that is about to succeed is the bug `fallbackFor`
+     * exists to prevent. The attempt counter is reset so the next failure, if
+     * there is one, waits the short first-retry delay rather than whatever a
+     * long outage had grown it to.
+     */
+    fun retryNow() {
+        if (!wanted) {
+            connect()
+            return
+        }
+        attempt = 0
+        skipBackoff?.complete(Unit)
+        if (connectJob?.isActive != true) connect()
     }
 
     private suspend fun runLoop() {
         while (wanted) {
             val token = tokens.currentToken()
             if (token == null) {
-                _state.value = RealtimeState.Refused
-                return
+                // A provider with nothing to give is a refusal too: Clerk's
+                // session may be PENDING, or gone. Counted like a 4401 and
+                // retried like one, since PENDING resolves on its own and gone
+                // is what the streak tells the banner to say. This used to end
+                // the loop, which left "Something went wrong" on screen with
+                // nothing ever trying again.
+                settle(AttemptOutcome.NoToken)
+                attempt += 1
+                waitBackoff(backoffMillis(attempt, throttled = true))
+                continue
             }
 
-            _state.value = if (attempt == 0) RealtimeState.Connecting else RealtimeState.Reconnecting
+            // `Refused` is never downgraded to `Reconnecting` by the attempt
+            // that follows it: why the client is retrying is more useful on
+            // the banner than the fact that it is. Cleared by `ready`, which
+            // is the only proof the session is accepted. Same rule as the
+            // web's `setPendingStatus`.
+            _state.value = when {
+                _state.value == RealtimeState.Refused -> RealtimeState.Refused
+                attempt == 0 -> RealtimeState.Connecting
+                else -> RealtimeState.Reconnecting
+            }
 
-            val closed = kotlinx.coroutines.CompletableDeferred<CloseReason>()
+            val closed = CompletableDeferred<CloseReason>()
             val request = Request.Builder().url(url).build()
             val ws = http.newBuilder()
                 // Protocol-level keepalive. The server runs its own ping/pong
@@ -112,24 +174,75 @@ class RealtimeClient(
             socket = ws
             val reason = closed.await()
             socket = null
+            _lastClose = RealtimeClose(reason.code, reason.reason, System.currentTimeMillis())
 
             if (!wanted) return
 
-            if (reason.code == CLOSE_UNAUTHORIZED) {
-                // 4401 is a refusal, not a blip. Retrying with the same
-                // credentials in a tight loop is how a client gets an address
-                // rate-limited, and the account almost certainly needs a human
-                // (a stale token, or an age gate that has not been answered).
-                _state.value = RealtimeState.Refused
-                return
-            }
-
             attempt += 1
-            delay(backoffMillis(attempt, throttled = reason.code == CLOSE_RATE_LIMITED))
+            if (reason.code == CLOSE_UNAUTHORIZED) {
+                // 4401 used to end the loop here for good, on the theory that
+                // a refusal "almost certainly needs a human". It does not,
+                // most of the time, and this is the decision behind changing
+                // it, written down because it is a real change of behaviour.
+                //
+                // The server closes 4401 for three things
+                // (`server/src/ws/index.ts`): "Auth timeout", when the `auth`
+                // frame did not arrive within the window; "Auth required",
+                // when the first frame was not `auth`; and "Unauthorized",
+                // when Clerk would not verify the token. The first is a slow
+                // network, not a credential. The third is, more often than
+                // not, a token that expired between `currentToken()` and the
+                // handshake: Clerk tokens live about a minute, and a phone
+                // that was asleep hands over one that is already dead. Every
+                // one of those is fixed by the next attempt with a fresh
+                // token, which is exactly what the web client does
+                // (`client/src/lib/realtime.ts`, `handleConnectionLoss`: a
+                // 4401 bumps `unauthorizedStreak` and still schedules a
+                // reconnect). Stopping here was the "fica conectando"
+                // support case: one stale token and the app sat on
+                // "Something went wrong" until it was force-closed.
+                //
+                // What the old code was right about is that a session the
+                // server keeps refusing must not be hammered, so the retry is
+                // on the throttled schedule (five seconds and up, the same
+                // one a 4429 gets) rather than the half-second one, and the
+                // streak is what tells the banner to stop saying
+                // "reconnecting" and offer "sign in again" once two attempts
+                // in a row have been refused. That is the web's rule too
+                // (`connection-doctor.ts`, `adviseFrom`: a socket failure
+                // with a streak of two is `signInAgain`). The age gate the
+                // old comment mentioned cannot reach here: `SessionStore`
+                // only calls `connect()` once `GET /api/me` says the gate is
+                // passed, and parks the session on the gate screen otherwise.
+                settle(AttemptOutcome.Refused)
+            } else {
+                settle(AttemptOutcome.Dropped)
+            }
+            waitBackoff(backoffMillis(attempt, throttled = throttles(reason.code)))
         }
     }
 
-    private fun listener(token: String, closed: kotlinx.coroutines.CompletableDeferred<CloseReason>) =
+    /** Applies one finished attempt to the streak and the published state. */
+    private fun settle(outcome: AttemptOutcome) {
+        _unauthorizedStreak.value = streakAfter(_unauthorizedStreak.value, outcome)
+        when (outcome) {
+            AttemptOutcome.NoToken, AttemptOutcome.Refused -> _state.value = RealtimeState.Refused
+            AttemptOutcome.Ready, AttemptOutcome.Dropped -> Unit
+        }
+    }
+
+    /** A delay that [retryNow] can cut short. */
+    private suspend fun waitBackoff(millis: Long) {
+        val skip = CompletableDeferred<Unit>()
+        skipBackoff = skip
+        try {
+            withTimeoutOrNull(millis) { skip.await() }
+        } finally {
+            if (skipBackoff === skip) skipBackoff = null
+        }
+    }
+
+    private fun listener(token: String, closed: CompletableDeferred<CloseReason>) =
         object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 // The first frame must be the handshake. There is no
@@ -154,6 +267,7 @@ class RealtimeClient(
                 when (frame["type"]?.jsonPrimitive?.contentOrNull) {
                     "ready" -> {
                         attempt = 0
+                        settle(AttemptOutcome.Ready)
                         _state.value = RealtimeState.Ready
                         // The server has no memory of what this connection was
                         // watching, so re-subscribing is the client's job.
@@ -313,6 +427,13 @@ class RealtimeClient(
     /** What a frame that could not leave should make this client do. */
     internal enum class SendFallback { Wait, Reconnect }
 
+    /**
+     * How one connect attempt ended, as far as the refusal count cares.
+     * `NoToken` never opened a socket; `Refused` is a 4401 close; `Dropped`
+     * is every other close; `Ready` is the server's handshake reply.
+     */
+    internal enum class AttemptOutcome { NoToken, Refused, Ready, Dropped }
+
     companion object {
         private const val TAG = "pqp.realtime"
 
@@ -326,9 +447,41 @@ class RealtimeClient(
         internal fun fallbackFor(ready: Boolean, attemptInFlight: Boolean): SendFallback =
             if (!ready && attemptInFlight) SendFallback.Wait else SendFallback.Reconnect
 
+        /**
+         * The number of refusals in a row after which the session is treated
+         * as gone rather than stale. Shared with the banner, the doctor and
+         * the voice controller, and the same number the web client uses.
+         */
+        const val REFUSED_FOR_GOOD = 2
+
+        /**
+         * What one finished connect attempt does to [unauthorizedStreak].
+         *
+         * Pure, and the whole 4401 rule in one place: a refusal or a missing
+         * token counts, `ready` clears, and an ordinary drop (a server
+         * restart, a tunnel change) leaves the count alone rather than
+         * clearing it, because one lucky TCP failure between two refusals
+         * must not reset the banner back to "reconnecting".
+         */
+        internal fun streakAfter(streak: Int, outcome: AttemptOutcome): Int = when (outcome) {
+            AttemptOutcome.NoToken, AttemptOutcome.Refused -> streak + 1
+            AttemptOutcome.Ready -> 0
+            AttemptOutcome.Dropped -> streak
+        }
+
+        /** Whether a streak this long means "sign in again" rather than "wait". */
+        fun refusedForGood(streak: Int): Boolean = streak >= REFUSED_FOR_GOOD
+
+        /**
+         * Whether a close code puts the next retry on the slow schedule. A
+         * refused session is not hammered any more than a rate-limited one.
+         */
+        internal fun throttles(closeCode: Int): Boolean =
+            closeCode == CLOSE_UNAUTHORIZED || closeCode == CLOSE_RATE_LIMITED
+
         /** The server's own close codes. Neither is an ordinary disconnect. */
-        private const val CLOSE_UNAUTHORIZED = 4401
-        private const val CLOSE_RATE_LIMITED = 4429
+        const val CLOSE_UNAUTHORIZED = 4401
+        const val CLOSE_RATE_LIMITED = 4429
 
         /**
          * Capped exponential backoff with jitter. The jitter matters more than

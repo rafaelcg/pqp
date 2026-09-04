@@ -19,6 +19,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -28,6 +31,8 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import gg.pqp.app.R
 import gg.pqp.app.bau.ui.BauScreen
+import gg.pqp.app.core.RealtimeClient
+import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.push.DeepLinkTarget
@@ -38,6 +43,8 @@ import gg.pqp.app.social.ui.HomeScreen
 import gg.pqp.app.social.ui.conversationDestination
 import gg.pqp.app.social.ui.titleOr
 import gg.pqp.app.ui.components.CallBar
+import gg.pqp.app.ui.components.ConnectionBanner
+import gg.pqp.app.ui.components.ConnectionDoctorDialog
 import gg.pqp.app.ui.screens.AgeGateScreen
 import gg.pqp.app.ui.screens.ChannelsScreen
 import gg.pqp.app.ui.screens.ChatScreen
@@ -154,19 +161,48 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController, push: Pus
         )
     }
 
+    // The live connection, app-wide. It used to be a strip inside the chat
+    // screen only, so somebody stuck on the home screen saw nothing, and
+    // somebody in a chat saw "Something went wrong" with no way out.
+    val connection by session.realtime.state.collectAsStateWithLifecycle()
+    val refusals by session.realtime.unauthorizedStreak.collectAsStateWithLifecycle()
+    val connectionBannerShowing = connection == RealtimeState.Connecting ||
+        connection == RealtimeState.Reconnecting ||
+        connection == RealtimeState.Refused
+    var checkingConnection by remember { mutableStateOf(false) }
+    if (checkingConnection) {
+        ConnectionDoctorDialog(
+            session = session,
+            onDismiss = { checkingConnection = false },
+            onSignInAgain = {
+                checkingConnection = false
+                session.signOut()
+            },
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
         // The call bar belongs to the process, not to the screen that started
         // the call, so it lives above the NavHost rather than inside any one
         // destination. It carries the status-bar inset itself while it is
         // showing, and the content below then stops adding that inset a second
-        // time.
+        // time. The connection banner sits under it and carries the inset only
+        // when the call bar is not there to.
         CallBar(voiceState, voice, Modifier.statusBarsPadding())
+        ConnectionBanner(
+            state = connection,
+            refusedRepeatedly = RealtimeClient.refusedForGood(refusals),
+            onRetry = session.realtime::retryNow,
+            onCheck = { checkingConnection = true },
+            onSignInAgain = session::signOut,
+            modifier = if (voiceState.isActive) Modifier else Modifier.statusBarsPadding(),
+        )
 
         Box(
             modifier = Modifier
                 .weight(1f)
                 .then(
-                    if (voiceState.isActive) {
+                    if (voiceState.isActive || connectionBannerShowing) {
                         Modifier.consumeWindowInsets(WindowInsets.statusBars)
                     } else {
                         Modifier

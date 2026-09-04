@@ -91,7 +91,6 @@ import gg.pqp.app.attachments.formatAttachmentSize
 import gg.pqp.app.core.ApiClient
 import gg.pqp.app.core.Message
 import gg.pqp.app.core.Reaction
-import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.push.VisibleChannel
@@ -141,7 +140,6 @@ fun ChatScreen(
         factory = ChatViewModel.factory(session, channelId, files),
     )
     val state by model.state.collectAsStateWithLifecycle()
-    val connection by session.realtime.state.collectAsStateWithLifecycle()
     val phase by session.phase.collectAsStateWithLifecycle()
     val me = (phase as? SessionPhase.Ready)?.me
 
@@ -233,7 +231,6 @@ fun ChatScreen(
                     colors = pqpTopBarColors(),
                 )
                 ChromeDivider()
-                ConnectionBanner(connection)
             }
         },
         bottomBar = {
@@ -398,45 +395,6 @@ fun ChatScreen(
             ),
             onDismiss = { reporting = null },
         )
-    }
-}
-
-@Composable
-private fun ConnectionBanner(state: RealtimeState) {
-    val text = when (state) {
-        RealtimeState.Connecting -> stringResource(R.string.connection_connecting)
-        RealtimeState.Reconnecting -> stringResource(R.string.connection_offline)
-        RealtimeState.Refused -> stringResource(R.string.error_generic)
-        else -> null
-    } ?: return
-
-    // Connecting is a fact and the other two are a problem, so only the other
-    // two are marked. A warning glyph on the first second of every launch would
-    // be crying wolf, and then nobody reads the strip that matters.
-    val warn = state == RealtimeState.Reconnecting || state == RealtimeState.Refused
-
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = Spacing.gutter, vertical = Spacing.xs + 2.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            if (warn) {
-                Icon(
-                    imageVector = PqpIcons.Warning,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp),
-                )
-                Spacer(Modifier.width(Spacing.sm))
-            }
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     }
 }
 

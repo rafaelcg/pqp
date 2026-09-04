@@ -1432,6 +1432,68 @@ Also unbuilt: no toggle for `dmDetails` (the server owns it and the client only
 reads it), no ringing-call notification, and no notification actions such as
 reply or mark-as-read.
 
+## The connection check
+
+"Fica conectando" (2 Sep 2026): one person, the PC app and the phone app, two
+networks, and a spinner on both while the API was healthy for everybody else.
+From the client that could have been a refused session, a token fetch that
+never returns (Clerk behind a DNS filter), a firewall that lets HTTPS through
+but not WebSockets, or a network with no path to a TURN relay. All four look
+identical on screen. The web shipped a check that tells them apart (#187,
+`client/src/lib/connection-doctor.ts`); this is the Android half of it.
+
+**Where it is.** Two entry points. The connection strip, which is now app-wide
+(`ui/components/ConnectionBanner.kt`, mounted in `PqpApp` under the call bar)
+rather than a strip inside the chat screen alone, so somebody stuck on the home
+screen sees it too. It carries **Tentar agora** and **Verificar conexão**, and
+after two refused connects in a row swaps its wording and offers **Entrar de
+novo**. And Settings, under **Voz**, because a call is what people notice
+failing first and the banner is only on screen while the socket is down.
+
+**What it checks.** Five bounded steps, each result shown as it lands
+(`core/ConnectionDoctor.kt`): `GET /health` over HTTPS (any status counts; the
+question is reachability, and a 503 is a real answer with a real code); a
+session token from the provider within eight seconds; the realtime socket as
+`RealtimeClient` sees it, with the last close code and reason; a STUN probe
+(server-reflexive candidate, against the API's list or a public fallback); a
+TURN probe with the transport policy set to relay only, so the only candidate
+that can appear is one that went through the relay. The two ICE probes use a
+throwaway `PeerConnectionFactory` with a data channel and no media
+(`voice/IceProbe.kt`), so they work with no call up and do not disturb one that
+is. The verdict rules and the advice strings are the web's, key for key, so a
+report from either app reads the same in the QG.
+
+**The report.** **Copiar relatório** puts plain text on the clipboard in the
+web's `formatReport` shape: a header with the timestamp and app version, one
+line per check (`OK ` / `FAIL` / `SKIP`, the check id, a short detail, the
+milliseconds), the advice, and the Android version and device model where the
+browser puts its user agent. It never contains the token, a relay credential
+or a URL; the details are fixed words (`present`, `null`, `timeout`) rather
+than the thing itself, and a test pins that.
+
+**What changed underneath, and why.** A `4401` close used to end the reconnect
+loop for good, on the theory that a refusal needs a human. It mostly does not:
+the server closes 4401 for an auth frame that arrived late (a slow network),
+and for a token Clerk would not verify, which on a phone is usually one that
+expired between `currentToken()` and the handshake, because the device was
+asleep. Both are fixed by the next attempt with a fresh token, which is what
+the web does. Android now does the same: 4401 and a null token both count
+toward `unauthorizedStreak`, retry on the throttled schedule (five seconds and
+up, the same as a 4429, so a genuinely dead session is not hammered), and two
+in a row is the cue for the banner and the check to say **sign in again**
+rather than **wait**. `ready` clears the count; an ordinary drop between two
+refusals leaves it alone. A call held through a single refusal is rebuilt on
+the next `ready` like any other drop; two refusals hang it up
+(`VoiceController`). Pinned by `UnauthorizedStreakTest` and
+`ConnectionDoctorTest` on the JVM; the ICE probes themselves are not, since
+they need the native WebRTC library.
+
+**Not verified on a device yet.** The change was written on a machine with no
+Java runtime, so CI is the only thing that has compiled it. The probes should
+be run once on a phone on mobile data and once on a network known to block
+UDP, and the report compared with the web's from the same network, before
+anybody quotes the advice to a user.
+
 ## Your data: export and account deletion
 
 **This is a Play Store submission blocker, not a nicety.** Google requires an
