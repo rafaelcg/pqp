@@ -404,6 +404,8 @@ export interface CallStageProps {
   windowFocused?: boolean;
   onPushToTalk?: (held: boolean) => void;
   onSetPeerVolume?: (peerId: string, volume: number) => void;
+  /** Screen-share audio volume, separate from the voice slider. */
+  onSetScreenVolume?: (userId: string, volume: number) => void;
   onRetryPeer?: (peerId: string) => void;
   /** Shrinks the thumbnail strip. Same setting the old lobby grid used. */
   compactPeers?: boolean;
@@ -443,6 +445,7 @@ export function CallStage({
   windowFocused = true,
   onPushToTalk,
   onSetPeerVolume,
+  onSetScreenVolume,
   onRetryPeer,
   compactPeers = false,
   controlsMayIdle = true,
@@ -495,6 +498,7 @@ export function CallStage({
       windowFocused={windowFocused}
       onPushToTalk={onPushToTalk}
       onSetPeerVolume={onSetPeerVolume}
+      onSetScreenVolume={onSetScreenVolume}
       onRetryPeer={onRetryPeer}
       compactPeers={compactPeers}
       controlsMayIdle={controlsMayIdle}
@@ -530,6 +534,7 @@ function ActiveCall({
   windowFocused = true,
   onPushToTalk,
   onSetPeerVolume,
+  onSetScreenVolume,
   onRetryPeer,
   compactPeers = false,
   controlsMayIdle = true,
@@ -566,6 +571,8 @@ function ActiveCall({
   windowFocused?: boolean;
   onPushToTalk?: (held: boolean) => void;
   onSetPeerVolume?: (peerId: string, volume: number) => void;
+  /** Screen-share audio volume, separate from the voice slider. */
+  onSetScreenVolume?: (userId: string, volume: number) => void;
   onRetryPeer?: (peerId: string) => void;
   compactPeers?: boolean;
   controlsMayIdle?: boolean;
@@ -651,6 +658,22 @@ function ActiveCall({
   // were the one presenting.
   const focusedIsLocal =
     focusedTile != null && focusedTile.peerId === voiceState.peerId;
+
+  /**
+   * The share-audio slider for a tile, or nothing when there is nothing to
+   * move: our own share, a silent one, or a caller that did not wire the
+   * setter. Keyed on userId so the setting survives a reconnect.
+   */
+  function shareAudioControl(tile: ScreenShareTile) {
+    if (tile.isSelf || !tile.hasAudio || !onSetScreenVolume) {
+      return undefined;
+    }
+    const key = tile.userId ?? tile.peerId;
+    return {
+      volume: voiceState.screenVolumes[key] ?? 1,
+      onSetVolume: (volume: number) => onSetScreenVolume(key, volume),
+    };
+  }
   const receivedShareHasAudio = useReceivedShareAudio(
     focusedIsLocal ? null : screenStream,
   );
@@ -1008,6 +1031,7 @@ function ActiveCall({
               isFullscreen
               showName
               onToggleFullscreen={() => fullscreen.toggleScreen(soloTile.peerId)}
+              audio={shareAudioControl(soloTile)}
               className="min-h-0 flex-1"
             />
           ) : splitTwo ? (
@@ -1020,6 +1044,7 @@ function ActiveCall({
                   isFullscreen={false}
                   showName
                   onToggleFullscreen={() => fullscreen.toggleScreen(tile.peerId)}
+                  audio={shareAudioControl(tile)}
                   className="h-full min-h-0"
                 />
               ))}
@@ -1032,6 +1057,7 @@ function ActiveCall({
               onToggleFullscreen={() =>
                 fullscreen.toggleScreen(focusedTile.peerId)
               }
+              audio={shareAudioControl(focusedTile)}
               className="min-h-0 flex-1"
             />
           ) : (
@@ -2298,6 +2324,7 @@ function ScreenTileFrame({
   isFullscreen,
   showName = false,
   onToggleFullscreen,
+  audio,
   className,
 }: {
   tile: ScreenShareTile;
@@ -2305,6 +2332,13 @@ function ScreenTileFrame({
   isFullscreen: boolean;
   showName?: boolean;
   onToggleFullscreen?: () => void;
+  /**
+   * The slider for THIS share's sound, absent when there is no sound to move
+   * (our own tile, or a share that arrived silent). It lives on the share
+   * rather than on the presenter's face because that is where the sound
+   * appears to come from, and because the face already carries their voice.
+   */
+  audio?: { volume: number; onSetVolume: (volume: number) => void };
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -2353,6 +2387,18 @@ function ScreenTileFrame({
           </span>
         )}
       </div>
+      {/* Bottom right, away from the name and the fullscreen button. Hidden
+          until hover while it sits at unity, the same rule the face tiles
+          use, so a share nobody has adjusted is still just a picture. */}
+      {audio && (
+        <div className="group absolute bottom-2 right-2 w-32">
+          <PeerTileControls
+            name={t("voice.share.audioOf", { name: tile.presenterName })}
+            volume={audio.volume}
+            onSetVolume={audio.onSetVolume}
+          />
+        </div>
+      )}
     </div>
   );
 }

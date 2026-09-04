@@ -166,6 +166,20 @@ export interface VoiceState {
   occupancy: Record<string, VoiceParticipant[]>;
   /** userId → 0..1 playback multiplier, persisted for the session. */
   peerVolumes: Record<string, number>;
+  /**
+   * userId → 0..1 multiplier for that person's SCREEN audio, separate from
+   * their voice.
+   *
+   * Separate because the two are different sounds with different problems. A
+   * game is mixed for a living room and a voice is a microphone in a bedroom,
+   * so the useful move is almost always "turn the game down and keep hearing
+   * the person", and one slider cannot do that. Asked for in the QG on
+   * 4 Sep 2026: "a separacao das faixas de audio entre a live do amigo e a voz
+   * do amigo".
+   *
+   * Keyed on userId like `peerVolumes`, and session-scoped the same way.
+   */
+  screenVolumes: Record<string, number>;
   /** True when media is flowing through an SFU rather than a peer mesh. */
   usingSfu: boolean;
   /**
@@ -661,6 +675,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     speakingPeerIds: [],
     occupancy: {},
     peerVolumes: {},
+    screenVolumes: {},
     usingSfu: false,
     transportFailure: null,
     roomTransport: null,
@@ -834,6 +849,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       speakingPeerIds: [...state.speakingPeerIds],
       occupancy: { ...state.occupancy },
       peerVolumes: { ...state.peerVolumes },
+      screenVolumes: { ...state.screenVolumes },
       self: state.self ? { ...state.self } : null,
       incomingCalls: [...state.incomingCalls],
       callDeclinedUserIds: [...state.callDeclinedUserIds],
@@ -1515,6 +1531,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       speakingPeerIds: [],
       occupancy: state.occupancy,
       peerVolumes: state.peerVolumes,
+      screenVolumes: state.screenVolumes,
       usingSfu: false,
       transportFailure: null,
       roomTransport: null,
@@ -2621,6 +2638,15 @@ export function createVoiceController(transport: RealtimeTransport) {
     setPeerVolume(userId: string, volume: number) {
       state.peerVolumes = {
         ...state.peerVolumes,
+        [userId]: Math.min(1, Math.max(0, volume)),
+      };
+      emit();
+    },
+
+    /** The same knob for a person's screen audio. See `screenVolumes`. */
+    setScreenVolume(userId: string, volume: number) {
+      state.screenVolumes = {
+        ...state.screenVolumes,
         [userId]: Math.min(1, Math.max(0, volume)),
       };
       emit();

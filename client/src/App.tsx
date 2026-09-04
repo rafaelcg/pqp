@@ -3903,6 +3903,9 @@ function MainAppContent({
             onSetPeerVolume={(userId, volume) =>
               voice.setPeerVolume(userId, volume)
             }
+            onSetScreenVolume={(userId, volume) =>
+              voice.setScreenVolume(userId, volume)
+            }
             onRetryPeer={(peerId) => {
               void voice.retryPeer(peerId);
             }}
@@ -4117,6 +4120,7 @@ function MainAppContent({
       <VoiceAudioSinks
         peers={voiceState.remotePeers}
         peerVolumes={voiceState.peerVolumes}
+        screenVolumes={voiceState.screenVolumes}
         isDeafened={voiceState.isDeafened}
         outputDeviceId={localSettings.outputDeviceId}
         outputVolume={localSettings.outputVolume}
