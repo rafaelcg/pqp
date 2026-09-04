@@ -32,7 +32,9 @@ const { listRoles, upsertChannelOverwrite } = await import(
 );
 const { clearAuthCaches } = await import("../auth/clerk.js");
 const { handleApi, resetApiRateLimits } = await import("./index.js");
-const { resetChatRateLimits } = await import("../ws/chat.js");
+const { postChannelMessage, resetChatRateLimits } = await import(
+  "../ws/chat.js"
+);
 
 async function withGate<T>(run: () => Promise<T>): Promise<T> {
   const previous = process.env.CHARACTER_ACCOUNTS_ENABLED;
@@ -309,10 +311,54 @@ describeDb("character HTTP send", () => {
       expect(posted.status).toBe(201);
     });
 
-    const deliveries = await getPool().query(
+    const afterCharacter = await getPool().query(
       `SELECT 1 FROM outgoing_webhook_deliveries`,
     );
-    expect(deliveries.rowCount).toBe(0);
+    expect(afterCharacter.rowCount).toBe(0);
+
+    const human = await postChannelMessage({
+      author: owner,
+      channelId,
+      body: "oi do dono",
+    });
+    expect(human.ok).toBe(true);
+
+    const afterHuman = await getPool().query(
+      `SELECT 1 FROM outgoing_webhook_deliveries`,
+    );
+    expect(afterHuman.rowCount).toBe(1);
+  });
+
+  it("404s when the channel id does not exist", async () => {
+    const { token } = await seated("clerk_owner_missing_channel");
+
+    await withGate(async () => {
+      const posted = await send(
+        token,
+        "00000000-0000-4000-8000-000000000099",
+        { body: "oi" },
+      );
+      expect(posted.status).toBe(404);
+    });
+  });
+
+  it("400s an empty or non-JSON body", async () => {
+    const { token, channelId } = await seated("clerk_owner_bad_body");
+
+    await withGate(async () => {
+      expect((await send(token, channelId, { body: "" })).status).toBe(400);
+      expect((await send(token, channelId, {})).status).toBe(400);
+
+      const raw = await fetch(`${baseUrl}/api/channels/${channelId}/messages`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: "not-json",
+      });
+      expect(raw.status).toBe(400);
+    });
   });
 
   it("400s a replyToId from another channel and posts plain on a missing parent", async () => {
@@ -374,20 +420,44 @@ describeDb("character HTTP send", () => {
     });
   });
 
+  it("does not spend the slow-mode token on a foreign replyToId", async () => {
+    const { owner, channelId, token } = await seated("clerk_owner_slow_reply");
+    await getPool().query(
+      `UPDATE channels SET slowmode_seconds = 30 WHERE id = $1`,
+      [channelId],
+    );
+    const other = await createPqpServer("Outro", owner.id);
+    const foreignChannel = other.channels.find((c) => c.type === "text")!.id;
+    const foreign = await createMessage(foreignChannel, owner, "segredo");
+
+    await withGate(async () => {
+      const crossed = await send(token, channelId, {
+        body: "vi",
+        replyToId: foreign!.id,
+      });
+      expect(crossed.status).toBe(400);
+
+      const plain = await send(token, channelId, { body: "oi" });
+      expect(plain.status).toBe(201);
+    });
+  });
+
   it("charges the same send budget the socket does", async () => {
     const { channelId, token } = await seated("clerk_owner_budget");
 
     await withGate(async () => {
       // RATE_LIMIT_WS_MESSAGE_CAPACITY defaults to 10; writeLimiter alone
-      // would have let 30 through.
-      for (let i = 0; i < 10; i += 1) {
-        expect((await send(token, channelId, { body: `${i}` })).status).toBe(
-          201,
-        );
-      }
-      const eleventh = await send(token, channelId, { body: "11" });
-      expect(eleventh.status).toBe(429);
-      expect(Number(eleventh.retryAfter)).toBeGreaterThan(0);
+      // would have let 30 through. Fire the burst together so a slow
+      // sequential loop cannot refill (2/s) before the eleventh lands.
+      const results = await Promise.all(
+        Array.from({ length: 11 }, (_, i) =>
+          send(token, channelId, { body: `${i}` }),
+        ),
+      );
+      expect(results.filter((result) => result.status === 201)).toHaveLength(10);
+      const limited = results.filter((result) => result.status === 429);
+      expect(limited).toHaveLength(1);
+      expect(limited[0]?.retryAfter).toBe("1");
     });
   });
 

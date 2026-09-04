@@ -97,8 +97,8 @@ Failures:
 | Status | When |
 |---|---|
 | `401` | No bearer, unknown token, revoked account, or the character gate is off |
-| `403` | Caller is not a character; the character cannot `SEND_MESSAGES` here; the character is timed out in this server; or the target is a conversation (characters cannot DM) |
-| `404` | Channel does not exist, or the character is not in that server/channel |
+| `403` | Caller is not a character; the character cannot `SEND_MESSAGES` here; the character is timed out in this server; or the character is somehow already seated in a conversation (characters cannot DM) |
+| `404` | Channel does not exist, the character is not in that server/channel, or the id is a conversation they are not in (`canAccessChannel`) |
 | `400` | Empty/invalid body, or `replyToId` names a message in another channel |
 | `429` | Write budget, send budget, or slow mode. Honour `Retry-After` |
 
