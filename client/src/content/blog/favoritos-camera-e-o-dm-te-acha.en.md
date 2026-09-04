@@ -12,11 +12,11 @@ Staff can schedule, save a draft, preview. Some posts are only for people the ow
 
 ![A Baú post, with a photo, likes, and a comment](/blog/favoritos-camera-e-o-dm-te-acha/bau.jpg "Session post, a heart, and a comment underneath.")
 
-On the site for now. Not on iPhone or Android yet.
+On iPhone and Android you can read, like, and comment. Posting, scheduling, and drafts are still on the site.
 
 ## DMs on the rail
 
-Right-click a conversation, **Pin to the rail**. Their face sits under the Home bubble, above the halls. Click it and it opens. Up to 15.
+Right-click a conversation, **Pin to the rail**. Their face sits under the Home bubble, above the halls. Click it and it opens. Up to 15. Site and desktop for now.
 
 ## Android
 

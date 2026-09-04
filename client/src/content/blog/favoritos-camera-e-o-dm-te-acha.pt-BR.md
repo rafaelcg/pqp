@@ -12,11 +12,11 @@ A staff agenda, guarda rascunho, vê a prévia. Tem post só pra quem o dono mar
 
 ![Um post no Baú, com foto, curtidas e comentário](/blog/favoritos-camera-e-o-dm-te-acha/bau.jpg "Post da sessão, coração, e um comentário embaixo.")
 
-Por enquanto só no site. iPhone e Android ainda não.
+No iPhone e no Android você lê, curte e comenta. Postar, agendar e rascunho ainda é no site.
 
 ## DM na barra
 
-Clica com o direito na conversa, **Fixar na barra**. A cara da pessoa fica embaixo do ícone de DMs, em cima das comunidades. Clica e abre. Até 15.
+Clica com o direito na conversa, **Fixar na barra**. A cara da pessoa fica embaixo do ícone de DMs, em cima das comunidades. Clica e abre. Até 15. Só no site e no PC por enquanto.
 
 ## Android
 
