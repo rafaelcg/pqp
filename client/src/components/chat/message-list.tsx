@@ -48,7 +48,12 @@ import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
-import type { ChatMessage, TypingUser } from "@/hooks/use-chat";
+import {
+  failedSendKey,
+  messageRetryReady,
+  type ChatMessage,
+  type TypingUser,
+} from "@/hooks/use-chat";
 import type { MemberRole, UserStatus } from "@pqp/shared";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { messageRoutePath } from "@/lib/app-route";
@@ -1251,7 +1256,7 @@ function buildMessageAriaLabel(
   if (message.pending) {
     parts.push(translateMessage("chat.sending"));
   } else if (message.failed) {
-    parts.push(translateMessage("chat.failedSend"));
+    parts.push(translateMessage(failedSendKey(message.rejectReason)));
   }
 
   const attachmentCount = message.attachments?.length ?? 0;
@@ -1928,15 +1933,17 @@ const MessageRow = memo(function MessageRow({
             {message.failed && (
               <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-danger">
                 <AlertCircle className="h-3.5 w-3.5" />
-                {t("chat.failedSend")}
-                <button
-                  type="button"
-                  tabIndex={controlTabIndex}
-                  onClick={onRetry}
-                  className="underline underline-offset-2 hover:text-paper"
-                >
-                  {t("chat.retry")}
-                </button>
+                {t(failedSendKey(message.rejectReason))}
+                {messageRetryReady(message) && (
+                  <button
+                    type="button"
+                    tabIndex={controlTabIndex}
+                    onClick={onRetry}
+                    className="underline underline-offset-2 hover:text-paper"
+                  >
+                    {t("chat.retry")}
+                  </button>
+                )}
                 <button
                   type="button"
                   tabIndex={controlTabIndex}
