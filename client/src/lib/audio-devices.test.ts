@@ -13,6 +13,7 @@ describe("listAudioDevices", () => {
           { kind: "audioinput", deviceId: "mic-1", label: "Built-in Mic" },
           { kind: "videoinput", deviceId: "cam-1", label: "FaceTime HD" },
           { kind: "videoinput", deviceId: "cam-2", label: "" },
+          { kind: "videoinput", deviceId: "", label: "Hidden until permission" },
           { kind: "audiooutput", deviceId: "spk-1", label: "Speakers" },
         ],
       },

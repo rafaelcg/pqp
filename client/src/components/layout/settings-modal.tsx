@@ -60,6 +60,7 @@ import {
 import type { VoiceInputMode } from "@/hooks/use-voice";
 import {
   defaultMicProcessing,
+  ensureCameraPermission,
   ensureMediaPermission,
   listAudioDevices,
   supportsAudioOutputSelection,
@@ -730,6 +731,7 @@ function VoiceSection({
   inputs,
   outputs,
   cameras,
+  onRevealCameras,
   devicesError,
   voiceAnalyser,
   metering,
@@ -739,6 +741,7 @@ function VoiceSection({
   inputs: MediaDeviceOption[];
   outputs: MediaDeviceOption[];
   cameras: MediaDeviceOption[];
+  onRevealCameras: () => void;
   devicesError: string | null;
   voiceAnalyser: AnalyserNode | null;
   metering: boolean;
@@ -960,6 +963,7 @@ function VoiceSection({
         <select
           value={draftLocal.cameraDeviceId}
           onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
+          onFocus={() => onRevealCameras()}
           className={selectClass}
         >
           <option value="">{t("settings.voice.systemDefault")}</option>
@@ -2885,6 +2889,15 @@ export function SettingsModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceVisible]);
 
+  async function revealCameras() {
+    // Labels stay blank until the browser has seen a video permission.
+    // Asked on focus of the camera select, not when Voice opens, so a
+    // volume tweak does not light the webcam.
+    await ensureCameraPermission();
+    const { cameras: nextCameras } = await listAudioDevices();
+    setCameras(nextCameras);
+  }
+
   function patchLocal(partial: Partial<LocalSettings>) {
     // Composed off a ref rather than inside a `setDraftLocal` updater.
     //
@@ -2996,6 +3009,9 @@ export function SettingsModal({
                 inputs={inputs}
                 outputs={outputs}
                 cameras={cameras}
+                onRevealCameras={() => {
+                  void revealCameras();
+                }}
                 devicesError={devicesError}
                 voiceAnalyser={voiceAnalyser}
                 metering={voiceVisible}
