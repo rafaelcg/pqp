@@ -20,7 +20,7 @@ if (DATABASE_URL) {
 
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("./users.js");
-const { acquisitionReport, recordAcquisition } = await import(
+const { acquisitionReport, recordAcquisition, retentionBySource } = await import(
   "./acquisition.js"
 );
 
@@ -163,4 +163,118 @@ describeDb("recordAcquisition", () => {
       { landing: "/", signups: 1 },
     ]);
   });
+
+  // ---------------------------------------------------------- retention
+
+  describe("retentionBySource", () => {
+    /** One channel for the whole describe: messages need somewhere to live. */
+    let channelId: string | null = null;
+    async function somewhereToPost(ownerId: string): Promise<string> {
+      if (channelId) {
+        return channelId;
+      }
+      const server = await getPool().query<{ id: string }>(
+        `INSERT INTO servers (name, owner_id) VALUES ('t', $1) RETURNING id`,
+        [ownerId],
+      );
+      const channel = await getPool().query<{ id: string }>(
+        `INSERT INTO channels (server_id, name, type)
+         VALUES ($1, 'geral', 'text') RETURNING id`,
+        [server.rows[0]!.id],
+      );
+      channelId = channel.rows[0]!.id;
+      return channelId;
+    }
+
+    /** A message from this user, aged so it lands inside or outside the window. */
+    async function post(userId: string, daysAgo: number) {
+      const where = await somewhereToPost(userId);
+      await getPool().query(
+        `INSERT INTO messages (channel_id, author_id, body, created_at)
+         VALUES ($1, $2, 'oi', now() - ($3::int * interval '1 day'))`,
+        [where, userId, daysAgo],
+      );
+    }
+
+    /** Backdate a signup so it is old enough to have had a chance to return. */
+    async function age(userId: string, daysAgo: number) {
+      await getPool().query(
+        `UPDATE users SET created_at = now() - ($2::int * interval '1 day')
+          WHERE id = $1`,
+        [userId, daysAgo],
+      );
+    }
+
+    beforeEach(() => {
+      // Every test truncates, so a cached id from the previous one is a
+      // foreign key to a row that no longer exists.
+      channelId = null;
+    });
+
+    it("separates a channel that keeps people from one that does not", async () => {
+      // The comparison the ad budget turns on: same signups, different worth.
+      const stayed = await freshUser("clerk-reddit-stay");
+      const left = await freshUser("clerk-cpc-left");
+      await recordAcquisition(stayed.id, { ref: "reddit" });
+      await recordAcquisition(left.id, { source: "google", medium: "cpc" });
+      await age(stayed.id, 10);
+      await age(left.id, 10);
+      await post(stayed.id, 1);
+      await post(left.id, 9); // signed up, posted once, never came back
+
+      const report = await retentionBySource(30);
+      const byChannel = Object.fromEntries(
+        report.rows.map((r) => [String(r.channel), r]),
+      );
+      expect(byChannel["reddit"]).toEqual({
+        channel: "reddit",
+        signups: 1,
+        retained: 1,
+      });
+      expect(byChannel["google / cpc"]).toEqual({
+        channel: "google / cpc",
+        signups: 1,
+        retained: 0,
+      });
+    });
+
+    it("does not count somebody who signed up an hour ago as lost", async () => {
+      // They have not failed to return, they have not had the chance. Counting
+      // them would make a channel look worse the faster it delivers.
+      const fresh = await freshUser("clerk-just-now");
+      await recordAcquisition(fresh.id, { ref: "reddit" });
+
+      const report = await retentionBySource(30);
+      expect(report.rows).toEqual([]);
+    });
+
+    it("keeps the unattributed majority as its own row", async () => {
+      const bare = await freshUser("clerk-bare-ret");
+      await age(bare.id, 5);
+
+      const report = await retentionBySource(30);
+      expect(report.rows).toEqual([
+        { channel: null, signups: 1, retained: 0 },
+      ]);
+    });
+
+    it("excludes webhooks and the house cast", async () => {
+      const ghost = await freshUser("clerk-ghost-ret");
+      await age(ghost.id, 5);
+      await getPool().query(`UPDATE users SET is_character = TRUE WHERE id = $1`, [
+        ghost.id,
+      ]);
+
+      const report = await retentionBySource(30);
+      expect(report.rows).toEqual([]);
+    });
+
+    it("reports the windows it used", async () => {
+      const report = await retentionBySource(30, 7);
+      expect(report.days).toBe(30);
+      expect(report.activeWindowDays).toBe(7);
+      expect(Date.parse(report.since)).toBeLessThan(Date.now());
+    });
+  });
+
 });
