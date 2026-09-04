@@ -92,6 +92,16 @@ export function WhatsNewView({
       if (event.key !== "Escape" || event.defaultPrevented) {
         return;
       }
+      const origin = event.target;
+      if (
+        origin instanceof Element &&
+        origin.closest('[role="dialog"], [aria-modal="true"], [role="menu"]')
+      ) {
+        return;
+      }
+      if (document.querySelector('[aria-modal="true"]')) {
+        return;
+      }
       event.preventDefault();
       onClose();
     }
