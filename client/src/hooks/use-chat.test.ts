@@ -184,6 +184,86 @@ describe("optimistic sending", () => {
     expect(chat.getMessages()).toHaveLength(0);
   });
 
+  it("marks a message failed with the server's reason, not the send timer", () => {
+    const { chat } = setup();
+    chat.sendMessage("hi");
+    const nonce = chat.getMessages()[0]!.nonce!;
+
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce,
+      reason: "undeliverable",
+    });
+
+    const message = chat.getMessages()[0]!;
+    expect(message.failed).toBe(true);
+    expect(message.pending).toBe(false);
+    expect(message.rejectReason).toBe("undeliverable");
+
+    vi.advanceTimersByTime(11_000);
+    expect(chat.getMessages()[0]!.rejectReason).toBe("undeliverable");
+  });
+
+  it("writes the server reason onto a bubble the send timer already failed", () => {
+    const { chat } = setup();
+    chat.sendMessage("hi");
+    const nonce = chat.getMessages()[0]!.nonce!;
+    vi.advanceTimersByTime(11_000);
+    expect(chat.getMessages()[0]!.failed).toBe(true);
+    expect(chat.getMessages()[0]!.rejectReason).toBeUndefined();
+
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce,
+      reason: "cannot-send",
+    });
+
+    expect(chat.getMessages()[0]!.rejectReason).toBe("cannot-send");
+    expect(chat.getMessages()[0]!.failed).toBe(true);
+  });
+
+  it("holds retry until retryAfterMs has elapsed", () => {
+    const { chat, sent } = setup();
+    chat.sendMessage("hi");
+    const nonce = chat.getMessages()[0]!.nonce!;
+
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce,
+      reason: "rate-limited",
+      retryAfterMs: 2000,
+    });
+
+    const before = sent.length;
+    chat.retryMessage(nonce);
+    expect(sent.length).toBe(before);
+    expect(chat.getMessages()[0]!.failed).toBe(true);
+
+    vi.advanceTimersByTime(2000);
+    chat.retryMessage(nonce);
+    expect(sent.length).toBe(before + 1);
+    expect(chat.getMessages()[0]!.pending).toBe(true);
+    expect(chat.getMessages()[0]!.rejectReason).toBeUndefined();
+  });
+
+  it("ignores a rejection for another channel", () => {
+    const { chat } = setup();
+    chat.sendMessage("hi");
+
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: "c0000000-0000-4000-8000-000000000099",
+      nonce: chat.getMessages()[0]!.nonce!,
+      reason: "no-access",
+    });
+
+    expect(chat.getMessages()[0]!.pending).toBe(true);
+    expect(chat.getMessages()[0]!.failed).toBeFalsy();
+  });
+
   it("keeps a message pending while offline instead of failing it", () => {
     // The transport queues and delivers on reconnect, so failing the bubble
     // would invite a retry that sends the same message twice.
