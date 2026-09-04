@@ -35,9 +35,7 @@ Product What's New, not Keep a Changelog. No Added / Changed / Fixed labels.
 3. **O resto** / **The rest** for the small pile.
 4. **Ainda não** / **Not yet** only if this ship makes people look for something that is not live.
 
-Voice: PT-BR like the QG. English matches. No em dashes. Both locales.
-
-Voice example: `client/src/content/blog/dados-discord-e-cargos.pt-BR.md`.
+Voice: write PT-BR first, like the QG, not a translation of the English. Rules: `AGENTS.md` § PT-BR voice. Example: `client/src/content/blog/dados-discord-e-cargos.pt-BR.md`. No em dashes. Both locales.
 
 ## Files
 
@@ -53,7 +51,7 @@ Do not import markdown from `posts.ts`. The Pages middleware cannot load `.md`. 
 
 ## Screenshots
 
-Nice to have. Capture if the UI is in front of you. Do not skip the post because a shot is awkward.
+Capture the app in **pt-BR**. English UI in a Portuguese note looks translated. Do not skip the post because a shot is awkward. An English shot already sitting in the PR can ship; do not add a new English one.
 
 ## After writing
 
