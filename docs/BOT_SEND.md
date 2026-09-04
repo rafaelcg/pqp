@@ -21,8 +21,17 @@ character token is `401` before the database is touched.
 There is no admin UI that mints keys. Provisioning is a script against
 `DATABASE_URL`, on purpose: see `tools/ambient/scripts/provision.mjs` (house
 cast) and `tools/support-bot/scripts/provision.mjs` (disclosed QG bot). The
-secret is returned once and stored as SHA-256. Rotate with `--rotate`, stop
-with `--revoke`.
+secret is returned once and stored as SHA-256. The two scripts take the same
+flags in different shapes: the cast script names the persona
+(`provision.mjs --rotate kzin`, `provision.mjs --revoke kzin`); the support-bot
+script has one account and takes the bare flag (`provision.mjs --rotate`,
+`provision.mjs --revoke`).
+
+Provisioning creates a **new** `users` row with its own id and its own
+`username#dddd`. It does not convert an existing Clerk account. If the bot
+already exists as a person (today's `caio#2160` is a Clerk user), the
+character is a second account: invite it separately, point the runner at the
+new token, and remove the old member when you are done.
 
 1. Set `CHARACTER_ACCOUNTS_ENABLED=true` on the API (`fly secrets set` on
    `pqp-api`, or the local `.env`).
@@ -50,9 +59,11 @@ A thread is a channel. To reply in a thread, POST to `thread.channelId` from
 The outgoing `message.created` webhook already carries the channel the human
 wrote in, including a thread.
 
-Rate limits are the same write budget as every other authenticated POST
-(`writeLimiter`: burst 30, 2/s, overridable with `RATE_LIMIT_WRITE_*`). Slow
-mode on the channel applies too.
+Rate limits: the API-wide write budget (`writeLimiter`: burst 30, 2/s,
+`RATE_LIMIT_WRITE_*`) and, on top of it, the same per-user send bucket the
+WebSocket charges (burst 10, 2/s, `RATE_LIMIT_WS_MESSAGE_*`). One account has
+one send budget whichever door it uses. Slow mode on the channel applies too.
+A server timeout on the character blocks the send like any other write.
 
 ## Response
 
@@ -65,7 +76,7 @@ mode on the channel applies too.
     "channelId": "…",
     "authorId": "…",
     "authorName": "Caio",
-    "authorTag": "caio#2160",
+    "authorTag": "caio#4821",
     "authorAvatarUrl": null,
     "body": "cheguei, como posso ajudar?",
     "createdAt": "2026-09-04T17:00:00.000Z",
@@ -78,15 +89,18 @@ mode on the channel applies too.
 }
 ```
 
+`authorTag` is whatever handle the provision script allocated. It is not the
+tag of any Clerk account with the same display name.
+
 Failures:
 
 | Status | When |
 |---|---|
 | `401` | No bearer, unknown token, revoked account, or the character gate is off |
-| `403` | Caller is not a character, or the character cannot `SEND_MESSAGES` here |
+| `403` | Caller is not a character; the character cannot `SEND_MESSAGES` here; the character is timed out in this server; or the target is a conversation (characters cannot DM) |
 | `404` | Channel does not exist, or the character is not in that server/channel |
 | `400` | Empty/invalid body, or `replyToId` names a message in another channel |
-| `429` | Write or slow-mode budget. Honour `Retry-After` |
+| `429` | Write budget, send budget, or slow mode. Honour `Retry-After` |
 
 ## Curl
 
