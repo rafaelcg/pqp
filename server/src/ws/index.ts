@@ -33,6 +33,7 @@ export {
   postChannelMessage,
   resolveEmbedInBackground,
   startClusterPresenceRefresh,
+  takeMessageBudget,
 } from "./chat.js";
 export {
   applyManualStatus,
