@@ -20,8 +20,12 @@ rather than configured:
 2. **It answers "é um bot?" plainly**, from a sentence a person wrote, never
    from the model. See the disclosure seam below.
 3. **It never speaks unprompted.** No schedule, no ambient chatter, no reacting
-   to things nobody asked it about. There is no code path that posts without an
-   explicit mention or a reply.
+   to things nobody asked it about. Every post is a reply to a message somebody
+   sent: an explicit mention, a reply to one of its own messages, or (the one
+   case that is not a question) a newcomer's hello in the greeting channel,
+   answered with a line a human wrote. See "Answering a newcomer's hello"
+   below; it is the only thing the bot does that nobody typed its name for,
+   and it is still a reply, never an announcement.
 
 ## Layout
 
@@ -36,6 +40,8 @@ rather than configured:
 | `src/generate.js` | One question, one model call. Or a fixture under `--canned`. |
 | `src/socket.js` | The reconnect. The one place this bot's socket policy differs from the ambient cast's, and why. |
 | `src/heartbeat.js` | One line every five minutes saying whether it is actually connected. |
+| `src/greetings.js` | Answering a newcomer's hello: the greeting matcher, the member roster on disk, the once-per-person and flood rules. Pure. |
+| `src/greetings-pool.js` | **Copy, not logic.** The lines the bot answers a hello with. A human edits it; the bot picks one. |
 | `src/bot.js` | The only file that touches the network, the clock or the disk. |
 | `scripts/provision.mjs` | Mint / rotate / revoke the one character account. **Not yet run.** |
 | `scripts/fake-pqp.mjs` | A fixture pqp server that can drop a socket on demand. Reproduces the 2026-08-23 outage. |
@@ -140,7 +146,7 @@ Outside the pnpm workspace, like `tools/ambient` and for the same reason.
 
 ```bash
 cd tools/support-bot
-npm test          # 104 tests, no network, no key, no database
+npm test          # 190 tests, no network, no key, no database
 ```
 
 ## Run it locally
@@ -178,10 +184,81 @@ DEV_AUTH_BYPASS=true node src/bot.js --watch --canned --dry-run
 Env: `PQP_API_URL`, `SUPPORT_TOKENS_FILE`, `SUPPORT_STATE_DIR`, `SUPPORT_MODEL`,
 `SUPPORT_OWNER_HANDLE`, `SUPPORT_CHANNELS`, `SUPPORT_IGNORE_USER_IDS`,
 `SUPPORT_MAX_*`, `SUPPORT_HEARTBEAT_MS` (default 300000 — read the cadence note
-in `src/heartbeat.js` before lowering it), `ANTHROPIC_API_KEY`, and two kill
-switches:
+in `src/heartbeat.js` before lowering it), `ANTHROPIC_API_KEY`, the hello knobs
+(`SUPPORT_GREETING_CHANNEL`, `SUPPORT_NEWCOMER_WINDOW_MS`,
+`SUPPORT_GREETING_MAX_PER_10MIN`, `SUPPORT_MEMBER_POLL_MS`, see the section
+below), and three switches:
 **`SUPPORT_BOT_KILL_SWITCH=1`** stops this bot, **`AMBIENT_KILL_SWITCH=1`** stops
-every automated account in the product including this one.
+every automated account in the product including this one, and
+**`SUPPORT_BOT_GREETINGS=false`** stops only the newcomer hellos and leaves the
+answers running.
+
+## Answering a newcomer's hello
+
+Somebody joins the QG, opens the channel where people talk, types "oi", and
+nothing happens. That silence is the moment a new person decides the room is
+dead. So the bot answers it, once, with one line a human wrote.
+
+**Trigger: two conditions, both checked deterministically.** A message posted in
+the greeting channel (`SUPPORT_GREETING_CHANNEL`, default `geral`, a channel
+*name* on the same server as the answer channels) by a member who joined **less
+than fifteen minutes ago** (`SUPPORT_NEWCOMER_WINDOW_MS`), whose message **reads
+as a greeting** by word list (`isGreeting` in `src/greetings.js`: oi, olá, eaí,
+salve, bom dia, cheguei, opa, fala galera, hello, hey, with repeated letters,
+punctuation and emoji tolerated). Somebody who joined an hour ago and says "oi"
+gets nothing. Somebody who joined three minutes ago and asks a question gets
+nothing from this path; the ordinary support path still applies to them,
+unchanged. "oi, como faço pra entrar na call?" is a greeting and a question, gets
+the hello, and the question goes wherever it would have gone anyway.
+
+**The reply** is one line from `src/greetings-pool.js`, `{name}` filled with
+`@username` (or the display name when there is none), posted as a *reply* to the
+person's own message (`replyToId` on `message-create`) so it threads under their
+"oi" instead of landing three messages later as noise. No model is involved: the
+same no-improvisation rule as the answers, applied to the one moment the bot
+speaks to somebody who did not ask it anything. The pool never repeats the line
+it just used, and the file is deliberately copy with no logic in it so a human
+can edit the jokes without reading code. Rules for a new line are in its header.
+
+**How it knows somebody is new.** It does not, exactly, and this is written down
+because it is the one place the feature can be wrong in an embarrassing
+direction. The server keeps `server_members.joined_at` but, as of this writing,
+neither exposes it on `GET /api/servers/:id/members` nor sends any `/ws` frame
+when a membership is created (`redeemInvite` only invalidates an audience
+cache). Changing that restarts `pqp-api` and is a separate decision. So the bot
+works from what it can observe: it fetches the member roster at boot and every
+`SUPPORT_MEMBER_POLL_MS` (default 60000), plus once more when somebody the
+roster has never seen posts in the greeting channel, and diffs it against the
+roster it persisted in `state/greetings.json`. An id that appears between two
+fetches is new, and that fetch is the estimate of when they joined. The estimate
+is trusted **only when the two fetches are less than the window apart**: after a
+restart or an outage, whoever appeared during the gap is *not* new, on purpose.
+A missed hello costs nothing; greeting somebody as a newcomer three hours after
+they arrived reads as a bot that does not know what is going on. The first
+roster the bot ever sees (no ledger on disk) seeds everybody as not-new, so
+switching the feature on never greets the existing membership. If the members
+endpoint ever returns a `joinedAt`, `Roster.observe` prefers it with no other
+change.
+
+**Limits.** One hello per person, ever, persisted across restarts and
+reconnects. At most `SUPPORT_GREETING_MAX_PER_10MIN` (default 3) hellos in any
+ten minutes; a newcomer refused by the cap is still marked greeted, because a
+hello that arrives ten minutes late under a conversation that has moved on is
+worse than none. Its own messages, webhooks, any `[bot]`-suffixed author and any
+`isCharacter` member are skipped. Watching the greeting channel does not make
+the bot answer questions there: those frames still go through `screenTrigger`,
+which refuses them unless the room is also in `SUPPORT_CHANNELS`.
+
+**Switches.** `SUPPORT_BOT_GREETINGS=false` turns the hellos off and nothing
+else (default on). `SUPPORT_BOT_KILL_SWITCH` and `AMBIENT_KILL_SWITCH` stop
+these too, checked right before every write like every other post. A greeting
+channel that does not exist logs `greetings.disabled channel-missing` at boot
+and the answers carry on; it is not a boot failure.
+
+**Editing the pool.** Open `src/greetings-pool.js`, add or change a line with
+exactly one `{name}`, no em dash, nothing about looks, gender or origin, no
+inside jokes, no claims about the product. `npm test` checks the mechanical
+rules. Redeploy the bot; nothing else moves.
 
 ## The socket, and why it now reconnects
 
