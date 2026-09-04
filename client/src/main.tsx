@@ -89,8 +89,31 @@ const PublicCommunityPage = lazy(() =>
     default: m.PublicCommunityPage,
   })),
 );
+const DesktopLoginPage = lazy(() =>
+  import("./pages/desktop-login-page").then((m) => ({
+    default: m.DesktopLoginPage,
+  })),
+);
 
-const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+/**
+ * `.env.example` ships a placeholder that is truthy, so a copied env would
+ * mount Clerk and crash with "publishableKey is invalid". Treat those as unset.
+ */
+function isUsableClerkPublishableKey(
+  value: string | undefined,
+): value is string {
+  if (!value) return false;
+  if (value.includes("your_clerk") || value.includes("your-clerk")) {
+    return false;
+  }
+  return /^(pk_test_|pk_live_)[A-Za-z0-9]{16,}$/.test(value);
+}
+
+const publishableKey = isUsableClerkPublishableKey(
+  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+)
+  ? import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
+  : undefined;
 
 /**
  * The marketing pages are compositions over a hero photograph, so they stay dark
@@ -198,6 +221,7 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
               click, and both are canonicalised to `/garanta` by `Seo`. */}
           <Route path="/garanta" element={<ClaimPage />} />
           <Route path="/claim" element={<ClaimPage />} />
+          <Route path="/desktop-login" element={<DesktopLoginPage />} />
           {/* Above the single-segment handle route below, though again the
               order does not decide it — `/c/:slug` is two segments and cannot
               collide with a one-segment pattern. Written here because a reader
@@ -309,7 +333,7 @@ function ThemedClerkProvider({
   return (
     <ClerkProvider
       publishableKey={publishableKey}
-      afterSignOutUrl="/"
+      afterSignOutUrl={isDesktopApp() ? "/app" : "/"}
       signInFallbackRedirectUrl="/app"
       signUpFallbackRedirectUrl="/app"
       appearance={appearance}
