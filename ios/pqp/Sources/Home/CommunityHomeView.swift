@@ -86,6 +86,12 @@ struct CommunityHomeView: View {
         do {
             posts = try await session.api.communityHomePosts(serverId: server.id)
             error = nil
+            // Only after the posts arrived: a read marker for a page that
+            // failed to load would clear a badge for posts nobody has seen.
+            // Best effort past that point, since the posts are the screen and
+            // the marker is bookkeeping. The channel list re-reads the count
+            // on the way back, which is what clears the row's badge here.
+            try? await session.api.markCommunityHomeRead(serverId: server.id)
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }

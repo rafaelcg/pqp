@@ -41,6 +41,62 @@ final class WireDecodingTests: XCTestCase {
         XCTAssertNil(notice.reason)
     }
 
+    // MARK: - message-rejected
+
+    /// The server's answer to a refused send. Before this case existed the
+    /// frame decoded to `.other`, so the optimistic row stayed dimmed forever
+    /// and a refused message looked sent. `retryAfterMs` is the slow mode
+    /// wait, and it has to survive the decode or the countdown has nothing to
+    /// count.
+    func testMessageRejectedDecodesWithRetryAfter() async throws {
+        let json = """
+        {"type":"message-rejected","channelId":"22222222-2222-2222-2222-222222222222",
+         "nonce":"abc123","reason":"slow-mode","retryAfterMs":12000}
+        """
+        let event = await firstEvent(from: json)
+        guard case .messageRejected(let rejection) = event else {
+            return XCTFail("Expected messageRejected, got \(String(describing: event))")
+        }
+        XCTAssertEqual(rejection.channelId, "22222222-2222-2222-2222-222222222222")
+        XCTAssertEqual(rejection.nonce, "abc123")
+        XCTAssertEqual(rejection.reason, "slow-mode")
+        XCTAssertEqual(rejection.retryAfterMs, 12000)
+    }
+
+    /// The permanent refusals carry neither a wait nor, on the schema, a
+    /// required nonce. Both optionals must read as absent, not fail the decode.
+    func testMessageRejectedWithoutOptionalsDecodes() async throws {
+        let json = """
+        {"type":"message-rejected","channelId":"22222222-2222-2222-2222-222222222222",
+         "reason":"undeliverable"}
+        """
+        let event = await firstEvent(from: json)
+        guard case .messageRejected(let rejection) = event else {
+            return XCTFail("Expected messageRejected, got \(String(describing: event))")
+        }
+        XCTAssertNil(rejection.nonce)
+        XCTAssertNil(rejection.retryAfterMs)
+        XCTAssertEqual(rejection.reason, "undeliverable")
+    }
+
+    // MARK: - peer-updated
+
+    /// A rename mid-call. Its own event rather than a second `peer-joined`,
+    /// because a join opens a peer connection and a rename must not.
+    func testPeerUpdatedDecodesAsItsOwnEvent() async throws {
+        let json = """
+        {"type":"peer-updated","peer":{"peerId":"p1","userId":"u1",
+         "displayName":"Ana Renamed","avatarUrl":null,"sharingScreen":false}}
+        """
+        let event = await firstEvent(from: json)
+        guard case .voicePeerUpdated(let peer) = event else {
+            return XCTFail("Expected voicePeerUpdated, got \(String(describing: event))")
+        }
+        XCTAssertEqual(peer.peerId, "p1")
+        XCTAssertEqual(peer.displayName, "Ana Renamed")
+        XCTAssertNil(peer.avatarUrl)
+    }
+
     // MARK: - friend-activity
 
     /// The nudge that makes a friend request visible without a pull-to-refresh.

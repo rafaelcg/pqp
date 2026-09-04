@@ -3892,6 +3892,26 @@
         }
       }
     },
+    "Slow mode is on.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Slow mode tá ligado."
+          }
+        }
+      }
+    },
+    "Slow mode. You can send again in %llds.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Slow mode. Espera %llds pra mandar de novo."
+          }
+        }
+      }
+    },
     "Someone": {
       "localizations": {
         "pt-BR": {
@@ -4242,6 +4262,16 @@
         }
       }
     },
+    "This call already has the maximum number of cameras.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Essa call já chegou no máximo de câmeras."
+          }
+        }
+      }
+    },
     "This call already has the maximum number of screen shares.": {
       "localizations": {
         "pt-BR": {
@@ -4308,6 +4338,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Esse é você."
+          }
+        }
+      }
+    },
+    "This message wasn't delivered": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Essa mensagem não foi entregue"
+          }
+        }
+      }
+    },
+    "This message wasn't sent.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Essa mensagem não foi enviada."
           }
         }
       }
@@ -4892,6 +4942,26 @@
         }
       }
     },
+    "You can't send in this channel": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você não pode mandar mensagem neste canal"
+          }
+        }
+      }
+    },
+    "You don't have permission to send here": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você não tem permissão pra mandar aqui"
+          }
+        }
+      }
+    },
     "You joined another voice room, so this one was left.": {
       "localizations": {
         "pt-BR": {
@@ -4928,6 +4998,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Vocês são amigos agora."
+          }
+        }
+      }
+    },
+    "You're sending too fast": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Você tá mandando rápido demais"
           }
         }
       }

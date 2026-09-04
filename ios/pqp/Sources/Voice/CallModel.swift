@@ -541,6 +541,12 @@ final class CallModel {
                 )
             }
 
+        // Same rule as `VoiceModel`: the tile's name and picture change, the
+        // connection does not. No `voice.connect`, no ring bookkeeping.
+        case .voicePeerUpdated(let participant):
+            guard phase.isLive, roster[participant.peerId] != nil else { return }
+            roster[participant.peerId] = participant
+
         case .voicePeerLeft(let peerId):
             guard phase.isLive else { return }
             knownPeerIds.remove(peerId)
