@@ -35,7 +35,7 @@ Product What's New, not Keep a Changelog. No Added / Changed / Fixed labels.
 3. **O resto** / **The rest** for the small pile.
 4. **Ainda não** / **Not yet** only if this ship makes people look for something that is not live.
 
-Voice: write PT-BR first, like the QG, not a translation of the English. Rules: `AGENTS.md` § PT-BR voice. Example: `client/src/content/blog/dados-discord-e-cargos.pt-BR.md`. No em dashes. Both locales.
+Voice: write PT-BR first, like the QG, not a translation of the English. Keep the English words the channel already uses (DM, call, staff, post, login). Rules: `AGENTS.md` § PT-BR voice. Example: `client/src/content/blog/dados-discord-e-cargos.pt-BR.md`. No em dashes. Both locales.
 
 ## Files
 

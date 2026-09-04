@@ -23,8 +23,13 @@ Do:
 
 - Read it out loud. If you would not send it in the QG, rewrite.
 - Concrete: the button, the menu, the slash command.
-- Loanwords the channel already uses: chat, call, mute, app, ban, kick. See the glossary in `docs/I18N.md`.
 - Gerund (`está fazendo`), not European `a fazer`. `você`, not `tu` / `a gente` as a system voice.
+
+Loanwords: Brazilian gaming Portuguese keeps a lot of English. Do not "fix" that.
+
+- Keep the word the QG already says: DM, chat, call, mute / mutar, kick / kickar, ban, staff, post, feed, login, app, APK, VIP, card, online, offline, Watch party, Chrome, Play Store, TestFlight. Full list in `docs/I18N.md`.
+- When you name a control, copy the pt-BR label (`Fixar na barra`, `Prévia`, `Rascunho`). Do not invent a more Portuguese one.
+- The other direction also sounds fake: do not leave English the UI already translated (`rail` is barra, `pin` is fixar, `settings` is Configurações).
 
 Do not:
 
