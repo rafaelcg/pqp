@@ -364,10 +364,10 @@ function ClerkAppGate() {
   );
 
   useEffect(() => {
-    if (signIn && setActive && queuedTicketRef.current) {
+    if (signIn && queuedTicketRef.current) {
       void redeemTicket(queuedTicketRef.current);
     }
-  }, [redeemTicket, setActive, signIn]);
+  }, [redeemTicket, signIn]);
 
   useEffect(() => {
     if (!canDesktopAuth || !desktop) {
