@@ -2793,6 +2793,9 @@ export function SettingsModal({
   // they were rather than at the top of the tree every time.
   const [section, setSection] = useState<SectionId>("profile");
   const settingsRef = useRef(localSettings);
+  // Camera permission is asked once per open Settings session. Tabbing
+  // through the Voice form must not blink the webcam LED on every focus.
+  const camerasAskedRef = useRef(false);
   const active = SECTIONS.find((entry) => entry.id === section) ?? SECTIONS[0]!;
   const tabIdPrefix = "settings-tab";
   const panelId = "settings-panel";
@@ -2810,6 +2813,7 @@ export function SettingsModal({
   useEffect(() => {
     if (!open) {
       setConfirmingDelete(false);
+      camerasAskedRef.current = false;
     }
   }, [open]);
 
@@ -2892,8 +2896,16 @@ export function SettingsModal({
   async function revealCameras() {
     // Labels stay blank until the browser has seen a video permission.
     // Asked on focus of the camera select, not when Voice opens, so a
-    // volume tweak does not light the webcam.
-    await ensureCameraPermission();
+    // volume tweak does not light the webcam. Once per open session:
+    // every Tab through this select used to open a second capture.
+    if (camerasAskedRef.current) {
+      return;
+    }
+    camerasAskedRef.current = true;
+    const granted = await ensureCameraPermission();
+    if (!granted) {
+      camerasAskedRef.current = false;
+    }
     const { cameras: nextCameras } = await listAudioDevices();
     setCameras(nextCameras);
   }
