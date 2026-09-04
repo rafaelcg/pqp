@@ -54,4 +54,11 @@ describe("VoiceOccupantBadges", () => {
     expect(html).toContain('aria-label="Sharing their screen"');
     expect(html).toContain('aria-label="Muted"');
   });
+
+  it("shows the camera badge from the roster stream id", () => {
+    const html = renderToStaticMarkup(
+      <VoiceOccupantBadges person={person({ cameraStreamId: "cam-1" })} />,
+    );
+    expect(html).toContain('aria-label="Camera on"');
+  });
 });

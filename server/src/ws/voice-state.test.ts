@@ -101,6 +101,7 @@ interface RosterFrame {
     muted: boolean;
     deafened: boolean;
     sharingScreen: boolean;
+    cameraStreamId?: string | null;
     screenAudioStreamId?: string | null;
   }>;
 }
@@ -414,5 +415,83 @@ describe("concurrent screen shares are capped per transport", () => {
     expect(
       lastRoster(outside).participants!.filter((p) => p.sharingScreen),
     ).toHaveLength(4);
+  });
+});
+
+describe("concurrent cameras are capped per transport", () => {
+  const sockets: Recorder[] = [];
+  const viewers: Recorder[] = [];
+
+  beforeEach(() => {
+    sockets.length = 0;
+    resetVoicePeers();
+    for (const rec of viewers.splice(0)) {
+      deleteAuthenticatedSocket(rec.socket);
+    }
+    resetVoiceRateLimits();
+    backend.configured = "mesh";
+    resetVoiceRoomTransports();
+  });
+
+  function track(rec: Recorder): Recorder {
+    sockets.push(rec);
+    return rec;
+  }
+
+  function viewer(userId: string): Recorder {
+    const rec = recorder();
+    setAuthenticatedSocket(rec.socket, asUser(userId));
+    viewers.push(rec);
+    return rec;
+  }
+
+  function denials(rec: Recorder): unknown[] {
+    return rec.received
+      .map((raw) => JSON.parse(raw) as { type: string })
+      .filter((frame) => frame.type === "camera-denied");
+  }
+
+  async function camera(rec: Recorder, userId: string, streamId: string | null) {
+    await handleVoiceMessage(
+      { socket: rec.socket, user: asUser(userId) },
+      { type: "set-camera", streamId },
+    );
+  }
+
+  it("lets three people publish a camera on mesh and refuses a fourth", async () => {
+    const outside = viewer("viewer");
+    const a = track(recorder());
+    const b = track(recorder());
+    const c = track(recorder());
+    const d = track(recorder());
+    await join(a, "a");
+    await join(b, "b");
+    await join(c, "c");
+    await join(d, "d");
+
+    await camera(a, "a", "cam-a");
+    await camera(b, "b", "cam-b");
+    await camera(c, "c", "cam-c");
+    await camera(d, "d", "cam-d");
+
+    expect(denials(d)).toHaveLength(1);
+    expect(
+      lastRoster(outside).participants!.filter((p) => p.cameraStreamId),
+    ).toHaveLength(3);
+  });
+
+  it("does not refuse a live camera that re-declares while the room is at cap", async () => {
+    const a = track(recorder());
+    const b = track(recorder());
+    const c = track(recorder());
+    await join(a, "a");
+    await join(b, "b");
+    await join(c, "c");
+    await camera(a, "a", "cam-a");
+    await camera(b, "b", "cam-b");
+    await camera(c, "c", "cam-c");
+    const before = denials(a).length;
+    await camera(a, "a", "cam-a-switch");
+    expect(denials(a).length).toBe(before);
   });
 });

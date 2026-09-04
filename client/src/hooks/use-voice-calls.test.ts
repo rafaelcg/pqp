@@ -515,6 +515,53 @@ describe("camera", () => {
     expect(sent).toEqual([]);
   });
 
+  it("skips the capture when the mesh camera cap is already full", async () => {
+    const { voice } = await connectedController();
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CONVERSATION,
+      transport: "mesh",
+      participants: [
+        participant(PEER, CALLER_ID),
+        participant("aaa", "11111111-1111-4111-8111-111111111111", {
+          cameraStreamId: "a",
+        }),
+        participant("bbb", "22222222-2222-4222-8222-222222222222", {
+          cameraStreamId: "b",
+        }),
+        participant("ccc", "33333333-3333-4333-8333-333333333333", {
+          cameraStreamId: "c",
+        }),
+      ],
+    });
+    await voice.toggleCamera();
+    expect(videoRequests).toHaveLength(0);
+    expect(voice.getState().isCameraOn).toBe(false);
+    expect(voice.getState().error).toMatch(/3/);
+  });
+
+  it("stops the capture when the server denies a camera at the cap", async () => {
+    const { voice } = await connectedController();
+    await voice.toggleCamera();
+    expect(voice.getState().isCameraOn).toBe(true);
+    voice.handleSignaling({
+      type: "camera-denied",
+      voiceChannelId: CONVERSATION,
+    });
+    await settle();
+    expect(voice.getState().isCameraOn).toBe(false);
+    expect(voice.getState().error).toMatch(/3/);
+  });
+
+  it("asks for the saved camera when one is chosen", async () => {
+    const { voice } = await connectedController();
+    await voice.setCameraDevice("cam-2");
+    await voice.toggleCamera();
+    expect(videoRequests[0]).toMatchObject({
+      deviceId: { exact: "cam-2" },
+    });
+  });
+
   it("feeds roster camera stream ids to the mesh for classification", async () => {
     const { voice } = await connectedController();
     voice.handleSignaling({

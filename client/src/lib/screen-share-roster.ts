@@ -1,4 +1,8 @@
-import { SCREEN_SHARE_LIMIT, type VoiceRoomTransport } from "@pqp/shared";
+import {
+  CAMERA_LIMIT,
+  SCREEN_SHARE_LIMIT,
+  type VoiceRoomTransport,
+} from "@pqp/shared";
 
 /**
  * Who to put in the large tile after a roster snapshot.
@@ -59,4 +63,14 @@ export function isScreenShareAtCap(
 ): boolean {
   const others = sharingPeerIds.filter((id) => id !== localPeerId).length;
   return others >= SCREEN_SHARE_LIMIT[transport ?? "mesh"];
+}
+
+/** Same shape as the screen-share cap, for cameras. */
+export function isCameraAtCap(
+  cameraPeerIds: readonly string[],
+  localPeerId: string | null,
+  transport: VoiceRoomTransport | null,
+): boolean {
+  const others = cameraPeerIds.filter((id) => id !== localPeerId).length;
+  return others >= CAMERA_LIMIT[transport ?? "mesh"];
 }

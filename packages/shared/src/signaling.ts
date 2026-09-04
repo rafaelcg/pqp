@@ -168,6 +168,11 @@ export const screenShareDeniedMessageSchema = z.object({
   voiceChannelId: z.string(),
 });
 
+export const cameraDeniedMessageSchema = z.object({
+  type: z.literal("camera-denied"),
+  voiceChannelId: z.string(),
+});
+
 export const offerMessageSchema = z.object({
   type: z.literal("offer"),
   from: z.string(),
@@ -315,6 +320,7 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   voiceTransportUnsupportedMessageSchema,
   voiceJoinRefusedMessageSchema,
   screenShareDeniedMessageSchema,
+  cameraDeniedMessageSchema,
   offerMessageSchema,
   answerMessageSchema,
   iceCandidateMessageSchema,
@@ -344,6 +350,7 @@ export type VoiceRoomFullMessage = z.infer<typeof voiceRoomFullMessageSchema>;
 export type ScreenShareDeniedMessage = z.infer<
   typeof screenShareDeniedMessageSchema
 >;
+export type CameraDeniedMessage = z.infer<typeof cameraDeniedMessageSchema>;
 export type OfferMessage = z.infer<typeof offerMessageSchema>;
 export type AnswerMessage = z.infer<typeof answerMessageSchema>;
 export type IceCandidateMessage = z.infer<typeof iceCandidateMessageSchema>;

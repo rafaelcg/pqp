@@ -28,17 +28,20 @@ export async function ensureMediaPermission(): Promise<boolean> {
 export async function listAudioDevices(): Promise<{
   inputs: MediaDeviceOption[];
   outputs: MediaDeviceOption[];
+  cameras: MediaDeviceOption[];
 }> {
   if (!navigator.mediaDevices?.enumerateDevices) {
-    return { inputs: [], outputs: [] };
+    return { inputs: [], outputs: [], cameras: [] };
   }
 
   const devices = await navigator.mediaDevices.enumerateDevices();
   const inputs: MediaDeviceOption[] = [];
   const outputs: MediaDeviceOption[] = [];
+  const cameras: MediaDeviceOption[] = [];
 
   let inputIndex = 1;
   let outputIndex = 1;
+  let cameraIndex = 1;
 
   for (const device of devices) {
     if (device.kind === "audioinput") {
@@ -51,10 +54,15 @@ export async function listAudioDevices(): Promise<{
         deviceId: device.deviceId,
         label: device.label || `Speaker ${outputIndex++}`,
       });
+    } else if (device.kind === "videoinput") {
+      cameras.push({
+        deviceId: device.deviceId,
+        label: device.label || `Camera ${cameraIndex++}`,
+      });
     }
   }
 
-  return { inputs, outputs };
+  return { inputs, outputs, cameras };
 }
 
 /**
