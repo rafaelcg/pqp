@@ -1,4 +1,4 @@
-Saiu o Baú. E agora dá pra deixar um DM na barra.
+Saiu o Baú. Dá pra deixar um DM na barra. E no site e no PC a call não cai quando a gente atualiza.
 
 ## Baú
 
@@ -17,6 +17,12 @@ No iPhone e no Android você lê, curte e comenta. Postar, agendar e rascunho ai
 ## DM na barra
 
 Clica com o direito na conversa, **Fixar na barra**. A cara da pessoa fica embaixo do ícone de DMs, em cima das comunidades. Clica e abre. No máximo 15, só no site e no PC.
+
+## Call no site e no PC
+
+No Chrome e no app do PC a call fica, mesmo se a gente atualizar no meio.
+
+No iPhone e no Android ainda cai. Entra de novo.
 
 ## Android
 

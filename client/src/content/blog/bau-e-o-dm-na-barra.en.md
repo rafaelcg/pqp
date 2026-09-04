@@ -1,4 +1,4 @@
-The Baú shipped. And you can pin a DM to the rail.
+The Baú shipped. You can pin a DM to the rail. And on the site and desktop the call stays up when we update.
 
 ## Baú
 
@@ -17,6 +17,12 @@ On iPhone and Android you can read, like, and comment. Posting, scheduling, and 
 ## DMs on the rail
 
 Right-click a conversation, **Pin to the rail**. Their face sits under the Home bubble, above the halls. Click it and it opens. Up to 15, on the site and desktop.
+
+## Calls on the site and desktop
+
+In Chrome and the desktop app the call stays, even if we update in the middle.
+
+On iPhone and Android it still drops. Rejoin.
 
 ## Android
 
