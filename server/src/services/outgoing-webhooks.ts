@@ -498,7 +498,7 @@ export async function enqueueOutgoingMessageCreated(input: {
   const hooks = await getPool().query<{ id: string; skip_user_ids: string[] }>(
     `SELECT id, skip_user_ids FROM outgoing_webhooks
       WHERE server_id = $1
-        AND status = 'active'
+        AND status <> 'disabled'
         AND channel_ids && $2::uuid[]`,
     [row.server_id, matchIds],
   );
@@ -751,7 +751,10 @@ async function deliverOne(row: DeliveryRow): Promise<boolean> {
 
   const payload = row.payload;
   const body = serializeMessageCreatedPayload(payload);
-  const unixTs = String(Math.floor(Date.parse(payload.timestamp) / 1000));
+  // Send time, not messages.created_at. Standard Webhooks receivers reject
+  // a timestamp outside a ~5 minute window, so a retry or a post-restart
+  // backlog must be signed with now.
+  const unixTs = String(Math.floor(Date.now() / 1000));
   const secrets = [hook.signing_secret];
   if (
     hook.signing_secret_previous &&
