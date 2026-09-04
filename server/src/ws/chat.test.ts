@@ -64,7 +64,7 @@ vi.mock("../services/embeds.js", () => ({
 
 vi.mock("../services/messages.js", () => ({
   createMessage: async () => ({ id: "message-1" }),
-  getReplyParent: async () => null,
+  getReplyParent: vi.fn(async () => null),
   mapMessage: (row: { id: string }) => ({ id: row.id, body: "hi" }),
 }));
 
@@ -100,6 +100,7 @@ const {
   deliverPermissionsUpdate,
   handleChatMessage,
   notifyFriendActivity,
+  postChannelMessage,
   resetChatRateLimits,
 } = await import("./chat.js");
 const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
@@ -111,6 +112,7 @@ const { isDmSendBlocked, restoreDmParticipants } = await import(
 );
 const { getChannel } = await import("../services/servers.js");
 const { computeMemberPermissions } = await import("../services/permissions.js");
+const { getReplyParent } = await import("../services/messages.js");
 
 interface Recorder {
   socket: WebSocket;
@@ -468,13 +470,15 @@ describe("message-rejected", () => {
     } as Awaited<ReturnType<typeof getChannel>>);
     vi.mocked(computeMemberPermissions).mockReset();
     vi.mocked(computeMemberPermissions).mockResolvedValue(0n);
+    vi.mocked(getReplyParent).mockReset();
+    vi.mocked(getReplyParent).mockResolvedValue(null);
   });
 
   async function post(
     recorder: Recorder,
     userId: string,
     channelId: string,
-    extra: { nonce?: string; body?: string } = {},
+    extra: { nonce?: string; body?: string; replyToId?: string } = {},
   ) {
     await handleChatMessage(
       { socket: recorder.socket, user: asUser(userId) },
@@ -483,6 +487,7 @@ describe("message-rejected", () => {
         channelId,
         body: extra.body ?? "hello",
         nonce: extra.nonce ?? nonce,
+        ...(extra.replyToId ? { replyToId: extra.replyToId } : {}),
       },
     );
   }
@@ -570,6 +575,54 @@ describe("message-rejected", () => {
     ]);
     expect(other.received).toHaveLength(0);
     expect(restoreDmParticipants).not.toHaveBeenCalled();
+  });
+
+  it("restores a closed 1:1 from the shared send path", async () => {
+    const channelId = nextChannelId();
+    const posted = await postChannelMessage({
+      author: asUser("user-a"),
+      channelId,
+      body: "hello",
+    });
+    expect(posted.ok).toBe(true);
+    expect(restoreDmParticipants).toHaveBeenCalledWith(channelId);
+  });
+
+  it("drops a foreign reply silently and does not spend slow mode", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    const channelId = nextChannelId();
+    const foreignParent = {
+      id: "00000000-0000-4000-8000-000000000001",
+      channel_id: "00000000-0000-4000-8000-000000000002",
+      author_id: "user-b",
+      author_name: "b",
+      body: "x",
+    };
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+      type: "text",
+      slowmode_seconds: 5,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES,
+    );
+    vi.mocked(getReplyParent).mockResolvedValue(foreignParent);
+
+    const sender = recordingSocket();
+    await post(sender, "user-a", channelId, {
+      replyToId: foreignParent.id,
+    });
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+    expect(framesOfType(sender.received, "message-broadcast")).toHaveLength(0);
+
+    vi.mocked(getReplyParent).mockResolvedValue(null);
+    sender.received.length = 0;
+    await post(sender, "user-a", channelId);
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+    expect(framesOfType(sender.received, "message-broadcast").length).toBeGreaterThanOrEqual(
+      1,
+    );
   });
 
   it("tells a held member to wait, with the remaining interval", async () => {

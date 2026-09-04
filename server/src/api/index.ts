@@ -3774,28 +3774,31 @@ router.post(
       replyToId: body.replyToId,
     });
     if (!posted.ok) {
-      if (posted.reason === "no-access") {
-        throw new NotFound("Channel not found");
-      }
-      if (posted.reason === "cannot-send") {
-        throw new Forbidden("You cannot send messages here");
-      }
-      if (posted.reason === "undeliverable") {
-        throw new Forbidden("You cannot send to this conversation");
-      }
-      if (posted.reason === "slow-mode") {
-        if (posted.retryAfterMs && posted.retryAfterMs > 0) {
-          res.setHeader(
-            "Retry-After",
-            String(Math.max(1, Math.ceil(posted.retryAfterMs / 1000))),
-          );
+      switch (posted.reason) {
+        case "no-access":
+          throw new NotFound("Channel not found");
+        case "cannot-send":
+          throw new Forbidden("You cannot send messages here");
+        case "undeliverable":
+          throw new Forbidden("You cannot send to this conversation");
+        case "slow-mode":
+        case "rate-limited":
+          if (posted.retryAfterMs && posted.retryAfterMs > 0) {
+            res.setHeader(
+              "Retry-After",
+              String(Math.max(1, Math.ceil(posted.retryAfterMs / 1000))),
+            );
+          }
+          throw new HttpError(429, "Slow down");
+        case "bad-reply":
+          throw new HttpError(400, "Reply is not in this channel");
+        case "empty":
+          throw new HttpError(400, "A message needs a body");
+        default: {
+          posted.reason satisfies never;
+          throw new HttpError(400, "A message needs a body");
         }
-        throw new HttpError(429, "Slow down");
       }
-      if (posted.reason === "bad-reply") {
-        throw new HttpError(400, "Reply is not in this channel");
-      }
-      throw new HttpError(400, "A message needs a body");
     }
     return created({ message: posted.message });
   },

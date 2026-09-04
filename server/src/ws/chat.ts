@@ -891,8 +891,9 @@ function sendMessageRejected(
  * Access, SEND_MESSAGES, blocks and slow mode are decided here. The per-user
  * send budget is not: each caller charges `takeMessageBudget` before it gets
  * here, so the socket can answer with its `rate-limited` frame and HTTP with a
- * 429 plus `Retry-After`. `beforeCreate` is the socket-only join/restore that
- * HTTP has no connection to run.
+ * 429 plus `Retry-After`. `beforeCreate` is the socket-only presence join;
+ * HTTP has no connection to run. Closed 1:1 restore lives in this function
+ * so every door does it.
  */
 export type PostChannelMessageInput = {
   author: DbUser;
@@ -942,6 +943,22 @@ export async function postChannelMessage(
     return { ok: false, reason: "undeliverable" };
   }
 
+  // A 1:1 the recipient had closed comes back when something is said in
+  // it. Ordering is load-bearing: this must run *before* `createMessage`,
+  // because `recordMentions` resolves a conversation's mentionable set
+  // through `channel_members`. It runs after the block guard so a blocked
+  // sender cannot use it to put the conversation back in the blocker's
+  // list. Shared with HTTP so a future human send cannot swallow a hide.
+  await restoreDmParticipants(input.channelId);
+
+  let parent = null;
+  if (input.replyToId) {
+    parent = await getReplyParent(input.replyToId);
+    if (parent && parent.channel_id !== input.channelId) {
+      return { ok: false, reason: "bad-reply" };
+    }
+  }
+
   if (
     channel &&
     channel.kind === "server" &&
@@ -965,14 +982,6 @@ export async function postChannelMessage(
   }
 
   await input.beforeCreate?.();
-
-  let parent = null;
-  if (input.replyToId) {
-    parent = await getReplyParent(input.replyToId);
-    if (parent && parent.channel_id !== input.channelId) {
-      return { ok: false, reason: "bad-reply" };
-    }
-  }
 
   const parsedMentions = extractMentions(input.body);
   let hereUserIds: string[] = [];
@@ -1277,7 +1286,7 @@ export async function handleChatMessage(
       poll: payload.poll,
       nonce: payload.nonce,
       senderSocket: conn.socket,
-      beforeCreate: async () => {
+      beforeCreate: () => {
         // A client that posts without ever sending `join-channel` is still
         // viewing the channel as far as every fan-out here is concerned, so it
         // must land in the presence index too. No `broadcastPresence` on this
@@ -1285,13 +1294,6 @@ export async function handleChatMessage(
         if (!conn.channelId) {
           joinChannel(conn, payload.channelId);
         }
-        // A 1:1 the recipient had closed comes back when something is said in
-        // it. Ordering is load-bearing: this must run *before* `createMessage`,
-        // because `recordMentions` resolves a conversation's mentionable set
-        // through `channel_members`. It runs after the block guard so a blocked
-        // sender cannot use it to put the conversation back in the blocker's
-        // list.
-        await restoreDmParticipants(payload.channelId);
       },
     });
     if (!posted.ok) {
