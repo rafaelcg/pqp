@@ -6,6 +6,7 @@ import type {
   Message,
   MessageBroadcast,
   MessageReaction,
+  MessageRejectReason,
   Poll,
   PollRequest,
   PresenceUpdate,
@@ -31,6 +32,39 @@ export interface ChatMessage extends Message {
   failed?: boolean;
   /** Correlates the optimistic bubble with the server's broadcast. */
   nonce?: string;
+  /** Set when the server answered `message-create` with `message-rejected`. */
+  rejectReason?: MessageRejectReason;
+  /** Epoch ms after which Retry is allowed again. */
+  retryAvailableAt?: number;
+}
+
+export function failedSendKey(
+  reason?: MessageRejectReason,
+):
+  | "chat.reject.rateLimited"
+  | "chat.reject.noAccess"
+  | "chat.reject.cannotSend"
+  | "chat.reject.undeliverable"
+  | "chat.failedSend" {
+  switch (reason) {
+    case "rate-limited":
+      return "chat.reject.rateLimited";
+    case "no-access":
+      return "chat.reject.noAccess";
+    case "cannot-send":
+      return "chat.reject.cannotSend";
+    case "undeliverable":
+      return "chat.reject.undeliverable";
+    default:
+      return "chat.failedSend";
+  }
+}
+
+export function messageRetryReady(
+  message: ChatMessage,
+  now = Date.now(),
+): boolean {
+  return !message.retryAvailableAt || message.retryAvailableAt <= now;
 }
 
 export interface TypingUser {
@@ -268,6 +302,7 @@ export function createChatController(
 
   const typing = new Map<string, { displayName: string; expiresAt: number }>();
   const sendTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const retryUnlockTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let lastTypingSentAt = 0;
   let typingSweep: ReturnType<typeof setInterval> | null = null;
 
@@ -280,6 +315,56 @@ export function createChatController(
     if (timer) {
       clearTimeout(timer);
       sendTimers.delete(nonce);
+    }
+  }
+
+  function clearRetryUnlock(nonce: string) {
+    const timer = retryUnlockTimers.get(nonce);
+    if (timer) {
+      clearTimeout(timer);
+      retryUnlockTimers.delete(nonce);
+    }
+  }
+
+  function markRejected(
+    nonce: string,
+    reason: MessageRejectReason,
+    retryAfterMs?: number,
+  ) {
+    clearSendTimer(nonce);
+    clearRetryUnlock(nonce);
+    const retryAvailableAt =
+      retryAfterMs && retryAfterMs > 0 ? Date.now() + retryAfterMs : undefined;
+    let changed = false;
+    messages = messages.map((message) => {
+      if (message.nonce !== nonce || (!message.pending && !message.failed)) {
+        return message;
+      }
+      changed = true;
+      return {
+        ...message,
+        pending: false,
+        failed: true,
+        rejectReason: reason,
+        retryAvailableAt,
+      };
+    });
+    if (changed) {
+      if (retryAvailableAt && retryAfterMs) {
+        retryUnlockTimers.set(
+          nonce,
+          setTimeout(() => {
+            retryUnlockTimers.delete(nonce);
+            messages = messages.map((message) =>
+              message.nonce === nonce && message.retryAvailableAt
+                ? { ...message, retryAvailableAt: undefined }
+                : message,
+            );
+            emit();
+          }, retryAfterMs),
+        );
+      }
+      emit();
     }
   }
 
@@ -355,6 +440,10 @@ export function createChatController(
       clearTimeout(timer);
     }
     sendTimers.clear();
+    for (const timer of retryUnlockTimers.values()) {
+      clearTimeout(timer);
+    }
+    retryUnlockTimers.clear();
     typing.clear();
     for (const message of messages) {
       revokeLocalPreviews(message);
@@ -715,9 +804,19 @@ export function createChatController(
       if (!failed || !channelId) {
         return;
       }
+      if (!messageRetryReady(failed)) {
+        return;
+      }
+      clearRetryUnlock(nonce);
       messages = messages.map((message) =>
         message.nonce === nonce
-          ? { ...message, pending: true, failed: false }
+          ? {
+              ...message,
+              pending: true,
+              failed: false,
+              rejectReason: undefined,
+              retryAvailableAt: undefined,
+            }
           : message,
       );
       emit();
@@ -734,6 +833,7 @@ export function createChatController(
 
     discardMessage(nonce: string) {
       clearSendTimer(nonce);
+      clearRetryUnlock(nonce);
       for (const message of messages) {
         if (message.nonce === nonce) {
           revokeLocalPreviews(message);
@@ -973,6 +1073,7 @@ export function createChatController(
           // it does not appear twice and does not jump position.
           if (message.nonce) {
             clearSendTimer(message.nonce);
+            clearRetryUnlock(message.nonce);
             const index = messages.findIndex(
               (entry) => entry.nonce === message.nonce,
             );
@@ -1097,6 +1198,14 @@ export function createChatController(
             presence = message.users;
             emit();
           }
+          return;
+        }
+
+        case "message-rejected": {
+          if (message.channelId !== channelId || !message.nonce) {
+            return;
+          }
+          markRejected(message.nonce, message.reason, message.retryAfterMs);
           return;
         }
 
