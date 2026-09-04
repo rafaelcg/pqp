@@ -17,8 +17,12 @@ if (DATABASE_URL) {
 }
 
 const { getPool, initDb, closePool } = await import("../db.js");
-const { upsertUser } = await import("../services/users.js");
-const { createCharacterAccount } = await import("../services/characters.js");
+const { upsertUser, listUnread } = await import("../services/users.js");
+const { createCharacterAccount, revokeCharacterAccount } = await import(
+  "../services/characters.js"
+);
+const { openConversation } = await import("../services/dms.js");
+const { issueTimeout } = await import("../services/sanctions.js");
 const { createServer: createPqpServer } = await import("../services/servers.js");
 const { createInvite, redeemInvite } = await import("../services/invites.js");
 const { createThreadForMessage } = await import("../services/threads.js");
@@ -73,7 +77,7 @@ describeDb("character HTTP send", () => {
       `TRUNCATE users, user_preferences, servers, channels, messages,
                 server_members, channel_members, server_invites, character_accounts,
                 channel_overwrites, outgoing_webhooks, outgoing_webhook_deliveries,
-                message_mentions
+                message_mentions, member_timeouts, channel_reads
        RESTART IDENTITY CASCADE`,
     );
   });
@@ -88,7 +92,11 @@ describeDb("character HTTP send", () => {
     token: string | null,
     channelId: string,
     body: unknown,
-  ): Promise<{ status: number; body: Record<string, unknown> }> {
+  ): Promise<{
+    status: number;
+    retryAfter: string | null;
+    body: Record<string, unknown>;
+  }> {
     const response = await fetch(
       `${baseUrl}/api/channels/${channelId}/messages`,
       {
@@ -103,7 +111,25 @@ describeDb("character HTTP send", () => {
     const text = await response.text();
     return {
       status: response.status,
+      retryAfter: response.headers.get("retry-after"),
       body: (text ? JSON.parse(text) : {}) as Record<string, unknown>,
+    };
+  }
+
+  /** A minted character already invited into a fresh server. */
+  async function seated(clerkId: string) {
+    const minted = await character("caio", "Caio");
+    const owner = await person("Owner", clerkId);
+    const { server, channels } = await createPqpServer("QG", owner.id);
+    const invite = await createInvite(server.id, owner.id, {});
+    await redeemInvite(invite.code, minted.user.id);
+    const channelId = channels.find((c) => c.type === "text")!.id;
+    return {
+      minted,
+      owner,
+      server,
+      channelId,
+      token: `character:${minted.token}`,
     };
   }
 
@@ -287,5 +313,140 @@ describeDb("character HTTP send", () => {
       `SELECT 1 FROM outgoing_webhook_deliveries`,
     );
     expect(deliveries.rowCount).toBe(0);
+  });
+
+  it("400s a replyToId from another channel and posts plain on a missing parent", async () => {
+    const { owner, channelId, token } = await seated("clerk_owner_reply");
+    const other = await createPqpServer("Outro", owner.id);
+    const foreignChannel = other.channels.find((c) => c.type === "text")!.id;
+    const foreign = await createMessage(foreignChannel, owner, "segredo");
+
+    await withGate(async () => {
+      const crossed = await send(token, channelId, {
+        body: "vi",
+        replyToId: foreign!.id,
+      });
+      expect(crossed.status).toBe(400);
+
+      // A parent that is simply gone is an ordinary race, not a bad request.
+      const orphan = await send(token, channelId, {
+        body: "vi",
+        replyToId: "00000000-0000-4000-8000-000000000001",
+      });
+      expect(orphan.status).toBe(201);
+      expect((orphan.body.message as { replyTo: unknown }).replyTo).toBeNull();
+    });
+  });
+
+  it("403s a character sending into a conversation, even when seated in it", async () => {
+    const { minted, owner, token } = await seated("clerk_owner_dm");
+    const friend = await person("Friend", "clerk_friend_dm");
+    await getPool().query(
+      `UPDATE users SET dm_privacy = 'everyone' WHERE id IN ($1, $2)`,
+      [owner.id, friend.id],
+    );
+    const conversation = await openConversation(owner.id, [friend.id]);
+    // The API never puts a character here; this is the backstop for a row
+    // that got there some other way.
+    await getPool().query(
+      `INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2)`,
+      [conversation.channelId, minted.user.id],
+    );
+
+    await withGate(async () => {
+      const posted = await send(token, conversation.channelId, { body: "oi" });
+      expect(posted.status).toBe(403);
+    });
+  });
+
+  it("429s with Retry-After when slow mode holds the character", async () => {
+    const { channelId, token } = await seated("clerk_owner_slow");
+    await getPool().query(
+      `UPDATE channels SET slowmode_seconds = 30 WHERE id = $1`,
+      [channelId],
+    );
+
+    await withGate(async () => {
+      expect((await send(token, channelId, { body: "1" })).status).toBe(201);
+      const held = await send(token, channelId, { body: "2" });
+      expect(held.status).toBe(429);
+      expect(Number(held.retryAfter)).toBeGreaterThan(0);
+    });
+  });
+
+  it("charges the same send budget the socket does", async () => {
+    const { channelId, token } = await seated("clerk_owner_budget");
+
+    await withGate(async () => {
+      // RATE_LIMIT_WS_MESSAGE_CAPACITY defaults to 10; writeLimiter alone
+      // would have let 30 through.
+      for (let i = 0; i < 10; i += 1) {
+        expect((await send(token, channelId, { body: `${i}` })).status).toBe(
+          201,
+        );
+      }
+      const eleventh = await send(token, channelId, { body: "11" });
+      expect(eleventh.status).toBe(429);
+      expect(Number(eleventh.retryAfter)).toBeGreaterThan(0);
+    });
+  });
+
+  it("403s a character that is timed out in the server", async () => {
+    const { minted, owner, server, channelId, token } = await seated(
+      "clerk_owner_timeout",
+    );
+    await issueTimeout({
+      serverId: server.id,
+      userId: minted.user.id,
+      issuedBy: owner.id,
+      minutes: 10,
+    });
+
+    await withGate(async () => {
+      const posted = await send(token, channelId, { body: "silenciado" });
+      expect(posted.status).toBe(403);
+    });
+  });
+
+  it("401s a revoked token on the very next request", async () => {
+    const { channelId, token } = await seated("clerk_owner_revoke");
+
+    await withGate(async () => {
+      expect((await send(token, channelId, { body: "ok" })).status).toBe(201);
+      await revokeCharacterAccount("caio");
+      expect((await send(token, channelId, { body: "gone" })).status).toBe(401);
+    });
+  });
+
+  it("leaves unread and a mention for the person it tagged", async () => {
+    const { owner, server, channelId, token } = await seated(
+      "clerk_owner_unread",
+    );
+
+    await withGate(async () => {
+      const posted = await send(token, channelId, {
+        body: `oi @${owner.username}#${owner.discriminator}`,
+      });
+      expect(posted.status).toBe(201);
+    });
+
+    const unread = await listUnread(server.id, owner.id);
+    const row = unread.find((entry) => entry.channelId === channelId);
+    expect(row?.count).toBe(1);
+    expect(row?.mentions).toBe(1);
+  });
+
+  it("stores @everyone as plain text when the character may not ping everyone", async () => {
+    const { channelId, token } = await seated("clerk_owner_everyone");
+
+    const posted = await withGate(() =>
+      send(token, channelId, { body: "@everyone acorda" }),
+    );
+    expect(posted.status).toBe(201);
+    const row = await getPool().query<{ mention_everyone: boolean }>(
+      `SELECT mention_everyone FROM messages WHERE id = $1`,
+      [(posted.body.message as { id: string }).id],
+    );
+    expect(row.rows[0]?.mention_everyone).toBe(false);
   });
 });
