@@ -916,7 +916,8 @@ router.post("/api/desktop/handoff", async ({ res, user }) => {
   try {
     const ticket = await createDesktopSignInToken(user.clerk_id);
     return { ticket };
-  } catch {
+  } catch (error) {
+    console.error("[pqp] desktop handoff mint failed", error);
     throw new HttpError(503, "Could not start desktop sign-in");
   }
 });

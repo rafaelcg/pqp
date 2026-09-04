@@ -1,11 +1,11 @@
 import { SignIn, SignUp, useAuth, useClerk, useUser } from "@clerk/clerk-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Seo } from "@/components/marketing/seo";
-import { ApiError, mintDesktopHandoff } from "@/lib/api";
+import { ApiError, mintDesktopHandoff, setAuthTokenProvider } from "@/lib/api";
 import { isDesktopApp } from "@/lib/desktop";
-import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
+import { getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import {
   desktopLoginHandoffHref,
   loopbackHandoffUrl,
@@ -31,11 +31,21 @@ export function DesktopLoginPage() {
 function DesktopLoginInner() {
   const { t } = useTranslation();
   const location = useLocation();
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isLoaded, isSignedIn, getToken } = useAuth();
   const { user } = useUser();
   const { signOut } = useClerk();
   const [handoffError, setHandoffError] = useState<string | null>(null);
   const [handoffBusy, setHandoffBusy] = useState(false);
+  const getTokenRef = useRef(getToken);
+  getTokenRef.current = getToken;
+
+  useEffect(() => {
+    setAuthTokenProvider((options) =>
+      getAuthToken(() =>
+        getTokenRef.current({ skipCache: options?.forceRefresh }),
+      ),
+    );
+  }, []);
 
   const params = useMemo(
     () => resolveDesktopLoginParams(location.search),
