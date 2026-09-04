@@ -10,6 +10,18 @@ export interface ScreenShareTile {
   stream: MediaStream | null;
   presenterName: string;
   isSelf: boolean;
+  /**
+   * The presenter's account id, which is what the volume maps are keyed on so
+   * a setting survives them reconnecting with a new `peerId`. Null for our own
+   * tile and for a peer whose identity has not arrived yet.
+   */
+  userId: string | null;
+  /**
+   * Whether this share arrived with sound. Read from the received stream, not
+   * from what the presenter ticked: the question a listener has is whether
+   * there is anything here to turn down.
+   */
+  hasAudio: boolean;
 }
 
 export function collectScreenTiles(args: {
@@ -27,6 +39,9 @@ export function collectScreenTiles(args: {
         stream: args.localStream,
         presenterName: args.localName,
         isSelf: true,
+        userId: null,
+        // Our own share is played by the machine sharing it, never by us.
+        hasAudio: false,
       };
     }
     const remote = args.remotePeers.find((peer) => peer.peerId === peerId);
@@ -35,6 +50,8 @@ export function collectScreenTiles(args: {
       stream: remote?.screenStream ?? null,
       presenterName: remote?.displayName ?? args.fallbackName,
       isSelf: false,
+      userId: remote?.userId ?? null,
+      hasAudio: remote?.screenAudioStream != null,
     };
   });
 }
