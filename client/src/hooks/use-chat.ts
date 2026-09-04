@@ -63,11 +63,64 @@ export function failedSendKey(
   }
 }
 
+const PERMANENT_REJECT_REASONS = new Set<MessageRejectReason>([
+  "no-access",
+  "cannot-send",
+  "undeliverable",
+]);
+
+export function isPermanentRejectReason(
+  reason?: MessageRejectReason,
+): boolean {
+  return reason != null && PERMANENT_REJECT_REASONS.has(reason);
+}
+
+/** Whole seconds left on a hold. 0 means the control is ready. */
+export function remainingWaitSeconds(
+  until: number | null | undefined,
+  now = Date.now(),
+): number {
+  if (!until || until <= now) {
+    return 0;
+  }
+  return Math.max(1, Math.ceil((until - now) / 1000));
+}
+
+/** Another click can succeed: timeout, rate-limit, or slow mode. */
+export function messageCanRetry(
+  message: Pick<ChatMessage, "failed" | "rejectReason">,
+): boolean {
+  return Boolean(message.failed && !isPermanentRejectReason(message.rejectReason));
+}
+
 export function messageRetryReady(
-  message: ChatMessage,
+  message: Pick<ChatMessage, "failed" | "rejectReason" | "retryAvailableAt">,
   now = Date.now(),
 ): boolean {
-  return !message.retryAvailableAt || message.retryAvailableAt <= now;
+  return (
+    messageCanRetry(message) &&
+    remainingWaitSeconds(message.retryAvailableAt, now) === 0
+  );
+}
+
+/**
+ * Status on a failed bubble. A slow-mode wait uses the composer string so the
+ * row and Send tell the same remaining seconds.
+ */
+export function failedSendCopy(
+  message: Pick<ChatMessage, "rejectReason" | "retryAvailableAt">,
+  now = Date.now(),
+): {
+  key: ReturnType<typeof failedSendKey> | "composer.slowMode";
+  vars?: { seconds: number };
+} {
+  if (message.rejectReason === "slow-mode") {
+    const seconds = remainingWaitSeconds(message.retryAvailableAt, now);
+    if (seconds > 0) {
+      return { key: "composer.slowMode", vars: { seconds } };
+    }
+  }
+  return { key: failedSendKey(message.rejectReason) };
 }
 
 export interface TypingUser {
@@ -377,8 +430,15 @@ export function createChatController(
   ) {
     clearSendTimer(nonce);
     clearRetryUnlock(nonce);
-    const retryAvailableAt =
-      retryAfterMs && retryAfterMs > 0 ? Date.now() + retryAfterMs : undefined;
+    let waitMs: number | undefined;
+    if (!isPermanentRejectReason(reason)) {
+      if (retryAfterMs && retryAfterMs > 0) {
+        waitMs = retryAfterMs;
+      } else if (reason === "slow-mode" && slowModeSeconds > 0) {
+        waitMs = slowModeSeconds * 1000;
+      }
+    }
+    const retryAvailableAt = waitMs ? Date.now() + waitMs : undefined;
     let changed = false;
     messages = messages.map((message) => {
       if (message.nonce !== nonce || (!message.pending && !message.failed)) {
@@ -395,15 +455,11 @@ export function createChatController(
     });
     if (changed) {
       if (reason === "slow-mode") {
-        const wait =
-          retryAfterMs && retryAfterMs > 0
-            ? retryAfterMs
-            : slowModeSeconds * 1000;
-        startSlowModeHold(nonce, wait);
+        startSlowModeHold(nonce, waitMs ?? 0);
       } else if (slowModeHoldNonce === nonce) {
         clearSlowModeHold();
       }
-      if (retryAvailableAt && retryAfterMs) {
+      if (retryAvailableAt && waitMs) {
         retryUnlockTimers.set(
           nonce,
           setTimeout(() => {
@@ -414,7 +470,7 @@ export function createChatController(
                 : message,
             );
             emit();
-          }, retryAfterMs),
+          }, waitMs),
         );
       }
       emit();

@@ -49,8 +49,10 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
 import {
-  failedSendKey,
+  failedSendCopy,
+  messageCanRetry,
   messageRetryReady,
+  remainingWaitSeconds,
   type ChatMessage,
   type TypingUser,
 } from "@/hooks/use-chat";
@@ -1167,6 +1169,79 @@ export function MessageList({
   );
 }
 
+const FAILED_ACTION_TILE =
+  "inline-flex h-8 w-full min-w-0 items-center justify-center whitespace-nowrap rounded-md border border-ink-4 bg-ink-3 px-2.5 text-xs font-medium text-paper outline-none hover:border-signal/50 hover:text-signal focus-visible:ring-2 focus-visible:ring-signal/60 disabled:pointer-events-none disabled:opacity-40";
+
+/**
+ * Failed bubble: one status line, then equal-width actions. Retry stays
+ * mounted through a rate-limit / slow-mode wait (disabled, with the remaining
+ * seconds). Permanent refusals get Discard only.
+ */
+function FailedSendFooter({
+  message,
+  tabIndex,
+  onRetry,
+  onDiscard,
+}: {
+  message: ChatMessage;
+  tabIndex: number;
+  onRetry: () => void;
+  onDiscard: () => void;
+}) {
+  const { t } = useTranslation();
+  const [now, setNow] = useState(() => Date.now());
+  const waitSeconds = remainingWaitSeconds(message.retryAvailableAt, now);
+  const canRetry = messageCanRetry(message);
+  const ready = messageRetryReady(message, now);
+  const copy = failedSendCopy(message, now);
+
+  useEffect(() => {
+    if (!message.retryAvailableAt || message.retryAvailableAt <= Date.now()) {
+      return;
+    }
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, [message.retryAvailableAt]);
+
+  return (
+    <div className="mt-1.5">
+      <p className="flex items-start gap-2 text-xs text-danger">
+        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+        <span>{t(copy.key, copy.vars)}</span>
+      </p>
+      <div
+        className={cn(
+          "mt-1.5 grid gap-2",
+          canRetry ? "max-w-[16rem] grid-cols-2" : "max-w-[8rem] grid-cols-1",
+        )}
+      >
+        {canRetry && (
+          <button
+            type="button"
+            tabIndex={tabIndex}
+            disabled={!ready}
+            onClick={onRetry}
+            className={cn(FAILED_ACTION_TILE, "tabular-nums")}
+          >
+            {waitSeconds > 0
+              ? t("chat.retryWait", { seconds: waitSeconds })
+              : t("chat.retry")}
+          </button>
+        )}
+        <button
+          type="button"
+          tabIndex={tabIndex}
+          onClick={onDiscard}
+          className={FAILED_ACTION_TILE}
+        >
+          {t("chat.discard")}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EmptyState() {
   const { t } = useTranslation();
   return (
@@ -1256,7 +1331,8 @@ function buildMessageAriaLabel(
   if (message.pending) {
     parts.push(translateMessage("chat.sending"));
   } else if (message.failed) {
-    parts.push(translateMessage(failedSendKey(message.rejectReason)));
+    const copy = failedSendCopy(message);
+    parts.push(translateMessage(copy.key, copy.vars));
   }
 
   const attachmentCount = message.attachments?.length ?? 0;
@@ -1931,28 +2007,12 @@ const MessageRow = memo(function MessageRow({
             )}
 
             {message.failed && (
-              <p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-danger">
-                <AlertCircle className="h-3.5 w-3.5" />
-                {t(failedSendKey(message.rejectReason))}
-                {messageRetryReady(message) && (
-                  <button
-                    type="button"
-                    tabIndex={controlTabIndex}
-                    onClick={onRetry}
-                    className="underline underline-offset-2 hover:text-paper"
-                  >
-                    {t("chat.retry")}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  tabIndex={controlTabIndex}
-                  onClick={onDiscard}
-                  className="underline underline-offset-2 hover:text-paper"
-                >
-                  {t("chat.discard")}
-                </button>
-              </p>
+              <FailedSendFooter
+                message={message}
+                tabIndex={controlTabIndex}
+                onRetry={onRetry}
+                onDiscard={onDiscard}
+              />
             )}
 
             {isReal && (

@@ -1,6 +1,13 @@
 import type { Message } from "@pqp/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createChatController, failedSendKey } from "./use-chat";
+import {
+  createChatController,
+  failedSendCopy,
+  failedSendKey,
+  messageCanRetry,
+  messageRetryReady,
+  remainingWaitSeconds,
+} from "./use-chat";
 import type { RealtimeTransport } from "@/lib/realtime";
 
 const notifyOpenChannelMessage = vi.fn();
@@ -251,6 +258,58 @@ describe("optimistic sending", () => {
 
   it("names a slow-mode rejection", () => {
     expect(failedSendKey("slow-mode")).toBe("chat.reject.slowMode");
+  });
+
+  it("uses the composer wait copy on a slow-mode row", () => {
+    const copy = failedSendCopy(
+      { rejectReason: "slow-mode", retryAvailableAt: Date.now() + 12_000 },
+      Date.now(),
+    );
+    expect(copy.key).toBe("composer.slowMode");
+    expect(copy.vars).toEqual({ seconds: 12 });
+  });
+
+  it("does not offer retry on a permanent refusal", () => {
+    for (const reason of ["no-access", "cannot-send", "undeliverable"] as const) {
+      expect(messageCanRetry({ failed: true, rejectReason: reason })).toBe(
+        false,
+      );
+      expect(messageRetryReady({ failed: true, rejectReason: reason })).toBe(
+        false,
+      );
+    }
+  });
+
+  it("keeps retry visible through a wait, then ready when it elapses", () => {
+    const now = Date.now();
+    const waiting = {
+      failed: true as const,
+      rejectReason: "rate-limited" as const,
+      retryAvailableAt: now + 2000,
+    };
+    expect(messageCanRetry(waiting)).toBe(true);
+    expect(messageRetryReady(waiting, now)).toBe(false);
+    expect(remainingWaitSeconds(waiting.retryAvailableAt, now)).toBe(2);
+    expect(messageRetryReady(waiting, now + 2000)).toBe(true);
+  });
+
+  it("does not retry a permanent refusal", () => {
+    const { chat, sent } = setup();
+    chat.sendMessage("hi");
+    const nonce = chat.getMessages()[0]!.nonce!;
+
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce,
+      reason: "cannot-send",
+    });
+
+    const before = sent.length;
+    chat.retryMessage(nonce);
+    expect(sent.length).toBe(before);
+    expect(chat.getMessages()[0]!.failed).toBe(true);
+    expect(chat.getMessages()[0]!.rejectReason).toBe("cannot-send");
   });
 
   it("holds send after a slow-mode rejection until retryAfterMs", () => {
