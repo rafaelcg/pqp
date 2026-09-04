@@ -58,6 +58,7 @@ const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
   MANAGE_ROLES: "roles.perm.MANAGE_ROLES",
   MODERATE_MEMBERS: "roles.perm.MODERATE_MEMBERS",
   ADD_REACTIONS: "roles.perm.ADD_REACTIONS",
+  MANAGE_WEBHOOKS: "roles.perm.MANAGE_WEBHOOKS",
 };
 
 /** One-liners for flags whose names collide or oversell. Labels stay for the rest. */
@@ -75,6 +76,7 @@ const FLAG_HINT: Partial<Record<PermissionFlagKey, MessageKey>> = {
   MANAGE_NICKNAMES: "roles.permHint.MANAGE_NICKNAMES",
   MANAGE_ROLES: "roles.permHint.MANAGE_ROLES",
   MODERATE_MEMBERS: "roles.permHint.MODERATE_MEMBERS",
+  MANAGE_WEBHOOKS: "roles.permHint.MANAGE_WEBHOOKS",
 };
 
 /** Display order. Bit numbers stay as defined in `@pqp/shared`. */
@@ -86,6 +88,7 @@ const PERMISSION_GROUPS = [
       "CREATE_INVITE",
       "MANAGE_CHANNELS",
       "MANAGE_SERVER",
+      "MANAGE_WEBHOOKS",
       "MANAGE_ROLES",
       "CHANGE_NICKNAME",
     ],

@@ -5,6 +5,7 @@ import {
   FetchTooLargeError,
   isBlockedAddress,
   safeFetch,
+  safePost,
   UnsafeUrlError,
 } from "./safe-fetch.js";
 
@@ -165,5 +166,60 @@ describe("fetchPinnedAddress: connection mechanics against a real server", () =>
       accept: "*/*",
     });
     expect(result.body.toString()).toBe("reached via pinned address");
+  });
+});
+
+describe("safePost: outgoing webhook SSRF", () => {
+  it("refuses loopback and never connects without allowPrivate", async () => {
+    let hits = 0;
+    const server = http.createServer((_req, res) => {
+      hits += 1;
+      res.end("should never be reached");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+
+    await expect(
+      safePost(`http://127.0.0.1:${port}/hook`, {
+        body: "{}",
+        headers: { "content-type": "application/json" },
+      }),
+    ).rejects.toThrow(UnsafeUrlError);
+    expect(hits).toBe(0);
+
+    server.close();
+  });
+
+  it("POSTs to loopback when allowPrivate is set and does not follow redirects", async () => {
+    let posts = 0;
+    const server = http.createServer((req, res) => {
+      posts += 1;
+      expect(req.method).toBe("POST");
+      if (req.url === "/gone") {
+        res.writeHead(302, { location: "/private" });
+        res.end();
+        return;
+      }
+      res.writeHead(200);
+      res.end("ok");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+
+    const ok = await safePost(`http://127.0.0.1:${port}/hook`, {
+      body: '{"hello":"world"}',
+      allowPrivate: true,
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.body.toString()).toBe("ok");
+
+    const redirected = await safePost(`http://127.0.0.1:${port}/gone`, {
+      body: "{}",
+      allowPrivate: true,
+    });
+    expect(redirected.statusCode).toBe(302);
+    expect(posts).toBe(2);
+
+    server.close();
   });
 });

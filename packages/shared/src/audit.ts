@@ -76,6 +76,10 @@ export const AUDIT_ACTIONS = [
   "invite.delete",
   "webhook.create",
   "webhook.delete",
+  "outgoing_webhook.create",
+  "outgoing_webhook.update",
+  "outgoing_webhook.delete",
+  "outgoing_webhook.rotate",
   /**
    * A report closed by a moderator, actioned or dismissed alike. Only ever
    * written for a report whose context is a *server* channel: `audit_log` is
