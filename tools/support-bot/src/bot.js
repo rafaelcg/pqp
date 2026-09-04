@@ -65,6 +65,13 @@ import { Budget } from "./budget.js";
 import { generateAnswer, estimateCostUsd, DEFAULT_MODEL } from "./generate.js";
 import { ResilientSocket } from "./socket.js";
 import { startHeartbeat } from "./heartbeat.js";
+import {
+  Roster,
+  Greeter,
+  greetingsEnabled,
+  NEWCOMER_WINDOW_MS,
+  DEFAULT_MAX_PER_WINDOW,
+} from "./greetings.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -124,6 +131,29 @@ function parseArgs(argv) {
       .filter(Boolean),
     ownerHandle: process.env.SUPPORT_OWNER_HANDLE ?? "rafa",
     stateDir: valueOf(argv, "--state-dir") ?? process.env.SUPPORT_STATE_DIR ?? join(ROOT, "state"),
+    /**
+     * Answering a newcomer's hello. See `greetings.js` for the whole design;
+     * the knobs are here so an operator can find every one of them in one
+     * place. The channel is a NAME, resolved against the same server as the
+     * answer channels, never an id in code. A missing channel disables the
+     * feature with a logged line rather than refusing to boot: the hellos are
+     * secondary, and their misconfiguration must not take support down.
+     */
+    greetings: {
+      enabled: greetingsEnabled(process.env),
+      channel: (valueOf(argv, "--greeting-channel") ?? process.env.SUPPORT_GREETING_CHANNEL ?? "geral")
+        .trim()
+        .replace(/^#/, ""),
+      newcomerWindowMs: num(process.env.SUPPORT_NEWCOMER_WINDOW_MS, NEWCOMER_WINDOW_MS),
+      maxPerTenMinutes: num(process.env.SUPPORT_GREETING_MAX_PER_10MIN, DEFAULT_MAX_PER_WINDOW),
+      /**
+       * How often the member roster is re-read. This is the resolution of "how
+       * long ago did they join", so it stays well under the fifteen-minute
+       * window. One GET a minute against an endpoint the app calls every time
+       * a member list opens.
+       */
+      memberPollMs: num(process.env.SUPPORT_MEMBER_POLL_MS, 60_000),
+    },
     limits: {
       maxPerUserPerHour: num(process.env.SUPPORT_MAX_PER_USER_HOUR, 6),
       maxPerChannelPerHour: num(process.env.SUPPORT_MAX_PER_CHANNEL_HOUR, 12),
@@ -142,6 +172,7 @@ function parseArgs(argv) {
   args.log ??= join(args.stateDir, "support.log.jsonl");
   args.escalations = join(args.stateDir, "escalations.jsonl");
   args.budgetPath = join(args.stateDir, "budget.json");
+  args.rosterPath = join(args.stateDir, "greetings.json");
   return args;
 }
 
@@ -334,6 +365,64 @@ export function makeEscalator(runtime) {
 }
 
 /**
+ * One message in the greeting channel: reply to it, or say why not.
+ *
+ * Extracted from the loop for the same reason `decideReply` was: the decision
+ * is `greeter.decide`, which is pure and tested on its own; this is the I/O
+ * around it, and the two things it does that the decision cannot are worth
+ * spelling out.
+ *
+ *   1. If the author is somebody the roster has never seen, the roster is
+ *      re-read FIRST. A person who joins and types "oi" within the same minute
+ *      would otherwise fall between two timer ticks and be refused as
+ *      NOT_NEW, which is the common case for exactly the people this is for.
+ *   2. The kill switch is re-checked right before the write, like every other
+ *      post this bot makes, and `--dry-run` prints instead of sending.
+ *
+ * Exported so `test/greetings.test.js` can drive it with a fake socket.
+ */
+export async function answerHello({ message, socket }, { greeter, runtime, args, log, stopped }) {
+  if (!greeter) {
+    return { post: null, reason: "greetings-disabled" };
+  }
+  if (runtime.roster && !runtime.roster.member(message.authorId) && runtime.pollRoster) {
+    await runtime.pollRoster();
+  }
+  const result = greeter.decide(message, Date.now());
+  if (!result.post) {
+    // NOT_GREETING and NOT_NEW are what almost every message in a busy channel
+    // is. Logging them would bury the rare reasons that matter.
+    if (result.reason !== "not-a-greeting" && result.reason !== "not-new") {
+      log("hello.skip", { reason: result.reason, author: message.authorName });
+    }
+    return result;
+  }
+  if (stopped()) {
+    log("bot.halted", { reason: "kill-switch", dropped: "hello" });
+    return { post: null, reason: "kill-switch" };
+  }
+  if (args.dryRun) {
+    console.log(`\n[hello] ${message.authorName}: ${message.body}`);
+    console.log(`  -> ${result.post}`);
+    greeter.recordSent(message, Date.now());
+    return result;
+  }
+  await sleep(MIN_LATENCY_MS);
+  try {
+    socket.reply(result.post, result.replyToId);
+  } catch (error) {
+    // Not recorded as greeted: the reply never left. If they say oi again
+    // inside the window they get it then; the reconnect loop is already
+    // working on the socket.
+    log("hello.dropped", { error: String(error.message), author: message.authorName });
+    return { post: null, reason: "dropped" };
+  }
+  greeter.recordSent(message, Date.now());
+  log("hello", { author: message.authorName, body: message.body, reply: result.post });
+  return result;
+}
+
+/**
  * Hold the typing indicator until `work` settles.
  *
  * NOT the ambient runner's `typeFor`, and the difference is the point. That
@@ -434,6 +523,24 @@ async function connect(args, log) {
     return found;
   });
 
+  // The channel where hellos are answered. Resolved the same way as the answer
+  // channels but NOT fatal when missing: a renamed #geral should cost the QG
+  // its hellos, not its support answers. The line below is the only trace.
+  let greetingChannel = null;
+  if (args.greetings.enabled) {
+    greetingChannel =
+      all.find((c) => c.type === "text" && c.name === args.greetings.channel) ?? null;
+    if (!greetingChannel) {
+      log("greetings.disabled", {
+        reason: "channel-missing",
+        channel: `#${args.greetings.channel}`,
+        known: all.filter((c) => c.type === "text").map((c) => `#${c.name}`),
+      });
+    }
+  } else {
+    log("greetings.disabled", { reason: "SUPPORT_BOT_GREETINGS" });
+  }
+
   log("bot.ready", {
     userId: me.id,
     username: me.username,
@@ -441,6 +548,7 @@ async function connect(args, log) {
     identity: identity.mode,
     server: server.name,
     channels: channels.map((c) => `#${c.name}`),
+    greetingChannel: greetingChannel ? `#${greetingChannel.name}` : null,
   });
 
   return {
@@ -448,6 +556,7 @@ async function connect(args, log) {
     bot: { userId: me.id, username: me.username },
     server,
     channels,
+    greetingChannel,
     tokenProvider,
   };
 }
@@ -539,7 +648,7 @@ async function main() {
     });
   }
 
-  const { bot, channels, tokenProvider } = await connect(args, log);
+  const { api, bot, server, channels, greetingChannel, tokenProvider } = await connect(args, log);
   runtime.bot = bot;
   runtime.allowedChannelIds = new Set(channels.map((c) => c.id));
 
@@ -588,6 +697,86 @@ async function main() {
     sockets.set(channel.id, socket);
   }
 
+  // ── Newcomer hellos. Everything below is inert when `greetingChannel` is
+  // null (feature off, or channel missing), and `greetings.js` explains the
+  // whole design. What lives HERE is the I/O it needs: the roster fetch, the
+  // timer that repeats it, the socket for the greeting channel, and the queue
+  // of candidate messages the main loop drains.
+  const hellos = [];
+  let greeter = null;
+  let stopRosterPoll = () => {};
+  if (greetingChannel) {
+    const roster = new Roster({
+      path: args.dryRun ? null : args.rosterPath,
+      windowMs: args.greetings.newcomerWindowMs,
+    });
+    greeter = new Greeter({
+      roster,
+      rateCap: runtime.rateCap,
+      channelId: greetingChannel.id,
+      botUserId: bot.userId,
+      enabled: args.greetings.enabled,
+      maxPerWindow: args.greetings.maxPerTenMinutes,
+    });
+    /**
+     * Re-read who is in the server. Called at boot, on the timer, and once more
+     * when somebody the roster has never seen posts in the greeting channel,
+     * so a hello typed five seconds after joining is not lost to the timer's
+     * resolution. A failed fetch is a logged line and a stale roster, which
+     * `Roster.observe` already treats as "trust nothing new".
+     */
+    const pollRoster = async () => {
+      try {
+        const { members } = await api.call(`/api/servers/${server.id}/members`);
+        const appeared = roster.observe(members, Date.now());
+        if (appeared.length > 0) {
+          log("roster.appeared", { count: appeared.length });
+        }
+      } catch (error) {
+        log("roster.failed", { error: String(error.message) });
+      }
+    };
+    await pollRoster();
+    const pollTimer = setInterval(() => void pollRoster(), args.greetings.memberPollMs);
+    pollTimer.unref?.();
+    stopRosterPoll = () => clearInterval(pollTimer);
+    runtime.pollRoster = pollRoster;
+    runtime.roster = roster;
+
+    // Reuse the answer socket when #ajuda and the greeting channel are the same
+    // room; otherwise open one more, with the same reconnect policy. Frames
+    // from this socket that are not hellos still go through `screenTrigger`,
+    // which refuses them as CHANNEL unless the room is also an answer channel,
+    // so watching #geral does not make the bot answer questions there.
+    let greetSocket = sockets.get(greetingChannel.id);
+    if (!greetSocket) {
+      greetSocket = new ResilientSocket({
+        wsUrl: args.wsUrl,
+        label: `#${greetingChannel.name}`,
+        channelId: greetingChannel.id,
+        tokenProvider,
+        log,
+      });
+      await greetSocket.start();
+      sockets.set(greetingChannel.id, greetSocket);
+    }
+    greetSocket.onFrame((frame) => {
+      if (frame.type !== "message-broadcast") {
+        return;
+      }
+      const message = frame.message;
+      if (message.channelId === greetingChannel.id && message.authorId !== bot.userId) {
+        hellos.push({ message, socket: greetSocket });
+      }
+    });
+    log("greetings.ready", {
+      channel: `#${greetingChannel.name}`,
+      newcomerWindowMs: args.greetings.newcomerWindowMs,
+      maxPerTenMinutes: args.greetings.maxPerTenMinutes,
+      memberPollMs: args.greetings.memberPollMs,
+    });
+  }
+
   // The only line this process emits on a quiet day. Started after the sockets
   // exist so the first beat reports a real connected count rather than zero.
   const stopHeartbeat = startHeartbeat({ sockets: [...sockets.values()], log });
@@ -597,6 +786,15 @@ async function main() {
       log("bot.halted", { reason: "kill-switch" });
       break;
     }
+    // Hellos first. They are cheap (no model call), they are time-sensitive
+    // (a reply to "oi" that arrives after the answer to somebody else's
+    // question reads as a non sequitur), and there is at most a handful a day.
+    const hello = hellos.shift();
+    if (hello) {
+      await answerHello(hello, { greeter, runtime, args, log, stopped });
+      continue;
+    }
+
     const next = queue.shift();
     if (!next) {
       await sleep(400);
@@ -664,6 +862,7 @@ async function main() {
   }
 
   stopHeartbeat();
+  stopRosterPoll();
   for (const socket of sockets.values()) {
     socket.close();
   }
