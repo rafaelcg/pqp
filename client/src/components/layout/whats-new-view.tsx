@@ -13,6 +13,7 @@ import { BlogMedia } from "@/components/blog/blog-media";
 import { formatPostDate, formatPostShortDate } from "@/lib/blog/format";
 import { loadPostBody } from "@/lib/blog/bodies";
 import { POSTS, type BlogLocale, type BlogPost } from "@/lib/blog/posts";
+import { subscribeEscapeUnlessOverlay } from "@/lib/escape-unless-overlay";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -87,27 +88,7 @@ export function WhatsNewView({
   );
   const selected = POSTS.find((post) => post.slug === selectedSlug) ?? POSTS[0];
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key !== "Escape" || event.defaultPrevented) {
-        return;
-      }
-      const origin = event.target;
-      if (
-        origin instanceof Element &&
-        origin.closest('[role="dialog"], [aria-modal="true"], [role="menu"]')
-      ) {
-        return;
-      }
-      if (document.querySelector('[aria-modal="true"]')) {
-        return;
-      }
-      event.preventDefault();
-      onClose();
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
+  useEffect(() => subscribeEscapeUnlessOverlay(onClose), [onClose]);
 
   function selectPost(slug: string) {
     setSelectedSlug(slug);
