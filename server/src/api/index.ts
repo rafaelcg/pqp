@@ -13,6 +13,7 @@ import {
   createAvatarUploadSchema,
   createServerImageUploadSchema,
   createBlockSchema,
+  createChannelMessageSchema,
   createChannelSchema,
   moveChannelSchema,
   createDmSchema,
@@ -127,6 +128,7 @@ import {
   forEachAuthenticatedSocket,
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
+  postChannelMessage,
   resolveEmbedInBackground,
   resolveStatuses,
 } from "../ws/index.js";
@@ -3733,6 +3735,59 @@ router.post(
 );
 
 // --------------------------------------------------------------- messages
+
+/**
+ * HTTP send for character accounts. Same `createMessage` + fan-out as the
+ * WebSocket `message-create` frame, gated on `users.is_character` and the
+ * existing `Bearer character:<token>` branch. A Clerk session cannot use
+ * this; a character that is not in the channel gets the same 404 as any
+ * other access miss.
+ *
+ * Text only. Attachments, chance and polls stay on the socket. A thread
+ * reply is a POST to the thread's channel id.
+ */
+router.post(
+  "/api/channels/:channelId/messages",
+  async ({ req, res, user }, { channelId }) => {
+    if (!user.is_character) {
+      throw new Forbidden(
+        "Only a character account can send messages over HTTP",
+      );
+    }
+    const body = createChannelMessageSchema.parse(await readJsonBody(req));
+    const posted = await postChannelMessage({
+      author: user,
+      channelId: channelId!,
+      body: body.body,
+      replyToId: body.replyToId,
+    });
+    if (!posted.ok) {
+      if (posted.reason === "no-access") {
+        throw new NotFound("Channel not found");
+      }
+      if (posted.reason === "cannot-send") {
+        throw new Forbidden("You cannot send messages here");
+      }
+      if (posted.reason === "undeliverable") {
+        throw new Forbidden("You cannot send to this conversation");
+      }
+      if (posted.reason === "slow-mode") {
+        if (posted.retryAfterMs && posted.retryAfterMs > 0) {
+          res.setHeader(
+            "Retry-After",
+            String(Math.max(1, Math.ceil(posted.retryAfterMs / 1000))),
+          );
+        }
+        throw new HttpError(429, "Slow down");
+      }
+      if (posted.reason === "bad-reply") {
+        throw new HttpError(400, "Reply is not in this channel");
+      }
+      throw new HttpError(400, "A message needs a body");
+    }
+    return created({ message: posted.message });
+  },
+);
 
 router.get(
   "/api/channels/:channelId/messages",

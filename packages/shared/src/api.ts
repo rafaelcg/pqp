@@ -739,6 +739,22 @@ export const updateMessageSchema = z.object({
   body: messageBodySchema,
 });
 
+/**
+ * POST /api/channels/:channelId/messages — HTTP send for character accounts.
+ *
+ * Text (and markdown) only. Attachments, chance and polls stay on the
+ * WebSocket `message-create` frame. `replyToId` is an inline reply in the
+ * same channel. A thread reply is a send to the thread's own channel id
+ * (`thread.channelId` from `POST /api/messages/:id/threads`).
+ */
+export const createChannelMessageSchema = z.object({
+  body: messageBodySchema,
+  replyToId: z.string().uuid().optional(),
+});
+export type CreateChannelMessageRequest = z.infer<
+  typeof createChannelMessageSchema
+>;
+
 /** How many messages a single history request may return. */
 export const MESSAGE_PAGE_SIZE = 50;
 export const MESSAGE_PAGE_MAX = 100;

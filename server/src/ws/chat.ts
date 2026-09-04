@@ -10,9 +10,11 @@ import {
   permissionsUpdateSchema,
   profileUpdateSchema,
   SLOWMODE_SECONDS_MAX,
+  type ChanceRequest,
   type ChatServerMessage,
   type FriendActivity,
   type MessageRejectReason,
+  type PollRequest,
   type ProfileUpdate,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
@@ -864,6 +866,201 @@ function sendMessageRejected(
   );
 }
 
+/**
+ * The shared create + fan-out path. The WebSocket `message-create` handler
+ * and `POST /api/channels/:channelId/messages` both land here so a bot HTTP
+ * send is the same message a person would have typed: history, mentions,
+ * unread, outgoing-webhook skip (`is_character`), thread chips, embeds.
+ *
+ * Access, SEND_MESSAGES, blocks and slow mode are decided here. The WS
+ * rate limiter stays in the socket handler (HTTP already has `writeLimiter`).
+ * `beforeCreate` is the socket-only join/restore that HTTP has no connection
+ * to run.
+ */
+export type PostChannelMessageInput = {
+  author: DbUser;
+  channelId: string;
+  body: string;
+  replyToId?: string;
+  attachmentIds?: string[];
+  chance?: ChanceRequest;
+  poll?: PollRequest;
+  nonce?: string;
+  senderSocket?: WebSocket;
+  beforeCreate?: () => void | Promise<void>;
+};
+
+export type PostChannelMessageResult =
+  | { ok: true; message: ReturnType<typeof mapMessage> }
+  | {
+      ok: false;
+      reason: MessageRejectReason | "bad-reply" | "empty";
+      retryAfterMs?: number;
+    };
+
+export async function postChannelMessage(
+  input: PostChannelMessageInput,
+): Promise<PostChannelMessageResult> {
+  if (!(await canAccessChannel(input.channelId, input.author.id))) {
+    return { ok: false, reason: "no-access" };
+  }
+  const channel = await getChannel(input.channelId);
+  let canMentionEveryone = false;
+  let memberPerms = 0n;
+  if (channel?.kind === "server" && channel.server_id) {
+    memberPerms = await computeMemberPermissions(
+      channel.server_id,
+      input.author.id,
+      input.channelId,
+    );
+    if (!hasPermission(memberPerms, Permission.SEND_MESSAGES)) {
+      return { ok: false, reason: "cannot-send" };
+    }
+    canMentionEveryone = hasPermission(memberPerms, Permission.MENTION_EVERYONE);
+  }
+  if (input.author.is_character && channel?.kind !== "server") {
+    return { ok: false, reason: "cannot-send" };
+  }
+  if (await isDmSendBlocked(input.channelId, input.author.id)) {
+    return { ok: false, reason: "undeliverable" };
+  }
+
+  if (
+    channel &&
+    channel.kind === "server" &&
+    (channel.type === "text" || channel.type === "thread")
+  ) {
+    const seconds = channel.slowmode_seconds ?? 0;
+    if (
+      seconds > 0 &&
+      !hasPermission(memberPerms, Permission.MANAGE_MESSAGES)
+    ) {
+      const limiter = slowModeLimiterFor(seconds);
+      const key = `${channel.server_id ?? channel.kind}:${channel.id}:${input.author.id}`;
+      if (!limiter.take(key)) {
+        const retryAfterMs = Math.min(
+          limiter.retryAfter(key) * 1000,
+          SLOWMODE_SECONDS_MAX * 1000,
+        );
+        return { ok: false, reason: "slow-mode", retryAfterMs };
+      }
+    }
+  }
+
+  await input.beforeCreate?.();
+
+  let parent = null;
+  if (input.replyToId) {
+    parent = await getReplyParent(input.replyToId);
+    if (parent && parent.channel_id !== input.channelId) {
+      return { ok: false, reason: "bad-reply" };
+    }
+  }
+
+  const parsedMentions = extractMentions(input.body);
+  let hereUserIds: string[] = [];
+  const mentionEveryone =
+    channel?.kind === "server" &&
+    parsedMentions.everyone &&
+    canMentionEveryone;
+  const mentionHere =
+    channel?.kind === "server" && parsedMentions.here && canMentionEveryone;
+  if (mentionHere) {
+    const hereAudience = await getChannelAudience(input.channelId);
+    hereUserIds = (hereAudience?.userIds ?? []).filter(
+      (id) => id !== input.author.id && isPresentForHere(id),
+    );
+  }
+
+  const dbMessage = await createMessage(
+    input.channelId,
+    input.author,
+    input.body,
+    parent?.id ?? null,
+    input.attachmentIds,
+    {
+      mentionEveryone,
+      mentionHere,
+      extraUserIds: hereUserIds,
+      canMentionEveryone,
+    },
+    input.chance || input.poll
+      ? { chance: input.chance, poll: input.poll }
+      : undefined,
+  );
+  if (!dbMessage) {
+    return { ok: false, reason: "empty" };
+  }
+
+  try {
+    await enqueueOutgoingMessageCreated({
+      channelId: input.channelId,
+      messageId: dbMessage.id,
+      authorId: input.author.id,
+      body: dbMessage.body,
+      createdAt: dbMessage.created_at,
+      replyToId: dbMessage.reply_to_id ?? null,
+    });
+  } catch (error) {
+    console.error("[outgoing-webhooks] enqueue failed:", error);
+  }
+
+  const message = mapMessage(dbMessage);
+  const url = extractFirstUrl(input.body);
+  let cacheFresh = true;
+  if (url) {
+    const state = await getEmbedCacheState(url);
+    cacheFresh = state.fresh;
+    if (state.embed) {
+      message.embeds = [state.embed];
+    }
+  }
+
+  broadcastToChannel(
+    input.channelId,
+    {
+      type: "message-broadcast",
+      message,
+      ...(input.nonce ? { nonce: input.nonce } : {}),
+    },
+    input.senderSocket,
+  );
+
+  const mentions = extractMentionUsernames(input.body);
+  if (isBusEnabled()) {
+    publishToCluster(ACTIVITY_TOPIC, {
+      channelId: input.channelId,
+      authorId: input.author.id,
+      mentions,
+      repliedToUserId: parent?.author_id ?? null,
+      mentionEveryone,
+      mentionHereUserIds: hereUserIds,
+    });
+  }
+  await notifyChannelActivity(
+    input.channelId,
+    input.author.id,
+    mentions,
+    parent?.author_id ?? null,
+    { mentionEveryone, mentionHereUserIds: hereUserIds },
+  );
+
+  const threadInfo = await getThreadInfo(input.channelId);
+  if (threadInfo?.rootMessageId) {
+    broadcastToChannel(threadInfo.parentChannelId, {
+      type: "thread-update",
+      channelId: threadInfo.parentChannelId,
+      messageId: threadInfo.rootMessageId,
+      thread: threadInfo,
+    });
+  }
+
+  if (url && !cacheFresh) {
+    resolveEmbedInBackground(input.channelId, message, url);
+  }
+  return { ok: true, message };
+}
+
 export async function handleChatMessage(
   session: { socket: WebSocket; user: DbUser },
   raw: unknown,
@@ -1052,242 +1249,47 @@ export async function handleChatMessage(
       );
       return;
     }
-    if (!(await canAccessChannel(payload.channelId, conn.user.id))) {
-      sendMessageRejected(
-        conn.socket,
-        payload.channelId,
-        payload.nonce,
-        "no-access",
-      );
-      return;
-    }
-    const channel = await getChannel(payload.channelId);
-    let canMentionEveryone = false;
-    let memberPerms = 0n;
-    if (channel?.kind === "server" && channel.server_id) {
-      memberPerms = await computeMemberPermissions(
-        channel.server_id,
-        conn.user.id,
-        payload.channelId,
-      );
-      if (!hasPermission(memberPerms, Permission.SEND_MESSAGES)) {
-        sendMessageRejected(
-          conn.socket,
-          payload.channelId,
-          payload.nonce,
-          "cannot-send",
-        );
-        return;
-      }
-      canMentionEveryone = hasPermission(memberPerms, Permission.MENTION_EVERYONE);
-    }
-    // A block closes a 1:1 in both directions. The sender is told the
-    // create will not land; the reason stays vague so this is not an
-    // oracle for "has this person blocked me". The conversation is not
-    // restored.
-    if (await isDmSendBlocked(payload.channelId, conn.user.id)) {
-      sendMessageRejected(
-        conn.socket,
-        payload.channelId,
-        payload.nonce,
-        "undeliverable",
-      );
-      return;
-    }
-
-    // Text and threads only. DMs stay 0 and never reach this; voice ignores
-    // the column even if someone wrote a value. A thread reads its own row.
-    if (
-      channel &&
-      channel.kind === "server" &&
-      (channel.type === "text" || channel.type === "thread")
-    ) {
-      const seconds = channel.slowmode_seconds ?? 0;
-      if (
-        seconds > 0 &&
-        !hasPermission(memberPerms, Permission.MANAGE_MESSAGES)
-      ) {
-        const limiter = slowModeLimiterFor(seconds);
-        // Channel ids are global UUIDs. The server id is in the key so a
-        // reused id in a fixture cannot charge the wrong room.
-        const key = `${channel.server_id ?? channel.kind}:${channel.id}:${conn.user.id}`;
-        if (!limiter.take(key)) {
-          const retryAfterMs = Math.min(
-            limiter.retryAfter(key) * 1000,
-            SLOWMODE_SECONDS_MAX * 1000,
-          );
-          sendMessageRejected(
-            conn.socket,
-            payload.channelId,
-            payload.nonce,
-            "slow-mode",
-            retryAfterMs,
-          );
-          return;
+    const posted = await postChannelMessage({
+      author: conn.user,
+      channelId: payload.channelId,
+      body: payload.body,
+      replyToId: payload.replyToId,
+      attachmentIds: payload.attachmentIds,
+      chance: payload.chance,
+      poll: payload.poll,
+      nonce: payload.nonce,
+      senderSocket: conn.socket,
+      beforeCreate: async () => {
+        // A client that posts without ever sending `join-channel` is still
+        // viewing the channel as far as every fan-out here is concerned, so it
+        // must land in the presence index too. No `broadcastPresence` on this
+        // path: it stays as quiet as it was.
+        if (!conn.channelId) {
+          joinChannel(conn, payload.channelId);
         }
-      }
-    }
-
-    // A client that posts without ever sending `join-channel` is still viewing
-    // the channel as far as every fan-out here is concerned, so it must land in
-    // the presence index too — assigning `channelId` alone used to work only
-    // because fan-out re-scanned that field, and would now drop every later
-    // message in this channel for this socket. No `broadcastPresence` on this
-    // path: it stays as quiet as it was, and the next real join or leave
-    // publishes the corrected roster.
-    if (!conn.channelId) {
-      joinChannel(conn, payload.channelId);
-    }
-
-    // A 1:1 the recipient had closed comes back when something is said in it.
-    // Without this the message lands in a channel they are no longer a member
-    // of, so they are not in its audience, get no badge, and never learn it
-    // exists — closing a conversation would silently swallow the next one.
-    // A no-op for every channel that is not a 1:1.
-    //
-    // Ordering is load-bearing: this must run *before* `createMessage`, because
-    // `recordMentions` resolves a conversation's mentionable set through
-    // `channel_members`. Restoring afterwards leaves the recipient missing from
-    // that set for their own message, so an @-mention into a conversation they
-    // had closed records no row — the live badge says "mention" and the badge
-    // after a refresh says none, the exact disagreement the reply-mention
-    // comment in `messages.ts` exists to prevent. It runs after the block guard
-    // so a blocked sender cannot use it to put the conversation back in the
-    // blocker's list.
-    await restoreDmParticipants(payload.channelId);
-
-    let parent = null;
-    if (payload.replyToId) {
-      parent = await getReplyParent(payload.replyToId);
-      // A parent in another channel can only come from a client that made it
-      // up, so drop the whole frame the way every other invalid input is
-      // dropped. A parent that is simply gone is an ordinary race — someone
-      // deleted it while the reply was being typed — and losing the words
-      // somebody actually wrote would be the worse failure, so it posts plain.
-      if (parent && parent.channel_id !== payload.channelId) {
+        // A 1:1 the recipient had closed comes back when something is said in
+        // it. Ordering is load-bearing: this must run *before* `createMessage`,
+        // because `recordMentions` resolves a conversation's mentionable set
+        // through `channel_members`. It runs after the block guard so a blocked
+        // sender cannot use it to put the conversation back in the blocker's
+        // list.
+        await restoreDmParticipants(payload.channelId);
+      },
+    });
+    if (!posted.ok) {
+      // A parent in another channel, or an attachment-only create whose every
+      // upload failed verification, used to drop silently. Keep that: the
+      // first is a made-up id, the second is no longer a message.
+      if (posted.reason === "bad-reply" || posted.reason === "empty") {
         return;
       }
-    }
-
-    const parsedMentions = extractMentions(payload.body);
-    let hereUserIds: string[] = [];
-    const mentionEveryone =
-      channel?.kind === "server" &&
-      parsedMentions.everyone &&
-      canMentionEveryone;
-    const mentionHere =
-      channel?.kind === "server" && parsedMentions.here && canMentionEveryone;
-    if (mentionHere) {
-      const hereAudience = await getChannelAudience(payload.channelId);
-      hereUserIds = (hereAudience?.userIds ?? []).filter(
-        (id) => id !== conn.user.id && isPresentForHere(id),
+      sendMessageRejected(
+        conn.socket,
+        payload.channelId,
+        payload.nonce,
+        posted.reason,
+        posted.retryAfterMs,
       );
-    }
-
-    const dbMessage = await createMessage(
-      payload.channelId,
-      conn.user,
-      payload.body,
-      parent?.id ?? null,
-      payload.attachmentIds,
-      {
-        mentionEveryone,
-        mentionHere,
-        extraUserIds: hereUserIds,
-        canMentionEveryone,
-      },
-      payload.chance || payload.poll
-        ? { chance: payload.chance, poll: payload.poll }
-        : undefined,
-    );
-    // Nothing survived: an attachment-only message whose every upload failed
-    // its verification. The frame said something when it was sent and says
-    // nothing now, so it is dropped like any other frame that does not describe
-    // a message — broadcasting an empty bubble would be worse than silence.
-    if (!dbMessage) {
-      return;
-    }
-
-    try {
-      await enqueueOutgoingMessageCreated({
-        channelId: payload.channelId,
-        messageId: dbMessage.id,
-        authorId: conn.user.id,
-        body: dbMessage.body,
-        createdAt: dbMessage.created_at,
-        replyToId: dbMessage.reply_to_id ?? null,
-      });
-    } catch (error) {
-      console.error("[outgoing-webhooks] enqueue failed:", error);
-    }
-
-    const message = mapMessage(dbMessage);
-    // A link somebody else already shared resolves instantly from cache and
-    // rides the very first broadcast; a link nobody has posted before goes
-    // out without one and catches up over `resolveEmbedInBackground` below —
-    // either way this never blocks the message itself on a network fetch.
-    const url = extractFirstUrl(payload.body);
-    let cacheFresh = true;
-    if (url) {
-      const state = await getEmbedCacheState(url);
-      cacheFresh = state.fresh;
-      if (state.embed) {
-        message.embeds = [state.embed];
-      }
-    }
-
-    broadcastToChannel(
-      payload.channelId,
-      {
-        type: "message-broadcast",
-        message,
-        ...(payload.nonce ? { nonce: payload.nonce } : {}),
-      },
-      conn.socket,
-    );
-
-    const mentions = extractMentionUsernames(payload.body);
-    if (isBusEnabled()) {
-      publishToCluster(ACTIVITY_TOPIC, {
-        channelId: payload.channelId,
-        authorId: conn.user.id,
-        mentions,
-        repliedToUserId: parent?.author_id ?? null,
-        mentionEveryone,
-        mentionHereUserIds: hereUserIds,
-      });
-    }
-    await notifyChannelActivity(
-      payload.channelId,
-      conn.user.id,
-      mentions,
-      parent?.author_id ?? null,
-      { mentionEveryone, mentionHereUserIds: hereUserIds },
-    );
-
-    // --- threads ---
-    // A message into a thread owes the PARENT channel's viewers a chip
-    // refresh: reply count and freshness on the origin message, with no
-    // content attached. One indexed lookup per send answers "is this channel a
-    // thread" and, for the overwhelming majority of sends, is the entire cost.
-    // Fanned out through `broadcastToChannel`, so the cluster relay carries it
-    // to viewers held by other instances — `thread-update` is in
-    // CHAT_SERVER_MESSAGE_TYPES for exactly that reason.
-    const threadInfo = await getThreadInfo(payload.channelId);
-    if (threadInfo?.rootMessageId) {
-      broadcastToChannel(threadInfo.parentChannelId, {
-        type: "thread-update",
-        channelId: threadInfo.parentChannelId,
-        messageId: threadInfo.rootMessageId,
-        thread: threadInfo,
-      });
-    }
-
-    // Only a genuine cache miss re-fetches — a fresh `failed` row already
-    // covers this url for FAILURE_TTL_MS, and re-trying it on every message
-    // that repeats a dead link would defeat that TTL entirely.
-    if (url && !cacheFresh) {
-      resolveEmbedInBackground(payload.channelId, message, url);
     }
     return;
   }

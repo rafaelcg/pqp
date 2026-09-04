@@ -30,6 +30,7 @@ export {
   evictUserFromChannels,
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
+  postChannelMessage,
   resolveEmbedInBackground,
   startClusterPresenceRefresh,
 } from "./chat.js";

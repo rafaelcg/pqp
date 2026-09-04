@@ -51,6 +51,7 @@
 | Per-server data export | Done (owner-only JSON download of channels/members/messages, capped at 50k messages, audit-logged) |
 | Incoming webhooks | Done (Discord wire-compatible payload shape; per-channel management UI; pseudo-user authors messages so no read path had to change; audit-logged) |
 | Outgoing channel webhooks | Draft (PR: server-scoped HTTPS POST after a human message; Standard Webhooks HMAC; outbox + DLQ; Integrations settings; skip `is_bot` / skip-user list. Not a bot API. [`OUTGOING_WEBHOOKS.md`](./OUTGOING_WEBHOOKS.md)) |
+| Character HTTP send | Done on this branch (PR). `POST /api/channels/:id/messages` as `Bearer character:<token>`; same create path as WS. [`BOT_SEND.md`](./BOT_SEND.md) |
 | i18n (en + pt-BR) | Done (i18next core, lazy pt-BR, Electron menus in `electron/locales/`) |
 | Mobile PWA | Done (installable, shell precache + offline fallback, prompted updates, iOS safe-area/`dvh`, SW notification path for Android — `docs/PWA.md`) |
 | Native Android app | **Partial** (Kotlin + Compose + Material 3 in `android/`: auth, age gate, servers, channels, text chat all verified against a live local server; mesh voice with a foreground service negotiates between two clients but its media path is unproven for want of TURN; no screen share, no push, no CI job. See `docs/ANDROID.md`) |
