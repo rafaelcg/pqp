@@ -230,13 +230,18 @@ export function screenScaleFactor(
  */
 export function cameraConstraintsFor(
   quality: VideoQuality,
+  deviceId?: string,
 ): MediaTrackConstraints {
   const profile = cameraProfileFor(quality);
-  return {
+  const constraints: MediaTrackConstraints = {
     width: { ideal: profile.width },
     height: { ideal: profile.height },
     frameRate: { ideal: profile.frameRate },
   };
+  if (deviceId) {
+    constraints.deviceId = { exact: deviceId };
+  }
+  return constraints;
 }
 
 export function cameraBitrateFor(quality: VideoQuality): number {
@@ -272,13 +277,23 @@ type GetUserMedia = (
 export async function captureCamera(
   getUserMedia: GetUserMedia,
   quality: VideoQuality,
+  deviceId?: string,
 ): Promise<MediaStream> {
   try {
     return await getUserMedia({
-      video: cameraConstraintsFor(quality),
+      video: cameraConstraintsFor(quality, deviceId),
       audio: false,
     });
   } catch (err) {
+    // The saved camera is gone. Try any camera at the same quality rather
+    // than leaving the button dead over a device id that no longer exists.
+    if (
+      deviceId &&
+      err instanceof Error &&
+      err.name === "NotFoundError"
+    ) {
+      return captureCamera(getUserMedia, quality);
+    }
     if (isFatalCaptureError(err)) {
       throw err;
     }
@@ -286,7 +301,10 @@ export async function captureCamera(
       "[pqp] camera refused the requested size; falling back to defaults",
       err,
     );
-    return getUserMedia({ video: true, audio: false });
+    return getUserMedia({
+      video: deviceId ? { deviceId: { exact: deviceId } } : true,
+      audio: false,
+    });
   }
 }
 

@@ -25,7 +25,11 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
-import { SCREEN_SHARE_LIMIT, MESH_VOICE_WARNING } from "@pqp/shared";
+import {
+  CAMERA_LIMIT,
+  SCREEN_SHARE_LIMIT,
+  MESH_VOICE_WARNING,
+} from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { VideoQuality } from "@/lib/video-quality";
 import { shareStreamHasAudio } from "@/lib/screen-capture-audio";
@@ -61,7 +65,7 @@ import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
-import { isScreenShareAtCap } from "@/lib/screen-share-roster";
+import { isCameraAtCap, isScreenShareAtCap } from "@/lib/screen-share-roster";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { PeerTileControls } from "@/components/voice/peer-tile-controls";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
@@ -1479,6 +1483,13 @@ function CallControls({
   const shareLimit = SCREEN_SHARE_LIMIT[voiceState.roomTransport ?? "mesh"];
   // The cap only bites somebody who is not already one of the shares.
   const shareCappedOut = shareAtCap && !voiceState.isSharingScreen;
+  const cameraAtCap = isCameraAtCap(
+    voiceState.cameraPeerIds,
+    voiceState.peerId,
+    voiceState.roomTransport,
+  );
+  const cameraLimit = CAMERA_LIMIT[voiceState.roomTransport ?? "mesh"];
+  const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
   const size = collapsed ? "h-8 w-8" : "h-10 w-10";
   const iconSize = collapsed ? "h-3.5 w-3.5" : "h-4 w-4";
 
@@ -1589,10 +1600,16 @@ function CallControls({
             ? t("call.panel.cameraOn")
             : t("call.panel.cameraOff")
         }
+        detail={
+          cameraCappedOut
+            ? t("voice.control.cameraLimit", { limit: cameraLimit })
+            : undefined
+        }
       >
         <button
           type="button"
           aria-pressed={voiceState.isCameraOn}
+          aria-disabled={cameraCappedOut || undefined}
           aria-label={
             voiceState.isCameraOn
               ? t("call.panel.cameraOn")
@@ -1601,11 +1618,17 @@ function CallControls({
           className={cn(
             "flex items-center justify-center rounded-full",
             size,
+            cameraCappedOut && "opacity-40",
             voiceState.isCameraOn
               ? "bg-signal/20 text-signal"
               : "bg-ink-3 text-paper hover:bg-ink-4",
           )}
-          onClick={onToggleCamera}
+          onClick={() => {
+            if (cameraCappedOut) {
+              return;
+            }
+            onToggleCamera();
+          }}
         >
           {voiceState.isCameraOn ? (
             <Video className={iconSize} />

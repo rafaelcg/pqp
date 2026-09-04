@@ -18,7 +18,7 @@ First deploy priority: **dev / marketing website** on Pages. Point `VITE_API_URL
 
 ## GitHub Actions
 
-### Which changes restart the API, and therefore drop every call
+### Which changes restart the API
 
 `deploy-api-fly.yml` only deploys when the commit touches something the server
 actually runs. The gate is an **allowlist**, so anything not on it is left

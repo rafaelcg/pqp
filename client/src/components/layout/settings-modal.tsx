@@ -60,6 +60,7 @@ import {
 import type { VoiceInputMode } from "@/hooks/use-voice";
 import {
   defaultMicProcessing,
+  ensureCameraPermission,
   ensureMediaPermission,
   listAudioDevices,
   supportsAudioOutputSelection,
@@ -127,6 +128,8 @@ export interface LocalSettings {
   muteOnJoin: boolean;
   compactPeers: boolean;
   inputDeviceId: string;
+  /** Webcam on this machine. Device-local, same reason as the mic id. */
+  cameraDeviceId: string;
   outputDeviceId: string;
   inputVolume: number;
   outputVolume: number;
@@ -169,6 +172,7 @@ export const defaultLocalSettings: LocalSettings = {
   muteOnJoin: false,
   compactPeers: false,
   inputDeviceId: "",
+  cameraDeviceId: "",
   outputDeviceId: "",
   inputVolume: 1,
   outputVolume: 1,
@@ -205,6 +209,10 @@ export function loadLocalSettings(): LocalSettings {
         typeof parsed.inputDeviceId === "string"
           ? parsed.inputDeviceId
           : defaultLocalSettings.inputDeviceId,
+      cameraDeviceId:
+        typeof parsed.cameraDeviceId === "string"
+          ? parsed.cameraDeviceId
+          : defaultLocalSettings.cameraDeviceId,
       outputDeviceId:
         typeof parsed.outputDeviceId === "string"
           ? parsed.outputDeviceId
@@ -722,6 +730,8 @@ function VoiceSection({
   patchLocal,
   inputs,
   outputs,
+  cameras,
+  onRevealCameras,
   devicesError,
   voiceAnalyser,
   metering,
@@ -730,6 +740,8 @@ function VoiceSection({
   patchLocal: (partial: Partial<LocalSettings>) => void;
   inputs: MediaDeviceOption[];
   outputs: MediaDeviceOption[];
+  cameras: MediaDeviceOption[];
+  onRevealCameras: () => void;
   devicesError: string | null;
   voiceAnalyser: AnalyserNode | null;
   metering: boolean;
@@ -942,6 +954,25 @@ function VoiceSection({
             percent: Math.round(draftLocal.outputVolume * 100),
           })}
         </span>
+      </label>
+
+      <label className="block">
+        <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+          {t("settings.voice.cameraDevice")}
+        </span>
+        <select
+          value={draftLocal.cameraDeviceId}
+          onChange={(e) => patchLocal({ cameraDeviceId: e.target.value })}
+          onFocus={() => onRevealCameras()}
+          className={selectClass}
+        >
+          <option value="">{t("settings.voice.systemDefault")}</option>
+          {cameras.map((device) => (
+            <option key={device.deviceId} value={device.deviceId}>
+              {device.label}
+            </option>
+          ))}
+        </select>
       </label>
 
       <div>
@@ -2753,6 +2784,7 @@ export function SettingsModal({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [inputs, setInputs] = useState<MediaDeviceOption[]>([]);
+  const [cameras, setCameras] = useState<MediaDeviceOption[]>([]);
   const [outputs, setOutputs] = useState<MediaDeviceOption[]>([]);
   const [devicesError, setDevicesError] = useState<string | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -2761,6 +2793,9 @@ export function SettingsModal({
   // they were rather than at the top of the tree every time.
   const [section, setSection] = useState<SectionId>("profile");
   const settingsRef = useRef(localSettings);
+  // Camera permission is asked once per open Settings session. Tabbing
+  // through the Voice form must not blink the webcam LED on every focus.
+  const camerasAskedRef = useRef(false);
   const active = SECTIONS.find((entry) => entry.id === section) ?? SECTIONS[0]!;
   const tabIdPrefix = "settings-tab";
   const panelId = "settings-panel";
@@ -2778,6 +2813,7 @@ export function SettingsModal({
   useEffect(() => {
     if (!open) {
       setConfirmingDelete(false);
+      camerasAskedRef.current = false;
     }
   }, [open]);
 
@@ -2829,13 +2865,14 @@ export function SettingsModal({
         }
         return;
       }
-      const { inputs: nextInputs, outputs: nextOutputs } =
+      const { inputs: nextInputs, outputs: nextOutputs, cameras: nextCameras } =
         await listAudioDevices();
       if (cancelled) {
         return;
       }
       setInputs(nextInputs);
       setOutputs(nextOutputs);
+      setCameras(nextCameras);
     }
 
     void loadDevices();
@@ -2855,6 +2892,23 @@ export function SettingsModal({
     // `t` is stable per locale and the locale cannot change without a reload.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceVisible]);
+
+  async function revealCameras() {
+    // Labels stay blank until the browser has seen a video permission.
+    // Asked on focus of the camera select, not when Voice opens, so a
+    // volume tweak does not light the webcam. Once per open session:
+    // every Tab through this select used to open a second capture.
+    if (camerasAskedRef.current) {
+      return;
+    }
+    camerasAskedRef.current = true;
+    const granted = await ensureCameraPermission();
+    if (!granted) {
+      camerasAskedRef.current = false;
+    }
+    const { cameras: nextCameras } = await listAudioDevices();
+    setCameras(nextCameras);
+  }
 
   function patchLocal(partial: Partial<LocalSettings>) {
     // Composed off a ref rather than inside a `setDraftLocal` updater.
@@ -2966,6 +3020,10 @@ export function SettingsModal({
                 patchLocal={patchLocal}
                 inputs={inputs}
                 outputs={outputs}
+                cameras={cameras}
+                onRevealCameras={() => {
+                  void revealCameras();
+                }}
                 devicesError={devicesError}
                 voiceAnalyser={voiceAnalyser}
                 metering={voiceVisible}
