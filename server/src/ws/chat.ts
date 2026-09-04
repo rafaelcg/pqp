@@ -1108,7 +1108,9 @@ export async function handleChatMessage(
         !hasPermission(memberPerms, Permission.MANAGE_MESSAGES)
       ) {
         const limiter = slowModeLimiterFor(seconds);
-        const key = `${payload.channelId}:${conn.user.id}`;
+        // Channel ids are global UUIDs. The server id is in the key so a
+        // reused id in a fixture cannot charge the wrong room.
+        const key = `${channel.server_id ?? channel.kind}:${channel.id}:${conn.user.id}`;
         if (!limiter.take(key)) {
           const retryAfterMs = Math.min(
             limiter.retryAfter(key) * 1000,

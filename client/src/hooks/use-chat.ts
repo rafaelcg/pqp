@@ -363,9 +363,19 @@ export function createChatController(
   let typingSweep: ReturnType<typeof setInterval> | null = null;
   let slowModeSeconds = 0;
   let bypassSlowMode = false;
-  let slowModeHeldUntil = 0;
-  let slowModeHoldTimer: ReturnType<typeof setTimeout> | null = null;
-  let slowModeHoldNonce: string | null = null;
+  /**
+   * One hold per channel. A single timestamp used to follow you into the next
+   * channel, and `joinChannel` used to wipe it, so a hop looked like the wait
+   * had ended.
+   */
+  const slowModeHolds = new Map<
+    string,
+    {
+      until: number;
+      nonce: string | null;
+      timer: ReturnType<typeof setTimeout> | null;
+    }
+  >();
 
   function emit() {
     listener?.();
@@ -387,40 +397,58 @@ export function createChatController(
     }
   }
 
-  function clearSlowModeHoldTimer() {
-    if (slowModeHoldTimer) {
-      clearTimeout(slowModeHoldTimer);
-      slowModeHoldTimer = null;
+  function heldUntilFor(id: string | null): number {
+    if (!id) {
+      return 0;
     }
+    const hold = slowModeHolds.get(id);
+    if (!hold || hold.until <= Date.now()) {
+      return 0;
+    }
+    return hold.until;
   }
 
-  function clearSlowModeHold() {
-    clearSlowModeHoldTimer();
-    slowModeHeldUntil = 0;
-    slowModeHoldNonce = null;
-  }
-
-  function applySlowModeHold(until: number) {
-    clearSlowModeHoldTimer();
-    const now = Date.now();
-    if (until <= now) {
-      slowModeHeldUntil = 0;
+  function clearSlowModeHold(id: string | null = channelId) {
+    if (!id) {
       return;
     }
-    slowModeHeldUntil = until;
-    slowModeHoldTimer = setTimeout(() => {
-      slowModeHoldTimer = null;
-      slowModeHeldUntil = 0;
-      emit();
+    const hold = slowModeHolds.get(id);
+    if (hold?.timer) {
+      clearTimeout(hold.timer);
+    }
+    slowModeHolds.delete(id);
+  }
+
+  function clearAllSlowModeHolds() {
+    for (const hold of slowModeHolds.values()) {
+      if (hold.timer) {
+        clearTimeout(hold.timer);
+      }
+    }
+    slowModeHolds.clear();
+  }
+
+  function applySlowModeHold(id: string, until: number, nonce: string | null) {
+    clearSlowModeHold(id);
+    const now = Date.now();
+    if (until <= now) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      const hold = slowModeHolds.get(id);
+      if (hold?.timer === timer) {
+        slowModeHolds.delete(id);
+        emit();
+      }
     }, until - now);
+    slowModeHolds.set(id, { until, nonce, timer });
   }
 
   function startSlowModeHold(nonce: string, durationMs: number) {
-    if (bypassSlowMode || durationMs <= 0) {
+    if (!channelId || bypassSlowMode || durationMs <= 0) {
       return;
     }
-    slowModeHoldNonce = nonce;
-    applySlowModeHold(Date.now() + durationMs);
+    applySlowModeHold(channelId, Date.now() + durationMs, nonce);
   }
 
   function markRejected(
@@ -456,8 +484,8 @@ export function createChatController(
     if (changed) {
       if (reason === "slow-mode") {
         startSlowModeHold(nonce, waitMs ?? 0);
-      } else if (slowModeHoldNonce === nonce) {
-        clearSlowModeHold();
+      } else if (channelId && slowModeHolds.get(channelId)?.nonce === nonce) {
+        clearSlowModeHold(channelId);
       }
       if (retryAvailableAt && waitMs) {
         retryUnlockTimers.set(
@@ -553,7 +581,6 @@ export function createChatController(
       clearTimeout(timer);
     }
     retryUnlockTimers.clear();
-    clearSlowModeHold();
     typing.clear();
     for (const message of messages) {
       revokeLocalPreviews(message);
@@ -648,7 +675,7 @@ export function createChatController(
     },
 
     getSlowModeHeldUntil() {
-      return slowModeHeldUntil > Date.now() ? slowModeHeldUntil : 0;
+      return heldUntilFor(channelId);
     },
 
     setSlowMode(options: { seconds: number; bypass: boolean }) {
@@ -660,8 +687,8 @@ export function createChatController(
       slowModeSeconds = nextSeconds;
       bypassSlowMode = nextBypass;
       if (bypassSlowMode || slowModeSeconds <= 0) {
-        const hadHold = slowModeHeldUntil > Date.now();
-        clearSlowModeHold();
+        const hadHold = heldUntilFor(channelId) > 0;
+        clearSlowModeHold(channelId);
         if (hadHold) {
           emit();
         }
@@ -855,7 +882,7 @@ export function createChatController(
       if (!channelId || !currentUserId) {
         return;
       }
-      if (!bypassSlowMode && slowModeHeldUntil > Date.now()) {
+      if (!bypassSlowMode && heldUntilFor(channelId) > 0) {
         return;
       }
       const clamped = clampChatNewlines(body);
@@ -944,7 +971,7 @@ export function createChatController(
       if (!messageRetryReady(failed)) {
         return;
       }
-      if (!bypassSlowMode && slowModeHeldUntil > Date.now()) {
+      if (!bypassSlowMode && heldUntilFor(channelId) > 0) {
         return;
       }
       clearRetryUnlock(nonce);
@@ -1387,7 +1414,7 @@ export function createChatController(
         clearInterval(typingSweep);
         typingSweep = null;
       }
-      clearSlowModeHoldTimer();
+      clearAllSlowModeHolds();
       listener = null;
     },
   };

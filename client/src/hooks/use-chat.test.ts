@@ -352,6 +352,34 @@ describe("optimistic sending", () => {
     expect(sent.length).toBe(before + 1);
   });
 
+  it("does not carry a slow-mode hold into another channel", () => {
+    const { chat, sent } = setup();
+    const other = "c0000000-0000-4000-8000-000000000002";
+    chat.setSlowMode({ seconds: 5, bypass: false });
+    chat.sendMessage("first");
+    expect(chat.getSlowModeHeldUntil()).toBeGreaterThan(Date.now());
+
+    chat.joinChannel(other);
+    chat.setSlowMode({ seconds: 5, bypass: false });
+    expect(chat.getSlowModeHeldUntil()).toBe(0);
+
+    const before = sent.filter(
+      (frame) => (frame as { type?: string }).type === "message-create",
+    ).length;
+    chat.sendMessage("other channel");
+    expect(
+      sent.filter((frame) => (frame as { type?: string }).type === "message-create"),
+    ).toHaveLength(before + 1);
+    expect(chat.getSlowModeHeldUntil()).toBeGreaterThan(Date.now());
+
+    chat.joinChannel(CHANNEL);
+    chat.setSlowMode({ seconds: 5, bypass: false });
+    expect(chat.getSlowModeHeldUntil()).toBeGreaterThan(Date.now());
+    const afterReturn = sent.length;
+    chat.sendMessage("back");
+    expect(sent.length).toBe(afterReturn);
+  });
+
   it("does not hold a sender who bypasses slow mode", () => {
     const { chat, sent } = setup();
     chat.setSlowMode({ seconds: 5, bypass: true });
