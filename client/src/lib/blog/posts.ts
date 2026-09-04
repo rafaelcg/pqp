@@ -77,6 +77,21 @@ export const POSTS: readonly BlogPost[] = [
     },
   },
   {
+    slug: "call-que-se-conserta",
+    date: "2026-09-03",
+    title: {
+      "pt-BR": "A call que se conserta sozinha",
+      en: "The call that fixes itself",
+    },
+    summary: {
+      "pt-BR":
+        "Microfone que não abre, \"conectando\" que não termina, tela sem som: a semana foi de conserto. Mais favoritos, câmera na call e DM que aparece.",
+      en:
+        "A mic that will not open, a \"connecting\" that never ends, a screen share with no sound: this week was repairs. Plus favorites, camera on the call, and DMs you cannot miss.",
+    },
+  },
+
+  {
     slug: "dados-discord-e-cargos",
     date: "2026-08-30",
     title: {

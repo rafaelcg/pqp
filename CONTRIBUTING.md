@@ -155,7 +155,8 @@ asking for that permission in advance.
 **Every PR is reviewed and merged by a maintainer.** Nothing lands on `main`
 automatically, including our own work. This is a side project, so expect days
 rather than hours, and nudge us if it goes quiet. That is not rudeness, it is
-helpful.
+helpful. CI also stamps a `size/XS`–`size/XL` label from the diff (lockfiles
+do not count). That is a review signal, not a merge gate.
 
 **Some PRs will be declined, and it is worth saying why in advance.** Almost
 never because the code is bad. Usually because the feature pulls pqp somewhere

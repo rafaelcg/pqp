@@ -580,7 +580,7 @@ describeDb("community home (Baú)", () => {
 
   // ------------------------------------------------- comments and likes
 
-  it("comments are a flat list; the card carries the two newest", async () => {
+  it("comments are a flat list; the card teases the oldest two", async () => {
     const post = await publish({ title: "Mapa", body: "mapa" });
     for (const body of ["um", "dois", "três"]) {
       const res = await call(member, "POST", `${base()}/posts/${post.id}/comments`, {
@@ -591,7 +591,10 @@ describeDb("community home (Baú)", () => {
     const feed = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
     const card = feed.body.posts[0]!;
     expect(card.commentCount).toBe(3);
-    expect(card.commentTeaser.map((c) => c.body)).toEqual(["dois", "três"]);
+    // Oldest two, not newest two. A card that reshuffles every time somebody
+    // comments turns the feed into a slow chat, which is the one thing this
+    // surface is not.
+    expect(card.commentTeaser.map((c) => c.body)).toEqual(["um", "dois"]);
 
     const all = await call<{ comments: { body: string }[] }>(
       member,
@@ -599,6 +602,28 @@ describeDb("community home (Baú)", () => {
       `${base()}/posts/${post.id}/comments`,
     );
     expect(all.body.comments.map((c) => c.body)).toEqual(["um", "dois", "três"]);
+  });
+
+  it("the author's own reply takes the card over older comments", async () => {
+    // The half of the teaser rule worth having: when the person who posted has
+    // answered, that answer is what a passer-by should see, even though three
+    // other comments came first.
+    const post = await publish({ title: "Aviso", body: "aviso" });
+    for (const body of ["um", "dois", "três"]) {
+      const res = await call(member, "POST", `${base()}/posts/${post.id}/comments`, {
+        body,
+      });
+      expect(res.status).toBe(201);
+    }
+    const reply = await call(owner, "POST", `${base()}/posts/${post.id}/comments`, {
+      body: "resposta",
+    });
+    expect(reply.status).toBe(201);
+
+    const feed = await call<{ posts: PostBody[] }>(member, "GET", `${base()}/posts`);
+    const card = feed.body.posts[0]!;
+    expect(card.commentCount).toBe(4);
+    expect(card.commentTeaser.map((c) => c.body)).toEqual(["resposta"]);
   });
 
   it("comments off refuses a new one and hides the list from members", async () => {

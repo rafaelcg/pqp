@@ -202,8 +202,12 @@ describe("POSTS", () => {
   it("is ordered newest first", () => {
     // Nothing sorts at runtime, so a mistyped year would move a post rather
     // than fail anything. This is the thing that fails instead.
+    // Same-day posts are allowed (two notes on 3 Sep 2026). A descending
+    // `.sort().reverse()` would swap those ties and fail a correct list.
     const dates = POSTS.map((p) => p.date);
-    expect([...dates].sort().reverse()).toEqual(dates);
+    for (let i = 1; i < dates.length; i++) {
+      expect(dates[i - 1] >= dates[i]).toBe(true);
+    }
   });
 
   it("carries a real date and both languages on every post", () => {
