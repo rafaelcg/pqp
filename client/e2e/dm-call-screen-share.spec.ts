@@ -226,3 +226,100 @@ test("a screen share started mid-video-call reaches the other side's stage", asy
     await callee.context.close();
   }
 });
+
+/**
+ * The participant rail beside a share: scrollable, and collapsible so the
+ * share can have the whole width. The hide choice is per device and survives
+ * the presenter changing, which the second half of this test drives by
+ * stopping and restarting the share while the rail is closed.
+ */
+test("the participant rail beside a share scrolls, hides, and stays hidden across a new share", async ({
+  page,
+  browser,
+}) => {
+  const pair = await seedConversation("rail-a", "rail-b");
+  const callee = await openCallee(browser, pair);
+
+  try {
+    await openConversation(page, pair.conversationId, pair.callerSuffix);
+    await page
+      .getByRole("button", { name: "Start video call", exact: true })
+      .click();
+    await expect(page.getByTestId("call-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    await callee.page
+      .getByRole("button", { name: "Accept" })
+      .click({ timeout: 20_000 });
+    await expectVideoPlaying(callee.page, pair.callerName);
+
+    await page
+      .getByRole("button", { name: "Share your screen", exact: true })
+      .click();
+    await expect(
+      callee.page.getByText(`${pair.callerName} is presenting`),
+    ).toBeVisible({ timeout: 20_000 });
+
+    const rail = callee.page.getByTestId("participant-rail");
+    await expect(rail).toHaveAttribute("data-open", "true");
+    const tiles = rail.locator("#participant-rail-tiles");
+    await expect(tiles.locator("[data-call-tile]")).toHaveCount(2);
+    // Bounded and scrollable: a hundred tiles must scroll, not run off the
+    // stage. Overflow is on the tiles column, not the stage.
+    await expect(tiles).toHaveCSS("overflow-y", "auto");
+    const stageBox = await callee.page.getByTestId("call-stage").boundingBox();
+    const tilesBox = await tiles.boundingBox();
+    expect(tilesBox!.y + tilesBox!.height).toBeLessThan(
+      stageBox!.y + stageBox!.height,
+    );
+    await callee.page.screenshot({
+      path: "test-results/participant-rail-open.png",
+    });
+
+    // Hide, from the keyboard: no tiles, no <video> for them, the share still
+    // on the stage, and focus kept on the (now "show") button.
+    await callee.page
+      .getByRole("button", { name: "Hide participants" })
+      .focus();
+    await callee.page.keyboard.press("Enter");
+    await expect(rail).toHaveAttribute("data-open", "false");
+    await expect(rail.locator("[data-call-tile]")).toHaveCount(0);
+    await expect(rail.locator("video")).toHaveCount(0);
+    await expect(screenVideo(callee.page)).toBeVisible();
+    await expect(
+      callee.page.getByRole("button", { name: "Show participants" }),
+    ).toBeFocused();
+    expect(
+      await callee.page.evaluate(() =>
+        localStorage.getItem("pqp:participant-rail"),
+      ),
+    ).toBe("false");
+    await callee.page.screenshot({
+      path: "test-results/participant-rail-hidden.png",
+    });
+
+    // A new share does not force the rail back open.
+    await page
+      .getByRole("button", { name: "Stop sharing your screen", exact: true })
+      .click();
+    await expect(
+      callee.page.getByText(`${pair.callerName} is presenting`),
+    ).not.toBeVisible({ timeout: 20_000 });
+    await page
+      .getByRole("button", { name: "Share your screen", exact: true })
+      .click();
+    await expect(
+      callee.page.getByText(`${pair.callerName} is presenting`),
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(rail).toHaveAttribute("data-open", "false");
+
+    // Show again.
+    await callee.page
+      .getByRole("button", { name: "Show participants" })
+      .click();
+    await expect(rail).toHaveAttribute("data-open", "true");
+    await expect(tiles.locator("[data-call-tile]")).toHaveCount(2);
+  } finally {
+    await callee.context.close();
+  }
+});
