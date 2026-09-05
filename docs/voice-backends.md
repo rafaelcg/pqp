@@ -110,6 +110,17 @@ So: **on LiveKit Cloud one removal is enough. On a self-hosted LiveKit the re-sw
 
 Not covered: closing a group conversation (`DELETE /api/dms/:channelId`) and blocking a user do not evict voice on **either** path today.
 
+### Server mute works on both transports, by the eviction trick
+
+`POST /api/servers/:serverId/members/:userId/voice-mute` used to be real on LiveKit and refused (409) on mesh, because the server never touches media on a mesh room. But eviction works on mesh, and it works because the server changes the **roster** and every other client enforces the roster. The mute uses the same trick.
+
+- `VoiceParticipant.serverMuted` (`packages/shared/src/signaling.ts`, defaulted like `muted`) travels on `welcome`, `voice-roster`, `peer-joined` and `peer-updated`.
+- The server keeps the flag per (room, user) in `roomServerMutes` beside `roomTransports` in `server/src/ws/voice.ts`: it outlives the seat, so leaving and rejoining comes back `serverMuted: true, muted: true`, and it dies when the room empties. While it stands the target's own `set-voice-state` unmute is refused (the roster is re-sent and the client snaps back).
+- On LiveKit the route still asks the SFU to mute the publication first and can still 502; on both transports it then sets the flag and broadcasts the roster, so a tile looks the same whichever transport carried the call.
+- Receiving clients (web: `VoiceAudioSinks` via `serverMutedPeerIds` in `use-voice`) play a server-muted peer at zero without touching the stored per-peer volume, suppress their speaking indicator, and draw a distinct glyph. The target's own client pins `isMuted`, disables the unmute control and says a moderator did it. Clearing the flag does **not** unmute them: the mic stays off until they turn it back on, so someone freed mid-sentence does not land in the room the instant staff releases them.
+
+Trust model: a modified sender gains nothing (nobody plays it); a modified receiver can hear one muted person, which is exactly the power a modified receiver already has over an evicted peer's last packets. iOS and Android implement the same contract.
+
 ## One room, one transport (fixed)
 
 ### The bug this replaces

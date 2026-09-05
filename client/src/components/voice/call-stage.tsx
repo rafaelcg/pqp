@@ -7,6 +7,7 @@ import {
   Maximize2,
   Mic,
   MicOff,
+  ShieldBan,
   Minimize2,
   MonitorSpeaker,
   PhoneOff,
@@ -115,6 +116,12 @@ interface StagePerson {
   stream: MediaStream | null;
   speaking: boolean;
   muted: boolean;
+  /**
+   * A moderator muted them for everyone. Drawn with its own glyph, because a
+   * self-mute is a choice and this is a sanction, and the people in the room
+   * (the muted person most of all) need to tell the two apart at a glance.
+   */
+  serverMuted: boolean;
   connecting: boolean;
   /** Mesh/SFU connection failed. Remote tiles offer Retry. */
   failed?: boolean;
@@ -614,6 +621,8 @@ function ActiveCall({
   const rosterByPeerId = new Map(roster.map((p) => [p.peerId, p]));
 
   const speaking = new Set(voiceState.speakingPeerIds);
+  const serverMuted = new Set(voiceState.serverMutedPeerIds);
+  const selfServerMuted = voiceState.self?.serverMuted === true;
   const self: StagePerson | null = currentUser
     ? {
         key: "self",
@@ -625,6 +634,7 @@ function ActiveCall({
           speaking.has(voiceState.peerId) &&
           !voiceState.isMuted,
         muted: voiceState.isMuted,
+        serverMuted: selfServerMuted,
         connecting: false,
         isSelf: true,
       }
@@ -637,8 +647,11 @@ function ActiveCall({
       name: peer.displayName ?? t("voice.share.someone"),
       avatarUrl: peer.avatarUrl ?? null,
       stream: peer.cameraStream,
-      speaking: speaking.has(peer.peerId),
+      // The hook already keeps a server-muted peer out of `speakingPeerIds`;
+      // the second check is so the ring cannot outlive that by one frame.
+      speaking: speaking.has(peer.peerId) && !serverMuted.has(peer.peerId),
       muted: rosterByPeerId.get(peer.peerId)?.muted ?? false,
+      serverMuted: serverMuted.has(peer.peerId),
       connecting: peer.connectionState !== "connected",
       failed,
       isSelf: false,
@@ -1274,7 +1287,11 @@ function ActiveCall({
                 />
               </div>
             )}
-            <TileBadge name={t("voice.tile.you")} muted={self.muted} />
+            <TileBadge
+              name={t("voice.tile.you")}
+              muted={self.muted}
+              serverMuted={self.serverMuted}
+            />
           </div>
         </div>
       )}
@@ -1623,30 +1640,55 @@ function CallControls({
       {!collapsed && (
         <Tooltip
           label={
-            voiceState.isMuted ? t("voice.control.unmute") : t("voice.control.mute")
+            voiceState.self?.serverMuted
+              ? t("voice.control.serverMuted")
+              : voiceState.isMuted
+                ? t("voice.control.unmute")
+                : t("voice.control.mute")
+          }
+          detail={
+            voiceState.self?.serverMuted
+              ? t("voice.serverMuted.self")
+              : undefined
           }
         >
-          <button
-            type="button"
-            aria-pressed={voiceState.isMuted}
-            aria-label={
-              voiceState.isMuted ? t("voice.control.unmute") : t("voice.control.mute")
-            }
-            className={cn(
-              "flex items-center justify-center rounded-full",
-              size,
-              voiceState.isMuted
-                ? "bg-danger/20 text-danger"
-                : "bg-ink-3 text-paper hover:bg-ink-4",
-            )}
-            onClick={onToggleMute}
-          >
-            {voiceState.isMuted ? (
-              <MicOff className={iconSize} />
-            ) : (
-              <Mic className={iconSize} />
-            )}
-          </button>
+          {/* A moderator's mute is not this person's to lift, so the
+              button says so and does nothing, rather than flicking to
+              "unmuted" for a frame and snapping back on the next roster.
+              The wrapper span is what the tooltip hovers, since a disabled
+              button drops pointer events. */}
+          <span className="inline-flex">
+            <button
+              type="button"
+              aria-pressed={voiceState.isMuted}
+              aria-label={
+                voiceState.self?.serverMuted
+                  ? t("voice.control.serverMuted")
+                  : voiceState.isMuted
+                    ? t("voice.control.unmute")
+                    : t("voice.control.mute")
+              }
+              disabled={voiceState.self?.serverMuted === true}
+              className={cn(
+                "flex items-center justify-center rounded-full disabled:cursor-not-allowed",
+                size,
+                voiceState.self?.serverMuted
+                  ? "bg-warning/20 text-warning"
+                  : voiceState.isMuted
+                    ? "bg-danger/20 text-danger"
+                    : "bg-ink-3 text-paper hover:bg-ink-4",
+              )}
+              onClick={onToggleMute}
+            >
+              {voiceState.self?.serverMuted ? (
+                <ShieldBan className={iconSize} />
+              ) : voiceState.isMuted ? (
+                <MicOff className={iconSize} />
+              ) : (
+                <Mic className={iconSize} />
+              )}
+            </button>
+          </span>
         </Tooltip>
       )}
       <Tooltip
@@ -2039,6 +2081,7 @@ function PrimaryTile({
       <TileBadge
         name={person.name}
         muted={person.muted}
+        serverMuted={person.serverMuted}
         connecting={person.connecting}
         connectingLabel={t("voice.tile.connecting")}
         prominent
@@ -2104,6 +2147,7 @@ function GridTile({
       <TileBadge
         name={person.isSelf ? youLabel : person.name}
         muted={person.muted}
+        serverMuted={person.serverMuted}
         connecting={person.connecting}
         connectingLabel={t("voice.tile.connecting")}
       />
@@ -2174,6 +2218,7 @@ function MiniTile({
         <TileBadge
           name={person.isSelf ? youLabel : person.name}
           muted={person.muted}
+          serverMuted={person.serverMuted}
         />
         <PeerTileControls
           name={person.name}
@@ -2253,16 +2298,20 @@ function StageAvatar({
 function TileBadge({
   name,
   muted,
+  serverMuted = false,
   connecting = false,
   connectingLabel,
   prominent = false,
 }: {
   name: string;
   muted: boolean;
+  /** Muted by a moderator: a different glyph from a self-mute, on purpose. */
+  serverMuted?: boolean;
   connecting?: boolean;
   connectingLabel?: string;
   prominent?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <span
       className={cn(
@@ -2270,7 +2319,15 @@ function TileBadge({
         prominent ? "px-2 py-1 text-xs" : "px-1.5 py-0.5 text-[10px]",
       )}
     >
-      {muted && <MicOff className="h-3 w-3 shrink-0 text-danger" />}
+      {serverMuted ? (
+        <ShieldBan
+          className="h-3 w-3 shrink-0 text-warning"
+          role="img"
+          aria-label={t("voice.tile.serverMuted", { name })}
+        />
+      ) : (
+        muted && <MicOff className="h-3 w-3 shrink-0 text-danger" />
+      )}
       <span className="truncate">{name}</span>
       {connecting && connectingLabel && (
         <span className="flex items-center gap-1 text-paper-muted">

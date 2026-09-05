@@ -139,6 +139,7 @@ import {
   getVoicePeerIdentities,
   leaveVoiceByResumeToken,
   notifyVoiceModeration,
+  setVoiceUserServerMuted,
   refreshVoiceIdentity,
 } from "../ws/voice.js";
 // --- voice moderation ---
@@ -4811,27 +4812,36 @@ router.post(
     const body = voiceMuteSchema.parse(await readJsonBody(req));
     const voiceChannelId = await requireVoiceTarget(serverId!, userId!);
 
-    if (getRoomTransport(voiceChannelId) !== "livekit") {
-      throw new HttpError(
-        409,
-        "This call runs peer-to-peer — the audio never touches the server, so a server mute cannot be enforced. Disconnect them or use a timeout instead.",
+    // Both transports end up with the same roster flag; they differ in what
+    // else happens to the media.
+    //
+    // LiveKit: the SFU is in the audio path, so it stops forwarding the track
+    // too. That call runs FIRST and can refuse, because the mute IS the
+    // action here, and an SFU that did not accept it must be reported instead
+    // of half-happening.
+    //
+    // Mesh: the audio never touches the server, and for a long time this
+    // route refused for that reason. But eviction works on mesh, and it works
+    // because every other client enforces the roster. The flag on the roster
+    // is enforced the same way: every receiver forces the peer's playback to
+    // zero and the target's own client refuses to unmute. See
+    // `roomServerMutes` in `ws/voice.ts` for the whole argument.
+    if (getRoomTransport(voiceChannelId) === "livekit") {
+      const changed = await setSfuUserMuted(
+        voiceChannelId,
+        userId!,
+        body.muted,
+        getVoicePeerIdentities(userId!, voiceChannelId),
       );
+      if (!changed) {
+        throw new HttpError(
+          502,
+          "The voice server did not accept the mute. They may not be publishing audio right now.",
+        );
+      }
     }
 
-    const changed = await setSfuUserMuted(
-      voiceChannelId,
-      userId!,
-      body.muted,
-      getVoicePeerIdentities(userId!, voiceChannelId),
-    );
-    if (!changed) {
-      // Unlike an eviction, the mute IS the action — nothing was committed
-      // yet, so a failure can and must be reported instead of half-happening.
-      throw new HttpError(
-        502,
-        "The voice server did not accept the mute. They may not be publishing audio right now.",
-      );
-    }
+    await setVoiceUserServerMuted(voiceChannelId, userId!, body.muted);
 
     await logAudit({
       serverId: serverId!,
@@ -4845,8 +4855,8 @@ router.post(
     notifyVoiceModeration(userId!, voiceChannelId, {
       action: body.muted ? "muted" : "unmuted",
       message: body.muted
-        ? "A moderator muted your microphone for everyone in the call. You can unmute yourself."
-        : "A moderator unmuted your microphone.",
+        ? "A moderator muted your microphone for everyone in the call. Only a moderator can unmute you."
+        : "A moderator unmuted your microphone. You can turn it back on.",
     });
     return { ok: true };
   },

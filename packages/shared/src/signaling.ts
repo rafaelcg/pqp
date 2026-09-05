@@ -75,6 +75,24 @@ export const voiceParticipantSchema = z.object({
   // receive, which is both free and more accurate than anything relayed.
   muted: z.boolean().default(false),
   deafened: z.boolean().default(false),
+  /**
+   * A moderator muted this participant for everyone in the call.
+   *
+   * Set by the server, never by the participant's own client, and enforced
+   * the way an eviction is: the server changes the ROSTER and every other
+   * client obeys it. On a mesh room the audio never touches the server, so a
+   * mute there is each receiver forcing this peer's playback to zero, exactly
+   * as each receiver already drops a peer the roster no longer lists. On a
+   * LiveKit room the SFU also mutes the publication, but the flag travels
+   * regardless so both transports look identical on every tile.
+   *
+   * While it is set the server keeps `muted` true and refuses the
+   * participant's own `set-voice-state` unmute; only a moderator clearing it
+   * or the room emptying resets it, so leaving and rejoining is not an unmute
+   * button. Defaulted like `muted`, so a client or server that predates the
+   * field reads absent as "not server-muted".
+   */
+  serverMuted: z.boolean().default(false),
 });
 
 export const welcomeMessageSchema = z.object({
