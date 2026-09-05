@@ -156,6 +156,18 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
     /// sending two (camera *and* screen). This is what files each under the
     /// right tile instead of guessing from arrival order.
     var cameraStreamId: String?
+    /// The stream id of this participant's screen capture WHEN it carries
+    /// sound, or nil. Announced on `set-sharing-screen` and re-sent with every
+    /// one, so a reconnect cannot leave a stale id on the roster.
+    ///
+    /// Load-bearing for the server mute, which is the reason it is decoded at
+    /// all on this platform: a moderator's mute silences a person's
+    /// microphone and NOT their share. The watch-party case is a host muting
+    /// chatter while the film keeps playing; zeroing the presenter's screen
+    /// audio would defeat the point. Receivers can only make that distinction
+    /// if they know which incoming audio track is the screen's, and the stream
+    /// id is the only thing an arriving track carries.
+    var screenAudioStreamId: String?
     /// Self-reported over `set-voice-state`; display only, never enforcement.
     var muted: Bool = false
     var deafened: Bool = false
@@ -177,7 +189,7 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case peerId, userId, displayName, avatarUrl, sharingScreen
-        case cameraStreamId, muted, deafened, serverMuted
+        case cameraStreamId, screenAudioStreamId, muted, deafened, serverMuted
     }
 
     init(from decoder: Decoder) throws {
@@ -188,6 +200,7 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
         avatarUrl = try c.decodeIfPresent(String.self, forKey: .avatarUrl)
         sharingScreen = try c.decodeIfPresent(Bool.self, forKey: .sharingScreen) ?? false
         cameraStreamId = try c.decodeIfPresent(String.self, forKey: .cameraStreamId)
+        screenAudioStreamId = try c.decodeIfPresent(String.self, forKey: .screenAudioStreamId)
         muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
         deafened = try c.decodeIfPresent(Bool.self, forKey: .deafened) ?? false
         serverMuted = try c.decodeIfPresent(Bool.self, forKey: .serverMuted) ?? false

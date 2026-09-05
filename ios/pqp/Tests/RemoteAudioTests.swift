@@ -136,22 +136,72 @@ final class RemoteAudioTests: XCTestCase {
     func testAServerMutePlaysThePersonAtZeroWithoutTouchingTheirLevel() {
         var mixer = RemoteAudioMixer<FakeTrack>()
         let microphone = FakeTrack()
-        let screenAudio = FakeTrack()
-        mixer.add(microphone, id: "mic", for: peer)
-        mixer.add(screenAudio, id: "screen", for: peer)
+        let unannounced = FakeTrack()
+        mixer.add(microphone, id: "mic", streamId: "voice-stream", for: peer)
+        // A second audio track under a stream the roster never named is read
+        // as voice too: only an announced share is spared.
+        mixer.add(unannounced, id: "other", streamId: "mystery", for: peer)
         mixer.setVolume(1.5, for: peer)
 
         mixer.setServerMuted(true, for: peer)
         XCTAssertEqual(microphone.playbackVolume, 0, "a server-muted person was still audible")
-        XCTAssertEqual(screenAudio.playbackVolume, 0, "their screen's sound kept playing")
+        XCTAssertEqual(unannounced.playbackVolume, 0, "an unannounced audio track escaped the mute")
         XCTAssertEqual(mixer.volume(for: peer), 1.5, "the mute overwrote the slider")
         XCTAssertEqual(mixer.effectiveVolume(for: peer), 0)
         XCTAssertTrue(mixer.isServerMuted(peer))
 
         mixer.setServerMuted(false, for: peer)
         XCTAssertEqual(microphone.playbackVolume, 1.5, "they did not come back at the chosen level")
-        XCTAssertEqual(screenAudio.playbackVolume, 1.5)
+        XCTAssertEqual(unannounced.playbackVolume, 1.5)
         XCTAssertFalse(mixer.isServerMuted(peer))
+    }
+
+    /// THE MICROPHONE ONLY. A host muting chatter during a watch party must
+    /// not mute the film: the roster names the share's stream, the track
+    /// arrives under it, and that one track keeps the listener's chosen level
+    /// while the voice goes to zero. The web client does the same with its
+    /// two sinks.
+    func testAServerMuteSparesTheScreenAudioTheRosterAnnounced() {
+        var mixer = RemoteAudioMixer<FakeTrack>()
+        let microphone = FakeTrack()
+        let screenAudio = FakeTrack()
+        mixer.add(microphone, id: "mic", streamId: "voice-stream", for: peer)
+        mixer.add(screenAudio, id: "screen-audio", streamId: "pqp-screen-1", for: peer)
+        mixer.setScreenAudioStreamId("pqp-screen-1", for: peer)
+        mixer.setVolume(0.7, for: peer)
+
+        mixer.setServerMuted(true, for: peer)
+        XCTAssertEqual(microphone.playbackVolume, 0, "the muted person's voice kept playing")
+        XCTAssertEqual(screenAudio.playbackVolume, 0.7, "the mute took the film with it")
+        XCTAssertTrue(mixer.isScreenAudio(trackId: "screen-audio", for: peer))
+        XCTAssertFalse(mixer.isScreenAudio(trackId: "mic", for: peer))
+
+        // The slider still reaches the share while the voice is muted.
+        mixer.setVolume(0.2, for: peer)
+        XCTAssertEqual(screenAudio.playbackVolume, 0.2)
+        XCTAssertEqual(microphone.playbackVolume, 0)
+
+        mixer.setServerMuted(false, for: peer)
+        XCTAssertEqual(microphone.playbackVolume, 0.2)
+        XCTAssertEqual(screenAudio.playbackVolume, 0.2)
+    }
+
+    /// The announcement and the track race: `set-sharing-screen` travels over
+    /// the socket while the track waits on a renegotiation. Whichever lands
+    /// second has to produce the same answer as if it had landed first.
+    func testTheScreenAudioAnnouncementReappliesToATrackAlreadyFiled() {
+        var mixer = RemoteAudioMixer<FakeTrack>()
+        let screenAudio = FakeTrack()
+        mixer.setServerMuted(true, for: peer)
+        mixer.add(screenAudio, id: "screen-audio", streamId: "pqp-screen-1", for: peer)
+        XCTAssertEqual(screenAudio.playbackVolume, 0, "an unannounced track must read as voice")
+
+        mixer.setScreenAudioStreamId("pqp-screen-1", for: peer)
+        XCTAssertEqual(screenAudio.playbackVolume, 1, "the announcement did not free the share")
+
+        // The share ends, or loses its sound: the same track would be voice.
+        mixer.setScreenAudioStreamId(nil, for: peer)
+        XCTAssertEqual(screenAudio.playbackVolume, 0)
     }
 
     /// Moving the slider on somebody a moderator silenced changes what they

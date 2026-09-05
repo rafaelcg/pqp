@@ -255,11 +255,26 @@ actor VoiceClient {
         }
     }
 
-    fileprivate func addRemoteTrack(_ box: UncheckedBox<RTCAudioTrack>, for peerId: String) {
+    fileprivate func addRemoteTrack(
+        _ box: UncheckedBox<RTCAudioTrack>,
+        streamIds: [String],
+        for peerId: String
+    ) {
         let track = box.value
         // Keyed by track id, not by peer: a peer sharing a screen with its
-        // sound sends two. Deafen and volume are re-applied by the mixer.
-        remoteAudio.add(track, id: track.trackId, for: peerId)
+        // sound sends two. Deafen and volume are re-applied by the mixer. The
+        // stream id rides along so the mixer can match the roster's
+        // `screenAudioStreamId` and spare the share from a server mute.
+        remoteAudio.add(track, id: track.trackId, streamId: streamIds.first, for: peerId)
+    }
+
+    /// File a peer's announced screen-audio stream id, from the roster.
+    ///
+    /// The audio twin of `setPeerCameraStreamId`, and needed for exactly one
+    /// decision: a moderator's mute takes the microphone and leaves the share's
+    /// sound playing. Nil means the share has no sound, or there is no share.
+    func setPeerScreenAudioStreamId(_ streamId: String?, for peerId: String) {
+        remoteAudio.setScreenAudioStreamId(streamId, for: peerId)
     }
 
     fileprivate func removeRemoteTrack(trackId: String, for peerId: String) {
@@ -1265,7 +1280,10 @@ private final class PeerDelegate: NSObject, RTCPeerConnectionDelegate, @unchecke
             // deafening toggles. Boxed rather than copied, and only ever touched on
             // the actor after this handoff.
             let box = UncheckedBox(track)
-            Task { [owner, peerId] in await owner?.addRemoteTrack(box, for: peerId) }
+            let streamId = stream.streamId
+            Task { [owner, peerId] in
+                await owner?.addRemoteTrack(box, streamIds: [streamId], for: peerId)
+            }
         }
         let streamId = stream.streamId
         for video in stream.videoTracks {
@@ -1307,7 +1325,9 @@ private final class PeerDelegate: NSObject, RTCPeerConnectionDelegate, @unchecke
             }
         } else if let audio = rtpReceiver.track as? RTCAudioTrack {
             let box = UncheckedBox(audio)
-            Task { [owner, peerId] in await owner?.addRemoteTrack(box, for: peerId) }
+            Task { [owner, peerId] in
+                await owner?.addRemoteTrack(box, streamIds: streamIds, for: peerId)
+            }
         }
     }
 

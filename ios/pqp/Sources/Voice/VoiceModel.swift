@@ -197,7 +197,12 @@ final class VoiceModel {
     /// diff: a flag that is re-applied is a no-op, a flag that is missed is a
     /// person the whole room agreed not to hear still playing on this phone.
     private func applyServerMute(_ participant: VoiceParticipant) {
-        Task { await voice.setServerMuted(participant.serverMuted, for: participant.peerId) }
+        Task {
+            await voice.setPeerScreenAudioStreamId(
+                participant.screenAudioStreamId, for: participant.peerId
+            )
+            await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
+        }
     }
 
     // MARK: - Camera
@@ -557,6 +562,9 @@ final class VoiceModel {
                     await voice.setPeerCameraStreamId(
                         participant.cameraStreamId, for: participant.peerId
                     )
+                    await voice.setPeerScreenAudioStreamId(
+                        participant.screenAudioStreamId, for: participant.peerId
+                    )
                     await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
                 }
                 // The peer the server just minted for us starts at "unmuted,
@@ -579,6 +587,9 @@ final class VoiceModel {
                     await voice.setVolume(volume, for: participant.peerId)
                 }
                 // Somebody muted elsewhere who then joins here is still muted.
+                await voice.setPeerScreenAudioStreamId(
+                    participant.screenAudioStreamId, for: participant.peerId
+                )
                 await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
             }
 
@@ -620,6 +631,9 @@ final class VoiceModel {
                 Task {
                     await voice.setPeerCameraStreamId(
                         participant.cameraStreamId, for: participant.peerId
+                    )
+                    await voice.setPeerScreenAudioStreamId(
+                        participant.screenAudioStreamId, for: participant.peerId
                     )
                     await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
                 }

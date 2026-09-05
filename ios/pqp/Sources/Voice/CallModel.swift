@@ -541,6 +541,9 @@ final class CallModel {
                     await voice.setPeerCameraStreamId(
                         participant.cameraStreamId, for: participant.peerId
                     )
+                    await voice.setPeerScreenAudioStreamId(
+                        participant.screenAudioStreamId, for: participant.peerId
+                    )
                     await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
                 }
                 if shouldRing {
@@ -567,6 +570,9 @@ final class CallModel {
                 await voice.setPeerCameraStreamId(
                     participant.cameraStreamId, for: participant.peerId
                 )
+                await voice.setPeerScreenAudioStreamId(
+                    participant.screenAudioStreamId, for: participant.peerId
+                )
                 await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
             }
 
@@ -582,7 +588,12 @@ final class CallModel {
             }
             guard roster[participant.peerId] != nil else { return }
             roster[participant.peerId] = participant
-            Task { await voice.setServerMuted(participant.serverMuted, for: participant.peerId) }
+            Task {
+                await voice.setPeerScreenAudioStreamId(
+                    participant.screenAudioStreamId, for: participant.peerId
+                )
+                await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
+            }
 
         case .voicePeerLeft(let peerId):
             guard phase.isLive else { return }
@@ -607,6 +618,9 @@ final class CallModel {
                 Task {
                     await voice.setPeerCameraStreamId(
                         participant.cameraStreamId, for: participant.peerId
+                    )
+                    await voice.setPeerScreenAudioStreamId(
+                        participant.screenAudioStreamId, for: participant.peerId
                     )
                     await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
                 }
