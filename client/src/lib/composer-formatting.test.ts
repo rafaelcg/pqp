@@ -92,6 +92,68 @@ describe("toggleFormatting", () => {
     expect(toggleFormatting("hello world", 11, 6, "**").value).toBe("hello **world**");
   });
 
+  it("stacks bold then italics with nothing selected, and unstacks in either order", () => {
+    // Ctrl+B, Ctrl+I, then type: the caret sits inside `****`, which is an
+    // empty bold pair and not an empty italics pair, so Ctrl+I adds a star.
+    const bold = toggleFormatting("", 0, 0, "**");
+    const both = toggleFormatting(bold.value, bold.selectionStart, bold.selectionEnd, "*");
+    expect(both.value).toBe("******");
+    expect(both.selectionStart).toBe(3);
+    const italicOff = toggleFormatting(both.value, 3, 3, "*");
+    expect(italicOff.value).toBe("****");
+    expect(italicOff.selectionStart).toBe(2);
+    const boldOff = toggleFormatting(both.value, 3, 3, "**");
+    expect(boldOff.value).toBe("**");
+    expect(boldOff.selectionStart).toBe(1);
+  });
+
+  it("removes an empty pair that is selected whole rather than wrapping it", () => {
+    // Italics is left out: `**` selected whole is indistinguishable from an
+    // empty bold pair, and the asterisk count says bold.
+    for (const marker of ["**", "~~", "`"] as const) {
+      const edit = toggleFormatting(`a ${marker}${marker} b`, 2, 2 + 2 * marker.length, marker);
+      expect(edit.value).toBe("a  b");
+      expect([edit.selectionStart, edit.selectionEnd]).toEqual([2, 2]);
+    }
+  });
+
+  it("never splits a surrogate pair at a selection edge", () => {
+    // Emoji are two UTF-16 units; a marker between the halves renders as two
+    // broken glyphs. A browser will not place the edge there, but the function
+    // must survive a caller that does.
+    const edit = toggleFormatting("a😀b", 0, 2, "**");
+    expect(edit.value).toBe("**a😀**b");
+    const tail = toggleFormatting("a😀b", 2, 4, "**");
+    expect(tail.value).toBe("a**😀b**");
+    expect(toggleFormatting("😀", 0, 2, "*").value).toBe("*😀*");
+    expect(toggleFormatting("😀", 1, 1, "*").value).toBe("**😀");
+  });
+
+  it("clamps a selection that is out of range and survives an empty value", () => {
+    expect(toggleFormatting("", 0, 0, "**").value).toBe("****");
+    expect(toggleFormatting("", 0, 5, "~~").value).toBe("~~~~");
+    expect(toggleFormatting("abc", 5, 9, "`").value).toBe("abc``");
+    expect(toggleFormatting("abc", -3, 2, "**").value).toBe("**ab**c");
+  });
+
+  it("keeps a selection inside a run of asterisks that is only half ours", () => {
+    // `**bo|ld**` with only `bo` selected: the right edge has no marker, so
+    // this is a wrap, not an unwrap, and the span applied is just the selection.
+    const edit = toggleFormatting("**bold**", 2, 4, "**");
+    expect([edit.replaceStart, edit.replaceEnd, edit.replacement]).toEqual([2, 4, "**bo**"]);
+    expect(edit.value.slice(edit.selectionStart, edit.selectionEnd)).toBe("bo");
+  });
+
+  it("copes with a very long value", () => {
+    const big = "*".repeat(100_000);
+    const started = performance.now();
+    for (let i = 0; i < 50; i += 1) {
+      toggleFormatting(big, 0, big.length, "*");
+      toggleFormatting(big, 50_000, 50_000, "**");
+    }
+    expect(performance.now() - started).toBeLessThan(2_000);
+  });
+
   it("covers strikethrough and inline code round trips", () => {
     for (const marker of ["~~", "`"] as const) {
       const on = toggleFormatting("a word b", 2, 6, marker);

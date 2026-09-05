@@ -51,6 +51,16 @@ function runLength(value: string, index: number, char: string, forward: boolean)
   return n;
 }
 
+function isHighSurrogate(value: string, index: number): boolean {
+  const code = value.charCodeAt(index);
+  return code >= 0xd800 && code <= 0xdbff;
+}
+
+function isLowSurrogate(value: string, index: number): boolean {
+  const code = value.charCodeAt(index);
+  return code >= 0xdc00 && code <= 0xdfff;
+}
+
 /**
  * Whether a run of `run` marker characters on both sides of the text means the
  * marker is already applied. Bold and italics share the asterisk, so the count
@@ -86,13 +96,30 @@ export function toggleFormatting(
   let start = Math.max(0, Math.min(selectionStart, selectionEnd, value.length));
   let end = Math.min(value.length, Math.max(selectionStart, selectionEnd));
 
+  // A browser never puts a selection edge between the two halves of a
+  // surrogate pair, but a programmatic caller can. Snap outwards rather than
+  // split an emoji in two, since a marker between the halves renders as two
+  // broken glyphs.
+  const caretOnly = start === end;
+  if (isLowSurrogate(value, start) && isHighSurrogate(value, start - 1)) start -= 1;
+  if (caretOnly) {
+    end = start;
+  } else if (isLowSurrogate(value, end) && isHighSurrogate(value, end - 1)) {
+    end += 1;
+  }
+
   // Caret only. An empty pair the caret is already sitting inside is the
   // result of pressing the shortcut a moment ago with nothing selected, so the
   // same key takes it back out again instead of nesting a second empty pair.
+  // The run is counted, not matched exactly, for the same reason as below:
+  // the caret inside `****` after Ctrl+B is inside an empty bold pair and
+  // not an empty italics pair, so Ctrl+I must add stars there, not strip them.
   if (start === end) {
-    const before = value.slice(start - len, start);
-    const after = value.slice(start, start + len);
-    if (before === marker && after === marker) {
+    const run = Math.min(
+      runLength(value, start, char, false),
+      runLength(value, start, char, true),
+    );
+    if (markerPresent(marker, run)) {
       return {
         value: value.slice(0, start - len) + value.slice(start + len),
         selectionStart: start - len,
@@ -113,13 +140,15 @@ export function toggleFormatting(
   }
 
   // The selection includes the markers themselves (`**word**` selected whole,
-  // the natural result of a double-click or Shift+Home). Unwrap in place.
+  // the natural result of a double-click or Shift+Home). Unwrap in place. An
+  // empty pair selected whole (`****`) is the caret case one step later, and
+  // comes out the same way: removed, not wrapped in a second pair.
   const selected = value.slice(start, end);
   const innerRun = Math.min(
     runLength(selected, 0, char, true),
     runLength(selected, selected.length, char, false),
   );
-  if (selected.length > 2 * len && markerPresent(marker, innerRun)) {
+  if (selected.length >= 2 * len && markerPresent(marker, innerRun)) {
     const inner = selected.slice(len, selected.length - len);
     return {
       value: value.slice(0, start) + inner + value.slice(end),
