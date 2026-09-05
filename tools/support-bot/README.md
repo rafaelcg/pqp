@@ -252,3 +252,15 @@ same failures against a fake WebSocket, including the half-open case and an
    (it never deletes), so the change is visible in `#chegou-agora`.
 5. Read `facts.md` end to end and correct anything wrong. It is the only thing
    standing between this bot and the failure it was built to avoid.
+
+## HTTP send (no socket)
+
+The bot can also POST without holding `/ws`. Same character token, same
+membership rules. See [`docs/BOT_SEND.md`](../../docs/BOT_SEND.md).
+
+```bash
+curl -sS -X POST "$PQP_API_URL/api/channels/$CHANNEL_ID/messages" \
+  -H "Authorization: Bearer character:$TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"body":"cheguei, como posso ajudar?"}'
+```

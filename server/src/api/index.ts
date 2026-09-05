@@ -13,6 +13,7 @@ import {
   createAvatarUploadSchema,
   createServerImageUploadSchema,
   createBlockSchema,
+  createChannelMessageSchema,
   createChannelSchema,
   moveChannelSchema,
   createDmSchema,
@@ -127,8 +128,10 @@ import {
   forEachAuthenticatedSocket,
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
+  postChannelMessage,
   resolveEmbedInBackground,
   resolveStatuses,
+  takeMessageBudget,
 } from "../ws/index.js";
 import {
   // --- voice moderation ---
@@ -253,6 +256,8 @@ import {
   getOutgoingWebhookRow,
   listOutgoingWebhooks,
   rotateOutgoingWebhookSecret,
+  serverHasActiveOutgoingWebhook,
+  statusWithCharacterHook,
   updateOutgoingWebhook,
 } from "../services/outgoing-webhooks.js";
 import {
@@ -3734,6 +3739,73 @@ router.post(
 
 // --------------------------------------------------------------- messages
 
+/**
+ * HTTP send for character accounts. Same `createMessage` + fan-out as the
+ * WebSocket `message-create` frame, gated on `users.is_character` and the
+ * existing `Bearer character:<token>` branch. A Clerk session cannot use
+ * this; a character that is not in the channel gets the same 404 as any
+ * other access miss.
+ *
+ * Text only. Attachments, chance and polls stay on the socket. A thread
+ * reply is a POST to the thread's channel id.
+ */
+router.post(
+  "/api/channels/:channelId/messages",
+  async ({ req, res, user }, { channelId }) => {
+    if (!user.is_character) {
+      throw new Forbidden(
+        "Only a character account can send messages over HTTP",
+      );
+    }
+    const body = createChannelMessageSchema.parse(await readJsonBody(req));
+    // The same per-user send bucket the socket charges, on top of the
+    // API-wide `writeLimiter`. Without it HTTP would allow a burst three
+    // times the size the socket does for the same account.
+    const budget = takeMessageBudget(user.id);
+    if (!budget.ok) {
+      res.setHeader(
+        "Retry-After",
+        String(Math.max(1, Math.ceil(budget.retryAfterMs / 1000))),
+      );
+      throw new HttpError(429, "Slow down");
+    }
+    const posted = await postChannelMessage({
+      author: user,
+      channelId: channelId!,
+      body: body.body,
+      replyToId: body.replyToId,
+    });
+    if (!posted.ok) {
+      switch (posted.reason) {
+        case "no-access":
+          throw new NotFound("Channel not found");
+        case "cannot-send":
+          throw new Forbidden("You cannot send messages here");
+        case "undeliverable":
+          throw new Forbidden("You cannot send to this conversation");
+        case "slow-mode":
+        case "rate-limited":
+          if (posted.retryAfterMs && posted.retryAfterMs > 0) {
+            res.setHeader(
+              "Retry-After",
+              String(Math.max(1, Math.ceil(posted.retryAfterMs / 1000))),
+            );
+          }
+          throw new HttpError(429, "Slow down");
+        case "bad-reply":
+          throw new HttpError(400, "Reply is not in this channel");
+        case "empty":
+          throw new HttpError(400, "A message needs a body");
+        default: {
+          posted.reason satisfies never;
+          throw new HttpError(400, "A message needs a body");
+        }
+      }
+    }
+    return created({ message: posted.message });
+  },
+);
+
 router.get(
   "/api/channels/:channelId/messages",
   async ({ url, user }, { channelId }) => {
@@ -4093,11 +4165,22 @@ router.get("/api/servers/:serverId/members", async ({ user }, { serverId }) => {
   await requireServerMember(serverId!, user.id);
   const members = await listServerMembers(serverId!);
   const statuses = resolveStatuses(members.map((member) => member.id));
+  // Characters that only POST have no socket, so the registry calls them
+  // offline. Paint them online on this roster while the server's outgoing
+  // hook is `active` — that is "Grok can still be woken", not a stored
+  // presence bit. A live socket still wins (idle / dnd / invisible).
+  const hookListening = members.some((member) => member.isCharacter)
+    ? await serverHasActiveOutgoingWebhook(serverId!)
+    : false;
   return {
     members: members.map((member) => ({
       ...member,
       // `offline` is the floor, and it is what an invisible member resolves to.
-      status: statuses.get(member.id) ?? "offline",
+      status: statusWithCharacterHook(
+        statuses.get(member.id) ?? "offline",
+        member.isCharacter,
+        hookListening,
+      ),
     })),
   };
 });

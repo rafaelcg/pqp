@@ -5,6 +5,7 @@ import {
   extractMentions,
   extractMentionUsernames,
   formatUserTag,
+  createChannelMessageSchema,
   messageBodySchema,
   messageReplyRefSchema,
   messageSchema,
@@ -419,6 +420,35 @@ describe("reply protocol", () => {
     expect(
       messageCreateMessageSchema.safeParse({ ...base, replyToId: "nope" })
         .success,
+    ).toBe(false);
+  });
+});
+
+describe("createChannelMessageSchema", () => {
+  it("accepts a body and an optional replyToId", () => {
+    expect(createChannelMessageSchema.parse({ body: "oi Caio" }).body).toBe(
+      "oi Caio",
+    );
+    expect(
+      createChannelMessageSchema.safeParse({
+        body: "oi",
+        replyToId: "00000000-0000-4000-8000-000000000001",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("refuses an empty body", () => {
+    expect(createChannelMessageSchema.safeParse({ body: "" }).success).toBe(
+      false,
+    );
+  });
+
+  it("refuses a non-uuid replyToId", () => {
+    expect(
+      createChannelMessageSchema.safeParse({
+        body: "oi",
+        replyToId: "nope",
+      }).success,
     ).toBe(false);
   });
 });
