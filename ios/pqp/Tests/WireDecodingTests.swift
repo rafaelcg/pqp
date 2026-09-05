@@ -97,6 +97,69 @@ final class WireDecodingTests: XCTestCase {
         XCTAssertNil(peer.avatarUrl)
     }
 
+    // MARK: - serverMuted
+
+    /// A moderator's mute rides on the participant shape, so it arrives on
+    /// every frame that carries one. On mesh this flag IS the mute: the server
+    /// cannot touch media, and the only thing that silences the person is each
+    /// receiver reading `true` here and playing them at zero. A decode that
+    /// drops the key is a room that agreed not to hear somebody and still does.
+    func testPeerUpdatedCarriesServerMuted() async throws {
+        let json = """
+        {"type":"peer-updated","peer":{"peerId":"p1","userId":"u1",
+         "displayName":"Ana","avatarUrl":null,"muted":false,"serverMuted":true}}
+        """
+        let event = await firstEvent(from: json)
+        guard case .voicePeerUpdated(let peer) = event else {
+            return XCTFail("Expected voicePeerUpdated, got \(String(describing: event))")
+        }
+        XCTAssertTrue(peer.serverMuted)
+        XCTAssertFalse(peer.muted, "the moderator's flag must not be confused with self-mute")
+    }
+
+    /// An older server omits the key, the same way it did `muted` and
+    /// `deafened` before it learned them. Absent reads as "nobody is muted",
+    /// never as a failed frame: failing here would drop the whole roster.
+    func testServerMutedDefaultsToFalseWhenAbsent() throws {
+        let json = #"{"peerId":"p1","userId":"u1","displayName":"Ana","avatarUrl":null}"#
+        let peer = try Coding.decoder.decode(VoiceParticipant.self, from: Data(json.utf8))
+        XCTAssertFalse(peer.serverMuted)
+    }
+
+    /// The share's audio stream id rides on the same shape
+    /// (`voiceParticipantSchema.screenAudioStreamId`), and is what lets a
+    /// server mute take the microphone and leave the film. Nullable and
+    /// optional on the wire; both read as "no share sound".
+    func testScreenAudioStreamIdDecodesAndTreatsNullAsAbsent() throws {
+        let with = #"{"peerId":"p1","userId":"u1","displayName":"Ana","screenAudioStreamId":"cap-1"}"#
+        let null = #"{"peerId":"p1","userId":"u1","displayName":"Ana","screenAudioStreamId":null}"#
+        let absent = #"{"peerId":"p1","userId":"u1","displayName":"Ana"}"#
+        XCTAssertEqual(
+            try Coding.decoder.decode(VoiceParticipant.self, from: Data(with.utf8)).screenAudioStreamId,
+            "cap-1"
+        )
+        XCTAssertNil(try Coding.decoder.decode(VoiceParticipant.self, from: Data(null.utf8)).screenAudioStreamId)
+        XCTAssertNil(try Coding.decoder.decode(VoiceParticipant.self, from: Data(absent.utf8)).screenAudioStreamId)
+    }
+
+    /// `welcome` carries it on both the existing peers and on `self`, which is
+    /// how a mute placed before we walked in, or one that outlived our last
+    /// socket, reaches us at all.
+    func testWelcomeCarriesServerMutedOnPeersAndSelf() async throws {
+        let json = """
+        {"type":"welcome","peerId":"me","voiceChannelId":"33333333-3333-3333-3333-333333333333",
+         "peers":[{"peerId":"p1","userId":"u1","displayName":"Ana","avatarUrl":null,"serverMuted":true}],
+         "self":{"peerId":"me","userId":"u0","displayName":"Eu","avatarUrl":null,"serverMuted":true},
+         "transport":"mesh"}
+        """
+        let event = await firstEvent(from: json)
+        guard case .voiceWelcome(_, _, let peers, let selfPeer, _) = event else {
+            return XCTFail("Expected voiceWelcome, got \(String(describing: event))")
+        }
+        XCTAssertEqual(peers.map(\.serverMuted), [true])
+        XCTAssertTrue(selfPeer.serverMuted)
+    }
+
     // MARK: - friend-activity
 
     /// The nudge that makes a friend request visible without a pull-to-refresh.

@@ -156,15 +156,40 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
     /// sending two (camera *and* screen). This is what files each under the
     /// right tile instead of guessing from arrival order.
     var cameraStreamId: String?
+    /// The stream id of this participant's screen capture WHEN it carries
+    /// sound, or nil. Announced on `set-sharing-screen` and re-sent with every
+    /// one, so a reconnect cannot leave a stale id on the roster.
+    ///
+    /// Load-bearing for the server mute, which is the reason it is decoded at
+    /// all on this platform: a moderator's mute silences a person's
+    /// microphone and NOT their share. The watch-party case is a host muting
+    /// chatter while the film keeps playing; zeroing the presenter's screen
+    /// audio would defeat the point. Receivers can only make that distinction
+    /// if they know which incoming audio track is the screen's, and the stream
+    /// id is the only thing an arriving track carries.
+    var screenAudioStreamId: String?
     /// Self-reported over `set-voice-state`; display only, never enforcement.
     var muted: Bool = false
     var deafened: Bool = false
+    /// A moderator muted this person, and the server is the one holding the
+    /// flag: their own `set-muted false` is refused and the roster snaps back.
+    ///
+    /// THE ONLY ENFORCEMENT ON MESH IS THE RECEIVER. The server never touches
+    /// media in a peer-to-peer room, so it cannot stop the bytes; what it can
+    /// do is put this on the roster and rely on every phone in the call to play
+    /// that person at zero, exactly the way eviction already works by changing
+    /// the roster and letting each client act on it. A client that decodes the
+    /// key and ignores it keeps hearing somebody the whole room agreed not to.
+    ///
+    /// Defaulted false for the same reason as `muted`: an older server omits
+    /// it, and absent has to read as "nobody is muted", not as a failed frame.
+    var serverMuted: Bool = false
 
     var id: String { peerId }
 
     enum CodingKeys: String, CodingKey {
         case peerId, userId, displayName, avatarUrl, sharingScreen
-        case cameraStreamId, muted, deafened
+        case cameraStreamId, screenAudioStreamId, muted, deafened, serverMuted
     }
 
     init(from decoder: Decoder) throws {
@@ -175,8 +200,10 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
         avatarUrl = try c.decodeIfPresent(String.self, forKey: .avatarUrl)
         sharingScreen = try c.decodeIfPresent(Bool.self, forKey: .sharingScreen) ?? false
         cameraStreamId = try c.decodeIfPresent(String.self, forKey: .cameraStreamId)
+        screenAudioStreamId = try c.decodeIfPresent(String.self, forKey: .screenAudioStreamId)
         muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
         deafened = try c.decodeIfPresent(Bool.self, forKey: .deafened) ?? false
+        serverMuted = try c.decodeIfPresent(Bool.self, forKey: .serverMuted) ?? false
     }
 }
 

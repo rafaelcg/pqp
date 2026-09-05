@@ -90,6 +90,18 @@ final class CallModel {
     /// not an account setting.
     var isCollapsed = false
 
+    /// A moderator muted us, per our own roster entry. Same rule as
+    /// `VoiceModel`: the server holds the flag and refuses our unmute, so the
+    /// control is disabled instead of pretending.
+    private(set) var isServerMuted = false
+
+    /// The DM mute button has always been live from the first frame of the
+    /// call (muting before the room exists is harmless and sometimes the
+    /// point), so the only thing that switches it off is a moderator.
+    var canToggleMute: Bool {
+        ServerMute.muteControlIsEnabled(connected: true, selfServerMuted: isServerMuted)
+    }
+
     private let voice = VoiceClient()
     private var session: SessionStore?
     private static let handlerKey = "dm-call"
@@ -303,6 +315,20 @@ final class CallModel {
 
     func isMuted(_ peerId: String) -> Bool { roster[peerId]?.muted ?? false }
 
+    /// Muted by a moderator rather than by themselves; drawn apart because
+    /// one is undoable by the person and the other is not.
+    func isServerMuted(_ peerId: String) -> Bool { roster[peerId]?.serverMuted ?? false }
+
+    /// The roster entry that is us. See `VoiceModel.applySelf`; the rule is
+    /// the same, and for the same reason the mic stays off when the flag
+    /// clears rather than springing back mid-sentence.
+    private func applySelf(_ participant: VoiceParticipant) {
+        let wasServerMuted = isServerMuted
+        isServerMuted = participant.serverMuted
+        guard participant.serverMuted, !wasServerMuted else { return }
+        isMuted = ServerMute.selfMuted(currentlyMuted: isMuted, serverMuted: true)
+    }
+
     // MARK: - Joining
 
     private func connect() async {
@@ -471,7 +497,7 @@ final class CallModel {
                 await session?.realtime.joinVoice(channelId: conversationId)
             }
 
-        case .voiceWelcome(let peerId, let voiceChannelId, let existing, _, let transport):
+        case .voiceWelcome(let peerId, let voiceChannelId, let existing, let selfPeer, let transport):
             guard voiceChannelId == conversationId else {
                 // A `welcome` for somewhere else means this socket joined
                 // another voice room, and the server keeps exactly one peer per
@@ -499,6 +525,7 @@ final class CallModel {
             screenShare.arm()
             knownPeerIds = Set(existing.map(\.peerId))
             for participant in existing { roster[participant.peerId] = participant }
+            applySelf(selfPeer)
             if existing.isEmpty {
                 phase = .ringing
             } else {
@@ -514,6 +541,10 @@ final class CallModel {
                     await voice.setPeerCameraStreamId(
                         participant.cameraStreamId, for: participant.peerId
                     )
+                    await voice.setPeerScreenAudioStreamId(
+                        participant.screenAudioStreamId, for: participant.peerId
+                    )
+                    await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
                 }
                 if shouldRing {
                     await session?.realtime.ringCall(conversationId: voiceChannelId)
@@ -539,13 +570,30 @@ final class CallModel {
                 await voice.setPeerCameraStreamId(
                     participant.cameraStreamId, for: participant.peerId
                 )
+                await voice.setPeerScreenAudioStreamId(
+                    participant.screenAudioStreamId, for: participant.peerId
+                )
+                await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
             }
 
         // Same rule as `VoiceModel`: the tile's name and picture change, the
-        // connection does not. No `voice.connect`, no ring bookkeeping.
+        // connection does not. No `voice.connect`, no ring bookkeeping. The
+        // exception is `serverMuted`, which goes to the mixer: on mesh the
+        // receiver is the only thing that can make a moderator's mute real.
         case .voicePeerUpdated(let participant):
-            guard phase.isLive, roster[participant.peerId] != nil else { return }
+            guard phase.isLive else { return }
+            if participant.peerId == selfPeerId {
+                applySelf(participant)
+                return
+            }
+            guard roster[participant.peerId] != nil else { return }
             roster[participant.peerId] = participant
+            Task {
+                await voice.setPeerScreenAudioStreamId(
+                    participant.screenAudioStreamId, for: participant.peerId
+                )
+                await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
+            }
 
         case .voicePeerLeft(let peerId):
             guard phase.isLive else { return }
@@ -561,12 +609,20 @@ final class CallModel {
 
         case .voiceRoster(let voiceChannelId, let participants):
             guard voiceChannelId == conversationId, phase.isLive else { return }
-            for participant in participants where participant.peerId != selfPeerId {
+            for participant in participants {
+                if participant.peerId == selfPeerId {
+                    applySelf(participant)
+                    continue
+                }
                 roster[participant.peerId] = participant
                 Task {
                     await voice.setPeerCameraStreamId(
                         participant.cameraStreamId, for: participant.peerId
                     )
+                    await voice.setPeerScreenAudioStreamId(
+                        participant.screenAudioStreamId, for: participant.peerId
+                    )
+                    await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
                 }
             }
 
@@ -650,6 +706,7 @@ final class CallModel {
         startedAt = nil
         isCollapsed = false
         isMuted = false
+        isServerMuted = false
         wantsCamera = false
         ringOnWelcome = false
     }
