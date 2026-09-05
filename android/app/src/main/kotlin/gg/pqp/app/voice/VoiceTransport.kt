@@ -100,6 +100,14 @@ interface VoiceTransport {
 
     fun setPeerSharingScreen(remotePeerId: String, sharing: Boolean)
 
+    // --- roster facts about other people's audio ---
+
+    /**
+     * A moderator muted, or unmuted, this peer. On mesh the receiver is the
+     * whole enforcement; on an SFU the server already muted the publication.
+     */
+    fun setPeerServerMuted(remotePeerId: String, muted: Boolean)
+
     // --- screen share ---
 
     /** False when this transport cannot publish a screen, or the capture failed. */
