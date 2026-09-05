@@ -33,7 +33,7 @@ class RemoteAudioGateTest {
     @Test
     fun `a peer the roster flags as server-muted stops playing`() {
         val gate = gate()
-        gate.trackAdded("bob", "t1", "bob-mic")
+        gate.trackAdded("bob", "t1", "bob-stream", "bob-mic")
         assertEquals(true, enabled["bob-mic"])
 
         assertTrue(gate.setServerMuted("bob", true))
@@ -46,7 +46,7 @@ class RemoteAudioGateTest {
     @Test
     fun `clearing the flag plays the peer again`() {
         val gate = gate()
-        gate.trackAdded("bob", "t1", "bob-mic")
+        gate.trackAdded("bob", "t1", "bob-stream", "bob-mic")
         gate.setServerMuted("bob", true)
 
         assertTrue(gate.setServerMuted("bob", false))
@@ -58,7 +58,7 @@ class RemoteAudioGateTest {
     @Test
     fun `a repeated roster is a no-op and touches no track`() {
         val gate = gate()
-        gate.trackAdded("bob", "t1", "bob-mic")
+        gate.trackAdded("bob", "t1", "bob-stream", "bob-mic")
         gate.setServerMuted("bob", true)
         applied.clear()
 
@@ -75,28 +75,81 @@ class RemoteAudioGateTest {
         val gate = gate()
         gate.setServerMuted("bob", true)
 
-        gate.trackAdded("bob", "t1", "bob-mic")
+        gate.trackAdded("bob", "t1", "bob-stream", "bob-mic")
 
         assertEquals(listOf("bob-mic" to false), applied)
     }
 
+    // --- the microphone, not the film ---------------------------------------
+
     @Test
-    fun `every audio track of a muted peer is switched, not just the first`() {
+    fun `a server mute silences the microphone and leaves the screen's sound playing`() {
         val gate = gate()
-        gate.trackAdded("bob", "mic", "bob-mic")
-        gate.trackAdded("bob", "screen", "bob-screen-audio")
+        gate.trackAdded("bob", "mic", "bob-stream", "bob-mic")
+        gate.trackAdded("bob", "screen", "bob-screen", "bob-screen-audio")
+        gate.setScreenAudioStreamId("bob", "bob-screen")
 
         gate.setServerMuted("bob", true)
 
         assertEquals(false, enabled["bob-mic"])
+        assertEquals(true, enabled["bob-screen-audio"])
+        assertTrue(gate.plays("bob", "bob-screen"))
+        assertFalse(gate.plays("bob", "bob-stream"))
+    }
+
+    @Test
+    fun `a screen-audio label that lands after the mute frees the film`() {
+        val gate = gate()
+        gate.trackAdded("bob", "mic", "bob-stream", "bob-mic")
+        gate.trackAdded("bob", "screen", "bob-screen", "bob-screen-audio")
+        gate.setServerMuted("bob", true)
+        assertEquals(false, enabled["bob-screen-audio"])
+
+        assertTrue(gate.setScreenAudioStreamId("bob", "bob-screen"))
+
+        assertEquals(true, enabled["bob-screen-audio"])
+        assertEquals(false, enabled["bob-mic"])
+    }
+
+    @Test
+    fun `screen audio arriving after the mute plays from its first frame`() {
+        val gate = gate()
+        gate.setScreenAudioStreamId("bob", "bob-screen")
+        gate.setServerMuted("bob", true)
+
+        gate.trackAdded("bob", "screen", "bob-screen", "bob-screen-audio")
+
+        assertEquals(listOf("bob-screen-audio" to true), applied)
+    }
+
+    @Test
+    fun `with no screen-audio label every audio track of a muted peer is voice`() {
+        val gate = gate()
+        gate.trackAdded("bob", "mic", "bob-stream", "bob-mic")
+        gate.trackAdded("bob", "other", null, "bob-unlabelled")
+
+        gate.setServerMuted("bob", true)
+
+        assertEquals(false, enabled["bob-mic"])
+        assertEquals(false, enabled["bob-unlabelled"])
+    }
+
+    @Test
+    fun `deafening still silences the screen's sound`() {
+        val gate = gate()
+        gate.trackAdded("bob", "screen", "bob-screen", "bob-screen-audio")
+        gate.setScreenAudioStreamId("bob", "bob-screen")
+
+        gate.setDeafened(true)
+
         assertEquals(false, enabled["bob-screen-audio"])
     }
 
     @Test
     fun `muting one peer leaves the others alone`() {
         val gate = gate()
-        gate.trackAdded("bob", "t1", "bob-mic")
-        gate.trackAdded("carol", "t2", "carol-mic")
+        gate.trackAdded("bob", "t1", "bob-stream", "bob-mic")
+        gate.trackAdded("carol", "t2", "carol-stream", "carol-mic")
 
         gate.setServerMuted("bob", true)
 
@@ -109,8 +162,8 @@ class RemoteAudioGateTest {
     @Test
     fun `undeafening does not bring a server-muted peer back`() {
         val gate = gate()
-        gate.trackAdded("bob", "t1", "bob-mic")
-        gate.trackAdded("carol", "t2", "carol-mic")
+        gate.trackAdded("bob", "t1", "bob-stream", "bob-mic")
+        gate.trackAdded("carol", "t2", "carol-stream", "carol-mic")
         gate.setServerMuted("bob", true)
 
         gate.setDeafened(true)
@@ -125,7 +178,7 @@ class RemoteAudioGateTest {
     @Test
     fun `lifting a mute while deafened keeps the peer silent`() {
         val gate = gate()
-        gate.trackAdded("bob", "t1", "bob-mic")
+        gate.trackAdded("bob", "t1", "bob-stream", "bob-mic")
         gate.setServerMuted("bob", true)
         gate.setDeafened(true)
 
@@ -140,7 +193,7 @@ class RemoteAudioGateTest {
         val gate = gate()
         gate.setDeafened(true)
 
-        gate.trackAdded("bob", "t1", "bob-mic")
+        gate.trackAdded("bob", "t1", "bob-stream", "bob-mic")
 
         assertEquals(false, enabled["bob-mic"])
     }
@@ -150,7 +203,7 @@ class RemoteAudioGateTest {
     @Test
     fun `a removed track is not switched again`() {
         val gate = gate()
-        gate.trackAdded("bob", "t1", "bob-mic")
+        gate.trackAdded("bob", "t1", "bob-stream", "bob-mic")
         gate.trackRemoved("bob", "t1")
         applied.clear()
 

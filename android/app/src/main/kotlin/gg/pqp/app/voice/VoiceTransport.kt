@@ -108,6 +108,9 @@ interface VoiceTransport {
      */
     fun setPeerServerMuted(remotePeerId: String, muted: Boolean)
 
+    /** Which of a peer's audio streams is their screen's sound; a server mute spares it. */
+    fun setPeerScreenAudioStreamId(remotePeerId: String, streamId: String?)
+
     // --- screen share ---
 
     /** False when this transport cannot publish a screen, or the capture failed. */

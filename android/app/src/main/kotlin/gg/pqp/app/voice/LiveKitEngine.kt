@@ -434,6 +434,8 @@ class LiveKitEngine(
     /** The SFU muted the publication itself; nothing reaches this phone to gate. */
     override fun setPeerServerMuted(remotePeerId: String, muted: Boolean) = Unit
 
+    override fun setPeerScreenAudioStreamId(remotePeerId: String, streamId: String?) = Unit
+
     /**
      * Refused, cleanly, every time.
      *

@@ -5,8 +5,14 @@ package gg.pqp.app.voice
  *
  * Two things can switch a remote track off and they have nothing to do with
  * each other. **Deafening** is this device's own choice and covers the whole
- * room. A **server mute** is a moderator's decision about one participant and
- * travels on the roster (`VoiceParticipant.serverMuted`). On a mesh room the
+ * room, every track. A **server mute** is a moderator's decision about one
+ * participant's *microphone* and travels on the roster
+ * (`VoiceParticipant.serverMuted`). It leaves that peer's screen-share audio
+ * playing: the case it exists for is a watch-party host muting chatter while
+ * the shared film keeps its sound, and the web client zeroes only the voice
+ * sink for the same reason. The roster names the screen's audio stream
+ * (`screenAudioStreamId`), and a track is told apart by the stream id it
+ * arrived on, which is the only label an incoming track carries. On a mesh room the
  * server never touches media, so the mute is real only because every receiving
  * client enforces it here, exactly the way an eviction is real because every
  * client acts on the roster it is handed. A client that ignored the flag would
@@ -41,17 +47,40 @@ class RemoteAudioGate<T : Any>(
          */
         val tracks = HashMap<String, T>()
 
+        /** Track id to the stream it arrived on, so a track can be classified. */
+        val streamIdByTrack = HashMap<String, String?>()
+
         /** What the roster last said about a moderator muting this peer. */
         var serverMuted: Boolean = false
+
+        /** The stream id the roster named as this peer's screen audio, or null. */
+        var screenAudioStreamId: String? = null
     }
 
     private val peers = HashMap<String, PeerAudio<T>>()
 
     private var deafened: Boolean = false
 
-    /** True when this peer's audio should currently be heard. */
+    /** True when this peer's *voice* should currently be heard. */
     fun plays(peerId: String): Boolean =
         !deafened && peers[peerId]?.serverMuted != true
+
+    /**
+     * True when the track that arrived on [streamId] should currently be heard.
+     *
+     * A server mute only reaches the microphone. Every other track of the
+     * peer's, which today means the screen's sound, follows deafening alone.
+     * A null stream id (a track libwebrtc handed over with no `a=msid`, which
+     * does not happen with the web client but is allowed) counts as voice,
+     * because the safe reading of an unlabelled track from a muted person is
+     * that it is the thing they were muted for.
+     */
+    fun plays(peerId: String, streamId: String?): Boolean {
+        if (deafened) return false
+        val audio = peers[peerId] ?: return true
+        if (!audio.serverMuted) return true
+        return streamId != null && streamId == audio.screenAudioStreamId
+    }
 
     /** The roster's view of this peer, whether or not a track has arrived. */
     fun isServerMuted(peerId: String): Boolean = peers[peerId]?.serverMuted == true
@@ -59,16 +88,36 @@ class RemoteAudioGate<T : Any>(
     /**
      * A remote audio track arrived. It is switched to the right state at once,
      * so a track that lands after the roster already flagged its peer never
-     * plays a frame.
+     * plays a frame. [streamId] is the `a=msid` it came in on, kept so a mute
+     * that arrives later can still tell the microphone from the screen.
      */
-    fun trackAdded(peerId: String, trackId: String, track: T) {
+    fun trackAdded(peerId: String, trackId: String, streamId: String?, track: T) {
         val audio = peers.getOrPut(peerId) { PeerAudio() }
         audio.tracks[trackId] = track
-        apply(track, plays(peerId))
+        audio.streamIdByTrack[trackId] = streamId
+        apply(track, plays(peerId, streamId))
     }
 
     fun trackRemoved(peerId: String, trackId: String) {
-        peers[peerId]?.tracks?.remove(trackId)
+        val audio = peers[peerId] ?: return
+        audio.tracks.remove(trackId)
+        audio.streamIdByTrack.remove(trackId)
+    }
+
+    /**
+     * The roster named this peer's screen audio stream, or said there is none.
+     *
+     * Fed from every roster frame like the mute flag itself, because it too
+     * races the track: a mute applied while the screen's sound was still an
+     * unlabelled second track has to be revisited once the label lands, or the
+     * film stays silent for the rest of the share.
+     */
+    fun setScreenAudioStreamId(peerId: String, streamId: String?): Boolean {
+        val audio = peers.getOrPut(peerId) { PeerAudio() }
+        if (audio.screenAudioStreamId == streamId) return false
+        audio.screenAudioStreamId = streamId
+        refresh(peerId, audio)
+        return true
     }
 
     /**
@@ -114,7 +163,8 @@ class RemoteAudioGate<T : Any>(
     }
 
     private fun refresh(peerId: String, audio: PeerAudio<T>) {
-        val enabled = plays(peerId)
-        audio.tracks.values.forEach { apply(it, enabled) }
+        audio.tracks.forEach { (trackId, track) ->
+            apply(track, plays(peerId, audio.streamIdByTrack[trackId]))
+        }
     }
 }
