@@ -24,6 +24,11 @@ struct ChannelListView: View {
     /// needs this AND the server's own switch, so a deployment without the
     /// feature (production until PR #176) draws nothing and loses nothing.
     @State private var communityHome: CommunityHomeConfig?
+    /// Posts in the Baú this account has not opened it for. Read with the
+    /// channel counts and cleared the same way: coming back from the Baú
+    /// re-reads it, after `CommunityHomeView` has told the server it was
+    /// read.
+    @State private var bauUnread = 0
     private var showsBau: Bool { (communityHome?.enabled ?? false) && current.communityHomeEnabled }
     @State private var showingInvites = false
     @State private var showingSearch = false
@@ -94,7 +99,7 @@ struct ChannelListView: View {
                             NavigationLink {
                                 CommunityHomeView(server: current, config: config)
                             } label: {
-                                BauRow()
+                                BauRow(unread: bauUnread)
                             }
                             .buttonStyle(.plain)
                             .accessibilityIdentifier("channels.bau")
@@ -281,6 +286,11 @@ struct ChannelListView: View {
                 // appear at all.
                 case .permissionsUpdate(let serverId, _) where serverId == server.id:
                     Task { await reloadAfterPermissionsChange() }
+                // A publish in the Baú. Content-free, so the count is asked
+                // for rather than bumped: a deletion sends the same frame and
+                // would have to move it the other way.
+                case .communityHomeUpdate(let serverId) where serverId == server.id:
+                    Task { await refreshBauUnread() }
                 default:
                     return
                 }
@@ -305,7 +315,8 @@ struct ChannelListView: View {
             channelId: channel.id,
             title: "#\(channel.name)",
             canStartThreads: true,
-            server: server
+            server: server,
+            slowmodeSeconds: channel.slowmodeSeconds
         )
         .onAppear { LastVisited.record(channelId: channel.id, serverId: server.id) }
     }
@@ -314,6 +325,17 @@ struct ChannelListView: View {
         guard !channels.isEmpty else { return }
         if let entries = try? await session.api.unread(serverId: server.id) {
             unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
+        }
+        await refreshBauUnread()
+    }
+
+    /// Only asked while the row is drawn: the route 404s when the instance
+    /// flag is off, and a server that does not show a Baú has no badge to
+    /// keep. A failure leaves the last count rather than zeroing it.
+    private func refreshBauUnread() async {
+        guard showsBau else { return }
+        if let count = try? await session.api.communityHomeUnread(serverId: server.id) {
+            bauUnread = count
         }
     }
 
@@ -435,6 +457,7 @@ struct ChannelListView: View {
             if let entries = try? await session.api.unread(serverId: server.id) {
                 unread = Dictionary(uniqueKeysWithValues: entries.map { ($0.channelId, $0) })
             }
+            await refreshBauUnread()
         } catch {
             self.error = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
@@ -522,6 +545,10 @@ private struct CommunityBanner: View {
 /// a second line: the one thing a person needs to know before tapping is that
 /// this is not a place to type.
 struct BauRow: View {
+    /// Posts not yet seen. Never a mention: the Baú has no @, so the badge is
+    /// the quiet one.
+    var unread: Int = 0
+
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: "archivebox")
@@ -541,6 +568,10 @@ struct BauRow: View {
             }
 
             Spacer()
+
+            if unread > 0 {
+                UnreadBadge(count: unread)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 10)

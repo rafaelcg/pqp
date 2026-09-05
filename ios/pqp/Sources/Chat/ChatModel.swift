@@ -13,6 +13,24 @@ final class ChatModel {
     var draft = ""
     var error: String?
 
+    /// Slow mode, as the composer sees it. `slowmodeSeconds` is the channel's
+    /// setting; `slowModeRemaining` is the seconds left on the current hold,
+    /// ticked down by `slowModeTicker` so a view can bind a countdown to it.
+    /// Zero means nothing is held.
+    ///
+    /// A hold starts in two places, both the web's rule: after this client's
+    /// own send lands in the transcript, for the channel's interval (so the
+    /// composer says "wait" before the server has to), and on a `slow-mode`
+    /// refusal, for the `retryAfterMs` the server named. Managers skip it:
+    /// the server waives slow mode for MANAGE_MESSAGES, and a countdown the
+    /// server would not enforce is a lie.
+    private(set) var slowmodeSeconds = 0
+    private(set) var slowModeRemaining = 0
+    private var bypassesSlowMode = false
+    private var slowModeHeldUntil: Date?
+    private var slowModeTicker: Task<Void, Never>?
+    var isHeldBySlowMode: Bool { slowModeRemaining > 0 }
+
     /// The message being replied to, shown above the composer until cleared.
     var replyingTo: Message?
     /// A timeout notice addressed to us, shown above the composer for this
@@ -86,9 +104,16 @@ final class ChatModel {
     /// bound starts, and there is no spinner at all when there is something to
     /// draw. The join, the two configs (memoised in `APIClient`, so usually
     /// free) and the refetch then run concurrently instead of in single file.
-    func open(channelId: String, session: SessionStore) async {
+    func open(
+        channelId: String,
+        session: SessionStore,
+        slowmodeSeconds: Int = 0,
+        bypassesSlowMode: Bool = false
+    ) async {
         self.session = session
         self.channelId = channelId
+        self.slowmodeSeconds = slowmodeSeconds
+        self.bypassesSlowMode = bypassesSlowMode
         // "This conversation is on screen", for the one consumer that needs it:
         // a push arriving for the channel you are reading must not banner over
         // it. Reported from here because `channelId` is private and this is the
@@ -241,6 +266,9 @@ final class ChatModel {
         // The server accepts an empty body when there are attachments, so a
         // photo with no caption is a valid message.
         guard !body.isEmpty || !pendingAttachments.isEmpty else { return }
+        // The composer hides the button while held, but a keyboard "send"
+        // does not go through the button.
+        guard !isHeldBySlowMode else { return }
 
         // An in-flight edit takes precedence: the composer is showing that
         // message's text, so sending must save it rather than post a duplicate.
@@ -274,8 +302,9 @@ final class ChatModel {
             }
         }
 
-        // Optimistic echo. The protocol has no ack, so the nonce coming back on
-        // `message-broadcast` is what retires this row.
+        // Optimistic echo. There is no ack: the nonce coming back on
+        // `message-broadcast` is what retires this row, and the same nonce on
+        // `message-rejected` is what removes it and hands the text back.
         var pending = Message(pendingBody: body, channelId: channelId, author: user)
         let nonce = await session.realtime.sendMessage(
             channelId: channelId, body: body, replyToId: replyId, attachmentIds: attachmentIds
@@ -284,6 +313,71 @@ final class ChatModel {
         messages.append(pending)
         isNearBottom = true
         isSending = false
+        // Start the wait now rather than on the refusal: the server charges
+        // the interval from this send, so the honest thing to show is a
+        // countdown that begins here.
+        if slowmodeSeconds > 0 {
+            holdForSlowMode(milliseconds: slowmodeSeconds * 1000)
+        }
+    }
+
+    // MARK: - Slow mode
+
+    private func holdForSlowMode(milliseconds: Int) {
+        guard !bypassesSlowMode, milliseconds > 0 else { return }
+        let until = Date().addingTimeInterval(Double(milliseconds) / 1000)
+        slowModeHeldUntil = until
+        tickSlowMode()
+        slowModeTicker?.cancel()
+        slowModeTicker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(250))
+                guard let self else { return }
+                self.tickSlowMode()
+                if self.slowModeRemaining == 0 { return }
+            }
+        }
+    }
+
+    /// Whole seconds, rounded up: "1s" for 300ms left, never "0s" while the
+    /// server would still refuse.
+    private func tickSlowMode() {
+        guard let until = slowModeHeldUntil else {
+            slowModeRemaining = 0
+            return
+        }
+        let left = until.timeIntervalSinceNow
+        slowModeRemaining = left > 0 ? Int(left.rounded(.up)) : 0
+        if slowModeRemaining == 0 { slowModeHeldUntil = nil }
+    }
+
+    /// The composer's line while held. Nil when it is not.
+    var slowModeNotice: String? {
+        guard isHeldBySlowMode else { return nil }
+        return String(localized: "Slow mode. You can send again in \(slowModeRemaining)s.")
+    }
+
+    /// The reason tokens of `messageRejectReasonSchema`, in the web client's
+    /// words (`chat.reject.*` in `client/src/locales`). A token this build does
+    /// not know gets the generic line: it is still a refusal.
+    static func rejectionCopy(for reason: String) -> String {
+        switch reason {
+        case "rate-limited": String(localized: "You're sending too fast")
+        case "no-access": String(localized: "You can't send in this channel")
+        case "cannot-send": String(localized: "You don't have permission to send here")
+        case "undeliverable": String(localized: "This message wasn't delivered")
+        case "slow-mode": String(localized: "Slow mode is on.")
+        default: String(localized: "This message wasn't sent.")
+        }
+    }
+
+    /// Test seam. `open` is the only production path that sets a channel, and
+    /// it needs a socket and an API; a test of what one frame does to the
+    /// transcript needs neither.
+    func stage(channelId: String, messages: [Message], draft: String = "") {
+        self.channelId = channelId
+        self.messages = messages
+        self.draft = draft
     }
 
     // MARK: - Message actions
@@ -431,7 +525,10 @@ final class ChatModel {
 
     // MARK: - Realtime
 
-    private func apply(_ event: RealtimeEvent) {
+    /// Internal rather than private for the same reason `RealtimeClient.ingest`
+    /// is: what a frame does to the transcript is the contract, and it is
+    /// tested by feeding the event straight in.
+    func apply(_ event: RealtimeEvent) {
         switch event {
         case .messageCreated(let message, let nonce):
             guard message.channelId == channelId else { return }
@@ -501,6 +598,33 @@ final class ChatModel {
                   let index = messages.firstIndex(where: { $0.id == messageId }) else { return }
             messages[index].thread = thread
 
+        case .messageRejected(let rejection):
+            guard rejection.channelId == channelId else { return }
+            // The web ignores a refusal with no nonce, and so does this: the
+            // frame cannot say which row it answers, and taking down every
+            // pending row would punish a send that may still land.
+            guard let nonce = rejection.nonce,
+                  let index = messages.firstIndex(where: { $0.pendingNonce == nonce }) else { return }
+            let body = messages[index].body
+            messages.remove(at: index)
+            // Back into the composer, so nothing typed is lost. Ahead of
+            // whatever has been typed since rather than instead of it.
+            // Attachments are not restored: their bytes are already in
+            // storage under an id the server refused to claim, and the
+            // person picks the photo again.
+            if !body.isEmpty {
+                draft = draft.isEmpty ? body : body + "\n" + draft
+            }
+            error = ChatModel.rejectionCopy(for: rejection.reason)
+            // A temporary refusal names its wait; the composer counts it
+            // down. A `slow-mode` without one falls back to the channel's
+            // interval, which is the most the server would charge.
+            if let wait = rejection.retryAfterMs, wait > 0 {
+                holdForSlowMode(milliseconds: wait)
+            } else if rejection.reason == "slow-mode", slowmodeSeconds > 0 {
+                holdForSlowMode(milliseconds: slowmodeSeconds * 1000)
+            }
+
         case .sanctionNotice(let notice):
             // Attached to the composer the person is actually looking at; a
             // notice for some other channel would read as a non sequitur.
@@ -525,7 +649,7 @@ final class ChatModel {
         // either way.
         case .friendActivity, .permissionsUpdate, .communityHomeUpdate,
              .presence, .activity, .other,
-             .voiceWelcome, .voicePeerJoined, .voicePeerLeft, .voiceRoster,
+             .voiceWelcome, .voicePeerJoined, .voicePeerUpdated, .voicePeerLeft, .voiceRoster,
              .voiceRoomFull, .voiceTransportUnsupported, .voiceScreenShareDenied,
              .voiceCameraDenied,
              .voiceOffer, .voiceAnswer, .voiceCandidate,

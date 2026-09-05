@@ -361,6 +361,27 @@ describe("screen share audio", () => {
     return { voice, sent };
   }
 
+  /** A roster where exactly these peer ids are presenting. */
+  function rosterWithShare(
+    sharing: string[],
+  ): Extract<VoiceSignalingMessage, { type: "voice-roster" }> {
+    const one = (peerId: string, sharingScreen: boolean) => ({
+      peerId,
+      userId: `user-${peerId}`,
+      displayName: peerId,
+      avatarUrl: null,
+      sharingScreen,
+      muted: false,
+      deafened: false,
+    });
+    return {
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      transport: "mesh",
+      participants: [one(PEER, false), ...sharing.map((id) => one(id, true))],
+    };
+  }
+
   it("does not ask for the machine's audio, and hides our own tab from the picker", async () => {
     // The 23 Aug 2026 echo report, pinned. `systemAudio: "include"` was what
     // captured the call off the machine's own mixer and sent it back to the
@@ -490,6 +511,64 @@ describe("screen share audio", () => {
     expect(displayMediaCalls).toHaveLength(1);
     expect(voice.getState().isSharingScreen).toBe(false);
     expect(voice.getState().error).not.toBeNull();
+  });
+
+  it("silences a share it was told to stop watching", async () => {
+    // "E se eu apenas nao quiser assistir a transmissao do amigo" (QG, 4 Sep
+    // 2026). Declining has to take the sound with it: hiding the picture and
+    // leaving the game audible would be the worse half of the feature.
+    const { voice } = await connectedMesh();
+    voice.handleSignaling(rosterWithShare(["p2"]));
+    expect(voice.getState().audibleScreenPeerIds).toContain("p2");
+
+    voice.dismissShare("p2");
+    expect(voice.getState().dismissedSharePeerIds).toEqual(["p2"]);
+    expect(voice.getState().audibleScreenPeerIds).not.toContain("p2");
+
+    voice.watchShare("p2");
+    expect(voice.getState().dismissedSharePeerIds).toEqual([]);
+    expect(voice.getState().audibleScreenPeerIds).toContain("p2");
+  });
+
+  it("forgets a dismissal once that share stops", async () => {
+    // A dismissal is about the share in front of you, not a grudge against the
+    // presenter. Their next share must arrive visible rather than blank.
+    const { voice } = await connectedMesh();
+    voice.handleSignaling(rosterWithShare(["p2"]));
+    voice.dismissShare("p2");
+    expect(voice.getState().dismissedSharePeerIds).toEqual(["p2"]);
+
+    voice.handleSignaling(rosterWithShare([]));
+    expect(voice.getState().dismissedSharePeerIds).toEqual([]);
+
+    voice.handleSignaling(rosterWithShare(["p2"]));
+    expect(voice.getState().dismissedSharePeerIds).toEqual([]);
+    expect(voice.getState().audibleScreenPeerIds).toContain("p2");
+  });
+
+  it("moves a share's sound without touching the presenter's voice", async () => {
+    // The request, from the QG on 4 Sep 2026: "a separacao das faixas de audio
+    // entre a live do amigo e a voz do amigo". Both sinks used to read the same
+    // number, so turning a loud game down turned the person down with it.
+    const { voice } = await connectedMesh();
+    voice.setPeerVolume("u2", 0.9);
+    voice.setScreenVolume("u2", 0.2);
+
+    expect(voice.getState().peerVolumes["u2"]).toBe(0.9);
+    expect(voice.getState().screenVolumes["u2"]).toBe(0.2);
+
+    // And the other direction: silencing a game leaves the voice alone.
+    voice.setScreenVolume("u2", 0);
+    expect(voice.getState().screenVolumes["u2"]).toBe(0);
+    expect(voice.getState().peerVolumes["u2"]).toBe(0.9);
+  });
+
+  it("clamps a screen volume to the playable range", async () => {
+    const { voice } = await connectedMesh();
+    voice.setScreenVolume("u2", 4);
+    expect(voice.getState().screenVolumes["u2"]).toBe(1);
+    voice.setScreenVolume("u2", -1);
+    expect(voice.getState().screenVolumes["u2"]).toBe(0);
   });
 
   it("offers a silent retry when sound is what killed the capture", async () => {

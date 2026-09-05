@@ -166,6 +166,20 @@ export interface VoiceState {
   occupancy: Record<string, VoiceParticipant[]>;
   /** userId → 0..1 playback multiplier, persisted for the session. */
   peerVolumes: Record<string, number>;
+  /**
+   * userId → 0..1 multiplier for that person's SCREEN audio, separate from
+   * their voice.
+   *
+   * Separate because the two are different sounds with different problems. A
+   * game is mixed for a living room and a voice is a microphone in a bedroom,
+   * so the useful move is almost always "turn the game down and keep hearing
+   * the person", and one slider cannot do that. Asked for in the QG on
+   * 4 Sep 2026: "a separacao das faixas de audio entre a live do amigo e a voz
+   * do amigo".
+   *
+   * Keyed on userId like `peerVolumes`, and session-scoped the same way.
+   */
+  screenVolumes: Record<string, number>;
   /** True when media is flowing through an SFU rather than a peer mesh. */
   usingSfu: boolean;
   /**
@@ -191,6 +205,22 @@ export interface VoiceState {
    * the app root) and both stage mounts can read the same value.
    */
   focusedScreenPeerId: string | null;
+  /**
+   * Shares this person has said no to. Peer ids, not user ids, and that is
+   * deliberate: a dismissal is about the share in front of you, not a grudge
+   * against its presenter. When they stop sharing the id leaves this list, so
+   * their next share arrives visible instead of mysteriously blank.
+   *
+   * Asked for in the QG on 4 Sep 2026: "e se eu apenas nao quiser assistir a
+   * transmissao do amigo".
+   *
+   * HONEST LIMIT: this hides and silences locally. On the mesh the bytes still
+   * arrive, because declining them properly means renegotiating with that peer
+   * (and on an SFU, unsubscribing). So it buys quiet and screen space, not
+   * bandwidth, and the day voice moves to LiveKit this is where the real
+   * saving gets wired in.
+   */
+  dismissedSharePeerIds: string[];
   /**
    * Whose screen audio to play. Derived from the sharing set + focus, not
    * from whether the stage is on screen — navigating to a text channel must
@@ -661,6 +691,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     speakingPeerIds: [],
     occupancy: {},
     peerVolumes: {},
+    screenVolumes: {},
     usingSfu: false,
     transportFailure: null,
     roomTransport: null,
@@ -668,6 +699,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     screenSharePeerIds: [],
     cameraPeerIds: [],
     focusedScreenPeerId: null,
+    dismissedSharePeerIds: [],
     audibleScreenPeerIds: [],
     localScreenStream: null,
     isSharingScreenAudio: false,
@@ -834,6 +866,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       speakingPeerIds: [...state.speakingPeerIds],
       occupancy: { ...state.occupancy },
       peerVolumes: { ...state.peerVolumes },
+      screenVolumes: { ...state.screenVolumes },
       self: state.self ? { ...state.self } : null,
       incomingCalls: [...state.incomingCalls],
       callDeclinedUserIds: [...state.callDeclinedUserIds],
@@ -1112,7 +1145,14 @@ export function createVoiceController(transport: RealtimeTransport) {
     );
     state.screenSharePeerIds = nextIds;
     state.focusedScreenPeerId = focused;
-    state.audibleScreenPeerIds = audibleScreenPeerIds(nextIds, focused);
+    // A dismissal only lasts as long as the share it was about.
+    state.dismissedSharePeerIds = state.dismissedSharePeerIds.filter((id) =>
+      nextIds.includes(id),
+    );
+    state.audibleScreenPeerIds = audibleScreenPeerIds(
+      nextIds.filter((id) => !state.dismissedSharePeerIds.includes(id)),
+      focused,
+    );
   }
 
   /** Who has a camera on, from a roster snapshot. */
@@ -1515,6 +1555,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       speakingPeerIds: [],
       occupancy: state.occupancy,
       peerVolumes: state.peerVolumes,
+      screenVolumes: state.screenVolumes,
       usingSfu: false,
       transportFailure: null,
       roomTransport: null,
@@ -1522,6 +1563,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       screenSharePeerIds: [],
       cameraPeerIds: [],
       focusedScreenPeerId: null,
+      dismissedSharePeerIds: [],
       audibleScreenPeerIds: [],
       localScreenStream: null,
       isSharingScreenAudio: false,
@@ -2354,6 +2396,38 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
     },
 
+    /** Stop watching one share: no picture, no sound, tile kept as a way back. */
+    dismissShare(peerId: string) {
+      if (state.dismissedSharePeerIds.includes(peerId)) {
+        return;
+      }
+      state.dismissedSharePeerIds = [...state.dismissedSharePeerIds, peerId];
+      state.audibleScreenPeerIds = audibleScreenPeerIds(
+        state.screenSharePeerIds.filter(
+          (id) => !state.dismissedSharePeerIds.includes(id),
+        ),
+        state.focusedScreenPeerId,
+      );
+      emit();
+    },
+
+    /** Undo that. */
+    watchShare(peerId: string) {
+      if (!state.dismissedSharePeerIds.includes(peerId)) {
+        return;
+      }
+      state.dismissedSharePeerIds = state.dismissedSharePeerIds.filter(
+        (id) => id !== peerId,
+      );
+      state.audibleScreenPeerIds = audibleScreenPeerIds(
+        state.screenSharePeerIds.filter(
+          (id) => !state.dismissedSharePeerIds.includes(id),
+        ),
+        state.focusedScreenPeerId,
+      );
+      emit();
+    },
+
     // --- conversation calls -----------------------------------------------
 
     /**
@@ -2621,6 +2695,15 @@ export function createVoiceController(transport: RealtimeTransport) {
     setPeerVolume(userId: string, volume: number) {
       state.peerVolumes = {
         ...state.peerVolumes,
+        [userId]: Math.min(1, Math.max(0, volume)),
+      };
+      emit();
+    },
+
+    /** The same knob for a person's screen audio. See `screenVolumes`. */
+    setScreenVolume(userId: string, volume: number) {
+      state.screenVolumes = {
+        ...state.screenVolumes,
         [userId]: Math.min(1, Math.max(0, volume)),
       };
       emit();

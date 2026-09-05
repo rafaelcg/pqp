@@ -29,6 +29,9 @@ export function VoiceChannelStage({
   windowFocused,
   onPushToTalk,
   onSetPeerVolume,
+  onSetScreenVolume,
+  onDismissShare,
+  onWatchShare,
   onRetryPeer,
   compactPeers = false,
 }: {
@@ -56,6 +59,9 @@ export function VoiceChannelStage({
   windowFocused?: boolean;
   onPushToTalk?: (held: boolean) => void;
   onSetPeerVolume?: (peerId: string, volume: number) => void;
+  onSetScreenVolume?: (userId: string, volume: number) => void;
+  onDismissShare?: (peerId: string) => void;
+  onWatchShare?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
   compactPeers?: boolean;
 }) {
@@ -87,6 +93,9 @@ export function VoiceChannelStage({
       windowFocused={windowFocused}
       onPushToTalk={onPushToTalk}
       onSetPeerVolume={onSetPeerVolume}
+      onSetScreenVolume={onSetScreenVolume}
+      onDismissShare={onDismissShare}
+      onWatchShare={onWatchShare}
       onRetryPeer={onRetryPeer}
       compactPeers={compactPeers}
       controlsMayIdle={false}

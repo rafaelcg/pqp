@@ -153,6 +153,7 @@ struct CommunityHomePostsResponse: Codable, Sendable { let posts: [CommunityHome
 struct CommunityHomeCommentsResponse: Codable, Sendable { let comments: [CommunityHomeComment] }
 struct CommunityHomeCommentResponse: Codable, Sendable { let comment: CommunityHomeComment }
 struct CommunityHomeLikeResponse: Codable, Sendable { let liked: Bool; let likeCount: Int }
+struct CommunityHomeUnreadResponse: Codable, Sendable { let count: Int }
 
 /// YouTube links, the one media kind that is a URL rather than an object.
 ///

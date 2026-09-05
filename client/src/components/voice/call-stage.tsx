@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ChevronUp,
+  EyeOff,
   LayoutGrid,
   Loader2,
   Maximize2,
@@ -404,6 +405,11 @@ export interface CallStageProps {
   windowFocused?: boolean;
   onPushToTalk?: (held: boolean) => void;
   onSetPeerVolume?: (peerId: string, volume: number) => void;
+  /** Screen-share audio volume, separate from the voice slider. */
+  onSetScreenVolume?: (userId: string, volume: number) => void;
+  /** Stop watching one peer's share, and undo that. */
+  onDismissShare?: (peerId: string) => void;
+  onWatchShare?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
   /** Shrinks the thumbnail strip. Same setting the old lobby grid used. */
   compactPeers?: boolean;
@@ -443,6 +449,9 @@ export function CallStage({
   windowFocused = true,
   onPushToTalk,
   onSetPeerVolume,
+  onSetScreenVolume,
+  onDismissShare,
+  onWatchShare,
   onRetryPeer,
   compactPeers = false,
   controlsMayIdle = true,
@@ -495,6 +504,9 @@ export function CallStage({
       windowFocused={windowFocused}
       onPushToTalk={onPushToTalk}
       onSetPeerVolume={onSetPeerVolume}
+      onSetScreenVolume={onSetScreenVolume}
+      onDismissShare={onDismissShare}
+      onWatchShare={onWatchShare}
       onRetryPeer={onRetryPeer}
       compactPeers={compactPeers}
       controlsMayIdle={controlsMayIdle}
@@ -530,6 +542,9 @@ function ActiveCall({
   windowFocused = true,
   onPushToTalk,
   onSetPeerVolume,
+  onSetScreenVolume,
+  onDismissShare,
+  onWatchShare,
   onRetryPeer,
   compactPeers = false,
   controlsMayIdle = true,
@@ -566,6 +581,11 @@ function ActiveCall({
   windowFocused?: boolean;
   onPushToTalk?: (held: boolean) => void;
   onSetPeerVolume?: (peerId: string, volume: number) => void;
+  /** Screen-share audio volume, separate from the voice slider. */
+  onSetScreenVolume?: (userId: string, volume: number) => void;
+  /** Stop watching one peer's share, and undo that. */
+  onDismissShare?: (peerId: string) => void;
+  onWatchShare?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
   compactPeers?: boolean;
   controlsMayIdle?: boolean;
@@ -651,6 +671,35 @@ function ActiveCall({
   // were the one presenting.
   const focusedIsLocal =
     focusedTile != null && focusedTile.peerId === voiceState.peerId;
+
+  /**
+   * The share-audio slider for a tile, or nothing when there is nothing to
+   * move: our own share, a silent one, or a caller that did not wire the
+   * setter. Keyed on userId so the setting survives a reconnect.
+   */
+  /** The decline control for a tile, or nothing when the caller did not wire it. */
+  function shareDismissControl(tile: ScreenShareTile) {
+    if (tile.isSelf || !onDismissShare || !onWatchShare) {
+      return undefined;
+    }
+    const active = voiceState.dismissedSharePeerIds.includes(tile.peerId);
+    return {
+      active,
+      onToggle: () =>
+        active ? onWatchShare(tile.peerId) : onDismissShare(tile.peerId),
+    };
+  }
+
+  function shareAudioControl(tile: ScreenShareTile) {
+    if (tile.isSelf || !tile.hasAudio || !onSetScreenVolume) {
+      return undefined;
+    }
+    const key = tile.userId ?? tile.peerId;
+    return {
+      volume: voiceState.screenVolumes[key] ?? 1,
+      onSetVolume: (volume: number) => onSetScreenVolume(key, volume),
+    };
+  }
   const receivedShareHasAudio = useReceivedShareAudio(
     focusedIsLocal ? null : screenStream,
   );
@@ -1008,6 +1057,8 @@ function ActiveCall({
               isFullscreen
               showName
               onToggleFullscreen={() => fullscreen.toggleScreen(soloTile.peerId)}
+              audio={shareAudioControl(soloTile)}
+              dismissed={shareDismissControl(soloTile)}
               className="min-h-0 flex-1"
             />
           ) : splitTwo ? (
@@ -1020,6 +1071,8 @@ function ActiveCall({
                   isFullscreen={false}
                   showName
                   onToggleFullscreen={() => fullscreen.toggleScreen(tile.peerId)}
+                  audio={shareAudioControl(tile)}
+              dismissed={shareDismissControl(tile)}
                   className="h-full min-h-0"
                 />
               ))}
@@ -1032,6 +1085,8 @@ function ActiveCall({
               onToggleFullscreen={() =>
                 fullscreen.toggleScreen(focusedTile.peerId)
               }
+              audio={shareAudioControl(focusedTile)}
+              dismissed={shareDismissControl(focusedTile)}
               className="min-h-0 flex-1"
             />
           ) : (
@@ -2298,6 +2353,8 @@ function ScreenTileFrame({
   isFullscreen,
   showName = false,
   onToggleFullscreen,
+  audio,
+  dismissed,
   className,
 }: {
   tile: ScreenShareTile;
@@ -2305,6 +2362,22 @@ function ScreenTileFrame({
   isFullscreen: boolean;
   showName?: boolean;
   onToggleFullscreen?: () => void;
+  /**
+   * The slider for THIS share's sound, absent when there is no sound to move
+   * (our own tile, or a share that arrived silent). It lives on the share
+   * rather than on the presenter's face because that is where the sound
+   * appears to come from, and because the face already carries their voice.
+   */
+  audio?: { volume: number; onSetVolume: (volume: number) => void };
+  /**
+   * The "not watching this one" state, and the way out of it.
+   *
+   * The tile is KEPT rather than removed, which is the whole trick: the layout
+   * maths never change, and the person is told why the screen everybody is
+   * talking about is not on their stage. Silently falling back to faces would
+   * leave them to rediscover their own decision.
+   */
+  dismissed?: { active: boolean; onToggle: () => void };
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -2314,6 +2387,32 @@ function ScreenTileFrame({
       ? // Naming yourself in your own button reads like somebody else's screen.
         t("voice.share.fullscreen")
       : t("voice.share.fullscreenPeer", { name: tile.presenterName });
+  if (dismissed?.active) {
+    return (
+      <div
+        className={cn(
+          "relative flex items-center justify-center bg-ink-2 p-4",
+          className,
+        )}
+        data-share-dismissed
+      >
+        <div className="text-center">
+          <p className="text-sm text-paper-muted">
+            {t("voice.share.dismissed", { name: tile.presenterName })}
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mt-2"
+            onClick={dismissed.onToggle}
+          >
+            {t("voice.share.watchAgain")}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={cn("relative", className)}>
       <StageVideo
@@ -2326,6 +2425,26 @@ function ScreenTileFrame({
           top right, and on a split stage the right-hand share sits underneath
           them. */}
       <div className="absolute left-2 top-2 flex max-w-[80%] items-center gap-1.5">
+        {/* Only a peer's share can be declined. Declining our own would mean
+            hiding the thing we are broadcasting, which is not a thing anyone
+            wants and would read as having stopped. */}
+        {dismissed && !tile.isSelf && (
+          <Tooltip
+            label={t("voice.share.dismiss", { name: tile.presenterName })}
+            side="bottom"
+            align="start"
+          >
+            <button
+              type="button"
+              data-share-dismiss
+              aria-label={t("voice.share.dismiss", { name: tile.presenterName })}
+              className="rounded-md bg-ink/70 p-1.5 text-paper-muted hover:bg-ink hover:text-paper"
+              onClick={dismissed.onToggle}
+            >
+              <EyeOff aria-hidden="true" className="h-4 w-4" />
+            </button>
+          </Tooltip>
+        )}
         {onToggleFullscreen && (
           /* `side="bottom"`: this sits on the top edge of the share, so a
              bubble above it would be off the tile. */
@@ -2353,6 +2472,18 @@ function ScreenTileFrame({
           </span>
         )}
       </div>
+      {/* Bottom right, away from the name and the fullscreen button. Hidden
+          until hover while it sits at unity, the same rule the face tiles
+          use, so a share nobody has adjusted is still just a picture. */}
+      {audio && (
+        <div className="group absolute bottom-2 right-2 w-32">
+          <PeerTileControls
+            name={t("voice.share.audioOf", { name: tile.presenterName })}
+            volume={audio.volume}
+            onSetVolume={audio.onSetVolume}
+          />
+        </div>
+      )}
     </div>
   );
 }
