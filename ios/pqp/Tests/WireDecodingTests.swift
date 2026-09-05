@@ -126,6 +126,22 @@ final class WireDecodingTests: XCTestCase {
         XCTAssertFalse(peer.serverMuted)
     }
 
+    /// The share's audio stream id rides on the same shape
+    /// (`voiceParticipantSchema.screenAudioStreamId`), and is what lets a
+    /// server mute take the microphone and leave the film. Nullable and
+    /// optional on the wire; both read as "no share sound".
+    func testScreenAudioStreamIdDecodesAndTreatsNullAsAbsent() throws {
+        let with = #"{"peerId":"p1","userId":"u1","displayName":"Ana","screenAudioStreamId":"cap-1"}"#
+        let null = #"{"peerId":"p1","userId":"u1","displayName":"Ana","screenAudioStreamId":null}"#
+        let absent = #"{"peerId":"p1","userId":"u1","displayName":"Ana"}"#
+        XCTAssertEqual(
+            try Coding.decoder.decode(VoiceParticipant.self, from: Data(with.utf8)).screenAudioStreamId,
+            "cap-1"
+        )
+        XCTAssertNil(try Coding.decoder.decode(VoiceParticipant.self, from: Data(null.utf8)).screenAudioStreamId)
+        XCTAssertNil(try Coding.decoder.decode(VoiceParticipant.self, from: Data(absent.utf8)).screenAudioStreamId)
+    }
+
     /// `welcome` carries it on both the existing peers and on `self`, which is
     /// how a mute placed before we walked in, or one that outlived our last
     /// socket, reaches us at all.
