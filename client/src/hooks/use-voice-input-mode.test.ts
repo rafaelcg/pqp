@@ -193,6 +193,7 @@ function welcome(roomTransport: "mesh" | "livekit"): VoiceSignalingMessage {
     sharingScreen: false,
     muted: false,
     deafened: false,
+    serverMuted: false,
   };
   return {
     type: "welcome",

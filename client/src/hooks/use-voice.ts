@@ -162,6 +162,22 @@ export interface VoiceState {
   voiceChannelId: string | null;
   self: VoiceParticipant | null;
   speakingPeerIds: string[];
+  /**
+   * peerIds in OUR room that a moderator has muted for everyone, from the
+   * roster's `serverMuted`. Never includes our own peer id: that case is
+   * `self.serverMuted`, and it changes what the mute button does rather than
+   * what we play.
+   *
+   * This is the receiving half of the server mute, and it is the same
+   * enforcement point as eviction: the server changed the roster, and this
+   * client obeys it. The audio sinks play these peers at zero whatever the
+   * person's own volume slider says (the slider's value is kept, so it
+   * restores the moment the flag clears), and the speaking loop never lights
+   * them up, because on a mesh their packets still arrive; only the playback
+   * stops. Both transports set the flag, so a LiveKit room reads identically
+   * even though its SFU also stopped forwarding the track.
+   */
+  serverMutedPeerIds: string[];
   /** channelId → participants currently in that voice channel */
   occupancy: Record<string, VoiceParticipant[]>;
   /** userId → 0..1 playback multiplier, persisted for the session. */
@@ -689,6 +705,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     voiceChannelId: null,
     self: null,
     speakingPeerIds: [],
+    serverMutedPeerIds: [],
     occupancy: {},
     peerVolumes: {},
     screenVolumes: {},
@@ -854,6 +871,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.remotePeers = [];
     state.voiceChannelId = null;
     state.speakingPeerIds = [];
+    state.serverMutedPeerIds = [];
     state.transportFailure = failure;
     state.error = translateMessage(TRANSPORT_FAILURE_KEY[failure.reason]);
     emit();
@@ -864,6 +882,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       ...state,
       remotePeers: [...state.remotePeers],
       speakingPeerIds: [...state.speakingPeerIds],
+      serverMutedPeerIds: [...state.serverMutedPeerIds],
       occupancy: { ...state.occupancy },
       peerVolumes: { ...state.peerVolumes },
       screenVolumes: { ...state.screenVolumes },
@@ -1051,6 +1070,14 @@ export function createVoiceController(transport: RealtimeTransport) {
 
       for (const [peerId, entry] of remoteAnalysers) {
         const level = readAnalyserLevel(entry.analyser);
+        // A server-muted peer's audio may still be arriving (on a mesh it
+        // always is), and the analyser still reads a level. Nobody hears it,
+        // so nothing may light up: a speaking ring on a person the room
+        // muted would be the panel contradicting the moderator.
+        if (state.serverMutedPeerIds.includes(peerId)) {
+          speakingTracker.update(peerId, 0, false);
+          continue;
+        }
         if (speakingTracker.update(peerId, level, true)) {
           next.push(peerId);
         }
@@ -1072,6 +1099,67 @@ export function createVoiceController(transport: RealtimeTransport) {
       displayName: participant.displayName,
       avatarUrl: participant.avatarUrl,
     };
+  }
+
+  /**
+   * Take the room's server mutes from a full roster (`welcome`, `voice-roster`
+   * for our channel). Everyone else lands in `serverMutedPeerIds`; our own
+   * entry updates `self.serverMuted` and pins our mic.
+   */
+  function applyServerMutes(participants: VoiceParticipant[]) {
+    const next = participants
+      .filter((p) => p.serverMuted && p.peerId !== state.peerId)
+      .map((p) => p.peerId)
+      .sort();
+    if (!sameSpeaking(state.serverMutedPeerIds, next)) {
+      state.serverMutedPeerIds = next;
+    }
+    const me = participants.find((p) => p.peerId === state.peerId);
+    if (me) {
+      applySelfServerMute(me.serverMuted);
+    }
+  }
+
+  /** One peer's flag changed (`peer-joined`, `peer-updated`). */
+  function applyPeerServerMute(peer: VoiceParticipant) {
+    if (peer.peerId === state.peerId) {
+      applySelfServerMute(peer.serverMuted);
+      return;
+    }
+    const listed = state.serverMutedPeerIds.includes(peer.peerId);
+    if (peer.serverMuted && !listed) {
+      state.serverMutedPeerIds = [...state.serverMutedPeerIds, peer.peerId].sort();
+    } else if (!peer.serverMuted && listed) {
+      state.serverMutedPeerIds = state.serverMutedPeerIds.filter(
+        (id) => id !== peer.peerId,
+      );
+    }
+  }
+
+  /**
+   * A moderator muted (or unmuted) US.
+   *
+   * Muting pins `isMuted` and stops the track: the server keeps our roster
+   * entry muted and refuses our unmute anyway, and every receiver plays us at
+   * zero, so publishing would only spend upload on audio nobody hears. The
+   * mute button becomes inert (see `setMuted` / `toggleMute`) until the flag
+   * clears. Clearing does not unmute: the mic stays off until the person
+   * turns it back on, exactly as after any self-mute.
+   */
+  function applySelfServerMute(serverMuted: boolean) {
+    if (!state.self) {
+      return;
+    }
+    if (state.self.serverMuted !== serverMuted) {
+      state.self = { ...state.self, serverMuted };
+    }
+    // Not gated on the flag having changed: `welcome` and `peer-updated`
+    // assign `self` wholesale before this runs, so the flag may already
+    // read true while the mic is still open.
+    if (serverMuted && !state.isMuted) {
+      state.isMuted = true;
+      applyMute();
+    }
   }
 
   async function teardownSfu() {
@@ -1553,6 +1641,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       voiceChannelId: null,
       self: null,
       speakingPeerIds: [],
+      serverMutedPeerIds: [],
       occupancy: state.occupancy,
       peerVolumes: state.peerVolumes,
       screenVolumes: state.screenVolumes,
@@ -1605,6 +1694,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         // before resume welcome (fresh process: empty room). Absence is not
         // departure: union ids, do not clear, do not tear down PCs.
         if (message.voiceChannelId === state.voiceChannelId) {
+          // Moderator mutes are read in both branches: a roster that arrives
+          // while holding media is still the room's word on who is muted.
+          applyServerMutes(message.participants);
           if (holdingMedia) {
             for (const participant of message.participants) {
               if (participant.peerId !== state.peerId) {
@@ -1709,6 +1801,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           applyCameraStreamIds([message.self, ...welcomePeers]);
           applyScreenAudioStreamIds([message.self, ...welcomePeers]);
           applySharingScreen([message.self, ...welcomePeers]);
+          applyServerMutes([message.self, ...welcomePeers]);
           redeclareLocalMedia();
           emit();
           break;
@@ -1730,6 +1823,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         applyScreenShareRoster([message.self, ...welcomePeers]);
         applyCameraRoster([message.self, ...welcomePeers]);
+        // A standing moderator mute on us survives the seat (the server keeps
+        // it for the room's lifetime), so it can already be true here. Read
+        // it now so the very first mic state we publish is the pinned one.
+        applyServerMutes([message.self, ...welcomePeers]);
         state.roomTransport = roomTransport;
 
         // Rejoin/channel-switch: tear the previous session down before building
@@ -1841,6 +1938,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           message.peer.peerId,
           message.peer.sharingScreen,
         );
+        applyPeerServerMute(message.peer);
         if (!alreadyKnown) {
           playCue("voiceJoin");
         }
@@ -1855,6 +1953,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (state.self?.peerId === message.peer.peerId) {
           state.self = message.peer;
         }
+        applyPeerServerMute(message.peer);
         // The SFU path builds `remotePeers` from LiveKit events, which a
         // rename is not one of, so patch the roster we are already holding
         // rather than waiting for the next thing to happen in the room.
@@ -1873,6 +1972,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       case "peer-left":
         knownPeerIds.delete(message.peerId);
         identities.delete(message.peerId);
+        if (state.serverMutedPeerIds.includes(message.peerId)) {
+          state.serverMutedPeerIds = state.serverMutedPeerIds.filter(
+            (id) => id !== message.peerId,
+          );
+        }
         manager?.removePeer(message.peerId);
         {
           const entry = remoteAnalysers.get(message.peerId);
@@ -2195,8 +2299,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!pipeline) {
         return;
       }
-      // Undeafening is the only way back to an unmuted mic while deafened.
-      state.isMuted = state.isDeafened ? true : muted;
+      // Undeafening is the only way back to an unmuted mic while deafened,
+      // and a moderator's mute is not ours to lift at all: the server would
+      // refuse the declaration and nobody would play us anyway.
+      state.isMuted = state.isDeafened || state.self?.serverMuted ? true : muted;
       applyMute();
       emit();
     },
@@ -2205,11 +2311,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!pipeline) {
         return;
       }
+      const serverMuted = state.self?.serverMuted === true;
       if (state.isDeafened) {
         state.isDeafened = false;
-        state.isMuted = false;
+        state.isMuted = serverMuted;
       } else {
-        state.isMuted = !state.isMuted;
+        state.isMuted = serverMuted ? true : !state.isMuted;
       }
       applyMute();
       emit();
@@ -2220,8 +2327,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       state.isDeafened = !state.isDeafened;
-      // Deafening also mutes; undeafening restores an open mic.
-      state.isMuted = state.isDeafened;
+      // Deafening also mutes; undeafening restores an open mic, unless a
+      // moderator has it pinned.
+      state.isMuted = state.isDeafened || state.self?.serverMuted === true;
       applyMute();
       emit();
     },

@@ -18,6 +18,7 @@ function person(overrides: Partial<VoiceParticipant> = {}): VoiceParticipant {
     sharingScreen: false,
     muted: false,
     deafened: false,
+    serverMuted: false,
     ...overrides,
   };
 }

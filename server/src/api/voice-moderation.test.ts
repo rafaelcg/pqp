@@ -21,8 +21,11 @@ import type { DbUser } from "../db.js";
  * - disconnect ejects both halves (mesh peer, SFU participant) and audits it;
  * - move enforces `canAccessChannel` in both directions before the eviction
  *   carries its destination hint;
- * - the server mute is real on a LiveKit room and REFUSED, honestly, on a
- *   mesh room — never faked.
+ * - the server mute is real on a LiveKit room (the SFU stops forwarding) and
+ *   on BOTH transports it lands on the roster as `serverMuted`, which is the
+ *   enforcement point every receiving client shares with eviction. The flag
+ *   outlives the target's seat (rejoin is not an unmute button), dies with
+ *   the room, and pins the target's own `muted` until a moderator clears it.
  */
 
 const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -72,9 +75,13 @@ const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
 const {
   handleVoiceMessage,
+  resetVoicePeers,
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
 } = await import("../ws/voice.js");
+const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
+  "../ws/sockets.js"
+);
 const { resetSfuAdminClient, settleSfuEvictions, stopSfuResweeps } =
   await import("../voice/admin.js");
 const { TrackType } = await import("livekit-server-sdk");
@@ -136,10 +143,17 @@ describeDb("voice moderation routes", () => {
     stopSfuResweeps();
   });
 
+  /** Sockets registered as authenticated (roster audience) by a test. */
+  const viewers: WebSocket[] = [];
+
   beforeEach(async () => {
     resetApiRateLimits();
+    resetVoicePeers();
     resetVoiceRateLimits();
     resetVoiceRoomTransports();
+    for (const socket of viewers.splice(0)) {
+      deleteAuthenticatedSocket(socket);
+    }
     stopSfuResweeps();
     configureLiveKit();
     lk.listRooms.mockReset().mockResolvedValue([]);
@@ -191,31 +205,110 @@ describeDb("voice moderation routes", () => {
     return result.rows[0]!;
   }
 
-  /** Put a user in the voice room over the WS path; returns peer id + frames. */
+  interface WelcomeFrame {
+    type: string;
+    peerId?: string;
+    self?: { muted: boolean; serverMuted: boolean };
+  }
+
+  /**
+   * Put a user in the voice room over the WS path; returns peer id + frames.
+   *
+   * The socket is also registered as authenticated, so `voice-roster` frames
+   * (which go to the channel's audience, not to the room) reach it. That is
+   * how the tests below read what everybody else sees.
+   */
   async function joinVoice(
     userId: string,
     voiceChannelId: string,
-  ): Promise<{ peerId: string; sent: string[] }> {
+  ): Promise<{
+    peerId: string;
+    sent: string[];
+    socket: WebSocket;
+    welcome: WelcomeFrame;
+  }> {
     const sent: string[] = [];
     const socket = {
       readyState: 1,
       send: (payload: string) => sent.push(payload),
       on: () => {},
     } as unknown as WebSocket;
+    const user = await asDbUser(userId);
+    setAuthenticatedSocket(socket, user);
+    viewers.push(socket);
 
     await handleVoiceMessage(
-      { socket, user: await asDbUser(userId) },
+      { socket, user },
       { type: "join-voice-room", voiceChannelId },
     );
     const welcome = sent
-      .map((raw) => JSON.parse(raw) as { type: string; peerId?: string })
+      .map((raw) => JSON.parse(raw) as WelcomeFrame)
       .find((message) => message.type === "welcome");
     expect(welcome).toBeDefined();
-    return { peerId: welcome!.peerId!, sent };
+    return { peerId: welcome!.peerId!, sent, socket, welcome: welcome! };
   }
 
   function frames(sent: string[]): Array<Record<string, unknown>> {
     return sent.map((raw) => JSON.parse(raw) as Record<string, unknown>);
+  }
+
+  interface RosterParticipant {
+    userId: string;
+    muted: boolean;
+    serverMuted: boolean;
+  }
+
+  /** The newest `voice-roster` this socket received for the room. */
+  function lastRoster(
+    sent: string[],
+    voiceChannelId: string,
+  ): RosterParticipant[] {
+    const all = frames(sent).filter(
+      (frame) =>
+        frame.type === "voice-roster" &&
+        frame.voiceChannelId === voiceChannelId,
+    );
+    expect(all.length).toBeGreaterThan(0);
+    return all[all.length - 1]!.participants as RosterParticipant[];
+  }
+
+  function rosterEntry(
+    sent: string[],
+    voiceChannelId: string,
+    userId: string,
+  ): RosterParticipant {
+    const entry = lastRoster(sent, voiceChannelId).find(
+      (participant) => participant.userId === userId,
+    );
+    expect(entry).toBeDefined();
+    return entry!;
+  }
+
+  async function leaveVoice(socket: WebSocket, userId: string) {
+    await handleVoiceMessage(
+      { socket, user: await asDbUser(userId) },
+      { type: "leave-voice-room" },
+    );
+  }
+
+  async function declareVoiceState(
+    socket: WebSocket,
+    userId: string,
+    muted: boolean,
+  ) {
+    await handleVoiceMessage(
+      { socket, user: await asDbUser(userId) },
+      { type: "set-voice-state", muted, deafened: false },
+    );
+  }
+
+  function muteCall(serverId: string, userId: string, muted: boolean) {
+    return call<{ error?: string }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/members/${userId}/voice-mute`,
+      { muted },
+    );
   }
 
   async function auditActions(serverId: string): Promise<string[]> {
@@ -385,9 +478,10 @@ describeDb("voice moderation routes", () => {
 
   // ------------------------------------------------------------------- mute
 
-  it("server mute is real on a LiveKit room", async () => {
+  it("server mute is real on a LiveKit room, and lands on the roster too", async () => {
     const { serverId, voiceChannelId } = await makeServer();
     const { peerId, sent } = await joinVoice(member.id, voiceChannelId);
+    const observer = await joinVoice(owner.id, voiceChannelId);
     lk.listParticipants.mockResolvedValue([
       {
         identity: peerId,
@@ -397,12 +491,7 @@ describeDb("voice moderation routes", () => {
     ]);
     sent.length = 0;
 
-    const res = await call(
-      owner,
-      "POST",
-      `/api/servers/${serverId}/members/${member.id}/voice-mute`,
-      { muted: true },
-    );
+    const res = await muteCall(serverId, member.id, true);
     expect(res.status).toBe(200);
     expect(lk.mutePublishedTrack).toHaveBeenCalledWith(
       voiceChannelId,
@@ -410,32 +499,128 @@ describeDb("voice moderation routes", () => {
       "TR_mic",
       true,
     );
-    // The target is told; the peer is NOT dropped — a mute is not an eviction.
-    expect(frames(sent)[0]).toMatchObject({
-      type: "voice-moderation",
+    // The target is told; the peer is NOT dropped: a mute is not an eviction.
+    expect(frames(sent).find((f) => f.type === "voice-moderation")).toMatchObject({
       action: "muted",
     });
     expect(lk.removeParticipant).not.toHaveBeenCalled();
     expect(await auditActions(serverId)).toContain("member.voice_mute");
+    // And the same flag every mesh client enforces is on the roster here as
+    // well, so a tile looks the same whichever transport carried the call.
+    expect(rosterEntry(observer.sent, voiceChannelId, member.id)).toMatchObject({
+      muted: true,
+      serverMuted: true,
+    });
   });
 
-  it("server mute is refused, honestly, on a mesh room", async () => {
-    // No LiveKit configured when the room opens: the room pins to mesh, which
-    // is the transport the whole refusal is about.
+  /** A mesh room: no LiveKit when the room opens, so it pins to mesh. */
+  async function makeMeshRoom() {
     unconfigureLiveKit();
-    const { serverId, voiceChannelId } = await makeServer();
-    await joinVoice(member.id, voiceChannelId);
+    const made = await makeServer();
+    const target = await joinVoice(member.id, made.voiceChannelId);
+    const observer = await joinVoice(owner.id, made.voiceChannelId);
+    return { ...made, target, observer };
+  }
 
-    const res = await call<{ error?: string }>(
-      owner,
+  it("server mute on a mesh room sets the roster flag and tells the target", async () => {
+    const { serverId, voiceChannelId, target, observer } = await makeMeshRoom();
+    target.sent.length = 0;
+
+    const res = await muteCall(serverId, member.id, true);
+    expect(res.status).toBe(200);
+    // No SFU in the path: nothing to ask it. The roster is the enforcement.
+    expect(lk.mutePublishedTrack).not.toHaveBeenCalled();
+    expect(rosterEntry(observer.sent, voiceChannelId, member.id)).toMatchObject({
+      muted: true,
+      serverMuted: true,
+    });
+    expect(rosterEntry(observer.sent, voiceChannelId, owner.id)).toMatchObject({
+      serverMuted: false,
+    });
+    expect(frames(target.sent).find((f) => f.type === "voice-moderation")).toMatchObject({
+      action: "muted",
+      voiceChannelId,
+    });
+    expect(await auditActions(serverId)).toContain("member.voice_mute");
+  });
+
+  it("the flag outlives the seat: leaving and rejoining comes back muted", async () => {
+    const { serverId, voiceChannelId, target } = await makeMeshRoom();
+    expect((await muteCall(serverId, member.id, true)).status).toBe(200);
+
+    await leaveVoice(target.socket, member.id);
+    const back = await joinVoice(member.id, voiceChannelId);
+
+    // Both in the welcome that seats them, before any client declaration.
+    expect(back.welcome.self).toMatchObject({ muted: true, serverMuted: true });
+  });
+
+  it("a moderator can clear it, and the target may then unmute", async () => {
+    const { serverId, voiceChannelId, target, observer } = await makeMeshRoom();
+    expect((await muteCall(serverId, member.id, true)).status).toBe(200);
+    target.sent.length = 0;
+
+    const res = await muteCall(serverId, member.id, false);
+    expect(res.status).toBe(200);
+    // Clearing is not an unmute: the person's mic stays off until they say.
+    expect(rosterEntry(observer.sent, voiceChannelId, member.id)).toMatchObject({
+      muted: true,
+      serverMuted: false,
+    });
+    expect(frames(target.sent).find((f) => f.type === "voice-moderation")).toMatchObject({
+      action: "unmuted",
+    });
+    expect(await auditActions(serverId)).toContain("member.voice_unmute");
+
+    await declareVoiceState(target.socket, member.id, false);
+    expect(rosterEntry(observer.sent, voiceChannelId, member.id)).toMatchObject({
+      muted: false,
+      serverMuted: false,
+    });
+  });
+
+  it("an emptied room forgets the mute", async () => {
+    const { serverId, voiceChannelId, target, observer } = await makeMeshRoom();
+    expect((await muteCall(serverId, member.id, true)).status).toBe(200);
+
+    await leaveVoice(target.socket, member.id);
+    await leaveVoice(observer.socket, owner.id);
+    const back = await joinVoice(member.id, voiceChannelId);
+
+    expect(back.welcome.self).toMatchObject({ muted: false, serverMuted: false });
+  });
+
+  it("refuses the target's own unmute while server-muted; the roster stays muted", async () => {
+    const { serverId, voiceChannelId, target, observer } = await makeMeshRoom();
+    expect((await muteCall(serverId, member.id, true)).status).toBe(200);
+    const rostersBefore = frames(observer.sent).filter(
+      (f) => f.type === "voice-roster",
+    ).length;
+
+    await declareVoiceState(target.socket, member.id, false);
+
+    expect(rosterEntry(observer.sent, voiceChannelId, member.id)).toMatchObject({
+      muted: true,
+      serverMuted: true,
+    });
+    // The refusal is a re-sent roster, so the client snaps back to what
+    // everyone else sees rather than sitting on a local unmute nobody plays.
+    expect(
+      frames(observer.sent).filter((f) => f.type === "voice-roster").length,
+    ).toBeGreaterThan(rostersBefore);
+  });
+
+  it("refuses a server mute from a plain member", async () => {
+    const { serverId, voiceChannelId } = await makeServer();
+    await joinVoice(owner.id, voiceChannelId);
+
+    const res = await call(
+      member,
       "POST",
-      `/api/servers/${serverId}/members/${member.id}/voice-mute`,
+      `/api/servers/${serverId}/members/${owner.id}/voice-mute`,
       { muted: true },
     );
-    expect(res.status).toBe(409);
-    // The refusal explains the physics, not just "no".
-    expect(res.body.error).toMatch(/peer-to-peer/i);
-    expect(lk.mutePublishedTrack).not.toHaveBeenCalled();
+    expect(res.status).toBe(403);
     expect(await auditActions(serverId)).not.toContain("member.voice_mute");
   });
 

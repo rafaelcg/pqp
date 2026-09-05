@@ -222,6 +222,7 @@ function participant(peerId: string, userId: string, extra = {}) {
     sharingScreen: false,
     muted: false,
     deafened: false,
+    serverMuted: false,
     ...extra,
   };
 }

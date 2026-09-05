@@ -195,6 +195,7 @@ function participant(peerId: string) {
     sharingScreen: false,
     muted: false,
     deafened: false,
+    serverMuted: false,
   };
 }
 
