@@ -405,6 +405,14 @@ object PqpIcons {
 
     val Mic get() = Lucide.mic
     val MicMuted get() = Lucide.micOff
+
+    /**
+     * A moderator muted somebody. A crossed speaker, not a crossed microphone:
+     * the person did not switch anything off, the room stopped playing them,
+     * and the two states have to be told apart at a glance because only one of
+     * them is theirs to undo.
+     */
+    val ServerMuted get() = Lucide.volumeX
     val Listening get() = Lucide.headphones
     val Deafened get() = Lucide.headphoneOff
     val Speakerphone get() = Lucide.volume2

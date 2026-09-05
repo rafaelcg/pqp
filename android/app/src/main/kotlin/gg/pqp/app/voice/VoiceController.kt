@@ -41,8 +41,19 @@ data class VoiceState(
     val channelName: String? = null,
     val stage: VoiceStage = VoiceStage.Idle,
     val participants: List<VoiceParticipant> = emptyList(),
+    /** Our own peer id from `welcome`, so we can find ourselves on the roster. */
+    val localPeerId: String? = null,
     val muted: Boolean = false,
     val deafened: Boolean = false,
+    /**
+     * A moderator muted this device, and only a moderator can undo it.
+     *
+     * While set, [muted] is forced true and the mute control is inert: the
+     * server refuses `set-voice-state` with `muted: false` from us and snaps
+     * the roster back, so offering the switch would be offering a lie. See
+     * [absorbServerMute].
+     */
+    val serverMuted: Boolean = false,
     /** Speakerphone rather than the earpiece. See [VoiceController.applyAudioRoute]. */
     val speakerphone: Boolean = true,
     /** This device is capturing and publishing its screen. */
@@ -256,6 +267,10 @@ class VoiceController(
     }
 
     fun toggleMute() {
+        // A moderator's mute is not ours to lift. The server would refuse the
+        // frame anyway; refusing here keeps the control honest and saves the
+        // round trip that would otherwise flicker the microphone icon.
+        if (!_state.value.muteControlEnabled) return
         val muted = !_state.value.muted
         _state.value = _state.value.copy(muted = muted)
         engine.setMuted(muted || _state.value.deafened)
@@ -472,12 +487,9 @@ class VoiceController(
 
         val peers = frame.participants("peers")
         peers.forEach { engine.addPeer(it.peerId) }
-        applyVideoRoster(peers)
 
-        _state.value = _state.value.copy(
-            stage = VoiceStage.Connected,
-            participants = peers + listOfNotNull(frame.participant("self")),
-        )
+        _state.value = _state.value.copy(stage = VoiceStage.Connected, localPeerId = peerId)
+        absorbRoster(peers + listOfNotNull(frame.participant("self")))
 
         // Re-declare mute and deafen, every single join.
         //
@@ -497,10 +509,7 @@ class VoiceController(
         if (!_state.value.isActive) return
         val peer = frame.participant("peer") ?: return
         engine.addPeer(peer.peerId)
-        applyVideoRoster(listOf(peer))
-        _state.value = _state.value.copy(
-            participants = _state.value.participants.filterNot { it.peerId == peer.peerId } + peer,
-        )
+        absorbRoster(_state.value.participants.filterNot { it.peerId == peer.peerId } + peer)
     }
 
     private fun onPeerLeft(frame: JsonObject) {
@@ -514,9 +523,41 @@ class VoiceController(
 
     private fun onRoster(frame: JsonObject) {
         if (frame.str("voiceChannelId") != _state.value.channelId) return
-        val participants = frame.participants("participants")
-        _state.value = _state.value.copy(participants = participants)
+        absorbRoster(frame.participants("participants"))
+    }
+
+    /**
+     * A new picture of the room, from whichever frame carried it.
+     *
+     * Everything the roster says is applied from here, in one place, because
+     * the roster is the *only* channel the server has to a mesh room: it cannot
+     * touch media, so eviction, screen bookkeeping and now a moderator's mute
+     * all work by changing the roster and trusting every client to enforce it.
+     * A frame that updated the participant list but skipped one of the
+     * enforcement steps would be a client that shows the mute and keeps
+     * playing the person.
+     */
+    private fun absorbRoster(participants: List<VoiceParticipant>) {
+        val before = _state.value
+        val after = before
+            .copy(participants = participants)
+            .absorbServerMute(participants, before.localPeerId)
+        _state.value = after
+        if (after.muted != before.muted) {
+            // Forced on by a moderator. Not pushed back over the socket: the
+            // server already holds us as muted, which is how we got here, and
+            // answering a roster with a state frame invites a loop.
+            engine.setMuted(after.muted || after.deafened)
+        }
         applyVideoRoster(participants)
+        participants.forEach { participant ->
+            if (participant.peerId != before.localPeerId) {
+                // Stream id first, then the flag, so a mute landing in the same
+                // frame as a new share already knows which track to spare.
+                engine.setPeerScreenAudioStreamId(participant.peerId, participant.screenAudioStreamId)
+                engine.setPeerServerMuted(participant.peerId, participant.serverMuted)
+            }
+        }
     }
 
     /**

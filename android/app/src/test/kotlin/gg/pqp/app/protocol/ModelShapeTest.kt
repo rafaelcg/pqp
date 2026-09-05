@@ -118,7 +118,17 @@ class ModelShapeTest {
 
     @Test
     fun `VoiceParticipant matches voiceParticipantSchema`() {
-        assertSubsetOfSchema(VoiceParticipant.serializer(), signaling, "voiceParticipantSchema")
+        assertSubsetOfSchema(
+            VoiceParticipant.serializer(),
+            signaling,
+            "voiceParticipantSchema",
+            // `serverMuted` is the server-mute-on-mesh contract, built on the
+            // Android, iOS, web and server sides in parallel. Listed here only
+            // until the server PR lands `serverMuted` on the shared schema;
+            // once it does this entry is dead weight and should be deleted so
+            // the subset check covers the field again.
+            knownExtras = setOf("serverMuted"),
+        )
     }
 
     /**

@@ -56,6 +56,8 @@ import gg.pqp.app.ui.theme.Spacing
 import gg.pqp.app.voice.VoiceController
 import gg.pqp.app.voice.VoiceStage
 import gg.pqp.app.voice.VoiceState
+import gg.pqp.app.voice.muteControlEnabled
+import gg.pqp.app.voice.serverMutedPeers
 
 /**
  * The persistent "you are in a call" strip.
@@ -117,6 +119,15 @@ fun CallBar(state: VoiceState, controller: VoiceController, modifier: Modifier =
 
                                 unreachable -> stringResource(R.string.voice_peer_unreachable)
 
+                                // A moderator muted this device. Said on the
+                                // status line for as long as it holds rather
+                                // than as a snackbar that vanishes, because
+                                // the thing it explains (a mute button that
+                                // does nothing) stays on screen until a
+                                // moderator lifts it.
+                                state.serverMuted ->
+                                    stringResource(R.string.voice_server_muted_you)
+
                                 else -> stringResource(
                                     R.string.voice_participants,
                                     state.participants.size,
@@ -137,9 +148,18 @@ fun CallBar(state: VoiceState, controller: VoiceController, modifier: Modifier =
                         onClick = controller::toggleMute,
                         icon = if (state.muted) PqpIcons.MicMuted else PqpIcons.Mic,
                         contentDescription = stringResource(
-                            if (state.muted) R.string.voice_unmute else R.string.voice_mute,
+                            when {
+                                state.serverMuted -> R.string.voice_server_muted_you
+                                state.muted -> R.string.voice_unmute
+                                else -> R.string.voice_mute
+                            },
                         ),
                         on = state.muted,
+                        // Inert while a moderator's mute holds. The controller
+                        // ignores the tap and the server would refuse the frame,
+                        // so a button that still looked pressable would be
+                        // pretending. Same fact as the guard in `toggleMute`.
+                        enabled = state.muteControlEnabled,
                     )
                     CallControl(
                         onClick = controller::toggleDeafen,
@@ -194,6 +214,7 @@ fun CallBar(state: VoiceState, controller: VoiceController, modifier: Modifier =
                     }
                 }
 
+                ServerMutedRow(state)
                 WatchScreenRow(state, controller)
 
                 // The rail's edge. Chrome is deeper than the page, and this is
@@ -263,6 +284,7 @@ private fun CallControl(
     icon: ImageVector,
     contentDescription: String,
     on: Boolean,
+    enabled: Boolean = true,
 ) {
     val container by animateColorAsState(
         targetValue = if (on) {
@@ -276,6 +298,7 @@ private fun CallControl(
 
     FilledIconButton(
         onClick = onClick,
+        enabled = enabled,
         colors = IconButtonDefaults.filledIconButtonColors(
             containerColor = container,
             contentColor = if (on) {
@@ -283,6 +306,10 @@ private fun CallControl(
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
+            // A disabled control keeps its "on" container so the state it is
+            // stuck in stays legible; only the glyph fades.
+            disabledContainerColor = container,
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
         ),
     ) {
         Icon(
@@ -335,6 +362,59 @@ private fun ShareScreenButton(state: VoiceState, controller: VoiceController) {
         ),
         on = state.sharingScreen,
     )
+}
+
+/**
+ * "A moderator muted somebody", one line per person.
+ *
+ * This client has no per-participant tiles yet; the call bar carries a head
+ * count and a row per event worth knowing about, and this is such an event.
+ * Without it a server-muted peer simply goes quiet on this phone, which is
+ * indistinguishable from the silent-connection failure the bar already warns
+ * about, and the person holding the phone starts debugging their network.
+ *
+ * The glyph is a crossed speaker, deliberately not the crossed microphone that
+ * marks a self-mute: one of those two states is the peer's own to undo and the
+ * other is not. The local person is left out; their case is the status line
+ * and the inert mute button above.
+ */
+@Composable
+private fun ServerMutedRow(state: VoiceState) {
+    val mutedPeers = state.serverMutedPeers()
+    AnimatedVisibility(
+        visible = mutedPeers.isNotEmpty(),
+        enter = expandVertically(),
+        exit = shrinkVertically(),
+    ) {
+        Column {
+            mutedPeers.forEach { participant ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = Spacing.gutter, end = Spacing.sm, bottom = Spacing.xs),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        imageVector = PqpIcons.ServerMuted,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(Sizes.iconInline),
+                    )
+                    Spacer(Modifier.width(Spacing.sm))
+                    Text(
+                        text = stringResource(
+                            R.string.voice_server_muted_peer,
+                            participant.displayName,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
 }
 
 /**

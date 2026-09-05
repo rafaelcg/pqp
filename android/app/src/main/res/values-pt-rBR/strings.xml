@@ -130,6 +130,8 @@
     <string name="voice_close_screen">Fechar</string>
     <string name="voice_speaker_on">Viva-voz</string>
     <string name="voice_speaker_off">Fone</string>
+    <string name="voice_server_muted_you">Um moderador te mutou</string>
+    <string name="voice_server_muted_peer">Um moderador mutou %1$s</string>
 
     <!-- Notificações -->
     <string name="push_channel_messages">Menções e mensagens</string>

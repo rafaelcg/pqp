@@ -126,9 +126,23 @@ class VoiceEngine(
     private val remoteVideo = RemoteVideoIndex<VideoTrack>()
     private val videoLock = Any()
 
+    /**
+     * Whether each peer's audio may play: deafening and moderator mutes, both.
+     *
+     * The same shape as [remoteVideo] for the same reason. It used to be a
+     * single `deafened` flag applied to whatever tracks existed at the time,
+     * which was enough while deafening was the only thing that could silence a
+     * peer. A server mute is per peer and arrives on the roster, usually before
+     * the peer's track does, so it has to be remembered per peer and consulted
+     * when the track finally lands. See [RemoteAudioGate].
+     */
+    private val remoteAudio = RemoteAudioGate<AudioTrack> { track, enabled ->
+        runCatching { track.setEnabled(enabled) }
+    }
+    private val audioLock = Any()
+
     @Volatile private var localPeerId: String? = null
     @Volatile private var iceServers: List<PeerConnection.IceServer> = emptyList()
-    @Volatile private var deafened: Boolean = false
 
     private var statsJob: Job? = null
 
@@ -201,17 +215,6 @@ class VoiceEngine(
 
         @Volatile var hasRemoteDescription = false
 
-        /**
-         * Remote tracks filed per **track**, not per peer.
-         *
-         * A peer can send more than one audio track: sharing a screen with its
-         * sound publishes the machine's audio alongside the microphone. Keyed by
-         * peer alone the second overwrites the first and takes the only handle
-         * on the microphone with it, so deafening silences the screen and leaves
-         * the presenter's voice playing. Neither half logs anything.
-         */
-        val remoteAudio = ConcurrentHashMap<String, AudioTrack>()
-
         /** Our screen video on this connection, so it can be removed again. */
         @Volatile var screenSender: RtpSender? = null
 
@@ -280,11 +283,34 @@ class VoiceEngine(
      * is what the web and iOS clients both do.
      */
     fun setDeafened(value: Boolean, mutedByUser: Boolean) {
-        deafened = value
-        peers.values.forEach { peer ->
-            peer.remoteAudio.values.forEach { it.setEnabled(!value) }
-        }
+        synchronized(audioLock) { remoteAudio.setDeafened(value) }
         localAudio?.setEnabled(!(value || mutedByUser))
+    }
+
+    /**
+     * The roster said a moderator muted, or unmuted, a peer.
+     *
+     * This is the receiving half of a server mute on a mesh room, and it is the
+     * only half there is: the server has no hand on the media, so the person
+     * goes quiet on this phone because this phone stops playing them. Fed from
+     * every roster frame rather than only from a change, for the same reason
+     * [setPeerCameraStreamId] is: the roster and the track race, and the gate
+     * absorbs a repeat for free.
+     */
+    fun setPeerServerMuted(remotePeerId: String, muted: Boolean) {
+        val changed = synchronized(audioLock) { remoteAudio.setServerMuted(remotePeerId, muted) }
+        if (changed) Log.i(TAG, "peer $remotePeerId server-muted=$muted")
+    }
+
+    /**
+     * The roster named which of a peer's audio streams is their screen's sound.
+     *
+     * A server mute must leave it playing (a watch-party host mutes the
+     * chatter, not the film), and this is the only way to tell it from the
+     * microphone. The audio twin of [setPeerCameraStreamId].
+     */
+    fun setPeerScreenAudioStreamId(remotePeerId: String, streamId: String?) {
+        synchronized(audioLock) { remoteAudio.setScreenAudioStreamId(remotePeerId, streamId) }
     }
 
     fun addPeer(remotePeerId: String) {
@@ -307,6 +333,7 @@ class VoiceEngine(
 
     fun removePeer(remotePeerId: String) {
         val peer = peers.remove(remotePeerId) ?: return
+        synchronized(audioLock) { remoteAudio.forget(remotePeerId) }
         if (synchronized(videoLock) { remoteVideo.forget(remotePeerId) }) {
             onRemoteScreen(remotePeerId, null)
         }
@@ -561,6 +588,7 @@ class VoiceEngine(
         releaseScreenCapture()
         peers.forEach { (_, peer) -> runCatching { peer.connection.dispose() } }
         peers.clear()
+        synchronized(audioLock) { remoteAudio.clear() }
         synchronized(videoLock) { remoteVideo.clear() }.forEach { onRemoteScreen(it, null) }
         localPeerId = null
     }
@@ -822,11 +850,18 @@ class VoiceEngine(
         override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
             when (val track = receiver.track()) {
                 is AudioTrack -> {
-                    track.setEnabled(!deafened)
                     // WebRTC plays a received audio track by itself, so there is
-                    // nothing to start here. The handle is kept only so that
-                    // deafening has something to switch off.
-                    peers[remotePeerId]?.remoteAudio?.put(track.id(), track)
+                    // nothing to start here. The gate switches it to the right
+                    // state on the way in (deafened, or a moderator mute the
+                    // roster announced before this track existed) and keeps the
+                    // handle so either can switch it later.
+                    // The stream id is what tells the microphone from the
+                    // screen's sound once a moderator mutes this peer; see
+                    // [RemoteAudioGate.plays].
+                    val streamId = streams.firstOrNull()?.id
+                    synchronized(audioLock) {
+                        remoteAudio.trackAdded(remotePeerId, track.id(), streamId, track)
+                    }
                 }
 
                 is VideoTrack -> {
@@ -859,7 +894,7 @@ class VoiceEngine(
                     onRemoteScreen(remotePeerId, remoteScreenFor(remotePeerId))
                 }
             } else {
-                peers[remotePeerId]?.remoteAudio?.remove(track.id())
+                synchronized(audioLock) { remoteAudio.trackRemoved(remotePeerId, track.id()) }
             }
         }
 
