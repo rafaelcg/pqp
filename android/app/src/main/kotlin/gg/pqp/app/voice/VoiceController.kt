@@ -552,6 +552,9 @@ class VoiceController(
         applyVideoRoster(participants)
         participants.forEach { participant ->
             if (participant.peerId != before.localPeerId) {
+                // Stream id first, then the flag, so a mute landing in the same
+                // frame as a new share already knows which track to spare.
+                engine.setPeerScreenAudioStreamId(participant.peerId, participant.screenAudioStreamId)
                 engine.setPeerServerMuted(participant.peerId, participant.serverMuted)
             }
         }

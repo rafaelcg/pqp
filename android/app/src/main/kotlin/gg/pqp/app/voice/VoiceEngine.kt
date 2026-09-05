@@ -302,6 +302,17 @@ class VoiceEngine(
         if (changed) Log.i(TAG, "peer $remotePeerId server-muted=$muted")
     }
 
+    /**
+     * The roster named which of a peer's audio streams is their screen's sound.
+     *
+     * A server mute must leave it playing (a watch-party host mutes the
+     * chatter, not the film), and this is the only way to tell it from the
+     * microphone. The audio twin of [setPeerCameraStreamId].
+     */
+    fun setPeerScreenAudioStreamId(remotePeerId: String, streamId: String?) {
+        synchronized(audioLock) { remoteAudio.setScreenAudioStreamId(remotePeerId, streamId) }
+    }
+
     fun addPeer(remotePeerId: String) {
         val local = localPeerId ?: return
         if (peers.containsKey(remotePeerId)) return
@@ -844,8 +855,12 @@ class VoiceEngine(
                     // state on the way in (deafened, or a moderator mute the
                     // roster announced before this track existed) and keeps the
                     // handle so either can switch it later.
+                    // The stream id is what tells the microphone from the
+                    // screen's sound once a moderator mutes this peer; see
+                    // [RemoteAudioGate.plays].
+                    val streamId = streams.firstOrNull()?.id
                     synchronized(audioLock) {
-                        remoteAudio.trackAdded(remotePeerId, track.id(), track)
+                        remoteAudio.trackAdded(remotePeerId, track.id(), streamId, track)
                     }
                 }
 
