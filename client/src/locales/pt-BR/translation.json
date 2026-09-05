@@ -1972,6 +1972,7 @@
   "notify.level.none": "Nada",
   "notify.menu.reset": "Usar o padrão de {inherits}",
   "slash.help.description": "Listar os comandos slash disponíveis",
+  "slash.help.formatting": "Formatação: selecione o texto e aperte {mod}+B para negrito, {mod}+I para itálico, {mod}+E para código, {mod}+Shift+X para riscado.",
   "slash.shrug.description": "Acrescentar um shrug à sua mensagem",
   "slash.tableflip.description": "Virar uma mesa no chat",
   "slash.me.description": "Enviar uma ação em itálico",
