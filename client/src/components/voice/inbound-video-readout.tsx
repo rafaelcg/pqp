@@ -4,6 +4,7 @@ import {
   sampleVoiceStats,
   type VideoReceiverSample,
 } from "@/lib/voice-stats-probe";
+import { liveReceiverRows } from "@/components/voice/inbound-video-rows";
 
 /**
  * What is ARRIVING, in words, for the person who cannot change it.
@@ -30,30 +31,19 @@ import {
  * control that silently does nothing, which is what they had.
  *
  * Reads the same sampler as the console probe and the outbound readout, so
- * none of the three can disagree. Mesh only: the registry that backs it holds
- * `RTCPeerConnection`s, and an SFU room has none, where it renders nothing
- * rather than something wrong.
+ * none of the three can disagree. Both transports feed that sampler: the mesh
+ * registers its peer connections, and the LiveKit session registers a sampler
+ * of its own that reads the room's subscriptions (`livekit-session.ts`). It
+ * did not always. The registry used to hold only `RTCPeerConnection`s, and an
+ * SFU room has none of those, so a 100-person watch party opened this menu
+ * over a playing screen share and read "nobody is sending you video right
+ * now". The sentence below it is still the truth on both transports: the
+ * share goes up as a single layer, so there is no smaller or larger copy on
+ * the server for this side to ask for.
+ *
+ * Which rows count as live, and their order, live in `inbound-video-rows.ts`.
  */
 const SAMPLE_INTERVAL_MS = 2000;
-
-/** A row worth showing: video that is actually arriving from somebody. */
-function isLive(sample: VideoReceiverSample): boolean {
-  return (sample.framesDecoded ?? 0) > 0 || (sample.kbps ?? 0) > 0;
-}
-
-/**
- * One line per incoming stream, newest reading, sorted so it does not shuffle.
- *
- * Sorted by peer then role rather than by bitrate, which was the first
- * instinct: a list that reorders itself every two seconds is unreadable, and
- * the busiest stream is not a stable identity.
- */
-function order(a: VideoReceiverSample, b: VideoReceiverSample): number {
-  const name = (a.displayName ?? a.peerId).localeCompare(
-    b.displayName ?? b.peerId,
-  );
-  return name !== 0 ? name : a.role.localeCompare(b.role);
-}
 
 export function InboundVideoReadout() {
   const { t } = useTranslation();
@@ -69,7 +59,7 @@ export function InboundVideoReadout() {
         if (!live) {
           return;
         }
-        setRows(snapshot.receivers.filter(isLive).sort(order));
+        setRows(liveReceiverRows(snapshot.receivers));
       });
     };
     tick();
