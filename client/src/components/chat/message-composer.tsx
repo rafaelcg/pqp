@@ -87,6 +87,12 @@ import {
   type SlashFeedback,
 } from "@/lib/slash-commands";
 import { remainingWaitSeconds } from "@/hooks/use-chat";
+import {
+  applyFormattingEdit,
+  formattingMarkerForKey,
+  isApplePlatform,
+  toggleFormatting,
+} from "@/lib/composer-formatting";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -1044,6 +1050,30 @@ export function MessageComposer({
         event.preventDefault();
         onCancelReply();
       }
+      return;
+    }
+
+    // Ctrl/Cmd+B, I, E and Ctrl/Cmd+Shift+X wrap the selection in the markdown
+    // the bubble renders (see composer-formatting.ts for the table and why
+    // there is no underline). Checked before Enter and the menus, and only
+    // here on the textarea, so nothing else in the app loses its Cmd+B and the
+    // browser keeps its own shortcuts everywhere the composer is not focused.
+    // The edit goes through the browser's own text insertion rather than
+    // setBody so Ctrl/Cmd+Z takes back just the markers, the same as it would
+    // for typed asterisks.
+    const marker = formattingMarkerForKey(event, isApplePlatform());
+    if (marker) {
+      event.preventDefault();
+      const input = event.currentTarget;
+      const edit = toggleFormatting(
+        input.value,
+        input.selectionStart ?? input.value.length,
+        input.selectionEnd ?? input.value.length,
+        marker,
+      );
+      applyFormattingEdit(input, edit);
+      setBody(input.value);
+      setCaret(edit.selectionStart);
       return;
     }
 

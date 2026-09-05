@@ -1972,6 +1972,7 @@
   "notify.level.none": "Nothing",
   "notify.menu.reset": "Use {inherits} default",
   "slash.help.description": "List available slash commands",
+  "slash.help.formatting": "Formatting: select text and press {mod}+B for bold, {mod}+I for italics, {mod}+E for code, {mod}+Shift+X for strikethrough.",
   "slash.shrug.description": "Append a shrug to your message",
   "slash.tableflip.description": "Flip a table in chat",
   "slash.me.description": "Send an emote-style italic action",
