@@ -9,6 +9,7 @@ import { manualStatusSchema } from "./status.js";
 import { threadSummarySchema } from "./threads.js";
 import { webhookEmbedSchema } from "./webhooks.js";
 import { chanceResultSchema } from "./chance.js";
+import { voiceRoomTransportSchema } from "./signaling.js";
 import { pollSchema } from "./polls.js";
 
 export const channelTypeSchema = z.enum(["text", "voice", "category"]);
@@ -565,6 +566,14 @@ export const channelSchema = z.object({
     .min(0)
     .max(SLOWMODE_SECONDS_MAX)
     .default(0),
+  /**
+   * Voice channels only. `null` is automatic: the server picks peer-to-peer
+   * for a small server and the SFU for a large one or a listed community.
+   * `"livekit"` forces the SFU, `"mesh"` forces peer-to-peer. Decided once,
+   * when a room's first peer joins; a live call never changes transport.
+   * Defaulted so a response from an API that predates the column still parses.
+   */
+  voiceTransport: voiceRoomTransportSchema.nullable().default(null),
 });
 
 /**
@@ -824,6 +833,8 @@ export const updateChannelSchema = z.object({
     .min(0)
     .max(SLOWMODE_SECONDS_MAX)
     .optional(),
+  /** Explicit `null` goes back to automatic; absent means "not changing". */
+  voiceTransport: voiceRoomTransportSchema.nullable().optional(),
 });
 
 /**

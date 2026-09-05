@@ -15,6 +15,7 @@ const BASE: Channel = {
   imageUrl: null,
   parentId: null,
   slowmodeSeconds: 0,
+  voiceTransport: null,
 };
 
 describe("isChannelImageUrl", () => {
