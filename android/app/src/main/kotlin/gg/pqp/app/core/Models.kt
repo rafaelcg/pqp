@@ -259,6 +259,17 @@ data class VoiceParticipant(
     val screenAudioStreamId: String? = null,
     val muted: Boolean = false,
     val deafened: Boolean = false,
+    /**
+     * A moderator muted this person, and only a moderator can undo it.
+     *
+     * Distinct from [muted], which is the person's own switch. On a mesh room
+     * the server cannot touch anybody's media, so this flag is how the mute is
+     * *enforced*: every receiving client stops playing the flagged peer, the
+     * same way an eviction works by changing the roster and letting each
+     * client act on it. Defaulted so a server that predates the field decodes
+     * to "not muted" rather than to an empty roster.
+     */
+    val serverMuted: Boolean = false,
 )
 
 /**

@@ -139,6 +139,8 @@
     <string name="voice_close_screen">Close</string>
     <string name="voice_speaker_on">Speaker</string>
     <string name="voice_speaker_off">Earpiece</string>
+    <string name="voice_server_muted_you">A moderator muted you</string>
+    <string name="voice_server_muted_peer">%1$s was muted by a moderator</string>
 
     <!-- Push notifications -->
     <string name="push_channel_messages">Mentions and messages</string>
