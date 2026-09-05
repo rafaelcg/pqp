@@ -464,6 +464,82 @@ async function decideRoomTransport(
 export function resetVoiceRoomTransports(): void {
   roomTransports.clear();
   remoteTransports.clear();
+  roomServerMutes.clear();
+}
+
+/**
+ * SERVER MUTES: room id -> user ids a moderator has muted for everyone.
+ *
+ * Keyed on the (room, user) pair and NOT stored on the `VoicePeer`, because a
+ * peer is a seat and the mute is a sanction on the person. A peer is minted on
+ * every join, so a mute that lived on it would be undone by hanging up and
+ * rejoining, which turns "leave" into an unmute button that only the target
+ * knows about. Here the flag outlives the peer: a server-muted person who
+ * rejoins comes back with `serverMuted: true` and `muted: true` in the same
+ * `welcome` that seats them.
+ *
+ * WHY THIS WORKS ON MESH AT ALL. The server never touches media on a mesh
+ * room, so for a long time a server mute there was refused as unenforceable.
+ * But eviction has always worked on mesh, and it works because the server
+ * changes the ROSTER and every other client enforces the roster: a peer that
+ * is not listed is not played. The mute uses the same trick and the same
+ * trust boundary. The flag rides the roster, every receiving client forces
+ * that peer's playback to zero, and the sender's own client stops publishing
+ * and refuses to unmute. A modified sender gains nothing (nobody plays it); a
+ * modified receiver can hear one muted person, which is exactly the power a
+ * modified receiver already has over an evicted peer's last packets. On
+ * LiveKit the SFU additionally mutes the publication, and the flag still
+ * travels so both transports look identical on every tile.
+ *
+ * Lifetime is the room's, like `roomTransports`: cleared when the last peer
+ * (orphans included) leaves, so a sanction never survives into a call that
+ * starts hours later. Per-process, for the same reasons as everything above.
+ */
+const roomServerMutes = new Map<string, Set<string>>();
+
+/** Whether a moderator has muted this user in this room. */
+export function isVoiceUserServerMuted(
+  voiceChannelId: string,
+  userId: string,
+): boolean {
+  return roomServerMutes.get(voiceChannelId)?.has(userId) ?? false;
+}
+
+/**
+ * Set or clear a moderator's mute on one user in one room, then tell the
+ * room. The route has already checked permission, rank and that the target
+ * is in this room; this is the state change and the fan-out.
+ *
+ * Muting also forces the target's self-reported `muted` on every seat they
+ * hold, so the very next roster is consistent (a receiver that only reads
+ * `muted` still draws the right badge). Clearing does NOT unmute them: the
+ * person decides when their mic comes back, the same as after any self-mute.
+ */
+export function setVoiceUserServerMuted(
+  voiceChannelId: string,
+  userId: string,
+  muted: boolean,
+): Promise<void> {
+  let set = roomServerMutes.get(voiceChannelId);
+  if (muted) {
+    if (!set) {
+      set = new Set();
+      roomServerMutes.set(voiceChannelId, set);
+    }
+    set.add(userId);
+    for (const peer of getRoomPeers(voiceChannelId)) {
+      if (peer.userId === userId) {
+        peer.muted = true;
+        writePeerRow(peer);
+      }
+    }
+  } else if (set) {
+    set.delete(userId);
+    if (set.size === 0) {
+      roomServerMutes.delete(voiceChannelId);
+    }
+  }
+  return broadcastRoster(voiceChannelId);
 }
 
 /**
@@ -772,6 +848,7 @@ function toParticipant(peer: VoicePeer): VoiceParticipant {
     muted: peer.muted,
     deafened: peer.deafened,
     canSpeak: peer.canSpeak,
+    serverMuted: isVoiceUserServerMuted(peer.voiceChannelId, peer.userId),
   };
 }
 
@@ -948,6 +1025,9 @@ function removePeer(peerId: string) {
   // moves. Orphans keep the pin so a resume cannot flip transport.
   if (getRoomPeers(voiceChannelId).length === 0) {
     roomTransports.delete(voiceChannelId);
+    // Same lifetime for the moderator mutes: a sanction on a call that is
+    // over must not be waiting for the next call in this channel.
+    roomServerMutes.delete(voiceChannelId);
   }
   if (registryOn()) {
     // One statement: the row goes, and the room row with it if this was the
@@ -1184,6 +1264,7 @@ function dropVoicePeerSilently(peerId: string): void {
   }
   if (getRoomPeers(peer.voiceChannelId).length === 0) {
     roomTransports.delete(peer.voiceChannelId);
+    roomServerMutes.delete(peer.voiceChannelId);
   }
   logEvent("voice.seatReleased", {
     peerId,
@@ -1303,6 +1384,7 @@ export function resetVoicePeers(): void {
   rosterCoalescer.reset();
   pendingRoomEvents.clear();
   remoteTransports.clear();
+  roomServerMutes.clear();
 }
 
 /** Whether a socket currently holds a voice peer (for disconnect diagnostics). */
@@ -1624,13 +1706,12 @@ export async function handleVoiceMessage(
     // the issuing route performs for anybody already inside one.
     //
     // WHY REFUSING THE JOIN AND NOT A SERVER-SIDE MUTE. A mute is the more
-    // surgical sanction and it is the one this product cannot actually deliver:
-    // in mesh mode the audio never touches the server at all, so "muted" would
-    // mean asking the sanctioned client to please stop sending — which is a
-    // suggestion, not enforcement, and would be defeated by any modified
-    // client. Refusing the room is enforceable in both mesh and SFU mode, and a
-    // sanction that only works when the sanctioned party cooperates is worse
-    // than an honest blunter one. The same join reaches a conversation's call,
+    // surgical sanction, and since `roomServerMutes` it does exist on mesh
+    // too, enforced by every receiver the way an eviction is. But it is
+    // scoped to one room for the room's lifetime, and a timeout is a
+    // sanction on the person across the whole server for a set time. Refusing
+    // the room is the one shape that means the same thing in every channel
+    // and on both transports. The same join reaches a conversation's call,
     // and `findTimeoutForChannel` returns nothing for those — a server's
     // moderators do not get to hang up their members' DM calls.
     if (await findTimeoutForChannel(user.id, payload.voiceChannelId)) {
@@ -1957,9 +2038,15 @@ export async function handleVoiceMessage(
       // Not muted until the client says so: the client re-declares its state
       // right after `welcome` (including after a rejoin, where this reset
       // would otherwise erase a standing mute). See use of `set-voice-state`.
-      // The exception is a listener, who is muted by rule from the first
-      // frame and stays so whatever their client declares.
-      muted: (adopted?.muted ?? false) || !canSpeak,
+      // Two exceptions: a listener, who is muted by rule from the first
+      // frame and stays so whatever their client declares, and a standing
+      // moderator mute on this person in this room, which outlives the seat
+      // (see `roomServerMutes`) and is therefore already true in the
+      // `welcome` that seats them.
+      muted:
+        (adopted?.muted ?? false) ||
+        !canSpeak ||
+        isVoiceUserServerMuted(payload.voiceChannelId, user.id),
       deafened: adopted?.deafened ?? false,
       canSpeak,
       canResume: payload.resume === true,
@@ -2097,10 +2184,25 @@ export async function handleVoiceMessage(
     if (!peer) {
       return;
     }
+    // A moderator's mute outranks the person's own declaration: while it
+    // stands, `muted` is pinned true whatever the client says. There is no
+    // refusal frame for this (the mute already reached them as a
+    // `voice-moderation` notice, and `serverMuted` is on every roster they
+    // hold), so a rejected unmute simply re-sends the roster, and the client
+    // snaps back to the state everyone else already sees. Through the same
+    // limiter as an honest toggle, so a client hammering unmute costs the
+    // audience no more than one toggling mute.
+    const serverMuted = isVoiceUserServerMuted(peer.voiceChannelId, peer.userId);
+    const muted = serverMuted ? true : payload.muted;
+    const refusedUnmute = serverMuted && !payload.muted;
     // No change, no fan-out: the client re-declares its state after every
     // (re)join, and most of those declarations are the defaults the peer
     // already has.
-    if (peer.muted === payload.muted && peer.deafened === payload.deafened) {
+    if (
+      peer.muted === muted &&
+      peer.deafened === payload.deafened &&
+      !refusedUnmute
+    ) {
       return;
     }
     if (!stateLimiter.take(user.id)) {
@@ -2108,8 +2210,9 @@ export async function handleVoiceMessage(
     }
     // A listener cannot show as unmuted: the roster badge would claim a mic
     // the rules do not allow. The client keeps itself muted; this keeps the
-    // display honest against one that does not.
-    peer.muted = payload.muted || !peer.canSpeak;
+    // display honest against one that does not. `muted` above already folds
+    // in a standing moderator mute.
+    peer.muted = muted || !peer.canSpeak;
     peer.deafened = payload.deafened;
     writePeerRow(peer);
     await broadcastRoster(peer.voiceChannelId);
