@@ -23,7 +23,12 @@ import {
 import { createMessage, mapMessage } from "../services/messages.js";
 import { pushChannelActivity, pushIncomingCall } from "../services/push.js";
 import { findTimeoutForChannel } from "../services/sanctions.js";
-import { getChannel, getChannelAudience } from "../services/servers.js";
+import {
+  getChannel,
+  getChannelAudience,
+  getServerVoiceProfile,
+  type ChannelRow,
+} from "../services/servers.js";
 import { computeMemberPermissions } from "../services/permissions.js";
 import { canAccessChannel, resolveMemberName } from "../services/users.js";
 import { broadcastToChannel } from "./chat.js";
@@ -37,6 +42,10 @@ import {
   getServerVoiceBackend,
   isLiveKitConfigured,
 } from "../voice/backends.js";
+import {
+  resolveVoiceTransport,
+  type VoiceTransportDecision,
+} from "../voice/transport-policy.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
 import {
   applyWatchPartyWrite,
@@ -142,8 +151,12 @@ const retiredPeerIds = new Map<string, ReturnType<typeof setTimeout>>();
  *
  * So the room owns the decision:
  *
- * - It is taken from config when the room's **first** peer joins and pinned
- *   here for as long as the room has anyone in it. A live call therefore never
+ * - It is decided when the room's **first** peer joins and pinned here for as
+ *   long as the room has anyone in it. The decision is `configuredTransport()`
+ *   narrowed by `voice/transport-policy.ts`: with LiveKit configured, a DM call
+ *   or a voice channel in a small server still opens on mesh (free, one hop
+ *   less), and only a large server, a listed community or a channel override
+ *   goes to the SFU. Without LiveKit everything is mesh. A live call never
  *   changes transport under the people in it — there is no correct way to move
  *   an in-progress mesh onto an SFU (or back) without dropping everyone's audio
  *   mid-sentence, and "it stays as it started" is a rule clients can rely on
@@ -166,9 +179,47 @@ function configuredTransport(): VoiceRoomTransport {
     : "mesh";
 }
 
-/** The transport a room is running on, or would get if it were opened now. */
+/**
+ * The transport a room is running on, or the configured ceiling if it is empty.
+ *
+ * Every room with a peer in it is pinned, so for a live room this is exact.
+ * For an empty room it answers what the deployment *can* run, not what the
+ * policy would pick: that needs the channel row and is `decideRoomTransport`.
+ */
 export function getRoomTransport(voiceChannelId: string): VoiceRoomTransport {
   return roomTransports.get(voiceChannelId) ?? configuredTransport();
+}
+
+/**
+ * What an empty room would open on. One query at most (the server's member
+ * count and community flag), and none at all when LiveKit is off, the channel
+ * is a conversation, or the channel carries an override. Called once per pin.
+ */
+async function decideRoomTransport(
+  channel: ChannelRow,
+): Promise<VoiceTransportDecision> {
+  const liveKitConfigured = configuredTransport() === "livekit";
+  const voiceTransport = channel.voice_transport ?? null;
+  let server: { isCommunity: boolean; memberCount: number } | null = null;
+  if (
+    liveKitConfigured &&
+    channel.kind === "server" &&
+    channel.server_id &&
+    !voiceTransport
+  ) {
+    try {
+      server = await getServerVoiceProfile(channel.server_id);
+    } catch (error) {
+      // A failed read must not refuse the join. Null falls through to the
+      // configured default, which is what every room got before the policy.
+      console.error("[voice] transport policy lookup failed:", error);
+    }
+  }
+  return resolveVoiceTransport({
+    liveKitConfigured,
+    channel: { kind: channel.kind, voiceTransport },
+    server,
+  });
 }
 
 /** Test hook: forget every pinned room transport. */
@@ -358,7 +409,7 @@ export interface VoiceActivitySnapshot {
   peakRoomSizeToday: number;
   /** ISO. Process start or the last São Paulo midnight, whichever is later. */
   peakTrackedSince: string;
-  /** The transport a room opened now would get. */
+  /** The transport the deployment can run. Small rooms may still open on mesh (voice/transport-policy.ts). */
   backend: VoiceRoomTransport;
   /**
    * One entry per room that has somebody in it, largest first.
@@ -980,6 +1031,13 @@ export async function handleVoiceMessage(
       }
     }
 
+    // What this room would open on, if this join is the one that opens it. A
+    // pinned room never re-decides, so the (at most one) query behind this is
+    // skipped for every join after the first.
+    const opening = roomTransports.has(payload.voiceChannelId)
+      ? null
+      : await decideRoomTransport(channel);
+
     // The awaits above mean the socket may have closed, or the client may have
     // sent a second join, while this one was in flight. Registering a peer for a
     // dead socket leaves a ghost in the roster that nothing ever removes.
@@ -992,10 +1050,11 @@ export async function handleVoiceMessage(
       "livekit",
     ];
     const resume = planVoiceResume(user.id, payload, capabilities);
-    const transport =
-      resume.kind === "reconstruct"
-        ? (roomTransports.get(payload.voiceChannelId) ?? resume.transport)
-        : getRoomTransport(payload.voiceChannelId);
+    const transport: VoiceRoomTransport =
+      roomTransports.get(payload.voiceChannelId) ??
+      (resume.kind === "reconstruct"
+        ? resume.transport
+        : (opening?.transport ?? configuredTransport()));
 
     // A client that cannot run this room's transport is refused *here*, before
     // a peer exists. Admitting it and letting it discover the mismatch a round
@@ -1118,12 +1177,20 @@ export async function handleVoiceMessage(
     socketToPeerId.set(socket, peerId);
     noteRoomSizeForPeak(getRoomPeers(payload.voiceChannelId).length);
     // Reconstruct pins the transport the token remembered, so a deploy cannot
-    // silently switch mesh ↔ LiveKit under held media. Cold join pins current
-    // config when the room is empty.
+    // silently switch mesh ↔ LiveKit under held media. Cold join pins the
+    // policy's decision when the room is empty.
+    const wasPinned = roomTransports.has(payload.voiceChannelId);
     if (resume.kind === "reconstruct") {
       roomTransports.set(payload.voiceChannelId, resume.transport);
-    } else if (!roomTransports.has(payload.voiceChannelId)) {
+    } else if (!wasPinned) {
       roomTransports.set(payload.voiceChannelId, transport);
+    }
+    if (!wasPinned) {
+      logEvent("voice.transportPinned", {
+        channelId: payload.voiceChannelId,
+        transport: roomTransports.get(payload.voiceChannelId),
+        reason: resume.kind === "reconstruct" ? "resume" : opening?.reason,
+      });
     }
     logEvent("voice.join", {
       peerId,

@@ -1746,6 +1746,13 @@ router.post("/api/voice/token", async ({ req, user }) => {
 
   await requireChannelAccess(body.voiceChannelId, user.id);
 
+  // The room's transport is pinned when its first peer joins and stated in
+  // `welcome`; a client in a peer-to-peer room has no business minting an SFU
+  // token, and every token minted starts LiveKit participant-minutes billing.
+  if (getRoomTransport(body.voiceChannelId) !== "livekit") {
+    throw new HttpError(409, "This room runs peer-to-peer");
+  }
+
   try {
     // `peer.userId` — not `user.id` — only because the two were just proved
     // equal above; keeping the token's identity and its metadata sourced from
@@ -3362,6 +3369,7 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
     topic: body.topic,
     imageUrl: body.imageUrl,
     slowmodeSeconds: body.slowmodeSeconds,
+    voiceTransport: body.voiceTransport,
   });
   if (!updated) {
     throw new NotFound("Channel not found");
@@ -3396,6 +3404,7 @@ router.patch("/api/channels/:channelId", async ({ req, user }, { channelId }) =>
       ["isPrivate", channel.is_private, updated.is_private],
       ["imageUrl", channel.image_url, updated.image_url],
       ["slowmodeSeconds", channel.slowmode_seconds, updated.slowmode_seconds],
+      ["voiceTransport", channel.voice_transport, updated.voice_transport],
     ] as const
   )
     .filter(([, oldValue, newValue]) => oldValue !== newValue)

@@ -37,6 +37,7 @@ function channel(
     imageUrl: null,
     parentId: null,
     slowmodeSeconds: 0,
+    voiceTransport: null,
     ...extra,
   };
 }

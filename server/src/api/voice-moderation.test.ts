@@ -180,6 +180,13 @@ describeDb("voice moderation routes", () => {
       [serverId, member.id],
     );
     const voiceChannel = created.body.channels.find((c) => c.type === "voice")!;
+    // A two-member server opens its rooms on mesh under the transport policy
+    // (voice/transport-policy.ts); these tests are about SFU rooms, so pin
+    // the channel to the SFU the way a small streamer's server would.
+    await getPool().query(
+      `UPDATE channels SET voice_transport = 'livekit' WHERE id = $1`,
+      [voiceChannel.id],
+    );
     return { serverId, voiceChannelId: voiceChannel.id };
   }
 

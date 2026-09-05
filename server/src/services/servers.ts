@@ -1,4 +1,8 @@
-import { formatUserTag, type ChannelKind } from "@pqp/shared";
+import {
+  formatUserTag,
+  type ChannelKind,
+  type VoiceRoomTransport,
+} from "@pqp/shared";
 import { getPool, type DbChannel, type DbServer, type MemberRole } from "../db.js";
 import {
   isBusEnabled,
@@ -31,7 +35,7 @@ export type ChannelRow = Omit<DbChannel, "server_id"> & {
 };
 
 /** Every channel read selects the same columns, `kind` included. */
-export const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, topic, image_url, parent_id, slowmode_seconds`;
+export const CHANNEL_COLUMNS = `id, server_id, name, type, position, is_private, kind, topic, image_url, parent_id, slowmode_seconds, voice_transport`;
 
 /**
  * Every server read selects the same columns.
@@ -218,7 +222,7 @@ export async function listChannels(
 ): Promise<ChannelRow[]> {
   const result = await getPool().query<ChannelRow>(
     `SELECT c.id, c.server_id, c.name, c.type, c.position, c.is_private, c.kind,
-            c.topic, c.image_url, c.parent_id, c.slowmode_seconds
+            c.topic, c.image_url, c.parent_id, c.slowmode_seconds, c.voice_transport
      FROM channels c
      JOIN server_members sm ON sm.server_id = c.server_id
      WHERE c.server_id = $1 AND sm.user_id = $2
@@ -403,6 +407,7 @@ export async function updateChannel(
     topic?: string | null;
     imageUrl?: string | null;
     slowmodeSeconds?: number;
+    voiceTransport?: VoiceRoomTransport | null;
   },
 ): Promise<ChannelRow | null> {
   const result = await getPool().query<ChannelRow>(
@@ -411,7 +416,8 @@ export async function updateChannel(
        is_private = COALESCE($3, is_private),
        topic = CASE WHEN $4::boolean THEN $5 ELSE topic END,
        image_url = CASE WHEN $6::boolean THEN $7 ELSE image_url END,
-       slowmode_seconds = CASE WHEN $8::boolean THEN $9 ELSE slowmode_seconds END
+       slowmode_seconds = CASE WHEN $8::boolean THEN $9 ELSE slowmode_seconds END,
+       voice_transport = CASE WHEN $10::boolean THEN $11 ELSE voice_transport END
      WHERE id = $1
      RETURNING ${CHANNEL_COLUMNS}`,
     [
@@ -424,6 +430,8 @@ export async function updateChannel(
       updates.imageUrl === "" ? null : (updates.imageUrl ?? null),
       updates.slowmodeSeconds !== undefined,
       updates.slowmodeSeconds ?? 0,
+      updates.voiceTransport !== undefined,
+      updates.voiceTransport ?? null,
     ],
   );
   const updated = result.rows[0] ?? null;
@@ -1333,6 +1341,37 @@ export function mapChannel(c: ChannelRow) {
     imageUrl: c.image_url ?? null,
     parentId: c.parent_id ?? null,
     slowmodeSeconds: c.slowmode_seconds ?? 0,
+    voiceTransport: c.voice_transport ?? null,
+  };
+}
+
+/**
+ * What the voice transport policy needs to know about a server: whether it is
+ * a listed community and how many members it has. One query, one correlated
+ * count over `server_members`' primary key (server_id, user_id), so it is an
+ * index-only range scan even on the largest server. Read once per room pin,
+ * never per join (ws/voice.ts caches the decision for the life of the pin).
+ */
+export async function getServerVoiceProfile(
+  serverId: string,
+): Promise<{ isCommunity: boolean; memberCount: number } | null> {
+  const result = await getPool().query<{
+    is_community: boolean;
+    member_count: string;
+  }>(
+    `SELECT s.is_community,
+            (SELECT COUNT(*) FROM server_members m WHERE m.server_id = s.id) AS member_count
+     FROM servers s
+     WHERE s.id = $1`,
+    [serverId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    isCommunity: row.is_community,
+    memberCount: Number(row.member_count),
   };
 }
 
