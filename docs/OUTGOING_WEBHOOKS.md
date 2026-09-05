@@ -128,3 +128,7 @@ in non-production only. The same checks run at create and at every delivery.
 On the desktop app, copy the POST URL and set `Authorization: Bearer <sender
 key>`. That header name is what Grok Bot's panel currently offers; it is
 unproven until the first live POST. pqp still sends the HMAC headers above.
+
+A character on that server with no WebSocket is shown as online on the member
+list while at least one hook is `active`. `failing` or `disabled` paints them
+offline again. A live socket still wins. This is not a stored presence bit.
