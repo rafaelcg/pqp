@@ -159,12 +159,25 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
     /// Self-reported over `set-voice-state`; display only, never enforcement.
     var muted: Bool = false
     var deafened: Bool = false
+    /// A moderator muted this person, and the server is the one holding the
+    /// flag: their own `set-muted false` is refused and the roster snaps back.
+    ///
+    /// THE ONLY ENFORCEMENT ON MESH IS THE RECEIVER. The server never touches
+    /// media in a peer-to-peer room, so it cannot stop the bytes; what it can
+    /// do is put this on the roster and rely on every phone in the call to play
+    /// that person at zero, exactly the way eviction already works by changing
+    /// the roster and letting each client act on it. A client that decodes the
+    /// key and ignores it keeps hearing somebody the whole room agreed not to.
+    ///
+    /// Defaulted false for the same reason as `muted`: an older server omits
+    /// it, and absent has to read as "nobody is muted", not as a failed frame.
+    var serverMuted: Bool = false
 
     var id: String { peerId }
 
     enum CodingKeys: String, CodingKey {
         case peerId, userId, displayName, avatarUrl, sharingScreen
-        case cameraStreamId, muted, deafened
+        case cameraStreamId, muted, deafened, serverMuted
     }
 
     init(from decoder: Decoder) throws {
@@ -177,6 +190,7 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
         cameraStreamId = try c.decodeIfPresent(String.self, forKey: .cameraStreamId)
         muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
         deafened = try c.decodeIfPresent(Bool.self, forKey: .deafened) ?? false
+        serverMuted = try c.decodeIfPresent(Bool.self, forKey: .serverMuted) ?? false
     }
 }
 

@@ -40,6 +40,10 @@ struct CallStageView: View {
                         .padding(.bottom, 10)
                         .transition(.opacity)
                 }
+                if call.isServerMuted {
+                    ServerMuteNotice()
+                        .transition(.opacity)
+                }
                 controls
             }
             .padding(.horizontal, Metrics.hPadding)
@@ -81,7 +85,8 @@ struct CallStageView: View {
         case .spotlight:
             if let peer = call.peers.first {
                 PeerStageTile(peer: peer, track: call.camera(for: peer.peerId),
-                              isMuted: call.isMuted(peer.peerId), large: true)
+                              isMuted: call.isMuted(peer.peerId),
+                              isServerMuted: call.isServerMuted(peer.peerId), large: true)
                     .ignoresSafeArea()
             }
 
@@ -91,7 +96,8 @@ struct CallStageView: View {
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(call.peers) { peer in
                         PeerStageTile(peer: peer, track: call.camera(for: peer.peerId),
-                                      isMuted: call.isMuted(peer.peerId), large: false)
+                                      isMuted: call.isMuted(peer.peerId),
+                                      isServerMuted: call.isServerMuted(peer.peerId), large: false)
                             .aspectRatio(3 / 4, contentMode: .fit)
                             .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadius,
                                                         style: .continuous))
@@ -132,7 +138,8 @@ struct CallStageView: View {
             HStack(spacing: 8) {
                 ForEach(call.peers) { peer in
                     PeerStageTile(peer: peer, track: call.camera(for: peer.peerId),
-                                  isMuted: call.isMuted(peer.peerId), large: false)
+                                  isMuted: call.isMuted(peer.peerId),
+                                  isServerMuted: call.isServerMuted(peer.peerId), large: false)
                         .frame(width: 128, height: 96)
                         .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall,
                                                     style: .continuous))
@@ -234,15 +241,27 @@ struct CallStageView: View {
         @Bindable var call = call
 
         return HStack(spacing: 12) {
+            // Off, not merely red, while a moderator has us muted: the server
+            // would refuse the unmute and snap the roster back, and a button
+            // that toggles and un-toggles itself is a bug report.
             CallControlButton(
-                icon: call.isMuted ? "mic.slash.fill" : "mic.fill",
+                icon: call.isServerMuted
+                    ? ServerMute.glyph
+                    : (call.isMuted ? ServerMute.selfMutedGlyph : "mic.fill"),
                 isOn: !call.isMuted,
-                tint: call.isMuted ? Palette.danger : Palette.paper
+                tint: call.isServerMuted
+                    ? Palette.warning
+                    : (call.isMuted ? Palette.danger : Palette.paper)
             ) {
                 call.isMuted.toggle()
             }
             .accessibilityIdentifier("call.mute")
-            .accessibilityLabel(call.isMuted ? "Unmute" : "Mute")
+            .accessibilityLabel(
+                call.isServerMuted
+                    ? "Muted by a moderator"
+                    : (call.isMuted ? "Unmute" : "Mute")
+            )
+            .disabled(!call.canToggleMute)
 
             CallControlButton(
                 icon: call.isCameraOn ? "video.fill" : "video.slash.fill",
@@ -294,6 +313,7 @@ private struct PeerStageTile: View {
     let peer: VoicePeerState
     let track: RTCVideoTrack?
     var isMuted: Bool = false
+    var isServerMuted: Bool = false
     var large: Bool
 
     var body: some View {
@@ -307,7 +327,7 @@ private struct PeerStageTile: View {
                         name: peer.displayName,
                         seed: peer.userId.isEmpty ? peer.peerId : peer.userId,
                         size: large ? 108 : 46,
-                        isSpeaking: peer.isSpeaking,
+                        isSpeaking: peer.isSpeaking && !isServerMuted,
                         url: peer.avatarUrl
                     )
                     if large {
@@ -320,8 +340,13 @@ private struct PeerStageTile: View {
         }
         .overlay(alignment: .bottomLeading) {
             HStack(spacing: 5) {
-                if isMuted {
-                    Image(systemName: "mic.slash.fill")
+                if isServerMuted {
+                    Image(systemName: ServerMute.glyph)
+                        .font(.system(size: 10))
+                        .foregroundStyle(Palette.warning)
+                        .accessibilityLabel("Muted by a moderator")
+                } else if isMuted {
+                    Image(systemName: ServerMute.selfMutedGlyph)
                         .font(.system(size: 10))
                         .foregroundStyle(Palette.danger)
                 }
@@ -335,7 +360,7 @@ private struct PeerStageTile: View {
             .padding(.vertical, 4)
             .background(Capsule().fill(Palette.inkDeep.opacity(0.7)))
             .padding(10)
-            .opacity(isMuted || peer.connection != "connected" ? 1 : 0)
+            .opacity(isMuted || isServerMuted || peer.connection != "connected" ? 1 : 0)
         }
     }
 }

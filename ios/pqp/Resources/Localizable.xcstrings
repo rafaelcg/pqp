@@ -282,6 +282,16 @@
         }
       }
     },
+    "A moderator muted you. You can talk again when they unmute you.": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A staff mutou você. Você só volta a falar quando desmutarem."
+          }
+        }
+      }
+    },
     "ARCHIVED": {
       "localizations": {
         "pt-BR": {
@@ -2448,6 +2458,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Silenciar o microfone ao entrar na call"
+          }
+        }
+      }
+    },
+    "Muted by a moderator": {
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mutado pela staff"
           }
         }
       }

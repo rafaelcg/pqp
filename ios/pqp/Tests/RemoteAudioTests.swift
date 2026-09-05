@@ -125,6 +125,79 @@ final class RemoteAudioTests: XCTestCase {
         XCTAssertTrue(next.isEnabled, "deafen survived into the next call")
     }
 
+    // MARK: - Server mute
+
+    /// THE RECEIVER IS THE ENFORCEMENT. On mesh the server never sees a byte of
+    /// audio, so when a moderator mutes somebody the only thing that goes quiet
+    /// is every listener's mixer playing them at zero. It has to win over the
+    /// slider, and it has to win WITHOUT moving the slider: the level is the
+    /// listener's choice about this person, and the mute is a moment in the
+    /// call. When it clears they come back at the chosen level, not at zero.
+    func testAServerMutePlaysThePersonAtZeroWithoutTouchingTheirLevel() {
+        var mixer = RemoteAudioMixer<FakeTrack>()
+        let microphone = FakeTrack()
+        let screenAudio = FakeTrack()
+        mixer.add(microphone, id: "mic", for: peer)
+        mixer.add(screenAudio, id: "screen", for: peer)
+        mixer.setVolume(1.5, for: peer)
+
+        mixer.setServerMuted(true, for: peer)
+        XCTAssertEqual(microphone.playbackVolume, 0, "a server-muted person was still audible")
+        XCTAssertEqual(screenAudio.playbackVolume, 0, "their screen's sound kept playing")
+        XCTAssertEqual(mixer.volume(for: peer), 1.5, "the mute overwrote the slider")
+        XCTAssertEqual(mixer.effectiveVolume(for: peer), 0)
+        XCTAssertTrue(mixer.isServerMuted(peer))
+
+        mixer.setServerMuted(false, for: peer)
+        XCTAssertEqual(microphone.playbackVolume, 1.5, "they did not come back at the chosen level")
+        XCTAssertEqual(screenAudio.playbackVolume, 1.5)
+        XCTAssertFalse(mixer.isServerMuted(peer))
+    }
+
+    /// Moving the slider on somebody a moderator silenced changes what they
+    /// come back at, not what plays now.
+    func testMovingTheSliderWhileServerMutedIsRememberedButNotPlayed() {
+        var mixer = RemoteAudioMixer<FakeTrack>()
+        let microphone = FakeTrack()
+        mixer.add(microphone, id: "mic", for: peer)
+        mixer.setServerMuted(true, for: peer)
+
+        mixer.setVolume(0.4, for: peer)
+        XCTAssertEqual(microphone.playbackVolume, 0)
+        XCTAssertEqual(mixer.volume(for: peer), 0.4)
+
+        mixer.setServerMuted(false, for: peer)
+        XCTAssertEqual(microphone.playbackVolume, 0.4)
+    }
+
+    /// The roster flag routinely lands before the media does: `peer-joined`
+    /// is what opens the connection that eventually delivers the track. A
+    /// track arriving after the flag has to arrive silent.
+    func testATrackArrivingAfterTheServerMuteArrivesSilent() {
+        var mixer = RemoteAudioMixer<FakeTrack>()
+        mixer.setVolume(0.8, for: peer)
+        mixer.setServerMuted(true, for: peer)
+
+        let arriving = FakeTrack()
+        mixer.add(arriving, id: "mic", for: peer)
+        XCTAssertEqual(arriving.playbackVolume, 0)
+    }
+
+    /// A peer id is minted fresh on every join and the flag belongs to that
+    /// roster entry, so a peer leaving takes their mute with them while their
+    /// chosen level stays. Remembering the mute would be one the server never
+    /// sent for the person who comes back.
+    func testAPeerLeavingTakesTheServerMuteButNotTheLevel() {
+        var mixer = RemoteAudioMixer<FakeTrack>()
+        mixer.add(FakeTrack(), id: "mic", for: peer)
+        mixer.setVolume(0.6, for: peer)
+        mixer.setServerMuted(true, for: peer)
+
+        mixer.remove(peerId: peer)
+        XCTAssertFalse(mixer.isServerMuted(peer))
+        XCTAssertEqual(mixer.effectiveVolume(for: peer), 0.6)
+    }
+
     /// Two people are two sets of tracks and two levels.
     func testPeersDoNotShareALevel() {
         var mixer = RemoteAudioMixer<FakeTrack>()

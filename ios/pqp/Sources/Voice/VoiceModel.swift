@@ -98,6 +98,16 @@ final class VoiceModel {
         didSet { Task { await voice.setSpeaker(isSpeakerOn) } }
     }
 
+    /// A moderator muted us, per our own roster entry. Not ours to clear: the
+    /// server refuses `set-muted false` from the target and snaps the roster
+    /// back, so the unmute control is disabled rather than left to pretend.
+    private(set) var isServerMuted = false
+
+    /// Whether the mic button does anything right now. See `ServerMute`.
+    var canToggleMute: Bool {
+        ServerMute.muteControlIsEnabled(connected: status == .connected, selfServerMuted: isServerMuted)
+    }
+
     /// The channel we intend to be in, kept across a socket drop so the call
     /// can be rebuilt rather than silently ending.
     private var intendedChannel: Channel?
@@ -161,6 +171,34 @@ final class VoiceModel {
     }
 
     func isMuted(_ peerId: String) -> Bool { roster[peerId]?.muted ?? false }
+
+    /// Muted by a moderator, as opposed to by themselves. The two glyphs differ
+    /// because the two facts do: one is a choice the person can undo, the other
+    /// is something done to them that they cannot.
+    func isServerMuted(_ peerId: String) -> Bool { roster[peerId]?.serverMuted ?? false }
+
+    /// The roster entry that is us. The only field on it that changes anything
+    /// here is `serverMuted`: while it is set we show ourselves muted and stop
+    /// the mic, because on mesh our own client is the only thing that can stop
+    /// the bytes leaving, and every receiver is already playing us at zero.
+    /// When it clears the mic STAYS off. Coming back unmuted the instant a
+    /// moderator lets go would put whatever was being said mid-sentence into
+    /// the room; tapping unmute is the person's own decision.
+    private func applySelf(_ participant: VoiceParticipant) {
+        let wasServerMuted = isServerMuted
+        isServerMuted = participant.serverMuted
+        guard participant.serverMuted, !wasServerMuted else { return }
+        let muted = ServerMute.selfMuted(currentlyMuted: isMuted, serverMuted: true)
+        if muted != isMuted { isMuted = muted }
+    }
+
+    /// One peer's roster flag, handed to the mixer. Idempotent and cheap, so
+    /// every frame that carries a participant calls it rather than trying to
+    /// diff: a flag that is re-applied is a no-op, a flag that is missed is a
+    /// person the whole room agreed not to hear still playing on this phone.
+    private func applyServerMute(_ participant: VoiceParticipant) {
+        Task { await voice.setServerMuted(participant.serverMuted, for: participant.peerId) }
+    }
 
     // MARK: - Camera
     //
@@ -332,6 +370,7 @@ final class VoiceModel {
         selfPeerId = nil
         isMuted = false
         isDeafened = false
+        isServerMuted = false
         localCamera = nil
         isCameraOn = false
         cameraError = nil
@@ -448,7 +487,7 @@ final class VoiceModel {
                 await session?.realtime.joinVoice(channelId: intendedChannel.id)
             }
 
-        case .voiceWelcome(let peerId, let voiceChannelId, let existing, _, let transport):
+        case .voiceWelcome(let peerId, let voiceChannelId, let existing, let selfPeer, let transport):
             guard voiceChannelId == channelId else {
                 // A `welcome` for another room means this socket joined one —
                 // and the server keeps exactly one peer per socket, so ours is
@@ -464,6 +503,7 @@ final class VoiceModel {
                     selfPeerId = nil
                     localCamera = nil
                     isCameraOn = false
+                    isServerMuted = false
                     status = .failed(String(
                         localized: "You joined another voice room, so this one was left."
                     ))
@@ -498,6 +538,9 @@ final class VoiceModel {
             selfPeerId = peerId
             status = .connected
             for participant in existing { roster[participant.peerId] = participant }
+            // A mute that outlived our last socket, or was placed before we
+            // walked in, arrives on `welcome` and nowhere else.
+            applySelf(selfPeer)
             // The bridge only listens while there is a room to share into.
             screenShare.arm()
             Task {
@@ -514,6 +557,7 @@ final class VoiceModel {
                     await voice.setPeerCameraStreamId(
                         participant.cameraStreamId, for: participant.peerId
                     )
+                    await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
                 }
                 // The peer the server just minted for us starts at "unmuted,
                 // undeafened", whatever this client had already decided —
@@ -534,6 +578,8 @@ final class VoiceModel {
                 if let volume = volumeByUser[participant.userId] {
                     await voice.setVolume(volume, for: participant.peerId)
                 }
+                // Somebody muted elsewhere who then joins here is still muted.
+                await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
             }
 
         // A rename or a new picture mid-call. The entry is replaced and that
@@ -541,24 +587,41 @@ final class VoiceModel {
         // that is already connected, for a change that never touched media.
         // Only somebody already in the roster is updated; a frame for a peer
         // this client never saw join is not an invitation to draw them.
+        //
+        // `serverMuted` travels on this frame too, and it is the one field that
+        // does reach media: not by renegotiating, but by telling the mixer to
+        // play this person at zero. Our own entry is never in `roster`, so a
+        // moderator muting *us* is the frame that would otherwise be dropped
+        // by the guard below.
         case .voicePeerUpdated(let participant):
+            if participant.peerId == selfPeerId {
+                applySelf(participant)
+                return
+            }
             guard roster[participant.peerId] != nil else { return }
             roster[participant.peerId] = participant
+            applyServerMute(participant)
 
         case .voicePeerLeft(let peerId):
             roster[peerId] = nil
             Task { await voice.remove(peerId: peerId) }
 
         // The roster is how a share announces itself: `sharingScreen` and
-        // `cameraStreamId` both arrive here, and both race the media.
+        // `cameraStreamId` both arrive here, and both race the media. It is
+        // also how a server mute lands on every phone at once.
         case .voiceRoster(let voiceChannelId, let participants):
             guard voiceChannelId == channelId, status == .connected else { return }
-            for participant in participants where participant.peerId != selfPeerId {
+            for participant in participants {
+                if participant.peerId == selfPeerId {
+                    applySelf(participant)
+                    continue
+                }
                 roster[participant.peerId] = participant
                 Task {
                     await voice.setPeerCameraStreamId(
                         participant.cameraStreamId, for: participant.peerId
                     )
+                    await voice.setServerMuted(participant.serverMuted, for: participant.peerId)
                 }
             }
 
