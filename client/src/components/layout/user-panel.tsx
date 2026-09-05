@@ -1,4 +1,4 @@
-import { Bug, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Settings } from "lucide-react";
+import { Bug, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Pencil, Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { UserButton } from "@clerk/clerk-react";
 import type { ManualStatus, UserStatus } from "@pqp/shared";
@@ -41,6 +41,13 @@ interface UserPanelProps {
   onOpenSettings: () => void;
   /** Opens settings straight at the feedback section. */
   onOpenFeedback: () => void;
+  /**
+   * Opens settings straight at the profile section, where the display name
+   * is. Deliberately not `onOpenSettings`: that one passes `null` so the
+   * sticky last-used section wins, which is exactly what buries the name
+   * field for anyone who has opened Voice or Appearance once.
+   */
+  onOpenProfile: () => void;
 }
 
 /**
@@ -95,6 +102,7 @@ export function UserPanel({
   onToggleMute,
   onToggleDeafen,
   onOpenSettings,
+  onOpenProfile,
   onOpenFeedback,
 }: UserPanelProps) {
   const { t } = useTranslation();
@@ -162,6 +170,26 @@ export function UserPanel({
             aria-label={t("status.change")}
             className="absolute bottom-full left-0 z-50 mb-2 w-64 overflow-hidden rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
           >
+          {/* Renaming lives first because this menu is where people look for
+              it. Somebody who signed in with Google lands with their real
+              full name printed under the avatar, clicks the name to change
+              it, and until this item existed got a status picker instead:
+              the one question new accounts ask in chat is "why am I called
+              this, how do I change it". The gear underneath is not an answer,
+              it reopens on whatever section was used last. */}
+          <button
+            type="button"
+            role="menuitem"
+            className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3"
+            onClick={() => {
+              onOpenProfile();
+              setOpen(false);
+            }}
+          >
+            <Pencil className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
+            {t("userMenu.editProfile")}
+          </button>
+          <div role="separator" className="my-1 border-t border-ink-4/60" />
           {CHOICES.map((choice) => {
             const selected = choice.manual === manualStatus;
             return (
