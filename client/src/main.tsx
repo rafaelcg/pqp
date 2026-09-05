@@ -27,6 +27,7 @@ import { DesktopTitleBar } from "./components/layout/desktop-title-bar";
 import { useTheme } from "./hooks/use-theme";
 import { rememberAcquisitionFromLocation } from "./lib/acquisition";
 import { browserStorage } from "./lib/arrival";
+import { desktopSignedOutPath } from "./lib/desktop-auth-flow";
 import { isDesktopApp } from "./lib/desktop";
 import { isDevAuthBypassEnabled } from "./lib/dev-auth";
 import { I18nProvider, useTranslation } from "./lib/i18n";
@@ -89,8 +90,28 @@ const PublicCommunityPage = lazy(() =>
     default: m.PublicCommunityPage,
   })),
 );
+const DesktopLoginPage = lazy(() =>
+  import("./pages/desktop-login-page").then((m) => ({
+    default: m.DesktopLoginPage,
+  })),
+);
 
-const publishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
+/**
+ * `.env.example` ships a placeholder that is truthy, so a copied env would
+ * mount Clerk and crash with "publishableKey is invalid". Treat those as unset.
+ */
+function isUsableClerkPublishableKey(
+  value: string | undefined,
+): value is string {
+  if (!value) return false;
+  return !value.includes("your_clerk") && !value.includes("your-clerk");
+}
+
+const publishableKey = isUsableClerkPublishableKey(
+  import.meta.env.VITE_CLERK_PUBLISHABLE_KEY,
+)
+  ? import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
+  : undefined;
 
 /**
  * The marketing pages are compositions over a hero photograph, so they stay dark
@@ -198,6 +219,7 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
               click, and both are canonicalised to `/garanta` by `Seo`. */}
           <Route path="/garanta" element={<ClaimPage />} />
           <Route path="/claim" element={<ClaimPage />} />
+          <Route path="/desktop-login" element={<DesktopLoginPage />} />
           {/* Above the single-segment handle route below, though again the
               order does not decide it — `/c/:slug` is two segments and cannot
               collide with a one-segment pattern. Written here because a reader
@@ -309,7 +331,7 @@ function ThemedClerkProvider({
   return (
     <ClerkProvider
       publishableKey={publishableKey}
-      afterSignOutUrl="/"
+      afterSignOutUrl={desktopSignedOutPath()}
       signInFallbackRedirectUrl="/app"
       signUpFallbackRedirectUrl="/app"
       appearance={appearance}

@@ -93,9 +93,10 @@ Notes:
 ## Security model
 
 - `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`
-- Preload exposes only `window.pqpDesktop` (mute toggle + deep-link helpers)
+- Preload exposes only `window.pqpDesktop` (mute toggle, deep-link helpers, desktop auth)
 - External `window.open` / off-origin navigations open in the system browser
-- Exception: auth hosts (`lib/nav-policy.js`) navigate in-window and may open a popup — a Clerk / OAuth redirect that finished in the system browser would put the session in the wrong place. Adding a social provider in Clerk may mean adding its host to `AUTH_HOST_SUFFIXES`.
+- Sign-in / sign-up on a current shell open the system browser (`/desktop-login`) and return via a one-shot `127.0.0.1` listener. Old shells have no `startDesktopAuth` and keep the in-app Clerk modal.
+- Exception: game-connection OAuth hosts (`lib/nav-policy.js`) still navigate in-window. A provider missing from `AUTH_HOST_SUFFIXES` bounces to the system browser and the session lands in the wrong place.
 - Local static mode serves on `127.0.0.1` with a restrictive CSP
 - Remote URLs keep the server’s own CSP (Electron does not rewrite it)
 - Media / notification permissions are allowlisted for voice UX; on macOS the shell also requests the *system* mic/camera permission (`systemPreferences.askForMediaAccess`), which is separate from the Chromium one and fails silently when missing
@@ -110,6 +111,12 @@ interface PqpDesktop {
   onToggleMute(cb: () => void): () => void;
   onDeepLink(cb: (appPath: string) => void): () => void;
   getPendingDeepLink(): Promise<string | null>;
+  startDesktopAuth?(mode: "sign-in" | "sign-up"): Promise<{ ok: boolean; url: string }>;
+  cancelDesktopAuth?(): Promise<void>;
+  getDesktopAuthStatus?(): Promise<{ active: boolean; url: string | null }>;
+  getPendingDesktopAuthTicket?(): Promise<string | null>;
+  onDesktopAuthTicket?(cb: (ticket: string) => void): () => void;
+  onDesktopAuthEnded?(cb: (reason: "expired" | "cancelled") => void): () => void;
 }
 
 declare global {

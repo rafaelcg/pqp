@@ -1,4 +1,10 @@
-import { SignInButton, SignUpButton, useAuth, useUser } from "@clerk/clerk-react";
+import {
+  SignInButton,
+  SignUpButton,
+  useAuth,
+  useSignIn,
+  useUser,
+} from "@clerk/clerk-react";
 import { Lock, Menu, Phone, Pin, Settings, Shield, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -234,6 +240,13 @@ import {
   pickServerLandingTarget,
 } from "@/lib/community-home";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
+import {
+  applyDesktopAuthStart,
+  desktopAuthEndedHandoff,
+  desktopSignedOutPath,
+  shouldRedeemDesktopTicket,
+  ticketSignInSucceeded,
+} from "@/lib/desktop-auth-flow";
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
@@ -302,6 +315,7 @@ export function App({ devBypass = false }: AppProps) {
 function ClerkAppGate() {
   const { t } = useTranslation();
   const { isLoaded, isSignedIn } = useAuth();
+  const { signIn, setActive } = useSignIn();
   const location = useLocation();
   stashConnectionCallbackFromWindow(location.pathname, location.search);
   /**
@@ -315,6 +329,121 @@ function ClerkAppGate() {
    * not a route this build recognises.
    */
   const redirectUrl = signedOutRedirectPath(location.pathname);
+  const desktop = getDesktop();
+  const canDesktopAuth = typeof desktop?.startDesktopAuth === "function";
+  const [waiting, setWaiting] = useState(false);
+  const [browserUrl, setBrowserUrl] = useState<string | null>(null);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const signInRef = useRef(signIn);
+  const setActiveRef = useRef(setActive);
+  const lastTicketRef = useRef<string | null>(null);
+  const queuedTicketRef = useRef<string | null>(null);
+  signInRef.current = signIn;
+  setActiveRef.current = setActive;
+
+  const redeemTicket = useCallback(
+    async (ticket: string) => {
+      const currentSignIn = signInRef.current;
+      const currentSetActive = setActiveRef.current;
+      if (!currentSignIn || !currentSetActive) {
+        queuedTicketRef.current = ticket;
+        return;
+      }
+      if (!shouldRedeemDesktopTicket(lastTicketRef.current, ticket)) {
+        return;
+      }
+      lastTicketRef.current = ticket;
+      queuedTicketRef.current = null;
+      void getDesktop()?.getPendingDesktopAuthTicket?.();
+      setHandoffError(null);
+      try {
+        const result = await currentSignIn.create({ strategy: "ticket", ticket });
+        if (ticketSignInSucceeded(result)) {
+          await currentSetActive({ session: result.createdSessionId });
+        } else {
+          setWaiting(false);
+          setHandoffError(t("signedOut.waiting.error"));
+        }
+      } catch {
+        setWaiting(false);
+        setHandoffError(t("signedOut.waiting.error"));
+      }
+    },
+    [t],
+  );
+
+  useEffect(() => {
+    if (!signIn) {
+      return;
+    }
+    if (queuedTicketRef.current) {
+      void redeemTicket(queuedTicketRef.current);
+    }
+    if (!canDesktopAuth || !desktop) {
+      return;
+    }
+    void desktop.getPendingDesktopAuthTicket?.().then((ticket) => {
+      if (ticket) {
+        void redeemTicket(ticket);
+      }
+    });
+  }, [canDesktopAuth, desktop, redeemTicket, signIn]);
+
+  useEffect(() => {
+    if (!canDesktopAuth || !desktop) {
+      return;
+    }
+    void desktop.getDesktopAuthStatus?.().then((status) => {
+      if (status?.active) {
+        setWaiting(true);
+        setBrowserUrl(status.url);
+      }
+    });
+    const offTicket = desktop.onDesktopAuthTicket?.((ticket) => {
+      void redeemTicket(ticket);
+    });
+    const offEnded = desktop.onDesktopAuthEnded?.((reason) => {
+      const ended = desktopAuthEndedHandoff(reason);
+      setWaiting(ended.waiting);
+      setBrowserUrl(null);
+      if (ended.expired) {
+        setHandoffError(t("signedOut.waiting.expired"));
+      }
+    });
+    return () => {
+      offTicket?.();
+      offEnded?.();
+    };
+  }, [canDesktopAuth, desktop, redeemTicket, t]);
+
+  const startDesktopAuth = useCallback(
+    async (mode: "sign-in" | "sign-up") => {
+      if (!desktop?.startDesktopAuth) {
+        return;
+      }
+      setAuthMode(mode);
+      setHandoffError(null);
+      setCopied(false);
+      setWaiting(true);
+      const result = await desktop.startDesktopAuth(mode);
+      const view = applyDesktopAuthStart(result);
+      setBrowserUrl(view.url || null);
+      setWaiting(view.waiting);
+      if (view.failed) {
+        setHandoffError(t("signedOut.waiting.error"));
+      }
+    },
+    [desktop, t],
+  );
+
+  const cancelDesktopAuth = useCallback(() => {
+    void desktop?.cancelDesktopAuth?.();
+    setWaiting(false);
+    setBrowserUrl(null);
+    setHandoffError(null);
+  }, [desktop]);
 
   if (!isLoaded) {
     return <AppLoadingShell label={t("app.loading.signingIn")} />;
@@ -332,18 +461,80 @@ function ClerkAppGate() {
             pqp.gg
             <BetaTag />
           </Link>
-          <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
-            {t("signedOut.title")}
-          </h1>
-          <p className="mt-4 max-w-sm text-paper-muted">{t("signedOut.body")}</p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
-              <Button>{t("signedOut.createAccount")}</Button>
-            </SignUpButton>
-            <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
-              <Button variant="secondary">{t("nav.signIn")}</Button>
-            </SignInButton>
-          </div>
+          {waiting && canDesktopAuth ? (
+            <>
+              <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
+                {t("signedOut.waiting.title")}
+              </h1>
+              <p className="mt-4 max-w-sm text-paper-muted">
+                {t("signedOut.waiting.body")}
+              </p>
+              {handoffError ? (
+                <p className="mt-4 text-danger">{handoffError}</p>
+              ) : null}
+              <div className="mt-8 flex flex-wrap gap-3">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    void startDesktopAuth(authMode);
+                  }}
+                >
+                  {t("signedOut.waiting.reopen")}
+                </Button>
+                {browserUrl ? (
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(browserUrl).then(() => {
+                        setCopied(true);
+                      });
+                    }}
+                  >
+                    {copied
+                      ? t("signedOut.waiting.copied")
+                      : t("signedOut.waiting.copy")}
+                  </Button>
+                ) : null}
+                <Button variant="ghost" onClick={cancelDesktopAuth}>
+                  {t("signedOut.waiting.cancel")}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
+                {t("signedOut.title")}
+              </h1>
+              <p className="mt-4 max-w-sm text-paper-muted">{t("signedOut.body")}</p>
+              {handoffError ? (
+                <p className="mt-4 text-danger">{handoffError}</p>
+              ) : null}
+              <div className="mt-8 flex flex-wrap gap-3">
+                {canDesktopAuth ? (
+                  <>
+                    <Button onClick={() => void startDesktopAuth("sign-up")}>
+                      {t("signedOut.createAccount")}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => void startDesktopAuth("sign-in")}
+                    >
+                      {t("nav.signIn")}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
+                      <Button>{t("signedOut.createAccount")}</Button>
+                    </SignUpButton>
+                    <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
+                      <Button variant="secondary">{t("nav.signIn")}</Button>
+                    </SignInButton>
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
@@ -497,8 +688,9 @@ function MainAppContent({
       }
     ).Clerk;
     if (!isDevAuthBypassEnabled() && clerk?.signOut) {
-      void clerk.signOut({ redirectUrl: "/" }).catch(() => {
-        window.location.replace("/");
+      const home = desktopSignedOutPath();
+      void clerk.signOut({ redirectUrl: home }).catch(() => {
+        window.location.replace(home);
       });
       return;
     }

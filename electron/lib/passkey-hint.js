@@ -24,9 +24,9 @@
  * page, by retitling the window and (after a wait) showing a hint.
  *
  * The real fix is to run the whole flow in the system browser and hand a
- * one-time code back over the `pqp://` protocol, which is the standard desktop
- * OAuth pattern and what the deep-link plumbing already half exists for. That
- * is a server-side change and is deliberately not this.
+ * one-time ticket back over a 127.0.0.1 loopback listener. Current shells
+ * do that (`startDesktopAuth`). This hint stays for older binaries that
+ * still open Google inside a BrowserWindow.
  */
 
 /**

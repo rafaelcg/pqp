@@ -66,6 +66,23 @@ that the loopback origin cannot be allowlisted. It is not the launch path.
 If the launch domain is not `pqp.gg`, change `DEFAULT_PROD_URL` in
 `electron/main.js` — it is the only place the desktop default lives.
 
+### Desktop sign-in
+
+Current shells do not finish Google/Apple inside the `BrowserWindow`.
+**Entrar** / **Criar conta** open the default browser on `/desktop-login`.
+After the user confirms, the API mints a 90-second Clerk ticket and the
+browser sends it to a one-shot `http://127.0.0.1:<port>/callback` listener
+in the main process. Electron redeems the ticket and the age gate still
+runs inside `/app`.
+
+Older shells have no `startDesktopAuth` and keep the in-app Clerk modal.
+Game-connection OAuth (Steam / Battle.net / Twitch) still hops in-window.
+
+Local and staging use the Clerk **development** instance. Google and Apple
+are off there until someone enables them in the Clerk dashboard (SSO
+connections, shared credentials, no custom OAuth apps). Production already
+has both, so a packaged build against pqp.gg shows those buttons.
+
 ### Consequence for update cadence
 
 Because the shell loads the hosted client, **the product updates itself on
@@ -387,7 +404,7 @@ runtime breaks Electron without the first three:
 | `cs.disable-library-validation` | Electron's frameworks are signed by Electron, not by us |
 | `device.audio-input` | **voice** — see below |
 | `device.camera` | video in voice channels |
-| `network.client` / `network.server` | API, WS, WebRTC; loopback static server |
+| `network.client` / `network.server` | API, WS, WebRTC; loopback static server; desktop sign-in callback |
 | `files.user-selected.read-write` | attachment pickers |
 
 ### 3.7 Microphone
@@ -524,12 +541,13 @@ download an Apple Silicon build.
       `source=Notarized Developer ID`.
 - [ ] `electron/package.json` `version` bumped to match the tag.
 - [ ] Draft release contains the `latest*.yml` feed files.
-- [ ] Sign in on a signed build. In particular **sign in with each social
-      provider that is enabled in Clerk** — a provider redirects the top-level
-      window off-origin, and the shell only permits that for the hosts in
-      `AUTH_HOST_SUFFIXES` (`electron/lib/nav-policy.js`). A provider missing
-      from that list bounces the user into the system browser mid-sign-in and
-      the session lands in the wrong place. Add its host if so.
+- [ ] Sign in on a signed build. Current shells open the system browser
+      (`/desktop-login`) and hand a one-shot ticket back over `127.0.0.1`.
+      Confirm Google and Apple (and email) finish there, then land in the
+      app. Old shells still use the in-app Clerk modal; for those, each
+      social provider must stay in `AUTH_HOST_SUFFIXES`
+      (`electron/lib/nav-policy.js`). Game-connection hops still use that
+      list.
 - [ ] Join a voice channel and confirm the mic prompt appears and audio flows.
 - [ ] `pqp://` deep link from a browser focuses the app on the right route.
 - [ ] Install an older version, publish a newer one, confirm the update prompt

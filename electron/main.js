@@ -25,6 +25,7 @@ const {
   mayPromptForPasskey,
 } = require("./lib/passkey-hint");
 const { initAutoUpdate } = require("./lib/updater");
+const { createDesktopAuthController } = require("./lib/desktop-auth-session");
 const {
   THUMBNAIL_SIZE,
   MAC_SCREEN_SETTINGS_URL,
@@ -62,6 +63,21 @@ let mainWindow = null;
 let staticServer = null;
 /** @type {string | null} */
 let pendingDeepLink = null;
+/** @type {string | null} */
+let sessionAppOrigin = null;
+const desktopAuth = createDesktopAuthController({
+  openExternal: (url) => shell.openExternal(url),
+  send: (channel, ...args) => sendToRenderer(channel, ...args),
+  getAppOrigin: () => sessionAppOrigin,
+  onDelivered: () => {
+    try {
+      app.focus({ steal: true });
+    } catch {
+      // Electron without steal still gets show/focus below.
+    }
+    focusMainWindow();
+  },
+});
 /** @type {BrowserWindow | null} */
 let pickerWindow = null;
 
@@ -277,9 +293,10 @@ function attachPasskeyHint(win) {
 
 function sendToRenderer(channel, ...args) {
   if (!mainWindow || mainWindow.isDestroyed()) {
-    return;
+    return false;
   }
   mainWindow.webContents.send(channel, ...args);
+  return true;
 }
 
 function focusMainWindow() {
@@ -895,6 +912,7 @@ function configureSessionSecurity(appOrigin) {
 }
 
 function createWindow(appUrl, allowedOrigin) {
+  sessionAppOrigin = allowedOrigin;
   const state = loadWindowState(app.getPath("userData"));
   const isMac = process.platform === "darwin";
 
@@ -1036,6 +1054,20 @@ if (!gotLock) {
     return value;
   });
 
+  ipcMain.handle("pqp:start-desktop-auth", (_event, mode) => {
+    return desktopAuth.start(mode === "sign-up" ? "sign-up" : "sign-in");
+  });
+
+  ipcMain.handle("pqp:cancel-desktop-auth", () => {
+    desktopAuth.stop("cancelled");
+  });
+
+  ipcMain.handle("pqp:desktop-auth-status", () => desktopAuth.status());
+
+  ipcMain.handle("pqp:get-pending-desktop-auth-ticket", () => {
+    return desktopAuth.takePendingTicket();
+  });
+
   ipcMain.on("pqp:set-theme", (_event, theme) => {
     if (theme !== "dark" && theme !== "light") {
       return;
@@ -1109,6 +1141,7 @@ if (!gotLock) {
   });
 
   app.on("before-quit", () => {
+    desktopAuth.stop();
     if (staticServer) {
       const server = staticServer;
       staticServer = null;
