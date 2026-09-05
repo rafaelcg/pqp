@@ -406,6 +406,15 @@ function useProfileStep({
             placeholder={t("onboarding.profile.displayNamePlaceholder")}
             onChange={(event) => setDisplayName(event.target.value)}
           />
+          {/* The field arrives pre-filled from the identity provider, and for
+              anyone who used "continue with Google" that pre-fill is their
+              legal name. Two taps of Continue and it is the name over every
+              message they send, which is not what somebody arriving from a
+              stream expects and not something the copy admitted to. The hint
+              is the cheapest honest fix: say who sees it, before they skip. */}
+          <span className="mt-1 block text-[11px] leading-snug text-paper-muted">
+            {t("onboarding.profile.displayNameHint")}
+          </span>
         </label>
 
         <div>
