@@ -836,6 +836,7 @@
   "voice.error.openVoiceSettings": "Abrir configurações de voz",
   "voice.notice.micFallback": "Seu microfone de sempre não ligou, então essa call está usando {label}.",
   "voice.notice.micFallbackUnnamed": "Seu microfone de sempre não ligou, então essa call está usando outro.",
+  "voice.notice.listenOnly": "Você entrou sem microfone, então dá para ouvir mas não para falar. {reason}",
   "voice.error.shareFailed": "Não foi possível compartilhar a tela",
   "voice.error.shareBlocked": "O compartilhamento de tela foi bloqueado ou cancelado.",
   "voice.error.shareAudioUnavailable": "Não deu pra pegar o áudio dessa tela, então nada foi compartilhado. Só aba do Chrome tem áudio pra dar: escolha \"Guia do Chrome\", marque \"Também compartilhar áudio da guia\" e tente de novo. Janela nunca tem som, e tela inteira só no Windows.",

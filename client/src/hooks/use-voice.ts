@@ -70,6 +70,20 @@ export type VoiceStatus = "idle" | "joining" | "connected";
 /** Aligned with the server orphan TTL (`VOICE_RESUME_TTL_MS`). */
 const VOICE_RESUME_GRACE_MS = 90_000;
 
+/** WebSocket handshake to `welcome`. Signalling only, so 12s is generous. */
+const JOIN_TIMEOUT_MS = 12_000;
+/**
+ * `welcome` to media up on an SFU room. This used to share the 12s above,
+ * which was sized for a handful of peers. On 2026-09-05 a ~90-person watch
+ * party showed what that does on a phone on mobile data: fetch a token, pull
+ * the ~530kB livekit-client chunk, connect to a room carrying ninety
+ * participants, publish, all inside 12s. Many did not make it, the timer
+ * called the SFU unreachable, the client left, the person tapped join again,
+ * and LiveKit logged 552 unique participants in 41 minutes for a room of 90.
+ * The black-holed-host case this timer exists for still ends, just later.
+ */
+const SFU_JOIN_TIMEOUT_MS = 45_000;
+
 /**
  * One wording for "this browser cannot capture a screen", shared with the UI.
  *
@@ -815,7 +829,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.voiceChannelId = null;
         emit();
       }
-    }, 12_000);
+    }, failure ? SFU_JOIN_TIMEOUT_MS : JOIN_TIMEOUT_MS);
     return generation;
   }
 
@@ -2105,15 +2119,23 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (generation !== joinGeneration) {
           return;
         }
-        clearJoinTimeout();
+        // LISTEN-ONLY JOIN. A microphone that cannot be opened: none plugged
+        // in, permission refused, another app holding it — used to abort the
+        // whole join with an error. On 2026-09-05 a streamer sent ~170 people
+        // into a watch party and a visible share of them never got in, on
+        // phones that had not granted the mic and laptops without one. None of
+        // them needed to talk. So: join anyway, muted, with no pipeline, and
+        // say why in the notice. Everything downstream already tolerates a
+        // null pipeline (mesh skips addTrack, the SFU skips publish, the mute
+        // controls no-op), so this is the join catching up with the rest.
         stopMicPipeline(pipeline);
         pipeline = null;
-        intendedChannelId = null;
-        state.error = micErrorMessage(err);
-        state.errorKind = "mic";
-        state.status = "idle";
-        state.voiceChannelId = null;
-        emit();
+        state.isMuted = true;
+        applyMuteToPipeline();
+        state.notice = translateMessage("voice.notice.listenOnly", {
+          reason: micErrorMessage(err),
+        });
+        sendJoin(voiceChannelId);
       }
     },
 

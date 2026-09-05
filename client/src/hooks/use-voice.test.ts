@@ -1246,15 +1246,19 @@ describe("lobby presence sounds", () => {
       },
     });
 
-    const { transport } = createTransport();
+    const { transport, sent } = createTransport();
     const voice = createVoiceController(transport);
     await voice.join(CHANNEL);
 
-    expect(voice.getState().status).toBe("idle");
-    expect(voice.getState().errorKind).toBe("mic");
+    // Listen-only: the join still goes out, muted, and the reason rides in
+    // the notice rather than an error that ends the attempt.
+    expect(voice.getState().status).toBe("joining");
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().isMuted).toBe(true);
+    expect(sent.some((m) => m.type === "join-voice-room")).toBe(true);
     // Not the browser's "Could not start audio source": the fix, in our words.
-    expect(voice.getState().error).toMatch(/microphone/i);
-    expect(voice.getState().error).not.toMatch(/audio source/);
+    expect(voice.getState().notice).toMatch(/microphone/i);
+    expect(voice.getState().notice).not.toMatch(/audio source/);
   });
 
   it("does not retry after a permission refusal", async () => {
@@ -1280,7 +1284,46 @@ describe("lobby presence sounds", () => {
     const voice = createVoiceController(transport);
     await voice.join(CHANNEL, { inputDeviceId: "a" });
     expect(getUserMedia).toHaveBeenCalledTimes(1);
-    expect(voice.getState().errorKind).toBe("mic");
+    // Refused is still a join, just a silent one.
+    expect(voice.getState().status).toBe("joining");
+    expect(voice.getState().isMuted).toBe(true);
+    expect(voice.getState().notice).toMatch(/microphone/i);
+  });
+
+  it("joins listen-only when the machine has no microphone at all, and cannot unmute", async () => {
+    // 2026-09-05: a streamer's watch party lost people on phones that had not
+    // granted the mic and laptops without one. Nobody there needed to talk.
+    const missing = Object.assign(new Error("Requested device not found"), {
+      name: "NotFoundError",
+    });
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: async () => {
+          throw missing;
+        },
+        enumerateDevices: async () => [],
+        getSupportedConstraints: () => ({ restrictOwnAudio: true }),
+        getDisplayMedia: async () => fakeCapture("screen", false),
+      },
+    });
+
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    expect(sent.filter((m) => m.type === "join-voice-room")).toHaveLength(1);
+
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    expect(voice.getState().status).toBe("connected");
+    expect(voice.getState().error).toBeNull();
+    expect(voice.getState().isMuted).toBe(true);
+    expect(voice.getState().isTransmitting).toBe(false);
+    expect(voice.getState().notice).toMatch(/microphone/i);
+
+    // No pipeline, so unmuting is a no-op rather than a crash.
+    voice.toggleMute();
+    expect(voice.getState().isMuted).toBe(true);
   });
 
   it("plays join when someone else enters the lobby, leave when they go", async () => {
