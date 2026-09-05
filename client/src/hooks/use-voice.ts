@@ -2105,15 +2105,23 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (generation !== joinGeneration) {
           return;
         }
-        clearJoinTimeout();
+        // LISTEN-ONLY JOIN. A microphone that cannot be opened: none plugged
+        // in, permission refused, another app holding it — used to abort the
+        // whole join with an error. On 2026-09-05 a streamer sent ~170 people
+        // into a watch party and a visible share of them never got in, on
+        // phones that had not granted the mic and laptops without one. None of
+        // them needed to talk. So: join anyway, muted, with no pipeline, and
+        // say why in the notice. Everything downstream already tolerates a
+        // null pipeline (mesh skips addTrack, the SFU skips publish, the mute
+        // controls no-op), so this is the join catching up with the rest.
         stopMicPipeline(pipeline);
         pipeline = null;
-        intendedChannelId = null;
-        state.error = micErrorMessage(err);
-        state.errorKind = "mic";
-        state.status = "idle";
-        state.voiceChannelId = null;
-        emit();
+        state.isMuted = true;
+        applyMuteToPipeline();
+        state.notice = translateMessage("voice.notice.listenOnly", {
+          reason: micErrorMessage(err),
+        });
+        sendJoin(voiceChannelId);
       }
     },
 
