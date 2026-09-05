@@ -150,12 +150,14 @@ kill_timeout = 30
 # (Cloudflare proxied DNS has its own 100s idle timeout), not this file.
 
 [[vm]]
-  # Signalling and chat only — media is peer-to-peer in mesh mode and goes to
-  # LiveKit in SFU mode, so this process never touches audio. Node + a pg pool
-  # + a few hundred sockets fits comfortably; 1GB leaves headroom for the
-  # attachment sweeper and export jobs without paying for a performance CPU.
-  size = "shared-cpu-1x"
-  memory = "1gb"
+  # Signalling and chat only. Media is peer-to-peer in mesh mode and goes to
+  # LiveKit in SFU mode, so this process never touches audio. Even so, the
+  # shared-cpu-1x / 1GB size saturated on 2026-09-05 at ~370 open sockets and
+  # a 50-person SFU room: root requests took >10s, the health check flapped and
+  # Clerk tokens expired while queued. Scaled live to this size and the API
+  # answered in 0.3s again. Keep it here; a deploy reverts to whatever this says.
+  size = "performance-2x"
+  memory = "4gb"
 
 [deploy]
   # rolling + max_unavailable = 1 on a single machine means: replace that one
