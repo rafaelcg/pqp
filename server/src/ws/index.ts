@@ -92,6 +92,47 @@ const socketLimiter = createRateLimiter({
 /** Sockets that have not answered our last ping. */
 const alive = new WeakMap<WebSocket, boolean>();
 
+/** Consecutive pings a socket has failed to answer. Reset by any pong. */
+const missedPongs = new WeakMap<WebSocket, number>();
+
+/**
+ * How many pings in a row may go unanswered before the socket is reaped.
+ *
+ * ONE WAS TOO FEW, and the night of 2026-09-05 is the evidence. A single
+ * missed pong inside one 30s interval terminated the connection, so the
+ * tolerance for a phone changing cell, a moment of packet loss, or this
+ * process being too busy to read the pong off the socket in time was exactly
+ * zero. During the moonkase stream that reaped five distinct users a minute
+ * out of ~170, and what those people saw was "caí e não consigo voltar":
+ * killed mid-call, peer orphaned, rejoin, killed again.
+ *
+ * Two strikes buys ~60s, which covers the ordinary blips without meaningfully
+ * delaying detection of a genuinely half-open socket — the case this whole
+ * mechanism exists for, where no close frame ever arrives. A dead socket is
+ * still gone within a minute; a live one on a bad train no longer is.
+ */
+export const MAX_MISSED_PONGS = 2;
+
+/**
+ * Put a socket under the heartbeat: fresh, no strikes, and answering pongs
+ * clears both.
+ *
+ * Exported because the liveness bookkeeping and the reaper are two halves of
+ * one mechanism that used to be impossible to test together — the maps are
+ * module-private and were only ever populated by `handleWsConnection`, which
+ * drags in rate limiters, auth timeouts and real IO. A test that cannot say
+ * "this socket answered" cannot test the thing that matters here, which is
+ * that an answering socket is never reaped.
+ */
+export function trackSocketLiveness(socket: WebSocket): void {
+  alive.set(socket, true);
+  missedPongs.set(socket, 0);
+  socket.on("pong", () => {
+    alive.set(socket, true);
+    missedPongs.set(socket, 0);
+  });
+}
+
 export function handleWsConnection(socket: WebSocket, remoteKey: string) {
   let authenticated = false;
   let closed = false;
@@ -105,8 +146,7 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     refillPerSecond: 20,
   });
 
-  alive.set(socket, true);
-  socket.on("pong", () => alive.set(socket, true));
+  trackSocketLiveness(socket);
 
   const authTimeout = setTimeout(() => {
     if (!authenticated) {
@@ -268,10 +308,29 @@ export function startHeartbeat(
   const timer = setInterval(() => {
     for (const socket of clients) {
       if (alive.get(socket) === false) {
-        // Log the reap so a mystery "kicked out" can be traced to a missed pong
-        // rather than a real close.
-        logEvent("ws.heartbeatTerminate", { userId: getSocketUser(socket)?.id });
-        socket.terminate();
+        const missed = (missedPongs.get(socket) ?? 0) + 1;
+        missedPongs.set(socket, missed);
+        if (missed >= MAX_MISSED_PONGS) {
+          // Log the reap so a mystery "kicked out" can be traced to missed
+          // pongs rather than a real close. `missed` is here because the whole
+          // point of the change is that one is not enough, and a future
+          // argument about the threshold should be able to read the number
+          // that actually applied.
+          logEvent("ws.heartbeatTerminate", {
+            userId: getSocketUser(socket)?.id,
+            missed,
+          });
+          socket.terminate();
+          continue;
+        }
+        // Still inside the grace window: ping again rather than waiting a whole
+        // interval in silence, and leave `alive` false so an unanswered second
+        // ping is what ends it.
+        try {
+          socket.ping();
+        } catch {
+          socket.terminate();
+        }
         continue;
       }
       alive.set(socket, false);
