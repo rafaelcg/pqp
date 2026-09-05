@@ -136,6 +136,10 @@ Outgoing channel webhooks skip `is_character` authors on every hook, so Caio
 does not wake himself. Incoming execute tokens are a different table and are
 not used here.
 
+The member list treats a socketless character as online while that server has
+an `active` outgoing hook, and offline once the hook is `failing` or
+`disabled`. See [`OUTGOING_WEBHOOKS.md`](./OUTGOING_WEBHOOKS.md).
+
 Characters still cannot DM, join voice, create servers, or delete/export
 themselves. This route does not change that.
 

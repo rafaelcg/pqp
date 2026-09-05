@@ -256,6 +256,8 @@ import {
   getOutgoingWebhookRow,
   listOutgoingWebhooks,
   rotateOutgoingWebhookSecret,
+  serverHasActiveOutgoingWebhook,
+  statusWithCharacterHook,
   updateOutgoingWebhook,
 } from "../services/outgoing-webhooks.js";
 import {
@@ -4163,11 +4165,22 @@ router.get("/api/servers/:serverId/members", async ({ user }, { serverId }) => {
   await requireServerMember(serverId!, user.id);
   const members = await listServerMembers(serverId!);
   const statuses = resolveStatuses(members.map((member) => member.id));
+  // Characters that only POST have no socket, so the registry calls them
+  // offline. Paint them online on this roster while the server's outgoing
+  // hook is `active` — that is "Grok can still be woken", not a stored
+  // presence bit. A live socket still wins (idle / dnd / invisible).
+  const hookListening = members.some((member) => member.isCharacter)
+    ? await serverHasActiveOutgoingWebhook(serverId!)
+    : false;
   return {
     members: members.map((member) => ({
       ...member,
       // `offline` is the floor, and it is what an invisible member resolves to.
-      status: statuses.get(member.id) ?? "offline",
+      status: statusWithCharacterHook(
+        statuses.get(member.id) ?? "offline",
+        member.isCharacter,
+        hookListening,
+      ),
     })),
   };
 });
