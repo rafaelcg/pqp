@@ -7,7 +7,7 @@ Production Postgres is **Fly Managed Postgres (MPG)** in `gru`. One cluster, two
 | `fly-db` | `pqp-api` (production) | The one that matters |
 | `pqp-staging` | `pqp-api-staging` | Empty-ish, recreated from `schema.sql` at boot (see `docs/STAGING.md`) |
 
-Cluster ids move when a cluster is rebuilt, so **always look them up** with `fly mpg list --org personal` rather than trusting a number in a doc. For the record: `pqp-db` was `82ylg01v4n30zx19` until 2026-09-05; its PITR restore `pqp-db-2` is `9g6y30wdxzmrv5ml`.
+Cluster ids move when a cluster is rebuilt, so **always look them up** with `fly mpg list --org personal` rather than trusting a number in a doc. As of 2026-09-06 production is **`pqp-db-2`, id `9g6y30wdxzmrv5ml`**. The original `pqp-db` (`82ylg01v4n30zx19`) is the degraded cluster from the incident below; it exists only until the backfill in step 8 is done and then gets destroyed.
 
 This document exists because on 2026-09-05 a plan resize on the managed cluster failed mid-switchover, the primary kept answering at 80 to 240 ms per query while cutting every connection every 10 to 40 seconds, `fly mpg status` said `ready` the whole time, and the only way out was Fly's point-in-time restore, which would not accept a point inside the last ~20 minutes. Roughly twenty minutes of writes were lost. We now keep our own copy.
 
@@ -23,45 +23,47 @@ No em dashes in this file on purpose; it is meant to be pasted into a terminal a
 
 ## 1. Nightly backup
 
-`.github/workflows/db-backup.yml` runs at **04:17 UTC** every night (01:17 São Paulo) and on `workflow_dispatch`. It:
+Fly Managed Postgres answers only on the org's private 6PN network (`*.flympg.net`), so a GitHub runner cannot reach it. The dump therefore runs **inside Fly**, as a scheduled machine in a tiny dedicated app, **`pqp-db-backup`**, region `gru`. Everything for it lives in `tools/db-backup/`:
 
-1. Installs `postgresql-client-17` from PGDG on the runner.
-2. Runs `pg_dump --format=custom --no-owner --no-privileges` against **`BACKUP_DATABASE_URL`**, the one and only connection string the workflow reads. It never sees the API's `DATABASE_URL` and it has a cheap guard that refuses anything containing `localhost`, `staging` or `pqp_test`.
-3. gzips the dump and **fails the job if the result is under 1 MB**. A dump that small means the wrong database, an empty one, or a truncated one. Nothing is uploaded in that case.
-4. Uploads to R2 through the S3 API at key `pqp-db/YYYY-MM-DD/fly-db-YYYYMMDDTHHMMSSZ.dump.gz`, then `HEAD`s the object and fails if the byte count does not match.
-5. Deletes objects under `pqp-db/` older than 30 days, but only when at least one newer object exists, so a listing or clock bug cannot empty the bucket.
+| File | Role |
+|---|---|
+| `tools/db-backup/Dockerfile` | `debian:bookworm-slim` + `postgresql-client-17` (PGDG) + `awscli` + `jq`; runs `backup.sh` as a non-root user and exits |
+| `tools/db-backup/backup.sh` | The job |
+| `tools/db-backup/fly.toml` | App name and region, nothing else. Never `fly deploy` it as a service |
 
-The connection string is passed to `pg_dump` via `--dbname="$BACKUP_DATABASE_URL"` inside a `set -euo pipefail` script with no `set -x`; it is never echoed, never in a step name, never in the job summary.
+What `backup.sh` does, in order:
 
-A red run is the alert. There is no other notification. Check the Actions tab if you have not seen a green `DB backup` in the last two days.
+1. Checks the secrets exist and refuses a `BACKUP_DATABASE_URL` containing `localhost`, `127.0.0.1`, `staging` or `pqp_test`. It reads **exactly one** connection string and never prints it (no `set -x`, no echo, passed as `--dbname="$BACKUP_DATABASE_URL"`).
+2. `pg_dump --format=custom --no-owner --no-privileges`, then `gzip -9`.
+3. **Exits 1 if the result is under 1 MB.** A dump that small is the wrong database, an empty one, or a truncated one. Nothing is uploaded in that case.
+4. `put-object` to R2 at `pqp-db/YYYY-MM-DD/fly-db-YYYYMMDDTHHMMSSZ.dump.gz`, then `head-object`; exits 1 if the byte count differs.
+5. Deletes objects under `pqp-db/` with `LastModified` older than 30 days, but only when at least one newer object is listed, so a clock or listing bug cannot empty the bucket.
 
-### Secrets to create
+Any non-zero exit is visible in `fly logs -a pqp-db-backup` and in `fly machine list` / `fly machine status`. A machine with a schedule is restarted by Fly on that cadence regardless of how the previous run exited, so one failure does not stop the next night's attempt.
 
-GitHub repository secrets (Settings > Secrets and variables > Actions):
+### Secrets to create (Fly secrets on the app, nothing in GitHub)
 
 | Secret | What |
 |---|---|
-| `BACKUP_DATABASE_URL` | Connection string for `fly-db` on the **production** cluster. See "Read-only backup role" below. |
-| `R2_BACKUP_BUCKET` | Bucket name, e.g. a new private bucket `pqp-db-backups`. Not the attachments bucket. |
-| `R2_ACCOUNT_ID` | Cloudflare account id. The workflow builds `https://<id>.r2.cloudflarestorage.com` from it. |
-| `R2_BACKUP_ENDPOINT` | Optional. Full S3 endpoint URL; overrides the one built from `R2_ACCOUNT_ID`. Use it to point at any other S3-compatible host. |
+| `BACKUP_DATABASE_URL` | Connection string for `fly-db` on the **production** cluster (`pqp-db-2`), using the `direct.<cluster>.flympg.net` host so the dump talks to the primary and not through a pooler. Ideally the read-only role below. |
+| `R2_BACKUP_BUCKET` | Bucket name. A new private bucket, suggested `pqp-db-backups`. Not the attachments bucket. |
+| `R2_ACCOUNT_ID` | Cloudflare account id. The script builds `https://<id>.r2.cloudflarestorage.com` from it. |
+| `R2_BACKUP_ENDPOINT` | Optional. Full S3 endpoint URL; overrides the one built from `R2_ACCOUNT_ID`. |
 | `R2_BACKUP_ACCESS_KEY_ID` | From an R2 API token scoped to that one bucket, permission **Object Read & Write** |
 | `R2_BACKUP_SECRET_ACCESS_KEY` | Same token |
 
-Cloudflare side: R2 > Create bucket (`pqp-db-backups`, location hint South America if offered, private, no public access, no CORS) and R2 > Manage R2 API Tokens > Create API token > Object Read & Write > Apply to specific buckets > that bucket only. Copy the access key id and secret into the two GitHub secrets. Do not reuse the attachments token; if the backup token leaks, the blast radius should be the backups and nothing else.
+Cloudflare side: R2 > Create bucket (`pqp-db-backups`, private, no public access, no CORS) and R2 > Manage R2 API Tokens > Create API token > Object Read & Write > Apply to specific buckets > that bucket only. Do not reuse the attachments token; if the backup token leaks, the blast radius should be the backups and nothing else.
 
 ### Read-only backup role
 
-The workflow works with the app's own `DATABASE_URL` value, but a dedicated role that can only read is better: a leaked backup credential then cannot alter production.
+The job works with the app's own `DATABASE_URL` value, but a dedicated role that can only read is better: a leaked backup credential then cannot alter production.
 
 ```bash
-# Cluster id from `fly mpg list --org personal`
-fly mpg users create --cluster <cluster-id> --name pqp_backup
+# Cluster id from `fly mpg list --org personal` (9g6y30wdxzmrv5ml as of 2026-09-06)
+fly mpg users create --cluster 9g6y30wdxzmrv5ml --name pqp_backup
 # Prints a password once. Keep it.
 
-# Grant read on fly-db (the schema self-applies at boot, so tables created
-# later need the default privilege line too).
-fly mpg connect <cluster-id> --database fly-db
+fly mpg connect 9g6y30wdxzmrv5ml --database fly-db
 ```
 
 ```sql
@@ -73,22 +75,76 @@ ALTER DEFAULT PRIVILEGES FOR ROLE schema_admin IN SCHEMA public GRANT SELECT ON 
 ALTER DEFAULT PRIVILEGES FOR ROLE schema_admin IN SCHEMA public GRANT SELECT ON SEQUENCES TO pqp_backup;
 ```
 
-`schema_admin` is what the app's `fly-user` login resolves to on this cluster (see `docs/STAGING.md`); it is the owner of every table, so default privileges have to be declared *for* it. If `fly mpg users create` is not available on your CLI version, `CREATE ROLE pqp_backup LOGIN PASSWORD '...'` from `fly mpg connect` does the same thing, but note that MPG's `schema_admin` may not be allowed to `CREATE ROLE`; the CLI path is the one that is known to work.
+`schema_admin` is what the app's `fly-user` login resolves to on this cluster (see `docs/STAGING.md`); it owns every table, so default privileges have to be declared *for* it, or a table added by a future schema change is invisible to the backup. If `fly mpg users create` is not in your CLI version, `CREATE ROLE pqp_backup LOGIN PASSWORD '...'` from `fly mpg connect` does the same thing if `schema_admin` is allowed to create roles; try the CLI path first.
 
-`BACKUP_DATABASE_URL` is then the cluster's connection string with `pqp_backup:<password>` in place of the app user, database `fly-db`, and `?sslmode=require`. The host is the same one `fly mpg attach` writes into `DATABASE_URL`. **The GitHub runner is outside Fly's private network**, so the host must be one that resolves and accepts TLS from the public internet. `fly mpg status <id>` lists the cluster's connection hostnames; if only a private `.flycast` / 6PN name is available, the runner cannot reach it and you will need a small `fly proxy` relay or a public endpoint on the cluster before this workflow can work at all. Verify from a laptop first, off any Fly WireGuard tunnel:
+`BACKUP_DATABASE_URL` is then the `direct.<cluster>.flympg.net` connection string with `pqp_backup:<password>` in place of the app user, database `fly-db`, `?sslmode=require`. Test it from inside Fly before saving the secret (a laptop cannot reach it):
 
 ```bash
-PGCONNECT_TIMEOUT=10 psql "$BACKUP_DATABASE_URL" -c 'select count(*) from users;'
+fly ssh console -a pqp-api -C "psql '<the url>' -qtAc 'select count(*) from users;'"
 ```
 
-Then trigger the workflow once by hand (`Actions > DB backup > Run workflow`) and confirm the object is in the bucket with a size that looks like a real database.
+### Creating the backup machine (one time)
+
+```bash
+# 1. The app. No machines, no IPs, nothing billing yet.
+fly apps create pqp-db-backup --org personal
+
+# 2. Secrets. Values are never in git; see the table above.
+fly secrets set -a pqp-db-backup \
+  BACKUP_DATABASE_URL='...' \
+  R2_BACKUP_BUCKET='pqp-db-backups' \
+  R2_ACCOUNT_ID='...' \
+  R2_BACKUP_ACCESS_KEY_ID='...' \
+  R2_BACKUP_SECRET_ACCESS_KEY='...'
+
+# 3. Build the image and push it to Fly's registry. No machine is created.
+#    Run from tools/db-backup so the Dockerfile's COPY sees backup.sh.
+(cd tools/db-backup && fly deploy --build-only --push --image-label v1)
+# Prints: registry.fly.io/pqp-db-backup:v1
+
+# 4. One scheduled machine. It runs immediately, then Fly restarts it every
+#    ~24 h counted from that first start, so run this at the hour you want the
+#    backup to happen (04:00 UTC / 01:00 São Paulo is quiet). `--schedule`
+#    accepts hourly, daily, weekly, monthly; there is no cron expression.
+fly machine run registry.fly.io/pqp-db-backup:v1 -a pqp-db-backup \
+  --region gru --schedule daily --vm-size shared-cpu-1x --vm-memory 512 \
+  --name nightly-dump --restart no
+
+# 5. Watch the first run finish.
+fly logs -a pqp-db-backup
+```
+
+The image bakes in the script, so any change to `backup.sh` or the Dockerfile means step 3 again with a new label, then:
+
+```bash
+fly machine update <machine-id> -a pqp-db-backup --image registry.fly.io/pqp-db-backup:v2 --yes
+```
+
+`fly machine list -a pqp-db-backup` gives the id. Secret changes (`fly secrets set`) apply to the next run without touching the machine.
+
+There is no GitHub Actions path; it would only be a `fly machine run` wrapped in a workflow with another long-lived Fly token in GitHub, which is not worth the extra credential. A one-off backup before a risky change is
+
+```bash
+fly machine run registry.fly.io/pqp-db-backup:v1 -a pqp-db-backup --region gru --rm
+```
+
+(no schedule, machine deleted on exit), or `fly machine start <machine-id>` to fire the scheduled one early.
+
+### Did last night's run succeed?
+
+```bash
+fly logs -a pqp-db-backup --no-tail | tail -20     # want a line ending "OK", not "ERROR:"
+fly machine list -a pqp-db-backup                  # state stopped, last exit code 0
+```
+
+Optionally list the bucket from a laptop with the R2 credentials: `aws --endpoint-url https://<account-id>.r2.cloudflarestorage.com s3 ls s3://pqp-db-backups/pqp-db/ --recursive | tail -3`. Nobody is paged for a failure; look at this weekly, and always before touching the cluster.
 
 ### Verify a dump restores (do this quarterly, and after any schema-heavy month)
 
 A backup you have never restored is a hope, not a backup. Local `docker compose` Postgres is `postgres:16-alpine`; a dump made by `pg_dump` 17 restores into 16 as long as `pg_restore` itself is 17 or newer, so use the `postgres:17` image for the client and keep the compose database as the target.
 
 ```bash
-# 1. Fetch the newest dump (AWS CLI against R2; same env names as the workflow)
+# 1. Fetch the newest dump (AWS CLI against R2, from a laptop; the bucket is reachable from the internet, the database is not)
 export AWS_ACCESS_KEY_ID=...   AWS_SECRET_ACCESS_KEY=...   AWS_DEFAULT_REGION=auto
 export AWS_REQUEST_CHECKSUM_CALCULATION=when_required AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 E="https://<account-id>.r2.cloudflarestorage.com"
@@ -139,7 +195,8 @@ A degraded managed cluster that Fly's own tooling calls healthy is not going to 
 
 ```bash
 fly mpg list --org personal            # cluster ids, plans, regions
-fly mpg backup list <cluster-id>       # base backups; PITR sits on top of these
+fly mpg backup list <degraded-id>      # base backups; PITR sits on top of these
+# On 2026-09-05 <degraded-id> was 82ylg01v4n30zx19 (pqp-db). Today's production is 9g6y30wdxzmrv5ml (pqp-db-2).
 ```
 
 Note the time now, in UTC. Every write after the point you pick is going to be reconciled by hand in step 8, so the newer the point the less work later.
@@ -147,7 +204,7 @@ Note the time now, in UTC. Every write after the point you pick is going to be r
 ### Step 2. Restore to a new cluster
 
 ```bash
-fly mpg restore <cluster-id> --pitr-time "2026-09-05T22:40:00Z" --name pqp-db-2
+fly mpg restore <degraded-id> --pitr-time "2026-09-05T22:40:00Z" --name pqp-db-3   # the incident produced pqp-db-2; use the next free name
 ```
 
 **`--pitr-time` refuses points inside roughly the last 20 minutes** ("target time is after the latest restorable point", or a generic error). Step back in **5-minute increments** until it accepts. Write down the accepted time; it is the boundary for the backfill.
@@ -297,7 +354,7 @@ The attach writes `DATABASE_URL` and restarts staging; the schema self-applies a
 
 ### Step 10. Detach and destroy the old cluster
 
-Only after steps 7, 8 and 9 are done and a night has passed with a green `DB backup` run against the new cluster (update `BACKUP_DATABASE_URL` in GitHub first; the backup role from section 1 does not exist on the new cluster until you recreate it).
+Only after steps 7, 8 and 9 are done and a night has passed with a green `DB backup` run against the new cluster (update `BACKUP_DATABASE_URL` on `pqp-db-backup` first; the backup role from section 1 does not exist on the new cluster until you recreate it).
 
 ```bash
 fly secrets unset -a pqp-api DATABASE_URL_NEW DATABASE_URL_OLD   # one more restart; do it in a quiet hour
@@ -310,7 +367,7 @@ Then update this file's cluster ids, `docs/STAGING.md`, `docs/deploy-fly.md` whe
 
 ### What NOT to do
 
-- **Do not resize a managed cluster during a live event, or at any hour someone is likely to be in a voice room.** A plan resize is a Patroni switchover. On 2026-09-05 it returned 503 mid-way and left the primary answering at 80 to 240 ms per query and cutting every connection every 10 to 40 seconds, while `fly mpg status` said `ready` throughout. If a resize is needed, do it at 05:00 São Paulo on a weekday, with this runbook open, right after a green `DB backup`, and be ready to run steps 1 to 7 immediately.
+- **Do not resize a managed cluster during a live event, or at any hour someone is likely to be in a voice room.** A plan resize is a Patroni switchover. On 2026-09-05 it returned 503 mid-way and left the primary answering at 80 to 240 ms per query and cutting every connection every 10 to 40 seconds, while `fly mpg status` said `ready` throughout. If a resize is needed, do it at 05:00 São Paulo on a weekday, with this runbook open, right after a green `pqp-db-backup` run (or a one-off `fly machine run ... --rm` dump), and be ready to run steps 1 to 7 immediately.
 - **Do not trust `fly mpg status` over `fly logs -a pqp-api`.** The status endpoint reports orchestration state, not query latency or connection stability.
 - **Do not wait for PITR to accept "now".** It never does; the floor was ~20 minutes on the night. Every 5 minutes spent retrying is 5 more minutes of live writes on a cluster you are about to abandon. Accept the newest point it takes and move on.
 - **Do not `fly mpg attach` with the default variable name while diagnosing.** That rewrites `DATABASE_URL` and restarts the API before you have measured anything. Always `--variable-name DATABASE_URL_NEW` first.

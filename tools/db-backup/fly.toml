@@ -1,0 +1,20 @@
+# Fly app that holds the nightly Postgres backup machine. See docs/DB_RUNBOOK.md.
+#
+# There is deliberately NO [http_service], no health check and no [processes]
+# block: this app is not a server. It exists so that
+#   * `fly secrets set -a pqp-db-backup ...` has somewhere to live,
+#   * `fly deploy --build-only --push` has a registry to push the image to,
+#   * `fly machine run registry.fly.io/pqp-db-backup:<label> --schedule daily`
+#     has an app to create the scheduled machine in.
+# Do NOT run a plain `fly deploy` against this file; that would create an
+# always-on machine that runs the script once and then sits stopped. The
+# schedule is set on the machine, not here.
+app = "pqp-db-backup"
+primary_region = "gru"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# No [env]: `fly machine run` does not read this block. The script's defaults
+# (MIN_BYTES=1048576, RETENTION_DAYS=30, KEY_PREFIX=pqp-db) are the config; to
+# override one, pass `--env NAME=value` to `fly machine run`.
