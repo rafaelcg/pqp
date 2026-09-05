@@ -3612,6 +3612,10 @@ function MainAppContent({
           setSettingsSection("feedback");
           setSettingsOpen(true);
         }}
+        onOpenProfile={() => {
+          setSettingsSection("profile");
+          setSettingsOpen(true);
+        }}
       />
     </>
   );
