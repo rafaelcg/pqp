@@ -10,6 +10,7 @@ import {
   type ChanceRequest,
   type PollRequest,
 } from "@pqp/shared";
+import { isApplePlatform } from "@/lib/composer-formatting";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 
 export interface SlashCommandMeta {
@@ -83,6 +84,14 @@ const commands: SlashCommand[] = [
     execute() {
       const lines = listSlashCommands().map(
         (c) => `${c.usage} — ${c.description}`,
+      );
+      // The formatting shortcuts have no button and no menu of their own, so
+      // the command listing is the one place a person can find out they exist.
+      lines.push(
+        "",
+        translateMessage("slash.help.formatting", {
+          mod: isApplePlatform() ? "Cmd" : "Ctrl",
+        }),
       );
       return ok({
         message: lines.join("\n"),
