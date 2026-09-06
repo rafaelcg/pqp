@@ -9,6 +9,7 @@ import {
 } from "@/lib/register-sw";
 import { snoozeRemainingMs } from "@/lib/update-snooze";
 import { setUpdatePromptShowing } from "@/lib/update-prompt-state";
+import { useInCall } from "@/lib/in-call-state";
 
 /**
  * "A new version is ready" — the visible half of `registerType: "prompt"`.
@@ -48,7 +49,10 @@ export function UpdatePrompt() {
     return () => clearTimeout(timer);
   }, [snoozedAt]);
 
-  const show = needsRefresh && snoozedAt === null;
+  // Never ask someone in a call to reload: a reload ends their screen share
+  // and drops them out of the room. The card waits until they hang up.
+  const inCall = useInCall();
+  const show = needsRefresh && snoozedAt === null && !inCall;
 
   // Tell the corner-hint queue inside App to yield while this is up.
   useEffect(() => {
