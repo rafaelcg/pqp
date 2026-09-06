@@ -3,6 +3,7 @@ import { Check, Flag, Link2, Users } from "lucide-react";
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { resolveUploadedImageUrl } from "@/lib/avatar";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
@@ -12,6 +13,29 @@ import {
   formatMemberCount,
   monogram,
 } from "./communities-model";
+
+/**
+ * The src a directory card may point an `<img>` at, or null when the monogram
+ * (and the header tint) must paint instead.
+ *
+ * Uploaded icons arrive as `/api/servers/:id/icon?v=…`. The SPA and the API
+ * are two origins on every hosted deploy, so a bare relative path asks Pages
+ * for a picture only the API has — that is the broken-file glyph on QG, PQP
+ * and the rest. `resolveUploadedImageUrl` prefixes the API origin and refuses
+ * `javascript:` / `http:` / empty strings. A URL that already failed is treated
+ * as absent, so `onError` lands on the same initials the cards with no icon
+ * already show.
+ */
+export function cardImageSrc(
+  value: string | null | undefined,
+  failedUrl: string | null = null,
+): string | null {
+  const resolved = resolveUploadedImageUrl(value);
+  if (!resolved || resolved === failedUrl) {
+    return null;
+  }
+  return resolved;
+}
 
 /**
  * One community, as a card in the directory grid.
@@ -80,6 +104,14 @@ export function CommunityCard({
   const action = cardAction(community);
   const hue = communityHue(community.id);
   const [shared, setShared] = useState(false);
+  const [failedIconUrl, setFailedIconUrl] = useState<string | null>(null);
+  const [failedBannerUrl, setFailedBannerUrl] = useState<string | null>(null);
+  const [readyIconUrl, setReadyIconUrl] = useState<string | null>(null);
+  const [readyBannerUrl, setReadyBannerUrl] = useState<string | null>(null);
+  const iconSrc = cardImageSrc(iconUrl, failedIconUrl);
+  const bannerSrc = cardImageSrc(bannerUrl, failedBannerUrl);
+  const showIcon = iconSrc !== null && readyIconUrl === iconSrc;
+  const showBanner = bannerSrc !== null && readyBannerUrl === bannerSrc;
 
   /**
    * The share button, and the reason this card grew one.
@@ -126,15 +158,21 @@ export function CommunityCard({
           up — the same box serves both. */}
       <div
         className="relative h-20 shrink-0 overflow-hidden"
-        style={bannerUrl ? undefined : tintStyle(hue, 30)}
+        style={showBanner ? undefined : tintStyle(hue, 30)}
       >
-        {bannerUrl && (
+        {bannerSrc && (
           <img
-            src={bannerUrl}
+            src={bannerSrc}
             alt=""
-            className="h-full w-full object-cover"
+            className={cn(
+              "h-full w-full object-cover",
+              showBanner ? undefined : "invisible",
+            )}
             loading="lazy"
             decoding="async"
+            referrerPolicy="no-referrer"
+            onLoad={() => setReadyBannerUrl(bannerSrc)}
+            onError={() => setFailedBannerUrl(bannerSrc)}
           />
         )}
         {/* Fades the header into the card body so the avatar below has
@@ -147,7 +185,7 @@ export function CommunityCard({
           aria-hidden="true"
           className="absolute left-3 top-3 flex items-center gap-1.5 rounded-full bg-ink/55 px-2.5 py-1 text-[11px] font-semibold text-paper backdrop-blur-sm"
         >
-          <span>{CATEGORY_EMOJI[community.category]}</span>
+          <span aria-hidden="true">{CATEGORY_EMOJI[community.category]}</span>
           {t(`communities.category.${community.category}` as never)}
         </span>
         {/* Both corner affordances share one hover group. Quiet until you reach
@@ -196,19 +234,24 @@ export function CommunityCard({
         <span
           aria-hidden="true"
           className="relative -mt-7 flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl font-display text-base font-bold text-paper ring-4 ring-ink-2"
-          style={iconUrl ? undefined : tintStyle(hue, 55)}
+          style={showIcon ? undefined : tintStyle(hue, 55)}
         >
-          {iconUrl ? (
+          {iconSrc && (
             <img
-              src={iconUrl}
+              src={iconSrc}
               alt=""
-              className="h-full w-full object-cover"
+              className={cn(
+                "absolute inset-0 h-full w-full object-cover",
+                showIcon ? undefined : "invisible",
+              )}
               loading="lazy"
               decoding="async"
+              referrerPolicy="no-referrer"
+              onLoad={() => setReadyIconUrl(iconSrc)}
+              onError={() => setFailedIconUrl(iconSrc)}
             />
-          ) : (
-            monogram(community.name)
           )}
+          {!showIcon && monogram(community.name)}
         </span>
 
         <h3 className="mt-3 truncate font-display text-base font-bold text-paper">
