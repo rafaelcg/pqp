@@ -118,6 +118,8 @@ interface ChannelListProps {
   onJoinVoice?: (channelId: string) => void;
   /** The signed-in account, for self-drag and "mute for me". */
   currentUserId?: string | null;
+  /** Seats with a move in flight: no second drag. */
+  pendingMoveUserIds?: string[];
   peerVolumes?: Record<string, number>;
   canMoveIn?: (channelId: string) => boolean;
   canConnectIn?: (channelId: string) => boolean;
@@ -184,6 +186,7 @@ export function ChannelList({
   onSelectChannel,
   onJoinVoice,
   currentUserId = null,
+  pendingMoveUserIds = [],
   peerVolumes = {},
   canMoveIn = () => false,
   canConnectIn = () => true,
@@ -300,7 +303,7 @@ export function ChannelList({
   }
 
   function commitOccupantDrop(channel: Channel) {
-    if (!draggedOccupant) {
+    if (!draggedOccupant || pendingMoveUserIds.includes(draggedOccupant.userId)) {
       return;
     }
     const drag = draggedOccupant;
@@ -670,11 +673,9 @@ export function ChannelList({
               const isSelf = Boolean(
                 currentUserId && person.userId === currentUserId,
               );
-              const canDrag = canDragVoiceOccupant(
-                isSelf,
-                channel.id,
-                canMoveIn,
-              );
+              const canDrag =
+                !pendingMoveUserIds.includes(person.userId) &&
+                canDragVoiceOccupant(isSelf, channel.id, canMoveIn);
               return (
                 <VoiceOccupantRow
                   key={person.peerId}

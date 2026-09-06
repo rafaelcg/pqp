@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Permission } from "@pqp/shared";
+import type { VoiceParticipant } from "@pqp/shared";
 import {
   canDragVoiceOccupant,
+  cloneVoiceOccupancy,
   dropReasonMessageKey,
   moveMembersBit,
+  moveOccupantSeat,
   resolveVoiceOccupantDrop,
   shouldHighlightVoiceDrop,
   voiceOccupantMenuActions,
@@ -200,5 +203,40 @@ describe("dropReasonMessageKey", () => {
   it("maps text and category to the same copy", () => {
     expect(dropReasonMessageKey("text")).toBe("voice.occupant.dropText");
     expect(dropReasonMessageKey("category")).toBe("voice.occupant.dropText");
+  });
+});
+
+describe("moveOccupantSeat", () => {
+  const andre: VoiceParticipant = {
+    peerId: "peer-andre",
+    userId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    displayName: "Andre",
+    avatarUrl: null,
+    sharingScreen: false,
+    muted: true,
+    deafened: false,
+    serverMuted: false,
+  };
+
+  it("paints them under the target channel immediately", () => {
+    const occupancy = { "voice-a": [andre] };
+    const { next, fromChannelId, moved } = moveOccupantSeat(
+      occupancy,
+      andre.userId,
+      "voice-b",
+    );
+    expect(fromChannelId).toBe("voice-a");
+    expect(moved).toEqual(andre);
+    expect(next["voice-a"]).toBeUndefined();
+    expect(next["voice-b"]).toEqual([andre]);
+    expect(next["voice-b"]?.[0]?.muted).toBe(true);
+  });
+
+  it("rolls back to the snapshot when the move fails", () => {
+    const occupancy = { "voice-a": [andre] };
+    const snapshot = cloneVoiceOccupancy(occupancy);
+    const { next } = moveOccupantSeat(occupancy, andre.userId, "voice-b");
+    expect(next["voice-b"]).toHaveLength(1);
+    expect(snapshot).toEqual({ "voice-a": [andre] });
   });
 });
