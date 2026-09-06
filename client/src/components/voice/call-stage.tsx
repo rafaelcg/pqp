@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   Loader2,
   Maximize2,
+  MonitorPlay,
   PanelLeftClose,
   PanelLeftOpen,
   Mic,
@@ -33,6 +34,7 @@ import {
   type RefObject,
   type SyntheticEvent,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   CAMERA_LIMIT,
   SCREEN_SHARE_LIMIT,
@@ -40,6 +42,7 @@ import {
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { VideoQuality } from "@/lib/video-quality";
+import { isDesktopApp } from "@/lib/desktop";
 import { shareStreamHasAudio } from "@/lib/screen-capture-audio";
 import {
   canShareScreenAudio,
@@ -461,7 +464,9 @@ export interface CallStageProps {
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
-  onStartScreenShare?: () => void;
+  onStartScreenShare?: (
+    intent?: { preferBrowserTab?: boolean },
+  ) => void | Promise<void>;
   /**
    * Start the same share with no sound at all. Offered only after sound is
    * what killed the last attempt, and separate from `onStartScreenShare`
@@ -629,7 +634,9 @@ function ActiveCall({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
-  onStartScreenShare?: () => void;
+  onStartScreenShare?: (
+    intent?: { preferBrowserTab?: boolean },
+  ) => void | Promise<void>;
   /**
    * Start the same share with no sound at all. Offered only after sound is
    * what killed the last attempt, and separate from `onStartScreenShare`
@@ -1665,7 +1672,9 @@ function CallControls({
   onVideoQualityChange: (quality: VideoQuality) => void;
   qualityMenuOpen: boolean;
   onQualityMenuOpenChange: (open: boolean) => void;
-  onStartScreenShare?: () => void;
+  onStartScreenShare?: (
+    intent?: { preferBrowserTab?: boolean },
+  ) => void | Promise<void>;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
@@ -1685,7 +1694,16 @@ function CallControls({
   // Probed once per mount — whether the browser has getDisplayMedia never
   // changes mid-session. Same probe the channel voice panel uses.
   const canShare = useMemo(() => supportsScreenShare(), []);
+  // Watch party is a Chrome tab plus that tab's sound. The shell picker
+  // lists screens and windows only, so the same door there would start a
+  // silent share and the prompt would be a lie.
+  const canWatchParty = canShare && !isDesktopApp();
   const [shareHint, setShareHint] = useState<string | null>(null);
+  useEffect(() => {
+    if (voiceState.isSharingScreen || voiceState.error) {
+      setShareHint(null);
+    }
+  }, [voiceState.isSharingScreen, voiceState.error]);
   const shareAtCap = isScreenShareAtCap(
     voiceState.screenSharePeerIds,
     voiceState.peerId,
@@ -2009,6 +2027,45 @@ function CallControls({
           </button>
         </Tooltip>
       )}
+      {canWatchParty &&
+        !listenOnly &&
+        onStartScreenShare &&
+        !voiceState.isSharingScreen && (
+          <Tooltip
+            label={t("voice.control.watchParty")}
+            detail={t("voice.control.watchPartyHint")}
+          >
+            <button
+              type="button"
+              aria-label={t("voice.control.watchParty")}
+              aria-disabled={shareCappedOut || undefined}
+              className={cn(
+                "flex items-center justify-center rounded-full",
+                size,
+                shareCappedOut && "opacity-40",
+                "bg-ink-3 text-paper hover:bg-ink-4",
+              )}
+              onClick={() => {
+                if (shareCappedOut) {
+                  return;
+                }
+                // Paint the hint in this click, before getDisplayMedia opens
+                // the picker and the rest of the page stops updating. Clear
+                // once the picker settles: cancel, error, or a live share.
+                flushSync(() => {
+                  setShareHint(t("voice.control.watchPartyHint"));
+                });
+                void Promise.resolve(
+                  onStartScreenShare({ preferBrowserTab: true }),
+                ).finally(() => {
+                  setShareHint(null);
+                });
+              }}
+            >
+              <MonitorPlay className={iconSize} />
+            </button>
+          </Tooltip>
+        )}
       {showGridToggle && onToggleGrid && (
         <Tooltip
           label={preferGrid ? t("call.stage.focus") : t("call.stage.grid")}
