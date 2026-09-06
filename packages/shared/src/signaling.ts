@@ -270,13 +270,17 @@ export const voiceTransportUnsupportedMessageSchema = z.object({
 });
 
 /**
- * Join was refused after the client asked to resume (ACL, timeout, block).
- * A holding client must hang up rather than sit on live media outside the room.
- * Older clients ignore an unknown type.
+ * Join was refused after the client asked to resume (ACL, timeout, block), or
+ * a cold mesh join was refused because the API is running on more than one
+ * machine and this one cannot relay to the room's peers (`reason`, M5 of the
+ * multi-instance plan). A holding client must hang up rather than sit on live
+ * media outside the room. Older clients ignore an unknown type and an unknown
+ * field.
  */
 export const voiceJoinRefusedMessageSchema = z.object({
   type: z.literal("voice-join-refused"),
   voiceChannelId: z.string().uuid(),
+  reason: z.enum(["mesh-multi-instance"]).optional(),
 });
 
 export const screenShareDeniedMessageSchema = z.object({

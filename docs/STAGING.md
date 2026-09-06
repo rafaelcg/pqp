@@ -222,3 +222,45 @@ Three caveats, all of which make the number **conservative rather than optimisti
 - **Game connections do not work.** Steam, Battle.net and Twitch OAuth apps are registered for the production origin only; the staging origin has no provider registrations, so those linking flows will fail or stay hidden.
 - **First request after idle is slow.** A parked machine takes a few seconds to wake. If a probe or test suite hits a timeout, retry once before suspecting the deploy.
 - **Voice on staging is signalling only unless LiveKit is configured.** There is no TURN and no SFU by default, so a load test that needs one room bigger than `MESH_VOICE_LIMIT` has to set `LIVEKIT_*` first. See the load-test runbook below.
+
+## Rehearsing two machines (M5 of `docs/plans/MULTI_INSTANCE_VOICE.md`)
+
+Before production is ever scaled to two (`docs/deploy-fly.md` 6a-bis), run the whole thing here once. Staging has no LiveKit, so this rehearses the bus, the registry, the drain and the mesh guard's *refusal* path; the SFU path is what production will take and can only be watched there.
+
+**Set up (all temporary, undo at the end):**
+
+```bash
+# 1. The two flags. `fly secrets set` restarts the machine.
+fly secrets set CLUSTER_BUS=postgres VOICE_REGISTRY=postgres -a pqp-api-staging
+
+# 2. Auto-stop off for the rehearsal. fly.staging.toml says "stop" / min 0;
+#    a parked machine would count as one instance that stopped answering.
+#    Edit fly.staging.toml locally (auto_stop_machines = "off",
+#    min_machines_running = 2) and deploy it; do not commit that edit.
+gh workflow run deploy-staging.yml --ref <your-branch>   # or fly deploy -c fly.staging.toml -a pqp-api-staging --ha=false
+
+# 3. Two machines, same region.
+fly scale count 2 --region gru -a pqp-api-staging
+fly machines list -a pqp-api-staging      # two rows, both "started", both gru
+```
+
+**Verify, in this order:**
+
+1. `fly logs -a pqp-api-staging` shows `voice.registryEnabled` from both instance ids, then `bus.selfEcho` from both (never `bus.selfEchoMissing`: that means `DATABASE_URL` is a transaction-mode pooler and LISTEN is not delivering, stop here). No `voice.configDrift`.
+2. `voice.meshClusterUnsafe` appears once from each instance within 15 s (no LiveKit on staging: that is the guard saying so).
+3. Two browsers (`localStorage.setItem("pqp:dev-user-suffix", "bob")` is not available here; sign up twice on the Clerk dev instance). Send a message in a text channel from one and confirm it appears in the other without a refresh; open the same server in both and confirm presence agrees. Reload each a few times: every `fly logs` line is prefixed with the machine id, so the `ws.*` lines for your two users tell you which machine each socket landed on, and you want to see both ids across reloads.
+4. Voice, the refusal path: join a voice channel in browser A. In browser B, join the same channel. If B is on the other machine, it must show the call as not connected within a second, with `voice-join-refused` (`reason: mesh-multi-instance`) in the WS frames and `voice.meshRefusedMultiInstance` in the logs, and A must **not** see B in the room. If B landed on the same machine it simply joins; reload B until it lands on the other one. Nobody may ever appear in a room they cannot hear.
+5. The drain. With both browsers connected and A still in voice, `fly machine restart <id of the machine A is on> -a pqp-api-staging`. In the logs: `[shutdown] SIGTERM`, then `ws.drainBatch` lines, then `ws.drained`, all inside a few seconds. In the browsers: at most a brief "reconnecting", no "Realtime connection closed" banner that stays, and both land on the surviving machine (the machine id prefix on their `ws.*` log lines). A's voice seat resumes with the same peer id (`voice.resumeAdopted` in the logs, `resumed: true` in the `welcome` frame). `curl -s -o /dev/null -w '%{http_code}' https://pqp-api-staging.fly.dev/health` during the drain answers 503 once the draining machine is the one hit, and `/up` stays 200 throughout.
+6. Once the restarted machine is back, repeat step 5 on the other one. Then a real deploy (`gh workflow run deploy-staging.yml --ref <branch>`): the rolling strategy does step 5 to each machine in turn, and the deploy-staging job's own checks pass.
+
+**Scale back (do not leave staging on two machines; it doubles the bill and parks nothing):**
+
+```bash
+fly scale count 1 --region gru -a pqp-api-staging
+git checkout fly.staging.toml                       # auto-stop "stop", min 0 again
+gh workflow run deploy-staging.yml --ref staging    # redeploys the committed file
+fly secrets unset CLUSTER_BUS VOICE_REGISTRY -a pqp-api-staging   # optional; harmless to leave on one machine
+fly machines list -a pqp-api-staging                # one row
+```
+
+Record the date and the outcome in the M5 line of the plan's status header when it has been done.

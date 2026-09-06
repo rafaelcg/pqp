@@ -139,10 +139,12 @@ jobs:
         uses: superfly/flyctl-actions/setup-flyctl@master
 
       # --ha=false IS LOAD-BEARING, not a cost tweak. Without it Fly happily
-      # brings up a second machine, and this server keeps WebSocket state,
-      # presence, voice rooms and rate-limit buckets in process memory — two
-      # machines are two disjoint chat servers behind one hostname, with no
-      # error anywhere to tell you. See the header of fly.toml.
+      # brings up an extra machine on its own. The machine count is a
+      # deliberate manual step (`fly scale count N --region gru`, N being
+      # fly.toml's min_machines_running), because this server can only run on
+      # more than one machine with every invariant in the header of fly.toml
+      # in force; the assertion after the deploy checks the number, never
+      # the deploy itself.
       #
       # --remote-only builds on Fly's builder so the runner does not need to
       # push a multi-hundred-MB image over the wire.
@@ -168,28 +170,55 @@ jobs:
             --image-label "${{ steps.commit.outputs.sha }}" \
             -e APP_VERSION="${{ steps.commit.outputs.sha }}"
 
-      # The single-machine invariant, asserted rather than assumed. It can be
-      # broken by a stray `fly scale count 2`, by someone dropping --ha, or by a
-      # bluegreen strategy leaving a machine behind — all of which look fine in
-      # the deploy log and present to users as "my friend can't see my
-      # messages". Cheap check, expensive failure.
-      - name: Assert exactly one machine, in gru
+      # The machine-count invariant, asserted rather than assumed. The
+      # expected count is `min_machines_running` in fly.toml (2 since M5 of
+      # docs/plans/MULTI_INSTANCE_VOICE.md), or the repo variable
+      # PQP_API_MACHINES while production is still being flipped (set it to 1
+      # until `fly scale count 2` has been run, then delete it). It can be
+      # broken by a stray `fly scale count`, by someone dropping --ha, or by a
+      # bluegreen strategy leaving a machine behind, all of which look fine in
+      # the deploy log. Too few means a deploy has no sibling to drain to; too
+      # many means a machine the cluster invariants were never checked on.
+      # Every counted machine must be *started*: a stopped one is a machine
+      # the proxy cannot route to, and a rolling deploy that left one behind
+      # is exactly what this is for. Cheap check, expensive failure.
+      #
+      # The second half is the dual-version probe: after a rolling deploy,
+      # every started machine must be on the same image. Two images behind
+      # one hostname is the mid-rollout split the transport pin and the
+      # `voice.hello` config-hash drift log exist to survive, not to live in.
+      - name: Assert the machine count, region and image
         if: steps.relevant.outputs.needed == 'true'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          MACHINES_OVERRIDE: ${{ vars.PQP_API_MACHINES }}
         run: |
+          set -uo pipefail
+          expected="$MACHINES_OVERRIDE"
+          if [ -z "$expected" ]; then
+            expected=$(sed -n 's/^[[:space:]]*min_machines_running[[:space:]]*=[[:space:]]*\([0-9]\+\).*/\1/p' fly.toml | head -n1)
+          fi
+          case "$expected" in
+            ''|*[!0-9]*) echo "::error::Could not read the expected machine count (fly.toml min_machines_running or vars.PQP_API_MACHINES); got '${expected:-empty}'"; exit 1 ;;
+          esac
           json=$(flyctl machines list --app "$FLY_APP" --json)
           live=$(printf '%s' "$json" | jq '[.[] | select(.state != "destroyed")] | length')
+          started=$(printf '%s' "$json" | jq '[.[] | select(.state == "started")] | length')
           regions=$(printf '%s' "$json" | jq -r '[.[] | select(.state != "destroyed") | .region] | unique | join(",")')
-          echo "live machines: $live (regions: $regions)"
-          if [ "$live" != "1" ]; then
-            echo "::error::Expected exactly 1 machine, found $live. This server keeps WebSocket/presence/voice state in process memory, so a second machine silently splits the userbase. Fix with: fly scale count 1 --region gru --app $FLY_APP"
+          images=$(printf '%s' "$json" | jq -r '[.[] | select(.state == "started") | (.image_ref.digest // .image_ref.tag // .config.image // "unknown")] | unique | join(",")')
+          echo "machines: $live live, $started started (expected $expected), regions: $regions"
+          echo "images on started machines: $images"
+          if [ "$started" != "$expected" ] || [ "$live" != "$expected" ]; then
+            echo "::error::Expected exactly $expected started machine(s), found $started started of $live live. This server keeps WebSocket/presence/voice state in process memory and needs every one of docs/plans/MULTI_INSTANCE_VOICE.md's invariants to run on more than one. Fix with: fly scale count $expected --region gru --app $FLY_APP (and set vars.PQP_API_MACHINES if the count is intentional)."
             exit 1
           fi
           if [ "$regions" != "gru" ]; then
-            echo "::error::Machine is in '$regions', expected 'gru'. A second region needs a pub/sub layer first — see docs/deploy-fly.md."
+            echo "::error::Machines are in '$regions', expected only 'gru'. A second region needs the database next to it; see docs/deploy-fly.md."
             exit 1
           fi
+          case "$images" in
+            *,*) echo "::error::Started machines run different images ($images): the rolling deploy left one behind. Re-run the deploy, or 'fly machines update' the stale one."; exit 1 ;;
+          esac
 
       # Same assertion the Railway workflow makes, for the same reason: every
       # /api/ route answers 401 before it routes, so a stalled deploy is

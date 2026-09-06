@@ -60,9 +60,21 @@ if (DATABASE_URL) {
 
 const naming = vi.hoisted(() => ({ shown: new Map<string, string>() }));
 
+/**
+ * Mesh by default, so the M2 and M4 groups run the transport they were
+ * written against. The M3 group runs on LiveKit, because after M5 a mesh
+ * seat cannot move machines (the "mesh guard" group pins exactly that), and
+ * the guard group flips this per test.
+ */
+const backend = vi.hoisted(() => ({
+  configured: "mesh" as "mesh" | "livekit",
+  /** What `getServerVoiceProfile` answers; null is the configured default. */
+  profile: null as { isCommunity: boolean; memberCount: number } | null,
+}));
+
 vi.mock("../voice/backends.js", () => ({
-  getServerVoiceBackend: () => "mesh",
-  isLiveKitConfigured: () => false,
+  getServerVoiceBackend: () => backend.configured,
+  isLiveKitConfigured: () => backend.configured === "livekit",
 }));
 
 vi.mock("../services/users.js", () => ({
@@ -104,7 +116,7 @@ vi.mock("../services/servers.js", () => ({
     kind: "server",
     has: () => true,
   }),
-  getServerVoiceProfile: async () => null,
+  getServerVoiceProfile: async () => backend.profile,
 }));
 
 vi.mock("../voice/admin.js", () => ({
@@ -346,6 +358,8 @@ describeDb("voice across two instances", () => {
     }
     booted.length = 0;
     process.env.VOICE_REGISTRY = previousFlag;
+    backend.configured = "mesh";
+    backend.profile = null;
     vi.restoreAllMocks();
   });
 
@@ -637,6 +651,13 @@ describeDb("voice across two instances", () => {
   });
 
   describe("resume across instances", () => {
+    // On the SFU: with two live leases a mesh seat cannot move machines
+    // (the "mesh guard" group below), and multi-instance mode requires
+    // LiveKit. The resume mechanics are the same on either transport.
+    beforeEach(() => {
+      backend.configured = "livekit";
+    });
+
     it("a resume on B for a seat A still holds adopts it, with no peer-left anywhere", async () => {
       const channel = randomUUID();
       const a = await bootInstance();
@@ -1102,6 +1123,152 @@ describeDb("voice across two instances", () => {
       const [, allowed, known] = sfuCalls(a, "evictSfuUsersExcept")[0]!;
       expect([...allowed]).toEqual([keep]);
       expect(known.get(dropped.peerId)).toBeDefined();
+    });
+  });
+
+  describe("mesh guard (M5)", () => {
+    const small = { isCommunity: false, memberCount: 3 };
+
+    async function tryJoin(
+      instance: Instance,
+      userId: string,
+      channel: string,
+    ): Promise<Recorder> {
+      const rec = recorder();
+      instance.sockets.setAuthenticatedSocket(rec.socket, asUser(userId));
+      await instance.voice.handleVoiceMessage(
+        { socket: rec.socket, user: asUser(userId) },
+        { type: "join-voice-room", voiceChannelId: channel, resume: true },
+      );
+      return rec;
+    }
+
+    async function roomRow(channel: string): Promise<string | undefined> {
+      const result = await pools[0]!.getPool().query<{ transport: string }>(
+        `SELECT transport FROM voice_rooms WHERE channel_id = $1`,
+        [channel],
+      );
+      return result.rows[0]?.transport;
+    }
+
+    it("two live instances, no SFU: a mesh join is refused everywhere but the holder", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      // Alone, A opens the room on mesh as it always did.
+      const first = await join(a, randomUUID(), channel);
+      expect(frames(first, "welcome")[0]?.transport).toBe("mesh");
+
+      const b = await bootInstance();
+      await b.registry.heartbeatVoiceInstance();
+      onTheWire.length = 0;
+      // B cannot relay to A's peers: refused, with a reason, and no seat.
+      const onB = await tryJoin(b, randomUUID(), channel);
+      expect(frames(onB, "welcome")).toHaveLength(0);
+      expect(frames(onB, "voice-join-refused")[0]).toMatchObject({
+        voiceChannelId: channel,
+        reason: "mesh-multi-instance",
+      });
+      // A brand-new room is refused too: nothing may open on mesh now.
+      const fresh = randomUUID();
+      const onBFresh = await tryJoin(b, randomUUID(), fresh);
+      expect(frames(onBFresh, "voice-join-refused")).toHaveLength(1);
+      await settle();
+      expect(await roomRow(fresh)).toBeUndefined();
+      expect(
+        onTheWire.filter((f) => f.topic === "voice.room"),
+      ).toHaveLength(0);
+      // The holder still seats people: every peer of that room is on A.
+      const second = await join(a, randomUUID(), channel);
+      expect(frames(second, "welcome")[0]?.transport).toBe("mesh");
+      await settle();
+      const rows = await pools[0]!.getPool().query(
+        `SELECT 1 FROM voice_peers WHERE channel_id = $1`,
+        [channel],
+      );
+      expect(rows.rowCount).toBe(2);
+    });
+
+    it("two live instances with an SFU: a room that would open on mesh opens on LiveKit instead", async () => {
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
+      const a = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      // Control: alone, a three-member server is a mesh room.
+      const alone = await join(a, randomUUID(), randomUUID());
+      expect(frames(alone, "welcome")[0]?.transport).toBe("mesh");
+
+      const b = await bootInstance();
+      await b.registry.heartbeatVoiceInstance();
+      const onA = await join(a, randomUUID(), channel);
+      expect(frames(onA, "welcome")[0]?.transport).toBe("livekit");
+      await settle();
+      expect(await roomRow(channel)).toBe("livekit");
+      // And B seats into the same room, on the same transport.
+      const onB = await join(b, randomUUID(), channel);
+      expect(frames(onB, "welcome")[0]?.transport).toBe("livekit");
+    });
+
+    it("a room opened on mesh before the second instance came up stays with its holder", async () => {
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
+      const a = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      const holder = await join(a, randomUUID(), channel);
+      expect(frames(holder, "welcome")[0]?.transport).toBe("mesh");
+      await settle();
+
+      const b = await bootInstance();
+      await b.registry.heartbeatVoiceInstance();
+      // The row says mesh and the peers are on A: B is refused after the
+      // pin, SFU or not, and the row is left alone.
+      const onB = await tryJoin(b, randomUUID(), channel);
+      expect(frames(onB, "welcome")).toHaveLength(0);
+      expect(frames(onB, "voice-join-refused")[0]?.reason).toBe(
+        "mesh-multi-instance",
+      );
+      expect(await roomRow(channel)).toBe("mesh");
+      // A holds the pin, so A keeps seating on mesh.
+      const onA = await join(a, randomUUID(), channel);
+      expect(frames(onA, "welcome")[0]?.transport).toBe("mesh");
+    });
+
+    it("an instance that drained is not counted from the moment it withdrew", async () => {
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      const refused = await tryJoin(a, randomUUID(), randomUUID());
+      expect(frames(refused, "voice-join-refused")).toHaveLength(1);
+
+      // B's shutdown withdraws its lease ahead of closing its sockets.
+      await b.registry.withdrawVoiceInstance();
+      const seated = await join(a, randomUUID(), randomUUID());
+      expect(frames(seated, "welcome")[0]?.transport).toBe("mesh");
+    });
+
+    it("warns once per episode when two are live without an SFU", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const a = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await a.voice.runVoiceReconcile();
+      expect(warn).not.toHaveBeenCalled();
+
+      const b = await bootInstance();
+      await b.registry.heartbeatVoiceInstance();
+      await a.voice.runVoiceReconcile();
+      await a.voice.runVoiceReconcile();
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]?.[0]).toContain("LIVEKIT_* is unset");
+
+      // Back to one, then two again: it says so again.
+      await b.registry.withdrawVoiceInstance();
+      await a.voice.runVoiceReconcile();
+      await b.registry.heartbeatVoiceInstance();
+      await a.voice.runVoiceReconcile();
+      expect(warn).toHaveBeenCalledTimes(2);
     });
   });
 

@@ -29,6 +29,12 @@ import {
   SECURITY_HEADERS,
   sendError,
 } from "./lib/http.js";
+import {
+  beginDrain,
+  closeSocketsInBatches,
+  DRAIN_SETTLE_MS,
+  healthVerdict,
+} from "./lib/drain.js";
 import { logEvent } from "./lib/log.js";
 import { noteRuntimeSample, registerSocketCount } from "./lib/runtime.js";
 import {
@@ -171,32 +177,24 @@ const httpServer = createServer((req, res) => {
       // the only machine on a Postgres blip. External monitors get /ready.
       //
       // Report unhealthy if the DB is unreachable so the platform can restart /
-      // route away instead of serving a process with a dead pool.
-      try {
-        await getPool().query("SELECT 1");
-        res.writeHead(200, {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-store",
-          ...SECURITY_HEADERS,
-        });
-        // The deployed commit, so "is the API actually running this code?" has
-        // an answer from outside. It did not, and a stalled deploy went
-        // unnoticed across five releases: every /api/ route answers 401 before
-        // it routes, so a missing route is indistinguishable from an
-        // unauthenticated one, and the client degrades quietly enough that the
-        // app still looks healthy. `/health` is the only unauthenticated
-        // surface, so the version belongs here.
-        res.end(
-          JSON.stringify({ ok: true, version: process.env.APP_VERSION ?? "dev" }),
-        );
-      } catch {
-        res.writeHead(503, {
-          "Content-Type": "application/json",
-          "Cache-Control": "no-store",
-          ...SECURITY_HEADERS,
-        });
-        res.end(JSON.stringify({ ok: false, error: "database unavailable" }));
-      }
+      // route away instead of serving a process with a dead pool, and from the
+      // moment SIGTERM lands (`lib/drain.ts`), so a rolling deploy's proxy
+      // sends the reconnects to the machine that is staying up.
+      //
+      // The 200 body carries the deployed commit, so "is the API actually
+      // running this code?" has an answer from outside. It did not, and a
+      // stalled deploy went unnoticed across five releases: every /api/ route
+      // answers 401 before it routes, so a missing route is indistinguishable
+      // from an unauthenticated one, and the client degrades quietly enough
+      // that the app still looks healthy. `/health` is the only
+      // unauthenticated surface, so the version belongs here.
+      const verdict = await healthVerdict(() => getPool().query("SELECT 1"));
+      res.writeHead(verdict.status, {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+        ...SECURITY_HEADERS,
+      });
+      res.end(JSON.stringify(verdict.body));
       return;
     }
 
@@ -578,26 +576,65 @@ process.on("uncaughtException", (error) => {
   console.error("[process] uncaught exception:", error);
 });
 
+/**
+ * Well inside `kill_timeout` in fly.toml (30 s). Whatever is still open at
+ * this point is closed by the SIGKILL that follows; the lease row is
+ * already withdrawn and everything else ages out on its own. Unref'd so it
+ * cannot itself be the reason the process lingers.
+ */
+const SHUTDOWN_DEADLINE_MS = 25_000;
+
+let shuttingDown = false;
+
 async function shutdown(signal: string) {
+  if (shuttingDown) {
+    return;
+  }
+  shuttingDown = true;
   console.log(`[shutdown] ${signal} — draining`);
+  const deadline = setTimeout(() => {
+    console.error("[shutdown] deadline reached, exiting");
+    process.exit(0);
+  }, SHUTDOWN_DEADLINE_MS);
+  deadline.unref?.();
+
+  // First, before anything is closed: `/health` answers 503 from here on, so
+  // fly-proxy stops routing new connections to this machine and the
+  // reconnects that the closes below produce land on the sibling.
+  beginDrain();
   clearInterval(heartbeat);
   stopReadySampler();
   clearInterval(rateLimitSweep);
   clearInterval(communityHomeSweep);
   coldJobs?.stop();
   stopPresenceRefresh?.();
-  for (const socket of wss.clients) {
-    socket.close(1001, "Server shutting down");
-  }
+  // Withdraw this instance's liveness row EARLY, ahead of the socket closes:
+  // the other machine's mesh guard stops counting this one the moment the
+  // row is gone, and a resume landing there adopts the seat on sight. Peer
+  // rows are left in place on purpose: they are what a client resuming onto
+  // the other machine is matched against. A clean shutdown is therefore
+  // never read as a crash for the next 45 s.
+  await stopVoiceHeartbeat?.();
+  // Let the check turn red before the first client is sent away. With the
+  // check at 10 s the proxy is at worst one interval behind, and a reconnect
+  // that still lands here is refused by the closed listener a moment later.
+  await new Promise<void>((done) => {
+    setTimeout(done, DRAIN_SETTLE_MS);
+  });
+  // Then the sockets, in batches with a little jitter (`lib/drain.ts`), so
+  // the machine staying up sees a ramp of reconnects, not a stampede.
+  const total = wss.clients.size;
+  const closed = await closeSocketsInBatches(wss.clients, {
+    onBatch: (batch, remaining) => {
+      logEvent("ws.drainBatch", { batch, remaining, total });
+    },
+  });
+  logEvent("ws.drained", { closed, total });
   await new Promise<void>((done) => httpServer.close(() => done()));
   // The long-lived HTTP/2 connection to Apple. It is `unref`ed, so it cannot
   // hold the loop open on its own; closing it politely is still better than
   // having the process exit mid-stream on a push that was in flight.
   closeApnsSessions();
-  // Withdraw this instance's liveness row so a clean shutdown is not read as
-  // a crash for the next 45 s. Peer rows are left in place on purpose: they
-  // are what a client resuming onto the other machine will be matched against.
-  await stopVoiceHeartbeat?.();
   // Last, so the presence withdrawals that closing those sockets produces still
   // have a bus to travel on. Best-effort — anything that misses the window is
   // covered by the contribution TTL on the other instances.
