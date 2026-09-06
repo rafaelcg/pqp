@@ -143,7 +143,7 @@ final class WireDecodingTests: XCTestCase {
          "transport":"livekit"}
         """
         let event = await firstEvent(from: json)
-        guard case .voiceWelcome(_, _, _, _, let transport) = event else {
+        guard case .voiceWelcome(_, _, _, _, let transport, _, _) = event else {
             return XCTFail("Expected voiceWelcome, got \(String(describing: event))")
         }
         XCTAssertEqual(transport, "livekit")
@@ -157,7 +157,7 @@ final class WireDecodingTests: XCTestCase {
          "displayName":"Ana","avatarUrl":null}}
         """
         let event = await firstEvent(from: json)
-        guard case .voiceWelcome(_, _, _, _, let transport) = event else {
+        guard case .voiceWelcome(_, _, _, _, let transport, _, _) = event else {
             return XCTFail("Expected voiceWelcome, got \(String(describing: event))")
         }
         XCTAssertNil(transport)

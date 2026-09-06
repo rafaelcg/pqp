@@ -106,6 +106,25 @@ A review account with **email + password** (below) keeps a reviewer off the
 social path entirely, which is why this was never caught. That is luck, not a
 mitigation: reviewers do test Sign in with Apple.
 
+## Build 17 and later: LiveKit rooms
+
+Production voice runs on LiveKit for most rooms, and every build before this one
+declared `transports: ["mesh"]`, so the server refused it from those rooms with
+"This voice channel runs on livekit, which the iOS app cannot join yet". From
+the build carrying `feat/ios-livekit` the app joins them. Two things a tester
+should know:
+
+- **Screen share from the phone is mesh-only.** In a LiveKit room the share
+  button is hidden; receiving somebody else's share, sound included, works.
+- **The app now links two WebRTC builds** (the mesh's and LiveKit's, whose
+  symbols are `LKRTC`-prefixed). The IPA is larger. If a TestFlight build
+  crashes on joining voice, the first thing to check is which of the two the
+  crash log names.
+
+Nothing in App Store Connect changes: same bundle id, same entitlements, and
+the demo account below still works for a reviewer, who will land in a LiveKit
+room on production.
+
 ## Related
 
 - `docs/IOS.md` — run the app, APNs, universal links

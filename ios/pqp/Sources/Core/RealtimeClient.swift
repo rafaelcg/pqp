@@ -72,8 +72,12 @@ enum RealtimeEvent: Sendable {
 
     // Voice signalling. The server is a pure relay for offer/answer/candidate;
     // everything else here is room membership.
+    /// `resumed` is true when the server reattached an existing peer id after a
+    /// socket drop rather than minting a new one; `resumeToken` is the HMAC a
+    /// later rejoin presents to ask for exactly that. Both optional on the wire.
     case voiceWelcome(peerId: String, voiceChannelId: String, peers: [VoiceParticipant],
-                      selfPeer: VoiceParticipant, transport: String?)
+                      selfPeer: VoiceParticipant, transport: String?,
+                      resumed: Bool, resumeToken: String?)
     case voicePeerJoined(VoiceParticipant)
     /// Somebody already in the room now shows a different name or picture.
     /// Distinct from `voicePeerJoined` on purpose: that one opens a peer
@@ -490,17 +494,22 @@ actor RealtimeClient {
 
     // MARK: - Voice
 
-    func joinVoice(channelId: String) async {
-        // `transports` is a capability declaration, not a preference. This
-        // client only speaks mesh; saying so lets the server refuse a
-        // LiveKit-pinned room *before* a peer exists, instead of us appearing
-        // in the roster and then hearing nobody. Omitting it means "assume
-        // everything", which is a lie here.
-        await send(raw: [
-            "type": "join-voice-room",
-            "voiceChannelId": channelId,
-            "transports": ["mesh"],
-        ])
+    /// `transports` is a capability declaration, not a preference: this client
+    /// speaks mesh and LiveKit, and saying exactly that lets the server refuse a
+    /// room pinned to anything else *before* a peer exists, instead of us
+    /// appearing in the roster and then hearing nobody. Omitting it means
+    /// "assume everything", which would be a lie the day a third one ships.
+    ///
+    /// `declaresResume` and `resume` are the two halves of surviving a socket
+    /// drop in an SFU room; see `joinVoiceRoomFrame` for what each means.
+    func joinVoice(
+        channelId: String,
+        declaresResume: Bool = false,
+        resume: VoiceResumeClaim? = nil
+    ) async {
+        await send(raw: joinVoiceRoomFrame(
+            channelId: channelId, declaresResume: declaresResume, resume: resume
+        ))
     }
 
     func leaveVoice() async {
@@ -625,6 +634,9 @@ actor RealtimeClient {
         let candidate: IceCandidatePayload?
         let limit: Int?
         let transport: String?
+        /// `welcome` only. See `RealtimeEvent.voiceWelcome`.
+        let resumed: Bool?
+        let resumeToken: String?
         /// `permissions-update` only. Optional because the frame is advisory:
         /// the client refetches either way, and a missing version just means
         /// "refetch anyway" (`shouldApplyPermissionsVersion` on the web).
@@ -644,7 +656,7 @@ actor RealtimeClient {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
-            case candidate, limit, transport, version
+            case candidate, limit, transport, version, resumed, resumeToken
             case conversationId, kind, caller, reason, thread, retryAfterMs
             // `self` is a Swift keyword, so the wire key is remapped.
             case selfPeer = "self"
@@ -777,7 +789,9 @@ actor RealtimeClient {
                   let selfPeer = envelope.selfPeer else { return }
             event = .voiceWelcome(peerId: peerId, voiceChannelId: voiceChannelId,
                                   peers: envelope.peers ?? [], selfPeer: selfPeer,
-                                  transport: envelope.transport)
+                                  transport: envelope.transport,
+                                  resumed: envelope.resumed ?? false,
+                                  resumeToken: envelope.resumeToken)
         case "peer-joined":
             guard let peer = envelope.peer else { return }
             event = .voicePeerJoined(peer)
