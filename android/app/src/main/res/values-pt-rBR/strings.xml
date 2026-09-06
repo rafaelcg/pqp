@@ -180,6 +180,9 @@
     <string name="voice_watch_screen">%1$s está compartilhando uma tela</string>
     <string name="voice_watch">Assistir</string>
     <string name="voice_close_screen">Fechar</string>
+    <string name="voice_camera_of">Câmera de %1$s</string>
+    <string name="voice_camera_someone">Alguém</string>
+    <string name="voice_camera_close">Fechar</string>
     <string name="voice_speaker_on">Viva-voz</string>
     <string name="voice_speaker_off">Fone</string>
     <string name="voice_server_muted_you">Um moderador te mutou</string>

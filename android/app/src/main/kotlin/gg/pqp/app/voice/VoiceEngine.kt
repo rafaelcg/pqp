@@ -103,7 +103,9 @@ class VoiceEngine(
     private val signal: (Map<String, Any?>) -> Unit,
     private val onPeerState: (String, PeerMediaState) -> Unit,
     /** A peer's screen arrived or went away. Null means "gone". */
-    private val onRemoteScreen: (String, RemoteScreen?) -> Unit = { _, _ -> },
+    private val onRemoteScreen: (String, RemoteVideoFeed?) -> Unit = { _, _ -> },
+    /** A peer's camera arrived or went away. Null means "gone". */
+    private val onRemoteCamera: (String, RemoteVideoFeed?) -> Unit = { _, _ -> },
     /** The person stopped the share from the system UI rather than from ours. */
     private val onScreenShareEnded: () -> Unit = {},
 ) : VoiceTransport {
@@ -361,9 +363,11 @@ class VoiceEngine(
     override fun removePeer(remotePeerId: String) {
         val peer = peers.remove(remotePeerId) ?: return
         synchronized(audioLock) { remoteAudio.forget(remotePeerId) }
+        val hadCamera = synchronized(videoLock) { remoteVideo.cameraFor(remotePeerId) != null }
         if (synchronized(videoLock) { remoteVideo.forget(remotePeerId) }) {
             onRemoteScreen(remotePeerId, null)
         }
+        if (hadCamera) onRemoteCamera(remotePeerId, null)
         runCatching { peer.connection.dispose() }
         retuneScreenSenders()
     }
@@ -621,7 +625,9 @@ class VoiceEngine(
         peers.forEach { (_, peer) -> runCatching { peer.connection.dispose() } }
         peers.clear()
         synchronized(audioLock) { remoteAudio.clear() }
+        val onCamera = synchronized(videoLock) { remoteVideo.cameraPeerIds() }
         synchronized(videoLock) { remoteVideo.clear() }.forEach { onRemoteScreen(it, null) }
+        onCamera.forEach { onRemoteCamera(it, null) }
         localPeerId = null
     }
 
@@ -665,14 +671,44 @@ class VoiceEngine(
      * were decoded into. Null before [start] has built it, and a track cannot
      * arrive before that, so the pairing never hands out a screen it cannot draw.
      */
-    override fun remoteScreenFor(remotePeerId: String): RemoteScreen? {
+    override fun remoteScreenFor(remotePeerId: String): RemoteVideoFeed? {
         val track = synchronized(videoLock) { remoteVideo.screenFor(remotePeerId) } ?: return null
         val egl = eglContext ?: return null
-        return RemoteScreen.Mesh(track, egl)
+        return RemoteVideoFeed.Mesh(track, egl)
+    }
+
+    /**
+     * This peer's incoming camera, paired with the same GL context.
+     *
+     * Which of a peer's video streams is the camera is the roster's answer, not
+     * this engine's: [RemoteVideoIndex] files the announced `cameraStreamId`
+     * here and everything else as a screen. That classification has existed
+     * since the index was written; what is new is that something now draws the
+     * result. Before this, a mesh peer's camera was decoded into a track that
+     * was filed, named correctly, and shown to nobody.
+     */
+    override fun remoteCameraFor(remotePeerId: String): RemoteVideoFeed? {
+        val track = synchronized(videoLock) { remoteVideo.cameraFor(remotePeerId) } ?: return null
+        val egl = eglContext ?: return null
+        return RemoteVideoFeed.Mesh(track, egl)
     }
 
     /** Nothing to do: a mesh receiver has no say in what the sender encodes. */
     override fun setWatchingScreen(remotePeerId: String, watching: Boolean) = Unit
+
+    /**
+     * Nothing to do, and for a stronger reason than the share above.
+     *
+     * A mesh sender encodes one stream per receiver and pushes it; the camera is
+     * already arriving down this peer connection whether or not a tile is on
+     * screen. Pausing it is not a thing the receiver can ask for, so drawing it
+     * costs nothing that was not already being paid.
+     */
+    override fun setCameraViewer(
+        remotePeerId: String,
+        surface: CameraSurface,
+        viewing: Boolean,
+    ) = Unit
 
     /**
      * The roster named a peer's camera capture, or said their camera is off.
@@ -686,6 +722,11 @@ class VoiceEngine(
             remoteVideo.setCameraStreamId(remotePeerId, streamId)
         }
         if (changed) onRemoteScreen(remotePeerId, remoteScreenFor(remotePeerId))
+        // Unconditional: `changed` is about the *screen* slot, and the roster
+        // naming a camera routinely moves only the camera. The controller's
+        // flow absorbs a repeat, so announcing every time is cheaper than a
+        // second changed-flag through the index.
+        onRemoteCamera(remotePeerId, remoteCameraFor(remotePeerId))
     }
 
     /**
@@ -699,6 +740,7 @@ class VoiceEngine(
             remoteVideo.setSharingScreen(remotePeerId, sharing)
         }
         if (changed) onRemoteScreen(remotePeerId, remoteScreenFor(remotePeerId))
+        onRemoteCamera(remotePeerId, remoteCameraFor(remotePeerId))
     }
 
     // --- is anybody actually hearing anybody ---
@@ -939,6 +981,7 @@ class VoiceEngine(
                     if (changed) {
                         onRemoteScreen(remotePeerId, remoteScreenFor(remotePeerId))
                     }
+                    onRemoteCamera(remotePeerId, remoteCameraFor(remotePeerId))
                 }
 
                 else -> Unit
@@ -954,6 +997,7 @@ class VoiceEngine(
                 if (changed) {
                     onRemoteScreen(remotePeerId, remoteScreenFor(remotePeerId))
                 }
+                onRemoteCamera(remotePeerId, remoteCameraFor(remotePeerId))
             } else {
                 synchronized(audioLock) { remoteAudio.trackRemoved(remotePeerId, track.id()) }
             }

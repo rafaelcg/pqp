@@ -26,6 +26,7 @@ import io.livekit.android.room.track.TrackPublication
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 
@@ -36,16 +37,16 @@ import kotlinx.coroutines.withTimeout
  * Read [VoiceTransport] first, in particular the note about there being two
  * WebRTC namespaces in this process, which is why nothing in this file imports
  * `org.webrtc`: every video type here is LiveKit's own, and it leaves as a
- * [RemoteScreen.LiveKit] so a renderer on the other namespace can never be
+ * [RemoteVideoFeed.LiveKit] so a renderer on the other namespace can never be
  * handed it.
  *
  * ### What this does with video
  *
  * **Watches screen shares.** A `SCREEN_SHARE` publication is subscribed and
- * handed up as a [RemoteScreen.LiveKit] for the call bar's Watch row, with its
- * `SCREEN_SHARE_AUDIO` companion playing as the presentation's sound. This is
- * where watch parties happen, and a phone that could hear the room but not see
- * the film was the platform gap. Two things keep it off the bill:
+ * handed up as a [RemoteVideoFeed.LiveKit] for the call bar's Watch row, with
+ * its `SCREEN_SHARE_AUDIO` companion playing as the presentation's sound. This
+ * is where watch parties happen, and a phone that could hear the room but not
+ * see the film was the platform gap. Two things keep it off the bill:
  *
  * - **Delivery is paused until somebody taps Watch.** The publication is
  *   `setEnabled(false)` the moment it is subscribed and only enabled by
@@ -57,6 +58,22 @@ import kotlinx.coroutines.withTimeout
  *   controls require adaptive stream to be **off** in this SDK, which is not
  *   the web's setting and is explained where the room is built.
  *
+ * **Draws cameras.** A `CAMERA` publication is subscribed and handed up the
+ * same way, for the strip of faces under the call bar and the viewer behind it.
+ * A room can hold many more cameras than screens, so the same two rules are
+ * tighter here rather than absent:
+ *
+ * - **Delivery follows what is actually on screen**, counted by [CameraDemand]:
+ *   a camera arrives flowing so the tile that binds a frame later is never
+ *   black, and is paused a second afterwards if nothing drew it. A tile
+ *   scrolled off the rail, a rail with no room for it and the app going to the
+ *   background all pause it the same way. Nothing here is ever *unsubscribed*
+ *   to save bytes: that is a renegotiation and a second of black, where
+ *   `setEnabled` is one frame each way.
+ * - **The layer is capped per surface** by [cameraReceiveLayerFor]: the bottom
+ *   layer for a tile, 360p for the full-screen viewer on Wi-Fi, the bottom
+ *   layer again on a metered link.
+ *
  * ### What this deliberately does not do
  *
  * **Publish a screen.** [startScreenShare] answers false and the call bar hides
@@ -64,9 +81,8 @@ import kotlinx.coroutines.withTimeout
  * that raises Android's consent dialog, takes the grant and then publishes
  * nothing would be worse than no button, and mesh screen share is untouched.
  *
- * **Receive a camera.** Not by ignoring frames but by never asking for them:
- * the room is joined with `autoSubscribe = false` and this client subscribes
- * publication by publication. See [livekitSubscribesTo].
+ * **Publish a camera.** This client has no camera capture at all, on either
+ * transport. Receiving one is what changed.
  *
  * **Fall back to mesh.** There is no path in here that does. The server pins a
  * room's transport for its lifetime; a client that could not reach the SFU and
@@ -91,7 +107,9 @@ class LiveKitEngine(
     /** Connected and publishing. The caller re-declares mute and deafen. */
     private val onConnected: () -> Unit,
     /** A participant's screen arrived or went away. Null means "gone". */
-    private val onRemoteScreen: (String, RemoteScreen?) -> Unit = { _, _ -> },
+    private val onRemoteScreen: (String, RemoteVideoFeed?) -> Unit = { _, _ -> },
+    /** A participant's camera arrived or went away. Null means "gone". */
+    private val onRemoteCamera: (String, RemoteVideoFeed?) -> Unit = { _, _ -> },
     /**
      * Whether the active network is metered, read when a layer is chosen. A
      * function rather than a value because a phone walks from Wi-Fi to mobile
@@ -122,6 +140,36 @@ class LiveKitEngine(
      * decides *which* sid is the screen; this only holds the track for it.
      */
     private val screens = HashMap<String, RemoteVideoTrack>()
+
+    /** The camera being shown per peer, on the same terms as [screens]. */
+    private val cameras = HashMap<String, RemoteVideoTrack>()
+
+    /**
+     * Which cameras somebody is actually drawing, and how big. The whole of
+     * what keeps a room full of faces off a phone's data allowance.
+     */
+    private val cameraDemand = CameraDemand()
+
+    /**
+     * Pending pauses, one per peer, so a camera whose tile is scrolled away
+     * and straight back does not flap.
+     *
+     * The Android half of `OFFSCREEN_GRACE_MS` in the web's
+     * `remote-video-delivery.ts`. Cancelled by the next bind, and by [stop].
+     */
+    private val cameraPauseJobs = HashMap<String, Job>()
+
+    /**
+     * Presenters whose share a viewer is open on.
+     *
+     * Remembered rather than applied and forgotten, because a reconnect has to
+     * be able to put delivery back the way it was: the SFU is told what to send
+     * once, and a room that reconnects has no memory of a `setEnabled` from
+     * before the drop. Without this a share being watched when the signal
+     * blipped would come back subscribed and paused, which on screen is a
+     * viewer that went black and stayed black.
+     */
+    private val watchedScreens = mutableSetOf<String>()
 
     /**
      * Peers the `/ws` roster currently says are presenting.
@@ -354,6 +402,26 @@ class LiveKitEngine(
                 // ever heard or seen.
                 is RoomEvent.TrackPublished -> subscribeIfWanted(event.publication)
 
+                // A camera the far end muted without unpublishing. Every pqp
+                // client unpublishes instead, so this is the server-side mute
+                // and anybody else's client; drawing through it would be a
+                // tile frozen on the last frame that arrived.
+                is RoomEvent.TrackMuted ->
+                    onCameraMuteChanged(event.participant, event.publication, muted = true)
+
+                is RoomEvent.TrackUnmuted ->
+                    onCameraMuteChanged(event.participant, event.publication, muted = false)
+
+                // The signal came back. Nothing about what this client had
+                // asked for survives on the server side of a reconnect, so
+                // both halves are re-stated: the subscriptions, and which of
+                // them should be flowing and at what layer.
+                is RoomEvent.Reconnected -> {
+                    Log.i(TAG, "SFU reconnected; re-asking for the media we had")
+                    seedParticipants(room)
+                    reapplyVideoDelivery()
+                }
+
                 is RoomEvent.ParticipantDisconnected -> {
                     val peerId = event.participant.identity?.value ?: return@collect
                     forgetPeer(peerId)
@@ -384,13 +452,14 @@ class LiveKitEngine(
         val track = event.track
         val publication = event.publication
         if (track is RemoteVideoTrack) {
-            if (publication.source != Track.Source.SCREEN_SHARE) {
-                // Only a screen is ever asked for (see `livekitSubscribesTo`),
-                // so a camera arriving here means the server subscribed us to
-                // something we did not ask for. Dropped rather than rendered,
-                // and said out loud rather than swallowed, because silently
-                // decoding video is the bill nobody can explain.
-                Log.w(TAG, "unexpected ${publication.source} video from $peerId; ignoring")
+            val source = publication.source
+            if (source != Track.Source.SCREEN_SHARE && source != Track.Source.CAMERA) {
+                // Only those two are ever asked for (see `livekitSubscribesTo`),
+                // so anything else arriving here means the server subscribed us
+                // to something we did not ask for. Dropped rather than
+                // rendered, and said out loud rather than swallowed, because
+                // silently decoding video is the bill nobody can explain.
+                Log.w(TAG, "unexpected $source video from $peerId; ignoring")
                 return
             }
             // A remote participant's publication always is one; the event's
@@ -398,10 +467,14 @@ class LiveKitEngine(
             // carries local publications elsewhere in the SDK.
             val remote = publication as? RemoteTrackPublication
             if (remote == null) {
-                Log.w(TAG, "screen share from $peerId is not a remote publication; ignoring")
+                Log.w(TAG, "$source video from $peerId is not a remote publication; ignoring")
                 return
             }
-            onScreenSubscribed(peerId, remote, track)
+            if (source == Track.Source.CAMERA) {
+                onCameraSubscribed(peerId, remote, track)
+            } else {
+                onScreenSubscribed(peerId, remote, track)
+            }
             return
         }
         if (track !is RemoteAudioTrack) {
@@ -426,10 +499,24 @@ class LiveKitEngine(
         val peerId = event.participant.identity?.value ?: return
         val sid = event.publications.sid
         if (event.track is RemoteVideoTrack) {
-            val gone = synchronized(peerLock) {
+            // By sid rather than by the publication's source, because the two
+            // slots are keyed by sid and the source on a torn-down publication
+            // is the one thing here we do not have to trust.
+            val screenGone = synchronized(peerLock) {
                 peers.screenTrackRemoved(peerId, sid).also { if (it) screens.remove(peerId) }
             }
-            if (gone) onRemoteScreen(peerId, null)
+            if (screenGone) {
+                synchronized(peerLock) { watchedScreens.remove(peerId) }
+                onRemoteScreen(peerId, null)
+                return
+            }
+            val cameraGone = synchronized(peerLock) {
+                peers.cameraTrackRemoved(peerId, sid).also { if (it) cameras.remove(peerId) }
+            }
+            if (cameraGone) {
+                forgetCameraDemand(peerId)
+                onRemoteCamera(peerId, null)
+            }
             return
         }
         if (event.track !is RemoteAudioTrack) return
@@ -465,7 +552,85 @@ class LiveKitEngine(
             return
         }
         applyScreenDelivery(publication, watching = false)
-        onRemoteScreen(peerId, RemoteScreen.LiveKit(track, room))
+        onRemoteScreen(peerId, RemoteVideoFeed.LiveKit(track, room))
+    }
+
+    /**
+     * A camera arrived. Filed, capped, delivered, then paused if nobody drew it.
+     *
+     * The opposite starting position from a share, and deliberately. A share is
+     * paused on arrival because opening one is a decision somebody takes
+     * seconds later, if at all. A camera is drawn by the rail the moment it
+     * exists, and the tile can only bind *after* this announces the feed, so
+     * starting paused would put a black rectangle in the strip for one
+     * signalling round trip every single time somebody turns their camera on.
+     * It starts flowing at the tile's layer instead, and the grace pause below
+     * is what covers the camera nothing ever binds: a rail with more faces than
+     * fit, or a phone whose screen is off.
+     */
+    private fun onCameraSubscribed(
+        peerId: String,
+        publication: RemoteTrackPublication,
+        track: RemoteVideoTrack,
+    ) {
+        val room = room ?: return
+        val filed = synchronized(peerLock) {
+            peers.cameraTrackAdded(peerId, publication.sid).also { if (it) cameras[peerId] = track }
+        }
+        if (!filed) {
+            Log.w(TAG, "second camera from $peerId while one is live; ignoring")
+            return
+        }
+        val muted = synchronized(peerLock) {
+            peers.setCameraMuted(peerId, publication.muted)
+            peers.isCameraMuted(peerId)
+        }
+        if (muted) {
+            // Subscribed and silent. Nothing is announced, so no tile appears
+            // for a camera that would only ever show one frozen frame; the
+            // unmute below brings both the delivery and the tile back.
+            applyCameraDelivery(peerId, null)
+            return
+        }
+        val wanted = synchronized(peerLock) { cameraDemand.wantedFor(peerId) }
+        applyCameraDelivery(peerId, wanted ?: CameraSurface.Tile)
+        onRemoteCamera(peerId, RemoteVideoFeed.LiveKit(track, room))
+        if (wanted == null) scheduleCameraPause(peerId)
+    }
+
+    /**
+     * The far end muted or unmuted a camera we hold.
+     *
+     * Only ever about a camera, and only ever about the publication currently
+     * filed for that peer: `TrackMuted` also fires for microphones and for this
+     * device's own publications, and neither is this rule's business.
+     */
+    private fun onCameraMuteChanged(
+        participant: Participant,
+        publication: TrackPublication,
+        muted: Boolean,
+    ) {
+        if (publication.source != Track.Source.CAMERA) return
+        val peerId = participant.identity?.value ?: return
+        val changed = synchronized(peerLock) {
+            if (peers.cameraTrackFor(peerId) != publication.sid) {
+                false
+            } else {
+                peers.setCameraMuted(peerId, muted)
+            }
+        }
+        if (!changed) return
+        if (muted) {
+            applyCameraDelivery(peerId, null)
+            onRemoteCamera(peerId, null)
+            return
+        }
+        val room = room ?: return
+        val track = synchronized(peerLock) { cameras[peerId] } ?: return
+        val wanted = synchronized(peerLock) { cameraDemand.wantedFor(peerId) }
+        applyCameraDelivery(peerId, wanted ?: CameraSurface.Tile)
+        onRemoteCamera(peerId, RemoteVideoFeed.LiveKit(track, room))
+        if (wanted == null) scheduleCameraPause(peerId)
     }
 
     private fun applyScreenDelivery(publication: RemoteTrackPublication, watching: Boolean) {
@@ -475,11 +640,92 @@ class LiveKitEngine(
             .onFailure { Log.w(TAG, "could not ${if (watching) "resume" else "pause"} ${publication.sid}", it) }
     }
 
-    private fun screenPublicationFor(peerId: String): RemoteTrackPublication? {
-        val sid = synchronized(peerLock) { peers.screenTrackFor(peerId) } ?: return null
+    private fun screenPublicationFor(peerId: String): RemoteTrackPublication? =
+        publicationFor(peerId, synchronized(peerLock) { peers.screenTrackFor(peerId) })
+
+    private fun cameraPublicationFor(peerId: String): RemoteTrackPublication? =
+        publicationFor(peerId, synchronized(peerLock) { peers.cameraTrackFor(peerId) })
+
+    private fun publicationFor(peerId: String, sid: String?): RemoteTrackPublication? {
+        if (sid == null) return null
         val participant = room?.remoteParticipants?.values?.firstOrNull { it.identity?.value == peerId }
             ?: return null
         return participant.trackPublications[sid] as? RemoteTrackPublication
+    }
+
+    /**
+     * Tell the SFU what to do with one peer's camera.
+     *
+     * Null means "nobody is drawing this": one `UpdateTrackSettings` frame that
+     * stops the forwarding without touching the subscription, so resuming is
+     * another single frame rather than a renegotiation. Otherwise the layer for
+     * the largest surface drawing it goes out first and the resume second, so
+     * the frames that arrive when it comes back are already the right size.
+     *
+     * A muted camera is never delivered whatever any surface wants: there are
+     * no frames to send and asking for them would be a subscription paying for
+     * keepalives.
+     */
+    private fun applyCameraDelivery(peerId: String, surface: CameraSurface?) {
+        val publication = cameraPublicationFor(peerId) ?: return
+        val muted = synchronized(peerLock) { peers.isCameraMuted(peerId) }
+        val delivery = cameraDeliveryFor(surface, muted, isMetered())
+        delivery.quality?.let { quality ->
+            runCatching { publication.setVideoQuality(quality) }
+                .onFailure {
+                    Log.w(TAG, "SFU camera quality rejected; keeping the current layer", it)
+                }
+        }
+        runCatching { publication.setEnabled(delivery.enabled) }
+            .onFailure {
+                val verb = if (delivery.enabled) "resume" else "pause"
+                Log.w(TAG, "could not $verb the camera from $peerId", it)
+            }
+    }
+
+    private fun scheduleCameraPause(peerId: String) {
+        synchronized(peerLock) {
+            cameraPauseJobs.remove(peerId)?.cancel()
+            cameraPauseJobs[peerId] = scope.launch {
+                delay(CAMERA_PAUSE_GRACE_MS)
+                val idle = synchronized(peerLock) {
+                    cameraPauseJobs.remove(peerId)
+                    cameraDemand.wantedFor(peerId) == null
+                }
+                if (idle) applyCameraDelivery(peerId, null)
+            }
+        }
+    }
+
+    private fun cancelCameraPause(peerId: String) {
+        synchronized(peerLock) { cameraPauseJobs.remove(peerId) }?.cancel()
+    }
+
+    /** The peer's camera went away: drop the demand and any pause owed for it. */
+    private fun forgetCameraDemand(peerId: String) {
+        cancelCameraPause(peerId)
+        synchronized(peerLock) { cameraDemand.forget(peerId) }
+    }
+
+    /**
+     * Say again what should be flowing, for every video this client holds.
+     *
+     * Called after a reconnect, which is the one moment the SFU's idea of what
+     * this client wants and this client's own idea can silently differ: the
+     * subscriptions are re-asked for by [seedParticipants], and this is the
+     * other half, the `UpdateTrackSettings` that were sent once and are not
+     * replayed by anybody.
+     */
+    private fun reapplyVideoDelivery() {
+        val screenPeers = synchronized(peerLock) { peers.screenPeerIds() }
+        screenPeers.forEach { peerId ->
+            val watching = synchronized(peerLock) { peerId in watchedScreens }
+            screenPublicationFor(peerId)?.let { applyScreenDelivery(it, watching) }
+        }
+        val cameraPeers = synchronized(peerLock) { peers.cameraPeerIds() }
+        cameraPeers.forEach { peerId ->
+            applyCameraDelivery(peerId, synchronized(peerLock) { cameraDemand.wantedFor(peerId) })
+        }
     }
 
     /**
@@ -491,8 +737,42 @@ class LiveKitEngine(
      * looking at, and the chosen layer when somebody is.
      */
     override fun setWatchingScreen(remotePeerId: String, watching: Boolean) {
+        synchronized(peerLock) {
+            if (watching) watchedScreens.add(remotePeerId) else watchedScreens.remove(remotePeerId)
+        }
         val publication = screenPublicationFor(remotePeerId) ?: return
         applyScreenDelivery(publication, watching)
+    }
+
+    /**
+     * A tile or the viewer started or stopped drawing this peer's camera.
+     *
+     * The whole of the bandwidth rule for cameras, and the reason it is counted
+     * rather than a boolean is in [CameraDemand]: the viewer is a dialog over a
+     * rail that stays composed, so closing it must not pause the tile still on
+     * screen behind it.
+     *
+     * Resuming is immediate and pausing waits [CAMERA_PAUSE_GRACE_MS], the same
+     * asymmetry the web has: a tile scrolled just past the rail's edge and back
+     * would otherwise cost two signalling frames and a blink for nothing, and a
+     * person who came back to a paused picture would have noticed.
+     */
+    override fun setCameraViewer(remotePeerId: String, surface: CameraSurface, viewing: Boolean) {
+        val wanted = synchronized(peerLock) {
+            val changed = if (viewing) {
+                cameraDemand.bind(remotePeerId, surface)
+            } else {
+                cameraDemand.release(remotePeerId, surface)
+            }
+            if (!changed) return
+            cameraDemand.wantedFor(remotePeerId)
+        }
+        if (wanted == null) {
+            scheduleCameraPause(remotePeerId)
+            return
+        }
+        cancelCameraPause(remotePeerId)
+        applyCameraDelivery(remotePeerId, wanted)
     }
 
     /** A presentation's sound plays only for an announced presenter, and never while deafened. */
@@ -513,12 +793,16 @@ class LiveKitEngine(
     }
 
     private fun forgetPeer(peerId: String) {
-        val hadScreen = synchronized(peerLock) {
+        cancelCameraPause(peerId)
+        val (hadScreen, hadCamera) = synchronized(peerLock) {
             sharingByRoster.remove(peerId)
+            watchedScreens.remove(peerId)
+            cameraDemand.forget(peerId)
             peers.forget(peerId)
-            screens.remove(peerId) != null
+            (screens.remove(peerId) != null) to (cameras.remove(peerId) != null)
         }
         if (hadScreen) onRemoteScreen(peerId, null)
+        if (hadCamera) onRemoteCamera(peerId, null)
     }
 
     private fun report(peerId: String) {
@@ -658,12 +942,19 @@ class LiveKitEngine(
         val mic = micTrack
         room = null
         micTrack = null
-        val showing = synchronized(peerLock) {
+        val (showing, oncamera) = synchronized(peerLock) {
             sharingByRoster.clear()
+            watchedScreens.clear()
+            cameraDemand.clear()
+            cameraPauseJobs.values.forEach { it.cancel() }
+            cameraPauseJobs.clear()
             peers.clear()
-            screens.keys.toList().also { screens.clear() }
+            val screenPeers = screens.keys.toList().also { screens.clear() }
+            val cameraPeers = cameras.keys.toList().also { cameras.clear() }
+            screenPeers to cameraPeers
         }
         showing.forEach { onRemoteScreen(it, null) }
+        oncamera.forEach { onRemoteCamera(it, null) }
         // The capture first, then the room. `release` would take the track with
         // it, but only after `disconnect` has finished its round trip, and the
         // gap is a microphone still recording for somebody who has hung up.
@@ -703,15 +994,34 @@ class LiveKitEngine(
      */
     override fun statsFor(remotePeerId: String): PeerMediaStats? = null
 
-    override fun remoteScreenFor(remotePeerId: String): RemoteScreen? {
+    override fun remoteScreenFor(remotePeerId: String): RemoteVideoFeed? {
         val room = room ?: return null
         val track = synchronized(peerLock) { screens[remotePeerId] } ?: return null
-        return RemoteScreen.LiveKit(track, room)
+        return RemoteVideoFeed.LiveKit(track, room)
+    }
+
+    override fun remoteCameraFor(remotePeerId: String): RemoteVideoFeed? {
+        val room = room ?: return null
+        val track = synchronized(peerLock) {
+            if (peers.isCameraMuted(remotePeerId)) null else cameras[remotePeerId]
+        } ?: return null
+        return RemoteVideoFeed.LiveKit(track, room)
     }
 
     companion object {
         private const val TAG = "pqp.voice"
         private const val LOCAL_AUDIO_ID = "pqp-mic"
+
+        /**
+         * How long a camera keeps flowing after the last surface stops drawing
+         * it.
+         *
+         * The web's `OFFSCREEN_GRACE_MS`, and the same one second, chosen the
+         * same way: long enough that a tile leaving and rejoining the rail
+         * across a layout change costs nothing, short enough that a camera
+         * nobody is looking at is off the wire before it is worth counting.
+         */
+        private const val CAMERA_PAUSE_GRACE_MS = 1_000L
 
         /**
          * The same 45s the web client allows.

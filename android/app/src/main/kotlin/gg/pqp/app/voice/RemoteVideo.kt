@@ -58,6 +58,9 @@ class RemoteVideoIndex<T : Any> {
 
     fun cameraFor(peerId: String): T? = peers[peerId]?.camera
 
+    /** Every peer with a live camera, keyed by peer id. */
+    fun cameraPeerIds(): Set<String> = peers.filterValues { it.camera != null }.keys.toSet()
+
     /**
      * File an incoming video track. Returns true when this peer's screen
      * changed, which is the only thing anything above here renders.

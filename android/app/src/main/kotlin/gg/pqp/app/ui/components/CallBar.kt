@@ -268,6 +268,10 @@ fun CallBar(
 
                 ServerMutedRow(state)
                 WatchScreenRow(state, controller)
+                // Last of the three, and the only one made of pictures. The
+                // two text rows above it stay together; the strip sits against
+                // the divider so the chrome ends on the thing you look at.
+                CameraRail(state, controller)
 
                 // The rail's edge. Chrome is deeper than the page, and this is
                 // the line that says where one stops and the other starts.
@@ -550,9 +554,9 @@ private fun WatchScreenRow(state: VoiceState, controller: VoiceController) {
     }
 
     if (watched != null) {
-        ScreenShareDialog(
-            screen = watched.second,
-            presenter = watched.first.displayName,
+        RemoteVideoDialog(
+            feed = watched.second,
+            name = watched.first.displayName,
             onClose = { watchingPeerId = null },
         )
     }
