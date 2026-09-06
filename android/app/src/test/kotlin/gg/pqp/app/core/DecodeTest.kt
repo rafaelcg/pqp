@@ -144,6 +144,18 @@ class DecodeTest {
         assertFalse(participant.deafened)
         assertFalse(participant.sharingScreen)
         assertNull(participant.cameraStreamId)
+        // Absent means a server that predates SPEAK enforcement, where
+        // everyone could speak.
+        assertTrue(participant.canSpeak)
+    }
+
+    @Test
+    fun `a roster entry carries the server's speak rule`() {
+        val participant = PqpJson.decodeFromString(
+            VoiceParticipant.serializer(),
+            """{"peerId":"p1","userId":"u1","displayName":"Rafa","avatarUrl":null,"canSpeak":false}""",
+        )
+        assertFalse(participant.canSpeak)
     }
 
     /**

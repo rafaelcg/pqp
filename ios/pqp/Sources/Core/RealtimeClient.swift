@@ -75,9 +75,12 @@ enum RealtimeEvent: Sendable {
     /// `resumed` is true when the server reattached an existing peer id after a
     /// socket drop rather than minting a new one; `resumeToken` is the HMAC a
     /// later rejoin presents to ask for exactly that. Both optional on the wire.
+    /// `canSpeak` is the server's SPEAK rule for this seat, resolved by
+    /// `VoiceSpeakRule.resolve` from the top-level key and `self.canSpeak`.
+    /// False means: join muted, keep the mic locked, offer no share or camera.
     case voiceWelcome(peerId: String, voiceChannelId: String, peers: [VoiceParticipant],
                       selfPeer: VoiceParticipant, transport: String?,
-                      resumed: Bool, resumeToken: String?)
+                      resumed: Bool, resumeToken: String?, canSpeak: Bool)
     case voicePeerJoined(VoiceParticipant)
     /// Somebody already in the room now shows a different name or picture.
     /// Distinct from `voicePeerJoined` on purpose: that one opens a peer
@@ -86,6 +89,11 @@ enum RealtimeEvent: Sendable {
     case voicePeerUpdated(VoiceParticipant)
     case voicePeerLeft(peerId: String)
     case voiceRoster(voiceChannelId: String, participants: [VoiceParticipant])
+    /// The SPEAK rule for this seat changed mid-call: a role edit, a channel
+    /// override, a timeout. `false` mutes and locks the controls; `true`
+    /// unlocks them and leaves the unmute to the person. Unicast; the roster
+    /// frame that follows carries the same bit for everybody else.
+    case voiceSpeakChanged(voiceChannelId: String, canSpeak: Bool)
     case voiceRoomFull(limit: Int)
     /// The call is already at the screen-share cap. Unicast to whoever tried.
     case voiceScreenShareDenied(voiceChannelId: String)
@@ -188,12 +196,16 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
     /// Defaulted false for the same reason as `muted`: an older server omits
     /// it, and absent has to read as "nobody is muted", not as a failed frame.
     var serverMuted: Bool = false
+    /// Set by the server, never self-reported: whether this seat may publish
+    /// audio at all. Absent on a server that predates SPEAK enforcement, and
+    /// absent reads as true, which is what every such server resolved.
+    var canSpeak: Bool = true
 
     var id: String { peerId }
 
     enum CodingKeys: String, CodingKey {
         case peerId, userId, displayName, avatarUrl, sharingScreen
-        case cameraStreamId, screenAudioStreamId, muted, deafened, serverMuted
+        case cameraStreamId, screenAudioStreamId, muted, deafened, serverMuted, canSpeak
     }
 
     init(from decoder: Decoder) throws {
@@ -208,6 +220,7 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
         muted = try c.decodeIfPresent(Bool.self, forKey: .muted) ?? false
         deafened = try c.decodeIfPresent(Bool.self, forKey: .deafened) ?? false
         serverMuted = try c.decodeIfPresent(Bool.self, forKey: .serverMuted) ?? false
+        canSpeak = try c.decodeIfPresent(Bool.self, forKey: .canSpeak) ?? true
     }
 }
 
@@ -664,6 +677,9 @@ actor RealtimeClient {
         /// `welcome` only. See `RealtimeEvent.voiceWelcome`.
         let resumed: Bool?
         let resumeToken: String?
+        /// `welcome` (top level, same value as `self.canSpeak`) and
+        /// `voice-speak-changed`.
+        let canSpeak: Bool?
         /// `permissions-update` only. Optional because the frame is advisory:
         /// the client refetches either way, and a missing version just means
         /// "refetch anyway" (`shouldApplyPermissionsVersion` on the web).
@@ -683,7 +699,7 @@ actor RealtimeClient {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
-            case candidate, limit, transport, version, resumed, resumeToken
+            case candidate, limit, transport, version, resumed, resumeToken, canSpeak
             case conversationId, kind, caller, reason, thread, retryAfterMs
             // `self` is a Swift keyword, so the wire key is remapped.
             case selfPeer = "self"
@@ -818,7 +834,11 @@ actor RealtimeClient {
                                   peers: envelope.peers ?? [], selfPeer: selfPeer,
                                   transport: envelope.transport,
                                   resumed: envelope.resumed ?? false,
-                                  resumeToken: envelope.resumeToken)
+                                  resumeToken: envelope.resumeToken,
+                                  canSpeak: VoiceSpeakRule.resolve(
+                                      topLevel: envelope.canSpeak,
+                                      selfPeer: selfPeer.canSpeak
+                                  ))
         case "peer-joined":
             guard let peer = envelope.peer else { return }
             event = .voicePeerJoined(peer)
@@ -832,6 +852,10 @@ actor RealtimeClient {
             guard let voiceChannelId = envelope.voiceChannelId else { return }
             event = .voiceRoster(voiceChannelId: voiceChannelId,
                                  participants: envelope.participants ?? [])
+        case "voice-speak-changed":
+            guard let voiceChannelId = envelope.voiceChannelId,
+                  let canSpeak = envelope.canSpeak else { return }
+            event = .voiceSpeakChanged(voiceChannelId: voiceChannelId, canSpeak: canSpeak)
         case "voice-room-full":
             event = .voiceRoomFull(limit: envelope.limit ?? 0)
         case "screen-share-denied":

@@ -650,7 +650,7 @@ final class ChatModel {
         case .friendActivity, .permissionsUpdate, .communityHomeUpdate,
              .presence, .activity, .other,
              .voiceWelcome, .voicePeerJoined, .voicePeerUpdated, .voicePeerLeft, .voiceRoster,
-             .voiceRoomFull, .voiceTransportUnsupported, .voiceScreenShareDenied,
+             .voiceSpeakChanged, .voiceRoomFull, .voiceTransportUnsupported, .voiceScreenShareDenied,
              .voiceCameraDenied,
              .voiceOffer, .voiceAnswer, .voiceCandidate,
              // Ringing is `CallModel`'s, and deliberately not this model's: a

@@ -168,6 +168,9 @@
     <string name="voice_speaker_off">Fone</string>
     <string name="voice_server_muted_you">Um moderador te mutou</string>
     <string name="voice_server_muted_peer">Um moderador mutou %1$s</string>
+    <string name="voice_listen_only">Só ouvindo</string>
+    <string name="voice_listen_only_locked">Só ouvindo. Você não tem permissão para falar neste canal.</string>
+    <string name="voice_speak_granted">Agora você pode falar. Ligue o microfone quando quiser.</string>
 
     <!-- Notificações -->
     <string name="push_channel_messages">Menções e mensagens</string>

@@ -79,6 +79,15 @@ interface VoiceTransport {
 
     fun setMuted(muted: Boolean)
 
+    /**
+     * Whether this seat may publish audio at all (`welcome.canSpeak`).
+     *
+     * Distinct from mute, which is the person's choice: this is the server's
+     * rule. False before [start] means no microphone track is ever published;
+     * true after false publishes it, muted, so the unmute stays the person's.
+     */
+    fun setCanPublishAudio(allowed: Boolean)
+
     /** Silences every remote track **and** forces the microphone off. */
     fun setDeafened(value: Boolean, mutedByUser: Boolean)
 
