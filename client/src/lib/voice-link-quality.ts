@@ -38,6 +38,11 @@ export interface VoiceLinkQuality {
   rttMs: number | null;
   /** 0–100. Null when the sample has no inbound packets to divide. */
   lossPct: number | null;
+  /**
+   * No reading yet. The meter must stay quiet: not red, not "bad", and not
+   * three green bars that look like Excellent.
+   */
+  unknown: boolean;
 }
 
 /** RTT above this is no longer a clean path. Discord's "good" band is nearby. */
@@ -59,7 +64,8 @@ function lossPctFromCounts(
   const received = packetsReceived ?? 0;
   const total = packetsLost + received;
   if (total <= 0) {
-    return packetsLost > 0 ? 100 : 0;
+    // 0/0 is the first second of a call, not a measured 0% loss.
+    return packetsLost > 0 ? 100 : null;
   }
   return (packetsLost / total) * 100;
 }
@@ -97,8 +103,9 @@ function worse(a: VoiceQualityBars, b: VoiceQualityBars): VoiceQualityBars {
  * people end up resetting a router that was never the problem.
  *
  * Missing numbers do not vote. A sample with RTT and no loss is scored on
- * RTT alone. A sample with nothing yet (the first second of a call) stays
- * on three bars: "we have a nominated pair" is not the same as "it is bad".
+ * RTT alone. A sample with nothing yet (the first second of a call) is
+ * unknown, not three green bars: "we have a nominated pair" is not a
+ * measurement, and it is also not a fault.
  */
 export function qualityFromMesh(input: {
   rttMs: number | null;
@@ -110,6 +117,7 @@ export function qualityFromMesh(input: {
   const lossPct =
     input.lossPct ??
     lossPctFromCounts(input.packetsLost ?? null, input.packetsReceived ?? null);
+  const unknown = input.rttMs === null && lossPct === null;
   let bars: VoiceQualityBars = 3;
   if (input.rttMs !== null) {
     bars = worse(bars, barsFromRtt(input.rttMs));
@@ -122,6 +130,7 @@ export function qualityFromMesh(input: {
     relayed: input.relayed,
     rttMs: input.rttMs,
     lossPct,
+    unknown,
   };
 }
 
@@ -130,14 +139,16 @@ export function qualityFromMesh(input: {
  *
  * `lost` is a path that is still in the room but not carrying media, so it
  * is the bottom bar rather than a hidden tile. `unknown` is "no reading
- * yet", the same optimistic three as an empty mesh sample.
+ * yet": same three-bar slot as Excellent so a later event can fill it, but
+ * flagged so the meter does not paint it as a healthy call.
  */
 export function qualityFromLiveKit(
   quality: LiveKitConnectionQuality,
   extra?: { relayed?: boolean; rttMs?: number | null; lossPct?: number | null },
 ): VoiceLinkQuality {
+  const unknown = quality === "unknown";
   const bars: VoiceQualityBars =
-    quality === "excellent" || quality === "unknown"
+    quality === "excellent" || unknown
       ? 3
       : quality === "good"
         ? 2
@@ -147,6 +158,7 @@ export function qualityFromLiveKit(
     relayed: extra?.relayed ?? false,
     rttMs: extra?.rttMs ?? null,
     lossPct: extra?.lossPct ?? null,
+    unknown,
   };
 }
 
@@ -184,6 +196,7 @@ export function mergeQuality(
     relayed: a.relayed || b.relayed,
     rttMs: b.rttMs ?? a.rttMs,
     lossPct: b.lossPct ?? a.lossPct,
+    unknown: a.unknown && b.unknown,
   };
 }
 
@@ -200,4 +213,24 @@ export function aggregateQuality(
     result = result ? mergeQuality(result, quality) : quality;
   }
   return result;
+}
+
+/**
+ * What the tile and the status bar actually draw.
+ *
+ * Unknown is quiet: no bars, no alarm. Relayed is a chip even before the
+ * numbers arrive, because the nominated pair is already a fact.
+ */
+export function qualityMeterView(
+  quality: VoiceLinkQuality | null,
+): { showBars: boolean; showRelayed: boolean } | null {
+  if (!quality) {
+    return null;
+  }
+  const showBars = !quality.unknown;
+  const showRelayed = quality.relayed;
+  if (!showBars && !showRelayed) {
+    return null;
+  }
+  return { showBars, showRelayed };
 }

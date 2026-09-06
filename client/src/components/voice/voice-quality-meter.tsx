@@ -1,5 +1,8 @@
 import { useTranslation, type MessageKey } from "@/lib/i18n";
-import type { VoiceLinkQuality } from "@/lib/voice-link-quality";
+import {
+  qualityMeterView,
+  type VoiceLinkQuality,
+} from "@/lib/voice-link-quality";
 import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
@@ -58,45 +61,51 @@ export function VoiceQualityMeter({
   className?: string;
 }) {
   const { t } = useTranslation();
-  if (!quality) {
+  const view = qualityMeterView(quality);
+  if (!quality || !view) {
     return null;
   }
 
+  const relayedLabel = t("voice.quality.relayed");
   const barsLabel = t("voice.quality.bars", { count: quality.bars });
-  const label = quality.relayed
-    ? `${barsLabel}. ${t("voice.quality.relayed")}`
-    : barsLabel;
-  const detail = tooltipDetail(quality, t);
+  const label = view.showBars
+    ? view.showRelayed
+      ? `${barsLabel}. ${relayedLabel}`
+      : barsLabel
+    : relayedLabel;
+  const detail = view.showBars ? tooltipDetail(quality, t) : undefined;
   const fill = barFill(quality.bars);
 
   return (
     <span className={cn("inline-flex items-center gap-1", className)}>
-      <Tooltip label={label} detail={detail}>
-        <span
-          className="inline-flex h-4 items-end gap-px"
-          aria-label={detail ? `${label}. ${detail}` : label}
-        >
-          {BAR_HEIGHT.map((height, index) => (
-            <span
-              key={height}
-              className={cn(
-                "w-[3px] rounded-[1px]",
-                height,
-                index < quality.bars ? fill : "bg-ink-3",
-              )}
-              aria-hidden="true"
-            />
-          ))}
-        </span>
-      </Tooltip>
-      {quality.relayed && (
+      {view.showBars && (
+        <Tooltip label={label} detail={detail}>
+          <span
+            className="inline-flex h-4 items-end gap-px"
+            aria-label={detail ? `${label}. ${detail}` : label}
+          >
+            {BAR_HEIGHT.map((height, index) => (
+              <span
+                key={height}
+                className={cn(
+                  "w-[3px] rounded-[1px]",
+                  height,
+                  index < quality.bars ? fill : "bg-ink-3",
+                )}
+                aria-hidden="true"
+              />
+            ))}
+          </span>
+        </Tooltip>
+      )}
+      {view.showRelayed && (
         <span
           className={cn(
-            "rounded bg-ink-3 font-medium uppercase tracking-wide text-paper-muted",
+            "whitespace-nowrap rounded bg-ink-3 font-medium uppercase tracking-wide text-paper-muted",
             compact ? "px-1 py-px text-[9px]" : "px-1.5 py-0.5 text-[10px]",
           )}
         >
-          {t("voice.quality.relayed")}
+          {relayedLabel}
         </span>
       )}
     </span>

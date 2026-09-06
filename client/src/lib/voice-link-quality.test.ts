@@ -4,6 +4,7 @@ import {
   qualityByPeerFromSnapshot,
   qualityFromLiveKit,
   qualityFromMesh,
+  qualityMeterView,
   type VoiceLinkQuality,
 } from "./voice-link-quality";
 import type { VoiceStatsSnapshot } from "./voice-stats-probe";
@@ -27,6 +28,7 @@ describe("qualityFromMesh", () => {
       relayed: false,
       rttMs: 40,
       lossPct: 0,
+      unknown: false,
     });
   });
 
@@ -75,6 +77,24 @@ describe("qualityFromMesh", () => {
       relayed: false,
       rttMs: null,
       lossPct: null,
+      unknown: true,
+    });
+  });
+
+  it("treats 0/0 packets as no reading, not a measured 0% loss", () => {
+    expect(
+      qualityFromMesh({
+        rttMs: null,
+        packetsLost: 0,
+        packetsReceived: 0,
+        relayed: false,
+      }),
+    ).toEqual({
+      bars: 3,
+      relayed: false,
+      rttMs: null,
+      lossPct: null,
+      unknown: true,
     });
   });
 
@@ -92,8 +112,15 @@ describe("qualityFromLiveKit", () => {
   });
 
   it("treats lost as the bottom bar and unknown as no reading yet", () => {
-    expect(qualityFromLiveKit("lost").bars).toBe(1);
-    expect(qualityFromLiveKit("unknown").bars).toBe(3);
+    expect(qualityFromLiveKit("lost")).toMatchObject({
+      bars: 1,
+      unknown: false,
+    });
+    expect(qualityFromLiveKit("unknown")).toMatchObject({
+      bars: 3,
+      unknown: true,
+    });
+    expect(qualityFromLiveKit("excellent").unknown).toBe(false);
   });
 
   it("can still carry a Relayed flag from the local ICE pair", () => {
@@ -102,6 +129,7 @@ describe("qualityFromLiveKit", () => {
       relayed: true,
       rttMs: null,
       lossPct: null,
+      unknown: false,
     });
   });
 });
@@ -144,6 +172,7 @@ describe("qualityByPeerFromSnapshot", () => {
       relayed: false,
       rttMs: 40,
       lossPct: 0,
+      unknown: false,
     });
     expect(byPeer.bob?.bars).toBe(1);
     expect(byPeer.bob?.relayed).toBe(true);
@@ -184,6 +213,7 @@ describe("qualityByPeerFromSnapshot", () => {
       relayed: true,
       rttMs: 350,
       lossPct: 0,
+      unknown: false,
     });
   });
 });
@@ -200,5 +230,46 @@ describe("aggregateQuality", () => {
     ]);
     expect(aggregate?.bars).toBe(2);
     expect(aggregate?.relayed).toBe(true);
+    expect(aggregate?.unknown).toBe(false);
+  });
+});
+
+describe("qualityMeterView", () => {
+  it("stays quiet while the path is still unknown", () => {
+    expect(qualityMeterView(qualityFromLiveKit("unknown"))).toBeNull();
+    expect(
+      qualityMeterView(
+        qualityFromMesh({
+          rttMs: null,
+          packetsLost: null,
+          packetsReceived: null,
+          relayed: false,
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps Relayed visible before the numbers arrive", () => {
+    expect(
+      qualityMeterView(
+        qualityFromMesh({
+          rttMs: null,
+          packetsLost: null,
+          packetsReceived: null,
+          relayed: true,
+        }),
+      ),
+    ).toEqual({ showBars: false, showRelayed: true });
+  });
+
+  it("shows bars once there is a reading", () => {
+    expect(qualityMeterView(mesh())).toEqual({
+      showBars: true,
+      showRelayed: false,
+    });
+    expect(qualityMeterView(qualityFromLiveKit("excellent"))).toEqual({
+      showBars: true,
+      showRelayed: false,
+    });
   });
 });
