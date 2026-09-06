@@ -36,8 +36,26 @@
  * Before the reconnect landed, the second question produced NOTHING: no answer,
  * no log line, no exit, no restart. That silence is the whole bug.
  *
+ * ── THE OTHER THING IT REPRODUCES ───────────────────────────────────────────
+ *
+ * Answering a question nobody answered, which is also unreachable from a unit
+ * test in its interesting form: it is a decision about two people and a clock.
+ * Run the bot with a short delay so a check takes seconds rather than minutes:
+ *
+ *   cd tools/support-bot
+ *   PQP_API_URL=http://127.0.0.1:4599 SUPPORT_STATE_DIR=/tmp/support-repro \
+ *     SUPPORT_UNPROMPTED_DELAY_MS=4000 SUPPORT_COOLDOWN_MS=0 \
+ *     node src/bot.js --watch --canned
+ *
+ *   # nobody answers ana, so the bot does, threaded under her message
+ *   curl -s 'http://127.0.0.1:4599/control/say?author=ana&body=a+qualidade+da+call+tem+como+melhorar%3F'
+ *
+ *   # caio answers her, so the bot stays out of it
+ *   curl -s 'http://127.0.0.1:4599/control/say?author=ana&body=o+pqp+funciona+no+safari%3F'
+ *   curl -s 'http://127.0.0.1:4599/control/say?author=caio&body=funciona+sim'
+ *
  * Control plane:
- *   GET/POST /control/say?body=...  broadcast an inbound message from "ana"
+ *   GET/POST /control/say?body=...&author=ana  broadcast an inbound message
  *   POST     /control/drop          destroy every live socket, no close frame
  *   GET      /control/state         { sockets, drops }
  */
@@ -97,14 +115,19 @@ const server = createServer((req, res) => {
   }
   if (url.pathname === "/control/say") {
     msgSeq += 1;
+    // `author` defaults to ana and exists so that "somebody else answered the
+    // question" can be reproduced, which needs two people and is the rule that
+    // decides whether the bot answers a question nobody replied to.
+    const author = url.searchParams.get("author") ?? "ana";
     broadcast({
       type: "message-broadcast",
       message: {
         id: `m${msgSeq}`,
         channelId: "c1",
-        authorId: "ana",
-        authorName: "ana",
+        authorId: author,
+        authorName: author,
         body: url.searchParams.get("body") ?? "@manual_bot oi",
+        createdAt: new Date().toISOString(),
       },
     });
     return json({ ok: true, sockets: live.size });
