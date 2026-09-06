@@ -804,6 +804,8 @@
   "voice.ptt.unfocused": "This window isn't focused, the key won't reach it. Click here first, or use the button.",
   "voice.bar.pttLive": "Live",
   "voice.bar.pttIdle": "PTT",
+  "voice.bar.vadLive": "Live",
+  "voice.bar.vadIdle": "Quiet",
   "voice.bar.open": "Open voice channel {name}",
   "voice.share.someone": "Someone",
   "voice.share.youPresenting": "You are presenting",

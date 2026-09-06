@@ -79,6 +79,7 @@ type TrackStub = { enabled: boolean; stopped: boolean; kind: "raw" | "processed"
 
 const tracks: TrackStub[] = [];
 const rafQueue: FrameRequestCallback[] = [];
+const intervalQueue: Array<() => void> = [];
 let analyserLevel = 0;
 let nowMs = 1_000;
 
@@ -103,12 +104,20 @@ function fakeStream(kind: TrackStub["kind"]) {
 function installBrowserStubs() {
   const g = globalThis as unknown as Record<string, unknown>;
   rafQueue.length = 0;
+  intervalQueue.length = 0;
   g.requestAnimationFrame = (cb: FrameRequestCallback) => {
     rafQueue.push(cb);
     return rafQueue.length;
   };
   g.cancelAnimationFrame = () => {
     rafQueue.length = 0;
+  };
+  g.setInterval = (cb: TimerHandler) => {
+    intervalQueue.push(typeof cb === "function" ? () => cb() : () => {});
+    return intervalQueue.length;
+  };
+  g.clearInterval = () => {
+    intervalQueue.length = 0;
   };
   Object.defineProperty(globalThis.navigator, "mediaDevices", {
     configurable: true,
@@ -216,6 +225,13 @@ function flushVoiceFrame() {
   }
 }
 
+function flushVoiceActivityPoll() {
+  const cbs = intervalQueue.slice();
+  for (const cb of cbs) {
+    cb();
+  }
+}
+
 const outgoingOpen = () =>
   tracks.some((track) => track.kind === "processed" && track.enabled && !track.stopped);
 
@@ -313,20 +329,44 @@ describe("voice-activity gate", () => {
     expect(outgoingOpen()).toBe(false);
   });
 
-  it("keeps the LiveKit publication muted until speech, then follows the gate", async () => {
+  it("gates LiveKit with the track and only publishes mute for the mute button", async () => {
     const { voice } = await connected("livekit");
-    expect(sfuMuteLog.at(-1)).toBe(true);
+    expect(sfuMuteLog.at(-1)).toBe(false);
     expect(outgoingOpen()).toBe(false);
+    const mutesAtJoin = sfuMuteLog.length;
 
     analyserLevel = 0.3;
     flushVoiceFrame();
-    expect(sfuMuteLog.at(-1)).toBe(false);
+    expect(outgoingOpen()).toBe(true);
     expect(voice.getState().isTransmitting).toBe(true);
+    expect(sfuMuteLog.at(-1)).toBe(false);
+    expect(sfuMuteLog.length).toBe(mutesAtJoin);
 
     analyserLevel = 0;
     nowMs += SPEAKING_HANGOVER_MS + 20;
     flushVoiceFrame();
-    expect(sfuMuteLog.at(-1)).toBe(true);
+    expect(outgoingOpen()).toBe(false);
     expect(voice.getState().isTransmitting).toBe(false);
+    expect(sfuMuteLog.at(-1)).toBe(false);
+    expect(sfuMuteLog.length).toBe(mutesAtJoin);
+
+    voice.toggleMute();
+    expect(sfuMuteLog.at(-1)).toBe(true);
+    expect(outgoingOpen()).toBe(false);
+  });
+
+  it("opens and closes the gate from the poll when rAF does not tick", async () => {
+    const { voice } = await connected();
+
+    analyserLevel = 0.3;
+    flushVoiceActivityPoll();
+    expect(voice.getState().isTransmitting).toBe(true);
+    expect(outgoingOpen()).toBe(true);
+
+    analyserLevel = 0;
+    nowMs += SPEAKING_HANGOVER_MS + 20;
+    flushVoiceActivityPoll();
+    expect(voice.getState().isTransmitting).toBe(false);
+    expect(outgoingOpen()).toBe(false);
   });
 });

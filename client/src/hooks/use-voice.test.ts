@@ -226,6 +226,8 @@ function installBrowserStubs() {
   const g = globalThis as unknown as Record<string, unknown>;
   g.requestAnimationFrame = () => 1;
   g.cancelAnimationFrame = () => {};
+  g.setInterval = () => 1;
+  g.clearInterval = () => {};
   const pagehideHandlers: Array<() => void> = [];
   g.window = {
     addEventListener: (type: string, handler: () => void) => {

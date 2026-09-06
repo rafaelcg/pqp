@@ -122,6 +122,8 @@ function installBrowserStubs() {
   const g = globalThis as unknown as Record<string, unknown>;
   g.requestAnimationFrame = () => 1;
   g.cancelAnimationFrame = () => {};
+  g.setInterval = () => 1;
+  g.clearInterval = () => {};
   Object.defineProperty(globalThis.navigator, "mediaDevices", {
     configurable: true,
     value: {
@@ -370,8 +372,9 @@ describe("push-to-talk on LiveKit", () => {
     voice.setInputMode("voice-activity");
 
     // Voice activity starts closed until the speaking loop sees a level.
-    // Switching mid-press must not leave the publication open.
-    expect(sfuMuteLog.at(-1)).toBe(true);
+    // The outgoing track is the gate; the LiveKit publication stays live so
+    // word boundaries do not fan TrackMuted to the room.
+    expect(sfuMuteLog.at(-1)).toBe(false);
     expect(voice.getState().isTransmitting).toBe(false);
 
     voice.setInputMode("push-to-talk");

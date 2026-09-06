@@ -804,6 +804,8 @@
   "voice.ptt.unfocused": "Esta janela não está em foco, a tecla não chega aqui. Clica aqui antes, ou usa o botão.",
   "voice.bar.pttLive": "Ao vivo",
   "voice.bar.pttIdle": "PTT",
+  "voice.bar.vadLive": "Ao vivo",
+  "voice.bar.vadIdle": "Fechado",
   "voice.bar.open": "Abrir o canal de voz {name}",
   "voice.share.someone": "Alguém",
   "voice.share.youPresenting": "Você está compartilhando",

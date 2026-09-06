@@ -580,6 +580,11 @@ function chipClass(selected: boolean): string {
  * The 1.8 gain is how the existing meter made a typical speaking level fill
  * more than a sliver of the bar. The volume floor stops a dragged-down
  * input volume from pinning the line to the left edge.
+ *
+ * This is the Settings bar, not the gate. The gate reads
+ * `pipeline.analyser` (after the input-volume gain). The preview stream
+ * here is raw getUserMedia. The marker matches this bar; a quiet talker
+ * still has to move the line until their bar crosses it.
  */
 const MIC_LEVEL_DISPLAY_GAIN = 1.8;
 const MIC_LEVEL_VOLUME_FLOOR = 0.15;

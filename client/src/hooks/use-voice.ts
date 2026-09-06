@@ -79,6 +79,13 @@ const VOICE_RESUME_GRACE_MS = 90_000;
 /** WebSocket handshake to `welcome`. Signalling only, so 12s is generous. */
 const JOIN_TIMEOUT_MS = 12_000;
 /**
+ * Voice-activity gate poll. `requestAnimationFrame` is frozen on a hidden
+ * tab (and on a minimized Electron window), which is exactly when people
+ * talk into this app. An interval still fires; Chrome may later clamp it
+ * toward 1s, which is a late open, not a stuck one.
+ */
+const VOICE_ACTIVITY_POLL_MS = 50;
+/**
  * `welcome` to media up on an SFU room. This used to share the 12s above,
  * which was sized for a handful of peers. On 2026-09-05 a ~90-person watch
  * party showed what that does on a phone on mobile data: fetch a token, pull
@@ -661,6 +668,7 @@ export function createVoiceController(transport: RealtimeTransport) {
   let screenCaptureStream: MediaStream | null = null;
   let joinTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let speakingRaf = 0;
+  let voiceActivityPollId = 0;
   let iceServers: RTCIceServer[] = getDefaultIceServers();
   const remoteAnalysers = new Map<
     string,
@@ -1016,7 +1024,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
     try {
       await sfu.publish(pipeline.processedStream);
-      await sfu.setMuted(!state.isTransmitting);
+      await applyPublicationMute();
     } catch (err) {
       if (attempt >= 5) {
         state.error = err instanceof Error ? err.message : String(err);
@@ -1077,18 +1085,43 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /**
+   * LiveKit publication mute is the remote-visible mute: user mute, deafen,
+   * or SPEAK revoked. Voice-activity word boundaries only flip
+   * `track.enabled` — publishing mute on every syllable fans TrackMuted to
+   * the whole room.
+   */
+  function publicationShouldBeMuted(): boolean {
+    if (!state.canSpeak || state.isDeafened || state.isMuted) {
+      return true;
+    }
+    if (state.inputMode === "voice-activity") {
+      return false;
+    }
+    return !state.isTransmitting;
+  }
+
+  /**
    * Both transports, every time.
    *
    * Disabling the track is what stops mesh peers hearing anything — an
    * `enabled: false` track sends silence over the existing sender, which is why
-   * push-to-talk never renegotiates. LiveKit needs to be told separately: it
-   * has its own publication state, and leaving that unmuted would keep sending
-   * (silent) packets and, worse, keep the SFU's own speaking indicator lit for
-   * everyone else in the room.
+   * push-to-talk never renegotiates. LiveKit still needs `published.mute()`
+   * when the person meant to be muted (or is on push-to-talk between presses).
    */
+  let sfuPublicationMuted: boolean | null = null;
+
+  function applyPublicationMute() {
+    const next = publicationShouldBeMuted();
+    if (!sfu || sfuPublicationMuted === next) {
+      return Promise.resolve();
+    }
+    sfuPublicationMuted = next;
+    return sfu.setMuted(next);
+  }
+
   function applyMute() {
     applyMuteToPipeline();
-    void sfu?.setMuted(!state.isTransmitting);
+    applyPublicationMute();
   }
 
   /**
@@ -1145,7 +1178,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       if (sfu) {
         await sfu.replaceTrack(pipeline.processedStream);
-        await sfu.setMuted(!state.isTransmitting);
+        await applyPublicationMute();
       }
       emit();
     } catch (err) {
@@ -1183,11 +1216,27 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  function stopVoiceActivityPoll() {
+    if (voiceActivityPollId) {
+      clearInterval(voiceActivityPollId);
+      voiceActivityPollId = 0;
+    }
+  }
+
+  function startVoiceActivityPoll() {
+    stopVoiceActivityPoll();
+    voiceActivityPollId = setInterval(
+      syncVoiceActivityGate,
+      VOICE_ACTIVITY_POLL_MS,
+    ) as unknown as number;
+  }
+
   function stopSpeakingLoop() {
     if (speakingRaf) {
       cancelAnimationFrame(speakingRaf);
       speakingRaf = 0;
     }
+    stopVoiceActivityPoll();
     speakingTracker.clear();
     voiceActivityTracker.clear();
     voiceActivityOpen = false;
@@ -1199,8 +1248,11 @@ export function createVoiceController(transport: RealtimeTransport) {
 
   function startSpeakingLoop() {
     stopSpeakingLoop();
+    startVoiceActivityPoll();
     const tick = () => {
       const next: string[] = [];
+      // The interval keeps the gate alive on a hidden tab. This rAF path is
+      // the low-latency one while the tab is visible.
       syncVoiceActivityGate();
       // `isTransmitting`, not `!isMuted`: in push-to-talk between presses the
       // mic is live and the analyser still reads a level, but nobody can hear
@@ -1243,6 +1295,7 @@ export function createVoiceController(transport: RealtimeTransport) {
   async function teardownSfu() {
     const session = sfu;
     sfu = null;
+    sfuPublicationMuted = null;
     state.usingSfu = false;
     identities.clear();
     if (session) {
@@ -1556,9 +1609,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       // LiveKit would refuse it. The mic is published if SPEAK arrives later.
       if (pipeline && state.canSpeak) {
         await sfu.publish(pipeline.processedStream);
-        // The gate, not the mute flag — a push-to-talk user who joins an SFU
-        // room without the key down must be published muted.
-        await sfu.setMuted(!state.isTransmitting);
+        // Push-to-talk joins muted. Voice activity keeps the publication
+        // live and gates with `track.enabled` so word boundaries do not
+        // signal TrackMuted to the room.
+        await applyPublicationMute();
       }
       // Before anything is published, so a camera or a share carried across a
       // reconnect is republished at the chosen quality. Without this a session
