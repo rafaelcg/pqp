@@ -20,23 +20,16 @@ struct VoicePeerState: Identifiable, Hashable, Sendable {
 
 /// One peer's incoming video, already sorted into what it *shows*.
 ///
-/// A video track on the wire says nothing about its subject; the roster does.
-/// See `classifyVideo` below — this is the answer that classification produces,
-/// and the only shape the UI ever sees.
-///
-/// `@unchecked Sendable` for the same reason `UncheckedBox` exists: `RTCVideoTrack`
-/// is an Objective-C class, the reference *is* the value (it is what a renderer
-/// attaches to), and it is handed from the actor to the main actor once and then
-/// only read there.
-struct PeerVideo: @unchecked Sendable, Equatable {
-    var camera: RTCVideoTrack?
-    var screen: RTCVideoTrack?
+/// On the mesh a video track on the wire says nothing about its subject; the
+/// roster does. See `classifyVideo` below — this is the answer that
+/// classification produces. On LiveKit the SFU labels every publication with
+/// its source and `LiveKitVoiceClient` files it straight into the right slot.
+/// Either way this is the only shape the UI ever sees.
+struct PeerVideo: Sendable, Equatable {
+    var camera: VideoFeed?
+    var screen: VideoFeed?
 
     var isEmpty: Bool { camera == nil && screen == nil }
-
-    static func == (lhs: PeerVideo, rhs: PeerVideo) -> Bool {
-        lhs.camera === rhs.camera && lhs.screen === rhs.screen
-    }
 }
 
 /// Full-mesh WebRTC voice.
@@ -740,7 +733,9 @@ actor VoiceClient {
                     screen = screen ?? track
                 }
             }
-            let video = PeerVideo(camera: camera, screen: screen)
+            let video = PeerVideo(
+                camera: camera.map(VideoFeed.mesh), screen: screen.map(VideoFeed.mesh)
+            )
             if !video.isEmpty {
                 result[peerId] = video
             }

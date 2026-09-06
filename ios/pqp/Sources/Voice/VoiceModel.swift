@@ -12,7 +12,8 @@ enum VoiceStatus: Equatable, Sendable {
     case failed(String)
 }
 
-/// Owns a voice session: mic permission, the room, and the mesh underneath it.
+/// Owns a voice session: mic permission, the room, and the media underneath it,
+/// which is a mesh or a LiveKit room depending on what the server pinned.
 @MainActor
 @Observable
 final class VoiceModel {
@@ -46,7 +47,10 @@ final class VoiceModel {
         didSet { noteCallProgress() }
     }
     /// Our own capture, for the self preview. Never handed to a renderer twice.
-    private(set) var localCamera: RTCVideoTrack?
+    private(set) var localCamera: VideoFeed?
+    /// What `welcome` said this room runs on. Nil until it has; the handlers
+    /// below switch on it, and `ratingSnapshot` reports it.
+    private(set) var transport: VoiceRoomTransport?
     private(set) var isCameraOn = false
     /// A refusal worth putting in front of somebody: permission, or a camera
     /// that would not open. Cleared by the next successful toggle.
@@ -58,7 +62,12 @@ final class VoiceModel {
     var isMuted = false {
         didSet {
             Task {
+                // Both transports, unconditionally: the one this room is not
+                // on holds no track and the call is a no-op, and forwarding to
+                // both is what keeps a mute decided before `welcome` true on
+                // whichever one the room turns out to be.
                 await voice.setMuted(isMuted)
+                await sfu.setMuted(isMuted)
                 await reportVoiceState()
             }
         }
@@ -70,6 +79,7 @@ final class VoiceModel {
             if isDeafened { isMuted = true }
             Task {
                 await voice.setDeafened(isDeafened)
+                await sfu.setDeafened(isDeafened)
                 await reportVoiceState()
             }
         }
@@ -95,7 +105,12 @@ final class VoiceModel {
     }
 
     var isSpeakerOn = true {
-        didSet { Task { await voice.setSpeaker(isSpeakerOn) } }
+        didSet {
+            Task {
+                await voice.setSpeaker(isSpeakerOn)
+                await sfu.setSpeaker(isSpeakerOn)
+            }
+        }
     }
 
     /// The channel we intend to be in, kept across a socket drop so the call
@@ -109,6 +124,21 @@ final class VoiceModel {
     private var volumeByUser: [String: Double] = [:]
 
     private let voice = VoiceClient()
+    /// The SFU half. Idle in a mesh room; in a LiveKit room it is the media.
+    private let sfu = LiveKitVoiceClient()
+    /// The token-and-connect in flight for a LiveKit room, so a leave that
+    /// lands mid-join can cancel it rather than race it.
+    private var sfuJoin: Task<Void, Never>?
+    /// Read synchronously off the last join outcome, because the `welcome`
+    /// handler that needs it is not async. Kept in step by `startSfuSession`
+    /// and by `leave`.
+    private var sfuIsConnected = false
+    /// Whether this deployment mints LiveKit rooms, read once per join from
+    /// `GET /api/voice/backend`. Decides `join-voice-room.resume`.
+    private var declaresResume = false
+    /// What the last `welcome` handed back, presented on the rejoin after a
+    /// socket drop so the server reattaches our seat instead of minting a new one.
+    private var resumeClaim: VoiceResumeClaim?
     private var session: SessionStore?
     private let handlerKey = "voice-" + UUID().uuidString
     /// Accumulates the shape of the call while it runs. Ignored by Observation
@@ -128,7 +158,7 @@ final class VoiceModel {
     /// phone shows one picture at a time and the chips switch who that is.
     var focusedScreenPeerId: String?
 
-    var screenPresenters: [(peerId: String, name: String, track: RTCVideoTrack)] {
+    var screenPresenters: [(peerId: String, name: String, track: VideoFeed)] {
         peers.compactMap { peer in
             guard let screen = video[peer.peerId]?.screen else { return nil }
             return (peer.peerId, peer.displayName, screen)
@@ -143,7 +173,7 @@ final class VoiceModel {
         return screenPresenters.first?.peerId
     }
 
-    var remoteScreen: RTCVideoTrack? {
+    var remoteScreen: VideoFeed? {
         if let focused = resolvedScreenFocus {
             return video[focused]?.screen
         }
@@ -168,7 +198,7 @@ final class VoiceModel {
     // `VoiceClient`. The mesh never cared which kind of room it was carrying;
     // what was missing was a screen with a button on it.
 
-    func camera(for peerId: String) -> RTCVideoTrack? { video[peerId]?.camera }
+    func camera(for peerId: String) -> VideoFeed? { video[peerId]?.camera }
 
     /// Everyone whose camera is on, in roster order, so the tiles do not
     /// reshuffle every time somebody starts speaking.
@@ -188,7 +218,11 @@ final class VoiceModel {
     }
 
     func flipCamera() async {
-        await voice.flipCamera()
+        if transport == .livekit {
+            await sfu.flipCamera()
+        } else {
+            await voice.flipCamera()
+        }
     }
 
     private func enableCamera() async {
@@ -197,11 +231,19 @@ final class VoiceModel {
             cameraError = String(localized: "Camera access is off. Enable it in Settings.")
             return
         }
-        guard let started = await voice.startCamera() else {
+        let started: (feed: VideoFeed, streamId: String)?
+        if transport == .livekit {
+            started = await sfu.startCamera()
+        } else if let mesh = await voice.startCamera() {
+            started = (.mesh(mesh.track.value), mesh.streamId)
+        } else {
+            started = nil
+        }
+        guard let started else {
             cameraError = String(localized: "Could not start the camera.")
             return
         }
-        localCamera = started.track.value
+        localCamera = started.feed
         isCameraOn = true
         cameraError = nil
         await voice.setVideoMode(true)
@@ -219,7 +261,11 @@ final class VoiceModel {
         // no announcement reclassifies it as a screen share and draws the last
         // frame of your face forever.
         await session?.realtime.setCamera(streamId: nil)
-        await voice.stopCamera()
+        if transport == .livekit {
+            await sfu.stopCamera()
+        } else {
+            await voice.stopCamera()
+        }
         await voice.setVideoMode(false)
     }
 
@@ -254,6 +300,13 @@ final class VoiceModel {
 
         do {
             let ice: IceServersResponse = try await session.api.get("/api/ice-servers")
+            // Advisory, never binding: `welcome` says what the room runs on.
+            // This only decides whether to ask the server to hold our seat
+            // across a socket drop, which is right for a LiveKit room and a
+            // 90-second ghost in everyone's roster for a mesh one. A failure
+            // here is not a failure to join; it is a join that cannot resume.
+            let backend: VoiceBackendInfo? = try? await session.api.get("/api/voice/backend")
+            declaresResume = backend?.declaresResume ?? false
             try await voice.startAudio()
             // "Mute microphone when joining voice", which Settings has been
             // writing since the screen existed and nothing has ever read.
@@ -298,13 +351,25 @@ final class VoiceModel {
                 guard let self else { return }
                 Task { await self.voice.setVideoQuality(quality) }
             }
-            await session.realtime.joinVoice(channelId: channel.id)
+            // The same two callbacks the mesh gets, so whichever transport the
+            // room turns out to be, the screen is fed from one pair of fields.
+            await sfu.configure(
+                onStateChange: { [weak self] states in
+                    Task { @MainActor in self?.peers = states }
+                },
+                onVideoChange: { [weak self] video in
+                    Task { @MainActor in self?.video = video }
+                }
+            )
+            await session.realtime.joinVoice(channelId: channel.id, declaresResume: declaresResume)
         } catch {
             status = .failed((error as? APIError)?.errorDescription ?? error.localizedDescription)
         }
     }
 
     func leave() async {
+        sfuJoin?.cancel()
+        sfuJoin = nil
         await screenShare.disarm()
         intendedChannel = nil
         VideoQualitySettings.shared.removeListener(handlerKey)
@@ -323,6 +388,10 @@ final class VoiceModel {
         }
         wasEvicted = false
         await voice.disconnectAll()
+        await sfu.disconnect()
+        sfuIsConnected = false
+        transport = nil
+        resumeClaim = nil
         status = .idle
         channelId = nil
         channelName = nil
@@ -345,9 +414,7 @@ final class VoiceModel {
     private var ratingSnapshot: CallSnapshot {
         CallSnapshot(
             peerCount: peers.count,
-            // This app declares `transports: ["mesh"]` and refuses a room pinned
-            // to anything else, so a connected call is always a mesh call.
-            usingSfu: false,
+            usingSfu: transport == .livekit,
             screenSharing: remoteScreen != nil || screenShare.isSharing,
             channelId: channelId
         )
@@ -396,7 +463,10 @@ final class VoiceModel {
 
     func setVolume(_ volume: Double, for peer: VoicePeerState) {
         volumeByUser[peer.userId] = volume
-        Task { await voice.setVolume(volume, for: peer.peerId) }
+        Task {
+            await voice.setVolume(volume, for: peer.peerId)
+            await sfu.setVolume(volume, for: peer.peerId)
+        }
     }
 
     func volume(for peer: VoicePeerState) -> Double {
@@ -437,6 +507,23 @@ final class VoiceModel {
         // unusable and has to be torn down and rebuilt rather than resumed.
         case .ready:
             guard let intendedChannel, status != .idle else { return }
+            // A LiveKit room does not care that `/ws` blinked: the media is a
+            // separate connection to a separate host, and it is still up. So
+            // the room is kept and the seat is reclaimed, by presenting the
+            // claim the last `welcome` issued. If the server honours it the
+            // next `welcome` says `resumed` and nothing is rebuilt; if it does
+            // not, that `welcome` mints a new id and media is reconnected once.
+            if transport == .livekit {
+                let claim = resumeClaim
+                Task {
+                    await session?.realtime.joinVoice(
+                        channelId: intendedChannel.id,
+                        declaresResume: declaresResume,
+                        resume: claim
+                    )
+                }
+                return
+            }
             Task {
                 await voice.disconnectAll()
                 // The capture went with the mesh, so the button has to go back
@@ -445,10 +532,13 @@ final class VoiceModel {
                 self.localCamera = nil
                 self.isCameraOn = false
                 try? await voice.startAudio()
-                await session?.realtime.joinVoice(channelId: intendedChannel.id)
+                await session?.realtime.joinVoice(
+                    channelId: intendedChannel.id, declaresResume: declaresResume
+                )
             }
 
-        case .voiceWelcome(let peerId, let voiceChannelId, let existing, _, let transport):
+        case .voiceWelcome(let peerId, let voiceChannelId, let existing, _, let transport,
+                           let resumed, let resumeToken):
             guard voiceChannelId == channelId else {
                 // A `welcome` for another room means this socket joined one —
                 // and the server keeps exactly one peer per socket, so ours is
@@ -467,12 +557,15 @@ final class VoiceModel {
                     status = .failed(String(
                         localized: "You joined another voice room, so this one was left."
                     ))
+                    sfuJoin?.cancel()
+                    sfuJoin = nil
                     Task {
                         // The bridge belongs to the room, and the room is gone —
                         // leaving it armed would hold the App Group socket that
                         // whichever room displaced us now needs.
                         await screenShare.disarm()
                         await voice.disconnectAll()
+                        await sfu.disconnect()
                     }
                 }
                 return
@@ -480,21 +573,57 @@ final class VoiceModel {
             // The room's transport is pinned by the server and binding. A
             // client that cannot speak it must refuse — joining anyway puts us
             // in the roster looking permanently muted to everyone else, which
-            // is worse than an honest no. Absent means a pre-SFU server, which
-            // is mesh by definition. We declare `transports: ["mesh"]` on join,
+            // is worse than an honest no. We declare what we can run on join,
             // so a current server refuses us before this point; this branch is
             // the belt to that suspender.
-            if let transport, transport != "mesh" {
+            let plan = VoiceTransportPlan(transport: transport)
+            if case .unsupported(let name) = plan {
                 Task {
                     await session?.realtime.leaveVoice()
                     await voice.disconnectAll()
                 }
                 status = .failed(String(
-                    localized: "This voice channel runs on \(transport), which the iOS app cannot join yet."
+                    localized: "This voice channel runs on \(name), which the iOS app cannot join yet."
                 ))
                 intendedChannel = nil
                 return
             }
+            if let resumeToken {
+                resumeClaim = VoiceResumeClaim(peerId: peerId, token: resumeToken)
+            }
+            if plan == .livekit {
+                self.transport = .livekit
+                for participant in existing { roster[participant.peerId] = participant }
+                Task {
+                    await sfu.setRoster(existing)
+                    for participant in existing {
+                        if let volume = volumeByUser[participant.userId] {
+                            await sfu.setVolume(volume, for: participant.peerId)
+                        }
+                    }
+                }
+                // The socket blinked and came back to the same seat, and the
+                // LiveKit room never noticed. Nothing to rebuild.
+                if keepsSfuSession(
+                    resumed: resumed, welcomePeerId: peerId,
+                    currentPeerId: selfPeerId, sfuConnected: sfuIsConnected
+                ) {
+                    status = .connected
+                    Task { await reportVoiceState() }
+                    return
+                }
+                selfPeerId = peerId
+                // Not `.connected` yet. On this transport `welcome` is half a
+                // join; the other half is media, and "Connecting" until it is
+                // up is the honest state, as on the web. The share bridge is
+                // deliberately NOT armed: publishing a screen from this app is
+                // mesh-only for now, and an armed bridge would announce a share
+                // that no track ever backs.
+                status = .joining
+                startSfuSession(peerId: peerId, channelId: voiceChannelId)
+                return
+            }
+            self.transport = .mesh
             selfPeerId = peerId
             status = .connected
             for participant in existing { roster[participant.peerId] = participant }
@@ -525,6 +654,16 @@ final class VoiceModel {
 
         case .voicePeerJoined(let participant):
             roster[participant.peerId] = participant
+            if transport == .livekit {
+                // The SFU delivers the media; this frame only names the person.
+                Task {
+                    await sfu.setRoster([participant])
+                    if let volume = volumeByUser[participant.userId] {
+                        await sfu.setVolume(volume, for: participant.peerId)
+                    }
+                }
+                return
+            }
             Task {
                 await voice.connect(to: participant)
                 await voice.setPeerCameraStreamId(
@@ -544,10 +683,16 @@ final class VoiceModel {
         case .voicePeerUpdated(let participant):
             guard roster[participant.peerId] != nil else { return }
             roster[participant.peerId] = participant
+            if transport == .livekit {
+                Task { await sfu.setRoster([participant]) }
+            }
 
         case .voicePeerLeft(let peerId):
             roster[peerId] = nil
-            Task { await voice.remove(peerId: peerId) }
+            Task {
+                await voice.remove(peerId: peerId)
+                await sfu.forgetPeer(peerId)
+            }
 
         // The roster is how a share announces itself: `sharingScreen` and
         // `cameraStreamId` both arrive here, and both race the media.
@@ -560,6 +705,10 @@ final class VoiceModel {
                         participant.cameraStreamId, for: participant.peerId
                     )
                 }
+            }
+            if transport == .livekit {
+                let others = participants.filter { $0.peerId != selfPeerId }
+                Task { await sfu.setRoster(others) }
             }
 
         case .voiceScreenShareDenied(let voiceChannelId):
@@ -590,17 +739,95 @@ final class VoiceModel {
                 localized: "This voice channel runs on \(transport), which the iOS app cannot join yet."
             ))
 
+        // Mesh signalling. The server drops these in an SFU room, and so does
+        // this client: a peer connection built here would be to nobody.
         case .voiceOffer(let from, let sdp):
+            guard transport != .livekit else { return }
             Task { await voice.handleOffer(from: from, sdp: sdp) }
 
         case .voiceAnswer(let from, let sdp):
+            guard transport != .livekit else { return }
             Task { await voice.handleAnswer(from: from, sdp: sdp) }
 
         case .voiceCandidate(let from, let payload):
+            guard transport != .livekit else { return }
             Task { await voice.handleCandidate(from: from, payload: payload) }
 
         default:
             break
         }
+    }
+
+    // MARK: - SFU
+
+    /// The media half of a LiveKit join: a token for the peer id `welcome`
+    /// minted, then the room. One clock over both, and one outcome.
+    ///
+    /// **Never a mesh instead.** If the token call fails, the room refuses, or
+    /// `sfuJoinTimeout` runs out, this leaves the WS room and says so. The rest
+    /// of the call is on the SFU and would neither hear a mesh peer nor see it
+    /// drop out; that silent split is the bug `docs/voice-backends.md` "One
+    /// room, one transport" exists to make impossible.
+    private func startSfuSession(peerId: String, channelId: String) {
+        sfuJoin?.cancel()
+        sfuJoin = Task { [weak self] in
+            guard let self else { return }
+            let outcome: Result<Void, SfuJoinError>
+            do {
+                try await withSfuTimeout {
+                    try await self.connectSfu(peerId: peerId, channelId: channelId)
+                }
+                outcome = .success(())
+            } catch let error as SfuJoinError {
+                outcome = .failure(error)
+            } catch {
+                outcome = .failure(.connect(String(describing: error)))
+            }
+            // A leave, or a displacement, that landed while this was in flight
+            // has already reset the model. Nothing here may write over it.
+            guard !Task.isCancelled, self.selfPeerId == peerId, self.status == .joining else {
+                if case .success = outcome { await self.sfu.disconnect() }
+                return
+            }
+            switch outcome {
+            case .success:
+                self.sfuIsConnected = true
+                self.status = .connected
+                await self.reportVoiceState()
+            case .failure(let error):
+                guard let message = sfuFailureMessage(error) else { return }
+                self.intendedChannel = nil
+                self.resumeClaim = nil
+                self.status = .failed(message)
+                await self.session?.realtime.leaveVoice()
+                await self.sfu.disconnect()
+                self.sfuIsConnected = false
+                self.peers = []
+                self.video = [:]
+                self.selfPeerId = nil
+            }
+        }
+    }
+
+    private func connectSfu(peerId: String, channelId: String) async throws {
+        guard let session else { throw SfuJoinError.superseded }
+        // The mesh's audio session is released first: two WebRTC builds each
+        // holding `AVAudioSession` is a fight the SDK that publishes should win
+        // outright, and the mic track the mesh created is not the one that goes
+        // on the wire here.
+        await voice.disconnectAll()
+        sfuIsConnected = false
+        let info: VoiceSessionInfo
+        do {
+            info = try await session.api.post(
+                "/api/voice/token",
+                body: VoiceSessionRequest(voiceChannelId: channelId, peerId: peerId)
+            )
+        } catch {
+            throw SfuJoinError.token((error as? APIError)?.errorDescription ?? error.localizedDescription)
+        }
+        try Task.checkCancellation()
+        try await sfu.connect(info, muted: isMuted || isDeafened, speaker: isSpeakerOn)
+        if isDeafened { await sfu.setDeafened(true) }
     }
 }

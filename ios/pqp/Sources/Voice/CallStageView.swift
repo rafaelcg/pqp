@@ -292,7 +292,7 @@ struct CallStageView: View {
 /// from a broken one.
 private struct PeerStageTile: View {
     let peer: VoicePeerState
-    let track: RTCVideoTrack?
+    let track: VideoFeed?
     var isMuted: Bool = false
     var large: Bool
 

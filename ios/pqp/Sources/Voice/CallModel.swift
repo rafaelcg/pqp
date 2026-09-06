@@ -49,7 +49,9 @@ final class CallModel {
         didSet { noteCallProgress() }
     }
     /// Our own capture, for the self preview. Never sent to a renderer twice.
-    private(set) var localCamera: RTCVideoTrack?
+    private(set) var localCamera: VideoFeed?
+    /// What `welcome` said this room runs on. Nil until it has.
+    private(set) var transport: VoiceRoomTransport?
     /// Rings arriving at this device, oldest first. Not call state of ours until
     /// one is accepted, so it survives starting/ending unrelated calls.
     private(set) var incoming: [IncomingCall] = []
@@ -69,7 +71,9 @@ final class CallModel {
         didSet {
             guard isMuted != oldValue else { return }
             Task {
+                // Both transports; the idle one holds no track and no-ops.
                 await voice.setMuted(isMuted)
+                await sfu.setMuted(isMuted)
                 await session?.realtime.setVoiceState(muted: isMuted, deafened: false)
             }
         }
@@ -81,7 +85,10 @@ final class CallModel {
     var isSpeakerOn = true {
         didSet {
             guard isSpeakerOn != oldValue else { return }
-            Task { await voice.setSpeaker(isSpeakerOn) }
+            Task {
+                await voice.setSpeaker(isSpeakerOn)
+                await sfu.setSpeaker(isSpeakerOn)
+            }
         }
     }
 
@@ -91,6 +98,13 @@ final class CallModel {
     var isCollapsed = false
 
     private let voice = VoiceClient()
+    /// The SFU half. Idle in a mesh room; in a LiveKit room it is the media.
+    /// See `VoiceModel` for the twin and for why the two are kept side by side.
+    private let sfu = LiveKitVoiceClient()
+    private var sfuJoin: Task<Void, Never>?
+    private var sfuIsConnected = false
+    private var declaresResume = false
+    private var resumeClaim: VoiceResumeClaim?
     private var session: SessionStore?
     private static let handlerKey = "dm-call"
     /// Send `call-ring` when `welcome` lands — set only for a call we placed.
@@ -178,6 +192,8 @@ final class CallModel {
         guard conversationId != nil else { return }
         ringTimeout?.cancel()
         ringTimeout = nil
+        sfuJoin?.cancel()
+        sfuJoin = nil
         if isCameraOn {
             await session?.realtime.setCamera(streamId: nil)
         }
@@ -187,6 +203,7 @@ final class CallModel {
         await screenShare.disarm()
         await session?.realtime.leaveVoice()
         await voice.disconnectAll()
+        await sfu.disconnect()
         clearCallState()
         phase = .ended(reason)
         // The closing sentence needs a moment to be read; then the stage goes
@@ -210,7 +227,11 @@ final class CallModel {
     }
 
     func flipCamera() async {
-        await voice.flipCamera()
+        if transport == .livekit {
+            await sfu.flipCamera()
+        } else {
+            await voice.flipCamera()
+        }
     }
 
     private func enableCamera() async {
@@ -219,11 +240,19 @@ final class CallModel {
             errorMessage = String(localized: "Camera access is off. Enable it in Settings.")
             return
         }
-        guard let started = await voice.startCamera() else {
+        let started: (feed: VideoFeed, streamId: String)?
+        if transport == .livekit {
+            started = await sfu.startCamera()
+        } else if let mesh = await voice.startCamera() {
+            started = (.mesh(mesh.track.value), mesh.streamId)
+        } else {
+            started = nil
+        }
+        guard let started else {
             errorMessage = String(localized: "Could not start the camera.")
             return
         }
-        localCamera = started.track.value
+        localCamera = started.feed
         isCameraOn = true
         errorMessage = nil
         await voice.setVideoMode(true)
@@ -241,7 +270,11 @@ final class CallModel {
         // Told before the track goes: a peer that sees the stream vanish with no
         // announcement reclassifies it as a screen share and draws a frozen frame.
         await session?.realtime.setCamera(streamId: nil)
-        await voice.stopCamera()
+        if transport == .livekit {
+            await sfu.stopCamera()
+        } else {
+            await voice.stopCamera()
+        }
         await voice.setVideoMode(false)
     }
 
@@ -256,7 +289,7 @@ final class CallModel {
     /// on mesh, four on LiveKit); the phone still shows one at a time.
     var focusedScreenPeerId: String?
 
-    var screenPresenters: [(peerId: String, name: String, track: RTCVideoTrack)] {
+    var screenPresenters: [(peerId: String, name: String, track: VideoFeed)] {
         peers.compactMap { peer in
             guard let screen = video[peer.peerId]?.screen else { return nil }
             return (peer.peerId, peer.displayName, screen)
@@ -271,7 +304,7 @@ final class CallModel {
         return screenPresenters.first?.peerId
     }
 
-    var remoteScreen: RTCVideoTrack? {
+    var remoteScreen: VideoFeed? {
         if let focused = resolvedScreenFocus {
             return video[focused]?.screen
         }
@@ -299,7 +332,7 @@ final class CallModel {
     /// The person on the other end of a 1:1, for the ring avatar.
     var counterpart: PublicUser? { conversation?.participants.first }
 
-    func camera(for peerId: String) -> RTCVideoTrack? { video[peerId]?.camera }
+    func camera(for peerId: String) -> VideoFeed? { video[peerId]?.camera }
 
     func isMuted(_ peerId: String) -> Bool { roster[peerId]?.muted ?? false }
 
@@ -318,6 +351,9 @@ final class CallModel {
         }
         do {
             let ice: IceServersResponse = try await session.api.get("/api/ice-servers")
+            // Advisory only; see `VoiceModel.join` for what it decides.
+            let backend: VoiceBackendInfo? = try? await session.api.get("/api/voice/backend")
+            declaresResume = backend?.declaresResume ?? false
             try await voice.startAudio()
             // "Mute microphone when joining voice" covers a DM call too, which
             // is how the web client reads it: `handleConversationCall` passes
@@ -351,7 +387,15 @@ final class CallModel {
                 guard let self else { return }
                 Task { await self.voice.setVideoQuality(quality) }
             }
-            await session.realtime.joinVoice(channelId: conversationId)
+            await sfu.configure(
+                onStateChange: { [weak self] states in
+                    Task { @MainActor in self?.peers = states }
+                },
+                onVideoChange: { [weak self] video in
+                    Task { @MainActor in self?.video = video }
+                }
+            )
+            await session.realtime.joinVoice(channelId: conversationId, declaresResume: declaresResume)
         } catch {
             fail((error as? APIError)?.errorDescription ?? error.localizedDescription)
         }
@@ -366,8 +410,7 @@ final class CallModel {
     private var ratingSnapshot: CallSnapshot {
         CallSnapshot(
             peerCount: peers.count,
-            // The DM room is mesh like every other room this app joins.
-            usingSfu: false,
+            usingSfu: transport == .livekit,
             screenSharing: remoteScreen != nil || screenShare.isSharing,
             channelId: conversationId
         )
@@ -458,20 +501,38 @@ final class CallModel {
 
         // --- the room ---
         case .ready:
-            // The socket came back and the server dropped our peer with it. A
-            // reconnect mints a new peer id, so the mesh is unusable and is
-            // rebuilt rather than resumed. The ring is NOT re-sent: the server
-            // refuses a second one, and the far end never stopped ringing.
+            // The socket came back. In a LiveKit room the media is still up on
+            // its own connection, so the seat is reclaimed with the claim the
+            // last `welcome` issued and nothing is rebuilt unless the server
+            // declines (see the `welcome` handler). On the mesh the server
+            // dropped our peer with the socket and a reconnect mints a new peer
+            // id, so the mesh is unusable and is rebuilt rather than resumed.
+            // The ring is NOT re-sent either way: the server refuses a second
+            // one, and the far end never stopped ringing.
             guard let conversationId, phase.isLive else { return }
+            if transport == .livekit {
+                let claim = resumeClaim
+                Task {
+                    await session?.realtime.joinVoice(
+                        channelId: conversationId,
+                        declaresResume: declaresResume,
+                        resume: claim
+                    )
+                }
+                return
+            }
             Task {
                 await voice.disconnectAll()
                 self.localCamera = nil
                 self.isCameraOn = false
                 try? await voice.startAudio()
-                await session?.realtime.joinVoice(channelId: conversationId)
+                await session?.realtime.joinVoice(
+                    channelId: conversationId, declaresResume: declaresResume
+                )
             }
 
-        case .voiceWelcome(let peerId, let voiceChannelId, let existing, _, let transport):
+        case .voiceWelcome(let peerId, let voiceChannelId, let existing, _, let transport,
+                           let resumed, let resumeToken):
             guard voiceChannelId == conversationId else {
                 // A `welcome` for somewhere else means this socket joined
                 // another voice room, and the server keeps exactly one peer per
@@ -485,18 +546,30 @@ final class CallModel {
                 return
             }
             // The room's transport is the server's to pin and binding on us.
-            // We declare `transports: ["mesh"]` at join so a current server
-            // refuses us before a peer exists; this is the belt to that suspender.
-            if let transport, transport != "mesh" {
+            // We declare what we can run at join so a current server refuses
+            // us before a peer exists; this is the belt to that suspender.
+            let plan = VoiceTransportPlan(transport: transport)
+            if case .unsupported(let name) = plan {
                 Task {
                     await session?.realtime.leaveVoice()
                     await voice.disconnectAll()
                 }
-                fail(String(localized: "This call runs on \(transport), which the iOS app cannot join yet."))
+                fail(String(localized: "This call runs on \(name), which the iOS app cannot join yet."))
                 return
             }
+            if let resumeToken {
+                resumeClaim = VoiceResumeClaim(peerId: peerId, token: resumeToken)
+            }
+            let isResume = plan == .livekit && keepsSfuSession(
+                resumed: resumed, welcomePeerId: peerId,
+                currentPeerId: selfPeerId, sfuConnected: sfuIsConnected
+            )
+            self.transport = plan.transport
             selfPeerId = peerId
-            screenShare.arm()
+            // The share bridge is mesh-only for now: publishing a screen from
+            // this app goes peer to peer, and an armed bridge in a LiveKit room
+            // would announce a share no track ever backs.
+            if plan == .mesh { screenShare.arm() }
             knownPeerIds = Set(existing.map(\.peerId))
             for participant in existing { roster[participant.peerId] = participant }
             if existing.isEmpty {
@@ -508,23 +581,32 @@ final class CallModel {
             let shouldRing = ringOnWelcome
             ringOnWelcome = false
             Task {
-                await voice.setSelfPeerId(peerId)
-                for participant in existing {
-                    await voice.connect(to: participant)
-                    await voice.setPeerCameraStreamId(
-                        participant.cameraStreamId, for: participant.peerId
-                    )
+                if plan == .livekit {
+                    await sfu.setRoster(existing)
+                } else {
+                    await voice.setSelfPeerId(peerId)
+                    for participant in existing {
+                        await voice.connect(to: participant)
+                        await voice.setPeerCameraStreamId(
+                            participant.cameraStreamId, for: participant.peerId
+                        )
+                    }
                 }
                 if shouldRing {
                     await session?.realtime.ringCall(conversationId: voiceChannelId)
                 }
                 await session?.realtime.setVoiceState(muted: isMuted, deafened: false)
-                if wantsCamera, !isCameraOn {
+                // On LiveKit the camera waits for the media to be up; the join
+                // task below turns it on once the room is connected.
+                if plan == .mesh, wantsCamera, !isCameraOn {
                     wantsCamera = false
                     await enableCamera()
                 }
             }
             if shouldRing { startRingTimeout() }
+            if plan == .livekit, !isResume {
+                startSfuSession(peerId: peerId, channelId: voiceChannelId)
+            }
 
         case .voicePeerJoined(let participant):
             guard phase.isLive else { return }
@@ -534,6 +616,10 @@ final class CallModel {
             ringTimeout = nil
             phase = .active
             startedAt = startedAt ?? Date()
+            if transport == .livekit {
+                Task { await sfu.setRoster([participant]) }
+                return
+            }
             Task {
                 await voice.connect(to: participant)
                 await voice.setPeerCameraStreamId(
@@ -546,12 +632,18 @@ final class CallModel {
         case .voicePeerUpdated(let participant):
             guard phase.isLive, roster[participant.peerId] != nil else { return }
             roster[participant.peerId] = participant
+            if transport == .livekit {
+                Task { await sfu.setRoster([participant]) }
+            }
 
         case .voicePeerLeft(let peerId):
             guard phase.isLive else { return }
             knownPeerIds.remove(peerId)
             roster[peerId] = nil
-            Task { await voice.remove(peerId: peerId) }
+            Task {
+                await voice.remove(peerId: peerId)
+                await sfu.forgetPeer(peerId)
+            }
             // The last person left. A 1:1 with nobody on the other end is over —
             // sitting on an empty stage waiting for a rejoin that has no reason
             // to come is the worse of the two guesses.
@@ -568,6 +660,10 @@ final class CallModel {
                         participant.cameraStreamId, for: participant.peerId
                     )
                 }
+            }
+            if transport == .livekit {
+                let others = participants.filter { $0.peerId != selfPeerId }
+                Task { await sfu.setRoster(others) }
             }
 
         case .voiceRoomFull(let limit):
@@ -595,21 +691,78 @@ final class CallModel {
             guard voiceChannelId == conversationId else { return }
             fail(String(localized: "This call runs on \(transport), which the iOS app cannot join yet."))
 
+        // Mesh signalling, dropped in an SFU room by the server and by us.
         case .voiceOffer(let from, let sdp):
-            guard phase.isLive else { return }
+            guard phase.isLive, transport != .livekit else { return }
             Task { await voice.handleOffer(from: from, sdp: sdp) }
 
         case .voiceAnswer(let from, let sdp):
-            guard phase.isLive else { return }
+            guard phase.isLive, transport != .livekit else { return }
             Task { await voice.handleAnswer(from: from, sdp: sdp) }
 
         case .voiceCandidate(let from, let payload):
-            guard phase.isLive else { return }
+            guard phase.isLive, transport != .livekit else { return }
             Task { await voice.handleCandidate(from: from, payload: payload) }
 
         default:
             break
         }
+    }
+
+    // MARK: - SFU
+
+    /// The media half of a LiveKit join. See `VoiceModel.startSfuSession` for
+    /// the contract; the one difference here is the ending, which is a hang-up
+    /// with the failure as its reason rather than a `.failed` status.
+    private func startSfuSession(peerId: String, channelId: String) {
+        sfuJoin?.cancel()
+        sfuJoin = Task { [weak self] in
+            guard let self else { return }
+            let outcome: Result<Void, SfuJoinError>
+            do {
+                try await withSfuTimeout {
+                    try await self.connectSfu(peerId: peerId, channelId: channelId)
+                }
+                outcome = .success(())
+            } catch let error as SfuJoinError {
+                outcome = .failure(error)
+            } catch {
+                outcome = .failure(.connect(String(describing: error)))
+            }
+            guard !Task.isCancelled, self.selfPeerId == peerId, self.phase.isLive else {
+                if case .success = outcome { await self.sfu.disconnect() }
+                return
+            }
+            switch outcome {
+            case .success:
+                self.sfuIsConnected = true
+                if self.wantsCamera, !self.isCameraOn {
+                    self.wantsCamera = false
+                    await self.enableCamera()
+                }
+            case .failure(let error):
+                guard let message = sfuFailureMessage(error) else { return }
+                self.sfuIsConnected = false
+                self.fail(message)
+            }
+        }
+    }
+
+    private func connectSfu(peerId: String, channelId: String) async throws {
+        guard let session else { throw SfuJoinError.superseded }
+        await voice.disconnectAll()
+        sfuIsConnected = false
+        let info: VoiceSessionInfo
+        do {
+            info = try await session.api.post(
+                "/api/voice/token",
+                body: VoiceSessionRequest(voiceChannelId: channelId, peerId: peerId)
+            )
+        } catch {
+            throw SfuJoinError.token((error as? APIError)?.errorDescription ?? error.localizedDescription)
+        }
+        try Task.checkCancellation()
+        try await sfu.connect(info, muted: isMuted, speaker: isSpeakerOn)
     }
 
     /// The caller's own 45s clock.
@@ -645,6 +798,9 @@ final class CallModel {
         localCamera = nil
         isCameraOn = false
         selfPeerId = nil
+        transport = nil
+        resumeClaim = nil
+        sfuIsConnected = false
         knownPeerIds = []
         declinedUserIds = []
         startedAt = nil
