@@ -113,6 +113,18 @@ export interface VideoReceiverSample {
   /** Times the picture froze, which is the receiver's own quality complaint. */
   freezeCount: number | null;
   packetsLost: number | null;
+  /**
+   * True when the transport itself vouches that this track is flowing.
+   *
+   * A mesh `getStats()` report has an `inbound-rtp` row for every video m-line
+   * whether or not anything is arriving on it, so a mesh row proves it is live
+   * by its frame and byte counters, and this is left unset. An SFU subscription
+   * is the opposite: the server only hands a client a track it is forwarding,
+   * so the row is live from the moment it exists, including the first second
+   * before the decoder has reported anything. Without this flag that second
+   * read as "nobody is sending you video" over a picture that was playing.
+   */
+  attached?: boolean;
 }
 
 /** The path the media is taking, which is the other half of the answer. */
@@ -422,6 +434,19 @@ interface Registration {
 }
 
 const registrations = new Map<RTCPeerConnection, Registration>();
+/**
+ * Transports that sample themselves.
+ *
+ * The mesh hands this module its `RTCPeerConnection`s and lets `getStats()`
+ * be read here, because the joining is the hard part and it is the same for
+ * every peer. An SFU session has one connection shared by every track and a
+ * client library that already knows which publication is whose, so it is the
+ * one that can answer "what is arriving and from whom"; it registers a sampler
+ * instead of a connection. Both feed the same snapshot, which is the point: a
+ * readout that reads `sampleVoiceStats()` cannot tell the transports apart,
+ * and before this existed it silently reported an SFU room as empty.
+ */
+const sources = new Set<() => Promise<VoiceStatsSnapshot>>();
 const byteMarks = new Map<string, ByteMark>();
 let timer: ReturnType<typeof setInterval> | null = null;
 
@@ -524,7 +549,49 @@ async function sampleAll(): Promise<VoiceStatsSnapshot> {
       // A connection closed between the iteration and the call. Nothing to say.
     }
   }
+  for (const source of sources) {
+    try {
+      const snapshot = await source();
+      senders.push(...snapshot.senders);
+      receivers.push(...snapshot.receivers);
+      paths.push(...snapshot.paths);
+    } catch {
+      // The room went away mid-sample. Same answer as above.
+    }
+  }
   return { senders, receivers, paths };
+}
+
+/**
+ * Bitrate since this key was last measured, for a transport sampling itself.
+ *
+ * Shares the mark table with the mesh path on purpose, so a source that is
+ * torn down and rebuilt under the same key resumes measuring rather than
+ * reporting one bogus spike off a stale mark from a different call.
+ */
+export function measureKbps(
+  key: string,
+  bytes: number | null,
+  timestamp: number | null,
+): number | null {
+  return rateKbps(byteMarks, key, bytes, timestamp);
+}
+
+/**
+ * Track a transport that produces its own rows, for as long as it lives.
+ *
+ * Returns the unregister function rather than taking a handle, because the
+ * caller has nothing stable to hand over: the SFU room object outlives its
+ * connection and is rebuilt on reconnect.
+ */
+export function registerVoiceStatsSource(
+  sample: () => Promise<VoiceStatsSnapshot>,
+): () => void {
+  sources.add(sample);
+  exposeConsole();
+  return () => {
+    sources.delete(sample);
+  };
 }
 
 /* eslint-disable no-console -- the console IS the output of this module; there
@@ -537,7 +604,7 @@ function print(snapshot: VoiceStatsSnapshot): void {
     snapshot.receivers.length === 0 &&
     snapshot.paths.length === 0
   ) {
-    console.log(`[pqp voice ${time}] no mesh connections — not in a call?`);
+    console.log(`[pqp voice ${time}] no voice connections, not in a call?`);
     return;
   }
   console.log(`[pqp voice ${time}] outbound video`);

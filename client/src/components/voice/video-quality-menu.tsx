@@ -39,6 +39,17 @@ import { cn } from "@/lib/utils";
  * this machine is actually sending; underneath them, "Video you receive" says
  * what is arriving and whose choice it was. Nothing here promises a viewer a
  * knob that WebRTC does not have.
+ *
+ * THE SAME IS TRUE ON THE SFU, FOR A DIFFERENT REASON. LiveKit can serve a
+ * viewer a smaller copy of a track, but only from simulcast layers the
+ * presenter encodes, and the screen share is published as a single layer on
+ * purpose (`livekit-session.ts`): a second and third encoder on the one
+ * machine that is already carrying the film is the wrong trade for a watch
+ * party. So a viewer gets no size list on either transport, and the receiving
+ * half must therefore be right on both. It was not: the readout under it knew
+ * only about mesh peer connections and told an SFU room's viewers that nobody
+ * was sending them video, while the share played. The LiveKit session now
+ * feeds the same sampler; see `inbound-video-readout.tsx`.
  */
 const LABELS: Record<VideoQuality, MessageKey> = {
   auto: "settings.voice.videoQuality.auto",
