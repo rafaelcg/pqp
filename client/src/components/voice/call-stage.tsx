@@ -1229,8 +1229,13 @@ function ActiveCall({
               )}
               style={{
                 gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`,
-                // Equal rows. Without this the rows size to content, and a
-                // tile whose picture is absolutely positioned has none.
+                // The featured row (a pin, or the one screen a crowded room
+                // is watching) gets twice the height of the rows under it.
+                // Without it a share at the top of a three-row grid is a third
+                // of the stage, which is not "featured" in any useful sense.
+                gridTemplateRows: stage.featured ? "minmax(0, 2fr)" : undefined,
+                // Equal rows for the rest. Without this they size to content,
+                // and a tile whose picture is absolutely positioned has none.
                 gridAutoRows: "minmax(0, 1fr)",
               }}
             >

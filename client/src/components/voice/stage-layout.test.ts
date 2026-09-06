@@ -111,6 +111,48 @@ describe("planStage", () => {
     expect(plan.featured).toBe(true);
   });
 
+  it("gives the one screen in a crowded room the whole first row", () => {
+    const plan = planStage({
+      screens: [{ peerId: "streamer", isSelf: false }],
+      people: [
+        person("me", { isSelf: true }),
+        person("streamer", { stream: {} }),
+        person("ana", { stream: {} }),
+        person("bia", { stream: {} }),
+      ],
+    });
+    expect(plan.tiles).toHaveLength(4);
+    expect(plan.tiles[0]!.kind).toBe("screen");
+    expect(plan.featured).toBe(true);
+  });
+
+  it("does not feature a screen while there is still room for it", () => {
+    const plan = planStage({
+      screens: [{ peerId: "streamer", isSelf: false }],
+      people: [
+        person("me", { isSelf: true }),
+        person("streamer", { stream: {} }),
+      ],
+    });
+    expect(plan.featured).toBe(false);
+  });
+
+  it("two presenters are a comparison, so neither is featured", () => {
+    const plan = planStage({
+      screens: [
+        { peerId: "ana", isSelf: false },
+        { peerId: "bia", isSelf: false },
+      ],
+      people: [
+        person("me", { isSelf: true }),
+        person("ana", { stream: {} }),
+        person("bia", { stream: {} }),
+      ],
+    });
+    expect(plan.tiles).toHaveLength(4);
+    expect(plan.featured).toBe(false);
+  });
+
   it("a pin on the only tile features nothing — it is already the stage", () => {
     const plan = planStage({
       screens: [{ peerId: "ana", isSelf: false }],

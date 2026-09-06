@@ -115,10 +115,20 @@ export function planStage(input: {
   const ordered = pinned
     ? [pinned, ...tiles.filter((tile) => tile.id !== pinned.id)]
     : tiles;
+  // A crowded room watching ONE screen: the screen takes the whole first row
+  // and the faces line up underneath. Four pictures in a plain grid puts that
+  // screen at a quarter of the stage, which is not what a room gathered to
+  // watch it looks like. One screen only — two presenters is a comparison, and
+  // the grid is right for that — and a pin always outranks it.
+  const watchParty =
+    pinned === undefined &&
+    screens.length === 1 &&
+    ordered.length >= 4 &&
+    ordered[0]?.kind === "screen";
   return {
     tiles: ordered,
     selfPreview,
-    featured: pinned !== undefined && ordered.length > 1,
+    featured: (pinned !== undefined || watchParty) && ordered.length > 1,
   };
 }
 
