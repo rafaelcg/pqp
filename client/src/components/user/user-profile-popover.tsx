@@ -1075,7 +1075,7 @@ function UserProfileCard({
   return (
     <>
       {createPortal(
-    <div>
+    <div
       ref={cardRef}
       role="dialog"
       aria-label={t("profile.cardLabel", { name: subject.displayName })}
