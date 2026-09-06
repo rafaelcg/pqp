@@ -65,7 +65,7 @@ See `.env.example`. Important names:
 | Area | Names |
 |---|---|
 | Server | `DATABASE_URL`, `TEST_DATABASE_URL`, `CLERK_SECRET_KEY`, `PORT`, `DEV_AUTH_BYPASS`, `DEV_SEED`, `CHARACTER_ACCOUNTS_ENABLED`, `INSTANCE_MODERATOR_CLERK_IDS`, `ADMIN_METRICS_TOKEN` (machine token for `GET /api/admin/metrics`, the operator dashboard feed; see `tools/admin-dashboard/README.md`) |
-| Multi-instance (both default off; one machine in production) | `CLUSTER_BUS` (`postgres` shares chat fan-out over LISTEN/NOTIFY), `VOICE_REGISTRY` (`postgres` copies the voice peer map and transport pins into the `voice_*` tables; write-through only as of M1 of `docs/plans/MULTI_INSTANCE_VOICE.md`, not yet enough to run two machines) |
+| Multi-instance (both default off; one machine in production) | `CLUSTER_BUS` (`postgres` shares chat fan-out over LISTEN/NOTIFY), `VOICE_REGISTRY` (`postgres` copies the voice peer map and transport pins into the `voice_*` tables and builds rosters from them; with `CLUSTER_BUS` also on, room events cross instances. M1 and M2 of `docs/plans/MULTI_INSTANCE_VOICE.md`; not yet enough to run two machines, M3 and M5 first) |
 | Game connections | `PUBLIC_APP_URL`, `STEAM_WEB_API_KEY`, `BATTLENET_CLIENT_ID`, `BATTLENET_CLIENT_SECRET`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` (off per provider until set; see `docs/CONNECTIONS.md`) |
 | Ambient runner (`tools/ambient`) | `PQP_API_URL`, `AMBIENT_TOKENS_FILE`, `AMBIENT_STATE_DIR`, `AMBIENT_CONFIG`, `AMBIENT_MODEL`, `ANTHROPIC_API_KEY`, `AMBIENT_KILL_SWITCH` |
 | Client | `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`, `VITE_DEV_AUTH_BYPASS`, `VITE_VOICE_BACKEND` (leave empty to follow the server; `mesh` forces peer-to-peer) |
