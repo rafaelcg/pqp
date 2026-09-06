@@ -3582,6 +3582,7 @@ function MainAppContent({
           isTransmitting={voiceState.isTransmitting}
           usingSfu={voiceState.usingSfu}
           isPresenting={voiceState.screenSharePeerIds.length > 0}
+          listenOnly={!voiceState.canSpeak}
           onOpen={() => void openVoiceChannel()}
           onLeave={() => voice.leave()}
         />
@@ -3594,6 +3595,7 @@ function MainAppContent({
         isMuted={voiceState.isMuted}
         isDeafened={voiceState.isDeafened}
         inVoice={voiceState.status !== "idle"}
+        canSpeak={voiceState.canSpeak}
         showUserButton={showUserButton}
         manualStatus={status.manual}
         effectiveStatus={status.effective}

@@ -1,4 +1,4 @@
-import { Loader2, PhoneOff, ScreenShare } from "lucide-react";
+import { Loader2, MicOff, PhoneOff, ScreenShare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
@@ -25,6 +25,12 @@ interface VoiceStatusBarProps {
    */
   inputMode?: "voice-activity" | "push-to-talk";
   isTransmitting?: boolean;
+  /**
+   * The channel does not let this person speak (`Permission.SPEAK` denied).
+   * Shown here because this strip is the one place the call is visible from
+   * the rest of the app, and a locked mic with no label reads as broken.
+   */
+  listenOnly?: boolean;
   onOpen: () => void;
   onLeave: () => void;
 }
@@ -43,6 +49,7 @@ export function VoiceStatusBar({
   isPresenting = false,
   inputMode = "voice-activity",
   isTransmitting = true,
+  listenOnly = false,
   onOpen,
   onLeave,
 }: VoiceStatusBarProps) {
@@ -83,6 +90,15 @@ export function VoiceStatusBar({
           <span className="flex shrink-0 items-center gap-1 rounded bg-signal/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal">
             <ScreenShare className="h-3 w-3" aria-hidden="true" />
             {t("voice.tile.presenting")}
+          </span>
+        )}
+        {listenOnly && (
+          <span
+            data-listen-only
+            className="flex shrink-0 items-center gap-1 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-warning"
+          >
+            <MicOff className="h-3 w-3" aria-hidden="true" />
+            {t("voice.bar.listenOnly")}
           </span>
         )}
         {/* i18n: needs `voice.bar.pttLive` / `voice.bar.pttIdle`. */}

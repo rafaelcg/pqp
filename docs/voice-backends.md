@@ -54,6 +54,8 @@ Restart the server and join a voice channel — the "mesh limit" warning disappe
 
 The compose service publishes **7880/tcp (signal), 7881/tcp (ICE over TCP) and 7882/udp (media)** — the ports `--dev` actually binds. If you change the LiveKit config, check the container's startup line (`"rtc.portTCP": 7881, "rtc.portUDP": {"Start":7882}`) rather than assuming a port range.
 
+If the browser connects to the signal socket and then logs `could not establish pc connection`, LiveKit is advertising the container's own IP (`"nodeIP": "172.x.x.x"` in its startup line), which Docker Desktop on macOS does not route. Run it with `--node-ip <your LAN IP>` (seen 2026-09-06; `docker run ... livekit/livekit-server --dev --bind 0.0.0.0 --node-ip 192.168.x.x` with the same three port mappings works).
+
 **How it works:**
 
 1. Client joins the voice room over `/ws` and receives `welcome` with its `peerId`.
@@ -64,6 +66,26 @@ The compose service publishes **7880/tcp (signal), 7881/tcp (ICE over TCP) and 7
 `livekit-client` is loaded via dynamic `import()`, so mesh deployments never download it (it is emitted as a separate ~530 kB chunk).
 
 **Security:** the token endpoint refuses any `peerId` that is not a live voice peer belonging to the requesting user in the requested channel, so a caller cannot mint a token impersonating another participant.
+
+### Speak permission (`Permission.SPEAK`)
+
+The roles editor and the per-channel overwrite editor expose **Speak**. It is enforced, permissively: every existing role and channel already carries the bit, so nothing changes on deploy until an owner takes it away.
+
+**How an owner makes a stage.** In the voice channel's permissions, set Speak to *Deny* for `@everyone` and to *Allow* for a moderator (or "speaker") role. Everyone else joins muted and cannot unmute; moderators talk. Owner and Administrator resolve to every bit, so they can never lock themselves out. The overwrite editor says this in one line under the Speak row.
+
+**What is enforced where.**
+
+| Path | Enforcement |
+|---|---|
+| Join (`ws/voice.ts`) | SPEAK is resolved with CONNECT (one query, with the channel's overwrites) and written into the peer. `welcome.canSpeak` and every roster entry's `canSpeak` carry it. A false value logs `voice.speakDenied` once per join. |
+| SFU token (`POST /api/voice/token`) | The LiveKit grant is `canPublish = SPEAK`. Screen share and camera are publishes too, so a listener cannot present. `canSubscribe` stays true. The response carries `speak`. **This is the real enforcement:** LiveKit refuses the publish, so a modified client is still silent. |
+| Live change | Every permissions bump (role edit, overwrite, role granted or removed) re-resolves SPEAK for everyone in that server's rooms (`reevaluateVoiceSpeak`, hooked on `onPermissionsUpdate`, local and cluster-relayed alike). A change sends `voice-speak-changed { canSpeak }` to that person and, on the SFU, rewrites their participant permission (`setSfuUserCanPublish`: mutes every published track, then `updateParticipant` with `canPublish`). A grant works without re-minting a token; the client publishes its mic as soon as it is told. |
+| Roster claims | `set-sharing-screen` and `set-camera` are refused for a listener (`screen-share-denied` / `camera-denied`), and `set-voice-state` cannot show a listener as unmuted. |
+| Client | Joins muted, the unmute is disabled ("Listening only. You do not have permission to speak in this channel."), share and camera buttons are not offered, push-to-talk does not open the mic, and a "Listen only" badge sits in the call bar. A mid-call grant unlocks the controls with a notice and leaves the person muted until they unmute. |
+
+**The mesh caveat.** In a mesh room the audio never touches the server, so the server cannot silence anyone at the media layer. Dropping a listener's offer/answer frames is not an option either: those carry both directions, so it would also stop them *hearing*. Mesh enforcement is therefore client-side (the same gate that already keeps a muted mic muted), plus the roster refusals above. That is a real limit: a modified client in a mesh room can still send audio. Rooms where this matters are large, and large rooms are on LiveKit, where the SFU enforces it. `voice.speakDenied` in the logs says which transport a listener joined on.
+
+Tests: `server/src/voice/backends.test.ts` (the grant), `server/src/voice/speak.test.ts` (the resolver), `server/src/voice/publish-grant.test.ts` (the live SFU update), `server/src/ws/voice-speak.test.ts` (welcome, roster, refusals, live change), `client/src/hooks/use-voice.test.ts` ("speak permission").
 
 ### Moderation must reach the SFU (`server/src/voice/admin.ts`)
 

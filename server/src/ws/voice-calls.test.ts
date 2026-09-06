@@ -117,6 +117,9 @@ vi.mock("./chat.js", () => ({
       fakes.broadcasts.push({ channelId, message });
     },
   ),
+  // Voice subscribes to permission bumps at import (SPEAK re-check); this
+  // suite never bumps one.
+  onPermissionsUpdate: () => () => {},
 }));
 
 vi.mock("./status.js", () => ({

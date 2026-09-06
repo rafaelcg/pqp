@@ -75,6 +75,17 @@ export const voiceParticipantSchema = z.object({
   // receive, which is both free and more accurate than anything relayed.
   muted: z.boolean().default(false),
   deafened: z.boolean().default(false),
+  /**
+   * Whether this participant holds `Permission.SPEAK` in the room. Absent on
+   * a server that predates the field, and absent means "may speak", which is
+   * also what every server resolved before SPEAK was enforced.
+   *
+   * Set by the server, never self-reported: it is what `muted` is not, a
+   * *rule*. On the SFU it is also the LiveKit publish grant. Carried for every
+   * participant, not only self, so the UI can badge a stage audience; the
+   * bit itself is already visible to anyone who can open the roles editor.
+   */
+  canSpeak: z.boolean().optional(),
 });
 
 export const welcomeMessageSchema = z.object({
@@ -105,6 +116,13 @@ export const welcomeMessageSchema = z.object({
    * id". Memory-only; a tab reload starts a cold join.
    */
   resumeToken: z.string().min(1).optional(),
+  /**
+   * Same value as `self.canSpeak`, at the top level so a client does not
+   * have to know the participant shape grew. False means: join muted, keep
+   * the mic locked, do not offer share or camera. Optional for wire
+   * compatibility; absent reads as true.
+   */
+  canSpeak: z.boolean().optional(),
 });
 
 export const peerJoinedMessageSchema = z.object({
@@ -308,6 +326,25 @@ export const voiceModerationMessageSchema = z.object({
 
 export type VoiceModerationMessage = z.infer<typeof voiceModerationMessageSchema>;
 
+/**
+ * Server → one participant's sockets: their SPEAK permission changed while
+ * they were in the room (a role edit, a channel overwrite, a role granted or
+ * removed). `false` means the mic is locked from now on: the client mutes,
+ * stops any share or camera, and disables the controls. On the SFU the
+ * server has already revoked the publish grant, so a client that ignores the
+ * frame is silent anyway. `true` unlocks the controls; the client stays muted
+ * until the person chooses to unmute.
+ */
+export const voiceSpeakChangedMessageSchema = z.object({
+  type: z.literal("voice-speak-changed"),
+  voiceChannelId: z.string(),
+  canSpeak: z.boolean(),
+});
+
+export type VoiceSpeakChangedMessage = z.infer<
+  typeof voiceSpeakChangedMessageSchema
+>;
+
 // --- end voice moderation ---------------------------------------------------
 
 export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
@@ -330,6 +367,7 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   callDeclinedMessageSchema,
   // --- voice moderation ---
   voiceModerationMessageSchema,
+  voiceSpeakChangedMessageSchema,
   // --- watch party ---
   watchPartyMessageSchema,
 ]);

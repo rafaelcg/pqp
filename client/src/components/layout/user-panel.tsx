@@ -28,6 +28,8 @@ interface UserPanelProps {
   isMuted: boolean;
   isDeafened: boolean;
   inVoice: boolean;
+  /** False while the current channel denies SPEAK: the mute stays locked. */
+  canSpeak?: boolean;
   showUserButton: boolean;
   /** What this account chose. `invisible` is only ever shown to its owner. */
   manualStatus: ManualStatus;
@@ -86,6 +88,7 @@ export function UserPanel({
   isMuted,
   isDeafened,
   inVoice,
+  canSpeak = true,
   showUserButton,
   manualStatus,
   effectiveStatus,
@@ -299,7 +302,13 @@ export function UserPanel({
       <Tooltip
         label={isMuted ? t("userPanel.unmute") : t("userPanel.mute")}
         name={isMuted ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
-        detail={inVoice ? undefined : t("userPanel.joinToUse")}
+        detail={
+          !inVoice
+            ? t("userPanel.joinToUse")
+            : canSpeak
+              ? undefined
+              : t("voice.control.listenOnlyLocked")
+        }
       >
         <span className="inline-flex">
           <Button
@@ -307,7 +316,7 @@ export function UserPanel({
             size="icon"
             className="h-8 w-8 shrink-0"
             onClick={onToggleMute}
-            disabled={!inVoice}
+            disabled={!inVoice || !canSpeak}
             aria-pressed={isMuted}
             aria-label={isMuted ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
           >
