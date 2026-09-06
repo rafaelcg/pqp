@@ -157,3 +157,76 @@ class LiveKitPeerIndexTest {
         }
     }
 }
+
+/**
+ * Which of a participant's video publications is the screen being shown.
+ *
+ * The SFU labels the source, so unlike the mesh there is no elimination to do;
+ * what is left is the ordering: a re-share can publish its new track before
+ * the old one's unsubscribe lands, and the dead one's exit must not take the
+ * live one off the screen.
+ */
+class LiveKitScreenIndexTest {
+
+    @Test
+    fun `the first screen from a peer is shown`() {
+        val index = LiveKitPeerIndex()
+        assertTrue(index.screenTrackAdded("alice", "TR_1"))
+        assertEquals("TR_1", index.screenTrackFor("alice"))
+        assertEquals(setOf("alice"), index.screenPeerIds())
+    }
+
+    @Test
+    fun `a second screen while one is live is not shown`() {
+        val index = LiveKitPeerIndex()
+        index.screenTrackAdded("alice", "TR_1")
+        assertFalse(index.screenTrackAdded("alice", "TR_2"))
+        assertEquals("TR_1", index.screenTrackFor("alice"))
+    }
+
+    @Test
+    fun `removing the shown screen clears it, removing another does not`() {
+        val index = LiveKitPeerIndex()
+        index.screenTrackAdded("alice", "TR_1")
+        assertFalse(
+            "a sid never shown must not clear a live share",
+            index.screenTrackRemoved("alice", "TR_2"),
+        )
+        assertEquals("TR_1", index.screenTrackFor("alice"))
+        assertTrue(index.screenTrackRemoved("alice", "TR_1"))
+        assertEquals(null, index.screenTrackFor("alice"))
+        assertTrue(index.screenPeerIds().isEmpty())
+    }
+
+    @Test
+    fun `a re-share after the old one ended is shown`() {
+        val index = LiveKitPeerIndex()
+        index.screenTrackAdded("alice", "TR_1")
+        index.screenTrackRemoved("alice", "TR_1")
+        assertTrue(index.screenTrackAdded("alice", "TR_2"))
+        assertEquals("TR_2", index.screenTrackFor("alice"))
+    }
+
+    @Test
+    fun `screens and voice tracks are separate facts`() {
+        val index = LiveKitPeerIndex()
+        index.screenTrackAdded("alice", "TR_1")
+        assertEquals(
+            "a screen alone does not make somebody audible",
+            PeerMediaState.Connecting,
+            index.stateFor("alice"),
+        )
+        index.voiceTrackAdded("alice", "TR_9")
+        assertEquals(PeerMediaState.Connected, index.stateFor("alice"))
+        index.voiceTrackRemoved("alice", "TR_9")
+        assertEquals("TR_1", index.screenTrackFor("alice"))
+    }
+
+    @Test
+    fun `forgetting a peer drops their screen`() {
+        val index = LiveKitPeerIndex()
+        index.screenTrackAdded("alice", "TR_1")
+        index.forget("alice")
+        assertEquals(null, index.screenTrackFor("alice"))
+    }
+}

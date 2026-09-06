@@ -33,6 +33,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -452,7 +453,6 @@ private fun ServerMutedRow(state: VoiceState) {
 @Composable
 private fun WatchScreenRow(state: VoiceState, controller: VoiceController) {
     val remoteScreens by controller.remoteScreens.collectAsStateWithLifecycle()
-    val eglContext = controller.eglContext
     var watchingPeerId by remember { mutableStateOf<String?>(null) }
 
     // Somebody the roster calls a presenter *and* whose picture has arrived.
@@ -463,7 +463,7 @@ private fun WatchScreenRow(state: VoiceState, controller: VoiceController) {
     }
 
     AnimatedVisibility(
-        visible = watchable.isNotEmpty() && eglContext != null,
+        visible = watchable.isNotEmpty(),
         enter = expandVertically(),
         exit = shrinkVertically(),
     ) {
@@ -500,14 +500,26 @@ private fun WatchScreenRow(state: VoiceState, controller: VoiceController) {
     // The presenter stopped while the viewer was open. Closed from an effect
     // rather than from composition, because writing state while composing is
     // how a recomposition loop starts.
-    LaunchedEffect(watched, eglContext) {
-        if (watched == null || eglContext == null) watchingPeerId = null
+    LaunchedEffect(watched) {
+        if (watched == null) watchingPeerId = null
     }
 
-    if (watched != null && eglContext != null) {
+    // Tell the transport who is being watched, for exactly as long as the
+    // viewer is open. On the SFU this is what lifts the pause on the share's
+    // video, and the dispose is what puts it back: a viewer closed by the
+    // back gesture, by the presenter stopping, or by the call ending all pass
+    // through here, so there is no way to leave a share flowing to nobody.
+    val watchedPeerId = watched?.first?.peerId
+    DisposableEffect(watchedPeerId) {
+        if (watchedPeerId != null) controller.setWatchingScreen(watchedPeerId, true)
+        onDispose {
+            if (watchedPeerId != null) controller.setWatchingScreen(watchedPeerId, false)
+        }
+    }
+
+    if (watched != null) {
         ScreenShareDialog(
-            track = watched.second,
-            eglContext = eglContext,
+            screen = watched.second,
             presenter = watched.first.displayName,
             onClose = { watchingPeerId = null },
         )

@@ -41,6 +41,17 @@ class LiveKitPeerIndex {
     private class Peer {
         /** Voice track sids currently subscribed. A set, not a flag: see below. */
         val voiceTracks = mutableSetOf<String>()
+
+        /**
+         * The sid of the screen-share video currently subscribed, or null.
+         *
+         * One slot, first wins, because a LiveKit participant publishes at most
+         * one `SCREEN_SHARE` source at a time, and a second arriving before the
+         * first unsubscribes is a re-share racing its own teardown: keeping the
+         * first and letting its unsubscribe clear the slot is what stops the
+         * live share being taken away by the dead one's exit.
+         */
+        var screenTrack: String? = null
     }
 
     private val peers = mutableMapOf<String, Peer>()
@@ -80,6 +91,39 @@ class LiveKitPeerIndex {
         val peer = peers[peerId] ?: return false
         return peer.voiceTracks.remove(trackSid)
     }
+
+    /**
+     * This participant's screen-share video was subscribed.
+     *
+     * True when it is now the screen to render, which is the only thing
+     * anything above here does with it. A second screen from the same peer
+     * while the first is live is filed nowhere (see [Peer.screenTrack]).
+     */
+    fun screenTrackAdded(peerId: String, trackSid: String): Boolean {
+        val peer = peers.getOrPut(peerId) { Peer() }
+        if (peer.screenTrack != null) return false
+        peer.screenTrack = trackSid
+        return true
+    }
+
+    /**
+     * A screen-share video was unsubscribed. True when it was the one being
+     * rendered, so the caller takes it off the screen; false for a sid this
+     * index never showed, which must not clear a live share.
+     */
+    fun screenTrackRemoved(peerId: String, trackSid: String): Boolean {
+        val peer = peers[peerId] ?: return false
+        if (peer.screenTrack != trackSid) return false
+        peer.screenTrack = null
+        return true
+    }
+
+    /** The sid being rendered for this peer, or null. */
+    fun screenTrackFor(peerId: String): String? = peers[peerId]?.screenTrack
+
+    /** Every peer currently showing a screen. */
+    fun screenPeerIds(): Set<String> =
+        peers.filterValues { it.screenTrack != null }.keys.toSet()
 
     /**
      * Everybody who was already in the room when this device joined.

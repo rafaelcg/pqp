@@ -29,17 +29,20 @@ import gg.pqp.app.R
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
-import org.webrtc.EglBase
-import org.webrtc.RendererCommon
-import org.webrtc.SurfaceViewRenderer
-import org.webrtc.VideoTrack
+import gg.pqp.app.voice.RemoteScreen
 
 /**
- * Somebody else's screen, full bleed.
+ * Somebody else's screen, full bleed, from whichever transport it came over.
  *
  * The renderer is a plain Android view because there is no Compose equivalent:
- * WebRTC hands out frames to a `VideoSink` and `SurfaceViewRenderer` is the one
- * that draws them on a surface the GPU already owns.
+ * WebRTC hands out frames to a `VideoSink` and a `SurfaceViewRenderer` is the
+ * one that draws them on a surface the GPU already owns.
+ *
+ * Two renderers, not one, and the `when` is the point. The mesh decodes into
+ * `org.webrtc` and LiveKit into `livekit.org.webrtc`, two unrelated libwebrtc
+ * builds in this process, each with its own GL context. A renderer initialised
+ * on one cannot draw the other's frames; it compiles and fails at the first
+ * frame. [RemoteScreen] is sealed so the compiler picks the renderer here.
  *
  * Two lifecycle rules, and getting either wrong is a leak that survives the
  * call. The sink has to come *off* the track before the renderer is released,
@@ -61,28 +64,9 @@ import org.webrtc.VideoTrack
  */
 @Composable
 fun RemoteScreenView(
-    track: VideoTrack,
-    eglContext: EglBase.Context,
+    screen: RemoteScreen,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
-    val renderer = remember(eglContext) {
-        SurfaceViewRenderer(context).apply {
-            init(eglContext, null)
-            setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT)
-            setEnableHardwareScaler(true)
-        }
-    }
-
-    DisposableEffect(track, renderer) {
-        track.addSink(renderer)
-        onDispose { runCatching { track.removeSink(renderer) } }
-    }
-
-    DisposableEffect(renderer) {
-        onDispose { runCatching { renderer.release() } }
-    }
-
     val shape = MaterialTheme.shapes.medium
     Box(
         modifier = modifier
@@ -90,8 +74,71 @@ fun RemoteScreenView(
             .background(Color.Black, shape)
             .border(Sizes.hairline, MaterialTheme.colorScheme.outline, shape),
     ) {
-        AndroidView(factory = { renderer }, modifier = Modifier.fillMaxSize())
+        when (screen) {
+            is RemoteScreen.Mesh -> MeshScreenRenderer(screen, Modifier.fillMaxSize())
+            is RemoteScreen.LiveKit -> LiveKitScreenRenderer(screen, Modifier.fillMaxSize())
+        }
     }
+}
+
+@Composable
+private fun MeshScreenRenderer(screen: RemoteScreen.Mesh, modifier: Modifier) {
+    val context = LocalContext.current
+    val renderer = remember(screen.eglContext) {
+        org.webrtc.SurfaceViewRenderer(context).apply {
+            init(screen.eglContext, null)
+            setScalingType(org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            setEnableHardwareScaler(true)
+        }
+    }
+
+    DisposableEffect(screen.track, renderer) {
+        screen.track.addSink(renderer)
+        onDispose { runCatching { screen.track.removeSink(renderer) } }
+    }
+
+    DisposableEffect(renderer) {
+        onDispose { runCatching { renderer.release() } }
+    }
+
+    AndroidView(factory = { renderer }, modifier = modifier)
+}
+
+/**
+ * LiveKit's own `SurfaceViewRenderer`, initialised by the room.
+ *
+ * `Room.initVideoRenderer` is the only way to get the SFU's GL context: it
+ * belongs to LiveKit's libwebrtc and is not exposed on its own. It also sets
+ * the scaling type and the hardware scaler, which this then overrides with
+ * aspect-fit for the same reason the mesh renderer uses it.
+ *
+ * Attached with `addRenderer` rather than `addSink`, because that is the API
+ * on a `RemoteVideoTrack` and it is what keeps the track's own sink list
+ * right. What layer arrives, and whether anything arrives at all, is decided
+ * by [gg.pqp.app.voice.LiveKitEngine] rather than by this view: the SDK's
+ * view-measuring path is deliberately off there.
+ */
+@Composable
+private fun LiveKitScreenRenderer(screen: RemoteScreen.LiveKit, modifier: Modifier) {
+    val context = LocalContext.current
+    val renderer = remember(screen.room) {
+        io.livekit.android.renderer.SurfaceViewRenderer(context).apply {
+            screen.room.initVideoRenderer(this)
+            setScalingType(livekit.org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            setEnableHardwareScaler(true)
+        }
+    }
+
+    DisposableEffect(screen.track, renderer) {
+        screen.track.addRenderer(renderer)
+        onDispose { runCatching { screen.track.removeRenderer(renderer) } }
+    }
+
+    DisposableEffect(renderer) {
+        onDispose { runCatching { renderer.release() } }
+    }
+
+    AndroidView(factory = { renderer }, modifier = modifier)
 }
 
 /**
@@ -110,8 +157,7 @@ fun RemoteScreenView(
  */
 @Composable
 fun ScreenShareDialog(
-    track: VideoTrack,
-    eglContext: EglBase.Context,
+    screen: RemoteScreen,
     presenter: String,
     onClose: () -> Unit,
 ) {
@@ -125,8 +171,7 @@ fun ScreenShareDialog(
                 .background(Color.Black),
         ) {
             RemoteScreenView(
-                track = track,
-                eglContext = eglContext,
+                screen = screen,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(Spacing.sm),
