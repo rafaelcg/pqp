@@ -35,11 +35,23 @@ describe("VoiceStatusBar", () => {
     expect(camera).toBeLessThan(share);
     expect(html).toContain("grid-cols-2");
     expect(html).not.toContain("grid-cols-3");
+    expect(html).toContain("in Lobby");
+    expect(html).toContain('data-voice-bar-channel="voice"');
+    expect(html).toContain("bg-ink-4");
+    expect(html).toContain("rounded-lg");
     expect(html).not.toContain("Live");
     expect(html).not.toContain("person");
     expect(html).not.toContain("SFU");
     expect(html).not.toContain("Mute microphone");
     expect(html).not.toContain("Deafen");
+  });
+
+  it("marks a server text channel with a hash and the same in-channel cue", () => {
+    const html = render({ channelType: "text" });
+    expect(html).toContain("in Lobby");
+    expect(html).toContain('data-voice-bar-channel="text"');
+    expect(html).toContain('aria-label="Open text channel Lobby"');
+    expect(html).not.toContain("Open voice channel Lobby");
   });
 
   it("hides the action row when STREAM is denied, and keeps hang-up on the header", () => {
@@ -48,7 +60,7 @@ describe("VoiceStatusBar", () => {
     expect(html).not.toContain("Share screen");
     expect(html).not.toContain("grid-cols-2");
     expect(html).toContain('aria-label="Disconnect from voice"');
-    expect(html).toContain("Lobby");
+    expect(html).toContain("in Lobby");
   });
 
   it("hides share when this device cannot capture a screen", () => {
