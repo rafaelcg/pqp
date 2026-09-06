@@ -283,10 +283,41 @@ now a voice channel simply had no button and no tiles. It filed every peer's
 everyone's camera and showed none of them.
 
 Turning one on is `VoiceModel.toggleCamera`, which is the same three calls
-`CallModel` already made: publish, announce over `set-camera`, switch the audio
-session to `.videoChat`. Faces take the space the speaker icon had when nobody is
-sharing a screen, and a rail beside the screen when somebody is. Tapping your own
-tile flips the camera, as on the DM stage.
+`CallModel` already made: publish, announce over `set-camera`, and (on the mesh
+only) switch the audio session to `.videoChat`. A LiveKit room's audio session
+belongs to the SDK, and the mesh's `RTCAudioSession` writing a mode into it is a
+change nothing asked for. Faces take the space the speaker icon had when nobody
+is sharing a screen, and a rail beside the screen when somebody is. Tapping your
+own tile flips the camera, as on the DM stage.
+
+**A camera that does not come on says so.** `VoiceClient.startCamera` used to
+run `try? await capturer.startCapture(…)` and carry on regardless, so a capture
+session that refused to open still produced a published track, a lit button and
+a black tile at the far end, with nothing anywhere to read. It throws now
+(`CameraFailure`), and four things guard the path:
+
+- `CameraGate.act` resolves a tap against what is already running, so a second
+  tap while the first start is still opening the device does nothing. Two
+  `AVCaptureSession`s against one `AVCaptureDevice` is how neither of them ends
+  up running, and it took only an impatient double tap.
+- A failed start closes its own half-built capture, so the device is free for
+  the next attempt rather than held by an object nobody has a reference to.
+- `disconnectAll` **awaits** the capture stop. `AVCaptureDevice` is exclusive,
+  and the next thing after a socket reconnect is a rejoin followed by somebody
+  pressing the camera button again.
+- `CameraFrameProbe` (mesh) and `LiveKitCameraFrameProbe` (SFU) count frames, and
+  a watchdog reports a capture that started and delivered nothing after five
+  seconds. Same shape and same reason as the silent-broadcast watchdog in
+  `ScreenShareController`: iOS can interrupt a session the instant it opens and
+  report it through neither API.
+
+Copy for all four failures is in `CameraGate.swift`, pt-BR included. **None of
+the AVFoundation half runs on a simulator**, which has no capture device at all.
+`CameraGateTests` covers every decision around it; the capture itself needs a
+device, and the sequence worth running is: camera on, camera off, camera on
+again; camera on then background the app and come back; camera on while a
+screen share is running; and camera on right after an API deploy has bounced
+the socket.
 
 ### Quality
 

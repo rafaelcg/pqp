@@ -272,6 +272,9 @@ struct CallStageView: View {
             }
             .accessibilityIdentifier("call.camera")
             .accessibilityLabel(call.isCameraOn ? "Turn camera off" : "Turn camera on")
+            // Opening a capture device takes long enough to tap again, and two
+            // starts against one camera is how it ends up opening neither.
+            .disabled(call.isCameraBusy)
 
             if call.offersScreenShare {
                 ScreenShareControlButton(
