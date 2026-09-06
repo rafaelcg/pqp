@@ -122,6 +122,8 @@ function installBrowserStubs() {
   const g = globalThis as unknown as Record<string, unknown>;
   g.requestAnimationFrame = () => 1;
   g.cancelAnimationFrame = () => {};
+  g.setInterval = () => 1;
+  g.clearInterval = () => {};
   Object.defineProperty(globalThis.navigator, "mediaDevices", {
     configurable: true,
     value: {
@@ -317,12 +319,14 @@ describe("push-to-talk on the mesh", () => {
     voice.handleSignaling(welcome("mesh"));
     await settle();
 
-    // A listener that has not been torn down yet must not be able to *close* a
-    // voice-activity mic either.
+    // Voice activity starts closed. A leftover PTT listener must not be able
+    // to open it, and a leftover release must not be able to close it either
+    // once speech has opened the gate (that last part lives in the activity
+    // suite; here we only pin the stray press).
     voice.setPushToTalkActive(false);
-    expect(voice.getState().isTransmitting).toBe(true);
+    expect(voice.getState().isTransmitting).toBe(false);
     voice.setPushToTalkActive(true);
-    expect(voice.getState().isTransmitting).toBe(true);
+    expect(voice.getState().isTransmitting).toBe(false);
   });
 
   it("leaves with the mic closed even if the key was down", async () => {
@@ -367,9 +371,11 @@ describe("push-to-talk on LiveKit", () => {
 
     voice.setInputMode("voice-activity");
 
-    // Voice activity with nothing muted: the mic is open again, deliberately.
+    // Voice activity starts closed until the speaking loop sees a level.
+    // The outgoing track is the gate; the LiveKit publication stays live so
+    // word boundaries do not fan TrackMuted to the room.
     expect(sfuMuteLog.at(-1)).toBe(false);
-    expect(voice.getState().isTransmitting).toBe(true);
+    expect(voice.getState().isTransmitting).toBe(false);
 
     voice.setInputMode("push-to-talk");
     expect(sfuMuteLog.at(-1)).toBe(true);

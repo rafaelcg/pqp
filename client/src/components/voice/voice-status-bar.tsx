@@ -121,8 +121,7 @@ export function VoiceStatusBar({
             {t("voice.bar.listenOnly")}
           </span>
         )}
-        {/* i18n: needs `voice.bar.pttLive` / `voice.bar.pttIdle`. */}
-        {connected && inputMode === "push-to-talk" && !isMuted && (
+        {connected && !isMuted && !listenOnly && (
           <span
             className={cn(
               "shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide",
@@ -131,7 +130,13 @@ export function VoiceStatusBar({
                 : "bg-ink-3 text-paper-muted",
             )}
           >
-            {isTransmitting ? "Live" : "PTT"}
+            {inputMode === "push-to-talk"
+              ? isTransmitting
+                ? t("voice.bar.pttLive")
+                : t("voice.bar.pttIdle")
+              : isTransmitting
+                ? t("voice.bar.vadLive")
+                : t("voice.bar.vadIdle")}
           </span>
         )}
         {usingSfu && (
