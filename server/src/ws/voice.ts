@@ -8,7 +8,11 @@ import {
   SCREEN_SHARE_LIMIT,
   hasPermission,
   Permission,
+  callDeclinedMessageSchema,
+  callIncomingMessageSchema,
+  callRingCancelledMessageSchema,
   voiceClientMessageSchema,
+  voiceModerationMessageSchema,
   voiceParticipantSchema,
   watchPartyStateSchema,
   type VoiceParticipant,
@@ -17,6 +21,7 @@ import {
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
 import {
+  INSTANCE_ID,
   isBusEnabled,
   publishToCluster,
   subscribeToCluster,
@@ -46,6 +51,7 @@ import {
   evictSfuUser,
   evictSfuUsersExcept,
   setSfuUserCanPublish,
+  tickSfuResweeps,
 } from "../voice/admin.js";
 import { resolveCanSpeak } from "../voice/speak.js";
 import {
@@ -204,8 +210,14 @@ interface VoicePeer {
  * window with `peer-left` fanned out by whoever is alive, and room rows
  * nobody is in are swept); the retired-id store is `voice_retired_peers`
  * alone; and the tab-close beacon retires a seat whichever machine holds
- * it. Rings and moderation notices (points 1 and 3, and the mesh ceiling)
- * are M4 and M5. With the flag off (the default) `registryOn()` is false on
+ * it. M4 put the two remaining per-process things on the bus: a ring is
+ * owned by the instance holding the caller's socket (its timers stay
+ * local) and only its fan-out crosses (`voice.call`), and a moderation
+ * action publishes `voice.moderation` so the instance holding the target's
+ * socket says the notice and drops the peer before the row goes; the SFU
+ * re-sweeps are `voice_resweeps` rows claimed by whoever ticks. The mesh
+ * ceiling across instances is M5. With the flag off (the default)
+ * `registryOn()` is false on
  * every path below and this file behaves exactly as it did before the
  * registry.
  */
@@ -993,6 +1005,16 @@ export function evictVoiceChannel(voiceChannelId: string) {
   for (const peer of getRoomPeers(voiceChannelId)) {
     removePeer(peer.id);
   }
+  if (registryOn()) {
+    void evictForeign(
+      { kind: "channel", channelId: voiceChannelId },
+      listVoicePeersInRoom(voiceChannelId),
+      () => true,
+      "channel",
+      () => evictSfuRoom(voiceChannelId),
+    );
+    return;
+  }
   void evictSfuRoom(voiceChannelId);
 }
 
@@ -1010,6 +1032,21 @@ export function evictVoiceUsersExcept(
     if (!allowedUserIds.has(peer.userId)) {
       removePeer(peer.id);
     }
+  }
+  if (registryOn()) {
+    void evictForeign(
+      {
+        kind: "except",
+        channelId: voiceChannelId,
+        allowedUserIds: [...allowedUserIds],
+      },
+      listVoicePeersInRoom(voiceChannelId),
+      (row) => !allowedUserIds.has(row.userId),
+      "channel-private",
+      (known) => evictSfuUsersExcept(voiceChannelId, allowedUserIds, known),
+      knownIdentities,
+    );
+    return;
   }
   void evictSfuUsersExcept(voiceChannelId, allowedUserIds, knownIdentities);
 }
@@ -1033,16 +1070,77 @@ export function evictVoiceUser(userId: string, serverChannelIds?: Set<string>) {
   // `undefined` scope means "every room they are in", which is what the SFU
   // side has to be told explicitly — it cannot infer the scope from a local map
   // that may not contain the participant at all.
-  void evictSfuUser(
-    userId,
-    serverChannelIds ? [...serverChannelIds] : null,
-    knownIdentities,
-  );
+  const scope = serverChannelIds ? [...serverChannelIds] : null;
+  if (registryOn()) {
+    void evictForeign(
+      { kind: "user", userId, channelIds: scope },
+      listVoicePeersForUser(userId),
+      (row) => !serverChannelIds || serverChannelIds.has(row.channelId),
+      "user",
+      (known) => evictSfuUser(userId, scope, known),
+      knownIdentities,
+    );
+    return;
+  }
+  void evictSfuUser(userId, scope, knownIdentities);
 }
 
 /** LiveKit identity (peer id) → user id, for peers this instance can see. */
 function identityMapFor(roster: VoicePeer[]): Map<string, string> {
   return new Map(roster.map((peer) => [peer.id, peer.userId]));
+}
+
+/**
+ * The cluster half of an eviction, registry on (M4, plan section 5.8). Three
+ * steps, in this order, because the order is the contract:
+ *
+ * 1. `voice.moderation` on the bus, so the instance holding the target's
+ *    socket says the notice (if there is one) and forgets its local entry
+ *    *before* the row goes. It drops the peer silently: the departure is
+ *    announced once, by step 2.
+ * 2. Every matching row held by another instance is released here, the way
+ *    the beacon releases a foreign seat (`releaseForeignPeer`): the row and
+ *    the retired id are this instance's to write, so a lost bus frame or a
+ *    dead owner still costs the room nothing but a frame. `adopted` then
+ *    `left` go out from there, and the owner, having already forgotten the
+ *    seat, forwards `peer-left` to its room like anybody else.
+ * 3. The SFU half runs once, here, with the rows' peer ids merged into the
+ *    identity hint, so a participant on a pre-metadata token whose socket
+ *    is on the other machine is still resolvable.
+ *
+ * Fire-and-forget like the flag-off path; a registry read that fails logs
+ * and still runs the SFU half with what this instance knew.
+ */
+async function evictForeign(
+  frame: VoiceModerationFrame,
+  rows: Promise<VoicePeerRow[]>,
+  selects: (row: VoicePeerRow) => boolean,
+  reason: string,
+  sfu: (knownIdentities: Map<string, string>) => Promise<void>,
+  knownIdentities: Map<string, string> = new Map(),
+): Promise<void> {
+  if (clusterOn()) {
+    publishToCluster(VOICE_MODERATION_TOPIC, frame);
+  }
+  try {
+    for (const row of await rows) {
+      if (!selects(row)) {
+        continue;
+      }
+      knownIdentities.set(row.peerId, row.userId);
+      if (row.instanceId === INSTANCE_ID || peers.has(row.peerId)) {
+        // Ours: `removePeer` already took it (the delete is in flight).
+        continue;
+      }
+      releaseForeignPeer(row, reason);
+    }
+  } catch (error) {
+    logEvent("voice.registryReadFailed", {
+      op: "evict",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  await sfu(knownIdentities);
 }
 
 /**
@@ -1211,6 +1309,9 @@ export async function runVoiceReconcile(): Promise<{
     return { orphaned: 0, removed: 0, roomsSwept: 0 };
   }
   const result = await reconcileVoiceRegistry();
+  // The SFU re-sweep claims ride on the same beat (plan section 5.4): every
+  // instance ticks, and only the rows this tick won are swept.
+  await tickSfuResweeps();
   const touched = new Set<string>();
   for (const { peerId, channelId } of result.removed) {
     broadcastToRoom(channelId, { type: "peer-left", peerId });
@@ -2370,6 +2471,26 @@ function sendToUserSockets(userIds: ReadonlySet<string>, frame: VoiceSignalingMe
   });
 }
 
+/**
+ * A ring frame to every socket these people hold, on every instance. The
+ * ring itself (timers, `pending`, `rung`) is owned by the instance holding
+ * the caller's socket (plan section 5.5); only the fan-out crosses, so the
+ * other instance never decides anything, it delivers.
+ */
+function fanToUserSockets(
+  userIds: ReadonlySet<string>,
+  frame: VoiceCallDelivery,
+): void {
+  sendToUserSockets(userIds, frame);
+  if (userIds.size > 0 && clusterOn()) {
+    publishToCluster(VOICE_CALL_TOPIC, {
+      kind: "deliver",
+      userIds: [...userIds],
+      frame,
+    } satisfies VoiceCallFrame);
+  }
+}
+
 async function handleCallRing(
   session: { socket: WebSocket; user: DbUser },
   conversationId: string,
@@ -2409,6 +2530,22 @@ async function handleCallRing(
   }
 
   const present = new Set(getRoomPeers(conversationId).map((p) => p.userId));
+  if (registryOn()) {
+    // Somebody already in the call on the other machine is not rung.
+    try {
+      for (const row of await listVoicePeersInRoom(conversationId)) {
+        present.add(row.userId);
+      }
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "ringPresent",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (socketToPeerId.get(socket) !== peerId || !peers.has(peerId!)) {
+      return;
+    }
+  }
   const absent = participants.filter(
     (id) => id !== user.id && !present.has(id),
   );
@@ -2449,7 +2586,7 @@ async function handleCallRing(
     rung: rung.size,
   });
 
-  sendToUserSockets(rung, {
+  fanToUserSockets(rung, {
     type: "call-incoming",
     conversationId,
     kind: ring.kind,
@@ -2465,8 +2602,9 @@ async function handleCallRing(
   // what a socket fan-out cannot know: no socket anywhere in the cluster, and
   // a stored DND the live registry reads as merely "offline". Short-TTL and
   // high-urgency inside (`CALL_PUSH_TTL_SECONDS`); fire-and-forget so the
-  // ring never waits on, or dies with, a push vendor. Voice is per-instance
-  // (see the module banner), so this cannot double-send across replicas.
+  // ring never waits on, or dies with, a push vendor. Only the ring's owner
+  // runs this function (a `voice.call` frame delivers, it never rings), so
+  // this cannot double-send across replicas.
   pushIncomingCall({
     conversationId,
     kind: ring.kind,
@@ -2481,21 +2619,39 @@ async function handleCallRing(
  * after a blip must not let the grace timer kill their own ring).
  */
 function noteConversationCallJoin(conversationId: string, userId: string) {
+  if (answerRing(conversationId, userId)) {
+    return;
+  }
+  // No ring here. If the call was placed from the other machine, that one
+  // owns the ring and is the one to tell; a frame for a room nobody is
+  // ringing is dropped there. Every join costs one small frame for this,
+  // which is cheaper than knowing the channel's kind on this path.
+  if (clusterOn()) {
+    publishToCluster(VOICE_CALL_TOPIC, {
+      kind: "answered",
+      conversationId,
+      userId,
+    } satisfies VoiceCallFrame);
+  }
+}
+
+/** The owner's half of a join: false when no ring lives here. */
+function answerRing(conversationId: string, userId: string): boolean {
   const ring = conversationRings.get(conversationId);
   if (!ring) {
-    return;
+    return false;
   }
   if (ring.emptyRoomTimer) {
     clearTimeout(ring.emptyRoomTimer);
     ring.emptyRoomTimer = null;
   }
   if (!ring.pending.delete(userId)) {
-    return;
+    return true;
   }
   ring.rung.delete(userId);
   ring.anyoneAnswered = true;
   // Their other devices stop ringing; everyone still pending keeps ringing.
-  sendToUserSockets(new Set([userId]), {
+  fanToUserSockets(new Set([userId]), {
     type: "call-ring-cancelled",
     conversationId,
     reason: "answered",
@@ -2503,27 +2659,56 @@ function noteConversationCallJoin(conversationId: string, userId: string) {
   if (ring.pending.size === 0) {
     clearRing(ring);
   }
+  return true;
 }
 
 function handleCallDecline(user: DbUser, conversationId: string) {
-  const ring = conversationRings.get(conversationId);
-  if (!ring || !ring.pending.delete(user.id)) {
+  if (declineRing(conversationId, user.id)) {
     return;
   }
-  ring.rung.delete(user.id);
+  // Not rung from here: route it to whoever owns the ring. The owner still
+  // checks `pending`, so a decline for a call the sender was never rung
+  // for is dropped there exactly as it is dropped here.
+  if (clusterOn()) {
+    publishToCluster(VOICE_CALL_TOPIC, {
+      kind: "decline",
+      conversationId,
+      userId: user.id,
+    } satisfies VoiceCallFrame);
+  }
+}
+
+/** The owner's half of a decline: false when no ring lives here. */
+function declineRing(conversationId: string, userId: string): boolean {
+  const ring = conversationRings.get(conversationId);
+  if (!ring) {
+    return false;
+  }
+  if (!ring.pending.delete(userId)) {
+    return true;
+  }
+  ring.rung.delete(userId);
   // Other devices of the decliner stop ringing…
-  sendToUserSockets(new Set([user.id]), {
+  fanToUserSockets(new Set([userId]), {
     type: "call-ring-cancelled",
     conversationId,
     reason: "declined",
   });
-  // …and the people in the call stop waiting for them.
-  broadcastToRoom(conversationId, {
+  // …and the people in the call stop waiting for them, wherever they sit.
+  const declined: VoiceSignalingMessage = {
     type: "call-declined",
     conversationId,
-    userId: user.id,
-  });
-  logEvent("voice.callDeclined", { conversationId, userId: user.id });
+    userId,
+  };
+  broadcastToRoom(conversationId, declined);
+  if (clusterOn()) {
+    publishToCluster(VOICE_CALL_TOPIC, {
+      kind: "room",
+      channelId: conversationId,
+      frame: declined,
+    } satisfies VoiceCallFrame);
+  }
+  logEvent("voice.callDeclined", { conversationId, userId });
   if (ring.pending.size === 0) {
     if (ring.anyoneAnswered) {
       clearRing(ring);
@@ -2532,9 +2717,15 @@ function handleCallDecline(user: DbUser, conversationId: string) {
       void endConversationRing(conversationId, "cancelled");
     }
   }
+  return true;
 }
 
-/** The room emptied. After the grace period, an unanswered ring dies with it. */
+/**
+ * The room emptied here. After the grace period, an unanswered ring dies
+ * with it. With the registry on the expiry check reads the rows as well,
+ * because the caller may have come back on the other machine: an empty
+ * local room is not an empty call.
+ */
 function noteVoiceRoomEmptied(voiceChannelId: string) {
   const ring = conversationRings.get(voiceChannelId);
   if (!ring || ring.emptyRoomTimer) {
@@ -2542,9 +2733,25 @@ function noteVoiceRoomEmptied(voiceChannelId: string) {
   }
   ring.emptyRoomTimer = setTimeout(() => {
     ring.emptyRoomTimer = null;
-    if (getRoomPeers(voiceChannelId).length === 0) {
-      void endConversationRing(voiceChannelId, "cancelled");
+    if (getRoomPeers(voiceChannelId).length > 0) {
+      return;
     }
+    if (!registryOn()) {
+      void endConversationRing(voiceChannelId, "cancelled");
+      return;
+    }
+    void listVoicePeersInRoom(voiceChannelId)
+      .catch(() => [])
+      .then((rows) => {
+        if (
+          rows.length === 0 &&
+          getRoomPeers(voiceChannelId).length === 0 &&
+          conversationRings.get(voiceChannelId) === ring &&
+          ring.emptyRoomTimer === null
+        ) {
+          void endConversationRing(voiceChannelId, "cancelled");
+        }
+      });
   }, CALL_EMPTY_ROOM_GRACE_MS);
 }
 
@@ -2566,7 +2773,7 @@ async function endConversationRing(
     return;
   }
   clearRing(ring);
-  sendToUserSockets(ring.rung, {
+  fanToUserSockets(ring.rung, {
     type: "call-ring-cancelled",
     conversationId,
     reason,
@@ -2667,11 +2874,12 @@ async function postMissedCallMessage(ring: ConversationRing): Promise<void> {
 // person ejected from voice with no notice has been handed a broken app, not a
 // moderation outcome.
 //
-// Scope caveat, same as the roster: `peers` is per-instance, so these helpers
-// can only see (and notify) targets whose WebSocket lands on this instance.
-// That matches the visibility the moderator acted on — the member panel's
-// voice badges come from the same map — and mesh voice already pins the
-// deployment to one instance (see the note above `peers`).
+// Scope: `peers` is per-instance, so on their own these helpers see (and
+// notify) targets whose WebSocket lands on this instance. With the registry
+// on, `findVoiceChannelForUser` finds a target on the other machine by row,
+// and the notice and the drop cross on `voice.moderation` (M4): the instance
+// holding the socket says the sentence and forgets the peer, this one
+// releases the row and runs the SFU half once.
 
 /**
  * The server voice channel this user is currently connected to, restricted to
@@ -2764,11 +2972,23 @@ export async function findVoicePeerIdentities(
 export function notifyVoiceModeration(
   userId: string,
   voiceChannelId: string,
-  notice: {
-    action: "disconnected" | "moved" | "muted" | "unmuted";
-    movedToChannelId?: string;
-    message: string;
-  },
+  notice: VoiceModerationNotice,
+): void {
+  notifyLocalVoiceModeration(userId, voiceChannelId, notice);
+  if (clusterOn()) {
+    publishToCluster(VOICE_MODERATION_TOPIC, {
+      kind: "notify",
+      userId,
+      channelId: voiceChannelId,
+      notice,
+    } satisfies VoiceModerationFrame);
+  }
+}
+
+function notifyLocalVoiceModeration(
+  userId: string,
+  voiceChannelId: string,
+  notice: VoiceModerationNotice,
 ): void {
   for (const peer of getRoomPeers(voiceChannelId)) {
     if (peer.userId !== userId) {
@@ -2811,15 +3031,31 @@ export function disconnectVoiceUser(
     knownIdentities.set(peerId, owner);
   }
 
-  notifyVoiceModeration(userId, voiceChannelId, {
+  const sentence: VoiceModerationNotice = {
     action: notice.movedToChannelId ? "moved" : "disconnected",
-    movedToChannelId: notice.movedToChannelId,
+    ...(notice.movedToChannelId
+      ? { movedToChannelId: notice.movedToChannelId }
+      : {}),
     message: notice.message,
-  });
+  };
+  // Local only: the cluster hears the notice inside the eviction frame, so
+  // the other instance says it once, right before it drops the peer.
+  notifyLocalVoiceModeration(userId, voiceChannelId, sentence);
   for (const peer of getRoomPeers(voiceChannelId)) {
     if (peer.userId === userId) {
       removePeer(peer.id);
     }
+  }
+  if (registryOn()) {
+    void evictForeign(
+      { kind: "user", userId, channelIds: [voiceChannelId], notice: sentence },
+      listVoicePeersInRoom(voiceChannelId),
+      (row) => row.userId === userId,
+      "moderation",
+      (known) => evictSfuUser(userId, [voiceChannelId], known),
+      knownIdentities,
+    );
+    return;
   }
   void evictSfuUser(userId, [voiceChannelId], knownIdentities);
 }
@@ -2952,6 +3188,8 @@ onPermissionsUpdate((serverId) => {
 export const VOICE_ROOM_TOPIC = "voice.room";
 export const VOICE_IDENTITY_TOPIC = "voice.identity";
 export const VOICE_WATCH_TOPIC = "voice.watch";
+export const VOICE_CALL_TOPIC = "voice.call";
+export const VOICE_MODERATION_TOPIC = "voice.moderation";
 
 const voiceRoomFrameSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -2991,6 +3229,171 @@ const voiceWatchFrameSchema = z.object({
   state: watchPartyStateSchema.nullable(),
 });
 type VoiceWatchFrame = z.infer<typeof voiceWatchFrameSchema>;
+
+/**
+ * `voice.call` (M4, plan section 5.5). Two directions on one topic. From the
+ * ring's owner outwards: `deliver` (a `call-incoming` or a
+ * `call-ring-cancelled`, addressed by user id, to whichever sockets those
+ * people hold here) and `room` (a `call-declined` to the call's peers
+ * here). Towards the owner: `decline` and `answered`, which this instance
+ * handles only when it holds the ring, and ignores otherwise. Only the
+ * owner ever calls `pushIncomingCall` or posts the missed-call message.
+ *
+ * Accepted degradation (documented, not fixed): if the owner dies mid-ring,
+ * its timers die with it. The callees' `call-incoming` was delivered and the
+ * phone push went out, but nobody sends `call-ring-cancelled` and no
+ * missed-call record is written. The client's own ring timeout ends the
+ * ring on screen.
+ */
+const voiceCallDeliverySchema = z.union([
+  callIncomingMessageSchema,
+  callRingCancelledMessageSchema,
+]);
+type VoiceCallDelivery = z.infer<typeof voiceCallDeliverySchema>;
+
+const voiceCallFrameSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("deliver"),
+    userIds: z.array(z.string().min(1)).min(1),
+    frame: voiceCallDeliverySchema,
+  }),
+  z.object({
+    kind: z.literal("room"),
+    channelId: z.string().uuid(),
+    frame: callDeclinedMessageSchema,
+  }),
+  z.object({
+    kind: z.literal("decline"),
+    conversationId: z.string().uuid(),
+    userId: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal("answered"),
+    conversationId: z.string().uuid(),
+    userId: z.string().min(1),
+  }),
+]);
+type VoiceCallFrame = z.infer<typeof voiceCallFrameSchema>;
+
+/**
+ * `voice.moderation` (M4, plan section 5.8). Published by the instance the
+ * moderation request landed on, before it releases the rows. The receiver
+ * does the socket half for the peers it holds: says the notice, if the
+ * frame carries one, then forgets the peer without a `peer-left` (the
+ * publisher's `releaseForeignPeer` announces the departure once, for
+ * everybody). `notify` is the notice alone, for the SFU mute where the
+ * peer stays. No SFU call here, ever: that ran once, on the publisher.
+ */
+const voiceModerationNoticeSchema = voiceModerationMessageSchema.pick({
+  action: true,
+  movedToChannelId: true,
+  message: true,
+});
+type VoiceModerationNotice = z.infer<typeof voiceModerationNoticeSchema>;
+
+const voiceModerationFrameSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("notify"),
+    userId: z.string().min(1),
+    channelId: z.string().uuid(),
+    notice: voiceModerationNoticeSchema,
+  }),
+  z.object({
+    kind: z.literal("user"),
+    userId: z.string().min(1),
+    /** `null` is "wherever they are". */
+    channelIds: z.array(z.string().uuid()).nullable(),
+    notice: voiceModerationNoticeSchema.optional(),
+  }),
+  z.object({ kind: z.literal("channel"), channelId: z.string().uuid() }),
+  z.object({
+    kind: z.literal("except"),
+    channelId: z.string().uuid(),
+    allowedUserIds: z.array(z.string().min(1)),
+  }),
+]);
+type VoiceModerationFrame = z.infer<typeof voiceModerationFrameSchema>;
+
+subscribeToCluster(VOICE_CALL_TOPIC, (data) => {
+  if (!registryOn()) {
+    return;
+  }
+  const parsed = voiceCallFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const frame = parsed.data;
+  switch (frame.kind) {
+    case "deliver":
+      sendToUserSockets(new Set(frame.userIds), frame.frame);
+      return;
+    case "room":
+      broadcastToRoom(frame.channelId, frame.frame);
+      return;
+    case "decline":
+      declineRing(frame.conversationId, frame.userId);
+      return;
+    case "answered":
+      answerRing(frame.conversationId, frame.userId);
+      return;
+  }
+});
+
+subscribeToCluster(VOICE_MODERATION_TOPIC, (data) => {
+  if (!registryOn()) {
+    return;
+  }
+  const parsed = voiceModerationFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const frame = parsed.data;
+  if (frame.kind === "notify") {
+    notifyLocalVoiceModeration(frame.userId, frame.channelId, frame.notice);
+    return;
+  }
+  const selected = [...peers.values()].filter((peer) => {
+    switch (frame.kind) {
+      case "user":
+        return (
+          peer.userId === frame.userId &&
+          (frame.channelIds === null ||
+            frame.channelIds.includes(peer.voiceChannelId))
+        );
+      case "channel":
+        return peer.voiceChannelId === frame.channelId;
+      case "except":
+        return (
+          peer.voiceChannelId === frame.channelId &&
+          !frame.allowedUserIds.includes(peer.userId)
+        );
+    }
+  });
+  for (const peer of selected) {
+    if (frame.kind === "user" && frame.notice) {
+      send(peer.socket, {
+        type: "voice-moderation",
+        action: frame.notice.action,
+        voiceChannelId: peer.voiceChannelId,
+        ...(frame.notice.movedToChannelId
+          ? { movedToChannelId: frame.notice.movedToChannelId }
+          : {}),
+        message: frame.notice.message,
+      });
+    }
+    const { voiceChannelId, socket } = peer;
+    dropVoicePeerSilently(peer.id);
+    // The room half of `removePeer` that a silent drop skips: a ring's
+    // empty-room grace and the watch party, for the room this leaves.
+    onLiveRoomMaybeEmpty(voiceChannelId, socket);
+    logEvent("voice.moderationApplied", {
+      peerId: peer.id,
+      userId: peer.userId,
+      voiceChannelId,
+      kind: frame.kind,
+    });
+  }
+});
 
 subscribeToCluster(VOICE_ROOM_TOPIC, (data) => {
   if (!registryOn()) {

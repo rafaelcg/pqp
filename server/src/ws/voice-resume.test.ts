@@ -48,6 +48,7 @@ vi.mock("../voice/admin.js", () => ({
   evictSfuRoom: vi.fn(() => Promise.resolve()),
   evictSfuUser: vi.fn(() => Promise.resolve()),
   evictSfuUsersExcept: vi.fn(() => Promise.resolve()),
+  tickSfuResweeps: vi.fn(() => Promise.resolve(0)),
 }));
 
 const {

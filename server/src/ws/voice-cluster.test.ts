@@ -42,6 +42,12 @@ import { createMemoryHub, type BusFrame } from "../lib/bus.js";
  * `orphaned_at`) rather than with fake timers, because the sweep's clock is
  * the database's `NOW()`.
  *
+ * M4 (the "moderation" group): a kick, a disconnect with notice, a channel
+ * deletion and a channel turned private, each requested on A for a socket
+ * B holds, drop the peer on B (the notice first, when there is one), take
+ * the row, announce the departure once, and run the SFU half exactly once,
+ * on A. Rings are in `voice-calls.test.ts`.
+ *
  * Skips without a database, like `voice-registry.test.ts`.
  */
 
@@ -102,6 +108,7 @@ vi.mock("../voice/admin.js", () => ({
   evictSfuUser: vi.fn(() => Promise.resolve()),
   evictSfuUsersExcept: vi.fn(() => Promise.resolve()),
   setSfuUserCanPublish: vi.fn(() => Promise.resolve()),
+  tickSfuResweeps: vi.fn(() => Promise.resolve(0)),
 }));
 
 type BusModule = typeof import("../lib/bus.js");
@@ -109,6 +116,7 @@ type VoiceModule = typeof import("./voice.js");
 type SocketsModule = typeof import("./sockets.js");
 type RegistryModule = typeof import("../voice/registry.js");
 type DbModule = typeof import("../db.js");
+type AdminModule = typeof import("../voice/admin.js");
 
 interface Instance {
   bus: BusModule;
@@ -116,6 +124,8 @@ interface Instance {
   sockets: SocketsModule;
   registry: RegistryModule;
   db: DbModule;
+  /** The (mocked) SFU half, per graph: which instance ran it is the point. */
+  admin: AdminModule;
 }
 
 interface Frame {
@@ -140,10 +150,11 @@ async function bootInstance(connected = true): Promise<Instance> {
   const voice = (await import("./voice.js")) as VoiceModule;
   const sockets = (await import("./sockets.js")) as SocketsModule;
   const registry = (await import("../voice/registry.js")) as RegistryModule;
+  const admin = (await import("../voice/admin.js")) as AdminModule;
   if (connected) {
     bus.setBusTransport(bus.createMemoryTransport(hub));
   }
-  const instance = { bus, voice, sockets, registry, db };
+  const instance = { bus, voice, sockets, registry, db, admin };
   booted.push(instance);
   return instance;
 }
@@ -920,6 +931,170 @@ describeDb("voice across two instances", () => {
         [channel],
       );
       expect(rows.rowCount).toBe(2);
+    });
+  });
+
+  describe("moderation", () => {
+    // `vi.mock` registers one factory per file, and `vi.resetModules` does
+    // not re-run it: every graph gets the same mocked `admin.js`, so its
+    // call log is the cluster's, which is exactly what "the SFU half ran
+    // once" has to be checked against.
+    function sfuCalls(instance: Instance, fn: "evictSfuUser" | "evictSfuRoom" | "evictSfuUsersExcept") {
+      return vi.mocked(instance.admin[fn]).mock.calls;
+    }
+
+    beforeEach(async () => {
+      const shared = await import("../voice/admin.js");
+      for (const fn of [shared.evictSfuUser, shared.evictSfuRoom, shared.evictSfuUsersExcept]) {
+        vi.mocked(fn).mockClear();
+      }
+    });
+
+    it("a kick on A of a user whose socket is on B drops them on B and evicts on the SFU once", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnA = watcher(a);
+      const target = randomUUID();
+      const bystanderOnB = await join(b, randomUUID(), channel);
+      const targetOnB = await join(b, target, channel);
+      await waitFor(
+        () => lastRoster(sidebarOnA, channel)?.participants.length === 2,
+        "both on A's roster",
+      );
+      bystanderOnB.frames.length = 0;
+
+      a.voice.evictVoiceUser(target, new Set([channel]));
+
+      await waitFor(
+        () => frames(bystanderOnB, "peer-left").length === 1,
+        "peer-left on B",
+      );
+      expect(frames(bystanderOnB, "peer-left")[0]?.peerId).toBe(targetOnB.peerId);
+      expect(b.voice.getVoicePeer(targetOnB.peerId)).toBeNull();
+      // The SFU half ran once in the cluster, after the rows were read, with
+      // B's peer id in the identity hint.
+      await waitFor(() => sfuCalls(a, "evictSfuUser").length === 1, "SFU once");
+      const [userId, rooms, known] = sfuCalls(a, "evictSfuUser")[0]!;
+      expect(userId).toBe(target);
+      expect(rooms).toEqual([channel]);
+      expect(known.get(targetOnB.peerId)).toBe(target);
+      await settle();
+      expect(await peerRow(targetOnB.peerId)).toBeUndefined();
+      await waitFor(
+        () => lastRoster(sidebarOnA, channel)?.participants.length === 1,
+        "roster without the target on A",
+      );
+      // Announced once: B forgot the seat silently, A released the row.
+      expect(frames(bystanderOnB, "peer-left")).toHaveLength(1);
+      expect(sfuCalls(b, "evictSfuUser")).toHaveLength(1);
+      // A retired id: the kicked seat cannot come back on either machine.
+      const again = await resume(b, target, channel, targetOnB.peerId, targetOnB.resumeToken);
+      expect(frames(again, "welcome")[0]?.resumed).toBeUndefined();
+    });
+
+    it("a disconnect on A tells the target on B before dropping them", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const target = randomUUID();
+      const targetOnB = await join(b, target, channel);
+      await join(b, randomUUID(), channel);
+      await settle();
+
+      expect(await a.voice.findVoiceChannelForUser(target, new Set([channel]))).toBe(channel);
+      const known = await a.voice.findVoicePeerIdentities(target, channel);
+      expect(known.get(targetOnB.peerId)).toBe(target);
+      a.voice.disconnectVoiceUser(target, channel, { message: "Out." }, known);
+
+      await waitFor(
+        () => frames(targetOnB, "voice-moderation").length === 1,
+        "the notice on B",
+      );
+      expect(frames(targetOnB, "voice-moderation")[0]).toMatchObject({
+        action: "disconnected",
+        voiceChannelId: channel,
+        message: "Out.",
+      });
+      expect(b.voice.getVoicePeer(targetOnB.peerId)).toBeNull();
+      await waitFor(() => sfuCalls(a, "evictSfuUser").length === 1, "SFU once");
+      await settle();
+      expect(await peerRow(targetOnB.peerId)).toBeUndefined();
+    });
+
+    it("an SFU mute notice on A reaches the target on B, who stays", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const target = randomUUID();
+      const targetOnB = await join(b, target, channel);
+
+      a.voice.notifyVoiceModeration(target, channel, {
+        action: "muted",
+        message: "Quiet.",
+      });
+
+      await waitFor(
+        () => frames(targetOnB, "voice-moderation").length === 1,
+        "the notice on B",
+      );
+      expect(frames(targetOnB, "voice-moderation")[0]).toMatchObject({
+        action: "muted",
+        message: "Quiet.",
+      });
+      expect(b.voice.getVoicePeer(targetOnB.peerId)).not.toBeNull();
+    });
+
+    it("a channel deletion on A empties the room on B, SFU once", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const one = await join(b, randomUUID(), channel);
+      const two = await join(b, randomUUID(), channel);
+      await join(a, randomUUID(), channel);
+      await settle();
+
+      a.voice.evictVoiceChannel(channel);
+
+      await waitFor(
+        () =>
+          b.voice.getVoicePeer(one.peerId) === null &&
+          b.voice.getVoicePeer(two.peerId) === null,
+        "B's room emptied",
+      );
+      await waitFor(() => sfuCalls(a, "evictSfuRoom").length === 1, "SFU once");
+      await settle();
+      expect(await peerRow(one.peerId)).toBeUndefined();
+      expect(await peerRow(two.peerId)).toBeUndefined();
+      const room = await pools[0]!
+        .getPool()
+        .query(`SELECT 1 FROM voice_rooms WHERE channel_id = $1`, [channel]);
+      expect(room.rowCount).toBe(0);
+    });
+
+    it("a channel turned private on A keeps the allowed on B and drops the rest", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const keep = randomUUID();
+      const kept = await join(b, keep, channel);
+      const dropped = await join(b, randomUUID(), channel);
+      await settle();
+      kept.frames.length = 0;
+
+      a.voice.evictVoiceUsersExcept(channel, new Set([keep]));
+
+      await waitFor(() => frames(kept, "peer-left").length === 1, "peer-left on B");
+      expect(frames(kept, "peer-left")[0]?.peerId).toBe(dropped.peerId);
+      expect(b.voice.getVoicePeer(kept.peerId)).not.toBeNull();
+      expect(b.voice.getVoicePeer(dropped.peerId)).toBeNull();
+      await waitFor(() => sfuCalls(a, "evictSfuUsersExcept").length === 1, "SFU once");
+      await settle();
+      expect(await peerRow(kept.peerId)).toBeDefined();
+      expect(await peerRow(dropped.peerId)).toBeUndefined();
+      const [, allowed, known] = sfuCalls(a, "evictSfuUsersExcept")[0]!;
+      expect([...allowed]).toEqual([keep]);
+      expect(known.get(dropped.peerId)).toBeDefined();
     });
   });
 
