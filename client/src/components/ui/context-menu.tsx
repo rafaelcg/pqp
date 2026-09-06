@@ -201,7 +201,7 @@ export function ContextMenu({
                 onSelect={() => item.onSelect?.()}
                 aria-checked={item.checked}
                 className={cn(
-                  "flex cursor-default select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-ink-3",
+                  "flex w-full cursor-default select-none items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-ink-3",
                   item.danger
                     ? "text-danger data-[highlighted]:bg-danger/15"
                     : "text-paper",
