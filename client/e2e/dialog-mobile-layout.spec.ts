@@ -160,7 +160,10 @@ const DIALOGS: {
     title: /Channel settings/,
     open: async (page) => {
       await closeDrawer(page);
-      await page.getByRole("button", { name: "Channel settings" }).first().click();
+      // The channel list also has a settings cog per row. After the drawer
+      // closes those buttons stay in the DOM, off-screen, and `.first()`
+      // lands on them. The header control is the one still on the phone.
+      await page.locator("[data-channel-header-settings]").click();
     },
   },
   {
