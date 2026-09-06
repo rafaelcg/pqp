@@ -1963,6 +1963,35 @@
       hg.appendChild(card);
     });
 
+    // /ready tile: the same verdict UptimeRobot sees, from /metrics. It is the
+    // one tile here that can be red while every /status.json tile is green,
+    // because it also watches the pool's shape over time (queued for more
+    // than 10 s, full for more than 30 s), which a SELECT 1 cannot see.
+    if (lastReady && lastReady.checks) {
+      var rc = lastReady.checks;
+      var readyTile = el("div", "health");
+      var bad = [];
+      if (rc.postgres && !rc.postgres.ok) bad.push("postgres");
+      if (rc.pool && !rc.pool.ok) bad.push("pool");
+      if (rc.livekit && !rc.livekit.ok) bad.push("livekit");
+      if (rc.storage && !rc.storage.ok) bad.push("storage");
+      var pool = rc.pool || {};
+      var poolLine = "pool " + (pool.inUse || 0) + "/" + (pool.max || 0) +
+        (pool.queued ? " · " + pool.queued + " na fila" : "");
+      var lkLine = !rc.livekit ? "" : rc.livekit.skipped ? " · sfu n/a" :
+        " · sfu " + (rc.livekit.ok ? Math.round(rc.livekit.ms) + "ms" : "falhou");
+      readyTile.innerHTML =
+        '<div class="h-top">' +
+          '<span class="h-name">/ready</span>' +
+          '<span class="status-chip ' + (lastReady.ok ? "" : "bad") + '">' +
+            '<span class="dot live"></span>' + (lastReady.ok ? "200" : "503") + '</span>' +
+        '</div>' +
+        '<div class="h-val num">' + (rc.postgres ? Math.round(rc.postgres.ms) : 0) + '<span class="u">ms</span></div>' +
+        '<div class="h-sub">' + esc(lastReady.ok ? "o que o uptimerobot vê" : "falhando: " + bad.join(", ")) + '</div>' +
+        '<div class="h-sub num" style="color:var(--muted)">' + esc(poolLine + lkLine) + '</div>';
+      hg.appendChild(readyTile);
+    }
+
     // Fly host tile
     var hostTile = el("div", "health host");
     var versionTag = host.versionKnown
@@ -3394,6 +3423,7 @@
     var version = !raw ? null : /^[0-9a-f]{12,}$/i.test(raw) ? raw.slice(0, 7) : raw.slice(0, 16);
     setText("infraVersion", version || "desconhecida");
     lastHost = { version: version || "", versionKnown: !!version };
+    lastReady = d.ready && typeof d.ready.ok === "boolean" ? d.ready : null;
     renderHealth(lastHealth, lastHost);
 
     lastLiveAt = d.generatedAt ? new Date(d.generatedAt) : new Date();
@@ -3409,6 +3439,8 @@
   // with real tiles, so an empty list here means the skeleton stays put.
   var lastHealth = null;
   var lastHost = { version: "", versionKnown: false };
+  // The `ready` block of /metrics (the /ready verdict); null until read.
+  var lastReady = null;
 
   function applyHealth(s) {
     var comps = Array.isArray(s.components) ? s.components : [];

@@ -158,6 +158,19 @@ export function clearPoolStats(): void {
   readPoolStats = null;
 }
 
+/**
+ * The raw counters, or null while there is no pool. For `services/ready.ts`,
+ * which needs to tell "no pool yet" from "an empty pool"; everything else
+ * wants `runtimeSnapshot`.
+ */
+export function currentPoolStats(): PoolStats | null {
+  try {
+    return readPoolStats?.() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // --------------------------------------------------------------------- peaks
 //
 // Same treatment as the voice peak in ws/voice.ts, for the same reason and with
