@@ -322,6 +322,13 @@ data class VoiceSessionResponse(
     val token: String,
     val room: String,
     val identity: String,
+    /**
+     * Whether the token carries a publish grant (`Permission.SPEAK` in this
+     * channel). Absent reads as true, matching `voiceSessionSchema`. The
+     * client does not act on it yet: a listen-only member's publish is
+     * refused by LiveKit itself.
+     */
+    val speak: Boolean = true,
 )
 
 /**
