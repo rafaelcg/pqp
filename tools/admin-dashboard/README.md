@@ -171,6 +171,14 @@ Live, from `GET https://api.pqp.gg/status.json` (proxied as `/health`): the
 component health tiles, the headline pill, database latency, and the 24h/7d
 uptime behind the infra tab.
 
+One more tile in that strip, `/ready`, comes from the `ready` block of
+`/metrics`: it is the verdict `GET https://api.pqp.gg/ready` gives UptimeRobot
+(200 or 503), with the failing check named and the pool's in-use / max /
+queued counts. It can be red while every `/status.json` tile is green, because
+it also watches the pool over time (queued for more than 10 s, full for more
+than 30 s), which is what the 2026-09-05 Postgres outage looked like from the
+inside. See `docs/MONITORING.md`.
+
 The page reads in both light and dark (it follows the system setting; every
 colour is a token, so only the palette changes), and nothing scrolls the page
 sideways on a phone: wide tables and charts scroll inside their own box, and the

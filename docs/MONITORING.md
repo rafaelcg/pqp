@@ -68,9 +68,84 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 > minutes, but scheduled runs on public repos are queued at low priority and are
 > routinely late. Shortening the interval does not help.
 
-### `GET /up` — the endpoint for an external monitor
+### `GET /ready`: the endpoint for an external monitor
 
-**Point UptimeRobot (or any status-code monitor) at `https://api.pqp.gg/up`.**
+**Point UptimeRobot, Grafana and any other status-code monitor at
+`https://api.pqp.gg/ready`.** Not `/health`, not `/status.json`, and no longer
+`/up` (still served, see below).
+
+Why it exists: on 2026-09-05 at 22:20Z production Postgres started cutting
+established connections and every database-backed request failed for about
+half an hour. Nothing fired. `/health` opens a fresh connection for its
+`SELECT 1`, which kept succeeding; `/status.json` answers 200 whatever it
+reports; Fly's machine check stayed green for the same reason `/health` did.
+What was actually broken was the **pool**: checked-out clients died
+mid-query, callers queued behind a full pool, and the queue never drained. A
+probe that only asks "can one more query be answered?" cannot see that.
+
+`/ready` is the check that can. It answers `200` only when **every** check is
+ok and `503` otherwise, with a JSON body that names the failing one:
+
+```json
+{
+  "ok": true,
+  "checks": {
+    "postgres": { "ok": true, "ms": 3 },
+    "pool":     { "ok": true, "inUse": 2, "max": 10, "queued": 0 },
+    "livekit":  { "ok": true, "ms": 41 },
+    "storage":  { "ok": true, "skipped": true }
+  },
+  "version": "<deployed commit>"
+}
+```
+
+| Check | Rule |
+|---|---|
+| `postgres` | One `SELECT 1` through the pool, 2 s timeout. Fails on error or timeout. |
+| `pool` | Sampled every second in-process. Not ok when `queued > 0` **continuously** for more than 10 s, or `inUse == max` continuously for more than 30 s. A momentary queue (cold start, deploy stampede) never flips it; the run has to be unbroken. |
+| `livekit` | `RoomService.listRooms`, 3 s timeout, result cached 30 s, concurrent callers share one probe. `{ ok: true, skipped: true }` when LiveKit is not configured. |
+| `storage` | A signed `HEAD` of a key that cannot exist (a 404 is a success), same timeout and cache as LiveKit. `skipped` when `S3_*` is unset. |
+
+It leaks nothing useful: component names, booleans, counts and milliseconds.
+No hostnames, no provider names, no error strings. It is rate-limited to a
+few requests per second per address, which bounds the `SELECT 1` cost; the two
+remote probes are bounded by their cache regardless.
+
+**Why this is not Fly's health check.** `fly.toml` keeps pointing at
+`/health`, which stays exactly as shallow as it is. If Fly's check were
+dependency-aware, a two-minute Postgres blip would make it restart the only
+machine, which drops every WebSocket and helps nobody. A monitor that pages a
+human can afford to be honest; a check that restarts the process cannot.
+
+Server side: `server/src/services/ready.ts` (the checks, the two pool clocks,
+the caches, the handler; tested in `ready.test.ts`), wired in
+`server/src/index.ts`. The operator dashboard shows the same verdict as a
+`/ready` tile in its health strip, via the `ready` block of
+`GET /api/admin/metrics`.
+
+#### Recommended settings
+
+| Setting | Value | Why |
+|---|---|---|
+| Monitor type | **HTTP(s)** | The status code is the signal. |
+| URL | `https://api.pqp.gg/ready` | |
+| Interval | **60 seconds** (5 minutes on the free plan is fine too) | The pool clocks are in-process, so the interval only sets how late you hear about it. |
+| Timeout | 10 to 30 seconds | The endpoint answers within about 2 s even when Postgres hangs; a long timeout only avoids false alarms from the monitor's own network. |
+| Alert threshold | Alert after **2** failures if the plan offers it | The no-crying-wolf rule from the top of this document, applied to somebody else's cron. |
+| Alert contacts | An email you actually read, **not** `contato@pqp.gg` | Keep provider alerts off that address. |
+| SSL expiry alerts | On | Free second opinion on `tls-expiry`. |
+
+For Grafana (synthetic monitoring or a JSON datasource), the same URL: alert
+on status `!= 200`, and chart `checks.postgres.ms` and `checks.pool.queued` if
+you want the shape of an incident rather than just its start.
+
+### `GET /up`: the older one-bit endpoint
+
+Still served, unchanged. Its contract is narrower and more conservative than
+`/ready` (it needs 45 s of continuous `SELECT 1` failure and reports nothing
+else), which is exactly why it also stayed green through the outage above.
+Prefer `/ready`; the rest of this section is kept for anything already
+pointed at `/up`.
 
 It exists because the 10–30 minute detection time above is the honest number,
 and because neither endpoint that already reports health can be handed to a
