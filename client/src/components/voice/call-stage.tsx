@@ -1,5 +1,7 @@
 import {
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ChevronUp,
   EyeOff,
   LayoutGrid,
@@ -24,6 +26,7 @@ import {
   useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type RefObject,
 } from "react";
 import {
@@ -67,6 +70,10 @@ import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
 import { isCameraAtCap, isScreenShareAtCap } from "@/lib/screen-share-roster";
+import {
+  loadParticipantRailOpen,
+  saveParticipantRailOpen,
+} from "@/lib/participant-rail-preference";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { PeerTileControls } from "@/components/voice/peer-tile-controls";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
@@ -713,6 +720,15 @@ function ActiveCall({
   const cameraCount = allPeople.filter((person) => person.stream !== null).length;
   const [preferGrid, setPreferGrid] = useState(() => isStageGrid(channelId));
   const [pinnedKey, setPinnedKey] = useState(() => stagePinnedKey(channelId));
+  // Per device, and never reset by a presenter change or a new share: see the
+  // preference module. Read once on mount; the toggle is the only writer.
+  const [railOpen, setRailOpen] = useState(loadParticipantRailOpen);
+  const toggleRail = useCallback(() => {
+    setRailOpen((open) => {
+      saveParticipantRailOpen(!open);
+      return !open;
+    });
+  }, []);
   useEffect(() => {
     setPreferGrid(isStageGrid(channelId));
     setPinnedKey(stagePinnedKey(channelId));
@@ -1131,11 +1147,15 @@ function ActiveCall({
               })}
             </div>
           )}
-          {/* Everyone in the call, small, over the screen's top edge. */}
-          <div className="pointer-events-none absolute right-3 top-3 flex max-h-[40%] flex-col gap-2 overflow-hidden">
-            {[...(self ? [self] : []), ...remotes].map((person) => (
-              <MiniTile
+          {/* Everyone in the call, small, down the screen's right edge. */}
+          <ParticipantRail
+            open={railOpen}
+            onToggle={toggleRail}
+            people={[...(self ? [self] : []), ...remotes]}
+            renderTile={(person, scrollRoot) => (
+              <RailTile
                 key={person.key}
+                scrollRoot={scrollRoot}
                 person={person}
                 youLabel={t("voice.tile.you")}
                 compact={compactPeers}
@@ -1151,8 +1171,8 @@ function ActiveCall({
                 }
                 pinned={pinnedKey === person.key}
               />
-            ))}
-          </div>
+            )}
+          />
         </div>
       ) : layout === "grid" ? (
         <ul
@@ -1195,7 +1215,7 @@ function ActiveCall({
             pinned={pinnedKey === spotlightPerson.key}
           />
           {stripPeople.filter((person) => !person.isSelf).length > 0 && (
-            <div className="pointer-events-auto absolute right-3 top-12 flex max-h-[40%] flex-col gap-2 overflow-hidden">
+            <div className="pointer-events-auto absolute right-3 top-12 flex max-h-[40%] flex-col gap-2 overflow-y-auto overscroll-contain pr-0.5 [scrollbar-width:thin]">
               {stripPeople
                 .filter((person) => !person.isSelf)
                 .map((person) => (
@@ -2119,6 +2139,111 @@ function GridTile({
   );
 }
 
+/**
+ * The column of participant thumbnails beside a screen share.
+ *
+ * Bounded by the stage (top edge to just above the controls row) so that with
+ * a hundred people in a watch party it scrolls instead of running off the
+ * bottom, and collapsible so the share can have the whole width. Closed, it
+ * renders nothing but the reopen button: no tiles, no `<video>` elements, no
+ * per-person work at all.
+ */
+function ParticipantRail({
+  open,
+  onToggle,
+  people,
+  renderTile,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  people: StagePerson[];
+  renderTile: (
+    person: StagePerson,
+    scrollRoot: RefObject<HTMLDivElement | null>,
+  ) => ReactNode;
+}) {
+  const { t } = useTranslation();
+  const scrollRoot = useRef<HTMLDivElement>(null);
+  return (
+    <div
+      data-testid="participant-rail"
+      data-open={open ? "true" : "false"}
+      className="pointer-events-none absolute bottom-16 right-3 top-12 z-10 flex flex-col items-end gap-2"
+    >
+      <Tooltip label={open ? t("voice.rail.hide") : t("voice.rail.show")}>
+        <button
+          type="button"
+          aria-label={open ? t("voice.rail.hide") : t("voice.rail.show")}
+          aria-expanded={open}
+          aria-controls="participant-rail-tiles"
+          onClick={onToggle}
+          className="pointer-events-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal"
+        >
+          {open ? (
+            <ChevronRight className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronLeft className="h-3.5 w-3.5" />
+          )}
+        </button>
+      </Tooltip>
+      {open && (
+        <div
+          id="participant-rail-tiles"
+          ref={scrollRoot}
+          className="pointer-events-auto flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain pr-0.5 [scrollbar-width:thin]"
+        >
+          {people.map((person) => renderTile(person, scrollRoot))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A rail thumbnail that only keeps a live `<video>` while it is near the
+ * visible part of the rail. Tiles scrolled well out of view fall back to the
+ * avatar, so a long rail costs the decoders of a short one. Without an
+ * `IntersectionObserver` (old WebViews, test runners) every tile is treated as
+ * visible, which is the previous behaviour.
+ */
+function RailTile({
+  scrollRoot,
+  ...tile
+}: MiniTileProps & { scrollRoot: RefObject<HTMLDivElement | null> }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [near, setNear] = useState(true);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === "undefined") {
+      return;
+    }
+    const io = new IntersectionObserver(
+      ([entry]) => setNear(entry?.isIntersecting ?? true),
+      // Half a rail of slack either side, so scrolling a tile into view does
+      // not show a beat of avatar before its frames arrive.
+      { root: scrollRoot.current, rootMargin: "50% 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [scrollRoot]);
+  return (
+    <div ref={ref} className="shrink-0">
+      <MiniTile {...tile} parked={!near} />
+    </div>
+  );
+}
+
+type MiniTileProps = {
+  person: StagePerson;
+  youLabel: string;
+  compact?: boolean;
+  onToggleFullscreen?: () => void;
+  onPin?: () => void;
+  pinned?: boolean;
+  /** Off-screen on the rail: show the avatar, keep no `<video>` alive. */
+  parked?: boolean;
+};
+
 /** A thumbnail on the screen-share rail. */
 function MiniTile({
   person,
@@ -2127,14 +2252,8 @@ function MiniTile({
   onToggleFullscreen,
   onPin,
   pinned = false,
-}: {
-  person: StagePerson;
-  youLabel: string;
-  compact?: boolean;
-  onToggleFullscreen?: () => void;
-  onPin?: () => void;
-  pinned?: boolean;
-}) {
+  parked = false,
+}: MiniTileProps) {
   const { t } = useTranslation();
   return (
     <div
@@ -2146,7 +2265,7 @@ function MiniTile({
       )}
     >
       <div className="relative aspect-video w-full">
-        {person.stream ? (
+        {person.stream && !parked ? (
           <StageVideo
             stream={person.stream}
             mirrored={person.isSelf}
