@@ -238,11 +238,20 @@ final class CallModel {
 
     // MARK: - Controls
 
+    /// True while a start or a stop is running. See `CameraGate`.
+    private(set) var isCameraBusy = false
+    private var cameraWatchdog: Task<Void, Never>?
+
     func toggleCamera() async {
-        if isCameraOn {
-            await disableCamera()
-        } else {
-            await enableCamera()
+        switch CameraGate.act(
+            isOn: isCameraOn, isBusy: isCameraBusy,
+            isLive: phase == .active || phase == .ringing,
+            // A DM call has no roles, so the seat can always publish.
+            canPublish: true
+        ) {
+        case .start: await enableCamera()
+        case .stop: await disableCamera()
+        case .ignore: return
         }
     }
 
@@ -256,35 +265,50 @@ final class CallModel {
 
     private func enableCamera() async {
         guard phase == .active || phase == .ringing else { return }
+        isCameraBusy = true
+        defer { isCameraBusy = false }
         guard await Self.requestCamera() else {
-            errorMessage = String(localized: "Camera access is off. Enable it in Settings.")
+            errorMessage = CameraFailure.permission.message
             return
         }
-        let started: (feed: VideoFeed, streamId: String)?
-        if transport == .livekit {
-            started = await sfu.startCamera()
-        } else if let mesh = await voice.startCamera() {
-            started = (.mesh(mesh.track.value), mesh.streamId)
-        } else {
-            started = nil
-        }
-        guard let started else {
-            errorMessage = String(localized: "Could not start the camera.")
+        // Re-read: answering a permission alert takes as long as it takes, and
+        // the call can end while it is up.
+        guard phase == .active || phase == .ringing else { return }
+        let started: (feed: VideoFeed, streamId: String)
+        do {
+            if transport == .livekit {
+                started = try await sfu.startCamera()
+            } else {
+                let mesh = try await voice.startCamera()
+                started = (.mesh(mesh.track.value), mesh.streamId)
+            }
+        } catch {
+            errorMessage = (error as? CameraFailure ?? .captureFailed).message
             return
         }
         localCamera = started.feed
         isCameraOn = true
         errorMessage = nil
-        await voice.setVideoMode(true)
+        // Mesh only: a LiveKit room's audio session belongs to the SDK, and
+        // the mesh's `RTCAudioSession` writing a mode into it is a change
+        // nothing asked for.
+        if transport != .livekit {
+            await voice.setVideoMode(true)
+        }
         // The announcement is what lets the far end file the arriving track as a
         // face rather than a screen. Sent after the track is published rather
         // than before, because the capture id does not exist until then — the
         // receiver's roster re-check (`setPeerCameraStreamId`) is what makes
         // either ordering correct.
         await session?.realtime.setCamera(streamId: started.streamId)
+        watchForFirstFrame()
     }
 
     private func disableCamera() async {
+        isCameraBusy = true
+        defer { isCameraBusy = false }
+        cameraWatchdog?.cancel()
+        cameraWatchdog = nil
         isCameraOn = false
         localCamera = nil
         // Told before the track goes: a peer that sees the stream vanish with no
@@ -295,7 +319,24 @@ final class CallModel {
         } else {
             await voice.stopCamera()
         }
-        await voice.setVideoMode(false)
+        if transport != .livekit {
+            await voice.setVideoMode(false)
+        }
+    }
+
+    /// A capture that opened and sent nothing is still a failure. Same
+    /// watchdog, same reasoning, as `VoiceModel.watchForFirstFrame`.
+    private func watchForFirstFrame() {
+        cameraWatchdog?.cancel()
+        cameraWatchdog = Task { [weak self] in
+            try? await Task.sleep(for: CameraFailure.firstFrameDeadline)
+            guard !Task.isCancelled, let self, self.isCameraOn else { return }
+            let sawFrames = self.transport == .livekit
+                ? await self.sfu.cameraHasFrames()
+                : await self.voice.cameraHasFrames()
+            guard !Task.isCancelled, self.isCameraOn, !sawFrames else { return }
+            self.errorMessage = CameraFailure.noFrames.message
+        }
     }
 
     // MARK: - Derived, for the stage
@@ -874,6 +915,9 @@ final class CallModel {
     private func clearCallState() {
         VideoQualitySettings.shared.removeListener(Self.handlerKey)
         VideoSendReport.shared.clear()
+        cameraWatchdog?.cancel()
+        cameraWatchdog = nil
+        isCameraBusy = false
         conversationId = nil
         conversation = nil
         peers = []
