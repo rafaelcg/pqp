@@ -1,38 +1,14 @@
 /**
  * The call stage's decisions, as pure functions.
  *
- * Everything here answers a layout or bookkeeping question without touching the
- * DOM, so the rules the stage lives by — which arrangement a call gets, where
- * the self-preview snaps, how long the call has run — can be pinned in a Node
- * test instead of only being observable through a browser.
+ * Everything here answers a stage or bookkeeping question without touching the
+ * DOM, so the rules the stage lives by — whether it is worth expanding at all,
+ * where the self-preview snaps, how long the call has run — can be pinned in a
+ * Node test instead of only being observable through a browser.
+ *
+ * Who is large and who is a chip is the other half, and it lives in
+ * `components/voice/stage-layout.ts`.
  */
-
-export type StageLayout =
-  /** Screen share on: the screen is the stage, people become thumbnails. */
-  | "screen"
-  /** 1:1 — the remote person IS the stage, self floats as a corner preview. */
-  | "spotlight"
-  /** Group call: a grid that shares the stage evenly. */
-  | "grid"
-  /** We are alone (ringing out / everyone left): one large pulsing identity. */
-  | "ring";
-
-/**
- * Which arrangement the stage draws. The screen share always wins — video of a
- * face is glanceable at thumbnail size, a shared screen is not.
- */
-export function stageLayout(
-  remoteCount: number,
-  hasScreenShare: boolean,
-): StageLayout {
-  if (hasScreenShare) {
-    return "screen";
-  }
-  if (remoteCount === 0) {
-    return "ring";
-  }
-  return remoteCount === 1 ? "spotlight" : "grid";
-}
 
 /**
  * Whether the stage has a picture worth owning the room: a camera (ours or
@@ -61,71 +37,6 @@ export function shouldShowExpandedStage(
   ringing = false,
 ): boolean {
   return (hasVideo || ringing) && !userCollapsed;
-}
-
-/**
- * Layout once the stage is actually showing a picture.
- *
- * Camera count, not headcount: five people with one camera is a spotlight,
- * not a grid of avatars. Grid is an explicit choice, and only with two
- * cameras to share the stage between.
- */
-export function resolvedStageLayout(input: {
-  remoteCount: number;
-  hasScreenShare: boolean;
-  cameraCount: number;
-  preferGrid: boolean;
-}): StageLayout {
-  if (input.hasScreenShare) {
-    return "screen";
-  }
-  if (input.remoteCount === 0) {
-    return "ring";
-  }
-  if (input.preferGrid && input.cameraCount >= 2) {
-    return "grid";
-  }
-  if (input.cameraCount >= 1) {
-    return "spotlight";
-  }
-  return stageLayout(input.remoteCount, false);
-}
-
-/**
- * Who fills the spotlight: a pin the user chose, else someone speaking on
- * camera, else the first remote camera, else anyone with a camera, else the
- * first remote person.
- */
-export function pickSpotlightKey(
-  people: readonly {
-    key: string;
-    /** Camera picture when they send one; null is an avatar. */
-    stream: unknown;
-    speaking: boolean;
-    isSelf: boolean;
-  }[],
-  pinnedKey: string | null,
-): string | null {
-  if (pinnedKey && people.some((person) => person.key === pinnedKey)) {
-    return pinnedKey;
-  }
-  const speakingCam = people.find(
-    (person) => person.speaking && person.stream !== null && !person.isSelf,
-  );
-  if (speakingCam) {
-    return speakingCam.key;
-  }
-  const remoteCam = people.find(
-    (person) => person.stream !== null && !person.isSelf,
-  );
-  if (remoteCam) {
-    return remoteCam.key;
-  }
-  const anyCam = people.find((person) => person.stream !== null);
-  if (anyCam) {
-    return anyCam.key;
-  }
-  return people.find((person) => !person.isSelf)?.key ?? people[0]?.key ?? null;
 }
 
 /** Prefix so a camera solo does not collide with that peer's screen share. */
@@ -195,19 +106,13 @@ export function rememberStageCollapsed(
 }
 
 /**
- * Grid vs spotlight, session-scoped per channel the same way collapse is.
- * Default is spotlight: the picture owns the room, the rest sit on a strip.
+ * The pinned stage tile, session-scoped per channel the same way collapse is.
+ *
+ * The value is a tile id (`stage-layout.ts`), so a share and a camera can both
+ * be pinned and the pin survives that person turning the other one on. Null is
+ * the default: the grid treats every publisher equally until somebody says
+ * otherwise.
  */
-const preferGridByChannel = new Map<string, boolean>();
-
-export function isStageGrid(channelId: string): boolean {
-  return preferGridByChannel.get(channelId) ?? false;
-}
-
-export function rememberStageGrid(channelId: string, grid: boolean): void {
-  preferGridByChannel.set(channelId, grid);
-}
-
 const pinnedByChannel = new Map<string, string | null>();
 
 export function stagePinnedKey(channelId: string): string | null {
