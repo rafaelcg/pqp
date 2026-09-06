@@ -40,6 +40,16 @@
  * A reply to one of its own messages counts as addressing it, because that is
  * how a follow-up question is actually typed and requiring a second `@` for
  * "e no firefox?" would be pedantry with a cost.
+ *
+ * ── THE ONE EXCEPTION, AND WHERE IT LIVES ───────────────────────────────────
+ *
+ * `pending.js` answers a question that was put to the room and that NOBODY
+ * ANSWERED for about three minutes. Every argument above still holds for a room
+ * with people in it: that path cancels the moment any other human posts, so it
+ * never pre-empts the humans this file is protecting. It is fenced in its own
+ * file, behind its own switch and its own caps, rather than added as a mode
+ * here, so that "answer when addressed" stays readable as one rule with one
+ * implementation.
  */
 
 /**
@@ -64,6 +74,34 @@ export const SKIP = {
 
 /** Longest question the bot will read. Past this it is a paste, not a question. */
 const MAX_QUESTION_CHARS = 600;
+
+/**
+ * Is this message from something other than a person?
+ *
+ * Extracted so `pending.js` decides "was that a human replying" with the same
+ * three rules this file uses to decide "is that a message worth answering",
+ * rather than a second copy that can drift. Returns the SKIP reason or null.
+ *
+ * The bot's OWN id is deliberately not checked here. Both callers treat
+ * themselves specially and both of them have to do it first, before anything
+ * else runs, so folding it in would let a caller get the order wrong.
+ */
+export function isAutomatedAuthor(message, ignoreUserIds = new Set()) {
+  if (message.isWebhook) {
+    return SKIP.WEBHOOK;
+  }
+  if (ignoreUserIds.has(message.authorId)) {
+    return SKIP.IGNORED_AUTHOR;
+  }
+  // Any account whose display name is marked as automated. Belt and braces
+  // next to `ignoreUserIds`: the house cast carries " [bot]" by construction
+  // (`disclosureLabel`), so this catches a sibling bot nobody remembered to add
+  // to the ignore list.
+  if (/\[bot\]\s*$/i.test(String(message.authorName ?? ""))) {
+    return SKIP.BOT_AUTHOR;
+  }
+  return null;
+}
 
 /**
  * Is this message addressed to the bot?
@@ -132,18 +170,9 @@ export function screenTrigger(message, context) {
   if (message.authorId === botUserId) {
     return { answer: false, reason: SKIP.SELF };
   }
-  if (message.isWebhook) {
-    return { answer: false, reason: SKIP.WEBHOOK };
-  }
-  if (ignoreUserIds.has(message.authorId)) {
-    return { answer: false, reason: SKIP.IGNORED_AUTHOR };
-  }
-  // Any account whose display name is marked as automated. Belt and braces
-  // next to `ignoreUserIds`: the house cast carries " [bot]" by construction
-  // (`disclosureLabel`), so this catches a sibling bot nobody remembered to add
-  // to the ignore list.
-  if (/\[bot\]\s*$/i.test(String(message.authorName ?? ""))) {
-    return { answer: false, reason: SKIP.BOT_AUTHOR };
+  const automated = isAutomatedAuthor(message, ignoreUserIds);
+  if (automated) {
+    return { answer: false, reason: automated };
   }
 
   if (allowedChannelIds && !allowedChannelIds.has(message.channelId)) {

@@ -56,11 +56,37 @@ kill_timeout = 15
   # would disagree about which numbers are allowed.
   SUPPORT_FACTS = "/app/tools/support-bot/facts.md"
 
-  # Only #ajuda. Not #caca-bugs (a bug report should reach a human, not be
+  # #ajuda and #geral. NOT #caca-bugs (a bug report should reach a human, not be
   # triaged by a model), not #papo-reto (a bot in the off-topic channel is
-  # ambient chatter), not #avisos.
-  SUPPORT_CHANNELS = "ajuda"
+  # ambient chatter), not #avisos, not #debug.
+  #
+  # #geral was added on 2026-09-06, on the owner's call, because that is where
+  # the QG actually talks and where the questions the bot exists for were being
+  # asked and missed. It is the same watch as #ajuda: a mention or a reply gets
+  # an answer, everything else is ignored. It is also the channel where the
+  # newcomer hellos already happen, so the bot was in the room either way; what
+  # changes is that it can now be spoken to there.
+  SUPPORT_CHANNELS = "ajuda,geral"
   SUPPORT_SERVER = "QG do pqp"
+
+  # Answering a question nobody answered is ON, and is deliberately NOT listed
+  # here. `unpromptedEnabled` defaults to on, so an absent variable is the same
+  # behaviour as SUPPORT_UNPROMPTED="true" and leaves exactly one place the
+  # value can come from. Setting it in `[env]` as well would mean an operator
+  # reaching for the off switch under time pressure has to know whether a Fly
+  # secret beats a fly.toml env var, and the answer to that must never be
+  # something anybody has to look up while a channel is being spammed.
+  #
+  # Off, at any hour, with no branch, no CI and no image build:
+  #
+  #   fly secrets set SUPPORT_UNPROMPTED=false --app pqp-support
+  #
+  # The number knobs move the same way, and are absent here for the same
+  # reason. `pending.js` has the defaults and the argument for each:
+  # SUPPORT_UNPROMPTED_DELAY_MS (180000), SUPPORT_UNPROMPTED_MAX_AGE_MS
+  # (600000), SUPPORT_UNPROMPTED_MAX_PER_CHANNEL_HOUR (2),
+  # SUPPORT_UNPROMPTED_MAX_TRIES_PER_CHANNEL_HOUR (4),
+  # SUPPORT_UNPROMPTED_BUDGET_RESERVE (30).
 
   # Who gets @-mentioned when it does not know.
   SUPPORT_OWNER_HANDLE = "rafa"
