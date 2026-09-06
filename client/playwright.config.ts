@@ -65,11 +65,20 @@ export default defineConfig({
     // Chromium with `isMobile` and a touch screen. Both start in portrait and
     // the spec rotates them with `setViewportSize`, which is what flips the
     // `(orientation: landscape)` media query the immersive rule keys on.
-    {
-      name: "mobile-iphone",
-      use: { ...devices["iPhone 14"], colorScheme: "dark", locale: "en-US" },
-      testMatch: /mobile-immersive-stage/,
-    },
+    // WebKit on Linux (the CI runner) has no fake display capture, so a screen
+    // share never starts there and every iPhone assertion times out on "You
+    // are presenting". The project is therefore local-only: run it on a Mac
+    // with PW_WEBKIT=1 (`PW_WEBKIT=1 npx playwright test --project=mobile-iphone`).
+    // The Pixel project covers the same spec in Chromium everywhere.
+    ...(process.env.PW_WEBKIT
+      ? [
+          {
+            name: "mobile-iphone",
+            use: { ...devices["iPhone 14"], colorScheme: "dark", locale: "en-US" },
+            testMatch: /mobile-immersive-stage/,
+          },
+        ]
+      : []),
     {
       name: "mobile-pixel",
       use: { ...devices["Pixel 7"], colorScheme: "dark", locale: "en-US" },
