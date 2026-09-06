@@ -7,13 +7,10 @@ import {
   FolderInput,
   FolderMinus,
   FolderPlus,
-  HeadphoneOff,
   Lock,
-  MicOff,
   Pencil,
   Phone,
   Plus,
-  ScreenShare,
   Search,
   Settings,
   Star,
@@ -21,10 +18,9 @@ import {
   Trash2,
   UserPlus,
   Users,
-  Video,
   X,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type DragEvent, type ReactNode } from "react";
 import type { Channel, Server, VoiceParticipant } from "@pqp/shared";
 import { SearchDialog } from "@/components/search/search-dialog";
 import { ChannelIcon } from "@/components/layout/channel-icon";
@@ -35,7 +31,16 @@ import {
 } from "@/components/ui/context-menu";
 import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
-import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import { VoiceOccupantRow } from "@/components/layout/voice-occupant-row";
+import { useProfilePopover } from "@/components/user/user-profile-popover";
+import {
+  canDragVoiceOccupant,
+  dropReasonMessageKey,
+  resolveVoiceOccupantDrop,
+  shouldHighlightVoiceDrop,
+  voiceOccupantMenuActions,
+  type VoiceOccupantDrag,
+} from "@/lib/voice-occupant-dnd";
 import {
   addFavorite,
   favoritesCollapseKey,
@@ -80,66 +85,7 @@ export function formatBadgeCount(value: number): string {
   return value > 99 ? "99+" : String(value);
 }
 
-/**
- * The per-occupant voice-state badges: mic-off, deafened, sharing screen,
- * camera on.
- *
- * Rendered from the roster (`VoiceParticipant`), which the server updates on
- * every `set-voice-state` and `set-camera` — so someone *outside* the call
- * sees who is muted or on camera before joining. Deafened implies muted (the
- * controller enforces that), so only the deafen icon is shown then: two red
- * icons would say the same thing twice in a 16px row. Camera-on is the
- * roster's `cameraStreamId`, the same field the mesh uses to file a face.
- *
- * There is deliberately no speaking badge here beyond the ring the in-call
- * viewer already gets: speaking is not carried on the roster (see the fan-out
- * note on `voiceParticipantSchema`), and this row must not pretend otherwise.
- */
-export function VoiceOccupantBadges({
-  person,
-}: {
-  person: VoiceParticipant;
-}) {
-  const { t } = useTranslation();
-  const cameraOn = Boolean(person.cameraStreamId);
-  if (
-    !person.muted &&
-    !person.deafened &&
-    !person.sharingScreen &&
-    !cameraOn
-  ) {
-    return null;
-  }
-  return (
-    <span className="ml-auto flex shrink-0 items-center gap-1">
-      {person.sharingScreen && (
-        <ScreenShare
-          aria-label={t("chrome.sharingScreen")}
-          role="img"
-          className="h-3 w-3 text-signal"
-        />
-      )}
-      {cameraOn && (
-        <Video
-          aria-label={t("chrome.cameraOn")}
-          role="img"
-          className="h-3 w-3 text-signal"
-        />
-      )}
-      {person.deafened ? (
-        <HeadphoneOff
-          aria-label={t("chrome.deafened")}
-          role="img"
-          className="h-3 w-3 text-danger"
-        />
-      ) : (
-        person.muted && (
-          <MicOff aria-label={t("chrome.muted")} role="img" className="h-3 w-3 text-danger" />
-        )
-      )}
-    </span>
-  );
-}
+export { VoiceOccupantBadges } from "./voice-occupant-badges";
 
 /** A channel or category, positioned within the one sibling group it belongs
  * to — see the comment on `moveChannel` (server/src/services/servers.ts) for
@@ -166,6 +112,20 @@ interface ChannelListProps {
    * open the channel and then hit Join. Single click still just selects.
    */
   onJoinVoice?: (channelId: string) => void;
+  /** The signed-in account, for self-drag and "mute for me". */
+  currentUserId?: string | null;
+  /** Seats with a move in flight: no second drag. */
+  pendingMoveUserIds?: string[];
+  peerVolumes?: Record<string, number>;
+  canMoveIn?: (channelId: string) => boolean;
+  canConnectIn?: (channelId: string) => boolean;
+  canMuteIn?: (channelId: string) => boolean;
+  canKickUser?: (userId: string) => boolean;
+  onMoveVoiceOccupant?: (userId: string, channelId: string) => void;
+  onDisconnectVoiceOccupant?: (userId: string) => void;
+  onServerMuteOccupant?: (userId: string, muted: boolean) => void;
+  onKickOccupant?: (userId: string, name: string) => void;
+  onSetPeerVolume?: (userId: string, volume: number) => void;
   onCreateChannel: (
     type: "text" | "voice" | "category",
     isPrivate: boolean,
@@ -221,6 +181,18 @@ export function ChannelList({
   unread,
   onSelectChannel,
   onJoinVoice,
+  currentUserId = null,
+  pendingMoveUserIds = [],
+  peerVolumes = {},
+  canMoveIn = () => false,
+  canConnectIn = () => true,
+  canMuteIn = () => false,
+  canKickUser = () => false,
+  onMoveVoiceOccupant,
+  onDisconnectVoiceOccupant,
+  onServerMuteOccupant,
+  onKickOccupant,
+  onSetPeerVolume,
   onCreateChannel,
   onRenameChannel,
   onOpenChannelSettings,
@@ -276,6 +248,14 @@ export function ChannelList({
   );
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [draggedOccupant, setDraggedOccupant] =
+    useState<VoiceOccupantDrag | null>(null);
+  const [dropHint, setDropHint] = useState<string | null>(null);
+  const openProfile = useProfilePopover();
+  const occupantCaps = {
+    canMoveIn,
+    canConnectIn,
+  };
 
   const hasServer = !!server;
   useEffect(() => {
@@ -299,6 +279,174 @@ export function ChannelList({
   function clearDrag() {
     setDraggedId(null);
     setDragOverId(null);
+    setDraggedOccupant(null);
+  }
+
+  function showDropHint(reason: Parameters<typeof dropReasonMessageKey>[0]) {
+    setDropHint(t(dropReasonMessageKey(reason)));
+    window.setTimeout(() => setDropHint(null), 2500);
+  }
+
+  function occupantDropAllowed(channel: Channel): boolean {
+    if (!draggedOccupant) {
+      return false;
+    }
+    return shouldHighlightVoiceDrop(
+      draggedOccupant,
+      { id: channel.id, type: channel.type },
+      occupantCaps,
+    );
+  }
+
+  function commitOccupantDrop(channel: Channel) {
+    if (!draggedOccupant || pendingMoveUserIds.includes(draggedOccupant.userId)) {
+      return;
+    }
+    const drag = draggedOccupant;
+    clearDrag();
+    const result = resolveVoiceOccupantDrop(
+      drag,
+      { id: channel.id, type: channel.type },
+      occupantCaps,
+    );
+    if (!result.ok) {
+      showDropHint(result.reason);
+      return;
+    }
+    if (result.action === "join") {
+      onJoinVoice?.(channel.id);
+      return;
+    }
+    onMoveVoiceOccupant?.(drag.userId, channel.id);
+  }
+
+  function handleRowDrop(channel: Channel) {
+    if (draggedOccupant) {
+      commitOccupantDrop(channel);
+      return;
+    }
+    handleDrop(channel);
+  }
+
+  function handleRowDragOver(event: DragEvent, channel: Channel) {
+    if (draggedOccupant) {
+      event.preventDefault();
+      if (occupantDropAllowed(channel)) {
+        event.dataTransfer.dropEffect = "move";
+        setDragOverId(channel.id);
+      } else {
+        event.dataTransfer.dropEffect = "none";
+        if (dragOverId === channel.id) {
+          setDragOverId(null);
+        }
+      }
+      return;
+    }
+    if (draggedId) {
+      event.preventDefault();
+      setDragOverId(channel.id);
+    }
+  }
+
+  function menuForOccupant(
+    person: VoiceParticipant,
+    channel: Channel,
+  ): ContextMenuItemDef[] {
+    const isSelf = Boolean(currentUserId && person.userId === currentUserId);
+    const inSameCall = activeVoiceChannelId === channel.id;
+    const mutedForMe = (peerVolumes[person.userId] ?? 1) === 0;
+    const actions = voiceOccupantMenuActions({
+      isSelf,
+      inSameCall,
+      mutedForMe,
+      canServerMute: canMuteIn(channel.id),
+      serverMuted: person.serverMuted,
+      canDisconnect: canMoveIn(channel.id),
+      canKick: canKickUser(person.userId),
+    });
+    const profile: ContextMenuItemDef[] = [];
+    const personal: ContextMenuItemDef[] = [];
+    const mod: ContextMenuItemDef[] = [];
+    const copy: ContextMenuItemDef[] = [];
+    for (const action of actions) {
+      if (action === "profile") {
+        profile.push({
+          id: "profile",
+          label: t("voice.occupant.profile"),
+          onSelect: () => {
+            const anchor = document.querySelector(
+              `[data-voice-occupant="${person.userId}"]`,
+            );
+            if (anchor instanceof HTMLElement) {
+              openProfile(
+                {
+                  id: person.userId,
+                  displayName: person.displayName,
+                  tag: null,
+                  avatarUrl: person.avatarUrl,
+                },
+                anchor,
+              );
+            }
+          },
+        });
+      } else if (action === "muteForMe") {
+        personal.push({
+          id: "mute-for-me",
+          label: t("voice.occupant.muteForMe"),
+          onSelect: () => onSetPeerVolume?.(person.userId, 0),
+        });
+      } else if (action === "unmuteForMe") {
+        personal.push({
+          id: "unmute-for-me",
+          label: t("voice.occupant.unmuteForMe"),
+          onSelect: () => onSetPeerVolume?.(person.userId, 1),
+        });
+      } else if (action === "serverMute") {
+        personal.push({
+          id: "server-mute",
+          label: t("voice.occupant.serverMute"),
+          onSelect: () => onServerMuteOccupant?.(person.userId, true),
+        });
+      } else if (action === "serverUnmute") {
+        personal.push({
+          id: "server-unmute",
+          label: t("voice.occupant.serverUnmute"),
+          onSelect: () => onServerMuteOccupant?.(person.userId, false),
+        });
+      } else if (action === "disconnect") {
+        mod.push({
+          id: "disconnect",
+          label: t("voice.occupant.disconnect"),
+          danger: true,
+          onSelect: () => onDisconnectVoiceOccupant?.(person.userId),
+        });
+      } else if (action === "kick") {
+        mod.push({
+          id: "kick",
+          label: t("voice.occupant.kick"),
+          danger: true,
+          onSelect: () => onKickOccupant?.(person.userId, person.displayName),
+        });
+      } else if (action === "copyName") {
+        copy.push({
+          id: "copy-name",
+          label: t("voice.occupant.copyName"),
+          onSelect: () => void navigator.clipboard.writeText(person.displayName),
+        });
+      }
+    }
+    const items: ContextMenuItemDef[] = [];
+    const groups = [profile, personal, mod, copy].filter(
+      (group) => group.length > 0,
+    );
+    for (const [index, group] of groups.entries()) {
+      if (index > 0) {
+        items.push({ id: `sep-${index}`, label: "", separator: true });
+      }
+      items.push(...group);
+    }
+    return items;
   }
 
   function draggedChannel(): Channel | undefined {
@@ -395,8 +543,23 @@ export function ChannelList({
     const occupants =
       channel.type === "voice" ? (voiceOccupancy[channel.id] ?? []) : [];
     const isFavorite = inFavorites || favoriteIdSet.has(channel.id);
+    const occupantDropOk = occupantDropAllowed(channel);
     return (
-      <div key={channel.id} className="mb-0.5">
+      <div
+        key={channel.id}
+        className="mb-0.5"
+        data-channel-id={channel.id}
+        data-channel-type={channel.type}
+        onDragOver={(event) => handleRowDragOver(event, channel)}
+        onDrop={(event) => {
+          if (!draggedOccupant) {
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          handleRowDrop(channel);
+        }}
+      >
         <ChannelRow
           channel={channel}
           selected={selectedChannelId === channel.id}
@@ -410,6 +573,8 @@ export function ChannelList({
           icon={<ChannelIcon channel={channel} />}
           isDragging={draggedId === channel.id}
           isDragOver={dragOverId === channel.id}
+          occupantDragActive={Boolean(draggedOccupant)}
+          occupantDropAllowed={occupantDropOk}
           isFavorite={isFavorite}
           onToggleFavorite={
             channel.type !== "category" && onFavoriteChannelIdsChange
@@ -485,32 +650,58 @@ export function ChannelList({
                 ? () => moveWithinGroup(group, channel, 1)
                 : undefined
           }
-          onDragStart={() => setDraggedId(channel.id)}
+          onDragStart={() => {
+            if (draggedOccupant) {
+              return;
+            }
+            setDraggedId(channel.id);
+          }}
           onDragEnd={() => {
             setDraggedId(null);
             setDragOverId(null);
           }}
-          onDragOverRow={() => draggedId && setDragOverId(channel.id)}
-          onDrop={() => handleDrop(channel)}
+          onDragOverRow={(event) => handleRowDragOver(event, channel)}
+          onDrop={() => handleRowDrop(channel)}
         />
         {occupants.length > 0 && (
           <ul className="ml-2 space-y-0.5 border-l border-ink-4/70 py-0.5 pl-2">
-            {occupants.map((person) => (
-              <li
-                key={person.peerId}
-                className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs text-paper-muted"
-              >
-                <VoiceAvatar
-                  name={person.displayName}
-                  avatarUrl={person.avatarUrl}
-                  isSpeaking={speaking.has(person.peerId)}
-                  muted={person.muted || person.deafened}
-                  size="sm"
+            {occupants.map((person) => {
+              const isSelf = Boolean(
+                currentUserId && person.userId === currentUserId,
+              );
+              const canDrag =
+                !pendingMoveUserIds.includes(person.userId) &&
+                canDragVoiceOccupant(isSelf, channel.id, canMoveIn);
+              return (
+                <VoiceOccupantRow
+                  key={person.peerId}
+                  person={person}
+                  channelId={channel.id}
+                  isSpeaking={
+                    speaking.has(person.peerId) &&
+                    !person.muted &&
+                    !person.deafened
+                  }
+                  canDrag={canDrag}
+                  isDragging={draggedOccupant?.userId === person.userId}
+                  items={menuForOccupant(person, channel)}
+                  onDragStart={(next, fromChannelId) => {
+                    setDraggedId(null);
+                    setDraggedOccupant({
+                      userId: next.userId,
+                      fromChannelId,
+                      isSelf: Boolean(
+                        currentUserId && next.userId === currentUserId,
+                      ),
+                    });
+                  }}
+                  onDragEnd={() => {
+                    setDraggedOccupant(null);
+                    setDragOverId(null);
+                  }}
                 />
-                <span className="truncate">{person.displayName}</span>
-                <VoiceOccupantBadges person={person} />
-              </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </div>
@@ -689,9 +880,18 @@ export function ChannelList({
                 onToggle={() =>
                   toggleCollapsed(favoritesCollapseKey(server.id))
                 }
-                isDragOver={dragOverId === FAVORITES_ZONE}
-                onDragOver={() => draggedId && setDragOverId(FAVORITES_ZONE)}
-                onDrop={() => handleDropOnFavorites()}
+                isDragOver={dragOverId === FAVORITES_ZONE && !draggedOccupant}
+                onDragOver={() =>
+                  !draggedOccupant && draggedId && setDragOverId(FAVORITES_ZONE)
+                }
+                onDrop={() => {
+                  if (draggedOccupant) {
+                    showDropHint("text");
+                    clearDrag();
+                    return;
+                  }
+                  handleDropOnFavorites();
+                }}
               >
                 {visibleFavs.map((channel) =>
                   renderRow(channel, visibleFavs, true),
@@ -759,9 +959,22 @@ export function ChannelList({
               canManage={canManage}
               onAdd={() => onCreateChannel("text", false)}
               onAddPrivate={() => onCreateChannel("text", true)}
-              isDragOver={dragOverId === TEXT_ZONE}
-              onDragOver={() => draggedId && setDragOverId(TEXT_ZONE)}
+              isDragOver={dragOverId === TEXT_ZONE && !draggedOccupant}
+              onDragOver={(event) => {
+                if (draggedOccupant) {
+                  event.dataTransfer.dropEffect = "none";
+                  return;
+                }
+                if (draggedId) {
+                  setDragOverId(TEXT_ZONE);
+                }
+              }}
               onDrop={() => {
+                if (draggedOccupant) {
+                  showDropHint("text");
+                  clearDrag();
+                  return;
+                }
                 const dragged = draggedChannel();
                 if (dragged && favoriteIdSet.has(dragged.id)) {
                   handleUnfavoriteDragged();
@@ -778,9 +991,21 @@ export function ChannelList({
               canManage={canManage}
               onAdd={() => onCreateChannel("voice", false)}
               onAddPrivate={() => onCreateChannel("voice", true)}
-              isDragOver={dragOverId === VOICE_ZONE}
-              onDragOver={() => draggedId && setDragOverId(VOICE_ZONE)}
+              isDragOver={dragOverId === VOICE_ZONE && !draggedOccupant}
+              onDragOver={(event) => {
+                if (draggedOccupant) {
+                  event.dataTransfer.dropEffect = "none";
+                  return;
+                }
+                if (draggedId) {
+                  setDragOverId(VOICE_ZONE);
+                }
+              }}
               onDrop={() => {
+                if (draggedOccupant) {
+                  clearDrag();
+                  return;
+                }
                 const dragged = draggedChannel();
                 if (dragged && favoriteIdSet.has(dragged.id)) {
                   handleUnfavoriteDragged();
@@ -827,16 +1052,25 @@ export function ChannelList({
                         canManage={canManage}
                         onRename={() => onRenameChannel(category)}
                         onDelete={() => onDeleteChannel(category.id)}
-                        isDragOver={dragOverId === category.id}
+                        isDragOver={dragOverId === category.id && !draggedOccupant}
                         onDragStart={() => setDraggedId(category.id)}
                         onDragEnd={() => {
                           setDraggedId(null);
                           setDragOverId(null);
                         }}
                         onDragOverRow={() =>
-                          draggedId && setDragOverId(category.id)
+                          !draggedOccupant &&
+                          draggedId &&
+                          setDragOverId(category.id)
                         }
-                        onDrop={() => handleDrop(category)}
+                        onDrop={() => {
+                          if (draggedOccupant) {
+                            showDropHint("category");
+                            clearDrag();
+                            return;
+                          }
+                          handleDrop(category);
+                        }}
                       />
                       {!isCollapsed && (
                         <div className="ml-2 border-l border-ink-4/70 pl-2">
@@ -857,6 +1091,15 @@ export function ChannelList({
           </>
         )}
       </div>
+
+      {dropHint && (
+        <p
+          role="status"
+          className="border-t border-ink-4/60 px-3 py-2 text-xs text-paper"
+        >
+          {dropHint}
+        </p>
+      )}
 
       {footer}
     </aside>
@@ -932,7 +1175,7 @@ function ChannelSection({
   onAddPrivate: () => void;
   children: ReactNode;
   isDragOver?: boolean;
-  onDragOver?: () => void;
+  onDragOver?: (event: DragEvent) => void;
   onDrop?: () => void;
 }) {
   const { t } = useTranslation();
@@ -948,7 +1191,7 @@ function ChannelSection({
           onDragOver
             ? (event) => {
                 event.preventDefault();
-                onDragOver();
+                onDragOver(event);
               }
             : undefined
         }
@@ -1087,6 +1330,8 @@ function ChannelRow({
   icon,
   isDragging,
   isDragOver,
+  occupantDragActive = false,
+  occupantDropAllowed = false,
   isFavorite = false,
   onToggleFavorite,
   onSelect,
@@ -1113,6 +1358,8 @@ function ChannelRow({
   icon: ReactNode;
   isDragging: boolean;
   isDragOver: boolean;
+  occupantDragActive?: boolean;
+  occupantDropAllowed?: boolean;
   isFavorite?: boolean;
   onToggleFavorite?: () => void;
   onSelect: () => void;
@@ -1128,7 +1375,7 @@ function ChannelRow({
   onMoveDown?: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
-  onDragOverRow: () => void;
+  onDragOverRow: (event: DragEvent) => void;
   onDrop: () => void;
 }) {
   const { t } = useTranslation();
@@ -1280,8 +1527,16 @@ function ChannelRow({
         }}
         onDragEnd={onDragEnd}
         onDragOver={(event) => {
+          if (occupantDragActive) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = occupantDropAllowed
+              ? "move"
+              : "none";
+            onDragOverRow(event);
+            return;
+          }
           event.preventDefault();
-          onDragOverRow();
+          onDragOverRow(event);
         }}
         onDrop={(event) => {
           event.preventDefault();
@@ -1297,7 +1552,10 @@ function ChannelRow({
           hasUnread && !muted && !selected && !connected && "text-paper",
           muted && !selected && !connected && "opacity-50",
           isDragging && "opacity-40",
-          isDragOver && "ring-1 ring-inset ring-signal/60",
+          isDragOver &&
+            (occupantDragActive
+              ? "bg-signal/15 ring-2 ring-inset ring-signal/70"
+              : "ring-1 ring-inset ring-signal/60"),
         )}
       >
         {hasUnread && !muted && (

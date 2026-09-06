@@ -885,10 +885,19 @@ export async function connectLiveKit({
       published = null;
     }
     published = new LocalAudioTrack(audioTrack);
+    // publishTrack starts the sender live. If the capture is already
+    // closed (user mute, deafen, SPEAK denied), mute the publication
+    // before the first packet, then again if the library re-opened it.
+    if (!audioTrack.enabled) {
+      await published.mute();
+    }
     await room.localParticipant.publishTrack(published, {
       dtx: true,
       red: true,
     });
+    if (!audioTrack.enabled && !published.isMuted) {
+      await published.mute();
+    }
   }
 
   snapshot();
