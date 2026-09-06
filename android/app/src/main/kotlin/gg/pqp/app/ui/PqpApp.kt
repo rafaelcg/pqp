@@ -45,12 +45,15 @@ import gg.pqp.app.social.ui.titleOr
 import gg.pqp.app.ui.components.CallBar
 import gg.pqp.app.ui.components.ConnectionBanner
 import gg.pqp.app.ui.components.ConnectionDoctorDialog
+import gg.pqp.app.ui.components.IncomingCallBanner
+import gg.pqp.app.ui.components.rememberMicrophoneGate
 import gg.pqp.app.ui.screens.AgeGateScreen
 import gg.pqp.app.ui.screens.ChannelsScreen
 import gg.pqp.app.ui.screens.ChatScreen
 import gg.pqp.app.ui.components.FailedScreen
 import gg.pqp.app.ui.screens.SignInScreen
 import gg.pqp.app.ui.screens.YouScreen
+import gg.pqp.app.voice.CallController
 import gg.pqp.app.voice.VoiceController
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.serialization.Serializable
@@ -79,12 +82,24 @@ import kotlinx.serialization.Serializable
      * record, and a countdown that is missing is only a refusal away.
      */
     val slowmodeSeconds: Int = 0,
+    /**
+     * Null for a channel whose server is not known (a notification tap
+     * carries only ids). The chat then behaves as a plain member there:
+     * nothing is offered that only a moderator could do, and `@` offers no
+     * names. It cannot be wrong, only quieter.
+     */
+    val serverId: String? = null,
 )
 
 @Serializable object YouRoute
 
 @Composable
-fun PqpApp(session: SessionStore, voice: VoiceController, push: PushController) {
+fun PqpApp(
+    session: SessionStore,
+    voice: VoiceController,
+    push: PushController,
+    calls: CallController,
+) {
     val phase by session.phase.collectAsStateWithLifecycle()
 
     Surface(
@@ -108,7 +123,7 @@ fun PqpApp(session: SessionStore, voice: VoiceController, push: PushController) 
                     reason = (phase as? SessionPhase.Blocked)?.reason.orEmpty(),
                     onRetry = null,
                 )
-                PhaseKey.Ready -> SignedInNav(session, voice, push)
+                PhaseKey.Ready -> SignedInNav(session, voice, push, calls)
             }
         }
     }
@@ -131,9 +146,26 @@ private fun phaseKey(phase: SessionPhase): PhaseKey = when (phase) {
 }
 
 @Composable
-private fun SignedInNav(session: SessionStore, voice: VoiceController, push: PushController) {
+private fun SignedInNav(
+    session: SessionStore,
+    voice: VoiceController,
+    push: PushController,
+    calls: CallController,
+) {
     val nav = rememberNavController()
     val voiceState by voice.state.collectAsStateWithLifecycle()
+    val callState by calls.state.collectAsStateWithLifecycle()
+
+    // Asked for on the tap that starts a call, never before. The gate lives
+    // here rather than in the conversation screen so that answering a ring and
+    // placing a call go through one piece of code.
+    val micDenied = stringResource(R.string.voice_mic_denied)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val withMicrophone = rememberMicrophoneGate(
+        onDenied = {
+            android.widget.Toast.makeText(context, micDenied, android.widget.Toast.LENGTH_LONG).show()
+        },
+    )
 
     // A tapped notification, routed only once the app is signed in and has a
     // NavController. Anything tapped earlier waited on the controller.
@@ -198,7 +230,11 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController, push: Pus
         // showing, and the content below then stops adding that inset a second
         // time. The connection banner sits under it and carries the inset only
         // when the call bar is not there to.
-        CallBar(voiceState, voice, Modifier.statusBarsPadding())
+        CallBar(voiceState, voice, Modifier.statusBarsPadding(), call = callState.outgoing)
+
+        // Above the NavHost and below the call bar: a ring is not part of any
+        // screen, and it must not be hidden by the one that happens to be open.
+        IncomingCallBanner(callState, calls)
         ConnectionBanner(
             state = connection,
             refusedRepeatedly = RealtimeClient.refusedForGood(refusals),
@@ -238,7 +274,13 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController, push: Pus
                         onOpenProfile = { nav.navigate(YouRoute) },
                     )
                 }
-                conversationDestination(session, onBack = nav::popBackStack)
+                conversationDestination(
+                    session = session,
+                    onBack = nav::popBackStack,
+                    onCall = { channelId, title ->
+                        withMicrophone { calls.place(channelId, title) }
+                    },
+                )
                 composable<ChannelsRoute> { entry ->
                     val route = entry.toRoute<ChannelsRoute>()
                     ChannelsScreen(
@@ -248,7 +290,14 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController, push: Pus
                         serverName = route.serverName,
                         onBack = nav::popBackStack,
                         onOpenChannel = { channel ->
-                            nav.navigate(ChatRoute(channel.id, channel.name, channel.slowmodeSeconds))
+                            nav.navigate(
+                                ChatRoute(
+                                    channel.id,
+                                    channel.name,
+                                    channel.slowmodeSeconds,
+                                    serverId = route.serverId,
+                                ),
+                            )
                         },
                         onOpenBau = {
                             nav.navigate(BauRoute(route.serverId, route.serverName))
@@ -272,6 +321,7 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController, push: Pus
                         channelName = route.channelName,
                         slowmodeSeconds = route.slowmodeSeconds,
                         onBack = nav::popBackStack,
+                        serverId = route.serverId,
                     )
                 }
                 composable<YouRoute> {

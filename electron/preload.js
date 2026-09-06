@@ -183,4 +183,63 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
       ipcRenderer.removeListener("pqp:notification-click", handler);
     };
   },
+
+  /**
+   * Global push-to-talk. The renderer hands over an Electron accelerator (or
+   * null to let go) and the main process registers it with `globalShortcut`
+   * whenever this window is not focused. Resolves with whether the OS took
+   * the registration. Main validates the string; this only types it.
+   */
+  bindPushToTalk(accelerator) {
+    if (accelerator !== null && typeof accelerator !== "string") {
+      return Promise.resolve(false);
+    }
+    return ipcRenderer.invoke("pqp:ptt-bind", accelerator);
+  },
+
+  /** Presses and releases of the global push-to-talk key. */
+  onPushToTalk(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const handler = (_event, held) => {
+      callback(held === true);
+    };
+    ipcRenderer.on("pqp:ptt-held", handler);
+    return () => {
+      ipcRenderer.removeListener("pqp:ptt-held", handler);
+    };
+  },
+
+  /** Call state for the tray icon and menu. */
+  setVoiceState(state) {
+    if (!state || typeof state !== "object") {
+      return;
+    }
+    ipcRenderer.send("pqp:voice-state", {
+      inCall: state.inCall === true,
+      muted: state.muted === true,
+      deafened: state.deafened === true,
+    });
+  },
+
+  /** Mute, deafen and leave from the tray menu. */
+  onVoiceCommand(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const handler = (_event, command) => {
+      if (
+        command === "toggleMute" ||
+        command === "toggleDeafen" ||
+        command === "leave"
+      ) {
+        callback(command);
+      }
+    };
+    ipcRenderer.on("pqp:voice-command", handler);
+    return () => {
+      ipcRenderer.removeListener("pqp:voice-command", handler);
+    };
+  },
 });

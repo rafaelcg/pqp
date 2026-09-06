@@ -34,6 +34,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -53,6 +56,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -63,6 +67,8 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -71,11 +77,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -91,6 +96,7 @@ import gg.pqp.app.attachments.PendingAttachment
 import gg.pqp.app.attachments.composerReadiness
 import gg.pqp.app.attachments.formatAttachmentSize
 import gg.pqp.app.core.ApiClient
+import gg.pqp.app.core.Gif
 import gg.pqp.app.core.Message
 import gg.pqp.app.core.Reaction
 import gg.pqp.app.core.SessionPhase
@@ -99,8 +105,13 @@ import gg.pqp.app.push.VisibleChannel
 import gg.pqp.app.reports.ReportTarget
 import gg.pqp.app.reports.ui.ReportSheet
 import gg.pqp.app.ui.chat.ChanceCard
+import gg.pqp.app.ui.chat.ComposerTarget
 import gg.pqp.app.ui.chat.DayLabel
 import gg.pqp.app.ui.chat.DayLabels
+import gg.pqp.app.ui.chat.MentionAutocomplete
+import gg.pqp.app.ui.chat.MentionCandidate
+import gg.pqp.app.ui.chat.MessageBody
+import gg.pqp.app.ui.chat.MessagePermissions
 import gg.pqp.app.ui.components.Avatar
 import gg.pqp.app.ui.components.ChromeDivider
 import gg.pqp.app.ui.components.EmptyState
@@ -139,6 +150,19 @@ fun ChatScreen(
      * the server's `message-rejected` corrects the countdown if this is stale.
      */
     slowmodeSeconds: Int = 0,
+    /**
+     * The server this channel belongs to, when the caller knows it. It decides
+     * who may delete somebody else's message and who may pin, and whose names
+     * `@` completes to. Null in a conversation, and null for a channel opened
+     * from a notification tap, which carries ids and no membership.
+     */
+    serverId: String? = null,
+    /**
+     * Actions for the app bar's trailing edge. A conversation puts the call
+     * button here; a server channel has nothing to add. A slot rather than a
+     * flag, so that this screen does not have to know what a call is.
+     */
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
 ) {
     val context = LocalContext.current
     // Built from the application context, so the reader outlives this
@@ -146,7 +170,7 @@ fun ChatScreen(
     val files = remember(context) { ContentAttachmentFiles(context) }
     val model: ChatViewModel = viewModel(
         key = channelId,
-        factory = ChatViewModel.factory(session, channelId, files, slowmodeSeconds),
+        factory = ChatViewModel.factory(session, channelId, files, slowmodeSeconds, serverId),
     )
     val state by model.state.collectAsStateWithLifecycle()
     val phase by session.phase.collectAsStateWithLifecycle()
@@ -175,7 +199,10 @@ fun ChatScreen(
     }
 
     val listState = rememberLazyListState()
-    var draft by remember { mutableStateOf("") }
+    // A `TextFieldValue` rather than a String, because the caret is now
+    // load-bearing: the mention menu is keyed to the token under it, and
+    // picking a name has to leave the caret after what it inserted.
+    var draft by remember { mutableStateOf(TextFieldValue("")) }
 
     // The server refused a send: the words come back to the box. The box was
     // cleared when the frame left, so without this the only copy of the
@@ -184,13 +211,47 @@ fun ChatScreen(
     // the exact failure this hand-off exists to prevent.
     LaunchedEffect(state.restoredDraft) {
         val body = state.restoredDraft ?: return@LaunchedEffect
-        draft = if (draft.isBlank()) body else "$body\n$draft"
+        val restored = if (draft.text.isBlank()) body else "$body\n${draft.text}"
+        draft = TextFieldValue(restored, TextRange(restored.length))
         model.draftRestored()
     }
 
     var reporting by remember { mutableStateOf<Message?>(null) }
     // The long press opens this; "Report" inside it is what sets `reporting`.
     var acting by remember { mutableStateOf<Message?>(null) }
+    var showingPins by remember { mutableStateOf(false) }
+    var pickingGif by remember { mutableStateOf(false) }
+    val composerFocus = remember { FocusRequester() }
+
+    // Editing loads the message into the box, which is how a phone offers an
+    // edit without a second screen. Cancelling puts back whatever was in the
+    // box, so an edit started by mistake does not eat a half-written draft.
+    var draftBeforeEdit by remember { mutableStateOf<TextFieldValue?>(null) }
+    LaunchedEffect(state.composer) {
+        when (val target = state.composer) {
+            is ComposerTarget.Edit -> {
+                if (draftBeforeEdit == null) draftBeforeEdit = draft
+                draft = TextFieldValue(target.message.body, TextRange(target.message.body.length))
+                runCatching { composerFocus.requestFocus() }
+            }
+
+            is ComposerTarget.Reply -> runCatching { composerFocus.requestFocus() }
+
+            ComposerTarget.New -> {
+                draftBeforeEdit?.let {
+                    draft = it
+                    draftBeforeEdit = null
+                }
+            }
+        }
+    }
+
+    val mentionQuery = remember(draft) {
+        MentionAutocomplete.find(draft.text, draft.selection.start)
+    }
+    val mentionMatches = remember(mentionQuery, state.members) {
+        mentionQuery?.let { MentionAutocomplete.filter(state.members, it.query) }.orEmpty()
+    }
 
     // So an incoming `reaction-broadcast` naming us can mark its own pill.
     // Set from the session rather than inferred, because a reaction of ours
@@ -249,6 +310,25 @@ fun ChatScreen(
                             )
                         }
                     },
+                    actions = {
+                        IconButton(
+                            onClick = {
+                                model.loadPins()
+                                showingPins = true
+                            },
+                            modifier = Modifier.testTag("chat.pins"),
+                        ) {
+                            Icon(
+                                PqpIcons.Pin,
+                                contentDescription = stringResource(R.string.chat_pins),
+                                modifier = Modifier.size(Sizes.iconAction),
+                            )
+                        }
+                        // Whatever the caller adds sits to the right of pins:
+                        // a conversation's call button, and nothing at all in
+                        // a server channel.
+                        actions()
+                    },
                     colors = pqpTopBarColors(),
                 )
                 ChromeDivider()
@@ -262,19 +342,45 @@ fun ChatScreen(
                 // composer are one continuous piece of chrome.
                 ChromeDivider()
                 TypingStrip(state.typing)
+                MentionMenu(mentionMatches) { candidate ->
+                    val username = candidate.username
+                    val query = mentionQuery
+                    if (username != null && query != null) {
+                        val (next, caret) = MentionAutocomplete.apply(draft.text, query, username)
+                        draft = TextFieldValue(next, TextRange(caret))
+                    }
+                }
+                ComposerTargetStrip(
+                    target = state.composer,
+                    onCancel = model::cancelComposerTarget,
+                )
                 Composer(
                     value = draft,
                     onValueChange = {
                         draft = it
-                        if (it.isNotEmpty()) model.typing()
+                        if (it.text.isNotEmpty()) model.typing()
                     },
                     onSend = {
                         // Cleared only once the frame has actually left the
                         // phone. A send during a reconnect returns false, and
                         // swallowing the box's contents there is how somebody
                         // loses a sentence they watched themselves type.
-                        if (model.send(draft, me)) draft = ""
+                        //
+                        // An edit takes the same path: `send` routes it to
+                        // `saveEdit`, which answers true because the request
+                        // is on its way and the box has done its job.
+                        if (model.send(draft.text, me)) {
+                            draft = TextFieldValue("")
+                            draftBeforeEdit = null
+                        }
                     },
+                    editing = state.composer is ComposerTarget.Edit,
+                    gifsEnabled = state.gifsEnabled,
+                    onOpenGifs = {
+                        model.searchGifs("")
+                        pickingGif = true
+                    },
+                    focusRequester = composerFocus,
                     attachmentsEnabled = state.attachmentsEnabled,
                     attachments = state.attachments,
                     refusal = state.attachmentRefusal,
@@ -344,6 +450,7 @@ fun ChatScreen(
                                 MessageRow(
                                     message = message,
                                     grouped = !startsDay && shouldGroup(previous, message),
+                                    selfUsername = me?.username,
                                     onOpenActions = { acting = message },
                                     onToggleReaction = { emoji ->
                                         model.toggleReaction(message.id, emoji, me)
@@ -387,10 +494,39 @@ fun ChatScreen(
      * with no label would be the way to lose it.
      */
     acting?.let { message ->
+        // The role is `admin` or nothing: the view model has already resolved
+        // owner-or-admin into one boolean, and the two are the same answer to
+        // every question a message can ask (`canManageMessages` in
+        // `packages/shared/src/moderation.ts` is a flat manager check).
+        val role = if (state.canManage) "admin" else null
         MessageActionsSheet(
             message = message,
+            canEdit = MessagePermissions.canEdit(message, me?.id),
+            canDelete = MessagePermissions.canDelete(
+                message = message,
+                meId = me?.id,
+                role = role,
+                isServerChannel = state.isServerChannel,
+            ),
+            canPin = MessagePermissions.canPin(role, state.isServerChannel),
             onReact = { emoji ->
                 model.toggleReaction(message.id, emoji, me)
+                acting = null
+            },
+            onReply = {
+                model.reply(message)
+                acting = null
+            },
+            onEdit = {
+                model.edit(message)
+                acting = null
+            },
+            onDelete = {
+                model.delete(message.id)
+                acting = null
+            },
+            onTogglePin = {
+                if (message.pinnedAt == null) model.pin(message.id) else model.unpin(message.id)
                 acting = null
             },
             onReport = {
@@ -399,6 +535,43 @@ fun ChatScreen(
             },
             onDismiss = { acting = null },
         )
+    }
+
+    if (showingPins) {
+        PinnedSheet(
+            pinned = state.pinned,
+            loaded = state.pinnedLoaded,
+            canUnpin = MessagePermissions.canPin(
+                role = if (state.canManage) "admin" else null,
+                isServerChannel = state.isServerChannel,
+            ),
+            selfUsername = me?.username,
+            onUnpin = model::unpin,
+            onDismiss = { showingPins = false },
+        )
+    }
+
+    if (pickingGif) {
+        GifPickerSheet(
+            gifs = state.gifs,
+            loading = state.gifsLoading,
+            onSearch = model::searchGifs,
+            onPick = { gif ->
+                model.stageGif(gif)
+                pickingGif = false
+            },
+            onDismiss = { pickingGif = false },
+        )
+    }
+
+    /*
+     * An edit, a delete or a pin the server refused, in the server's own
+     * words. It is the only thing on this screen that fails leaving no other
+     * trace: the message simply does not change, and somebody told nothing
+     * tries again.
+     */
+    state.actionError?.let { error ->
+        ActionErrorDialog(error, model::clearActionError)
     }
 
     /*
@@ -512,6 +685,8 @@ private val TEXT_COLUMN_INSET = Sizes.avatarRow + Spacing.md
 private fun MessageRow(
     message: Message,
     grouped: Boolean,
+    /** The reader's own `username`, so a mention of them can be marked. */
+    selfUsername: String?,
     onOpenActions: () -> Unit,
     onToggleReaction: (String) -> Unit,
     api: ApiClient,
@@ -559,6 +734,15 @@ private fun MessageRow(
                         text = message.authorName,
                         style = MaterialTheme.typography.titleSmall,
                     )
+                    if (message.pinnedAt != null) {
+                        Spacer(Modifier.width(Spacing.sm))
+                        Icon(
+                            imageVector = PqpIcons.Pin,
+                            contentDescription = stringResource(R.string.chat_pinned),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp),
+                        )
+                    }
                     Spacer(Modifier.width(Spacing.sm))
                     Text(
                         text = formatTime(message.createdAt),
@@ -582,7 +766,8 @@ private fun MessageRow(
                 Row(
                     modifier = Modifier
                         .height(IntrinsicSize.Min)
-                        .padding(bottom = 2.dp),
+                        .padding(bottom = 2.dp)
+                        .testTag("message.reply"),
                 ) {
                     // The rule is what says "quoted" rather than "first
                     // sentence". `primaryContainer` is the scheme's spelling of
@@ -619,9 +804,10 @@ private fun MessageRow(
                 Spacer(Modifier.height(Spacing.xs))
                 ChanceCard(message.chance)
             } else if (message.body.isNotEmpty()) {
-                Text(
-                    text = bodyWithEditMark(message),
-                    style = MaterialTheme.typography.bodyLarge,
+                MessageBody(
+                    body = message.body,
+                    editedMark = message.editedAt?.let { stringResource(R.string.chat_edited) },
+                    selfUsername = selfUsername,
                 )
             }
 
@@ -717,7 +903,14 @@ private fun ReactionRow(reactions: List<Reaction>, onToggle: (String) -> Unit) {
 @Composable
 private fun MessageActionsSheet(
     message: Message,
+    canEdit: Boolean,
+    canDelete: Boolean,
+    canPin: Boolean,
     onReact: (String) -> Unit,
+    onReply: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onTogglePin: () -> Unit,
     onReport: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -764,50 +957,46 @@ private fun MessageActionsSheet(
             Spacer(Modifier.height(Spacing.md))
             ChromeDivider()
 
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onReport)
-                    .padding(horizontal = Spacing.gutter, vertical = Spacing.md),
-            ) {
-                Icon(
-                    imageVector = PqpIcons.Warning,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(Sizes.iconAction),
-                )
-                Spacer(Modifier.width(Spacing.md))
-                Text(
-                    text = stringResource(R.string.report_message_long_press),
-                    style = MaterialTheme.typography.bodyLarge,
+            SheetAction(
+                icon = PqpIcons.Reply,
+                label = stringResource(R.string.chat_reply),
+                testTag = "message.reply-action",
+                onClick = onReply,
+            )
+            if (canEdit) {
+                SheetAction(
+                    icon = PqpIcons.Edit,
+                    label = stringResource(R.string.chat_edit),
+                    testTag = "message.edit",
+                    onClick = onEdit,
                 )
             }
+            if (canPin) {
+                SheetAction(
+                    icon = if (message.pinnedAt == null) PqpIcons.Pin else PqpIcons.Unpin,
+                    label = stringResource(
+                        if (message.pinnedAt == null) R.string.chat_pin else R.string.chat_unpin,
+                    ),
+                    testTag = "message.pin",
+                    onClick = onTogglePin,
+                )
+            }
+            if (canDelete) {
+                SheetAction(
+                    icon = PqpIcons.Delete,
+                    label = stringResource(R.string.chat_delete),
+                    testTag = "message.delete",
+                    destructive = true,
+                    onClick = onDelete,
+                )
+            }
+            SheetAction(
+                icon = PqpIcons.Warning,
+                label = stringResource(R.string.report_message_long_press),
+                testTag = "message.report",
+                onClick = onReport,
+            )
         }
-    }
-}
-
-/**
- * The body, with the edit mark as its own muted piece rather than two spaces
- * and a word glued onto the end of what somebody wrote.
- *
- * One `Text`, so the mark still wraps with the last line instead of hanging on
- * a row of its own, and a span style rather than a nested composable, so a
- * message that ends mid-line does not push the mark to the next one.
- */
-@Composable
-private fun bodyWithEditMark(message: Message): AnnotatedString {
-    if (message.editedAt == null) return AnnotatedString(message.body)
-
-    val mark = stringResource(R.string.chat_edited)
-    val style = MaterialTheme.typography.labelMedium
-        .toSpanStyle()
-        .copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
-
-    return buildAnnotatedString {
-        append(message.body)
-        append(" ")
-        withStyle(style) { append(mark) }
     }
 }
 
@@ -821,9 +1010,14 @@ private fun formatTime(iso: String): String = runCatching {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun Composer(
-    value: String,
-    onValueChange: (String) -> Unit,
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
     onSend: () -> Unit,
+    /** An edit sends a tick rather than a paper plane: it changes, not adds. */
+    editing: Boolean,
+    gifsEnabled: Boolean,
+    onOpenGifs: () -> Unit,
+    focusRequester: FocusRequester,
     attachmentsEnabled: Boolean,
     attachments: List<PendingAttachment>,
     refusal: AttachmentRefusal?,
@@ -853,7 +1047,7 @@ private fun Composer(
     // surface animates on. It is no longer "is there text": a message may be
     // nothing but a picture, and it may not go while an upload is still
     // running or has failed, or while slow mode is counting down.
-    val readiness = composerReadiness(value, attachments)
+    val readiness = composerReadiness(value.text, attachments)
     val active = readiness == ComposerReadiness.Ready && waitSeconds == 0
 
     // `OpenMultipleDocuments` rather than `PickVisualMedia`: the allowlist is
@@ -915,6 +1109,23 @@ private fun Composer(
                     )
                 }
             }
+            // A GIF is not an upload and does not need object storage: the
+            // bytes stay with the provider and the server mints a row that
+            // points at them. So this button is gated on the GIF key alone,
+            // never on `attachmentsEnabled`.
+            if (gifsEnabled) {
+                IconButton(
+                    onClick = onOpenGifs,
+                    enabled = attachments.size < MAX_ATTACHMENTS_PER_MESSAGE,
+                    modifier = Modifier.testTag("composer.gif"),
+                ) {
+                    Icon(
+                        PqpIcons.Gif,
+                        contentDescription = stringResource(R.string.chat_gif),
+                        modifier = Modifier.size(Sizes.iconAction),
+                    )
+                }
+            }
             TextField(
                 value = value,
                 onValueChange = onValueChange,
@@ -927,6 +1138,7 @@ private fun Composer(
                 },
                 modifier = Modifier
                     .weight(1f)
+                    .focusRequester(focusRequester)
                     // Material floors a text field at 56dp, which is a form
                     // field's height and half again what one line of 15sp
                     // needs. The floor is only applied when nothing above has
@@ -975,8 +1187,10 @@ private fun Composer(
                 ),
             ) {
                 Icon(
-                    PqpIcons.Send,
-                    contentDescription = stringResource(R.string.chat_send),
+                    if (editing) PqpIcons.Confirm else PqpIcons.Send,
+                    contentDescription = stringResource(
+                        if (editing) R.string.chat_edit_save else R.string.chat_send,
+                    ),
                     modifier = Modifier.size(Sizes.iconAction),
                 )
             }
@@ -1199,4 +1413,344 @@ private fun AttachmentChip(
             }
         }
     }
+}
+
+/** One labelled row in the message sheet. The label is the affordance. */
+@Composable
+private fun SheetAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    testTag: String,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val tint = if (destructive) {
+        MaterialTheme.colorScheme.error
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = Spacing.gutter, vertical = Spacing.md)
+            .testTag(testTag),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(Sizes.iconAction),
+        )
+        Spacer(Modifier.width(Spacing.md))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (destructive) MaterialTheme.colorScheme.error else LocalContentColor.current,
+        )
+    }
+}
+
+/**
+ * What the next send is for, when it is not a new message.
+ *
+ * Above the composer and on its surface, the same place the typing strip
+ * stands, because both answer "what is this box about to do". Without it a
+ * reply is invisible until it lands quoting something, and an edit is
+ * indistinguishable from a draft that mysteriously filled itself in.
+ */
+@Composable
+private fun ComposerTargetStrip(target: ComposerTarget, onCancel: () -> Unit) {
+    val label = when (target) {
+        is ComposerTarget.Reply -> stringResource(R.string.chat_replying_to, target.to.authorName)
+        is ComposerTarget.Edit -> stringResource(R.string.chat_editing)
+        ComposerTarget.New -> return
+    }
+
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = Spacing.gutter, end = Spacing.sm)
+                .testTag("composer.target"),
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            IconButton(onClick = onCancel, modifier = Modifier.testTag("composer.target.cancel")) {
+                Icon(
+                    PqpIcons.Close,
+                    contentDescription = stringResource(R.string.chat_cancel),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(Sizes.iconInline),
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The names `@` can complete to, immediately above the composer.
+ *
+ * A strip rather than a popup: a popup on a phone is drawn over the keyboard
+ * or over the transcript, and this has to sit between the two. It draws
+ * nothing at all when there is no active token, so an ordinary composer is
+ * exactly as tall as it was.
+ */
+@Composable
+private fun MentionMenu(matches: List<MentionCandidate>, onPick: (MentionCandidate) -> Unit) {
+    if (matches.isEmpty()) return
+
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer) {
+        Column(Modifier.fillMaxWidth().testTag("composer.mentions")) {
+            ChromeDivider()
+            matches.forEach { candidate ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onPick(candidate) }
+                        .padding(horizontal = Spacing.gutter, vertical = Spacing.sm),
+                ) {
+                    Avatar(
+                        name = candidate.displayName,
+                        url = candidate.avatarUrl,
+                        size = Sizes.avatarSmall,
+                        seed = candidate.id,
+                    )
+                    Spacer(Modifier.width(Spacing.md))
+                    Text(
+                        text = candidate.nickname?.takeIf { it.isNotBlank() } ?: candidate.displayName,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.width(Spacing.sm))
+                    // The username, because that is what gets inserted and
+                    // what the server resolves. A picker that shows only a
+                    // display name is a picker you cannot predict.
+                    Text(
+                        text = "@${candidate.username.orEmpty()}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * What this channel has pinned.
+ *
+ * Fetched when the sheet opens rather than held with the transcript: pins
+ * change rarely and are read rarely, and a channel's pin list is a second
+ * page of history nobody asked to load.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PinnedSheet(
+    pinned: List<Message>,
+    loaded: Boolean,
+    canUnpin: Boolean,
+    selfUsername: String?,
+    onUnpin: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag("chat.pins.sheet"),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = Spacing.lg),
+        ) {
+            Text(
+                text = stringResource(R.string.chat_pins),
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.sm),
+            )
+
+            when {
+                !loaded -> Box(
+                    Modifier.fillMaxWidth().padding(Spacing.xl),
+                    contentAlignment = Alignment.Center,
+                ) { CircularProgressIndicator(Modifier.width(24.dp)) }
+
+                pinned.isEmpty() -> Text(
+                    text = stringResource(R.string.chat_pins_empty),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
+                )
+
+                else -> LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                    items(pinned.size, key = { pinned[it].id }) { index ->
+                        val message = pinned[index]
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = Spacing.gutter, vertical = Spacing.sm),
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Row(verticalAlignment = Alignment.Bottom) {
+                                    Text(
+                                        text = message.authorName,
+                                        style = MaterialTheme.typography.titleSmall,
+                                    )
+                                    Spacer(Modifier.width(Spacing.sm))
+                                    Text(
+                                        text = formatTime(message.createdAt),
+                                        style = MaterialTheme.typography.labelMedium
+                                            .copy(fontFeatureSettings = TabularFigures),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                MessageBody(body = message.body, selfUsername = selfUsername)
+                            }
+                            if (canUnpin) {
+                                IconButton(onClick = { onUnpin(message.id) }) {
+                                    Icon(
+                                        PqpIcons.Unpin,
+                                        contentDescription = stringResource(R.string.chat_unpin),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(Sizes.iconInline),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Picking a GIF.
+ *
+ * The provider is whatever the API is configured with (Klipy today), reached
+ * only through the `/api/gifs` routes: no provider key is on the phone and no
+ * upstream host is contacted from here, the same arrangement the web has.
+ * The picked GIF is staged as an attachment rather than posted as a body, so
+ * it can carry a caption and be edited afterwards.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun GifPickerSheet(
+    gifs: List<Gif>,
+    loading: Boolean,
+    onSearch: (String) -> Unit,
+    onPick: (Gif) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var query by remember { mutableStateOf("") }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        modifier = Modifier.testTag("chat.gifs"),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(bottom = Spacing.lg),
+        ) {
+            TextField(
+                value = query,
+                onValueChange = {
+                    query = it
+                    onSearch(it)
+                },
+                placeholder = { Text(stringResource(R.string.chat_gif_search)) },
+                singleLine = true,
+                shape = MaterialTheme.shapes.extraLarge,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Spacing.gutter)
+                    .testTag("gif.search"),
+            )
+            Spacer(Modifier.height(Spacing.sm))
+
+            when {
+                loading && gifs.isEmpty() -> Box(
+                    Modifier.fillMaxWidth().padding(Spacing.xl),
+                    contentAlignment = Alignment.Center,
+                ) { CircularProgressIndicator(Modifier.width(24.dp)) }
+
+                gifs.isEmpty() -> Text(
+                    text = stringResource(R.string.chat_gif_none),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.md),
+                )
+
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    horizontalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    verticalArrangement = Arrangement.spacedBy(Spacing.sm),
+                    contentPadding = PaddingValues(horizontal = Spacing.gutter),
+                    modifier = Modifier.heightIn(max = 420.dp),
+                ) {
+                    items(gifs, key = { it.id }) { gif ->
+                        AsyncImage(
+                            model = gif.previewUrl,
+                            contentDescription = gif.title.ifBlank {
+                                stringResource(R.string.chat_gif)
+                            },
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(120.dp)
+                                .clip(MaterialTheme.shapes.small)
+                                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                                .clickable { onPick(gif) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A refusal from the server, said out loud.
+ *
+ * Verbatim, because only the server knows which refusal it was: an edit
+ * aimed at somebody else's message, a pin past this channel's ceiling, a
+ * delete by somebody who has stopped being a moderator since the sheet opened.
+ */
+@Composable
+private fun ActionErrorDialog(message: String, onDismiss: () -> Unit) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.ok)) }
+        },
+        title = { Text(stringResource(R.string.chat_action_failed)) },
+        text = { Text(message) },
+        modifier = Modifier.testTag("chat.action-error"),
+    )
 }

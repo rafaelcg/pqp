@@ -114,4 +114,27 @@ class DeepLinkTest {
             DeepLink.target("https://pqp.gg/invite/aB3-x_9"),
         )
     }
+
+    /**
+     * The link the web hands out is `/app/invite/<code>` (`inviteLink` in
+     * `client/src/components/layout/invite-panel.tsx`), and it is the path the
+     * manifest's App Links filter claims. Before this test it parsed to null,
+     * so an https invite opened the server list and said nothing.
+     */
+    @Test
+    fun `the web's own invite link is an invite`() {
+        assertEquals(
+            DeepLinkTarget.Invite("aB3-x_9"),
+            DeepLink.target("https://pqp.gg/app/invite/aB3-x_9"),
+        )
+        assertEquals(DeepLinkTarget.Invite("aB3-x_9"), DeepLink.target("/app/invite/aB3-x_9"))
+        assertEquals(
+            DeepLinkTarget.Invite("aB3-x_9"),
+            DeepLink.target("https://pqp.gg/app/invite/aB3-x_9?utm_source=share#top"),
+        )
+        assertNull(DeepLink.target("/app/invite"))
+        assertNull(DeepLink.target("/app/invite/"))
+        assertNull(DeepLink.target("https://pqp.gg/app/invite/../me"))
+        assertNull(DeepLink.target("https://pqp.gg/app/invite/" + "A".repeat(65)))
+    }
 }

@@ -62,6 +62,60 @@ On **macOS**, the shell uses `titleBarStyle: "hiddenInset"` (traffic lights only
 
 On Windows / Linux, the native title bar is kept (minimal).
 
+## Global push-to-talk
+
+The web client can only hear a key while its window is focused, so browser
+push-to-talk stops the moment you alt-tab into a game. The shell registers the
+same binding with `globalShortcut` and reports it over IPC:
+
+- The renderer converts its binding (a `KeyboardEvent.code` plus a chord) into
+  an Electron accelerator (`client/src/components/voice/push-to-talk-accelerator.ts`)
+  and calls `pqpDesktop.bindPushToTalk(accelerator)`. It resolves `false` when
+  the OS refuses the key, and the client silently stays in-window only.
+- Rebinding calls it again; `null` gives the key back. `will-quit` unregisters
+  everything.
+- **The accelerator is held only while the app window is NOT focused.** A
+  registered global shortcut is swallowed system-wide, our own renderer
+  included, and the renderer's keydown / keyup pair is the precise one. So
+  in-window PTT is unchanged and out-of-window PTT is the shell's job.
+- **`globalShortcut` reports key-down and nothing else.** There is no key-up
+  and no way to poll. `lib/global-ptt.js` infers the release from auto-repeat:
+  the first press engages, repeats extend the deadline, and a gap ends the
+  transmission. A tap therefore holds the mic for up to ~1.1 s (the initial
+  repeat delay every OS applies), and a held key lets go ~250 ms after the
+  finger. On a desktop that does not repeat global hotkeys at all, a hold is a
+  single ~1.1 s pulse. Going tighter needs a native keyboard hook, which is a
+  native module and a macOS accessibility grant this shell deliberately does
+  not ask for.
+
+**macOS.** `globalShortcut` does **not** need the Accessibility permission (it
+uses Carbon hotkeys, not an event tap), so there is no TCC prompt and nothing
+to grant. What it *is* subject to is conflicts: a key the system or another app
+already owns cannot be registered, `register` returns false, and pqp falls back
+to in-window PTT rather than pretending. Cmd chords collide with system
+shortcuts most often; the default `` ` `` binding does not.
+
+**Modifier-only bindings** (Left Ctrl on its own) cannot be global: an
+accelerator needs a non-modifier key. Those keep working in-window.
+
+## Tray
+
+`lib/tray-icon.js` paints four 16 px glyphs (idle, live, muted, deafened) at 1x
+and 2x and encodes them as PNG at runtime — template images on macOS, colour
+elsewhere, with a red slash on mute and deafen. No binaries to commit.
+
+The menu (`lib/tray-menu.js`, strings in `locales/`) is: call state, mute /
+unmute, deafen / undeafen, leave call, show window, "keep in tray while in a
+call", quit. Mute, deafen and leave are IPC to the renderer
+(`pqpDesktop.onVoiceCommand`) and are greyed out when no call is up. The
+renderer mirrors its call state back with `pqpDesktop.setVoiceState`, which is
+what repaints the icon.
+
+Closing the window **during a call** hides to the tray instead of quitting,
+because quitting hangs up. Out of a call, and whenever the tray checkbox is
+off, close behaves as it always did. The preference lives in
+`userData/tray.json` and is toggled from the tray menu.
+
 ## Screen sharing
 
 `getDisplayMedia` in the renderer resolves nothing until the main process answers it, so the shell owns "which surface?" entirely (`setDisplayMediaRequestHandler` in `main.js`).
@@ -181,6 +235,7 @@ Packaged apps load the hosted app (see **Environment** above). `resources/client
 - No `window`-only assumptions in core hooks (`lib/api.ts`, `lib/realtime.ts`)
 - Clerk: add the desktop origin (and `http://127.0.0.1:*` for static mode if used) to allowed origins
 - Detect `window.pqpDesktop?.isElectron` for desktop-only UX (title bar, mute IPC, deep links)
+- Feature-detect each bridge method, never the shell version: `bindPushToTalk`, `onPushToTalk`, `setVoiceState` and `onVoiceCommand` are absent in a browser **and** in shells built before they landed, and the packaged shell loads the hosted client, so a client deployed today runs inside a shell built weeks ago
 
 ## Remaining gaps
 
@@ -192,6 +247,8 @@ Packaged apps load the hosted app (see **Environment** above). `resources/client
 | Auto-update | Implemented (`lib/updater.js`, electron-updater → GitHub Releases). macOS updates need a signed build |
 | App icons | `build/icon.{icns,ico,png}`, generated from `build/*.svg` |
 | Bundled client origin | Loopback static mode cannot satisfy a production CORS allowlist; the fix is a stable `app://` protocol |
-| Tray / push-to-talk | Future |
+| Tray, minimize to tray during a call | Implemented (`lib/tray-icon.js`, `lib/tray-menu.js`, `lib/tray-state.js`) |
+| Global push-to-talk | Implemented (`lib/global-ptt.js`); release is inferred from auto-repeat, see above |
+| Start at login | Future |
 | Native notifications deep-link | Future |
 | Deep-link → select server/channel state | Path navigates to `/app/...`; selection state still in-memory |

@@ -1,13 +1,22 @@
 package gg.pqp.app.social.ui
 
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import androidx.navigation.toRoute
+import androidx.compose.foundation.layout.size
+import gg.pqp.app.R
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.social.DmSummary
 import gg.pqp.app.social.SocialRepository
 import gg.pqp.app.ui.screens.ChatScreen
+import gg.pqp.app.ui.theme.PqpIcons
+import gg.pqp.app.ui.theme.Sizes
 import kotlinx.serialization.Serializable
 
 /**
@@ -31,6 +40,15 @@ data class ConversationRoute(val channelId: String, val title: String)
 fun NavGraphBuilder.conversationDestination(
     session: SessionStore,
     onBack: () -> Unit,
+    /**
+     * Ring this conversation. Null leaves the app bar as it was, which is what
+     * a caller with no call machinery wants.
+     *
+     * The title travels with the id because the call bar has to name the room
+     * from the moment the join starts, and a conversation has no name of its
+     * own to look up.
+     */
+    onCall: ((channelId: String, title: String) -> Unit)? = null,
 ) {
     composable<ConversationRoute> { entry ->
         val route = entry.toRoute<ConversationRoute>()
@@ -55,6 +73,20 @@ fun NavGraphBuilder.conversationDestination(
             // A conversation's app bar is a person's name, not `#name`: there is
             // no channel here to prefix.
             title = route.title,
+            actions = {
+                if (onCall != null) {
+                    IconButton(
+                        onClick = { onCall(route.channelId, route.title) },
+                        modifier = Modifier.testTag("conversation.call"),
+                    ) {
+                        Icon(
+                            imageVector = PqpIcons.Call,
+                            contentDescription = stringResource(R.string.call_start),
+                            modifier = Modifier.size(Sizes.iconAction),
+                        )
+                    }
+                }
+            },
         )
     }
 }
