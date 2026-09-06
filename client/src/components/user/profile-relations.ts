@@ -1,5 +1,6 @@
 import {
   canModerateMember,
+  publicProfilePath,
   type FriendsResponse,
   type MemberRole,
   type RoleSystemKey,
@@ -49,6 +50,24 @@ export interface ProfileSubject {
    * "none", so the prompt starts blank rather than wrong.
    */
   nickname?: string | null;
+  /**
+   * Claimed public handle (`pqp.gg/@rafa`). Null or absent when they have never
+   * claimed one. The card must not invent a URL from username or tag.
+   */
+  handle?: string | null;
+}
+
+/**
+ * Path to this person's public page, or null when they have no handle.
+ * Empty string is treated as missing so a dead `pqp.gg/@` is never drawn.
+ */
+export function publicProfileHref(
+  handle: string | null | undefined,
+): string | null {
+  if (!handle) {
+    return null;
+  }
+  return publicProfilePath(handle);
 }
 
 /** Painted roles the card can list. `@everyone` is filtered out at render. */

@@ -13,7 +13,7 @@ import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
-import type { ProfileSubject } from "@/components/user/profile-relations";
+import { publicProfileHref, type ProfileSubject } from "@/components/user/profile-relations";
 import { ApiError, memberDisplayName, memberMatchesQuery, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
 import { highestRoleColor, identityMarks, rankBadges } from "@/lib/author-display";
 import { useTranslation } from "@/lib/i18n";
@@ -130,6 +130,7 @@ function subjectOf(member: ServerMember): ProfileSubject {
     roleIds: member.roleIds,
     rank: member.role,
     isCharacter: member.isCharacter,
+    handle: member.handle ?? null,
   };
 }
 
@@ -345,6 +346,16 @@ export function MemberSidebar({
 
   function menuFor(member: ServerMember): ContextMenuItemDef[] {
     const items: ContextMenuItemDef[] = [];
+    const publicHref = publicProfileHref(member.handle);
+    if (publicHref) {
+      items.push({
+        id: "public-profile",
+        label: t("profile.viewPublic"),
+        onSelect: () => {
+          window.open(publicHref, "_blank", "noopener,noreferrer");
+        },
+      });
+    }
     if (onMention && member.username) {
       const username = member.username;
       items.push({
