@@ -284,7 +284,19 @@ class VoiceEngine(
     }
 
     override fun setMuted(muted: Boolean) {
-        localAudio?.setEnabled(!muted)
+        localAudio?.setEnabled(!muted && canPublishAudio)
+    }
+
+    /**
+     * The mesh has no server between the microphone and the room, so this
+     * client is the enforcement: the track stays on the transceiver (the peer
+     * connections were negotiated with it) and is simply never enabled.
+     */
+    @Volatile private var canPublishAudio = true
+
+    override fun setCanPublishAudio(allowed: Boolean) {
+        canPublishAudio = allowed
+        if (!allowed) localAudio?.setEnabled(false)
     }
 
     /**
@@ -295,7 +307,11 @@ class VoiceEngine(
      */
     override fun setDeafened(value: Boolean, mutedByUser: Boolean) {
         synchronized(audioLock) { remoteAudio.setDeafened(value) }
-        localAudio?.setEnabled(!(value || mutedByUser))
+        // `canPublishAudio` is in the condition and not only in `setMuted`,
+        // because undeafening is the one path that enables the track without
+        // going through it. The controller keeps a listen-only seat muted, so
+        // this is belt and braces on the failure that matters.
+        localAudio?.setEnabled(!(value || mutedByUser) && canPublishAudio)
     }
 
     /**

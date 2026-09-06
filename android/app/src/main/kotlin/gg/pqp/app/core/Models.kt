@@ -277,6 +277,12 @@ data class VoiceParticipant(
      * to "not muted" rather than to an empty roster.
      */
     val serverMuted: Boolean = false,
+    /**
+     * Set by the server, never self-reported: whether this seat may publish
+     * audio at all. Absent on a server that predates SPEAK enforcement, and
+     * absent reads as true, which is what every such server resolved.
+     */
+    val canSpeak: Boolean = true,
 )
 
 /**

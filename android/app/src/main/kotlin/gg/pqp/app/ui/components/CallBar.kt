@@ -119,6 +119,12 @@ fun CallBar(state: VoiceState, controller: VoiceController, modifier: Modifier =
 
                                 unreachable -> stringResource(R.string.voice_peer_unreachable)
 
+                                // A listen-only seat first: the rule is the
+                                // reason the mic is locked, and it outranks a
+                                // moderator's mute the same way the web call
+                                // bar orders them.
+                                !state.canSpeak -> stringResource(R.string.voice_listen_only)
+
                                 // A moderator muted this device. Said on the
                                 // status line for as long as it holds rather
                                 // than as a snackbar that vanishes, because
@@ -144,21 +150,25 @@ fun CallBar(state: VoiceState, controller: VoiceController, modifier: Modifier =
                         )
                     }
 
+                    // Locked, not hidden, on a listen-only seat: a microphone
+                    // that is simply absent reads as a broken bar, while a
+                    // dimmed one with the sentence on it reads as a rule.
                     CallControl(
                         onClick = controller::toggleMute,
                         icon = if (state.muted) PqpIcons.MicMuted else PqpIcons.Mic,
                         contentDescription = stringResource(
                             when {
+                                !state.canSpeak -> R.string.voice_listen_only_locked
                                 state.serverMuted -> R.string.voice_server_muted_you
                                 state.muted -> R.string.voice_unmute
                                 else -> R.string.voice_mute
                             },
                         ),
                         on = state.muted,
-                        // Inert while a moderator's mute holds. The controller
-                        // ignores the tap and the server would refuse the frame,
-                        // so a button that still looked pressable would be
-                        // pretending. Same fact as the guard in `toggleMute`.
+                        // Inert while a moderator's mute holds or the seat
+                        // may not speak at all. The controller ignores the tap
+                        // and the server would refuse the frame, so a button
+                        // that still looked pressable would be pretending.
                         enabled = state.muteControlEnabled,
                     )
                     CallControl(
@@ -203,7 +213,9 @@ fun CallBar(state: VoiceState, controller: VoiceController, modifier: Modifier =
                     // Android's consent dialog, and offering that when nothing
                     // can be published with the grant is worse than not
                     // offering at all. See `VoiceState.screenShareSupported`.
-                    if (state.screenShareSupported) {
+                    // Nor on a listen-only seat: the server refuses the
+                    // announce and the roster never carries it.
+                    if (state.screenShareSupported && state.canSpeak) {
                         ShareScreenButton(state, controller)
                     }
                     FilledIconButton(

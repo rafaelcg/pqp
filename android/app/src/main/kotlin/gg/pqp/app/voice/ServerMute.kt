@@ -35,10 +35,12 @@ internal fun VoiceState.absorbServerMute(
  *
  * One expression, named, so the controller and the call bar cannot disagree
  * about it: the button is drawn inert for exactly the state in which a tap is
- * ignored, and the test pins both to the same fact.
+ * ignored, and the test pins both to the same fact. Two rules land on the same
+ * control: a moderator's mute, and a seat the server's SPEAK rule says may not
+ * publish at all. Neither is this person's to lift.
  */
 internal val VoiceState.muteControlEnabled: Boolean
-    get() = !serverMuted
+    get() = !serverMuted && canSpeak
 
 /**
  * Everybody on the roster a moderator has muted, other than this device.

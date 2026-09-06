@@ -178,6 +178,9 @@
     <string name="voice_speaker_off">Earpiece</string>
     <string name="voice_server_muted_you">A moderator muted you</string>
     <string name="voice_server_muted_peer">%1$s was muted by a moderator</string>
+    <string name="voice_listen_only">Listen only</string>
+    <string name="voice_listen_only_locked">Listening only. You do not have permission to speak in this channel.</string>
+    <string name="voice_speak_granted">You can speak now. Unmute when you are ready.</string>
 
     <!-- Push notifications -->
     <string name="push_channel_messages">Mentions and messages</string>

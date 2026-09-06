@@ -59,8 +59,23 @@ final class VoiceModel {
     private(set) var roster: [String: VoiceParticipant] = [:]
     /// Outgoing screen share, driven by the ReplayKit bridge.
     let screenShare = ScreenShareController()
+    /// The server's SPEAK rule for this seat, from `welcome.canSpeak` and
+    /// `voice-speak-changed`. False locks the microphone control, hides
+    /// share and camera, and publishes nothing. Always true in a call that
+    /// has no roles. See `VoiceSpeakRule`.
+    private(set) var canSpeak = true
+    /// Why the microphone is locked, or that it has just been unlocked.
+    /// Cleared on leave and by the next rule change.
+    private(set) var speakNotice: String?
     var isMuted = false {
         didSet {
+            // A listen-only seat cannot unmute, whatever asked. The control is
+            // disabled in the view; this is the belt to that suspender, so a
+            // stale tap or a deafen-then-undeafen cannot open the microphone.
+            if !canSpeak && !isMuted {
+                isMuted = true
+                return
+            }
             Task {
                 // Both transports, unconditionally: the one this room is not
                 // on holds no track and the call is a no-op, and forwarding to
@@ -121,6 +136,7 @@ final class VoiceModel {
     /// Whether the mic button does anything right now. See `ServerMute`.
     var canToggleMute: Bool {
         ServerMute.muteControlIsEnabled(connected: status == .connected, selfServerMuted: isServerMuted)
+            && canSpeak
     }
 
     /// The channel we intend to be in, kept across a socket drop so the call
@@ -269,7 +285,7 @@ final class VoiceModel {
     }
 
     private func enableCamera() async {
-        guard status == .connected else { return }
+        guard status == .connected, canSpeak else { return }
         guard await Self.requestCamera() else {
             cameraError = String(localized: "Camera access is off. Enable it in Settings.")
             return
@@ -442,12 +458,40 @@ final class VoiceModel {
         video = [:]
         roster = [:]
         selfPeerId = nil
+        canSpeak = true
+        speakNotice = nil
         isMuted = false
         isDeafened = false
         isServerMuted = false
         localCamera = nil
         isCameraOn = false
         cameraError = nil
+    }
+
+    /// Apply the server's SPEAK rule to the local media. See `VoiceSpeakRule`.
+    private func applySpeakRule(_ next: Bool, source: VoiceSpeakRule.Source) {
+        let outcome = VoiceSpeakRule.apply(canSpeak: next, was: canSpeak, source: source)
+        canSpeak = outcome.canSpeak
+        if let notice = outcome.notice {
+            speakNotice = notice.text
+        } else if outcome.canSpeak {
+            speakNotice = nil
+        }
+        guard outcome.mute else { return }
+        // Through the property, so both transports and the roster hear it.
+        if !isMuted { isMuted = true }
+        if outcome.stopPublishing {
+            let wasSharing = screenShare.isSharing
+            Task {
+                if isCameraOn { await disableCamera() }
+                if wasSharing {
+                    // `refuse` stops the announce and the outgoing track and
+                    // keeps later frames from re-announcing until the
+                    // broadcast is stopped, which is exactly a revoke.
+                    await screenShare.refuse(message: VoiceSpeakRule.Notice.listenOnly.text)
+                }
+            }
+        }
     }
 
     /// One moment of this call, for the rating that may follow it.
@@ -582,7 +626,7 @@ final class VoiceModel {
             }
 
         case .voiceWelcome(let peerId, let voiceChannelId, let existing, let selfPeer, let transport,
-                           let resumed, let resumeToken):
+                           let resumed, let resumeToken, let seatCanSpeak):
             guard voiceChannelId == channelId else {
                 // A `welcome` for another room means this socket joined one —
                 // and the server keeps exactly one peer per socket, so ours is
@@ -636,6 +680,10 @@ final class VoiceModel {
             if let resumeToken {
                 resumeClaim = VoiceResumeClaim(peerId: peerId, token: resumeToken)
             }
+            // Before any media is built or resumed, so a listen-only seat is
+            // muted from the first packet and the SFU join below publishes
+            // nothing at all.
+            applySpeakRule(seatCanSpeak, source: .welcome)
             if plan == .livekit {
                 self.transport = .livekit
                 for participant in existing { roster[participant.peerId] = participant }
@@ -761,6 +809,13 @@ final class VoiceModel {
                 await voice.remove(peerId: peerId)
                 await sfu.forgetPeer(peerId)
             }
+
+        // A role or override edit mid-call. `false` is the safety half: the
+        // SFU has already dropped the grant, and in a mesh room this branch is
+        // the only thing that closes the microphone.
+        case .voiceSpeakChanged(let voiceChannelId, let next):
+            guard voiceChannelId == channelId, status != .idle else { return }
+            applySpeakRule(next, source: .change)
 
         // The roster is how a share announces itself: `sharingScreen` and
         // `cameraStreamId` both arrive here, and both race the media. It is
@@ -904,7 +959,9 @@ final class VoiceModel {
             throw SfuJoinError.token((error as? APIError)?.errorDescription ?? error.localizedDescription)
         }
         try Task.checkCancellation()
-        try await sfu.connect(info, muted: isMuted || isDeafened, speaker: isSpeakerOn)
+        try await sfu.connect(
+            info, muted: isMuted || isDeafened, speaker: isSpeakerOn, publishMicrophone: canSpeak
+        )
         if isDeafened { await sfu.setDeafened(true) }
     }
 }

@@ -144,6 +144,9 @@ class WireProtocolTest {
             "voice-roster",
             "voice-room-full",
             "voice-transport-unsupported",
+            // The mid-call SPEAK revoke. In a mesh room this client is the
+            // only enforcement, so losing the branch is an open microphone.
+            "voice-speak-changed",
             "offer",
             "answer",
             "ice-candidate",
@@ -192,11 +195,6 @@ class WireProtocolTest {
         "call-declined" to "Android never rings anybody, so nobody can decline it",
         // Watch party is a desktop feature by design (docs/ANDROID.md).
         "watch-party" to "no watch party on the phone",
-        // A live change to Permission.SPEAK for somebody already in the
-        // room. Android does not enforce the speak rule yet; the server
-        // still refuses the SFU publish grant, and on mesh the other
-        // clients read `canSpeak` off the roster.
-        "voice-speak-changed" to "Android does not enforce the speak permission yet",
     )
 
     /**

@@ -57,6 +57,17 @@ struct VoiceView: View {
                 if model.isServerMuted {
                     ServerMuteNotice()
                 }
+                // Not red: a listen-only seat is a rule, not a failure, and
+                // painting it as one teaches people to ignore the colour that
+                // is supposed to mean something went wrong.
+                if let message = model.speakNotice {
+                    Text(message)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.paperMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.bottom, 6)
+                        .accessibilityIdentifier("voice.speakNotice")
+                }
                 ScreenSharePresenterBanner(
                     isSharing: model.screenShare.isSharing,
                     errorMessage: model.screenShare.errorMessage
@@ -242,10 +253,12 @@ struct VoiceView: View {
 
     private func controlRow(side: CGFloat, spacing: CGFloat) -> some View {
         HStack(spacing: spacing) {
-            // A moderator's mute takes the button away rather than letting it
-            // toggle and snap back: the server refuses the target's
-            // `set-muted false`, and a control that appears to work and does
-            // not is worse than one that is plainly off.
+            // Locked, not hidden, on a listen-only seat: a microphone that
+            // is simply absent reads as a broken screen, while a dimmed one
+            // with a sentence under it reads as a rule. A moderator's mute
+            // locks the same button for the same reason: the server refuses
+            // the target's `set-muted false`, and a control that appears to
+            // work and does not is worse than one that is plainly off.
             circleButton(
                 icon: model.isServerMuted
                     ? ServerMute.glyph
@@ -259,10 +272,13 @@ struct VoiceView: View {
             }
             .accessibilityIdentifier("voice.mute")
             .accessibilityLabel(
-                model.isServerMuted
-                    ? "Muted by a moderator"
-                    : (model.isMuted ? "Unmute" : "Mute")
+                !model.canSpeak
+                    ? VoiceSpeakRule.Notice.listenOnly.text
+                    : (model.isServerMuted
+                        ? "Muted by a moderator"
+                        : (model.isMuted ? "Unmute" : "Mute"))
             )
+            .opacity(model.canSpeak ? 1 : 0.4)
             .disabled(!model.canToggleMute)
 
             circleButton(
@@ -276,16 +292,18 @@ struct VoiceView: View {
             .accessibilityLabel(model.isDeafened ? "Undeafen" : "Deafen")
             .disabled(model.status != .connected)
 
-            circleButton(
-                icon: model.isCameraOn ? "video.fill" : "video.slash.fill",
-                tint: model.isCameraOn ? Palette.signal : Palette.paper,
-                side: side
-            ) {
-                Task { await model.toggleCamera() }
+            if model.canSpeak {
+                circleButton(
+                    icon: model.isCameraOn ? "video.fill" : "video.slash.fill",
+                    tint: model.isCameraOn ? Palette.signal : Palette.paper,
+                    side: side
+                ) {
+                    Task { await model.toggleCamera() }
+                }
+                .accessibilityIdentifier("voice.camera")
+                .accessibilityLabel(model.isCameraOn ? "Turn camera off" : "Turn camera on")
+                .disabled(model.status != .connected)
             }
-            .accessibilityIdentifier("voice.camera")
-            .accessibilityLabel(model.isCameraOn ? "Turn camera off" : "Turn camera on")
-            .disabled(model.status != .connected)
 
             circleButton(
                 icon: model.isSpeakerOn ? "speaker.wave.3.fill" : "iphone.gen3",
@@ -301,7 +319,9 @@ struct VoiceView: View {
             // Only where a broadcast can actually happen. The extension cannot
             // run in the simulator, and the bridge refuses to arm there, so a
             // button that opened a sheet leading nowhere would be a lie.
-            if model.screenShare.isAvailable {
+            // Nor on a listen-only seat: the server refuses the announce and
+            // the roster never carries it. See `VoiceSpeakRule`.
+            if model.screenShare.isAvailable && model.canSpeak {
                 // The size is passed *in* rather than imposed with an outer
                 // `.frame`: the painted circle, the system picker and Apple's
                 // own button all have to be the same square, or part of what

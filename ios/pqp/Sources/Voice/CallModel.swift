@@ -557,8 +557,10 @@ final class CallModel {
                 )
             }
 
+        // `canSpeak` is ignored on purpose: a conversation call has no roles,
+        // so the server always resolves it true there.
         case .voiceWelcome(let peerId, let voiceChannelId, let existing, let selfPeer, let transport,
-                           let resumed, let resumeToken):
+                           let resumed, let resumeToken, _):
             guard voiceChannelId == conversationId else {
                 // A `welcome` for somewhere else means this socket joined
                 // another voice room, and the server keeps exactly one peer per

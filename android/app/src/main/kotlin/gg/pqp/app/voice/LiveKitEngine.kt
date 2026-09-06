@@ -94,6 +94,15 @@ class LiveKitEngine(
     @Volatile private var muted = false
     @Volatile private var deafened = false
 
+    /**
+     * `welcome.canSpeak`. False is a listen-only seat: no track is created and
+     * nothing is published, because the server has already withheld the
+     * LiveKit publish grant and asking anyway is a refused publish in the log
+     * for every listener in a stage. Flipped to true mid-call, the microphone
+     * is published then, muted, and the unmute stays the person's.
+     */
+    @Volatile private var canPublishAudio = true
+
     /** Non-null between [start] and [stop]. Guards late callbacks from an old room. */
     @Volatile private var localPeerId: String? = null
 
@@ -198,7 +207,7 @@ class LiveKitEngine(
         }
 
         seedParticipants(created)
-        publishMicrophone(created)
+        if (canPublishAudio) publishMicrophone(created)
         onConnected()
         Log.i(TAG, "SFU connected as $peerId in room ${credentials.room}")
     }
@@ -371,6 +380,24 @@ class LiveKitEngine(
         scope.launch { applyMuteToPublication() }
     }
 
+    override fun setCanPublishAudio(allowed: Boolean) {
+        canPublishAudio = allowed
+        if (!allowed) {
+            // The grant is gone and the SFU drops the publication itself;
+            // the local track is silenced so nothing is captured meanwhile.
+            micTrack?.enabled = false
+            return
+        }
+        val room = room ?: return
+        if (micTrack != null || localPeerId == null) return
+        // Granted after a listen-only join: publish now, in whatever mute
+        // state the controller has set (which is muted, by the rule).
+        scope.launch {
+            runCatching { publishMicrophone(room) }
+                .onFailure { Log.w(TAG, "could not publish the microphone after SPEAK was granted", it) }
+        }
+    }
+
     /**
      * The second half of muting, and the half that other people can see.
      *
@@ -398,7 +425,10 @@ class LiveKitEngine(
         }
         // Being heard while hearing nothing is a trap rather than a feature,
         // and it is what the mesh path, the web and iOS all do.
-        micTrack?.enabled = !(value || mutedByUser)
+        // `canPublishAudio` for the same reason as on the mesh path:
+        // undeafening is the one route that enables the track without passing
+        // through `setMuted`.
+        micTrack?.enabled = !(value || mutedByUser) && canPublishAudio
         scope.launch { applyMuteToPublication() }
     }
 
