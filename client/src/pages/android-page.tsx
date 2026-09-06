@@ -16,7 +16,7 @@ import { testflightUrl } from "@/lib/testflight";
  * URL comes from `android-apk.ts`, so the button is real whether or not a
  * build-time override is set.
  *
- * The copy names the build (0.2.0, beta) and what it does not do yet, so
+ * The copy names the build (0.3.0, beta) and what it does not do yet, so
  * nobody installs it expecting a screen-share viewer or a camera. Voice on
  * this build joins every room, LiveKit ones included; the earlier build was
  * refused from large rooms, which is why the CTA was switched off for a day
