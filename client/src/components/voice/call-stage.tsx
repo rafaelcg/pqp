@@ -34,6 +34,7 @@ import {
   type RefObject,
   type SyntheticEvent,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   CAMERA_LIMIT,
   SCREEN_SHARE_LIMIT,
@@ -41,6 +42,7 @@ import {
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { VideoQuality } from "@/lib/video-quality";
+import { isDesktopApp } from "@/lib/desktop";
 import { shareStreamHasAudio } from "@/lib/screen-capture-audio";
 import {
   canShareScreenAudio,
@@ -1686,6 +1688,10 @@ function CallControls({
   // Probed once per mount — whether the browser has getDisplayMedia never
   // changes mid-session. Same probe the channel voice panel uses.
   const canShare = useMemo(() => supportsScreenShare(), []);
+  // Watch party is a Chrome tab plus that tab's sound. The shell picker
+  // lists screens and windows only, so the same door there would start a
+  // silent share and the prompt would be a lie.
+  const canWatchParty = canShare && !isDesktopApp();
   const [shareHint, setShareHint] = useState<string | null>(null);
   useEffect(() => {
     if (voiceState.isSharingScreen) {
@@ -2015,7 +2021,7 @@ function CallControls({
           </button>
         </Tooltip>
       )}
-      {canShare &&
+      {canWatchParty &&
         !listenOnly &&
         onStartScreenShare &&
         !voiceState.isSharingScreen && (
@@ -2037,10 +2043,11 @@ function CallControls({
                 if (shareCappedOut) {
                   return;
                 }
-                // The hint has to be on screen before the picker, not after
-                // a silent share. Watch party is a tab share: the player tab,
-                // with that tab's sound, not the whole desktop.
-                setShareHint(t("voice.control.watchPartyHint"));
+                // Paint the hint in this click, before getDisplayMedia opens
+                // the picker and the rest of the page stops updating.
+                flushSync(() => {
+                  setShareHint(t("voice.control.watchPartyHint"));
+                });
                 onStartScreenShare({ preferBrowserTab: true });
               }}
             >
