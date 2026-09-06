@@ -47,8 +47,8 @@ change, threshold 10 members) removes most of that. Bandwidth is the bill that s
 | LiveKit Cloud Ship | $50/mo, 250 GB downstream included, then $0.12/GB; 150,000 WebRTC minutes then $0.0005/min; 1,000 concurrent connections | https://livekit.com/pricing |
 | LiveKit Cloud Build (free) | $0, 50 GB downstream, 5,000 WebRTC minutes, 100 concurrent connections | https://livekit.com/pricing |
 | Vultr egress policy | 2 TB free per account per month, pooled across all instances and regions, on top of each plan's own allowance; ingress free; overage $0.01/GB worldwide | https://blogs.vultr.com/Vultr-Announces-Reduced-Bandwidth-Pricing-2-Tb-Of-Free-Monthly-Egress-Free-Ingress-And-Global-Pooling and https://docs.vultr.com/support/platform/billing/what-is-the-bandwidth-overage-rate |
-| Vultr High Frequency 2 vCPU / 4 GB | about $24/mo (verify on https://www.vultr.com/pricing/ with São Paulo selected; the page blocks automated fetches, so this figure came from third-party summaries) | https://www.vultr.com/pricing/ |
-| Vultr High Frequency 4 vCPU / 8 GB | verify, expected in the $48/mo range | https://www.vultr.com/pricing/ |
+| Vultr High Performance AMD 2 vCPU / 4 GB (`vhp-2c-4gb-amd`) | $24/mo list, **$36/mo in São Paulo** (region markup shown at checkout on 2026-09-06; 5 TB transfer, 100 GB NVMe). Automatic Backups add $4.80 and are off. | https://www.vultr.com/pricing/ |
+| Vultr High Performance AMD 4 vCPU / 8 GB (`vhp-4c-8gb-amd`) | $48/mo list, expect about $72 in São Paulo | https://www.vultr.com/pricing/ |
 | Fly.io egress, South America | $0.04/GB, no free allowance; inbound free | https://fly.io/docs/about/pricing/ |
 | Fly.io compute for an SFU | verify; a `performance-*` machine in `gru` carries a regional markup and an SFU should not share CPU | https://fly.io/docs/about/pricing/ |
 
@@ -60,11 +60,11 @@ it depends on the size you pick.
 
 | Parties / month | Egress | LiveKit Cloud Ship | Vultr São Paulo (2 vCPU / 4 GB) | Fly gru |
 |---|---|---|---|---|
-| 1 | 250 GB | $50 (at the included limit) | ~$24 (verify) + $0 egress | M + $10 |
-| 4 | 1,000 GB | $50 + 750 * $0.12 = $140 | ~$24 + $0 | M + $40 |
-| 8 | 2,000 GB | $50 + 1,750 * $0.12 = $260 | ~$24 + $0 | M + $80 |
+| 1 | 250 GB | $50 (at the included limit) | $36 + $0 egress | M + $10 |
+| 4 | 1,000 GB | $50 + 750 * $0.12 = $140 | $36 + $0 | M + $40 |
+| 8 | 2,000 GB | $50 + 1,750 * $0.12 = $260 | $36 + $0 | M + $80 |
 
-Break-even on the bill alone is below one party a month, because the VM costs less than Ship. The
+Break-even on the bill alone is below one party a month, because the VM ($36) costs less than Ship ($50). The
 reason to stay on Cloud at one party a month is not money, it is the other column: your time and
 someone else's pager. From the second party onward Cloud is $90+ a month above the VM and rising $30
 per party.
@@ -115,7 +115,7 @@ muted; the SFU forwards only what is published, and dynacast pauses layers nobod
   = 150k pkt/s, about one sixth of the audio benchmark.
 - Memory is not the constraint; LiveKit is a Go process that sits in the low hundreds of MB here.
 
-Recommendation: **start on Vultr High Frequency 2 vCPU / 4 GB (~$24/mo, verify)** and gate the
+Recommendation: **start on Vultr High Performance AMD 2 vCPU / 4 GB ($36/mo in São Paulo)**. This is what was provisioned on 2026-09-06 as `sfu-pqp`, 216.238.114.79. The High Frequency line had no 4 GB plan in São Paulo that night. and gate the
 production switch on the load test in section 5. If the load test shows sustained CPU above 60% or
 packet loss, move to **4 vCPU / 8 GB (verify price)**; a Vultr resize is a reboot, and the box is
 stateless. Choose High Frequency over Regular because packet forwarding is latency-sensitive
@@ -135,9 +135,9 @@ sustained needs a 1 Gbps port, not a shared 100 Mbps one.
   (section 4). Reason a separate hostname is needed: two processes cannot both own 443 on one IP, so
   TURN gets its own IP or its own hostname behind a second IP. On Vultr, attach one additional
   reserved IP to the VM and bind TURN to it; verify the monthly price of a reserved IPv4 on Vultr.
-  If you would rather not pay for a second IP, run TURN/TLS on 5349 instead and accept that a few
-  corporate networks that only allow 443 will fail; that is the documented default
-  (`turn.tls_port: 5349` in config-sample.yaml).
+  **Decision taken 2026-09-06: TURN/TLS on 5349 on the single IP, no reserved IP.** Zero extra cost;
+  the few corporate networks that only allow outbound 443 will fail to relay, and if that ever shows
+  up in the wild the fix is a reserved IP and `tls_port: 443`. `ufw` on the box already allows 5349.
 
 ### Ports (from https://docs.livekit.io/transport/self-hosting/ports-firewall/)
 
@@ -147,7 +147,7 @@ sustained needs a 1 Gbps port, not a shared 100 Mbps one.
 | 80 | TCP | ACME issuance only | Internet |
 | 7882 | UDP | Single UDP mux port for all media ("It's possible to handle all UDP traffic on a single port. When this is set, rtc.port_range_start/end are not used") | Internet |
 | 7881 | TCP | ICE over TCP fallback | Internet |
-| 443 on the TURN IP | TCP | TURN/TLS | Internet |
+| 5349 | TCP | TURN/TLS (single-IP decision, see above) | Internet |
 | 3478 | UDP | TURN/UDP (optional, cheap, enable) | Internet |
 | 7880 | TCP | LiveKit HTTP; only via Caddy | localhost only |
 | 6789 | TCP | Prometheus metrics | localhost or your monitoring IP only |
@@ -217,7 +217,7 @@ rtc:
 turn:
   enabled: true
   domain: turn.pqp.gg
-  tls_port: 443                 # "If not using LB, this port needs to be set to 443"
+  tls_port: 5349                # single IP shares 443 with Caddy; 5349 is the LiveKit default
   udp_port: 3478
   external_tls: false           # LiveKit terminates TURN/TLS itself, so it needs the cert files
   cert_file: /opt/livekit/certs/turn.pqp.gg.crt
@@ -316,7 +316,7 @@ read.
 ```yaml
 services:
   livekit:
-    image: livekit/livekit-server:v1.13.5        # pin; see upgrade procedure
+    image: livekit/livekit-server:v1.13.6        # pin; see upgrade procedure
     command: --config /etc/livekit.yaml
     restart: unless-stopped
     network_mode: host                           # UDP mux + TURN want the real interface
@@ -457,7 +457,7 @@ response, so the client needs no rebuild).
 
 ## 6. Cost summary and timeline
 
-Monthly, steady state, from section 1: about $24 for the VM (verify) plus $0 egress for up to 8 parties
+Monthly, steady state, from section 1: $36 for the VM plus $0 egress for up to 8 parties
 under the Vultr pool and plan allowance, plus a reserved IP for TURN if you take that route (verify).
 Against Ship at $140 (4 parties) or $260 (8 parties). The Cloud project stays on the free tier at $0.
 
