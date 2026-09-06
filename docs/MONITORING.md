@@ -528,9 +528,10 @@ pqp-api (Fly, gru) -> Fly NATS log stream -> pqp-log-shipper (Fly, Vector) -> Lo
 is shipped (not the worker, not staging). Its README lists the five secrets
 and where each value comes from. Four are staged; `LOKI_PASSWORD` needs a
 grafana.com Access Policy token with `logs:write`, which only the org owner
-can create, then `fly deploy` from that directory. Until then every panel
-below shows "No data" and the alert rules stay in `Normal` (no data resolves to
-OK on purpose: a silent shipper must not page as an outage).
+can create. Deployed 2026-09-06; lines arrive within seconds. If the shipper
+is down every panel below shows "No data" and the alert rules stay `Normal`
+(no data resolves to OK on purpose: a silent shipper must not page as an
+outage), so the no-traffic rule is the one that notices.
 
 Deploying or restarting the shipper never touches `pqp-api`.
 
@@ -552,19 +553,19 @@ tool. LogQL handles the text fine; every pattern below is a substring filter.
 
 ### LogQL patterns
 
-All queries start from `{app="pqp-api"}` (Vector labels: `app`, `region`,
-`instance`, `level`). The event name is unique enough that a substring match
+All queries start from `{fly_app_name="pqp-api"}` (Vector labels: `fly_app_name`, `fly_app_instance`,
+`fly_region`, `event_provider`, `level`). The event name is unique enough that a substring match
 does the job; wrap in `count_over_time` for a rate.
 
 | What | LogQL |
 |---|---|
-| Every structured event | `{app="pqp-api"} \|= "[pqp]"` |
-| One event | `{app="pqp-api"} \|= "voice.join"` |
-| Events per minute | `sum(count_over_time({app="pqp-api"} \|= "ws.connect" [1m]))` |
-| Error lines | `{app="pqp-api"} \|~ "\\[error\\]\|unhandled\|Connection terminated"` |
-| Errors from one module | `{app="pqp-api"} \|= "[voice]" \|~ "failed\|error"` |
-| Pull a field out | `{app="pqp-api"} \|= "ws.close" \| logfmt \| code = "1006"` |
-| Count by a field | `sum by (code) (count_over_time({app="pqp-api"} \|= "ws.close" \| logfmt [5m]))` |
+| Every structured event | `{fly_app_name="pqp-api"} \|= "[pqp]"` |
+| One event | `{fly_app_name="pqp-api"} \|= "voice.join"` |
+| Events per minute | `sum(count_over_time({fly_app_name="pqp-api"} \|= "ws.connect" [1m]))` |
+| Error lines | `{fly_app_name="pqp-api"} \|~ "\\[error\\]\|unhandled\|Connection terminated"` |
+| Errors from one module | `{fly_app_name="pqp-api"} \|= "[voice]" \|~ "failed\|error"` |
+| Pull a field out | `{fly_app_name="pqp-api"} \|= "ws.close" \| logfmt \| code = "1006"` |
+| Count by a field | `sum by (code) (count_over_time({fly_app_name="pqp-api"} \|= "ws.close" \| logfmt [5m]))` |
 
 `| logfmt` works because `logEvent` prints `key=value` separated by single
 spaces. It parses everything after `[pqp] event.name` too, so a field whose
@@ -595,7 +596,7 @@ all routed to the contact point `rafael-email`):
 | error lines > 20 in 5m | more than 20 error lines in the last 5 minutes, sustained 5 minutes |
 | Connection terminated > 5 in 5m | Postgres is dropping connections (the 2026-09-05 outage shape) |
 | voice.roomFull in last 5m | any join refused for room size; the mesh cap is being hit |
-| no ws.connect for 15m (12:00-03:00 UTC) | nobody connected for 15 minutes during active hours; mute timing `pqp-quiet-hours` silences it 03:00-12:00 UTC. **Paused** until the shipper is live, because "no lines" and "no shipper" look the same to it; unpause it in Alert rules after the first `fly deploy` |
+| no ws.connect for 15m (12:00-03:00 UTC) | nobody connected for 15 minutes during active hours; mute timing `pqp-quiet-hours` silences it 03:00-12:00 UTC. "No lines" and "no shipper" look the same to it, so it also catches a dead shipper |
 
 The synthetic checks on `/health` and `sfu.pqp.gg` (ids 6260, 6261) and the
 contact point predate this and live in the same stack.
