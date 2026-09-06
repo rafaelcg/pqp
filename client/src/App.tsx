@@ -3789,6 +3789,8 @@ function MainAppContent({
               <button
                 type="button"
                 className={HEADER_ACTION_TILE}
+                data-channel-header-settings=""
+                aria-label={t("chrome.channelSettings")}
                 onClick={() =>
                   setChannelSettings({
                     channelId: selectedChannel.id,
