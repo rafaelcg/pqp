@@ -57,8 +57,10 @@ import {
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
 import {
+  adoptVoicePeer,
   clearWatchPartyIfEmpty,
   deleteVoicePeer,
+  getVoicePeerRow,
   isVoicePeerRetired,
   isVoiceRegistryEnabled,
   listVoicePeersForUser,
@@ -70,6 +72,7 @@ import {
   persistWatchParty,
   pinVoiceRoom,
   readWatchParty,
+  reconcileVoiceRegistry,
   retireVoicePeerId,
   unpinVoiceRoomIfEmpty,
   upsertVoicePeer,
@@ -192,11 +195,19 @@ interface VoicePeer {
  * `voice.watch` frame when `CLUSTER_BUS` is also on. FRAMES ARE HINTS, ROWS
  * ARE TRUTH: the receiving instance forwards the `peer-*` frame to its local
  * room and rebuilds the roster from the rows, so a lost frame costs latency,
- * not a ghost (point 4 above). Cross-instance resume and the dead-instance
- * reconcile are M3; rings and moderation notices (points 1 and 3, and the
- * mesh ceiling) are M4 and M5. With the flag off (the default) `registryOn()`
- * is false on every path below and this file behaves exactly as it did
- * before the registry.
+ * not a ghost (point 4 above). M3 made a seat outlive its instance: a
+ * resume that lands here for a row another instance holds ADOPTS it (one
+ * conditional update, then the reattach path, and a `voice.room adopted`
+ * frame so the old owner forgets the entry without a `peer-left`); the
+ * instance lease has consequences (`runVoiceReconcile`, after every
+ * heartbeat: a dead instance's rows are orphaned, deleted after the resume
+ * window with `peer-left` fanned out by whoever is alive, and room rows
+ * nobody is in are swept); the retired-id store is `voice_retired_peers`
+ * alone; and the tab-close beacon retires a seat whichever machine holds
+ * it. Rings and moderation notices (points 1 and 3, and the mesh ceiling)
+ * are M4 and M5. With the flag off (the default) `registryOn()` is false on
+ * every path below and this file behaves exactly as it did before the
+ * registry.
  */
 const peers = new Map<string, VoicePeer>();
 
@@ -307,6 +318,7 @@ async function readClusterRoom(
   for (const peer of getRoomPeers(voiceChannelId)) {
     byId.set(peer.id, toParticipant(peer));
   }
+  noteRemoteTransport(voiceChannelId, room?.transport ?? null);
   if (!room && byId.size === 0) {
     return null;
   }
@@ -319,7 +331,12 @@ async function readClusterRoom(
   };
 }
 const socketToPeerId = new Map<WebSocket, string>();
-/** Peer ids removed in this process (leave / kick / TTL). Blocks reconstruct for the token's life so a hangup cannot resurrect the id. */
+/**
+ * Peer ids removed in this process (leave / kick / TTL). Blocks reconstruct
+ * for the token's life so a hangup cannot resurrect the id. With the
+ * registry on this map is never written: `voice_retired_peers` is the one
+ * store, and it answers for every instance and across a restart.
+ */
 const retiredPeerIds = new Map<string, ReturnType<typeof setTimeout>>();
 
 /**
@@ -357,6 +374,29 @@ const retiredPeerIds = new Map<string, ReturnType<typeof setTimeout>>();
  */
 const roomTransports = new Map<string, VoiceRoomTransport>();
 
+/**
+ * The read-through cache of `voice_rooms.transport` for rooms this process
+ * has nobody in (with the registry on, and only then). Filled by every row
+ * read that carries the room (`readClusterRoom`, `sendAllVoiceRosters`,
+ * `welcomeVoicePeer`), dropped for a channel on every `voice.room` frame
+ * about it and whenever a read says the room is gone, so `getRoomTransport`
+ * stays synchronous for the hot paths and still answers for a room pinned
+ * elsewhere. Never authoritative over `roomTransports`: a room this process
+ * has a peer in is pinned here and the pin wins.
+ */
+const remoteTransports = new Map<string, VoiceRoomTransport>();
+
+function noteRemoteTransport(
+  voiceChannelId: string,
+  transport: VoiceRoomTransport | null,
+): void {
+  if (transport === null) {
+    remoteTransports.delete(voiceChannelId);
+  } else {
+    remoteTransports.set(voiceChannelId, transport);
+  }
+}
+
 function configuredTransport(): VoiceRoomTransport {
   return getServerVoiceBackend() === "livekit" && isLiveKitConfigured()
     ? "livekit"
@@ -371,7 +411,11 @@ function configuredTransport(): VoiceRoomTransport {
  * policy would pick: that needs the channel row and is `decideRoomTransport`.
  */
 export function getRoomTransport(voiceChannelId: string): VoiceRoomTransport {
-  return roomTransports.get(voiceChannelId) ?? configuredTransport();
+  return (
+    roomTransports.get(voiceChannelId) ??
+    remoteTransports.get(voiceChannelId) ??
+    configuredTransport()
+  );
 }
 
 /**
@@ -419,6 +463,7 @@ async function decideRoomTransport(
 /** Test hook: forget every pinned room transport. */
 export function resetVoiceRoomTransports(): void {
   roomTransports.clear();
+  remoteTransports.clear();
 }
 
 /**
@@ -460,7 +505,14 @@ function cancelOrphan(peer: VoicePeer): void {
   peer.orphanedAt = undefined;
 }
 
-function retirePeerId(peerId: string): void {
+function retirePeerId(peerId: string, voiceChannelId: string): void {
+  if (registryOn()) {
+    // Tracked on the channel so a resume for this id that arrives right
+    // behind the hangup waits for the row before it asks whether the id is
+    // retired (`settledRowWrites` in the join handler).
+    trackRowWrite(voiceChannelId, retireVoicePeerId(peerId));
+    return;
+  }
   const existing = retiredPeerIds.get(peerId);
   if (existing) {
     clearTimeout(existing);
@@ -471,9 +523,6 @@ function retirePeerId(peerId: string): void {
       retiredPeerIds.delete(peerId);
     }, VOICE_RESUME_TOKEN_TTL_MS),
   );
-  if (registryOn()) {
-    void retireVoicePeerId(peerId);
-  }
 }
 
 /**
@@ -909,7 +958,7 @@ function removePeer(peerId: string) {
       deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(voiceChannelId)),
     );
   }
-  retirePeerId(peerId);
+  retirePeerId(peerId, voiceChannelId);
   onLiveRoomMaybeEmpty(voiceChannelId, peer.socket);
   logEvent("voice.leave", {
     peerId,
@@ -1018,26 +1067,182 @@ export function getVoicePeer(
  * Tab close / hangup after `/ws` is already gone. The HMAC is the proof; the
  * peer id is on every roster, so a bare id must not be enough to retire a seat.
  * Returns whether a peer was removed.
+ *
+ * The local map is answered synchronously, before the first await, so the
+ * beacon route's fire-and-forget call still removes a local peer in the
+ * same tick as before. With the registry on, a seat this process does not
+ * hold is looked up by row: the beacon is an HTTP request, load-balanced
+ * per request, so it lands on whichever machine, and the row is what makes
+ * the answer the same on both.
  */
-export function leaveVoiceByResumeToken(
+export async function leaveVoiceByResumeToken(
   resumePeerId: string,
   resumeToken: string,
-): boolean {
+): Promise<boolean> {
   const peer = peers.get(resumePeerId);
-  if (!peer) {
+  if (peer) {
+    if (
+      !verifyVoiceResumeToken(resumeToken, {
+        userId: peer.userId,
+        peerId: resumePeerId,
+        voiceChannelId: peer.voiceChannelId,
+      })
+    ) {
+      return false;
+    }
+    removePeer(resumePeerId);
+    return true;
+  }
+  if (!registryOn()) {
+    return false;
+  }
+  let row: VoicePeerRow | null = null;
+  try {
+    row = await getVoicePeerRow(resumePeerId);
+  } catch (error) {
+    logEvent("voice.registryReadFailed", {
+      op: "leaveByToken",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+  if (!row) {
     return false;
   }
   if (
     !verifyVoiceResumeToken(resumeToken, {
-      userId: peer.userId,
+      userId: row.userId,
       peerId: resumePeerId,
-      voiceChannelId: peer.voiceChannelId,
+      voiceChannelId: row.channelId,
     })
   ) {
     return false;
   }
-  removePeer(resumePeerId);
+  // The row may have come home while the read was out (a resume landed
+  // here); the map is exact for what this process holds.
+  if (peers.has(resumePeerId)) {
+    removePeer(resumePeerId);
+    return true;
+  }
+  releaseForeignPeer(row, "beacon");
   return true;
+}
+
+/**
+ * Retire a seat another instance holds: the row goes (and the room row with
+ * it if it was the last), the id is retired, this instance's room hears
+ * `peer-left`, and the cluster hears two things in order: `adopted`, so the
+ * owner forgets its local entry without announcing anything, then `left`
+ * from inside the roster queue, so every instance (the owner included, now
+ * that it no longer holds the peer) forwards `peer-left` to its room and
+ * rebuilds its roster from the rows. Without the first frame the owner's
+ * orphan timer would fire later and announce a departure the room already
+ * saw.
+ */
+function releaseForeignPeer(row: VoicePeerRow, reason: string): void {
+  const { peerId, channelId } = row;
+  trackRowWrite(
+    channelId,
+    deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(channelId)),
+  );
+  retirePeerId(peerId, channelId);
+  logEvent("voice.leave", {
+    peerId,
+    userId: row.userId,
+    voiceChannelId: channelId,
+    roomSize: getLiveRoomPeers(channelId).length,
+    foreign: true,
+    reason,
+  });
+  if (clusterOn()) {
+    publishToCluster(VOICE_ROOM_TOPIC, {
+      channelId,
+      kind: "adopted",
+      peerId,
+    } satisfies VoiceRoomFrame);
+  }
+  broadcastToRoom(channelId, { type: "peer-left", peerId });
+  void broadcastRoster(channelId, { kind: "left", peerId });
+}
+
+/**
+ * Another instance now answers for this peer id (it adopted the seat on
+ * resume, or retired it on the owner's behalf). Forget the entry without a
+ * `peer-left`: the room is told by the frames that follow, if it needs to
+ * be. The socket, if it is still open, is a half-open one the client has
+ * already replaced; its eventual close finds no peer and does nothing.
+ */
+function dropVoicePeerSilently(peerId: string): void {
+  const peer = peers.get(peerId);
+  if (!peer) {
+    return;
+  }
+  cancelOrphan(peer);
+  peers.delete(peerId);
+  if (socketToPeerId.get(peer.socket) === peerId) {
+    socketToPeerId.delete(peer.socket);
+  }
+  if (getRoomPeers(peer.voiceChannelId).length === 0) {
+    roomTransports.delete(peer.voiceChannelId);
+  }
+  logEvent("voice.seatReleased", {
+    peerId,
+    userId: peer.userId,
+    voiceChannelId: peer.voiceChannelId,
+  });
+}
+
+/**
+ * The instance lease's consequences, run after every heartbeat while the
+ * registry is on (`startVoiceInstanceHeartbeat` in `index.ts`). The rows
+ * are the registry's to sweep (`reconcileVoiceRegistry`); the fan-out is
+ * this file's: every seat the sweep removed gets `peer-left` in this
+ * instance's room and a `left` hint on the bus, and the roster is rebuilt
+ * for every room it touched. Idempotent across instances: the sweep names
+ * exactly the rows this call deleted, so two instances racing it announce
+ * each departure once between them. A no-op with the flag off.
+ */
+export async function runVoiceReconcile(): Promise<{
+  orphaned: number;
+  removed: number;
+  roomsSwept: number;
+}> {
+  if (!registryOn()) {
+    return { orphaned: 0, removed: 0, roomsSwept: 0 };
+  }
+  const result = await reconcileVoiceRegistry();
+  const touched = new Set<string>();
+  for (const { peerId, channelId } of result.removed) {
+    broadcastToRoom(channelId, { type: "peer-left", peerId });
+    void broadcastRoster(channelId, { kind: "left", peerId });
+    touched.add(channelId);
+  }
+  for (const { channelId } of result.orphaned) {
+    if (!touched.has(channelId)) {
+      // Orphans stay on the roster (the sidebar still shows them); the
+      // rebuild is for the instances that will read the row's new state.
+      void broadcastRoster(channelId, { kind: "roster" });
+      touched.add(channelId);
+    }
+  }
+  if (
+    result.orphaned.length > 0 ||
+    result.removed.length > 0 ||
+    result.roomsSwept > 0 ||
+    result.instancesSwept > 0
+  ) {
+    logEvent("voice.reconcile", {
+      orphaned: result.orphaned.length,
+      removed: result.removed.length,
+      roomsSwept: result.roomsSwept,
+      instancesSwept: result.instancesSwept,
+    });
+  }
+  return {
+    orphaned: result.orphaned.length,
+    removed: result.removed.length,
+    roomsSwept: result.roomsSwept,
+  };
 }
 
 /**
@@ -1097,6 +1302,7 @@ export function resetVoicePeers(): void {
   roomTransports.clear();
   rosterCoalescer.reset();
   pendingRoomEvents.clear();
+  remoteTransports.clear();
 }
 
 /** Whether a socket currently holds a voice peer (for disconnect diagnostics). */
@@ -1131,6 +1337,7 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
       for (const row of await listVoiceRosters()) {
         const room = roomOf(row.channelId);
         room.transport = row.transport;
+        noteRemoteTransport(row.channelId, row.transport);
         for (const peer of row.peers) {
           room.participants.set(peer.peerId, rowToParticipant(peer));
         }
@@ -1172,6 +1379,17 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
 type VoiceResumePlan =
   | { kind: "reattach"; peer: VoicePeer }
   | { kind: "reconstruct"; peerId: string; transport: VoiceRoomTransport }
+  /**
+   * The row exists and another instance holds it: taken over by
+   * `adoptVoicePeer` once the transport is settled. Decided in the join
+   * handler (it needs a row read), never here.
+   */
+  | {
+      kind: "adopt";
+      peerId: string;
+      transport: VoiceRoomTransport;
+      row: VoicePeerRow;
+    }
   | { kind: "cold" };
 
 function planVoiceResume(
@@ -1214,7 +1432,7 @@ function planVoiceResume(
     return { kind: "reattach", peer: existing };
   }
 
-  if (retiredPeerIds.has(claimed)) {
+  if (!registryOn() && retiredPeerIds.has(claimed)) {
     return { kind: "cold" };
   }
   const pinned = roomTransports.get(payload.voiceChannelId);
@@ -1254,6 +1472,7 @@ async function welcomeVoicePeer(
         listVoiceRoster(peer.voiceChannelId),
         readWatchParty(peer.voiceChannelId),
       ]);
+      noteRemoteTransport(peer.voiceChannelId, room?.transport ?? null);
       for (const row of room?.peers ?? []) {
         if (row.orphanedAt === null) {
           byId.set(row.peerId, rowToParticipant(row));
@@ -1467,20 +1686,42 @@ export async function handleVoiceMessage(
       "livekit",
     ];
     let resume = planVoiceResume(user.id, payload, capabilities);
-    // The registry's copy of `retiredPeerIds`: a hangup on another instance
-    // (or on this one, before a restart emptied the map) must not be
-    // resurrected here. Same rule as the local check, one row read.
+    // With the registry on the retired store is the table, not the map: a
+    // hangup on another instance (or on this one, before a restart emptied
+    // the map) must not be resurrected here. Then the row: a seat another
+    // instance still holds for this user in this room is adopted rather
+    // than rebuilt, so the roster never shows two of them and no instance
+    // ever announces a `peer-left` for a person who never left. Two reads,
+    // both after this channel's pending writes, so a hangup or an orphan
+    // stamp that is still in flight is seen.
     if (resume.kind === "reconstruct" && registryOn()) {
+      const claimed = resume.peerId;
       let retired = false;
+      let row: VoicePeerRow | null = null;
       try {
-        retired = await isVoicePeerRetired(resume.peerId);
+        await settledRowWrites(payload.voiceChannelId);
+        retired = await isVoicePeerRetired(claimed);
+        if (!retired) {
+          row = await getVoicePeerRow(claimed);
+        }
       } catch (error) {
         logEvent("voice.registryReadFailed", {
-          op: "retired",
+          op: "resume",
           error: error instanceof Error ? error.message : String(error),
         });
       }
       if (retired) {
+        resume = { kind: "cold" };
+      } else if (
+        row &&
+        row.userId === user.id &&
+        row.channelId === payload.voiceChannelId
+      ) {
+        resume = { kind: "adopt", peerId: claimed, transport: resume.transport, row };
+      } else if (row) {
+        // Somebody else's seat under this id, or this person's seat in
+        // another room: the token proved neither. Cold, like a local
+        // mismatch in `planVoiceResume`.
         resume = { kind: "cold" };
       }
       if (socket.readyState !== 1) {
@@ -1489,7 +1730,7 @@ export async function handleVoiceMessage(
     }
     let transport: VoiceRoomTransport =
       roomTransports.get(payload.voiceChannelId) ??
-      (resume.kind === "reconstruct"
+      (resume.kind === "reconstruct" || resume.kind === "adopt"
         ? resume.transport
         : (opening?.transport ?? configuredTransport()));
 
@@ -1513,7 +1754,7 @@ export async function handleVoiceMessage(
             stored,
           });
           transport = stored;
-          if (resume.kind === "reconstruct") {
+          if (resume.kind === "reconstruct" || resume.kind === "adopt") {
             resume = { kind: "cold" };
           }
         }
@@ -1527,6 +1768,59 @@ export async function handleVoiceMessage(
       // the socket, and a pinned room nobody joined must not stay pinned.
       if (socket.readyState !== 1) {
         void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
+        return;
+      }
+    }
+
+    // THE ADOPT. The transport is settled, so the row can change hands: one
+    // conditional update stamps this instance on it and clears the orphan
+    // mark. A null means the row went (a hangup landed first, or the
+    // reconcile retired it), and the join proceeds as a reconstruct; the
+    // retired check above is what keeps a retired id from coming back that
+    // way, and a resume that lost to it exactly then simply cold-joins. The
+    // `adopted` frame goes out now, ahead of the `joined` hint the welcome
+    // will queue, so the old owner has forgotten the seat by the time its
+    // room is told the person is (still) here.
+    let adopted: VoicePeerRow | null = null;
+    if (resume.kind === "adopt") {
+      try {
+        const adoption = await adoptVoicePeer(
+          resume.peerId,
+          user.id,
+          payload.voiceChannelId,
+        );
+        if (adoption) {
+          adopted = adoption.row;
+          logEvent("voice.resumeAdopted", {
+            peerId: resume.peerId,
+            userId: user.id,
+            voiceChannelId: payload.voiceChannelId,
+            from: adoption.previousInstanceId,
+            ownerAlive: adoption.previousOwnerAlive,
+            orphaned: adoption.previousOrphanedAt !== null,
+          });
+          if (clusterOn()) {
+            publishToCluster(VOICE_ROOM_TOPIC, {
+              channelId: payload.voiceChannelId,
+              kind: "adopted",
+              peerId: resume.peerId,
+            } satisfies VoiceRoomFrame);
+          }
+        }
+      } catch (error) {
+        logEvent("voice.registryWriteFailed", {
+          op: "adopt",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (!adopted) {
+        resume = {
+          kind: "reconstruct",
+          peerId: resume.peerId,
+          transport: resume.transport,
+        };
+      }
+      if (socket.readyState !== 1) {
         return;
       }
     }
@@ -1560,7 +1854,7 @@ export async function handleVoiceMessage(
     const resumePeerId =
       resume.kind === "reattach"
         ? resume.peer.id
-        : resume.kind === "reconstruct"
+        : resume.kind === "reconstruct" || resume.kind === "adopt"
           ? resume.peerId
           : undefined;
 
@@ -1635,7 +1929,9 @@ export async function handleVoiceMessage(
     }
 
     const peerId =
-      resume.kind === "reconstruct" ? resume.peerId : randomUUID();
+      resume.kind === "reconstruct" || resume.kind === "adopt"
+        ? resume.peerId
+        : randomUUID();
     // What this person is called *here*: their nickname in this server, or
     // the name on their account. Every other surface already resolves it this
     // way; voice used to read `display_name` straight, which is how somebody
@@ -1644,6 +1940,10 @@ export async function handleVoiceMessage(
       channel.kind === "server" ? (channel.server_id ?? null) : null,
       user,
     );
+    // An adopted seat keeps what its row says (a share or a camera that is
+    // still up on the SFU, a standing mute), exactly as a reattach keeps
+    // the peer object: the person never left. A reconstruct starts clean,
+    // as it always has; the client re-declares its state after `welcome`.
     const peer: VoicePeer = {
       id: peerId,
       socket,
@@ -1651,19 +1951,24 @@ export async function handleVoiceMessage(
       displayName: shownName,
       avatarUrl: user.avatar_url,
       voiceChannelId: payload.voiceChannelId,
-      sharingScreen: false,
-      cameraStreamId: null,
-      screenAudioStreamId: null,
+      sharingScreen: adopted?.sharingScreen ?? false,
+      cameraStreamId: adopted?.cameraStreamId ?? null,
+      screenAudioStreamId: adopted?.screenAudioStreamId ?? null,
       // Not muted until the client says so: the client re-declares its state
       // right after `welcome` (including after a rejoin, where this reset
       // would otherwise erase a standing mute). See use of `set-voice-state`.
       // The exception is a listener, who is muted by rule from the first
       // frame and stays so whatever their client declares.
-      muted: !canSpeak,
-      deafened: false,
+      muted: (adopted?.muted ?? false) || !canSpeak,
+      deafened: adopted?.deafened ?? false,
       canSpeak,
       canResume: payload.resume === true,
     };
+    if (adopted && !canSpeak) {
+      peer.sharingScreen = false;
+      peer.cameraStreamId = null;
+      peer.screenAudioStreamId = null;
+    }
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
     noteRoomSizeForPeak(getRoomPeers(payload.voiceChannelId).length);
@@ -1681,7 +1986,7 @@ export async function handleVoiceMessage(
     // silently switch mesh ↔ LiveKit under held media. Cold join pins the
     // policy's decision when the room is empty.
     const wasPinned = roomTransports.has(payload.voiceChannelId);
-    if (resume.kind === "reconstruct") {
+    if (resume.kind === "reconstruct" || resume.kind === "adopt") {
       roomTransports.set(payload.voiceChannelId, resume.transport);
     } else if (!wasPinned) {
       roomTransports.set(payload.voiceChannelId, transport);
@@ -1690,20 +1995,28 @@ export async function handleVoiceMessage(
       logEvent("voice.transportPinned", {
         channelId: payload.voiceChannelId,
         transport: roomTransports.get(payload.voiceChannelId),
-        reason: resume.kind === "reconstruct" ? "resume" : opening?.reason,
+        reason:
+          resume.kind === "reconstruct" || resume.kind === "adopt"
+            ? "resume"
+            : opening?.reason,
       });
     }
-    logEvent("voice.join", {
+    logEvent(resume.kind === "adopt" ? "voice.resume" : "voice.join", {
       peerId,
       userId: user.id,
       voiceChannelId: payload.voiceChannelId,
       roomSize: getRoomPeers(payload.voiceChannelId).length,
-      resumed: resume.kind === "reconstruct",
+      resumed: resume.kind === "reconstruct" || resume.kind === "adopt",
     });
-    // After the pin so the row carries the room's transport.
+    // After the pin so the row carries the room's transport. For an adopted
+    // seat this re-writes the row the adopt just claimed with the same
+    // content plus whatever the permission re-check changed.
     writePeerRow(peer);
 
-    await welcomeVoicePeer(peer, resume.kind === "reconstruct");
+    await welcomeVoicePeer(
+      peer,
+      resume.kind === "reconstruct" || resume.kind === "adopt",
+    );
     return;
   }
 
@@ -1722,7 +2035,7 @@ export async function handleVoiceMessage(
     // resume pair proves this user still owns that orphan; drop it now so
     // the roster does not keep a 90s ghost.
     if (payload.resumePeerId && payload.resumeToken) {
-      leaveVoiceByResumeToken(payload.resumePeerId, payload.resumeToken);
+      await leaveVoiceByResumeToken(payload.resumePeerId, payload.resumeToken);
     }
     return;
   }
@@ -2657,6 +2970,12 @@ const voiceRoomFrameSchema = z.discriminatedUnion("kind", [
     peer: voiceParticipantSchema,
   }),
   z.object({ channelId: z.string().uuid(), kind: z.literal("roster") }),
+  /** Another instance answers for this peer id now: forget it, say nothing. */
+  z.object({
+    channelId: z.string().uuid(),
+    kind: z.literal("adopted"),
+    peerId: z.string().min(1),
+  }),
 ]);
 type VoiceRoomFrame = z.infer<typeof voiceRoomFrameSchema>;
 
@@ -2682,10 +3001,17 @@ subscribeToCluster(VOICE_ROOM_TOPIC, (data) => {
     return;
   }
   const frame = parsed.data;
+  // Whatever the room row says now, this process's copy is stale for it;
+  // the roster rebuild below refreshes the entry or drops it.
+  remoteTransports.delete(frame.channelId);
+  if (frame.kind === "adopted") {
+    dropVoicePeerSilently(frame.peerId);
+    return;
+  }
   // The room frame, to the peers this instance holds. A peer we hold
   // ourselves is never announced to us by somebody else: that would be a
-  // seat both instances think they own, which M3's adopt resolves, and
-  // until then the local map wins.
+  // seat both instances think they own, and the `adopted` frame above is
+  // how the seat changes hands; until it arrives the local map wins.
   if (frame.kind === "joined" && !peers.has(frame.peer.peerId)) {
     broadcastToRoom(frame.channelId, { type: "peer-joined", peer: frame.peer });
   } else if (frame.kind === "left" && !peers.has(frame.peerId)) {
