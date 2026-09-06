@@ -223,7 +223,7 @@ function sortByPosition<T extends { position: number }>(list: T[]): T[] {
 }
 
 /**
- * Sidebar order without favorites (those would duplicate) and without
+ * Sidebar order without personal pins (those would duplicate) and without
  * category headers. Same grouping ChannelList paints: top-level text,
  * top-level voice, then each category's children.
  *
