@@ -53,6 +53,15 @@ env:
   # machine happens to have it installed.
   COMPILE_SDK: "37"
   BUILD_TOOLS: "36.0.0"
+  # The certificate that must sign every sideload APK, so that a tester's
+  # existing install can be updated in place. Public by construction: it is what
+  # the installed APK already exposes and what
+  # `client/public/.well-known/assetlinks.json` publishes on purpose. Pinned
+  # here so a key that quietly changes is a red build rather than a fortnight of
+  # "the update button does nothing". Rotating it deliberately means editing
+  # this line, that file, and the four ANDROID_SIDELOAD_* secrets, and telling
+  # testers to reinstall. See docs/ANDROID.md, "The sideload signing key".
+  SIDELOAD_CERT_SHA256: "EE:28:41:C9:89:FD:20:0D:27:8B:32:D4:30:A3:63:A1:E7:D2:2E:20:0F:86:19:E2:82:D6:F0:6B:DA:46:BB:F3"
 
 jobs:
   build:
@@ -135,31 +144,71 @@ jobs:
         working-directory: android
         run: ./gradlew :app:assembleRelease --stacktrace
 
-      # The GitHub-beta APK. Same shrinker and prod URLs as release, signed
-      # with the debug key so the artifact actually installs. The debug
-      # keystore on a runner is ephemeral unless we keep it: a new one every
-      # run would force every tester to uninstall before updating. Caching
-      # `~/.android/debug.keystore` under a stable key is the whole of that.
-      # Do not commit a keystore. Do not put this signing config on `release`.
-      - name: Persist the sideload debug keystore
-        uses: actions/cache@v4
-        with:
-          path: ~/.android/debug.keystore
-          key: android-sideload-debug-keystore-v1
-
-      - name: Sideload APK (prod API, debug-signed)
-        working-directory: android
+      # The key that signs the GitHub-beta APK, and the reason this file no
+      # longer has an `actions/cache` step here.
+      #
+      # It used to sign with whatever `~/.android/debug.keystore` the runner
+      # generated, and keep that file alive between runs in an Actions cache
+      # under a stable key. That is not durable and cannot be: GitHub evicts a
+      # cache after **seven days without a read**, and the Android workflow only
+      # runs when `android/**` or a protocol path changes. A quiet fortnight
+      # therefore rotated the signing key, silently, and the next publish went
+      # out signed by a stranger. Android refuses to install an update over a
+      # different signature, so every tester holding an older APK simply could
+      # not update, with no error worth reading, and nothing in the build went
+      # red. That is what happened to the 0.3.0 publish.
+      #
+      # So the key is a repository secret now, decoded to a runner-local file
+      # that the job deletes with itself. Do not commit a keystore. Do not put
+      # this signing config on `release`: that one is Play's, and Play refuses
+      # anything but the upload key.
+      - name: Decode the sideload signing key
+        id: sideload_key
+        shell: bash
         env:
-          # Publishable, the same value Pages already bakes into the web
-          # client. Empty on fork PRs (GitHub will not hand secrets to a
-          # fork); those runs still compile, they just cannot sign in.
-          PQP_CLERKPUBLISHABLEKEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          SIDELOAD_KEYSTORE_B64: ${{ secrets.ANDROID_SIDELOAD_KEYSTORE_B64 }}
         run: |
           set -euo pipefail
           publishing=0
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] || { [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; }; then
             publishing=1
           fi
+          echo "publishing=${publishing}" >> "$GITHUB_OUTPUT"
+
+          if [ -z "${SIDELOAD_KEYSTORE_B64}" ]; then
+            if [ "$publishing" = 1 ]; then
+              echo "::error::ANDROID_SIDELOAD_KEYSTORE_B64 is empty, so this run would sign android-beta with a throwaway debug key and break in-place updates for every existing tester. Set the four ANDROID_SIDELOAD_* Actions secrets (see docs/ANDROID.md, 'The sideload signing key') before publishing. The keystore is backed up at ~/.config/pqp/android-sideload-keystore/ on the maintainer's machine."
+              exit 1
+            fi
+            # Fork PRs get no secrets at all. Those runs still have to compile
+            # and still upload an artifact; they just sign it with the runner's
+            # own debug key, which nobody updates over.
+            echo "::warning::No sideload keystore secret; this APK is signed with the runner's debug key and cannot update an installed beta. Expected on a fork PR."
+            exit 0
+          fi
+
+          install -d -m 700 "$RUNNER_TEMP/android-signing"
+          printf '%s' "$SIDELOAD_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/android-signing/sideload.jks"
+          chmod 600 "$RUNNER_TEMP/android-signing/sideload.jks"
+          echo "keystore=$RUNNER_TEMP/android-signing/sideload.jks" >> "$GITHUB_OUTPUT"
+
+      - name: Sideload APK (prod API, signed with the durable beta key)
+        working-directory: android
+        env:
+          # Publishable, the same value Pages already bakes into the web
+          # client. Empty on fork PRs (GitHub will not hand secrets to a
+          # fork); those runs still compile, they just cannot sign in.
+          PQP_CLERKPUBLISHABLEKEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY }}
+          # Empty when the secret is absent, and `build.gradle.kts` then falls
+          # back to the debug keystore. The step above is what makes that
+          # fallback impossible on a publishing run.
+          PQP_SIDELOADKEYSTOREFILE: ${{ steps.sideload_key.outputs.keystore }}
+          PQP_SIDELOADKEYSTOREPASSWORD: ${{ secrets.ANDROID_SIDELOAD_KEYSTORE_PASSWORD }}
+          PQP_SIDELOADKEYALIAS: ${{ secrets.ANDROID_SIDELOAD_KEY_ALIAS }}
+          PQP_SIDELOADKEYPASSWORD: ${{ secrets.ANDROID_SIDELOAD_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          publishing='${{ steps.sideload_key.outputs.publishing }}'
           if [ "$publishing" = 1 ] && [ -z "${PQP_CLERKPUBLISHABLEKEY}" ]; then
             echo "::error::VITE_CLERK_PUBLISHABLE_KEY is empty. The sideload APK would compile and then refuse to sign in (AuthMode.Misconfigured). Set the Actions secret (same value as the Pages build) before publishing android-beta."
             exit 1
@@ -169,6 +218,44 @@ jobs:
           fi
           ./gradlew :app:assembleSideload --stacktrace
           cp app/build/outputs/apk/sideload/app-sideload.apk app/build/outputs/apk/sideload/pqp.apk
+
+      # Reads the signature off the artifact rather than trusting the config
+      # that produced it, which is the only version of this check that would
+      # have caught the cache eviction. A certificate fingerprint is public by
+      # construction (every installed APK exposes it), so pinning it in a
+      # workflow file leaks nothing and turns a silent key rotation into a red
+      # build.
+      #
+      # It is also the value `client/public/.well-known/assetlinks.json` has to
+      # list for https://pqp.gg/app/invite/<code> to open the app directly.
+      # Rotating the key on purpose means editing both this constant and that
+      # file, and telling testers to reinstall.
+      - name: Verify the sideload signature
+        if: steps.sideload_key.outputs.keystore != ''
+        working-directory: android
+        shell: bash
+        run: |
+          set -euo pipefail
+          apksigner="$ANDROID_HOME/build-tools/${BUILD_TOOLS}/apksigner"
+          if [ ! -x "$apksigner" ]; then
+            apksigner=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort | tail -1)
+          fi
+          certs=$("$apksigner" verify --print-certs app/build/outputs/apk/sideload/pqp.apk)
+          echo "$certs"
+          actual=$(echo "$certs" | awk '/SHA-256 digest:/ { print $NF; exit }')
+          expected=$(echo "$SIDELOAD_CERT_SHA256" | tr -d ':' | tr 'A-Z' 'a-z')
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::The sideload APK is signed by ${actual}, not by the durable beta key ${expected}. Testers could not update over this build. Either a secret was replaced or the key was rotated without updating SIDELOAD_CERT_SHA256 in this workflow and client/public/.well-known/assetlinks.json."
+            exit 1
+          fi
+          {
+            echo "### Sideload signing certificate"
+            echo
+            echo "SHA-256 (package \`gg.pqp.app\`), matches the pinned key:"
+            echo
+            echo "\`${SIDELOAD_CERT_SHA256}\`"
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Summarise
         if: always()
@@ -265,9 +352,11 @@ jobs:
             Sideload APK for the closed Play window (`pqp.gg/android`).
 
             Built by `.github/workflows/android.yml` from the `sideload`
-            variant: production API, R8, debug-signed. Not the Play upload
-            key, so the listing cannot update over this install. Uninstall
-            this build when the store opens.
+            variant: production API, R8, signed with the durable beta key
+            (certificate SHA-256 pinned in that workflow, so every build here
+            updates in place over the last one). Not the Play upload key, so
+            the listing cannot update over this install. Uninstall this build
+            when the store opens.
 
             Filename is stable (`pqp.apk`) so the download URL does not
             change when the binary does.
