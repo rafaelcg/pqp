@@ -1331,7 +1331,7 @@ export function MessageComposer({
   return (
     <form
       onSubmit={(event) => void handleSubmit(event)}
-      className="safe-pb relative max-h-[min(60dvh,100%)] overflow-y-auto border-t border-border/60 px-3 py-3 sm:px-4"
+      className="safe-pb relative border-t border-border/60 px-3 py-3 sm:px-4"
     >
       {menuKind && (
         <AutocompleteMenu
@@ -1403,71 +1403,78 @@ export function MessageComposer({
           </span>
         </div>
       )}
-      {replyTarget && (
-        <div className="mb-2 flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-muted">
-          <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-accent" />
-          <span className="min-w-0 flex-1 truncate">
-            {t("composer.replying", { name: replyTarget.authorName })}
-          </span>
-          <button
-            type="button"
-            aria-label={t("composer.cancelReply")}
-            onClick={() => onCancelReply?.()}
-            className="shrink-0 rounded p-0.5 hover:text-text"
+      {(replyTarget ||
+        isPollComposerOpen ||
+        pending.length > 0 ||
+        isFormatBarOpen) && (
+      <div className="max-h-[min(40dvh,100%)] overflow-y-auto">
+        {replyTarget && (
+          <div className="mb-2 flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-muted">
+            <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-accent" />
+            <span className="min-w-0 flex-1 truncate">
+              {t("composer.replying", { name: replyTarget.authorName })}
+            </span>
+            <button
+              type="button"
+              aria-label={t("composer.cancelReply")}
+              onClick={() => onCancelReply?.()}
+              className="shrink-0 rounded p-0.5 hover:text-text"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+        {isPollComposerOpen && slashContext && (
+          <PollComposer
+            onSubmit={(request) => {
+              slashContext.sendPoll(request);
+              setIsPollComposerOpen(false);
+            }}
+            onClose={() => setIsPollComposerOpen(false)}
+          />
+        )}
+        {pending.length > 0 && (
+          <ul
+            aria-label={t("composer.attachments")}
+            className="mb-2 flex flex-wrap gap-2"
           >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
-      {isPollComposerOpen && slashContext && (
-        <PollComposer
-          onSubmit={(request) => {
-            slashContext.sendPoll(request);
-            setIsPollComposerOpen(false);
-          }}
-          onClose={() => setIsPollComposerOpen(false)}
-        />
-      )}
-      {pending.length > 0 && (
-        <ul
-          aria-label={t("composer.attachments")}
-          className="mb-2 flex flex-wrap gap-2"
-        >
-          {pending.map((item) => (
-            <AttachmentChip
-              key={item.localId}
-              attachment={item}
-              onRemove={() => removeAttachment(item.localId)}
-            />
-          ))}
-        </ul>
-      )}
-      {isFormatBarOpen && (
-        <div
-          id={FORMAT_BAR_ID}
-          role="toolbar"
-          aria-label={t("composer.format")}
-          className="mb-2 flex gap-1"
-        >
-          {FORMAT_ACTIONS.map((action) => {
-            const Icon = action.icon;
-            return (
-              <Tooltip key={action.id} label={t(action.labelKey)}>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  disabled={disabled || isRunningSlash}
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => applyComposerFormat(action.kind)}
-                  className="h-8 min-w-8 flex-1 text-paper-muted hover:text-signal sm:w-8 sm:flex-none"
-                >
-                  <Icon className="h-4 w-4" />
-                </Button>
-              </Tooltip>
-            );
-          })}
-        </div>
+            {pending.map((item) => (
+              <AttachmentChip
+                key={item.localId}
+                attachment={item}
+                onRemove={() => removeAttachment(item.localId)}
+              />
+            ))}
+          </ul>
+        )}
+        {isFormatBarOpen && (
+          <div
+            id={FORMAT_BAR_ID}
+            role="toolbar"
+            aria-label={t("composer.format")}
+            className="mb-2 flex gap-1"
+          >
+            {FORMAT_ACTIONS.map((action) => {
+              const Icon = action.icon;
+              return (
+                <Tooltip key={action.id} label={t(action.labelKey)}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    disabled={disabled || isRunningSlash}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => applyComposerFormat(action.kind)}
+                    className="h-8 min-w-8 flex-1 text-paper-muted hover:text-signal sm:w-8 sm:flex-none"
+                  >
+                    <Icon className="h-4 w-4" />
+                  </Button>
+                </Tooltip>
+              );
+            })}
+          </div>
+        )}
+      </div>
       )}
       <div
         className={cn(
