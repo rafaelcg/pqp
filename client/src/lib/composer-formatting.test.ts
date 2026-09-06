@@ -388,7 +388,16 @@ describe("caretInsideUnclosedFence", () => {
 describe("composerBodyIsEmpty", () => {
   it("treats an empty fence as nothing to send", () => {
     expect(composerBodyIsEmpty("```\n\n```")).toBe(true);
+    expect(composerBodyIsEmpty("```js\n```")).toBe(true);
     expect(composerBodyIsEmpty("hi")).toBe(false);
+  });
+
+  it("keeps a one-line code span sendable", () => {
+    // ```code``` on one line is a code span with text in it, not an empty
+    // block. Treating it as empty left Enter and the send button doing nothing.
+    expect(composerBodyIsEmpty("```code```")).toBe(false);
+    expect(composerBodyIsEmpty("``` ls -la ```")).toBe(false);
+    expect(composerBodyIsEmpty("```js\nx\n```")).toBe(false);
   });
 });
 

@@ -428,13 +428,18 @@ export function caretInsideUnclosedFence(value: string, caret: number): boolean 
   return (markers?.length ?? 0) % 2 === 1;
 }
 
-/** Empty, or only an empty fence the format bar just inserted. */
+/**
+ * Empty, or only an empty fence the format bar just inserted.
+ *
+ * The fence has to span lines: a one-line ```` ```code``` ```` is a code span
+ * with text in it, and must stay sendable.
+ */
 export function composerBodyIsEmpty(value: string): boolean {
   const trimmed = value.trim();
   if (!trimmed) {
     return true;
   }
-  return /^```[^\n]*\n*\s*```$/.test(trimmed);
+  return /^```[^\n]*\n\s*```$/.test(trimmed);
 }
 
 /** The subset of a keydown event the shortcut table needs. */
