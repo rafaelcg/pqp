@@ -38,6 +38,7 @@ import {
   sameMicProcessing,
   type MicProcessing,
 } from "@/lib/audio-devices";
+import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
 import {
   connectLiveKit,
   type LiveKitIdentity,
@@ -150,7 +151,8 @@ export interface VoiceAudioOptions {
   inputVolume?: number;
   /**
    * Join with the microphone already off. Applied before the track is published
-   * so "mute on join" is muted from the very first sample.
+   * so "mute on join" is muted from the very first sample. Ignored when
+   * switching rooms: a drag is not an unmute.
    */
   startMuted?: boolean;
   inputMode?: VoiceInputMode;
@@ -700,6 +702,8 @@ export function createVoiceController(transport: RealtimeTransport) {
   // The room the user means to be in. Kept across a WS drop so we can auto-
   // rejoin on reconnect instead of ejecting them from the call.
   let intendedChannelId: string | null = null;
+  /** Channel switch in flight: keep "Na call" up while WebRTC rebuilds. */
+  let switchingRooms = false;
   /** HMAC from the last `welcome`. Sent on the next join so the server can reattach. */
   let resumeToken: string | null = null;
   /**
@@ -849,7 +853,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     clearJoinTimeout();
     const generation = ++joinGeneration;
     joinTimeoutId = setTimeout(() => {
-      if (state.status === "joining" && generation === joinGeneration) {
+      if (
+        generation === joinGeneration &&
+        (state.status === "joining" || switchingRooms)
+      ) {
         // A media transport that never came up is a transport failure, and has
         // to look like one: a black-holed SFU host hangs rather than refusing,
         // and that is the *likely* cloud failure, not the exotic one.
@@ -900,6 +907,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     sendLeave();
     holdingMedia = false;
     resumeToken = null;
+    switchingRooms = false;
     joinGeneration++;
     intendedChannelId = null;
     ringOnWelcomeChannelId = null;
@@ -1806,6 +1814,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
     holdingMedia = false;
     resumeToken = null;
+    switchingRooms = false;
     joinGeneration++;
     intendedChannelId = null;
     ringOnWelcomeChannelId = null;
@@ -2001,6 +2010,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           applyCameraStreamIds([message.self, ...welcomePeers]);
           applyScreenAudioStreamIds([message.self, ...welcomePeers]);
           applySharingScreen([message.self, ...welcomePeers]);
+          switchingRooms = false;
           redeclareLocalMedia();
           emit();
           break;
@@ -2008,7 +2018,7 @@ export function createVoiceController(transport: RealtimeTransport) {
 
         holdingMedia = false;
         clearResumeGrace();
-        if (state.status === "connected") {
+        if (state.status === "connected" && !switchingRooms) {
           state.status = "joining";
         }
         knownPeerIds.clear();
@@ -2068,6 +2078,11 @@ export function createVoiceController(transport: RealtimeTransport) {
               return;
             }
             state.status = "connected";
+            const wasSwitchingRooms = switchingRooms;
+            switchingRooms = false;
+            if (wasSwitchingRooms) {
+              redeclareLocalMedia();
+            }
             // A conversation call rings only once we are genuinely in it —
             // never for a join that is about to be refused.
             if (ringOnWelcomeChannelId === channelId) {
@@ -2086,11 +2101,16 @@ export function createVoiceController(transport: RealtimeTransport) {
 
         clearJoinTimeout();
         state.status = "connected";
+        const wasSwitchingRooms = switchingRooms;
+        switchingRooms = false;
         if (ringOnWelcomeChannelId === channelId) {
           ringOnWelcomeChannelId = null;
           transport.sendVoice({ type: "call-ring", conversationId: channelId });
         }
         startMeshSession(peerId, welcomePeers);
+        if (wasSwitchingRooms) {
+          redeclareLocalMedia();
+        }
         startSpeakingLoop();
         emit();
         break;
@@ -2320,15 +2340,30 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     async join(voiceChannelId: string, options?: VoiceAudioOptions) {
+      if (
+        intendedChannelId === voiceChannelId &&
+        (switchingRooms || state.voiceChannelId === voiceChannelId) &&
+        state.status !== "idle"
+      ) {
+        return;
+      }
       const fromIdle = state.status === "idle";
       const switching =
-        state.status === "connected" &&
+        state.status !== "idle" &&
         state.voiceChannelId !== null &&
         state.voiceChannelId !== voiceChannelId;
       if (switching) {
         resumeToken = null;
         holdingMedia = false;
         clearResumeGrace();
+        switchingRooms = true;
+        if (state.self) {
+          state.occupancy = moveOccupantSeat(
+            state.occupancy,
+            state.self.userId,
+            voiceChannelId,
+          ).next;
+        }
       }
       // Rings outrank samples if they overlap; kill them before the click cue.
       stopAllSoundLoops();
@@ -2342,7 +2377,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.errorKind = null;
       state.notice = null;
       state.transportFailure = null;
-      state.status = "joining";
+      // A live call that is only changing rooms stays "connected" so the
+      // status bar never flashes off "Na call" while WebRTC rebuilds.
+      if (!switching) {
+        state.status = "joining";
+      }
       // A channel switch calls join() without leave(), so the previous room's
       // share ids would otherwise leak into the welcome diff and look like
       // newcomers. Empty previous is the locked "join into live shares" rule.
@@ -2362,19 +2401,24 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (ringOnWelcomeChannelId && ringOnWelcomeChannelId !== voiceChannelId) {
         ringOnWelcomeChannelId = null;
       }
-      // Applied before the track exists, so "mute on join" is genuinely muted
-      // from the first sample rather than a moment later.
-      state.isMuted = options?.startMuted ?? state.isMuted;
+      // Fresh join: mute-on-join / crowd mute. A switch keeps the flags the
+      // person already chose — dragging rooms is not an unmute.
+      if (!switching) {
+        state.isMuted = options?.startMuted ?? state.isMuted;
+      }
       // Never inherit a key held from before the join — there is no keyup owed
       // to us for a press that happened while we were not in a call.
-      pushToTalkHeld = false;
-      voiceActivityOpen = false;
-      voiceActivityTracker.clear();
+      if (!switching) {
+        pushToTalkHeld = false;
+        voiceActivityOpen = false;
+        voiceActivityTracker.clear();
+      }
       state.inputMode = options?.inputMode ?? state.inputMode;
       if (options?.vadThreshold !== undefined) {
         applyVadThreshold(options.vadThreshold);
       }
       state.isTransmitting = micShouldBeOpen();
+      applyMuteToPipeline();
       emit();
 
       if (options) {
@@ -2388,8 +2432,15 @@ export function createVoiceController(transport: RealtimeTransport) {
       const generation = armJoinTimeout();
 
       try {
-        await whenCueSettled();
+        if (!switching) {
+          await whenCueSettled();
+        }
         if (generation !== joinGeneration) {
+          return;
+        }
+        if (switching && pipeline) {
+          applyMuteToPipeline();
+          sendJoin(voiceChannelId);
           return;
         }
         stopMicPipeline(pipeline);
@@ -2423,6 +2474,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (generation !== joinGeneration) {
           return;
         }
+        if (switching && pipeline) {
+          applyMuteToPipeline();
+          sendJoin(voiceChannelId);
+          return;
+        }
         // LISTEN-ONLY JOIN. A microphone that cannot be opened: none plugged
         // in, permission refused, another app holding it — used to abort the
         // whole join with an error. On 2026-09-05 a streamer sent ~170 people
@@ -2441,6 +2497,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         });
         sendJoin(voiceChannelId);
       }
+    },
+
+    replaceOccupancy(next: Record<string, VoiceParticipant[]>) {
+      state.occupancy = next;
+      emit();
     },
 
     leave() {
