@@ -194,6 +194,7 @@ the clone is done by hand.
 | `app/src/main/kotlin/gg/pqp/app/social` | Friends, blocks, conversations: wire shapes, endpoints, the live repository |
 | `app/src/main/kotlin/gg/pqp/app/social/ui` | The three-tab home, the inbox, the friends screen, the two people pickers |
 | `app/src/main/kotlin/gg/pqp/app/push` | FCM registration, the notification payload, deep links, per-channel settings |
+| `app/src/main/kotlin/gg/pqp/app/invites` | The invite link shape and the invite sheet: make, copy, share, revoke |
 | `app/src/main/kotlin/gg/pqp/app/account` | Data export and account deletion: the confirmation rule, the two endpoints, the two screens |
 | `app/src/test/kotlin` | JVM unit tests for the pure parts: capture sizing, stats parsing, deep links, push presentation |
 | `app/src/main/res/values` | English copy |
@@ -683,6 +684,45 @@ Audio uses `MODE_IN_COMMUNICATION` with a `USAGE_VOICE_COMMUNICATION` focus
 request, which is what puts the volume rocker on the call stream and turns on
 the platform's echo cancellation.
 
+### DM calls ring, and the ring is foreground only
+
+A conversation call is an ordinary voice room on the conversation's channel id:
+same `join-voice-room`, same pinned transport, same roster. What makes it a
+call is the ring, and that is five frames in `packages/shared/src/signaling.ts`
+(`call-ring`, `call-decline`, `call-incoming`, `call-ring-cancelled`,
+`call-declined`).
+
+Three rules carry over from the web client and each one is a bug if it is
+broken:
+
+1. **The ring waits for the room.** The server only accepts `call-ring` from a
+   live peer of exactly that room, so it is sent when the voice state says the
+   join is connected, never on the tap. Sent early it is dropped in silence and
+   nobody's phone rings.
+2. **Answering is joining.** There is no accept frame. `CallEffect.JoinCall`
+   is the whole answer, and the server stops ringing the account's other
+   devices itself.
+3. **Dismissing the card sends nothing.** Decline tells the caller no; the
+   cross is silence on this device only, and the call stays joinable while the
+   caller keeps ringing.
+
+The decisions live in `CallMachine`, a pure function with no Android in it, so
+they are pinned by plain JVM tests (`CallMachineTest`, 25 of them) rather than
+by an emulator. `CallController` owns the socket, the clocks and the ringtone
+and does what the machine says. `CallFramesTest` reads the shared schemas off
+disk the way the rest of `protocol/` does, so a renamed frame fails the Android
+build instead of becoming a phone that never rings.
+
+The ringtone is the phone's own, on the ringtone stream, so the volume rocker
+and the silent switch apply as they would to a phone call. Silent is silent,
+vibrate is vibrate, and Do Not Disturb wins outright; the card appears in every
+case, only the noise is gated.
+
+**Foreground only.** A ring with the app closed needs a push that wakes the
+process, and the FCM server leg does not exist (see the push row above). Nothing
+here is verified on hardware yet: it compiles, the state machine is tested, and
+no two phones have rung each other.
+
 ### What voice is verified to do, and what it is not
 
 Tested with **two emulators in one room** on two separate dev-bypass accounts,
@@ -1090,6 +1130,83 @@ to sit un-acknowledged for as long as it takes to long-press it.
 
 **Not verified:** that guard, and the server's cap on how many distinct emoji
 one message may carry.
+
+## Chat basics: markdown, edit, delete, reply, pins, mentions, GIFs
+
+The gap this closes is the one `docs/PARITY.md` ranked ninth: the transcript
+could send, receive, react and report, and could do nothing else the web has
+been doing since the first month.
+
+**Markdown is parsed here, not by a library.** `ui/chat/ChatMarkdown.kt` reads
+a body into blocks and styled runs; `ui/chat/MessageBody.kt` draws them. No
+markdown dependency was added, and that is deliberate: chat markdown is
+Discord-shaped rather than CommonMark-shaped, so every general-purpose parser
+would have to be *disabled* into the right shape. `# announcement` is a
+sentence, a single newline is a line break rather than a space, and a blank
+line survives. A CommonMark renderer gets all three wrong by default, which is
+exactly what `client/src/lib/chat-markdown.ts` spends its length undoing.
+
+The vocabulary is the web's: `**bold**`, `*italic*`, `_italic_`,
+`~~strike~~`, `` `code` ``, ``` fences, `> quotes`, links (bare and
+labelled) and `@mentions`. Headings, indented code, HTML and `---` rules stay
+literal, which is the same set `remarkDisableChatBlocks` turns off. Keeping the
+parser out of Compose is what makes it testable: `ChatMarkdownTest` is 20 cases
+over strings, no device and no screenshot.
+
+**A mention is marked when the server would resolve it**, not when it looks
+tidy. `MENTION_PATTERN` in `packages/shared/src/api.ts` has no word boundary,
+so `me@example.com` really does notify an account called `example` if one
+exists, and the renderer marks it for that reason. The *picker* is stricter and
+refuses an `@` mid-word, because that is a different question: what to offer
+while somebody types, not what they typed. `ChatMarkdownTest` reads the shared
+pattern off disk and fails when the copy drifts.
+
+**Edit, delete and pin are HTTP, not socket frames.** There is no
+`message-edit` on this wire: it is `PATCH /api/messages/:id`,
+`DELETE /api/messages/:id` and `POST` / `DELETE /api/messages/:id/pin`, and the
+socket's only part is relaying the `message-update` (or `message-delete`) that
+follows. `ChatActionsApiTest` pins the verb and the path of each against a real
+socket, because a wrong one is a 404 the view model catches and turns into a
+dialog: nothing crashes, and nothing works.
+
+None of the three is optimistic, unlike a reaction. A reaction is a pill that
+has to move under the finger; an edit that reverts a second later, or a deleted
+message that comes back, reads as a haunting. The local state changes when the
+server has agreed, and the broadcast that follows is then a no-op.
+
+**Who is offered what** is `ui/chat/MessageActions.kt`, restating the server's
+own rules so the sheet cannot show a row that always 403s. Only an author
+edits, ever, including a moderator looking at somebody else's words. An author
+deletes their own anywhere; a moderator deletes anyone's *in a server channel*.
+A conversation has no moderators at all, so `serverId` being null is an answer
+rather than a missing lookup, and anybody in one may pin. This is the shape iOS
+got wrong in both directions at once, which is why `canManageMessages` lives in
+shared; `MessageActionsTest` reads it off disk.
+
+The screen learns which server it is in from `ChatRoute.serverId`. A chat
+opened by a notification tap carries ids and no membership, so it behaves as a
+plain member there and `@` offers no names: quieter than it could be, never
+wrong.
+
+**Replying and editing share the composer**, because a phone has nowhere else
+to put them. A strip above the box says which of the two is happening and
+offers a way out; cancelling an edit puts back whatever draft was in the box
+before it started. The send button becomes a tick while editing, since an edit
+changes a message rather than adding one.
+
+**The GIF picker** goes through `/api/gifs/config`, `/search` and `/trending`,
+so the provider is whatever the API is configured with (Klipy today) and no
+provider key is ever on the phone. A picked GIF is *staged as an attachment*
+(`POST /api/channels/:id/attachments/gif`) exactly as the web does it: nothing
+is uploaded, the bytes stay with the provider, and the message can therefore
+carry a caption and be edited afterwards. The button is gated on the GIF key
+alone and not on `attachmentsEnabled`: a deployment with no `S3_*` at all can
+still send a GIF.
+
+**Not verified on a device or an emulator.** This is compiled, and the pure
+parts are covered by 59 new JVM tests, but nobody has watched a pin sheet open
+on a phone. Two emulators and a web client would settle it in ten minutes,
+which is what the reactions work above cost and what it found.
 
 ## Direct messages and the friends list
 
@@ -1644,6 +1761,108 @@ be run once on a phone on mobile data and once on a network known to block
 UDP, and the report compared with the web's from the same network, before
 anybody quotes the advice to a user.
 
+## Invites: making one, and the https links that open the app
+
+Before this, an Android user could redeem an invite but could not produce one:
+the answer to "how do I get my friend in" was "ask somebody on a desktop".
+Both halves are here now.
+
+**Making one.** The overflow menu on a community row has *Invite people*, which
+opens a sheet over the three routes the web's `invite-panel.tsx` already uses:
+`GET /api/servers/:id/invites` to list, `POST` the same path to make one,
+`DELETE /api/servers/:id/invites/:inviteId` to revoke. Copy puts the link on the
+clipboard; Share hands it to the system share sheet (`Intent.ACTION_SEND`), so
+where it goes is the phone's business.
+
+The two permissions are not the same, and the sheet is shaped around that.
+Listing needs MANAGE_SERVER; creating needs CREATE_INVITE, which every member
+has by default. So a plain member opens the sheet to an empty list and a working
+button, and the 403 from the list call is swallowed rather than shown: it is not
+an error, it is the role. Every other refusal is printed in the server's own
+words, because only the server knows which refusal it was.
+
+**The link is the web's link.** `InviteLinks.link` builds
+`https://pqp.gg/app/invite/<code>`, the exact string `inviteLink` in
+`client/src/components/layout/invite-panel.tsx` builds. That matters because it
+is also the path the manifest claims and the path `DeepLink` parses back, so
+three places have to agree on one shape. `InviteLinksTest` asserts the round
+trip (build a link, parse it, get the same code back) rather than the string, so
+a change in either half fails a test instead of a friend's tap.
+
+The origin is a build input (`pqp.appUrl`, defaulting to `https://pqp.gg`) and
+it does **not** follow `pqp.apiUrl`. A debug build talks to `localhost:3001`
+through `adb reverse` and still shares `https://pqp.gg/...` links, because the
+person receiving the link has no tunnel to the laptop.
+
+### App Links
+
+`https://pqp.gg/app/invite/<code>` is claimed by an `autoVerify` intent filter,
+the Android twin of iOS's `applinks:pqp.gg`. Only that path prefix is claimed.
+Claiming `/app` would swallow every pqp.gg link somebody taps into an app that
+has no screen for most of them.
+
+`MainActivity` is `singleTask` now. A notification tap already asked for
+SINGLE_TOP on the intent it built; a browser's VIEW intent cannot be asked to,
+and without this a link tapped while the app was running would stack a second
+`MainActivity`, with a second NavHost and a second call bar, on top of the
+browser's task. Cold start and warm start both end in
+`PushController.onActivityIntent`, which is the one place that reads
+`intent.data`, consumes it and parks a target for the NavHost to pick up.
+
+**The web half is `client/public/.well-known/assetlinks.json`.** It has to list
+the SHA-256 of the certificate that signs the APK a person actually installed.
+That APK is the sideload build, signed with a key that lives in Actions secrets
+and has never existed on any laptop, so the value cannot be computed from a
+checkout.
+
+The value committed is read from the artifact itself, which is the one source
+that cannot be wrong about what people have installed:
+
+```bash
+curl -sL -o pqp.apk https://github.com/rafaelcg/pqp/releases/download/android-beta/pqp.apk
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs pqp.apk
+# Signer #1 certificate SHA-256 digest: cdd20531...  (colon-separate it, upper case)
+```
+
+The Android workflow reads the fingerprint back off the signed artifact and
+checks it against `SIDELOAD_CERT_SHA256`, pinned at the top of
+`.github/workflows/android.yml`, in the *Verify the sideload signature* step;
+it also puts it in the job summary under *Sideload signing certificate*. A
+build signed by anything else is red. Nothing about the number is secret: a
+certificate fingerprint is public by construction, every installed APK exposes
+its own.
+
+`sha256_cert_fingerprints` lists **two** keys, and the order is the point. The
+first is the durable sideload key from Actions secrets, which is what every
+build now signs with and what the workflow verifies. The second is the
+throwaway debug key that a build signed while the keystore lived in an
+`actions/cache` entry, before the durable key existed: GitHub evicts a cache
+after seven days without a hit, so a quiet week rotated the signing key and the
+0.3.0 publish went out signed by a stranger (see *Why the cache approach broke*
+below). Testers holding that APK cannot update over it and have to reinstall,
+but until they do, the second entry keeps their App Links verifying. Drop it
+once nobody is on that build. A rotation is always added rather than swapped
+while the old build is still out there.
+
+With the right fingerprint in place, the phone verifies at install and the link
+opens the app with no chooser. With the wrong one, nothing breaks: the link
+opens the web client in the browser, which is the same page, and a person who
+wants the app instead turns on *Open supported links* for it in system
+settings.
+
+To check verification on a device:
+
+```bash
+adb shell pm get-app-links gg.pqp.app
+# and to re-run it after fixing the file
+adb shell pm verify-app-links --re-verify gg.pqp.app
+```
+
+*Not verified:* no device has yet opened an `https://` invite link into this
+app, because that needs a real fingerprint in the deployed file. The parsing,
+the sheet and the three routes are unit-tested and compile; the verification
+handshake is the part that is still on paper.
+
 ## Your data: export and account deletion
 
 **This is a Play Store submission blocker, not a nicety.** Google requires an
@@ -1927,9 +2146,14 @@ project exists and the server has no FCM leg. **Do not write "Android push
 works"** until a real device has received a real message from a real server.
 
 There are JVM unit tests over the pure parts worth pinning: the capture sizing
-arithmetic, the stats parsing, deep-link parsing and push presentation. There
+arithmetic, the stats parsing, deep-link parsing, push presentation, the chat
+markdown grammar and who may edit, delete or pin. There
 are still **no instrumented tests**, and nothing proves a new `stringResource`
 has a Portuguese counterpart.
+
+Built, unit-tested and **not yet exercised on a device**: chat markdown, edit,
+delete, reply, the pinned list, mention autocomplete and the GIF picker. See
+**Chat basics** above for what each one is and what would settle it.
 
 Built and **verified against a live local server**: personal data export and
 in-app account deletion, including the 409 that lists the communities blocking
@@ -1939,8 +2163,8 @@ about it that are not proven, are in **Your data** above.
 ### Media in a message
 
 This is about **rendering**. Sending is its own section (**Attachments**
-above) and is built for files; there is still no GIF picker on Android, so a
-picker GIF is always one somebody sent from the web or the iOS client.
+above) for files, and **Chat basics** for the GIF picker, which now exists here
+too: a picker GIF may have come from any of the three clients.
 
 - **GIFs animate.** They did not before `coil-gif` was added, and nothing said
   so: Coil decodes a still image with no help, so an `ImageLoader` with no
@@ -1982,7 +2206,7 @@ picker GIF is always one somebody sent from the web or the iOS client.
 
 **Not built:** a GIF picker, replies, editing, pinning, threads,
 search, members and moderation surfaces, profile editing, communities, game
-connections. Invites can be redeemed from a link but not created or shown. No
+connections. No
 camera (send or receive), no screen-share audio *out of* this device, no
 speaking indicators, no per-peer volume, no push-to-talk. LiveKit rooms are
 joined and can now be watched in: an incoming screen share renders, with the

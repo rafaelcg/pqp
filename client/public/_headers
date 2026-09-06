@@ -34,6 +34,14 @@
   Content-Type: application/json
   Cache-Control: public, max-age=300
 
+# Android App Links, the twin of the file above. Fetched by the phone at
+# install time (and by Google's verifier), must be application/json over https
+# with no redirect. Which certificate fingerprints belong in it, and how to get
+# the sideload one, is in docs/ANDROID.md under "App Links".
+/.well-known/assetlinks.json
+  Content-Type: application/json
+  Cache-Control: public, max-age=300
+
 # RFC 8288 discovery pointers on the homepage: where the API catalog and the
 # live status live. Cheap, standard, and true — unlike advertising agent
 # registration surfaces this product does not have.

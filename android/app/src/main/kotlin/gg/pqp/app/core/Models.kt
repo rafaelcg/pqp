@@ -96,6 +96,43 @@ data class CreateServerResponse(
 data class JoinInviteResponse(val serverId: String, val serverName: String = "")
 
 /**
+ * One invite, as `mapInvite` in `server/src/services/invites.ts` shapes it.
+ *
+ * `maxUses` and `expiresAt` are null for "unlimited" and "never"; `uses`
+ * counts redemptions that actually added a member (rejoining does not burn
+ * one). `serverName` is only filled on the by-code preview, not on a server's
+ * own list, so it is defaulted rather than required.
+ */
+@Serializable
+data class Invite(
+    val id: String,
+    val code: String,
+    val serverId: String,
+    val serverName: String? = null,
+    val maxUses: Int? = null,
+    val uses: Int = 0,
+    val expiresAt: String? = null,
+    val createdAt: String = "",
+)
+
+@Serializable
+data class InvitesResponse(val invites: List<Invite> = emptyList())
+
+@Serializable
+data class InviteResponse(val invite: Invite)
+
+/**
+ * `createInviteSchema` in `packages/shared/src/api.ts`. Both fields are
+ * optional and null means "no limit"; `encodeDefaults = false` on [PqpJson]
+ * keeps an unset field off the wire rather than sending an explicit null.
+ */
+@Serializable
+data class CreateInviteRequest(
+    val maxUses: Int? = null,
+    val expiresInHours: Int? = null,
+)
+
+/**
  * `kind` is what the row *is* (`server` / `dm` / `group`); `type` is what it
  * *carries* (`text` / `voice` / `category`). They are two different fields and
  * conflating them is how a category ends up rendered as an empty text channel.
@@ -245,6 +282,65 @@ data class ChancePayload(
     val remaining: Int? = null,
     val reshuffled: Boolean? = null,
 )
+
+@Serializable
+data class MessageResponse(val message: Message)
+
+/** Body of `PATCH /api/messages/:messageId`. */
+@Serializable
+data class EditMessageRequest(val body: String)
+
+/**
+ * One row of `GET /api/servers/:serverId/members`, as much of it as the
+ * mention picker needs. `username` is nullable on the wire and a member
+ * without one cannot be mentioned at all: the wire format is `@username`.
+ */
+@Serializable
+data class ServerMember(
+    val id: String,
+    val displayName: String,
+    val username: String? = null,
+    val nickname: String? = null,
+    val avatarUrl: String? = null,
+    val role: String? = null,
+)
+
+@Serializable
+data class MembersResponse(val members: List<ServerMember> = emptyList())
+
+// --- gifs ---
+
+/** `GET /api/gifs/config`: absent or failing reads as off, like attachments. */
+@Serializable
+data class GifConfig(val enabled: Boolean = false)
+
+/** `gifSchema` in `packages/shared/src/gifs.ts`. */
+@Serializable
+data class Gif(
+    val id: String,
+    /** What the attachment is minted from; must be on the shared host allowlist. */
+    val url: String,
+    val previewUrl: String,
+    val previewStillUrl: String? = null,
+    val width: Int,
+    val height: Int,
+    val title: String = "",
+)
+
+@Serializable
+data class GifsResponse(val gifs: List<Gif> = emptyList())
+
+/** Body of `POST /api/channels/:channelId/attachments/gif`. */
+@Serializable
+data class CreateGifAttachmentRequest(
+    val url: String,
+    val width: Int? = null,
+    val height: Int? = null,
+    val title: String? = null,
+)
+
+@Serializable
+data class CreateGifAttachmentResponse(val attachment: Attachment)
 
 @Serializable
 data class MessagesResponse(

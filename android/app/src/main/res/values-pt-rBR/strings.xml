@@ -69,6 +69,22 @@
     <string name="chat_reject_slow_mode">Slow mode tá ligado.</string>
     <string name="chat_reject_generic">Falha ao enviar</string>
     <string name="chat_slow_mode_wait">Slow mode. Espera %1$ds pra mandar de novo.</string>
+    <string name="chat_reply">Responder</string>
+    <string name="chat_replying_to">Respondendo a %1$s</string>
+    <string name="chat_edit">Editar</string>
+    <string name="chat_editing">Editando esta mensagem</string>
+    <string name="chat_edit_save">Salvar</string>
+    <string name="chat_cancel">Cancelar</string>
+    <string name="chat_delete">Apagar</string>
+    <string name="chat_pin">Fixar</string>
+    <string name="chat_unpin">Desafixar</string>
+    <string name="chat_pinned">Fixada</string>
+    <string name="chat_pins">Mensagens fixadas</string>
+    <string name="chat_pins_empty">Nada fixado aqui ainda.</string>
+    <string name="chat_gif">GIF</string>
+    <string name="chat_gif_search">Buscar GIFs</string>
+    <string name="chat_gif_none">Nenhum GIF para isso.</string>
+    <string name="chat_action_failed">Isso não foi</string>
     <string name="chat_day_today">Hoje</string>
     <string name="chat_day_yesterday">Ontem</string>
 
@@ -195,6 +211,33 @@
     <string name="ok">OK</string>
     <string name="invite_failed_title">Esse convite não funcionou</string>
     <string name="error_generic">Algo deu errado.</string>
+
+    <!-- Convites -->
+    <string name="invite_people">Convidar pessoas</string>
+    <string name="invite_sheet_body">Qualquer pessoa com o link entra em %1$s até ele expirar ou você revogar.</string>
+    <string name="invite_create_action">Criar link de convite</string>
+    <string name="invite_none">Nenhum convite ainda. Cria um pra compartilhar esta comunidade.</string>
+    <string name="invite_copy">Copiar link</string>
+    <string name="invite_share">Compartilhar</string>
+    <string name="invite_revoke">Revogar</string>
+    <string name="invite_copied">Copiado</string>
+    <string name="invite_share_subject">Entra em %1$s no pqp</string>
+    <string name="invite_share_text">Entra em %1$s no pqp: %2$s</string>
+    <string name="invite_expiry_never">Não expira</string>
+    <string name="invite_expiry_soon">Expira em menos de uma hora</string>
+    <plurals name="invite_expiry_hours">
+        <item quantity="one">Expira em %1$d hora</item>
+        <item quantity="other">Expira em %1$d horas</item>
+    </plurals>
+    <plurals name="invite_expiry_days">
+        <item quantity="one">Expira em %1$d dia</item>
+        <item quantity="other">Expira em %1$d dias</item>
+    </plurals>
+    <string name="invite_uses_of">%1$d de %2$d usos</string>
+    <plurals name="invite_uses">
+        <item quantity="one">Usado %1$d vez</item>
+        <item quantity="other">Usado %1$d vezes</item>
+    </plurals>
     <string name="error_network">O servidor não respondeu.</string>
 
     <!-- Conversas -->
@@ -330,4 +373,18 @@
     <string name="chance_left">%d no baralho</string>
     <string name="chance_new_deck">Baralho novo · %d no baralho</string>
     <string name="chance_shuffled">Embaralhou · %d no baralho</string>
+
+    <!-- Chamadas na DM -->
+    <string name="call_start">Ligar</string>
+    <string name="call_incoming_title">Chamada recebida</string>
+    <string name="call_incoming_group_title">Chamada de grupo recebida</string>
+    <string name="call_accept">Atender</string>
+    <string name="call_decline">Recusar</string>
+    <string name="call_ignore">Ignorar</string>
+    <string name="call_ringing">Chamando\u2026</string>
+    <string name="call_no_answer">Ningu\u00e9m atendeu</string>
+    <plurals name="call_declined">
+        <item quantity="one">%1$d recusou</item>
+        <item quantity="other">%1$d recusaram</item>
+    </plurals>
 </resources>

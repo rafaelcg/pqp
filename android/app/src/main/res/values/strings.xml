@@ -74,6 +74,22 @@
     <string name="chat_reject_generic">Failed to send</string>
     <string name="chat_slow_mode_wait">Slow mode. You can send again in %1$ds.</string>
     <!-- The row between two calendar days. Older days are formatted dates. -->
+    <string name="chat_reply">Reply</string>
+    <string name="chat_replying_to">Replying to %1$s</string>
+    <string name="chat_edit">Edit</string>
+    <string name="chat_editing">Editing this message</string>
+    <string name="chat_edit_save">Save</string>
+    <string name="chat_cancel">Cancel</string>
+    <string name="chat_delete">Delete</string>
+    <string name="chat_pin">Pin</string>
+    <string name="chat_unpin">Unpin</string>
+    <string name="chat_pinned">Pinned</string>
+    <string name="chat_pins">Pinned messages</string>
+    <string name="chat_pins_empty">Nothing pinned here yet.</string>
+    <string name="chat_gif">GIF</string>
+    <string name="chat_gif_search">Search GIFs</string>
+    <string name="chat_gif_none">No GIFs for that.</string>
+    <string name="chat_action_failed">That did not go through</string>
     <string name="chat_day_today">Today</string>
     <string name="chat_day_yesterday">Yesterday</string>
 
@@ -205,6 +221,33 @@
     <string name="ok">OK</string>
     <string name="invite_failed_title">That invite did not work</string>
     <string name="error_generic">Something went wrong.</string>
+
+    <!-- Invites (the sheet behind "Invite people" on a community row) -->
+    <string name="invite_people">Invite people</string>
+    <string name="invite_sheet_body">Anyone with a link can join %1$s until it expires or you revoke it.</string>
+    <string name="invite_create_action">Make an invite link</string>
+    <string name="invite_none">No invites yet. Make one to share this community.</string>
+    <string name="invite_copy">Copy link</string>
+    <string name="invite_share">Share</string>
+    <string name="invite_revoke">Revoke</string>
+    <string name="invite_copied">Copied</string>
+    <string name="invite_share_subject">Join %1$s on pqp</string>
+    <string name="invite_share_text">Join %1$s on pqp: %2$s</string>
+    <string name="invite_expiry_never">Never expires</string>
+    <string name="invite_expiry_soon">Expires within the hour</string>
+    <plurals name="invite_expiry_hours">
+        <item quantity="one">Expires in %1$d hour</item>
+        <item quantity="other">Expires in %1$d hours</item>
+    </plurals>
+    <plurals name="invite_expiry_days">
+        <item quantity="one">Expires in %1$d day</item>
+        <item quantity="other">Expires in %1$d days</item>
+    </plurals>
+    <string name="invite_uses_of">%1$d of %2$d uses</string>
+    <plurals name="invite_uses">
+        <item quantity="one">Used %1$d time</item>
+        <item quantity="other">Used %1$d times</item>
+    </plurals>
     <string name="error_network">The server did not answer.</string>
 
     <!-- Conversations -->
@@ -336,4 +379,18 @@
     <string name="chance_left">%d left</string>
     <string name="chance_new_deck">New deck · %d left</string>
     <string name="chance_shuffled">Shuffled · %d left</string>
+
+    <!-- DM calls -->
+    <string name="call_start">Call</string>
+    <string name="call_incoming_title">Incoming call</string>
+    <string name="call_incoming_group_title">Incoming group call</string>
+    <string name="call_accept">Accept</string>
+    <string name="call_decline">Decline</string>
+    <string name="call_ignore">Ignore</string>
+    <string name="call_ringing">Calling\u2026</string>
+    <string name="call_no_answer">No answer</string>
+    <plurals name="call_declined">
+        <item quantity="one">%1$d declined</item>
+        <item quantity="other">%1$d declined</item>
+    </plurals>
 </resources>

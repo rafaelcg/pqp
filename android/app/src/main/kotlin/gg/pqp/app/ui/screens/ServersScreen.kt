@@ -61,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
 import gg.pqp.app.core.ServerSummary
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.invites.ui.InviteSheet
 import gg.pqp.app.reports.ReportDraft
 import gg.pqp.app.reports.ReportTarget
 import gg.pqp.app.reports.ui.ReportSheet
@@ -92,6 +93,7 @@ fun ServersScreen(
     var leaving by remember { mutableStateOf<ServerSummary?>(null) }
     var deleting by remember { mutableStateOf<ServerSummary?>(null) }
     var reporting by remember { mutableStateOf<ServerSummary?>(null) }
+    var inviting by remember { mutableStateOf<ServerSummary?>(null) }
 
     // A refusal is the server's sentence, verbatim. Only it knows whether a
     // delete was refused because the caller is no longer the owner, or a leave
@@ -210,11 +212,20 @@ fun ServersScreen(
                             onLeave = { leaving = server },
                             onDelete = { deleting = server },
                             onReport = { reporting = server },
+                            onInvite = { inviting = server },
                         )
                     }
                 }
             }
         }
+    }
+
+    inviting?.let { server ->
+        InviteSheet(
+            api = session.api,
+            server = server,
+            onDismiss = { inviting = null },
+        )
     }
 
     if (creating) {
@@ -298,6 +309,7 @@ private fun ServerRow(
     onLeave: () -> Unit,
     onDelete: () -> Unit,
     onReport: () -> Unit,
+    onInvite: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val interactions = remember { MutableInteractionSource() }
@@ -384,6 +396,17 @@ private fun ServerRow(
                 )
             }
             DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                // First, because it is the one action here that is not about
+                // getting out. Offered to every role: CREATE_INVITE is in the
+                // default member permission set, and a server that has taken
+                // it away refuses in its own words inside the sheet.
+                DropdownMenuItem(
+                    text = { Text(stringResource(R.string.invite_people)) },
+                    onClick = {
+                        menuOpen = false
+                        onInvite()
+                    },
+                )
                 if (ServerActions.isOwner(server.role)) {
                     DropdownMenuItem(
                         text = { Text(stringResource(R.string.server_delete)) },

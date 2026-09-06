@@ -189,10 +189,6 @@ class WireProtocolTest {
         "permissions-update" to "no permission-gated controls on the phone to refresh",
         // Polls render as their message body; votes and closes are web only.
         "poll-update" to "no poll surface on the phone",
-        // Conversation calls (ringing a DM) are not built on Android.
-        "call-incoming" to "no incoming-call surface on the phone",
-        "call-ring-cancelled" to "no incoming-call surface on the phone",
-        "call-declined" to "Android never rings anybody, so nobody can decline it",
         // Watch party is a desktop feature by design (docs/ANDROID.md).
         "watch-party" to "no watch party on the phone",
     )

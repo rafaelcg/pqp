@@ -12,10 +12,17 @@ import gg.pqp.app.attachments.PendingAttachment
 import gg.pqp.app.attachments.attachmentIdsFor
 import gg.pqp.app.attachments.refuseAttachment
 import gg.pqp.app.core.Attachment
+import gg.pqp.app.core.CreateGifAttachmentRequest
+import gg.pqp.app.core.Gif
 import gg.pqp.app.core.Message
 import gg.pqp.app.core.PqpJson
 import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionStore
+import gg.pqp.app.ui.chat.ChatMarkdown
+import gg.pqp.app.ui.chat.ComposerTarget
+import gg.pqp.app.ui.chat.MentionCandidate
+import gg.pqp.app.ui.chat.MessagePermissions
+import gg.pqp.app.ui.chat.PinnedMessages
 import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -119,6 +126,23 @@ data class ChatState(
     val attachments: List<PendingAttachment> = emptyList(),
     /** The last refusal, for the composer to say out loud. Cleared on the next pick. */
     val attachmentRefusal: AttachmentRefusal? = null,
+    /** New message, a reply to one, or an edit of one. */
+    val composer: ComposerTarget = ComposerTarget.New,
+    /** Newest pin first. Empty until [ChatViewModel.loadPins] has answered. */
+    val pinned: List<Message> = emptyList(),
+    val pinnedLoaded: Boolean = false,
+    /** Whether the caller is owner or admin here. Always false in a conversation. */
+    val canManage: Boolean = false,
+    /** A server channel, as opposed to a conversation, which has no moderators. */
+    val isServerChannel: Boolean = false,
+    /** Who `@` can complete to. Server members; a conversation offers nobody. */
+    val members: List<MentionCandidate> = emptyList(),
+    /** Whether this deployment has a GIF provider key. Off hides the button. */
+    val gifsEnabled: Boolean = false,
+    val gifs: List<Gif> = emptyList(),
+    val gifsLoading: Boolean = false,
+    /** A refused edit, delete or pin, in the server's own words. Cleared when read. */
+    val actionError: String? = null,
 )
 
 /**
@@ -148,6 +172,11 @@ class ChatViewModel(
     private val files: AttachmentFiles? = null,
     /** The channel's slow mode, 0 when off or unknown. See [ChatState.slowmodeSeconds]. */
     slowmodeSeconds: Int = 0,
+    /**
+     * The server this channel belongs to, or null for a conversation. It is
+     * what decides who may delete and pin here, and whose names `@` offers.
+     */
+    private val serverId: String? = null,
 ) : ViewModel() {
 
     private val attachmentApi = AttachmentApi(session.api)
@@ -173,6 +202,204 @@ class ChatViewModel(
         viewModelScope.launch { listen() }
         viewModelScope.launch { followConnection() }
         viewModelScope.launch { loadAttachmentConfig() }
+        viewModelScope.launch { loadGifConfig() }
+        viewModelScope.launch { loadMembers() }
+        _state.value = _state.value.copy(
+            isServerChannel = serverId != null,
+            canManage = MessagePermissions.canManage(
+                session.servers.value.firstOrNull { it.id == serverId }?.role,
+            ),
+        )
+    }
+
+    // --- edit, delete, reply, pin ---
+
+    fun reply(message: Message) {
+        if (message.id in pending) return
+        _state.value = _state.value.copy(composer = ComposerTarget.Reply(message))
+    }
+
+    fun edit(message: Message) {
+        if (message.id in pending) return
+        _state.value = _state.value.copy(composer = ComposerTarget.Edit(message))
+    }
+
+    fun cancelComposerTarget() {
+        _state.value = _state.value.copy(composer = ComposerTarget.New)
+    }
+
+    fun clearActionError() {
+        _state.value = _state.value.copy(actionError = null)
+    }
+
+    private fun refused(failure: Throwable) {
+        _state.value = _state.value.copy(
+            actionError = failure.message?.takeIf { it.isNotBlank() }
+                ?: failure::class.java.simpleName,
+        )
+    }
+
+    /**
+     * Save an edit. Not optimistic: an edit is an HTTP round trip that can be
+     * refused (only the author, and never in a conversation that has since
+     * blocked them), and the old body staying on screen until the server
+     * agrees is the honest picture. The response is the row as it now stands,
+     * applied the same way the `message-update` broadcast will be.
+     */
+    fun saveEdit(body: String): Boolean {
+        val target = _state.value.composer as? ComposerTarget.Edit ?: return false
+        val trimmed = ChatMarkdown.clampNewlines(body).trim()
+        _state.value = _state.value.copy(composer = ComposerTarget.New)
+        if (trimmed.isEmpty() || trimmed == target.message.body) return true
+        viewModelScope.launch {
+            runCatching { session.api.editMessage(target.message.id, trimmed) }
+                .onSuccess { replaceMessage(it) }
+                .onFailure(::refused)
+        }
+        return true
+    }
+
+    /**
+     * Remove a message. Applied on success rather than optimistically: a
+     * delete that is refused and then reappears reads as a haunting, and the
+     * broadcast that follows is a no-op against the local removal.
+     */
+    fun delete(messageId: String) {
+        if (messageId in pending) return
+        viewModelScope.launch {
+            runCatching { session.api.deleteMessage(messageId) }
+                .onSuccess {
+                    _state.value = _state.value.copy(
+                        messages = _state.value.messages.filterNot { it.id == messageId },
+                        pinned = PinnedMessages.remove(_state.value.pinned, messageId),
+                    )
+                }
+                .onFailure(::refused)
+        }
+    }
+
+    fun pin(messageId: String) {
+        if (messageId in pending) return
+        viewModelScope.launch {
+            runCatching { session.api.pinMessage(messageId) }
+                .onSuccess { replaceMessage(it) }
+                .onFailure(::refused)
+        }
+    }
+
+    fun unpin(messageId: String) {
+        viewModelScope.launch {
+            runCatching { session.api.unpinMessage(messageId) }
+                .onSuccess { replaceMessage(it) }
+                .onFailure(::refused)
+        }
+    }
+
+    /** Fetched on demand: the pin sheet is opened far less often than the chat. */
+    fun loadPins() {
+        viewModelScope.launch {
+            runCatching { session.api.pinnedMessages(channelId) }
+                .onSuccess { _state.value = _state.value.copy(pinned = it, pinnedLoaded = true) }
+                .onFailure { _state.value = _state.value.copy(pinnedLoaded = true) }
+        }
+    }
+
+    /** One row changed, whether by us or by the socket: transcript and pins both follow. */
+    private fun replaceMessage(message: Message) {
+        _state.value = _state.value.copy(
+            messages = _state.value.messages.map { if (it.id == message.id) message else it },
+            pinned = PinnedMessages.apply(_state.value.pinned, message),
+        )
+    }
+
+    // --- mentions ---
+
+    /**
+     * Who `@` can complete to. A conversation has no member list endpoint
+     * and offers nobody; the server still resolves a typed `@username` there.
+     */
+    private suspend fun loadMembers() {
+        val id = serverId ?: return
+        runCatching { session.api.serverMembers(id) }
+            .onSuccess { members ->
+                _state.value = _state.value.copy(
+                    members = members.map {
+                        MentionCandidate(
+                            id = it.id,
+                            displayName = it.displayName,
+                            username = it.username,
+                            nickname = it.nickname,
+                            avatarUrl = it.avatarUrl,
+                        )
+                    },
+                )
+            }
+    }
+
+    // --- gifs ---
+
+    private suspend fun loadGifConfig() {
+        val config = runCatching { session.api.gifConfig() }.getOrNull() ?: return
+        _state.value = _state.value.copy(gifsEnabled = config.enabled)
+    }
+
+    private var gifSearch: Job? = null
+
+    /** Trending for an empty query, search otherwise. The previous search is dropped. */
+    fun searchGifs(query: String) {
+        gifSearch?.cancel()
+        _state.value = _state.value.copy(gifsLoading = true)
+        gifSearch = viewModelScope.launch {
+            val trimmed = query.trim()
+            if (trimmed.isNotEmpty()) kotlinx.coroutines.delay(GIF_SEARCH_DEBOUNCE_MS)
+            val result = runCatching {
+                if (trimmed.isEmpty()) session.api.trendingGifs() else session.api.searchGifs(trimmed)
+            }
+            _state.value = _state.value.copy(
+                gifs = result.getOrDefault(_state.value.gifs),
+                gifsLoading = false,
+            )
+        }
+    }
+
+    /**
+     * Stage a picked GIF as an attachment, exactly as the web does
+     * (`stageGif` in `message-composer.tsx`): the chip appears at once with
+     * the preview, and the id lands when the server has minted the row.
+     * Nothing is uploaded, so this works with no `S3_*` configured and is
+     * deliberately not gated on [ChatState.attachmentsEnabled].
+     */
+    fun stageGif(gif: Gif) {
+        val localId = UUID.randomUUID().toString()
+        val chip = PendingAttachment(
+            localId = localId,
+            uri = gif.previewUrl,
+            filename = gif.title.ifBlank { "GIF" },
+            contentType = "image/gif",
+            byteSize = 0,
+        )
+        _state.value = _state.value.copy(
+            attachments = _state.value.attachments + chip,
+            attachmentRefusal = null,
+        )
+        viewModelScope.launch {
+            val minted = runCatching {
+                session.api.createGifAttachment(
+                    channelId,
+                    CreateGifAttachmentRequest(
+                        url = gif.url,
+                        width = gif.width,
+                        height = gif.height,
+                        title = gif.title.takeIf { it.isNotBlank() },
+                    ),
+                )
+            }.getOrNull()
+            _state.value = _state.value.copy(
+                attachments = _state.value.attachments.map {
+                    if (it.localId != localId) it else it.copy(attachmentId = minted?.id, failed = minted == null)
+                },
+            )
+        }
     }
 
     // --- attachments ---
@@ -562,9 +789,7 @@ class ChatViewModel(
     private fun onUpdate(frame: JsonObject) {
         val message = frame.message() ?: return
         if (message.channelId != channelId) return
-        _state.value = _state.value.copy(
-            messages = _state.value.messages.map { if (it.id == message.id) message else it },
-        )
+        replaceMessage(message)
     }
 
     private fun onDelete(frame: JsonObject) {
@@ -572,6 +797,7 @@ class ChatViewModel(
         val id = frame.string("messageId") ?: return
         _state.value = _state.value.copy(
             messages = _state.value.messages.filterNot { it.id == id },
+            pinned = PinnedMessages.remove(_state.value.pinned, id),
         )
     }
 
@@ -693,7 +919,9 @@ class ChatViewModel(
      * frame later so there was nothing left on screen to retry from.
      */
     fun send(body: String, author: gg.pqp.app.core.Me?): Boolean {
-        val trimmed = body.trim()
+        if (_state.value.composer is ComposerTarget.Edit) return saveEdit(body)
+        val trimmed = ChatMarkdown.clampNewlines(body).trim()
+        val replyTo = (_state.value.composer as? ComposerTarget.Reply)?.to
         val attachments = _state.value.attachments
         val attachmentIds = attachmentIdsFor(attachments)
 
@@ -727,6 +955,14 @@ class ChatViewModel(
             authorAvatarUrl = author?.avatarUrl,
             body = trimmed,
             createdAt = java.time.Instant.now().toString(),
+            replyTo = replyTo?.let {
+                gg.pqp.app.core.ReplyRef(
+                    id = it.id,
+                    authorId = it.authorId,
+                    authorName = it.authorName,
+                    excerpt = it.body.take(REPLY_EXCERPT_CHARS),
+                )
+            },
             attachments = attachments.mapNotNull { attachment ->
                 attachment.attachmentId?.let { id ->
                     Attachment(
@@ -741,7 +977,14 @@ class ChatViewModel(
         )
         _state.value = _state.value.copy(messages = _state.value.messages + optimistic)
 
-        if (!session.realtime.sendMessage(channelId, trimmed, nonce, attachmentIds = attachmentIds)) {
+        val left = session.realtime.sendMessage(
+            channelId,
+            trimmed,
+            nonce,
+            replyToId = replyTo?.id,
+            attachmentIds = attachmentIds,
+        )
+        if (!left) {
             // The frame did not leave the phone. `RealtimeClient` is already
             // reconnecting; the row is dropped rather than left looking sent,
             // because a message that silently never arrives is the failure this
@@ -758,6 +1001,7 @@ class ChatViewModel(
             attachmentRefusal = null,
             sendRefusal = null,
             restoredDraft = null,
+            composer = ComposerTarget.New,
         )
         // Slow mode starts counting when the message leaves, the way the web
         // composer does it, so the person sees the wait before the server has
@@ -823,6 +1067,10 @@ class ChatViewModel(
 
     companion object {
         private const val TYPING_TTL_MS = 4_000L
+        private const val GIF_SEARCH_DEBOUNCE_MS = 300L
+
+        /** Only for the optimistic row; the server writes the real excerpt. */
+        private const val REPLY_EXCERPT_CHARS = 80
 
         /**
          * Matches `TYPING_THROTTLE_MS` in the web client. The server's own
@@ -853,10 +1101,11 @@ class ChatViewModel(
             channelId: String,
             files: AttachmentFiles? = null,
             slowmodeSeconds: Int = 0,
+            serverId: String? = null,
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                ChatViewModel(session, channelId, files, slowmodeSeconds) as T
+                ChatViewModel(session, channelId, files, slowmodeSeconds, serverId) as T
         }
     }
 }

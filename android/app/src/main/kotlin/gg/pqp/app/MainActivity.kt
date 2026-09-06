@@ -62,7 +62,12 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             PqpTheme {
-                PqpApp(session = app.session, voice = app.voice, push = app.push)
+                PqpApp(
+                    session = app.session,
+                    voice = app.voice,
+                    push = app.push,
+                    calls = app.calls,
+                )
             }
         }
     }
