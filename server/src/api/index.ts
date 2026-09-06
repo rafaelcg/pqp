@@ -247,6 +247,7 @@ import {
 import { buildServerExport } from "../services/export.js";
 import {
   CommunityListingForbiddenError,
+  CommunityListingNeedsAddressError,
   CommunitySlugError,
   findCommunityIdBySlug,
   getCommunity,
@@ -3190,7 +3191,11 @@ router.get("/api/communities/by-slug/:slug", async ({ user }, { slug }) => {
   if (!serverId) {
     throw new NotFound("Community not found");
   }
-  const community = await getCommunity(user.id, serverId);
+  // ADDRESSED SCOPE, not the directory's. Somebody arriving through
+  // `?join=<slug>` was handed the link; whether the room is also browsable is
+  // beside the point, and answering 404 here would break the whole reason a
+  // community can take an address without opening the directory door.
+  const community = await getCommunity(user.id, serverId, "addressed");
   if (!community) {
     // Listed and unsuspended, but the viewer is banned from it. Same 404 a
     // stranger's unknown slug gets — see rule 3 in services/communities.ts: a
@@ -3227,21 +3232,22 @@ router.get(
  *
  * TWO GATES ON ONE ROUTE, AND THE SPLIT IS THE POINT.
  *
- * `isCommunity` — the directory listing — IS OWNER ONLY, for the reason
- * `retention` and `ssoEmailDomain` are: it makes a private room findable and
- * joinable by strangers who were sent nothing, and it is what attaches the
- * moderation duty in docs/CONTENT_SAFETY.md §Communities to the instance. That
- * is not a thing an admin should be able to do to somebody else's server. It is
- * enforced in `updateCommunitySettings`, under the row lock, so an admin's save
- * cannot undo a listing the owner turned on a millisecond earlier.
+ * `isListed` — the DIRECTORY — IS OWNER ONLY, for the reason `retention` and
+ * `ssoEmailDomain` are: it makes a private room findable and joinable by
+ * strangers who were sent nothing, and it is what attaches the moderation duty
+ * in docs/CONTENT_SAFETY.md §Communities to the instance. That is not a thing an
+ * admin should be able to do to somebody else's server. It is enforced in
+ * `updateCommunitySettings`, under the row lock, so an admin's save cannot undo
+ * a listing the owner turned on a millisecond earlier — nor take it down
+ * sideways by emptying the address underneath it.
  *
  * EVERYTHING ELSE IS MANAGE SERVER, the bit that already renames the server and
- * replaces its icon and banner. The public address is the field that motivated
- * the split: a community's moderators are the people who hand out its link, and
- * a setting only the owner can reach is a setting a 500-member room cannot use
- * on the day it needs to. The address changes no permission and admits nobody
- * on its own — it names a page whose join is the same one an invite already
- * offers, and none of the strangers a listing brings.
+ * replaces its icon and banner. `isCommunity` — the public ADDRESS — is the
+ * field that motivated the split: a community's moderators are the people who
+ * hand out its link, and a setting only the owner can reach is a setting a
+ * 500-member room cannot use on the day it needs to. The address changes no
+ * permission and brings none of the strangers a listing brings; the door behind
+ * it is the one an invite already offers.
  *
  * A SEPARATE ROUTE FROM `PATCH /api/servers/:serverId` on purpose. That route
  * must keep working with the flag off; this one must 404. Folding these fields
@@ -3253,7 +3259,7 @@ router.patch(
   async ({ req, user }, { serverId }) => {
     requireCommunities();
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
-    // Read once, here, and handed to the service so the listing check happens
+    // Read once, here, and handed to the service so the directory check happens
     // under the lock rather than against a value that may already be stale.
     const mayChangeListing =
       (await getMemberRole(serverId!, user.id)) === "owner";
@@ -3318,6 +3324,7 @@ router.patch(
           ...(body.isCommunity !== undefined
             ? { isCommunity: body.isCommunity }
             : {}),
+          ...(body.isListed !== undefined ? { isListed: body.isListed } : {}),
           ...(tagline !== undefined ? { tagline } : {}),
           ...(body.category !== undefined ? { category: body.category } : {}),
           ...(slug !== undefined ? { slug } : {}),
@@ -3332,10 +3339,23 @@ router.patch(
       // address, because nothing about *this* request will be different on a
       // retry; the owner has to supply something.
       // 403 and not 404: the caller may plainly see this panel and edit most
-      // of it, so hiding the field would only make the switch look broken.
+      // of it, so hiding the field would only make the switch look broken. The
+      // two reasons get two sentences, because "you cannot do that" about a
+      // switch the admin never touched is the confusing half.
       if (error instanceof CommunityListingForbiddenError) {
         throw new Forbidden(
-          "Only the owner can list this community in the directory",
+          error.reason === "listing"
+            ? "Only the owner can list this community in the directory"
+            : "This community is in the directory. Only the owner can take it out, so its public address cannot be turned off here.",
+        );
+      }
+      // 409: the request was well formed and lost to the row's state, and a
+      // retry that turns the address on first works. Same family as the slug
+      // collision below.
+      if (error instanceof CommunityListingNeedsAddressError) {
+        throw new HttpError(
+          409,
+          "Turn the public address on before listing this community in the directory",
         );
       }
       if (error instanceof CommunitySlugError) {
@@ -3364,6 +3384,19 @@ router.patch(
               key: "isCommunity",
               old: updated.previous.isCommunity,
               new: updated.settings.isCommunity,
+            },
+          ]
+        : []),
+      // Logged on the EFFECTIVE value rather than on what was asked for: the
+      // listing can move without anybody naming it, when the address is turned
+      // off underneath it. An audit trail that only recorded the field somebody
+      // typed would have no record of the room leaving the directory.
+      ...(updated.previous.isListed !== updated.settings.isListed
+        ? [
+            {
+              key: "isCommunityListed",
+              old: updated.previous.isListed,
+              new: updated.settings.isListed,
             },
           ]
         : []),

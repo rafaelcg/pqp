@@ -20,7 +20,7 @@ import {
  *    language that dress it, is **Manage Server** — the same bit that already
  *    renames the server and replaces its icon. The people who hand out a
  *    community's link are its moderators as often as its owner;
- *  - the DIRECTORY LISTING (`isCommunity`) is **owner only**, because that is
+ *  - the DIRECTORY LISTING (`isListed`) is **owner only**, because that is
  *    the switch that makes the room findable and joinable by strangers who were
  *    sent nothing, and the one that attaches the instance's moderation duty
  *    (docs/CONTENT_SAFETY.md §Communities).
@@ -86,6 +86,7 @@ async function call<T = Record<string, unknown>>(
 interface SettingsBody {
   community: {
     isCommunity: boolean;
+    isListed: boolean;
     slug: string | null;
     tagline: string | null;
     category: string;
@@ -163,12 +164,13 @@ describeDb("community settings permissions", () => {
     );
   });
 
+  /** Both switches on, which is what the old single switch used to mean. */
   async function listedByOwner() {
     const res = await call<SettingsBody>(
       owner,
       "PATCH",
       `/api/servers/${serverId}/community`,
-      { isCommunity: true },
+      { isCommunity: true, isListed: true },
     );
     expect(res.status).toBe(200);
     return res.body.community;
@@ -263,11 +265,16 @@ describeDb("community settings permissions", () => {
 
   describe("the directory listing", () => {
     it("is refused to an admin, and the row does not move", async () => {
+      // The address first, which an admin may do, so the refusal below is
+      // about the directory alone and not about the missing prerequisite.
+      await call(admin, "PATCH", `/api/servers/${serverId}/community`, {
+        isCommunity: true,
+      });
       const refused = await call<{ error?: string }>(
         admin,
         "PATCH",
         `/api/servers/${serverId}/community`,
-        { isCommunity: true, tagline: "abrindo pro mundo" },
+        { isListed: true, tagline: "abrindo pro mundo" },
       );
       expect(refused.status).toBe(403);
 
@@ -276,7 +283,7 @@ describeDb("community settings permissions", () => {
         "GET",
         `/api/servers/${serverId}/community`,
       );
-      expect(after.body.community.isCommunity).toBe(false);
+      expect(after.body.community.isListed).toBe(false);
       // The whole patch rolled back, tagline included: half of a refused write
       // landing is the shape of a bug nobody can see from the panel.
       expect(after.body.community.tagline).toBeNull();
@@ -288,7 +295,7 @@ describeDb("community settings permissions", () => {
         admin,
         "PATCH",
         `/api/servers/${serverId}/community`,
-        { isCommunity: false },
+        { isListed: false },
       );
       expect(refused.status).toBe(403);
       const after = await call<SettingsBody>(
@@ -296,7 +303,29 @@ describeDb("community settings permissions", () => {
         "GET",
         `/api/servers/${serverId}/community`,
       );
+      expect(after.body.community.isListed).toBe(true);
+    });
+
+    it("is refused to an admin emptying the address underneath it", async () => {
+      await listedByOwner();
+      // The sideways route to the same outcome: no address, no listing. The
+      // refusal names it, because "you cannot do that" about a switch the
+      // admin never touched is the confusing half.
+      const refused = await call<{ error?: string }>(
+        admin,
+        "PATCH",
+        `/api/servers/${serverId}/community`,
+        { isCommunity: false },
+      );
+      expect(refused.status).toBe(403);
+      expect(refused.body.error).toMatch(/directory/i);
+      const after = await call<SettingsBody>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/community`,
+      );
       expect(after.body.community.isCommunity).toBe(true);
+      expect(after.body.community.isListed).toBe(true);
     });
 
     it("lets an admin resend the value it already has", async () => {
@@ -308,7 +337,7 @@ describeDb("community settings permissions", () => {
         admin,
         "PATCH",
         `/api/servers/${serverId}/community`,
-        { isCommunity: true, tagline: "mesma coisa" },
+        { isCommunity: true, isListed: true, tagline: "mesma coisa" },
       );
       expect(patched.status).toBe(200);
       expect(patched.body.community.tagline).toBe("mesma coisa");
@@ -316,7 +345,7 @@ describeDb("community settings permissions", () => {
 
     it("is the owner's, both ways", async () => {
       const on = await listedByOwner();
-      expect(on.isCommunity).toBe(true);
+      expect(on.isListed).toBe(true);
       // Derived from the name on the transition into listed.
       expect(on.slug).toBe("moonkase");
 
@@ -324,10 +353,12 @@ describeDb("community settings permissions", () => {
         owner,
         "PATCH",
         `/api/servers/${serverId}/community`,
-        { isCommunity: false },
+        { isListed: false },
       );
       expect(off.status).toBe(200);
-      expect(off.body.community.isCommunity).toBe(false);
+      expect(off.body.community.isListed).toBe(false);
+      // The address survives leaving the directory. That is the split.
+      expect(off.body.community.isCommunity).toBe(true);
       // Unlisting keeps the address on the row, as it always has.
       expect(off.body.community.slug).toBe("moonkase");
     });

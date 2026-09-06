@@ -782,7 +782,13 @@ export const fetchCommunitySettings = (serverId: string) =>
     `/api/servers/${serverId}/community`,
   );
 
-/** Opt in, opt out, or edit the pitch. Owner-only, server-side. */
+/**
+ * Move the two public switches, or edit the pitch.
+ *
+ * `isCommunity` is the public address and needs Manage Server; `isListed` is
+ * the directory and needs the owner. The server enforces both, and refuses
+ * `isListed` on a room with no address rather than turning both on.
+ */
 export const updateCommunitySettings = (
   serverId: string,
   body: UpdateCommunityRequest,

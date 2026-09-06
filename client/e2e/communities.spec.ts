@@ -87,7 +87,7 @@ async function seedCommunity(
   const patched = await fetch(`${API}/api/servers/${server.id}/community`, {
     method: "PATCH",
     headers: headers(OWNER),
-    body: JSON.stringify({ isCommunity: true, category, tagline }),
+    body: JSON.stringify({ isCommunity: true, isListed: true, category, tagline }),
   });
   if (!patched.ok) {
     throw new Error(`could not list ${name}: ${patched.status}`);
@@ -269,7 +269,7 @@ test.describe("Communities", () => {
     ).toBeVisible();
   });
 
-  test("an owner's settings say what listing publicly means", async ({
+  test("an owner's settings offer two switches and say what each one does", async ({
     page,
   }) => {
     await openApp(page);
@@ -277,18 +277,36 @@ test.describe("Communities", () => {
 
     const section = page.locator("[data-community-settings]");
     await expect(section).toBeVisible();
-    // THE COPY IS THE FEATURE. An owner has to be told, before they tick the
-    // box, that the room becomes publicly findable and that anyone can walk in
-    // without an invite and without their approval.
-    await expect(section).toContainText(/publicly|público/i);
+    // THE COPY IS THE FEATURE. An owner has to be told, before they tick
+    // anything, that a link admits people without an invite and that the
+    // directory is the separate step that brings strangers.
+    await expect(section).toContainText(/public address|endereço público/i);
     await expect(section).toContainText(/no invite|sem convite/i);
     // …and that reports about it go past them, to whoever runs the instance.
     await expect(section).toContainText(
       /people who run pqp|quem cuida do pqp/i,
     );
-    await expect(
-      section.getByRole("checkbox", { name: /List this community publicly/i }),
-    ).toBeVisible();
+
+    const address = section.getByRole("checkbox", {
+      name: /Turn on the public address|Ligar o endereço público/i,
+    });
+    const directory = section.getByRole("checkbox", {
+      name: /Show in the pqp directory|Aparecer no diretório/i,
+    });
+    await expect(address).toBeVisible();
+    await expect(directory).toBeVisible();
+
+    // THE DEPENDENCY IS VISIBLE BEFORE IT IS HIT. With no address there is no
+    // page for a directory card to point at, so the second switch is disabled
+    // and says which step is missing rather than refusing a save later.
+    await expect(address).not.toBeChecked();
+    await expect(directory).toBeDisabled();
+    await expect(section).toContainText(
+      /Turn the public address on first|Liga o endereço público primeiro/i,
+    );
+
+    await address.check();
+    await expect(directory).toBeEnabled();
   });
 
   test("the create call to action hands you the make-a-community form", async ({

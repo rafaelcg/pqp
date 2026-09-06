@@ -83,7 +83,7 @@ async function seedCommunity(
   const patched = await fetch(`${API}/api/servers/${server.id}/community`, {
     method: "PATCH",
     headers: headers(OWNER),
-    body: JSON.stringify({ isCommunity: true, category, language, tagline }),
+    body: JSON.stringify({ isCommunity: true, isListed: true, category, language, tagline }),
   });
   if (!patched.ok) {
     throw new Error(`could not list ${name}: ${patched.status}`);

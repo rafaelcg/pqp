@@ -1843,7 +1843,64 @@ ALTER TABLE channels ADD COLUMN IF NOT EXISTS voice_transport TEXT
 -- a public directory of joinable rooms is precisely what moves an instance out
 -- of it. The schema can land ahead of that decision; the routes must not.
 
+-- TWO SWITCHES, NOT ONE, and the pair is the whole of this block.
+--
+-- `is_community` is THE PUBLIC ADDRESS: the server has a page at
+-- `pqp.gg/c/<slug>` that anybody on the internet can read, and anybody holding
+-- that link can walk in with one tap. It is what an owner turns on to hand a
+-- link to an audience they already have.
+--
+-- `is_community_listed` is THE DIRECTORY: on top of the address, the room is
+-- browsable and searchable by every signed-in account, so strangers who were
+-- sent nothing can find it. That is the half with the legal weight — it is what
+-- moves the instance into "platform hosting public content" — and it is the
+-- half only the owner can flip.
+--
+-- Listing implies an address: the CHECK below refuses `is_community_listed`
+-- without `is_community`, because a directory card whose share button leads
+-- nowhere is not a listing anybody can act on.
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS is_community BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- ONE-SHOT, AND IT MUST STAY ONE-SHOT. Every community that was listed before
+-- this column existed was listed under the old single switch, so it keeps both
+-- halves and nothing about it changes: same directory card, same address, same
+-- links.
+--
+-- The backfill runs INSIDE the "column did not exist" branch, unlike the slug
+-- backfill further down which is idempotent by its own NULL predicate. A
+-- standalone `UPDATE ... WHERE is_community AND NOT is_community_listed` would
+-- look equivalent and would re-list, on every boot, every community whose owner
+-- had deliberately turned the directory off — silently undoing the one decision
+-- this whole change exists to give them.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+     WHERE table_schema = current_schema()
+       AND table_name = 'servers'
+       AND column_name = 'is_community_listed'
+  ) THEN
+    ALTER TABLE servers
+      ADD COLUMN is_community_listed BOOLEAN NOT NULL DEFAULT FALSE;
+    UPDATE servers SET is_community_listed = TRUE WHERE is_community;
+    RAISE NOTICE 'pqp: carried % listing(s) onto is_community_listed',
+      (SELECT COUNT(*) FROM servers WHERE is_community_listed);
+  END IF;
+END $$;
+
+-- A listing with no public address is not reachable from its own card, and an
+-- address it could not hold is how a directory grows dead links. Wrapped like
+-- every other CHECK here so a boot against a database that somehow holds such a
+-- row cannot abort the rest of the schema.
+DO $$
+BEGIN
+  ALTER TABLE servers DROP CONSTRAINT IF EXISTS servers_community_listed_needs_address;
+  ALTER TABLE servers
+    ADD CONSTRAINT servers_community_listed_needs_address
+    CHECK (NOT is_community_listed OR is_community);
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
 
 -- One line, owner-written. NULL is legal and common — half of Orkut's own
 -- directory was a name and nothing else, and a card falls back to the name.
@@ -1912,9 +1969,11 @@ END $$;
 -- asking the owner nicely, and "Mate Um Negro, Ganhe Um Brinde" is what the
 -- owner does with that remedy.
 --
--- Suspending UNLISTS, it does not delete. The server, its members and its
+-- Suspending TAKES BOTH SWITCHES DOWN — the directory card and the public page
+-- at `pqp.gg/c/<slug>` — and it deletes nothing. The server, its members and its
 -- messages carry on exactly as a private server would; what stops is being
--- findable by strangers and joinable without an invite. That asymmetry is
+-- findable by strangers and joinable without an invite. An operator never has to
+-- reason about which of the two an owner had turned on. That asymmetry is
 -- deliberate — pulling a listing is a reversible, low-evidence act an operator
 -- should be willing to take within the hour, and deleting a room full of people
 -- is not. See docs/CONTENT_SAFETY.md for the runbook and the exact SQL.
@@ -1995,9 +2054,16 @@ END $$;
 -- so keyset pagination over (member_count, id) is a total order — without it two
 -- communities of equal size can swap places between pages and one of them is
 -- never shown.
+--
+-- DROPPED AND REBUILT rather than left to `IF NOT EXISTS`, because the predicate
+-- moved from `is_community` to `is_community_listed` when the address and the
+-- listing became two switches, and `CREATE INDEX IF NOT EXISTS` on an existing
+-- name is a no-op that would leave the old partial set in place — an index that
+-- silently stops covering the query it exists for.
+DROP INDEX IF EXISTS idx_servers_community_directory;
 CREATE INDEX IF NOT EXISTS idx_servers_community_directory
   ON servers (community_category, member_count DESC, id DESC)
-  WHERE is_community AND NOT is_community_suspended;
+  WHERE is_community_listed AND NOT is_community_suspended;
 
 -- Name/tagline search is a plain ILIKE with no index behind it, and that is a
 -- considered choice rather than an oversight: it scans only the partial set
@@ -2447,14 +2513,14 @@ END $$;
 -- anything. `updateCommunitySettings` attempts the write and converts the 23505
 -- into a refusal naming the `slug` field; this index is what decides who won.
 --
--- PARTIAL ON `is_community`, which is a narrower predicate than "not null" and
--- the difference matters. Unlisting a community deliberately LEAVES its slug on
--- the row — the same way it leaves the tagline and the category, so relisting a
--- week later needs no retyping — and an unlisted row must not go on holding a
--- public address against everybody else. So the constraint is "no two LISTED
--- communities share an address", which is the only sentence that is actually
--- true of the URL space, and an unlisted holder loses the race to a live
--- claimant rather than squatting from a room nobody can see.
+-- PARTIAL ON `is_community`, which is the ADDRESS switch and not the directory
+-- one. That is exactly the right predicate now that the two are separate: the
+-- rows that hold a URL are the rows that answer at one, so the constraint reads
+-- "no two ADDRESSED communities share an address". A community that leaves the
+-- directory keeps both its page and its claim on the name, which is the entire
+-- point of splitting the switches; a server that turns the address off keeps the
+-- slug on the row for a later change of mind, and stops holding it against a
+-- live claimant.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_servers_community_slug
   ON servers (community_slug)
   WHERE is_community AND community_slug IS NOT NULL;

@@ -526,10 +526,25 @@ need.
 > **Status as shipped: `COMMUNITIES_ENABLED` is unset, so there is no directory,
 > no server can be listed, and every route below answers 404.**
 
-A *community* is an ordinary server whose owner has ticked one box. Ticking it
-puts the server in a directory any signed-in account can search and browse, and
-lets anyone who finds it join with one tap — no invite, no approval. Nothing
-else about the server changes: the same channels, the same roles, the same bans.
+A *community* is an ordinary server with two public switches, and they are two
+because they are two different decisions.
+
+| Switch | Column | Who | What it does |
+|---|---|---|---|
+| **Public address** | `is_community` | Manage Server | The server gets a page at `pqp.gg/c/<slug>` that anybody on the internet can read, and anybody holding that link can join with one tap, no invite and no approval. It is **not** findable: nobody reaches it without being sent the link. |
+| **Directory** | `is_community_listed` | **owner only** | On top of the address, the room is browsable and searchable by every signed-in account. Strangers who were sent nothing can find it and walk in. |
+
+The directory needs an address (a CHECK enforces it), and turning the address off
+takes the listing down with it. Nothing else about the server changes under
+either: the same channels, the same roles, the same bans.
+
+**The section below is about the directory.** It is the switch that moves the
+instance out of Art. 19's shelter, because it is the one that makes rooms
+*findable by strangers*, and it is why that switch stayed with the owner when the
+address moved to Manage Server. A public page somebody has to be sent is closer
+to an invite link than to a directory; that is the reason for the split, not a
+claim that the page carries no duty at all. Reports about **either** go to the
+instance queue, and the operator's kill switch takes both down at once.
 
 ### Why this section is in the content-safety document and not in a feature guide
 
@@ -580,13 +595,13 @@ failure mode reproduced with better latency.
 | Affordance | Where |
 |---|---|
 | Every directory read requires auth | the router's own gate; there is no anonymous browsing, so the 18+ gate cannot be routed around |
-| The one public page — `pqp.gg/c/<slug>` — is a **poster, not a window** | `publicCommunitySchema`: name, address, tagline, category, member **count**, the two pictures, a month. No member list, no messages, no channels, no owner, no id |
+| The one public page — `pqp.gg/c/<slug>` — is a **poster, not a window**, and it exists for an addressed community whether or not it is listed | `publicCommunitySchema`: name, address, tagline, category, member **count**, the two pictures, a month. No member list, no messages, no channels, no owner, no id |
 | A server you are banned from is **invisible**, not merely un-joinable | `LISTED_SQL` in `server/src/services/communities.ts` — grid, search and direct-id lookup alike |
 | Report a whole community from its card | `subjectType: "server"` on `POST /api/reports` |
 | Community reports go to the **instance** queue, never to that community's owner | `resolveServerSubject` writes `context_kind = 'none'` and a NULL `server_id`; the subject lives in `reported_server_id` |
 | The operator can pull a listing over the owner's head | `servers.is_community_suspended` — see below |
 | The opt-in is audited | `server.community_update`; directory joins are `member.community_join` |
-| **Listing is the owner's; the public address is Manage Server** | `PATCH /api/servers/:id/community` runs `requirePermission(MANAGE_SERVER)`, and `updateCommunitySettings` refuses a *change* to `is_community` from anyone but the owner, under the row lock. An admin can set `pqp.gg/c/<slug>` and write the pitch; only the owner can put the room in the directory |
+| **Listing is the owner's; the public address is Manage Server** | `PATCH /api/servers/:id/community` runs `requirePermission(MANAGE_SERVER)`, and `updateCommunitySettings` refuses a *change* to `is_community_listed` from anyone but the owner, under the row lock — including the sideways one, an admin emptying the address underneath a live listing. An admin can set `pqp.gg/c/<slug>` and write the pitch; only the owner can put the room in the directory |
 
 The routing rule is the one worth restating: **a community owner must never be
 able to read or close a report about their own community.** `listServerReports`
@@ -607,8 +622,9 @@ findable and being joinable without an invite. That asymmetry is the point:
 pulling a listing is a reversible, low-evidence act you should be willing to take
 within the hour, and deleting a room full of people is not.
 
-**It also takes the public page down**, which is the half that matters most for
-a report that arrived from outside the instance: `pqp.gg/c/<slug>` answers the
+**It also takes the public page down** — both switches, in one UPDATE, so an
+operator never has to work out which of the two an owner had turned on. That is
+the half that matters most for a report that arrived from outside the instance: `pqp.gg/c/<slug>` answers the
 byte-identical 404 an unknown slug gets, so a link already circulating stops
 resolving and nobody can read the suspension off the response. The address stays
 on the row — an owner who is later cleared keeps the URL that is in screenshots
@@ -754,7 +770,8 @@ it as one.
 
 | Column | |
 |---|---|
-| `is_community` | The owner's opt-in, and **only** the owner's — an admin holding Manage Server may edit the address and the pitch, never this. False for every server until the owner ticks the box. |
+| `is_community` | **The public address.** The room answers at `pqp.gg/c/<slug>` and admits whoever holds the link. Manage Server sets it. False for every server until somebody ticks the box. |
+| `is_community_listed` | **The directory**, and **only** the owner's. Requires `is_community` (CHECK), and goes down with it. Backfilled to `is_community` once, when the column was added, so every community listed before the split kept both halves. |
 | `community_tagline` | One line, ≤140 chars, written by anyone with Manage Server. Null is normal. |
 | `community_category` | One of the ten slugs in `COMMUNITY_CATEGORIES`; `geral` is the default and the catch-all. |
 | `is_community_suspended` | **The operator's kill switch.** Set by SQL only — no route, no role, no setting writes it. Unlists without deleting anything. |

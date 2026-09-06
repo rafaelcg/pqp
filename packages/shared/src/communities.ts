@@ -348,7 +348,35 @@ export function communitySlugFromPath(pathname: string): string | null {
  * accepting and dropping them on a deployment where communities do not exist.
  */
 export const updateCommunitySchema = z.object({
+  /**
+   * THE PUBLIC ADDRESS, and since the split it is only that: the server gets a
+   * page at `pqp.gg/c/<slug>` that anybody can read and anybody holding the
+   * link can join with one tap. It does NOT put the room in the directory.
+   *
+   * The wire name is unchanged even though its meaning narrowed, because
+   * `servers.isCommunity` is what every client already reads to mean "this room
+   * is public" — Baú, depoimentos, the voice transport pin — and every one of
+   * those is still true of an addressed community. Renaming it would have
+   * touched three clients to say the same thing.
+   *
+   * Manage Server may set it. See `isListed` for the half that may not.
+   */
   isCommunity: z.boolean().optional(),
+  /**
+   * THE DIRECTORY, and the owner's alone.
+   *
+   * Turning it on requires an address — the request is refused rather than
+   * quietly turning both on, because "list us" and "publish a page about us"
+   * are different sentences and a switch that flips a second switch is how
+   * somebody ends up published without having said so. The panel keeps this
+   * control disabled until the address is on, so a client that has to ask has
+   * skipped a step.
+   *
+   * Turning the ADDRESS off takes the listing with it, and that direction is
+   * NOT refused: a listing whose card leads to a dead link is worse than one
+   * that quietly went away, and the owner asked for the public half to stop.
+   */
+  isListed: z.boolean().optional(),
   /**
    * Explicit `null` clears the tagline; absent means "not changing". A
    * community may be listed with no tagline — the card falls back to the
@@ -449,9 +477,24 @@ export const communityPageSchema = z.object({
 });
 export type CommunityPage = z.infer<typeof communityPageSchema>;
 
-/** What the owner's settings panel reads back for its own server. */
+/**
+ * What the settings panel reads back for its own server.
+ *
+ * `isCommunity` is the public address; `isListed` is the directory. See
+ * `updateCommunitySchema` for which of the two each role may move.
+ */
 export const communitySettingsSchema = z.object({
   isCommunity: z.boolean(),
+  /**
+   * Whether the community is in the directory.
+   *
+   * DEFAULTED TO THE ADDRESS rather than to `false`, through the object-level
+   * transform below, and that default is the compatibility story: a server
+   * built before the split answers with `isCommunity` alone, and on that server
+   * an addressed community IS a listed one. Defaulting to `false` would show a
+   * panel claiming a live listing had been taken down.
+   */
+  isListed: z.boolean().optional(),
   /** Null until the first successful opt-in derives or the owner picks one. */
   slug: z.string().nullable().default(null),
   tagline: z.string().nullable(),
@@ -463,7 +506,10 @@ export const communitySettingsSchema = z.object({
    * `docs/CONTENT_SAFETY.md` — an operator pulls a listing with one UPDATE.
    */
   suspended: z.boolean(),
-});
+}).transform((settings) => ({
+  ...settings,
+  isListed: settings.isListed ?? settings.isCommunity,
+}));
 export type CommunitySettings = z.infer<typeof communitySettingsSchema>;
 
 /** Whether this deployment has the directory at all. */
