@@ -69,6 +69,22 @@
     <string name="chat_reject_slow_mode">Slow mode tá ligado.</string>
     <string name="chat_reject_generic">Falha ao enviar</string>
     <string name="chat_slow_mode_wait">Slow mode. Espera %1$ds pra mandar de novo.</string>
+    <string name="chat_reply">Responder</string>
+    <string name="chat_replying_to">Respondendo a %1$s</string>
+    <string name="chat_edit">Editar</string>
+    <string name="chat_editing">Editando esta mensagem</string>
+    <string name="chat_edit_save">Salvar</string>
+    <string name="chat_cancel">Cancelar</string>
+    <string name="chat_delete">Apagar</string>
+    <string name="chat_pin">Fixar</string>
+    <string name="chat_unpin">Desafixar</string>
+    <string name="chat_pinned">Fixada</string>
+    <string name="chat_pins">Mensagens fixadas</string>
+    <string name="chat_pins_empty">Nada fixado aqui ainda.</string>
+    <string name="chat_gif">GIF</string>
+    <string name="chat_gif_search">Buscar GIFs</string>
+    <string name="chat_gif_none">Nenhum GIF para isso.</string>
+    <string name="chat_action_failed">Isso não foi</string>
     <string name="chat_day_today">Hoje</string>
     <string name="chat_day_yesterday">Ontem</string>
 

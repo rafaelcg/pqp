@@ -247,6 +247,65 @@ data class ChancePayload(
 )
 
 @Serializable
+data class MessageResponse(val message: Message)
+
+/** Body of `PATCH /api/messages/:messageId`. */
+@Serializable
+data class EditMessageRequest(val body: String)
+
+/**
+ * One row of `GET /api/servers/:serverId/members`, as much of it as the
+ * mention picker needs. `username` is nullable on the wire and a member
+ * without one cannot be mentioned at all: the wire format is `@username`.
+ */
+@Serializable
+data class ServerMember(
+    val id: String,
+    val displayName: String,
+    val username: String? = null,
+    val nickname: String? = null,
+    val avatarUrl: String? = null,
+    val role: String? = null,
+)
+
+@Serializable
+data class MembersResponse(val members: List<ServerMember> = emptyList())
+
+// --- gifs ---
+
+/** `GET /api/gifs/config`: absent or failing reads as off, like attachments. */
+@Serializable
+data class GifConfig(val enabled: Boolean = false)
+
+/** `gifSchema` in `packages/shared/src/gifs.ts`. */
+@Serializable
+data class Gif(
+    val id: String,
+    /** What the attachment is minted from; must be on the shared host allowlist. */
+    val url: String,
+    val previewUrl: String,
+    val previewStillUrl: String? = null,
+    val width: Int,
+    val height: Int,
+    val title: String = "",
+)
+
+@Serializable
+data class GifsResponse(val gifs: List<Gif> = emptyList())
+
+/** Body of `POST /api/channels/:channelId/attachments/gif`. */
+@Serializable
+data class CreateGifAttachmentRequest(
+    val url: String,
+    val width: Int? = null,
+    val height: Int? = null,
+    val title: String? = null,
+)
+
+@Serializable
+data class CreateGifAttachmentResponse(val attachment: Attachment)
+
+@Serializable
 data class MessagesResponse(
     val messages: List<Message> = emptyList(),
     val hasMore: Boolean = false,

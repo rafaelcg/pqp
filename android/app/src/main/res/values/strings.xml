@@ -74,6 +74,22 @@
     <string name="chat_reject_generic">Failed to send</string>
     <string name="chat_slow_mode_wait">Slow mode. You can send again in %1$ds.</string>
     <!-- The row between two calendar days. Older days are formatted dates. -->
+    <string name="chat_reply">Reply</string>
+    <string name="chat_replying_to">Replying to %1$s</string>
+    <string name="chat_edit">Edit</string>
+    <string name="chat_editing">Editing this message</string>
+    <string name="chat_edit_save">Save</string>
+    <string name="chat_cancel">Cancel</string>
+    <string name="chat_delete">Delete</string>
+    <string name="chat_pin">Pin</string>
+    <string name="chat_unpin">Unpin</string>
+    <string name="chat_pinned">Pinned</string>
+    <string name="chat_pins">Pinned messages</string>
+    <string name="chat_pins_empty">Nothing pinned here yet.</string>
+    <string name="chat_gif">GIF</string>
+    <string name="chat_gif_search">Search GIFs</string>
+    <string name="chat_gif_none">No GIFs for that.</string>
+    <string name="chat_action_failed">That did not go through</string>
     <string name="chat_day_today">Today</string>
     <string name="chat_day_yesterday">Yesterday</string>
 

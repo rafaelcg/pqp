@@ -113,6 +113,57 @@ class ApiClient(
         },
     )
 
+    /** `GET /api/channels/:channelId/pins`, newest pin first. */
+    suspend fun pinnedMessages(channelId: String): List<Message> =
+        get<MessagesResponse>("/api/channels/$channelId/pins").messages
+
+    /**
+     * `PATCH /api/messages/:messageId`. Author only; the server answers with
+     * the row as it now stands and broadcasts the same `message-update`.
+     */
+    suspend fun editMessage(messageId: String, body: String): Message {
+        val json = json.encodeToString(EditMessageRequest.serializer(), EditMessageRequest(body))
+        return patch<MessageResponse>("/api/messages/$messageId", json).message
+    }
+
+    /**
+     * `DELETE /api/messages/:messageId`. The author, or a member with
+     * MANAGE_MESSAGES in a server channel. The body is `{"ok": true}` and
+     * nothing reads it.
+     */
+    suspend fun deleteMessage(messageId: String) {
+        execute(Request.Builder().url(url("/api/messages/$messageId")).delete()).close()
+    }
+
+    suspend fun pinMessage(messageId: String): Message =
+        post<MessageResponse>("/api/messages/$messageId/pin", "{}").message
+
+    suspend fun unpinMessage(messageId: String): Message =
+        decode<MessageResponse>(
+            execute(Request.Builder().url(url("/api/messages/$messageId/pin")).delete()),
+        ).message
+
+    suspend fun serverMembers(serverId: String): List<ServerMember> =
+        get<MembersResponse>("/api/servers/$serverId/members").members
+
+    suspend fun gifConfig(): GifConfig = get("/api/gifs/config")
+
+    suspend fun searchGifs(query: String): List<Gif> =
+        get<GifsResponse>("/api/gifs/search", mapOf("q" to query)).gifs
+
+    suspend fun trendingGifs(): List<Gif> =
+        get<GifsResponse>("/api/gifs/trending").gifs
+
+    /**
+     * Stage a picked GIF as an attachment. Nothing is uploaded, the bytes stay
+     * with the provider, so this works on a deployment with no `S3_*` at all.
+     * The server re-checks the host against the shared allowlist.
+     */
+    suspend fun createGifAttachment(channelId: String, request: CreateGifAttachmentRequest): Attachment {
+        val body = json.encodeToString(CreateGifAttachmentRequest.serializer(), request)
+        return post<CreateGifAttachmentResponse>("/api/channels/$channelId/attachments/gif", body).attachment
+    }
+
     /**
      * Redeem an invite code and answer with the server it let us into.
      *
@@ -199,6 +250,13 @@ class ApiClient(
         val url = url(path, query)
         val response = execute(Request.Builder().url(url).get())
         return decode(response)
+    }
+
+    private suspend inline fun <reified T> patch(path: String, body: String): T {
+        val request = Request.Builder()
+            .url(url(path))
+            .patch(body.toRequestBody(JSON_MEDIA_TYPE))
+        return decode(execute(request))
     }
 
     private suspend inline fun <reified T> post(path: String, body: String): T {

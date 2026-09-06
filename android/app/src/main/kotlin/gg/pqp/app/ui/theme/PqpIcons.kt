@@ -238,6 +238,12 @@ private object Lucide {
         "M3 16h3a2 2 0 0 1 2 2v3",
         "M16 21v-3a2 2 0 0 1 2-2h3",
     )
+    val imagePlay by lucide(
+        "m11 16-5 5",
+        "M11 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v6",
+        "M15.765 22a.5.5 0 0 1-.765-.424V13.38a.5.5 0 0 1 .765-.424l5.878 3.674a1 1 0 0 1 0 1.696z",
+        "M11 9a2 2 0 1 1-4 0 2 2 0 0 1 4 0",
+    )
     val paperclip by lucide(
         "m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551",
     )
@@ -252,6 +258,16 @@ private object Lucide {
     )
     val phone by lucide(
         "M13.832 16.568a1 1 0 0 0 1.213-.303l.355-.465A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.468.351a1 1 0 0 0-.292 1.233 14 14 0 0 0 6.392 6.384",
+    )
+    val pin by lucide(
+        "M12 17v5",
+        "M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z",
+    )
+    val pinOff by lucide(
+        "M12 17v5",
+        "M15 9.34V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H7.89",
+        "m2 2 20 20",
+        "M9 9v1.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h11",
     )
     val play by lucide(
         // Lucide draws this as `<polygon points="6 3 20 12 6 21 6 3"/>`.
@@ -268,6 +284,10 @@ private object Lucide {
         "M21 3v5h-5",
         "M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16",
         "M8 16H3v5",
+    )
+    val reply by lucide(
+        "M9 17 4 12 9 7",
+        "M20 18v-2a4 4 0 0 0-4-4H4",
     )
     val screenShareOff by lucide(
         "M13 3H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-3",
@@ -394,6 +414,13 @@ object PqpIcons {
 
     val Messages get() = Lucide.messageCircle
     val Send get() = Lucide.send
+
+    /** Answer one message in particular; the quoted parent goes with it. */
+    val Reply get() = Lucide.reply
+    val Pin get() = Lucide.pin
+    val Unpin get() = Lucide.pinOff
+    /** The GIF picker. A picture that plays, which is what a GIF is. */
+    val Gif get() = Lucide.imagePlay
 
     /** The Baú: a server's chest of posts that stay. A box, not a feed icon. */
     val Bau get() = Lucide.archive
