@@ -154,6 +154,22 @@ describe("ChannelList voice occupants", () => {
     );
   });
 
+  it("does not let you drag a seat that is already moving", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        currentUserId={andre.userId}
+        canMoveIn={() => true}
+        pendingMoveUserIds={[rafa.userId]}
+      />,
+    );
+    expect(html).toMatch(
+      new RegExp(
+        `data-voice-occupant="${rafa.userId}"[^>]*data-voice-occupant-draggable="false"`,
+      ),
+    );
+  });
+
   it("lets staff drag someone else when Move Members is on that channel", () => {
     const html = renderList(
       <ChannelList
