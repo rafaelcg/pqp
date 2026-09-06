@@ -79,6 +79,13 @@ import kotlinx.serialization.Serializable
      * record, and a countdown that is missing is only a refusal away.
      */
     val slowmodeSeconds: Int = 0,
+    /**
+     * Null for a channel whose server is not known (a notification tap
+     * carries only ids). The chat then behaves as a plain member there:
+     * nothing is offered that only a moderator could do, and `@` offers no
+     * names. It cannot be wrong, only quieter.
+     */
+    val serverId: String? = null,
 )
 
 @Serializable object YouRoute
@@ -248,7 +255,14 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController, push: Pus
                         serverName = route.serverName,
                         onBack = nav::popBackStack,
                         onOpenChannel = { channel ->
-                            nav.navigate(ChatRoute(channel.id, channel.name, channel.slowmodeSeconds))
+                            nav.navigate(
+                                ChatRoute(
+                                    channel.id,
+                                    channel.name,
+                                    channel.slowmodeSeconds,
+                                    serverId = route.serverId,
+                                ),
+                            )
                         },
                         onOpenBau = {
                             nav.navigate(BauRoute(route.serverId, route.serverName))
@@ -272,6 +286,7 @@ private fun SignedInNav(session: SessionStore, voice: VoiceController, push: Pus
                         channelName = route.channelName,
                         slowmodeSeconds = route.slowmodeSeconds,
                         onBack = nav::popBackStack,
+                        serverId = route.serverId,
                     )
                 }
                 composable<YouRoute> {

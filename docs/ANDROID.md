@@ -1020,6 +1020,83 @@ to sit un-acknowledged for as long as it takes to long-press it.
 **Not verified:** that guard, and the server's cap on how many distinct emoji
 one message may carry.
 
+## Chat basics: markdown, edit, delete, reply, pins, mentions, GIFs
+
+The gap this closes is the one `docs/PARITY.md` ranked ninth: the transcript
+could send, receive, react and report, and could do nothing else the web has
+been doing since the first month.
+
+**Markdown is parsed here, not by a library.** `ui/chat/ChatMarkdown.kt` reads
+a body into blocks and styled runs; `ui/chat/MessageBody.kt` draws them. No
+markdown dependency was added, and that is deliberate: chat markdown is
+Discord-shaped rather than CommonMark-shaped, so every general-purpose parser
+would have to be *disabled* into the right shape. `# announcement` is a
+sentence, a single newline is a line break rather than a space, and a blank
+line survives. A CommonMark renderer gets all three wrong by default, which is
+exactly what `client/src/lib/chat-markdown.ts` spends its length undoing.
+
+The vocabulary is the web's: `**bold**`, `*italic*`, `_italic_`,
+`~~strike~~`, `` `code` ``, ``` fences, `> quotes`, links (bare and
+labelled) and `@mentions`. Headings, indented code, HTML and `---` rules stay
+literal, which is the same set `remarkDisableChatBlocks` turns off. Keeping the
+parser out of Compose is what makes it testable: `ChatMarkdownTest` is 20 cases
+over strings, no device and no screenshot.
+
+**A mention is marked when the server would resolve it**, not when it looks
+tidy. `MENTION_PATTERN` in `packages/shared/src/api.ts` has no word boundary,
+so `me@example.com` really does notify an account called `example` if one
+exists, and the renderer marks it for that reason. The *picker* is stricter and
+refuses an `@` mid-word, because that is a different question: what to offer
+while somebody types, not what they typed. `ChatMarkdownTest` reads the shared
+pattern off disk and fails when the copy drifts.
+
+**Edit, delete and pin are HTTP, not socket frames.** There is no
+`message-edit` on this wire: it is `PATCH /api/messages/:id`,
+`DELETE /api/messages/:id` and `POST` / `DELETE /api/messages/:id/pin`, and the
+socket's only part is relaying the `message-update` (or `message-delete`) that
+follows. `ChatActionsApiTest` pins the verb and the path of each against a real
+socket, because a wrong one is a 404 the view model catches and turns into a
+dialog: nothing crashes, and nothing works.
+
+None of the three is optimistic, unlike a reaction. A reaction is a pill that
+has to move under the finger; an edit that reverts a second later, or a deleted
+message that comes back, reads as a haunting. The local state changes when the
+server has agreed, and the broadcast that follows is then a no-op.
+
+**Who is offered what** is `ui/chat/MessageActions.kt`, restating the server's
+own rules so the sheet cannot show a row that always 403s. Only an author
+edits, ever, including a moderator looking at somebody else's words. An author
+deletes their own anywhere; a moderator deletes anyone's *in a server channel*.
+A conversation has no moderators at all, so `serverId` being null is an answer
+rather than a missing lookup, and anybody in one may pin. This is the shape iOS
+got wrong in both directions at once, which is why `canManageMessages` lives in
+shared; `MessageActionsTest` reads it off disk.
+
+The screen learns which server it is in from `ChatRoute.serverId`. A chat
+opened by a notification tap carries ids and no membership, so it behaves as a
+plain member there and `@` offers no names: quieter than it could be, never
+wrong.
+
+**Replying and editing share the composer**, because a phone has nowhere else
+to put them. A strip above the box says which of the two is happening and
+offers a way out; cancelling an edit puts back whatever draft was in the box
+before it started. The send button becomes a tick while editing, since an edit
+changes a message rather than adding one.
+
+**The GIF picker** goes through `/api/gifs/config`, `/search` and `/trending`,
+so the provider is whatever the API is configured with (Klipy today) and no
+provider key is ever on the phone. A picked GIF is *staged as an attachment*
+(`POST /api/channels/:id/attachments/gif`) exactly as the web does it: nothing
+is uploaded, the bytes stay with the provider, and the message can therefore
+carry a caption and be edited afterwards. The button is gated on the GIF key
+alone and not on `attachmentsEnabled`: a deployment with no `S3_*` at all can
+still send a GIF.
+
+**Not verified on a device or an emulator.** This is compiled, and the pure
+parts are covered by 59 new JVM tests, but nobody has watched a pin sheet open
+on a phone. Two emulators and a web client would settle it in ten minutes,
+which is what the reactions work above cost and what it found.
+
 ## Direct messages and the friends list
 
 Three peer destinations behind a bottom `NavigationBar`: **Servers**, with the
@@ -1728,9 +1805,14 @@ project exists and the server has no FCM leg. **Do not write "Android push
 works"** until a real device has received a real message from a real server.
 
 There are JVM unit tests over the pure parts worth pinning: the capture sizing
-arithmetic, the stats parsing, deep-link parsing and push presentation. There
+arithmetic, the stats parsing, deep-link parsing, push presentation, the chat
+markdown grammar and who may edit, delete or pin. There
 are still **no instrumented tests**, and nothing proves a new `stringResource`
 has a Portuguese counterpart.
+
+Built, unit-tested and **not yet exercised on a device**: chat markdown, edit,
+delete, reply, the pinned list, mention autocomplete and the GIF picker. See
+**Chat basics** above for what each one is and what would settle it.
 
 Built and **verified against a live local server**: personal data export and
 in-app account deletion, including the 409 that lists the communities blocking
@@ -1740,8 +1822,8 @@ about it that are not proven, are in **Your data** above.
 ### Media in a message
 
 This is about **rendering**. Sending is its own section (**Attachments**
-above) and is built for files; there is still no GIF picker on Android, so a
-picker GIF is always one somebody sent from the web or the iOS client.
+above) for files, and **Chat basics** for the GIF picker, which now exists here
+too: a picker GIF may have come from any of the three clients.
 
 - **GIFs animate.** They did not before `coil-gif` was added, and nothing said
   so: Coil decodes a still image with no help, so an `ImageLoader` with no
