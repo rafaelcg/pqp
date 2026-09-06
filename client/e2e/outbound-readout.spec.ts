@@ -139,6 +139,7 @@ test("the in-call readout reports the camera that is actually on the wire", asyn
     await joinVoice(watcher.page);
 
     await page
+      .getByRole("main")
       .getByRole("button", { name: "Turn camera on", exact: true })
       .click({ timeout: 15_000 });
     await expect(watcher.page.getByLabel(/camera$/)).toBeVisible({
