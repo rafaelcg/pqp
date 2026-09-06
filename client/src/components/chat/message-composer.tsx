@@ -47,6 +47,7 @@ import { EmojiPickerPanel } from "@/components/chat/emoji-picker";
 import { GifPickerPanel } from "@/components/chat/gif-picker";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   AttachmentAbortError,
@@ -305,6 +306,12 @@ export function MessageComposer({
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const [holdAnnouncement, setHoldAnnouncement] = useState("");
+  const [mentionConfirmKey, setMentionConfirmKey] = useState<
+    | "composer.confirmEveryone"
+    | "composer.confirmHere"
+    | "composer.confirmEveryoneHere"
+    | null
+  >(null);
   const announcedHoldRef = useRef<number | null>(null);
   const holdHintId = useId();
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1001,12 +1008,19 @@ export function MessageComposer({
             : mentions.everyone
               ? "composer.confirmEveryone"
               : "composer.confirmHere";
-        if (!window.confirm(t(key))) {
-          return;
-        }
+        setMentionConfirmKey(key);
+        return;
       }
     }
 
+    commitSend();
+  }
+
+  function commitSend() {
+    const trimmed = body.trim();
+    const ready = pending.filter(
+      (item) => item.status === "ready" && item.attachmentId,
+    );
     onSend(
       trimmed ? expandEmojiShortcodes(trimmed) : "",
       ready.map((item) => ({
@@ -1029,6 +1043,7 @@ export function MessageComposer({
     setIsPickerOpen(false);
     setIsGifPickerOpen(false);
     setIsInsertMenuOpen(false);
+    setMentionConfirmKey(null);
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -1583,6 +1598,15 @@ export function MessageComposer({
       <p id={holdHintId} role="status" className="sr-only">
         {holdAnnouncement}
       </p>
+      <ConfirmDialog
+        open={mentionConfirmKey !== null}
+        title={t("composer.send")}
+        description={mentionConfirmKey ? t(mentionConfirmKey) : undefined}
+        confirmLabel={t("composer.send")}
+        destructive={false}
+        onConfirm={commitSend}
+        onClose={() => setMentionConfirmKey(null)}
+      />
     </form>
   );
 }
