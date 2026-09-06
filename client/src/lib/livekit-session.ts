@@ -16,6 +16,11 @@ import {
   type VideoQuality,
 } from "./video-quality";
 import {
+  qualityFromLiveKit,
+  type LiveKitConnectionQuality,
+  type VoiceLinkQuality,
+} from "./voice-link-quality";
+import {
   measureKbps,
   registerVoiceStatsSource,
   type VideoReceiverSample,
@@ -23,6 +28,19 @@ import {
   type VideoSenderSample,
   type VoiceStatsSnapshot,
 } from "./voice-stats-probe";
+
+function asLiveKitQuality(value: unknown): LiveKitConnectionQuality {
+  if (
+    value === "excellent" ||
+    value === "good" ||
+    value === "poor" ||
+    value === "lost" ||
+    value === "unknown"
+  ) {
+    return value;
+  }
+  return "unknown";
+}
 
 /**
  * The shape of the two stats calls `livekit-client` puts on its video tracks,
@@ -303,6 +321,16 @@ export async function connectLiveKit({
   const cameraStreams = new Map<string, MediaStream>();
   /** peerId → MediaStream for the audio of that participant's screen share. */
   const screenAudioStreams = new Map<string, MediaStream>();
+  /**
+   * LiveKit's own reading of each participant, keyed by peer id.
+   *
+   * The mesh quality meter reads `getStats()`. An SFU room has one connection
+   * to the server, so that reading would say the same thing about everybody.
+   * The library already classifies Excellent / Good / Poor per participant
+   * (`ConnectionQualityChanged`); we just keep the last event so a tile can
+   * draw the same three bars the mesh uses.
+   */
+  const qualities = new Map<string, VoiceLinkQuality>();
 
   function snapshot() {
     const peers: RemotePeer[] = [];
@@ -319,6 +347,7 @@ export async function connectLiveKit({
         userId: identity?.userId,
         displayName: identity?.displayName ?? participant.name ?? undefined,
         avatarUrl: identity?.avatarUrl ?? null,
+        quality: qualities.get(peerId),
       });
     }
     onPeersChanged(peers);
@@ -393,6 +422,7 @@ export async function connectLiveKit({
       screenStreams.delete(participant.identity);
       cameraStreams.delete(participant.identity);
       screenAudioStreams.delete(participant.identity);
+      qualities.delete(participant.identity);
       snapshot();
       void reconcileScreenPlan();
     })
@@ -401,6 +431,7 @@ export async function connectLiveKit({
       screenStreams.clear();
       cameraStreams.clear();
       screenAudioStreams.clear();
+      qualities.clear();
       snapshot();
     })
     .on(RoomEvent.ConnectionStateChanged, (state) => {
@@ -409,8 +440,25 @@ export async function connectLiveKit({
         screenStreams.clear();
         cameraStreams.clear();
         screenAudioStreams.clear();
+        qualities.clear();
         snapshot();
       }
+    })
+    .on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
+      const peerId =
+        participant && typeof participant === "object"
+          ? String(
+              (participant as { identity?: unknown }).identity ?? "",
+            )
+          : "";
+      if (!peerId || peerId === session.identity) {
+        return;
+      }
+      qualities.set(
+        peerId,
+        qualityFromLiveKit(asLiveKitQuality(quality)),
+      );
+      snapshot();
     })
     .on(RoomEvent.MediaDevicesError, (err: Error) => {
       onError(err.message);
@@ -996,6 +1044,7 @@ export async function connectLiveKit({
       screenStreams.clear();
       cameraStreams.clear();
       screenAudioStreams.clear();
+      qualities.clear();
       published = null;
       publishedScreenTrack = null;
       publishedScreenPlan = null;
