@@ -737,7 +737,11 @@ export function ChannelList({
                   key={person.peerId}
                   person={person}
                   channelId={channel.id}
-                  isSpeaking={speaking.has(person.peerId)}
+                  isSpeaking={
+                    speaking.has(person.peerId) &&
+                    !person.muted &&
+                    !person.deafened
+                  }
                   canDrag={canDrag}
                   isDragging={draggedOccupant?.userId === person.userId}
                   items={menuForOccupant(person, channel)}
