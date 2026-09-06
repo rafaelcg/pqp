@@ -1012,6 +1012,7 @@
   "memberList.owner": "Owner",
   "memberList.admins": "Admins",
   "memberList.online": "Online",
+  "memberList.friends": "Friends",
   "memberList.offline": "Offline",
   "memberList.participants": "Participants",
   "memberList.inVoice": "In voice: {channel}",
