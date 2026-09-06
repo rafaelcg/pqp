@@ -66,6 +66,14 @@ final class CallModel {
     private(set) var roster: [String: VoiceParticipant] = [:]
     /// Outgoing screen share, driven by the ReplayKit bridge.
     let screenShare = ScreenShareController()
+    /// SPEAK as the server resolved it for us. A DM call has no roles, so
+    /// this is true in practice; it is read all the same so the two rooms
+    /// obey one rule (`screenShareIsOffered`).
+    private(set) var canSpeak = true
+
+    var offersScreenShare: Bool {
+        screenShareIsOffered(isAvailable: screenShare.isAvailable, canSpeak: canSpeak)
+    }
 
     var isMuted = false {
         didSet {
@@ -451,23 +459,37 @@ final class CallModel {
         ratings?.finish(&ratingTracker)
     }
 
-    /// Wires the ReplayKit bridge to the mesh. See `VoiceModel` for the twin —
-    /// the two rooms differ in everything but this.
+    /// Wires the ReplayKit bridge to whichever transport the call runs on.
+    /// See `VoiceModel` for the twin; the two rooms differ in everything but
+    /// this.
     private func configureScreenShare() {
         screenShare.configure(
             onFrame: { [weak self] buffer, rotation in
                 guard let self else { return }
                 let timestamp = Int64(CACurrentMediaTime() * 1_000_000_000)
+                let usesSfu = self.transport == .livekit
                 Task {
-                    await self.voice.pushScreenFrame(
-                        buffer, rotation: rotation, timeStampNs: timestamp
-                    )
+                    if usesSfu {
+                        await self.sfu.pushScreenFrame(
+                            buffer, rotation: rotation, timeStampNs: timestamp
+                        )
+                    } else {
+                        await self.voice.pushScreenFrame(
+                            buffer, rotation: rotation, timeStampNs: timestamp
+                        )
+                    }
                 }
             },
             onStart: { [weak self] in
                 guard let self else { return }
                 await self.session?.realtime.setSharingScreen(true)
-                _ = await self.voice.startScreenShare()
+                if self.transport == .livekit {
+                    _ = await self.sfu.startScreenShare(
+                        quality: VideoQualitySettings.shared.quality
+                    )
+                } else {
+                    _ = await self.voice.startScreenShare()
+                }
                 // Our own share never touches `video`, which is the far end's
                 // tracks, so this is the only place it can be recorded.
                 self.noteCallProgress()
@@ -475,6 +497,7 @@ final class CallModel {
             onStop: { [weak self] in
                 guard let self else { return }
                 await self.session?.realtime.setSharingScreen(false)
+                await self.sfu.stopScreenShare()
                 await self.voice.stopScreenShare()
             }
         )
@@ -594,10 +617,12 @@ final class CallModel {
             )
             self.transport = plan.transport
             selfPeerId = peerId
-            // The share bridge is mesh-only for now: publishing a screen from
-            // this app goes peer to peer, and an armed bridge in a LiveKit room
-            // would announce a share no track ever backs.
-            if plan == .mesh { screenShare.arm() }
+            canSpeak = selfPeer.canSpeak
+            // On the mesh the media is up the moment the first peer connects,
+            // so the bridge can listen now. On LiveKit it waits for the room
+            // (`startSfuSession`): armed before that, it would announce a
+            // share no track can back yet. A resume already has the room.
+            if plan == .mesh || isResume { screenShare.arm() }
             knownPeerIds = Set(existing.map(\.peerId))
             for participant in existing { roster[participant.peerId] = participant }
             applySelf(selfPeer)
@@ -794,6 +819,7 @@ final class CallModel {
             switch outcome {
             case .success:
                 self.sfuIsConnected = true
+                self.screenShare.arm()
                 if self.wantsCamera, !self.isCameraOn {
                     self.wantsCamera = false
                     await self.enableCamera()

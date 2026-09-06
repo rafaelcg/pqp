@@ -192,9 +192,42 @@ Failure is the web's: a token error, a connect refusal, or 45 s
 not reach the voice server, so you have not joined this call". Never a mesh
 instead; see `docs/voice-backends.md` "One room, one transport".
 
-Not yet on LiveKit: publishing a screen share (the ReplayKit bridge feeds the
-mesh's video source and is not armed in a LiveKit room, so the button is hidden
-there) and the video quality ladder. Receiving shares, with their audio, works.
+**Screen share publishes on both transports.** The ReplayKit bridge is the
+same on either: the extension writes NV12 over the App Group socket, and the
+app hands the frames to the mesh's `RTCVideoSource` or, in a LiveKit room, to
+a `BufferCapturer` track published as `Track.Source.ScreenShareVideo`. The
+bridge is armed when the media is up, which on this transport is after the
+room connects rather than at `welcome`. The publish waits for the *first
+frame*, because the SDK resolves a buffer track's dimensions from what it
+captures and a publish before that times out.
+
+The SDK's own broadcast path (`LKSampleHandler`, `BroadcastScreenCapturer`)
+is deliberately not used: it JPEG-encodes every frame in the extension and
+decodes it in the app, inside a process iOS kills at about 50 MB, and it
+would link LiveKit's WebRTC build into that process. Our bridge already
+scales to 1280 on the long side, clocks to 30 fps and allocates nothing per
+frame. The SDK still *thinks* an extension is configured, because the bundle
+ids match its convention, but nothing calls `setScreenShare(enabled:)`, so
+`BroadcastManager` is never reached.
+
+The share goes up with the web's ladder (`sfuScreenPlan` in `VideoQuality.swift`,
+mirroring `screenSimulcastPlan` in `client/src/lib/video-quality.ts`): the
+lower rungs declared as simulcast layers, the top capped by
+`screenShareEncoding` rather than `encoding`, `maintainFramerate`, and the
+large-room cap that holds an unchosen share at 720p past twenty people. So a
+phone cannot put an uncapped 1080p30 stream in front of a watch party.
+Pinned by `ScreenSharePlanTests`.
+
+Not yet on LiveKit: the receive-side video quality ladder. Receiving shares,
+with their audio, works.
+
+**The share control follows SPEAK.** `welcome.self.canSpeak` (and the same
+field on every roster entry) is the channel's SPEAK permission, which is the
+screen and camera grant as well as the mic one. The control is hidden when it
+is false, exactly as the web hides it, because the alternative is a person
+starting a system broadcast and being answered with `screen-share-denied`. A
+permission that is taken away mid-share arrives as a roster and stops the
+bridge re-announcing.
 
 ### Mesh rooms
 
@@ -505,7 +538,10 @@ somebody has run a TestFlight build on a phone. Both sentences are currently
 unsupported. It is cheap to settle: one build, one phone, thirty seconds.
 
 Per-peer volume is done. Screen share receiving is done; screen share sending is
-written and, as of build 12, reported broken from a phone (see above).
+written for both transports and, as of build 12, reported broken from a phone
+(see above). The LiveKit half has never run on a phone either: the app-side
+publish path is exercised by `-pqp.fakeScreenShare`, and everything past the
+socket is device-only.
 Camera-in-voice-channels is done, and so is the camera and screen quality ladder
 that the web got in PR #84. Neither has been seen on a phone yet: the picture a
 quality choice produces exists only on a live connection, which is what
@@ -783,4 +819,6 @@ This is the foundation, not the finished app.
   what that would cost.
 - **Group DMs.** The API takes up to nine participants; the picker starts one
   conversation with one person.
-- **iPad layout.** The target builds universal but the layout is phone-first.
+- **iPad layout.** iPhone only: `TARGETED_DEVICE_FAMILY: "1"` in
+  `project.yml`. Every layout here is phone-first, so the target does not
+  claim to be an iPad app. Both would have to change together.
