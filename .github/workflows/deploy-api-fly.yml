@@ -117,7 +117,7 @@ jobs:
           # Everything baked into the API image, plus the files that decide how
           # it is built and run. `packages/` is here in full because the server
           # imports @pqp/shared and a Docker build copies the workspace.
-          if printf '%s\n' "$changed" | grep -qE '^(server/|packages/|Dockerfile|fly\.toml|pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|\.github/workflows/deploy-api-fly\.yml)'; then
+          if printf '%s\n' "$changed" | grep -qE '^(server/|packages/|Dockerfile|fly\.toml|fly\.worker\.toml|pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|\.github/workflows/deploy-api-fly\.yml)'; then
             decide true "server-relevant files changed since $deployed"
           else
             decide false "only client-side files changed since ${deployed:0:7}; leaving the machine and its sockets alone"
@@ -156,6 +156,8 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
+          # --image-label pins the pushed image to this commit so the worker
+          # step below can deploy the SAME image rather than rebuilding.
           flyctl deploy \
             --config fly.toml \
             --app "$FLY_APP" \
@@ -163,6 +165,7 @@ jobs:
             --ha=false \
             --strategy rolling \
             --wait-timeout 15m \
+            --image-label "${{ steps.commit.outputs.sha }}" \
             -e APP_VERSION="${{ steps.commit.outputs.sha }}"
 
       # The single-machine invariant, asserted rather than assumed. It can be
@@ -214,3 +217,45 @@ jobs:
           done
           echo "::error::API never reported the deployed commit. It is probably still serving the previous build."
           exit 1
+
+      # The worker (fly.worker.toml): same image the step above just pushed,
+      # under the label of this commit, so the two apps can never run two
+      # different builds of jobs.ts. It deploys AFTER the API has verified,
+      # because the API runs the schema migration and the worker does not.
+      #
+      # Optional on purpose. A fork or a fresh clone has no pqp-worker app and
+      # no token for it; both cases skip with a notice rather than fail, and
+      # the API keeps running every job itself (WORKER_MODE unset). The
+      # one-time setup is in docs/deploy-fly.md, "Worker".
+      #
+      # FLY_API_TOKEN_WORKER is a deploy token for pqp-worker. It has to be
+      # able to pull registry.fly.io/pqp-api:<sha>; if a per-app token is
+      # refused on the pull, use one org-scoped deploy token for both secrets.
+      - name: Deploy the worker (same image)
+        if: steps.relevant.outputs.needed == 'true'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_WORKER }}
+          WORKER_APP: pqp-worker
+          IMAGE: registry.fly.io/pqp-api:${{ steps.commit.outputs.sha }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::notice::FLY_API_TOKEN_WORKER is not set; skipping the worker. The API runs the batch jobs itself until one exists."
+            exit 0
+          fi
+          if ! flyctl status --app "$WORKER_APP" >/dev/null 2>&1; then
+            echo "::notice::App $WORKER_APP does not exist (or the token cannot see it); skipping the worker deploy."
+            exit 0
+          fi
+          flyctl deploy \
+            --config fly.worker.toml \
+            --app "$WORKER_APP" \
+            --image "$IMAGE" \
+            --ha=false \
+            --strategy rolling \
+            --wait-timeout 10m \
+            -e APP_VERSION="${{ steps.commit.outputs.sha }}"
+          live=$(flyctl machines list --app "$WORKER_APP" --json | jq '[.[] | select(.state != "destroyed")] | length')
+          if [ "$live" != "1" ]; then
+            echo "::error::Expected exactly 1 worker machine, found $live. Fix with: fly scale count 1 --region gru --app $WORKER_APP"
+            exit 1
+          fi

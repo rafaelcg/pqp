@@ -72,8 +72,16 @@ kill_timeout = 30
 
   # pg pool ceiling per process. There is one process, so this is the app's
   # entire connection footprint against Postgres. Keep it comfortably under the
-  # database's max_connections (and note attachments' sweeper shares this pool).
+  # database's max_connections, together with fly.worker.toml's PG_POOL_MAX
+  # when the worker exists (until WORKER_MODE=api is set on this app, the
+  # batch sweeps in server/src/jobs.ts share this pool too).
   PG_POOL_MAX = "10"
+
+  # WORKER_MODE is deliberately NOT here. Unset means this process runs the
+  # batch jobs itself, which is correct until pqp-worker exists. The flip to
+  # `api` is a one-time `fly secrets set` in docs/deploy-fly.md §7f, done only
+  # after the worker answers /health; move it into this file afterwards if
+  # you prefer it reviewable.
 
 [http_service]
   internal_port = 3001

@@ -1,0 +1,72 @@
+# Fly.io configuration for the pqp WORKER: the batch half of the API.
+#
+# Same Docker image as fly.toml, different command. It runs `jobs.ts` (the
+# attachment and quarantine sweeps, audit / report / timeout prunes, message
+# retention, interrupted account deletions, the outgoing-webhook outbox, the
+# Community Home media sweep) and one `/health` listener. No `/api`, no `/ws`,
+# no static files, no public hostname.
+#
+# Why it exists: `pqp-api` is one shared-cpu machine whose job is voice
+# signalling and chat fan-out, and every bucket listing or retention DELETE
+# used to compete with that for the same CPU. See docs/plans/COLD_PATHS.md for
+# the inventory of what moved and what deliberately stayed.
+#
+# THE ONE THING TO KNOW BEFORE USING THIS FILE
+# --------------------------------------------
+# The API keeps running every one of these jobs until `WORKER_MODE=api` is set
+# on `pqp-api`. The order is therefore:
+#   1. create this app and set its secrets (docs/deploy-fly.md, "Worker"),
+#   2. deploy it and see `/health` answer `"role":"worker"`,
+#   3. only then `fly secrets set WORKER_MODE=api --app pqp-api`.
+# Doing step 3 first stops the sweeps everywhere. Doing 1 and 2 without 3 is
+# safe: both processes run the jobs, every one of which claims rows in SQL, so
+# the overlap is duplicate work rather than wrong work.
+#
+# One machine. There is no in-process state here that a second machine would
+# split, but the outbox tick is a poll and two pollers are twice the queries
+# for no throughput, so CI deploys with --ha=false like the API.
+
+app = "pqp-worker"
+primary_region = "gru"
+
+kill_signal = "SIGTERM"
+kill_timeout = 30
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Overrides the image's CMD (`node server/dist/index.js`). `WORKER_MODE` below
+# would send index.js to the same place; the explicit entry point is so that
+# `ps` and the Fly console say what this machine is.
+[processes]
+  worker = "node server/dist/worker.js"
+
+[env]
+  # Belt and braces with the process command above, and the value CLAUDE.md
+  # documents. `1` is accepted as an alias for `worker`.
+  WORKER_MODE = "worker"
+  # /health listens here. No [http_service]: nothing outside the org needs to
+  # reach this machine, and the check below reaches it over the private
+  # network.
+  PORT = "3001"
+  # The worker holds at most a handful of connections at once (one sweep in
+  # flight per job, and most jobs are daily). Keep the sum of this and
+  # fly.toml's PG_POOL_MAX under the database's max_connections.
+  PG_POOL_MAX = "4"
+
+# Machine-level check: restart the worker whose pool went dead, the same way
+# the API's /health does through its http_service check. There is no public
+# service on this app, so this is the only health signal it has.
+[checks]
+  [checks.health]
+    type = "http"
+    port = 3001
+    path = "/health"
+    method = "GET"
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

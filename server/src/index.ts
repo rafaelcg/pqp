@@ -31,26 +31,12 @@ import {
   sweepRateLimits,
 } from "./lib/rate-limit.js";
 import {
-  isAttachmentsConfigured,
-  sweepOrphanedAttachments,
-  sweepQuarantinedAttachments,
-} from "./services/attachments.js";
-import {
   isCommunityHomeEnabled,
   publishDueCommunityHomePosts,
-  sweepOrphanedCommunityHomeMedia,
 } from "./services/community-home.js";
-import { sweepPendingAccountDeletions } from "./services/account.js";
-import { pruneAuditLog } from "./services/audit.js";
-import { pruneResolvedReports } from "./services/reports.js";
-import { pruneExpiredTimeouts } from "./services/sanctions.js";
-import { sweepMessageRetention } from "./services/retention.js";
-import { sweepExpiredConnectionStates } from "./services/connections.js";
 import { sweepChannelAudiences } from "./services/servers.js";
-import {
-  deliverDueOutgoingWebhooks,
-  pruneDeliveredOutgoingWebhooks,
-} from "./services/outgoing-webhooks.js";
+import { startColdJobs, type ColdJobs } from "./jobs.js";
+import { processRole, runsColdJobs } from "./lib/process-role.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
   READY_PATH,
@@ -375,93 +361,6 @@ const rateLimitSweep = setInterval(() => {
 }, 60_000);
 rateLimitSweep.unref?.();
 
-/**
- * Collect attachments no message claimed — uploads that were never sent, and
- * rows orphaned when a message, channel or server was deleted.
- *
- * Hourly, because the grace period is an hour: running more often only finds
- * rows it is not yet allowed to touch. Skipped outright without storage so a
- * deployment that never enabled the feature does no work at all, and every
- * failure is swallowed — a bucket being unreachable is a cost problem that
- * resolves on the next run, and must never be able to bring the server down.
- */
-const ATTACHMENT_SWEEP_INTERVAL_MS = 60 * 60_000;
-
-async function sweepAttachments(): Promise<void> {
-  // Quarantine expiry runs whether or not storage is configured, and outside
-  // the guard below on purpose: a quarantined row can be a remote GIF, which
-  // has no bucket anywhere in its life cycle, and a deployment that turned S3
-  // off after scanning had already refused something would otherwise hold those
-  // rows forever. `sweepQuarantinedAttachments` never touches an
-  // illegal-content row at any age — see its comment.
-  try {
-    await sweepQuarantinedAttachments();
-  } catch (error) {
-    console.error("[content-safety] quarantine sweep failed:", error);
-  }
-
-  if (!isAttachmentsConfigured()) {
-    return;
-  }
-  try {
-    await sweepOrphanedAttachments();
-  } catch (error) {
-    console.error("[attachments] sweep failed:", error);
-  }
-}
-
-const attachmentSweep = setInterval(() => {
-  void sweepAttachments();
-}, ATTACHMENT_SWEEP_INTERVAL_MS);
-// Unref'd like the rate-limit sweep: a timer this long must not be the reason
-// the process refuses to exit.
-attachmentSweep.unref?.();
-
-/** Daily is plenty for a 90-day retention window; a failure here costs
- * nothing but disk, and resolves on the next run. */
-const AUDIT_LOG_PRUNE_INTERVAL_MS = 24 * 60 * 60_000;
-
-const auditLogPrune = setInterval(() => {
-  void pruneAuditLog().catch((error) => {
-    console.error("[audit] prune failed:", error);
-  });
-}, AUDIT_LOG_PRUNE_INTERVAL_MS);
-auditLogPrune.unref?.();
-
-/** Same cadence and the same failure tolerance as the audit prune, but a
- * different reason for existing: a resolved report holds a copy of reported
- * content, so this is a privacy sweep rather than a disk one. Open reports are
- * never touched — see `pruneResolvedReports`. */
-const reportPrune = setInterval(() => {
-  void pruneResolvedReports().catch((error) => {
-    console.error("[reports] prune failed:", error);
-  });
-}, AUDIT_LOG_PRUNE_INTERVAL_MS);
-reportPrune.unref?.();
-
-/**
- * Expired timeouts.
- *
- * The one sweep in this file that NOTHING DEPENDS ON. Every read in
- * services/sanctions.ts filters on `expires_at > NOW()`, so a timeout ends when
- * it says it ends whether or not this timer ever fires; deleting this block
- * would change no behaviour and only leave one dead row per sanction ever
- * issued. It is here for the same reason the audit prune is — disk — and it is
- * worth saying out loud, because a sanction whose *correctness* depended on a
- * cron would be a sanction that quietly outlives its sentence when a deploy
- * restarts the process before the timer fires.
- */
-const timeoutPrune = setInterval(() => {
-  void pruneExpiredTimeouts().catch((error) => {
-    console.error("[sanctions] timeout prune failed:", error);
-  });
-}, AUDIT_LOG_PRUNE_INTERVAL_MS);
-timeoutPrune.unref?.();
-
-/** Daily: retention is measured in days, so nothing is lost by checking once
- * a day rather than continuously. */
-const RETENTION_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
-
 /** One probe a minute: fine enough to catch a short outage, cheap enough to
  * keep 30 days of history small. */
 const STATUS_SAMPLE_INTERVAL_MS = 60_000;
@@ -487,53 +386,22 @@ const statusPrune = setInterval(() => {
 }, 24 * 60 * 60_000);
 statusPrune.unref?.();
 
-const retentionSweep = setInterval(() => {
-  void sweepMessageRetention().catch((error) => {
-    console.error("[retention] sweep failed:", error);
-  });
-  void sweepExpiredConnectionStates().catch((error) => {
-    console.error("[connections] state sweep failed:", error);
-  });
-}, RETENTION_SWEEP_INTERVAL_MS);
-retentionSweep.unref?.();
-
-/**
- * Finish account deletions that were interrupted between the Clerk call and the
- * local DELETE — see the ordering note on `deleteAccount`.
- *
- * Five minutes rather than daily, and unlike every other sweep in this file it
- * is not about disk: each pending row is an account whose owner has been told
- * their data is gone and whose sign-in already is. A day of that is a day of
- * being wrong about a statutory promise.
- */
-const PENDING_DELETION_SWEEP_INTERVAL_MS = 5 * 60_000;
-
-const pendingDeletionSweep = setInterval(() => {
-  void sweepPendingAccountDeletions()
-    .then((finished) => {
-      if (finished > 0) {
-        console.warn(`[account] finished ${finished} interrupted deletion(s)`);
-      }
-    })
-    .catch((error) => {
-      console.error("[account] pending deletion sweep failed:", error);
-    });
-}, PENDING_DELETION_SWEEP_INTERVAL_MS);
-pendingDeletionSweep.unref?.();
-
 /**
  * Community Home schedule catch-up.
  *
- * Single Node process, no worker, no queue. Every 30s flip due `scheduled`
- * rows to `published` and nudge connected members. Correctness does not
- * depend on the interval staying up — a redeploy that misses a tick catches
- * up on the next one (and on boot below). Staging stays one machine.
+ * Every 30s flip due `scheduled` rows to `published` and nudge connected
+ * members. Correctness does not depend on the interval staying up: a redeploy
+ * that misses a tick catches up on the next one (and on boot below).
+ *
+ * This one stays with the sockets even when a worker exists, because the
+ * nudge is a WebSocket push and the worker has no sockets. The media orphan
+ * sweep that used to share this timer lives in `jobs.ts`.
  */
 const COMMUNITY_HOME_SCHEDULE_MS = 30_000;
 
 async function sweepCommunityHomeSchedule(): Promise<void> {
-  // Flag off: nothing to publish and nothing to sweep. Read per tick so a
-  // restart with the variable set picks it up without touching this code.
+  // Flag off: nothing to publish. Read per tick so a restart with the
+  // variable set picks it up without touching this code.
   if (!isCommunityHomeEnabled()) {
     return;
   }
@@ -550,39 +418,12 @@ async function sweepCommunityHomeSchedule(): Promise<void> {
   } catch (error) {
     console.error("[community-home] schedule sweep failed:", error);
   }
-  try {
-    await sweepOrphanedCommunityHomeMedia();
-  } catch (error) {
-    console.error("[community-home] media sweep failed:", error);
-  }
 }
 
 const communityHomeSweep = setInterval(() => {
   void sweepCommunityHomeSchedule();
 }, COMMUNITY_HOME_SCHEDULE_MS);
 communityHomeSweep.unref?.();
-
-/**
- * Outgoing webhook outbox. First attempt is also kicked from enqueue; this
- * loop owns retries, reclaim of a `delivering` row whose process died, and
- * pruning delivered receipts after 7 days. Unref'd: a quiet server must still
- * be able to exit.
- */
-const OUTGOING_WEBHOOK_TICK_MS = 2_000;
-
-const outgoingWebhookTick = setInterval(() => {
-  void deliverDueOutgoingWebhooks().catch((error) => {
-    console.error("[outgoing-webhooks] delivery tick failed:", error);
-  });
-}, OUTGOING_WEBHOOK_TICK_MS);
-outgoingWebhookTick.unref?.();
-
-const outgoingWebhookPrune = setInterval(() => {
-  void pruneDeliveredOutgoingWebhooks().catch((error) => {
-    console.error("[outgoing-webhooks] prune failed:", error);
-  });
-}, 60 * 60_000);
-outgoingWebhookPrune.unref?.();
 
 /**
  * Multi-instance chat, off by default.
@@ -624,8 +465,20 @@ function startClusterBus(): (() => void) | null {
 }
 
 let stopPresenceRefresh: (() => void) | null = null;
+let coldJobs: ColdJobs | null = null;
 
 async function main() {
+  // `WORKER_MODE=worker` on this entry point means "be the worker": hand off
+  // before anything below binds a port or opens a socket. The batch half has
+  // its own file so the split is visible in `ps`, not just in the env.
+  const role = processRole();
+  if (role === "worker") {
+    await import("./worker.js");
+    return;
+  }
+  // Only the API drains sockets on SIGTERM; the worker installs its own.
+  installSignalHandlers();
+
   assertAuthConfig();
   assertCorsConfig();
   if (isDevAuthBypassEnabled()) {
@@ -642,12 +495,21 @@ async function main() {
   // by an instance that can hear the rest of the cluster.
   stopPresenceRefresh = startClusterBus();
 
-  // One sweep per boot, on top of the interval: a process that redeploys or
-  // crash-restarts more often than hourly never reaches the first tick, so on
-  // Railway the sweeper could otherwise never run once in the lifetime of a
-  // deployment. After initDb so it cannot race schema creation, and unawaited
-  // so a bucket that is merely unreachable cannot hold up listen().
-  void sweepAttachments();
+  // The cold paths (attachment sweeps, prunes, retention, the webhook outbox:
+  // jobs.ts) run here unless a separate worker owns them. After initDb so
+  // nothing races schema creation. `WORKER_MODE=api` is the only value that
+  // skips this, and it is only correct once `pqp-worker` exists; unset keeps
+  // the single-process behaviour every self-host and local dev has.
+  if (runsColdJobs(role)) {
+    coldJobs = startColdJobs();
+  } else {
+    console.log(
+      `[role] WORKER_MODE=${role}: batch jobs left to the worker process`,
+    );
+  }
+  // One publish per boot, on top of the interval, for the same reason the
+  // boot sweeps in jobs.ts exist: a process that restarts more often than the
+  // interval never reaches its first tick.
   void sweepCommunityHomeSchedule();
 
   httpServer.listen(PORT, () => {
@@ -674,11 +536,8 @@ async function shutdown(signal: string) {
   clearInterval(heartbeat);
   stopReadySampler();
   clearInterval(rateLimitSweep);
-  clearInterval(attachmentSweep);
-  clearInterval(pendingDeletionSweep);
   clearInterval(communityHomeSweep);
-  clearInterval(outgoingWebhookTick);
-  clearInterval(outgoingWebhookPrune);
+  coldJobs?.stop();
   stopPresenceRefresh?.();
   for (const socket of wss.clients) {
     socket.close(1001, "Server shutting down");
@@ -696,10 +555,12 @@ async function shutdown(signal: string) {
   process.exit(0);
 }
 
-for (const signal of ["SIGTERM", "SIGINT"] as const) {
-  process.on(signal, () => {
-    void shutdown(signal);
-  });
+function installSignalHandlers(): void {
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.on(signal, () => {
+      void shutdown(signal);
+    });
+  }
 }
 
 main().catch((error) => {
