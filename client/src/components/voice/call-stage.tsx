@@ -511,7 +511,7 @@ export interface CallStageProps {
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
-  /** Shrinks the thumbnail strip. Same setting the old lobby grid used. */
+  /** Shrinks the listener chips. Same setting the old lobby grid used. */
   compactPeers?: boolean;
   /**
    * DM ringing copy. Server voice does not ring: being the only person in a
@@ -811,11 +811,14 @@ function ActiveCall({
   const [pinnedTileId, setPinnedTileId] = useState(() =>
     stagePinnedKey(channelId),
   );
-  // Per device, and never reset by a presenter change or a new share: see the
-  // preference module. Read once on mount; the toggle is the only writer.
-  const [railOpen, setRailOpen] = useState(loadParticipantRailOpen);
-  const toggleRail = useCallback(() => {
-    setRailOpen((open) => {
+  // Whether the listener row is showing. Per device, and never reset by a
+  // presenter change or a new share: see the preference module. It keeps the
+  // storage key the rail used, because it is the same choice ("give the
+  // picture the whole stage on this monitor") about the row that replaced it.
+  // Read once on mount; the toggle is the only writer.
+  const [stripOpen, setStripOpen] = useState(loadParticipantRailOpen);
+  const toggleStrip = useCallback(() => {
+    setStripOpen((open) => {
       saveParticipantRailOpen(!open);
       return !open;
     });
@@ -963,7 +966,7 @@ function ActiveCall({
     reducedMotion,
   });
   // A touch tap is a down and an up that did not travel. Anything that moved
-  // (a scroll on the rail, a drag on the self preview) is plain activity.
+  // (a scroll on the listener row, a drag on the self preview) is activity.
   const touchDownRef = useRef<{ x: number; y: number } | null>(null);
   const onStagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "touch") {
@@ -1344,8 +1347,8 @@ function ActiveCall({
               onRetry: person.onRetry,
             }))}
             limit={wide ? STRIP_LIMIT_WIDE : STRIP_LIMIT_NARROW}
-            open={railOpen}
-            onToggle={toggleRail}
+            open={stripOpen}
+            onToggle={toggleStrip}
             youLabel={t("voice.tile.you")}
             compact={compactPeers}
             /* Above the control bar in the stacking order, because the bar is
