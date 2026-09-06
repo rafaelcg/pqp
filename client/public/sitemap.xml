@@ -39,7 +39,17 @@
     <priority>0.8</priority>
   </url>
   <url>
+    <loc>https://pqp.gg/android</loc>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
     <loc>https://pqp.gg/download</loc>
+  </url>
+  <url>
+    <loc>https://pqp.gg/apoie</loc>
+    <changefreq>monthly</changefreq>
+    <priority>0.4</priority>
   </url>
   <url>
     <loc>https://pqp.gg/garanta</loc>

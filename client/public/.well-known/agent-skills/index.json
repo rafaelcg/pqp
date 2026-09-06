@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schemas.agentskills.io/discovery/0.2.0/schema.json",
+  "skills": [
+    {
+      "name": "pqp-public-surfaces",
+      "type": "skill-md",
+      "description": "Read pqp.gg without an account: what pqp is, public profiles at /@handle, public communities at /c/slug, invite links, and the open-source repository. pqp has no agent API; this covers only what is public.",
+      "url": "https://pqp.gg/.well-known/agent-skills/pqp-public-surfaces/SKILL.md",
+      "digest": "sha256:21675c736301b9508596c0527bf05e4dadfea940c57c50b2fca6677ff5caa689"
+    }
+  ]
+}
