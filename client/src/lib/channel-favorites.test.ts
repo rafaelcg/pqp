@@ -148,6 +148,49 @@ describe("addFavorite / removeFavorite / moveFavorite", () => {
   });
 });
 
+describe("pin / unpin and order persistence", () => {
+  it("pins, reorders, unpins, and keeps the map across writes", () => {
+    let map = writeFavoritesForServer(undefined, SERVER, addFavorite([], general));
+    expect(isFavoriteChannel(favoritesForServer(map, SERVER), GENERAL)).toBe(
+      true,
+    );
+
+    map = writeFavoritesForServer(
+      map,
+      SERVER,
+      addFavorite(favoritesForServer(map, SERVER), lobby),
+    );
+    expect(favoritesForServer(map, SERVER)).toEqual([GENERAL, LOBBY]);
+
+    map = writeFavoritesForServer(
+      map,
+      SERVER,
+      addFavorite(favoritesForServer(map, SERVER), lobby, GENERAL),
+    );
+    expect(favoritesForServer(map, SERVER)).toEqual([LOBBY, GENERAL]);
+
+    map = writeFavoritesForServer(
+      map,
+      SERVER,
+      removeFavorite(favoritesForServer(map, SERVER), LOBBY),
+    );
+    expect(favoritesForServer(map, SERVER)).toEqual([GENERAL]);
+    expect(isFavoriteChannel(favoritesForServer(map, SERVER), LOBBY)).toBe(
+      false,
+    );
+  });
+
+  it("keeps another server's pins when this server's list is rewritten", () => {
+    const map = writeFavoritesForServer(
+      { [OTHER_SERVER]: [LOBBY] },
+      SERVER,
+      [GENERAL, RANDOM],
+    );
+    expect(favoritesForServer(map, OTHER_SERVER)).toEqual([LOBBY]);
+    expect(favoritesForServer(map, SERVER)).toEqual([GENERAL, RANDOM]);
+  });
+});
+
 describe("isFavoriteChannel / favoritesCollapseKey", () => {
   it("reports membership and namespaces the collapse key", () => {
     expect(isFavoriteChannel([GENERAL, LOBBY], LOBBY)).toBe(true);
