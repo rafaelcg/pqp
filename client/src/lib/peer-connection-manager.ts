@@ -6,6 +6,7 @@ import {
   screenScaleFactor,
   type VideoQuality,
 } from "./video-quality";
+import type { VoiceLinkQuality } from "./voice-link-quality";
 import {
   registerVoiceConnection,
   unregisterVoiceConnection,
@@ -43,6 +44,14 @@ export interface RemotePeer {
   userId?: string;
   displayName?: string;
   avatarUrl?: string | null;
+  /**
+   * How this path is doing, when the transport already knows.
+   *
+   * The mesh fills this from the probe (see `useVoiceLinkQuality`). The SFU
+   * fills it from LiveKit's Excellent / Good / Poor. Same three bars either
+   * way, so a tile never has to ask which backend is under it.
+   */
+  quality?: VoiceLinkQuality;
 }
 
 export type SignalingSend = (message: ClientRelayMessage) => void;
