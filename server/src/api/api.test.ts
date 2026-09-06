@@ -2005,6 +2005,32 @@ describeDb("API authorization", () => {
         expect(member.status).toBe("offline");
       }
     });
+
+    it("carries a claimed public handle, and null when they have none", async () => {
+      const { serverId } = await makeServer();
+      const before = await call<{
+        members: Array<{ id: string; handle?: string | null }>;
+      }>(owner, "GET", `/api/servers/${serverId}/members`);
+      expect(before.status).toBe(200);
+      for (const row of before.body.members) {
+        expect(row.handle).toBeNull();
+      }
+
+      const claimed = await call<{ handle: string }>(owner, "PATCH", "/api/me", {
+        handle: "card_perfil",
+      });
+      expect(claimed.status).toBe(200);
+      expect(claimed.body.handle).toBe("card_perfil");
+
+      const after = await call<{
+        members: Array<{ id: string; handle?: string | null }>;
+      }>(member, "GET", `/api/servers/${serverId}/members`);
+      expect(after.status).toBe(200);
+      const ownerRow = after.body.members.find((row) => row.id === owner.id);
+      const memberRow = after.body.members.find((row) => row.id === member.id);
+      expect(ownerRow?.handle).toBe("card_perfil");
+      expect(memberRow?.handle).toBeNull();
+    });
   });
 
   describe("preferences", () => {

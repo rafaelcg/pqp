@@ -867,9 +867,10 @@ export async function listServerMembers(serverId: string) {
     nickname: string | null;
     role_ids: string[];
     is_character: boolean;
+    handle: string | null;
   }>(
     `SELECT u.id, u.display_name, u.username, u.discriminator, u.avatar_url, sm.role,
-            sm.nickname,
+            sm.nickname, u.handle,
             COALESCE(u.is_character, FALSE) AS is_character,
             COALESCE(
               (
@@ -906,6 +907,9 @@ export async function listServerMembers(serverId: string) {
     nickname: row.nickname,
     roleIds: row.role_ids ?? [],
     isCharacter: row.is_character,
+    // Claimed `pqp.gg/@` name, or null. The profile card offers Ver perfil
+    // only from this field. Username and tag must never be turned into a URL.
+    handle: row.handle ?? null,
   }));
 }
 

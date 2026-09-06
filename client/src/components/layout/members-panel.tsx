@@ -24,7 +24,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { StatusDot } from "@/components/user/status-dot";
 import { RankMarks } from "@/components/user/rank-marks";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
-import type { ProfileSubject } from "@/components/user/profile-relations";
+import { publicProfileHref, type ProfileSubject } from "@/components/user/profile-relations";
 import { highestRoleColor, identityMarks, rankBadges } from "@/lib/author-display";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import {
@@ -393,6 +393,7 @@ function subjectOf(member: ServerMember): ProfileSubject {
     // The raw nickname too, so the card's Change-nickname prompt can prefill
     // it instead of starting from blank.
     nickname: member.nickname ?? null,
+    handle: member.handle ?? null,
   };
 }
 
@@ -894,6 +895,16 @@ export function MembersPanel({
 
   function actionsFor(member: ServerMember): RowAction[] {
     const actions: RowAction[] = [];
+    const publicHref = publicProfileHref(member.handle);
+    if (publicHref) {
+      actions.push({
+        id: "public-profile",
+        label: t("profile.viewPublic"),
+        onSelect: () => {
+          window.open(publicHref, "_blank", "noopener,noreferrer");
+        },
+      });
+    }
     if (onMention && member.username) {
       const username = member.username;
       actions.push({
