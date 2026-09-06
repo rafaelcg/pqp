@@ -1,10 +1,35 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
+  clearStashedDesktopLoginParams,
   desktopLoginHandoffHref,
   loopbackHandoffUrl,
   parseDesktopLoginSearch,
   parseDesktopLoopbackReturn,
+  resolveDesktopLoginParams,
+  stashDesktopLoginParams,
 } from "./desktop-login";
+
+const memory = new Map<string, string>();
+const session = {
+  getItem(key: string) {
+    return memory.get(key) ?? null;
+  },
+  setItem(key: string, value: string) {
+    memory.set(key, value);
+  },
+  removeItem(key: string) {
+    memory.delete(key);
+  },
+};
+
+Object.defineProperty(globalThis, "sessionStorage", {
+  value: session,
+  configurable: true,
+});
+
+afterEach(() => {
+  memory.clear();
+});
 
 describe("parseDesktopLoopbackReturn", () => {
   it("accepts a bare 127.0.0.1 callback", () => {
@@ -85,5 +110,38 @@ describe("desktopLoginHandoffHref / loopbackHandoffUrl", () => {
     expect(
       loopbackHandoffUrl("http://127.0.0.1:41234/callback", "st_x", "abc"),
     ).toBe("http://127.0.0.1:41234/callback?ticket=st_x&state=abc");
+  });
+});
+
+describe("resolveDesktopLoginParams stash", () => {
+  const live = {
+    mode: "sign-in" as const,
+    returnUrl: "http://127.0.0.1:41234/callback",
+    state: "abc",
+    next: null,
+    done: false,
+  };
+
+  it("keeps return/state across a Clerk hop that drops the query", () => {
+    stashDesktopLoginParams(live);
+    expect(resolveDesktopLoginParams("?mode=sign-in")).toEqual(live);
+  });
+
+  it("drops the stash when the app says the handoff is done", () => {
+    stashDesktopLoginParams(live);
+    expect(resolveDesktopLoginParams("?done=1").done).toBe(true);
+    expect(resolveDesktopLoginParams("")).toEqual({
+      mode: "sign-in",
+      returnUrl: null,
+      state: null,
+      next: null,
+      done: false,
+    });
+  });
+
+  it("drops a cleared stash so Switch account cannot reuse an old listener", () => {
+    stashDesktopLoginParams(live);
+    clearStashedDesktopLoginParams();
+    expect(resolveDesktopLoginParams("").returnUrl).toBeNull();
   });
 });

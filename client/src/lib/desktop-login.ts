@@ -114,6 +114,9 @@ export function clearStashedDesktopLoginParams(): void {
 export function resolveDesktopLoginParams(search: string): DesktopLoginParams {
   const fromUrl = parseDesktopLoginSearch(search);
   if (fromUrl.done) {
+    // Flow finished. Drop the stash so a later bare /desktop-login does not
+    // hand a ticket to the previous listener (Switch account, then a new tab).
+    clearStashedDesktopLoginParams();
     return fromUrl;
   }
   if (fromUrl.returnUrl || fromUrl.state) {

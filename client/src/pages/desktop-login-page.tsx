@@ -7,6 +7,7 @@ import { ApiError, mintDesktopHandoff, setAuthTokenProvider } from "@/lib/api";
 import { isDesktopApp } from "@/lib/desktop";
 import { getAuthToken, isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import {
+  clearStashedDesktopLoginParams,
   desktopLoginHandoffHref,
   loopbackHandoffUrl,
   resolveDesktopLoginParams,
@@ -58,6 +59,7 @@ function DesktopLoginInner() {
 
   const continueToApp = useCallback(async () => {
     if (!params.returnUrl) {
+      clearStashedDesktopLoginParams();
       window.location.replace(params.next ?? "/app");
       return;
     }
@@ -65,6 +67,7 @@ function DesktopLoginInner() {
     setHandoffError(null);
     try {
       const { ticket } = await mintDesktopHandoff();
+      clearStashedDesktopLoginParams();
       window.location.replace(
         loopbackHandoffUrl(params.returnUrl, ticket, params.state),
       );
