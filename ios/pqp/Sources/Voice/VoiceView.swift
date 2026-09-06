@@ -54,6 +54,9 @@ struct VoiceView: View {
                         .multilineTextAlignment(.center)
                         .padding(.bottom, 6)
                 }
+                if model.isServerMuted {
+                    ServerMuteNotice()
+                }
                 ScreenSharePresenterBanner(
                     isSharing: model.screenShare.isSharing,
                     errorMessage: model.screenShare.errorMessage
@@ -141,7 +144,8 @@ struct VoiceView: View {
                         track: model.camera(for: peer.peerId),
                         name: peer.displayName,
                         isSpeaking: peer.isSpeaking,
-                        isMuted: model.isMuted(peer.peerId)
+                        isMuted: model.isMuted(peer.peerId),
+                        isServerMuted: model.isServerMuted(peer.peerId)
                     )
                     .aspectRatio(4 / 3, contentMode: .fit)
                 }
@@ -151,6 +155,7 @@ struct VoiceView: View {
                         name: String(localized: "You"),
                         isSpeaking: false,
                         isMuted: model.isMuted,
+                        isServerMuted: model.isServerMuted,
                         mirrored: true
                     )
                     .aspectRatio(4 / 3, contentMode: .fit)
@@ -172,7 +177,8 @@ struct VoiceView: View {
                             track: model.camera(for: peer.peerId),
                             name: peer.displayName,
                             isSpeaking: peer.isSpeaking,
-                            isMuted: model.isMuted(peer.peerId)
+                            isMuted: model.isMuted(peer.peerId),
+                            isServerMuted: model.isServerMuted(peer.peerId)
                         )
                         .frame(width: 128, height: 96)
                     }
@@ -182,6 +188,7 @@ struct VoiceView: View {
                             name: String(localized: "You"),
                             isSpeaking: false,
                             isMuted: model.isMuted,
+                            isServerMuted: model.isServerMuted,
                             mirrored: true
                         )
                         .frame(width: 128, height: 96)
@@ -200,6 +207,7 @@ struct VoiceView: View {
                 SelfRow(
                     isMuted: model.isMuted,
                     isDeafened: model.isDeafened,
+                    isServerMuted: model.isServerMuted,
                     name: session.currentUser?.displayName ?? "You",
                     avatarUrl: session.currentUser?.avatarUrl
                 )
@@ -209,7 +217,8 @@ struct VoiceView: View {
                     peer: peer,
                     volume: model.volume(for: peer),
                     onVolume: { model.setVolume($0, for: peer) },
-                    isPresenting: model.video[peer.peerId]?.screen != nil
+                    isPresenting: model.video[peer.peerId]?.screen != nil,
+                    isServerMuted: model.isServerMuted(peer.peerId)
                 )
             }
         }
@@ -233,16 +242,28 @@ struct VoiceView: View {
 
     private func controlRow(side: CGFloat, spacing: CGFloat) -> some View {
         HStack(spacing: spacing) {
+            // A moderator's mute takes the button away rather than letting it
+            // toggle and snap back: the server refuses the target's
+            // `set-muted false`, and a control that appears to work and does
+            // not is worse than one that is plainly off.
             circleButton(
-                icon: model.isMuted ? "mic.slash.fill" : "mic.fill",
-                tint: model.isMuted ? Palette.danger : Palette.paper,
+                icon: model.isServerMuted
+                    ? ServerMute.glyph
+                    : (model.isMuted ? ServerMute.selfMutedGlyph : "mic.fill"),
+                tint: model.isServerMuted
+                    ? Palette.warning
+                    : (model.isMuted ? Palette.danger : Palette.paper),
                 side: side
             ) {
                 model.isMuted.toggle()
             }
             .accessibilityIdentifier("voice.mute")
-            .accessibilityLabel(model.isMuted ? "Unmute" : "Mute")
-            .disabled(model.status != .connected)
+            .accessibilityLabel(
+                model.isServerMuted
+                    ? "Muted by a moderator"
+                    : (model.isMuted ? "Unmute" : "Mute")
+            )
+            .disabled(!model.canToggleMute)
 
             circleButton(
                 icon: model.isDeafened ? "speaker.slash.fill" : "headphones",
@@ -337,7 +358,13 @@ private struct VoiceCameraTile: View {
     let name: String
     var isSpeaking: Bool = false
     var isMuted: Bool = false
+    var isServerMuted: Bool = false
     var mirrored: Bool = false
+
+    /// A person the room cannot hear does not get a speaking ring, whatever
+    /// their `audioLevel` says. `VoiceClient` already drops it for remote
+    /// peers; this keeps the self tile honest too.
+    private var showsSpeaking: Bool { isSpeaking && !isServerMuted }
 
     var body: some View {
         VideoTile(track: track, mirrored: mirrored)
@@ -345,13 +372,18 @@ private struct VoiceCameraTile: View {
                                         style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous)
-                    .strokeBorder(isSpeaking ? Palette.success : Palette.border,
-                                  lineWidth: isSpeaking ? 2 : 1)
+                    .strokeBorder(showsSpeaking ? Palette.success : Palette.border,
+                                  lineWidth: showsSpeaking ? 2 : 1)
             )
             .overlay(alignment: .bottomLeading) {
                 HStack(spacing: 4) {
-                    if isMuted {
-                        Image(systemName: "mic.slash.fill")
+                    if isServerMuted {
+                        Image(systemName: ServerMute.glyph)
+                            .font(.system(size: 9))
+                            .foregroundStyle(Palette.warning)
+                            .accessibilityLabel("Muted by a moderator")
+                    } else if isMuted {
+                        Image(systemName: ServerMute.selfMutedGlyph)
                             .font(.system(size: 9))
                             .foregroundStyle(Palette.danger)
                     }
@@ -371,6 +403,7 @@ private struct VoiceCameraTile: View {
 private struct SelfRow: View {
     let isMuted: Bool
     let isDeafened: Bool
+    var isServerMuted: Bool = false
     let name: String
     var avatarUrl: String?
 
@@ -384,12 +417,19 @@ private struct SelfRow: View {
                 .font(Typography.caption)
                 .foregroundStyle(Palette.paperMuted)
             Spacer()
-            if isDeafened {
+            // The moderator's glyph outranks our own: deafened or not, the
+            // thing the room needs to know about us is that we cannot talk.
+            if isServerMuted {
+                Image(systemName: ServerMute.glyph)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Palette.warning)
+                    .accessibilityLabel("Muted by a moderator")
+            } else if isDeafened {
                 Image(systemName: "speaker.slash.fill")
                     .font(.system(size: 13))
                     .foregroundStyle(Palette.danger)
             } else if isMuted {
-                Image(systemName: "mic.slash.fill")
+                Image(systemName: ServerMute.selfMutedGlyph)
                     .font(.system(size: 13))
                     .foregroundStyle(Palette.danger)
             }
@@ -399,11 +439,33 @@ private struct SelfRow: View {
     }
 }
 
+/// The one line the target of a server mute sees, under the room and above
+/// the controls. Says who did it and what happens next, and nothing else: the
+/// button being off already says "you cannot".
+struct ServerMuteNotice: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: ServerMute.glyph)
+                .font(.system(size: 12))
+            Text(ServerMute.notice)
+                .font(Typography.caption)
+                .multilineTextAlignment(.leading)
+        }
+        .foregroundStyle(Palette.warning)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Capsule().fill(Palette.warning.opacity(0.14)))
+        .padding(.bottom, 6)
+        .accessibilityIdentifier("voice.serverMuted")
+    }
+}
+
 private struct PeerRow: View {
     let peer: VoicePeerState
     var volume: Double = 1
     var onVolume: (Double) -> Void = { _ in }
     var isPresenting: Bool = false
+    var isServerMuted: Bool = false
     @State private var expanded = false
 
     private var stateColor: Color {
@@ -420,13 +482,19 @@ private struct PeerRow: View {
                 name: peer.displayName,
                 seed: peer.userId.isEmpty ? peer.peerId : peer.userId,
                 size: 40,
-                isSpeaking: peer.isSpeaking,
+                isSpeaking: peer.isSpeaking && !isServerMuted,
                 url: peer.avatarUrl
             )
             Text(peer.displayName)
                 .font(Typography.bodyMedium)
                 .foregroundStyle(Palette.paper)
                 .lineLimit(1)
+            if isServerMuted {
+                Image(systemName: ServerMute.glyph)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.warning)
+                    .accessibilityLabel("Muted by a moderator")
+            }
             if isPresenting {
                 Image(systemName: "rectangle.on.rectangle")
                     .font(.system(size: 11))
@@ -448,6 +516,11 @@ private struct PeerRow: View {
         .padding(12)
         // The slider is behind a tap rather than always shown: a row per person
         // with a permanent slider turns a four-person call into a mixing desk.
+        //
+        // It keeps showing the chosen level while the person is server-muted.
+        // The mixer plays them at zero regardless and the glyph beside the
+        // name says why; dragging the slider to zero to match would throw
+        // away the level they come back at.
         .overlay(alignment: .bottom) {
             if expanded {
                 HStack(spacing: 8) {
