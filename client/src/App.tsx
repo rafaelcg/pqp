@@ -18,7 +18,6 @@ import type {
   ChannelKind,
   DmSummary,
   MemberRole,
-  ProfileUpdate,
   SanctionNotice,
   Server,
   ThreadSummary,
@@ -244,7 +243,9 @@ import {
   unreadByServer,
 } from "@/lib/notifications";
 import { setSoundOutput } from "@/lib/sounds";
+import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
+import { mergeMemberStatuses } from "@/lib/member-roster";
 import { useChannelNotifications } from "@/hooks/use-notifications";
 import { useUserStatus } from "@/hooks/use-status";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
@@ -577,22 +578,13 @@ function MainAppContent({
   // in the channel header rather than in the panel.
   const memberSidebar = useMemberSidebar();
   /**
-   * Two live signals the member sidebar cannot receive on its own.
-   *
-   * `memberRosterNudge` is bumped on any `presence-update` frame: status itself
-   * is a pull surface by design (see `server/src/ws/status.ts`), but "somebody
-   * just started looking at a channel in here" is a frame this client already
-   * gets for nothing, and it is the same event as "somebody just came online"
-   * almost every time. The sidebar debounces it into one re-read, which turns a
-   * 15-second worst case into about a second for the case people actually watch.
-   *
-   * `lastProfileUpdate` carries a rename or a new avatar straight into the
-   * roster. A fresh object per frame is what makes the sidebar's effect fire
-   * even when the same person changes the same field twice.
+   * Bumped on any `presence-update` frame. Status itself is a pull surface
+   * (see `server/src/ws/status.ts`); the frame is only "somebody started
+   * looking at a channel in here", which is the cheapest hint that presence
+   * may have moved. The shared roster hook debounces it into one re-read so
+   * both the sidebar and the transcript pips update from the same map.
    */
   const [memberRosterNudge, setMemberRosterNudge] = useState(0);
-  const [lastProfileUpdate, setLastProfileUpdate] =
-    useState<ProfileUpdate | null>(null);
   // Bumped on `community-home-update` for the OPEN server only — Baú refetches
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
@@ -1117,6 +1109,8 @@ function MainAppContent({
       setServerRoles([]);
       return;
     }
+    setServerMembers([]);
+    setMentionMembers([]);
     let cancelled = false;
     void Promise.all([
       fetchMembers(selectedServerId),
@@ -1147,6 +1141,15 @@ function MainAppContent({
       cancelled = true;
     };
   }, [conversationParticipants, selectedServerId]);
+
+  const applyRosterPayload = useCallback((incoming: ServerMember[]) => {
+    setServerMembers((prev) => mergeMemberStatuses(prev, incoming));
+  }, []);
+  useMemberRosterRefresh(
+    conversationParticipants ? null : selectedServerId,
+    memberRosterNudge,
+    applyRosterPayload,
+  );
 
   const mentionCandidates = useMemo(() => {
     if (conversationParticipants) {
@@ -1804,9 +1807,10 @@ function MainAppContent({
           }
 
           // Somebody started or stopped looking at a channel. The chat
-          // controller wants it for the header count; the member sidebar wants
-          // it as the cheapest available hint that presence has moved. Neither
-          // is the frame's owner, so it is nudged here and still falls through.
+          // controller wants it for the header count; the shared roster
+          // treats it as the cheapest available hint that presence has
+          // moved (status is not on this frame). Neither is the frame's
+          // owner, so it is nudged here and still falls through.
           if (message.type === "presence-update") {
             setMemberRosterNudge((n) => n + 1);
           }
@@ -1919,13 +1923,28 @@ function MainAppContent({
           //
           // The moderation *panel* is not, deliberately: it fetches its own
           // roster when opened and is closed the overwhelming majority of the
-          // time. The member SIDEBAR is the opposite case — it is open all the
-          // time at desktop widths — so the frame is parked here and it patches
-          // itself from it rather than refetching a hundred rows for one name.
+          // time. The shared member roster (sidebar + transcript pips) is the
+          // opposite case — it is on screen all the time at desktop widths —
+          // so name and avatar are patched in place rather than refetching a
+          // hundred rows for one person.
           if (message.type === "profile-update") {
             chat.applyProfileUpdate(message);
             threadChat.applyProfileUpdate(message);
-            setLastProfileUpdate(message);
+            setServerMembers((prev) =>
+              prev.some((one) => one.id === message.userId)
+                ? prev.map((one) =>
+                    one.id === message.userId
+                      ? {
+                          ...one,
+                          displayName: message.displayName,
+                          username: message.username,
+                          tag: message.tag,
+                          avatarUrl: message.avatarUrl,
+                        }
+                      : one,
+                  )
+                : prev,
+            );
             setConversations((prev) =>
               prev.map((conversation) =>
                 conversation.participants.some(
@@ -4685,8 +4704,14 @@ function MainAppContent({
           canManageNicknames={canManageNicknames}
           showManageRoster={canStaff}
           blockedUserIds={blockedUserIds}
-          refreshNudge={memberRosterNudge}
-          profileUpdate={lastProfileUpdate}
+          members={serverMembers}
+          onMemberNickname={(userId, nickname) => {
+            setServerMembers((prev) =>
+              prev.map((row) =>
+                row.id === userId ? { ...row, nickname } : row,
+              ),
+            );
+          }}
           onMention={(username) => setComposerInsert(`@${username}`)}
           onBlockUser={(userId) => void handleBlockUser(userId)}
           onUnblockUser={(userId) => void handleUnblockUser(userId)}
