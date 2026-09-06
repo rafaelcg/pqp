@@ -42,7 +42,7 @@ import { useAccentHue } from "@/hooks/use-accent-hue";
 import { useAppearance } from "@/hooks/use-appearance";
 import { useContrast } from "@/hooks/use-contrast";
 import { useTheme } from "@/hooks/use-theme";
-import { ACTION_LABEL } from "@/components/layout/shortcut-overlay";
+import { ACTION_LABEL, GROUP_LABEL } from "@/components/layout/shortcut-overlay";
 import { KeyBindingField } from "@/components/voice/key-binding-field";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import {
@@ -886,13 +886,14 @@ function VoiceSection({
             <KeyBindingField
               label={t("settings.voice.pttKey")}
               binding={draftLocal.pushToTalkKey}
-              isTaken={(binding) =>
-                findBindingConflict(
+              takenBy={(binding) => {
+                const conflict = findBindingConflict(
                   bindableMap(draftLocal),
                   "pushToTalk",
                   binding,
-                ) !== null
-              }
+                );
+                return conflict ? t(ACTION_LABEL[conflict]) : null;
+              }}
               onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
             />
             {/* The honest limit, stated where the binding is set rather than
@@ -1094,26 +1095,29 @@ function KeyboardSection({
     });
   }
 
-  const rows: Array<{ id: BindableId; binding: KeyBinding }> = [];
-  for (const group of SHORTCUT_GROUPS) {
-    for (const action of group.actions) {
-      rows.push({ id: action, binding: bindings[action] });
-    }
-    if (group.id === "voice") {
-      rows.push({ id: "pushToTalk", binding: draftLocal.pushToTalkKey });
-    }
+  function takenBy(action: BindableId) {
+    return (binding: KeyBinding) => {
+      const conflict = findBindingConflict(owned, action, binding);
+      return conflict ? t(ACTION_LABEL[conflict]) : null;
+    };
   }
 
   return (
     <div className="space-y-5">
       <p className="text-sm text-paper-muted">{t("settings.keyboard.hint")}</p>
-      <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="secondary" onClick={onShowOverlay}>
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          type="button"
+          variant="secondary"
+          className="w-full whitespace-normal"
+          onClick={onShowOverlay}
+        >
           {t("settings.keyboard.showMap")}
         </Button>
         <Button
           type="button"
-          variant="ghost"
+          variant="secondary"
+          className="w-full whitespace-normal"
           onClick={() =>
             patchLocal({
               shortcuts: {},
@@ -1125,26 +1129,39 @@ function KeyboardSection({
         </Button>
       </div>
       {canBindKey ? (
-        <ul className="divide-y divide-ink-4/70">
-          {rows.map((row) => (
-            <li key={row.id} className="py-3">
-              <KeyBindingField
-                label={t(ACTION_LABEL[row.id])}
-                binding={row.binding}
-                isTaken={(binding) =>
-                  findBindingConflict(owned, row.id, binding) !== null
-                }
-                onChange={(binding) => {
-                  if (row.id === "pushToTalk") {
-                    patchLocal({ pushToTalkKey: binding });
-                    return;
-                  }
-                  remap(row.id, binding);
-                }}
-              />
-            </li>
+        <div className="space-y-6">
+          {SHORTCUT_GROUPS.map((group) => (
+            <section key={group.id}>
+              <h4 className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
+                {t(GROUP_LABEL[group.id])}
+              </h4>
+              <ul className="divide-y divide-ink-4/70">
+                {group.actions.map((action) => (
+                  <li key={action} className="py-3">
+                    <KeyBindingField
+                      label={t(ACTION_LABEL[action])}
+                      binding={bindings[action]}
+                      takenBy={takenBy(action)}
+                      onChange={(binding) => remap(action, binding)}
+                    />
+                  </li>
+                ))}
+                {group.id === "voice" && (
+                  <li className="py-3">
+                    <KeyBindingField
+                      label={t(ACTION_LABEL.pushToTalk)}
+                      binding={draftLocal.pushToTalkKey}
+                      takenBy={takenBy("pushToTalk")}
+                      onChange={(binding) =>
+                        patchLocal({ pushToTalkKey: binding })
+                      }
+                    />
+                  </li>
+                )}
+              </ul>
+            </section>
           ))}
-        </ul>
+        </div>
       ) : (
         <p className="text-xs text-paper-muted">
           {t("settings.voice.pttNoKeyboard")}

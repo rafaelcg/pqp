@@ -4778,13 +4778,6 @@ function MainAppContent({
         />
       )}
 
-      <ShortcutOverlay
-        open={shortcutOverlayOpen}
-        bindings={shortcutBindings}
-        pushToTalkKey={localSettings.pushToTalkKey}
-        onClose={() => setShortcutOverlayOpen(false)}
-      />
-
       <SettingsModal
         open={settingsOpen}
         requestedSection={settingsSection}
@@ -5091,6 +5084,14 @@ function MainAppContent({
           );
           setChannelMetaChannel(null);
         }}
+      />
+
+      {/* Last dialog so the map stacks above Settings (and Esc hits this layer). */}
+      <ShortcutOverlay
+        open={shortcutOverlayOpen}
+        bindings={shortcutBindings}
+        pushToTalkKey={localSettings.pushToTalkKey}
+        onClose={() => setShortcutOverlayOpen(false)}
       />
     </div>
     </ProfilePopoverProvider>

@@ -31,7 +31,7 @@ function ShortcutKeys({ binding }: { binding: KeyBinding }) {
       {parts.map((part, index) => (
         <kbd
           key={`${part}-${index}`}
-          className="rounded border border-ink-4 bg-ink px-1.5 py-0.5 font-mono text-[11px] text-paper"
+          className="rounded border border-ink-4 bg-ink-3 px-1.5 py-0.5 font-mono text-[11px] text-paper"
         >
           {part}
         </kbd>

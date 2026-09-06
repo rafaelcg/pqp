@@ -14,8 +14,8 @@ interface KeyBindingFieldProps {
   binding: KeyBinding;
   onChange: (binding: KeyBinding) => void;
   label: string;
-  /** True when this chord already belongs to another row. */
-  isTaken?: (binding: KeyBinding) => boolean;
+  /** Label of the row that already owns this chord, if any. */
+  takenBy?: (binding: KeyBinding) => string | null;
 }
 
 /**
@@ -36,14 +36,14 @@ export function KeyBindingField({
   binding,
   onChange,
   label,
-  isTaken,
+  takenBy,
 }: KeyBindingFieldProps) {
   const { t } = useTranslation();
   const [capturing, setCapturing] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
-  const isTakenRef = useRef(isTaken);
+  const takenByRef = useRef(takenBy);
   const tRef = useRef(t);
-  isTakenRef.current = isTaken;
+  takenByRef.current = takenBy;
   tRef.current = t;
 
   useEffect(() => {
@@ -77,8 +77,9 @@ export function KeyBindingField({
         setRefused(tRef.current("keyBinding.refused"));
         return;
       }
-      if (isTakenRef.current?.(outcome.binding)) {
-        setRefused(tRef.current("keyBinding.conflict"));
+      const taken = takenByRef.current?.(outcome.binding);
+      if (taken) {
+        setRefused(tRef.current("keyBinding.conflict", { action: taken }));
         setCapturing(false);
         return;
       }
@@ -95,8 +96,9 @@ export function KeyBindingField({
       }
       pendingModifier = null;
       const next = captureModifier(event);
-      if (isTakenRef.current?.(next)) {
-        setRefused(tRef.current("keyBinding.conflict"));
+      const taken = takenByRef.current?.(next);
+      if (taken) {
+        setRefused(tRef.current("keyBinding.conflict", { action: taken }));
         setCapturing(false);
         return;
       }
@@ -113,6 +115,10 @@ export function KeyBindingField({
     };
   }, [capturing, onChange]);
 
+  useEffect(() => {
+    setRefused(null);
+  }, [binding]);
+
   return (
     <div className="space-y-1.5">
       <span className="block text-xs uppercase tracking-wide text-paper-muted">
@@ -121,7 +127,7 @@ export function KeyBindingField({
       <Button
         type="button"
         variant="secondary"
-        className="w-full justify-start font-mono"
+        className="h-auto min-h-9 w-full justify-start whitespace-normal font-mono"
         aria-live="polite"
         // The pressed state is what tells a screen reader the field is armed
         // and swallowing keys, which is otherwise invisible.
