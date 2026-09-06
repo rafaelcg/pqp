@@ -77,6 +77,7 @@ See `.env.example`. Important names:
 | Attachments (S3/R2) | `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE`, `S3_PUBLIC_BASE_URL`, `MAX_ATTACHMENT_BYTES`, `ATTACHMENT_URL_TTL_SECONDS` |
 | Communities | `COMMUNITIES_ENABLED` (default off — read `docs/CONTENT_SAFETY.md` §Communities first; it changes the instance's legal category, not just its features) |
 | Baú (Community Home) | `COMMUNITY_HOME_ENABLED`, `COMMUNITY_HOME_VIP_ENABLED` (both default off; server-side, read per request; the client follows `GET /api/community-home/config`. Not `COMMUNITIES_ENABLED`. See `docs/COMMUNITY_HOME.md`) |
+| Process role | `WORKER_MODE` (unset = one process does everything, today's default; `api` = listeners only, batch jobs skipped, set on `pqp-api` only after `pqp-worker` exists; `worker` or `1` = batch jobs + `/health` only, set on `pqp-worker`). Inventory of what moved: `docs/plans/COLD_PATHS.md` |
 | Electron | `VITE_APP_URL` |
 
 **Rule:** never commit `.env` / secrets. Prefer serving ICE via `GET /api/ice-servers` (the API) over baking TURN into the Pages build.
@@ -103,6 +104,7 @@ Browser/Electron → Clerk (auth)
 |---|---|---|
 | Static SPA | Cloudflare Pages project `pqp` | https://pqp-3yr.pages.dev |
 | API + WS | Fly.io app `pqp-api`, region `gru` (São Paulo) | https://api.pqp.gg — `wss://api.pqp.gg/ws` |
+| Worker (batch jobs) | Fly.io app `pqp-worker`, region `gru`, `WORKER_MODE=worker`, no public service (`fly.worker.toml`; optional, see `docs/deploy-fly.md` §7f) | private `/health` only |
 | Staging SPA | Cloudflare Pages branch `staging` of project `pqp` | https://staging.pqp-3yr.pages.dev |
 | Staging API + WS | Fly.io app `pqp-api-staging`, region `gru` | https://pqp-api-staging.fly.dev — `wss://pqp-api-staging.fly.dev/ws` |
 
@@ -110,7 +112,7 @@ CI workflows: `.github/workflows/ci.yml`, `deploy-web.yml`, `deploy-api-fly.yml`
 
 **GitHub Actions secrets (names):** `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_API_URL`, `VITE_WS_URL`; staging adds secret `FLY_API_TOKEN_STAGING` and repo variable `STAGING_CLERK_PUBLISHABLE_KEY`.
 
-**API secrets on Fly (names):** `DATABASE_URL`, `CLERK_SECRET_KEY`, plus TURN/ICE vars above, `S3_*` if attachments are wanted, and `PUBLIC_APP_URL` plus `STEAM_WEB_API_KEY` / `BATTLENET_*` / `TWITCH_*` if game connections are wanted. A stale Railway copy may still answer at api-production-206d.up.railway.app; nothing points at it. Do not put Clerk secret, TURN credentials, S3 keys, or those provider secrets in Pages/client secrets.
+**API secrets on Fly (names):** `DATABASE_URL`, `CLERK_SECRET_KEY`, plus TURN/ICE vars above, `S3_*` if attachments are wanted, and `PUBLIC_APP_URL` plus `STEAM_WEB_API_KEY` / `BATTLENET_*` / `TWITCH_*` if game connections are wanted. **Worker secrets on Fly (names):** `DATABASE_URL`, `CLERK_SECRET_KEY`, `S3_*` if attachments are on (`DATABASE_SSL` if the API has it); nothing else. CI needs `FLY_API_TOKEN_WORKER` to deploy it, and skips the worker when that is unset. A stale Railway copy may still answer at api-production-206d.up.railway.app; nothing points at it. Do not put Clerk secret, TURN credentials, S3 keys, or those provider secrets in Pages/client secrets.
 
 ## Pitfalls already hit
 
