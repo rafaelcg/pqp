@@ -1721,6 +1721,7 @@
   "composer.formatFence": "Code block",
   "composer.formatQuote": "Quote",
   "composer.formatList": "List",
+  "composer.formatPreview": "Preview",
   "chat.empty.title": "Start the thread",
   "chat.empty.body": "Messages persist. Use **bold**, *italic*, `code`, and links. Shift+Enter adds a line.",
   "chat.reply": "Reply",
