@@ -17,6 +17,8 @@ import gg.pqp.app.core.PqpJson
 import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionStore
 import java.util.UUID
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +29,46 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
+
+/**
+ * Why a `message-create` never became a broadcast, as `messageRejectReasonSchema`
+ * spells it. Hand-copied like every other wire literal in this module and
+ * pinned by `WireProtocolTest`, because a token this client does not know is a
+ * refusal it can only describe as "failed to send".
+ */
+enum class MessageRejectReason(val wire: String) {
+    RateLimited("rate-limited"),
+    NoAccess("no-access"),
+    CannotSend("cannot-send"),
+    /**
+     * Deliberately vague on the wire. A blocked DM answers with this token and
+     * nothing more specific, so a client must not paint it as anything but
+     * "not delivered" either: naming the block would make it an oracle.
+     */
+    Undeliverable("undeliverable"),
+    SlowMode("slow-mode"),
+    ;
+
+    companion object {
+        fun fromWire(token: String?): MessageRejectReason? = entries.firstOrNull { it.wire == token }
+    }
+}
+
+/**
+ * The server's answer to a send that did not land, for the composer to say.
+ *
+ * Two shapes because the server has two frames for it. `message-rejected`
+ * carries a machine token this client translates; `sanction-notice` carries
+ * the whole sentence, already written and already in the person's language,
+ * and is shown verbatim for the same reason `voice-moderation` is.
+ */
+sealed class SendRefusal {
+    /** `reason` is null for a token this build has never heard of. The row still comes down. */
+    data class Rejected(val reason: MessageRejectReason?) : SendRefusal()
+
+    data class Sanctioned(val message: String) : SendRefusal()
+}
 
 data class ChatState(
     val messages: List<Message> = emptyList(),
@@ -35,6 +77,33 @@ data class ChatState(
     val loadingOlder: Boolean = false,
     val typing: Set<String> = emptySet(),
     val error: String? = null,
+    /**
+     * The channel's slow mode in seconds, 0 when off. Carried in from the
+     * channel list so the composer can count down from the moment a message
+     * leaves, rather than from the moment the server says no.
+     */
+    val slowmodeSeconds: Int = 0,
+    /**
+     * Why the last send did not land, or null. Cleared by the next send that
+     * leaves the phone and, for a wait, by the wait ending.
+     */
+    val sendRefusal: SendRefusal? = null,
+    /**
+     * `SystemClock.elapsedRealtime()` before which the composer must not send,
+     * or 0. This is slow mode as the composer sees it: a countdown that starts
+     * on a successful send and is corrected by `retryAfterMs` when the server
+     * disagrees about how long is left.
+     */
+    val sendHoldUntilMs: Long = 0L,
+    /**
+     * Text the server refused, handed back to the composer once.
+     *
+     * The optimistic row is the only place the words lived after the box was
+     * cleared, and that row is coming down. The screen copies this into the
+     * draft and calls [ChatViewModel.draftRestored], which is what makes it a
+     * one-shot hand-off rather than a second source of truth for the box.
+     */
+    val restoredDraft: String? = null,
     /**
      * Whether this deployment has object storage at all.
      *
@@ -59,8 +128,13 @@ data class ChatState(
  * **sending**. This API has no `POST /api/channels/:id/messages`, only a
  * `message-create` frame. The only correlation the protocol offers is the
  * `nonce` echoed back on `message-broadcast`, so that is what retires an
- * optimistic row. There is no ack and no error frame: an invalid frame is
- * dropped server-side in silence.
+ * optimistic row. There is no ack. There is a refusal: since PR #204 the server
+ * answers a create it will not land with `message-rejected`, addressed to the
+ * sender only and echoing the same nonce, and a timed-out sender gets a
+ * `sanction-notice` instead. A malformed frame is still dropped in silence,
+ * so a row can still sit pending forever, but only for a bug in this client.
+ * For a long time this class had no branch for either refusal, and a message
+ * the server refused looked sent, on this phone, until the app was restarted.
  */
 class ChatViewModel(
     private val session: SessionStore,
@@ -72,15 +146,27 @@ class ChatViewModel(
      * above it is exercised by a JVM test with no device and no provider.
      */
     private val files: AttachmentFiles? = null,
+    /** The channel's slow mode, 0 when off or unknown. See [ChatState.slowmodeSeconds]. */
+    slowmodeSeconds: Int = 0,
 ) : ViewModel() {
 
     private val attachmentApi = AttachmentApi(session.api)
 
-    private val _state = MutableStateFlow(ChatState())
+    private val _state = MutableStateFlow(ChatState(slowmodeSeconds = slowmodeSeconds.coerceAtLeast(0)))
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
-    /** Nonces this client is still waiting to see echoed back. */
-    private val pending = mutableSetOf<String>()
+    /** What a message looked like when it left, kept until the server answers. */
+    private data class PendingSend(val body: String, val attachments: List<PendingAttachment>)
+
+    /**
+     * Nonces this client is still waiting to hear about, with what they carried.
+     *
+     * A map and not a set because a refusal hands the words back: by the time
+     * `message-rejected` arrives the composer has been cleared and the
+     * optimistic row is the only copy, and that row is about to be removed.
+     * Insertion-ordered, so the newest pending send is the last entry.
+     */
+    private val pending = linkedMapOf<String, PendingSend>()
 
     init {
         viewModelScope.launch { loadInitial() }
@@ -327,6 +413,8 @@ class ChatViewModel(
                 "message-delete", "message-deleted" -> onDelete(frame)
                 "reaction-broadcast" -> onReaction(frame)
                 "typing-broadcast" -> onTyping(frame)
+                "message-rejected" -> onRejected(frame)
+                "sanction-notice" -> onSanctioned(frame)
             }
         }
     }
@@ -337,13 +425,138 @@ class ChatViewModel(
         val nonce = frame.string("nonce")
 
         val current = _state.value.messages
-        val withoutOptimistic = if (nonce != null && pending.remove(nonce)) {
+        val withoutOptimistic = if (nonce != null && pending.remove(nonce) != null) {
             current.filterNot { it.id == nonce }
         } else {
             current
         }
         if (withoutOptimistic.any { it.id == message.id }) return
         _state.value = _state.value.copy(messages = withoutOptimistic + message)
+    }
+
+    /**
+     * The server refused a `message-create` of ours.
+     *
+     * Three things happen, and the order is the point. The optimistic row comes
+     * down, because a bubble that stays is a message the person believes was
+     * sent. The words go back to the composer, because that row was the only
+     * copy of them. And the reason goes on the composer in plain language,
+     * because "that did not work" is the sentence this frame exists to replace.
+     *
+     * A wait (`rate-limited`, `slow-mode`) is taken from `retryAfterMs` when
+     * the server says how long, and from the channel's slow mode when it does
+     * not. A permanent refusal cancels a countdown that this same send started,
+     * since there is no point waiting to be refused again for the same reason.
+     *
+     * Guarded to this channel like every broadcast: the subscription is per
+     * connection and a refusal for the chat that was on screen a second ago
+     * still arrives here.
+     */
+    private fun onRejected(frame: JsonObject) {
+        if (frame.string("channelId") != channelId) return
+        val nonce = frame.string("nonce")
+        val reason = MessageRejectReason.fromWire(frame.string("reason"))
+        val retryAfterMs = (frame["retryAfterMs"] as? JsonPrimitive)?.longOrNull ?: 0L
+
+        val sent = nonce?.let { pending.remove(it) }
+        retireAndRestore(listOfNotNull(nonce), sent, SendRefusal.Rejected(reason))
+
+        val waitMs = when (reason) {
+            MessageRejectReason.RateLimited -> retryAfterMs
+            MessageRejectReason.SlowMode ->
+                if (retryAfterMs > 0) retryAfterMs else _state.value.slowmodeSeconds * 1_000L
+            else -> 0L
+        }
+        if (waitMs > 0) {
+            hold(nonce, waitMs)
+        } else if (nonce != null && nonce == holdNonce) {
+            clearHold()
+        }
+    }
+
+    /**
+     * A moderator's timeout, told to the sender on the send it stopped.
+     *
+     * The server drops every `message-create` from a timed-out person and
+     * answers with this frame instead of `message-rejected`, so without a
+     * branch here their bubbles sat pending forever, which the plan called out
+     * (`B11`) as the one silent frame that was a moderation problem rather
+     * than a missing feature. The frame names no nonce, so every row still
+     * pending in this channel comes down and the newest text goes back.
+     */
+    private fun onSanctioned(frame: JsonObject) {
+        if (frame.string("channelId") != channelId) return
+        val message = frame.string("message") ?: return
+        val nonces = pending.keys.toList()
+        val newest = pending.values.lastOrNull()
+        pending.clear()
+        retireAndRestore(nonces, newest, SendRefusal.Sanctioned(message))
+        clearHold()
+    }
+
+    private fun retireAndRestore(nonces: List<String>, sent: PendingSend?, refusal: SendRefusal) {
+        val current = _state.value
+        // Attachments are handed back too. The refusal came before the claim,
+        // so the uploaded objects are still claimable and a retry costs
+        // nothing; what the composer has picked since is kept alongside them.
+        val attachments = if (sent == null) {
+            current.attachments
+        } else {
+            (current.attachments + sent.attachments).distinctBy { it.localId }
+        }
+        _state.value = current.copy(
+            messages = current.messages.filterNot { it.id in nonces },
+            attachments = attachments,
+            restoredDraft = sent?.body?.takeIf { it.isNotEmpty() } ?: current.restoredDraft,
+            sendRefusal = refusal,
+        )
+    }
+
+    /** The screen has copied [ChatState.restoredDraft] into the box. */
+    fun draftRestored() {
+        _state.value = _state.value.copy(restoredDraft = null)
+    }
+
+    // --- the send hold ---
+
+    /** Which send started the running countdown, so its own refusal can end it. */
+    private var holdNonce: String? = null
+    private var holdJob: Job? = null
+
+    private fun now(): Long = android.os.SystemClock.elapsedRealtime()
+
+    /**
+     * Stop the composer sending for [durationMs].
+     *
+     * Wall-clock free: `elapsedRealtime` cannot jump when the phone corrects
+     * its clock, which would otherwise strand the composer closed for however
+     * far the clock moved. The hold releases itself, and takes a wait-shaped
+     * refusal with it, because "you can send again in 0s" is not a sentence.
+     */
+    private fun hold(nonce: String?, durationMs: Long) {
+        val until = now() + durationMs
+        holdNonce = nonce
+        holdJob?.cancel()
+        _state.value = _state.value.copy(sendHoldUntilMs = until)
+        holdJob = viewModelScope.launch {
+            delay(durationMs)
+            if (_state.value.sendHoldUntilMs != until) return@launch
+            val refusal = _state.value.sendRefusal
+            val waitShaped = refusal is SendRefusal.Rejected &&
+                (refusal.reason == MessageRejectReason.SlowMode || refusal.reason == MessageRejectReason.RateLimited)
+            _state.value = _state.value.copy(
+                sendHoldUntilMs = 0L,
+                sendRefusal = if (waitShaped) null else refusal,
+            )
+            holdNonce = null
+        }
+    }
+
+    private fun clearHold() {
+        holdJob?.cancel()
+        holdJob = null
+        holdNonce = null
+        _state.value = _state.value.copy(sendHoldUntilMs = 0L)
     }
 
     private fun onUpdate(frame: JsonObject) {
@@ -490,9 +703,13 @@ class ChatViewModel(
         // claim would drop that row and the picture would simply not be there.
         if (attachments.any { it.uploading || it.failed }) return false
         if (trimmed.isEmpty() && attachmentIds.isEmpty()) return false
+        // Nor while slow mode is counting down. The server would answer with a
+        // `message-rejected` anyway; refusing here keeps the words in the box
+        // instead of taking them on a round trip to come back.
+        if (_state.value.sendHoldUntilMs > now()) return false
 
         val nonce = UUID.randomUUID().toString()
-        pending += nonce
+        pending[nonce] = PendingSend(trimmed, attachments)
 
         // The optimistic row borrows the nonce as its id, which is what makes
         // retiring it a plain filter when the broadcast arrives.
@@ -536,7 +753,21 @@ class ChatViewModel(
             )
             return false
         }
-        _state.value = _state.value.copy(attachments = emptyList(), attachmentRefusal = null)
+        _state.value = _state.value.copy(
+            attachments = emptyList(),
+            attachmentRefusal = null,
+            sendRefusal = null,
+            restoredDraft = null,
+        )
+        // Slow mode starts counting when the message leaves, the way the web
+        // composer does it, so the person sees the wait before the server has
+        // to refuse anything. `retryAfterMs` on a refusal corrects it if the
+        // two clocks disagree. The one cost: this client knows nothing about
+        // permissions, so a member with Manage Messages, whom the server lets
+        // through, waits here too. That is the honest price of a countdown
+        // that is right for everybody else, until permissions reach Android.
+        val slowmode = _state.value.slowmodeSeconds
+        if (slowmode > 0) hold(nonce, slowmode * 1_000L)
         return true
     }
 
@@ -604,14 +835,28 @@ class ChatViewModel(
         internal fun shouldSendTyping(nowMs: Long, lastSentMs: Long): Boolean =
             lastSentMs == 0L || nowMs - lastSentMs >= TYPING_THROTTLE_MS
 
+        /**
+         * Whole seconds left on a hold, rounded up, and 0 once it has passed.
+         *
+         * Up rather than down because the number is a promise: "1s" that turns
+         * into a refusal because 400ms were truncated is the countdown lying.
+         * Pure, like [shouldSendTyping], so the one rule here has a test.
+         */
+        internal fun remainingWaitSeconds(untilMs: Long, nowMs: Long): Int {
+            val left = untilMs - nowMs
+            if (left <= 0L) return 0
+            return ((left + 999L) / 1_000L).toInt()
+        }
+
         fun factory(
             session: SessionStore,
             channelId: String,
             files: AttachmentFiles? = null,
+            slowmodeSeconds: Int = 0,
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                ChatViewModel(session, channelId, files) as T
+                ChatViewModel(session, channelId, files, slowmodeSeconds) as T
         }
     }
 }
