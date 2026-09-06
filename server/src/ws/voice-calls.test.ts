@@ -158,6 +158,9 @@ const {
   resetVoiceRoomTransports,
 } = await import("./voice.js");
 
+const { setCoalesceImmediate } = await import("./fanout.js");
+// Fake timers below would freeze the roster's coalescing window.
+setCoalesceImmediate(true);
 const { setAuthenticatedSocket, deleteAuthenticatedSocket } = await import(
   "./sockets.js"
 );

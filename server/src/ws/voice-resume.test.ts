@@ -60,6 +60,9 @@ const {
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
 } = await import("./voice.js");
+const { setCoalesceImmediate } = await import("./fanout.js");
+// Fake timers in the TTL tests would freeze the roster's coalescing window.
+setCoalesceImmediate(true);
 const { deleteAuthenticatedSocket, setAuthenticatedSocket } = await import(
   "./sockets.js"
 );
