@@ -25,9 +25,11 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type FocusEvent as ReactFocusEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
+  type SyntheticEvent,
 } from "react";
 import {
   CAMERA_LIMIT,
@@ -61,12 +63,17 @@ import {
   type ScreenShareTile,
 } from "@/components/voice/screen-stage";
 import {
-  callControlsMayIdle,
   showsVideoQualityControl,
   videoQualityMenuOpen,
 } from "@/components/voice/video-quality-control";
 import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
+import {
+  idleChromeClassName,
+  tapIsOnStage,
+  useIdleChrome,
+} from "@/hooks/use-idle-chrome";
+import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
 import { isCameraAtCap, isScreenShareAtCap } from "@/lib/screen-share-roster";
@@ -421,11 +428,6 @@ export interface CallStageProps {
   /** Shrinks the thumbnail strip. Same setting the old lobby grid used. */
   compactPeers?: boolean;
   /**
-   * Conversation calls fade the chrome after a few idle seconds of video.
-   * Server voice does not: the quality menu and share live here.
-   */
-  controlsMayIdle?: boolean;
-  /**
    * DM ringing copy. Server voice does not ring: being the only person in a
    * Lobby is occupancy, not an outgoing call.
    */
@@ -461,7 +463,6 @@ export function CallStage({
   onWatchShare,
   onRetryPeer,
   compactPeers = false,
-  controlsMayIdle = true,
   ringWhenAlone = true,
 }: CallStageProps) {
   const [userCollapsed, setUserCollapsed] = useState(() =>
@@ -516,7 +517,6 @@ export function CallStage({
       onWatchShare={onWatchShare}
       onRetryPeer={onRetryPeer}
       compactPeers={compactPeers}
-      controlsMayIdle={controlsMayIdle}
       ringWhenAlone={ringWhenAlone}
     />
   );
@@ -554,7 +554,6 @@ function ActiveCall({
   onWatchShare,
   onRetryPeer,
   compactPeers = false,
-  controlsMayIdle = true,
   ringWhenAlone = true,
 }: {
   channelId: string;
@@ -595,7 +594,6 @@ function ActiveCall({
   onWatchShare?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
   compactPeers?: boolean;
-  controlsMayIdle?: boolean;
   ringWhenAlone?: boolean;
 }) {
   const { t } = useTranslation();
@@ -811,21 +809,6 @@ function ActiveCall({
   // puts a fullscreen button on every share and answers a double click on the
   // video, and this is the same call in a different room.
 
-  // --- controls fade-on-idle ---------------------------------------------
-  // Desktop pointer + video only: on touch there is no "pointer resting", and
-  // over avatars there is nothing the bar hides. Reduced motion keeps the bar
-  // put — appearing and vanishing chrome is exactly the motion being declined.
-  const autoHide = useMemo(() => {
-    if (typeof window === "undefined" || !("matchMedia" in window)) {
-      return false;
-    }
-    return (
-      window.matchMedia("(hover: hover)").matches &&
-      !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    );
-  }, []);
-  const [controlsIdle, setControlsIdle] = useState(false);
-  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // --- video quality menu -------------------------------------------------
   // "Requested" rather than "open": the open state is derived, so turning the
   // camera off (or collapsing) takes the menu down with the button it hangs
@@ -845,37 +828,67 @@ function ActiveCall({
       setQualityMenuRequested(false);
     }
   }, [qualityMenuRequested, qualityMenuOpen]);
-  const shouldAutoHide = callControlsMayIdle({
-    autoHide: autoHide && controlsMayIdle,
-    anyVideo,
-    collapsed,
-    menuOpen: qualityMenuOpen,
+  // --- video-player chrome -------------------------------------------------
+  // With a share or a camera on stage the bar and the title overlay fade
+  // after a few idle seconds and come back on any pointer move, key or touch;
+  // a tap on the picture toggles them on a phone. Nothing hides while a menu
+  // from the bar is open, the pointer rests on the bar, focus is inside it
+  // (a keyboard user is on the way to hang up) or push-to-talk is held. An
+  // audio-only call has nothing under the bar and keeps it put; so does a
+  // collapsed stage. Rules and timing: `client/src/hooks/use-idle-chrome.ts`.
+  const reducedMotion = usePrefersReducedMotion();
+  const [barHovered, setBarHovered] = useState(false);
+  const [barFocused, setBarFocused] = useState(false);
+  const pushToTalkHeld =
+    inputMode === "push-to-talk" &&
+    voiceState.isTransmitting &&
+    !voiceState.isMuted;
+  const chrome = useIdleChrome(
+    anyVideo && !collapsed,
+    qualityMenuOpen || barHovered || barFocused || pushToTalkHeld,
+  );
+  const chromeClass = idleChromeClassName({
+    hidden: chrome.hidden,
+    reducedMotion,
   });
-  const wakeControls = useCallback(() => {
-    setControlsIdle(false);
-    if (idleTimerRef.current) {
-      clearTimeout(idleTimerRef.current);
-      idleTimerRef.current = null;
-    }
-    if (!shouldAutoHide) {
+  // A touch tap is a down and an up that did not travel. Anything that moved
+  // (a scroll on the rail, a drag on the self preview) is plain activity.
+  const touchDownRef = useRef<{ x: number; y: number } | null>(null);
+  const onStagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "touch") {
+      touchDownRef.current = { x: event.clientX, y: event.clientY };
       return;
     }
-    idleTimerRef.current = setTimeout(() => setControlsIdle(true), 3000);
-  }, [shouldAutoHide]);
-  useEffect(() => {
-    if (!shouldAutoHide) {
-      setControlsIdle(false);
-      if (idleTimerRef.current) {
-        clearTimeout(idleTimerRef.current);
-        idleTimerRef.current = null;
-      }
+    chrome.wake();
+  };
+  const onStagePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType !== "touch") {
+      return;
     }
-    return () => {
-      if (idleTimerRef.current) {
-        clearTimeout(idleTimerRef.current);
-      }
-    };
-  }, [shouldAutoHide]);
+    const down = touchDownRef.current;
+    touchDownRef.current = null;
+    const travelled =
+      down === null ||
+      Math.hypot(event.clientX - down.x, event.clientY - down.y) > 10;
+    if (!travelled && tapIsOnStage(event.target)) {
+      chrome.toggle();
+      return;
+    }
+    chrome.wake();
+  };
+  const swallowPressWhileHidden = (event: SyntheticEvent<HTMLDivElement>) => {
+    if (!chrome.isHidden()) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    chrome.wake();
+  };
+  const onBarBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setBarFocused(false);
+    }
+  };
 
   // --- draggable self-preview --------------------------------------------
   const [pipCorner, setPipCorner] = useState<PipCorner>("br");
@@ -1041,8 +1054,19 @@ function ActiveCall({
             ? "h-[68svh] min-h-[280px]"
             : "h-[38svh] max-h-[420px] min-h-[220px]",
       )}
-      onPointerMove={shouldAutoHide ? wakeControls : undefined}
-      onFocusCapture={shouldAutoHide ? wakeControls : undefined}
+      onPointerMove={(event) => {
+        // Touch "moves" are scrolls and drags, answered on pointer up.
+        if (event.pointerType !== "touch") {
+          chrome.wake();
+        }
+      }}
+      onPointerDown={onStagePointerDown}
+      onPointerUp={onStagePointerUp}
+      onPointerCancel={() => {
+        touchDownRef.current = null;
+      }}
+      onKeyDownCapture={chrome.wake}
+      onFocusCapture={chrome.wake}
     >
       {/* --- the stage's content, by layout --------------------------------- */}
       {showMeshWarning && (
@@ -1260,6 +1284,7 @@ function ActiveCall({
         !(layout === "ring" && self.stream) && (
         <div
           data-call-tile={self.name}
+          data-call-pip=""
           role="group"
           aria-label={t("call.stage.selfPreview")}
           className={cn(
@@ -1356,9 +1381,11 @@ function ActiveCall({
       )}
 
       <div
+        data-call-chrome="overlay"
+        data-chrome-hidden={chrome.hidden ? "true" : "false"}
         className={cn(
-          "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent px-3 py-2 transition-opacity duration-300 motion-reduce:transition-none",
-          controlsIdle && "opacity-0",
+          "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent px-3 py-2",
+          chromeClass,
           (voiceState.error || voiceState.notice) && "mt-7",
         )}
       >
@@ -1417,10 +1444,27 @@ function ActiveCall({
       </div>
 
       <div
+        data-call-chrome="bar"
+        data-testid="call-controls-bar"
+        data-chrome-hidden={chrome.hidden ? "true" : "false"}
         className={cn(
-          "absolute inset-x-0 bottom-0 z-20 flex justify-center bg-gradient-to-t from-ink/80 to-transparent px-3 pb-3 pt-8 transition-opacity duration-300 motion-reduce:transition-none",
-          controlsIdle && "pointer-events-none opacity-0",
+          "absolute inset-x-0 bottom-0 z-20 flex justify-center bg-gradient-to-t from-ink/80 to-transparent px-3 pb-3 pt-8",
+          chromeClass,
         )}
+        onPointerEnter={(event) => {
+          if (event.pointerType !== "touch") {
+            setBarHovered(true);
+          }
+        }}
+        onPointerLeave={() => setBarHovered(false)}
+        // A press on the bar while it is invisible only brings it back. The
+        // mouse move before a click has already done that, so this is the
+        // touch case: a thumb on the picture, right where the hang-up button
+        // happens to be.
+        onPointerDownCapture={swallowPressWhileHidden}
+        onClickCapture={swallowPressWhileHidden}
+        onFocusCapture={() => setBarFocused(true)}
+        onBlurCapture={onBarBlur}
       >
         {controls}
       </div>

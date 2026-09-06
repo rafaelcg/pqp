@@ -98,7 +98,6 @@ export function VoiceChannelStage({
       onWatchShare={onWatchShare}
       onRetryPeer={onRetryPeer}
       compactPeers={compactPeers}
-      controlsMayIdle={false}
       ringWhenAlone={false}
     />
   );
