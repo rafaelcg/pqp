@@ -85,7 +85,7 @@ final class LiveKitJoinUITests: XCTestCase {
     ///
     /// and, once `lk room list` shows the room, from another shell:
     ///
-    ///     lk room join --url ws://localhost:7880 --api-key devkey --api-secret secret \
+    ///     lk room join --url ws://localhost:7880 --api-key "$LIVEKIT_API_KEY" --api-secret "$LIVEKIT_API_SECRET" \
     ///        --identity bot --publish-demo <room>
     func testARemoteParticipantAppearsOnTheRoster() throws {
         let label = try XCTUnwrap(
