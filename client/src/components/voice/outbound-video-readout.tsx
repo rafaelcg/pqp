@@ -19,8 +19,10 @@ import {
  * my connection" is a report somebody can do something with.
  *
  * It reads the same sampler the console probe uses, so the two can never
- * disagree. Mesh only, because that is where the registry lives; on an SFU
- * room it simply shows nothing rather than something wrong.
+ * disagree. Both transports feed it: the mesh registers its peer connections
+ * and the LiveKit session registers a sampler over its own publications, with
+ * the ceiling it applied, so "held back by your quality setting" means the
+ * same thing on the SFU as on the mesh.
  */
 const SAMPLE_INTERVAL_MS = 2000;
 
@@ -46,7 +48,7 @@ export function OutboundVideoReadout({
    * "turn your camera on during a call". The in-call menu only exists while the
    * camera *is* on, so that sentence would be a flat contradiction there: with
    * a camera running and no sample, what is actually true is that this call
-   * cannot be measured from here (an SFU room keeps no local sender registry).
+   * has not produced a reading yet.
    */
   idleKey = "settings.voice.videoQuality.idle",
 }: {

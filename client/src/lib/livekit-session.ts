@@ -5,6 +5,42 @@ import {
   DEFAULT_VIDEO_QUALITY,
   screenBitrateFor,
 } from "./video-quality";
+import {
+  measureKbps,
+  registerVoiceStatsSource,
+  type VideoReceiverSample,
+  type VideoSenderRole,
+  type VideoSenderSample,
+  type VoiceStatsSnapshot,
+} from "./voice-stats-probe";
+
+/**
+ * The shape of the two stats calls `livekit-client` puts on its video tracks,
+ * spelled locally so the sampler can duck-type a publication's track rather
+ * than `instanceof` a class that only exists after the dynamic import.
+ */
+interface ReceiverStatsLike {
+  timestamp: number;
+  bytesReceived?: number;
+  framesDecoded?: number;
+  frameWidth?: number;
+  frameHeight?: number;
+  decoderImplementation?: string;
+  packetsLost?: number;
+}
+interface SenderStatsLike {
+  timestamp: number;
+  bytesSent?: number;
+  frameWidth?: number;
+  frameHeight?: number;
+  framesPerSecond?: number;
+  framesSent?: number;
+  targetBitrate?: number;
+  qualityLimitationReason?: string;
+  qualityLimitationDurations?: Record<string, number>;
+  pliCount?: number;
+  nackCount?: number;
+}
 
 /** Where a session starts before anybody has chosen a quality. */
 const DEFAULT_CAMERA_MAX_BITRATE_BPS = cameraBitrateFor(DEFAULT_VIDEO_QUALITY);
@@ -220,6 +256,184 @@ export async function connectLiveKit({
 
   await room.connect(session.url, session.token);
 
+  /**
+   * The peer id this participant joined under. Sender rows need one, and on
+   * this transport the only connection is ours.
+   */
+  const localPeerId = session.identity;
+
+  function roleOfSource(source: unknown): VideoSenderRole {
+    if (source === Track.Source.ScreenShare) {
+      return "screen";
+    }
+    if (source === Track.Source.Camera) {
+      return "camera";
+    }
+    return "unknown";
+  }
+
+  /** Decoded-frame marks, so a receiver's fps is measured rather than guessed. */
+  const frameMarks = new Map<string, { frames: number; timestamp: number }>();
+
+  function measureFps(
+    key: string,
+    frames: number | null,
+    timestamp: number | null,
+  ): number | null {
+    const mark = frameMarks.get(key);
+    let fps: number | null = null;
+    if (mark && frames !== null && timestamp !== null && timestamp > mark.timestamp) {
+      fps = ((frames - mark.frames) * 1000) / (timestamp - mark.timestamp);
+    }
+    if (frames !== null && timestamp !== null) {
+      frameMarks.set(key, { frames, timestamp });
+    }
+    return fps;
+  }
+
+  /**
+   * What is arriving, straight off the room.
+   *
+   * WHY THE ROOM AND NOT `getStats()`. The readout under the quality menu
+   * reads one sampler for both transports, and that sampler used to know only
+   * about mesh peer connections. In a LiveKit room it therefore found nothing
+   * and said "nobody is sending you video right now" under a screen share
+   * that a hundred people were watching. The SFU already labels every
+   * publication with its source and its owner, so it is the authority on the
+   * two things the readout is for: what this is, and whose it is. The size,
+   * rate and decoder come off the track's own receiver stats when the
+   * library has them, and the row is present either way, because a subscribed
+   * video publication is the server's word that the picture is flowing.
+   */
+  async function sampleReceivers(): Promise<VideoReceiverSample[]> {
+    const rows: VideoReceiverSample[] = [];
+    for (const participant of room.remoteParticipants.values()) {
+      for (const publication of participant.videoTrackPublications.values()) {
+        const role = roleOfSource(publication.source);
+        const track = publication.videoTrack;
+        if (role === "unknown" || !track || !publication.isSubscribed || publication.isMuted) {
+          continue;
+        }
+        let stats: ReceiverStatsLike | undefined;
+        const reader = (
+          track as unknown as {
+            getReceiverStats?: () => Promise<ReceiverStatsLike | undefined>;
+          }
+        ).getReceiverStats;
+        if (typeof reader === "function") {
+          try {
+            stats = await reader.call(track);
+          } catch {
+            stats = undefined;
+          }
+        }
+        const key = `sfu:in:${participant.identity}:${publication.trackSid}`;
+        const timestamp = stats?.timestamp ?? null;
+        const framesDecoded = stats?.framesDecoded ?? null;
+        const identity = lookupIdentity(participant.identity);
+        rows.push({
+          peerId: participant.identity,
+          displayName: identity?.displayName ?? participant.name ?? null,
+          role,
+          width: stats?.frameWidth ?? null,
+          height: stats?.frameHeight ?? null,
+          fps: measureFps(key, framesDecoded, timestamp),
+          kbps: measureKbps(key, stats?.bytesReceived ?? null, timestamp),
+          framesDecoded,
+          decoder: stats?.decoderImplementation ?? null,
+          freezeCount: null,
+          packetsLost: stats?.packetsLost ?? null,
+          attached: true,
+        });
+      }
+    }
+    return rows;
+  }
+
+  /**
+   * What is leaving, for the presenter's half of the same menu.
+   *
+   * One row per published video source. The library reports one entry per
+   * simulcast layer; both sources publish a single layer here, and if that
+   * ever changes the busiest layer is the one a person means by "what am I
+   * sending". The ceiling is the one this session applied, which is what lets
+   * `describeLimitation` tell "sitting on your setting" from "starved by your
+   * link" exactly as it does on the mesh.
+   */
+  async function sampleSenders(): Promise<VideoSenderSample[]> {
+    const rows: VideoSenderSample[] = [];
+    const sources: [unknown, VideoSenderRole, number][] = [
+      [Track.Source.Camera, "camera", cameraMaxBitrate],
+      [Track.Source.ScreenShare, "screen", screenMaxBitrate],
+    ];
+    for (const [source, role, ceiling] of sources) {
+      const publication = room.localParticipant.getTrackPublication(
+        source as Parameters<typeof room.localParticipant.getTrackPublication>[0],
+      );
+      const track = publication?.videoTrack;
+      const reader = (
+        track as unknown as
+          | { getSenderStats?: () => Promise<SenderStatsLike[]> }
+          | undefined
+      )?.getSenderStats;
+      if (!track || typeof reader !== "function") {
+        continue;
+      }
+      let layers: SenderStatsLike[] = [];
+      try {
+        layers = (await reader.call(track)) ?? [];
+      } catch {
+        layers = [];
+      }
+      const stats = layers.reduce<SenderStatsLike | null>(
+        (best, layer) =>
+          best === null || (layer.bytesSent ?? 0) > (best.bytesSent ?? 0)
+            ? layer
+            : best,
+        null,
+      );
+      if (!stats) {
+        continue;
+      }
+      const key = `sfu:out:${localPeerId}:${role}`;
+      rows.push({
+        peerId: localPeerId,
+        role,
+        width: stats.frameWidth ?? null,
+        height: stats.frameHeight ?? null,
+        fps: stats.framesPerSecond ?? null,
+        kbps: measureKbps(key, stats.bytesSent ?? null, stats.timestamp),
+        targetKbps:
+          typeof stats.targetBitrate === "number"
+            ? Math.round(stats.targetBitrate / 1000)
+            : null,
+        limitedBy: stats.qualityLimitationReason ?? null,
+        ceilingKbps: Math.round(ceiling / 1000),
+        limitDurations: stats.qualityLimitationDurations ?? null,
+        encoder: null,
+        framesEncoded: null,
+        framesSent: stats.framesSent ?? null,
+        keyFramesEncoded: null,
+        pliCount: stats.pliCount ?? null,
+        nackCount: stats.nackCount ?? null,
+      });
+    }
+    return rows;
+  }
+
+  async function sampleRoom(): Promise<VoiceStatsSnapshot> {
+    if (room.state !== ConnectionState.Connected) {
+      return { senders: [], receivers: [], paths: [] };
+    }
+    const [senders, receivers] = await Promise.all([
+      sampleSenders(),
+      sampleReceivers(),
+    ]);
+    return { senders, receivers, paths: [] };
+  }
+
+  const unregisterStats = registerVoiceStatsSource(sampleRoom);
+
   /** Track we published, kept so we can replace/mute it later. */
   let published: InstanceType<typeof LocalAudioTrack> | null = null;
   /** Raw screen-share track we published, kept so we can unpublish it later. */
@@ -418,6 +632,8 @@ export async function connectLiveKit({
     },
 
     async disconnect() {
+      unregisterStats();
+      frameMarks.clear();
       streams.clear();
       screenStreams.clear();
       cameraStreams.clear();
