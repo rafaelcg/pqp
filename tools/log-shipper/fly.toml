@@ -1,0 +1,28 @@
+# Fly app that forwards pqp-api log lines to Grafana Cloud Loki. Official
+# superfly/fly-log-shipper image (Vector based); nothing is built from this repo.
+#
+# Deploy from this directory:  fly deploy
+# Secrets (never here):        see README.md
+app = "pqp-log-shipper"
+primary_region = "gru"
+
+[build]
+  image = "flyio/log-shipper:latest"
+
+[env]
+  # Which apps to ship. The image default is "logs.>" (every app in the org);
+  # pqp only needs the API, so narrow it and keep the Loki volume small.
+  SUBJECT = "logs.pqp-api.>"
+  QUEUE = "pqp-log-shipper"
+
+# Vector's API port; no public traffic, no health checks, one tiny machine.
+[[services]]
+  internal_port = 8686
+  protocol = "tcp"
+  auto_stop_machines = "off"
+  auto_start_machines = false
+  min_machines_running = 1
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
