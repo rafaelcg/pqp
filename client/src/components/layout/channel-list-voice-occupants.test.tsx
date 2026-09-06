@@ -131,6 +131,20 @@ describe("ChannelList voice occupants", () => {
     expect(html).toContain('data-channel-type="text"');
   });
 
+  it("does not light the speaking ring on a muted seat", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        currentUserId={andre.userId}
+        voiceOccupancy={{
+          [lobby.id]: [{ ...andre, muted: true }, rafa],
+        }}
+        speakingPeerIds={[andre.peerId]}
+      />,
+    );
+    expect(html).not.toContain("ring-accent");
+  });
+
   it("lets you drag yourself without Move Members", () => {
     const html = renderList(
       <ChannelList
