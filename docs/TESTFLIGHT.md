@@ -125,6 +125,36 @@ POST /v1/betaBuildLocalizations   # locale pt-BR, whatsNew: the notes, build: th
 Write it in plain Brazilian Portuguese, aimed at somebody holding a phone, with
 no jargon and no em dashes. Say what changed and what to poke at.
 
+### 5. Put it in front of testers
+
+Uploading is not shipping. There are two audiences and they behave differently:
+
+| Group | Kind | Gets a new build |
+|---|---|---|
+| `Team` | internal | Automatically. `hasAccessToAllBuilds` is true, so an upload is enough |
+| `Beta` | external, public link `https://testflight.apple.com/join/envnP5vV` | **Only when the build is submitted for Beta App Review and added to the group.** Nothing about uploading does this |
+
+That distinction went unnoticed for a month: builds 12 through 17 were uploaded
+and every one of them reached the internal group only, while the public link the
+website advertises still handed out **build 11 from 8 August**. Check it after
+every upload:
+
+```bash
+GET /v1/betaGroups/4d8af414-c4f2-4fe1-8299-01b77e5fde89/builds?fields[builds]=version
+```
+
+Two calls fix it, and they need no human step when Test Information is already
+filled in (it is: contact plus a demo account):
+
+```bash
+POST /v1/betaAppReviewSubmissions          # { build: <build id> }
+POST /v1/betaGroups/<group id>/relationships/builds   # [ { type: builds, id: <build id> } ]
+```
+
+Build 18's review came back `APPROVED` in under a minute, which is what a
+subsequent build of an already-approved app usually does. `autoNotifyEnabled`
+is on, so testers are emailed without a further step.
+
 ## Sign-in information ≠ Apple ID
 
 App Store Connect → Test Information / App Review asks for **Sign-in information**.
