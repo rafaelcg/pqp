@@ -435,6 +435,10 @@ export function isApplePlatform(nav: Pick<Navigator, "platform" | "userAgent"> =
  * itself since no event fires. Returns whether an `input` event was dispatched.
  */
 export function applyFormattingEdit(input: HTMLTextAreaElement, edit: FormattingEdit): boolean {
+  // insertText/delete run on the active element. A format-bar click can leave
+  // the button focused; without this, Chromium reports success and appends
+  // the replacement at the end instead of wrapping the selection.
+  input.focus();
   input.setSelectionRange(edit.replaceStart, edit.replaceEnd);
   let dispatched = false;
   if (typeof document !== "undefined" && typeof document.execCommand === "function") {
@@ -451,6 +455,9 @@ export function applyFormattingEdit(input: HTMLTextAreaElement, edit: Formatting
   }
   if (!dispatched) {
     input.setRangeText(edit.replacement, edit.replaceStart, edit.replaceEnd, "end");
+  } else if (input.value !== edit.value) {
+    input.setRangeText(edit.value, 0, input.value.length, "end");
+    dispatched = false;
   }
   input.setSelectionRange(edit.selectionStart, edit.selectionEnd);
   return dispatched;

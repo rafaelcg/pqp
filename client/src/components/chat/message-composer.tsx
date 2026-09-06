@@ -703,14 +703,28 @@ export function MessageComposer({
     if (!input || disabled || isRunningSlash) {
       return;
     }
+    // Read the range before focus(). Some browsers move the caret to the end
+    // when a blurred textarea is focused, which would wrap the wrong span
+    // and make a second tap nest instead of unwrap.
     const start = input.selectionStart ?? input.value.length;
     const end = input.selectionEnd ?? input.value.length;
+    input.focus();
+    input.setSelectionRange(start, end);
     const edit = isBlockFormat(kind)
       ? toggleBlockFormatting(input.value, start, end, kind)
       : toggleFormatting(input.value, start, end, kind);
     applyFormattingEdit(input, edit);
     setBody(input.value);
     setCaret(edit.selectionStart);
+    requestAnimationFrame(() => {
+      const live = inputRef.current;
+      if (!live) {
+        return;
+      }
+      live.focus();
+      live.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+      setCaret(edit.selectionStart);
+    });
   }
 
   function syncCaret(input: HTMLTextAreaElement) {
@@ -1433,7 +1447,7 @@ export function MessageComposer({
           id={FORMAT_BAR_ID}
           role="toolbar"
           aria-label={t("composer.format")}
-          className="mb-2 grid grid-cols-7 gap-1"
+          className="mb-2 flex gap-1"
         >
           {FORMAT_ACTIONS.map((action) => {
             const Icon = action.icon;
@@ -1446,7 +1460,7 @@ export function MessageComposer({
                   disabled={disabled || isRunningSlash}
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => applyComposerFormat(action.kind)}
-                  className="h-8 w-full min-w-0 text-paper-muted hover:text-signal"
+                  className="h-8 min-w-8 flex-1 text-paper-muted hover:text-signal sm:w-8 sm:flex-none"
                 >
                   <Icon className="h-4 w-4" />
                 </Button>
