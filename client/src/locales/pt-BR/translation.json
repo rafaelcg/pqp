@@ -882,7 +882,7 @@
   "voice.notice.listenOnly": "Você entrou sem microfone, então dá para ouvir mas não para falar. {reason}",
   "voice.notice.speakDenied": "Só ouvindo. Você não tem permissão para falar neste canal.",
   "voice.notice.speakGranted": "Agora você pode falar. Ligue o microfone quando quiser.",
-  "voice.notice.streamDenied": "Sem câmera nem tela neste canal.",
+  "voice.notice.streamDenied": "Neste canal você não liga câmera nem compartilha tela.",
   "voice.notice.streamGranted": "Agora você pode ligar a câmera ou compartilhar a tela.",
   "voice.control.listenOnlyLocked": "Só ouvindo. Você não tem permissão para falar neste canal.",
   "voice.bar.listenOnly": "Só ouvindo",
