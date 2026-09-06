@@ -628,6 +628,29 @@ describe("the large-room cap", () => {
   });
 });
 
+describe("ConnectionQualityChanged becomes the same three bars", () => {
+  it("attaches Excellent / Good / Poor to the remote peer", async () => {
+    const seen: { peerId: string; bars?: number }[][] = [];
+    await connectLiveKit({
+      session: SESSION,
+      lookupIdentity: () => undefined,
+      onPeersChanged: (peers) => {
+        seen.push(
+          peers.map((peer) => ({
+            peerId: peer.peerId,
+            bars: peer.quality?.bars,
+          })),
+        );
+      },
+      onError: () => {},
+    });
+    room().join("rafa");
+    room().setQuality("rafa", ConnectionQuality.Poor);
+
+    expect(seen.at(-1)).toEqual([{ peerId: "rafa", bars: 1 }]);
+  });
+});
+
 describe("the layer this viewer asks for", () => {
   it("maps the four choices onto the library's three qualities", async () => {
     const sfu = await session();
@@ -816,28 +839,5 @@ describe("video nobody is drawing", () => {
     room().unsubscribe(rafa, Track.Source.ScreenShare);
     vi.advanceTimersByTime(OFFSCREEN_GRACE_MS * 2);
     expect(publication.enabled).toEqual([]);
-  });
-});
-
-describe("ConnectionQualityChanged becomes the same three bars", () => {
-  it("attaches Excellent / Good / Poor to the remote peer", async () => {
-    const seen: { peerId: string; bars?: number }[][] = [];
-    await connectLiveKit({
-      session: SESSION,
-      lookupIdentity: () => undefined,
-      onPeersChanged: (peers) => {
-        seen.push(
-          peers.map((peer) => ({
-            peerId: peer.peerId,
-            bars: peer.quality?.bars,
-          })),
-        );
-      },
-      onError: () => {},
-    });
-    room().join("rafa");
-    room().setQuality("rafa", ConnectionQuality.Poor);
-
-    expect(seen.at(-1)).toEqual([{ peerId: "rafa", bars: 1 }]);
   });
 });
