@@ -254,6 +254,7 @@ import { adoptThemePreference, themeToAdopt } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
+import { shouldJoinMuted } from "@/lib/join-muted";
 import { Button } from "@/components/ui/button";
 
 export type TokenResolver = (options?: {
@@ -2529,10 +2530,12 @@ function MainAppContent({
     voiceServerIdRef.current = selectedServerId;
     refreshIceServers();
 
+    // A crowd is joined muted regardless of the preference; see join-muted.ts.
+    const occupantsAlreadyInRoom = voiceState.occupancy[channelId]?.length ?? 0;
     await voice.join(channelId, {
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,
-      startMuted: localSettings.muteOnJoin,
+      startMuted: shouldJoinMuted(localSettings.muteOnJoin, occupantsAlreadyInRoom),
       inputMode: localSettings.inputMode,
       processing: localSettings.micProcessing,
     });
