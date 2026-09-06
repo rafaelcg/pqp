@@ -100,7 +100,7 @@ export function SectionRail<Id extends string>({
             )}
           >
             <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span className="min-w-0 truncate">{section.label}</span>
+            <span className="min-w-0">{section.label}</span>
             {section.dirty ? (
               <span
                 className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-signal"

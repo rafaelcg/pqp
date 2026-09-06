@@ -140,7 +140,7 @@ export function WebhooksSection({
               <Button
                 size="sm"
                 variant="ghost"
-                className="w-20 shrink-0 text-danger"
+                className="w-[6.25rem] shrink-0 text-danger"
                 disabled={busyId === webhook.id}
                 onClick={() => void remove(webhook.id)}
               >
@@ -155,7 +155,7 @@ export function WebhooksSection({
               <Button
                 size="sm"
                 variant="secondary"
-                className="w-20 shrink-0"
+                className="w-[6.25rem] shrink-0"
                 onClick={() => void copyUrl(webhook)}
               >
                 {copiedId === webhook.id ? t("common.copied") : t("common.copy")}

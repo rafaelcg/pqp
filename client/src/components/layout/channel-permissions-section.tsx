@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Check, Plus, X } from "lucide-react";
+import { Check, ChevronDown, Plus, X } from "lucide-react";
 import { Permission, parsePermissions, serializePermissions } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { CheckRow } from "@/components/ui/check-row";
@@ -656,7 +656,7 @@ export function ChannelPermissionsSection({
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="w-20 shrink-0"
+                        className="w-[6.25rem] shrink-0"
                         disabled={memberBusy === member.id}
                         onClick={() => void removeMember(member)}
                       >
@@ -683,7 +683,7 @@ export function ChannelPermissionsSection({
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="w-20 shrink-0"
+                        className="w-[6.25rem] shrink-0"
                         disabled={memberBusy === member.id}
                         onClick={() => void addMember(member)}
                       >
@@ -770,7 +770,7 @@ export function ChannelPermissionsSection({
             </button>
             <div
               className={cn(
-                "border-t border-ink-4/60 px-2 py-1",
+                "max-h-64 overflow-y-auto overscroll-contain border-t border-ink-4/60 px-2 py-1",
                 recipe.kind === "everyone" && "opacity-60",
               )}
             >
@@ -817,13 +817,14 @@ export function ChannelPermissionsSection({
             </div>
           </div>
           {recipeError && (
-            <div className="flex items-center gap-3">
-              <p className="text-sm text-danger" role="alert">
+            <div className="flex flex-wrap items-center gap-3">
+              <p className="min-w-0 flex-1 text-sm text-danger" role="alert">
                 {recipeError}
               </p>
               <Button
                 size="sm"
                 variant="ghost"
+                className="shrink-0"
                 disabled={recipeBusy}
                 onClick={retryRecipe}
               >
@@ -845,9 +846,13 @@ export function ChannelPermissionsSection({
             <span className="text-[15px] font-semibold text-paper">
               {t("channelSettings.advanced")}
             </span>
-            <span className="text-xs text-paper-muted">
-              {advancedOpen ? "–" : "+"}
-            </span>
+            <ChevronDown
+              className={cn(
+                "h-4 w-4 shrink-0 text-paper-muted transition-transform",
+                advancedOpen && "rotate-180",
+              )}
+              aria-hidden="true"
+            />
           </button>
           {!advancedOpen && (
             <p className="px-1 text-sm text-paper-muted">
@@ -857,14 +862,14 @@ export function ChannelPermissionsSection({
           {advancedOpen && (
             <div className="mt-2 space-y-3">
               <div className="flex min-h-0 flex-col gap-3 sm:flex-row">
-                <ul className="w-full shrink-0 space-y-1 sm:w-40">
+                <ul className="max-h-64 w-full shrink-0 space-y-1 overflow-y-auto overscroll-contain sm:w-44">
                   {targets.map((row) => (
                     <li key={row.key}>
                       <button
                         type="button"
                         onClick={() => setSelectedKey(row.key)}
                         className={cn(
-                          "w-full truncate rounded-md px-2 py-1.5 text-left text-sm",
+                          "w-full break-words rounded-md px-2 py-1.5 text-left text-sm",
                           row.key === selectedKey
                             ? "bg-signal/12 font-medium text-paper"
                             : "text-paper-muted hover:bg-ink-3 hover:text-paper",

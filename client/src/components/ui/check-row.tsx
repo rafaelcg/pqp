@@ -47,7 +47,7 @@ export function CheckRow({
             aria-hidden
           />
         ) : null}
-        <span className="truncate text-sm text-paper">{label}</span>
+        <span className="break-words text-sm text-paper">{label}</span>
       </span>
       <span
         aria-hidden
