@@ -804,6 +804,8 @@
   "voice.bar.open": "Abrir o canal de voz {name}",
   "voice.share.someone": "Alguém",
   "voice.share.youPresenting": "Você está compartilhando",
+  "voice.rail.hide": "Ocultar participantes",
+  "voice.rail.show": "Mostrar participantes",
   "voice.share.peerPresenting": "{name} está compartilhando",
   "voice.share.focus": "Ver a tela de {name}",
   "voice.share.stop": "Parar de compartilhar",
