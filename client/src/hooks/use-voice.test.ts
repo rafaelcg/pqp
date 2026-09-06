@@ -317,6 +317,7 @@ function welcome(
     sharingScreen: false,
     muted: false,
     deafened: false,
+    serverMuted: false,
   };
   return {
     type: "welcome",
@@ -379,6 +380,7 @@ describe("screen share audio", () => {
       sharingScreen,
       muted: false,
       deafened: false,
+      serverMuted: false,
     });
     return {
       type: "voice-roster",
@@ -739,6 +741,7 @@ describe("concurrent screen shares", () => {
       sharingScreen,
       muted: false,
       deafened: false,
+      serverMuted: false,
     };
   }
 
@@ -1348,6 +1351,7 @@ describe("lobby presence sounds", () => {
       sharingScreen: false,
       muted: false,
       deafened: false,
+      serverMuted: false,
     };
     voice.handleSignaling({ type: "peer-joined", peer: other } as never);
     expect(playCueMock).toHaveBeenCalledWith("voiceJoin");
@@ -1377,6 +1381,7 @@ describe("lobby presence sounds", () => {
       sharingScreen: false,
       muted: false,
       deafened: false,
+      serverMuted: false,
     };
     voice.handleSignaling({ type: "peer-joined", peer: other } as never);
     playCueMock.mockClear();
@@ -1456,6 +1461,7 @@ describe("voice session resume", () => {
         sharingScreen: false,
         muted: false,
         deafened: false,
+        serverMuted: false,
       },
       resumed: true,
       resumeToken: TOKEN,
@@ -1532,6 +1538,7 @@ describe("voice session resume", () => {
         sharingScreen: false,
         muted: false,
         deafened: false,
+        serverMuted: false,
       },
     });
     expect(playCueMock).not.toHaveBeenCalled();
@@ -1551,6 +1558,7 @@ describe("voice session resume", () => {
         sharingScreen: false,
         muted: false,
         deafened: false,
+        serverMuted: false,
       },
     });
     expect(playCueMock).not.toHaveBeenCalled();
@@ -1573,6 +1581,7 @@ describe("voice session resume", () => {
         sharingScreen: false,
         muted: false,
         deafened: false,
+        serverMuted: false,
       },
     });
     await settle();
@@ -1670,6 +1679,7 @@ describe("voice session resume", () => {
           sharingScreen: false,
           muted: false,
           deafened: false,
+          serverMuted: false,
         },
         {
           peerId: arrived,
@@ -1679,6 +1689,7 @@ describe("voice session resume", () => {
           sharingScreen: false,
           muted: false,
           deafened: false,
+          serverMuted: false,
         },
       ],
     });
@@ -1949,5 +1960,213 @@ describe("speak permission", () => {
     expect(voice.getState().canSpeak).toBe(false);
     voice.leave();
     expect(voice.getState().canSpeak).toBe(true);
+  });
+});
+
+/**
+ * The receiving half of a server mute.
+ *
+ * The server never touches media on a mesh room, so the mute there is the
+ * eviction trick: the roster carries `serverMuted`, and every client enforces
+ * it. What this pins is that the hook actually reads the flag from every frame
+ * a participant travels in, keeps the muted person out of the speaking set,
+ * and turns the target's own unmute into a no-op while the flag stands.
+ */
+describe("server mute", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    stoppedTracks.length = 0;
+  });
+
+  const OTHER = "00000000-0000-4000-8000-0000000000dd";
+
+  function participant(
+    peerId: string,
+    overrides: Partial<{ serverMuted: boolean; muted: boolean }> = {},
+  ) {
+    return {
+      peerId,
+      userId: peerId === PEER ? "00000000-0000-4000-8000-0000000000cc" : OTHER,
+      displayName: peerId === PEER ? "Me" : "Other",
+      avatarUrl: null,
+      sharingScreen: false,
+      muted: false,
+      deafened: false,
+      serverMuted: false,
+      ...overrides,
+    };
+  }
+
+  it("reads a peer's flag from welcome", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+
+    voice.handleSignaling({
+      type: "welcome",
+      peerId: PEER,
+      voiceChannelId: CHANNEL,
+      self: participant(PEER),
+      peers: [participant("quiet", { serverMuted: true, muted: true })],
+      transport: "mesh",
+    } as never);
+    await settle();
+
+    expect(voice.getState().serverMutedPeerIds).toEqual(["quiet"]);
+    expect(voice.getState().self?.serverMuted).toBe(false);
+  });
+
+  it("follows the flag on voice-roster and peer-updated, both ways", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    voice.handleSignaling({
+      type: "peer-joined",
+      peer: participant("loud"),
+    } as never);
+    expect(voice.getState().serverMutedPeerIds).toEqual([]);
+
+    // The moderator acted: the room's roster says so.
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      participants: [participant(PEER), participant("loud", { serverMuted: true })],
+      transport: "mesh",
+    } as never);
+    expect(voice.getState().serverMutedPeerIds).toEqual(["loud"]);
+
+    // A per-peer frame clears it again.
+    voice.handleSignaling({
+      type: "peer-updated",
+      peer: participant("loud", { serverMuted: false }),
+    } as never);
+    expect(voice.getState().serverMutedPeerIds).toEqual([]);
+
+    // And sets it again.
+    voice.handleSignaling({
+      type: "peer-updated",
+      peer: participant("loud", { serverMuted: true }),
+    } as never);
+    expect(voice.getState().serverMutedPeerIds).toEqual(["loud"]);
+  });
+
+  it("ignores another room's roster", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: "00000000-0000-4000-8000-0000000000ee",
+      participants: [participant("elsewhere", { serverMuted: true })],
+      transport: "mesh",
+    } as never);
+
+    expect(voice.getState().serverMutedPeerIds).toEqual([]);
+  });
+
+  it("pins the target's own mic: unmute is a no-op while server-muted", async () => {
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    expect(voice.getState().isMuted).toBe(false);
+
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      participants: [participant(PEER, { serverMuted: true, muted: true })],
+      transport: "mesh",
+    } as never);
+
+    expect(voice.getState().self?.serverMuted).toBe(true);
+    expect(voice.getState().isMuted).toBe(true);
+    // Our own peer id is never in the list: that is what we play, not what
+    // we are.
+    expect(voice.getState().serverMutedPeerIds).toEqual([]);
+
+    voice.setMuted(false);
+    expect(voice.getState().isMuted).toBe(true);
+    voice.toggleMute();
+    expect(voice.getState().isMuted).toBe(true);
+    // Deafen and undeafen must not sneak the mic back open either.
+    voice.toggleDeafen();
+    voice.toggleDeafen();
+    expect(voice.getState().isDeafened).toBe(false);
+    expect(voice.getState().isMuted).toBe(true);
+    expect(voice.getState().isTransmitting).toBe(false);
+    expect(
+      sent.filter((m) => m.type === "set-voice-state" && m.muted === false),
+    ).toEqual([]);
+  });
+
+  it("lets the person unmute again once a moderator clears it", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      participants: [participant(PEER, { serverMuted: true, muted: true })],
+      transport: "mesh",
+    } as never);
+
+    voice.handleSignaling({
+      type: "peer-updated",
+      peer: participant(PEER, { serverMuted: false, muted: true }),
+    } as never);
+
+    // Clearing is not an unmute: the mic stays off until the person says.
+    expect(voice.getState().self?.serverMuted).toBe(false);
+    expect(voice.getState().isMuted).toBe(true);
+    voice.setMuted(false);
+    expect(voice.getState().isMuted).toBe(false);
+  });
+
+  it("comes back muted when the welcome that seats us already carries the flag", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+
+    // A rejoin after a moderator mute: the server kept the flag for the room.
+    voice.handleSignaling({
+      type: "welcome",
+      peerId: PEER,
+      voiceChannelId: CHANNEL,
+      self: participant(PEER, { serverMuted: true, muted: true }),
+      peers: [],
+      transport: "mesh",
+    } as never);
+    await settle();
+
+    expect(voice.getState().self?.serverMuted).toBe(true);
+    expect(voice.getState().isMuted).toBe(true);
+    voice.toggleMute();
+    expect(voice.getState().isMuted).toBe(true);
+  });
+
+  it("forgets a server-muted peer when they leave", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    voice.handleSignaling({
+      type: "peer-joined",
+      peer: participant("loud", { serverMuted: true }),
+    } as never);
+    expect(voice.getState().serverMutedPeerIds).toEqual(["loud"]);
+
+    voice.handleSignaling({ type: "peer-left", peerId: "loud" } as never);
+
+    expect(voice.getState().serverMutedPeerIds).toEqual([]);
   });
 });

@@ -193,6 +193,8 @@ interface MemberVoicePresence {
   transport: VoiceRoomTransport | undefined;
   muted: boolean;
   deafened: boolean;
+  /** A moderator muted them for the call; the menu offers the unmute. */
+  serverMuted: boolean;
 }
 
 function MemberRow({
@@ -315,17 +317,6 @@ function MemberRow({
 interface PendingMove {
   member: ServerMember;
   fromChannelId: string;
-}
-
-/**
- * Why a server mute is refused on a mesh room — client-side copy of the same
- * sentence the API answers with, so the tooltip can be honest without a round
- * trip. Media in a mesh room flows peer-to-peer; there is no server in the
- * audio path to do the muting, and faking it client-side would be enforcement
- * theater.
- */
-function meshMuteUnavailable(): string {
-  return translateMessage("timeout.mesh");
 }
 
 interface PendingRemoval {
@@ -478,6 +469,7 @@ export function MembersPanel({
         transport: voiceRoomTransports[channel.id],
         muted: person.muted,
         deafened: person.deafened,
+        serverMuted: person.serverMuted,
       });
     }
   }
@@ -851,7 +843,14 @@ export function MembersPanel({
     }
   }
 
-  async function serverMuteVoice(member: ServerMember) {
+  /**
+   * Mute (or unmute) one member for everyone in the call. Works on both
+   * transports since the flag moved onto the roster: on LiveKit the SFU also
+   * stops forwarding, on a mesh every receiver plays them at zero, the same
+   * way every receiver already drops an evicted peer. The room state is what
+   * the clients enforce, so the hint can be the same sentence either way.
+   */
+  async function serverMuteVoice(member: ServerMember, muted: boolean) {
     if (!serverId) {
       return;
     }
@@ -859,13 +858,13 @@ export function MembersPanel({
     setError(null);
     setVoiceHint(null);
     try {
-      await setMemberVoiceMuted(serverId, member.id, true);
+      await setMemberVoiceMuted(serverId, member.id, muted);
       setVoiceHint(
-        t("timeout.sfuMute", { name: member.displayName }),
+        t(muted ? "timeout.serverMuted" : "timeout.serverUnmuted", {
+          name: member.displayName,
+        }),
       );
     } catch (err) {
-      // The 409 for a mesh room lands here too, with the server's own honest
-      // sentence — a hint, not an error: nothing is broken, it is a limit.
       setVoiceHint(messageOf(err, t("member.muteFailed")));
     } finally {
       setBusyId(null);
@@ -1001,17 +1000,12 @@ export function MembersPanel({
           });
         }
         if (canMute) {
-          const meshRoom = voice.transport === "mesh";
           actions.push({
             id: "voice-mute",
-            label: t("member.serverMute"),
-            onSelect: () => {
-              if (meshRoom) {
-                setVoiceHint(meshMuteUnavailable());
-                return;
-              }
-              void serverMuteVoice(member);
-            },
+            label: voice.serverMuted
+              ? t("member.serverUnmute")
+              : t("member.serverMute"),
+            onSelect: () => void serverMuteVoice(member, !voice.serverMuted),
           });
         }
         if (canTimeout) {

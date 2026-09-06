@@ -231,11 +231,13 @@ their own messages, joining voice, and every other write into that server.
   the most harmful thing this feature could do.
 
 **Voice is a refused join, not a server mute.** A mute is the more surgical
-sanction and it is the one this product cannot deliver: in mesh mode the audio
-never touches the server, so "muted" would mean asking the sanctioned client to
-please stop sending — a suggestion, not enforcement, defeated by any modified
-client. The join is refused instead, and anybody already in a room is evicted
-when the sanction lands.
+sanction, and it does exist now on both transports (see `docs/voice-backends.md`,
+"Server mute works on both transports"): the roster carries `serverMuted` and
+every receiving client plays that person at zero, the same enforcement point
+eviction uses. But it is scoped to one room for that room's lifetime, and a
+timeout is a sanction on the person across the whole server for a set time.
+The join is refused instead, and anybody already in a room is evicted when the
+sanction lands.
 
 **Rank.** Exactly the kick/ban rule: owners may act on anyone below them, admins
 only on plain members. An admin who could silence a peer for 28 days would have

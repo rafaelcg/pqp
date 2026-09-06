@@ -26,6 +26,8 @@ interface UserPanelProps {
   handle?: string | null;
   avatarUrl?: string | null;
   isMuted: boolean;
+  /** A moderator muted this person for the call: the mute button is inert. */
+  serverMuted?: boolean;
   isDeafened: boolean;
   inVoice: boolean;
   /** False while the current channel denies SPEAK: the mute stays locked. */
@@ -93,6 +95,7 @@ export function UserPanel({
   handle = null,
   avatarUrl = null,
   isMuted,
+  serverMuted = false,
   isDeafened,
   inVoice,
   canSpeak = true,
@@ -328,14 +331,22 @@ export function UserPanel({
           wrapper span is what the tooltip can hover, because Button drops
           pointer events when disabled. */}
       <Tooltip
-        label={isMuted ? t("userPanel.unmute") : t("userPanel.mute")}
+        label={
+          serverMuted
+            ? t("voice.control.serverMuted")
+            : isMuted
+              ? t("userPanel.unmute")
+              : t("userPanel.mute")
+        }
         name={isMuted ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
         detail={
           !inVoice
             ? t("userPanel.joinToUse")
-            : canSpeak
-              ? undefined
-              : t("voice.control.listenOnlyLocked")
+            : !canSpeak
+              ? t("voice.control.listenOnlyLocked")
+              : serverMuted
+                ? t("voice.serverMuted.self")
+                : undefined
         }
       >
         <span className="inline-flex">
@@ -344,12 +355,20 @@ export function UserPanel({
             size="icon"
             className="h-8 w-8 shrink-0"
             onClick={onToggleMute}
-            disabled={!inVoice || !canSpeak}
+            disabled={!inVoice || !canSpeak || serverMuted}
             aria-pressed={isMuted}
-            aria-label={isMuted ? t("userPanel.unmuteMic") : t("userPanel.muteMic")}
+            aria-label={
+              serverMuted
+                ? t("voice.control.serverMuted")
+                : isMuted
+                  ? t("userPanel.unmuteMic")
+                  : t("userPanel.muteMic")
+            }
           >
             {isMuted ? (
-              <MicOff className="h-4 w-4 text-danger" />
+              <MicOff
+                className={cn("h-4 w-4", serverMuted ? "text-warning" : "text-danger")}
+              />
             ) : (
               <Mic className="h-4 w-4" />
             )}
