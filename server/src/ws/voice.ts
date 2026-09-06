@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
+import { z } from "zod";
 import {
   isClientRelayMessage,
   CAMERA_LIMIT,
@@ -8,11 +9,18 @@ import {
   hasPermission,
   Permission,
   voiceClientMessageSchema,
+  voiceParticipantSchema,
+  watchPartyStateSchema,
   type VoiceParticipant,
   type VoiceRoomTransport,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
+import {
+  isBusEnabled,
+  publishToCluster,
+  subscribeToCluster,
+} from "../lib/bus.js";
 import { logEvent } from "../lib/log.js";
 import { createRateLimiter } from "../lib/rate-limit.js";
 import { listBlockersOf } from "../services/blocks.js";
@@ -49,17 +57,23 @@ import {
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
 import {
+  clearWatchPartyIfEmpty,
   deleteVoicePeer,
   isVoicePeerRetired,
   isVoiceRegistryEnabled,
   listVoicePeersForUser,
   listVoicePeersInRoom,
   listVoiceRoomOccupancy,
+  listVoiceRoster,
+  listVoiceRosters,
   markVoicePeerOrphaned,
+  persistWatchParty,
   pinVoiceRoom,
+  readWatchParty,
   retireVoicePeerId,
   unpinVoiceRoomIfEmpty,
   upsertVoicePeer,
+  type VoicePeerRow,
 } from "../voice/registry.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
 import {
@@ -70,6 +84,7 @@ import {
   sendEncodedDroppable,
 } from "./fanout.js";
 import {
+  adoptWatchPartyState,
   applyWatchPartyWrite,
   endWatchParty,
   getWatchPartyState,
@@ -165,19 +180,66 @@ interface VoicePeer {
  *
  * THE WAY OUT IS THE VOICE REGISTRY (`voice/registry.ts`,
  * `docs/plans/MULTI_INSTANCE_VOICE.md`), behind `VOICE_REGISTRY=postgres`.
- * As of milestone M1 it is write-through only: every change to this map is
- * copied to `voice_peers`, the transport pin goes through an atomic insert on
+ * M1 made it write-through: every change to this map is copied to
+ * `voice_peers`, the transport pin goes through an atomic insert on
  * `voice_rooms` so two instances cannot disagree, and the three places that
  * must answer for the whole cluster from one HTTP request (the SFU token
  * mint, moderation targeting, the operator snapshot) read the rows after the
- * map. Fan-out still reads this map and nothing else; rosters over the bus
- * are M2. With the flag off (the default) `registryOn()` is false on every
- * path below and this file behaves exactly as it did before the registry.
+ * map. M2 put the roster on the rows and the room on the bus: with the flag
+ * on, `broadcastRoster` and `sendAllVoiceRosters` read `voice_peers` (this
+ * map only supplies the sockets), the watch party lives in `voice_rooms`,
+ * and every state change publishes a `voice.room` / `voice.identity` /
+ * `voice.watch` frame when `CLUSTER_BUS` is also on. FRAMES ARE HINTS, ROWS
+ * ARE TRUTH: the receiving instance forwards the `peer-*` frame to its local
+ * room and rebuilds the roster from the rows, so a lost frame costs latency,
+ * not a ghost (point 4 above). Cross-instance resume and the dead-instance
+ * reconcile are M3; rings and moderation notices (points 1 and 3, and the
+ * mesh ceiling) are M4 and M5. With the flag off (the default) `registryOn()`
+ * is false on every path below and this file behaves exactly as it did
+ * before the registry.
  */
 const peers = new Map<string, VoicePeer>();
 
 function registryOn(): boolean {
   return isVoiceRegistryEnabled();
+}
+
+/**
+ * Both switches: rows to read (the registry) and a wire to send the hint on
+ * (the bus). Checked before building any frame, so a deployment with either
+ * off allocates nothing for the other instance that is not there.
+ */
+function clusterOn(): boolean {
+  return registryOn() && isBusEnabled();
+}
+
+/**
+ * Registry writes in flight, per channel. The handler never waits for a row
+ * (a database blip must not hold up a frame), but a roster built from the
+ * rows must not run ahead of the write it is reporting, or the joiner's own
+ * audience would see a roster without them. `broadcastRoster` awaits this
+ * before reading, which is also what puts the bus hint after the commit.
+ */
+const pendingRowWrites = new Map<string, Promise<void>>();
+
+function trackRowWrite(channelId: string, write: Promise<unknown>): void {
+  const previous = pendingRowWrites.get(channelId) ?? Promise.resolve();
+  // Registry promises never reject (`track` swallows into a log), so this
+  // chain cannot break; `catch` is belt and braces against a future caller.
+  const next = Promise.all([previous, write]).then(
+    () => undefined,
+    () => undefined,
+  );
+  pendingRowWrites.set(channelId, next);
+  void next.then(() => {
+    if (pendingRowWrites.get(channelId) === next) {
+      pendingRowWrites.delete(channelId);
+    }
+  });
+}
+
+function settledRowWrites(channelId: string): Promise<void> {
+  return pendingRowWrites.get(channelId) ?? Promise.resolve();
 }
 
 /**
@@ -190,22 +252,71 @@ function writePeerRow(peer: VoicePeer): void {
   if (!registryOn()) {
     return;
   }
-  void upsertVoicePeer({
-    peerId: peer.id,
-    channelId: peer.voiceChannelId,
-    userId: peer.userId,
-    displayName: peer.displayName,
-    avatarUrl: peer.avatarUrl,
-    muted: peer.muted,
-    deafened: peer.deafened,
-    sharingScreen: peer.sharingScreen,
-    cameraStreamId: peer.cameraStreamId,
-    screenAudioStreamId: peer.screenAudioStreamId,
-    canSpeak: peer.canSpeak,
-    canResume: peer.canResume,
-    orphanedAt: peer.orphanedAt === undefined ? null : new Date(peer.orphanedAt),
-    transport: getRoomTransport(peer.voiceChannelId),
-  });
+  trackRowWrite(
+    peer.voiceChannelId,
+    upsertVoicePeer({
+      peerId: peer.id,
+      channelId: peer.voiceChannelId,
+      userId: peer.userId,
+      displayName: peer.displayName,
+      avatarUrl: peer.avatarUrl,
+      muted: peer.muted,
+      deafened: peer.deafened,
+      sharingScreen: peer.sharingScreen,
+      cameraStreamId: peer.cameraStreamId,
+      screenAudioStreamId: peer.screenAudioStreamId,
+      canSpeak: peer.canSpeak,
+      canResume: peer.canResume,
+      orphanedAt:
+        peer.orphanedAt === undefined ? null : new Date(peer.orphanedAt),
+      transport: getRoomTransport(peer.voiceChannelId),
+    }),
+  );
+}
+
+/** A registry row as the wire shape: what a roster carries for a peer held elsewhere. */
+function rowToParticipant(row: VoicePeerRow): VoiceParticipant {
+  return {
+    peerId: row.peerId,
+    userId: row.userId,
+    displayName: row.displayName,
+    avatarUrl: row.avatarUrl,
+    sharingScreen: row.sharingScreen,
+    cameraStreamId: row.cameraStreamId,
+    screenAudioStreamId: row.screenAudioStreamId,
+    muted: row.muted,
+    deafened: row.deafened,
+    canSpeak: row.canSpeak,
+  };
+}
+
+/**
+ * The room as the cluster sees it: the rows, with this instance's own peers
+ * laid over them by id (the map is exact for a socket held here and may be a
+ * write ahead of its row). Returns null when the rows say there is no room,
+ * which after `settledRowWrites` means nobody is in it anywhere.
+ */
+async function readClusterRoom(
+  voiceChannelId: string,
+): Promise<{ participants: VoiceParticipant[]; transport: VoiceRoomTransport } | null> {
+  const room = await listVoiceRoster(voiceChannelId);
+  const byId = new Map<string, VoiceParticipant>();
+  for (const row of room?.peers ?? []) {
+    byId.set(row.peerId, rowToParticipant(row));
+  }
+  for (const peer of getRoomPeers(voiceChannelId)) {
+    byId.set(peer.id, toParticipant(peer));
+  }
+  if (!room && byId.size === 0) {
+    return null;
+  }
+  return {
+    participants: [...byId.values()],
+    transport:
+      roomTransports.get(voiceChannelId) ??
+      room?.transport ??
+      configuredTransport(),
+  };
 }
 const socketToPeerId = new Map<WebSocket, string>();
 /** Peer ids removed in this process (leave / kick / TTL). Blocks reconstruct for the token's life so a hangup cannot resurrect the id. */
@@ -417,11 +528,35 @@ export async function refreshVoiceIdentity(
   userId: string,
   profile: { display_name: string; avatar_url: string | null },
 ): Promise<void> {
+  // The profile route ran here; the person's sockets may be anywhere. The
+  // hint goes out whether or not this instance holds a peer for them, since
+  // "none here" says nothing about the other machine. Published before the
+  // local half so the other instance's re-read is not waiting on this one's
+  // name resolution; its own rows are its own to write.
+  if (clusterOn()) {
+    publishToCluster(VOICE_IDENTITY_TOPIC, {
+      userId,
+      displayName: profile.display_name,
+      avatarUrl: profile.avatar_url,
+    } satisfies VoiceIdentityFrame);
+  }
+  await applyVoiceIdentity(userId, profile);
+}
+
+/**
+ * The local half of `refreshVoiceIdentity`: relabel the peers this instance
+ * holds for the user, copy them to their rows, tell their rooms, rebuild the
+ * rosters. Also what a `voice.identity` frame runs, so it never publishes.
+ */
+async function applyVoiceIdentity(
+  userId: string,
+  profile: { display_name: string; avatar_url: string | null },
+): Promise<void> {
   const mine = [...peers.values()].filter((peer) => peer.userId === userId);
   if (mine.length === 0) {
     return;
   }
-  const rooms = new Set<string>();
+  const rooms = new Map<string, VoicePeer>();
   for (const peer of mine) {
     try {
       const channel = await getChannel(peer.voiceChannelId);
@@ -431,7 +566,7 @@ export async function refreshVoiceIdentity(
       );
       peer.avatarUrl = profile.avatar_url;
       writePeerRow(peer);
-      rooms.add(peer.voiceChannelId);
+      rooms.set(peer.voiceChannelId, peer);
       broadcastToRoom(peer.voiceChannelId, {
         type: "peer-updated",
         peer: toParticipant(peer),
@@ -447,8 +582,14 @@ export async function refreshVoiceIdentity(
   // Awaited rather than fired off: the roster send is queued per room, and a
   // caller that wants to know the room has caught up (a test, or a future
   // caller that cares) can only find out if this waits. Every caller today
-  // starts it with `void`, so nothing blocks a request either way.
-  await Promise.all([...rooms].map((room) => broadcastRoster(room)));
+  // starts it with `void`, so nothing blocks a request either way. The room
+  // event carries the relabelled peer, so the other instance's tiles update
+  // too (one peer per room is enough: a second seat is a curiosity).
+  await Promise.all(
+    [...rooms].map(([room, peer]) =>
+      broadcastRoster(room, { kind: "updated", peer: toParticipant(peer) }),
+    ),
+  );
 }
 
 // --- operator metrics ---------------------------------------------------
@@ -605,12 +746,33 @@ function broadcastToRoom(
 }
 
 /**
+ * What changed in the room, riding on the roster's bus hint so the other
+ * instance can forward the matching `peer-*` frame to its local room before
+ * it rebuilds its roster. `roster` is a state toggle: those never carried a
+ * room frame locally either (the roster is the whole announcement).
+ */
+type VoiceRoomEvent =
+  | { kind: "joined"; peer: VoiceParticipant }
+  | { kind: "left"; peerId: string }
+  | { kind: "updated"; peer: VoiceParticipant }
+  | { kind: "roster" };
+
+/**
+ * Events waiting for the coalesced roster run of their channel. Published
+ * after that run, so a hint never reaches the other instance before the row
+ * write it will re-read has settled, and never before the local roster that
+ * reported it. Consecutive `roster` hints fold into one: the other side
+ * rebuilds from rows either way.
+ */
+const pendingRoomEvents = new Map<string, VoiceRoomEvent[]>();
+
+/**
  * Roster fan-out. Occupancy drives the channel-list badges, so it goes to
  * everyone who can *see* the channel — sending it to every socket on the
  * instance would leak cross-server presence and, worse, hand out the peer IDs
  * used for signaling.
  *
- * Coalesced per channel (`ROSTER_COALESCE_MS`) and serialized per channel: the
+ * Coalesced per channel (`coalesceWindowFor`) and serialized per channel: the
  * audience lookup is async, and two overlapping broadcasts could otherwise
  * deliver an older snapshot last, leaving a departed peer visible in
  * everyone's sidebar. The coalescer guarantees both.
@@ -620,30 +782,65 @@ function broadcastToRoom(
  * than by a copy of this one it will read late. Measured before this existed:
  * a 200-person LiveKit room with 20 mute toggles and 4 joins/leaves a second
  * was 836 KB/s of roster *per socket*, 85% of everything the process wrote.
+ *
+ * With the registry on, the snapshot comes from `voice_peers` (this
+ * instance's own peers laid over by id), read after this instance's pending
+ * row writes have settled so the roster cannot run ahead of the write it
+ * reports. Never awaited with the flag off: no writes exist.
  */
 async function sendRoster(voiceChannelId: string): Promise<void> {
+  const events = pendingRoomEvents.get(voiceChannelId) ?? [];
+  pendingRoomEvents.delete(voiceChannelId);
   try {
-    const audience = await getChannelAudience(voiceChannelId);
-    if (!audience) {
-      return;
+    let room: {
+      participants: VoiceParticipant[];
+      transport: VoiceRoomTransport;
+    } | null = null;
+    if (registryOn()) {
+      await settledRowWrites(voiceChannelId);
+      try {
+        room = await readClusterRoom(voiceChannelId);
+      } catch (error) {
+        logEvent("voice.registryReadFailed", {
+          op: "roster",
+          error: error instanceof Error ? error.message : String(error),
+        });
+        room = null;
+      }
     }
 
-    // Read the room *after* the await so the payload reflects state at send
-    // time, not at the time the broadcast was requested.
-    const encoded = encodeFrame({
-      type: "voice-roster",
-      voiceChannelId,
-      participants: getRoomPeers(voiceChannelId).map(toParticipant),
-      transport: getRoomTransport(voiceChannelId),
-    } satisfies VoiceSignalingMessage);
+    const audience = await getChannelAudience(voiceChannelId);
+    if (audience) {
+      // Read the room *after* the await so the payload reflects state at send
+      // time, not at the time the broadcast was requested. The rows were read
+      // before it; a change since then has its own roster queued behind this
+      // one.
+      const encoded = encodeFrame({
+        type: "voice-roster",
+        voiceChannelId,
+        participants:
+          room?.participants ?? getRoomPeers(voiceChannelId).map(toParticipant),
+        transport: room?.transport ?? getRoomTransport(voiceChannelId),
+      } satisfies VoiceSignalingMessage);
 
-    forEachAuthenticatedSocket((socket, user) => {
-      if (audience.has(user.id)) {
-        sendEncodedDroppable(socket, encoded);
-      }
-    });
+      forEachAuthenticatedSocket((socket, user) => {
+        if (audience.has(user.id)) {
+          sendEncodedDroppable(socket, encoded);
+        }
+      });
+    }
   } catch (error) {
     console.error("[voice] failed to load audience for roster:", error);
+  }
+  // After the local pass, whatever the audience lookup did: a `left` that
+  // never crossed is the ghost the banner warns about.
+  if (events.length > 0 && clusterOn()) {
+    for (const event of events) {
+      publishToCluster(VOICE_ROOM_TOPIC, {
+        channelId: voiceChannelId,
+        ...event,
+      } satisfies VoiceRoomFrame);
+    }
   }
 }
 
@@ -658,7 +855,23 @@ const rosterCoalescer = createCoalescer<string>(
   sendRoster,
 );
 
-function broadcastRoster(voiceChannelId: string): Promise<void> {
+/**
+ * `event` is what to tell the cluster; `null` is the local half alone, which
+ * is what a frame arriving from the bus runs, and it must never publish, or
+ * two instances would rebuild each other's rosters forever.
+ */
+function broadcastRoster(
+  voiceChannelId: string,
+  event: VoiceRoomEvent | null = { kind: "roster" },
+): Promise<void> {
+  if (event) {
+    const queue = pendingRoomEvents.get(voiceChannelId) ?? [];
+    const last = queue[queue.length - 1];
+    if (!(event.kind === "roster" && last?.kind === "roster")) {
+      queue.push(event);
+    }
+    pendingRoomEvents.set(voiceChannelId, queue);
+  }
   return rosterCoalescer.request(voiceChannelId);
 }
 
@@ -689,8 +902,12 @@ function removePeer(peerId: string) {
   }
   if (registryOn()) {
     // One statement: the row goes, and the room row with it if this was the
-    // last peer anywhere in the cluster (not only on this instance).
-    void deleteVoicePeer(peerId);
+    // last peer anywhere in the cluster (not only on this instance). Then the
+    // party, for the one race that can leave a room row behind.
+    trackRowWrite(
+      voiceChannelId,
+      deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(voiceChannelId)),
+    );
   }
   retirePeerId(peerId);
   onLiveRoomMaybeEmpty(voiceChannelId, peer.socket);
@@ -701,7 +918,7 @@ function removePeer(peerId: string) {
     roomSize: getLiveRoomPeers(voiceChannelId).length,
   });
   broadcastToRoom(voiceChannelId, { type: "peer-left", peerId });
-  void broadcastRoster(voiceChannelId);
+  void broadcastRoster(voiceChannelId, { kind: "left", peerId });
 }
 
 /**
@@ -853,7 +1070,10 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
     }
   }, VOICE_RESUME_TTL_MS);
   if (registryOn()) {
-    void markVoicePeerOrphaned(peerId, new Date(peer.orphanedAt));
+    trackRowWrite(
+      peer.voiceChannelId,
+      markVoicePeerOrphaned(peerId, new Date(peer.orphanedAt)),
+    );
   }
   onLiveRoomMaybeEmpty(peer.voiceChannelId, socket);
   logEvent("voice.orphan", {
@@ -876,6 +1096,7 @@ export function resetVoicePeers(): void {
   retiredPeerIds.clear();
   roomTransports.clear();
   rosterCoalescer.reset();
+  pendingRoomEvents.clear();
 }
 
 /** Whether a socket currently holds a voice peer (for disconnect diagnostics). */
@@ -888,15 +1109,45 @@ export function isSocketInVoice(socket: WebSocket): boolean {
  * the rooms this user is allowed to see.
  */
 export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
-  const byChannel = new Map<string, VoiceParticipant[]>();
+  const rooms = new Map<
+    string,
+    { participants: Map<string, VoiceParticipant>; transport?: VoiceRoomTransport }
+  >();
+  const roomOf = (voiceChannelId: string) => {
+    let room = rooms.get(voiceChannelId);
+    if (!room) {
+      room = { participants: new Map() };
+      rooms.set(voiceChannelId, room);
+    }
+    return room;
+  };
+
+  // The cluster's rooms first, then this instance's own peers laid over them
+  // by id, exactly as `readClusterRoom` does per room. One query for every
+  // room at once: a fresh socket is the one moment the whole map is wanted.
+  if (registryOn()) {
+    try {
+      await Promise.all([...pendingRowWrites.values()]);
+      for (const row of await listVoiceRosters()) {
+        const room = roomOf(row.channelId);
+        room.transport = row.transport;
+        for (const peer of row.peers) {
+          room.participants.set(peer.peerId, rowToParticipant(peer));
+        }
+      }
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "rosters",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   for (const peer of peers.values()) {
-    const list = byChannel.get(peer.voiceChannelId) ?? [];
-    list.push(toParticipant(peer));
-    byChannel.set(peer.voiceChannelId, list);
+    roomOf(peer.voiceChannelId).participants.set(peer.id, toParticipant(peer));
   }
 
   await Promise.all(
-    [...byChannel].map(async ([voiceChannelId, participants]) => {
+    [...rooms].map(async ([voiceChannelId, room]) => {
       try {
         if (!(await canAccessChannel(voiceChannelId, user.id))) {
           return;
@@ -908,8 +1159,11 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
       send(socket, {
         type: "voice-roster",
         voiceChannelId,
-        participants,
-        transport: getRoomTransport(voiceChannelId),
+        participants: [...room.participants.values()],
+        transport:
+          roomTransports.get(voiceChannelId) ??
+          room.transport ??
+          configuredTransport(),
       });
     }),
   );
@@ -989,9 +1243,40 @@ async function welcomeVoicePeer(
   // Orphans stay on the roster (sidebar still shows them) but must not be
   // in `welcome.peers`. A joiner that offered to a closed socket would sit
   // in `have-local-offer` forever; on resume `connectToPeer` is a no-op.
-  const existingPeers = getLiveRoomPeers(peer.voiceChannelId)
-    .filter((p) => p.id !== peer.id)
-    .map(toParticipant);
+  const byId = new Map<string, VoiceParticipant>();
+  let party = getWatchPartyState(peer.voiceChannelId);
+  if (registryOn()) {
+    // The room's other instances' peers, and the party the room holds. One
+    // read each, both best effort: a failed read leaves the local view,
+    // which is what a single machine would have shown.
+    try {
+      const [room, held] = await Promise.all([
+        listVoiceRoster(peer.voiceChannelId),
+        readWatchParty(peer.voiceChannelId),
+      ]);
+      for (const row of room?.peers ?? []) {
+        if (row.orphanedAt === null) {
+          byId.set(row.peerId, rowToParticipant(row));
+        }
+      }
+      if (held !== undefined) {
+        adoptWatchPartyState(peer.voiceChannelId, held);
+        party = getWatchPartyState(peer.voiceChannelId);
+      }
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "welcome",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    // The await may have outlived the socket. `send` drops the frame on a
+    // closed socket anyway; the room broadcast below is still owed.
+  }
+  for (const live of getLiveRoomPeers(peer.voiceChannelId)) {
+    byId.set(live.id, toParticipant(live));
+  }
+  byId.delete(peer.id);
+  const existingPeers = [...byId.values()];
 
   send(peer.socket, {
     type: "welcome",
@@ -1011,7 +1296,6 @@ async function welcomeVoicePeer(
   // Sent after `welcome` so the client already knows which room it is in,
   // and before the room hears about the joiner, so the state is in hand
   // before anything else can arrive about it.
-  const party = getWatchPartyState(peer.voiceChannelId);
   if (party) {
     send(peer.socket, {
       type: "watch-party",
@@ -1026,7 +1310,7 @@ async function welcomeVoicePeer(
     peer.id,
   );
   noteConversationCallJoin(peer.voiceChannelId, peer.userId);
-  await broadcastRoster(peer.voiceChannelId);
+  await broadcastRoster(peer.voiceChannelId, { kind: "joined", peer: self });
 }
 
 async function reattachVoicePeer(
@@ -1558,11 +1842,44 @@ export async function handleVoiceMessage(
       });
       return;
     }
+    // The row is the room's party when the flag is on, and the write is the
+    // ordering the cache just applied, run again against what the cluster
+    // holds. A write that lost there (this instance missed a frame, or two
+    // people acted in the same instant on two machines) is handed the row's
+    // winner, exactly as a local loser is handed the held state above. A
+    // failed write degrades to the local decision, like every registry write.
+    if (registryOn()) {
+      let persisted: Awaited<ReturnType<typeof persistWatchParty>> | null =
+        null;
+      try {
+        persisted = await persistWatchParty(peer.voiceChannelId, write.state);
+      } catch (error) {
+        logEvent("voice.registryWriteFailed", {
+          op: "watchParty",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (persisted?.kind === "stale") {
+        adoptWatchPartyState(peer.voiceChannelId, persisted.held);
+        send(socket, {
+          type: "watch-party",
+          channelId: peer.voiceChannelId,
+          state: persisted.held,
+        });
+        return;
+      }
+    }
     broadcastToRoom(peer.voiceChannelId, {
       type: "watch-party",
       channelId: peer.voiceChannelId,
       state: write.state,
     });
+    if (clusterOn()) {
+      publishToCluster(VOICE_WATCH_TOPIC, {
+        channelId: peer.voiceChannelId,
+        state: write.state,
+      } satisfies VoiceWatchFrame);
+    }
     return;
   }
 
@@ -2302,3 +2619,129 @@ onPermissionsUpdate((serverId) => {
 });
 
 // --- end speak permission -----------------------------------------------------
+
+// --- the cluster bus ----------------------------------------------------------
+//
+// Milestone M2 of `docs/plans/MULTI_INSTANCE_VOICE.md`. Three topics, one
+// rule: the publisher has already written the row and served its own
+// sockets, and the frame tells the other instance to do *its* local half.
+// A subscriber never republishes (the same rule as `sendPresence` in
+// chat.ts), and never trusts the frame over the rows: a `voice.room` hint
+// forwards the `peer-*` frame it carries to the local room, then rebuilds
+// the roster from `voice_peers`, so a frame that was lost costs the other
+// instance's audience a moment of staleness rather than a permanent ghost.
+//
+// Every handler checks `registryOn()` first. A bus with the registry off
+// carries `voice.hello` and nothing else about voice: without rows to read,
+// a room frame would be a rumour, and the flag-off path stays exactly what
+// it was.
+
+export const VOICE_ROOM_TOPIC = "voice.room";
+export const VOICE_IDENTITY_TOPIC = "voice.identity";
+export const VOICE_WATCH_TOPIC = "voice.watch";
+
+const voiceRoomFrameSchema = z.discriminatedUnion("kind", [
+  z.object({
+    channelId: z.string().uuid(),
+    kind: z.literal("joined"),
+    peer: voiceParticipantSchema,
+  }),
+  z.object({
+    channelId: z.string().uuid(),
+    kind: z.literal("left"),
+    peerId: z.string().min(1),
+  }),
+  z.object({
+    channelId: z.string().uuid(),
+    kind: z.literal("updated"),
+    peer: voiceParticipantSchema,
+  }),
+  z.object({ channelId: z.string().uuid(), kind: z.literal("roster") }),
+]);
+type VoiceRoomFrame = z.infer<typeof voiceRoomFrameSchema>;
+
+const voiceIdentityFrameSchema = z.object({
+  userId: z.string().min(1),
+  displayName: z.string(),
+  avatarUrl: z.string().nullable(),
+});
+type VoiceIdentityFrame = z.infer<typeof voiceIdentityFrameSchema>;
+
+const voiceWatchFrameSchema = z.object({
+  channelId: z.string().uuid(),
+  state: watchPartyStateSchema.nullable(),
+});
+type VoiceWatchFrame = z.infer<typeof voiceWatchFrameSchema>;
+
+subscribeToCluster(VOICE_ROOM_TOPIC, (data) => {
+  if (!registryOn()) {
+    return;
+  }
+  const parsed = voiceRoomFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const frame = parsed.data;
+  // The room frame, to the peers this instance holds. A peer we hold
+  // ourselves is never announced to us by somebody else: that would be a
+  // seat both instances think they own, which M3's adopt resolves, and
+  // until then the local map wins.
+  if (frame.kind === "joined" && !peers.has(frame.peer.peerId)) {
+    broadcastToRoom(frame.channelId, { type: "peer-joined", peer: frame.peer });
+  } else if (frame.kind === "left" && !peers.has(frame.peerId)) {
+    broadcastToRoom(frame.channelId, { type: "peer-left", peerId: frame.peerId });
+  } else if (frame.kind === "updated" && !peers.has(frame.peer.peerId)) {
+    broadcastToRoom(frame.channelId, {
+      type: "peer-updated",
+      peer: frame.peer,
+    });
+  }
+  // Rows are truth: the roster is rebuilt from `voice_peers`, not from the
+  // frame, and `null` keeps this instance from publishing in turn.
+  void broadcastRoster(frame.channelId, null);
+});
+
+subscribeToCluster(VOICE_IDENTITY_TOPIC, (data) => {
+  if (!registryOn()) {
+    return;
+  }
+  const parsed = voiceIdentityFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { userId, displayName, avatarUrl } = parsed.data;
+  // The local half only: this instance's own peers for the user, their rows
+  // (which are this instance's to write), their rooms and rosters.
+  void applyVoiceIdentity(userId, {
+    display_name: displayName,
+    avatar_url: avatarUrl,
+  }).catch((error: unknown) => {
+    console.error("[voice] identity frame failed:", error);
+  });
+});
+
+subscribeToCluster(VOICE_WATCH_TOPIC, (data) => {
+  if (!registryOn()) {
+    return;
+  }
+  const parsed = voiceWatchFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { channelId, state } = parsed.data;
+  // Only rooms this instance has somebody in. The cache is per room and is
+  // torn down when the local room empties, so adopting for a room nobody
+  // here is in would be an entry nothing ever removes.
+  if (getRoomPeers(channelId).length === 0) {
+    return;
+  }
+  if (!adoptWatchPartyState(channelId, state)) {
+    // Older than what is held (a straggler behind a frame that already
+    // landed, or behind the row a joiner just read). The room has the
+    // newer state already; repeating the older one would roll it back.
+    return;
+  }
+  broadcastToRoom(channelId, { type: "watch-party", channelId, state });
+});
+
+// --- end the cluster bus ------------------------------------------------------

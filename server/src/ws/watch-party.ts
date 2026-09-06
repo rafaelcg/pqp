@@ -19,11 +19,15 @@ import { createRateLimiter } from "../lib/rate-limit.js";
  * third rule becomes cheap: an incoming write can be COMPARED to it, which is
  * what lets the rate limiter coalesce instead of drop. See `applyWatchPartyWrite`.
  *
- * SCOPE. Per process, exactly like `peers` in `voice.ts`, and for the same
- * reason: a watch party lives inside a voice room, voice is deliberately not on
- * the cluster bus, and a room therefore lives on one instance. This map does not
- * widen that ceiling and must not be written as though it had. See the banner
- * above `peers` for the full argument.
+ * SCOPE. Per process, exactly like `peers` in `voice.ts`. With the voice
+ * registry off (the default) this map is the party, and a room lives on one
+ * instance. With `VOICE_REGISTRY=postgres` the party is
+ * `voice_rooms.watch_party` and this map is a cache of it: a write is still
+ * compared and coalesced here first, then persisted with the contract's
+ * ordering as the WHERE clause (`persistWatchParty` in `voice/registry.ts`),
+ * and a write that lost in the row is handed the row's winner. Frames from
+ * other instances land through `adoptWatchPartyState`, which applies the same
+ * ordering to the cache. See the banner above `peers` in `voice.ts`.
  *
  * NO MEDIA. Nothing here carries video or audio, and nothing here ever should.
  * Every participant streams from YouTube themselves; what travels is the small
@@ -128,6 +132,33 @@ export function isStaleWrite(
     return incoming.rev < held.rev;
   }
   return incoming.actorId < held.actorId;
+}
+
+/**
+ * Take a state decided elsewhere (the registry row, or a `voice.watch` frame
+ * from another instance) into the cache. Applies the contract's ordering
+ * against what is held, so a straggling frame cannot roll the cache back;
+ * `null` is a teardown and always wins, as it does in `applyWatchPartyWrite`.
+ * Returns whether the cache changed. No limiter, no log: nothing here was
+ * written by a person on this instance.
+ */
+export function adoptWatchPartyState(
+  voiceChannelId: string,
+  state: WatchPartyState | null,
+): boolean {
+  const held = getWatchPartyState(voiceChannelId);
+  if (state === null) {
+    if (held === null) {
+      return false;
+    }
+    parties.delete(voiceChannelId);
+    return true;
+  }
+  if (isStaleWrite(held, state)) {
+    return false;
+  }
+  parties.set(voiceChannelId, state);
+  return true;
 }
 
 export type WatchPartyWrite =

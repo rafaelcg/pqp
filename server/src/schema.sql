@@ -1398,9 +1398,12 @@ CREATE INDEX IF NOT EXISTS idx_cluster_bus_payloads_created
 -- off (the default) `ws/voice.ts` never touches them and they sit empty. All
 -- additive, so a rollback is "set the flag off", never a schema change.
 --
--- Milestone M1 is write-through: the in-process map in `ws/voice.ts` is still
--- what fan-out reads, and these rows are a copy of it plus the one decision
--- that has to be atomic across instances, the room's transport pin.
+-- M1 made these rows a write-through copy of the in-process map in
+-- `ws/voice.ts` plus the one decision that has to be atomic across
+-- instances, the room's transport pin. M2 made them the roster: with the
+-- flag on, `voice-roster` frames are built from `voice_peers`, and the
+-- watch party lives in `voice_rooms.watch_party` (its `rev` is the
+-- contract's logical clock; a write only lands when it outranks the row).
 
 -- One row per occupied voice room. Row exists iff the room has a peer row;
 -- the last peer's delete removes it in the same statement (see
