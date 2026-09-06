@@ -803,6 +803,7 @@
   "voice.occupant.muteForMe": "Mutar pra você",
   "voice.occupant.unmuteForMe": "Desmutar pra você",
   "voice.occupant.serverMute": "Mutar no servidor",
+  "voice.occupant.serverUnmute": "Desmutar no servidor",
   "voice.occupant.disconnect": "Desconectar",
   "voice.occupant.kick": "Kickar da comunidade",
   "voice.occupant.copyName": "Copiar nome",

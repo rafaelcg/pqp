@@ -74,6 +74,7 @@ const andre: VoiceParticipant = {
   sharingScreen: false,
   muted: false,
   deafened: false,
+  serverMuted: false,
 };
 
 const rafa: VoiceParticipant = {
@@ -84,6 +85,7 @@ const rafa: VoiceParticipant = {
   sharingScreen: false,
   muted: false,
   deafened: false,
+  serverMuted: false,
 };
 
 const baseProps = {
