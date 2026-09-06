@@ -1018,6 +1018,7 @@
   "memberList.loadFailed": "Não foi possível carregar a lista de membros.",
   "memberList.empty": "Ninguém aqui ainda.",
   "memberList.search": "Buscar membros",
+  "memberList.searchClear": "Limpar busca",
   "memberList.actions": "Ações para {name}",
   "memberList.noMatches": "Ninguém corresponde a \"{query}\".",
   "memberList.showMore": "Mostrar mais {count}",

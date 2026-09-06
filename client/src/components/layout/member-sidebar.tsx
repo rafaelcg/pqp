@@ -199,6 +199,7 @@ export function MemberSidebar({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const [collapsed, setCollapsed] =
     useState<SectionCollapseState>(NO_COLLAPSE);
   /** section id → how many of its rows are mounted. */
@@ -338,19 +339,25 @@ export function MemberSidebar({
 
   // Escape closes the DRAWER only. In column mode it is not a transient thing
   // covering anything, so eating Escape there would take the key away from the
-  // popover and the composer for no gain.
+  // popover and the composer for no gain. A typed query is dismissed first so
+  // the first Escape is "back to the roster", not "close the list".
   useEffect(() => {
     if (!open || wide) {
       return;
     }
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
+      if (event.key !== "Escape") {
+        return;
       }
+      if (query.trim()) {
+        setQuery("");
+        return;
+      }
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, wide, onClose]);
+  }, [open, wide, onClose, query]);
 
   // A rename or a new avatar, from anywhere on the instance. Patched rather than
   // refetched: the frame carries every field that changed.
@@ -574,24 +581,27 @@ export function MemberSidebar({
 
     return (
       <section key={section.id} data-member-section={section.id} className="mb-4">
-        <button
-          type="button"
-          aria-expanded={!shut}
-          className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted hover:text-paper"
-          onClick={() => {
-            if (searching) {
-              return;
+        {searching ? (
+          <div className="flex w-full items-center gap-1 px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+            <span className="truncate">{headingFor(section)}</span>
+          </div>
+        ) : (
+          <button
+            type="button"
+            aria-expanded={!shut}
+            className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted hover:text-paper"
+            onClick={() =>
+              setCollapsed((prev) => toggleSectionCollapse(section, prev))
             }
-            setCollapsed((prev) => toggleSectionCollapse(section, prev));
-          }}
-        >
-          {shut ? (
-            <ChevronRight className="h-3 w-3 shrink-0" />
-          ) : (
-            <ChevronDown className="h-3 w-3 shrink-0" />
-          )}
-          <span className="truncate">{headingFor(section)}</span>
-        </button>
+          >
+            {shut ? (
+              <ChevronRight className="h-3 w-3 shrink-0" />
+            ) : (
+              <ChevronDown className="h-3 w-3 shrink-0" />
+            )}
+            <span className="truncate">{headingFor(section)}</span>
+          </button>
+        )}
         {visible.map((member) => (
           <MemberRow
             key={member.id}
@@ -668,20 +678,51 @@ export function MemberSidebar({
         </div>
 
         {rows.length > 0 && (
-          <div className="shrink-0 px-2 pb-1 pt-2">
+          <div role="search" className="shrink-0 px-2 pb-1 pt-2">
             <div className="relative">
               <Search
                 aria-hidden="true"
                 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted"
               />
               <input
+                ref={searchRef}
                 type="search"
                 value={query}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                enterKeyHint="search"
                 aria-label={t("memberList.search")}
                 placeholder={t("memberList.search")}
-                className="h-9 w-full rounded-xl bg-ink-2 pl-9 pr-3 text-sm text-paper placeholder:text-paper-muted focus:outline-none focus:ring-2 focus:ring-signal/60"
+                className={cn(
+                  "h-9 w-full appearance-none rounded-xl bg-ink-2 pl-9 text-sm text-paper placeholder:text-paper-muted",
+                  "focus:outline-none focus:ring-2 focus:ring-signal/60",
+                  "[&::-webkit-search-cancel-button]:hidden",
+                  searching ? "pr-9" : "pr-3",
+                )}
                 onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && query) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setQuery("");
+                  }
+                }}
               />
+              {searching && (
+                <button
+                  type="button"
+                  aria-label={t("memberList.searchClear")}
+                  className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+                  onClick={() => {
+                    setQuery("");
+                    searchRef.current?.focus();
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
           </div>
         )}
