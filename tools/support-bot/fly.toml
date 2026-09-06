@@ -69,19 +69,24 @@ kill_timeout = 15
   SUPPORT_CHANNELS = "ajuda,geral"
   SUPPORT_SERVER = "QG do pqp"
 
-  # Answering a question nobody answered. On by default; `pending.js` has the
-  # whole design and the defaults, which are what runs unless something below is
-  # set. The switch is here rather than in code so that turning it off is
+  # Answering a question nobody answered is ON, and is deliberately NOT listed
+  # here. `unpromptedEnabled` defaults to on, so an absent variable is the same
+  # behaviour as SUPPORT_UNPROMPTED="true" and leaves exactly one place the
+  # value can come from. Setting it in `[env]` as well would mean an operator
+  # reaching for the off switch under time pressure has to know whether a Fly
+  # secret beats a fly.toml env var, and the answer to that must never be
+  # something anybody has to look up while a channel is being spammed.
   #
-  #   fly secrets set SUPPORT_UNPROMPTED=false -a pqp-support
+  # Off, at any hour, with no branch, no CI and no image build:
   #
-  # at any hour, with no branch, no CI and no image build. Set the number knobs
-  # the same way if it turns out to be too eager or too quiet:
+  #   fly secrets set SUPPORT_UNPROMPTED=false --app pqp-support
+  #
+  # The number knobs move the same way, and are absent here for the same
+  # reason. `pending.js` has the defaults and the argument for each:
   # SUPPORT_UNPROMPTED_DELAY_MS (180000), SUPPORT_UNPROMPTED_MAX_AGE_MS
   # (600000), SUPPORT_UNPROMPTED_MAX_PER_CHANNEL_HOUR (2),
   # SUPPORT_UNPROMPTED_MAX_TRIES_PER_CHANNEL_HOUR (4),
   # SUPPORT_UNPROMPTED_BUDGET_RESERVE (30).
-  SUPPORT_UNPROMPTED = "true"
 
   # Who gets @-mentioned when it does not know.
   SUPPORT_OWNER_HANDLE = "rafa"
