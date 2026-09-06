@@ -980,6 +980,11 @@ export interface ServerMember {
   status?: UserStatus;
   /** Character accounts (the house cast). Drives the bot mark next to the name. */
   isCharacter?: boolean;
+  /**
+   * Claimed public handle, or null. Optional so a roster from an older API
+   * still parses; absent is treated as "none", never as a URL to invent.
+   */
+  handle?: string | null;
 }
 
 export function memberDisplayName(member: {
@@ -1001,6 +1006,7 @@ export function memberMatchesQuery(
     displayName: string;
     username?: string | null;
     tag?: string | null;
+    handle?: string | null;
   },
   query: string,
 ): boolean {
@@ -1013,6 +1019,7 @@ export function memberMatchesQuery(
     member.displayName,
     member.username ?? "",
     member.tag ?? "",
+    member.handle ?? "",
   ].some((haystack) => haystack.toLowerCase().includes(needle));
 }
 

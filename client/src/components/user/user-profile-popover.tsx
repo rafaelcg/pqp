@@ -1,4 +1,5 @@
 import {
+  ArrowUpRight,
   AtSign,
   Loader2,
   MessageCircle,
@@ -82,6 +83,7 @@ import {
   primaryAction,
   primaryIsInert,
   offersDecline,
+  publicProfileHref,
   resolveFriendshipState,
   resolvePresence,
   profileAboutTabs,
@@ -930,17 +932,32 @@ function UserProfileCard({
 
   /**
    * The strip of things you do WITH somebody — message, call, mention — plus
-   * the ellipsis that hides block and report. Equal icon wells, captions
-   * under the chrome. Nickname, rank and the ladder live in the section
-   * below, not in this strip.
+   * the public page when they claimed a handle, plus the ellipsis that hides
+   * block and report. Equal icon wells, captions under the chrome. Nickname,
+   * rank and the ladder live in the section below, not in this strip.
    */
+  const publicHref = publicProfileHref(subject.handle);
+  const tilePublic = Boolean(publicHref);
   const tileMore = overflowItems.length > 0;
   const tileMessage = canMessage(state);
   const tileCall = canCall(state) && Boolean(onStartCall);
   const tileMention = Boolean(onMention && mentionUsername);
   const actionStrip =
-    tileMessage || tileCall || tileMention || tileMore ? (
+    tileMessage || tileCall || tileMention || tilePublic || tileMore ? (
       <div className="mt-3 flex items-start gap-2">
+        {tilePublic && publicHref && (
+          <div className="min-w-0 flex-1">
+            <ActionTile
+              label={t("profile.viewPublic")}
+              data-profile-public=""
+              onClick={() => {
+                window.open(publicHref, "_blank", "noopener,noreferrer");
+              }}
+            >
+              <ArrowUpRight aria-hidden className="h-[18px] w-[18px]" />
+            </ActionTile>
+          </div>
+        )}
         {tileMessage && (
           <div className="min-w-0 flex-1">
             <ActionTile
@@ -1166,6 +1183,17 @@ function UserProfileCard({
           <p className="truncate text-center font-mono text-xs text-paper-muted">
             {subject.tag}
           </p>
+        )}
+        {publicHref && subject.handle && (
+          <a
+            href={publicHref}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-0.5 block truncate text-center font-mono text-xs text-signal hover:underline"
+            data-profile-public-url=""
+          >
+            {t("profile.publicUrl", { handle: subject.handle })}
+          </a>
         )}
         {paintedRoles.length > 0 && (
           <ul
