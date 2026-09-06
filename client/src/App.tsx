@@ -3625,6 +3625,9 @@ function MainAppContent({
           usingSfu={voiceState.usingSfu}
           isPresenting={voiceState.screenSharePeerIds.length > 0}
           listenOnly={!voiceState.canSpeak}
+          peerQualities={voiceState.remotePeers.flatMap((peer) =>
+            peer.quality ? [peer.quality] : [],
+          )}
           onOpen={() => void openVoiceChannel()}
           onLeave={() => voice.leave()}
         />
