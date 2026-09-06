@@ -225,9 +225,11 @@ export function screenCaptureOptions(
     surfaceSwitching: "include",
     ...(intent.preferBrowserTab
       ? {
-          // Tab-first picker. Our own tab stays excluded above, so this does
-          // not mean "share pqp": it means open already pointed at Chrome tabs.
-          preferCurrentTab: true,
+          // Tab-first picker. `preferCurrentTab` is the other Chrome hint
+          // and it means "offer *this* tab", which is pqp: mutually exclusive
+          // with `selfBrowserSurface: "exclude"` and the hall-of-mirrors case.
+          // `displaySurface: "browser"` on video (above) plus hiding monitors
+          // is the valid shape that opens on the Tabs pane.
           monitorTypeSurfaces: "exclude" as const,
         }
       : {}),

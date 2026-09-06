@@ -464,7 +464,9 @@ export interface CallStageProps {
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
-  onStartScreenShare?: (intent?: { preferBrowserTab?: boolean }) => void;
+  onStartScreenShare?: (
+    intent?: { preferBrowserTab?: boolean },
+  ) => void | Promise<void>;
   /**
    * Start the same share with no sound at all. Offered only after sound is
    * what killed the last attempt, and separate from `onStartScreenShare`
@@ -632,7 +634,9 @@ function ActiveCall({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
-  onStartScreenShare?: (intent?: { preferBrowserTab?: boolean }) => void;
+  onStartScreenShare?: (
+    intent?: { preferBrowserTab?: boolean },
+  ) => void | Promise<void>;
   /**
    * Start the same share with no sound at all. Offered only after sound is
    * what killed the last attempt, and separate from `onStartScreenShare`
@@ -1668,7 +1672,9 @@ function CallControls({
   onVideoQualityChange: (quality: VideoQuality) => void;
   qualityMenuOpen: boolean;
   onQualityMenuOpenChange: (open: boolean) => void;
-  onStartScreenShare?: (intent?: { preferBrowserTab?: boolean }) => void;
+  onStartScreenShare?: (
+    intent?: { preferBrowserTab?: boolean },
+  ) => void | Promise<void>;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
@@ -1694,10 +1700,10 @@ function CallControls({
   const canWatchParty = canShare && !isDesktopApp();
   const [shareHint, setShareHint] = useState<string | null>(null);
   useEffect(() => {
-    if (voiceState.isSharingScreen) {
+    if (voiceState.isSharingScreen || voiceState.error) {
       setShareHint(null);
     }
-  }, [voiceState.isSharingScreen]);
+  }, [voiceState.isSharingScreen, voiceState.error]);
   const shareAtCap = isScreenShareAtCap(
     voiceState.screenSharePeerIds,
     voiceState.peerId,
@@ -2044,11 +2050,16 @@ function CallControls({
                   return;
                 }
                 // Paint the hint in this click, before getDisplayMedia opens
-                // the picker and the rest of the page stops updating.
+                // the picker and the rest of the page stops updating. Clear
+                // once the picker settles: cancel, error, or a live share.
                 flushSync(() => {
                   setShareHint(t("voice.control.watchPartyHint"));
                 });
-                onStartScreenShare({ preferBrowserTab: true });
+                void Promise.resolve(
+                  onStartScreenShare({ preferBrowserTab: true }),
+                ).finally(() => {
+                  setShareHint(null);
+                });
               }}
             >
               <MonitorPlay className={iconSize} />

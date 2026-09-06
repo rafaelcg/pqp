@@ -422,12 +422,12 @@ describe("screen share audio", () => {
 
     expect(displayMediaCalls[0]).toMatchObject({
       systemAudio: "exclude",
-      preferCurrentTab: true,
       monitorTypeSurfaces: "exclude",
       selfBrowserSurface: "exclude",
       video: { displaySurface: "browser" },
       audio: { echoCancellation: false },
     });
+    expect(displayMediaCalls[0]).not.toHaveProperty("preferCurrentTab");
   });
 
   it("flags a whole-screen share that carries sound", async () => {

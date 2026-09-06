@@ -3895,7 +3895,7 @@ function MainAppContent({
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onStartScreenShare={(intent) =>
-              void voice.startScreenShare(
+              voice.startScreenShare(
                 intent?.preferBrowserTab ? false : shareSystemAudio,
                 intent,
               )
@@ -3950,7 +3950,7 @@ function MainAppContent({
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onStartScreenShare={(intent) =>
-            void voice.startScreenShare(
+            voice.startScreenShare(
               intent?.preferBrowserTab ? false : shareSystemAudio,
               intent,
             )
