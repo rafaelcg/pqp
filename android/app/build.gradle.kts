@@ -49,6 +49,38 @@ val releaseKeystore: File? = config("pqp.keystoreFile", "")
     ?.let { path -> File(path).takeIf { it.isAbsolute } ?: rootProject.file(path) }
 
 /**
+ * The sideload key, or nothing.
+ *
+ * A different key from the release/upload one above, and a different job. This
+ * one signs the GitHub-beta APK on the `android-beta` tag, the thing testers
+ * install from `pqp.gg/android`. Play never sees it.
+ *
+ * It has to be **durable**, which is the whole reason it exists. Android
+ * refuses to install an update over an app signed by a different key, so the
+ * day this key changes is the day every tester has to uninstall before they can
+ * update. CI used to sign the sideload variant with whatever
+ * `~/.android/debug.keystore` the runner happened to have, kept alive in an
+ * Actions cache; GitHub evicts a cache after seven days idle, and each eviction
+ * silently minted a fresh key and broke in-place updates for everybody. Now the
+ * key is a repository secret, decoded to a runner-local file, and the workflow
+ * refuses to publish without it.
+ *
+ * `pqp.sideloadKeystoreFile`, `pqp.sideloadKeystorePassword`,
+ * `pqp.sideloadKeyAlias` and `pqp.sideloadKeyPassword`, read from
+ * `local.properties`, a `-P` flag or the environment
+ * (`PQP_SIDELOADKEYSTOREFILE` and friends) like every other build input here.
+ *
+ * When they are absent this is null and `assembleSideload` falls back to the
+ * local debug key, so a laptop build still installs. That fallback is safe in a
+ * way the release one was not: a sideload APK is never uploaded anywhere that
+ * checks a signature, and the loud check lives in CI, where publishing without
+ * the secret is a hard failure rather than a quiet key rotation.
+ */
+val sideloadKeystore: File? = config("pqp.sideloadKeystoreFile", "")
+    .takeIf { it.isNotBlank() }
+    ?.let { path -> File(path).takeIf { it.isAbsolute } ?: rootProject.file(path) }
+
+/**
  * Whether this build can talk to Firebase Cloud Messaging at all.
  *
  * `google-services.json` is a per-project file that nobody has created yet, and
@@ -123,6 +155,19 @@ android {
                 keyPassword = config("pqp.keyPassword", "")
             }
         }
+        // Named `sideloadRelease` rather than `sideload` so it cannot be
+        // confused with the build type of the same name in the block below;
+        // they live in different containers and Gradle would accept both, which
+        // is exactly why the next person reading `signingConfigs.getByName` here
+        // deserves a name that says which one it is.
+        if (sideloadKeystore != null) {
+            create("sideloadRelease") {
+                storeFile = sideloadKeystore
+                storePassword = config("pqp.sideloadKeystorePassword", "")
+                keyAlias = config("pqp.sideloadKeyAlias", "pqp-sideload")
+                keyPassword = config("pqp.sideloadKeyPassword", "")
+            }
+        }
     }
 
     buildTypes {
@@ -189,10 +234,11 @@ android {
             signingConfig = signingConfigs.findByName("release")
         }
         // GitHub beta, not Play. Same applicationId, same prod URLs, same
-        // shrinker as release, signed with the debug key so CI can produce an
-        // installable APK without ever holding the upload keystore.
+        // shrinker as release, signed with a key that is not the Play upload
+        // key, so CI can produce an installable APK without ever holding that
+        // keystore.
         //
-        // Do not fold this into `release`. Putting the debug key back on
+        // Do not fold this into `release`. Putting a non-upload key back on
         // `assembleRelease` is how a Play upload gets signed with a key Play
         // will refuse, and the rejection arrives days later. Sideload is
         // honest: testers uninstall it when the store opens (the listing
@@ -201,7 +247,15 @@ android {
         create("sideload") {
             initWith(getByName("release"))
             matchingFallbacks += listOf("release")
-            signingConfig = signingConfigs.getByName("debug")
+            // The durable sideload key when the secrets are there, the local
+            // debug key when they are not. On CI the secrets are always there
+            // and the workflow fails the publish when they are not, so the
+            // fallback is a laptop convenience only: `./gradlew
+            // :app:assembleSideload` still produces something installable with
+            // no keystore on the machine. See `sideloadKeystore` above for why
+            // a durable key matters at all.
+            signingConfig = signingConfigs.findByName("sideloadRelease")
+                ?: signingConfigs.getByName("debug")
             versionNameSuffix = "-beta"
         }
     }

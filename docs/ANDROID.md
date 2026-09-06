@@ -98,7 +98,7 @@ Then, from `android/`:
 ```bash
 ./gradlew :app:assembleDebug     # build (localhost API, `.debug` applicationId)
 ./gradlew :app:installDebug      # build and install on the running emulator
-./gradlew :app:assembleSideload  # prod API, debug-signed; what CI puts on GitHub
+./gradlew :app:assembleSideload  # prod API, beta-signed; what CI puts on GitHub
 ```
 
 Opening `android/` in Android Studio works too and needs neither variable.
@@ -1653,6 +1653,134 @@ authenticated request, so a socket that reconnects in the moment between the
 delete returning and the sign-out landing creates a *fresh* account with the
 same `clerk_id` and a new id. That cannot happen with Clerk, where the identity
 itself is gone and no token works.
+
+## The sideload signing key
+
+The APK on the `android-beta` release tag, the one `pqp.gg/android` hands out,
+is signed by a key that has to stay the same forever. Android refuses to install
+an update over an app signed by a different key: the install simply fails, the
+message a tester sees is not worth reading, and the only way out is to uninstall
+and lose whatever the app kept on device. So the signing key is not an
+implementation detail of the build, it is the thing that decides whether an
+update is an update.
+
+### Why the cache approach broke
+
+CI used to sign the sideload variant with `~/.android/debug.keystore`, the
+throwaway key the Android tooling generates on any machine that does not have
+one, and keep the runner's copy alive between runs with `actions/cache` under
+the stable key `android-sideload-debug-keystore-v1`.
+
+That cannot be durable, and the reason is in GitHub's own rules: **a cache entry
+is evicted after seven days without a read**. This workflow only runs when
+`android/**`, `packages/shared/src/**`, `server/src/ws/**` or
+`client/src/lib/peer-connection-manager.ts` changes. A quiet fortnight on the
+Android side is completely ordinary, and every one of them silently threw the
+signing key away. The next publish generated a fresh one, went out green, and
+every tester holding an older APK simply could not update. Nothing in the build
+noticed, because from the build's point of view nothing had gone wrong.
+
+That is what happened to the 0.3.0 publish: the cache was gone, and the APK on
+`android-beta` was signed by a key that had existed for about four minutes.
+
+### What replaces it
+
+A real keystore, generated once, held in repository secrets, and pinned by its
+certificate fingerprint so it cannot change quietly again.
+
+| Actions secret | What it holds |
+|---|---|
+| `ANDROID_SIDELOAD_KEYSTORE_B64` | `base64 -i pqp-sideload.jks \| tr -d '\n'`, one line |
+| `ANDROID_SIDELOAD_KEYSTORE_PASSWORD` | the store password |
+| `ANDROID_SIDELOAD_KEY_ALIAS` | `pqp-sideload` |
+| `ANDROID_SIDELOAD_KEY_PASSWORD` | the key password (the same value here) |
+
+The key itself: PKCS12, RSA 2048, 10000 days, alias `pqp-sideload`, subject
+`CN=pqp sideload, OU=pqp, O=pqp.gg, L=Sao Paulo, ST=SP, C=BR`. Certificate
+SHA-256, which is public by construction and is what the assetlinks file below
+publishes on purpose:
+
+```
+EE:28:41:C9:89:FD:20:0D:27:8B:32:D4:30:A3:63:A1:E7:D2:2E:20:0F:86:19:E2:82:D6:F0:6B:DA:46:BB:F3
+```
+
+`.github/workflows/android.yml` decodes the secret into `$RUNNER_TEMP`, hands
+the path to Gradle as `PQP_SIDELOADKEYSTOREFILE` and friends, and then does two
+things the old version could not:
+
+1. **Refuses to publish without it.** On a `push` to `main` or a
+   `workflow_dispatch`, an empty `ANDROID_SIDELOAD_KEYSTORE_B64` is an
+   `::error::` and a failed job, not a fallback. A publish that breaks every
+   tester's update should be a red build, not a green one.
+2. **Reads the signature back off the artifact.** `apksigner verify
+   --print-certs` on the built APK, compared against `SIDELOAD_CERT_SHA256`
+   pinned in the workflow's `env:` block. Checking the artifact rather than the
+   config is the only version of this check that would have caught the cache
+   eviction, because the config was fine; it was the file underneath it that
+   disappeared.
+
+`android/app/build.gradle.kts` creates a `sideloadRelease` signing config only
+when those inputs are present, and the `sideload` build type falls back to the
+local debug key when they are not. So `./gradlew :app:assembleSideload` still
+works on a laptop with no secrets and no keystore, and on a fork PR, which gets
+no secrets at all. The fallback is a convenience for local builds only; the loud
+check is in the one place it matters, the publishing run.
+
+### The local backup, which is the only recoverable copy
+
+GitHub Actions secrets are write-only. Once set, nobody, including the repo
+owner, can read the value back. If the keystore is lost, it is lost, and every
+tester uninstalls.
+
+So it also lives at **`~/.config/pqp/android-sideload-keystore/`** on the
+maintainer's machine (`pqp-sideload.jks`, `password.txt`, `README.txt`, all mode
+0600). That directory is the durable copy. Back it up wherever the things that
+cannot be regenerated are backed up. It is not in this repo and must never be:
+no keystore, no password, in git, ever.
+
+To build a signed sideload APK locally with it:
+
+```bash
+cd android
+PQP_SIDELOADKEYSTOREFILE=~/.config/pqp/android-sideload-keystore/pqp-sideload.jks \
+PQP_SIDELOADKEYSTOREPASSWORD="$(cat ~/.config/pqp/android-sideload-keystore/password.txt)" \
+PQP_SIDELOADKEYALIAS=pqp-sideload \
+PQP_SIDELOADKEYPASSWORD="$(cat ~/.config/pqp/android-sideload-keystore/password.txt)" \
+./gradlew :app:assembleSideload
+```
+
+### App Links
+
+`client/public/.well-known/assetlinks.json` has to list this fingerprint for
+`https://pqp.gg/app/invite/<code>` to open the app instead of a browser chooser.
+It is the same value as `SIDELOAD_CERT_SHA256`, in the same colon-separated
+uppercase form. When the Play listing opens, the Play App Signing certificate
+goes in that array **as well**, not instead: a store install and a sideload
+install are different signatures and both have to be claimed.
+
+### Rotating it, deliberately
+
+Only for a real reason (a leak, or moving to Play signing). It costs every
+tester a reinstall, the same as losing it, so it is not a tidy-up.
+
+1. `keytool -genkeypair -v -keystore pqp-sideload.jks -storetype PKCS12 -alias
+   pqp-sideload -keyalg RSA -keysize 2048 -validity 10000` in a directory
+   outside the repo.
+2. Replace all four `ANDROID_SIDELOAD_*` secrets (`gh secret set NAME --repo
+   rafaelcg/pqp < file` keeps the value off your screen and out of your shell
+   history).
+3. Replace the copy in `~/.config/pqp/android-sideload-keystore/`.
+4. Update `SIDELOAD_CERT_SHA256` in `.github/workflows/android.yml` **and** the
+   fingerprint in `client/public/.well-known/assetlinks.json`. The verify step
+   fails the build if you forget either.
+5. Tell testers to uninstall and reinstall before they will get another update.
+
+### The one-time cost of this fix
+
+Every tester who installed a beta before this landed has an APK signed by some
+evicted-cache key. The first correctly signed publish cannot update over it.
+They uninstall pqp once, install the new APK from `pqp.gg/android`, and every
+update after that is an ordinary in-place update.
 
 ## CI
 
