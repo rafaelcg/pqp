@@ -298,6 +298,9 @@ function rowToParticipant(row: VoicePeerRow): VoiceParticipant {
     muted: row.muted,
     deafened: row.deafened,
     canSpeak: row.canSpeak,
+    // The sanction is per-process (see `roomServerMutes`); a row held by
+    // another instance carries no flag, so this reads false there.
+    serverMuted: isVoiceUserServerMuted(row.channelId, row.userId),
   };
 }
 

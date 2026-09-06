@@ -4902,35 +4902,6 @@ router.post(
         voiceChannelId,
         userId!,
         body.muted,
-        getVoicePeerIdentities(userId!, voiceChannelId),
-      );
-      if (!changed) {
-        throw new HttpError(
-          502,
-          "The voice server did not accept the mute. They may not be publishing audio right now.",
-        );
-      }
-    }
-
-    // Both transports end up with the same roster flag; they differ in what
-    // else happens to the media.
-    //
-    // LiveKit: the SFU is in the audio path, so it stops forwarding the track
-    // too. That call runs FIRST and can refuse, because the mute IS the
-    // action here, and an SFU that did not accept it must be reported instead
-    // of half-happening.
-    //
-    // Mesh: the audio never touches the server, and for a long time this
-    // route refused for that reason. But eviction works on mesh, and it works
-    // because every other client enforces the roster. The flag on the roster
-    // is enforced the same way: every receiver forces the peer's playback to
-    // zero and the target's own client refuses to unmute. See
-    // `roomServerMutes` in `ws/voice.ts` for the whole argument.
-    if (getRoomTransport(voiceChannelId) === "livekit") {
-      const changed = await setSfuUserMuted(
-        voiceChannelId,
-        userId!,
-        body.muted,
         await findVoicePeerIdentities(userId!, voiceChannelId),
       );
       if (!changed) {
