@@ -45,6 +45,7 @@ import {
   type ContextMenuItemDef,
 } from "@/components/ui/context-menu";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
@@ -1575,10 +1576,10 @@ const MessageRow = memo(function MessageRow({
     ? null
     : highestRoleColor(authorInfo?.roleIds, roles);
 
+  const [deleteOpen, setDeleteOpen] = useState(false);
+
   function confirmDelete() {
-    if (window.confirm(t("chat.deleteConfirm"))) {
-      onDelete?.();
-    }
+    setDeleteOpen(true);
   }
 
   /**
@@ -2228,6 +2229,14 @@ const MessageRow = memo(function MessageRow({
           )}
         </article>
       </ContextMenu>
+      <ConfirmDialog
+        open={deleteOpen}
+        title={t("chat.delete")}
+        description={t("chat.deleteConfirm")}
+        confirmLabel={t("chat.delete")}
+        onConfirm={() => onDelete?.()}
+        onClose={() => setDeleteOpen(false)}
+      />
     </>
   );
 });

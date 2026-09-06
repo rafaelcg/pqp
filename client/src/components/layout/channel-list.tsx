@@ -393,6 +393,9 @@ export function ChannelList({
         <ChannelRow
           channel={channel}
           selected={selectedChannelId === channel.id}
+          announceCurrent={
+            selectedChannelId === channel.id && !communityHomeSelected
+          }
           unread={unread[channel.id] ?? EMPTY_UNREAD}
           connected={activeVoiceChannelId === channel.id}
           canManage={canManage}
@@ -689,6 +692,7 @@ export function ChannelList({
                 <button
                   type="button"
                   data-community-home-row
+                  aria-current={communityHomeSelected ? "page" : undefined}
                   className={cn(
                     "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
                     communityHomeSelected
@@ -1057,6 +1061,7 @@ function CategoryHeader({
 function ChannelRow({
   channel,
   selected,
+  announceCurrent = selected,
   unread,
   connected = false,
   canManage,
@@ -1085,6 +1090,8 @@ function ChannelRow({
 }: {
   channel: Channel;
   selected: boolean;
+  /** False when Baú is the open page so two rows do not both claim current. */
+  announceCurrent?: boolean;
   unread: UnreadState;
   connected?: boolean;
   canManage: boolean;
@@ -1301,6 +1308,7 @@ function ChannelRow({
         <button
           type="button"
           onClick={onJoinVoice && !connected ? onJoinVoice : onSelect}
+          aria-current={announceCurrent ? "page" : undefined}
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           {icon}
