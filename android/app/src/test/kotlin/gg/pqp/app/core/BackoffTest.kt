@@ -83,9 +83,11 @@ class BackoffTest {
     }
 
     /**
-     * No attempt number produces a delay short enough to be a spin. A 4401 is a
-     * refusal and stops the loop before it reaches here, but a zero here would
-     * be a client hammering the server as fast as it can open a socket.
+     * No attempt number produces a delay short enough to be a spin. A 4401 is
+     * retried on the throttled schedule (see `UnauthorizedStreakTest`), so the
+     * five second floor is the least a refused session ever waits, and a zero
+     * here would be a client hammering the server as fast as it can open a
+     * socket.
      */
     @Test
     fun `every delay is long enough to be a wait`() {

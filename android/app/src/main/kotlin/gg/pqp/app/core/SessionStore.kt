@@ -37,7 +37,8 @@ sealed interface SessionPhase {
  */
 class SessionStore(
     private val scope: CoroutineScope,
-    http: OkHttpClient = ApiClient.defaultHttpClient(),
+    /** Shared with the API and the socket; the connection check borrows it too. */
+    val http: OkHttpClient = ApiClient.defaultHttpClient(),
 ) {
     private val _phase = MutableStateFlow<SessionPhase>(SessionPhase.Launching)
     val phase: StateFlow<SessionPhase> = _phase.asStateFlow()
@@ -198,6 +199,24 @@ class SessionStore(
         _servers.value = emptyList()
         _linkError.value = null
         _phase.value = SessionPhase.SignedOut
+    }
+
+    /**
+     * Ends the Clerk session first, while the call can still authenticate,
+     * then forgets it locally. Clearing local state first would leave a live
+     * session on the device with nothing able to revoke it.
+     *
+     * Here rather than on the account screen because it has a second caller
+     * now: the connection banner's "Sign in again", which is the only fix for
+     * a session the server has stopped accepting.
+     */
+    fun signOut() {
+        scope.launch {
+            if (Backend.authMode == AuthMode.Clerk) {
+                runCatching { com.clerk.api.Clerk.auth.signOut() }
+            }
+            signOutLocally()
+        }
     }
 
     companion object {
