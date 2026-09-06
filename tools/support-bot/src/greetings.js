@@ -8,11 +8,11 @@
  * dead. This file gives them one reply, from a line a human wrote, so the
  * channel has a pulse and the person feels seen.
  *
- * It is NOT the bot announcing arrivals. The README's third property, "it never
- * speaks unprompted", survives because the trigger is still a message somebody
- * sent: the person said hello into the room, and a hello is the one message a
- * room is expected to answer. Two conditions have to hold at once, and both
- * are checked here, deterministically:
+ * It is NOT the bot announcing arrivals. The README's third property, "no
+ * schedule and never announces itself", survives because the trigger is still a
+ * message somebody sent: the person said hello into the room, and a hello is
+ * the one message a room is expected to answer. Two conditions have to hold at
+ * once, and both are checked here, deterministically:
  *
  *   1. the author joined the server LESS THAN FIFTEEN MINUTES AGO, and
  *   2. the message READS AS A GREETING, by word list, not by model.

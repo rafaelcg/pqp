@@ -67,9 +67,12 @@ They share plumbing and share nothing else. The full argument is at the top of
   the safest way to stop somebody adding a cast to it by editing the wrong
   block. A mode inside the ambient runner puts the QG back in that file's blast
   radius.
-- The ambient runner's core loop is a **scheduler for speaking unprompted**.
-  This bot must never speak unprompted, so sharing one would mean maintaining
-  "this cadence must never apply to that account" forever.
+- The ambient runner's core loop is a **scheduler**: it decides when to speak
+  out of nothing, on a cadence. This bot has no scheduler at all, and even the
+  one thing it says that nobody asked it for is triggered by a specific message
+  from a specific person that a specific room failed to answer. Sharing a
+  scheduler would mean maintaining "this cadence must never apply to that
+  account" forever.
 - Their defaults are opposites: the cast never discloses and improvises
   everything; this account always discloses and improvises nothing.
 - They need separate kill switches. "Stop the personas" and "stop support" are
