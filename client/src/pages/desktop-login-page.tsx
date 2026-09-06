@@ -86,7 +86,7 @@ function DesktopLoginInner() {
   };
 
   return (
-    <div className="relative flex min-h-full flex-col items-center justify-center overflow-hidden px-6 py-12">
+    <div className="relative flex min-h-full flex-col items-center justify-center overflow-y-auto px-6 py-12">
       <Seo
         title={t("desktopLogin.seo.title")}
         description={t("desktopLogin.seo.description")}
@@ -139,7 +139,11 @@ function DesktopLoginInner() {
               <p className="mt-4 text-danger">{handoffError}</p>
             ) : null}
             <div className="mt-8 flex w-full flex-col gap-3">
-              <Button onClick={() => void continueToApp()} disabled={handoffBusy}>
+              <Button
+                className="w-full whitespace-normal"
+                onClick={() => void continueToApp()}
+                disabled={handoffBusy}
+              >
                 {t("desktopLogin.continue", {
                   name:
                     user?.fullName ||
@@ -148,6 +152,7 @@ function DesktopLoginInner() {
                 })}
               </Button>
               <Button
+                className="w-full whitespace-normal"
                 variant="secondary"
                 onClick={() => {
                   void signOut({ redirectUrl: handoffHref });

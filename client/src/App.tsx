@@ -453,7 +453,7 @@ function ClerkAppGate() {
 
   if (!isSignedIn) {
     return (
-      <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12">
+      <div className="relative flex h-full flex-col items-start justify-end overflow-y-auto p-8 sm:p-12">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,var(--glow-accent),transparent_40%)]" />
         <div className="animate-rise relative z-10 max-w-lg">
           <Link
@@ -474,8 +474,9 @@ function ClerkAppGate() {
               {handoffError ? (
                 <p className="mt-4 text-danger">{handoffError}</p>
               ) : null}
-              <div className="mt-8 flex flex-wrap gap-3">
+              <div className="mt-8 flex w-full max-w-sm flex-col gap-3">
                 <Button
+                  className="w-full whitespace-normal"
                   variant="secondary"
                   onClick={() => {
                     void startDesktopAuth(authMode);
@@ -485,6 +486,7 @@ function ClerkAppGate() {
                 </Button>
                 {browserUrl ? (
                   <Button
+                    className="w-full whitespace-normal"
                     variant="secondary"
                     onClick={() => {
                       void navigator.clipboard.writeText(browserUrl).then(() => {
@@ -497,7 +499,11 @@ function ClerkAppGate() {
                       : t("signedOut.waiting.copy")}
                   </Button>
                 ) : null}
-                <Button variant="ghost" onClick={cancelDesktopAuth}>
+                <Button
+                  className="w-full whitespace-normal"
+                  variant="ghost"
+                  onClick={cancelDesktopAuth}
+                >
                   {t("signedOut.waiting.cancel")}
                 </Button>
               </div>
@@ -513,17 +519,21 @@ function ClerkAppGate() {
               ) : null}
               <div className="mt-8 flex flex-wrap gap-3">
                 {canDesktopAuth ? (
-                  <>
-                    <Button onClick={() => void startDesktopAuth("sign-up")}>
+                  <div className="flex w-full max-w-sm flex-col gap-3">
+                    <Button
+                      className="w-full whitespace-normal"
+                      onClick={() => void startDesktopAuth("sign-up")}
+                    >
                       {t("signedOut.createAccount")}
                     </Button>
                     <Button
+                      className="w-full whitespace-normal"
                       variant="secondary"
                       onClick={() => void startDesktopAuth("sign-in")}
                     >
                       {t("nav.signIn")}
                     </Button>
-                  </>
+                  </div>
                 ) : (
                   <>
                     <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
