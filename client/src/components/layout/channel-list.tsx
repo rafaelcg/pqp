@@ -61,6 +61,7 @@ import {
   notificationLevelItems,
   useChannelNotificationLevel,
 } from "@/hooks/use-notifications";
+import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -219,6 +220,7 @@ export function ChannelList({
   onSelectCommunityHome,
 }: ChannelListProps) {
   const { t } = useTranslation();
+  const channelPinHintEnabled = useFeatureHintEnabled("channelPin");
   const visibleFavs = visibleFavoriteChannels(channels, favoriteChannelIds);
   const favoriteIdSet = new Set(visibleFavs.map((c) => c.id));
   const topLevelText = sortByPosition(
@@ -897,6 +899,15 @@ export function ChannelList({
           <ChannelListSkeleton />
         ) : (
           <>
+            {channelPinHintEnabled && server && (
+              <div className="mb-2">
+                <FeatureHint
+                  id="channelPin"
+                  enabled
+                  body={t("featureHint.channelPin.body")}
+                />
+              </div>
+            )}
             {server &&
               (visibleFavs.length > 0 ||
                 Boolean(

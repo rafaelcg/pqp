@@ -61,6 +61,7 @@ import {
   videoSupportsNativeFullscreen,
   type StageFullscreenStrategy,
 } from "@/lib/fullscreen";
+import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   NO_SCREEN_FULLSCREEN,
@@ -1720,6 +1721,7 @@ function CallControls({
   // lists screens and windows only, so the same door there would start a
   // silent share and the prompt would be a lie.
   const canWatchParty = canShare && !isDesktopApp();
+  const watchPartyHintEnabled = useFeatureHintEnabled("watchParty");
   const [shareHint, setShareHint] = useState<string | null>(null);
   useEffect(() => {
     if (voiceState.isSharingScreen || voiceState.error) {
@@ -1750,6 +1752,15 @@ function CallControls({
 
   return (
     <div className={cn("flex flex-col items-center", collapsed ? "gap-0" : "gap-1.5")}>
+      {watchPartyHintEnabled && canWatchParty && !listenOnly && !noVideo && (
+        <div className="pointer-events-auto mb-1">
+          <FeatureHint
+            id="watchParty"
+            enabled
+            body={t("featureHint.watchParty.body")}
+          />
+        </div>
+      )}
       {pushToTalk && (
         <div className={cn("w-full", collapsed ? "mb-1" : "mb-0.5")}>
           <Button
