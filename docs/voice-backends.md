@@ -205,20 +205,47 @@ LiveKit Cloud bills participant-minutes, and a call between three friends gains 
 
 **iOS runs LiveKit rooms** (PR feat/ios-livekit). The app declares `transports: ["mesh", "livekit"]`, and on a `welcome` that says `livekit` it builds no peer connections: it `POST`s `/api/voice/token` for the peer id the welcome minted, connects a LiveKit `Room` (`client-sdk-swift` 2.16.0) to the returned URL, publishes the microphone, and subscribes to everybody's audio, camera and screen share. Participant identity is the peer id, so the roster, the mute badges and the tiles are keyed exactly as on the mesh. The failure semantics are the web's: token 5xx, a refusing SFU, or 45 s without a connected room leaves the WS room and shows the same "Could not reach the voice server" sentence, and it never builds a mesh instead. A `/ws` blip in a LiveKit room keeps the media: the app declares `resume` on an SFU deployment (read from `GET /api/voice/backend`), presents the `resumeToken` on the rejoin, and skips the media rebuild when `welcome.resumed` comes back for the same peer id.
 
-**Android runs LiveKit rooms too** (PR #248), and since `android/livekit-share-receive`
-it can watch a share in one. It declares `transports: ["mesh", "livekit"]`,
+**Android runs LiveKit rooms too** (PR #248), watches a share in one since
+`android/livekit-share-receive`, and draws cameras since
+`feat/android-livekit-cameras`. It declares `transports: ["mesh", "livekit"]`,
 mints a token for the peer id the welcome named, connects with
 `autoSubscribe = false` and subscribes deliberately: every audio publication,
-plus `SCREEN_SHARE` video. A share arrives disabled and is only enabled while
-the viewer is open, and the layer is capped at 720p (360p on a metered link),
-so a phone in a 100-viewer watch party is not handed the 1080p layer. Both of
-those need `adaptiveStream = false` on Android: unlike livekit-client, the
-Android SDK ignores `setEnabled` and `setVideoQuality` on an adaptively managed
-track rather than treating the manual value as a ceiling. `SCREEN_SHARE_AUDIO` plays with the voice, silenced by deafen and
-gated on the roster having announced the share. What Android does **not** do on
-LiveKit: publish a screen (the button is hidden there), a camera in either
-direction, or per-peer stats, because LiveKit's stats arrive in the other
-libwebrtc's types. None of the receive path has been run on hardware yet.
+plus `SCREEN_SHARE` and `CAMERA` video. Anything else is refused by default.
+
+Delivery, not subscription, is what the phone controls, and the two videos are
+controlled differently because they are used differently:
+
+- A **share** arrives disabled and is enabled only while the viewer is open,
+  capped at 720p (360p on a metered link), so a phone in a 100-viewer watch
+  party is never handed the 1080p layer.
+- A **camera** arrives flowing and is paused a second later unless something is
+  drawing it. What draws one is a strip of tiles under the call bar plus the
+  full-screen viewer a tap opens, and each surface tells the transport it is
+  drawing that camera for as long as it is composed and the app is started, so
+  a tile scrolled off the strip, a phone in a pocket and a camera the strip has
+  no room for are all paused. Claims are *counted*, because the viewer is a
+  dialog over a strip that stays composed and closing it must not pause the
+  tile behind it. The layer is capped per surface: the bottom layer for a tile,
+  360p for the viewer on Wi-Fi, the bottom layer again on a metered link.
+  Mirrors `client/src/lib/remote-video-delivery.ts`, whose grace period it also
+  copies. The ceiling is worth less than it looks against a **web** publisher,
+  which publishes its camera with `simulcast: false`: there is one layer on the
+  server and the saving there is entirely the pausing.
+
+Both controls need `adaptiveStream = false` on Android: unlike livekit-client,
+the Android SDK ignores `setEnabled` and `setVideoQuality` on an adaptively
+managed track rather than treating the manual value as a ceiling.
+`SCREEN_SHARE_AUDIO` plays with the voice, silenced by deafen and gated on the
+roster having announced the share. A camera the publisher *mutes* rather than
+unpublishes drops its tile and its delivery until the unmute; every pqp client
+unpublishes, so that path is for the server-side mute and for other clients.
+A reconnect re-asks for both halves, the subscriptions and the track settings,
+because the SFU keeps neither across one.
+
+What Android does **not** do on LiveKit: publish a screen (the button is hidden
+there), publish a camera (it has no capture at all, on either transport), or
+per-peer stats, because LiveKit's stats arrive in the other libwebrtc's types.
+None of the receive path has been run on hardware yet.
 
 **iOS publishes screen shares on LiveKit** (PR `ios/livekit-share-send`). The ReplayKit bridge is unchanged and transport-agnostic: the extension writes NV12 over the App Group socket, and the app feeds the frames to the mesh's `RTCVideoSource` or to a LiveKit `BufferCapturer` track published as `Track.Source.ScreenShareVideo`. The bridge is armed once the room is connected, and the publish waits for the first frame, because the SDK resolves a buffer track's dimensions from what it captures. The SDK's own broadcast path is not used, deliberately: it JPEG-encodes every frame inside the ~50 MB extension process. The publish carries the web's ladder from PR #237, layer for layer (`sfuScreenPlan` in `ios/pqp/Sources/Voice/VideoQuality.swift`), including the large-room cap, so a phone cannot hand a watch party an uncapped 1080p30 stream. The share control follows `welcome.self.canSpeak`. Still mesh-only on iOS: the receive-side video quality ladder; LiveKit subscribes at the SDK's defaults. **Device-only and unverified:** ReplayKit broadcast has no simulator equivalent.
 

@@ -190,6 +190,9 @@
     <string name="voice_watch_screen">%1$s is sharing a screen</string>
     <string name="voice_watch">Watch</string>
     <string name="voice_close_screen">Close</string>
+    <string name="voice_camera_of">%1$s\'s camera</string>
+    <string name="voice_camera_someone">Someone</string>
+    <string name="voice_camera_close">Close</string>
     <string name="voice_speaker_on">Speaker</string>
     <string name="voice_speaker_off">Earpiece</string>
     <string name="voice_server_muted_you">A moderator muted you</string>
