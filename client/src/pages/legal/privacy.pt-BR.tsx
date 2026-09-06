@@ -27,7 +27,7 @@ export const privacyPtBr: LegalDocument = {
   description:
     "Como o pqp.gg trata dados pessoais: o que a gente coleta, as bases legais, onde os dados são tratados, por quanto tempo ficam e os seus direitos sob a LGPD e a lei de proteção de dados do Reino Unido.",
   heading: "Política de Privacidade",
-  updated: "2 de setembro de 2026",
+  updated: "7 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -396,24 +396,77 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "voice",
-      sourceRev: "99fd73b2",
+      sourceRev: "4ffed91f",
       heading: "Chamadas de voz",
       body: (
         <>
           <p>
-            Na configuração que o pqp.gg roda hoje, a voz é{" "}
-            <strong>ponto a ponto</strong>. O seu áudio vai direto do seu
-            dispositivo para as outras pessoas do canal por WebRTC,
-            criptografado de ponta a ponta pelo navegador (DTLS-SRTP).{" "}
-            <strong>
-              Ele não passa pelos nossos servidores, e a gente não conseguiria
-              gravar mesmo se quisesse.
-            </strong>{" "}
-            O que o nosso servidor faz é só a sinalização: quem está em qual
-            canal de voz e as mensagens de estabelecimento de conexão que os
-            navegadores trocam.
+            A voz e o vídeo no pqp.gg pegam um de dois caminhos, e qual deles a
+            sua chamada pega é decidido quando a chamada começa. Em sala
+            pequena, o áudio e o vídeo de tela vão{" "}
+            <strong>direto do seu dispositivo para as outras pessoas</strong> do
+            canal, por WebRTC, criptografados pelo navegador (DTLS-SRTP), e não
+            passam por servidor nenhum nosso. Em sala grande, eles são
+            repassados por um{" "}
+            <strong>servidor de mídia que a gente mesmo roda</strong>, em São
+            Paulo, no Brasil.
           </p>
-          <p>Duas ressalvas honestas:</p>
+          <p>Quais salas são quais:</p>
+          <ul>
+            <li>
+              Chamada em DM ou em grupo de DM é sempre direta entre as pessoas
+              que estão nela.
+            </li>
+            <li>
+              Canal de voz em servidor com menos de 10 membros é direto entre as
+              pessoas que estão nele.
+            </li>
+            <li>
+              Canal de voz em servidor com 10 membros ou mais passa pelo
+              servidor de mídia.
+            </li>
+            <li>
+              Canal de voz em comunidade também passa, seja qual for o tamanho.
+              Comunidade aqui é servidor que ganhou endereço público em{" "}
+              <strong>pqp.gg/c/…</strong>, esteja ele no diretório público ou
+              não. O endereço é o que deixa qualquer um entrar, então é ele que
+              a gente trata como sinal de sala que pode encher.
+            </li>
+            <li>
+              Quem pode gerenciar os canais do servidor, normalmente o dono e os
+              admins, pode fixar o caminho por canal, em{" "}
+              <strong>Tamanho da sala de voz</strong> nas configurações do
+              canal, e essa escolha vale no lugar da regra acima.
+            </li>
+          </ul>
+          <p>
+            A escolha é feita quando a primeira pessoa entra e vale até a sala
+            esvaziar. Uma chamada em andamento nunca troca de caminho.
+          </p>
+          <p>
+            <strong>
+              O que o caminho repassado significa para você, sem rodeio.
+            </strong>{" "}
+            Para passar o seu áudio e o seu vídeo adiante, o servidor de mídia
+            descriptografa o que você manda e criptografa de novo para cada
+            pessoa que recebe. É isso que um servidor de mídia faz; não tem como
+            repassar mídia sem mexer nela. Então, em sala grande, a criptografia
+            é entre você e o nosso servidor, e não de ponta a ponta entre os
+            participantes, e a frase que ficava aqui antes, de que o seu áudio
+            não chegaria à gente nem se a gente quisesse, deixou de valer para
+            toda chamada.
+          </p>
+          <p>
+            <strong>O que a gente faz com isso: repassa e joga fora.</strong>{" "}
+            Nada é gravado, nada é armazenado, e pessoa nenhuma escuta. A
+            máquina roda o servidor de mídia e mais nada: sem serviço de
+            gravação, sem fila e sem disco onde a mídia seja escrita. E nenhum
+            dos tokens que a gente emite para entrar numa sala carrega permissão
+            de gravar. A mídia existe na memória daquele servidor pelo tempo de
+            repassar o pacote. A gente também não consegue voltar depois e
+            recuperar uma chamada, porque cópia nenhuma foi feita.
+          </p>
+          <p>Três ressalvas honestas:</p>
           <ul>
             <li>
               <strong>STUN e TURN.</strong> Para conectar dois dispositivos
@@ -421,24 +474,38 @@ export const privacyPtBr: LegalDocument = {
               STUN e, quando um caminho direto é impossível (comum em rede
               móvel), o áudio criptografado é retransmitido por um servidor{" "}
               <strong>TURN</strong>. Esses terceiros veem os endereços IP das
-              pessoas na chamada, e o relay TURN carrega a mídia — mas ela
+              pessoas na chamada, e o relay TURN carrega a mídia, mas ela
               continua criptografada entre os participantes, então o relay não
               consegue escutar. Os nossos provedores de STUN/TURN hoje são a{" "}
               <strong>Cloudflare Realtime TURN</strong>, depois Metered / Open
               Relay se a Cloudflare não estiver configurada, depois um relay
-              estático (ExpressTURN no pqp.gg) como fallback, mais os
-              servidores STUN públicos do Google e da Cloudflare.
+              estático (ExpressTURN no pqp.gg) como fallback, mais os servidores
+              STUN públicos do Google e da Cloudflare. Numa sala grande esse
+              mesmo trabalho é feito pelo próprio servidor de mídia, na mesma
+              máquina, sem terceiro nenhum no meio.
             </li>
             <li>
-              <strong>Chamadas grandes.</strong> Como cada participante se
-              conecta diretamente com todos os outros, esse desenho só estica
-              até certo ponto antes de as conexões pesarem. O software também
-              suporta um servidor de mídia (SFU) para canais maiores, o que{" "}
-              <em>colocaria</em> o áudio em um servidor de terceiro. Esse modo{" "}
-              <strong>não está ligado</strong> no pqp.gg. Se a gente ligar,
-              atualiza esta página antes.
+              <strong>Quem cuida da máquina.</strong> O servidor de mídia é uma
+              máquina virtual que a gente aluga da <strong>Vultr</strong> em São
+              Paulo e administra por conta própria. A Vultr entrega o hardware,
+              a rede e o prédio; o software que roda em cima é nosso.
+            </li>
+            <li>
+              <strong>Isso é uma promessa, não uma prova.</strong> No caminho
+              direto a gente não conseguiria gravar a sua chamada nem querendo,
+              porque ela não chega até a gente. No caminho repassado a gente
+              conseguiria, e não grava. Quem tiver acesso de administrador
+              àquela máquina pode instalar um gravador, e o que separa você
+              disso é a palavra de quem opera o pqp.gg mais a configuração
+              descrita acima. A gente prefere dizer isso na cara do que deixar a
+              frase antiga cobrir os dois casos.
             </li>
           </ul>
+          <p>
+            Isso mudou em <strong>5 de setembro de 2026</strong>, quando o
+            servidor de mídia entrou em produção. Antes dessa data toda chamada
+            no pqp.gg era direta entre os participantes.
+          </p>
         </>
       ),
     },
@@ -545,7 +612,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "who-sees",
-      sourceRev: "f444dc8b",
+      sourceRev: "266a6929",
       heading: "Quem mais vê os seus dados",
       body: (
         <>
@@ -562,6 +629,13 @@ export const privacyPtBr: LegalDocument = {
               <strong>Fly.io</strong> — servidores de aplicação e o banco de
               dados Postgres, em{" "}
               <strong>São Paulo, Brasil (região gru da Fly)</strong>.
+            </li>
+            <li>
+              <strong>Vultr</strong>, a máquina virtual onde roda o nosso
+              servidor de mídia de voz, em <strong>São Paulo, Brasil</strong>. O
+              software em cima dela é nosso; a Vultr entrega a máquina e a rede.
+              Em sala grande, o áudio e o vídeo de tela passam por ali para
+              serem repassados, como está em &quot;Chamadas de voz&quot; acima.
             </li>
             <li>
               <strong>Umami</strong> — contagem de visitas sem cookie, hospedado
@@ -647,7 +721,7 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "where-processed",
-      sourceRev: "18d155e8",
+      sourceRev: "7843ade0",
       heading: "Onde os seus dados são tratados",
       body: (
         <>
@@ -660,9 +734,11 @@ export const privacyPtBr: LegalDocument = {
             de STUN/TURN e o Google Fonts operam globalmente e normalmente
             tratam dados nos Estados Unidos e na Europa. Os servidores de
             aplicação e o banco de dados rodam na <strong>Fly.io</strong> em{" "}
-            <strong>São Paulo, Brasil (região gru da Fly)</strong>. A pessoa que
-            administra o pqp.gg está no Reino Unido, então tudo que é tratado
-            por um humano é tratado lá.
+            <strong>São Paulo, Brasil (região gru da Fly)</strong>, e o servidor
+            de mídia de voz roda em uma máquina da Vultr também em{" "}
+            <strong>São Paulo</strong>, então uma chamada repassada não sai do
+            Brasil. A pessoa que administra o pqp.gg está no Reino Unido, então
+            tudo que é tratado por um humano é tratado lá.
           </p>
           <p>
             A base honesta dessas transferências: são serviços comerciais
@@ -990,20 +1066,22 @@ export const privacyPtBr: LegalDocument = {
     },
     {
       id: "security",
-      sourceRev: "8fd809d4",
+      sourceRev: "09946099",
       heading: "Segurança",
       body: (
         <p>
-          O tráfego é criptografado em trânsito. O áudio de voz é criptografado
-          entre os participantes. Os links de anexo são de vida curta e
-          assinados, em vez de públicos. O nosso servidor se recusa a buscar
-          prévia de link em endereços de rede interna. Nenhum sistema é
-          perfeitamente seguro, e este é mantido por uma pessoa sem equipe de
-          segurança atrás — se você encontrar uma vulnerabilidade, por favor
-          conte para a gente em <strong>contato@pqp.gg</strong> antes de contar
-          para qualquer outra pessoa. Se um incidente de segurança criar risco
-          real para você, a gente comunica você e a autoridade competente, como
-          exigem o art. 48 da LGPD e os arts. 33–34 do UK GDPR.
+          O tráfego é criptografado em trânsito. A voz é criptografada em
+          trânsito nos dois caminhos: de ponta a ponta entre os participantes na
+          sala pequena, e entre você e o nosso servidor de mídia na sala grande,
+          onde ele precisa mexer na mídia para repassá-la. Os links de anexo são
+          de vida curta e assinados, em vez de públicos. O nosso servidor se
+          recusa a buscar prévia de link em endereços de rede interna. Nenhum
+          sistema é perfeitamente seguro, e este é mantido por uma pessoa sem
+          equipe de segurança atrás. Se você encontrar uma vulnerabilidade, por
+          favor conte para a gente em <strong>contato@pqp.gg</strong> antes de
+          contar para qualquer outra pessoa. Se um incidente de segurança criar
+          risco real para você, a gente comunica você e a autoridade competente,
+          como exigem o art. 48 da LGPD e os arts. 33–34 do UK GDPR.
         </p>
       ),
     },
