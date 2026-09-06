@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
 import { runtimeSnapshot, type RuntimeMetrics } from "../lib/runtime.js";
 import { checkReady, type ReadyReport } from "./ready.js";
+import { readSfuStats, type SfuStats } from "../voice/sfu-stats.js";
 import { getVoiceActivitySnapshot } from "../ws/voice.js";
 import {
   acquisitionReport,
@@ -80,6 +81,14 @@ export interface AdminMetrics {
    * bounds its own cost (one SELECT 1; remote probes cached for 30 s).
    */
   ready: ReadyReport;
+  /**
+   * The SFU as the SFU sees itself: which host this process is configured
+   * with (hostname only), whether it answered, and its room and participant
+   * counts. Its own 10-second cache, in voice/sfu-stats.ts, not this one:
+   * `voice` below is the API's peer map from the 30-second cache, and the two
+   * are meant to be compared, not confused.
+   */
+  sfu: SfuStats;
   users: {
     total: number;
     last24h: number;
@@ -314,7 +323,7 @@ function hoursAgo(column: string): string {
  * Expressed as a type rather than as a convention on purpose: it makes it
  * impossible to accidentally compute the live block inside the cached one.
  */
-type CachedMetrics = Omit<AdminMetrics, "runtime" | "ready">;
+type CachedMetrics = Omit<AdminMetrics, "runtime" | "ready" | "sfu">;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
   const pool = getPool();
@@ -865,8 +874,12 @@ async function getCachedMetrics(): Promise<CachedMetrics> {
  * `runtime` block and start serving a stale one.
  */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
-  const [payload, ready] = await Promise.all([getCachedMetrics(), checkReady()]);
-  return { ...payload, runtime: runtimeSnapshot(), ready };
+  const [payload, ready, sfu] = await Promise.all([
+    getCachedMetrics(),
+    checkReady(),
+    readSfuStats(),
+  ]);
+  return { ...payload, runtime: runtimeSnapshot(), ready, sfu };
 }
 
 /** Test hook: forget the cached payload. */

@@ -1,4 +1,4 @@
-import { RoomServiceClient, TrackType } from "livekit-server-sdk";
+import { RoomServiceClient, TrackType, type Room } from "livekit-server-sdk";
 import { logEvent } from "../lib/log.js";
 import {
   isLiveKitConfigured,
@@ -110,6 +110,20 @@ export async function pingSfu(): Promise<void> {
     throw new Error("LiveKit is not configured");
   }
   await client.listRooms();
+}
+
+/**
+ * Every room the SFU currently holds, for the operator dashboard's counts
+ * (`voice/sfu-stats.ts`). Same call as `pingSfu`, with the answer kept.
+ * Rejects when LiveKit is not configured or the SFU did not answer; the
+ * caller owns the timeout and the cache.
+ */
+export async function listSfuRooms(): Promise<Room[]> {
+  const client = getRoomService();
+  if (!client) {
+    throw new Error("LiveKit is not configured");
+  }
+  return client.listRooms();
 }
 
 function describeError(error: unknown): string {

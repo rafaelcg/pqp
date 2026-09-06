@@ -92,7 +92,7 @@ ok and `503` otherwise, with a JSON body that names the failing one:
   "checks": {
     "postgres": { "ok": true, "ms": 3 },
     "pool":     { "ok": true, "inUse": 2, "max": 10, "queued": 0 },
-    "livekit":  { "ok": true, "ms": 41 },
+    "livekit":  { "ok": true, "ms": 41, "host": "sfu.pqp.gg" },
     "storage":  { "ok": true, "skipped": true }
   },
   "version": "<deployed commit>"
@@ -103,11 +103,12 @@ ok and `503` otherwise, with a JSON body that names the failing one:
 |---|---|
 | `postgres` | One `SELECT 1` through the pool, 2 s timeout. Fails on error or timeout. |
 | `pool` | Sampled every second in-process. Not ok when `queued > 0` **continuously** for more than 10 s, or `inUse == max` continuously for more than 30 s. A momentary queue (cold start, deploy stampede) never flips it; the run has to be unbroken. |
-| `livekit` | `RoomService.listRooms`, 3 s timeout, result cached 30 s, concurrent callers share one probe. `{ ok: true, skipped: true }` when LiveKit is not configured. |
+| `livekit` | `RoomService.listRooms`, 3 s timeout, result cached 30 s, concurrent callers share one probe. Carries `host`, the SFU hostname from `LIVEKIT_URL` (never the key or secret), so a rollback from `sfu.pqp.gg` to LiveKit Cloud is visible to a monitor. `{ ok: true, skipped: true }` when LiveKit is not configured. |
 | `storage` | A signed `HEAD` of a key that cannot exist (a 404 is a success), same timeout and cache as LiveKit. `skipped` when `S3_*` is unset. |
 
-It leaks nothing useful: component names, booleans, counts and milliseconds.
-No hostnames, no provider names, no error strings. It is rate-limited to a
+It leaks nothing useful: component names, booleans, counts and milliseconds,
+plus the one hostname every voice client is already handed (the SFU's). No
+other hostnames, no provider names, no error strings. It is rate-limited to a
 few requests per second per address, which bounds the `SELECT 1` cost; the two
 remote probes are bounded by their cache regardless.
 
