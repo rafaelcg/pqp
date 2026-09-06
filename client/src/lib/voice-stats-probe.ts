@@ -139,11 +139,13 @@ export interface CandidatePairSample {
   localAddress: string | null;
   remoteAddress: string | null;
   /**
-   * Inbound packets lost and received on this connection, any kind.
+   * Inbound packets lost and received on this connection, any kind, over the
+   * last sample window rather than since the call started.
    *
    * Video receivers already expose `packetsLost`, but a voice-only call has
    * no video inbound-rtp, so the path is the place a quality meter can read
-   * loss without inventing a second sample shape.
+   * loss without inventing a second sample shape. The first sample is null
+   * until there is a previous mark to difference against.
    */
   packetsLost: number | null;
   packetsReceived: number | null;
@@ -165,6 +167,12 @@ export interface VoiceStatsSnapshot {
 interface ByteMark {
   bytes: number;
   timestamp: number;
+}
+
+/** Lifetime inbound-rtp counters, so the next sample can report a window. */
+interface LossMark {
+  lost: number;
+  received: number;
 }
 
 /**
@@ -195,6 +203,33 @@ function rateKbps(
     previous.set(key, { bytes, timestamp });
   }
   return kbps;
+}
+
+/**
+ * Lost / received since this key was last seen.
+ *
+ * `inbound-rtp` counters are lifetime totals. Feeding those straight to the
+ * three-bar meter pins a bad first minute for the rest of the call, and hides
+ * a collapse after a long clean stretch. Same reason `rateKbps` differences
+ * bytes instead of reporting the running average.
+ */
+function windowedLoss(
+  previous: Map<string, LossMark>,
+  key: string,
+  lost: number | null,
+  received: number | null,
+): { lost: number | null; received: number | null } {
+  const mark = previous.get(key);
+  let deltaLost: number | null = null;
+  let deltaReceived: number | null = null;
+  if (mark && lost !== null && received !== null && lost >= mark.lost && received >= mark.received) {
+    deltaLost = lost - mark.lost;
+    deltaReceived = received - mark.received;
+  }
+  if (lost !== null && received !== null) {
+    previous.set(key, { lost, received });
+  }
+  return { lost: deltaLost, received: deltaReceived };
 }
 
 function num(value: unknown): number | null {
@@ -235,6 +270,7 @@ export function summariseStats(
    * plausible.
    */
   roleOfRemoteTrack?: (trackId: string) => VideoSenderRole,
+  lossMarks: Map<string, LossMark> = new Map(),
 ): VoiceStatsSnapshot {
   const byId = new Map<string, RtcStatLike>();
   const all: RtcStatLike[] = [];
@@ -353,8 +389,8 @@ export function summariseStats(
     return stat.nominated === true && stat.state === "succeeded";
   });
 
-  let packetsLost: number | null = null;
-  let packetsReceived: number | null = null;
+  let lifetimeLost: number | null = null;
+  let lifetimeReceived: number | null = null;
   for (const stat of all) {
     if (stat.type !== "inbound-rtp") {
       continue;
@@ -362,12 +398,20 @@ export function summariseStats(
     const lost = num(stat.packetsLost);
     const received = num(stat.packetsReceived);
     if (lost !== null) {
-      packetsLost = (packetsLost ?? 0) + lost;
+      lifetimeLost = (lifetimeLost ?? 0) + lost;
     }
     if (received !== null) {
-      packetsReceived = (packetsReceived ?? 0) + received;
+      lifetimeReceived = (lifetimeReceived ?? 0) + received;
     }
   }
+  const windowed = windowedLoss(
+    lossMarks,
+    `loss:${peerId}`,
+    lifetimeLost,
+    lifetimeReceived,
+  );
+  const packetsLost = windowed.lost;
+  const packetsReceived = windowed.received;
 
   const paths: CandidatePairSample[] = pairs.map((pair) => {
     const local = byId.get(str(pair.localCandidateId) ?? "");
@@ -475,6 +519,7 @@ const registrations = new Map<RTCPeerConnection, Registration>();
  */
 const sources = new Set<() => Promise<VoiceStatsSnapshot>>();
 const byteMarks = new Map<string, ByteMark>();
+const lossMarks = new Map<string, LossMark>();
 let timer: ReturnType<typeof setInterval> | null = null;
 
 /**
@@ -563,6 +608,7 @@ async function sampleAll(): Promise<VoiceStatsSnapshot> {
         byteMarks,
         ceilingLookup(registration.pc),
         registration.roleOfRemoteTrack,
+        lossMarks,
       );
       senders.push(...snapshot.senders);
       // The name is attached here rather than inside `summariseStats`, which
