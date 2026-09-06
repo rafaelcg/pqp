@@ -78,6 +78,56 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
   },
 
   /**
+   * Desktop auth IPC. Main refuses these unless `event.senderFrame`
+   * is the app origin (`lib/ipc-origin.js`). Game-connection hosts
+   * reuse this preload while they navigate in-window.
+   */
+  startDesktopAuth(mode) {
+    return ipcRenderer.invoke(
+      "pqp:start-desktop-auth",
+      mode === "sign-up" ? "sign-up" : "sign-in",
+    );
+  },
+
+  cancelDesktopAuth() {
+    return ipcRenderer.invoke("pqp:cancel-desktop-auth");
+  },
+
+  getDesktopAuthStatus() {
+    return ipcRenderer.invoke("pqp:desktop-auth-status");
+  },
+
+  getPendingDesktopAuthTicket() {
+    return ipcRenderer.invoke("pqp:get-pending-desktop-auth-ticket");
+  },
+
+  onDesktopAuthTicket(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const handler = (_event, ticket) => {
+      callback(ticket);
+    };
+    ipcRenderer.on("pqp:desktop-auth-ticket", handler);
+    return () => {
+      ipcRenderer.removeListener("pqp:desktop-auth-ticket", handler);
+    };
+  },
+
+  onDesktopAuthEnded(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const handler = (_event, reason) => {
+      callback(reason === "expired" ? "expired" : "cancelled");
+    };
+    ipcRenderer.on("pqp:desktop-auth-ended", handler);
+    return () => {
+      ipcRenderer.removeListener("pqp:desktop-auth-ended", handler);
+    };
+  },
+
+  /**
    * Mirror the resolved theme into the main process, which cannot read the
    * renderer's localStorage but has to paint the window background before the
    * renderer loads on the next launch.

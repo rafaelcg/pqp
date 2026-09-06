@@ -1,4 +1,10 @@
-import { SignInButton, SignUpButton, useAuth, useUser } from "@clerk/clerk-react";
+import {
+  SignInButton,
+  SignUpButton,
+  useAuth,
+  useSignIn,
+  useUser,
+} from "@clerk/clerk-react";
 import { Lock, Menu, Phone, Pin, Settings, Shield, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
@@ -244,6 +250,17 @@ import {
   pickServerLandingTarget,
 } from "@/lib/community-home";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
+import {
+  applyDesktopAuthStart,
+  completeDesktopSecondFactor,
+  desktopAuthEndedHandoff,
+  desktopSignedOutPath,
+  pickPreferredSecondFactor,
+  redeemDesktopTicket,
+  secondFactorNeedsPrepare,
+  shouldRedeemDesktopTicket,
+  type SecondFactorStrategy,
+} from "@/lib/desktop-auth-flow";
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
@@ -269,6 +286,7 @@ import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall } from "@/lib/in-call-state";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -316,6 +334,7 @@ export function App({ devBypass = false }: AppProps) {
 function ClerkAppGate() {
   const { t } = useTranslation();
   const { isLoaded, isSignedIn } = useAuth();
+  const { signIn, setActive } = useSignIn();
   const location = useLocation();
   stashConnectionCallbackFromWindow(location.pathname, location.search);
   /**
@@ -329,6 +348,188 @@ function ClerkAppGate() {
    * not a route this build recognises.
    */
   const redirectUrl = signedOutRedirectPath(location.pathname);
+  const desktop = getDesktop();
+  const canDesktopAuth = typeof desktop?.startDesktopAuth === "function";
+  const [waiting, setWaiting] = useState(false);
+  const [browserUrl, setBrowserUrl] = useState<string | null>(null);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [mfa, setMfa] = useState<{
+    strategy: SecondFactorStrategy;
+    strategies: SecondFactorStrategy[];
+  } | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaBusy, setMfaBusy] = useState(false);
+  const [inAppFallback, setInAppFallback] = useState(false);
+  const signInRef = useRef(signIn);
+  const setActiveRef = useRef(setActive);
+  const lastTicketRef = useRef<string | null>(null);
+  const queuedTicketRef = useRef<string | null>(null);
+  signInRef.current = signIn;
+  setActiveRef.current = setActive;
+
+  const redeemTicket = useCallback(
+    async (ticket: string) => {
+      const currentSignIn = signInRef.current;
+      const currentSetActive = setActiveRef.current;
+      if (!currentSignIn || !currentSetActive) {
+        queuedTicketRef.current = ticket;
+        return;
+      }
+      if (!shouldRedeemDesktopTicket(lastTicketRef.current, ticket)) {
+        return;
+      }
+      lastTicketRef.current = ticket;
+      queuedTicketRef.current = null;
+      void getDesktop()?.getPendingDesktopAuthTicket?.();
+      setHandoffError(null);
+      setMfa(null);
+      setInAppFallback(false);
+      try {
+        const classified = await redeemDesktopTicket(currentSignIn, ticket);
+        if (classified.kind === "complete") {
+          await currentSetActive({ session: classified.sessionId });
+          return;
+        }
+        if (classified.kind === "second_factor") {
+          const strategy = pickPreferredSecondFactor(classified.strategies);
+          if (secondFactorNeedsPrepare(strategy)) {
+            await currentSignIn.prepareSecondFactor({ strategy });
+          }
+          setWaiting(false);
+          setMfaCode("");
+          setMfa({ strategies: classified.strategies, strategy });
+          return;
+        }
+        setWaiting(false);
+        setHandoffError(t("signedOut.waiting.error"));
+        setInAppFallback(true);
+      } catch {
+        setWaiting(false);
+        setHandoffError(t("signedOut.waiting.error"));
+        setInAppFallback(true);
+      }
+    },
+    [t],
+  );
+
+  const submitDesktopMfa = useCallback(async () => {
+    const currentSignIn = signInRef.current;
+    const currentSetActive = setActiveRef.current;
+    if (!currentSignIn || !currentSetActive || !mfa) {
+      return;
+    }
+    const code = mfaCode.trim();
+    if (!code) {
+      return;
+    }
+    setMfaBusy(true);
+    setHandoffError(null);
+    try {
+      const classified = await completeDesktopSecondFactor(currentSignIn, {
+        strategy: mfa.strategy,
+        code,
+      });
+      if (classified.kind === "complete") {
+        await currentSetActive({ session: classified.sessionId });
+        return;
+      }
+      if (classified.kind === "second_factor") {
+        setHandoffError(t("signedOut.waiting.mfa.error"));
+        return;
+      }
+      setMfa(null);
+      setHandoffError(t("signedOut.waiting.error"));
+      setInAppFallback(true);
+    } catch {
+      setHandoffError(t("signedOut.waiting.mfa.error"));
+    } finally {
+      setMfaBusy(false);
+    }
+  }, [mfa, mfaCode, t]);
+
+  const cancelDesktopMfa = useCallback(() => {
+    setMfa(null);
+    setMfaCode("");
+    setInAppFallback(true);
+  }, []);
+
+  useEffect(() => {
+    if (!signIn) {
+      return;
+    }
+    if (queuedTicketRef.current) {
+      void redeemTicket(queuedTicketRef.current);
+    }
+    if (!canDesktopAuth || !desktop) {
+      return;
+    }
+    void desktop.getPendingDesktopAuthTicket?.().then((ticket) => {
+      if (ticket) {
+        void redeemTicket(ticket);
+      }
+    });
+  }, [canDesktopAuth, desktop, redeemTicket, signIn]);
+
+  useEffect(() => {
+    if (!canDesktopAuth || !desktop) {
+      return;
+    }
+    void desktop.getDesktopAuthStatus?.().then((status) => {
+      if (status?.active) {
+        setWaiting(true);
+        setBrowserUrl(status.url);
+      }
+    });
+    const offTicket = desktop.onDesktopAuthTicket?.((ticket) => {
+      void redeemTicket(ticket);
+    });
+    const offEnded = desktop.onDesktopAuthEnded?.((reason) => {
+      const ended = desktopAuthEndedHandoff(reason);
+      setWaiting(ended.waiting);
+      setBrowserUrl(null);
+      if (ended.expired) {
+        setHandoffError(t("signedOut.waiting.expired"));
+      }
+    });
+    return () => {
+      offTicket?.();
+      offEnded?.();
+    };
+  }, [canDesktopAuth, desktop, redeemTicket, t]);
+
+  const startDesktopAuth = useCallback(
+    async (mode: "sign-in" | "sign-up") => {
+      if (!desktop?.startDesktopAuth) {
+        return;
+      }
+      setAuthMode(mode);
+      setHandoffError(null);
+      setCopied(false);
+      setMfa(null);
+      setMfaCode("");
+      setInAppFallback(false);
+      setWaiting(true);
+      const result = await desktop.startDesktopAuth(mode);
+      const view = applyDesktopAuthStart(result);
+      setBrowserUrl(view.url || null);
+      setWaiting(view.waiting);
+      if (view.failed) {
+        setHandoffError(t("signedOut.waiting.error"));
+      }
+    },
+    [desktop, t],
+  );
+
+  const cancelDesktopAuth = useCallback(() => {
+    void desktop?.cancelDesktopAuth?.();
+    setWaiting(false);
+    setBrowserUrl(null);
+    setHandoffError(null);
+    setMfa(null);
+    setMfaCode("");
+  }, [desktop]);
 
   if (!isLoaded) {
     return <AppLoadingShell label={t("app.loading.signingIn")} />;
@@ -336,7 +537,7 @@ function ClerkAppGate() {
 
   if (!isSignedIn) {
     return (
-      <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12">
+      <div className="relative flex h-full flex-col items-start justify-end overflow-y-auto p-8 sm:p-12">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,var(--glow-accent),transparent_40%)]" />
         <div className="animate-rise relative z-10 max-w-lg">
           <Link
@@ -346,18 +547,152 @@ function ClerkAppGate() {
             pqp.gg
             <BetaTag />
           </Link>
-          <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
-            {t("signedOut.title")}
-          </h1>
-          <p className="mt-4 max-w-sm text-paper-muted">{t("signedOut.body")}</p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
-              <Button>{t("signedOut.createAccount")}</Button>
-            </SignUpButton>
-            <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
-              <Button variant="secondary">{t("nav.signIn")}</Button>
-            </SignInButton>
-          </div>
+          {mfa && canDesktopAuth ? (
+            <>
+              <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
+                {t("signedOut.waiting.mfa.title")}
+              </h1>
+              <p className="mt-4 max-w-sm text-paper-muted">
+                {t("signedOut.waiting.mfa.body")}
+              </p>
+              {handoffError ? (
+                <p className="mt-4 text-danger">{handoffError}</p>
+              ) : null}
+              <form
+                className="mt-8 flex w-full max-w-sm flex-col gap-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void submitDesktopMfa();
+                }}
+              >
+                <Input
+                  value={mfaCode}
+                  onChange={(event) => setMfaCode(event.target.value)}
+                  autoComplete="one-time-code"
+                  autoFocus
+                  placeholder={t("signedOut.waiting.mfa.placeholder")}
+                  disabled={mfaBusy}
+                />
+                <Button
+                  className="w-full whitespace-normal"
+                  type="submit"
+                  disabled={mfaBusy}
+                >
+                  {t("signedOut.waiting.mfa.submit")}
+                </Button>
+                <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
+                  <Button
+                    className="w-full whitespace-normal"
+                    variant="secondary"
+                    type="button"
+                  >
+                    {t("signedOut.waiting.inApp")}
+                  </Button>
+                </SignInButton>
+                <Button
+                  className="w-full whitespace-normal"
+                  variant="ghost"
+                  type="button"
+                  onClick={cancelDesktopMfa}
+                >
+                  {t("signedOut.waiting.cancel")}
+                </Button>
+              </form>
+            </>
+          ) : waiting && canDesktopAuth ? (
+            <>
+              <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
+                {t("signedOut.waiting.title")}
+              </h1>
+              <p className="mt-4 max-w-sm text-paper-muted">
+                {t("signedOut.waiting.body")}
+              </p>
+              {handoffError ? (
+                <p className="mt-4 text-danger">{handoffError}</p>
+              ) : null}
+              <div className="mt-8 flex w-full max-w-sm flex-col gap-3">
+                <Button
+                  className="w-full whitespace-normal"
+                  variant="secondary"
+                  onClick={() => {
+                    void startDesktopAuth(authMode);
+                  }}
+                >
+                  {t("signedOut.waiting.reopen")}
+                </Button>
+                {browserUrl ? (
+                  <Button
+                    className="w-full whitespace-normal"
+                    variant="secondary"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(browserUrl).then(() => {
+                        setCopied(true);
+                      });
+                    }}
+                  >
+                    {copied
+                      ? t("signedOut.waiting.copied")
+                      : t("signedOut.waiting.copy")}
+                  </Button>
+                ) : null}
+                <Button
+                  className="w-full whitespace-normal"
+                  variant="ghost"
+                  onClick={cancelDesktopAuth}
+                >
+                  {t("signedOut.waiting.cancel")}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
+                {t("signedOut.title")}
+              </h1>
+              <p className="mt-4 max-w-sm text-paper-muted">{t("signedOut.body")}</p>
+              {handoffError ? (
+                <p className="mt-4 text-danger">{handoffError}</p>
+              ) : null}
+              <div className="mt-8 flex flex-wrap gap-3">
+                {canDesktopAuth ? (
+                  <div className="flex w-full max-w-sm flex-col gap-3">
+                    <Button
+                      className="w-full whitespace-normal"
+                      onClick={() => void startDesktopAuth("sign-up")}
+                    >
+                      {t("signedOut.createAccount")}
+                    </Button>
+                    <Button
+                      className="w-full whitespace-normal"
+                      variant="secondary"
+                      onClick={() => void startDesktopAuth("sign-in")}
+                    >
+                      {t("nav.signIn")}
+                    </Button>
+                    {inAppFallback ? (
+                      <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
+                        <Button
+                          className="w-full whitespace-normal"
+                          variant="ghost"
+                        >
+                          {t("signedOut.waiting.inApp")}
+                        </Button>
+                      </SignInButton>
+                    ) : null}
+                  </div>
+                ) : (
+                  <>
+                    <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
+                      <Button>{t("signedOut.createAccount")}</Button>
+                    </SignUpButton>
+                    <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
+                      <Button variant="secondary">{t("nav.signIn")}</Button>
+                    </SignInButton>
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
@@ -511,8 +846,9 @@ function MainAppContent({
       }
     ).Clerk;
     if (!isDevAuthBypassEnabled() && clerk?.signOut) {
-      void clerk.signOut({ redirectUrl: "/" }).catch(() => {
-        window.location.replace("/");
+      const home = desktopSignedOutPath();
+      void clerk.signOut({ redirectUrl: home }).catch(() => {
+        window.location.replace(home);
       });
       return;
     }
