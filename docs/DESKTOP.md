@@ -78,6 +78,13 @@ runs inside `/app`.
 Older shells have no `startDesktopAuth` and keep the in-app Clerk modal.
 Game-connection OAuth (Steam / Battle.net / Twitch) still hops in-window.
 
+If the account has MFA, Clerk spends the ticket and returns
+`needs_second_factor` (TOTP, SMS, backup codes) or `needs_client_trust`.
+The shell completes the second factor in `/app` rather than treating that
+as a failed redeem. `needs_client_trust` keeps the in-app Clerk modal as
+a fallback so the ticket is not a dead end. Desktop auth IPC only answers
+when `event.senderFrame` is the app origin.
+
 Local and staging use the Clerk **development** instance. Google and Apple
 are off there until someone enables them in the Clerk dashboard (SSO
 connections, shared credentials, no custom OAuth apps). Production already

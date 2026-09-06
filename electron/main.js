@@ -26,6 +26,7 @@ const {
 } = require("./lib/passkey-hint");
 const { initAutoUpdate } = require("./lib/updater");
 const { createDesktopAuthController } = require("./lib/desktop-auth-session");
+const { senderMatchesAppOrigin } = require("./lib/ipc-origin");
 const {
   THUMBNAIL_SIZE,
   MAC_SCREEN_SETTINGS_URL,
@@ -1054,17 +1055,31 @@ if (!gotLock) {
     return value;
   });
 
-  ipcMain.handle("pqp:start-desktop-auth", (_event, mode) => {
+  ipcMain.handle("pqp:start-desktop-auth", (event, mode) => {
+    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return { ok: false, url: "" };
+    }
     return desktopAuth.start(mode === "sign-up" ? "sign-up" : "sign-in");
   });
 
-  ipcMain.handle("pqp:cancel-desktop-auth", () => {
+  ipcMain.handle("pqp:cancel-desktop-auth", (event) => {
+    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return;
+    }
     desktopAuth.stop("cancelled");
   });
 
-  ipcMain.handle("pqp:desktop-auth-status", () => desktopAuth.status());
+  ipcMain.handle("pqp:desktop-auth-status", (event) => {
+    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return { active: false, url: null };
+    }
+    return desktopAuth.status();
+  });
 
-  ipcMain.handle("pqp:get-pending-desktop-auth-ticket", () => {
+  ipcMain.handle("pqp:get-pending-desktop-auth-ticket", (event) => {
+    if (!senderMatchesAppOrigin(event, sessionAppOrigin)) {
+      return null;
+    }
     return desktopAuth.takePendingTicket();
   });
 

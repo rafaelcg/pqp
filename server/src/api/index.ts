@@ -179,6 +179,7 @@ import {
   sendJson,
 } from "../lib/http.js";
 import { Etagged, etagged } from "../lib/etag.js";
+import { logEvent } from "../lib/log.js";
 import {
   clientAddress,
   createRateLimiter,
@@ -913,7 +914,7 @@ function refuseCharacterSelfService(user: DbUser): void {
  * finished in their system browser. Age-gate exempt on purpose: a new sign-up
  * has never seen the dialog, and the ticket only transfers identity.
  */
-router.post("/api/desktop/handoff", async ({ res, user }) => {
+router.post("/api/desktop/handoff", async ({ req, res, user }) => {
   if (!isClerkUserId(user.clerk_id)) {
     throw new HttpError(403, "Desktop handoff is only for Clerk accounts");
   }
@@ -924,6 +925,13 @@ router.post("/api/desktop/handoff", async ({ res, user }) => {
   }
   try {
     const ticket = await createDesktopSignInToken(user.clerk_id);
+    const uaRaw = req.headers["user-agent"];
+    const ua = Array.isArray(uaRaw) ? uaRaw[0] : uaRaw;
+    logEvent("desktop.handoff", {
+      userId: user.id,
+      ip: clientAddress(req as never),
+      ua: ua ? ua.slice(0, 200) : undefined,
+    });
     return { ticket };
   } catch (error) {
     console.error("[pqp] desktop handoff mint failed", error);

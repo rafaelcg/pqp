@@ -63,6 +63,11 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     return ipcRenderer.invoke("pqp:get-pending-deep-link");
   },
 
+  /**
+   * Desktop auth IPC. Main refuses these unless `event.senderFrame`
+   * is the app origin (`lib/ipc-origin.js`). Game-connection hosts
+   * reuse this preload while they navigate in-window.
+   */
   startDesktopAuth(mode) {
     return ipcRenderer.invoke(
       "pqp:start-desktop-auth",

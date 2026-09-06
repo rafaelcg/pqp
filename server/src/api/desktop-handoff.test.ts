@@ -69,6 +69,7 @@ async function call<T = Record<string, unknown>>(
     headers: {
       "Content-Type": "application/json",
       Authorization: "Bearer test",
+      "User-Agent": "pqp-desktop-handoff-test",
     },
   });
   const text = await response.text();
@@ -172,5 +173,22 @@ describeDb("POST /api/desktop/handoff", () => {
     const result = await call(alice, "POST", "/api/desktop/handoff");
     expect(result.status).toBe(503);
     expect(result.body).not.toHaveProperty("ticket");
+  });
+
+  it("logs user, ip and ua on a successful mint", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const result = await call(alice, "POST", "/api/desktop/handoff");
+      expect(result.status).toBe(200);
+      const line = spy.mock.calls
+        .map((entry) => String(entry[0]))
+        .find((entry) => entry.includes("desktop.handoff"));
+      expect(line).toBeDefined();
+      expect(line).toContain(`userId=${alice.id}`);
+      expect(line).toContain("ip=");
+      expect(line).toContain("ua=pqp-desktop-handoff-test");
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

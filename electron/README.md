@@ -95,7 +95,8 @@ Notes:
 - `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`
 - Preload exposes only `window.pqpDesktop` (mute toggle, deep-link helpers, desktop auth)
 - External `window.open` / off-origin navigations open in the system browser
-- Sign-in / sign-up on a current shell open the system browser (`/desktop-login`) and return via a one-shot `127.0.0.1` listener. Old shells have no `startDesktopAuth` and keep the in-app Clerk modal.
+- Sign-in / sign-up on a current shell open the system browser (`/desktop-login`) and return via a one-shot `127.0.0.1` listener. Old shells have no `startDesktopAuth` and keep the in-app Clerk modal. MFA (TOTP / SMS / backup codes) is completed in the renderer after the ticket lands; `needs_client_trust` falls back to the in-app Clerk modal.
+- The four desktop-auth `ipcMain.handle` channels refuse callers whose `event.senderFrame` origin is not the loaded app origin. Game-connection hosts reuse this preload in-window and must not mint or read a ticket.
 - Exception: game-connection OAuth hosts (`lib/nav-policy.js`) still navigate in-window. A provider missing from `AUTH_HOST_SUFFIXES` bounces to the system browser and the session lands in the wrong place.
 - Local static mode serves on `127.0.0.1` with a restrictive CSP
 - Remote URLs keep the server’s own CSP (Electron does not rewrite it)
