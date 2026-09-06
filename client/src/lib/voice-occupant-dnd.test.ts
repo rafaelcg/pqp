@@ -35,11 +35,8 @@ const caps = (
 });
 
 describe("moveMembersBit", () => {
-  it("uses MOVE_MEMBERS when the shared package has it, otherwise MODERATE_MEMBERS", () => {
-    const extra = Permission as typeof Permission & { MOVE_MEMBERS?: bigint };
-    expect(moveMembersBit()).toBe(
-      extra.MOVE_MEMBERS ?? Permission.MODERATE_MEMBERS,
-    );
+  it("is MOVE_MEMBERS, the same bit voice-move checks", () => {
+    expect(moveMembersBit()).toBe(Permission.MOVE_MEMBERS);
   });
 });
 

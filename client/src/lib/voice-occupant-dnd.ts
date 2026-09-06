@@ -5,16 +5,10 @@ import { Permission, type VoiceParticipant } from "@pqp/shared";
  *
  * Self-move is an ordinary join: the voice-move API refuses self-targeting
  * ("Use the leave button on yourself"). Staff moving someone else is the
- * existing `POST .../voice-move` path.
- *
- * MOVE_MEMBERS is #254. Staging already has the bit; main still gates the
- * same routes on MODERATE_MEMBERS. Read whichever the running shared package
- * actually exported so this client works on both stacks without a schema
- * change.
+ * existing `POST .../voice-move` path, gated on MOVE_MEMBERS.
  */
 export function moveMembersBit(): bigint {
-  const extra = Permission as typeof Permission & { MOVE_MEMBERS?: bigint };
-  return extra.MOVE_MEMBERS ?? Permission.MODERATE_MEMBERS;
+  return Permission.MOVE_MEMBERS;
 }
 
 export const VOICE_OCCUPANT_DRAG_MIME = "application/x-pqp-voice-occupant";
