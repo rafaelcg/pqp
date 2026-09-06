@@ -416,6 +416,20 @@ describe("screen share audio", () => {
     });
   });
 
+  it("steers a Watch party toward a tab and ignores the system-audio opt-in", async () => {
+    const { voice } = await connectedMesh();
+    await voice.startScreenShare(true, { preferBrowserTab: true });
+
+    expect(displayMediaCalls[0]).toMatchObject({
+      systemAudio: "exclude",
+      preferCurrentTab: true,
+      monitorTypeSurfaces: "exclude",
+      selfBrowserSurface: "exclude",
+      video: { displaySurface: "browser" },
+      audio: { echoCancellation: false },
+    });
+  });
+
   it("flags a whole-screen share that carries sound", async () => {
     // The only surface that can be carrying everybody's voices, and the one
     // the UI says so about while it is live.

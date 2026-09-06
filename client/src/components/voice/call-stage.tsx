@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   Loader2,
   Maximize2,
+  MonitorPlay,
   PanelLeftClose,
   PanelLeftOpen,
   Mic,
@@ -461,7 +462,7 @@ export interface CallStageProps {
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
-  onStartScreenShare?: () => void;
+  onStartScreenShare?: (intent?: { preferBrowserTab?: boolean }) => void;
   /**
    * Start the same share with no sound at all. Offered only after sound is
    * what killed the last attempt, and separate from `onStartScreenShare`
@@ -629,7 +630,7 @@ function ActiveCall({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
-  onStartScreenShare?: () => void;
+  onStartScreenShare?: (intent?: { preferBrowserTab?: boolean }) => void;
   /**
    * Start the same share with no sound at all. Offered only after sound is
    * what killed the last attempt, and separate from `onStartScreenShare`
@@ -1665,7 +1666,7 @@ function CallControls({
   onVideoQualityChange: (quality: VideoQuality) => void;
   qualityMenuOpen: boolean;
   onQualityMenuOpenChange: (open: boolean) => void;
-  onStartScreenShare?: () => void;
+  onStartScreenShare?: (intent?: { preferBrowserTab?: boolean }) => void;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
@@ -1686,6 +1687,11 @@ function CallControls({
   // changes mid-session. Same probe the channel voice panel uses.
   const canShare = useMemo(() => supportsScreenShare(), []);
   const [shareHint, setShareHint] = useState<string | null>(null);
+  useEffect(() => {
+    if (voiceState.isSharingScreen) {
+      setShareHint(null);
+    }
+  }, [voiceState.isSharingScreen]);
   const shareAtCap = isScreenShareAtCap(
     voiceState.screenSharePeerIds,
     voiceState.peerId,
@@ -2009,6 +2015,39 @@ function CallControls({
           </button>
         </Tooltip>
       )}
+      {canShare &&
+        !listenOnly &&
+        onStartScreenShare &&
+        !voiceState.isSharingScreen && (
+          <Tooltip
+            label={t("voice.control.watchParty")}
+            detail={t("voice.control.watchPartyHint")}
+          >
+            <button
+              type="button"
+              aria-label={t("voice.control.watchParty")}
+              aria-disabled={shareCappedOut || undefined}
+              className={cn(
+                "flex items-center justify-center rounded-full",
+                size,
+                shareCappedOut && "opacity-40",
+                "bg-ink-3 text-paper hover:bg-ink-4",
+              )}
+              onClick={() => {
+                if (shareCappedOut) {
+                  return;
+                }
+                // The hint has to be on screen before the picker, not after
+                // a silent share. Watch party is a tab share: the player tab,
+                // with that tab's sound, not the whole desktop.
+                setShareHint(t("voice.control.watchPartyHint"));
+                onStartScreenShare({ preferBrowserTab: true });
+              }}
+            >
+              <MonitorPlay className={iconSize} />
+            </button>
+          </Tooltip>
+        )}
       {showGridToggle && onToggleGrid && (
         <Tooltip
           label={preferGrid ? t("call.stage.focus") : t("call.stage.grid")}

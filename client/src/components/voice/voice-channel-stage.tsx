@@ -48,7 +48,7 @@ export function VoiceChannelStage({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
-  onStartScreenShare?: () => void;
+  onStartScreenShare?: (intent?: { preferBrowserTab?: boolean }) => void;
   onShareWithoutSound?: () => void;
   onStopScreenShare?: () => void;
   shareSystemAudio?: boolean;

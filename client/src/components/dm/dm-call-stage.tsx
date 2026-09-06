@@ -49,7 +49,7 @@ export function DmCallStage({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
-  onStartScreenShare?: () => void;
+  onStartScreenShare?: (intent?: { preferBrowserTab?: boolean }) => void;
   onShareWithoutSound?: () => void;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;

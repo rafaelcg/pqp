@@ -780,6 +780,8 @@
   "voice.control.deafen": "Deafen",
   "voice.control.undeafen": "Undeafen",
   "voice.control.share": "Share your screen",
+  "voice.control.watchParty": "Watch party",
+  "voice.control.watchPartyHint": "Share the YouTube (or player) tab in Chrome and tick that tab's sound. Don't pick the whole screen.",
   "voice.control.stopShare": "Stop sharing your screen",
   "voice.control.shareUnavailable": "Share your screen (unavailable on this device)",
   "voice.control.shareLimit": "This call already has {limit} screen shares",
