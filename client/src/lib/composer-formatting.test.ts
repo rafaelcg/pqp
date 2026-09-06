@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  caretInsideUnclosedFence,
+  composerBodyIsEmpty,
+  COMPOSER_FORM_CLASS,
   formattingMarkerForKey,
+  toggleBlockFormatting,
   toggleFormatting,
   type ShortcutKey,
 } from "./composer-formatting.js";
@@ -202,5 +206,203 @@ describe("formattingMarkerForKey", () => {
   it("requires Shift for strikethrough and refuses it for the rest", () => {
     expect(formattingMarkerForKey(key({ key: "x", ctrlKey: true }), false)).toBeNull();
     expect(formattingMarkerForKey(key({ key: "B", ctrlKey: true, shiftKey: true }), false)).toBeNull();
+  });
+});
+
+describe("toggleBlockFormatting quote", () => {
+  it("prefixes the current line when nothing is selected", () => {
+    const edit = toggleBlockFormatting("hello world", 6, 6, "quote");
+    expect(edit.value).toBe("> hello world");
+    expect([edit.selectionStart, edit.selectionEnd]).toEqual([8, 8]);
+  });
+
+  it("prefixes every selected line and leaves the block selected", () => {
+    const edit = toggleBlockFormatting("one\ntwo\nthree", 0, 13, "quote");
+    expect(edit.value).toBe("> one\n> two\n> three");
+    expect([edit.selectionStart, edit.selectionEnd]).toEqual([0, 19]);
+    expect([edit.replaceStart, edit.replaceEnd, edit.replacement]).toEqual([
+      0,
+      13,
+      "> one\n> two\n> three",
+    ]);
+  });
+
+  it("unwraps when every selected line is already quoted", () => {
+    const wrapped = toggleBlockFormatting("one\ntwo", 0, 7, "quote");
+    const edit = toggleBlockFormatting(
+      wrapped.value,
+      wrapped.selectionStart,
+      wrapped.selectionEnd,
+      "quote",
+    );
+    expect(edit.value).toBe("one\ntwo");
+  });
+
+  it("adds the prefix only to lines that are missing it", () => {
+    const edit = toggleBlockFormatting("> one\ntwo", 0, 9, "quote");
+    expect(edit.value).toBe("> one\n> two");
+  });
+
+  it("strips a leading > without a space as well", () => {
+    const edit = toggleBlockFormatting(">hello", 0, 6, "quote");
+    expect(edit.value).toBe("hello");
+  });
+
+  it("quotes an empty composer and parks the caret after the prefix", () => {
+    const edit = toggleBlockFormatting("", 0, 0, "quote");
+    expect(edit.value).toBe("> ");
+    expect([edit.selectionStart, edit.selectionEnd]).toEqual([2, 2]);
+  });
+
+  it("does not touch lines outside the selection", () => {
+    const edit = toggleBlockFormatting("keep\nchange\nkeep", 5, 11, "quote");
+    expect(edit.value).toBe("keep\n> change\nkeep");
+  });
+
+  it("treats a trailing newline on a full selection as the end of the last line", () => {
+    const edit = toggleBlockFormatting("one\ntwo\n", 0, 8, "quote");
+    expect(edit.value).toBe("> one\n> two\n");
+  });
+
+  it("accepts a backwards selection", () => {
+    expect(toggleBlockFormatting("hello", 5, 0, "quote").value).toBe("> hello");
+  });
+
+  it("clamps a selection that is out of range", () => {
+    expect(toggleBlockFormatting("abc", 9, 20, "quote").value).toBe("> abc");
+    expect(toggleBlockFormatting("abc", -2, 2, "quote").value).toBe("> abc");
+  });
+});
+
+describe("toggleBlockFormatting list", () => {
+  it("prefixes the current line with a dash", () => {
+    const edit = toggleBlockFormatting("milk", 0, 0, "list");
+    expect(edit.value).toBe("- milk");
+    expect(edit.selectionStart).toBe(2);
+  });
+
+  it("prefixes every selected line and unwraps on a second tap", () => {
+    const on = toggleBlockFormatting("one\ntwo", 0, 7, "list");
+    expect(on.value).toBe("- one\n- two");
+    const off = toggleBlockFormatting(on.value, on.selectionStart, on.selectionEnd, "list");
+    expect(off.value).toBe("one\ntwo");
+  });
+
+  it("does not treat a star list or a dash without a space as already wrapped", () => {
+    expect(toggleBlockFormatting("* milk", 0, 6, "list").value).toBe("- * milk");
+    expect(toggleBlockFormatting("-milk", 0, 5, "list").value).toBe("- -milk");
+  });
+
+  it("inserts a dash prefix on an empty line", () => {
+    const edit = toggleBlockFormatting("", 0, 0, "list");
+    expect(edit.value).toBe("- ");
+    expect([edit.selectionStart, edit.selectionEnd]).toEqual([2, 2]);
+  });
+});
+
+describe("toggleBlockFormatting fence", () => {
+  it("expands a mid-line selection to the line so the wrap is a fence, not a span", () => {
+    const edit = toggleBlockFormatting("foo bar baz", 4, 7, "fence");
+    expect(edit.value).toBe("```\nfoo bar baz\n```");
+    expect(edit.value.slice(edit.selectionStart, edit.selectionEnd)).toBe(
+      "foo bar baz",
+    );
+  });
+
+  it("wraps the selection in a fence and keeps the inner text selected", () => {
+    const edit = toggleBlockFormatting("hello world", 6, 11, "fence");
+    expect(edit.value).toBe("```\nhello world\n```");
+    expect(edit.value.slice(edit.selectionStart, edit.selectionEnd)).toBe(
+      "hello world",
+    );
+    expect([edit.replaceStart, edit.replaceEnd, edit.replacement]).toEqual([
+      0,
+      11,
+      "```\nhello world\n```",
+    ]);
+  });
+
+  it("unwraps when the fence sits just outside the selection", () => {
+    const wrapped = toggleBlockFormatting("word", 0, 4, "fence");
+    const edit = toggleBlockFormatting(
+      wrapped.value,
+      wrapped.selectionStart,
+      wrapped.selectionEnd,
+      "fence",
+    );
+    expect(edit.value).toBe("word");
+    expect([edit.selectionStart, edit.selectionEnd]).toEqual([0, 4]);
+  });
+
+  it("unwraps when the selection includes the fence markers", () => {
+    const edit = toggleBlockFormatting("```\nword\n```", 0, 12, "fence");
+    expect(edit.value).toBe("word");
+  });
+
+  it("inserts an empty fence on its own lines when the caret is mid-line", () => {
+    const edit = toggleBlockFormatting("hello ", 6, 6, "fence");
+    expect(edit.value).toBe("hello \n```\n\n```");
+    expect([edit.selectionStart, edit.selectionEnd]).toEqual([11, 11]);
+  });
+
+  it("removes an empty fence the caret is inside instead of nesting another", () => {
+    const empty = toggleBlockFormatting("", 0, 0, "fence");
+    expect(empty.value).toBe("```\n\n```");
+    const edit = toggleBlockFormatting(empty.value, empty.selectionStart, empty.selectionEnd, "fence");
+    expect(edit.value).toBe("");
+    expect(edit.replacement).toBe("");
+  });
+
+  it("wraps a multi-line selection as one fence", () => {
+    const value = "one\ntwo";
+    const edit = toggleBlockFormatting(value, 0, value.length, "fence");
+    expect(edit.value).toBe("```\none\ntwo\n```");
+  });
+
+  it("unwraps the line's fence when only part of the inner text is selected", () => {
+    const edit = toggleBlockFormatting("```\nbold\n```", 4, 6, "fence");
+    expect(edit.value).toBe("bold");
+  });
+
+  it("accepts a backwards selection and clamps out of range", () => {
+    expect(toggleBlockFormatting("word", 4, 0, "fence").value).toBe("```\nword\n```");
+    expect(toggleBlockFormatting("abc", 9, 12, "fence").value).toBe("abc\n```\n\n```");
+  });
+});
+
+describe("caretInsideUnclosedFence", () => {
+  it("treats the caret between an empty fence pair as inside", () => {
+    const empty = toggleBlockFormatting("", 0, 0, "fence");
+    expect(caretInsideUnclosedFence(empty.value, empty.selectionStart)).toBe(true);
+  });
+
+  it("is false after the closing fence", () => {
+    expect(caretInsideUnclosedFence("```\ncode\n```", 12)).toBe(false);
+  });
+
+  it("is true on a line typed inside an unclosed fence", () => {
+    expect(caretInsideUnclosedFence("```\nhello", 9)).toBe(true);
+  });
+});
+
+describe("composerBodyIsEmpty", () => {
+  it("treats an empty fence as nothing to send", () => {
+    expect(composerBodyIsEmpty("```\n\n```")).toBe(true);
+    expect(composerBodyIsEmpty("```js\n```")).toBe(true);
+    expect(composerBodyIsEmpty("hi")).toBe(false);
+  });
+
+  it("keeps a one-line code span sendable", () => {
+    // ```code``` on one line is a code span with text in it, not an empty
+    // block. Treating it as empty left Enter and the send button doing nothing.
+    expect(composerBodyIsEmpty("```code```")).toBe(false);
+    expect(composerBodyIsEmpty("``` ls -la ```")).toBe(false);
+    expect(composerBodyIsEmpty("```js\nx\n```")).toBe(false);
+  });
+});
+
+describe("COMPOSER_FORM_CLASS", () => {
+  it("does not make the form a scroll container, so @ : / popups stay visible", () => {
+    expect(COMPOSER_FORM_CLASS).not.toMatch(/overflow-y-|max-h-/);
   });
 });

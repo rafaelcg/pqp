@@ -9,10 +9,13 @@ import {
   type PollRequest,
 } from "@pqp/shared";
 import {
+  ALargeSmall,
   AlertCircle,
   Angry,
   BarChart3,
+  Bold,
   CheckCircle2,
+  Code,
   Coins,
   CornerUpLeft,
   Dices,
@@ -20,6 +23,8 @@ import {
   HelpCircle,
   ImagePlay,
   Info,
+  Italic,
+  List,
   LogIn,
   Meh,
   Mic,
@@ -30,7 +35,10 @@ import {
   Shuffle,
   Smile,
   Spade,
+  SquareCode,
+  Strikethrough,
   Terminal,
+  TextQuote,
   User,
   UserPlus,
   X,
@@ -90,9 +98,15 @@ import {
 import { remainingWaitSeconds } from "@/hooks/use-chat";
 import {
   applyFormattingEdit,
+  caretInsideUnclosedFence,
+  composerBodyIsEmpty,
+  COMPOSER_FORM_CLASS,
   formattingMarkerForKey,
   isApplePlatform,
+  toggleBlockFormatting,
   toggleFormatting,
+  type BlockFormat,
+  type FormattingMarker,
 } from "@/lib/composer-formatting";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -158,6 +172,35 @@ const COMPOSER_LINE_PX = 20;
 const COMPOSER_PAD_Y_PX = 8;
 
 const MENU_ID = "composer-autocomplete";
+const FORMAT_BAR_ID = "composer-format-bar";
+
+type FormatAction = {
+  id: string;
+  kind: FormattingMarker | BlockFormat;
+  labelKey:
+    | "composer.formatBold"
+    | "composer.formatItalic"
+    | "composer.formatStrike"
+    | "composer.formatCode"
+    | "composer.formatFence"
+    | "composer.formatQuote"
+    | "composer.formatList";
+  icon: LucideIcon;
+};
+
+const FORMAT_ACTIONS: FormatAction[] = [
+  { id: "bold", kind: "**", labelKey: "composer.formatBold", icon: Bold },
+  { id: "italic", kind: "*", labelKey: "composer.formatItalic", icon: Italic },
+  { id: "strike", kind: "~~", labelKey: "composer.formatStrike", icon: Strikethrough },
+  { id: "code", kind: "`", labelKey: "composer.formatCode", icon: Code },
+  { id: "fence", kind: "fence", labelKey: "composer.formatFence", icon: SquareCode },
+  { id: "quote", kind: "quote", labelKey: "composer.formatQuote", icon: TextQuote },
+  { id: "list", kind: "list", labelKey: "composer.formatList", icon: List },
+];
+
+function isBlockFormat(kind: FormattingMarker | BlockFormat): kind is BlockFormat {
+  return kind === "quote" || kind === "list" || kind === "fence";
+}
 
 /**
  * One glance-able mark per slash command in the autocomplete menu. Purely
@@ -293,6 +336,7 @@ export function MessageComposer({
   const [isGifPickerOpen, setIsGifPickerOpen] = useState(false);
   const [isPollComposerOpen, setIsPollComposerOpen] = useState(false);
   const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false);
+  const [isFormatBarOpen, setIsFormatBarOpen] = useState(false);
   const [gifQuery, setGifQuery] = useState("");
   const [isGifSearchEnabled, setIsGifSearchEnabled] = useState(false);
   const [attachmentLimits, setAttachmentLimits] = useState<{
@@ -315,6 +359,7 @@ export function MessageComposer({
   const announcedHoldRef = useRef<number | null>(null);
   const holdHintId = useId();
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const formatFromPointerRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const insertMenuRef = useRef<HTMLDivElement>(null);
   /** Lets the insert effect append without listing the draft as a dependency. */
@@ -664,6 +709,35 @@ export function MessageComposer({
     };
   }, [isInsertMenuOpen]);
 
+  function applyComposerFormat(kind: FormattingMarker | BlockFormat) {
+    const input = inputRef.current;
+    if (!input || disabled || isRunningSlash) {
+      return;
+    }
+    // Read the range before focus(). Some browsers move the caret to the end
+    // when a blurred textarea is focused, which would wrap the wrong span
+    // and make a second tap nest instead of unwrap.
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.focus();
+    input.setSelectionRange(start, end);
+    const edit = isBlockFormat(kind)
+      ? toggleBlockFormatting(input.value, start, end, kind)
+      : toggleFormatting(input.value, start, end, kind);
+    applyFormattingEdit(input, edit);
+    setBody(input.value);
+    setCaret(edit.selectionStart);
+    requestAnimationFrame(() => {
+      const live = inputRef.current;
+      if (!live) {
+        return;
+      }
+      live.focus();
+      live.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+      setCaret(edit.selectionStart);
+    });
+  }
+
   function syncCaret(input: HTMLTextAreaElement) {
     setCaret(input.selectionStart ?? input.value.length);
   }
@@ -990,7 +1064,7 @@ export function MessageComposer({
     if (isRunningSlash || isUploading) {
       return;
     }
-    if (!trimmed && ready.length === 0) {
+    if ((composerBodyIsEmpty(body) || !trimmed) && ready.length === 0) {
       return;
     }
 
@@ -1059,6 +1133,11 @@ export function MessageComposer({
         }
         return;
       }
+      if (isFormatBarOpen) {
+        event.preventDefault();
+        setIsFormatBarOpen(false);
+        return;
+      }
       // Only once nothing is layered on top: Escape backing out of the reply
       // should not also close a menu the user opened over it.
       if (replyTarget && onCancelReply) {
@@ -1079,21 +1158,14 @@ export function MessageComposer({
     const marker = formattingMarkerForKey(event, isApplePlatform());
     if (marker) {
       event.preventDefault();
-      const input = event.currentTarget;
-      const edit = toggleFormatting(
-        input.value,
-        input.selectionStart ?? input.value.length,
-        input.selectionEnd ?? input.value.length,
-        marker,
-      );
-      applyFormattingEdit(input, edit);
-      setBody(input.value);
-      setCaret(edit.selectionStart);
+      applyComposerFormat(marker);
       return;
     }
 
     // Enter sends; Shift+Enter (and the menus, handled below) inserts a
-    // newline. Without this a textarea would only ever add lines.
+    // newline. Inside an unclosed fence, Enter is a new line, same as Discord:
+    // the fence button leaves the caret between an empty pair, and sending
+    // that by accident is the trap this branch exists for.
     if (
       event.key === "Enter" &&
       !event.shiftKey &&
@@ -1101,6 +1173,11 @@ export function MessageComposer({
       !event.ctrlKey &&
       !(menuKind && menuCount > 0)
     ) {
+      const input = event.currentTarget;
+      const caret = input.selectionStart ?? body.length;
+      if (caretInsideUnclosedFence(input.value, caret)) {
+        return;
+      }
       event.preventDefault();
       void handleSubmit();
       return;
@@ -1218,6 +1295,15 @@ export function MessageComposer({
   }
 
   const insertItems = [
+    {
+      id: "format",
+      label: t("composer.format"),
+      icon: ALargeSmall,
+      onSelect: () => {
+        setIsInsertMenuOpen(false);
+        setIsFormatBarOpen((open) => !open);
+      },
+    },
     isAttachmentsEnabled
       ? {
           id: "attach",
@@ -1271,7 +1357,7 @@ export function MessageComposer({
   return (
     <form
       onSubmit={(event) => void handleSubmit(event)}
-      className="safe-pb relative border-t border-border/60 px-3 py-3 sm:px-4"
+      className={COMPOSER_FORM_CLASS}
     >
       {menuKind && (
         <AutocompleteMenu
@@ -1343,44 +1429,92 @@ export function MessageComposer({
           </span>
         </div>
       )}
-      {replyTarget && (
-        <div className="mb-2 flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-muted">
-          <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-accent" />
-          <span className="min-w-0 flex-1 truncate">
-            {t("composer.replying", { name: replyTarget.authorName })}
-          </span>
-          <button
-            type="button"
-            aria-label={t("composer.cancelReply")}
-            onClick={() => onCancelReply?.()}
-            className="shrink-0 rounded p-0.5 hover:text-text"
+      {(replyTarget ||
+        isPollComposerOpen ||
+        pending.length > 0 ||
+        isFormatBarOpen) && (
+      <div className="max-h-[min(40dvh,100%)] overflow-y-auto">
+        {replyTarget && (
+          <div className="mb-2 flex items-center gap-2 rounded-md border border-border bg-surface-2 px-2.5 py-1.5 text-xs text-text-muted">
+            <CornerUpLeft className="h-3.5 w-3.5 shrink-0 text-accent" />
+            <span className="min-w-0 flex-1 truncate">
+              {t("composer.replying", { name: replyTarget.authorName })}
+            </span>
+            <button
+              type="button"
+              aria-label={t("composer.cancelReply")}
+              onClick={() => onCancelReply?.()}
+              className="shrink-0 rounded p-0.5 hover:text-text"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        )}
+        {isPollComposerOpen && slashContext && (
+          <PollComposer
+            onSubmit={(request) => {
+              slashContext.sendPoll(request);
+              setIsPollComposerOpen(false);
+            }}
+            onClose={() => setIsPollComposerOpen(false)}
+          />
+        )}
+        {pending.length > 0 && (
+          <ul
+            aria-label={t("composer.attachments")}
+            className="mb-2 flex flex-wrap gap-2"
           >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
-      {isPollComposerOpen && slashContext && (
-        <PollComposer
-          onSubmit={(request) => {
-            slashContext.sendPoll(request);
-            setIsPollComposerOpen(false);
-          }}
-          onClose={() => setIsPollComposerOpen(false)}
-        />
-      )}
-      {pending.length > 0 && (
-        <ul
-          aria-label={t("composer.attachments")}
-          className="mb-2 flex flex-wrap gap-2"
-        >
-          {pending.map((item) => (
-            <AttachmentChip
-              key={item.localId}
-              attachment={item}
-              onRemove={() => removeAttachment(item.localId)}
-            />
-          ))}
-        </ul>
+            {pending.map((item) => (
+              <AttachmentChip
+                key={item.localId}
+                attachment={item}
+                onRemove={() => removeAttachment(item.localId)}
+              />
+            ))}
+          </ul>
+        )}
+        {isFormatBarOpen && (
+          <div
+            id={FORMAT_BAR_ID}
+            role="toolbar"
+            aria-label={t("composer.format")}
+            className="mb-2 flex gap-1"
+          >
+            {FORMAT_ACTIONS.map((action) => {
+              const Icon = action.icon;
+              return (
+                <Tooltip key={action.id} label={t(action.labelKey)}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    disabled={disabled || isRunningSlash}
+                  onPointerDown={(event) => {
+                    // Pointer, not mouse: a tap never fires mousedown, and
+                    // without preventDefault the textarea blurs and loses the
+                    // selection before click. Apply here so touch and pen
+                    // wrap once even when the compatibility click is dropped.
+                    event.preventDefault();
+                    formatFromPointerRef.current = true;
+                    applyComposerFormat(action.kind);
+                  }}
+                  onClick={() => {
+                    if (formatFromPointerRef.current) {
+                      formatFromPointerRef.current = false;
+                      return;
+                    }
+                    applyComposerFormat(action.kind);
+                  }}
+                    className="h-8 min-w-8 flex-1 text-paper-muted hover:text-signal sm:w-8 sm:flex-none"
+                  >
+                    <Icon className="h-4 w-4" />
+                  </Button>
+                </Tooltip>
+              );
+            })}
+          </div>
+        )}
+      </div>
       )}
       <div
         className={cn(
@@ -1407,7 +1541,31 @@ export function MessageComposer({
             }}
           />
         )}
-        <div className="relative flex items-center">
+        <div className="relative flex items-center gap-2">
+          <div className="hidden sm:block">
+            <Tooltip label={t("composer.format")}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled={disabled}
+                aria-expanded={isFormatBarOpen}
+                aria-controls={isFormatBarOpen ? FORMAT_BAR_ID : undefined}
+                aria-pressed={isFormatBarOpen}
+                onClick={() => {
+                  setIsInsertMenuOpen(false);
+                  setIsFormatBarOpen((open) => !open);
+                }}
+                onMouseDown={(event) => event.preventDefault()}
+                className={cn(
+                  COMPOSER_ICON_BUTTON,
+                  isFormatBarOpen && "bg-ink-3 text-signal",
+                )}
+              >
+                <ALargeSmall className="h-5 w-5" />
+              </Button>
+            </Tooltip>
+          </div>
           <div ref={insertMenuRef} className="relative sm:hidden">
             <Button
               type="button"
@@ -1582,7 +1740,7 @@ export function MessageComposer({
             slowModeRemaining > 0 ||
             isRunningSlash ||
             isUploading ||
-            (!body.trim() && readyCount === 0)
+            (composerBodyIsEmpty(body) && readyCount === 0)
           }
           aria-label={
             slowModeRemaining > 0
