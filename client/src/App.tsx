@@ -109,6 +109,7 @@ import { useCallRating } from "@/hooks/use-call-rating";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { BetaTag } from "@/components/ui/beta-tag";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { Seo } from "@/components/marketing/seo";
@@ -616,6 +617,12 @@ function MainAppContent({
   const [channelPrompt, setChannelPrompt] = useState<ChannelPromptState | null>(
     null,
   );
+  const [pendingDeleteChannelId, setPendingDeleteChannelId] = useState<
+    string | null
+  >(null);
+  const [pendingLeaveServerId, setPendingLeaveServerId] = useState<
+    string | null
+  >(null);
   const [channelMetaChannel, setChannelMetaChannel] = useState<Channel | null>(
     null,
   );
@@ -2327,9 +2334,15 @@ function MainAppContent({
   }
 
   async function handleDeleteChannel(channelId: string) {
-    if (!window.confirm(t("chrome.deleteChannelConfirm"))) {
+    setPendingDeleteChannelId(channelId);
+  }
+
+  async function confirmDeleteChannel() {
+    const channelId = pendingDeleteChannelId;
+    if (!channelId) {
       return;
     }
+    setPendingDeleteChannelId(null);
     try {
       await deleteChannel(channelId);
       // The server SETs NULL any channel's parent_id that pointed at what was
@@ -2487,9 +2500,15 @@ function MainAppContent({
   );
 
   async function handleLeaveServer(serverId: string) {
-    if (!window.confirm(t("chrome.leaveServer"))) {
+    setPendingLeaveServerId(serverId);
+  }
+
+  async function confirmLeaveServer() {
+    const serverId = pendingLeaveServerId;
+    if (!serverId) {
       return;
     }
+    setPendingLeaveServerId(null);
     try {
       await leaveServer(serverId);
       await dropServer(serverId);
@@ -4920,6 +4939,23 @@ function MainAppContent({
         canUnpin={selectedServerId ? canManageMessages : true}
         onClose={() => setPinsOpen(false)}
         onJumpToMessage={(messageId) => void jumpToMessage(messageId)}
+      />
+
+      <ConfirmDialog
+        open={pendingDeleteChannelId !== null}
+        title={t("chrome.deleteChannel")}
+        description={t("chrome.deleteChannelConfirm")}
+        confirmLabel={t("chrome.deleteChannel")}
+        onConfirm={() => void confirmDeleteChannel()}
+        onClose={() => setPendingDeleteChannelId(null)}
+      />
+      <ConfirmDialog
+        open={pendingLeaveServerId !== null}
+        title={t("chrome.leaveCommunity")}
+        description={t("chrome.leaveServer")}
+        confirmLabel={t("chrome.leaveCommunity")}
+        onConfirm={() => void confirmLeaveServer()}
+        onClose={() => setPendingLeaveServerId(null)}
       />
 
       <PromptDialog
