@@ -99,6 +99,14 @@ vi.mock("livekit-client", () => {
     Track,
     LocalAudioTrack,
     ConnectionState,
+    VideoPreset: class {
+      constructor(
+        public width: number,
+        public height: number,
+        public maxBitrate: number,
+      ) {}
+    },
+    VideoQuality: { LOW: 0, MEDIUM: 1, HIGH: 2 },
   };
 });
 

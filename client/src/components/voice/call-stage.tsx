@@ -67,6 +67,7 @@ import {
   videoQualityMenuOpen,
 } from "@/components/voice/video-quality-control";
 import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
+import { bindRemoteVideo } from "@/lib/remote-video-binding";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import {
   idleChromeClassName,
@@ -1773,6 +1774,9 @@ function CallControls({
           onOpenChange={onQualityMenuOpenChange}
           onChange={onVideoQualityChange}
           isSendingVideo={voiceState.isCameraOn || voiceState.isSharingScreen}
+          isSharingScreen={voiceState.isSharingScreen}
+          usingSfu={voiceState.usingSfu}
+          participantCount={voiceState.remotePeers.length + 1}
           buttonClassName={size}
           iconClassName={iconSize}
         />
@@ -2674,10 +2678,10 @@ function StageVideo({
     if (!video) {
       return;
     }
-    video.srcObject = stream;
-    return () => {
-      video.srcObject = null;
-    };
+    // Through the binding rather than `srcObject` directly, so an SFU stream
+    // gets its element measured for adaptive streaming. See
+    // `lib/remote-video-binding.ts`; on the mesh it is the same two lines.
+    return bindRemoteVideo(video, stream);
   }, [ref, stream]);
   return (
     <video

@@ -203,7 +203,31 @@ Concurrent presenters are capped in `ws/voice.ts` on the `set-sharing-screen` fr
 
 - **The cap binds the roster, not the media.** A client that publishes a `ScreenShare` track without announcing it is not stopped by anything — LiveKit has no such rule and the server cannot see the track. Every other participant subscribes and decodes it. It is never *rendered*, because `ScreenStage` is driven by `screenSharePeerIds` from the roster, so this is a bandwidth-grief vector rather than a way to hijack a slot.
 - **The honest client publishes before it is answered.** `startScreenShare()` sends `set-sharing-screen` and publishes to the SFU without waiting; on a denial, `screen-share-denied` arrives a round trip later and unpublishes. In the simultaneous-click race at the cap a spare screen track is briefly live on the SFU.
-- **Cap 4 without `adaptiveStream`:** a viewer can pull 4 × 2.5 Mbps = 10 Mbps down, all decoded at 30 fps, including thumbnail shares. That is the price of deferring `Track.attach()`. Mesh is unchanged: `tuneScreenSender` already budgets per presenter across the peer count, so a second presenter adds no encode cost to the first.
+- **Cap 4:** with `adaptiveStream` on (below) a thumbnail share asks for its 360p layer, so four concurrent shares no longer mean four full-rate streams per viewer. Mesh is unchanged: `tuneScreenSender` already budgets per presenter across the peer count, so a second presenter adds no encode cost to the first.
+
+### Bandwidth: simulcast and receive quality (2026-09-06)
+
+Why: a 100-viewer watch party on 5 Sep 2026 consumed 323 GB of SFU downstream in 3.5 hours. The screen share went up as **one layer** and every viewer, phones included, received it. Worse, the publish passed the ceiling in `videoEncoding`, which livekit-client ignores for a `ScreenShare` source (it reads `screenShareEncoding`), so the one layer had **no bitrate cap at all**. Client-only fix, LiveKit path only; mesh is untouched.
+
+**Presenter ladder** (`screenSimulcastPlan` in `client/src/lib/video-quality.ts`, published by `publishScreenVideo` in `livekit-session.ts` with `simulcast: true`, `screenShareSimulcastLayers` as `VideoPreset`s and `screenShareEncoding` for the top):
+
+| Layer | Size | Ceiling | Note |
+|---|---|---|---|
+| top | capture size, 1080p on auto or an explicit 1080p | the chosen ceiling: 3 Mbps auto, 4 Mbps 1080p, 2 Mbps 720p | `setScreenMaxBitrate` moves this layer only |
+| mid | 1280x720 | 1.4 Mbps | only when the top is above 720 |
+| low | 640x360 | 450 kbps | only when the top is above 360 |
+
+`degradationPreference: "maintain-framerate"` and 30 fps stay. The top layer is the **capture size** on purpose: livekit-client declares each layer's dimensions to the SFU and routes a viewer's size request against that declaration, so the session asks the capture for the plan's height with `applyConstraints({ height: { max } })` rather than scaling the top layer behind the library's back. A display capture climbs back to 1080 when the limit is lifted.
+
+**Large-room cap.** Above `LARGE_ROOM_PARTICIPANTS` (20, counted off `room.remoteParticipants` plus self) the top is held at **720p / 1.5 Mbps** unless the presenter picked **1080p by name** in the send menu, which steps around the cap. The menu says so while it acts ("Large room: your screen goes out at 720p to keep it smooth for everyone. Pick 1080p to send it anyway."). A change of top *height* on a live share (crossing 20 people, or choosing 1080p mid-share) republishes the same track with `unpublishTrack(track, false)` so the capture survives; viewers see one blink at that moment. A change of *ceiling* at the same height moves the sender in place, no blink, as before.
+
+**Viewer side.** The room is created with `adaptiveStream: true`, and every remote video stream carries a binding (`client/src/lib/remote-video-binding.ts`) so the three `<video>` sites introduce their element to the track via `RemoteVideoTrack.attach`; without that the library measures nothing and, after the first tab switch, tells the server the track is invisible. "Video you receive" gains a selector on the SFU path: **Auto, 1080p, 720p, 360p**, applied with `RemoteTrackPublication.setVideoQuality(VideoQuality.HIGH | MEDIUM | LOW)` to every subscribed video publication (share and camera tiles) and to any that subscribes later. Auto sends `HIGH`, which under adaptive stream means "the element decides".
+
+**Adaptive stream and an explicit choice do not fight.** Verified in livekit-client 2.21.0 (`RemoteTrackPublication.emitTrackUpdate`): when both are set the library requests the **smaller** of the adaptive dimensions and the chosen layer's dimensions. The explicit pick is therefore a ceiling; a small element still saves below it. This is tighter than the docs' "manual overrides adaptive" and it is the behaviour wanted here.
+
+**Device defaults** (`client/src/lib/receive-quality.ts`, `localStorage` key `pqp:receive-quality`, per device like the participant rail): coarse pointer, viewport under 900 px, or a phone user agent defaults to **720p**; desktop defaults to **Auto**. Anyone can pick 1080p. On mesh the selector is hidden and the "sender picks that size" sentence stays, because there it is still true.
+
+Verification status: unit-tested (`livekit-session-quality.test.ts`, `video-quality.test.ts`, `receive-quality.test.ts`). See the PR for what was and was not observed against a live LiveKit.
 
 ## Cloudflare Realtime SFU — still a stub
 

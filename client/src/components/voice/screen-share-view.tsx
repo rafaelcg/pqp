@@ -9,6 +9,7 @@ import {
 import { attemptElementFullscreen } from "@/components/voice/element-fullscreen";
 import { desktopContext } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
+import { bindRemoteVideo } from "@/lib/remote-video-binding";
 import { cn } from "@/lib/utils";
 
 /**
@@ -131,13 +132,18 @@ export function ScreenShareView({
     if (!video) {
       return;
     }
-    video.srcObject = stream;
+    // Through the binding rather than `srcObject` directly, so an SFU stream
+    // has this element measured for adaptive streaming: the stage going
+    // fullscreen is what asks the SFU for the 1080p layer, and a phone-sized
+    // stage is what asks for the small one. See `lib/remote-video-binding.ts`.
+    const unbind = bindRemoteVideo(video, stream);
     if (stream) {
       void video.play().catch(() => {
         // Autoplay can be blocked until the page has been interacted with;
         // sharing/joining is itself an interaction, so this is rare.
       });
     }
+    return unbind;
   }, [stream]);
 
   useEffect(() => {

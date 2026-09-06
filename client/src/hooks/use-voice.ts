@@ -49,11 +49,14 @@ import {
   type RemotePeer,
 } from "@/lib/peer-connection-manager";
 import type { RealtimeTransport } from "@/lib/realtime";
+import {
+  getReceiveQuality,
+  subscribeReceiveQuality,
+} from "@/lib/receive-quality";
 import { beaconVoiceLeave } from "@/lib/voice-leave-beacon";
 import {
   applyCameraQuality,
   cameraBitrateFor,
-  screenBitrateFor,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
   type VideoQuality,
@@ -623,6 +626,12 @@ export type VoiceSessionProvider = (
 export function createVoiceController(transport: RealtimeTransport) {
   let manager: ReturnType<typeof createPeerConnectionManager> | null = null;
   let sfu: LiveKitSession | null = null;
+  // The receive ceiling is a device preference set from the call's menu; the
+  // menu writes the store and the live SFU session follows it here, so the
+  // choice needs no thread through the stage's props.
+  subscribeReceiveQuality((quality) => {
+    void sfu?.setReceiveQuality(quality);
+  });
   let sessionProvider: VoiceSessionProvider | null = null;
   /**
    * What to assume when `welcome` carries no `transport` — i.e. the server
@@ -1411,7 +1420,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       // rebuilt after a WS drop silently reverted both to the defaults, and
       // nothing recomputed them until the user next touched the menu.
       await sfu.setCameraMaxBitrate(cameraBitrateFor(videoQuality));
-      await sfu.setScreenMaxBitrate(screenBitrateFor(videoQuality));
+      await sfu.setScreenQuality(videoQuality);
+      // The viewer's half: the largest layer this device wants, remembered
+      // per device. Applied before anything is subscribed so the first frame
+      // of a share arriving at a phone is already the phone-sized layer.
+      await sfu.setReceiveQuality(getReceiveQuality());
       // A screen share started before a reconnect rebuilds the session — the
       // capture itself survives the WS drop (it's a browser-level grant, not
       // tied to the connection), only the publish needs redoing.
@@ -2616,7 +2629,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // manager and the SFU session each hold the choice for a share that has
       // not started yet, so this is not only about the sender on the wire.
       manager?.setScreenQuality(next);
-      await sfu?.setScreenMaxBitrate(screenBitrateFor(next));
+      await sfu?.setScreenQuality(next);
       const track = cameraCaptureStream?.getVideoTracks()[0];
       if (track) {
         await applyCameraQuality(track, next);

@@ -217,6 +217,127 @@ export function screenScaleFactor(
   return Math.round((height / target) * 100) / 100;
 }
 
+// ------------------------------------------------------------- SFU simulcast
+
+/**
+ * The room size above which a presenter on the SFU stops offering 1080p unless
+ * they asked for it by name.
+ *
+ * WHY 20. A 100-viewer watch party on 5 Sep 2026 pulled 323 GB of SFU
+ * downstream in three and a half hours. The share was one layer at up to
+ * 3 Mbps, and every viewer, phones included, received that layer, because
+ * there was nothing else to receive. Above a couple of dozen people the room
+ * is a broadcast, not a conversation: the presenter is one, the viewers are
+ * many, and every bit the presenter's top layer carries is paid for once per
+ * viewer. Twenty is where "a few friends" stops being a fair description of
+ * the room, and it is well under the point where the bill becomes the story.
+ */
+export const LARGE_ROOM_PARTICIPANTS = 20;
+
+/** What a large room's top layer is held to, unless 1080p was chosen by name. */
+export const LARGE_ROOM_SCREEN_HEIGHT = 720;
+export const LARGE_ROOM_SCREEN_BITRATE = 1_500_000;
+
+/** One rung of the presenter's simulcast ladder, as `livekit-client` wants it. */
+export interface ScreenLayer {
+  width: number;
+  height: number;
+  /** Ceiling in bits per second. A ceiling, not a target; see above. */
+  maxBitrate: number;
+  maxFramerate: number;
+}
+
+/**
+ * The two smaller copies a presenter encodes alongside the top layer.
+ *
+ * The SFU can only hand a viewer a smaller picture that the presenter
+ * actually encodes, so a phone watching a 1080p share used to receive 1080p
+ * because that was the only copy on the server. These are the copies it can
+ * now choose from. 720p at 1.4 Mbps is a little under what LiveKit's own
+ * `ScreenSharePresets.h720fps15` spends, given 30 fps because a share here is
+ * usually a film or a game; 360p at 450 kbps is a phone-sized picture that
+ * still reads as video rather than as a slideshow.
+ */
+export const SCREEN_SIMULCAST_RUNGS: readonly ScreenLayer[] = [
+  { width: 640, height: 360, maxBitrate: 450_000, maxFramerate: 30 },
+  { width: 1280, height: 720, maxBitrate: 1_400_000, maxFramerate: 30 },
+];
+
+/**
+ * What the presenter's screen goes up as on the SFU: the size and ceiling of
+ * the top layer, the smaller layers under it, and whether the room's size is
+ * what decided the top.
+ */
+export interface ScreenSimulcastPlan {
+  /** Lines in the top layer, which is also what the capture is asked for. */
+  topHeight: number;
+  /** The top layer's ceiling in bits per second. */
+  topBitrate: number;
+  /** Every rung strictly below the top, smallest first. */
+  lowerLayers: ScreenLayer[];
+  /** True when `LARGE_ROOM_PARTICIPANTS` is what held the top at 720p. */
+  capped: boolean;
+}
+
+/**
+ * Whether the room is large enough to hold the top layer at 720p.
+ *
+ * An explicit 1080p is the presenter saying "I know, spend it", and the cap
+ * steps aside. Auto and every smaller choice are subject to it; a smaller
+ * choice is already at or under the cap, so for them it is moot.
+ */
+export function isLargeRoomCapped(
+  quality: VideoQuality,
+  participantCount: number,
+): boolean {
+  return participantCount > LARGE_ROOM_PARTICIPANTS && quality !== "1080p";
+}
+
+/**
+ * The presenter's ladder for a quality and a room size.
+ *
+ * THE TOP LAYER IS THE CAPTURE SIZE, and that is why the plan names a height
+ * rather than a divisor. `livekit-client` builds the top simulcast layer from
+ * the track's own dimensions and scales the smaller layers down from there,
+ * and it declares those dimensions to the SFU, which routes a viewer's
+ * request ("720 lines, please") against the declaration. Scaling the top
+ * layer down behind the library's back with `scaleResolutionDownBy` would
+ * leave the declaration saying 1080p over a 720p picture and send the wrong
+ * layer to whoever asked. So the session asks the *capture* for the plan's
+ * height with `applyConstraints`, and republishes when that height changes,
+ * which keeps every layer the SFU knows about a layer that actually exists.
+ *
+ * The capture-floor argument in `screenScaleFactor` still holds: this never
+ * captures below the chosen size, and a display capture constrained to 720
+ * lines climbs back to 1080 the moment the constraint is relaxed, because the
+ * source is the screen, not a smaller camera mode.
+ */
+export function screenSimulcastPlan(
+  quality: VideoQuality,
+  participantCount: number,
+): ScreenSimulcastPlan {
+  const chosenHeight =
+    quality === "auto" ? SCREEN_CAPTURE_HEIGHT : SCREEN_HEIGHTS[quality];
+  const capped = isLargeRoomCapped(quality, participantCount);
+  const topHeight = capped
+    ? Math.min(chosenHeight, LARGE_ROOM_SCREEN_HEIGHT)
+    : chosenHeight;
+  const topBitrate = capped
+    ? Math.min(screenBitrateFor(quality), LARGE_ROOM_SCREEN_BITRATE)
+    : screenBitrateFor(quality);
+  return {
+    topHeight,
+    topBitrate,
+    lowerLayers: SCREEN_SIMULCAST_RUNGS.filter(
+      (layer) => layer.height < topHeight,
+    ),
+    // Only "the room decided" counts. Somebody who chose 720p in a big room
+    // is sending what they asked for, and the menu must not tell them the
+    // room made them do it.
+    capped: capped && topHeight < chosenHeight,
+  };
+}
+
 /**
  * Capture constraints for a quality. **Every field is `ideal`.**
  *
