@@ -586,6 +586,71 @@ Update the hosted-deploy table in `CLAUDE.md`, `docs/DEPLOY.md` and `docs/HANDOV
 
 ---
 
+## 7f. Worker: `pqp-worker` (optional, one-time)
+
+The batch jobs (attachment and quarantine sweeps, audit / report / timeout prunes, message retention, interrupted account deletions, the outgoing-webhook outbox, the Community Home media sweep) can run on a second, private machine so they never compete with voice signalling for `pqp-api`'s one CPU. Inventory and reasoning: [`plans/COLD_PATHS.md`](./plans/COLD_PATHS.md). Config: `fly.worker.toml`. Switch: `WORKER_MODE` (`server/src/lib/process-role.ts`).
+
+**Without this section, nothing changes.** `WORKER_MODE` unset means the API runs every job itself, exactly as before. A self-host never needs a worker.
+
+**Order matters.** The API keeps running the jobs until you tell it to stop, and telling it before the worker exists stops them everywhere. So: create, deploy, verify, and only then flip the API.
+
+```bash
+# 1. The app. No public IP: nothing outside the org talks to it.
+fly apps create pqp-worker --org <your-org>
+
+# 2. Secrets, by name. Same values as pqp-api (copy them from your password
+#    manager, not from `fly secrets list`, which never shows values).
+#    DATABASE_URL: the same Fly Postgres. `fly mpg attach` also works here:
+#      fly mpg attach <CLUSTER_ID> --app pqp-worker
+#    or set it by hand to the exact string pqp-api uses.
+fly secrets set --app pqp-worker --stage \
+  DATABASE_URL='<same as pqp-api>' \
+  CLERK_SECRET_KEY='<same as pqp-api>'
+
+#    Attachments on? The sweeps need the bucket. Skip if pqp-api has no S3_*.
+fly secrets set --app pqp-worker --stage \
+  S3_ENDPOINT='<...>' S3_BUCKET='<...>' S3_REGION='<...>' \
+  S3_ACCESS_KEY_ID='<...>' S3_SECRET_ACCESS_KEY='<...>' \
+  S3_FORCE_PATH_STYLE='false' S3_PUBLIC_BASE_URL='<...>'
+
+#    External Postgres with TLS only (not Fly MPG over 6PN):
+#      fly secrets set --app pqp-worker --stage DATABASE_SSL='true'
+
+# 3. First deploy, from the image pqp-api is running (CI does the same):
+sha=$(curl -fsS https://api.pqp.gg/health | jq -r .version)
+fly deploy --config fly.worker.toml --app pqp-worker \
+  --image "registry.fly.io/pqp-api:$sha" --ha=false -e APP_VERSION="$sha"
+#    (No such label yet? The first CI deploy after this lands pushes one.
+#     Until then: fly deploy --config fly.worker.toml --app pqp-worker \
+#       --remote-only --ha=false -e APP_VERSION="$(git rev-parse HEAD)")
+
+# 4. See it answer. No public hostname, so go through the private network:
+fly ssh console --app pqp-worker -C "wget -qO- http://localhost:3001/health"
+# {"ok":true,"role":"worker","version":"<sha>"}
+fly logs --app pqp-worker --no-tail | grep "pqp worker"
+# pqp worker: 10 job(s) scheduled, /health on http://localhost:3001
+
+# 5. Only now: tell the API to stop running the jobs. This restarts pqp-api
+#    (every /ws reconnects), so do it in a quiet hour.
+fly secrets set --app pqp-api WORKER_MODE=api
+fly logs --app pqp-api --no-tail | grep "\[role\]"
+# [role] WORKER_MODE=api: batch jobs left to the worker process
+
+# 6. CI: a deploy token for the worker, so deploy-api-fly.yml deploys both
+#    apps from the same image on every merge. Without it the step skips.
+fly tokens create deploy -a pqp-worker
+gh secret set FLY_API_TOKEN_WORKER
+#    If the worker deploy fails pulling registry.fly.io/pqp-api:<sha>, the
+#    per-app token cannot read the API's registry; use one org-scoped deploy
+#    token for both FLY_API_TOKEN and FLY_API_TOKEN_WORKER instead.
+```
+
+The worker needs no TURN, LiveKit, CORS, Clerk authorized parties, provider keys or `ADMIN_METRICS_TOKEN`. It does not run the schema migration; CI deploys it after the API has verified, so it never runs against a schema older than its code.
+
+**Rollback:** `fly secrets unset WORKER_MODE --app pqp-api` puts every job back on the API (restarts it), and `fly scale count 0 --app pqp-worker` parks the worker. Both processes running the jobs at once is safe: every job claims its rows in SQL, so the overlap is duplicate work, not wrong work.
+
+---
+
 ## 8. Rollback
 
 **Decide up front where the point of no easy return is: the first message a user writes against the Fly database.** Before that, rollback is a DNS record. After that, rolling back means either losing those writes or dumping Fly and restoring into Railway. Watch the clock, and if the verification checklist below is not clean within your window, go back rather than pressing on.
