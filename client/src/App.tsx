@@ -3065,12 +3065,12 @@ function MainAppContent({
     }
   }
 
-  async function handleServerMuteOccupant(userId: string) {
+  async function handleServerMuteOccupant(userId: string, muted: boolean) {
     if (!selectedServerId) {
       return;
     }
     try {
-      await setMemberVoiceMuted(selectedServerId, userId, true);
+      await setMemberVoiceMuted(selectedServerId, userId, muted);
     } catch (err) {
       setAppError(voiceModerationError(err, t("member.muteFailed")));
     }
@@ -4904,7 +4904,6 @@ function MainAppContent({
           onJoinVoice={handleJoinVoiceFromList}
           currentUserId={user?.id ?? null}
           peerVolumes={voiceState.peerVolumes}
-          voiceRoomTransports={voiceRoomTransports}
           canMoveIn={(channelId) => perms.can(moveMembersBit(), channelId)}
           canConnectIn={(channelId) =>
             perms.can(Permission.CONNECT, channelId)
@@ -4919,8 +4918,8 @@ function MainAppContent({
           onDisconnectVoiceOccupant={(userId) =>
             void handleDisconnectVoiceOccupant(userId)
           }
-          onServerMuteOccupant={(userId) =>
-            void handleServerMuteOccupant(userId)
+          onServerMuteOccupant={(userId, muted) =>
+            void handleServerMuteOccupant(userId, muted)
           }
           onKickOccupant={(userId, name) =>
             void handleKickOccupant(userId, name)

@@ -143,6 +143,7 @@ describe("voiceOccupantMenuActions", () => {
     inSameCall: true,
     mutedForMe: false,
     canServerMute: true,
+    serverMuted: false,
     canDisconnect: true,
     canKick: true,
   };
@@ -173,6 +174,12 @@ describe("voiceOccupantMenuActions", () => {
         canKick: false,
       }),
     ).toEqual(["profile", "muteForMe", "copyName"]);
+  });
+
+  it("offers server unmute when they are already server-muted", () => {
+    expect(
+      voiceOccupantMenuActions({ ...base, serverMuted: true }),
+    ).toContain("serverUnmute");
   });
 
   it("does not offer kick, disconnect or mutes against yourself", () => {

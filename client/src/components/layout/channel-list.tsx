@@ -25,7 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useState, type DragEvent, type ReactNode } from "react";
-import type { Channel, Server, VoiceParticipant, VoiceRoomTransport } from "@pqp/shared";
+import type { Channel, Server, VoiceParticipant } from "@pqp/shared";
 import { SearchDialog } from "@/components/search/search-dialog";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { ServerBanner, ServerIcon } from "@/components/layout/server-identity";
@@ -119,14 +119,13 @@ interface ChannelListProps {
   /** The signed-in account, for self-drag and "mute for me". */
   currentUserId?: string | null;
   peerVolumes?: Record<string, number>;
-  voiceRoomTransports?: Record<string, VoiceRoomTransport>;
   canMoveIn?: (channelId: string) => boolean;
   canConnectIn?: (channelId: string) => boolean;
   canMuteIn?: (channelId: string) => boolean;
   canKickUser?: (userId: string) => boolean;
   onMoveVoiceOccupant?: (userId: string, channelId: string) => void;
   onDisconnectVoiceOccupant?: (userId: string) => void;
-  onServerMuteOccupant?: (userId: string) => void;
+  onServerMuteOccupant?: (userId: string, muted: boolean) => void;
   onKickOccupant?: (userId: string, name: string) => void;
   onSetPeerVolume?: (userId: string, volume: number) => void;
   onCreateChannel: (
@@ -186,7 +185,6 @@ export function ChannelList({
   onJoinVoice,
   currentUserId = null,
   peerVolumes = {},
-  voiceRoomTransports = {},
   canMoveIn = () => false,
   canConnectIn = () => true,
   canMuteIn = () => false,
@@ -333,8 +331,8 @@ export function ChannelList({
 
   function handleRowDragOver(event: DragEvent, channel: Channel) {
     if (draggedOccupant) {
+      event.preventDefault();
       if (occupantDropAllowed(channel)) {
-        event.preventDefault();
         event.dataTransfer.dropEffect = "move";
         setDragOverId(channel.id);
       } else {
@@ -358,12 +356,12 @@ export function ChannelList({
     const isSelf = Boolean(currentUserId && person.userId === currentUserId);
     const inSameCall = activeVoiceChannelId === channel.id;
     const mutedForMe = (peerVolumes[person.userId] ?? 1) === 0;
-    const transport = voiceRoomTransports[channel.id];
     const actions = voiceOccupantMenuActions({
       isSelf,
       inSameCall,
       mutedForMe,
       canServerMute: canMuteIn(channel.id),
+      serverMuted: person.serverMuted,
       canDisconnect: canMoveIn(channel.id),
       canKick: canKickUser(person.userId),
     });
@@ -409,14 +407,13 @@ export function ChannelList({
         personal.push({
           id: "server-mute",
           label: t("voice.occupant.serverMute"),
-          onSelect: () => {
-            if (transport === "mesh") {
-              setDropHint(t("timeout.mesh"));
-              window.setTimeout(() => setDropHint(null), 4000);
-              return;
-            }
-            onServerMuteOccupant?.(person.userId);
-          },
+          onSelect: () => onServerMuteOccupant?.(person.userId, true),
+        });
+      } else if (action === "serverUnmute") {
+        personal.push({
+          id: "server-unmute",
+          label: t("voice.occupant.serverUnmute"),
+          onSelect: () => onServerMuteOccupant?.(person.userId, false),
         });
       } else if (action === "disconnect") {
         mod.push({
@@ -1530,13 +1527,11 @@ function ChannelRow({
         onDragEnd={onDragEnd}
         onDragOver={(event) => {
           if (occupantDragActive) {
-            if (occupantDropAllowed) {
-              event.preventDefault();
-              event.dataTransfer.dropEffect = "move";
-              onDragOverRow(event);
-            } else {
-              event.dataTransfer.dropEffect = "none";
-            }
+            event.preventDefault();
+            event.dataTransfer.dropEffect = occupantDropAllowed
+              ? "move"
+              : "none";
+            onDragOverRow(event);
             return;
           }
           event.preventDefault();

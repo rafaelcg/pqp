@@ -96,6 +96,7 @@ export type VoiceOccupantMenuAction =
   | "muteForMe"
   | "unmuteForMe"
   | "serverMute"
+  | "serverUnmute"
   | "disconnect"
   | "kick"
   | "copyName";
@@ -110,6 +111,7 @@ export function voiceOccupantMenuActions(input: {
   inSameCall: boolean;
   mutedForMe: boolean;
   canServerMute: boolean;
+  serverMuted: boolean;
   canDisconnect: boolean;
   canKick: boolean;
 }): VoiceOccupantMenuAction[] {
@@ -118,7 +120,7 @@ export function voiceOccupantMenuActions(input: {
     items.push(input.mutedForMe ? "unmuteForMe" : "muteForMe");
   }
   if (!input.isSelf && input.canServerMute) {
-    items.push("serverMute");
+    items.push(input.serverMuted ? "serverUnmute" : "serverMute");
   }
   if (!input.isSelf && input.canDisconnect) {
     items.push("disconnect");
