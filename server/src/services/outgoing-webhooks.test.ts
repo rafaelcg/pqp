@@ -66,7 +66,10 @@ const {
   assertOutgoingWebhookUrl,
   enqueueOutgoingMessageCreated,
   resetOutgoingWebhookRateLimit,
+  statusWithCharacterHook,
 } = await import("./outgoing-webhooks.js");
+const { createCharacterAccount } = await import("./characters.js");
+const { createInvite, redeemInvite } = await import("./invites.js");
 const { verifySignatureHeader } = await import("../lib/webhook-sign.js");
 
 let httpServer: Server;
@@ -134,6 +137,20 @@ describe("assertOutgoingWebhookUrl", () => {
     await expect(
       assertOutgoingWebhookUrl("https://user:pass@example.com/hook"),
     ).rejects.toMatchObject({ status: 400 });
+  });
+});
+
+describe("statusWithCharacterHook", () => {
+  it("leaves humans and live sockets alone", () => {
+    expect(statusWithCharacterHook("offline", false, true)).toBe("offline");
+    expect(statusWithCharacterHook("idle", true, true)).toBe("idle");
+    expect(statusWithCharacterHook("dnd", true, true)).toBe("dnd");
+    expect(statusWithCharacterHook("online", true, false)).toBe("online");
+  });
+
+  it("paints a socketless character online only while a hook is active", () => {
+    expect(statusWithCharacterHook("offline", true, true)).toBe("online");
+    expect(statusWithCharacterHook("offline", true, false)).toBe("offline");
   });
 });
 
@@ -550,5 +567,53 @@ describeDb("outgoing webhooks", () => {
     });
     expect(inserted).toBe(0);
     expect(await deliveryCount()).toBe(0);
+  });
+
+  it("paints a character online on the member list only while a hook is active", async () => {
+    const minted = await createCharacterAccount({
+      label: "caio-presence",
+      displayName: "Caio",
+    });
+    const invite = await createInvite(serverId, owner.id, { maxUses: 1 });
+    await redeemInvite(invite.code, minted.user.id);
+
+    const before = await call<{
+      members: Array<{ id: string; status?: string; isCharacter?: boolean }>;
+    }>(owner, "GET", `/api/servers/${serverId}/members`);
+    const caioBefore = before.body.members.find((m) => m.id === minted.user.id);
+    expect(caioBefore?.isCharacter).toBe(true);
+    expect(caioBefore?.status).toBe("offline");
+    expect(
+      before.body.members.find((m) => m.id === owner.id)?.status,
+    ).toBe("offline");
+
+    const created = await call<{ webhook: OutgoingWebhook }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/outgoing-webhooks`,
+      createBody({ name: "Caio wake" }),
+    );
+    expect(created.status).toBe(201);
+
+    const active = await call<{
+      members: Array<{ id: string; status?: string }>;
+    }>(owner, "GET", `/api/servers/${serverId}/members`);
+    expect(
+      active.body.members.find((m) => m.id === minted.user.id)?.status,
+    ).toBe("online");
+    expect(
+      active.body.members.find((m) => m.id === owner.id)?.status,
+    ).toBe("offline");
+
+    await getPool().query(
+      `UPDATE outgoing_webhooks SET status = 'failing' WHERE id = $1`,
+      [created.body.webhook.id],
+    );
+    const failing = await call<{
+      members: Array<{ id: string; status?: string }>;
+    }>(owner, "GET", `/api/servers/${serverId}/members`);
+    expect(
+      failing.body.members.find((m) => m.id === minted.user.id)?.status,
+    ).toBe("offline");
   });
 });

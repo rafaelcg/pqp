@@ -86,6 +86,9 @@ fly secrets set CHARACTER_ACCOUNTS_ENABLED=true -a pqp-api
 Until this is set, `Bearer character:…` is refused before the server touches the
 database. Everything below can be prepared without it.
 
+A character that is already minted can send over HTTP without a socket:
+[`docs/BOT_SEND.md`](./BOT_SEND.md).
+
 ### 2. Mint the character accounts
 
 From a checkout, with the production `DATABASE_URL`:
