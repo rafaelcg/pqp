@@ -595,7 +595,7 @@ all routed to the contact point `rafael-email`):
 | error lines > 20 in 5m | more than 20 error lines in the last 5 minutes, sustained 5 minutes |
 | Connection terminated > 5 in 5m | Postgres is dropping connections (the 2026-09-05 outage shape) |
 | voice.roomFull in last 5m | any join refused for room size; the mesh cap is being hit |
-| no ws.connect for 15m (12:00-03:00 UTC) | nobody connected for 15 minutes during active hours; mute timing `pqp-quiet-hours` silences it 03:00-12:00 UTC |
+| no ws.connect for 15m (12:00-03:00 UTC) | nobody connected for 15 minutes during active hours; mute timing `pqp-quiet-hours` silences it 03:00-12:00 UTC. **Paused** until the shipper is live, because "no lines" and "no shipper" look the same to it; unpause it in Alert rules after the first `fly deploy` |
 
 The synthetic checks on `/health` and `sfu.pqp.gg` (ids 6260, 6261) and the
 contact point predate this and live in the same stack.
