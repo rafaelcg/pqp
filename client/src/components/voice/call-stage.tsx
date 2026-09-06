@@ -98,6 +98,9 @@ import {
 } from "@/lib/participant-rail-preference";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { PeerTileControls } from "@/components/voice/peer-tile-controls";
+import { VoiceQualityMeter } from "@/components/voice/voice-quality-meter";
+import { useVoiceLinkQuality } from "@/hooks/use-voice-link-quality";
+import type { VoiceLinkQuality } from "@/lib/voice-link-quality";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
 import {
   requestConnectionCheck,
@@ -153,6 +156,7 @@ interface StagePerson {
   volume?: number;
   onSetVolume?: (volume: number) => void;
   onRetry?: () => void;
+  quality?: VoiceLinkQuality | null;
 }
 
 const PIP_CORNER_CLASS: Record<PipCorner, string> = {
@@ -675,6 +679,7 @@ function ActiveCall({
   }, [callingOut, playOutgoingRingtone]);
   const roster = voiceState.occupancy[channelId] ?? [];
   const rosterByPeerId = new Map(roster.map((p) => [p.peerId, p]));
+  const meshQuality = useVoiceLinkQuality(voiceState.status !== "idle");
 
   const speaking = new Set(voiceState.speakingPeerIds);
   const self: StagePerson | null = currentUser
@@ -712,6 +717,7 @@ function ActiveCall({
         : undefined,
       onRetry:
         failed && onRetryPeer ? () => onRetryPeer(peer.peerId) : undefined,
+      quality: peer.quality ?? meshQuality[peer.peerId] ?? null,
     };
   });
 
@@ -2232,6 +2238,12 @@ function PrimaryTile({
         connectingLabel={t("voice.tile.connecting")}
         prominent
       />
+      {!person.isSelf && (
+        <VoiceQualityMeter
+          quality={person.quality ?? null}
+          className="absolute right-2 top-2 z-20"
+        />
+      )}
       <PeerTileControls
         name={person.name}
         volume={person.volume}
@@ -2296,6 +2308,13 @@ function GridTile({
         connecting={person.connecting}
         connectingLabel={t("voice.tile.connecting")}
       />
+      {!person.isSelf && (
+        <VoiceQualityMeter
+          quality={person.quality ?? null}
+          compact
+          className="absolute right-1.5 top-1.5 z-20"
+        />
+      )}
       <PeerTileControls
         name={person.name}
         volume={person.volume}
@@ -2463,6 +2482,13 @@ function MiniTile({
           name={person.isSelf ? youLabel : person.name}
           muted={person.muted}
         />
+        {!person.isSelf && (
+          <VoiceQualityMeter
+            quality={person.quality ?? null}
+            compact
+            className="absolute right-1 top-1 z-20"
+          />
+        )}
         <PeerTileControls
           name={person.name}
           volume={person.volume}

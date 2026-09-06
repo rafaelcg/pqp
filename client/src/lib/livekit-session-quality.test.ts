@@ -135,7 +135,16 @@ const RoomEvent = {
   ParticipantDisconnected: "participantDisconnected",
   Disconnected: "disconnected",
   ConnectionStateChanged: "connectionStateChanged",
+  ConnectionQualityChanged: "connectionQualityChanged",
   MediaDevicesError: "mediaDevicesError",
+};
+
+const ConnectionQuality = {
+  Excellent: "excellent",
+  Good: "good",
+  Poor: "poor",
+  Lost: "lost",
+  Unknown: "unknown",
 };
 
 const rooms: FakeRoom[] = [];
@@ -188,6 +197,14 @@ class FakeRoom {
     this.remoteParticipants.delete(identity);
     this.handlers.get(RoomEvent.ParticipantDisconnected)?.(participant);
   }
+  /** Test helper: LiveKit's Excellent / Good / Poor for one participant. */
+  setQuality(identity: string, quality: string) {
+    const participant = this.remoteParticipants.get(identity) ?? { identity };
+    this.handlers.get(RoomEvent.ConnectionQualityChanged)?.(
+      quality,
+      participant,
+    );
+  }
   /** Test helper: a participant's video publication gets subscribed. */
   subscribe(participant: FakeRemoteParticipant, source: string) {
     const publication: FakeRemotePublication = {
@@ -231,6 +248,7 @@ vi.mock("livekit-client", () => {
   return {
     Room: FakeRoom,
     RoomEvent,
+    ConnectionQuality,
     Track,
     LocalAudioTrack,
     ConnectionState: { Disconnected: "disconnected" },
@@ -798,5 +816,28 @@ describe("video nobody is drawing", () => {
     room().unsubscribe(rafa, Track.Source.ScreenShare);
     vi.advanceTimersByTime(OFFSCREEN_GRACE_MS * 2);
     expect(publication.enabled).toEqual([]);
+  });
+});
+
+describe("ConnectionQualityChanged becomes the same three bars", () => {
+  it("attaches Excellent / Good / Poor to the remote peer", async () => {
+    const seen: { peerId: string; bars?: number }[][] = [];
+    await connectLiveKit({
+      session: SESSION,
+      lookupIdentity: () => undefined,
+      onPeersChanged: (peers) => {
+        seen.push(
+          peers.map((peer) => ({
+            peerId: peer.peerId,
+            bars: peer.quality?.bars,
+          })),
+        );
+      },
+      onError: () => {},
+    });
+    room().join("rafa");
+    room().setQuality("rafa", ConnectionQuality.Poor);
+
+    expect(seen.at(-1)).toEqual([{ peerId: "rafa", bars: 1 }]);
   });
 });

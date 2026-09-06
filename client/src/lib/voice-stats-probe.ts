@@ -10,11 +10,11 @@
  * taking a relayed path — look identical from the outside while being opposite
  * fixes.
  *
- * WHAT IT IS NOT. It is not a feature. Nothing renders, nothing is sampled and
- * nothing is timed until somebody types `pqpVoiceStats.report()` into a
- * console; registering a connection costs one `Map.set` and unregistering one
- * `Map.delete`. There is no UI, no toast, no periodic work, and no behaviour
- * change of any kind on the call itself.
+ * WHAT IT IS NOT. The console tool is still the place to dump a table. A
+ * quality meter now also samples the same snapshot every two seconds, so a
+ * weak or relayed path shows on the tiles instead of only in a console
+ * table. Registering a connection is still one `Map.set`. The call itself
+ * does not change.
  *
  * WHY IT IS NOT GATED TO DEV BUILDS. The defect being chased only happens on
  * real networks between two real houses, which means the hosted build is the
@@ -138,6 +138,15 @@ export interface CandidatePairSample {
   availableOutgoingKbps: number | null;
   localAddress: string | null;
   remoteAddress: string | null;
+  /**
+   * Inbound packets lost and received on this connection, any kind.
+   *
+   * Video receivers already expose `packetsLost`, but a voice-only call has
+   * no video inbound-rtp, so the path is the place a quality meter can read
+   * loss without inventing a second sample shape.
+   */
+  packetsLost: number | null;
+  packetsReceived: number | null;
 }
 
 export interface VoiceStatsSnapshot {
@@ -344,6 +353,22 @@ export function summariseStats(
     return stat.nominated === true && stat.state === "succeeded";
   });
 
+  let packetsLost: number | null = null;
+  let packetsReceived: number | null = null;
+  for (const stat of all) {
+    if (stat.type !== "inbound-rtp") {
+      continue;
+    }
+    const lost = num(stat.packetsLost);
+    const received = num(stat.packetsReceived);
+    if (lost !== null) {
+      packetsLost = (packetsLost ?? 0) + lost;
+    }
+    if (received !== null) {
+      packetsReceived = (packetsReceived ?? 0) + received;
+    }
+  }
+
   const paths: CandidatePairSample[] = pairs.map((pair) => {
     const local = byId.get(str(pair.localCandidateId) ?? "");
     const remote = byId.get(str(pair.remoteCandidateId) ?? "");
@@ -361,6 +386,8 @@ export function summariseStats(
         available === null ? null : Math.round(available / 1000),
       localAddress: str(local?.address) ?? str(local?.ip),
       remoteAddress: str(remote?.address) ?? str(remote?.ip),
+      packetsLost,
+      packetsReceived,
     };
   });
 

@@ -114,6 +114,19 @@ describe("summariseStats", () => {
     expect(paths[0]!.relayed).toBe(true);
   });
 
+  it("puts inbound packet counts on the selected path, audio included", () => {
+    const audio: RtcStatLike = {
+      id: "IA1",
+      type: "inbound-rtp",
+      kind: "audio",
+      packetsLost: 3,
+      packetsReceived: 97,
+    };
+    const { paths } = summariseStats(PEER, report([audio]), roles, new Map());
+    expect(paths[0]!.packetsLost).toBe(3);
+    expect(paths[0]!.packetsReceived).toBe(97);
+  });
+
   it("falls back to the nominated pair when no transport names one", () => {
     const withoutTransport = report()
       .filter((stat) => stat.type !== "transport")
