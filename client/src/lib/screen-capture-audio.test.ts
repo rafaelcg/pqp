@@ -130,6 +130,43 @@ describe("screenCaptureOptions", () => {
       height: { max: 1080 },
     });
   });
+
+  it("steers a Watch party toward a tab and that tab's sound", () => {
+    // The product meaning of Watch party: share the player tab, with its
+    // sound, not the whole desktop. System audio is the echo path and stays
+    // off even if the caller also passed the opt-in.
+    const options = screenCaptureOptions(true, browser, {
+      preferBrowserTab: true,
+    });
+    expect(options.systemAudio).toBe("exclude");
+    expect(options.preferCurrentTab).toBeUndefined();
+    expect(options.monitorTypeSurfaces).toBe("exclude");
+    expect(options.selfBrowserSurface).toBe("exclude");
+    expect(options.video).toMatchObject({ displaySurface: "browser" });
+    expect(options.audio).not.toBe(false);
+    expect(options.audio).toMatchObject({ echoCancellation: false });
+  });
+
+  it("never pairs preferCurrentTab with selfBrowserSurface exclude", () => {
+    // Chrome rejects that pair with TypeError before the picker opens, then
+    // startScreenShare retries `{ video: true }` and every Watch party becomes
+    // a silent share. The valid tab steer is displaySurface + hide monitors.
+    for (const intent of [{}, { preferBrowserTab: true }] as const) {
+      const options = screenCaptureOptions(true, browser, intent);
+      if (options.preferCurrentTab === true) {
+        expect(options.selfBrowserSurface).not.toBe("exclude");
+      }
+      expect(options.selfBrowserSurface).toBe("exclude");
+      expect(options.preferCurrentTab).toBeUndefined();
+    }
+  });
+
+  it("does not steer a normal share toward a tab", () => {
+    const options = screenCaptureOptions(false, browser);
+    expect(options.preferCurrentTab).toBeUndefined();
+    expect(options.monitorTypeSurfaces).toBeUndefined();
+    expect(options.video).not.toHaveProperty("displaySurface");
+  });
 });
 
 describe("capturesSystemAudio", () => {

@@ -784,6 +784,8 @@
   "voice.control.deafen": "Desligar o áudio",
   "voice.control.undeafen": "Ligar o áudio",
   "voice.control.share": "Compartilhar a tela",
+  "voice.control.watchParty": "Watch party",
+  "voice.control.watchPartyHint": "Compartilha a guia do YouTube (ou do player) no Chrome, com o áudio da guia. Não escolhe a tela inteira.",
   "voice.control.stopShare": "Parar de compartilhar a tela",
   "voice.control.shareUnavailable": "Compartilhar a tela (indisponível neste aparelho)",
   "voice.control.shareLimit": "Essa call já tem {limit} telas sendo compartilhadas",
