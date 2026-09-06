@@ -183,6 +183,12 @@ android {
             buildConfigField("String", "API_URL", "\"${config("pqp.apiUrl", "http://localhost:3001")}\"")
             buildConfigField("String", "WS_URL", "\"${config("pqp.wsUrl", "ws://localhost:3001/ws")}\"")
             buildConfigField("String", "CLERK_PUBLISHABLE_KEY", "\"${config("pqp.clerkPublishableKey", "")}\"")
+            // The web origin an invite link is built on (`InviteLinks`). A
+            // debug build shares links to the hosted site, not to localhost:
+            // the person receiving the link does not have a tunnel to this
+            // laptop, and pqp.gg is the only origin the App Links filter
+            // claims.
+            buildConfigField("String", "APP_URL", "\"${config("pqp.appUrl", "https://pqp.gg")}\"")
         }
         release {
             isMinifyEnabled = true
@@ -220,6 +226,7 @@ android {
             buildConfigField("String", "API_URL", "\"${config("pqp.apiUrl", "https://api.pqp.gg")}\"")
             buildConfigField("String", "WS_URL", "\"${config("pqp.wsUrl", "wss://api.pqp.gg/ws")}\"")
             buildConfigField("String", "CLERK_PUBLISHABLE_KEY", "\"${config("pqp.clerkPublishableKey", "")}\"")
+            buildConfigField("String", "APP_URL", "\"${config("pqp.appUrl", "https://pqp.gg")}\"")
 
             // The upload key when there is one, and **no signing config at
             // all** when there is not.
