@@ -1347,7 +1347,8 @@ export function mapChannel(c: ChannelRow) {
 
 /**
  * What the voice transport policy needs to know about a server: whether it is
- * a listed community and how many members it has. One query, one correlated
+ * a public community — `is_community`, the address switch, which is the one
+ * that lets strangers in — and how many members it has. One query, one correlated
  * count over `server_members`' primary key (server_id, user_id), so it is an
  * index-only range scan even on the largest server. Read once per room pin,
  * never per join (ws/voice.ts caches the decision for the life of the pin).
