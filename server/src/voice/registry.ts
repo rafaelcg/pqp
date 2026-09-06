@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { VoiceRoomTransport } from "@pqp/shared";
+import type { VoiceRoomTransport, WatchPartyState } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
 import { logEvent } from "../lib/log.js";
@@ -21,14 +21,15 @@ import { VOICE_RESUME_TOKEN_TTL_MS } from "../ws/voice-resume-token.js";
  * it before doing anything, so the single-instance path stays byte-for-byte
  * what it was before this file existed. The tables sit empty.
  *
- * MILESTONE M1 IS WRITE-THROUGH. The in-process map is still what every
- * fan-out reads; these rows are a copy of it, kept in step on join, state
- * change, socket loss and leave, plus the transport pin, which is the one
- * decision that goes *through* the table rather than beside it. Reads are
- * confined to the places that have to answer for the whole cluster from one
- * instance: the token mint, moderation targeting, and the operator snapshot.
- * Rosters over the bus are M2; cross-instance resume and the dead-instance
- * reconcile are M3.
+ * M1 MADE IT WRITE-THROUGH, M2 MADE THE ROWS THE ROSTER. Every change to the
+ * in-process map (join, state change, socket loss, leave) is copied here, and
+ * the transport pin is the one decision that goes *through* the table rather
+ * than beside it. With the flag on, `broadcastRoster` and `sendAllVoiceRosters`
+ * in `ws/voice.ts` read `listVoiceRoster` / `listVoiceRosters` instead of the
+ * map, the watch party lives in `voice_rooms.watch_party`, and the bus frames
+ * (`voice.room`, `voice.identity`, `voice.watch`) are *hints* that tell the
+ * other instance to re-read: a dropped frame costs latency, never a ghost.
+ * Cross-instance resume and the dead-instance reconcile are M3.
  *
  * WRITES NEVER THROW INTO THE HANDLER. A failed registry write is logged and
  * otherwise ignored: the local map has already been updated and the sockets
@@ -405,6 +406,153 @@ export async function listVoiceRoomOccupancy(): Promise<
     participants: Number(row.participants),
     sharingScreen: Number(row.sharing_screen),
   }));
+}
+
+// --- rosters ----------------------------------------------------------------
+//
+// What `broadcastRoster` and `sendAllVoiceRosters` read with the flag on.
+// One query each, on the channel index; the room row rides along so the
+// roster states the transport the room is pinned to even when this instance
+// never pinned it.
+
+export interface VoiceRoomRoster {
+  channelId: string;
+  transport: VoiceRoomTransport;
+  peers: VoicePeerRow[];
+}
+
+interface RosterDbRow extends VoicePeerDbRow {
+  room_channel_id: string;
+  transport: VoiceRoomTransport;
+}
+
+const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport,
+       p.peer_id, p.channel_id, p.user_id, p.instance_id, p.display_name,
+       p.avatar_url, p.muted, p.deafened, p.sharing_screen, p.camera_stream_id,
+       p.screen_audio_stream_id, p.can_speak, p.can_resume, p.orphaned_at
+  FROM voice_rooms r
+  LEFT JOIN voice_peers p ON p.channel_id = r.channel_id`;
+
+function groupRosters(rows: RosterDbRow[]): VoiceRoomRoster[] {
+  const byRoom = new Map<string, VoiceRoomRoster>();
+  for (const row of rows) {
+    let room = byRoom.get(row.room_channel_id);
+    if (!room) {
+      room = {
+        channelId: row.room_channel_id,
+        transport: row.transport,
+        peers: [],
+      };
+      byRoom.set(row.room_channel_id, room);
+    }
+    // A room row with no peers (the LEFT JOIN's null side) is still a room.
+    if (row.peer_id) {
+      room.peers.push(mapRow(row));
+    }
+  }
+  return [...byRoom.values()];
+}
+
+/** One room's roster, or null when no room row exists (nobody is in it anywhere). */
+export async function listVoiceRoster(
+  channelId: string,
+): Promise<VoiceRoomRoster | null> {
+  const result = await getPool().query<RosterDbRow>(
+    `${ROSTER_SELECT} WHERE r.channel_id = $1 ORDER BY p.joined_at`,
+    [channelId],
+  );
+  return groupRosters(result.rows)[0] ?? null;
+}
+
+/** Every occupied room in the cluster, for the rosters a fresh socket is sent. */
+export async function listVoiceRosters(): Promise<VoiceRoomRoster[]> {
+  const result = await getPool().query<RosterDbRow>(
+    `${ROSTER_SELECT} ORDER BY r.channel_id, p.joined_at`,
+  );
+  return groupRosters(result.rows).filter((room) => room.peers.length > 0);
+}
+
+// --- watch party ------------------------------------------------------------
+//
+// `voice_rooms.watch_party` is the room's party with the flag on; the map in
+// `ws/watch-party.ts` becomes a per-instance cache of it. The contract's own
+// ordering (higher `rev` wins, ties break on `actorId`) is the WHERE clause,
+// so the write is the coalescing point across instances: a row not updated
+// is a write that lost, and the caller hands the loser what the row holds.
+
+export type WatchPartyPersist =
+  | { kind: "updated" }
+  | { kind: "stale"; held: WatchPartyState | null }
+  /** No room row: the room emptied under the writer. Nothing to hold. */
+  | { kind: "missing" };
+
+export async function persistWatchParty(
+  channelId: string,
+  state: WatchPartyState | null,
+): Promise<WatchPartyPersist> {
+  const pool = getPool();
+  if (state === null) {
+    // A teardown is structural and last-wins, exactly as in memory: the held
+    // state is forgotten and the clock restarts, so the next party's first
+    // write (rev 1 from a client that has heard nothing) is not refused.
+    const result = await pool.query(
+      `UPDATE voice_rooms SET watch_party = NULL, watch_party_rev = 0
+        WHERE channel_id = $1`,
+      [channelId],
+    );
+    return (result.rowCount ?? 0) > 0
+      ? { kind: "updated" }
+      : { kind: "missing" };
+  }
+  const result = await pool.query(
+    `UPDATE voice_rooms
+        SET watch_party = $2::jsonb, watch_party_rev = $3
+      WHERE channel_id = $1
+        AND (watch_party_rev < $3
+             OR (watch_party_rev = $3 AND (watch_party->>'actorId') <= $4))`,
+    [channelId, JSON.stringify(state), state.rev, state.actorId],
+  );
+  if ((result.rowCount ?? 0) > 0) {
+    return { kind: "updated" };
+  }
+  const held = await readWatchParty(channelId);
+  if (held === undefined) {
+    return { kind: "missing" };
+  }
+  return { kind: "stale", held };
+}
+
+/** The row's party: null when the room has none, undefined when there is no room. */
+export async function readWatchParty(
+  channelId: string,
+): Promise<WatchPartyState | null | undefined> {
+  const result = await getPool().query<{
+    watch_party: WatchPartyState | null;
+  }>(`SELECT watch_party FROM voice_rooms WHERE channel_id = $1`, [channelId]);
+  if (result.rows.length === 0) {
+    return undefined;
+  }
+  return result.rows[0]?.watch_party ?? null;
+}
+
+/**
+ * Forget a room's party once nobody is in it anywhere. Normally moot, since
+ * the last peer's delete takes the room row with it; this covers the row the
+ * concurrent-last-leave race in `deleteVoicePeer` can leave behind, so the
+ * next call in the channel does not inherit a film nobody is watching.
+ */
+export function clearWatchPartyIfEmpty(channelId: string): Promise<unknown> {
+  return track(
+    getPool().query(
+      `UPDATE voice_rooms r
+          SET watch_party = NULL, watch_party_rev = 0
+        WHERE r.channel_id = $1
+          AND r.watch_party IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM voice_peers p WHERE p.channel_id = r.channel_id)`,
+      [channelId],
+    ),
+    "clearWatchParty",
+  );
 }
 
 // --- retired ids ------------------------------------------------------------
