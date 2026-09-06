@@ -187,17 +187,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: playwright-webkit-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install Playwright browser
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: pnpm --filter @pqp/client exec playwright install --with-deps chromium
+        run: pnpm --filter @pqp/client exec playwright install --with-deps chromium webkit
 
       # A cache hit restores the browser binaries but not the apt packages the
       # runner image may be missing; install-deps alone is cheap.
       - name: Install Playwright system deps
         if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: pnpm --filter @pqp/client exec playwright install-deps chromium
+        run: pnpm --filter @pqp/client exec playwright install-deps chromium webkit
 
       - name: E2E (shard ${{ matrix.shard }}/4)
         run: pnpm --filter @pqp/client e2e --shard=${{ matrix.shard }}/4
