@@ -273,7 +273,7 @@ struct CallStageView: View {
             .accessibilityIdentifier("call.camera")
             .accessibilityLabel(call.isCameraOn ? "Turn camera off" : "Turn camera on")
 
-            if call.screenShare.isAvailable {
+            if call.offersScreenShare {
                 ScreenShareControlButton(
                     isSharing: call.screenShare.isSharing,
                     identifier: "call.share",

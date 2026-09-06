@@ -62,11 +62,17 @@ final class VoiceModel {
     /// The server's SPEAK rule for this seat, from `welcome.canSpeak` and
     /// `voice-speak-changed`. False locks the microphone control, hides
     /// share and camera, and publishes nothing. Always true in a call that
-    /// has no roles. See `VoiceSpeakRule`.
+    /// has no roles. It is the screen grant too, so the share control follows
+    /// it (`screenShareIsOffered`). See `VoiceSpeakRule`.
     private(set) var canSpeak = true
     /// Why the microphone is locked, or that it has just been unlocked.
     /// Cleared on leave and by the next rule change.
     private(set) var speakNotice: String?
+
+    /// Whether to draw the share control at all.
+    var offersScreenShare: Bool {
+        screenShareIsOffered(isAvailable: screenShare.isAvailable, canSpeak: canSpeak)
+    }
     var isMuted = false {
         didSet {
             // A listen-only seat cannot unmute, whatever asked. The control is
@@ -466,6 +472,7 @@ final class VoiceModel {
         localCamera = nil
         isCameraOn = false
         cameraError = nil
+        canSpeak = true
     }
 
     /// Apply the server's SPEAK rule to the local media. See `VoiceSpeakRule`.
@@ -517,26 +524,42 @@ final class VoiceModel {
         ratings?.finish(&ratingTracker)
     }
 
-    /// Wires the bridge to the mesh. Both directions are here rather than in the
-    /// controller so the controller stays about *when* to share, not how.
+    /// Wires the bridge to whichever transport the room runs on. Both
+    /// directions are here rather than in the controller so the controller
+    /// stays about *when* to share, not how. The bridge is the same socket
+    /// and the same NV12 frames either way; only the track they land in
+    /// differs.
     private func configureScreenShare() {
         screenShare.configure(
             onFrame: { [weak self] buffer, rotation in
                 guard let self else { return }
                 let timestamp = Int64(CACurrentMediaTime() * 1_000_000_000)
+                let usesSfu = self.transport == .livekit
                 Task {
-                    await self.voice.pushScreenFrame(
-                        buffer, rotation: rotation, timeStampNs: timestamp
-                    )
+                    if usesSfu {
+                        await self.sfu.pushScreenFrame(
+                            buffer, rotation: rotation, timeStampNs: timestamp
+                        )
+                    } else {
+                        await self.voice.pushScreenFrame(
+                            buffer, rotation: rotation, timeStampNs: timestamp
+                        )
+                    }
                 }
             },
             onStart: { [weak self] in
                 guard let self else { return }
                 // Announced first, matching the web client: the roster flag is
                 // what draws "X is presenting", and the track behind it takes a
-                // renegotiation to arrive.
+                // renegotiation (or a first frame, on the SFU) to arrive.
                 await self.session?.realtime.setSharingScreen(true)
-                _ = await self.voice.startScreenShare()
+                if self.transport == .livekit {
+                    _ = await self.sfu.startScreenShare(
+                        quality: VideoQualitySettings.shared.quality
+                    )
+                } else {
+                    _ = await self.voice.startScreenShare()
+                }
                 // Our own share never touches `video`, which is the far end's
                 // tracks, so this is the only place it can be recorded.
                 self.noteCallProgress()
@@ -544,6 +567,7 @@ final class VoiceModel {
             onStop: { [weak self] in
                 guard let self else { return }
                 await self.session?.realtime.setSharingScreen(false)
+                await self.sfu.stopScreenShare()
                 await self.voice.stopScreenShare()
             }
         )
@@ -709,9 +733,8 @@ final class VoiceModel {
                 // Not `.connected` yet. On this transport `welcome` is half a
                 // join; the other half is media, and "Connecting" until it is
                 // up is the honest state, as on the web. The share bridge is
-                // deliberately NOT armed: publishing a screen from this app is
-                // mesh-only for now, and an armed bridge would announce a share
-                // that no track ever backs.
+                // armed once the media is, in `startSfuSession`: armed now it
+                // would announce a share that no track can back yet.
                 status = .joining
                 startSfuSession(peerId: peerId, channelId: voiceChannelId)
                 return
@@ -824,6 +847,9 @@ final class VoiceModel {
             guard voiceChannelId == channelId, status == .connected else { return }
             for participant in participants {
                 if participant.peerId == selfPeerId {
+                    // A permission change also reaches us as a roster with our
+                    // own entry re-resolved, not only as `voice-speak-changed`.
+                    applySpeakRule(participant.canSpeak, source: .change)
                     applySelf(participant)
                     continue
                 }
@@ -925,6 +951,8 @@ final class VoiceModel {
             case .success:
                 self.sfuIsConnected = true
                 self.status = .connected
+                // Media is up, so a share now has a room to land in.
+                self.screenShare.arm()
                 await self.reportVoiceState()
             case .failure(let error):
                 guard let message = sfuFailureMessage(error) else { return }

@@ -114,8 +114,12 @@ declared `transports: ["mesh"]`, so the server refused it from those rooms with
 the build carrying `feat/ios-livekit` the app joins them. Two things a tester
 should know:
 
-- **Screen share from the phone is mesh-only.** In a LiveKit room the share
-  button is hidden; receiving somebody else's share, sound included, works.
+- **Screen share from the phone now publishes into LiveKit rooms too**, and
+  has never been run on a phone on either transport. The control is hidden
+  only where a broadcast cannot happen (the simulator) or where the channel
+  denies SPEAK. Receiving somebody else's share, sound included, works and is
+  verified. If a share produces no picture at the far end, say which transport
+  the room was on: the two publish paths are different code.
 - **The app now links two WebRTC builds** (the mesh's and LiveKit's, whose
   symbols are `LKRTC`-prefixed). The IPA is larger. If a TestFlight build
   crashes on joining voice, the first thing to check is which of the two the

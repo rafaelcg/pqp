@@ -210,3 +210,94 @@ func videoScaleFactor(
 func uprightVideoLines(width: Int, height: Int, rotation: Int) -> Int {
     (rotation == 90 || rotation == 270) ? width : height
 }
+
+// MARK: - SFU screen share plan
+
+/// One simulcast rung of a screen share on the SFU, as the web declares it
+/// (`SCREEN_SIMULCAST_RUNGS` in `client/src/lib/video-quality.ts`).
+struct ScreenLayer: Equatable, Sendable {
+    let width: Int
+    let height: Int
+    let maxBitrate: Int
+    let maxFramerate: Int
+}
+
+/// The rungs a share can go up as beside its top layer. Same two as the web,
+/// so a viewer on a weak link is offered the same 360p and 720p pictures
+/// whether the presenter is a laptop or a phone.
+let sfuScreenSimulcastRungs: [ScreenLayer] = [
+    ScreenLayer(width: 640, height: 360, maxBitrate: 450_000, maxFramerate: 30),
+    ScreenLayer(width: 1280, height: 720, maxBitrate: 1_400_000, maxFramerate: 30),
+]
+
+/// Past this many people in a room, a share that was not asked for by name
+/// is held at `sfuLargeRoomScreenHeight` and `sfuLargeRoomScreenBitrate`.
+/// The web's `LARGE_ROOM_PARTICIPANTS`, for the web's reason: a hundred
+/// phones each receiving one full-rate 1080p stream is what fell over on
+/// 5 Sep 2026, and the top layer is the one every viewer defaults to.
+let sfuLargeRoomParticipants = 20
+let sfuLargeRoomScreenHeight = 720
+let sfuLargeRoomScreenBitrate = 1_500_000
+
+/// What `auto` asks a screen capture for, in lines. The web's
+/// `SCREEN_CAPTURE_HEIGHT`; on a phone the bridge already caps the long
+/// side at `ScreenShareWire.maxLongSide`, so this is a ceiling the capture
+/// rarely reaches rather than a size it is scaled up to.
+let sfuScreenCaptureHeight = 1080
+
+/// Frames per second a share may spend. The web's `VIDEO_MAX_FRAMERATE`.
+let sfuScreenMaxFramerate = 30
+
+/// The layers and the ceiling one SFU share goes up with.
+///
+/// Mirrors `screenSimulcastPlan` in `client/src/lib/video-quality.ts` field
+/// for field, because a phone presenting to a room full of browsers has to
+/// cost the room what a browser presenting would.
+struct SfuScreenPlan: Equatable, Sendable {
+    /// Lines the top layer promises.
+    let topHeight: Int
+    /// Ceiling for the top layer, in bits per second. A ceiling, not a target.
+    let topBitrate: Int
+    /// Every rung strictly below the top, smallest first.
+    let lowerLayers: [ScreenLayer]
+    /// True when the room's size, not the chosen quality, held the top down.
+    let capped: Bool
+}
+
+/// Whether the room's size caps a share that was not chosen by name.
+///
+/// Somebody who picked 1080p in a big room asked for it and gets it; the cap
+/// is for the presenter who never opened the menu.
+func sfuIsLargeRoomCapped(quality: VideoQuality, participantCount: Int) -> Bool {
+    participantCount > sfuLargeRoomParticipants && quality != .p1080
+}
+
+func sfuScreenPlan(quality: VideoQuality, participantCount: Int) -> SfuScreenPlan {
+    let chosenHeight = quality.lines ?? sfuScreenCaptureHeight
+    let capped = sfuIsLargeRoomCapped(quality: quality, participantCount: participantCount)
+    let topHeight = capped ? min(chosenHeight, sfuLargeRoomScreenHeight) : chosenHeight
+    let topBitrate = capped
+        ? min(quality.screenBitrate, sfuLargeRoomScreenBitrate)
+        : quality.screenBitrate
+    return SfuScreenPlan(
+        topHeight: topHeight,
+        topBitrate: topBitrate,
+        lowerLayers: sfuScreenSimulcastRungs.filter { $0.height < topHeight },
+        // Only "the room decided" counts, as on the web: a chosen 720p in a
+        // big room is what was asked for, not a cap.
+        capped: capped && topHeight < chosenHeight
+    )
+}
+
+/// Whether the share control is offered at all.
+///
+/// Two independent reasons to hide it, and hiding rather than disabling in
+/// both cases: a broadcast this build cannot host (`isAvailable`, the
+/// simulator or a missing App Group) would open a sheet leading nowhere, and
+/// a share the server would refuse (`canSpeak == false`, the channel's SPEAK
+/// permission, which is also the screen and camera grant) would end in a
+/// `screen-share-denied` after the person has already started a system
+/// broadcast. The web hides it for the same reason (`welcome.canSpeak`).
+func screenShareIsOffered(isAvailable: Bool, canSpeak: Bool) -> Bool {
+    isAvailable && canSpeak
+}

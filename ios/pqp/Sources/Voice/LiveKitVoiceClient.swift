@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import CoreVideo
 import LiveKit
 
 /// SFU voice: the media half of a room the server pinned to LiveKit.
@@ -45,6 +46,13 @@ actor LiveKitVoiceClient {
     private var isDeafened = false
     private var localCamera: LocalVideoTrack?
     private var usesFrontCamera = true
+    /// Our screen, while the ReplayKit bridge is feeding one. The track is
+    /// created on `startScreenShare` and *published on the first frame*: the
+    /// SDK resolves a buffer track's dimensions from what it captures, and a
+    /// publish before any frame waits on that and times out.
+    private var localScreen: LocalVideoTrack?
+    private var screenPublish: Task<Void, Never>?
+    private var screenPlan: SfuScreenPlan?
 
     private var onStateChange: (@Sendable ([VoicePeerState]) -> Void)?
     private var onVideoChange: (@Sendable ([String: PeerVideo]) -> Void)?
@@ -224,6 +232,128 @@ actor LiveKitVoiceClient {
 
     var isCameraOn: Bool { localCamera != nil }
 
+    // MARK: - Screen share
+
+    /// Everyone in the room, us included, for the large-room cap.
+    var participantCount: Int {
+        guard let room else { return 0 }
+        return room.remoteParticipants.count + 1
+    }
+
+    /// Gets a screen track ready for the frames the ReplayKit bridge is about
+    /// to deliver. Nothing goes on the wire until the first one arrives.
+    ///
+    /// NOT the SDK's own broadcast path (`LKSampleHandler` in the extension,
+    /// `BroadcastScreenCapturer` here), deliberately. That path has the
+    /// extension JPEG-encode every frame at the screen's full size and the
+    /// app decode it again, inside a process iOS kills at about 50 MB, and it
+    /// would link LiveKit and its WebRTC build into that process. The bridge
+    /// this app already has scales to `ScreenShareWire.maxLongSide`, clocks
+    /// to 30 fps and allocates nothing per frame, and it feeds the mesh from
+    /// the same socket. So the same NV12 buffers are handed to a
+    /// `BufferCapturer` track, which is the SDK's door for exactly this
+    /// ("can be used to provide video buffers from ReplayKit").
+    ///
+    /// The SDK still believes an extension is configured, because our bundle
+    /// ids happen to match its convention (`gg.pqp.app` + `.broadcast`,
+    /// `group.gg.pqp.app`), and it listens for Darwin notifications our
+    /// extension never posts. That is inert: `setScreenShare(enabled:)` is
+    /// never called, so nothing here ever reaches `BroadcastManager`.
+    func startScreenShare(quality: VideoQuality) -> Bool {
+        guard let room, room.connectionState == .connected else { return false }
+        if localScreen != nil { return true }
+        let plan = sfuScreenPlan(quality: quality, participantCount: participantCount)
+        let track = LocalVideoTrack.createBufferTrack(
+            name: Track.screenShareVideoName,
+            source: .screenShareVideo,
+            options: BufferCaptureOptions(
+                dimensions: plan.topHeight >= 1080 ? .h1080_169 : .h720_169,
+                fps: sfuScreenMaxFramerate
+            )
+        )
+        localScreen = track
+        screenPlan = plan
+        return true
+    }
+
+    /// One frame from the bridge. The first one also starts the publish.
+    func pushScreenFrame(
+        _ box: UncheckedBox<CVPixelBuffer>,
+        rotation: Int,
+        timeStampNs: Int64
+    ) {
+        guard let localScreen,
+              let capturer = localScreen.capturer as? BufferCapturer else { return }
+        capturer.capture(
+            box.value,
+            timeStampNs: timeStampNs,
+            rotation: liveKitRotation(degrees: rotation)
+        )
+        guard screenPublish == nil, let plan = screenPlan else { return }
+        screenPublish = Task { [weak self] in
+            await self?.publishScreen(localScreen, plan: plan)
+        }
+    }
+
+    private func publishScreen(_ track: LocalVideoTrack, plan: SfuScreenPlan) async {
+        guard let room, localScreen === track else { return }
+        do {
+            _ = try await room.localParticipant.publish(
+                videoTrack: track,
+                options: Self.screenPublishOptions(for: plan)
+            )
+        } catch {
+            // The room said no, or went away. The bridge keeps delivering
+            // frames into a track nobody receives; the next `stopScreenShare`
+            // clears it, and a fresh broadcast tries again.
+            if localScreen === track { localScreen = nil }
+            screenPublish = nil
+        }
+    }
+
+    /// The web's `publishScreenVideo`, field for field: simulcast with the
+    /// plan's lower rungs declared, the top layer capped by the plan's
+    /// ceiling, and `maintainFramerate` so the encoder sheds pixels before
+    /// it sheds motion. `screenShareEncoding`, not `encoding`: the SDK reads
+    /// a screen's ceiling from that field alone.
+    static func screenPublishOptions(for plan: SfuScreenPlan) -> VideoPublishOptions {
+        VideoPublishOptions(
+            screenShareEncoding: VideoEncoding(
+                maxBitrate: plan.topBitrate, maxFps: sfuScreenMaxFramerate
+            ),
+            simulcast: true,
+            screenShareSimulcastLayers: plan.lowerLayers.map { layer in
+                VideoParameters(
+                    dimensions: Dimensions(
+                        width: Int32(layer.width), height: Int32(layer.height)
+                    ),
+                    encoding: VideoEncoding(
+                        maxBitrate: layer.maxBitrate, maxFps: layer.maxFramerate
+                    )
+                )
+            },
+            degradationPreference: .maintainFramerate
+        )
+    }
+
+    func stopScreenShare() async {
+        screenPublish?.cancel()
+        screenPublish = nil
+        screenPlan = nil
+        guard let track = localScreen else { return }
+        localScreen = nil
+        guard let room else { return }
+        let screen = room.localParticipant.trackPublications.values
+            .first { $0.source == .screenShareVideo } as? LocalTrackPublication
+        if let screen {
+            try? await room.localParticipant.unpublish(publication: screen)
+        } else {
+            _ = try? await track.stop()
+        }
+    }
+
+    var isSharingScreen: Bool { localScreen != nil }
+
     // MARK: - Teardown
 
     func disconnect() async {
@@ -231,6 +361,10 @@ actor LiveKitVoiceClient {
         self.room = nil
         bridge = nil
         localCamera = nil
+        screenPublish?.cancel()
+        screenPublish = nil
+        localScreen = nil
+        screenPlan = nil
         roster.removeAll()
         audible.removeAll()
         speaking.removeAll()
@@ -453,5 +587,16 @@ private final class RoomBridge: NSObject, RoomDelegate, @unchecked Sendable {
 
     func room(_ room: Room, didDisconnectWithError error: LiveKitError?) {
         Task { [owner] in await owner?.noteDisconnected() }
+    }
+}
+
+/// ReplayKit's rotation, in the degrees the bridge carries, as the SDK names
+/// it. Both count clockwise, so the mapping is a rename and nothing else.
+func liveKitRotation(degrees: Int) -> VideoRotation {
+    switch degrees {
+    case 90: ._90
+    case 180: ._180
+    case 270: ._270
+    default: ._0
     }
 }

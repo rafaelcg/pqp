@@ -5011,6 +5011,16 @@
         }
       }
     },
+    "You cannot share your screen in this channel." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Você não pode compartilhar sua tela neste canal."
+          }
+        }
+      }
+    },
     "You joined another voice room, so this one was left." : {
       "localizations" : {
         "pt-BR" : {
