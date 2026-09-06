@@ -79,6 +79,12 @@ import { CargosHint } from "@/components/layout/cargos-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
+import { canActOnMemberClient } from "@/lib/role-hierarchy";
+import {
+  cloneVoiceOccupancy,
+  moveMembersBit,
+  moveOccupantSeat,
+} from "@/lib/voice-occupant-dnd";
 import { useUpdatePromptShowing } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
@@ -165,6 +171,10 @@ import {
   markChannelRead,
   markCommunityHomeRead,
   moveChannel,
+  moveMemberVoice,
+  disconnectMemberVoice,
+  setMemberVoiceMuted,
+  kickMember,
   setAuthTokenProvider,
   unblockUser,
   updateChannel,
@@ -1091,6 +1101,7 @@ function MainAppContent({
   );
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+  const [pendingVoiceMoves, setPendingVoiceMoves] = useState<string[]>([]);
   /**
    * The standing opt-in to sending this machine's whole sound with a share.
    *
@@ -3009,19 +3020,37 @@ function MainAppContent({
     voiceServerIdRef.current = selectedServerId;
     refreshIceServers();
 
+    const current = voice.getState();
+    const inCall = current.status !== "idle";
+    const switching =
+      inCall &&
+      current.voiceChannelId !== null &&
+      current.voiceChannelId !== channelId;
+    if (switching && current.self && pendingVoiceMoves.includes(current.self.userId)) {
+      return;
+    }
+
     // A crowd is joined muted regardless of the preference; see join-muted.ts.
-    const occupantsAlreadyInRoom = voiceState.occupancy[channelId]?.length ?? 0;
+    // Already in a call: never pass startMuted. A drag is not a fresh join.
+    const occupantsAlreadyInRoom = current.occupancy[channelId]?.length ?? 0;
     await voice.join(channelId, {
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,
-      startMuted: shouldJoinMuted(localSettings.muteOnJoin, occupantsAlreadyInRoom),
+      ...(inCall
+        ? {}
+        : {
+            startMuted: shouldJoinMuted(
+              localSettings.muteOnJoin,
+              occupantsAlreadyInRoom,
+            ),
+          }),
       inputMode: localSettings.inputMode,
       vadThreshold: localSettings.vadThreshold,
       processing: localSettings.micProcessing,
     });
   }
 
-  /** Sidebar double-click: open the channel and join, unless already in it. */
+  /** Sidebar: open the channel and join, unless already in it. */
   function handleJoinVoiceFromList(channelId: string) {
     void selectChannel(channelId);
     if (
@@ -3031,6 +3060,96 @@ function MainAppContent({
       return;
     }
     void handleJoinVoice(channelId);
+  }
+
+  function voiceModerationError(err: unknown, fallback: string): string {
+    return err instanceof ApiError ? err.message : fallback;
+  }
+
+  async function handleMoveVoiceOccupant(userId: string, channelId: string) {
+    if (!selectedServerId || pendingVoiceMoves.includes(userId)) {
+      return;
+    }
+    const snapshot = cloneVoiceOccupancy(voice.getState().occupancy);
+    const { next } = moveOccupantSeat(snapshot, userId, channelId);
+    voice.replaceOccupancy(next);
+    setPendingVoiceMoves((ids) =>
+      ids.includes(userId) ? ids : [...ids, userId],
+    );
+    try {
+      await moveMemberVoice(selectedServerId, userId, channelId);
+    } catch (err) {
+      voice.replaceOccupancy(snapshot);
+      setAppError(voiceModerationError(err, t("member.moveFailed")));
+    } finally {
+      setPendingVoiceMoves((ids) => ids.filter((id) => id !== userId));
+    }
+  }
+
+  async function handleDisconnectVoiceOccupant(userId: string) {
+    if (!selectedServerId) {
+      return;
+    }
+    try {
+      await disconnectMemberVoice(selectedServerId, userId);
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("member.disconnectFailed")));
+    }
+  }
+
+  async function handleServerMuteOccupant(userId: string, muted: boolean) {
+    if (!selectedServerId) {
+      return;
+    }
+    try {
+      await setMemberVoiceMuted(selectedServerId, userId, muted);
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("member.muteFailed")));
+    }
+  }
+
+  async function handleKickOccupant(userId: string, name: string) {
+    if (!selectedServerId) {
+      return;
+    }
+    if (!window.confirm(t("profile.mod.kick.title", { name }))) {
+      return;
+    }
+    try {
+      await kickMember(selectedServerId, userId);
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("member.removeFailed")));
+    }
+  }
+
+  function canKickOccupant(userId: string): boolean {
+    if (!moderationBits.kick || !user) {
+      return false;
+    }
+    const actor = serverMembers.find((row) => row.id === user.id);
+    const target = serverMembers.find((row) => row.id === userId);
+    if (!target) {
+      return false;
+    }
+    if (!actor) {
+      return (
+        (selectedServer?.role === "owner" ||
+          selectedServer?.role === "admin") &&
+        target.role === "member"
+      );
+    }
+    return canActOnMemberClient(
+      actor,
+      target,
+      serverRoles.map((entry) => ({
+        id: entry.id,
+        position: entry.position,
+        permissions: entry.permissions,
+        systemKey: entry.systemKey,
+      })),
+      user.id,
+      userId,
+    );
   }
 
   // --- conversation calls ---------------------------------------------------
@@ -4815,6 +4934,32 @@ function MainAppContent({
           onMobileClose={() => setMobileNavOpen(false)}
           onSelectChannel={(id) => void selectChannel(id)}
           onJoinVoice={handleJoinVoiceFromList}
+          currentUserId={user?.id ?? null}
+          pendingMoveUserIds={pendingVoiceMoves}
+          peerVolumes={voiceState.peerVolumes}
+          canMoveIn={(channelId) => perms.can(moveMembersBit(), channelId)}
+          canConnectIn={(channelId) =>
+            perms.can(Permission.CONNECT, channelId)
+          }
+          canMuteIn={(channelId) =>
+            perms.can(Permission.MUTE_MEMBERS, channelId)
+          }
+          canKickUser={canKickOccupant}
+          onMoveVoiceOccupant={(userId, channelId) =>
+            void handleMoveVoiceOccupant(userId, channelId)
+          }
+          onDisconnectVoiceOccupant={(userId) =>
+            void handleDisconnectVoiceOccupant(userId)
+          }
+          onServerMuteOccupant={(userId, muted) =>
+            void handleServerMuteOccupant(userId, muted)
+          }
+          onKickOccupant={(userId, name) =>
+            void handleKickOccupant(userId, name)
+          }
+          onSetPeerVolume={(userId, volume) =>
+            voice.setPeerVolume(userId, volume)
+          }
           onCreateChannel={(type, isPrivate) =>
             setChannelPrompt({ mode: "create", type, isPrivate })
           }

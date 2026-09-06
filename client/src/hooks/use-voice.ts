@@ -38,6 +38,7 @@ import {
   sameMicProcessing,
   type MicProcessing,
 } from "@/lib/audio-devices";
+import { moveOccupantSeat } from "@/lib/voice-occupant-dnd";
 import {
   connectLiveKit,
   type LiveKitIdentity,
@@ -150,7 +151,8 @@ export interface VoiceAudioOptions {
   inputVolume?: number;
   /**
    * Join with the microphone already off. Applied before the track is published
-   * so "mute on join" is muted from the very first sample.
+   * so "mute on join" is muted from the very first sample. Ignored when
+   * already in a call: a drag or a second join() is not an unmute.
    */
   startMuted?: boolean;
   inputMode?: VoiceInputMode;
@@ -716,6 +718,15 @@ export function createVoiceController(transport: RealtimeTransport) {
   // The room the user means to be in. Kept across a WS drop so we can auto-
   // rejoin on reconnect instead of ejecting them from the call.
   let intendedChannelId: string | null = null;
+  /** Channel switch in flight: keep "Na call" up while WebRTC rebuilds. */
+  let switchingRooms = false;
+  /**
+   * Mute/deafen the person already chose, captured at the start of a room
+   * switch. A new `welcome` always arrives with `self.muted: false` (the
+   * server resets a seat). That must not unmute them, and it must not win
+   * over this snapshot when we publish the next track.
+   */
+  let preservedSelfVoice: { muted: boolean; deafened: boolean } | null = null;
   /** HMAC from the last `welcome`. Sent on the next join so the server can reattach. */
   let resumeToken: string | null = null;
   /**
@@ -837,7 +848,51 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  function applyPreservedSelfVoice() {
+    if (!preservedSelfVoice) {
+      return;
+    }
+    if (preservedSelfVoice.deafened) {
+      state.isDeafened = true;
+      state.isMuted = true;
+    } else if (preservedSelfVoice.muted) {
+      state.isMuted = true;
+    }
+    applyMuteToPipeline();
+  }
+
+  function overlayLocalSelfVoice(person: VoiceParticipant): VoiceParticipant {
+    const userId = state.self?.userId;
+    if (!userId || person.userId !== userId) {
+      return person;
+    }
+    if (person.muted === state.isMuted && person.deafened === state.isDeafened) {
+      return person;
+    }
+    return {
+      ...person,
+      muted: state.isMuted,
+      deafened: state.isDeafened,
+    };
+  }
+
+  function overlayOccupancy(
+    occupancy: Record<string, VoiceParticipant[]>,
+  ): Record<string, VoiceParticipant[]> {
+    let changed = false;
+    const next: Record<string, VoiceParticipant[]> = {};
+    for (const [id, people] of Object.entries(occupancy)) {
+      const mapped = people.map(overlayLocalSelfVoice);
+      if (mapped.some((person, index) => person !== people[index])) {
+        changed = true;
+      }
+      next[id] = mapped;
+    }
+    return changed ? next : occupancy;
+  }
+
   function redeclareLocalMedia() {
+    applyPreservedSelfVoice();
     transport.sendVoice({
       type: "set-voice-state",
       muted: state.isMuted,
@@ -866,7 +921,10 @@ export function createVoiceController(transport: RealtimeTransport) {
     clearJoinTimeout();
     const generation = ++joinGeneration;
     joinTimeoutId = setTimeout(() => {
-      if (state.status === "joining" && generation === joinGeneration) {
+      if (
+        generation === joinGeneration &&
+        (state.status === "joining" || switchingRooms)
+      ) {
         // A media transport that never came up is a transport failure, and has
         // to look like one: a black-holed SFU host hangs rather than refusing,
         // and that is the *likely* cloud failure, not the exotic one.
@@ -917,6 +975,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     sendLeave();
     holdingMedia = false;
     resumeToken = null;
+    switchingRooms = false;
+    preservedSelfVoice = null;
     joinGeneration++;
     intendedChannelId = null;
     ringOnWelcomeChannelId = null;
@@ -947,15 +1007,17 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   function snapshot(): VoiceState {
+    const self = state.self ? overlayLocalSelfVoice(state.self) : null;
+    const occupancy = overlayOccupancy(state.occupancy);
     return {
       ...state,
       remotePeers: [...state.remotePeers],
       speakingPeerIds: [...state.speakingPeerIds],
       serverMutedPeerIds: [...state.serverMutedPeerIds],
-      occupancy: { ...state.occupancy },
+      occupancy: { ...occupancy },
       peerVolumes: { ...state.peerVolumes },
       screenVolumes: { ...state.screenVolumes },
-      self: state.self ? { ...state.self } : null,
+      self: self ? { ...self } : null,
       incomingCalls: [...state.incomingCalls],
       callDeclinedUserIds: [...state.callDeclinedUserIds],
     };
@@ -1056,9 +1118,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       return;
     }
     try {
+      applyPreservedSelfVoice();
+      applyMuteToPipeline();
       await sfu.publish(pipeline.processedStream);
       sfuPublicationMuted = null;
       await applyPublicationMute();
+      preservedSelfVoice = null;
     } catch (err) {
       if (attempt >= 5) {
         state.error = err instanceof Error ? err.message : String(err);
@@ -1752,12 +1817,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       // No publish for a listener: the token carries no grant for one and
       // LiveKit would refuse it. The mic is published if SPEAK arrives later.
       if (pipeline && state.canSpeak) {
+        applyPreservedSelfVoice();
+        applyMuteToPipeline();
         await sfu.publish(pipeline.processedStream);
         sfuPublicationMuted = null;
-        // Push-to-talk joins muted. Voice activity keeps the publication
-        // live and gates with `track.enabled` so word boundaries do not
-        // signal TrackMuted to the room.
+        // Mute the publication after publish, but the track was already
+        // disabled above so the first packet is not live.
         await applyPublicationMute();
+        preservedSelfVoice = null;
       }
       // Before anything is published, so a camera or a share carried across a
       // reconnect is republished at the chosen quality. Without this a session
@@ -1832,6 +1899,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     // rebuilt at the chosen quality, not at the default one.
     manager.setScreenQuality(videoQuality);
     if (pipeline) {
+      applyPreservedSelfVoice();
+      applyMuteToPipeline();
       manager.setLocalStream(pipeline.processedStream);
     }
     // See the matching comment in startSfuSession: carry an in-progress share
@@ -1894,6 +1963,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
     holdingMedia = false;
     resumeToken = null;
+    switchingRooms = false;
+    preservedSelfVoice = null;
     joinGeneration++;
     intendedChannelId = null;
     ringOnWelcomeChannelId = null;
@@ -1962,9 +2033,10 @@ export function createVoiceController(transport: RealtimeTransport) {
   function handleSignaling(message: VoiceSignalingMessage) {
     switch (message.type) {
       case "voice-roster":
+        applyPreservedSelfVoice();
         state.occupancy = {
           ...state.occupancy,
-          [message.voiceChannelId]: message.participants,
+          [message.voiceChannelId]: message.participants.map(overlayLocalSelfVoice),
         };
         if (message.participants.length === 0) {
           const next = { ...state.occupancy };
@@ -2073,7 +2145,6 @@ export function createVoiceController(transport: RealtimeTransport) {
           clearResumeGrace();
           state.peerId = peerId;
           state.voiceChannelId = channelId;
-          state.self = message.self;
           state.roomTransport = roomTransport;
           state.status = "connected";
           applyPublishRules(
@@ -2081,6 +2152,8 @@ export function createVoiceController(transport: RealtimeTransport) {
             publishFlagsFrom(message).canStream,
             "change",
           );
+          applyPreservedSelfVoice();
+          state.self = overlayLocalSelfVoice(message.self);
           for (const peer of welcomePeers) {
             knownPeerIds.add(peer.peerId);
             identities.set(peer.peerId, toIdentity(peer));
@@ -2094,6 +2167,8 @@ export function createVoiceController(transport: RealtimeTransport) {
           applyScreenAudioStreamIds([message.self, ...welcomePeers]);
           applySharingScreen([message.self, ...welcomePeers]);
           applyServerMutes([message.self, ...welcomePeers]);
+          switchingRooms = false;
+          preservedSelfVoice = null;
           redeclareLocalMedia();
           emit();
           break;
@@ -2101,13 +2176,12 @@ export function createVoiceController(transport: RealtimeTransport) {
 
         holdingMedia = false;
         clearResumeGrace();
-        if (state.status === "connected") {
+        if (state.status === "connected" && !switchingRooms) {
           state.status = "joining";
         }
         knownPeerIds.clear();
         state.peerId = message.peerId;
         state.voiceChannelId = message.voiceChannelId;
-        state.self = message.self;
         state.transportFailure = null;
         // Before any media is built, so a listener's SFU session never tries
         // to publish and a mesh listener's track starts disabled.
@@ -2116,6 +2190,8 @@ export function createVoiceController(transport: RealtimeTransport) {
           publishFlagsFrom(message).canStream,
           "welcome",
         );
+        applyPreservedSelfVoice();
+        state.self = overlayLocalSelfVoice(message.self);
 
         for (const peer of welcomePeers) {
           knownPeerIds.add(peer.peerId);
@@ -2165,6 +2241,11 @@ export function createVoiceController(transport: RealtimeTransport) {
               return;
             }
             state.status = "connected";
+            const wasSwitchingRooms = switchingRooms;
+            switchingRooms = false;
+            if (wasSwitchingRooms) {
+              redeclareLocalMedia();
+            }
             // A conversation call rings only once we are genuinely in it —
             // never for a join that is about to be refused.
             if (ringOnWelcomeChannelId === channelId) {
@@ -2183,11 +2264,17 @@ export function createVoiceController(transport: RealtimeTransport) {
 
         clearJoinTimeout();
         state.status = "connected";
+        const wasSwitchingRooms = switchingRooms;
+        switchingRooms = false;
         if (ringOnWelcomeChannelId === channelId) {
           ringOnWelcomeChannelId = null;
           transport.sendVoice({ type: "call-ring", conversationId: channelId });
         }
         startMeshSession(peerId, welcomePeers);
+        if (wasSwitchingRooms) {
+          redeclareLocalMedia();
+        }
+        preservedSelfVoice = null;
         startSpeakingLoop();
         emit();
         break;
@@ -2424,15 +2511,38 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     async join(voiceChannelId: string, options?: VoiceAudioOptions) {
+      if (
+        intendedChannelId === voiceChannelId &&
+        (switchingRooms || state.voiceChannelId === voiceChannelId) &&
+        state.status !== "idle"
+      ) {
+        return;
+      }
       const fromIdle = state.status === "idle";
       const switching =
-        state.status === "connected" &&
+        state.status !== "idle" &&
         state.voiceChannelId !== null &&
         state.voiceChannelId !== voiceChannelId;
+      if (!fromIdle) {
+        preservedSelfVoice = {
+          muted: state.isMuted,
+          deafened: state.isDeafened,
+        };
+      }
       if (switching) {
         resumeToken = null;
         holdingMedia = false;
         clearResumeGrace();
+        switchingRooms = true;
+        if (state.self) {
+          state.occupancy = overlayOccupancy(
+            moveOccupantSeat(
+              state.occupancy,
+              state.self.userId,
+              voiceChannelId,
+            ).next,
+          );
+        }
       }
       // Rings outrank samples if they overlap; kill them before the click cue.
       stopAllSoundLoops();
@@ -2446,7 +2556,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.errorKind = null;
       state.notice = null;
       state.transportFailure = null;
-      state.status = "joining";
+      // A live call that is only changing rooms stays "connected" so the
+      // status bar never flashes off "Na call" while WebRTC rebuilds.
+      if (!switching) {
+        state.status = "joining";
+      }
       // A channel switch calls join() without leave(), so the previous room's
       // share ids would otherwise leak into the welcome diff and look like
       // newcomers. Empty previous is the locked "join into live shares" rule.
@@ -2466,19 +2580,27 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (ringOnWelcomeChannelId && ringOnWelcomeChannelId !== voiceChannelId) {
         ringOnWelcomeChannelId = null;
       }
-      // Applied before the track exists, so "mute on join" is genuinely muted
-      // from the first sample rather than a moment later.
-      state.isMuted = options?.startMuted ?? state.isMuted;
+      // Fresh join: mute-on-join / crowd mute. Already in a call: never
+      // take startMuted. A second join() (Strict Mode, drop+click) is
+      // not consent to unmute, and the server seat is born unmuted.
+      if (fromIdle) {
+        state.isMuted = options?.startMuted ?? state.isMuted;
+      } else {
+        applyPreservedSelfVoice();
+      }
       // Never inherit a key held from before the join — there is no keyup owed
       // to us for a press that happened while we were not in a call.
-      pushToTalkHeld = false;
-      voiceActivityOpen = false;
-      voiceActivityTracker.clear();
+      if (fromIdle) {
+        pushToTalkHeld = false;
+        voiceActivityOpen = false;
+        voiceActivityTracker.clear();
+      }
       state.inputMode = options?.inputMode ?? state.inputMode;
       if (options?.vadThreshold !== undefined) {
         applyVadThreshold(options.vadThreshold);
       }
       state.isTransmitting = micShouldBeOpen();
+      applyMuteToPipeline();
       emit();
 
       if (options) {
@@ -2492,8 +2614,16 @@ export function createVoiceController(transport: RealtimeTransport) {
       const generation = armJoinTimeout();
 
       try {
-        await whenCueSettled();
+        if (!switching) {
+          await whenCueSettled();
+        }
         if (generation !== joinGeneration) {
+          return;
+        }
+        if (!fromIdle) {
+          applyPreservedSelfVoice();
+          applyMuteToPipeline();
+          sendJoin(voiceChannelId);
           return;
         }
         stopMicPipeline(pipeline);
@@ -2527,6 +2657,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (generation !== joinGeneration) {
           return;
         }
+        if (!fromIdle) {
+          applyPreservedSelfVoice();
+          applyMuteToPipeline();
+          sendJoin(voiceChannelId);
+          return;
+        }
         // LISTEN-ONLY JOIN. A microphone that cannot be opened: none plugged
         // in, permission refused, another app holding it — used to abort the
         // whole join with an error. On 2026-09-05 a streamer sent ~170 people
@@ -2545,6 +2681,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         });
         sendJoin(voiceChannelId);
       }
+    },
+
+    replaceOccupancy(next: Record<string, VoiceParticipant[]>) {
+      state.occupancy = next;
+      emit();
     },
 
     leave() {
@@ -2625,6 +2766,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!pipeline) {
         return;
       }
+      preservedSelfVoice = null;
       // Undeafening is the only way back to an unmuted mic while deafened,
       // there is no way back at all while the room says listen only, and a
       // moderator's mute is not ours to lift either: the server would refuse
@@ -2641,6 +2783,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!pipeline) {
         return;
       }
+      preservedSelfVoice = null;
       // Locked, not toggled: the button is disabled for this, and a shortcut
       // or a desktop menu item that reaches here must get the same answer.
       if (!state.canSpeak) {
@@ -2661,6 +2804,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!pipeline) {
         return;
       }
+      preservedSelfVoice = null;
       state.isDeafened = !state.isDeafened;
       // Deafening also mutes; undeafening restores an open mic, unless the
       // room never allowed one or a moderator has it pinned.
