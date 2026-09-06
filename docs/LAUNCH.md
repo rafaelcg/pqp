@@ -59,14 +59,16 @@ chat fan-out — broadcasts, presence, typing, unread badges and evictions — o
 Postgres `LISTEN/NOTIFY` (`server/src/lib/bus.ts`, `bus-postgres.ts`). Unset,
 every path is exactly what it was. Three things to know before turning it on:
 
-- **Voice is not on the bus and cannot be.** A mesh room's peer registry,
-  roster and size ceiling are per-process, and relaying signaling alone would
-  produce two half-rooms that each believe they are whole — see the block
-  comment above `peers` in `server/src/ws/voice.ts`. **Mesh voice pins the
-  deployment to one instance.** Multi-instance requires LiveKit
-  (`LIVEKIT_*`), where media never touches our relay; what still degrades
-  there is the voice *roster*, i.e. occupancy badges show only your own
-  instance's participants.
+- **Voice rides the bus only behind a second flag, and that flag is not
+  enough yet.** `VOICE_REGISTRY=postgres` (M1 to M3, landed, default off) copies
+  the peer map and the transport pins into Postgres so a roster can be built
+  from any instance. Without it, a mesh room's peer registry, roster and size
+  ceiling are per-process, and relaying signaling alone would produce two
+  half-rooms that each believe they are whole. See the block comment above
+  `peers` in `server/src/ws/voice.ts`. **Mesh voice still pins the deployment to
+  one instance**, and the remaining milestones are in
+  [`plans/MULTI_INSTANCE_VOICE.md`](./plans/MULTI_INSTANCE_VOICE.md). LiveKit
+  rooms are the easy half: media never touches our relay there.
 - **Rate limits stay per-instance.** Per-user WS limits are exact for a
   single-socket user and multiply by the number of instances a user holds
   sockets on; HTTP limits multiply by the replica count outright. The header

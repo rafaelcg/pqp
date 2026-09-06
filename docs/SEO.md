@@ -72,8 +72,10 @@ router); internal links from the footer and from `/vs-discord`.
    (maps, tokens, rulebooks are all *screens*), the queries are evergreen, and
    the current winners are guides that now recommend a broken tool. Shape: a
    guide, not a listicle — how to run a table on pqp (voice channel + screen
-   share + a VTT in another tab), honest about the 5–8 person voice ceiling,
-   which is a *feature* for a table of six.
+   share + a VTT in another tab). Do **not** sell a small-room ceiling: voice
+   holds the whole room now, so a table of six is comfortable rather than
+   constrained, and a claim about a 5–8 person limit is a claim the fact sheet
+   marks false.
 2. **`/chat-de-voz` — "chat de voz para grupos, no navegador"** (target:
    "chat de voz para grupos", "chat de voz online", "voice chat navegador").
    The landing sells the product; this page answers the query — no download,

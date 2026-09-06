@@ -19,14 +19,16 @@ service at [pqp.gg](https://pqp.gg) or self-host an independent copy — your ow
 URL, your own database, your own rules.
 
 **Model:** servers (invite links) → public/private channels → text + voice.
-Roles owner / admin / member. Handles are `name#1234`.
+Roles are permission bits behind a seeded staff ladder (owner, admin, manager,
+moderator, VIP, `@everyone`) plus whatever a server invents, with per-channel
+overwrites. Usernames are `name#1234`; a claimed `@handle` is a public page.
 
 ## What it does
 
 |  |  |
 |---|---|
-| **Voice channels** | Peer-to-peer mesh (5–8 per channel), or a LiveKit SFU for bigger rooms. Push-to-talk, per-peer volume, device pickers. |
-| **Screen sharing** | Two presenters at once on mesh, four on LiveKit. Desktop or iPhone. |
+| **Voice channels** | The server picks the media path per room, at the first join: peer-to-peer for DM calls and small servers, a LiveKit SFU for communities and servers of ten or more, so a crowded room is not capped at a handful. Push-to-talk, per-peer volume, device pickers. |
+| **Screen sharing** | With the machine's audio. Two presenters at once peer-to-peer, four on the SFU. Send from a browser or the desktop app (Android in peer-to-peer rooms); watch from any client, phones included. |
 | **Chat** | Markdown, replies, reactions, pins, edits, typing, unread and mention badges. Link previews, GIF picker. Outgoing webhooks after a human message ([docs](./docs/OUTGOING_WEBHOOKS.md)). |
 | **Search** | Full-text across the server, stemmed for Portuguese *and* English, accent-insensitive. |
 | **DMs and groups** | Direct messages and group DMs up to 10, found by handle. |
@@ -74,14 +76,20 @@ that matter:
 | `S3_*` | R2/MinIO attachments. Off entirely when unset. |
 | `CONTENT_SCAN_PROVIDER` / `OPENAI_API_KEY` | Image safety scanning at claim time. |
 | `CLUSTER_BUS=postgres` | Fans chat out over LISTEN/NOTIFY for multi-instance. Off = exactly today's single-process behaviour. |
+| `VOICE_REGISTRY=postgres` | Puts the voice peer map and transport pins in Postgres so rosters survive a second instance. Off by default; see [docs/plans/MULTI_INSTANCE_VOICE.md](./docs/plans/MULTI_INSTANCE_VOICE.md). |
 
 ## Voice backends
 
-| Mode | Capacity | Notes |
-|---|---|---|
-| Mesh (default) | ~5–8 per channel | P2P; media never touches the server. TURN only across strict NATs. |
-| LiveKit SFU | Dozens+ | Implemented and verified end to end. A room's transport is decided by the server and pinned — no silent mesh/SFU splits. |
-| Cloudflare Realtime | — | Still a stub; falls back to mesh. |
+The server chooses per room, on the first join, and pins the choice for the
+room's lifetime (`server/src/voice/transport-policy.ts`). No client rebuild
+switches it, and there are no silent mesh/SFU splits: a client that cannot use
+the room's transport is refused rather than left out of the call.
+
+| Mode | When it is used | Capacity | Notes |
+|---|---|---|---|
+| Mesh | DM calls, and servers under ten members. Everything, on a deployment with no `LIVEKIT_*` | `MESH_VOICE_LIMIT`, 8 per channel | P2P; media never touches the server. TURN only across strict NATs. |
+| LiveKit SFU | Listed communities of any size, and servers of ten or more | Big rooms, and live on pqp.gg | Implemented and verified end to end. |
+| Cloudflare Realtime | never | n/a | Still a stub; falls back to mesh. |
 
 ## Self-host
 
@@ -100,8 +108,11 @@ linked to pqp.gg.
 - **Desktop:** [latest release](https://github.com/rafaelcg/pqp/releases/latest) —
   macOS signed and notarized with auto-update; Windows/Linux build unsigned
   (SmartScreen will warn). See [docs/DESKTOP.md](./docs/DESKTOP.md).
-- **Mobile:** install the PWA from the browser ([docs/PWA.md](./docs/PWA.md)).
-  A native iOS app lives in [`ios/`](./ios) and is not yet shipped.
+- **Mobile:** native clients in [`ios/`](./ios) (SwiftUI, TestFlight beta at
+  [pqp.gg/beta](https://pqp.gg/beta)) and [`android/`](./android) (Kotlin and
+  Compose, APK beta at [pqp.gg/android](https://pqp.gg/android)). Neither is on
+  a store yet. The PWA still installs from any browser
+  ([docs/PWA.md](./docs/PWA.md)).
 
 ## API
 
@@ -123,16 +134,20 @@ the wire contracts are the Zod schemas in [`packages/shared/`](./packages/shared
 
 ## Known limitations
 
-- **Mesh voice tops out at ~5–8 per channel.** Configure `LIVEKIT_*` to lift it;
-  Cloudflare Realtime remains a stub.
+- **A deployment with no `LIVEKIT_*` tops out at 8 per voice channel**, because
+  every room is then peer-to-peer. Cloudflare Realtime remains a stub.
 - **Single instance unless you opt in.** Chat can go multi-instance with
-  `CLUSTER_BUS=postgres`, but mesh voice pins the deployment to one instance —
-  multi-instance voice requires the SFU. Rate limits stay per-instance either way.
-- **No camera video** in voice channels yet — screen share only.
-- **No push notifications yet** — an open tab raises desktop notifications, a
-  closed phone hears nothing.
-- **No friend system, threads, or AutoMod** — see
-  [docs/DISCORD_GAPS.md](./docs/DISCORD_GAPS.md) for the honest census.
+  `CLUSTER_BUS=postgres` and voice rosters with `VOICE_REGISTRY=postgres`, but
+  the pieces are not yet enough to run two machines. Rate limits stay
+  per-instance either way.
+- **Android has no push server leg.** Web Push and APNs are wired end to end;
+  `server/src/services/push.ts` knows `web` and `apns` only, so a closed
+  Android app hears nothing.
+- **Android has no camera** in either direction, and cannot send a screen share
+  into a large room.
+- **No AutoMod, no forwarding on the phones.** See
+  [docs/DISCORD_GAPS.md](./docs/DISCORD_GAPS.md) for the honest census and
+  [docs/PARITY.md](./docs/PARITY.md) for the client-by-client matrix.
 
 ## Trust & safety
 

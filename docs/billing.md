@@ -6,9 +6,16 @@ Monetization applies to **hosted pqp.gg only**. Self-host remains unlimited open
 
 | Tier | Audience | Features (draft) |
 |---|---|---|
-| **Free** | Small groups | Mesh voice, text channels, limited servers |
-| **Plus** | Power users | More servers/channels, SFU voice, custom domains |
+| **Free** | Small groups | Voice, text channels, limited servers |
+| **Plus** | Power users | More servers/channels, custom domains |
 | **Pro** | Communities | Higher limits, priority support, analytics |
+
+**Superseded, 2026-09-06: SFU voice is not a paid gate and cannot become one.**
+`server/src/voice/transport-policy.ts` routes every listed community and every
+server of ten or more members onto the media server, for free, for everybody.
+The SFU is a cost centre, not a tier lever, and taking it back from the rooms
+that already have it would be a takeaway. Re-price this table before anyone
+builds against it.
 
 ## Implementation path
 

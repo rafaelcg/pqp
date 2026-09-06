@@ -49,7 +49,9 @@ services:
       postgres:
         condition: service_healthy
 
-  # Optional SFU for voice channels above the ~5-8 user mesh limit.
+  # SFU for voice channels. With LIVEKIT_* set, listed communities and servers
+  # of ten or more members are routed here automatically
+  # (server/src/voice/transport-policy.ts); mesh keeps DM calls and small ones.
   #   docker compose --profile livekit up -d
   # Dev credentials only — generate real ones for any public deployment.
   livekit:
