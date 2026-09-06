@@ -99,8 +99,13 @@ export function greetingsEnabled(env = process.env) {
  * punctuation turned into spaces, whitespace collapsed. Repeated letters are
  * kept and handled by the patterns, because "oiii" is a hello and "hello" has a
  * double letter that must survive.
+ *
+ * Exported as `normaliseText` for `pending.js`, which matches its own word
+ * lists against exactly the same shape. One normaliser rather than two is the
+ * point: a rule written against "alguem ai" must not pass or fail depending on
+ * which file is asking.
  */
-function normalise(body) {
+export function normaliseText(body) {
   return String(body ?? "")
     .toLowerCase()
     .normalize("NFD")
@@ -142,7 +147,7 @@ const WEAK_RE = new RegExp(`^(?:${WEAK})(?:\\s+(?:${VOCATIVE}))*$`);
  * is in `test/greetings.test.js`; add the ones it gets wrong there first.
  */
 export function isGreeting(body) {
-  const text = normalise(body);
+  const text = normaliseText(body);
   if (!text) {
     return false;
   }

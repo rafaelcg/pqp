@@ -56,11 +56,32 @@ kill_timeout = 15
   # would disagree about which numbers are allowed.
   SUPPORT_FACTS = "/app/tools/support-bot/facts.md"
 
-  # Only #ajuda. Not #caca-bugs (a bug report should reach a human, not be
+  # #ajuda and #geral. NOT #caca-bugs (a bug report should reach a human, not be
   # triaged by a model), not #papo-reto (a bot in the off-topic channel is
-  # ambient chatter), not #avisos.
-  SUPPORT_CHANNELS = "ajuda"
+  # ambient chatter), not #avisos, not #debug.
+  #
+  # #geral was added on 2026-09-06, on the owner's call, because that is where
+  # the QG actually talks and where the questions the bot exists for were being
+  # asked and missed. It is the same watch as #ajuda: a mention or a reply gets
+  # an answer, everything else is ignored. It is also the channel where the
+  # newcomer hellos already happen, so the bot was in the room either way; what
+  # changes is that it can now be spoken to there.
+  SUPPORT_CHANNELS = "ajuda,geral"
   SUPPORT_SERVER = "QG do pqp"
+
+  # Answering a question nobody answered. On by default; `pending.js` has the
+  # whole design and the defaults, which are what runs unless something below is
+  # set. The switch is here rather than in code so that turning it off is
+  #
+  #   fly secrets set SUPPORT_UNPROMPTED=false -a pqp-support
+  #
+  # at any hour, with no branch, no CI and no image build. Set the number knobs
+  # the same way if it turns out to be too eager or too quiet:
+  # SUPPORT_UNPROMPTED_DELAY_MS (180000), SUPPORT_UNPROMPTED_MAX_AGE_MS
+  # (600000), SUPPORT_UNPROMPTED_MAX_PER_CHANNEL_HOUR (2),
+  # SUPPORT_UNPROMPTED_MAX_TRIES_PER_CHANNEL_HOUR (4),
+  # SUPPORT_UNPROMPTED_BUDGET_RESERVE (30).
+  SUPPORT_UNPROMPTED = "true"
 
   # Who gets @-mentioned when it does not know.
   SUPPORT_OWNER_HANDLE = "rafa"

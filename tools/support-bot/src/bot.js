@@ -3,13 +3,20 @@
  * The QG support bot.
  *
  * Answers product questions in the QG do pqp, from `facts.md` and from nothing
- * else, only when somebody explicitly addresses it, and says it does not know
- * the rest of the time.
+ * else, and says it does not know the rest of the time.
  *
  *   node src/bot.js --ask "tem como aumentar a qualidade da tela?" --canned
  *   node src/bot.js --ask "..."                       one question, no network, live model
+ *   node src/bot.js --ask "..." --unprompted          the same, through the no-mention path
  *   node src/bot.js --watch --canned                  connected, fixture answers
  *   node src/bot.js --watch                           the real thing
+ *
+ * It speaks in three situations and no others: somebody addressed it (a mention
+ * or a reply, `trigger.js`), a newcomer said hello (`greetings.js`), or a
+ * question was put to a watched channel and NOBODY ANSWERED IT for about three
+ * minutes (`pending.js`). The third one is the only thing it does that is not a
+ * direct response to somebody engaging with it, it is fenced by seven
+ * conditions and a confidence gate, and its own file argues the case.
  *
  * ── WHY A SIBLING OF tools/ambient AND NOT A MODE INSIDE IT ─────────────────
  *
@@ -22,9 +29,11 @@
  * is the one outcome worth spending a directory to avoid.
  *
  * The rest follows from that. The ambient runner's core loop is a scheduler
- * that decides when to speak unprompted; this bot must never speak unprompted,
- * so it has no scheduler at all and sharing one would mean maintaining the
- * property "this cadence must never apply to that account" forever. Their
+ * that decides when to speak on a CADENCE, out of nothing; this bot has no
+ * scheduler at all, and even the one thing it says that nobody asked it for
+ * (`pending.js`) is triggered by a specific message from a specific person that
+ * a specific room failed to answer. Sharing a scheduler would mean maintaining
+ * the property "this cadence must never apply to that account" forever. Their
  * defaults are opposites: the cast never discloses and improvises everything,
  * this account always discloses and improvises nothing. They need separate kill
  * switches, because "stop the personas" and "stop support" are different
@@ -60,7 +69,14 @@ import { screenInbound, disclosureLabel } from "../../ambient/src/guardrails.js"
 import { loadFacts } from "./facts.js";
 import { screenTrigger, SKIP } from "./trigger.js";
 import { screenAnswer } from "./screen.js";
-import { FIXED, cannedAnswerFor, fallbackAnswer, parseAnswer } from "./answer.js";
+import {
+  FIXED,
+  cannedAnswerFor,
+  fallbackAnswer,
+  parseAnswer,
+  parseUnpromptedAnswer,
+  CONFIDENT_PREFIX,
+} from "./answer.js";
 import { Budget } from "./budget.js";
 import { generateAnswer, estimateCostUsd, DEFAULT_MODEL } from "./generate.js";
 import { ResilientSocket } from "./socket.js";
@@ -72,6 +88,17 @@ import {
   NEWCOMER_WINDOW_MS,
   DEFAULT_MAX_PER_WINDOW,
 } from "./greetings.js";
+import {
+  PendingQuestions,
+  looksLikeRoomQuestion,
+  screenUnprompted,
+  unpromptedEnabled,
+  DEFAULT_DELAY_MS,
+  DEFAULT_MAX_AGE_MS,
+  DEFAULT_MAX_PER_CHANNEL_HOUR,
+  DEFAULT_MAX_TRIES_PER_CHANNEL_HOUR,
+  DEFAULT_BUDGET_RESERVE,
+} from "./pending.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, "..");
@@ -116,6 +143,8 @@ function parseArgs(argv) {
     watch: argv.includes("--watch"),
     canned: argv.includes("--canned"),
     dryRun: argv.includes("--dry-run"),
+    /** `--ask --unprompted`: run the question through the no-mention path. */
+    askUnprompted: argv.includes("--unprompted"),
     ask: valueOf(argv, "--ask") ?? null,
     facts: valueOf(argv, "--facts") ?? process.env.SUPPORT_FACTS ?? join(ROOT, "facts.md"),
     apiUrl: process.env.PQP_API_URL ?? "http://127.0.0.1:3001",
@@ -153,6 +182,30 @@ function parseArgs(argv) {
        * a member list opens.
        */
       memberPollMs: num(process.env.SUPPORT_MEMBER_POLL_MS, 60_000),
+    },
+    /**
+     * Answering a question the room dropped. See `pending.js` for the whole
+     * design and for why each of these numbers is what it is. They are here so
+     * an operator can find every knob for this behaviour in one place, and
+     * every one of them is an environment variable rather than a constant so
+     * that turning it down, or off, is a `fly secrets set` and not a deploy.
+     */
+    unprompted: {
+      enabled: unpromptedEnabled(process.env),
+      delayMs: num(process.env.SUPPORT_UNPROMPTED_DELAY_MS, DEFAULT_DELAY_MS),
+      maxAgeMs: num(process.env.SUPPORT_UNPROMPTED_MAX_AGE_MS, DEFAULT_MAX_AGE_MS),
+      maxPerChannelPerHour: num(
+        process.env.SUPPORT_UNPROMPTED_MAX_PER_CHANNEL_HOUR,
+        DEFAULT_MAX_PER_CHANNEL_HOUR,
+      ),
+      maxTriesPerChannelPerHour: num(
+        process.env.SUPPORT_UNPROMPTED_MAX_TRIES_PER_CHANNEL_HOUR,
+        DEFAULT_MAX_TRIES_PER_CHANNEL_HOUR,
+      ),
+      budgetReserve: num(
+        process.env.SUPPORT_UNPROMPTED_BUDGET_RESERVE,
+        DEFAULT_BUDGET_RESERVE,
+      ),
     },
     limits: {
       maxPerUserPerHour: num(process.env.SUPPORT_MAX_PER_USER_HOUR, 6),
@@ -199,6 +252,34 @@ function num(value, fallback) {
 function stopped() {
   const own = process.env.SUPPORT_BOT_KILL_SWITCH;
   return killSwitchEngaged() || own === "1" || own === "true";
+}
+
+/**
+ * The last few lines of the channel this message is in.
+ *
+ * Per channel, not per process. It used to be one list, which was correct while
+ * the bot watched exactly one room; watching `#ajuda` and `#geral` at once
+ * makes a single list feed the answer to a question in one room with the
+ * conversation from the other. That is wrong twice over: the context is
+ * misleading, and it widens the injection surface to every room the bot can
+ * see rather than the one the question was asked in.
+ */
+function recentTranscript(runtime, channelId) {
+  const lines = runtime.transcripts?.get(channelId) ?? [];
+  return lines.slice(-runtime.args.limits.transcriptLines);
+}
+
+/** Append to a channel's transcript, keeping it bounded. */
+function rememberLine(runtime, message) {
+  const lines = runtime.transcripts.get(message.channelId) ?? [];
+  lines.push({
+    authorName: message.authorName,
+    body: String(message.body ?? "").slice(0, 300),
+  });
+  if (lines.length > 40) {
+    lines.splice(0, lines.length - 40);
+  }
+  runtime.transcripts.set(message.channelId, lines);
 }
 
 /**
@@ -271,7 +352,7 @@ export async function decideReply(message, runtime) {
     generated = await generateAnswer({
       facts,
       question: trigger.question,
-      transcript: runtime.transcript.slice(-args.limits.transcriptLines),
+      transcript: recentTranscript(runtime, message.channelId),
       authorName: message.authorName,
       maxChars: args.limits.maxAnswerChars,
       canned: args.canned ? runtime.cannedAnswer : null,
@@ -321,6 +402,152 @@ export async function decideReply(message, runtime) {
   }
 
   return { post: parsed.body, reason: "answered" };
+}
+
+/**
+ * Everything between "the room dropped this question" and a sentence, or
+ * silence.
+ *
+ * The counterpart of `decideReply`, and the differences between the two are the
+ * whole feature. `pending.js` has already decided that this question was put to
+ * the room, that nobody answered it, and that the delay has elapsed; this
+ * decides whether there is anything worth saying about it.
+ *
+ * ── EVERY FAILURE IS SILENCE ────────────────────────────────────────────────
+ *
+ * There is no fallback sentence anywhere below, and that is the single most
+ * important line in this function. `fallbackAnswer` exists because somebody who
+ * typed `@manual_bot` is owed an answer, and "essa eu não sei responder,
+ * @rafa consegue te dizer" is one. Nobody typed anything here. A bot that walks
+ * into a quiet channel to announce that it cannot help has added a message and
+ * no information, which is precisely the noise this feature is one bad decision
+ * away from becoming. It also means no escalation ping: the questions that
+ * reach Rafael are still the ones somebody asked the bot.
+ *
+ * Returns `{ post }` with the text to send, or `{ post: null, reason }`.
+ */
+export async function decideUnprompted(candidate, runtime) {
+  const { facts, args, rateCap, budget, log, seen } = runtime;
+  const now = Date.now();
+
+  // Redelivery across a reconnect. Cheapest check, and it runs first for the
+  // same reason it does on the mention path: answering one message twice reads
+  // as a bug in the product rather than in the bot. The ledger is shared with
+  // `decideReply`, so a question cannot be picked up by both paths either.
+  if (seen?.has(candidate.id)) {
+    return { post: null, reason: SKIP.DUPLICATE };
+  }
+
+  const gate = screenUnprompted(candidate, {
+    enabled: args.unprompted.enabled,
+    allowedChannelIds: runtime.allowedChannelIds,
+    rateCap,
+    now,
+    limits: args.limits,
+    unprompted: args.unprompted,
+    dailyCallsRemaining: budget.remaining(),
+    lastAnswerAt: runtime.lastAnswerAt,
+  });
+  if (!gate.answer) {
+    log("unprompted.skip", {
+      reason: gate.reason,
+      channelId: candidate.channelId,
+      question: candidate.body,
+    });
+    return { post: null, reason: gate.reason };
+  }
+
+  seen.add(candidate.id);
+
+  const inbound = screenInbound(candidate.body, { disclosure: DISCLOSURE });
+  if (!inbound.reply || inbound.disclose) {
+    // Hostility, advice-seeking and off-platform are refused exactly as they
+    // are on the mention path. The identity probe is the one that differs: a
+    // `disclose` verdict means the bot HAS a fixed sentence for it, and posting
+    // that sentence into a room where nobody was talking to the bot is the bot
+    // introducing itself, which is the one thing this account must never do.
+    // "é um bot?" typed at it still gets the plain answer, every time.
+    const reason = inbound.disclose ? "identity-probe" : inbound.reason;
+    log("unprompted.silent", { reason, author: candidate.authorName });
+    return { post: null, reason };
+  }
+
+  // The fixed E2E sentence. Zero tokens, zero chance of a wrong word, written
+  // by a person: the one answer that is as safe to volunteer as it is to give
+  // when asked. It does not spend a model attempt because it does not make one.
+  const canned = cannedAnswerFor(candidate.body);
+  if (canned) {
+    log("unprompted.answered", { reason: "canned", author: candidate.authorName });
+    return { post: canned, reason: "canned" };
+  }
+
+  // An attempt is an attempt whether or not it produces a sentence, and the
+  // silent outcome is the common one by design. Recorded BEFORE the call so a
+  // failing upstream cannot be retried once per loop tick.
+  rateCap.record(`unprompted-try:${candidate.channelId}`, now);
+
+  let generated;
+  try {
+    generated = await generateAnswer({
+      facts,
+      question: candidate.body,
+      transcript: recentTranscript(runtime, candidate.channelId),
+      authorName: candidate.authorName,
+      maxChars: args.limits.maxAnswerChars,
+      unprompted: true,
+      canned: args.canned ? runtime.cannedUnpromptedAnswer : null,
+    });
+  } catch (error) {
+    log("generate.failed", { error: String(error.message), path: "unprompted" });
+    return { post: null, reason: "generate-failed" };
+  }
+
+  const cost = estimateCostUsd(generated.usage, generated.model);
+  if (generated.usage) {
+    budget.record(cost);
+  }
+
+  // THE CONFIDENCE GATE. `parseUnpromptedAnswer` publishes nothing that did not
+  // come back asserting the answer is in the fact file. Every other shape,
+  // including the ordinary `NAO_SEI`, an unmarked answer and a hedge, is
+  // silence and is logged with the shape that produced it, because "what did it
+  // nearly say" is the only way to tell a heuristic that is too loose from one
+  // that is too tight.
+  const parsed = parseUnpromptedAnswer(generated.text);
+  if (!parsed.known) {
+    log("unprompted.silent", {
+      reason: parsed.reason,
+      author: candidate.authorName,
+      question: candidate.body,
+      costUsd: Number(cost.toFixed(5)),
+    });
+    return { post: null, reason: `unconfident:${parsed.reason}` };
+  }
+
+  const verdict = screenAnswer(parsed.body, {
+    facts,
+    ownerHandle: args.ownerHandle,
+    maxLength: args.limits.maxAnswerChars,
+  });
+  if (!verdict.ok) {
+    log("unprompted.silent", {
+      reason: `screen:${verdict.reason}`,
+      detail: verdict.detail,
+      body: parsed.body,
+    });
+    return { post: null, reason: `rejected:${verdict.reason}` };
+  }
+
+  log("generate", {
+    model: generated.model,
+    path: "unprompted",
+    inputTokens: generated.usage?.input_tokens,
+    outputTokens: generated.usage?.output_tokens,
+    costUsd: Number(cost.toFixed(5)),
+    budget: budget.snapshot(),
+  });
+
+  return { post: parsed.body, reason: "unprompted", replyToId: candidate.id };
 }
 
 /**
@@ -418,7 +645,121 @@ export async function answerHello({ message, socket }, { greeter, runtime, args,
     return { post: null, reason: "dropped" };
   }
   greeter.recordSent(message, Date.now());
+  // A hello is a message the room sees from the bot, so it counts for the "no
+  // two bot messages in a row" rule exactly like an answer does.
+  runtime.pending?.recordPost(message.channelId);
   log("hello", { author: message.authorName, body: message.body, reply: result.post });
+  return result;
+}
+
+/**
+ * One pass over the questions the room did not answer.
+ *
+ * Called from the idle branch of the main loop, so it is what the bot does with
+ * a moment in which nobody has asked it anything. Everything interesting is in
+ * `pending.due` (is there a question, is it old enough, is it too old, did the
+ * bot just speak) and `decideUnprompted` (is there anything to say); this is
+ * the I/O between them, and the two things it does that neither of those can:
+ *
+ *   1. it posts as a REPLY to the original message, always. An unprompted line
+ *      that lands loose in the channel three minutes after the question reads
+ *      as an announcement. Threaded under the question it reads as an answer,
+ *      and anybody scrolling past can see what it is answering.
+ *   2. it tells the pending store that the bot has now spoken in that channel,
+ *      which is what stops a second unprompted line following the first.
+ *
+ * Exported so `test/pending.test.js` can drive it with a fake socket.
+ */
+export async function sweepUnanswered({ runtime, sockets, args, log, stopped }) {
+  const pending = runtime.pending;
+  if (!pending || !args.unprompted.enabled) {
+    return { post: null, reason: "unprompted-disabled" };
+  }
+
+  const candidate = pending.due(Date.now(), (dropped) => {
+    // Stale and awaiting-human drops are the two ways this feature declines to
+    // speak for a structural reason rather than a content one, and both are
+    // rare enough to be worth a line each.
+    log("unprompted.dropped", {
+      reason: dropped.reason,
+      ageS: Math.round(dropped.ageMs / 1000),
+      author: dropped.authorName,
+      question: dropped.body,
+    });
+  });
+  if (!candidate) {
+    return { post: null, reason: "none-due" };
+  }
+
+  const socket = sockets.get(candidate.channelId);
+  if (!socket) {
+    return { post: null, reason: "no-socket" };
+  }
+
+  // NO TYPING INDICATOR HERE, and it is deliberate rather than an omission.
+  // `typingWhile` is right on the mention path: somebody is waiting for an
+  // answer and an honest progress indicator is what they want. On this path
+  // silence is the designed common outcome, so a typing indicator would mostly
+  // be "manual [bot] está digitando" in a quiet room followed by nothing, which
+  // is a message with no content. It is also itself an unprompted signal from
+  // an account nobody called. The answer just arrives, threaded under the
+  // question, after the same latency floor everything else waits out.
+  let result;
+  try {
+    result = await decideUnprompted(candidate, runtime);
+  } catch (error) {
+    log("handler.failed", {
+      path: "unprompted",
+      error: String(error.stack ?? error.message),
+    });
+    return { post: null, reason: "handler-failed" };
+  }
+
+  if (!result.post) {
+    return result;
+  }
+
+  if (stopped()) {
+    log("bot.halted", { reason: "kill-switch", dropped: result.reason });
+    return { post: null, reason: "kill-switch" };
+  }
+
+  if (args.dryRun) {
+    console.log(`\n[unprompted] ${candidate.authorName}: ${candidate.body}`);
+    console.log(`  -> ${result.post}`);
+    return result;
+  }
+
+  await sleep(MIN_LATENCY_MS);
+  try {
+    socket.reply(result.post, candidate.id);
+  } catch (error) {
+    // The socket dropped between deciding and posting. Nothing is retried: by
+    // the time it is back the question is older still, and the whole point of
+    // the staleness rule is that a late answer is worse than none.
+    log("unprompted.dropped", {
+      reason: "socket-down",
+      error: String(error.message),
+      author: candidate.authorName,
+    });
+    return { post: null, reason: "dropped" };
+  }
+
+  const now = Date.now();
+  runtime.lastAnswerAt = now;
+  // The shared ledger. An unprompted answer spends the same per-user and
+  // per-channel hourly budget as one somebody asked for, so this feature cannot
+  // raise the total number of messages the account posts in an hour.
+  runtime.rateCap.record(`user:${candidate.authorId}`, now);
+  runtime.rateCap.record(`channel:${candidate.channelId}`, now);
+  runtime.rateCap.record(`unprompted:${candidate.channelId}`, now);
+  pending.recordPost(candidate.channelId);
+  log("unprompted.answered", {
+    author: candidate.authorName,
+    question: candidate.body,
+    answer: result.post,
+    waitedS: Math.round((now - candidate.askedAt) / 1000),
+  });
   return result;
 }
 
@@ -576,7 +917,8 @@ async function main() {
       ...args.budget,
     }),
     seen: new Set(),
-    transcript: [],
+    /** channelId -> the last 40 lines of that channel. See `recentTranscript`. */
+    transcripts: new Map(),
     ignoreUserIds: new Set(
       (process.env.SUPPORT_IGNORE_USER_IDS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
     ),
@@ -606,6 +948,19 @@ async function main() {
             ? "a captura é 1080p30 e não tem ajuste manual de qualidade. quanto menos gente assistindo, mais nítido fica."
             : "NAO_SEI",
   };
+  /**
+   * The same fixture, in the shape the unprompted parser expects.
+   *
+   * Wrapping rather than a second table, so `--canned` cannot drift into
+   * demonstrating different knowledge on the two paths. It DOES have to carry
+   * the confidence prefix: a fixture that skipped it would make every canned
+   * unprompted run silent, which would hide the whole feature behind the one
+   * flag people develop with.
+   */
+  runtime.cannedUnpromptedAnswer = (question) => {
+    const text = runtime.cannedAnswer(question);
+    return text === "NAO_SEI" ? text : `${CONFIDENT_PREFIX}: ${text}`;
+  };
   runtime.escalate = makeEscalator(runtime);
 
   // ── `--ask`: the whole answering path, with no socket and no channel.
@@ -616,14 +971,28 @@ async function main() {
   // fifty real questions in a second and without a running server.
   if (args.ask) {
     runtime.bot = { userId: "bot", username: "manual_bot" };
+    runtime.allowedChannelIds = new Set(["ask"]);
+    runtime.pending = new PendingQuestions({ botUserId: "bot" });
     const message = {
       id: "ask",
       channelId: "ask",
       authorId: "asker",
       authorName: "você",
-      body: `@manual_bot ${args.ask}`,
+      // `--unprompted` asks the question the way the room would: no mention,
+      // nobody having answered it. It is how the confidence gate and the
+      // room-question heuristic are developed, and like `--ask` it needs no
+      // socket, no channel and no server.
+      body: args.askUnprompted ? args.ask : `@manual_bot ${args.ask}`,
     };
-    const result = await decideReply(message, runtime);
+    const heuristic = looksLikeRoomQuestion(message);
+    const result = args.askUnprompted
+      ? heuristic.ok
+        ? await decideUnprompted(
+            { ...message, askedAt: Date.now(), body: message.body },
+            runtime,
+          )
+        : { post: null, reason: `not-a-room-question:${heuristic.reason}` }
+      : await decideReply(message, runtime);
     console.log(`\n> ${args.ask}\n`);
     console.log(result.post ? result.post : `(silêncio: ${result.reason})`);
     console.log(`\n[${result.reason}] ${JSON.stringify(runtime.budget.snapshot())}`);
@@ -652,11 +1021,23 @@ async function main() {
   runtime.bot = bot;
   runtime.allowedChannelIds = new Set(channels.map((c) => c.id));
 
+  // The questions the room has not answered. In memory, so a redeploy starts
+  // with none and the bot never turns up under an hour-old message. See the
+  // header of `pending.js`.
+  runtime.pending = new PendingQuestions({
+    enabled: args.unprompted.enabled,
+    botUserId: bot.userId,
+    ignoreUserIds: runtime.ignoreUserIds,
+    delayMs: args.unprompted.delayMs,
+    maxAgeMs: args.unprompted.maxAgeMs,
+  });
+
   log("bot.start", {
     model: args.canned ? "canned" : DEFAULT_MODEL,
     budget: runtime.budget.snapshot(),
     limits: args.limits,
     ownerHandle: args.ownerHandle,
+    unprompted: args.unprompted,
   });
 
   // One socket per channel. `ResilientSocket` pins itself to the channel it
@@ -683,12 +1064,18 @@ async function main() {
       // Every message feeds the transcript, including the bot's own: an answer
       // is context for the follow-up question. Only non-bot messages become
       // candidates to answer.
-      runtime.transcript.push({
-        authorName: message.authorName,
-        body: String(message.body ?? "").slice(0, 300),
-      });
-      if (runtime.transcript.length > 40) {
-        runtime.transcript.splice(0, runtime.transcript.length - 40);
+      rememberLine(runtime, message);
+      // And every message, including the bot's own, is offered to the pending
+      // store, which is how it learns both "somebody asked something nobody
+      // answered" and "the newest thing in this room is me". It decides what
+      // each message means; this only has to show it all of them.
+      const noted = runtime.pending.observe(message, Date.now());
+      if (noted.tracked) {
+        log("unprompted.tracked", {
+          channel: `#${channel.name}`,
+          author: message.authorName,
+          question: message.body,
+        });
       }
       if (message.authorId !== bot.userId) {
         queue.push({ message, socket });
@@ -797,6 +1184,11 @@ async function main() {
 
     const next = queue.shift();
     if (!next) {
+      // The unprompted sweep runs LAST, only when there is nothing anybody
+      // asked for waiting. That ordering is the priority statement: a question
+      // somebody typed the bot's name into always goes first, and the answer to
+      // a question the room dropped is what the bot does with an idle moment.
+      await sweepUnanswered({ runtime, sockets, args, log, stopped });
       await sleep(400);
       continue;
     }
@@ -853,6 +1245,7 @@ async function main() {
     runtime.lastAnswerAt = Date.now();
     runtime.rateCap.record(`user:${message.authorId}`, runtime.lastAnswerAt);
     runtime.rateCap.record(`channel:${message.channelId}`, runtime.lastAnswerAt);
+    runtime.pending.recordPost(message.channelId);
     log("answered", {
       reason: result.reason,
       author: message.authorName,
