@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { validateChannelIconInput } from "./channel-meta-dialog";
+import {
+  VOICE_ROOM_SIZE_OPTIONS,
+  fromVoiceRoomSizeOption,
+  showsVoiceRoomSize,
+  toVoiceRoomSizeOption,
+  validateChannelIconInput,
+} from "./channel-meta-dialog";
 
 describe("validateChannelIconInput", () => {
   it("accepts an empty value — clearing the icon", () => {
@@ -40,5 +46,36 @@ describe("validateChannelIconInput", () => {
     expect(validateChannelIconInput("https://")).toBe(
       "channel.meta.image.error.invalid",
     );
+  });
+});
+
+describe("voice room size", () => {
+  // The control only exists where there is a room to size. A text channel has
+  // no voice room, and a DM call is always small (the server pins it to mesh),
+  // so offering the select there would promise a choice that changes nothing.
+  it("shows only for a server voice channel", () => {
+    expect(showsVoiceRoomSize({ kind: "server", type: "voice" })).toBe(true);
+    expect(showsVoiceRoomSize({ kind: "server", type: "text" })).toBe(false);
+    expect(showsVoiceRoomSize({ kind: "dm", type: "voice" })).toBe(false);
+    expect(showsVoiceRoomSize(null)).toBe(false);
+  });
+
+  // A <select> only speaks strings, so "auto" stands in for the wire's null.
+  // Saving must send an explicit null back (absent would mean "not changing"),
+  // otherwise an owner could never return a channel to automatic.
+  it("round-trips null as automatic and the two transports as themselves", () => {
+    expect(toVoiceRoomSizeOption(null)).toBe("auto");
+    expect(toVoiceRoomSizeOption(undefined)).toBe("auto");
+    expect(toVoiceRoomSizeOption("mesh")).toBe("mesh");
+    expect(toVoiceRoomSizeOption("livekit")).toBe("livekit");
+
+    expect(fromVoiceRoomSizeOption("auto")).toBeNull();
+    expect(fromVoiceRoomSizeOption("mesh")).toBe("mesh");
+    expect(fromVoiceRoomSizeOption("livekit")).toBe("livekit");
+    for (const option of VOICE_ROOM_SIZE_OPTIONS) {
+      expect(toVoiceRoomSizeOption(fromVoiceRoomSizeOption(option))).toBe(
+        option,
+      );
+    }
   });
 });

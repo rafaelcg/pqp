@@ -190,6 +190,8 @@ export interface DbChannel {
   image_url: string | null;
   parent_id: string | null;
   slowmode_seconds: number;
+  /** NULL means automatic; see voice/transport-policy.ts. */
+  voice_transport: "mesh" | "livekit" | null;
 }
 
 export interface DbMessage {

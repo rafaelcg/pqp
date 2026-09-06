@@ -2,6 +2,7 @@ import { useEffect, useId, useMemo, useState, type FormEvent, type ReactNode } f
 import {
   SLOWMODE_SECONDS_PRESETS,
   type Channel,
+  type VoiceRoomTransport,
 } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
@@ -30,6 +31,37 @@ function slowModeOptionKey(seconds: number): MessageKey {
 }
 
 const CHANNEL_ICON_PRESETS = ["📡", "💬", "🔊", "🎮", "☕", "🛠️", "🎵", "📌"];
+
+/**
+ * The voice room size control, as the `<select>` sees it. The wire value is
+ * `null | "mesh" | "livekit"`; a `<select>` only speaks strings, so "auto" is
+ * the form's spelling of null. Exported for the test, with `showsVoiceRoomSize`.
+ */
+export const VOICE_ROOM_SIZE_OPTIONS = ["auto", "mesh", "livekit"] as const;
+export type VoiceRoomSizeOption = (typeof VOICE_ROOM_SIZE_OPTIONS)[number];
+
+const VOICE_ROOM_SIZE_KEYS: Record<VoiceRoomSizeOption, MessageKey> = {
+  auto: "channelMeta.voiceRoomSize.auto",
+  mesh: "channelMeta.voiceRoomSize.small",
+  livekit: "channelMeta.voiceRoomSize.large",
+};
+
+export function toVoiceRoomSizeOption(
+  transport: VoiceRoomTransport | null | undefined,
+): VoiceRoomSizeOption {
+  return transport ?? "auto";
+}
+
+export function fromVoiceRoomSizeOption(
+  option: VoiceRoomSizeOption,
+): VoiceRoomTransport | null {
+  return option === "auto" ? null : option;
+}
+
+/** Only a server voice channel has a room to size; conversations are always small. */
+export function showsVoiceRoomSize(channel: Pick<Channel, "kind" | "type"> | null): boolean {
+  return channel?.kind === "server" && channel.type === "voice";
+}
 
 const fieldClass =
   "h-11 rounded-xl border-ink-4/70 bg-ink text-[15px] focus-visible:ring-signal/40";
@@ -106,6 +138,7 @@ interface ChannelMetaDialogProps {
     topic: string | null;
     imageUrl: string | null;
     slowmodeSeconds?: number;
+    voiceTransport?: VoiceRoomTransport | null;
   }) => Promise<void> | void;
 }
 
@@ -119,11 +152,15 @@ export function ChannelMetaDialog({
   const [topic, setTopic] = useState("");
   const [imageUrl, setImageUrl] = useState("");
   const [slowmodeSeconds, setSlowmodeSeconds] = useState(0);
+  const [voiceRoomSize, setVoiceRoomSize] =
+    useState<VoiceRoomSizeOption>("auto");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const formId = useId();
   const showSlowMode = channel?.kind === "server" && channel.type === "text";
+  const showVoiceRoomSize = showsVoiceRoomSize(channel);
   const slowModeHintId = `${formId}-slow-mode-hint`;
+  const voiceRoomSizeHintId = `${formId}-voice-room-size-hint`;
   const topicHintId = `${formId}-topic-hint`;
   const iconHintId = `${formId}-icon-hint`;
 
@@ -143,6 +180,7 @@ export function ChannelMetaDialog({
       setTopic(channel.topic ?? "");
       setImageUrl(channel.imageUrl ?? "");
       setSlowmodeSeconds(channel.slowmodeSeconds ?? 0);
+      setVoiceRoomSize(toVoiceRoomSizeOption(channel.voiceTransport));
       setError(null);
     }
   }, [open, channel]);
@@ -161,6 +199,9 @@ export function ChannelMetaDialog({
         topic: topic.trim() || null,
         imageUrl: imageUrl.trim() || null,
         ...(showSlowMode ? { slowmodeSeconds } : {}),
+        ...(showVoiceRoomSize
+          ? { voiceTransport: fromVoiceRoomSizeOption(voiceRoomSize) }
+          : {}),
       });
       onClose();
     } catch (err) {
@@ -250,6 +291,33 @@ export function ChannelMetaDialog({
               {slowModeOptions.map((seconds) => (
                 <option key={seconds} value={seconds}>
                   {t(slowModeOptionKey(seconds), { seconds })}
+                </option>
+              ))}
+            </select>
+          </SettingsGroup>
+        )}
+
+        {showVoiceRoomSize && (
+          <SettingsGroup
+            title={t("channelMeta.voiceRoomSize")}
+            hint={t("channelMeta.voiceRoomSize.hint")}
+            hintId={voiceRoomSizeHintId}
+          >
+            <select
+              value={voiceRoomSize}
+              aria-label={t("channelMeta.voiceRoomSize")}
+              aria-describedby={voiceRoomSizeHintId}
+              className={cn(
+                "w-full border px-3 text-paper outline-none focus-visible:ring-2",
+                fieldClass,
+              )}
+              onChange={(e) =>
+                setVoiceRoomSize(e.target.value as VoiceRoomSizeOption)
+              }
+            >
+              {VOICE_ROOM_SIZE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {t(VOICE_ROOM_SIZE_KEYS[option])}
                 </option>
               ))}
             </select>

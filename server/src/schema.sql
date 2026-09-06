@@ -1726,6 +1726,16 @@ EXCEPTION
   WHEN others THEN NULL;
 END $$;
 
+-- Per-channel voice transport override. NULL is "automatic": the server picks
+-- mesh for a small server (fewer than 10 members) and the SFU for a large one
+-- or a listed community (see voice/transport-policy.ts). 'livekit' forces the
+-- SFU regardless of member count (a streamer's server with five members and a
+-- public stream), 'mesh' forces peer-to-peer. Without LIVEKIT_* configured the
+-- value is kept but every room stays mesh. Read once, when a room's first peer
+-- joins; a live call never changes transport.
+ALTER TABLE channels ADD COLUMN IF NOT EXISTS voice_transport TEXT
+  CHECK (voice_transport IN ('mesh', 'livekit'));
+
 -- There is deliberately NO last_activity_at column and NO archival sweeper.
 -- "Archived" is computed at read time from the thread's newest message (an
 -- index-only lookup on idx_messages_channel_created), so a thread un-archives

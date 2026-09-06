@@ -45,13 +45,45 @@ vi.mock("../services/sanctions.js", () => ({
   timeoutMessage: () => "",
 }));
 
+// A channel with a server behind it runs the CONNECT check, which reads
+// Postgres. Everyone here is allowed in; access is proved elsewhere.
+vi.mock("../services/permissions.js", () => ({
+  computeMemberPermissions: async () => (1n << 64n) - 1n,
+}));
+
 vi.mock("../services/dms.js", () => ({
   isDmSendBlocked: async () => false,
 }));
 
+/**
+ * Rows the transport policy reads. A channel absent from `channels` is a plain
+ * server voice channel with no server row behind it, which is what every test
+ * that predates the policy was written against: it resolves to the configured
+ * default, so those tests describe the deployment ceiling unchanged.
+ */
+const rows = vi.hoisted(() => ({
+  channels: new Map<
+    string,
+    {
+      kind: string;
+      type: string;
+      server_id?: string;
+      voice_transport?: "mesh" | "livekit" | null;
+    }
+  >(),
+  servers: new Map<string, { isCommunity: boolean; memberCount: number }>(),
+  /** How many times the policy went to the database for a server. */
+  profileReads: 0,
+}));
+
 vi.mock("../services/servers.js", () => ({
-  getChannel: async () => ({ kind: "server", type: "voice" }),
+  getChannel: async (channelId: string) =>
+    rows.channels.get(channelId) ?? { kind: "server", type: "voice" },
   getChannelAudience: async () => null,
+  getServerVoiceProfile: async (serverId: string) => {
+    rows.profileReads += 1;
+    return rows.servers.get(serverId) ?? null;
+  },
 }));
 
 vi.mock("../voice/admin.js", () => ({
@@ -148,6 +180,201 @@ describe("voice room transport", () => {
     resetVoiceRoomTransports();
     backend.configured = "mesh";
     channel = randomUUID();
+    rows.channels.clear();
+    rows.servers.clear();
+    rows.profileReads = 0;
+  });
+
+  /**
+   * THE POLICY. LiveKit Cloud bills participant-minutes, and a call between
+   * three friends gains nothing from it, so with the SFU configured a room
+   * still opens on mesh unless it can outgrow the mesh: a server of ten or
+   * more, a listed community, or a channel the owner pinned to the SFU.
+   */
+  describe("which transport a room opens on (SFU configured)", () => {
+    let serverId: string;
+
+    /** A voice channel in a server of `memberCount` members. */
+    function serverChannel(
+      memberCount: number,
+      extra: { isCommunity?: boolean; override?: "mesh" | "livekit" } = {},
+    ): string {
+      serverId = randomUUID();
+      rows.servers.set(serverId, {
+        isCommunity: extra.isCommunity ?? false,
+        memberCount,
+      });
+      rows.channels.set(channel, {
+        kind: "server",
+        type: "voice",
+        server_id: serverId,
+        voice_transport: extra.override ?? null,
+      });
+      return channel;
+    }
+
+    beforeEach(() => {
+      backend.configured = "livekit";
+    });
+
+    it("opens a DM call on mesh", async () => {
+      rows.channels.set(channel, { kind: "dm", type: "text" });
+      const rec = track(
+        await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+      );
+
+      expect(frame(rec, "welcome")?.transport).toBe("mesh");
+      // Nothing to look up for a conversation.
+      expect(rows.profileReads).toBe(0);
+    });
+
+    it("opens a voice channel in a nine-member server on mesh", async () => {
+      serverChannel(9);
+      const rec = track(
+        await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+      );
+
+      expect(frame(rec, "welcome")?.transport).toBe("mesh");
+      expect(getRoomTransport(channel)).toBe("mesh");
+    });
+
+    it("admits a mesh-only native client to a small server's room", async () => {
+      serverChannel(4);
+      const phone = track(await join(recorder(), "u1", channel, ["mesh"]));
+
+      expect(frame(phone, "welcome")?.transport).toBe("mesh");
+      expect(typesOf(phone)).not.toContain("voice-transport-unsupported");
+    });
+
+    it("opens a voice channel in a ten-member server on the SFU", async () => {
+      serverChannel(10);
+      const rec = track(
+        await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+      );
+
+      expect(frame(rec, "welcome")?.transport).toBe("livekit");
+    });
+
+    it("still refuses a mesh-only client from a large server's room", async () => {
+      // No silent fallback: the room is an SFU room, and a client that cannot
+      // run it is told so, exactly as before the policy.
+      serverChannel(40);
+      const phone = track(await join(recorder(), "u1", channel, ["mesh"]));
+
+      expect(frame(phone, "voice-transport-unsupported")).toMatchObject({
+        transport: "livekit",
+      });
+      expect(peerIdOf(phone)).toBeNull();
+    });
+
+    it("opens a three-member listed community on the SFU", async () => {
+      serverChannel(3, { isCommunity: true });
+      const rec = track(
+        await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+      );
+
+      expect(frame(rec, "welcome")?.transport).toBe("livekit");
+    });
+
+    it("lets the channel override force the SFU on a small server", async () => {
+      serverChannel(5, { override: "livekit" });
+      const rec = track(
+        await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+      );
+
+      expect(frame(rec, "welcome")?.transport).toBe("livekit");
+      // The override settles it without reading the server at all.
+      expect(rows.profileReads).toBe(0);
+    });
+
+    it("lets the channel override force mesh on a large community", async () => {
+      serverChannel(500, { isCommunity: true, override: "mesh" });
+      const rec = track(
+        await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+      );
+
+      expect(frame(rec, "welcome")?.transport).toBe("mesh");
+    });
+
+    it("keeps a small server's room on mesh at the mesh ceiling, with the usual refusal", async () => {
+      serverChannel(9);
+      for (let i = 0; i < MESH_VOICE_LIMIT; i++) {
+        track(await join(recorder(), `u${i}`, channel, ["mesh", "livekit"]));
+      }
+      const extra = track(
+        await join(recorder(), "extra", channel, ["mesh", "livekit"]),
+      );
+
+      expect(frame(extra, "voice-room-full")).toMatchObject({
+        limit: MESH_VOICE_LIMIT,
+      });
+      expect(getRoomTransport(channel)).toBe("mesh");
+    });
+
+    it("decides once per pin: later joins do not re-read, and a live room never flips", async () => {
+      serverChannel(9);
+      track(await join(recorder(), "u1", channel, ["mesh", "livekit"]));
+      expect(rows.profileReads).toBe(1);
+
+      // The server crosses the threshold mid-call.
+      rows.servers.set(serverId, { isCommunity: false, memberCount: 10 });
+      const second = track(
+        await join(recorder(), "u2", channel, ["mesh", "livekit"]),
+      );
+
+      expect(frame(second, "welcome")?.transport).toBe("mesh");
+      expect(rows.profileReads).toBe(1);
+    });
+
+    it("re-decides for the next call once the room empties", async () => {
+      serverChannel(9);
+      const first = track(
+        await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+      );
+      expect(frame(first, "welcome")?.transport).toBe("mesh");
+
+      rows.servers.set(serverId, { isCommunity: false, memberCount: 10 });
+      await handleVoiceMessage(
+        { socket: first.socket, user: asUser("u1") },
+        { type: "leave-voice-room" },
+      );
+
+      const next = track(
+        await join(recorder(), "u2", channel, ["mesh", "livekit"]),
+      );
+      expect(frame(next, "welcome")?.transport).toBe("livekit");
+      expect(rows.profileReads).toBe(2);
+    });
+
+    it("logs one transportPinned line per pin, with the reason", async () => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        serverChannel(9);
+        track(await join(recorder(), "u1", channel, ["mesh", "livekit"]));
+        track(await join(recorder(), "u2", channel, ["mesh", "livekit"]));
+
+        const pinned = log.mock.calls
+          .map((call) => String(call[0]))
+          .filter((line) => line.includes("voice.transportPinned"));
+        expect(pinned).toHaveLength(1);
+        expect(pinned[0]).toContain(`channelId=${channel}`);
+        expect(pinned[0]).toContain("transport=mesh");
+        expect(pinned[0]).toContain("reason=small");
+      } finally {
+        log.mockRestore();
+      }
+    });
+
+    it("stays mesh everywhere, without a lookup, when LiveKit is not configured", async () => {
+      backend.configured = "mesh";
+      serverChannel(500, { isCommunity: true, override: "livekit" });
+      const rec = track(
+        await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+      );
+
+      expect(frame(rec, "welcome")?.transport).toBe("mesh");
+      expect(rows.profileReads).toBe(0);
+    });
   });
 
   describe("mesh-only deployment (the default self-host)", () => {
