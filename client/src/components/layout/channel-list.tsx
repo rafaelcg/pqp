@@ -7,13 +7,10 @@ import {
   FolderInput,
   FolderMinus,
   FolderPlus,
-  HeadphoneOff,
   Lock,
-  MicOff,
   Pencil,
   Phone,
   Plus,
-  ScreenShare,
   Search,
   Settings,
   Star,
@@ -21,7 +18,6 @@ import {
   Trash2,
   UserPlus,
   Users,
-  Video,
   X,
 } from "lucide-react";
 import { useEffect, useState, type DragEvent, type ReactNode } from "react";
