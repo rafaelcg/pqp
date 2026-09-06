@@ -75,12 +75,15 @@ export const voiceSessionSchema = z.object({
   room: z.string(),
   identity: z.string(),
   /**
-   * Whether the token carries a publish grant, i.e. whether the caller holds
-   * `Permission.SPEAK` in this channel. False means listen only: LiveKit
-   * refuses every publish (mic, screen, camera) from this participant. Sent
-   * so the client knows without a second round trip; absent reads as true.
+   * Whether the token allows a microphone publish (`Permission.SPEAK`).
+   * Absent reads as true.
    */
   speak: z.boolean().optional(),
+  /**
+   * Whether the token allows camera or screen share (`Permission.STREAM`).
+   * Absent reads as `speak`.
+   */
+  stream: z.boolean().optional(),
 });
 
 export type VoiceSessionRequest = z.infer<typeof voiceSessionRequestSchema>;

@@ -1,5 +1,5 @@
 import type { DmSummary, PublicUser } from "@pqp/shared";
-import { Phone, Plus, Users, X } from "lucide-react";
+import { Ban, Copy, Phone, Pin, PinOff, Plus, UserRound, Users, X } from "lucide-react";
 import { useRef, type ReactNode } from "react";
 import {
   formatBadgeCount,
@@ -283,6 +283,7 @@ function ConversationRow({
           {
             id: "profile",
             label: t("profile.viewProfile"),
+            icon: UserRound,
             onSelect: () => {
               const anchor = rowRef.current;
               if (anchor) {
@@ -307,6 +308,7 @@ function ConversationRow({
             label: pinned
               ? t("chrome.unpinConversation")
               : t("chrome.pinConversation"),
+            icon: pinned ? PinOff : Pin,
             onSelect: onTogglePin,
           },
         ]
@@ -314,6 +316,7 @@ function ConversationRow({
     {
       id: "copy-id",
       label: t("dm.copyId"),
+      icon: Copy,
       onSelect: () => void navigator.clipboard.writeText(conversation.channelId),
     },
     ...notificationLevelItems("notify", notifications, "account"),
@@ -321,6 +324,7 @@ function ConversationRow({
     {
       id: "hide",
       label: t("dm.close"),
+      icon: X,
       onSelect: onHide,
     },
   ];
@@ -330,11 +334,13 @@ function ConversationRow({
         ? {
             id: "unblock",
             label: t("profile.unblock"),
+            icon: Ban,
             onSelect: () => onUnblock(solo.id),
           }
         : {
             id: "block",
             label: t("profile.block"),
+            icon: Ban,
             danger: true,
             onSelect: () => onBlock(solo),
           },

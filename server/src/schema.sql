@@ -1432,6 +1432,7 @@ CREATE TABLE IF NOT EXISTS voice_peers (
   camera_stream_id       TEXT,
   screen_audio_stream_id TEXT,
   can_speak              BOOLEAN NOT NULL DEFAULT TRUE,
+  can_stream             BOOLEAN NOT NULL DEFAULT TRUE,
   can_resume             BOOLEAN NOT NULL DEFAULT FALSE,
   orphaned_at            TIMESTAMPTZ,
   joined_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1440,6 +1441,9 @@ CREATE TABLE IF NOT EXISTS voice_peers (
 CREATE INDEX IF NOT EXISTS idx_voice_peers_channel ON voice_peers (channel_id);
 CREATE INDEX IF NOT EXISTS idx_voice_peers_user ON voice_peers (user_id);
 CREATE INDEX IF NOT EXISTS idx_voice_peers_instance ON voice_peers (instance_id);
+-- STREAM split landed after M1 created this table. Existing rows keep
+-- presenting (the old Speak bit covered camera and share).
+ALTER TABLE voice_peers ADD COLUMN IF NOT EXISTS can_stream BOOLEAN NOT NULL DEFAULT TRUE;
 
 -- Hung-up ids that must not be reconstructed for the resume token's life. The
 -- in-process `retiredPeerIds` map is the same fact for one instance; this is
@@ -2725,7 +2729,7 @@ CREATE INDEX IF NOT EXISTS idx_connection_oauth_states_created
 -- (https://docs.discord.com/developers/topics/permissions), stored as BIGINT
 -- bitfields. Wire format is a decimal string; JS math is always bigint.
 --
--- Bits 0–20, matching packages/shared/src/permissions.ts:
+-- Bits 0–22, matching packages/shared/src/permissions.ts:
 --   0 CREATE_INVITE          1
 --   1 KICK_MEMBERS           2
 --   2 BAN_MEMBERS            4
@@ -2747,8 +2751,10 @@ CREATE INDEX IF NOT EXISTS idx_connection_oauth_states_created
 --  18 MODERATE_MEMBERS       262144
 --  19 ADD_REACTIONS          524288
 --  20 MANAGE_WEBHOOKS        1048576
+--  21 STREAM                 2097152
+--  22 MOVE_MEMBERS           4194304
 --
--- ALL = 2097151. Default @everyone = 571073.
+-- ALL = 8388607. Default @everyone = 2668225.
 --
 -- Seeded roles per server: `@everyone` (implicit, never a member_roles row),
 -- Moderator, Manager, Admin (ADMINISTRATOR), and Owner (display only;
@@ -2906,14 +2912,14 @@ BEGIN
   END IF;
 
   INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable)
-  SELECT s.id, 'everyone', 571073, 0, TRUE, 'everyone', FALSE
+  SELECT s.id, 'everyone', 2668225, 0, TRUE, 'everyone', FALSE
     FROM servers s
    WHERE NOT EXISTS (
      SELECT 1 FROM roles r WHERE r.server_id = s.id AND r.is_everyone
    );
 
   INSERT INTO roles (server_id, name, permissions, position, is_everyone, system_key, mentionable)
-  SELECT s.id, 'Admin', 1048575, 1, FALSE, 'admin', FALSE
+  SELECT s.id, 'Admin', 8388607, 1, FALSE, 'admin', FALSE
     FROM servers s
    WHERE NOT EXISTS (
      SELECT 1 FROM roles r WHERE r.server_id = s.id AND r.system_key = 'admin'
@@ -3010,8 +3016,8 @@ END;
 $$;
 
 -- Moderator extras: KICK(2) | MANAGE_MESSAGES(256) | MUTE(16384) |
--- MANAGE_NICKNAMES(65536) | MODERATE_MEMBERS(262144) = 344322.
--- Manager: ALL(2097151) minus ADMINISTRATOR(8) = 2097143.
+-- MANAGE_NICKNAMES(65536) | MODERATE_MEMBERS(262144) | MOVE(4194304) = 4538626.
+-- Manager: ALL(8388607) minus ADMINISTRATOR(8) = 8388599.
 -- VIP is a colour and a hoist with no extra bits (0).
 -- Insert colours match STAFF_ROLE_COLORS in packages/shared/src/permissions.ts.
 CREATE OR REPLACE FUNCTION pqp_ensure_staff_ladder(p_server_id UUID)
@@ -3057,7 +3063,7 @@ BEGIN
       mentionable, hoist, show_badge, color
     )
     VALUES (
-      p_server_id, pqp_unique_role_name(p_server_id, 'Moderator'), 344322, 1,
+      p_server_id, pqp_unique_role_name(p_server_id, 'Moderator'), 4538626, 1,
       FALSE, 'moderator', FALSE, TRUE, TRUE, '#4EC4B0'
     );
   END IF;
@@ -3070,7 +3076,7 @@ BEGIN
       mentionable, hoist, show_badge, color
     )
     VALUES (
-      p_server_id, pqp_unique_role_name(p_server_id, 'Manager'), 2097143, 2,
+      p_server_id, pqp_unique_role_name(p_server_id, 'Manager'), 8388599, 2,
       FALSE, 'manager', FALSE, TRUE, TRUE, '#6BA3E8'
     );
   END IF;
@@ -3206,6 +3212,46 @@ BEGIN
     'COMMENT ON COLUMN roles.permissions IS %L',
     marker
   );
+END $$;
+
+-- STREAM (bit 21 = 2097152) and MOVE_MEMBERS (bit 22 = 4194304).
+-- Stream rides with Speak so an existing listen-only overwrite stays silent
+-- on camera and screen too. Move rides with timeout, which is what move and
+-- disconnect used before they had their own bit.
+--
+-- One-shot via data_migrations, not a comment on roles.permissions. That
+-- column's comment is already the MANAGE_WEBHOOKS fingerprint; sharing it
+-- made this block and that one re-run on every boot, which OR'd STREAM back
+-- onto any role an owner had split to mic-only.
+DO $$
+DECLARE
+  speak CONSTANT BIGINT := 8192;
+  stream CONSTANT BIGINT := 2097152;
+  moderate CONSTANT BIGINT := 262144;
+  move CONSTANT BIGINT := 4194304;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'stream_move_bits_2026_09'
+  ) THEN
+    RETURN;
+  END IF;
+
+  UPDATE roles
+     SET permissions = permissions | stream
+   WHERE (permissions & speak) = speak;
+
+  UPDATE channel_overwrites
+     SET allow = allow | CASE WHEN (allow & speak) = speak THEN stream ELSE 0 END,
+         deny = deny | CASE WHEN (deny & speak) = speak THEN stream ELSE 0 END;
+
+  UPDATE roles
+     SET permissions = permissions | move
+   WHERE (permissions & moderate) = moderate;
+
+  UPDATE servers
+     SET permissions_version = permissions_version + 1;
+
+  INSERT INTO data_migrations (name) VALUES ('stream_move_bits_2026_09');
 END $$;
 
 -- Who may VIEW this channel (the effective row: parent for a thread).

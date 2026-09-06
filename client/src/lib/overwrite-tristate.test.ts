@@ -60,10 +60,15 @@ describe("shouldDeleteOverwrite", () => {
 });
 
 describe("overwriteBitsForChannel", () => {
-  it("uses CONNECT on voice and SEND on text", () => {
+  it("uses CONNECT and SPEAK on voice and SEND on text", () => {
     expect(overwriteBitsForChannel("voice")).toContain("CONNECT");
+    expect(overwriteBitsForChannel("voice")).toContain("SPEAK");
+    expect(overwriteBitsForChannel("voice")).toContain("STREAM");
+    expect(overwriteBitsForChannel("voice")).not.toContain("MUTE_MEMBERS");
+    expect(overwriteBitsForChannel("voice")).not.toContain("MOVE_MEMBERS");
     expect(overwriteBitsForChannel("text")).toContain("SEND_MESSAGES");
     expect(overwriteBitsForChannel("text")).toContain("MANAGE_MESSAGES");
     expect(overwriteBitsForChannel("text")).not.toContain("CONNECT");
+    expect(overwriteBitsForChannel("text")).not.toContain("SPEAK");
   });
 });
