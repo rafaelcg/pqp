@@ -1622,25 +1622,46 @@ browser's task. Cold start and warm start both end in
 `PushController.onActivityIntent`, which is the one place that reads
 `intent.data`, consumes it and parks a target for the NavHost to pick up.
 
-**The web half is `client/public/.well-known/assetlinks.json`,** and its
-fingerprint is a placeholder in this commit. The file has to list the SHA-256 of
-the certificate that signs the APK a person actually installed. That APK is the
-sideload build, and it is signed with the debug keystore **that lives on the CI
-runner**: the workflow caches `~/.android/debug.keystore` under a stable key
-precisely so that testers are not forced to uninstall between updates, and that
-keystore has never existed on any laptop. So the value cannot be computed here.
+**The web half is `client/public/.well-known/assetlinks.json`.** It has to list
+the SHA-256 of the certificate that signs the APK a person actually installed.
+That APK is the sideload build, signed with a debug keystore that lives on the
+CI runner and has never existed on any laptop, so the value cannot be computed
+from a checkout.
 
-The Android workflow now prints it. Look at the job summary of any `android`
-run, under *Sideload signing certificate*, or read it from the log line
-`sideload signing cert SHA-256:`, and paste it into `assetlinks.json`. Nothing
-about it is secret: a certificate fingerprint is public by construction, every
+The value committed is read from the artifact itself, which is the one source
+that cannot be wrong about what people have installed:
+
+```bash
+curl -sL -o pqp.apk https://github.com/rafaelcg/pqp/releases/download/android-beta/pqp.apk
+"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --print-certs pqp.apk
+# Signer #1 certificate SHA-256 digest: cdd20531...  (colon-separate it, upper case)
+```
+
+The Android workflow also prints the fingerprint of the keystore *it currently
+holds*, in the job summary under *Sideload signing certificate* and in the log
+line `sideload signing cert SHA-256:`, via `signingReport` rather than `keytool`
+so that no keystore password is ever on a command line. Nothing about either
+number is secret: a certificate fingerprint is public by construction, every
 installed APK exposes its own.
 
-Until it is filled in, verification fails and nothing breaks: the link opens the
-web client in the browser, which is the same page. A person who wants the app
-instead can turn on *Open supported links* for it in system settings. With the
-right fingerprint in place, the phone verifies at install time and the link goes
-straight to the app with no chooser.
+**The two did not match when this was written, and that is a real finding about
+the beta, not about App Links.** The workflow caches `~/.android/debug.keystore`
+under a stable key so that testers are not forced to uninstall between updates.
+That cache was gone (`gh api repos/rafaelcg/pqp/actions/caches` listed no
+keystore entry at all): GitHub evicts a cache after seven days without a hit,
+and a PR run cannot write into the default branch's cache scope. So a quiet
+week rotates the signing key, and the next `android-beta` publish produces an
+APK that no existing tester can update over. It has to be uninstalled and
+reinstalled, and this file has to be re-read from the new artifact. The durable
+fix is a real sideload keystore in Actions secrets rather than a cached debug
+one, which is a separate change; `sha256_cert_fingerprints` is an array, so a
+rotation is added rather than swapped when the old build is still out there.
+
+With the right fingerprint in place, the phone verifies at install and the link
+opens the app with no chooser. With the wrong one, nothing breaks: the link
+opens the web client in the browser, which is the same page, and a person who
+wants the app instead turns on *Open supported links* for it in system
+settings.
 
 To check verification on a device:
 
