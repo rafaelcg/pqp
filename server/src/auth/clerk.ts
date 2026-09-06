@@ -38,6 +38,33 @@ export interface AuthUser {
 
 export { DEV_AUTH_TOKEN };
 
+/** Clerk's own user ids. Bypass and character rows use other prefixes. */
+export function isClerkUserId(clerkId: string): boolean {
+  return clerkId.startsWith("user_");
+}
+
+/**
+ * One-shot ticket that lets the desktop shell adopt a session the user
+ * already finished in their system browser.
+ *
+ * Ninety seconds is long enough to hop back to Electron and short enough
+ * that a leaked URL is stale. Clerk's default is 30 days; do not use that.
+ */
+export const DESKTOP_HANDOFF_TTL_SECONDS = 90;
+
+export async function createDesktopSignInToken(
+  clerkId: string,
+): Promise<string> {
+  const response = await clerk.signInTokens.createSignInToken({
+    userId: clerkId,
+    expiresInSeconds: DESKTOP_HANDOFF_TTL_SECONDS,
+  });
+  if (!response.token) {
+    throw new Error("Clerk did not return a sign-in token");
+  }
+  return response.token;
+}
+
 let warnedAboutBypassInProd = false;
 
 /**
