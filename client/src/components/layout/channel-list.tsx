@@ -689,6 +689,7 @@ export function ChannelList({
                 <button
                   type="button"
                   data-community-home-row
+                  aria-current={communityHomeSelected ? "page" : undefined}
                   className={cn(
                     "flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
                     communityHomeSelected
@@ -1301,6 +1302,7 @@ function ChannelRow({
         <button
           type="button"
           onClick={onJoinVoice && !connected ? onJoinVoice : onSelect}
+          aria-current={selected ? "page" : undefined}
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           {icon}

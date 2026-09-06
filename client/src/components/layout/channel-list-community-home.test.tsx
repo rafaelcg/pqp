@@ -81,6 +81,14 @@ function renderList(node: ReactElement) {
   );
 }
 
+describe("ChannelList selected row", () => {
+  it("marks the open channel as the current page", () => {
+    const html = renderList(<ChannelList {...baseProps} />);
+    expect(html).toContain("geral");
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+  });
+});
+
 describe("ChannelList Community Home row", () => {
   it("flag off: no Home row in the channel list", () => {
     const html = renderList(<ChannelList {...baseProps} />);

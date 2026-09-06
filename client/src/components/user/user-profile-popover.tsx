@@ -28,6 +28,7 @@ import {
   type VisibleConnection,
 } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
@@ -374,6 +375,9 @@ function UserProfileCard({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<"remove" | "block" | null>(
+    null,
+  );
   const [confirming, setConfirming] = useState<ProfilePrimaryAction | null>(
     null,
   );
@@ -852,11 +856,7 @@ function UserProfileCard({
             danger: true,
             onSelect: () => {
               setOverflowOpen(false);
-              if (window.confirm(t("profile.removeFriend.confirm", {
-                name: subject.displayName,
-              }))) {
-                void run(() => remove(subject.id));
-              }
+              setPendingConfirm("remove");
             },
           },
         ]
@@ -869,14 +869,7 @@ function UserProfileCard({
             danger: true,
             onSelect: () => {
               setOverflowOpen(false);
-              if (
-                window.confirm(
-                  t("profile.block.confirm", { name: subject.displayName }),
-                )
-              ) {
-                onBlockUser(subject.id);
-                onClose();
-              }
+              setPendingConfirm("block");
             },
           },
         ]
@@ -1079,8 +1072,10 @@ function UserProfileCard({
       </div>
     ) : null;
 
-  return createPortal(
-    <div
+  return (
+    <>
+      {createPortal(
+    <div>
       ref={cardRef}
       role="dialog"
       aria-label={t("profile.cardLabel", { name: subject.displayName })}
@@ -1097,7 +1092,11 @@ function UserProfileCard({
       // the viewport cap, the inner scroller shrinks to nothing, and the
       // bottom of the card is unreachable. overflow-y on this node is what
       // a daft zoom needs. Mais opens downward so Block is not clipped.
-      className="fixed z-[110] max-h-[calc(100dvh-16px)] overflow-y-auto overscroll-contain rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] animate-fade-in"
+      // Drop under the confirm Dialog (z-60) so the in-app confirm is on top.
+      className={cn(
+        "fixed max-h-[calc(100dvh-16px)] overflow-y-auto overscroll-contain rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] animate-fade-in",
+        pendingConfirm ? "z-[50]" : "z-[110]",
+      )}
     >
       {/* No banner image exists on the server, so the band is a quiet wash of
           the accent into the surface — enough depth that the card reads as an
@@ -1579,6 +1578,31 @@ function UserProfileCard({
         )}
       </div>
     </div>,
-    document.body,
+        document.body,
+      )}
+      <ConfirmDialog
+        open={pendingConfirm === "remove"}
+        title={t("profile.removeFriend")}
+        description={t("profile.removeFriend.confirm", {
+          name: subject.displayName,
+        })}
+        confirmLabel={t("profile.removeFriend")}
+        onConfirm={() => {
+          void run(() => remove(subject.id));
+        }}
+        onClose={() => setPendingConfirm(null)}
+      />
+      <ConfirmDialog
+        open={pendingConfirm === "block"}
+        title={t("profile.block")}
+        description={t("profile.block.confirm", { name: subject.displayName })}
+        confirmLabel={t("profile.block")}
+        onConfirm={() => {
+          onBlockUser(subject.id);
+          onClose();
+        }}
+        onClose={() => setPendingConfirm(null)}
+      />
+    </>
   );
 }
