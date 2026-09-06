@@ -700,3 +700,188 @@ describe("re-offering a dropped first offer", () => {
     expect(ctx.offers().length).toBe(offersBefore);
   });
 });
+
+/**
+ * A camera and a screen share on the mesh at the same time.
+ *
+ * WHY. On 5 Sep 2026 a presenter in a big watch party had both on. Her UI said
+ * the camera was on and the room said it could not see it. The cause turned
+ * out to be the layout (the camera tile sat off-screen in a strip that could
+ * not be scrolled to it), not the media, and the layout is being fixed on its
+ * own. What that leaves is a media path everybody now believes is sound and
+ * nothing pinned.
+ *
+ * Two video tracks on one connection is the arrangement where the mesh is most
+ * likely to lose one silently, and no way of losing it shows up in a type
+ * check:
+ *
+ *   - Sending, one video sender reused for both, `replaceTrack` swapping the
+ *     camera onto the screen's sender, looks identical from the sender's own
+ *     UI, which reads local state.
+ *   - Sending, adding the second track without asking for an offer leaves it
+ *     on a transceiver with no mid: on the connection, invisible to the peer.
+ *   - Receiving, the screen is defined negatively ("video that is not the
+ *     announced camera"), so a camera whose roster announcement has not landed
+ *     yet is filed as a screen share, and the announcement has to move it.
+ *
+ * The party ran on the SFU; the SFU half is `livekit-session-sources.test.ts`.
+ * This is the transport DM calls and small rooms take.
+ */
+describe("a camera and a screen share on one connection", () => {
+  function arriveVideo(pc: FakePeerConnection, streamId: string) {
+    const incoming = track("video", `${streamId}:video`);
+    pc.ontrack?.({
+      track: incoming,
+      streams: [fakeStream(streamId, [incoming])],
+    });
+    return incoming;
+  }
+
+  it("sends two video tracks, one sender each", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "screen")]),
+    );
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "camera")]),
+    );
+
+    expect(ctx.pc().added.map((entry) => entry.track.id)).toEqual([
+      "screen",
+      "camera",
+    ]);
+    // Distinct msids: the receiver tells the two apart by stream id, and the
+    // camera's is what the roster announces.
+    expect(ctx.pc().added.map((entry) => entry.streamId)).toEqual([
+      "cap",
+      "cam",
+    ]);
+    expect(ctx.pc().senders).toHaveLength(2);
+    // Nothing was swapped onto an existing sender: both tracks are live.
+    expect(ctx.pc().senders.map((s) => s.track?.id).sort()).toEqual([
+      "camera",
+      "screen",
+    ]);
+  });
+
+  it("offers again for the second video track", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "screen")]),
+    );
+    const offersBefore = ctx.offers().length;
+
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "camera")]),
+    );
+
+    // Without this the camera sits on a transceiver with no mid and the peer
+    // is never told the m-line exists: the sender sees a live camera and the
+    // room sees nothing, which is exactly the shape that was reported.
+    expect(ctx.offers().length - offersBefore).toBe(1);
+  });
+
+  it("works the same when the camera goes on first", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "camera")]),
+    );
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "screen")]),
+    );
+
+    expect(ctx.pc().senders.map((s) => s.track?.id).sort()).toEqual([
+      "camera",
+      "screen",
+    ]);
+  });
+
+  it("stops the share without taking the camera off the connection", async () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "screen")]),
+    );
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "camera")]),
+    );
+
+    await ctx.manager.setLocalScreenStream(null);
+
+    expect(ctx.pc().senders.map((s) => s.track?.id)).toEqual(["camera"]);
+  });
+
+  it("gives a peer that joins mid-call both video tracks", async () => {
+    const ctx = setup();
+    await ctx.manager.setLocalScreenStream(
+      fakeStream("cap", [track("video", "screen")]),
+    );
+    await ctx.manager.setLocalCameraStream(
+      fakeStream("cam", [track("video", "camera")]),
+    );
+
+    ctx.manager.connectToPeer(REMOTE);
+    await settle();
+
+    expect(ctx.pc().added.map((entry) => entry.track.id).sort()).toEqual([
+      "camera",
+      "screen",
+    ]);
+  });
+
+  it("files an incoming camera and share separately, share first", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+    ctx.manager.setPeerCameraStreamId(REMOTE, "their-cam");
+    arriveVideo(ctx.pc(), "their-cam");
+
+    const peer = ctx.peers()[0]!;
+    expect(peer.screenStream?.id).toBe("share-1");
+    expect(peer.cameraStream?.id).toBe("their-cam");
+  });
+
+  it("files them separately when the camera was on first", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerCameraStreamId(REMOTE, "their-cam");
+    arriveVideo(ctx.pc(), "their-cam");
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+
+    const peer = ctx.peers()[0]!;
+    expect(peer.cameraStream?.id).toBe("their-cam");
+    expect(peer.screenStream?.id).toBe("share-1");
+  });
+
+  /**
+   * The roster and the media race on every real call. A camera track that
+   * beats its own announcement is filed as a screen share for a moment, since
+   * the screen slot is defined negatively, and the announcement has to move
+   * it, or the presenter's share renders their face and their camera renders
+   * nothing.
+   */
+  it("re-files a camera that arrived before the roster said what it was", () => {
+    const ctx = setup();
+    ctx.manager.connectToPeer(REMOTE);
+    ctx.manager.setPeerSharingScreen(REMOTE, true);
+    arriveVideo(ctx.pc(), "share-1");
+    arriveVideo(ctx.pc(), "their-cam");
+
+    ctx.manager.setPeerCameraStreamId(REMOTE, "their-cam");
+
+    const peer = ctx.peers()[0]!;
+    expect(peer.cameraStream?.id).toBe("their-cam");
+    expect(peer.screenStream?.id).toBe("share-1");
+  });
+});
