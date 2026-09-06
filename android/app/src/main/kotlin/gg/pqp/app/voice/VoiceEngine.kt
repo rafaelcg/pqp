@@ -106,11 +106,21 @@ class VoiceEngine(
     private val onRemoteScreen: (String, VideoTrack?) -> Unit = { _, _ -> },
     /** The person stopped the share from the system UI rather than from ours. */
     private val onScreenShareEnded: () -> Unit = {},
-) {
+) : VoiceTransport {
     private var factory: PeerConnectionFactory? = null
     private var audioDeviceModule: JavaAudioDeviceModule? = null
     private var eglBase: EglBase? = null
     private var localAudio: AudioTrack? = null
+
+    /**
+     * The source behind [localAudio], kept only so [dispose] can free it.
+     *
+     * It used to be a local in [start], which was harmless for as long as
+     * `dispose` was dead code. It is not harmless now: the mic source holds a
+     * native reference into the factory, and dropping the last Kotlin handle to
+     * it does not close the recording.
+     */
+    private var localAudioSource: org.webrtc.AudioSource? = null
 
     private val peers = ConcurrentHashMap<String, Peer>()
 
@@ -150,10 +160,10 @@ class VoiceEngine(
      */
     private val screenStreamId = "pqp-screen-${java.util.UUID.randomUUID()}"
 
-    val isSharingScreen: Boolean get() = screenTrack != null
+    override val isSharingScreen: Boolean get() = screenTrack != null
 
     /** For a renderer: the same GL context the decoders draw into. */
-    val eglContext: EglBase.Context? get() = eglBase?.eglBaseContext
+    override val eglContext: EglBase.Context? get() = eglBase?.eglBaseContext
 
     private class Peer(val connection: PeerConnection) {
         /**
@@ -222,7 +232,7 @@ class VoiceEngine(
         @Volatile var stats: PeerMediaStats? = null
     }
 
-    fun start(localPeerId: String, ice: List<IceServer>) {
+    override fun start(localPeerId: String, ice: List<IceServer>) {
         this.localPeerId = localPeerId
         this.iceServers = ice.flatMap { server ->
             server.urlList.map { url ->
@@ -263,13 +273,14 @@ class VoiceEngine(
 
         if (localAudio == null) {
             val source = factory!!.createAudioSource(MediaConstraints())
+            localAudioSource = source
             localAudio = factory!!.createAudioTrack(LOCAL_AUDIO_ID, source)
         }
 
         startStatsPolling()
     }
 
-    fun setMuted(muted: Boolean) {
+    override fun setMuted(muted: Boolean) {
         localAudio?.setEnabled(!muted)
     }
 
@@ -279,7 +290,7 @@ class VoiceEngine(
      * Being heard while hearing nothing is a trap rather than a feature, and it
      * is what the web and iOS clients both do.
      */
-    fun setDeafened(value: Boolean, mutedByUser: Boolean) {
+    override fun setDeafened(value: Boolean, mutedByUser: Boolean) {
         deafened = value
         peers.values.forEach { peer ->
             peer.remoteAudio.values.forEach { it.setEnabled(!value) }
@@ -287,7 +298,7 @@ class VoiceEngine(
         localAudio?.setEnabled(!(value || mutedByUser))
     }
 
-    fun addPeer(remotePeerId: String) {
+    override fun addPeer(remotePeerId: String) {
         val local = localPeerId ?: return
         if (peers.containsKey(remotePeerId)) return
 
@@ -305,7 +316,7 @@ class VoiceEngine(
         retuneScreenSenders()
     }
 
-    fun removePeer(remotePeerId: String) {
+    override fun removePeer(remotePeerId: String) {
         val peer = peers.remove(remotePeerId) ?: return
         if (synchronized(videoLock) { remoteVideo.forget(remotePeerId) }) {
             onRemoteScreen(remotePeerId, null)
@@ -314,7 +325,7 @@ class VoiceEngine(
         retuneScreenSenders()
     }
 
-    fun handleOffer(from: String, sdp: String) {
+    override fun handleOffer(from: String, sdp: String) {
         val local = localPeerId ?: return
         val peer = peers.getOrPut(from) { createPeer(from) ?: return }
         scope.launch {
@@ -378,7 +389,7 @@ class VoiceEngine(
         }
     }
 
-    fun handleAnswer(from: String, sdp: String) {
+    override fun handleAnswer(from: String, sdp: String) {
         val peer = peers[from] ?: return
         scope.launch {
             peer.mutex.withLock {
@@ -407,7 +418,12 @@ class VoiceEngine(
      * failure is a mesh that logs a warning per peer and works anyway, which is
      * the kind of noise that hides a real one.
      */
-    fun handleCandidate(from: String, sdpMid: String?, sdpMLineIndex: Int?, candidate: String?) {
+    override fun handleCandidate(
+        from: String,
+        sdpMid: String?,
+        sdpMLineIndex: Int?,
+        candidate: String?,
+    ) {
         if (candidate.isNullOrEmpty()) return
         val peer = peers[from] ?: return
         val ice = IceCandidate(sdpMid.orEmpty(), sdpMLineIndex ?: 0, candidate)
@@ -432,7 +448,7 @@ class VoiceEngine(
      * does not, and the throw happens inside `startCapture` where it would look
      * like a capture failure rather than an ordering one.
      */
-    fun startScreenShare(permission: Intent, profile: ScreenCaptureProfile): Boolean {
+    override fun startScreenShare(permission: Intent, profile: ScreenCaptureProfile): Boolean {
         val factory = factory ?: return false
         val egl = eglBase ?: return false
         if (screenTrack != null) return true
@@ -479,7 +495,7 @@ class VoiceEngine(
     }
 
     /** Stop capturing and take the track off every peer. */
-    fun stopScreenShare() {
+    override fun stopScreenShare() {
         if (screenTrack == null) return
         peers.forEach { (peerId, peer) ->
             val sender = peer.screenSender ?: return@forEach
@@ -555,7 +571,7 @@ class VoiceEngine(
     }
 
     /** Tears the whole mesh down. The factory is kept for the next call. */
-    fun stop() {
+    override fun stop() {
         statsJob?.cancel()
         statsJob = null
         releaseScreenCapture()
@@ -565,24 +581,42 @@ class VoiceEngine(
         localPeerId = null
     }
 
-    fun dispose() {
+    /**
+     * Hand back the process-global WebRTC resources.
+     *
+     * **This ran for the first time when LiveKit arrived.** It was written
+     * alongside [stop] and then never called from anywhere, because a call
+     * ending keeps the factory for the next one, and until a second transport
+     * existed there was never a reason to let go of it. Read it as new code.
+     *
+     * The order is the order libwebrtc requires and it is not interchangeable:
+     * the track and its source come first (they hold native references *into*
+     * the factory), the factory second, and the audio device module only after
+     * the factory that owns it is gone. Releasing the module first is a
+     * use-after-free in native code, which is a SIGSEGV rather than an
+     * exception. `runCatching` on each step so that one unhappy handle cannot
+     * strand the rest: a half-disposed factory is exactly the state that
+     * leaves a second `AudioRecord` open on the microphone.
+     */
+    override fun dispose() {
         stop()
+        runCatching { localAudio?.dispose() }
         localAudio = null
-        factory?.dispose()
+        runCatching { localAudioSource?.dispose() }
+        localAudioSource = null
+        runCatching { factory?.dispose() }
         factory = null
-        audioDeviceModule?.release()
+        runCatching { audioDeviceModule?.release() }
         audioDeviceModule = null
-        eglBase?.release()
+        runCatching { eglBase?.release() }
         eglBase = null
     }
 
-    val peerCount: Int get() = peers.size
-
     /** The last stats sample for a peer, or null before the first one. */
-    fun statsFor(remotePeerId: String): PeerMediaStats? = peers[remotePeerId]?.stats
+    override fun statsFor(remotePeerId: String): PeerMediaStats? = peers[remotePeerId]?.stats
 
     /** This peer's incoming screen video, for a renderer to attach to. */
-    fun remoteScreenFor(remotePeerId: String): VideoTrack? =
+    override fun remoteScreenFor(remotePeerId: String): VideoTrack? =
         synchronized(videoLock) { remoteVideo.screenFor(remotePeerId) }
 
     /**
@@ -592,7 +626,7 @@ class VoiceEngine(
      * roster and the track race in both directions: a camera can be announced
      * before its track arrives or after. The index absorbs a repeat for free.
      */
-    fun setPeerCameraStreamId(remotePeerId: String, streamId: String?) {
+    override fun setPeerCameraStreamId(remotePeerId: String, streamId: String?) {
         val changed = synchronized(videoLock) {
             remoteVideo.setCameraStreamId(remotePeerId, streamId)
         }
@@ -605,7 +639,7 @@ class VoiceEngine(
      * The only end-of-share signal that can be trusted for a *re*-share: see
      * [RemoteVideoIndex.setSharingScreen].
      */
-    fun setPeerSharingScreen(remotePeerId: String, sharing: Boolean) {
+    override fun setPeerSharingScreen(remotePeerId: String, sharing: Boolean) {
         val changed = synchronized(videoLock) {
             remoteVideo.setSharingScreen(remotePeerId, sharing)
         }

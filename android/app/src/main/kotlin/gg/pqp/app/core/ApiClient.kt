@@ -143,6 +143,53 @@ class ApiClient(
     suspend fun voiceBackend(): String =
         get<VoiceBackendResponse>("/api/voice/backend").backend
 
+    /**
+     * SFU credentials for a peer the voice room has already accepted.
+     *
+     * **Only callable after `welcome`.** The server looks `peerId` up in its
+     * live peer table and refuses (403) a peer that is not there or not owned
+     * by the caller, so asking before the room has assigned one is not an
+     * ordering nicety, it is a request that cannot succeed.
+     *
+     * A refusal arrives as an [ApiException] and must not be answered by
+     * building a mesh instead: the room's transport is pinned by the server and
+     * a mesh client in a LiveKit room is a name on the roster that can neither
+     * hear nor be heard.
+     */
+    suspend fun voiceSession(voiceChannelId: String, peerId: String): VoiceSessionResponse {
+        val body = json.encodeToString(
+            VoiceSessionRequest.serializer(),
+            VoiceSessionRequest(voiceChannelId = voiceChannelId, peerId = peerId),
+        )
+        return post("/api/voice/token", body)
+    }
+
+    /**
+     * `POST /api/voice/leave`, the way out when `/ws` is not there to say it.
+     *
+     * The socket is the normal route (`leave-voice-room`), and this is what the
+     * server provides for the case the socket has already gone: the peer's own
+     * resume token is the credential, which is why this route is handled
+     * *before* Clerk resolution and needs no bearer token to work.
+     *
+     * Without it, hanging up while offline leaves a ghost on everybody else's
+     * roster for the length of the orphan window. Answers 204 and there is
+     * nothing to decode; a failure is swallowed by the caller because a failed
+     * best-effort leave is not something a person who has already hung up can
+     * act on.
+     */
+    suspend fun leaveVoiceBeacon(resumePeerId: String, resumeToken: String) {
+        val body = json.encodeToString(
+            VoiceLeaveBeacon.serializer(),
+            VoiceLeaveBeacon(resumePeerId = resumePeerId, resumeToken = resumeToken),
+        )
+        execute(
+            Request.Builder()
+                .url(url("/api/voice/leave"))
+                .post(body.toRequestBody(JSON_MEDIA_TYPE)),
+        ).close()
+    }
+
     // --- plumbing ---
 
     private suspend inline fun <reified T> get(

@@ -178,7 +178,14 @@ fun CallBar(state: VoiceState, controller: VoiceController, modifier: Modifier =
                         // genuinely mean something is switched off.
                         on = false,
                     )
-                    ShareScreenButton(state, controller)
+                    // Absent, not disabled, on a transport that cannot carry
+                    // this device's screen. The button's whole job is to raise
+                    // Android's consent dialog, and offering that when nothing
+                    // can be published with the grant is worse than not
+                    // offering at all. See `VoiceState.screenShareSupported`.
+                    if (state.screenShareSupported) {
+                        ShareScreenButton(state, controller)
+                    }
                     FilledIconButton(
                         onClick = controller::leave,
                         colors = IconButtonDefaults.filledIconButtonColors(
