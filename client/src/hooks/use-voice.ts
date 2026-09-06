@@ -1002,6 +1002,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       voiceActivityTracker.update("local", 0, false);
       return;
     }
+    // Fail closed if the analyser cannot be read (closed context, test stub).
+    if (typeof pipeline.analyser.getByteFrequencyData !== "function") {
+      voiceActivityOpen = false;
+      voiceActivityTracker.update("local", 0, false);
+      return;
+    }
     const level = readAnalyserLevel(pipeline.analyser);
     voiceActivityOpen = voiceActivityTracker.update("local", level, true);
     if (micShouldBeOpen() !== state.isTransmitting) {
