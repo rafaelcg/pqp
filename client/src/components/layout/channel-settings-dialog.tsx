@@ -343,6 +343,10 @@ export function ChannelSettingsDialog({
         isPrivate: next,
       });
       onChannelUpdated(updated);
+    } catch (err) {
+      setSaveError(
+        err instanceof Error ? err.message : t("channelSettings.saveFailed"),
+      );
     } finally {
       setPrivateBusy(false);
     }
@@ -366,33 +370,42 @@ export function ChannelSettingsDialog({
 
   const footer = confirmLeave ? (
     <>
-      <p className="mr-auto text-sm text-paper-muted">
+      <p className="mr-auto min-w-0 text-sm text-paper-muted">
         {t("channelSettings.leaveTitle")}
       </p>
-      <Button variant="ghost" onClick={() => setConfirmLeave(false)}>
-        {t("channelSettings.leaveStay")}
-      </Button>
-      <Button
-        variant="danger"
-        onClick={() => {
-          discardDraft();
-          onClose();
-        }}
-      >
-        {t("channelSettings.leaveDiscard")}
-      </Button>
+      <div className="grid w-full min-w-0 grid-cols-2 gap-2 sm:flex sm:w-auto">
+        <Button variant="ghost" className="min-w-0" onClick={() => setConfirmLeave(false)}>
+          {t("channelSettings.leaveStay")}
+        </Button>
+        <Button
+          variant="danger"
+          className="min-w-0"
+          onClick={() => {
+            discardDraft();
+            onClose();
+          }}
+        >
+          {t("channelSettings.leaveDiscard")}
+        </Button>
+      </div>
     </>
   ) : dirty ? (
     <>
-      <p className="mr-auto animate-fade-in text-sm text-paper-muted">
+      <p className="mr-auto min-w-0 animate-fade-in text-sm text-paper-muted">
         {t("channelSettings.unsaved")}
       </p>
-      <Button variant="ghost" onClick={discardDraft}>
-        {t("channelSettings.discard")}
-      </Button>
-      <Button disabled={saving} onClick={() => void saveOverview()}>
-        {saving ? t("common.saving") : t("common.save")}
-      </Button>
+      <div className="grid w-full min-w-0 grid-cols-2 gap-2 sm:flex sm:w-auto">
+        <Button variant="ghost" className="min-w-0" onClick={discardDraft}>
+          {t("channelSettings.discard")}
+        </Button>
+        <Button
+          className="min-w-0"
+          disabled={saving}
+          onClick={() => void saveOverview()}
+        >
+          {saving ? t("common.saving") : t("common.save")}
+        </Button>
+      </div>
     </>
   ) : (
     <Button variant="secondary" onClick={onClose}>

@@ -1703,8 +1703,8 @@ function CallControls({
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
   const size = collapsed ? "h-8 w-8" : "h-10 w-10";
   const iconSize = collapsed ? "h-3.5 w-3.5" : "h-4 w-4";
-  // The room's rule, not a choice: SPEAK denied. Mute is locked shut, and
-  // share and camera are not offered at all, since presenting is speaking.
+  // SPEAK denied locks mute. STREAM denied hides camera and share. The two
+  // bits are independent: a stage can let someone present without talking.
   const listenOnly = !voiceState.canSpeak;
   const noVideo = !voiceState.canStream;
 
