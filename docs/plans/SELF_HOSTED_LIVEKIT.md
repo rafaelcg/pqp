@@ -1,6 +1,7 @@
 # Self-hosted LiveKit for pqp voice
 
-Status: plan, not yet executed. Written 2026-09-06.
+Status: executed. The box is up and `wss://sfu.pqp.gg` answers as a LiveKit server on the Vultr
+instance in São Paulo. Written 2026-09-06 as a plan, updated the same day on the switch.
 Owner: solo maintainer. Audience: the same person, six months from now, at 23:00, with a party tomorrow.
 
 Production voice moved to LiveKit Cloud (Ship plan) on 2026-09-05. This document is the step-by-step
@@ -37,8 +38,9 @@ self-hosted party (section 5).
 Minutes are the second bill. 100 viewers for 180 minutes is 18,000 WebRTC minutes per party; Ship
 includes 150,000 per month, so even 8 parties fit. But every ordinary small call is on the SFU today
 as well, and 10 people in voice around the clock is about 430,000 minutes a month, so overage at
-$0.0005 per minute is roughly $140 before any party. Routing small rooms back to mesh (a separate
-change, threshold 10 members) removes most of that. Bandwidth is the bill that self-hosting removes.
+$0.0005 per minute is roughly $140 before any party. Routing small rooms back to mesh has since
+landed (`server/src/voice/transport-policy.ts`: threshold 10 members, plus every listed community
+regardless of size), which removes most of that. Bandwidth is the bill that self-hosting removes.
 
 ### Prices, from the vendors
 
@@ -464,7 +466,8 @@ response, so the client needs no rebuild).
   about 70% of one core (35% of the box) mid-run while the tester itself shared the same two cores, so
   the real headroom is better than that number. Memory 350 MB. The 2 vCPU / 4 GB plan is enough for the
   100 to 150 viewer parties we have seen; no resize needed before the production switch.
-- Not yet done: a phone on mobile data across NAT, the UDP-blocked TURN path, and the switch itself.
+- Not yet done: a phone on mobile data across NAT, and the UDP-blocked TURN path. The switch itself
+  has happened; `sfu.pqp.gg` serves and `GET https://api.pqp.gg/ready` reports LiveKit healthy.
 
 ## 6. Cost summary and timeline
 

@@ -18,12 +18,16 @@ No client rebuild is needed to switch. `VITE_VOICE_BACKEND=mesh` is a build-time
 
 `GET /api/voice/backend` still reports the deployment-wide value, but it is no longer what decides a call: the room's transport arrives with the join.
 
-## mesh (default)
+## mesh (small rooms, and the fallback when `LIVEKIT_*` is unset)
 
 - Full peer-to-peer WebRTC per voice channel
 - Signaling over the existing WebSocket
-- ~5–8 users per channel (`MESH_VOICE_LIMIT`)
+- 8 users per channel, exactly (`MESH_VOICE_LIMIT`); the UI warns from 6
 - TURN for NAT traversal — see `/api/ice-servers`
+- On a deployment that **has** LiveKit, this is what DM calls and servers under
+  `LARGE_SERVER_MEMBER_THRESHOLD` (10) members get. It is no longer what a
+  crowded room gets. See [Which transport a room gets](#choosing-a-backend) and
+  `server/src/voice/transport-policy.ts`.
 
 ## LiveKit — implemented
 
@@ -353,7 +357,7 @@ CLOUDFLARE_REALTIME_APP_SECRET=...
 
 ## Running LiveKit in production
 
-Nothing below has been deployed; it is the shape of the decision, priced.
+**LiveKit is deployed.** Production voice runs through a self-hosted server at `sfu.pqp.gg`, and `GET /ready` reports it. What follows is the decision record for how that was chosen and what it costs; the runbook for the box itself is [`plans/SELF_HOSTED_LIVEKIT.md`](./plans/SELF_HOSTED_LIVEKIT.md).
 
 **What a deploy needs.** Three values on the Fly app (`fly secrets set`, not `[env]` — two of them are credentials): `LIVEKIT_URL` (`wss://…`), `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`. Nothing changes on Cloudflare Pages — the client learns the backend from `GET /api/voice/backend` at runtime, and CI does not set `VITE_VOICE_BACKEND`. Do **not** copy `client/.env`'s `VITE_VOICE_BACKEND=mesh` into the build; it forces mesh for everyone.
 
@@ -417,6 +421,6 @@ Not verified, and knowingly so:
 
 - **Against LiveKit Cloud.** Everything above is a self-hosted `--dev` server. In particular the `revokeTokenTs` behaviour is expected to differ (that is the point), and the re-sweep has not been observed against Cloud.
 - **Multi-instance.** Two instances with different LiveKit config would still pin a channel differently. Reasoned through, not executed — it needs a second process and a shared room registry that does not exist.
-- **Scale.** Two to twelve participants, one room, one machine, all on localhost. No claim is made about a busy channel, cross-NAT paths, or TURN interaction on the SFU path.
+- **Scale.** The `--dev` verification above was two to twelve participants on localhost. Since then the self-hosted box has been load-tested to 150 subscribers on one publisher and has carried a real watch party of over a hundred people (2026-09-05). Still no claim about cross-NAT paths or TURN interaction on the SFU path.
 - **Real `getDisplayMedia`.** Headless Chromium cannot open the OS picker, so screen share was driven from a canvas capture. The publish/subscribe path is repo code and is verified; the capture call itself is browser API and is not.
 - **Real network partition.** "LiveKit unreachable from one user only" was simulated by a session provider that throws and by a non-routable `LIVEKIT_URL`, not by a firewall between a real client and a real SFU.
