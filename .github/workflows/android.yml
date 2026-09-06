@@ -147,6 +147,42 @@ jobs:
           path: ~/.android/debug.keystore
           key: android-sideload-debug-keystore-v1
 
+      # The certificate fingerprint of the key that signs the sideload APK,
+      # which is what `client/public/.well-known/assetlinks.json` has to list
+      # for https://pqp.gg/app/invite/<code> to open the app without a chooser.
+      # The keystore never leaves the runner (see the cache step above), so
+      # this is the only place the fingerprint can be read from. Nothing
+      # secret: a certificate fingerprint is public by construction, it is
+      # what every installed APK already exposes.
+      #
+      # `signingReport` rather than `keytool`, because keytool wants the debug
+      # keystore's password on the command line. It is the documented constant
+      # and not a secret, but a literal password in a workflow file is a secret
+      # scanner's finding either way, and Gradle already knows how to open its
+      # own debug keystore.
+      - name: Print the sideload signing fingerprint
+        if: always()
+        working-directory: android
+        shell: bash
+        run: |
+          set -uo pipefail
+          fp=$(./gradlew --quiet :app:signingReport 2>/dev/null \
+            | awk '/^Variant: sideload$/ { found = 1 }
+                   found && /^SHA-256: / { sub(/^SHA-256: /, ""); print; exit }')
+          if [ -n "${fp:-}" ]; then
+            echo "sideload signing cert SHA-256: $fp"
+            {
+              echo "### Sideload signing certificate"
+              echo
+              echo "SHA-256 for \`client/public/.well-known/assetlinks.json\` (package \`gg.pqp.app\`):"
+              echo
+              echo "\`$fp\`"
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::notice::No signing report; the fingerprint will print on the next run."
+          fi
+
       - name: Sideload APK (prod API, debug-signed)
         working-directory: android
         env:

@@ -23,7 +23,10 @@ sealed interface DeepLinkTarget {
     /** A server with no channel named. */
     data class Server(val serverId: String) : DeepLinkTarget
 
-    /** `pqp://invite/<code>`, which no push produces but the manifest accepts. */
+    /**
+     * `pqp://invite/<code>` or `https://pqp.gg/app/invite/<code>`. No push
+     * produces either; the manifest accepts both.
+     */
     data class Invite(val code: String) : DeepLinkTarget
 }
 
@@ -75,6 +78,14 @@ object DeepLink {
         if (segments[0] != "app") return null
 
         return when {
+            // `https://pqp.gg/app/invite/<code>` is the link the web client
+            // actually hands out (`inviteLink` in `invite-panel.tsx`) and the
+            // path the manifest's App Links filter claims. It used to fall
+            // through to null here, so an https invite opened the app on the
+            // server list and did nothing; only `pqp://invite/<code>` worked.
+            segments.size >= 3 && segments[1] == "invite" ->
+                if (isUsableCode(segments[2])) DeepLinkTarget.Invite(segments[2]) else null
+
             segments.size >= 5 &&
                 segments[1] == "server" &&
                 segments[3] == "channel" ->

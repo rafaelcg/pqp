@@ -125,6 +125,39 @@ class ApiClient(
         post("/api/invites/$code/join", "{}")
 
     /**
+     * `GET /api/servers/:serverId/invites`, the live invites of one server.
+     *
+     * MANAGE_SERVER only: a plain member gets a 403 here while still being
+     * allowed to *create* one (CREATE_INVITE is in the default member set). The
+     * invite sheet therefore treats a refusal on this call as "nothing to
+     * list" rather than as an error, and keeps the create button.
+     */
+    suspend fun invites(serverId: String): List<Invite> =
+        get<InvitesResponse>("/api/servers/$serverId/invites").invites
+
+    /**
+     * `POST /api/servers/:serverId/invites`. The same defaults the web's
+     * invite panel sends: unlimited uses, seven days.
+     */
+    suspend fun createInvite(
+        serverId: String,
+        maxUses: Int? = null,
+        expiresInHours: Int? = DEFAULT_INVITE_EXPIRY_HOURS,
+    ): Invite {
+        val body = json.encodeToString(
+            CreateInviteRequest.serializer(),
+            CreateInviteRequest(maxUses = maxUses, expiresInHours = expiresInHours),
+        )
+        return post<InviteResponse>("/api/servers/$serverId/invites", body).invite
+    }
+
+    /** `DELETE /api/servers/:serverId/invites/:inviteId`. MANAGE_SERVER only. */
+    suspend fun deleteInvite(serverId: String, inviteId: String) {
+        execute(Request.Builder().url(url("/api/servers/$serverId/invites/$inviteId")).delete())
+            .close()
+    }
+
+    /**
      * A fresh read URL for one attachment.
      *
      * The URL baked into a message is presigned and expires, so a channel left
@@ -296,6 +329,9 @@ class ApiClient(
 
     companion object {
         val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+
+        /** `DEFAULT_EXPIRY_HOURS` in `client/src/components/layout/invite-panel.tsx`. */
+        const val DEFAULT_INVITE_EXPIRY_HOURS = 168
 
         /**
          * One client for HTTP, WebSocket and image loading, which is what lets

@@ -194,6 +194,7 @@ the clone is done by hand.
 | `app/src/main/kotlin/gg/pqp/app/social` | Friends, blocks, conversations: wire shapes, endpoints, the live repository |
 | `app/src/main/kotlin/gg/pqp/app/social/ui` | The three-tab home, the inbox, the friends screen, the two people pickers |
 | `app/src/main/kotlin/gg/pqp/app/push` | FCM registration, the notification payload, deep links, per-channel settings |
+| `app/src/main/kotlin/gg/pqp/app/invites` | The invite link shape and the invite sheet: make, copy, share, revoke |
 | `app/src/main/kotlin/gg/pqp/app/account` | Data export and account deletion: the confirmation rule, the two endpoints, the two screens |
 | `app/src/test/kotlin` | JVM unit tests for the pure parts: capture sizing, stats parsing, deep links, push presentation |
 | `app/src/main/res/values` | English copy |
@@ -1573,6 +1574,87 @@ be run once on a phone on mobile data and once on a network known to block
 UDP, and the report compared with the web's from the same network, before
 anybody quotes the advice to a user.
 
+## Invites: making one, and the https links that open the app
+
+Before this, an Android user could redeem an invite but could not produce one:
+the answer to "how do I get my friend in" was "ask somebody on a desktop".
+Both halves are here now.
+
+**Making one.** The overflow menu on a community row has *Invite people*, which
+opens a sheet over the three routes the web's `invite-panel.tsx` already uses:
+`GET /api/servers/:id/invites` to list, `POST` the same path to make one,
+`DELETE /api/servers/:id/invites/:inviteId` to revoke. Copy puts the link on the
+clipboard; Share hands it to the system share sheet (`Intent.ACTION_SEND`), so
+where it goes is the phone's business.
+
+The two permissions are not the same, and the sheet is shaped around that.
+Listing needs MANAGE_SERVER; creating needs CREATE_INVITE, which every member
+has by default. So a plain member opens the sheet to an empty list and a working
+button, and the 403 from the list call is swallowed rather than shown: it is not
+an error, it is the role. Every other refusal is printed in the server's own
+words, because only the server knows which refusal it was.
+
+**The link is the web's link.** `InviteLinks.link` builds
+`https://pqp.gg/app/invite/<code>`, the exact string `inviteLink` in
+`client/src/components/layout/invite-panel.tsx` builds. That matters because it
+is also the path the manifest claims and the path `DeepLink` parses back, so
+three places have to agree on one shape. `InviteLinksTest` asserts the round
+trip (build a link, parse it, get the same code back) rather than the string, so
+a change in either half fails a test instead of a friend's tap.
+
+The origin is a build input (`pqp.appUrl`, defaulting to `https://pqp.gg`) and
+it does **not** follow `pqp.apiUrl`. A debug build talks to `localhost:3001`
+through `adb reverse` and still shares `https://pqp.gg/...` links, because the
+person receiving the link has no tunnel to the laptop.
+
+### App Links
+
+`https://pqp.gg/app/invite/<code>` is claimed by an `autoVerify` intent filter,
+the Android twin of iOS's `applinks:pqp.gg`. Only that path prefix is claimed.
+Claiming `/app` would swallow every pqp.gg link somebody taps into an app that
+has no screen for most of them.
+
+`MainActivity` is `singleTask` now. A notification tap already asked for
+SINGLE_TOP on the intent it built; a browser's VIEW intent cannot be asked to,
+and without this a link tapped while the app was running would stack a second
+`MainActivity`, with a second NavHost and a second call bar, on top of the
+browser's task. Cold start and warm start both end in
+`PushController.onActivityIntent`, which is the one place that reads
+`intent.data`, consumes it and parks a target for the NavHost to pick up.
+
+**The web half is `client/public/.well-known/assetlinks.json`,** and its
+fingerprint is a placeholder in this commit. The file has to list the SHA-256 of
+the certificate that signs the APK a person actually installed. That APK is the
+sideload build, and it is signed with the debug keystore **that lives on the CI
+runner**: the workflow caches `~/.android/debug.keystore` under a stable key
+precisely so that testers are not forced to uninstall between updates, and that
+keystore has never existed on any laptop. So the value cannot be computed here.
+
+The Android workflow now prints it. Look at the job summary of any `android`
+run, under *Sideload signing certificate*, or read it from the log line
+`sideload signing cert SHA-256:`, and paste it into `assetlinks.json`. Nothing
+about it is secret: a certificate fingerprint is public by construction, every
+installed APK exposes its own.
+
+Until it is filled in, verification fails and nothing breaks: the link opens the
+web client in the browser, which is the same page. A person who wants the app
+instead can turn on *Open supported links* for it in system settings. With the
+right fingerprint in place, the phone verifies at install time and the link goes
+straight to the app with no chooser.
+
+To check verification on a device:
+
+```bash
+adb shell pm get-app-links gg.pqp.app
+# and to re-run it after fixing the file
+adb shell pm verify-app-links --re-verify gg.pqp.app
+```
+
+*Not verified:* no device has yet opened an `https://` invite link into this
+app, because that needs a real fingerprint in the deployed file. The parsing,
+the sheet and the three routes are unit-tested and compile; the verification
+handshake is the part that is still on paper.
+
 ## Your data: export and account deletion
 
 **This is a Play Store submission blocker, not a nicety.** Google requires an
@@ -1783,7 +1865,7 @@ picker GIF is always one somebody sent from the web or the iOS client.
 
 **Not built:** a GIF picker, replies, editing, pinning, threads,
 search, members and moderation surfaces, profile editing, communities, game
-connections. Invites can be redeemed from a link but not created or shown. No
+connections. No
 camera (send or receive), no screen-share audio, no speaking indicators, no
 per-peer volume, no push-to-talk. LiveKit rooms are joined but no audio has been
 heard over that path from this client; it is audio-only by construction and can

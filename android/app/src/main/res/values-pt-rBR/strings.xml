@@ -192,6 +192,33 @@
     <string name="ok">OK</string>
     <string name="invite_failed_title">Esse convite não funcionou</string>
     <string name="error_generic">Algo deu errado.</string>
+
+    <!-- Convites -->
+    <string name="invite_people">Convidar pessoas</string>
+    <string name="invite_sheet_body">Qualquer pessoa com o link entra em %1$s até ele expirar ou você revogar.</string>
+    <string name="invite_create_action">Criar link de convite</string>
+    <string name="invite_none">Nenhum convite ainda. Cria um pra compartilhar esta comunidade.</string>
+    <string name="invite_copy">Copiar link</string>
+    <string name="invite_share">Compartilhar</string>
+    <string name="invite_revoke">Revogar</string>
+    <string name="invite_copied">Copiado</string>
+    <string name="invite_share_subject">Entra em %1$s no pqp</string>
+    <string name="invite_share_text">Entra em %1$s no pqp: %2$s</string>
+    <string name="invite_expiry_never">Não expira</string>
+    <string name="invite_expiry_soon">Expira em menos de uma hora</string>
+    <plurals name="invite_expiry_hours">
+        <item quantity="one">Expira em %1$d hora</item>
+        <item quantity="other">Expira em %1$d horas</item>
+    </plurals>
+    <plurals name="invite_expiry_days">
+        <item quantity="one">Expira em %1$d dia</item>
+        <item quantity="other">Expira em %1$d dias</item>
+    </plurals>
+    <string name="invite_uses_of">%1$d de %2$d usos</string>
+    <plurals name="invite_uses">
+        <item quantity="one">Usado %1$d vez</item>
+        <item quantity="other">Usado %1$d vezes</item>
+    </plurals>
     <string name="error_network">O servidor não respondeu.</string>
 
     <!-- Conversas -->

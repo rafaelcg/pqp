@@ -96,6 +96,43 @@ data class CreateServerResponse(
 data class JoinInviteResponse(val serverId: String, val serverName: String = "")
 
 /**
+ * One invite, as `mapInvite` in `server/src/services/invites.ts` shapes it.
+ *
+ * `maxUses` and `expiresAt` are null for "unlimited" and "never"; `uses`
+ * counts redemptions that actually added a member (rejoining does not burn
+ * one). `serverName` is only filled on the by-code preview, not on a server's
+ * own list, so it is defaulted rather than required.
+ */
+@Serializable
+data class Invite(
+    val id: String,
+    val code: String,
+    val serverId: String,
+    val serverName: String? = null,
+    val maxUses: Int? = null,
+    val uses: Int = 0,
+    val expiresAt: String? = null,
+    val createdAt: String = "",
+)
+
+@Serializable
+data class InvitesResponse(val invites: List<Invite> = emptyList())
+
+@Serializable
+data class InviteResponse(val invite: Invite)
+
+/**
+ * `createInviteSchema` in `packages/shared/src/api.ts`. Both fields are
+ * optional and null means "no limit"; `encodeDefaults = false` on [PqpJson]
+ * keeps an unset field off the wire rather than sending an explicit null.
+ */
+@Serializable
+data class CreateInviteRequest(
+    val maxUses: Int? = null,
+    val expiresInHours: Int? = null,
+)
+
+/**
  * `kind` is what the row *is* (`server` / `dm` / `group`); `type` is what it
  * *carries* (`text` / `voice` / `category`). They are two different fields and
  * conflating them is how a category ends up rendered as an empty text channel.

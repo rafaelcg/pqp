@@ -13,6 +13,9 @@ object Backend {
     val apiUrl: String = BuildConfig.API_URL.trimEnd('/')
     val wsUrl: String = BuildConfig.WS_URL
 
+    /** The web origin invite links are built on. See `InviteLinks`. */
+    val appUrl: String = BuildConfig.APP_URL.trimEnd('/')
+
     val clerkPublishableKey: String? =
         BuildConfig.CLERK_PUBLISHABLE_KEY.takeIf { it.isNotBlank() }
 

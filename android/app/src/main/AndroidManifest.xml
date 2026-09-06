@@ -44,7 +44,15 @@
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode|density|fontScale"
             android:windowSoftInputMode="adjustResize"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.Pqp.Starting">
+            <!-- singleTask: an invite link tapped in a browser while the app is
+                 already running has to reach the running Activity's
+                 onNewIntent, not stack a second MainActivity (with a second
+                 NavHost and a second voice bar) on top of the browser's task.
+                 Notification taps already asked for SINGLE_TOP on the intent;
+                 a browser's VIEW intent cannot be asked to, so the activity
+                 says it itself. -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -56,6 +64,30 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="pqp" />
+            </intent-filter>
+
+            <!-- https://pqp.gg/app/invite/<code>, the link the web client hands
+                 out, as a verified App Link (the Android twin of iOS's
+                 applinks:pqp.gg). `autoVerify` makes the system fetch
+                 https://pqp.gg/.well-known/assetlinks.json at install and, when
+                 the package name and signing cert there match this APK, open
+                 the link here with no chooser. When they do not match (an APK
+                 signed with a key the file does not list) nothing breaks: the
+                 link opens the web client in the browser, which is the same
+                 page, and a person who wants the app instead turns on "Open
+                 supported links" for it in system settings. The file lives at
+                 client/public/.well-known/assetlinks.json.
+
+                 Only the invite path is claimed, on purpose. Claiming `/app`
+                 would swallow every pqp.gg link a person taps into an app that
+                 has no screen for most of them yet. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="pqp.gg" />
+                <data android:pathPrefix="/app/invite/" />
             </intent-filter>
         </activity>
 
