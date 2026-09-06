@@ -10,7 +10,6 @@ import {
   resolveShortcutBindings,
   stepChannelId,
   stepUnreadChannelId,
-  type ShortcutAction,
 } from "./keyboard-shortcuts";
 import {
   defaultPushToTalkBinding as pttDefault,
@@ -199,40 +198,148 @@ describe("match event → action", () => {
   });
 });
 
-describe("isTextEntryTarget suppresses", () => {
-  it("does not fire mute, deafen or channel motion in the composer", () => {
-    const cases: Array<[ShortcutAction, KeyEventLike]> = [
-      [
-        "toggleMute",
+describe("composer focus", () => {
+  it("Cmd/Ctrl+Shift+M mutes while the composer is focused", () => {
+    expect(
+      matchShortcut(
+        keyEvent({
+          code: "KeyM",
+          metaKey: true,
+          shiftKey: true,
+          target: composer,
+        }),
+        MAC,
+      ),
+    ).toBe("toggleMute");
+    expect(
+      matchShortcut(
         keyEvent({
           code: "KeyM",
           ctrlKey: true,
           shiftKey: true,
           target: composer,
         }),
-      ],
-      [
-        "toggleDeafen",
+        WIN,
+      ),
+    ).toBe("toggleMute");
+  });
+
+  it("Cmd/Ctrl+Shift+D deafens while the composer is focused", () => {
+    expect(
+      matchShortcut(
+        keyEvent({
+          code: "KeyD",
+          metaKey: true,
+          shiftKey: true,
+          target: composer,
+        }),
+        MAC,
+      ),
+    ).toBe("toggleDeafen");
+    expect(
+      matchShortcut(
         keyEvent({
           code: "KeyD",
           ctrlKey: true,
           shiftKey: true,
           target: composer,
         }),
-      ],
-      [
-        "nextChannel",
-        keyEvent({ code: "ArrowDown", altKey: true, target: composer }),
-      ],
-      [
-        "toggleOverlay",
+        WIN,
+      ),
+    ).toBe("toggleDeafen");
+  });
+
+  it("Cmd/Ctrl+/ still opens the map while the composer is focused", () => {
+    expect(
+      matchShortcut(
         keyEvent({ code: "Slash", metaKey: true, target: composer }),
-      ],
-    ];
-    for (const [action, event] of cases) {
-      expect(matchShortcut(event, WIN), action).toBeNull();
-      expect(matchShortcut(event, MAC), action).toBeNull();
-    }
+        MAC,
+      ),
+    ).toBe("toggleOverlay");
+    expect(
+      matchShortcut(
+        keyEvent({ code: "Slash", ctrlKey: true, target: composer }),
+        WIN,
+      ),
+    ).toBe("toggleOverlay");
+  });
+
+  it("does not fire Alt+↓ while the composer is focused", () => {
+    expect(
+      matchShortcut(
+        keyEvent({ code: "ArrowDown", altKey: true, target: composer }),
+        MAC,
+      ),
+    ).toBeNull();
+    expect(
+      matchShortcut(
+        keyEvent({
+          code: "ArrowDown",
+          altKey: true,
+          shiftKey: true,
+          target: composer,
+        }),
+        WIN,
+      ),
+    ).toBeNull();
+  });
+
+  it("leaves plain letters and Enter to the composer", () => {
+    expect(
+      matchShortcut(keyEvent({ code: "KeyM", target: composer }), MAC),
+    ).toBeNull();
+    expect(
+      matchShortcut(keyEvent({ code: "Enter", target: composer }), WIN),
+    ).toBeNull();
+  });
+
+  it("still ignores IME composition and auto-repeat on a mute chord", () => {
+    expect(
+      matchShortcut(
+        keyEvent({
+          code: "KeyM",
+          ctrlKey: true,
+          shiftKey: true,
+          target: composer,
+          isComposing: true,
+        }),
+        WIN,
+      ),
+    ).toBeNull();
+    expect(
+      matchShortcut(
+        keyEvent({
+          code: "KeyM",
+          ctrlKey: true,
+          shiftKey: true,
+          target: composer,
+          repeat: true,
+        }),
+        WIN,
+      ),
+    ).toBeNull();
+  });
+
+  it("a remapped letter mute still yields to the composer", () => {
+    const remapped = resolveShortcutBindings(
+      {
+        toggleMute: {
+          code: "KeyQ",
+          label: "Q",
+          ctrl: false,
+          alt: false,
+          shift: false,
+          meta: false,
+        },
+      },
+      false,
+    );
+    expect(
+      matchShortcut(keyEvent({ code: "KeyQ", target: composer }), remapped),
+    ).toBeNull();
+    expect(
+      matchShortcut(keyEvent({ code: "KeyQ", target: plainDiv }), remapped),
+    ).toBe("toggleMute");
   });
 
   it("still fires over ordinary page chrome", () => {

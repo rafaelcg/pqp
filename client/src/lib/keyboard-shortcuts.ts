@@ -13,8 +13,8 @@
 
 import {
   isTextEntryTarget,
+  matchesBinding,
   parseBinding,
-  shouldEngage,
   type KeyBinding,
   type KeyEventLike,
 } from "@/components/voice/push-to-talk";
@@ -186,20 +186,26 @@ export function findBindingConflict(
 /**
  * First action whose binding matches this keydown.
  *
- * Uses `shouldEngage`, so composer focus, IME composition and auto-repeat
- * all suppress the same way push-to-talk does.
+ * IME composition and auto-repeat still fail via `matchesBinding`. The
+ * text-entry trap only applies to bindings that have neither Ctrl nor Meta:
+ * Alt+↑ would steal the caret, and a remapped letter would type into the
+ * composer. Discord's mute and deafen chords are Cmd/Ctrl+Shift+M and
+ * Cmd/Ctrl+Shift+D, which must fire while the composer is focused.
  */
 export function matchShortcut(
   event: KeyEventLike,
   bindings: Record<ShortcutAction, KeyBinding>,
 ): ShortcutAction | null {
-  if (isTextEntryTarget(event.target)) {
-    return null;
-  }
+  const typing = isTextEntryTarget(event.target);
   for (const action of SHORTCUT_ACTIONS) {
-    if (shouldEngage(event, bindings[action])) {
-      return action;
+    const binding = bindings[action];
+    if (!matchesBinding(event, binding)) {
+      continue;
     }
+    if (typing && !binding.ctrl && !binding.meta) {
+      continue;
+    }
+    return action;
   }
   return null;
 }

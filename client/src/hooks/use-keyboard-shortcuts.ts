@@ -43,8 +43,8 @@ function desktopOwnsDefault(
 
 /**
  * Window-level Discord keys. Capture phase so a stopped bubble still
- * reaches us; skipped while a key-binding field is armed, and while the
- * composer has focus (`matchShortcut` uses `isTextEntryTarget`).
+ * reaches us; skipped while a key-binding field is armed. Bindings without
+ * Ctrl/Meta still yield to the composer (`matchShortcut`).
  */
 export function useKeyboardShortcuts({
   overrides,

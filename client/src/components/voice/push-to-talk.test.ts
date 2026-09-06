@@ -5,6 +5,7 @@ import {
   defaultPushToTalkBinding,
   formatBinding,
   isTextEntryTarget,
+  matchesBinding,
   parseBinding,
   shouldEngage,
   shouldRelease,
@@ -103,6 +104,24 @@ describe("engaging", () => {
   it("ignores auto-repeat rather than re-engaging every 30ms", () => {
     expect(
       shouldEngage(keyEvent({ code: "KeyT", target: plainDiv, repeat: true }), T_KEY),
+    ).toBe(false);
+  });
+
+  it("matchesBinding ignores the target so a Ctrl chord can still be recognised in the composer", () => {
+    expect(matchesBinding(keyEvent({ code: "KeyT", target: composer }), T_KEY)).toBe(
+      true,
+    );
+    expect(
+      matchesBinding(
+        keyEvent({ code: "KeyT", target: composer, isComposing: true }),
+        T_KEY,
+      ),
+    ).toBe(false);
+    expect(
+      matchesBinding(
+        keyEvent({ code: "KeyT", target: composer, repeat: true }),
+        T_KEY,
+      ),
     ).toBe(false);
   });
 
