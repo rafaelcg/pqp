@@ -107,16 +107,16 @@ private fun MeshScreenRenderer(screen: RemoteScreen.Mesh, modifier: Modifier) {
 /**
  * LiveKit's own `SurfaceViewRenderer`, initialised by the room.
  *
- * `Room.initVideoRenderer` is what hands it the SFU's GL context, and it is
- * also what makes adaptive stream work: LiveKit's renderer reports its size
- * and visibility to the track (`ViewVisibility.Notifier`), so the SFU is asked
- * for the smallest simulcast layer that covers this view under the ceiling
- * `screenReceiveLayerFor` set. A plain `livekit.org.webrtc.SurfaceViewRenderer`
- * would draw the same frames and tell the SFU nothing, which on a phone means
- * the 720p layer for a picture drawn at 360 lines.
+ * `Room.initVideoRenderer` is the only way to get the SFU's GL context: it
+ * belongs to LiveKit's libwebrtc and is not exposed on its own. It also sets
+ * the scaling type and the hardware scaler, which this then overrides with
+ * aspect-fit for the same reason the mesh renderer uses it.
  *
- * Attached with `addRenderer` rather than `addSink`: it is the track's own
- * sink list that the visibility bookkeeping walks.
+ * Attached with `addRenderer` rather than `addSink`, because that is the API
+ * on a `RemoteVideoTrack` and it is what keeps the track's own sink list
+ * right. What layer arrives, and whether anything arrives at all, is decided
+ * by [gg.pqp.app.voice.LiveKitEngine] rather than by this view: the SDK's
+ * view-measuring path is deliberately off there.
  */
 @Composable
 private fun LiveKitScreenRenderer(screen: RemoteScreen.LiveKit, modifier: Modifier) {

@@ -961,9 +961,8 @@ then fails at the first frame. So a screen leaves a transport as a
 `RemoteScreen`, a sealed type with one case per namespace, each carrying the GL
 context or the `Room` its own renderer needs, and `RemoteScreenView` is a `when`
 over the two. The LiveKit case uses LiveKit's own `SurfaceViewRenderer`
-initialised through `Room.initVideoRenderer` and attached with `addRenderer`,
-because that is what registers the view with adaptive stream; a plain renderer
-would draw the same picture and tell the SFU nothing about its size.
+initialised through `Room.initVideoRenderer`, which is the only way to get the
+SFU's GL context, and attaches with `addRenderer`.
 
 **What the SFU is asked for, and when.** Two rules, both about the bill, and
 both mirroring the web:
@@ -977,13 +976,27 @@ both mirroring the web:
   flowing to nobody.
 - **The layer is capped at 720p, or 360p on a metered link**
   (`screenReceiveLayerFor`, tested). The presenter publishes simulcast layers,
-  so there is a phone-sized copy on the server to ask for; adaptive stream
-  still shrinks below that ceiling for a small view. `HIGH` is never asked for
-  by default, because under adaptive stream it means "no ceiling", which is a
-  desktop's default and not a phone's. The metered signal is
+  so there is a phone-sized copy on the server to ask for. `HIGH` is never
+  asked for, because it is the SDK's resting value and means "whatever the
+  publisher's top layer is". The metered signal is
   `ConnectivityManager.isActiveNetworkMetered`, read each time a layer is
   chosen, so a phone that leaves Wi-Fi mid-call is noticed by the next share it
   opens.
+
+**Adaptive stream is off here, and that is the opposite of the web's setting.**
+It is a difference between the two SDKs, not a preference. In livekit-client
+the two compose: the library measures the element and a manual
+`setVideoQuality` is a ceiling over that measurement. In livekit-android 2.28.1
+they do not compose, they replace each other:
+`RemoteTrackPublication.setEnabled` and `setVideoQuality` both begin
+`if (isAutoManaged()) return`, and `isAutoManaged` is the track's
+`autoManageVideo`, which the room sets from `adaptiveStream` (read from the
+2.28.1 bytecode). With adaptive stream on, both controls above would compile,
+run, and do nothing. The thing that most needs controlling is also the case a
+measurement cannot see: a share nobody has opened has no renderer, so it has no
+computed visibility and is delivered until one is attached and removed. The
+viewer is a full-screen dialog, so there is little else for a measurement to
+find that `screenReceiveLayerFor` does not already know.
 
 **A share's sound is carried on the SFU**, and only there: the mesh path
 never announced an `audioStreamId` from this client and the web's

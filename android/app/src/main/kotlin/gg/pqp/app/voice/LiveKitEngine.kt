@@ -52,10 +52,10 @@ import kotlinx.coroutines.withTimeout
  *   [setWatchingScreen], so a share in a room this phone is merely listening to
  *   is a subscription on paper and no bytes on the wire. The web does the same
  *   with `remote-video-delivery.ts`.
- * - **The layer is capped.** Adaptive stream is on, so LiveKit measures the
- *   renderer and asks the SFU for the smallest simulcast layer that covers it,
- *   and [screenReceiveLayerFor] lays a ceiling over that: 720p on Wi-Fi, 360p on
- *   a metered link. A phone never asks for the 1080p layer by default.
+ * - **The layer is capped** by [screenReceiveLayerFor]: 720p on Wi-Fi, 360p on
+ *   a metered link, so a phone never asks for the 1080p layer. Both of those
+ *   controls require adaptive stream to be **off** in this SDK, which is not
+ *   the web's setting and is explained where the room is built.
  *
  * ### What this deliberately does not do
  *
@@ -186,15 +186,30 @@ class LiveKitEngine(
         val created = LiveKit.create(
             context.applicationContext,
             RoomOptions(
-                // On, as on the web. Adaptive stream measures the renderer a
-                // subscribed video is drawn into and asks the SFU for the
-                // smallest simulcast layer that covers it, and pauses the
-                // video when no renderer is visible. The renderer has to be
-                // registered through `Room.initVideoRenderer` for the SDK to
-                // see it; `RemoteScreenView` does that. A manual
-                // `setVideoQuality` is a ceiling laid over the measurement,
-                // not a replacement for it: see `screenReceiveLayerFor`.
-                adaptiveStream = true,
+                // OFF, AND THAT IS THE OPPOSITE CALL FROM THE WEB'S, FOR A
+                // REASON IN THIS SDK RATHER THAN A PREFERENCE.
+                //
+                // On the web the two compose: `adaptiveStream` measures the
+                // element and a manual `setVideoQuality` is a ceiling over
+                // that measurement, so the library sends the smaller of the
+                // two. livekit-android 2.28.1 does not compose them, it
+                // *replaces* them: `RemoteTrackPublication.setEnabled` and
+                // `setVideoQuality` both begin `if (isAutoManaged()) return`,
+                // and `isAutoManaged` is the track's `autoManageVideo`, which
+                // the room sets from this flag (verified by reading the 2.28.1
+                // bytecode). So with adaptive stream on, every line below that
+                // pauses a share or caps its layer would compile, run, and do
+                // nothing at all.
+                //
+                // The choice is therefore between the SDK measuring the view
+                // and this client saying what it wants. Saying it wins,
+                // because the thing to pause is a share *nobody has opened*,
+                // which has no view to measure: a publication with no renderer
+                // has never had a visibility computed, so it is delivered
+                // until one is attached and removed. The viewer here is also a
+                // full-screen dialog, so there is little for a measurement to
+                // discover that `screenReceiveLayerFor` does not already know.
+                adaptiveStream = false,
                 dynacast = true,
             ),
             LiveKitOverrides(
@@ -470,12 +485,10 @@ class LiveKitEngine(
     /**
      * The viewer opened or closed on this peer's share.
      *
-     * Explicit on both ends rather than left to adaptive stream alone. The
-     * SDK pauses a track once every renderer it was given has gone invisible,
-     * but before a renderer has ever been attached it has nothing to compare
-     * against and leaves the publication delivering. Naming the state here is
-     * what makes the pause certain; the SDK's measurement then only ever
-     * shrinks the layer below the ceiling while the viewer is open.
+     * The only thing that starts and stops the video on this transport, since
+     * the SDK's own visibility management is off (see the room options). One
+     * `UpdateTrackSettings` frame each way: `disabled` for a share nobody is
+     * looking at, and the chosen layer when somebody is.
      */
     override fun setWatchingScreen(remotePeerId: String, watching: Boolean) {
         val publication = screenPublicationFor(remotePeerId) ?: return

@@ -206,9 +206,11 @@ it can watch a share in one. It declares `transports: ["mesh", "livekit"]`,
 mints a token for the peer id the welcome named, connects with
 `autoSubscribe = false` and subscribes deliberately: every audio publication,
 plus `SCREEN_SHARE` video. A share arrives disabled and is only enabled while
-the viewer is open, and the layer is capped at 720p (360p on a metered link)
-under adaptive stream, so a phone in a 100-viewer watch party is not handed the
-1080p layer. `SCREEN_SHARE_AUDIO` plays with the voice, silenced by deafen and
+the viewer is open, and the layer is capped at 720p (360p on a metered link),
+so a phone in a 100-viewer watch party is not handed the 1080p layer. Both of
+those need `adaptiveStream = false` on Android: unlike livekit-client, the
+Android SDK ignores `setEnabled` and `setVideoQuality` on an adaptively managed
+track rather than treating the manual value as a ceiling. `SCREEN_SHARE_AUDIO` plays with the voice, silenced by deafen and
 gated on the roster having announced the share. What Android does **not** do on
 LiveKit: publish a screen (the button is hidden there), a camera in either
 direction, or per-peer stats, because LiveKit's stats arrive in the other
