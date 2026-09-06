@@ -109,7 +109,7 @@ the first upload rather than after.
    *upload* key. Losing the upload key is recoverable through Google support;
    losing an app signing key would not have been. Opt in.
 
-Also note the version. `versionCode = 3` / `versionName = "0.2.0"` in
+Also note the version. `versionCode = 4` / `versionName = "0.3.0"` in
 `android/app/build.gradle.kts`. **A `versionCode` can never be reused**, even by
 a build that was rejected, so bump it for every single upload.
 
@@ -436,8 +436,9 @@ declaration is a rejection, and this is the single easiest way to lose a day.
 **Console → App content → Foreground service permissions**, for `microphone`:
 
 - **What it does:** keeps a live voice call running while the person uses
-  another app. The call is peer-to-peer WebRTC audio between people who joined
-  the same voice channel.
+  another app. The call is WebRTC audio between people who joined the same
+  voice channel: peer-to-peer in a small room, forwarded by our own media
+  server in a large one.
 - **Why a foreground service is required:** Android stops a backgrounded
   process's threads, so without it every call drops the moment the person checks
   a message. There is no alternative API for continuous audio capture.
@@ -497,11 +498,15 @@ Data types to declare:
 - **Messages → Other in-app messages**: collected, required, app functionality.
   Text messages are stored on the server so a channel has history.
 - **Audio → Voice or sound recordings**: **collected: no.** This is the one
-  worth getting right. Voice is peer-to-peer WebRTC and the microphone stream is
-  never stored or sent to the server; TURN relays packets it cannot read.
-  Declare the microphone permission and say audio is transmitted in real time
-  and not collected. Do not tick "collected" out of caution: an inaccurate
-  data-safety form is itself a policy violation, in either direction.
+  worth getting right, and the reason given matters as much as the answer.
+  Voice is WebRTC. In a small room it is peer-to-peer and TURN only relays
+  packets it cannot read. In a large room (a listed community, or a server of
+  ten or more) it is forwarded by our own LiveKit media server, which decrypts
+  in order to forward and writes nothing to disk. Either way the microphone
+  stream is never stored. Declare the microphone permission, say audio is
+  transmitted in real time and not collected, and do not tick "collected" out
+  of caution: an inaccurate data-safety form is itself a policy violation, in
+  either direction.
 - **Photos** and **Files**: not yet. Attachments (B5) are not built on Android.
   **Revisit this form when they are.**
 - **App activity / App info and performance**: no analytics SDK ships in the

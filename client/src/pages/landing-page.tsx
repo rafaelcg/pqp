@@ -34,7 +34,7 @@ const TRUST_ITEMS = [
     external: true,
   },
   { key: "landing.trust.selfHostable", href: "/#hosting" },
-  { key: "landing.trust.meshVoice", href: "/#features" },
+  { key: "landing.trust.voice", href: "/#features" },
   { key: "landing.trust.inviteCodes", href: "/#features" },
   { key: "landing.trust.yourKeys", href: "/#hosting" },
 ] satisfies {

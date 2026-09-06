@@ -61,7 +61,7 @@ Never commit `.env`. Template: [`.env.example`](../.env.example).
 | 2 Text chat | Done |
 | 3 Voice (mesh) | Done (cross-NAT FIXED 2026-07-11) |
 | 4 Self-host / Fly + Pages | Done (live) |
-| 5 SFU | LiveKit **verified against a live server 2026-08-07** (not Cloud, not at scale, not cross-NAT); **not enabled in production**; Cloudflare Realtime still a stub. Scope: [`voice-backends.md`](./voice-backends.md#verification-status) |
+| 5 SFU | LiveKit is **live in production** on a self-hosted server (`sfu.pqp.gg`, the Vultr box in São Paulo); `GET /ready` reports it healthy. Rooms are routed automatically: listed communities and servers of ten or more members get LiveKit, DM calls and small servers stay on mesh (`server/src/voice/transport-policy.ts`). A watch party of over a hundred people ran on it 2026-09-05. Not verified against LiveKit Cloud or cross-NAT on the SFU path; Cloudflare Realtime still a stub. Scope: [`voice-backends.md`](./voice-backends.md#verification-status) |
 | 6 Electron + billing | **Partial** (shell + CI artifacts + deep links; no app icon, no Stripe UI) |
 
 Detail and “still open” list: [`PLAN_STATUS.md`](./PLAN_STATUS.md).

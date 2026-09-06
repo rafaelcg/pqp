@@ -5,10 +5,10 @@ pqp (https://pqp.gg) is an open-source voice and text chat for groups of friends
 ## What it is
 
 - Servers (called halls in the code) with text channels and voice channels.
-- Voice is WebRTC. Small rooms are a peer-to-peer mesh; larger rooms use a LiveKit SFU when the hosted instance has one configured. The server decides the transport per room.
+- Voice is WebRTC, and the server picks the transport per room: small servers and DM calls stay peer-to-peer, while listed communities and servers of ten or more members go through a media server (LiveKit). The hosted instance at pqp.gg runs one, so a big room is not capped at a handful of people; a self-host with no LiveKit configured is peer-to-peer only, which tops out around eight per channel.
 - Screen share with audio from the browser, and watch parties.
 - Direct messages, friends, reactions, attachments (S3-compatible storage, off unless configured), GIFs.
-- Roles: owner, admin, member. Invites are links; joining needs an account.
+- Roles: a seeded staff ladder (owner, admin, manager, moderator, VIP, @everyone) plus roles a server invents, each with permission bits and per-channel overwrites. Invites are links; joining needs an account.
 - Communities: an opt-in public directory of joinable servers. Off by default on a self-host.
 - Public handles: a person can claim `pqp.gg/@handle` and get a public profile page. Communities that opt in get `pqp.gg/c/slug`.
 - Baú: a durable media feed inside a server, behind its own flag.

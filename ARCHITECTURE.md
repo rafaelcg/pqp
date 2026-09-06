@@ -85,7 +85,9 @@ Per **voice channel** mesh room. Same offer/answer/ICE relay as the seed MVP, sc
 | Server → Client | `screen-share-denied` | The room already has the maximum number of screen shares |
 | Relayed | `offer` / `answer` / `ice-candidate` | WebRTC negotiation (mic and, when presenting, a second video track) |
 
-**Mesh limit:** ~5–8 users per voice channel. UI warns at 6+. SFU backends scale beyond this.
+**Which transport a room gets.** The server decides at the first join and pins it for the room's lifetime (`server/src/voice/transport-policy.ts`): listed communities of any size, and servers of ten or more members, go to LiveKit; DM calls and smaller servers stay on mesh. With no `LIVEKIT_*` configured every room is mesh.
+
+**Mesh limit:** 8 per voice channel, exactly (`MESH_VOICE_LIMIT`). UI warns from 6. A LiveKit room has no such gate.
 Screen share is capped per transport: **two** concurrent presenters on mesh, **four** on LiveKit. The media path already carries one screen track per peer; the cap is a bandwidth policy, not a protocol limit. Old clients that still take the first `sharingScreen` roster entry keep working: they see and hear only that first sharer.
 
 ## Public status page
@@ -189,7 +191,7 @@ Details: [`docs/voice-backends.md`](./docs/voice-backends.md).
 | Service | Use | Why not always |
 |---|---|---|
 | **TURN** | NAT traversal for mesh voice | Self-host uses coturn or env TURN |
-| **Realtime SFU** | Scale voice past mesh on hosted | Not self-hostable; LiveKit for OSS |
+| **Media server (LiveKit)** | Carries voice and screen share for communities and servers of ten or more | Self-hosted on pqp.gg (`sfu.pqp.gg`); LiveKit Cloud, your own box, or none all work |
 | **Pages** | CDN for static client on pqp.gg | Self-host serves from Node |
 | **R2** | Attachment bytes (no egress fee) | Same S3 driver points at MinIO for self-host |
 
@@ -220,5 +222,5 @@ Thin shell loads `VITE_APP_URL` or bundled client. Configure `VITE_API_URL` / `V
 2. Text chat + markdown — **done**
 3. Voice per channel mesh — **done**
 4. Docker + Railway — **done**
-5. SFU backends — stubs + docs
+5. SFU backends: LiveKit implemented and live in production; Cloudflare Realtime still a stub
 6. Electron + billing groundwork — **done (shell + docs)**

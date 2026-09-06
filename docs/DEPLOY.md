@@ -127,7 +127,7 @@ These live on the API, never in the client build. Names only — see [`../.env.e
 | Core | `TRUST_PROXY` | Yes — unset behind Railway's edge means every client shares one rate-limit bucket, so a single abusive caller exhausts the pre-auth budget for everybody |
 | Hardening | `PG_POOL_MAX`, `DATABASE_SSL` | Recommended |
 | ICE / TURN | one of the options in [`deploy-railway.md`](./deploy-railway.md) | For cross-NAT voice |
-| SFU | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Only past the mesh limit |
+| SFU | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Set these and the server routes listed communities and servers of ten or more members here on its own; unset, every room is peer-to-peer and caps at 8 |
 | GIF search | `KLIPY_API_KEY` | Optional feature |
 | **Game connections** | `PUBLIC_APP_URL`, `STEAM_WEB_API_KEY`, `BATTLENET_CLIENT_ID`, `BATTLENET_CLIENT_SECRET`, `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` | Optional, per provider — [`CONNECTIONS.md`](./CONNECTIONS.md) |
 | **Attachments** | `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_FORCE_PATH_STYLE` | Optional feature |

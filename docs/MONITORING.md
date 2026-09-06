@@ -467,7 +467,7 @@ These are printed at the end of every `limits` run as well.
 | **Errors the server never logs** | — | The error heartbeat reads stdout. A route that 500s without a `console.error`, or anything that fails in the browser, is invisible to it. It measures what the server says about itself, which is not what users experience. | n/a |
 | **Scheduled workflows still enabled** | — | **GitHub disables scheduled workflows after 60 days with no repository activity.** A repo that goes quiet loses its monitoring silently. | Monthly: confirm `Monitor (uptime)` has run recently in the Actions tab |
 | **GitHub Actions minutes** | Unlimited | rafaelcg/pqp is a **public** repository and Actions minutes are free and unmetered for public repos. There is no quota to hit, so no alert was built — one would never fire. This becomes real only if the repo is ever made private. | Never, unless the repo goes private |
-| **LiveKit Cloud participant-minutes** | n/a | `LIVEKIT_*` is not configured; voice is full-mesh, so there is no SFU account to meter. Add a check here if that changes. | n/a |
+| **LiveKit usage (minutes and egress)** | none yet | `LIVEKIT_*` **is** configured and the self-hosted SFU carries production voice, so the meter is the box's own bandwidth graph rather than a Cloud dashboard. A hundred-person watch party is a real egress bill on a real machine and nothing watches it. | Build one: a bandwidth alert on the SFU host, see `docs/plans/SELF_HOSTED_LIVEKIT.md` |
 
 ---
 
@@ -595,7 +595,7 @@ all routed to the contact point `rafael-email`):
 |---|---|
 | error lines > 20 in 5m | more than 20 error lines in the last 5 minutes, sustained 5 minutes |
 | Connection terminated > 5 in 5m | Postgres is dropping connections (the 2026-09-05 outage shape) |
-| voice.roomFull in last 5m | any join refused for room size; the mesh cap is being hit |
+| voice.roomFull in last 5m | any join refused for room size; the mesh cap is being hit. Mesh rooms only, and a LiveKit room has no size gate, so silence here is not proof that no room filled |
 | no ws.connect for 15m (12:00-03:00 UTC) | nobody connected for 15 minutes during active hours; mute timing `pqp-quiet-hours` silences it 03:00-12:00 UTC. "No lines" and "no shipper" look the same to it, so it also catches a dead shipper |
 
 The synthetic checks on `/health` and `sfu.pqp.gg` (ids 6260, 6261) and the

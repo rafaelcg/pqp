@@ -145,15 +145,19 @@ then message it is governed by `users.dm_privacy`, which defaults to
 treated as a control (§2.2, C5).
 
 **Voice, and what it means for moderation.** Voice channels are full-mesh
-WebRTC between participants, or LiveKit SFU where configured. **Media never
-passes through the operator's servers, is not recorded, and is not retained.**
-Only signalling and presence cross the operator's WebSocket. This is a
-structural limit, not a failure to try: there is nothing to scan because nothing
-arrives.
+WebRTC between participants, or LiveKit where the room is large enough to be
+routed there (listed communities, and servers of ten or more members). **On
+mesh, media never touches the operator's infrastructure at all. On LiveKit, it
+transits a media server the operator runs, which decrypts in order to forward
+and writes nothing to disk: nothing is recorded and nothing is retained.**
+Either way only signalling and presence cross the operator's WebSocket, and
+there is nothing stored to scan after the fact. Note the distinction that
+changed on the day the SFU went live: on mesh, "we cannot see it" is
+structural; on LiveKit it is a policy control the operator chooses to keep.
 
-**Screen sharing exists, and it is video.** `use-voice.ts:1016` calls
-`getDisplayMedia({ video: true })`; one participant per voice channel may share
-at a time. It travels the same peer-to-peer or SFU path as audio, and is
+**Screen sharing exists, and it is video.** `use-voice.ts` calls
+`getDisplayMedia`; two participants per voice channel may share at a time on
+mesh, four on LiveKit (`SCREEN_SHARE_LIMIT`). It travels the same peer-to-peer or SFU path as audio, and is
 therefore **live video that is never recorded, never stored and never
 observable by the operator.** For Ofcom's purposes this makes pqp a service with
 a livestreaming functionality, which is a risk factor for grooming and for
@@ -234,7 +238,7 @@ that the Risk Profiles were consulted and a list of the risk factors found.
 | 4b | Closed groups or group messages | **Yes** | Private channels, group DMs, invite-only servers |
 | 5a | Livestreaming | **Yes** | Live voice, and **live video via screen share** |
 | 5b | Direct messaging | **Yes** | |
-| 5c | Encrypted messaging | **Text: no. Voice and screen share: effectively yes** | Text is stored in Postgres and readable by the operator. Voice/video is peer-to-peer WebRTC, DTLS-SRTP, never recorded — for risk purposes it behaves exactly like encrypted messaging: the operator cannot see it, cannot scan it, cannot retrieve it after the fact |
+| 5c | Encrypted messaging | **Text: no. Voice and screen share: effectively yes** | Text is stored in Postgres and readable by the operator. Voice and video are DTLS-SRTP either way, and nothing is recorded or retrievable after the fact. On mesh it is peer-to-peer and the operator structurally has no access. On LiveKit the operator's own media server decrypts in order to forward, so "cannot see it" becomes "does not see it, does not record it, keeps nothing", a policy control rather than a structural one |
 | 5d | Commenting on content | No | Replies and reactions exist, but they are messages, not comments on published content |
 | 5e | Posting or sending images or videos | **Yes** | Images, video files, audio files, PDFs |
 | 5f | Posting or sending location information | No | No feature; a user can type an address |

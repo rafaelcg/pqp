@@ -1,8 +1,19 @@
 # Client parity: Web, Electron, iOS, Android
 
-Read-only audit as of 2026-09-06, against `main` at `c268a86`. No code was
-changed for this document. Every cell was verified in the file named beside it;
-where a doc and the code disagree, the code wins and the disagreement is noted.
+First pass 2026-09-06 against `main` at `c268a86`; refreshed the same day
+against `a6b150ff`, after the batch that landed Electron push-to-talk and a
+tray, Android DM calls, Android chat and Android invites, iOS and Android
+SPEAK, Android share watching on the media server, and iOS share publishing.
+No code was changed for this document. Every cell was verified in the file
+named beside it; where a doc and the code disagree, the code wins and the
+disagreement is noted.
+
+One thing to hold while reading the voice rows: a big room is a media-server
+room **in production today**, not a future flag.
+`server/src/voice/transport-policy.ts` sends every listed community, and every
+server of ten or more members, to LiveKit the moment a call opens, and
+`https://api.pqp.gg/ready` reports LiveKit healthy. Peer-to-peer is what is
+left for DM calls and small servers.
 
 Audience: whoever picks the next platform gap. The ranking at the bottom is
 tuned for people who arrived from a Twitch watch party: voice, screen share,
@@ -34,22 +45,22 @@ Paths are relative to the repo root. `ios/` means
 | Capability | Web | Electron | iOS | Android |
 |---|---|---|---|---|
 | Send, receive, optimistic rows, typing | full (`client/src/hooks/use-chat.ts`) | same | full (`ios/Chat/ChatModel.swift`) | full (`android/ui/screens/ChatViewModel.kt`) |
-| Markdown rendering | full: blocks, code fences, spoilers, mention chips (`client/src/lib/chat-markdown.ts`) | same | partial: inline only via `AttributedString(markdown:)`, no headings, quotes, fenced code, spoilers or mention pills (`ios/Chat/ChatView.swift` `MessageBodyText`) | missing: plain `AnnotatedString`, no markdown library in `android/gradle/libs.versions.toml` (`android/ui/screens/ChatScreen.kt`) |
+| Markdown rendering | full: blocks, code fences, spoilers, mention chips (`client/src/lib/chat-markdown.ts`) | same | partial: inline only via `AttributedString(markdown:)`, no headings, quotes, fenced code, spoilers or mention pills (`ios/Chat/ChatView.swift` `MessageBodyText`) | full: hand-rolled Discord-shaped parser, bold, italic, strike, code, fences, quotes, links, mention runs (`android/ui/chat/ChatMarkdown.kt`, `android/ui/chat/MessageBody.kt`) |
 | Formatting shortcuts (Cmd/Ctrl+B, I, E, Shift+X) | full (`client/src/lib/composer-formatting.ts`) | same | missing: plain `TextField` composer (`ios/Chat/ChatView.swift` `Composer`) | missing (`android/ui/screens/ChatScreen.kt` composer) |
 | Format bar | open PR #263 | same | missing | missing |
 | Emoji picker and `:shortcode:` expansion | full (`client/src/components/chat/emoji-picker-panel.tsx`, `client/src/lib/emoji-shortcodes.ts`) | same | partial: hand-built catalog of about 70 entries, no shortcodes (`ios/Chat/Pickers.swift` `EmojiCatalog`) | partial: only the fixed quick-reaction set, no picker, no shortcodes (`android/ui/screens/Reactions.kt`) |
 | Reactions, who reacted | full (`client/src/components/chat/message-list.tsx`, `client/src/lib/reaction-who.ts`) | same | full (`ios/Chat/ChatView.swift` `ReactionRow`) | full, no "who reacted" (`android/ui/screens/Reactions.kt`) |
 | Attachments: upload | full, any file, drag, paste (`client/src/lib/attachments.ts`) | same | partial: photos only, re-encoded JPEG, no documents, video, audio or PDF (`ios/Core/AttachmentUploader.swift`, `ios/Chat/ChatView.swift:71`) | full, any file via SAF (`android/attachments/AttachmentApi.kt`) |
 | Attachments: view | full (`client/src/components/chat/attachment-grid.tsx`) | same | full: images, GIFs, video, zoom (`ios/Chat/MediaPlayerView.swift`, `ios/Media/ZoomableMediaView.swift`) | partial: images, GIFs, video via Media3; audio is a download chip (`android/ui/media/MessageMedia.kt`) |
-| GIF picker | full (`client/src/components/chat/gif-picker-panel.tsx`) | same | full (`ios/Chat/Pickers.swift` `GifGrid`) | missing: pasted GIF links render, no picker (`android/ui/media/GifLinks.kt`, `docs/ANDROID.md` "Media in a message") |
-| Replies | full (`client/src/components/chat/message-list.tsx`) | same | full (`ios/Chat/ChatView.swift` `ReplyChip`) | partial: quoted line renders and `sendMessage` takes `replyToId`, but no Reply action in the sheet (`android/ui/screens/ChatScreen.kt` `MessageActionsSheet`) |
+| GIF picker | full (`client/src/components/chat/gif-picker-panel.tsx`) | same | full (`ios/Chat/Pickers.swift` `GifGrid`) | full (`android/ui/screens/ChatScreen.kt` `GifPickerSheet`; pasted links in `android/ui/media/GifLinks.kt`) |
+| Replies | full (`client/src/components/chat/message-list.tsx`) | same | full (`ios/Chat/ChatView.swift` `ReplyChip`) | full (`android/ui/chat/MessageActions.kt` `ComposerTarget.Reply`, `android/ui/screens/ChatScreen.kt` `MessageActionsSheet`) |
 | Threads | full (`client/src/components/chat/thread-panel.tsx`) | same | partial: derived from the last ~100 messages, no archive (`ios/Chat/ThreadViews.swift`) | missing (`android/core/Models.kt:13` ignores the field) |
 | Forward | full (`client/src/components/chat/forward-dialog.tsx`) | same | missing | missing |
 | Polls, `/draw` chance card, slash commands | full (`client/src/lib/slash-commands.ts`, `client/src/components/chat/poll-card.tsx`) | same | missing (renders nothing special) | partial: chance card renders (`android/ui/chat/ChanceCard.kt`), no polls, no commands |
-| Mentions: autocomplete and rendering | full (`client/src/lib/mention-autocomplete.ts`, `client/src/lib/remark-mentions.ts`) | same | partial: mention counts and badges, no `@` autocomplete, no pills (`ios/Home/HomeView.swift:263`, `ios/Chat/ChatView.swift`) | partial: unread mention count only (`android/social/SocialModels.kt:93`) |
+| Mentions: autocomplete and rendering | full (`client/src/lib/mention-autocomplete.ts`, `client/src/lib/remark-mentions.ts`) | same | partial: mention counts and badges, no `@` autocomplete, no pills (`ios/Home/HomeView.swift:263`, `ios/Chat/ChatView.swift`) | partial: `@` autocomplete and mention runs in the body, no coloured pill for the reader (`android/ui/chat/MentionAutocomplete.kt`, `android/ui/chat/ChatMarkdown.kt`) |
 | Slow mode | full (`client/src/components/chat/message-composer.tsx`) | same | full, with `retryAfterMs` draft restore (`ios/Chat/ChatModel.swift:319`) | missing: no `slowMode` anywhere; `message-rejected` is handled since PR #218 but no countdown (`android/core/RealtimeClient.kt`) |
-| Edit and delete own message, Arrow Up edits last | full (`client/src/lib/edit-last-message.ts`) | same | full (`ios/Chat/MessageActionsOverlay.swift`) | partial: receives `message-update` / `message-delete`, no edit or delete action (`android/ui/screens/ChatViewModel.kt:322`) |
-| Pins | full (`client/src/components/chat/pinned-messages-panel.tsx`) | same | full (`ios/Home/ServerToolsView.swift` `PinnedMessagesView`) | missing (`pinnedAt` decoded only, `android/core/Models.kt:207`) |
+| Edit and delete own message, Arrow Up edits last | full (`client/src/lib/edit-last-message.ts`) | same | full (`ios/Chat/MessageActionsOverlay.swift`) | partial: edit and delete rows in the sheet, no Arrow-Up-edits-last (`android/ui/chat/MessageActions.kt`, `android/ui/screens/ChatViewModel.kt:215`) |
+| Pins | full (`client/src/components/chat/pinned-messages-panel.tsx`) | same | full (`ios/Home/ServerToolsView.swift` `PinnedMessagesView`) | full: pin / unpin row, pinned sheet, `MANAGE_MESSAGES` gate (`android/ui/chat/MessageActions.kt`, `android/ui/screens/ChatScreen.kt` `PinnedSheet`) |
 | Message search | full (`client/src/components/search/search-dialog.tsx`) | same | partial: server-wide, no `from:` / `has:` filters (`ios/Home/ServerToolsView.swift` `SearchView`) | missing (people search only, `android/social/ui/PeopleSearch.kt`) |
 | Link embeds | full (`client/src/components/chat/message-body.tsx`) | same | full, with a preview toggle (`ios/Chat/Pickers.swift` `EmbedCard`) | missing |
 | Unread divider, read state | full (`client/src/lib/unread-divider.ts`) | same | full (`ios/Core/ReadCache.swift`) | partial: unread badges, no divider (`android/social/ui/SocialComponents.kt:215`) |
@@ -79,20 +90,20 @@ Paths are relative to the repo root. `ios/` means
 | Capability | Web | Electron | iOS | Android |
 |---|---|---|---|---|
 | Mesh voice, mute, deafen | full (`client/src/lib/peer-connection-manager.ts`) | same | full (`ios/Voice/VoiceClient.swift`) | full, audio measured by `getStats` but never by a human ear (`android/voice/VoiceEngine.kt`, `docs/ANDROID.md` "What is real") |
-| LiveKit / SFU voice | full (`client/src/lib/livekit-session.ts`) | same | partial: joins, publishes mic, receives shares; no share publish, no quality ladder (`ios/Voice/LiveKitVoiceClient.swift`) | partial: audio only by construction, no screen share either direction, no stats; audio never heard (`android/voice/LiveKitEngine.kt`) |
+| LiveKit / SFU voice | full (`client/src/lib/livekit-session.ts`) | same | full: joins, publishes mic, receives shares and publishes one with the web's ladder (`ios/Voice/LiveKitVoiceClient.swift`, `ios/Voice/VideoQuality.swift` `sfuScreenPlan`) | partial: audio plus share watching with its sound; no share publish, no camera, no stats (`android/voice/LiveKitEngine.kt`) |
 | Resume media across an API restart | full, 90 s orphan window (`client/src/lib/realtime.ts`, `client/src/hooks/use-voice.ts`) | same, plus `setBackgroundThrottling(false)` (`electron/main.js:939`) | partial: LiveKit resumes, mesh is rebuilt (`ios/Voice/VoiceModel.swift:507`) | partial: call is rebuilt, not resumed; `resumeToken` sent since PR #270 (`android/voice/VoiceController.kt`) |
 | Speaking indicators | full (`client/src/hooks/use-voice.ts`) | same | full, 300 ms `audioLevel` polling (`ios/Voice/VoiceClient.swift`) | missing |
 | Per-peer volume | full (`client/src/components/voice/peer-tile-controls.tsx`) | same | full (`ios/Voice/RemoteAudio.swift`) | missing |
-| Push-to-talk | full, in-window only (`client/src/components/voice/use-push-to-talk.ts`) | partial: no global hotkey, key releases on window blur (`use-push-to-talk.ts:34`, `electron/README.md:186`); menu has Cmd/Ctrl+Shift+M toggle mute (`electron/main.js:366`) | missing (`ios/Core/APIClient.swift:546` says `inputMode` is not modelled) | missing |
+| Push-to-talk | full, in-window only (`client/src/components/voice/use-push-to-talk.ts`) | full: global hotkey while the window is unfocused, in-window otherwise (`electron/lib/global-ptt.js`, `electron/main.js:1216`); menu has Cmd/Ctrl+Shift+M toggle mute | missing (`ios/Core/APIClient.swift:546` says `inputMode` is not modelled) | missing |
 | Voice activity gate | open PR #259 (`client/src/components/layout/settings-modal.tsx`) | same | missing | missing |
 | Noise suppression, echo, auto gain toggles | full (`client/src/components/layout/settings-modal.tsx`) | same | missing as settings; `.voiceChat` mode gives AEC (`ios/Voice/VoiceClient.swift`) | missing as settings; hardware NS always on (`android/voice/VoiceEngine.kt:256`) |
 | Input / output device pickers | full (`client/src/lib/audio-devices.ts`) | partial: output device unsupported (`settings.voice.outputUnsupported_desktop`, `client/src/locales/en/translation.json`) | partial: speaker / earpiece toggle only (`ios/Voice/VoiceView.swift:270`) | partial: speakerphone toggle only (`android/ui/components/CallBar.kt:162`) |
 | Join muted in a crowded room | full (`client/src/lib/join-muted.ts`) | same | full, as a preference (`ios/Voice/VoiceModel.swift:316`) | full (`android/voice/VoiceController.kt` `onWelcome`) |
 | Server mute / deafen / disconnect / move (moderator) | full on LiveKit (`client/src/components/layout/members-panel.tsx`); mesh in open PR #223 | same | missing: no frame or action (`ios/Core/Moderation.swift:32`); receiver side in open PR #222 | full receiver side: `voice-moderation` muted / unmuted / moved / disconnected (`android/voice/VoiceController.kt`); mesh in open PR #221; no moderator UI |
-| SPEAK / STREAM permission enforcement | full: listen-only join, disabled unmute, badge (`client/src/components/voice/capabilities.ts`); STREAM split in open PR #254 | same | partial: reacts to `screen-share-denied` and `camera-denied`, no permission bits (`ios/Core/RealtimeClient.swift:810`) | partial: reacts to refusals only (`android/ui/screens/ChannelsScreen.kt:174`) |
-| Screen share: send | full, tab / window / screen (`client/src/components/voice/screen-share-view.tsx`) | partial: own picker with screens and windows, no tab; system picker on macOS 15+ (`electron/lib/display-sources.js`, `electron/picker/`) | unverified: ReplayKit extension built, never run on a phone; mesh only (`ios/Broadcast/SampleHandler.swift`, `docs/IOS.md` "Screen sharing") | full on mesh, missing on LiveKit (`android/voice/ScreenCapture.kt`) |
+| SPEAK / STREAM permission enforcement | full: listen-only join, disabled unmute, badge (`client/src/components/voice/capabilities.ts`); STREAM split in open PR #254 | same | full for SPEAK: `welcome.canSpeak` and `voice-speak-changed` lock the mic and hide share, with the web's copy (`ios/Voice/VoiceSpeakRule.swift`, `ios/Voice/VoiceView.swift:275`); STREAM not split yet | full for SPEAK (`android/voice/SpeakRule.kt`, `android/voice/VoiceController.kt:741`, `android/ui/components/CallBar.kt:147`); STREAM not split yet |
+| Screen share: send | full, tab / window / screen (`client/src/components/voice/screen-share-view.tsx`) | partial: own picker with screens and windows, no tab; system picker on macOS 15+ (`electron/lib/display-sources.js`, `electron/picker/`) | unverified: ReplayKit extension built, never run on a phone; publishes on both transports (`ios/Broadcast/SampleHandler.swift`, `ios/Voice/LiveKitVoiceClient.swift:262`, `docs/IOS.md` "Device-only") | full on mesh, missing on LiveKit (`android/voice/ScreenCapture.kt`) |
 | Screen share: send with sound | full (`client/src/lib/screen-capture-audio.ts`) | partial: Windows loopback only, toggle hidden on macOS and Linux (`electron/lib/display-sources.js` `captureResponse`) | missing | missing |
-| Screen share: receive, with share audio | full (`client/src/components/voice/screen-stage.tsx`) | same | full, both transports (`ios/Voice/ScreenShareReceiver.swift`) | partial: mesh only, no share audio (`android/ui/components/ScreenShareView.kt`) |
+| Screen share: receive, with share audio | full (`client/src/components/voice/screen-stage.tsx`) | same | full, both transports (`ios/Voice/ScreenShareReceiver.swift`) | full, both transports, with share audio (`android/voice/RemoteScreen.kt`, `android/voice/LiveKitEngine.kt:411`, `android/ui/components/ScreenShareView.kt`) |
 | Camera | full (`client/src/hooks/use-voice.ts`) | same, macOS permission prompt (`electron/main.js:501`) | full, channels and DM calls (`ios/Voice/VoiceModel.swift` `toggleCamera`) | missing either direction |
 | Video quality ladder, send and receive readouts | full (`client/src/components/voice/video-quality-menu.tsx`) | same | full for mesh (`ios/Voice/VideoQuality.swift`) | missing |
 | Watch party / cinema mode | full: immersive stage, idle chrome (`client/src/hooks/use-immersive-stage.ts`); tab-share-with-sound control in open PR #258 | same, minus tab share (see send row) | missing (no hits in `ios/`) | missing (no hits in `android/`) |
@@ -100,7 +111,7 @@ Paths are relative to the repo root. `ios/` means
 | Connection quality bars, relayed badge | open PR #261 | same | missing | partial: "Silent" detection only (`android/voice/VoiceStats.kt`) |
 | Connection doctor | full (`client/src/lib/connection-doctor.ts`) | same | missing | open PR #217 |
 | Call rating prompt | full (`client/src/components/voice/call-rating-prompt.tsx`) | same | full (`ios/Voice/CallRating.swift`) | missing |
-| DM calls, ringing, incoming banner | full (`client/src/components/dm/incoming-call-overlay.tsx`) | same | full (`ios/Voice/CallModel.swift`, `ios/Voice/CallStageView.swift`) | missing: no ring frames, no call UI (`docs/ANDROID.md`) |
+| DM calls, ringing, incoming banner | full (`client/src/components/dm/incoming-call-overlay.tsx`) | same | full (`ios/Voice/CallModel.swift`, `ios/Voice/CallStageView.swift`) | full while the app is open: ring frames, a ringtone that respects DND, incoming banner, accept and decline (`android/voice/CallMachine.kt`, `android/voice/Ringer.kt`, `android/ui/components/IncomingCallBanner.kt`); a ring to a closed app still needs the push server leg |
 | Background audio while the app is hidden | n/a | n/a | partial: `audio` + `voip` background modes, no CallKit or PushKit (`ios/pqp/Info.plist:70`) | full: foreground service with Hang up (`android/voice/VoiceService.kt`) |
 
 ### Notifications and arrival
@@ -112,8 +123,8 @@ Paths are relative to the repo root. `ios/` means
 | Sounds | full (`client/src/lib/sounds.ts`) | same | missing: haptics only (`docs/IOS.md` parity table) | partial: channel default sound only (`android/push/PushNotifier.kt`) |
 | Unread badge on the icon | n/a (tab title) | full: dock badge, taskbar flash on Windows (`electron/main.js:329`) | partial: badge comes from the payload, app never sets it | missing: in-app only |
 | Update prompt | full: service worker prompt, never mid-call (`client/src/components/layout/update-prompt.tsx`) | same for the client; shell via electron-updater from GitHub Releases, silent on unsigned macOS (`electron/lib/updater.js`) | missing: no minimum-version check | missing: no Play in-app update, no sideload check (`docs/ANDROID_RELEASE.md`) |
-| Invites: create, list, revoke | full (`client/src/components/layout/invite-panel.tsx`) | same | full (`ios/Home/ServerToolsView.swift:8`) | missing: redeem only (`android/ui/PqpApp.kt:250`) |
-| Deep links: invite, DM, channel | full (`client/src/lib/app-route.ts`) | full: `pqp://` handler, single instance (`electron/main.js:354`, `client/src/components/desktop-bridge.tsx`) | full: universal links plus `pqp://`; no `@handle` or `/c/` target (`ios/Core/DeepLink.swift`) | partial: `pqp://` only, no `https://` App Links or `assetlinks` (`android/AndroidManifest.xml`, `android/push/DeepLink.kt`) |
+| Invites: create, list, revoke | full (`client/src/components/layout/invite-panel.tsx`) | same | full (`ios/Home/ServerToolsView.swift:8`) | full: create, list, copy, share, revoke (`android/invites/ui/InviteSheet.kt`, `android/core/ApiClient.kt:186`) |
+| Deep links: invite, DM, channel | full (`client/src/lib/app-route.ts`) | full: `pqp://` handler, single instance (`electron/main.js:354`, `client/src/components/desktop-bridge.tsx`) | full: universal links plus `pqp://`; no `@handle` or `/c/` target (`ios/Core/DeepLink.swift`) | full for invites: `pqp://` plus verified `https://pqp.gg/app/invite/` App Links (`android/AndroidManifest.xml:87`, `client/public/.well-known/assetlinks.json`, `android/push/DeepLink.kt`) |
 | Onboarding, first-run card, corner hints | full (`client/src/components/onboarding/onboarding-flow.tsx`, `client/src/lib/corner-hints.ts`) | same, mobile beta card suppressed (`client/src/lib/mobile-beta-hint.ts:50`) | full: three-beat intro, first-run checklist shared with web (`ios/Onboarding/FirstRun.swift`) | missing |
 | Sign-in | Clerk modal (`client/src/main.tsx`) | in-window Clerk popups; Google passkey hangs, hint dialog only (`electron/lib/passkey-hint.js`); system browser handoff in open PR #210 | Clerk native `AuthView`, Google and Apple (`ios/Core/Auth.swift`) | Clerk native `AuthView`, Google; a completed real sign-in is unverified (`android/ui/screens/SignInScreen.kt`) |
 | Age gate | full (`client/src/components/user/age-gate-dialog.tsx`) | same | full (`ios/Onboarding/AgeGateView.swift`) | full (`android/ui/screens/AgeGateScreen.kt`) |
@@ -150,8 +161,9 @@ Paths are relative to the repo root. `ios/` means
 | Capability | State | Where |
 |---|---|---|
 | Native menus, Cmd/Ctrl+Shift+M toggle mute | full | `electron/main.js:366` |
-| Tray, minimize to tray, start at login | missing | `electron/README.md:186` lists tray and push-to-talk as future |
-| Global push-to-talk hotkey | missing | see the PTT row above |
+| Tray, minimize to tray | full: call status, mute, deafen, leave, show, keep-in-tray, quit; hides to tray on close during a call | `electron/lib/tray-icon.js`, `electron/lib/tray-menu.js`, `electron/lib/tray-state.js`, `electron/main.js:1083` |
+| Start at login | missing | nothing calls `setLoginItemSettings` |
+| Global push-to-talk hotkey | full: registered while the window is unfocused | `electron/lib/global-ptt.js`, `electron/main.js:1216` |
 | Auto-update of the shell | partial: unsigned macOS builds fail silently, Windows unsigned (SmartScreen) | `electron/lib/updater.js`, `electron/README.md:184` |
 | System-browser sign-in | open PR #210 | `electron/lib/nav-policy.js` today keeps Clerk in-window |
 | Screen picker (screens and windows, thumbnails, macOS permission deep link) | full | `electron/picker/`, `electron/lib/display-sources.js` |
@@ -159,9 +171,11 @@ Paths are relative to the repo root. `ios/` means
 | Bundled offline client (`PQP_LOAD_STATIC=1`) | broken against production CORS and Clerk | `docs/DESKTOP.md` §1 |
 | App icon | missing (default Electron icon) | `docs/HANDOVER.md` "Suggested next work" 7 |
 
-## Open PRs that already cover a gap
+## Landed since the first pass
 
-From `gh pr list --limit 60` on 2026-09-06.
+Every PR in this table is now merged into `main`. It is kept as a record of
+which cells above moved, and of what the batch on 2026-09-06 actually
+contained.
 
 | PR | Covers | Platform |
 |---|---|---|
@@ -197,15 +211,18 @@ Windows-flavoured Electron gaps sit higher than an equal iOS gap.
 
 ### Top 10
 
-1. **Android cannot watch a share on LiveKit, and cannot send one there.**
-   Large rooms are SFU rooms, so the platform with the second largest audience
-   is audio-only exactly where the watch party happens. Size **L**. Start at
-   `android/voice/LiveKitEngine.kt` (subscribe to `ScreenShare` and
-   `ScreenShareAudio` sources, map onto `RemoteVideo.kt`), reuse the mesh
-   viewer in `android/ui/components/ScreenShareView.kt`, then publish from
-   `android/voice/ScreenCapture.kt` the way iOS's ReplayKit bridge will have
-   to. Reference: `client/src/lib/livekit-session.ts`, `ios/Voice/LiveKitVoiceClient.swift`.
-   Not covered by an open PR.
+The numbering is the first pass's. Items 5, 6, 7 and 8 landed the same day and
+are struck through below rather than deleted, so a reader can see what moved.
+On the current code the top of the list is item 2, Android push.
+
+1. **Android cannot send a share on a media-server room.** Watching one
+   landed with sound (`android/voice/LiveKitEngine.kt:387,411`), so the
+   remaining half is publishing: `LiveKitEngine.startScreenShare` returns
+   `false` and `VoiceController.kt:762` offers the control on peer-to-peer
+   rooms only, which is exactly the transport a watch party is not on. Size
+   **M**. Start at `android/voice/ScreenCapture.kt` and
+   `android/voice/LiveKitEngine.kt`. Reference:
+   `client/src/lib/livekit-session.ts`, `ios/Voice/LiveKitVoiceClient.swift:262`.
 
 2. **Android push has no server leg.** A phone that closes the app never
    hears about a DM, a mention or a ring. The client, the payload and the
@@ -217,69 +234,54 @@ Windows-flavoured Electron gaps sit higher than an equal iOS gap.
    `server/src/services/apns.ts` as the template, `docs/ANDROID.md` "What the
    server needs, precisely". `restarts-api`. Not covered by an open PR.
 
-3. **iOS screen share send has never run on a phone, and is hidden on
-   LiveKit.** The ReplayKit extension, App Group socket and NV12 bridge exist
-   but are unverified on hardware, and in an SFU room the button is not offered
-   at all. Size **M** to verify and fix on mesh, **L** to publish into LiveKit
-   (the bridge feeds `RTCVideoSource`; LiveKit Swift needs a custom
-   `VideoCapturer`). Start at `ios/Broadcast/SampleHandler.swift`,
-   `ios/Voice/ScreenShareController.swift`, `ios/Voice/LiveKitVoiceClient.swift`;
-   `docs/IOS.md` "Device-only". Not covered by an open PR.
+3. **iOS screen share send has never run on a phone.** The ReplayKit
+   extension, App Group socket and NV12 bridge exist, and the media-server
+   half now publishes through a `BufferCapturer` with the web's ladder
+   (`ios/Voice/LiveKitVoiceClient.swift:262`), so the hidden-on-LiveKit half
+   of this gap is closed. What is left is hardware: ReplayKit has no simulator
+   equivalent, so the extension, the socket and the rotation mapping are only
+   ever exercised by `-pqp.fakeScreenShare`. Size **M** to verify on a device.
+   Start at `ios/Broadcast/SampleHandler.swift`,
+   `ios/Voice/ScreenShareController.swift`; `docs/IOS.md` "Device-only".
 
-4. **Server mute is LiveKit-only on web, absent on iOS, and the mesh half
-   is split across three open PRs.** A moderator in a crowded room needs one
-   button that works on every transport and every client. Size **S** to land
-   what exists: merge #223 (server, `restarts-api`, wait for the trough), then
-   #222 (iOS) and #221 (Android). The remaining hole after that is iOS
-   moderator UI, which is **S** on top of `ios/Home/UserProfileSheet.swift`
-   and `ios/Core/APIClient.swift` (the route is `POST
-   /api/servers/:serverId/members/:userId/voice-mute`).
+4. **iOS has no moderator UI for server mute.** The three PRs this item
+   asked for (#223 server, #222 iOS receiver, #221 Android receiver) are all
+   merged, so the mesh half exists on every client's receiving side. The hole
+   left is the acting side on iOS: **S** on top of
+   `ios/Home/UserProfileSheet.swift` and `ios/Core/APIClient.swift` (the route
+   is `POST /api/servers/:serverId/members/:userId/voice-mute`).
 
-5. **Android has no DM calls and no ring.** Web and iOS ring each other;
-   Android neither sends nor receives `call-ring`. Size **L**. Start at
-   `android/core/RealtimeClient.kt` (add `call-ring`, `call-incoming`,
-   `call-decline`, `call-ring-cancelled`), a `CallController` beside
-   `android/voice/VoiceController.kt`, and a banner above the NavHost in
-   `android/ui/PqpApp.kt`. Reference: `ios/Voice/CallState.swift`,
-   `ios/Voice/CallModel.swift`, `client/src/components/dm/call-stage-state.ts`.
-   Depends on gap 2 for a ring that reaches a closed app. Not covered.
+5. ~~**Android has no DM calls and no ring.**~~ Landed: ring frames,
+   `CallMachine`, a DND-aware `Ringer`, an incoming banner and outgoing
+   placement (`android/voice/CallFrames.kt`, `android/voice/CallMachine.kt`,
+   `android/voice/Ringer.kt`, `android/ui/components/IncomingCallBanner.kt`,
+   `android/ui/PqpApp.kt:237`). A ring that reaches a **closed** app is still
+   gap 2's push server leg.
 
-6. **Electron push-to-talk is not global, and there is no tray.** Windows
-   is 76% of the audience and a gamer alt-tabs. The web PTT hook releases the
-   key on `blur`, so the desktop app is worse at PTT than Discord in the one
-   place it should be better. Size **M**: `globalShortcut` in the main process
-   with a `pqp:ptt-down` / `pqp:ptt-up` IPC pair, a preload bridge, and
-   `use-push-to-talk.ts` preferring the bridge when `isDesktopApp()`. Tray with
-   mute / deafen / quit is a further **S** in `electron/main.js`. Not covered
-   by an open PR (#265 is the in-window shortcut map, not a global hook).
+6. ~~**Electron push-to-talk is not global, and there is no tray.**~~
+   Landed: `globalShortcut` registered while the window is unfocused
+   (`electron/lib/global-ptt.js`, `electron/main.js:1216`) and a tray with call
+   status, mute, deafen, leave, show and quit (`electron/lib/tray-menu.js`,
+   `electron/lib/tray-state.js`). Start at login is still missing.
 
-7. **iOS and Android join a LiveKit room without the SPEAK bits.** The
-   server enforces the grant so nobody can cheat, but a listen-only member on
-   a phone sees an unmute button that silently fails instead of "Listening
-   only". Size **S** each: decode `welcome.canSpeak` and
-   `voice-speak-changed`, disable unmute and hide share when false. Start at
-   `ios/Core/RealtimeClient.swift` and `ios/Voice/VoiceView.swift`;
-   `android/core/RealtimeClient.kt` and `android/ui/components/CallBar.kt`.
-   Reference: `client/src/components/voice/capabilities.ts`. #254 will add a
-   STREAM bit on top; land the SPEAK half first.
+7. ~~**iOS and Android join a LiveKit room without the SPEAK bits.**~~
+   Landed on both (`ios/Voice/VoiceSpeakRule.swift`,
+   `android/voice/SpeakRule.kt`): a listen-only seat joins muted, the unmute is
+   locked, share is hidden, and `voice-speak-changed` unlocks it live. The
+   STREAM half of the split is still web and server only.
 
-8. **Android cannot create or show an invite.** The join flow for a friend
-   on a phone is "ask someone on desktop for the link". Size **S**: an
-   invites screen on `android/ui/screens/ServersScreen.kt` using the routes
-   `client/src/components/layout/invite-panel.tsx` already calls, plus the
-   system share sheet. Add `https://pqp.gg/app/invite/<code>` App Links with
-   an `assetlinks.json` under `client/public/.well-known/` while there
-   (**S**, matches iOS's `applinks:pqp.gg`). Not covered.
+8. ~~**Android cannot create or show an invite.**~~ Landed: create, list,
+   copy, share and revoke (`android/invites/ui/InviteSheet.kt`), plus verified
+   `https://pqp.gg/app/invite/` App Links with a real
+   `client/public/.well-known/assetlinks.json`.
 
-9. **Android chat is missing the message basics: markdown, edit, delete,
-   reply action, pins, mentions autocomplete, GIF picker.** Individually small,
-   together the reason the phone feels like a read-only client. Size **M** for
-   the bundle (markdown via a Compose renderer such as `compose-markdown` or a
-   hand-rolled inline subset matching iOS; reply / edit / delete rows on
-   `MessageActionsSheet`; `GET /api/gifs/search` grid). Start at
-   `android/ui/screens/ChatScreen.kt`, `android/ui/screens/ChatViewModel.kt`,
-   `android/core/ApiClient.kt`. Reference: `ios/Chat/MessageActionsOverlay.swift`,
-   `ios/Chat/Pickers.swift`. Slow mode countdown belongs here too once #218 is in.
+9. **Android chat: the slow-mode countdown, and the reader's mention
+   pill.** The bundle this item asked for landed, markdown, edit, delete,
+   reply, pins, `@` autocomplete and the GIF picker included
+   (`android/ui/chat/`). What is left is small: `slowMode` is still not
+   modelled anywhere on the client, so a rejected send has no countdown, and a
+   mention renders as a run rather than a coloured pill. Size **S**. Start at
+   `android/core/RealtimeClient.kt` and `android/ui/chat/ChatMarkdown.kt`.
 
 10. **No update prompt on iOS or Android, and Electron's updater is silent
     on unsigned macOS.** The web reloads itself; a phone on build 12 with the
@@ -297,6 +299,7 @@ Windows-flavoured Electron gaps sit higher than an equal iOS gap.
 12. Android: speaking indicators and per-peer volume (`android/voice/VoiceStats.kt` already polls stats).
 13. iOS: game connections (Steam, Twitch, Battle.net) so a Twitch-linked profile shows on the phone.
 14. Android: members list, kick, ban, timeout; then roles.
+14b. Android: camera, either direction (`CAMERA_LIMIT` allows eight on a media-server room).
 15. iOS and Android: roles and permission bits beyond owner / admin / member.
 16. iOS: group DMs (API takes nine, picker takes one).
 17. Android: presence in servers and a self status picker.
