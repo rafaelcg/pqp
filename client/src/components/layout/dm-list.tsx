@@ -95,6 +95,7 @@ export function DmList({
   const { t } = useTranslation();
   return (
     <aside
+      data-immersive-hide=""
       className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:static md:z-auto md:w-64 md:translate-x-0 ${
         mobileOpen
           ? "translate-x-0"

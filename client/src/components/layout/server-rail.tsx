@@ -129,7 +129,10 @@ export function ServerRail({
   const notifications = useNotificationState();
 
   return (
-    <nav className="flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3">
+    <nav
+      data-immersive-hide=""
+      className="flex h-full w-[72px] shrink-0 flex-col items-center gap-2 overflow-y-auto border-r border-ink-4/40 bg-rail py-3"
+    >
       {/* Above the servers, and separated from them: conversations belong to no
           server, so putting Home in the list would read as one more of them. */}
       {/* Every bubble on this rail points right. The rail is 72px against the

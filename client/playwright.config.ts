@@ -58,6 +58,22 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      testIgnore: /mobile-immersive-stage/,
+    },
+    // Phone emulation, for the one spec that is about phones. An iPhone is
+    // WebKit with no element fullscreen and Safari's own user agent; a Pixel is
+    // Chromium with `isMobile` and a touch screen. Both start in portrait and
+    // the spec rotates them with `setViewportSize`, which is what flips the
+    // `(orientation: landscape)` media query the immersive rule keys on.
+    {
+      name: "mobile-iphone",
+      use: { ...devices["iPhone 14"], colorScheme: "dark", locale: "en-US" },
+      testMatch: /mobile-immersive-stage/,
+    },
+    {
+      name: "mobile-pixel",
+      use: { ...devices["Pixel 7"], colorScheme: "dark", locale: "en-US" },
+      testMatch: /mobile-immersive-stage/,
     },
   ],
 
