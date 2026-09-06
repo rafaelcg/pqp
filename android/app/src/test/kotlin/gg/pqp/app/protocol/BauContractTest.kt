@@ -3,6 +3,7 @@ package gg.pqp.app.protocol
 import gg.pqp.app.bau.BauComment
 import gg.pqp.app.bau.BauMedia
 import gg.pqp.app.bau.BauPost
+import gg.pqp.app.bau.BauUnreadResponse
 import gg.pqp.app.bau.CommunityHomeConfig
 import java.io.File
 import kotlinx.serialization.KSerializer
@@ -70,6 +71,16 @@ class BauContractTest {
     fun `CommunityHomeConfig matches communityHomeConfigSchema`() {
         assumeSharedModule()
         assertSubsetOfSchema(CommunityHomeConfig.serializer(), "communityHomeConfigSchema")
+    }
+
+    /**
+     * The badge count. A rename here decodes to the default, which is 0, which
+     * is a Baú that never has anything new in it and nothing to say so.
+     */
+    @Test
+    fun `BauUnreadResponse matches communityHomeUnreadResponseSchema`() {
+        assumeSharedModule()
+        assertSubsetOfSchema(BauUnreadResponse.serializer(), "communityHomeUnreadResponseSchema")
     }
 
     /**
