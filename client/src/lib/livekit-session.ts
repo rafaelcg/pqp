@@ -1,9 +1,15 @@
 import type { VoiceSessionInfo } from "@pqp/shared";
 import type { PeerConnectionState, RemotePeer } from "./peer-connection-manager";
+import type { ReceiveQuality } from "./receive-quality";
+import { registerRemoteVideoBinding } from "./remote-video-binding";
 import {
   cameraBitrateFor,
   DEFAULT_VIDEO_QUALITY,
+  LARGE_ROOM_SCREEN_BITRATE,
   screenBitrateFor,
+  screenSimulcastPlan,
+  type ScreenSimulcastPlan,
+  type VideoQuality,
 } from "./video-quality";
 import {
   measureKbps,
@@ -99,6 +105,22 @@ export interface LiveKitSession {
    * the same.
    */
   setScreenMaxBitrate(maxBitrate: number): Promise<void>;
+  /**
+   * The presenter's chosen quality, as a ladder rather than a number.
+   *
+   * `setScreenMaxBitrate` moves the top layer's ceiling and nothing else. This
+   * also decides the top layer's *size* and which smaller layers go up under
+   * it (`screenSimulcastPlan`), and it is where the large-room cap lives: a
+   * room past `LARGE_ROOM_PARTICIPANTS` holds the top at 720p unless 1080p
+   * was chosen by name. A share already on the wire is republished only when
+   * its top height changes; a ceiling-only change moves the sender in place.
+   */
+  setScreenQuality(quality: VideoQuality): Promise<void>;
+  /**
+   * The largest layer this viewer accepts from every remote video publication,
+   * applied to what is subscribed now and to whatever arrives later.
+   */
+  setReceiveQuality(quality: ReceiveQuality): Promise<void>;
   /** Stop publishing the camera video track. */
   unpublishCamera(): Promise<void>;
   disconnect(): Promise<void>;
@@ -136,12 +158,88 @@ export async function connectLiveKit({
     Track,
     LocalAudioTrack,
     ConnectionState,
+    VideoPreset,
+    VideoQuality: LayerQuality,
   } = await import("livekit-client");
 
+  /**
+   * ADAPTIVE STREAM IS ON, AND HOW IT MEETS AN EXPLICIT CHOICE. Verified
+   * against livekit-client 2.21.0 (`RemoteTrackPublication.emitTrackUpdate`):
+   * with `adaptiveStream` the library measures each attached element and asks
+   * the SFU for the smallest layer that covers it; a manual
+   * `setVideoQuality(q)` names the highest layer this side accepts; and when
+   * both are set the library sends the SMALLER of the two (the adaptive
+   * dimensions, or the dimensions of layer `q`, whichever is less). So the
+   * two do not fight: the explicit pick is a ceiling, adaptive still saves
+   * below it, and "Auto" is simply no ceiling (`VideoQuality.HIGH`). This is
+   * a little tighter than the docs' "manual overrides adaptive", and it is
+   * the behaviour this product wants, because the point is bandwidth.
+   *
+   * The library only measures elements it has been given through
+   * `RemoteVideoTrack.attach`, and the tiles set `srcObject` themselves, so
+   * every video stream handed out below carries a binding that introduces the
+   * element. See `remote-video-binding.ts`; without it adaptive streaming
+   * would stop the picture after the first tab switch.
+   */
   const room = new Room({
-    adaptiveStream: false,
+    adaptiveStream: true,
     dynacast: true,
   });
+
+  /** The largest layer this viewer asks for. Applied to every subscription. */
+  let receiveQuality: ReceiveQuality = "auto";
+
+  /**
+   * `remoteVideoTrack.stopObservingElement` is the half of `detach` that stops
+   * measuring without touching `srcObject`. It is marked private in the
+   * typings and public on the object; reached by name so a build where it has
+   * gone simply stops measuring on unmount, which costs nothing.
+   */
+  function bindingFor(track: { attach(el: HTMLMediaElement): HTMLMediaElement }) {
+    return {
+      attach(element: HTMLVideoElement) {
+        track.attach(element);
+      },
+      detach(element: HTMLVideoElement) {
+        const stop = (
+          track as unknown as {
+            stopObservingElement?: (el: HTMLMediaElement) => void;
+          }
+        ).stopObservingElement;
+        if (typeof stop === "function") {
+          stop.call(track, element);
+        }
+      },
+    };
+  }
+
+  function layerQualityFor(quality: ReceiveQuality) {
+    switch (quality) {
+      case "360p":
+        return LayerQuality.LOW;
+      case "720p":
+        return LayerQuality.MEDIUM;
+      case "1080p":
+      case "auto":
+        // HIGH is the library's resting value, so under adaptive stream it
+        // means "the element decides", which is what auto promises.
+        return LayerQuality.HIGH;
+    }
+  }
+
+  /** Ask the SFU for at most the chosen layer of one publication. */
+  function applyReceiveQuality(publication: {
+    setVideoQuality?: (quality: number) => void;
+  }) {
+    if (typeof publication.setVideoQuality !== "function") {
+      return;
+    }
+    try {
+      publication.setVideoQuality(layerQualityFor(receiveQuality));
+    } catch (err) {
+      console.warn("[pqp] SFU receive quality rejected; keeping the current layer", err);
+    }
+  }
 
   /** peerId → MediaStream assembled from that participant's audio tracks. */
   const streams = new Map<string, MediaStream>();
@@ -177,17 +275,17 @@ export async function connectLiveKit({
       if (track.kind === Track.Kind.Video) {
         // The SFU labels every video publication with its source, so camera
         // and screen never need the stream-id dance the mesh path does.
+        const stream = new MediaStream([track.mediaStreamTrack]);
+        registerRemoteVideoBinding(stream, bindingFor(track));
+        // The viewer's ceiling rides on every subscription, including the
+        // ones that arrive after the choice: a share that starts mid-call
+        // must not come in at 1080p on a phone that asked for 720p.
+        applyReceiveQuality(pub);
         if (pub.source === Track.Source.ScreenShare) {
-          screenStreams.set(
-            participant.identity,
-            new MediaStream([track.mediaStreamTrack]),
-          );
+          screenStreams.set(participant.identity, stream);
           snapshot();
         } else if (pub.source === Track.Source.Camera) {
-          cameraStreams.set(
-            participant.identity,
-            new MediaStream([track.mediaStreamTrack]),
-          );
+          cameraStreams.set(participant.identity, stream);
           snapshot();
         }
         return;
@@ -226,13 +324,19 @@ export async function connectLiveKit({
       }
       snapshot();
     })
-    .on(RoomEvent.ParticipantConnected, snapshot)
+    .on(RoomEvent.ParticipantConnected, () => {
+      snapshot();
+      // The room just grew. If it crossed the large-room line the top layer
+      // comes down to 720p; see `reconcileScreenPlan`.
+      void reconcileScreenPlan();
+    })
     .on(RoomEvent.ParticipantDisconnected, (participant) => {
       streams.delete(participant.identity);
       screenStreams.delete(participant.identity);
       cameraStreams.delete(participant.identity);
       screenAudioStreams.delete(participant.identity);
       snapshot();
+      void reconcileScreenPlan();
     })
     .on(RoomEvent.Disconnected, () => {
       streams.clear();
@@ -354,9 +458,9 @@ export async function connectLiveKit({
    * What is leaving, for the presenter's half of the same menu.
    *
    * One row per published video source. The library reports one entry per
-   * simulcast layer; both sources publish a single layer here, and if that
-   * ever changes the busiest layer is the one a person means by "what am I
-   * sending". The ceiling is the one this session applied, which is what lets
+   * simulcast layer; the camera publishes one and the screen publishes up to
+   * three, and the busiest layer is the one a person means by "what am I
+   * sending". The ceiling is the top layer's, which is what lets
    * `describeLimitation` tell "sitting on your setting" from "starved by your
    * link" exactly as it does on the mesh.
    */
@@ -444,6 +548,18 @@ export async function connectLiveKit({
   let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
   /** The ceiling the next screen publish will carry. See `setScreenMaxBitrate`. */
   let screenMaxBitrate = DEFAULT_SCREEN_MAX_BITRATE_BPS;
+  /** The presenter's chosen quality; with the room size it makes the plan. */
+  let screenQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
+  /** The plan the share on the wire was published under. Null while not sharing. */
+  let publishedScreenPlan: ScreenSimulcastPlan | null = null;
+  /**
+   * The capture's constraints as the browser handed them over, so the plan's
+   * height can be laid over them and lifted again without losing the frame
+   * rate or width the capture was asked for.
+   */
+  let screenCaptureConstraints: MediaTrackConstraints | null = null;
+  /** One reconcile at a time; a second request waits its turn. */
+  let reconciling: Promise<void> | null = null;
   /** The screen share's audio track, when the capture had one. Usually null. */
   let publishedScreenAudioTrack: MediaStreamTrack | null = null;
 
@@ -456,6 +572,11 @@ export async function connectLiveKit({
    * would be the obvious alternative and is much worse: it drops the track from
    * every subscriber's view for as long as renegotiation takes, and for a screen
    * share it can put the OS picker back on screen.
+   *
+   * ONLY THE TOP LAYER MOVES when the source is simulcast. The lower layers
+   * are the small copies a phone asks for and their cost is what makes them
+   * useful; a 360p layer given a 4 Mbps ceiling stops being a small copy.
+   * `livekit-client` orders encodings smallest first, so the top is the last.
    */
   async function setSourceMaxBitrate(
     // Spelled off the method rather than as `Track.Source`, because `Track` is
@@ -475,9 +596,8 @@ export async function connectLiveKit({
       if (!params.encodings || params.encodings.length === 0) {
         params.encodings = [{}];
       }
-      for (const encoding of params.encodings) {
-        encoding.maxBitrate = maxBitrate;
-      }
+      const top = params.encodings[params.encodings.length - 1]!;
+      top.maxBitrate = maxBitrate;
       await sender.setParameters(params);
     } catch (err) {
       console.warn(
@@ -485,6 +605,168 @@ export async function connectLiveKit({
         err,
       );
     }
+  }
+
+  /** Everybody in the room, this participant included. */
+  function participantCount(): number {
+    return room.remoteParticipants.size + 1;
+  }
+
+  /**
+   * The plan for this room right now. The ceiling comes from
+   * `screenMaxBitrate` rather than from the quality's ladder, so a ceiling set
+   * directly (`setScreenMaxBitrate`) is what a later publish carries, exactly
+   * as that method promises; the two agree whenever the quality was the last
+   * thing set. The cap still binds it.
+   */
+  function currentScreenPlan(): ScreenSimulcastPlan {
+    const plan = screenSimulcastPlan(screenQuality, participantCount());
+    return {
+      ...plan,
+      topBitrate: plan.capped
+        ? Math.min(screenMaxBitrate, LARGE_ROOM_SCREEN_BITRATE)
+        : screenMaxBitrate,
+    };
+  }
+
+  /**
+   * Ask the capture for the plan's height. Resolves whether it took.
+   *
+   * A display capture accepts `height.max` in every browser this product
+   * supports and scales its output down to it, and it climbs back up when the
+   * limit is raised again, because the source is the whole screen. A browser
+   * that refuses leaves the capture where it was, and the layers the library
+   * declares are still true, because it reads them off the track; the only
+   * cost is that the top stays at the capture size.
+   */
+  async function constrainScreenCapture(
+    track: MediaStreamTrack,
+    height: number,
+  ): Promise<boolean> {
+    if (typeof track.applyConstraints !== "function") {
+      return false;
+    }
+    if (!screenCaptureConstraints) {
+      screenCaptureConstraints =
+        typeof track.getConstraints === "function"
+          ? { ...track.getConstraints() }
+          : {};
+    }
+    const previousHeight = screenCaptureConstraints.height;
+    try {
+      await track.applyConstraints({
+        ...screenCaptureConstraints,
+        height: {
+          ...(typeof previousHeight === "object" ? previousHeight : {}),
+          max: height,
+        },
+      });
+      return true;
+    } catch (err) {
+      console.warn(
+        "[pqp] screen capture refused the planned height; keeping its size",
+        err,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Put the screen's picture on the wire under the current plan.
+   *
+   * `screenShareEncoding`, NOT `videoEncoding`. The library reads the screen's
+   * ceiling from a field of its own (`computeVideoEncodings` in
+   * livekit-client 2.21.0 swaps `videoEncoding` for `screenShareEncoding`
+   * whenever the source is a screen share), and this session used to set the
+   * other one. With no ceiling and no simulcast the library returns an empty
+   * encoding, so every SFU share went up with no bitrate cap at all, whatever
+   * the menu said. That is the single-layer, full-rate stream a hundred phones
+   * were each receiving on 5 Sep 2026.
+   *
+   * The lower layers go up as `VideoPreset`s under `screenShareSimulcastLayers`;
+   * the library scales each from the capture size, keeps the top layer at the
+   * capture size with this ceiling, and declares all of them to the SFU.
+   */
+  async function publishScreenVideo(
+    track: MediaStreamTrack,
+    plan: ScreenSimulcastPlan,
+  ): Promise<void> {
+    await room.localParticipant.publishTrack(track, {
+      source: Track.Source.ScreenShare,
+      simulcast: true,
+      screenShareSimulcastLayers: plan.lowerLayers.map(
+        (layer) =>
+          new VideoPreset(
+            layer.width,
+            layer.height,
+            layer.maxBitrate,
+            layer.maxFramerate,
+          ),
+      ),
+      // The SFU half of the same argument as the mesh path: without these the
+      // encoder holds resolution and spends framerate, which turns a film
+      // into stills. `degradationPreference` is the lever; the encoding is a
+      // ceiling, not a target, so a still screen still costs almost nothing.
+      degradationPreference: "maintain-framerate",
+      screenShareEncoding: {
+        maxBitrate: plan.topBitrate,
+        maxFramerate: VIDEO_MAX_FRAMERATE,
+      },
+    });
+    publishedScreenPlan = plan;
+  }
+
+  /**
+   * Bring the share on the wire in line with the plan the room now calls for.
+   *
+   * Runs on every quality change and every time the room grows or shrinks. A
+   * different top HEIGHT means a different set of declared layers, and the
+   * only honest way to change those is to publish again, so the track is
+   * unpublished without being stopped and published under the new plan; the
+   * viewers see the picture blink once, at the moment the room crosses twenty
+   * people or the presenter picks 1080p by name. A different top CEILING at
+   * the same height is moved in place, with no blink, exactly as before.
+   */
+  function reconcileScreenPlan(): Promise<void> {
+    const run = async () => {
+      const track = publishedScreenTrack;
+      const published = publishedScreenPlan;
+      if (!track || !published) {
+        return;
+      }
+      const plan = currentScreenPlan();
+      if (plan.topHeight !== published.topHeight) {
+        await constrainScreenCapture(track, plan.topHeight);
+        // `false`: the capture stays alive; it is the same track going back up.
+        await room.localParticipant.unpublishTrack(track, false);
+        if (publishedScreenTrack !== track) {
+          // The share ended while the capture was being resized.
+          return;
+        }
+        await publishScreenVideo(track, plan);
+        return;
+      }
+      if (plan.topBitrate !== published.topBitrate) {
+        await setSourceMaxBitrate(
+          Track.Source.ScreenShare,
+          plan.topBitrate,
+          "screen",
+        );
+        publishedScreenPlan = plan;
+      }
+    };
+    const next = (reconciling ?? Promise.resolve())
+      .then(run)
+      .catch((err) => {
+        console.warn("[pqp] SFU screen plan could not be applied", err);
+      })
+      .finally(() => {
+        if (reconciling === next) {
+          reconciling = null;
+        }
+      });
+    reconciling = next;
+    return next;
   }
 
   async function publish(stream: MediaStream) {
@@ -527,22 +809,14 @@ export async function connectLiveKit({
         await room.localParticipant.unpublishTrack(publishedScreenTrack);
       }
       publishedScreenTrack = videoTrack;
-      await room.localParticipant.publishTrack(videoTrack, {
-        source: Track.Source.ScreenShare,
-        simulcast: false,
-        // The SFU half of the same argument as the mesh path: without these the
-        // encoder holds resolution and spends framerate, which turns a film
-        // into stills. `degradationPreference` is the lever; the encoding is a
-        // ceiling, not a target, so a still screen still costs almost nothing.
-        degradationPreference: "maintain-framerate",
-        videoEncoding: {
-          // The chosen quality, not a constant. This used to be a hard-coded
-          // 2.5 Mbps that no setting could reach, which is why picking 1080p
-          // did nothing for a share on either transport.
-          maxBitrate: screenMaxBitrate,
-          maxFramerate: VIDEO_MAX_FRAMERATE,
-        },
-      });
+      screenCaptureConstraints = null;
+      // The plan for THIS room at THIS size, applied to the capture before
+      // the library reads its dimensions, so the layers it declares are the
+      // layers that exist. See `screenSimulcastPlan` for why height and not
+      // a divisor.
+      const plan = currentScreenPlan();
+      await constrainScreenCapture(videoTrack, plan.topHeight);
+      await publishScreenVideo(videoTrack, plan);
 
       // The audio half. Absent from most captures, so its absence is not an
       // error, but a re-publish (after a reconnect) must not leave the previous
@@ -583,6 +857,8 @@ export async function connectLiveKit({
       }
       await room.localParticipant.unpublishTrack(publishedScreenTrack);
       publishedScreenTrack = null;
+      publishedScreenPlan = null;
+      screenCaptureConstraints = null;
     },
 
     async publishCamera(stream: MediaStream) {
@@ -621,6 +897,26 @@ export async function connectLiveKit({
       // reconnect), and the call is what the share already on the wire gets.
       screenMaxBitrate = maxBitrate;
       await setSourceMaxBitrate(Track.Source.ScreenShare, maxBitrate, "screen");
+      if (publishedScreenPlan) {
+        publishedScreenPlan = { ...publishedScreenPlan, topBitrate: maxBitrate };
+      }
+    },
+
+    async setScreenQuality(quality: VideoQuality) {
+      screenQuality = quality;
+      screenMaxBitrate = screenBitrateFor(quality);
+      await reconcileScreenPlan();
+    },
+
+    async setReceiveQuality(quality: ReceiveQuality) {
+      receiveQuality = quality;
+      for (const participant of room.remoteParticipants.values()) {
+        for (const publication of participant.videoTrackPublications.values()) {
+          if (publication.isSubscribed) {
+            applyReceiveQuality(publication);
+          }
+        }
+      }
     },
 
     async unpublishCamera() {
@@ -640,6 +936,8 @@ export async function connectLiveKit({
       screenAudioStreams.clear();
       published = null;
       publishedScreenTrack = null;
+      publishedScreenPlan = null;
+      screenCaptureConstraints = null;
       publishedCameraTrack = null;
       publishedScreenAudioTrack = null;
       await room.disconnect();

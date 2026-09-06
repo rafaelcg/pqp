@@ -5,9 +5,12 @@ import {
   cameraConstraintsFor,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
+  isLargeRoomCapped,
+  LARGE_ROOM_PARTICIPANTS,
   parseVideoQuality,
   screenBitrateFor,
   screenScaleFactor,
+  screenSimulcastPlan,
   VIDEO_QUALITIES,
 } from "./video-quality";
 
@@ -226,6 +229,56 @@ describe("screenBitrateFor", () => {
     // The ceiling exists to be reachable, not to saturate a 5 to 10 Mbps home
     // upload and starve the audio riding on the same link.
     expect(screenBitrateFor("1080p")).toBeLessThanOrEqual(4_000_000);
+  });
+});
+
+describe("screenSimulcastPlan", () => {
+  it("puts 360p and 720p under a 1080p top on auto in a small room", () => {
+    const plan = screenSimulcastPlan("auto", 4);
+    expect(plan.topHeight).toBe(1080);
+    expect(plan.topBitrate).toBe(3_000_000);
+    expect(plan.lowerLayers.map((l) => [l.height, l.maxBitrate])).toEqual([
+      [360, 450_000],
+      [720, 1_400_000],
+    ]);
+    expect(plan.capped).toBe(false);
+  });
+
+  it("holds the top at 720p and 1.5 Mbps past the large-room line", () => {
+    const plan = screenSimulcastPlan("auto", LARGE_ROOM_PARTICIPANTS + 1);
+    expect(plan.topHeight).toBe(720);
+    expect(plan.topBitrate).toBe(1_500_000);
+    expect(plan.lowerLayers.map((l) => l.height)).toEqual([360]);
+    expect(plan.capped).toBe(true);
+  });
+
+  it("does not cap at exactly the line", () => {
+    expect(isLargeRoomCapped("auto", LARGE_ROOM_PARTICIPANTS)).toBe(false);
+    expect(screenSimulcastPlan("auto", LARGE_ROOM_PARTICIPANTS).capped).toBe(
+      false,
+    );
+  });
+
+  it("steps aside for an explicit 1080p", () => {
+    const plan = screenSimulcastPlan("1080p", 100);
+    expect(plan.topHeight).toBe(1080);
+    expect(plan.topBitrate).toBe(4_000_000);
+    expect(plan.lowerLayers).toHaveLength(2);
+    expect(plan.capped).toBe(false);
+  });
+
+  it("does not call a chosen 720p 'capped' in a big room", () => {
+    // They are sending what they asked for; the room did not decide it.
+    const plan = screenSimulcastPlan("720p", 100);
+    expect(plan.topHeight).toBe(720);
+    expect(plan.topBitrate).toBe(1_500_000);
+    expect(plan.capped).toBe(false);
+  });
+
+  it("publishes no lower layer under a 360p top", () => {
+    const plan = screenSimulcastPlan("360p", 2);
+    expect(plan.topHeight).toBe(360);
+    expect(plan.lowerLayers).toEqual([]);
   });
 });
 

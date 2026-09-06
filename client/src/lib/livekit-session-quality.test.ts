@@ -14,7 +14,7 @@ import type { VoiceSessionInfo } from "@pqp/shared";
  * outcome, and both of its halves are easy to break silently:
  *
  *   1. A track published *after* a choice must carry the chosen ceiling in its
- *      `videoEncoding`. This is the path everybody takes, because the ordinary
+ *      publish options. This is the path everybody takes, because the ordinary
  *      sequence is "set the quality once, then turn the camera on".
  *   2. A track already published must be moved by `setParameters` on its own
  *      sender, without being republished. Republishing would drop the picture
@@ -23,6 +23,17 @@ import type { VoiceSessionInfo } from "@pqp/shared";
  *
  * A failure in either is invisible from the UI: the menu ticks the new row, the
  * call keeps running, and the picture is simply governed by the wrong number.
+ *
+ * THE SCREEN'S OPTION IS `screenShareEncoding`, and the first version of this
+ * suite asserted `videoEncoding` and passed. livekit-client reads the screen's
+ * ceiling from its own field and ignores `videoEncoding` for that source, so
+ * the suite was pinning a value the library never looked at, and every SFU
+ * share went up with no ceiling. The doubles here are shaped after the real
+ * option names for exactly that reason.
+ *
+ * Since 6 Sep 2026 the screen also goes up as simulcast layers, with a top
+ * layer the room's size can hold down, and the viewer's side asks for a layer
+ * by name. Those are here too, because they are the same seam.
  *
  * Only the quality seam lives here. Which *source* each publication goes up
  * under, and a camera and a share coexisting on this transport, are a separate
@@ -35,19 +46,39 @@ interface PublishedTrack {
   track: unknown;
   options: {
     source?: string;
+    simulcast?: boolean;
     videoEncoding?: { maxBitrate?: number; maxFramerate?: number };
+    screenShareEncoding?: { maxBitrate?: number; maxFramerate?: number };
+    screenShareSimulcastLayers?: FakePreset[];
     degradationPreference?: string;
   };
 }
 
-/** `setParameters` calls a publication's sender received, in order. */
-const senderWrites: { source: string; maxBitrate: number | undefined }[] = [];
-const published: PublishedTrack[] = [];
-const unpublished: unknown[] = [];
+class FakePreset {
+  constructor(
+    public width: number,
+    public height: number,
+    public maxBitrate: number,
+    public maxFramerate?: number,
+  ) {}
+}
 
-function fakeSender(source: string) {
+/** `setParameters` calls a publication's sender received, in order. */
+const senderWrites: {
+  source: string;
+  maxBitrate: number | undefined;
+  encodings: RTCRtpEncodingParameters[];
+}[] = [];
+const published: PublishedTrack[] = [];
+const unpublished: { track: unknown; stop: boolean | undefined }[] = [];
+/** Every `applyConstraints` the screen capture received, height max only. */
+const constrained: number[] = [];
+/** `Room` options the session constructed the room with. */
+let roomOptions: Record<string, unknown> = {};
+
+function fakeSender(source: string, layers: number) {
   let params: RTCRtpSendParameters = {
-    encodings: [{}],
+    encodings: Array.from({ length: layers }, () => ({})),
     transactionId: "t",
     codecs: [],
     headerExtensions: [],
@@ -59,7 +90,8 @@ function fakeSender(source: string) {
       params = next;
       senderWrites.push({
         source,
-        maxBitrate: next.encodings?.[0]?.maxBitrate,
+        maxBitrate: next.encodings?.[next.encodings.length - 1]?.maxBitrate,
+        encodings: next.encodings ?? [],
       });
     },
   };
@@ -67,6 +99,18 @@ function fakeSender(source: string) {
 
 /** Publications the local participant currently holds, keyed by source. */
 const publications = new Map<string, { track: { sender: unknown } }>();
+
+interface FakeRemotePublication {
+  source: string;
+  isSubscribed: boolean;
+  requested: number[];
+  setVideoQuality: (quality: number) => void;
+}
+
+interface FakeRemoteParticipant {
+  identity: string;
+  videoTrackPublications: Map<string, FakeRemotePublication>;
+}
 
 const Track = {
   Kind: { Video: "video", Audio: "audio" },
@@ -88,50 +132,122 @@ const RoomEvent = {
   MediaDevicesError: "mediaDevicesError",
 };
 
-vi.mock("livekit-client", () => {
-  class Room {
-    remoteParticipants = new Map();
-    localParticipant = {
-      publishTrack: async (
-        track: unknown,
-        options: PublishedTrack["options"] = {},
-      ) => {
-        published.push({ track, options });
-        if (options.source) {
-          publications.set(options.source, {
-            track: { sender: fakeSender(options.source) },
-          });
-        }
-      },
-      unpublishTrack: async (track: unknown) => {
-        unpublished.push(track);
-      },
-      getTrackPublication: (source: string) => publications.get(source),
-    };
-    on() {
-      return this;
-    }
-    async connect() {}
-    async disconnect() {}
+const rooms: FakeRoom[] = [];
+
+class FakeRoom {
+  remoteParticipants = new Map<string, FakeRemoteParticipant>();
+  handlers = new Map<string, (...args: unknown[]) => void>();
+  localParticipant = {
+    publishTrack: async (
+      track: unknown,
+      options: PublishedTrack["options"] = {},
+    ) => {
+      published.push({ track, options });
+      if (options.source) {
+        const layers = options.simulcast
+          ? (options.screenShareSimulcastLayers?.length ?? 0) + 1
+          : 1;
+        publications.set(options.source, {
+          track: { sender: fakeSender(options.source, layers) },
+        });
+      }
+    },
+    unpublishTrack: async (track: unknown, stop?: boolean) => {
+      unpublished.push({ track, stop });
+    },
+    getTrackPublication: (source: string) => publications.get(source),
+  };
+  constructor(options: Record<string, unknown>) {
+    roomOptions = options;
+    rooms.push(this);
   }
+  on(event: string, handler: (...args: unknown[]) => void) {
+    this.handlers.set(event, handler);
+    return this;
+  }
+  async connect() {}
+  async disconnect() {}
+  /** Test helper: somebody joins the room. */
+  join(identity: string): FakeRemoteParticipant {
+    const participant: FakeRemoteParticipant = {
+      identity,
+      videoTrackPublications: new Map(),
+    };
+    this.remoteParticipants.set(identity, participant);
+    this.handlers.get(RoomEvent.ParticipantConnected)?.(participant);
+    return participant;
+  }
+  leave(identity: string) {
+    const participant = this.remoteParticipants.get(identity);
+    this.remoteParticipants.delete(identity);
+    this.handlers.get(RoomEvent.ParticipantDisconnected)?.(participant);
+  }
+  /** Test helper: a participant's video publication gets subscribed. */
+  subscribe(participant: FakeRemoteParticipant, source: string) {
+    const publication: FakeRemotePublication = {
+      source,
+      isSubscribed: true,
+      requested: [],
+      setVideoQuality(quality: number) {
+        this.requested.push(quality);
+      },
+    };
+    participant.videoTrackPublications.set(`${source}-sid`, publication);
+    const track = {
+      kind: Track.Kind.Video,
+      mediaStreamTrack: { kind: "video" },
+      attach: () => {},
+    };
+    this.handlers.get(RoomEvent.TrackSubscribed)?.(track, publication, participant);
+    return publication;
+  }
+}
+
+vi.mock("livekit-client", () => {
   class LocalAudioTrack {
     constructor(public track: unknown) {}
     async mute() {}
     async unmute() {}
   }
   return {
-    Room,
+    Room: FakeRoom,
     RoomEvent,
     Track,
     LocalAudioTrack,
     ConnectionState: { Disconnected: "disconnected" },
+    VideoPreset: FakePreset,
+    VideoQuality: { LOW: 0, MEDIUM: 1, HIGH: 2 },
   };
 });
+
+vi.stubGlobal(
+  "MediaStream",
+  class {
+    constructor(public tracks: unknown[] = []) {}
+    getTracks() {
+      return this.tracks;
+    }
+  },
+);
 
 const { connectLiveKit } = await import("./livekit-session");
 
 function fakeTrack(kind: "audio" | "video", id: string) {
-  return { kind, id, contentHint: "" } as unknown as MediaStreamTrack;
+  return {
+    kind,
+    id,
+    contentHint: "",
+    getConstraints: () => ({
+      frameRate: { ideal: 30, max: 30 },
+      height: { max: 1080 },
+    }),
+    applyConstraints: async (constraints: MediaTrackConstraints) => {
+      const height = constraints.height;
+      if (typeof height === "object" && typeof height.max === "number") {
+        constrained.push(height.max);
+      }
+    },
+  } as unknown as MediaStreamTrack;
 }
 
 function fakeStream(kind: "audio" | "video", id: string): MediaStream {
@@ -161,15 +277,42 @@ async function session() {
   });
 }
 
+function room(): FakeRoom {
+  return rooms[rooms.length - 1]!;
+}
+
+/** Fill the room to `total` people, this one included. */
+function fillRoom(total: number) {
+  for (let i = room().remoteParticipants.size; i < total - 1; i += 1) {
+    room().join(`p${i}`);
+  }
+}
+
+/** Let the reconcile chain the join events queued settle. */
+async function settle() {
+  for (let i = 0; i < 5; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 beforeEach(() => {
   published.length = 0;
   unpublished.length = 0;
   senderWrites.length = 0;
+  constrained.length = 0;
   publications.clear();
+  rooms.length = 0;
 });
 
 function encodingFor(source: string) {
   return published.find((entry) => entry.options.source === source)?.options;
+}
+
+function lastScreenPublish() {
+  return [...published]
+    .reverse()
+    .find((entry) => entry.options.source === Track.Source.ScreenShare)
+    ?.options;
 }
 
 describe("a quality chosen before the track exists", () => {
@@ -188,17 +331,17 @@ describe("a quality chosen before the track exists", () => {
     );
   });
 
-  it("publishes the screen at the chosen ceiling, not the default one", async () => {
+  it("publishes the screen at the chosen ceiling, in the field the library reads", async () => {
     const sfu = await session();
     await sfu.setScreenMaxBitrate(4_000_000);
     await sfu.publishScreen(fakeStream("video", "screen"));
 
-    expect(
-      encodingFor(Track.Source.ScreenShare)?.videoEncoding?.maxBitrate,
-    ).toBe(4_000_000);
-    expect(encodingFor(Track.Source.ScreenShare)?.degradationPreference).toBe(
-      "maintain-framerate",
-    );
+    const options = encodingFor(Track.Source.ScreenShare);
+    expect(options?.screenShareEncoding?.maxBitrate).toBe(4_000_000);
+    // The field the library ignores for a screen share. Setting it is how a
+    // share goes up with no ceiling while every test stays green.
+    expect(options?.videoEncoding).toBeUndefined();
+    expect(options?.degradationPreference).toBe("maintain-framerate");
   });
 
   it("gives the two sources different numbers for the same choice", async () => {
@@ -214,7 +357,7 @@ describe("a quality chosen before the track exists", () => {
       2_500_000,
     );
     expect(
-      encodingFor(Track.Source.ScreenShare)?.videoEncoding?.maxBitrate,
+      encodingFor(Track.Source.ScreenShare)?.screenShareEncoding?.maxBitrate,
     ).toBe(4_000_000);
   });
 });
@@ -227,8 +370,8 @@ describe("a quality chosen while the track is already up", () => {
 
     await sfu.setCameraMaxBitrate(400_000);
 
-    expect(senderWrites).toEqual([
-      { source: Track.Source.Camera, maxBitrate: 400_000 },
+    expect(senderWrites.map((w) => [w.source, w.maxBitrate])).toEqual([
+      [Track.Source.Camera, 400_000],
     ]);
     // The picture must not blink: republishing drops it from every subscriber.
     expect(published).toHaveLength(publishesBefore);
@@ -242,11 +385,26 @@ describe("a quality chosen while the track is already up", () => {
 
     await sfu.setScreenMaxBitrate(600_000);
 
-    expect(senderWrites).toEqual([
-      { source: Track.Source.ScreenShare, maxBitrate: 600_000 },
+    expect(senderWrites.map((w) => [w.source, w.maxBitrate])).toEqual([
+      [Track.Source.ScreenShare, 600_000],
     ]);
     expect(published).toHaveLength(publishesBefore);
     expect(unpublished).toHaveLength(0);
+  });
+
+  it("moves only the TOP layer of a simulcast screen", async () => {
+    // The small layers are small on purpose. A 360p copy handed a 4 Mbps
+    // ceiling is no longer the copy a phone wanted.
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+
+    await sfu.setScreenMaxBitrate(4_000_000);
+
+    const write = senderWrites[0]!;
+    expect(write.encodings).toHaveLength(3);
+    expect(write.encodings[2]?.maxBitrate).toBe(4_000_000);
+    expect(write.encodings[0]?.maxBitrate).toBeUndefined();
+    expect(write.encodings[1]?.maxBitrate).toBeUndefined();
   });
 
   it("also stores the new ceiling for the next publish after a reconnect", async () => {
@@ -260,7 +418,7 @@ describe("a quality chosen while the track is already up", () => {
     await sfu.publishScreen(fakeStream("video", "screen-again"));
 
     expect(
-      encodingFor(Track.Source.ScreenShare)?.videoEncoding?.maxBitrate,
+      encodingFor(Track.Source.ScreenShare)?.screenShareEncoding?.maxBitrate,
     ).toBe(1_000_000);
   });
 
@@ -288,5 +446,187 @@ describe("a quality chosen while the track is already up", () => {
     const sfu = await session();
     await expect(sfu.setCameraMaxBitrate(400_000)).resolves.toBeUndefined();
     expect(senderWrites).toEqual([]);
+  });
+});
+
+describe("the screen goes up as simulcast layers", () => {
+  it("publishes 360p and 720p under a 1080p top on auto", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+
+    const options = encodingFor(Track.Source.ScreenShare);
+    expect(options?.simulcast).toBe(true);
+    expect(
+      options?.screenShareSimulcastLayers?.map((layer) => [
+        layer.height,
+        layer.maxBitrate,
+      ]),
+    ).toEqual([
+      [360, 450_000],
+      [720, 1_400_000],
+    ]);
+    // Auto's top: 1080 lines at the auto ceiling.
+    expect(options?.screenShareEncoding?.maxBitrate).toBe(3_000_000);
+    expect(constrained).toEqual([1080]);
+  });
+
+  it("keeps the camera as a single layer", async () => {
+    const sfu = await session();
+    await sfu.publishCamera(fakeStream("video", "cam"));
+    expect(encodingFor(Track.Source.Camera)?.simulcast).toBe(false);
+  });
+
+  it("turns adaptive streaming on for the room", async () => {
+    await session();
+    expect(roomOptions.adaptiveStream).toBe(true);
+  });
+
+  it("publishes only the rungs below an explicit 720p", async () => {
+    const sfu = await session();
+    await sfu.setScreenQuality("720p");
+    await sfu.publishScreen(fakeStream("video", "screen"));
+
+    const options = encodingFor(Track.Source.ScreenShare);
+    expect(options?.screenShareSimulcastLayers?.map((l) => l.height)).toEqual([
+      360,
+    ]);
+    expect(options?.screenShareEncoding?.maxBitrate).toBe(2_000_000);
+    expect(constrained).toEqual([720]);
+  });
+});
+
+describe("the large-room cap", () => {
+  it("holds the top layer at 720p and 1.5 Mbps above 20 participants", async () => {
+    const sfu = await session();
+    fillRoom(21);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+
+    const options = encodingFor(Track.Source.ScreenShare);
+    expect(constrained).toEqual([720]);
+    expect(options?.screenShareEncoding?.maxBitrate).toBe(1_500_000);
+    expect(options?.screenShareSimulcastLayers?.map((l) => l.height)).toEqual([
+      360,
+    ]);
+  });
+
+  it("does not cap a room of exactly 20", async () => {
+    const sfu = await session();
+    fillRoom(20);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+
+    expect(constrained).toEqual([1080]);
+    expect(
+      encodingFor(Track.Source.ScreenShare)?.screenShareEncoding?.maxBitrate,
+    ).toBe(3_000_000);
+  });
+
+  it("steps aside for an explicit 1080p", async () => {
+    const sfu = await session();
+    fillRoom(50);
+    await settle();
+    await sfu.setScreenQuality("1080p");
+    await sfu.publishScreen(fakeStream("video", "screen"));
+
+    const options = encodingFor(Track.Source.ScreenShare);
+    expect(constrained).toEqual([1080]);
+    expect(options?.screenShareEncoding?.maxBitrate).toBe(4_000_000);
+    expect(options?.screenShareSimulcastLayers?.map((l) => l.height)).toEqual([
+      360, 720,
+    ]);
+  });
+
+  it("republishes a live share, without stopping the capture, when the room crosses the line", async () => {
+    const sfu = await session();
+    fillRoom(20);
+    await settle();
+    const stream = fakeStream("video", "screen");
+    await sfu.publishScreen(stream);
+    expect(constrained).toEqual([1080]);
+
+    room().join("the-21st");
+    await settle();
+
+    // The same track went back up, and the capture stayed alive for it.
+    expect(unpublished).toEqual([
+      { track: stream.getVideoTracks()[0], stop: false },
+    ]);
+    expect(constrained).toEqual([1080, 720]);
+    expect(lastScreenPublish()?.screenShareEncoding?.maxBitrate).toBe(
+      1_500_000,
+    );
+    expect(lastScreenPublish()?.screenShareSimulcastLayers).toHaveLength(1);
+  });
+
+  it("lifts the cap again when the presenter picks 1080p mid-share", async () => {
+    const sfu = await session();
+    fillRoom(30);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    expect(constrained).toEqual([720]);
+
+    await sfu.setScreenQuality("1080p");
+
+    expect(constrained).toEqual([720, 1080]);
+    expect(lastScreenPublish()?.screenShareEncoding?.maxBitrate).toBe(
+      4_000_000,
+    );
+    expect(lastScreenPublish()?.screenShareSimulcastLayers).toHaveLength(2);
+  });
+
+  it("does not blink the share for a room change that changes nothing", async () => {
+    const sfu = await session();
+    fillRoom(5);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    const publishesBefore = published.length;
+
+    room().join("p-extra");
+    room().leave("p0");
+    await settle();
+
+    expect(published).toHaveLength(publishesBefore);
+    expect(unpublished).toHaveLength(0);
+  });
+});
+
+describe("the layer this viewer asks for", () => {
+  it("maps the four choices onto the library's three qualities", async () => {
+    const sfu = await session();
+    const rafa = room().join("rafa");
+    const publication = room().subscribe(rafa, Track.Source.ScreenShare);
+    publication.requested.length = 0;
+
+    await sfu.setReceiveQuality("360p");
+    await sfu.setReceiveQuality("720p");
+    await sfu.setReceiveQuality("1080p");
+    await sfu.setReceiveQuality("auto");
+
+    // LOW, MEDIUM, HIGH, and HIGH again: under adaptive stream HIGH is "no
+    // ceiling, the element decides", which is what auto means.
+    expect(publication.requested).toEqual([0, 1, 2, 2]);
+  });
+
+  it("applies the standing choice to a share that arrives later", async () => {
+    const sfu = await session();
+    await sfu.setReceiveQuality("720p");
+    const rafa = room().join("rafa");
+
+    const publication = room().subscribe(rafa, Track.Source.ScreenShare);
+
+    expect(publication.requested).toEqual([1]);
+  });
+
+  it("reaches camera tiles as well as the share", async () => {
+    const sfu = await session();
+    const rafa = room().join("rafa");
+    const screen = room().subscribe(rafa, Track.Source.ScreenShare);
+    const camera = room().subscribe(rafa, Track.Source.Camera);
+
+    await sfu.setReceiveQuality("360p");
+
+    expect(screen.requested.at(-1)).toBe(0);
+    expect(camera.requested.at(-1)).toBe(0);
   });
 });

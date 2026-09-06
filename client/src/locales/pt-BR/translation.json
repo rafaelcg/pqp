@@ -873,6 +873,8 @@
   "call.quality.receiving.measuring": "O vídeo de {name} está chegando. Medindo.",
   "call.quality.receiving.none": "Ninguém está te enviando vídeo agora.",
   "call.quality.receiving.sendersChoice": "Quem envia é que escolhe esse tamanho. Nada deste lado consegue aumentar, então peça mais para a pessoa se estiver ruim demais.",
+  "call.quality.receive.hint": "Auto acompanha o tamanho da imagem nesta tela. Uma escolha fixa é o maior tamanho que este aparelho aceita, e fica guardada neste aparelho.",
+  "call.quality.send.largeRoomCap": "Sala grande: sua tela sai em 720p para ficar fluida para todo mundo. Escolha 1080p para enviar assim mesmo.",
   "call.panel.mute": "Silenciar",
   "call.panel.unmute": "Ativar o som",
   "call.startVoice": "Iniciar chamada de voz",

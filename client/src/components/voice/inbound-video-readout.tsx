@@ -45,7 +45,17 @@ import { liveReceiverRows } from "@/components/voice/inbound-video-rows";
  */
 const SAMPLE_INTERVAL_MS = 2000;
 
-export function InboundVideoReadout() {
+export function InboundVideoReadout({
+  usingSfu = false,
+}: {
+  /**
+   * Whether media is flowing through the SFU. There, the sentence about the
+   * sender choosing the size is no longer the whole truth: the presenter
+   * publishes several sizes and the selector above this readout picks among
+   * them, so the sentence is the mesh's alone.
+   */
+  usingSfu?: boolean;
+}) {
   const { t } = useTranslation();
   const [rows, setRows] = useState<VideoReceiverSample[] | null>(null);
 
@@ -126,9 +136,11 @@ export function InboundVideoReadout() {
           present whenever anything is arriving, not only when it looks bad:
           "why can I not change this" is asked at exactly the moment the picture
           disappoints, and by then the person has already tried the wrong knob. */}
-      <p className="text-xs text-paper-muted">
-        {t("call.quality.receiving.sendersChoice")}
-      </p>
+      {!usingSfu && (
+        <p className="text-xs text-paper-muted">
+          {t("call.quality.receiving.sendersChoice")}
+        </p>
+      )}
     </div>
   );
 }
