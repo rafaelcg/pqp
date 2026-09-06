@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Search, X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -15,7 +15,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
-import { ApiError, fetchMembers, memberDisplayName, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
+import { ApiError, fetchMembers, memberDisplayName, memberMatchesQuery, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
 import { highestRoleColor, identityMarks, rankBadges } from "@/lib/author-display";
 import { useTranslation } from "@/lib/i18n";
 import { displayRoleName } from "@/lib/role-labels";
@@ -128,6 +128,11 @@ interface MemberSidebarProps {
   voiceChannels?: ReadonlyArray<{ id: string; name: string }>;
   /** Server roles, for hoist sections and name colour. */
   roles?: readonly ServerRole[];
+  /**
+   * Accepted-friend ids from the shell's friends snapshot. Incoming and
+   * outgoing requests stay out: those people are not friends yet.
+   */
+  friendIds?: ReadonlySet<string>;
   canManageNicknames?: boolean;
   showManageRoster?: boolean;
 }
@@ -182,6 +187,7 @@ export function MemberSidebar({
   voiceOccupancy = {},
   voiceChannels = [],
   roles = [],
+  friendIds,
   canManageNicknames = false,
   showManageRoster = false,
 }: MemberSidebarProps) {
@@ -192,6 +198,7 @@ export function MemberSidebar({
   membersRef.current = members;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] =
     useState<SectionCollapseState>(NO_COLLAPSE);
   /** section id → how many of its rows are mounted. */
@@ -246,6 +253,7 @@ export function MemberSidebar({
     }
     setMembers([]);
     setError(null);
+    setQuery("");
     setShown({});
     setCollapsed(NO_COLLAPSE);
   }, [active, serverId]);
@@ -403,10 +411,25 @@ export function MemberSidebar({
     [participants, self, members, adminRoleId, ownerRoleId],
   );
 
+  const conversationKey = serverId
+    ?? (participants ? participants.map((person) => person.id).sort().join(",") : "");
+
+  useEffect(() => {
+    setQuery("");
+  }, [conversationKey]);
+
+  const searching = query.trim().length > 0;
+  const visibleRows = useMemo(
+    () => rows.filter((member) => memberMatchesQuery(member, query)),
+    [rows, query],
+  );
+
   const sections = useMemo(
     () =>
-      participants ? singleSection(rows) : groupMembers(rows, hoistedRoles),
-    [participants, rows, hoistedRoles],
+      participants
+        ? singleSection(visibleRows)
+        : groupMembers(visibleRows, hoistedRoles, friendIds),
+    [participants, visibleRows, hoistedRoles, friendIds],
   );
 
   // userId → where they are in this server's voice, from the live rosters. Same
@@ -432,14 +455,24 @@ export function MemberSidebar({
   // ---------------------------------------------------------------- rendering
 
   function headingFor(section: MemberSection<ServerMember>): string {
-    const label =
-      section.kind === "role"
-        ? (section.label ?? t("memberList.admins"))
-        : section.kind === "offline"
-          ? t("memberList.offline")
-          : section.kind === "all"
-            ? t("memberList.participants")
-            : t("memberList.online");
+    let label: string;
+    switch (section.kind) {
+      case "role":
+        label = section.label ?? t("memberList.admins");
+        break;
+      case "friends":
+        label = t("memberList.friends");
+        break;
+      case "offline":
+        label = t("memberList.offline");
+        break;
+      case "all":
+        label = t("memberList.participants");
+        break;
+      case "online":
+        label = t("memberList.online");
+        break;
+    }
     return t("memberList.sectionHeading", {
       label,
       count: section.members.length,
@@ -534,7 +567,7 @@ export function MemberSidebar({
   }
 
   function renderSection(section: MemberSection<ServerMember>): ReactNode {
-    const shut = sectionCollapsed(section, collapsed);
+    const shut = searching ? false : sectionCollapsed(section, collapsed);
     const limit = shown[section.id] ?? MEMBER_PAGE_SIZE;
     const visible = shut ? [] : section.members.slice(0, limit);
     const remaining = shut ? 0 : section.members.length - visible.length;
@@ -545,9 +578,12 @@ export function MemberSidebar({
           type="button"
           aria-expanded={!shut}
           className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted hover:text-paper"
-          onClick={() =>
-            setCollapsed((prev) => toggleSectionCollapse(section, prev))
-          }
+          onClick={() => {
+            if (searching) {
+              return;
+            }
+            setCollapsed((prev) => toggleSectionCollapse(section, prev));
+          }}
         >
           {shut ? (
             <ChevronRight className="h-3 w-3 shrink-0" />
@@ -631,6 +667,25 @@ export function MemberSidebar({
           </Tooltip>
         </div>
 
+        {rows.length > 0 && (
+          <div className="shrink-0 px-2 pb-1 pt-2">
+            <div className="relative">
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted"
+              />
+              <input
+                type="search"
+                value={query}
+                aria-label={t("memberList.search")}
+                placeholder={t("memberList.search")}
+                className="h-9 w-full rounded-xl bg-ink-2 pl-9 pr-3 text-sm text-paper placeholder:text-paper-muted focus:outline-none focus:ring-2 focus:ring-signal/60"
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </div>
+          </div>
+        )}
+
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3">
           {error && (
             <p role="alert" className="px-1 pb-2 text-xs text-danger">
@@ -648,7 +703,9 @@ export function MemberSidebar({
           )}
           {!loading && sections.length === 0 && !error && (
             <p className="px-1 py-2 text-xs text-paper-muted">
-              {t("memberList.empty")}
+              {searching
+                ? t("memberList.noMatches", { query: query.trim() })
+                : t("memberList.empty")}
             </p>
           )}
           {sections.map(renderSection)}
