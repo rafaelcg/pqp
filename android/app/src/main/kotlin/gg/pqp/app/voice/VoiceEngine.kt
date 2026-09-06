@@ -102,8 +102,8 @@ class VoiceEngine(
     private val scope: CoroutineScope,
     private val signal: (Map<String, Any?>) -> Unit,
     private val onPeerState: (String, PeerMediaState) -> Unit,
-    /** A peer's screen video arrived or went away. Null means "gone". */
-    private val onRemoteScreen: (String, VideoTrack?) -> Unit = { _, _ -> },
+    /** A peer's screen arrived or went away. Null means "gone". */
+    private val onRemoteScreen: (String, RemoteScreen?) -> Unit = { _, _ -> },
     /** The person stopped the share from the system UI rather than from ours. */
     private val onScreenShareEnded: () -> Unit = {},
 ) : VoiceTransport {
@@ -177,7 +177,7 @@ class VoiceEngine(
     override val isSharingScreen: Boolean get() = screenTrack != null
 
     /** For a renderer: the same GL context the decoders draw into. */
-    override val eglContext: EglBase.Context? get() = eglBase?.eglBaseContext
+    private val eglContext: EglBase.Context? get() = eglBase?.eglBaseContext
 
     private class Peer(val connection: PeerConnection) {
         /**
@@ -660,8 +660,19 @@ class VoiceEngine(
     override fun statsFor(remotePeerId: String): PeerMediaStats? = peers[remotePeerId]?.stats
 
     /** This peer's incoming screen video, for a renderer to attach to. */
-    override fun remoteScreenFor(remotePeerId: String): VideoTrack? =
-        synchronized(videoLock) { remoteVideo.screenFor(remotePeerId) }
+    /**
+     * Paired with this engine's GL context, which is the one the track's frames
+     * were decoded into. Null before [start] has built it, and a track cannot
+     * arrive before that, so the pairing never hands out a screen it cannot draw.
+     */
+    override fun remoteScreenFor(remotePeerId: String): RemoteScreen? {
+        val track = synchronized(videoLock) { remoteVideo.screenFor(remotePeerId) } ?: return null
+        val egl = eglContext ?: return null
+        return RemoteScreen.Mesh(track, egl)
+    }
+
+    /** Nothing to do: a mesh receiver has no say in what the sender encodes. */
+    override fun setWatchingScreen(remotePeerId: String, watching: Boolean) = Unit
 
     /**
      * The roster named a peer's camera capture, or said their camera is off.

@@ -201,6 +201,21 @@ LiveKit Cloud bills participant-minutes, and a call between three friends gains 
 
 **iOS runs LiveKit rooms** (PR feat/ios-livekit). The app declares `transports: ["mesh", "livekit"]`, and on a `welcome` that says `livekit` it builds no peer connections: it `POST`s `/api/voice/token` for the peer id the welcome minted, connects a LiveKit `Room` (`client-sdk-swift` 2.16.0) to the returned URL, publishes the microphone, and subscribes to everybody's audio, camera and screen share. Participant identity is the peer id, so the roster, the mute badges and the tiles are keyed exactly as on the mesh. The failure semantics are the web's: token 5xx, a refusing SFU, or 45 s without a connected room leaves the WS room and shows the same "Could not reach the voice server" sentence, and it never builds a mesh instead. A `/ws` blip in a LiveKit room keeps the media: the app declares `resume` on an SFU deployment (read from `GET /api/voice/backend`), presents the `resumeToken` on the rejoin, and skips the media rebuild when `welcome.resumed` comes back for the same peer id.
 
+**Android runs LiveKit rooms too** (PR #248), and since `android/livekit-share-receive`
+it can watch a share in one. It declares `transports: ["mesh", "livekit"]`,
+mints a token for the peer id the welcome named, connects with
+`autoSubscribe = false` and subscribes deliberately: every audio publication,
+plus `SCREEN_SHARE` video. A share arrives disabled and is only enabled while
+the viewer is open, and the layer is capped at 720p (360p on a metered link),
+so a phone in a 100-viewer watch party is not handed the 1080p layer. Both of
+those need `adaptiveStream = false` on Android: unlike livekit-client, the
+Android SDK ignores `setEnabled` and `setVideoQuality` on an adaptively managed
+track rather than treating the manual value as a ceiling. `SCREEN_SHARE_AUDIO` plays with the voice, silenced by deafen and
+gated on the roster having announced the share. What Android does **not** do on
+LiveKit: publish a screen (the button is hidden there), a camera in either
+direction, or per-peer stats, because LiveKit's stats arrive in the other
+libwebrtc's types. None of the receive path has been run on hardware yet.
+
 What iOS does **not** do yet on LiveKit: publish a screen share. The ReplayKit broadcast bridge feeds the mesh's `RTCVideoSource` and is not armed in a LiveKit room, so the share button is hidden there. Receiving shares (video and `ScreenShareAudio`) works. The video quality ladder (`VideoQualitySettings`) is mesh-only too; LiveKit publishes at the SDK's defaults.
 
 **Android is still mesh-only.** It declares `["mesh"]` and is refused from SFU rooms with `voice-transport-unsupported`, exactly as iOS was before this.
