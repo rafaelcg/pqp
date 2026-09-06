@@ -92,6 +92,16 @@ import {
   type LocalSettings,
   type SettingsSectionId,
 } from "@/components/layout/settings-modal";
+import { ShortcutOverlay } from "@/components/layout/shortcut-overlay";
+import { isApplePlatform } from "@/lib/composer-formatting";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
+import {
+  channelIsUnread,
+  navigableChannelIds,
+  stepChannelId,
+  stepUnreadChannelId,
+  type ShortcutAction,
+} from "@/lib/keyboard-shortcuts";
 import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions";
 import { UserPanel } from "@/components/layout/user-panel";
@@ -957,18 +967,31 @@ function MainAppContent({
     onHeldChange: handlePushToTalk,
   });
 
-  // Electron: Cmd/Ctrl+Shift+M → toggle mute when connected to voice.
+  // Electron app menu: mute (and deafen on shells that ship the item).
+  // The renderer table owns the same chords on the web; on desktop the
+  // default mute/deafen chords stay with the menu so they do not toggle twice.
   useEffect(() => {
     const desktop = getDesktop();
     if (!desktop) {
       return;
     }
-    return desktop.onToggleMute(() => {
+    const offMute = desktop.onToggleMute(() => {
       if (voice.getState().status === "connected") {
         voice.toggleMute();
       }
     });
+    const offDeafen = desktop.onToggleDeafen?.(() => {
+      if (voice.getState().status === "connected") {
+        voice.toggleDeafen();
+      }
+    });
+    return () => {
+      offMute();
+      offDeafen?.();
+    };
   }, [voice]);
+
+  const [shortcutOverlayOpen, setShortcutOverlayOpen] = useState(false);
 
   const clearUnread = useCallback(async (channelId: string): Promise<string | null> => {
     unreadHoldRef.current.delete(channelId);
@@ -2163,6 +2186,77 @@ function MainAppContent({
     },
     [openChannel, syncRoute],
   );
+
+  const handleShortcut = useCallback(
+    (action: ShortcutAction) => {
+      switch (action) {
+        case "toggleOverlay":
+          setShortcutOverlayOpen((open) => !open);
+          return;
+        case "toggleMute":
+          if (voice.getState().status === "connected") {
+            voice.toggleMute();
+          }
+          return;
+        case "toggleDeafen":
+          if (voice.getState().status === "connected") {
+            voice.toggleDeafen();
+          }
+          return;
+        case "openUserSettings":
+          setShortcutOverlayOpen(false);
+          setSettingsSection(null);
+          setSettingsOpen(true);
+          return;
+        case "previousChannel":
+        case "nextChannel":
+        case "previousUnreadChannel":
+        case "nextUnreadChannel": {
+          const direction =
+            action === "previousChannel" || action === "previousUnreadChannel"
+              ? -1
+              : 1;
+          const inServer = selection.kind === "server";
+          const ids = inServer
+            ? navigableChannelIds(channels)
+            : conversations.map((conversation) => conversation.channelId);
+          const next =
+            action === "previousUnreadChannel" || action === "nextUnreadChannel"
+              ? stepUnreadChannelId(
+                  ids,
+                  selectedChannelId,
+                  (id) => channelIsUnread(unread, id),
+                  direction,
+                )
+              : stepChannelId(ids, selectedChannelId, direction);
+          if (!next) {
+            return;
+          }
+          if (inServer) {
+            void selectChannel(next);
+          } else {
+            void selectConversation(next);
+          }
+        }
+      }
+    },
+    [
+      channels,
+      conversations,
+      selectChannel,
+      selectConversation,
+      selectedChannelId,
+      selection.kind,
+      unread,
+      voice,
+    ],
+  );
+
+  const shortcutBindings = useKeyboardShortcuts({
+    overrides: localSettings.shortcuts,
+    isMac: isApplePlatform(),
+    onAction: handleShortcut,
+  });
 
   const handleForwardPick = useCallback(
     async (target: ForwardTarget) => {
@@ -4684,6 +4778,13 @@ function MainAppContent({
         />
       )}
 
+      <ShortcutOverlay
+        open={shortcutOverlayOpen}
+        bindings={shortcutBindings}
+        pushToTalkKey={localSettings.pushToTalkKey}
+        onClose={() => setShortcutOverlayOpen(false)}
+      />
+
       <SettingsModal
         open={settingsOpen}
         requestedSection={settingsSection}
@@ -4692,6 +4793,7 @@ function MainAppContent({
         voiceAnalyser={voice.getAnalyser()}
         blockedUsers={blockedUsers}
         onClose={() => setSettingsOpen(false)}
+        onShowShortcutOverlay={() => setShortcutOverlayOpen(true)}
         onLocalSave={setLocalSettings}
         onUserUpdated={(updated) => {
           setUser(updated);

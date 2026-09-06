@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Gamepad2, Bell, Bug, Database, Mic, Palette, ShieldCheck, UserRound, type LucideIcon } from "lucide-react";
+import { Gamepad2, Bell, Bug, Database, Keyboard, Mic, Palette, ShieldCheck, UserRound, type LucideIcon } from "lucide-react";
 import {
   canRenameHandle,
   deleteConfirmationMatches,
@@ -42,7 +42,18 @@ import { useAccentHue } from "@/hooks/use-accent-hue";
 import { useAppearance } from "@/hooks/use-appearance";
 import { useContrast } from "@/hooks/use-contrast";
 import { useTheme } from "@/hooks/use-theme";
+import { ACTION_LABEL } from "@/components/layout/shortcut-overlay";
 import { KeyBindingField } from "@/components/voice/key-binding-field";
+import { isApplePlatform } from "@/lib/composer-formatting";
+import {
+  findBindingConflict,
+  parseShortcutOverrides,
+  resolveShortcutBindings,
+  SHORTCUT_GROUPS,
+  type BindableId,
+  type ShortcutAction,
+  type ShortcutOverrides,
+} from "@/lib/keyboard-shortcuts";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
 import {
   DEFAULT_VIDEO_QUALITY,
@@ -147,6 +158,12 @@ export interface LocalSettings {
    */
   inputMode: VoiceInputMode;
   pushToTalkKey: KeyBinding;
+  /**
+   * Remapped Discord-style shortcuts. Device-local for the same reason as
+   * the PTT key: a `KeyboardEvent.code` is this keyboard. Absent keys keep
+   * the platform default (Cmd on Apple, Ctrl elsewhere).
+   */
+  shortcuts: ShortcutOverrides;
   /** getUserMedia processing flags. Also pending a shared-schema key. */
   micProcessing: MicProcessing;
   /**
@@ -181,6 +198,7 @@ export const defaultLocalSettings: LocalSettings = {
   // has, and push-to-talk is a choice people make, not one made for them.
   inputMode: "voice-activity",
   pushToTalkKey: defaultPushToTalkBinding,
+  shortcuts: {},
   micProcessing: defaultMicProcessing,
   // Auto, always. A default that pins a size would be a default that is wrong
   // on somebody's uplink.
@@ -224,6 +242,7 @@ export function loadLocalSettings(): LocalSettings {
       // push-to-talk bound to nothing and the user apparently mute.
       pushToTalkKey:
         parseBinding(parsed.pushToTalkKey) ?? defaultLocalSettings.pushToTalkKey,
+      shortcuts: parseShortcutOverrides(parsed.shortcuts),
       micProcessing: {
         echoCancellation: parsed.micProcessing?.echoCancellation !== false,
         noiseSuppression: parsed.micProcessing?.noiseSuppression !== false,
@@ -322,6 +341,8 @@ interface SettingsModalProps {
    * last-visited behaviour the dialog already has.
    */
   requestedSection?: SectionId | null;
+  /** Open the shortcut map. Settings stays up; the overlay stacks on top. */
+  onShowShortcutOverlay?: () => void;
 }
 
 /* ------------------------------------------------------------------ layout */
@@ -344,6 +365,7 @@ type SectionId =
   | "profile"
   | "connections"
   | "voice"
+  | "keyboard"
   | "notifications"
   | "appearance"
   | "privacy"
@@ -378,6 +400,12 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.voice",
     description: "settings.voice.description",
     icon: Mic,
+  },
+  {
+    id: "keyboard",
+    label: "settings.section.keyboard",
+    description: "settings.keyboard.description",
+    icon: Keyboard,
   },
   {
     id: "notifications",
@@ -858,6 +886,13 @@ function VoiceSection({
             <KeyBindingField
               label={t("settings.voice.pttKey")}
               binding={draftLocal.pushToTalkKey}
+              isTaken={(binding) =>
+                findBindingConflict(
+                  bindableMap(draftLocal),
+                  "pushToTalk",
+                  binding,
+                ) !== null
+              }
               onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
             />
             {/* The honest limit, stated where the binding is set rather than
@@ -1020,6 +1055,102 @@ function VoiceSection({
         />
         <span className="text-sm">{t("settings.voice.compactPeers")}</span>
       </label>
+    </div>
+  );
+}
+
+function bindableMap(
+  settings: LocalSettings,
+): Record<BindableId, KeyBinding> {
+  return {
+    ...resolveShortcutBindings(settings.shortcuts, isApplePlatform()),
+    pushToTalk: settings.pushToTalkKey,
+  };
+}
+
+function KeyboardSection({
+  draftLocal,
+  patchLocal,
+  onShowOverlay,
+}: {
+  draftLocal: LocalSettings;
+  patchLocal: (partial: Partial<LocalSettings>) => void;
+  onShowOverlay: () => void;
+}) {
+  const { t } = useTranslation();
+  const canBindKey = useMemo(() => supportsKeyBinding(), []);
+  const bindings = useMemo(
+    () => resolveShortcutBindings(draftLocal.shortcuts, isApplePlatform()),
+    [draftLocal.shortcuts],
+  );
+  const owned = bindableMap(draftLocal);
+
+  function remap(action: ShortcutAction, binding: KeyBinding) {
+    if (findBindingConflict(owned, action, binding)) {
+      return;
+    }
+    patchLocal({
+      shortcuts: { ...draftLocal.shortcuts, [action]: binding },
+    });
+  }
+
+  const rows: Array<{ id: BindableId; binding: KeyBinding }> = [];
+  for (const group of SHORTCUT_GROUPS) {
+    for (const action of group.actions) {
+      rows.push({ id: action, binding: bindings[action] });
+    }
+    if (group.id === "voice") {
+      rows.push({ id: "pushToTalk", binding: draftLocal.pushToTalkKey });
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <p className="text-sm text-paper-muted">{t("settings.keyboard.hint")}</p>
+      <div className="flex flex-wrap gap-2">
+        <Button type="button" variant="secondary" onClick={onShowOverlay}>
+          {t("settings.keyboard.showMap")}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          onClick={() =>
+            patchLocal({
+              shortcuts: {},
+              pushToTalkKey: defaultPushToTalkBinding,
+            })
+          }
+        >
+          {t("settings.keyboard.reset")}
+        </Button>
+      </div>
+      {canBindKey ? (
+        <ul className="divide-y divide-ink-4/70">
+          {rows.map((row) => (
+            <li key={row.id} className="py-3">
+              <KeyBindingField
+                label={t(ACTION_LABEL[row.id])}
+                binding={row.binding}
+                isTaken={(binding) =>
+                  findBindingConflict(owned, row.id, binding) !== null
+                }
+                onChange={(binding) => {
+                  if (row.id === "pushToTalk") {
+                    patchLocal({ pushToTalkKey: binding });
+                    return;
+                  }
+                  remap(row.id, binding);
+                }}
+              />
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-xs text-paper-muted">
+          {t("settings.voice.pttNoKeyboard")}
+        </p>
+      )}
+      <p className="text-xs text-paper-muted">{t("settings.keyboard.pttNote")}</p>
     </div>
   );
 }
@@ -2771,6 +2902,7 @@ export function SettingsModal({
   onUnblockUser,
   onAudioSettingsLive,
   requestedSection = null,
+  onShowShortcutOverlay,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   const [displayName, setDisplayName] = useState("");
@@ -3027,6 +3159,14 @@ export function SettingsModal({
                 devicesError={devicesError}
                 voiceAnalyser={voiceAnalyser}
                 metering={voiceVisible}
+              />
+            )}
+
+            {section === "keyboard" && (
+              <KeyboardSection
+                draftLocal={draftLocal}
+                patchLocal={patchLocal}
+                onShowOverlay={() => onShowShortcutOverlay?.()}
               />
             )}
 

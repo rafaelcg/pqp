@@ -3,6 +3,8 @@ export interface PqpDesktop {
   isElectron: true;
   hasCustomTitleBar: boolean;
   onToggleMute(cb: () => void): () => void;
+  /** Subscribe to Cmd/Ctrl+Shift+D deafen toggle from the app menu. */
+  onToggleDeafen?(cb: () => void): () => void;
   /** In-app path under `/app` (main process maps `pqp://` → `/app/...`). */
   onDeepLink(cb: (appPath: string) => void): () => void;
   getPendingDeepLink(): Promise<string | null>;

@@ -42,6 +42,20 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
     };
   },
 
+  /** Subscribe to Cmd/Ctrl+Shift+D deafen toggle from the app menu. */
+  onToggleDeafen(callback) {
+    if (typeof callback !== "function") {
+      return () => {};
+    }
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on("pqp:toggle-deafen", handler);
+    return () => {
+      ipcRenderer.removeListener("pqp:toggle-deafen", handler);
+    };
+  },
+
   /**
    * Subscribe to deep-link navigations.
    * Payload is an in-app path under `/app` (not a raw `pqp://` URL).
