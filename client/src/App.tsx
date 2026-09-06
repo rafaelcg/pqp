@@ -4223,6 +4223,11 @@ function MainAppContent({
               ? conversationTitle(voiceConversation.participants)
               : t("voice.channelFallback"))
           }
+          channelType={
+            voiceChannel?.kind === "server" && voiceChannel.type === "text"
+              ? "text"
+              : "voice"
+          }
           status={voiceState.status}
           isMuted={voiceState.isMuted}
           inputMode={voiceState.inputMode}

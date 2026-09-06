@@ -1,11 +1,13 @@
 import { useMemo, type ReactNode } from "react";
 import {
+  Hash,
   Loader2,
   PhoneOff,
   ScreenShare,
   ScreenShareOff,
   Video,
   VideoOff,
+  Volume2,
 } from "lucide-react";
 import { FeatureHint } from "@/components/layout/feature-hint";
 import { Button } from "@/components/ui/button";
@@ -22,6 +24,12 @@ import { cn } from "@/lib/utils";
 
 interface VoiceStatusBarProps {
   channelName: string;
+  /**
+   * Speaker for a voice room, hash when this call is a server text channel
+   * (the linked chat). DMs and groups stay on the speaker: this strip is a
+   * call, not a channel list.
+   */
+  channelType?: "voice" | "text";
   status: "idle" | "joining" | "connected";
   isMuted: boolean;
   /**
@@ -65,7 +73,7 @@ interface VoiceStatusBarProps {
   shareHintEnabled?: boolean;
 }
 
-const ACTION = "h-8 w-full shrink-0";
+const ACTION = "h-9 w-full shrink-0 rounded-lg";
 
 /**
  * Discord's Voice Connected corner: status + hang-up, the channel, camera, share.
@@ -74,6 +82,7 @@ const ACTION = "h-8 w-full shrink-0";
  */
 export function VoiceStatusBar({
   channelName,
+  channelType = "voice",
   status,
   isMuted,
   inputMode = "voice-activity",
@@ -189,20 +198,40 @@ export function VoiceStatusBar({
       </div>
 
       {connected && (
-        <button
-          type="button"
-          onClick={onOpen}
-          aria-label={t("voice.bar.open", { name: channelName })}
-          className="mt-0.5 w-full truncate rounded-md px-0.5 py-0.5 text-left text-xs text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+        <Tooltip
+          label={
+            channelType === "text"
+              ? t("channelMeta.kind.text")
+              : t("channelMeta.kind.voice")
+          }
+          name={
+            channelType === "text"
+              ? t("voice.bar.openText", { name: channelName })
+              : t("voice.bar.open", { name: channelName })
+          }
         >
-          {channelName}
-        </button>
+          <button
+            type="button"
+            onClick={onOpen}
+            data-voice-bar-channel={channelType}
+            className="mt-0.5 flex w-full min-w-0 items-center gap-1 rounded-md px-0.5 py-0.5 text-left text-xs text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+          >
+            {channelType === "text" ? (
+              <Hash className="h-3 w-3 shrink-0" aria-hidden="true" />
+            ) : (
+              <Volume2 className="h-3 w-3 shrink-0" aria-hidden="true" />
+            )}
+            <span className="min-w-0 truncate">
+              {t("voice.bar.inChannel", { name: channelName })}
+            </span>
+          </button>
+        </Tooltip>
       )}
 
       {showActionRow && (
         <div
           className={cn(
-            "mt-1 grid gap-1",
+            "mt-1.5 grid gap-1.5",
             showCamera && showShare ? "grid-cols-2" : "grid-cols-1",
           )}
         >
@@ -274,12 +303,12 @@ function VoiceBarAction({
           aria-disabled={disabled || undefined}
           aria-label={label}
           className={cn(
-            "flex items-center justify-center rounded-md text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+            "flex items-center justify-center bg-ink-4 text-paper transition-colors hover:bg-border-strong hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
             ACTION,
             pressed &&
-              "bg-signal/20 text-signal hover:bg-signal/25 hover:text-signal",
+              "bg-signal/30 text-signal hover:bg-signal/40 hover:text-signal",
             disabled &&
-              "cursor-not-allowed opacity-40 hover:bg-transparent hover:text-paper-muted",
+              "cursor-not-allowed opacity-40 hover:bg-ink-4 hover:text-paper",
           )}
           onClick={() => {
             if (disabled) {
