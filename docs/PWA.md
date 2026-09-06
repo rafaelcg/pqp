@@ -100,3 +100,14 @@ The same set is what the Electron app icon should use (still open).
 - **Offline message composition / outbox.** Sends are dropped while offline
   rather than queued for later delivery.
 - **Background sync.**
+
+## Watching a share on a phone
+
+A phone in a browser tab cannot give a share the whole screen the way the installed app can, and the two platforms differ:
+
+- **Android Chrome and iPadOS Safari** have element fullscreen. The stage's fullscreen button calls `requestFullscreen()` on the stage container, the browser chrome goes, and `screen.orientation.lock("landscape")` is attempted (Chrome honours it while fullscreen; failures are ignored).
+- **iPhone Safari** has no element fullscreen. The button expands the stage in the page (`fixed inset-0`), which fills the web view but leaves Safari's bars. The only true fullscreen there is the native player, `HTMLVideoElement.webkitEnterFullscreen()`, and PR #48 saw it render a MediaStream as black. That path is built (`client/src/lib/fullscreen.ts`) but **opt-in**: set `localStorage["pqp:native-video-fullscreen"] = "1"` on the phone to try it. Call audio is separate `<audio>` elements (`voice-audio-sinks.tsx`), so it keeps playing either way. Verified in emulation only; a real device decides the default.
+- **Held sideways** (landscape, under 500px tall) with a share on, the rail, channel list and roster hide and the stage takes the width (`client/src/hooks/use-immersive-stage.ts`); a button in the stage's top bar brings the chat back. The stage controls pad with `env(safe-area-inset-*)` so nothing sits under the home indicator or the notch.
+- **Cinema hint**: on iOS in a tab, the stage shows "Add pqp to your home screen for a full-screen cinema" once (`lib/cinema-hint.ts`, see `docs/ONBOARDING.md`).
+
+Pinned by `client/e2e/mobile-immersive-stage.spec.ts` under the `mobile-iphone` (WebKit) and `mobile-pixel` (Chromium) Playwright projects.

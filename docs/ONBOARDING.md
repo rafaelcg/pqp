@@ -19,6 +19,7 @@ Adding one means adding a row here.
 | What's New (rail) | `components/layout/whats-new-view.tsx` + sparkle on `server-rail.tsx` | Rail icon, lime pip | newest `/blog` slug unseen | `pqp:whats-new-feed` (opening the feed) |
 | Cargos tip | `components/layout/cargos-hint.tsx` | Corner card | can manage roles | `pqp:cargos-hint-…` (impression) |
 | Get the app strip | `components/downloads/download-hint.tsx` | Sidebar strip | desktop browser | `pqp:download-hint-dismissed` (dismiss) |
+| Cinema hint | `components/voice/cinema-hint.tsx` | One-line strip above the call controls | iPhone/iPad in a browser tab (not standalone), a share on the stage | `pqp:cinema-hint-…` (impression, `lib/cinema-hint.ts`) |
 
 ## The rules
 

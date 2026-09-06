@@ -7,6 +7,8 @@ import {
   LayoutGrid,
   Loader2,
   Maximize2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Mic,
   MicOff,
   Minimize2,
@@ -47,6 +49,18 @@ import {
   type FullscreenMode,
 } from "@/components/voice/capabilities";
 import { attemptElementFullscreen } from "@/components/voice/element-fullscreen";
+import { CinemaHint } from "@/components/voice/cinema-hint";
+import { useImmersiveStage } from "@/hooks/use-immersive-stage";
+import {
+  chooseFullscreenStrategy,
+  enterNativeVideoFullscreen,
+  exitNativeVideoFullscreen,
+  lockLandscape,
+  nativeVideoFullscreenAllowed,
+  unlockOrientation,
+  videoSupportsNativeFullscreen,
+  type StageFullscreenStrategy,
+} from "@/lib/fullscreen";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   NO_SCREEN_FULLSCREEN,
@@ -225,7 +239,7 @@ function useStageFullscreen(
   );
   // `expand` needs no platform support, so it is the safe starting point and
   // the detector only ever upgrades it.
-  const [mode, setMode] = useState<FullscreenMode>("expand");
+  const [mode, setMode] = useState<StageFullscreenStrategy>("expand");
   // Set once a platform that *claims* element fullscreen turns out not to
   // honour it (an Electron shell whose embedder denies the permission). It
   // pins the mode to `expand`, which the detector below must then stop
@@ -238,19 +252,37 @@ function useStageFullscreen(
       return;
     }
     const doc = fullscreenDocument();
+    const elementMode: FullscreenMode = detectFullscreenMode({
+      documentFullscreenEnabled:
+        typeof document === "undefined"
+          ? undefined
+          : (doc.fullscreenEnabled ?? doc.webkitFullscreenEnabled),
+      requestFullscreen: containerRef.current?.requestFullscreen,
+      webkitRequestFullscreen: (
+        containerRef.current as WebkitFullscreenElement | null
+      )?.webkitRequestFullscreen,
+    });
+    // iPhone Safari has no element fullscreen; the native player is the
+    // only real one it has, and it is opt-in (see `lib/fullscreen.ts`).
     setMode(
-      detectFullscreenMode({
-        documentFullscreenEnabled:
-          typeof document === "undefined"
-            ? undefined
-            : (doc.fullscreenEnabled ?? doc.webkitFullscreenEnabled),
-        requestFullscreen: containerRef.current?.requestFullscreen,
-        webkitRequestFullscreen: (
-          containerRef.current as WebkitFullscreenElement | null
-        )?.webkitRequestFullscreen,
+      chooseFullscreenStrategy({
+        elementFullscreen: elementMode === "element",
+        videoNativeFullscreen: videoSupportsNativeFullscreen(videoRef.current),
+        hasVideo: hasPrimaryVideo,
+        allowNativeVideo: nativeVideoFullscreenAllowed(),
       }),
     );
   }, [containerRef, videoRef, hasPrimaryVideo]);
+
+  // A share is landscape; a phone in a hand usually is not. Asked after the
+  // fact because Chrome only honours a lock while the document is fullscreen.
+  useEffect(() => {
+    if (state.active) {
+      lockLandscape();
+    } else {
+      unlockOrientation();
+    }
+  }, [state.active]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -295,6 +327,31 @@ function useStageFullscreen(
 
   const apply = useCallback(
     (transition: ScreenFullscreenTransition) => {
+      if (mode === "video") {
+        // iPhone: the focused <video> goes to the native player. `active` is
+        // confirmed by `webkitbeginfullscreen` / `webkitendfullscreen` on the
+        // element, wired above, so it is never pre-empted here.
+        const video = videoRef.current;
+        if (transition.request === "none" || !video) {
+          setState(transition.next);
+          return;
+        }
+        if (transition.request === "exit") {
+          exitNativeVideoFullscreen(video);
+          return;
+        }
+        setState((was) => ({ ...was, soloPeerId: transition.next.soloPeerId }));
+        try {
+          enterNativeVideoFullscreen(video);
+        } catch (err) {
+          // Older desktop Safari: the method exists, the element refuses.
+          console.warn("[call] native video fullscreen refused; expanding in page", err);
+          refusedElementRef.current = true;
+          setMode("expand");
+          setState(transition.next);
+        }
+        return;
+      }
       if (mode !== "element") {
         // `expand`: grow the stage inside the page. Replaces handing the
         // <video> to the OS media player, which cannot render a MediaStream and
@@ -343,7 +400,7 @@ function useStageFullscreen(
         setState(transition.next);
       });
     },
-    [mode, containerRef],
+    [mode, containerRef, videoRef],
   );
 
   // The click handlers need the *current* state without being re-created (and
@@ -786,6 +843,12 @@ function ActiveCall({
     hasPrimaryVideo,
     [...voiceState.screenSharePeerIds, ...cameraSoloIds],
   );
+  // Phone held sideways with a share on: the shell's columns step aside.
+  // Everything but the flag lives in the hook (`use-immersive-stage.ts`).
+  const immersive = useImmersiveStage({
+    shareFocused: screenStream !== null && !collapsed,
+    fullscreen: fullscreen.isFullscreen,
+  });
   const soloTile =
     fullscreen.soloPeerId === null || isCameraSoloId(fullscreen.soloPeerId)
       ? null
@@ -1385,7 +1448,7 @@ function ActiveCall({
         data-call-chrome="overlay"
         data-chrome-hidden={chrome.hidden ? "true" : "false"}
         className={cn(
-          "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent px-3 py-2",
+          "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between gap-2 bg-gradient-to-b from-ink/70 to-transparent pb-2 pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-[max(0.5rem,env(safe-area-inset-top))]",
           chromeClass,
           (voiceState.error || voiceState.notice) && "mt-7",
         )}
@@ -1434,14 +1497,38 @@ function ActiveCall({
             )}
           </p>
         </div>
-        {elapsedLabel && (
-          <span
-            className="shrink-0 rounded bg-ink/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
-            aria-label={t("call.stage.duration")}
-          >
-            {elapsedLabel}
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {elapsedLabel && (
+            <span
+              className="rounded bg-ink/60 px-1.5 py-0.5 text-xs tabular-nums text-paper-muted"
+              aria-label={t("call.stage.duration")}
+            >
+              {elapsedLabel}
+            </span>
+          )}
+          {/* The way back from the landscape takeover, and the way into it
+              again. Only on a phone held sideways with a share on. */}
+          {(immersive.canDismiss || immersive.dismissed) && (
+            <button
+              type="button"
+              data-testid="stage-immersive-toggle"
+              aria-pressed={immersive.dismissed}
+              aria-label={
+                immersive.dismissed
+                  ? t("voice.share.hideChat")
+                  : t("voice.share.showChat")
+              }
+              className="pointer-events-auto flex h-7 w-7 items-center justify-center rounded-full bg-ink/60 text-paper-muted hover:bg-ink-3 hover:text-paper"
+              onClick={immersive.dismissed ? immersive.restore : immersive.dismiss}
+            >
+              {immersive.dismissed ? (
+                <PanelLeftClose className="h-4 w-4" />
+              ) : (
+                <PanelLeftOpen className="h-4 w-4" />
+              )}
+            </button>
+          )}
+        </div>
       </div>
 
       <div
@@ -1449,7 +1536,7 @@ function ActiveCall({
         data-testid="call-controls-bar"
         data-chrome-hidden={chrome.hidden ? "true" : "false"}
         className={cn(
-          "absolute inset-x-0 bottom-0 z-20 flex justify-center bg-gradient-to-t from-ink/80 to-transparent px-3 pb-3 pt-8",
+          "absolute inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 bg-gradient-to-t from-ink/80 to-transparent pb-[max(0.75rem,env(safe-area-inset-bottom))] pl-[max(0.75rem,env(safe-area-inset-left))] pr-[max(0.75rem,env(safe-area-inset-right))] pt-8",
           chromeClass,
         )}
         onPointerEnter={(event) => {
@@ -1467,6 +1554,7 @@ function ActiveCall({
         onFocusCapture={() => setBarFocused(true)}
         onBlurCapture={onBarBlur}
       >
+        <CinemaHint visible={screenStream !== null} />
         {controls}
       </div>
     </div>
@@ -1916,6 +2004,7 @@ function CallControls({
         >
           <button
             type="button"
+            data-testid="stage-fullscreen"
             aria-pressed={isFullscreen}
             className={cn(
               "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
