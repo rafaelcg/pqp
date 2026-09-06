@@ -5,7 +5,7 @@ import {
   useSignIn,
   useUser,
 } from "@clerk/clerk-react";
-import { FileText, Lock, Menu, Phone, Pin, Settings, Shield, Users, Video } from "lucide-react";
+import { Lock, Menu, Phone, Pin, Settings, Shield, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
