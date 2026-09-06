@@ -160,8 +160,8 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
     },
     description: {
       "pt-BR":
-        "Acesso antecipado ao pqp no Android. Versão 0.2.0, beta. A voz funciona em toda sala, das pequenas às watch parties grandes. Baixa o APK, autoriza uma vez, e tá dentro. De graça.",
-      en: "Early access to pqp on Android. Version 0.2.0, beta. Voice works in every room, from small ones to big watch parties. Download the APK, allow install once, and you're in. Free.",
+        "Acesso antecipado ao pqp no Android. Versão 0.3.0, beta. A voz funciona em toda sala, das pequenas às watch parties grandes. Baixa o APK, autoriza uma vez, e tá dentro. De graça.",
+      en: "Early access to pqp on Android. Version 0.3.0, beta. Voice works in every room, from small ones to big watch parties. Download the APK, allow install once, and you're in. Free.",
     },
   },
   "/download": {
