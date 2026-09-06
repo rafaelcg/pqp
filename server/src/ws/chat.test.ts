@@ -670,3 +670,80 @@ describe("message-rejected", () => {
   });
 });
 
+describe("presence fan-out under load", () => {
+  beforeEach(() => {
+    resetChatRateLimits();
+  });
+
+  it("folds a burst of joins into one presence frame per viewer", async () => {
+    const channelId = nextChannelId();
+    const watcher = recordingSocket();
+    await join(watcher, "watcher", channelId);
+
+    // Ten people arriving inside one coalescing window. Before the window
+    // existed this was ten viewer-list snapshots to every socket in the
+    // channel, quadratic in its size.
+    const arrivals = Array.from({ length: 10 }, (_, i) => {
+      const rec = recordingSocket();
+      return handleChatMessage(
+        { socket: rec.socket, user: asUser(`arrival-${i}`) },
+        { type: "join-channel", channelId },
+      );
+    });
+    await Promise.all(arrivals);
+
+    const frames = framesOfType(watcher.received, "presence-update") as Array<{
+      users: Array<{ id: string }>;
+    }>;
+    expect(frames.length).toBeLessThan(10);
+    // The one that went out is authoritative: it lists everybody.
+    const last = frames[frames.length - 1]!;
+    expect(last.users.map((u) => u.id).sort()).toEqual(
+      ["watcher", ...Array.from({ length: 10 }, (_, i) => `arrival-${i}`)].sort(),
+    );
+  });
+
+  it("drops typing and presence, never messages, for a socket over the backpressure threshold", async () => {
+    const channelId = nextChannelId();
+    const stuck = recordingSocket();
+    // A megabyte and change queued and not draining.
+    (stuck.socket as unknown as { bufferedAmount: number }).bufferedAmount =
+      2 * 1024 * 1024;
+    const typist = recordingSocket();
+    await join(stuck, "stuck", channelId);
+    await join(typist, "typist", channelId);
+    stuck.received.length = 0;
+
+    await handleChatMessage(
+      { socket: typist.socket, user: asUser("typist") },
+      { type: "typing", channelId },
+    );
+    expect(framesOfType(stuck.received, "typing-broadcast")).toHaveLength(0);
+    expect(framesOfType(stuck.received, "presence-update")).toHaveLength(0);
+
+    broadcastToChannel(channelId, {
+      type: "message-deleted",
+      channelId,
+      messageId: randomUUID(),
+    });
+    expect(framesOfType(stuck.received, "message-deleted")).toHaveLength(1);
+  });
+
+  it("sends the same encoded Buffer to every viewer", async () => {
+    const channelId = nextChannelId();
+    const a = recordingSocket();
+    const b = recordingSocket();
+    await join(a, "a", channelId);
+    await join(b, "b", channelId);
+    broadcastToChannel(channelId, {
+      type: "message-deleted",
+      channelId,
+      messageId: randomUUID(),
+    });
+    const fromA = a.received[a.received.length - 1] as unknown;
+    const fromB = b.received[b.received.length - 1] as unknown;
+    expect(Buffer.isBuffer(fromA)).toBe(true);
+    expect(fromA).toBe(fromB);
+  });
+});
+

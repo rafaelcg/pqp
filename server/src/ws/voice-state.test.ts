@@ -495,3 +495,72 @@ describe("concurrent cameras are capped per transport", () => {
     expect(denials(a).length).toBe(before);
   });
 });
+
+describe("voice roster fan-out under load", () => {
+  const viewers: Recorder[] = [];
+
+  beforeEach(() => {
+    resetVoicePeers();
+    for (const rec of viewers.splice(0)) {
+      deleteAuthenticatedSocket(rec.socket);
+    }
+    resetVoiceRateLimits();
+    backend.configured = "livekit";
+    resetVoiceRoomTransports();
+  });
+
+  function viewer(userId: string, bufferedAmount = 0): Recorder {
+    const rec = recorder();
+    (rec.socket as unknown as { bufferedAmount: number }).bufferedAmount =
+      bufferedAmount;
+    setAuthenticatedSocket(rec.socket, asUser(userId));
+    viewers.push(rec);
+    return rec;
+  }
+
+  it("folds a burst of joins into far fewer roster frames than joins", async () => {
+    const outside = viewer("viewer");
+    const joins = Array.from({ length: 20 }, (_, i) =>
+      join(recorder(), `p-${i}`),
+    );
+    await Promise.all(joins);
+
+    const all = rosters(outside);
+    expect(all.length).toBeLessThan(10);
+    // Authoritative: the last one lists the whole room.
+    expect(lastRoster(outside).participants).toHaveLength(20);
+  });
+
+  it("folds a burst of mute toggles into one roster", async () => {
+    const outside = viewer("viewer");
+    const members = await Promise.all(
+      Array.from({ length: 10 }, async (_, i) => {
+        const rec = recorder();
+        await join(rec, `m-${i}`);
+        return rec;
+      }),
+    );
+    outside.received.length = 0;
+
+    await Promise.all(
+      members.map((rec, i) =>
+        handleVoiceMessage(
+          { socket: rec.socket, user: asUser(`m-${i}`) },
+          { type: "set-voice-state", muted: true, deafened: false },
+        ),
+      ),
+    );
+
+    const all = rosters(outside);
+    expect(all).toHaveLength(1);
+    expect(all[0]!.participants!.every((p) => p.muted)).toBe(true);
+  });
+
+  it("skips the roster for a viewer over the backpressure threshold", async () => {
+    const healthy = viewer("healthy");
+    const stuck = viewer("stuck", 2 * 1024 * 1024);
+    await join(recorder(), "talker");
+    expect(rosters(healthy).length).toBeGreaterThan(0);
+    expect(rosters(stuck)).toHaveLength(0);
+  });
+});

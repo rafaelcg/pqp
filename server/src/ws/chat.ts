@@ -57,6 +57,13 @@ import {
 import { getThreadInfo } from "../services/threads.js";
 import { canAccessChannel } from "../services/users.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
+import {
+  coalesceWindowFor,
+  createCoalescer,
+  encodeFrame,
+  sendEncoded,
+  sendEncodedDroppable,
+} from "./fanout.js";
 import { isInvisible, isPresentForHere, setSocketIdle } from "./status.js";
 
 interface ChatConnection {
@@ -88,7 +95,15 @@ const messageLimiter = createRateLimiter({
   refillPerSecond: limitFromEnv("RATE_LIMIT_WS_MESSAGE_REFILL", 2),
 });
 const reactionLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 5 });
-const typingLimiter = createRateLimiter({ capacity: 5, refillPerSecond: 1 });
+/**
+ * One typing frame per user per two seconds, sustained, with a burst of two.
+ * The web client already throttles itself to one every 2.5 s and shows the
+ * indicator for 5 s (`TYPING_THROTTLE_MS` / `TYPING_TTL_MS` in use-chat.ts),
+ * so a client inside that contract never loses a frame; one outside it is
+ * spending the whole channel's bandwidth per keystroke and gets dropped to
+ * the same cadence.
+ */
+const typingLimiter = createRateLimiter({ capacity: 2, refillPerSecond: 0.5 });
 const slowModeLimiters = new Map<number, ReturnType<typeof createRateLimiter>>();
 
 function slowModeLimiterFor(seconds: number) {
@@ -230,20 +245,38 @@ function sendPresence(channelId: string): void {
     }
   }
 
-  const payload = encode({
+  const payload = encodeFrame({
     type: "presence-update",
     channelId,
     users: [...byUser.values()],
-  });
+  } satisfies ChatServerMessage);
 
   // The recipients of a channel's presence are exactly the people present in
   // it, so this walks the same index the payload was built from rather than
-  // every socket on the process.
+  // every socket on the process. Droppable: a viewer list is a snapshot the
+  // next one supersedes.
   for (const conn of present) {
-    if (conn.socket.readyState === 1) {
-      conn.socket.send(payload);
-    }
+    sendEncodedDroppable(conn.socket, payload);
   }
+}
+
+/**
+ * Presence is a snapshot of a channel's viewers sent to every viewer, so it is
+ * quadratic in the channel's size and it fires on every join and leave: with
+ * 200 people in #general, one person clicking between channels four times a
+ * second was 141 KB/s to *each* socket. Folding a window of joins and leaves
+ * into one frame keeps the roster authoritative (the send reads the index at
+ * fire time) and costs nobody a visible delay. Same window policy as the
+ * voice roster, sized by how many are viewing.
+ */
+const presenceCoalescer = createCoalescer<string>(
+  (channelId) => coalesceWindowFor(channelPresence.get(channelId)?.size ?? 0),
+  sendPresence,
+);
+
+/** Test seam: drop any presence frame still waiting for its window. */
+export function resetPresenceCoalescer(): void {
+  presenceCoalescer.reset();
 }
 
 /**
@@ -259,13 +292,20 @@ function publishPresence(channelId: string, kind: "update" | "refresh"): void {
   });
 }
 
-function broadcastPresence(channelId: string) {
-  sendPresence(channelId);
+/**
+ * Resolves once the coalesced frame has gone out. Join paths await it so the
+ * handler still finishes after the roster is on the wire, which is what the
+ * tests (and anything else that reads the order) observe; leave paths fire
+ * and forget, since nobody is waiting on a departure.
+ */
+function broadcastPresence(channelId: string): Promise<void> {
+  const sent = presenceCoalescer.request(channelId);
   if (isBusEnabled()) {
     // Published even when the local roster is now empty: an empty contribution
     // is how the other instances learn to forget this one's viewers.
     publishPresence(channelId, "update");
   }
+  return sent;
 }
 
 /**
@@ -293,7 +333,7 @@ function leaveChannel(conn: ChatConnection) {
     channelPresence.delete(channelId);
   }
   conn.channelId = null;
-  broadcastPresence(channelId);
+  void broadcastPresence(channelId);
 }
 
 // --- threads ---
@@ -331,7 +371,7 @@ function leaveThread(conn: ChatConnection): void {
   if (presence && presence.size === 0) {
     channelPresence.delete(channelId);
   }
-  broadcastPresence(channelId);
+  void broadcastPresence(channelId);
 }
 
 function ensureConnection(socket: WebSocket, user: DbUser): ChatConnection {
@@ -393,7 +433,9 @@ function deliverToChannel(
   message: ChatServerMessage,
   alsoSocket?: WebSocket,
 ): void {
-  const payload = encode(message);
+  // One Buffer for the whole audience; never droppable, a message is the one
+  // frame a client cannot recover by waiting for the next one.
+  const payload = encodeFrame(message);
   let sentToAlso = false;
   for (const conn of channelPresence.get(channelId) ?? []) {
     if (conn.socket.readyState !== 1) {
@@ -402,13 +444,13 @@ function deliverToChannel(
     if (conn.socket === alsoSocket) {
       sentToAlso = true;
     }
-    conn.socket.send(payload);
+    sendEncoded(conn.socket, payload);
   }
   // The sender hears their own message even when they are not viewing the
   // channel — but only once, hence the flag: a sender who *is* viewing it was
   // already served by the loop, and two copies would double-render the bubble.
-  if (alsoSocket && !sentToAlso && alsoSocket.readyState === 1) {
-    alsoSocket.send(payload);
+  if (alsoSocket && !sentToAlso) {
+    sendEncoded(alsoSocket, payload);
   }
 }
 
@@ -955,7 +997,7 @@ export async function handleChatMessage(
     }
     leaveChannel(conn);
     joinChannel(conn, payload.channelId);
-    broadcastPresence(payload.channelId);
+    await broadcastPresence(payload.channelId);
     return;
   }
 
@@ -980,7 +1022,7 @@ export async function handleChatMessage(
     }
     leaveThread(conn);
     joinThread(conn, payload.channelId);
-    broadcastPresence(payload.channelId);
+    await broadcastPresence(payload.channelId);
     return;
   }
 
@@ -1040,17 +1082,19 @@ export async function handleChatMessage(
     }
     // Membership was proven at join-channel time and revocation evicts the
     // viewer, so no extra query on this very hot, purely ephemeral path.
-    const encoded = encode({
+    const encoded = encodeFrame({
       type: "typing-broadcast",
       channelId: payload.channelId,
       userId: conn.user.id,
       displayName: conn.user.display_name,
-    });
+    } satisfies ChatServerMessage);
     // Same index, same reason as `broadcastToChannel`: this is the app's
     // hottest fan-out and it must not walk every socket once per keystroke.
+    // Droppable: an indicator a slow socket reads five seconds late is worse
+    // than one it never sees.
     for (const other of channelPresence.get(payload.channelId) ?? []) {
-      if (other !== conn && other.socket.readyState === 1) {
-        other.socket.send(encoded);
+      if (other !== conn) {
+        sendEncodedDroppable(other.socket, encoded);
       }
     }
     if (isBusEnabled()) {
@@ -1558,20 +1602,18 @@ subscribeToCluster(TYPING_TOPIC, (data) => {
   if (!channelId || !userId || displayName === null) {
     return;
   }
-  const encoded = encode({
+  const encoded = encodeFrame({
     type: "typing-broadcast",
     channelId,
     userId,
     displayName,
-  });
+  } satisfies ChatServerMessage);
   // No self-exclusion: the typist's own socket is on the publishing instance.
   // A second tab of the same user held here does receive it — which is already
   // what happens with two tabs on one process today, so the behaviour is the
   // same whichever instance the tabs landed on.
   for (const conn of channelPresence.get(channelId) ?? []) {
-    if (conn.socket.readyState === 1) {
-      conn.socket.send(encoded);
-    }
+    sendEncodedDroppable(conn.socket, encoded);
   }
 });
 

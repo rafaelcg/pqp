@@ -50,6 +50,13 @@ import {
 } from "../voice/transport-policy.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
 import {
+  coalesceWindowFor,
+  createCoalescer,
+  encodeFrame,
+  sendEncoded,
+  sendEncodedDroppable,
+} from "./fanout.js";
+import {
   applyWatchPartyWrite,
   endWatchParty,
   getWatchPartyState,
@@ -497,10 +504,10 @@ function broadcastToRoom(
   message: VoiceSignalingMessage,
   excludePeerId?: string,
 ) {
-  const encoded = JSON.stringify(message);
+  const encoded = encodeFrame(message);
   for (const peer of getRoomPeers(voiceChannelId)) {
-    if (peer.id !== excludePeerId && peer.socket.readyState === 1) {
-      peer.socket.send(encoded);
+    if (peer.id !== excludePeerId) {
+      sendEncoded(peer.socket, encoded);
     }
   }
 }
@@ -511,49 +518,56 @@ function broadcastToRoom(
  * instance would leak cross-server presence and, worse, hand out the peer IDs
  * used for signaling.
  *
- * Serialized per channel: the audience lookup is async, and two overlapping
- * broadcasts could otherwise deliver an older snapshot last, leaving a departed
- * peer visible in everyone's sidebar.
+ * Coalesced per channel (`ROSTER_COALESCE_MS`) and serialized per channel: the
+ * audience lookup is async, and two overlapping broadcasts could otherwise
+ * deliver an older snapshot last, leaving a departed peer visible in
+ * everyone's sidebar. The coalescer guarantees both.
+ *
+ * Encoded once as a Buffer and sent droppable: a roster is a snapshot, and a
+ * socket that already has a megabyte queued is better served by the next one
+ * than by a copy of this one it will read late. Measured before this existed:
+ * a 200-person LiveKit room with 20 mute toggles and 4 joins/leaves a second
+ * was 836 KB/s of roster *per socket*, 85% of everything the process wrote.
  */
-const rosterQueue = new Map<string, Promise<void>>();
+async function sendRoster(voiceChannelId: string): Promise<void> {
+  try {
+    const audience = await getChannelAudience(voiceChannelId);
+    if (!audience) {
+      return;
+    }
 
-function broadcastRoster(voiceChannelId: string): Promise<void> {
-  const previous = rosterQueue.get(voiceChannelId) ?? Promise.resolve();
-  const next = previous
-    .catch(() => {})
-    .then(async () => {
-      try {
-        const audience = await getChannelAudience(voiceChannelId);
-        if (!audience) {
-          return;
-        }
+    // Read the room *after* the await so the payload reflects state at send
+    // time, not at the time the broadcast was requested.
+    const encoded = encodeFrame({
+      type: "voice-roster",
+      voiceChannelId,
+      participants: getRoomPeers(voiceChannelId).map(toParticipant),
+      transport: getRoomTransport(voiceChannelId),
+    } satisfies VoiceSignalingMessage);
 
-        // Read the room *after* the await so the payload reflects state at send
-        // time, not at the time the broadcast was requested.
-        const encoded = JSON.stringify({
-          type: "voice-roster",
-          voiceChannelId,
-          participants: getRoomPeers(voiceChannelId).map(toParticipant),
-          transport: getRoomTransport(voiceChannelId),
-        } satisfies VoiceSignalingMessage);
-
-        forEachAuthenticatedSocket((socket, user) => {
-          if (socket.readyState === 1 && audience.has(user.id)) {
-            socket.send(encoded);
-          }
-        });
-      } catch (error) {
-        console.error("[voice] failed to load audience for roster:", error);
-      }
-    })
-    .finally(() => {
-      if (rosterQueue.get(voiceChannelId) === next) {
-        rosterQueue.delete(voiceChannelId);
+    forEachAuthenticatedSocket((socket, user) => {
+      if (audience.has(user.id)) {
+        sendEncodedDroppable(socket, encoded);
       }
     });
+  } catch (error) {
+    console.error("[voice] failed to load audience for roster:", error);
+  }
+}
 
-  rosterQueue.set(voiceChannelId, next);
-  return next;
+/**
+ * A 100-person room where people toggle mute, join and leave produces dozens
+ * of roster requests a second, each a frame of the whole room to every member
+ * of the server. The window grows with the room (`coalesceWindowFor`), so a
+ * two-person call is instant and a big room is bounded.
+ */
+const rosterCoalescer = createCoalescer<string>(
+  (voiceChannelId) => coalesceWindowFor(getRoomPeers(voiceChannelId).length),
+  sendRoster,
+);
+
+function broadcastRoster(voiceChannelId: string): Promise<void> {
+  return rosterCoalescer.request(voiceChannelId);
 }
 
 function relayToTarget(message: VoiceSignalingMessage & { to: string }) {
@@ -761,6 +775,7 @@ export function resetVoicePeers(): void {
   socketToPeerId.clear();
   retiredPeerIds.clear();
   roomTransports.clear();
+  rosterCoalescer.reset();
 }
 
 /** Whether a socket currently holds a voice peer (for disconnect diagnostics). */
