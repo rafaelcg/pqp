@@ -602,6 +602,7 @@ export function MemberSidebar({
       )}
       <aside
         data-member-sidebar=""
+        data-immersive-hide=""
         aria-label={t("memberList.title")}
         className={cn(
           "flex shrink-0 flex-col border-l border-ink-4/60 bg-channel",

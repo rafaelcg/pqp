@@ -1411,3 +1411,13 @@ h2,
   margin-top: 0.65em;
   opacity: 0.85;
 }
+
+/*
+ * The stage owns the window: a share focused on a phone held sideways, or the
+ * stage fullscreen in the page. `hooks/use-immersive-stage.ts` sets the
+ * attribute; the shell columns (rail, channel list, DM list, roster) carry
+ * the marker. One rule here so the layout files need no state of their own.
+ */
+html[data-immersive-stage] [data-immersive-hide] {
+  display: none !important;
+}
