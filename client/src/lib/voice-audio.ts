@@ -1,7 +1,15 @@
 /** Shared helpers for WebRTC ICE / speaking detection. */
 
-const SPEAKING_THRESHOLD = 0.045;
-const SPEAKING_HANGOVER_MS = 280;
+export const SPEAKING_THRESHOLD = 0.045;
+export const SPEAKING_HANGOVER_MS = 280;
+
+/** Clamp a stored or live voice-activity threshold onto 0..1. */
+export function parseVadThreshold(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return SPEAKING_THRESHOLD;
+  }
+  return Math.min(1, Math.max(0, value));
+}
 
 /**
  * Chrome caps a page at roughly six AudioContexts. Creating one per remote peer
@@ -49,7 +57,7 @@ export function createSpeakingTracker(options?: {
   threshold?: number;
   hangoverMs?: number;
 }) {
-  const threshold = options?.threshold ?? SPEAKING_THRESHOLD;
+  let threshold = options?.threshold ?? SPEAKING_THRESHOLD;
   const hangoverMs = options?.hangoverMs ?? SPEAKING_HANGOVER_MS;
   const lastSpokeAt = new Map<string, number>();
 
@@ -71,11 +79,15 @@ export function createSpeakingTracker(options?: {
     return false;
   }
 
+  function setThreshold(next: number) {
+    threshold = parseVadThreshold(next);
+  }
+
   function clear() {
     lastSpokeAt.clear();
   }
 
-  return { update, clear };
+  return { update, clear, setThreshold };
 }
 
 export function createStreamAnalyser(stream: MediaStream): {
