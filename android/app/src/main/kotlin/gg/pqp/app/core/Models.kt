@@ -306,6 +306,13 @@ data class VoiceBackendResponse(@SerialName("backend") val backend: String = "me
 data class VoiceSessionRequest(
     val voiceChannelId: String,
     val peerId: String,
+    /**
+     * The resume HMAC `welcome` handed out for this peer id. Optional on the
+     * wire; this client does not send it yet (null is not encoded, see
+     * `PqpJson`), and the server then proves ownership against its own peer
+     * map, which is exact on a single instance.
+     */
+    val resumeToken: String? = null,
 )
 
 /**
