@@ -429,6 +429,13 @@ function createAppMenu() {
             sendToRenderer("pqp:toggle-mute");
           },
         },
+        {
+          label: t("menu.toggleDeafen"),
+          accelerator: "CommandOrControl+Shift+D",
+          click: () => {
+            sendToRenderer("pqp:toggle-deafen");
+          },
+        },
       ],
     },
     {
@@ -453,6 +460,12 @@ function createAppMenu() {
           label: t("menu.toggleMuteHelp"),
           click: () => {
             sendToRenderer("pqp:toggle-mute");
+          },
+        },
+        {
+          label: t("menu.toggleDeafenHelp"),
+          click: () => {
+            sendToRenderer("pqp:toggle-deafen");
           },
         },
       ],

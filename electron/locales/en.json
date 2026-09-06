@@ -5,6 +5,8 @@
   "menu.speech": "Speech",
   "menu.toggleMute": "Toggle Mute",
   "menu.toggleMuteHelp": "Toggle Mute (Cmd/Ctrl+Shift+M)",
+  "menu.toggleDeafen": "Toggle Deafen",
+  "menu.toggleDeafenHelp": "Toggle Deafen (Cmd/Ctrl+Shift+D)",
   "updater.title": "Update ready",
   "updater.message": "pqp {version} is ready to install.",
   "updater.detail": "Restarting takes a few seconds. If you are in a call, choose Later, and the update installs the next time you quit.",
