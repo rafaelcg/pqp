@@ -136,6 +136,9 @@ export function ContextMenu({
           ref={placeContent}
           alignOffset={alignOffset}
           collisionPadding={COLLISION_PADDING}
+          // Named so a test can address the open menu and its rows without
+          // matching on translated labels.
+          data-context-menu=""
           // `animate-fade-in` rather than `animate-rise`: the latter animates
           // `translateY(14px)` over 650ms, so the menu spends half a second
           // visibly detached from the point it is anchored to.
@@ -200,6 +203,7 @@ export function ContextMenu({
                 disabled={item.disabled}
                 onSelect={() => item.onSelect?.()}
                 aria-checked={item.checked}
+                data-menu-item={item.id}
                 className={cn(
                   "flex w-full cursor-default select-none items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-ink-3",
                   item.danger

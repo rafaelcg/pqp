@@ -5333,6 +5333,9 @@ function MainAppContent({
             })
           }
           onOpenMembersPanel={() => setMembersOpen(true)}
+          // The same context the profile card gets, so the row's menu and the
+          // card cannot disagree about what this account may do to somebody.
+          moderation={cardModeration}
           voiceOccupancy={voiceState.occupancy}
           voiceChannels={channels
             .filter((c) => c.type === "voice")

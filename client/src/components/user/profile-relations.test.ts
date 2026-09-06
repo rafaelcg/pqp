@@ -300,8 +300,8 @@ describe("placeCard", () => {
  *
  * The rank rule itself is proved in `packages/shared/src/friends.test.ts`; this
  * covers what is specific to THIS surface — that a conversation offers nothing,
- * that an unknown rank offers nothing, and that a live timeout swaps "issue" for
- * "end" rather than showing both.
+ * that an unknown rank still offers the ban and only the ban, and that a live
+ * timeout swaps "issue" for "end" rather than showing both.
  */
 describe("moderationActions", () => {
   const OTHER = "22222222-2222-4222-8222-222222222222";
@@ -359,15 +359,48 @@ describe("moderationActions", () => {
   });
 
   /**
-   * The pre-emptive ban lives on the members panel, not here: a card opened on a
-   * name in a channel is about somebody in this server, and if the roster has
-   * not arrived a kick offered against them would 404. Drawing nothing is the
-   * honest answer, and it is why this differs from `canModerateMember`, which
-   * allows a null target on purpose.
+   * THE REGRESSION THIS SURFACE SHIPPED WITH. An unknown rank used to draw an
+   * empty menu, and a name in a transcript is regularly not in the roster: the
+   * person left, or the roster of a two-thousand member community has not
+   * landed. The owner of the biggest community here found a card with Block
+   * and Report on it and nothing else, on exactly those people.
+   *
+   * The ban survives because the server allows a pre-emptive one; the kick and
+   * the timeout do not, because they need a membership and would 404.
    */
-  it("offers nothing when the person's rank is not known yet", () => {
+  it("still offers the ban when the person's rank is not known", () => {
     expect(
       moderationActions(THEM, ME, context({ memberRoles: new Map() })),
+    ).toEqual(["ban"]);
+  });
+
+  it("offers nothing on an unknown rank without the ban bit", () => {
+    expect(
+      moderationActions(
+        THEM,
+        ME,
+        context({
+          memberRoles: new Map(),
+          bits: {
+            kick: true,
+            ban: false,
+            timeout: true,
+            mute: true,
+            move: true,
+            nicknames: true,
+            manageRoles: true,
+            canMuteIn: () => true,
+            canMoveIn: () => true,
+          },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("never offers anything against yourself, known rank or not", () => {
+    expect(moderationActions(ME, ME, context())).toEqual([]);
+    expect(
+      moderationActions(ME, ME, context({ memberRoles: new Map() })),
     ).toEqual([]);
   });
 
