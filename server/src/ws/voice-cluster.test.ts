@@ -939,8 +939,11 @@ describeDb("voice across two instances", () => {
     // not re-run it: every graph gets the same mocked `admin.js`, so its
     // call log is the cluster's, which is exactly what "the SFU half ran
     // once" has to be checked against.
-    function sfuCalls(instance: Instance, fn: "evictSfuUser" | "evictSfuRoom" | "evictSfuUsersExcept") {
-      return vi.mocked(instance.admin[fn]).mock.calls;
+    function sfuCalls<F extends "evictSfuUser" | "evictSfuRoom" | "evictSfuUsersExcept">(
+      instance: Instance,
+      fn: F,
+    ): Parameters<AdminModule[F]>[] {
+      return vi.mocked(instance.admin[fn]).mock.calls as Parameters<AdminModule[F]>[];
     }
 
     beforeEach(async () => {
