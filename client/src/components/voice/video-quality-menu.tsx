@@ -4,7 +4,17 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { InboundVideoReadout } from "@/components/voice/inbound-video-readout";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
-import { VIDEO_QUALITIES, type VideoQuality } from "@/lib/video-quality";
+import {
+  RECEIVE_QUALITIES,
+  setReceiveQuality,
+  useReceiveQuality,
+  type ReceiveQuality,
+} from "@/lib/receive-quality";
+import {
+  screenSimulcastPlan,
+  VIDEO_QUALITIES,
+  type VideoQuality,
+} from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 
 /**
@@ -31,25 +41,28 @@ import { cn } from "@/lib/utils";
  * used to be one list of sizes under the heading "Camera and screen quality",
  * shown with identical wording to a presenter and to a watcher. Those are
  * opposite situations: the presenter's choice decides what everyone sees, and
- * the watcher's decides nothing at all, because in a mesh the sender encodes
+ * on the mesh the watcher's decides nothing at all, because the sender encodes
  * the stream and `RTCRtpReceiver` has no size or rate parameter to answer with.
  * Somebody watching a soft share therefore reached for the only control the
- * product offered, moved it two rungs, and got nothing — twice, across a
+ * product offered, moved it two rungs, and got nothing, twice, across a
  * rejoin. So the sizes now sit under "Video you send" and appear only while
  * this machine is actually sending; underneath them, "Video you receive" says
- * what is arriving and whose choice it was. Nothing here promises a viewer a
- * knob that WebRTC does not have.
+ * what is arriving and whose choice it was. Nothing here promises a mesh
+ * viewer a knob that WebRTC does not have.
  *
- * THE SAME IS TRUE ON THE SFU, FOR A DIFFERENT REASON. LiveKit can serve a
- * viewer a smaller copy of a track, but only from simulcast layers the
- * presenter encodes, and the screen share is published as a single layer on
- * purpose (`livekit-session.ts`): a second and third encoder on the one
- * machine that is already carrying the film is the wrong trade for a watch
- * party. So a viewer gets no size list on either transport, and the receiving
- * half must therefore be right on both. It was not: the readout under it knew
- * only about mesh peer connections and told an SFU room's viewers that nobody
- * was sending them video, while the share played. The LiveKit session now
- * feeds the same sampler; see `inbound-video-readout.tsx`.
+ * ON THE SFU THE VIEWER DOES GET A KNOB, since 6 Sep 2026. The presenter
+ * publishes simulcast layers (`livekit-session.ts`), so the server holds a
+ * 360p and a 720p copy next to the top one, and "Video you receive" carries a
+ * second list: Auto, 1080p, 720p, 360p. Auto lets the size of the picture on
+ * this screen decide; a fixed choice is the largest layer this device will
+ * accept. It is remembered per device (`receive-quality.ts`), which is why a
+ * phone opens on 720p and a desktop on Auto. The mesh keeps the sentence and
+ * hides the list, because there the sentence is still the truth.
+ *
+ * THE LARGE-ROOM NOTE. Past twenty people an SFU presenter's screen is held
+ * to 720p unless they picked 1080p by name (`screenSimulcastPlan`). A cap
+ * that acts silently reads as a broken setting, so while it is in effect the
+ * sending half says so, and says how to override it.
  */
 const LABELS: Record<VideoQuality, MessageKey> = {
   auto: "settings.voice.videoQuality.auto",
@@ -59,12 +72,25 @@ const LABELS: Record<VideoQuality, MessageKey> = {
   "360p": "settings.voice.videoQuality.360p",
 };
 
+const RECEIVE_LABELS: Record<ReceiveQuality, MessageKey> = {
+  auto: "settings.voice.videoQuality.auto",
+  "1080p": "settings.voice.videoQuality.1080p",
+  "720p": "settings.voice.videoQuality.720p",
+  "360p": "settings.voice.videoQuality.360p",
+};
+
+const ITEM_CLASS =
+  "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3";
+
 export function VideoQualityMenu({
   value,
   open,
   onOpenChange,
   onChange,
   isSendingVideo,
+  isSharingScreen = false,
+  usingSfu = false,
+  participantCount = 1,
   buttonClassName,
   iconClassName,
 }: {
@@ -82,11 +108,18 @@ export function VideoQualityMenu({
    * what a watcher opened this for.
    */
   isSendingVideo: boolean;
+  /** Whether the share, specifically, is this machine's. The cap is about it. */
+  isSharingScreen?: boolean;
+  /** Media on the SFU: the receive list exists, the mesh sentence does not. */
+  usingSfu?: boolean;
+  /** Everybody in the room, this machine included. Decides the cap note. */
+  participantCount?: number;
   buttonClassName?: string;
   iconClassName?: string;
 }) {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
+  const receiveQuality = useReceiveQuality();
 
   // Same dismissal contract as the user-panel popover: a press anywhere else,
   // or Escape. Anchored on the wrapper rather than the panel so a press on the
@@ -116,10 +149,15 @@ export function VideoQualityMenu({
 
   // The button's own name changes with the role, because it is the first
   // thing read and the last thing a screen-reader user hears before opening
-  // something that, for a viewer, contains no control at all.
+  // something that, for a mesh viewer, contains no control at all.
   const label = isSendingVideo
     ? t("call.quality.open", { quality: t(LABELS[value]) })
     : t("call.quality.openReceiving");
+
+  const largeRoomCap =
+    usingSfu &&
+    isSharingScreen &&
+    screenSimulcastPlan(value, participantCount).capped;
 
   return (
     <div ref={rootRef} className="relative">
@@ -143,7 +181,7 @@ export function VideoQualityMenu({
                   type="button"
                   role="menuitemradio"
                   aria-checked={selected}
-                  className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3"
+                  className={ITEM_CLASS}
                   onClick={() => {
                     onChange(quality);
                     onOpenChange(false);
@@ -162,6 +200,14 @@ export function VideoQualityMenu({
                 </button>
               );
             })}
+          {/* The cap, said out loud while it acts. Without this line a
+              presenter on Auto in a big room reads "1080p" nowhere and
+              "720p" in the readout below and concludes the setting is broken. */}
+          {largeRoomCap && (
+            <p className="px-2.5 pb-1 pt-0.5 text-xs text-paper-muted">
+              {t("call.quality.send.largeRoomCap")}
+            </p>
+          )}
           {/* The reason the control is on the call rather than only in a
               dialog: the size actually leaving this machine, updating while
               you look at it. Changing the choice above re-shapes the track
@@ -176,11 +222,45 @@ export function VideoQualityMenu({
               Always present, including for a presenter who is also watching
               somebody else: "mine is fine and theirs is 360p" is a diagnosis,
               and it is unavailable from any other surface in the product. */}
-          <div className="mt-1 border-t border-ink-4/60 px-2.5 pb-1.5 pt-1">
-            <p className="pb-0.5 text-xs uppercase tracking-wide text-paper-muted">
+          <div className="mt-1 border-t border-ink-4/60 pb-1.5 pt-1">
+            <p className="px-2.5 pb-0.5 text-xs uppercase tracking-wide text-paper-muted">
               {t("call.quality.receiving")}
             </p>
-            <InboundVideoReadout />
+            {usingSfu &&
+              RECEIVE_QUALITIES.map((quality) => {
+                const selected = quality === receiveQuality;
+                return (
+                  <button
+                    key={quality}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={selected}
+                    className={ITEM_CLASS}
+                    onClick={() => {
+                      setReceiveQuality(quality);
+                    }}
+                  >
+                    <Check
+                      className={cn(
+                        "h-3.5 w-3.5 shrink-0 text-signal",
+                        !selected && "invisible",
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1 truncate">
+                      {t(RECEIVE_LABELS[quality])}
+                    </span>
+                  </button>
+                );
+              })}
+            {usingSfu && (
+              <p className="px-2.5 pb-0.5 pt-1 text-xs text-paper-muted">
+                {t("call.quality.receive.hint")}
+              </p>
+            )}
+            <div className="px-2.5">
+              <InboundVideoReadout usingSfu={usingSfu} />
+            </div>
           </div>
         </div>
       )}

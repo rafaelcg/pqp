@@ -3,6 +3,7 @@ import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
 import { useLgUp } from "@/hooks/use-lg-up";
 import { useTranslation } from "@/lib/i18n";
+import { bindRemoteVideo } from "@/lib/remote-video-binding";
 import { cn } from "@/lib/utils";
 
 export interface ScreenShareTile {
@@ -63,10 +64,13 @@ function ThumbVideo({ stream }: { stream: MediaStream | null }) {
     if (!video) {
       return;
     }
-    video.srcObject = stream;
+    // Through the binding so an SFU stream's element is measured for
+    // adaptive streaming; a thumbnail asking for the 360p layer is the point.
+    const unbind = bindRemoteVideo(video, stream);
     if (stream) {
       void video.play().catch(() => {});
     }
+    return unbind;
   }, [stream]);
   return (
     <video
