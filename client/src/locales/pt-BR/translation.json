@@ -1012,6 +1012,7 @@
   "memberList.owner": "Dono",
   "memberList.admins": "Administradores",
   "memberList.online": "Online",
+  "memberList.friends": "Amigos",
   "memberList.offline": "Offline",
   "memberList.participants": "Participantes",
   "memberList.inVoice": "Na call: {channel}",
