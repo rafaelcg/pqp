@@ -358,10 +358,14 @@ describe("voice-activity gate", () => {
   it("opens and closes the gate from the poll when rAF does not tick", async () => {
     const { voice } = await connected();
 
+    // Hidden tab / occluded Electron window: rAF is frozen. The interval
+    // still fires, which is what keeps the transmit gate alive.
     analyserLevel = 0.3;
+    expect(rafQueue).toHaveLength(1);
     flushVoiceActivityPoll();
     expect(voice.getState().isTransmitting).toBe(true);
     expect(outgoingOpen()).toBe(true);
+    expect(rafQueue).toHaveLength(1);
 
     analyserLevel = 0;
     nowMs += SPEAKING_HANGOVER_MS + 20;
