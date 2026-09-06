@@ -342,22 +342,57 @@ function toggleFence(value: string, start: number, end: number): FormattingEdit 
     );
   }
 
-  const replacement = `${FENCE_OPEN}${selected}${FENCE_CLOSE}`;
+  const range = start === end ? { start, end } : lineRange(value, start, end);
+  const block = value.slice(range.start, range.end);
+  if (
+    block.length >= FENCE_OPEN.length + FENCE_CLOSE.length &&
+    block.startsWith(FENCE_OPEN) &&
+    block.endsWith(FENCE_CLOSE)
+  ) {
+    const inner = block.slice(FENCE_OPEN.length, block.length - FENCE_CLOSE.length);
+    return makeEdit(value, range.start, range.end, inner, range.start, range.start + inner.length);
+  }
+  if (
+    value.slice(range.start - FENCE_OPEN.length, range.start) === FENCE_OPEN &&
+    value.slice(range.end, range.end + FENCE_CLOSE.length) === FENCE_CLOSE
+  ) {
+    return makeEdit(
+      value,
+      range.start - FENCE_OPEN.length,
+      range.end + FENCE_CLOSE.length,
+      block,
+      range.start - FENCE_OPEN.length,
+      range.start - FENCE_OPEN.length + block.length,
+    );
+  }
+
+  if (start === end) {
+    const atLineStart = start === 0 || value[start - 1] === "\n";
+    const atLineEnd = start === value.length || value[start] === "\n";
+    const lead = atLineStart ? "" : "\n";
+    const tail = atLineEnd ? "" : "\n";
+    const replacement = `${lead}${FENCE_OPEN}${FENCE_CLOSE}${tail}`;
+    const caret = start + lead.length + FENCE_OPEN.length;
+    return makeEdit(value, start, end, replacement, caret, caret);
+  }
+
+  const replacement = `${FENCE_OPEN}${block}${FENCE_CLOSE}`;
   return makeEdit(
     value,
-    start,
-    end,
+    range.start,
+    range.end,
     replacement,
-    start + FENCE_OPEN.length,
-    start + FENCE_OPEN.length + selected.length,
+    range.start + FENCE_OPEN.length,
+    range.start + FENCE_OPEN.length + block.length,
   );
 }
 
 /**
  * Quote, list, or fence the selection, or unwrap it when the same wrap is
  * already there. Quote and list expand to the lines the caret or selection
- * touches; a fence wraps the selection itself, or inserts an empty pair with
- * the caret between the markers.
+ * touches. A fence does the same, so mid-line wraps stay CommonMark blocks
+ * rather than becoming a code span. With no selection it inserts an empty
+ * pair on its own lines and leaves the caret between the markers.
  */
 export function toggleBlockFormatting(
   value: string,
@@ -373,6 +408,33 @@ export function toggleBlockFormatting(
     return toggleLinePrefix(value, start, end, lineHasQuote, stripQuote, addQuote);
   }
   return toggleLinePrefix(value, start, end, lineHasList, stripList, addList);
+}
+
+/**
+ * Form chrome. Must not set overflow or a max height: `@` `:` `/` menus, the
+ * warning strip and the phone + menu all sit `absolute bottom-full` on this
+ * node, and a scroll container clips them.
+ */
+export const COMPOSER_FORM_CLASS =
+  "safe-pb relative border-t border-border/60 px-3 py-3 sm:px-4";
+
+/**
+ * Odd ``` before the caret means the user is still inside a fence. Enter
+ * then inserts a newline (Discord) instead of sending a half-written block.
+ */
+export function caretInsideUnclosedFence(value: string, caret: number): boolean {
+  const clamped = Math.max(0, Math.min(caret, value.length));
+  const markers = value.slice(0, clamped).match(/```/g);
+  return (markers?.length ?? 0) % 2 === 1;
+}
+
+/** Empty, or only an empty fence the format bar just inserted. */
+export function composerBodyIsEmpty(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return true;
+  }
+  return /^```[^\n]*\n*\s*```$/.test(trimmed);
 }
 
 /** The subset of a keydown event the shortcut table needs. */

@@ -97,6 +97,9 @@ import {
 import { remainingWaitSeconds } from "@/hooks/use-chat";
 import {
   applyFormattingEdit,
+  caretInsideUnclosedFence,
+  composerBodyIsEmpty,
+  COMPOSER_FORM_CLASS,
   formattingMarkerForKey,
   isApplePlatform,
   toggleBlockFormatting,
@@ -349,6 +352,7 @@ export function MessageComposer({
   const announcedHoldRef = useRef<number | null>(null);
   const holdHintId = useId();
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const formatFromPointerRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const insertMenuRef = useRef<HTMLDivElement>(null);
   /** Lets the insert effect append without listing the draft as a dependency. */
@@ -1053,7 +1057,7 @@ export function MessageComposer({
     if (isRunningSlash || isUploading) {
       return;
     }
-    if (!trimmed && ready.length === 0) {
+    if ((composerBodyIsEmpty(body) || !trimmed) && ready.length === 0) {
       return;
     }
 
@@ -1144,7 +1148,9 @@ export function MessageComposer({
     }
 
     // Enter sends; Shift+Enter (and the menus, handled below) inserts a
-    // newline. Without this a textarea would only ever add lines.
+    // newline. Inside an unclosed fence, Enter is a new line, same as Discord:
+    // the fence button leaves the caret between an empty pair, and sending
+    // that by accident is the trap this branch exists for.
     if (
       event.key === "Enter" &&
       !event.shiftKey &&
@@ -1152,6 +1158,11 @@ export function MessageComposer({
       !event.ctrlKey &&
       !(menuKind && menuCount > 0)
     ) {
+      const input = event.currentTarget;
+      const caret = input.selectionStart ?? body.length;
+      if (caretInsideUnclosedFence(input.value, caret)) {
+        return;
+      }
       event.preventDefault();
       void handleSubmit();
       return;
@@ -1331,7 +1342,7 @@ export function MessageComposer({
   return (
     <form
       onSubmit={(event) => void handleSubmit(event)}
-      className="safe-pb relative border-t border-border/60 px-3 py-3 sm:px-4"
+      className={COMPOSER_FORM_CLASS}
     >
       {menuKind && (
         <AutocompleteMenu
@@ -1463,8 +1474,22 @@ export function MessageComposer({
                     variant="ghost"
                     size="icon"
                     disabled={disabled || isRunningSlash}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => applyComposerFormat(action.kind)}
+                  onPointerDown={(event) => {
+                    // Pointer, not mouse: a tap never fires mousedown, and
+                    // without preventDefault the textarea blurs and loses the
+                    // selection before click. Apply here so touch and pen
+                    // wrap once even when the compatibility click is dropped.
+                    event.preventDefault();
+                    formatFromPointerRef.current = true;
+                    applyComposerFormat(action.kind);
+                  }}
+                  onClick={() => {
+                    if (formatFromPointerRef.current) {
+                      formatFromPointerRef.current = false;
+                      return;
+                    }
+                    applyComposerFormat(action.kind);
+                  }}
                     className="h-8 min-w-8 flex-1 text-paper-muted hover:text-signal sm:w-8 sm:flex-none"
                   >
                     <Icon className="h-4 w-4" />
@@ -1700,7 +1725,7 @@ export function MessageComposer({
             slowModeRemaining > 0 ||
             isRunningSlash ||
             isUploading ||
-            (!body.trim() && readyCount === 0)
+            (composerBodyIsEmpty(body) && readyCount === 0)
           }
           aria-label={
             slowModeRemaining > 0

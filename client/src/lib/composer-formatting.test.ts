@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  caretInsideUnclosedFence,
+  composerBodyIsEmpty,
+  COMPOSER_FORM_CLASS,
   formattingMarkerForKey,
   toggleBlockFormatting,
   toggleFormatting,
@@ -298,14 +301,24 @@ describe("toggleBlockFormatting list", () => {
 });
 
 describe("toggleBlockFormatting fence", () => {
+  it("expands a mid-line selection to the line so the wrap is a fence, not a span", () => {
+    const edit = toggleBlockFormatting("foo bar baz", 4, 7, "fence");
+    expect(edit.value).toBe("```\nfoo bar baz\n```");
+    expect(edit.value.slice(edit.selectionStart, edit.selectionEnd)).toBe(
+      "foo bar baz",
+    );
+  });
+
   it("wraps the selection in a fence and keeps the inner text selected", () => {
     const edit = toggleBlockFormatting("hello world", 6, 11, "fence");
-    expect(edit.value).toBe("hello ```\nworld\n```");
-    expect(edit.value.slice(edit.selectionStart, edit.selectionEnd)).toBe("world");
+    expect(edit.value).toBe("```\nhello world\n```");
+    expect(edit.value.slice(edit.selectionStart, edit.selectionEnd)).toBe(
+      "hello world",
+    );
     expect([edit.replaceStart, edit.replaceEnd, edit.replacement]).toEqual([
-      6,
+      0,
       11,
-      "```\nworld\n```",
+      "```\nhello world\n```",
     ]);
   });
 
@@ -326,10 +339,10 @@ describe("toggleBlockFormatting fence", () => {
     expect(edit.value).toBe("word");
   });
 
-  it("inserts an empty fence with the caret between when nothing is selected", () => {
+  it("inserts an empty fence on its own lines when the caret is mid-line", () => {
     const edit = toggleBlockFormatting("hello ", 6, 6, "fence");
-    expect(edit.value).toBe("hello ```\n\n```");
-    expect([edit.selectionStart, edit.selectionEnd]).toEqual([10, 10]);
+    expect(edit.value).toBe("hello \n```\n\n```");
+    expect([edit.selectionStart, edit.selectionEnd]).toEqual([11, 11]);
   });
 
   it("removes an empty fence the caret is inside instead of nesting another", () => {
@@ -346,13 +359,41 @@ describe("toggleBlockFormatting fence", () => {
     expect(edit.value).toBe("```\none\ntwo\n```");
   });
 
-  it("does not unwrap when only part of the inner text is selected", () => {
+  it("unwraps the line's fence when only part of the inner text is selected", () => {
     const edit = toggleBlockFormatting("```\nbold\n```", 4, 6, "fence");
-    expect(edit.value).toBe("```\n```\nbo\n```ld\n```");
+    expect(edit.value).toBe("bold");
   });
 
   it("accepts a backwards selection and clamps out of range", () => {
     expect(toggleBlockFormatting("word", 4, 0, "fence").value).toBe("```\nword\n```");
-    expect(toggleBlockFormatting("abc", 9, 12, "fence").value).toBe("abc```\n\n```");
+    expect(toggleBlockFormatting("abc", 9, 12, "fence").value).toBe("abc\n```\n\n```");
+  });
+});
+
+describe("caretInsideUnclosedFence", () => {
+  it("treats the caret between an empty fence pair as inside", () => {
+    const empty = toggleBlockFormatting("", 0, 0, "fence");
+    expect(caretInsideUnclosedFence(empty.value, empty.selectionStart)).toBe(true);
+  });
+
+  it("is false after the closing fence", () => {
+    expect(caretInsideUnclosedFence("```\ncode\n```", 12)).toBe(false);
+  });
+
+  it("is true on a line typed inside an unclosed fence", () => {
+    expect(caretInsideUnclosedFence("```\nhello", 9)).toBe(true);
+  });
+});
+
+describe("composerBodyIsEmpty", () => {
+  it("treats an empty fence as nothing to send", () => {
+    expect(composerBodyIsEmpty("```\n\n```")).toBe(true);
+    expect(composerBodyIsEmpty("hi")).toBe(false);
+  });
+});
+
+describe("COMPOSER_FORM_CLASS", () => {
+  it("does not make the form a scroll container, so @ : / popups stay visible", () => {
+    expect(COMPOSER_FORM_CLASS).not.toMatch(/overflow-y-|max-h-/);
   });
 });
