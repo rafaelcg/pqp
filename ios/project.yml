@@ -109,6 +109,10 @@ targets:
         SWIFT_EMIT_LOC_STRINGS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # iPhone only. Every layout in this app is phone-first, and an iPad
+        # running a stretched phone layout is a worse review than an app that
+        # does not claim to be an iPad app. Change this and `docs/IOS.md`
+        # together, and only after the layouts are actually adaptive.
         TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
         # The app is a dark, high-contrast surface by design; letting iOS
@@ -238,6 +242,11 @@ targets:
       - path: pqp/Tests
     dependencies:
       - target: pqp
+      # `ScreenSharePlanTests` reads the publish options the SFU share goes
+      # up with, and their type is the SDK's. Linked here rather than relying
+      # on the app target's copy, which a test bundle does not inherit.
+      - package: LiveKit
+        product: LiveKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: gg.pqp.app.tests

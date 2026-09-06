@@ -196,9 +196,11 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
     /// Defaulted false for the same reason as `muted`: an older server omits
     /// it, and absent has to read as "nobody is muted", not as a failed frame.
     var serverMuted: Bool = false
-    /// Set by the server, never self-reported: whether this seat may publish
-    /// audio at all. Absent on a server that predates SPEAK enforcement, and
-    /// absent reads as true, which is what every such server resolved.
+    /// Set by the server, never self-reported: the channel's SPEAK permission
+    /// resolved for this person. It is the mic grant and also the screen and
+    /// camera grant (`set-sharing-screen` answers `screen-share-denied` when
+    /// it is false). Absent on a server that predates the field, which reads
+    /// as true, exactly as `welcome.canSpeak` does on the web.
     var canSpeak: Bool = true
 
     var id: String { peerId }

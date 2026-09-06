@@ -316,12 +316,13 @@ struct VoiceView: View {
             .accessibilityLabel(model.isSpeakerOn ? "Switch to earpiece" : "Switch to speaker")
             .disabled(model.status != .connected)
 
-            // Only where a broadcast can actually happen. The extension cannot
-            // run in the simulator, and the bridge refuses to arm there, so a
-            // button that opened a sheet leading nowhere would be a lie.
-            // Nor on a listen-only seat: the server refuses the announce and
-            // the roster never carries it. See `VoiceSpeakRule`.
-            if model.screenShare.isAvailable && model.canSpeak {
+            // Only where a broadcast can actually happen and the channel lets
+            // us present. The extension cannot run in the simulator, and the
+            // bridge refuses to arm there, so a button that opened a sheet
+            // leading nowhere would be a lie; and a channel that denies SPEAK
+            // would answer the broadcast with `screen-share-denied`. Both
+            // rooms read the one rule. See `VoiceSpeakRule`.
+            if model.offersScreenShare {
                 // The size is passed *in* rather than imposed with an outer
                 // `.frame`: the painted circle, the system picker and Apple's
                 // own button all have to be the same square, or part of what

@@ -153,7 +153,7 @@ final class WireDecodingTests: XCTestCase {
          "transport":"mesh"}
         """
         let event = await firstEvent(from: json)
-        guard case .voiceWelcome(_, _, let peers, let selfPeer, _, _, _) = event else {
+        guard case .voiceWelcome(_, _, let peers, let selfPeer, _, _, _, _) = event else {
             return XCTFail("Expected voiceWelcome, got \(String(describing: event))")
         }
         XCTAssertEqual(peers.map(\.serverMuted), [true])
