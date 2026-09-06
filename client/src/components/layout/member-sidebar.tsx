@@ -13,7 +13,21 @@ import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
-import type { ProfileSubject } from "@/components/user/profile-relations";
+import {
+  MemberModerationDialog,
+  type ModerationSubject,
+} from "@/components/user/member-moderation-dialog";
+import {
+  moderationActions,
+  moderationNeedsConfirmation,
+  type ProfileModerationAction,
+  type ProfileModerationContext,
+  type ProfileSubject,
+} from "@/components/user/profile-relations";
+import {
+  applyMemberModeration,
+  moderationActionLabel,
+} from "@/lib/member-moderation";
 import { ApiError, memberDisplayName, memberMatchesQuery, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
 import { highestRoleColor, identityMarks, rankBadges } from "@/lib/author-display";
 import { useTranslation } from "@/lib/i18n";
@@ -48,13 +62,16 @@ const EMPTY_MEMBERS: readonly ServerMember[] = [];
  * "Server Settings → Members" table: one answers "who is here", continuously,
  * and the other answers "what am I going to do about this person".
  *
- * The split is deliberate about moderation, too. The destructive actions all
- * need a confirmation dialog, a busy flag and a timeout/ban fetch to describe
- * themselves honestly; duplicating that here would be two copies of an
- * enforcement ladder, which is exactly the code you cannot afford to have drift.
- * So the row's context menu carries only what is already a plain callback the
- * shell owns — mention, block, report, open profile — plus a door into the panel
- * for everything else.
+ * THE LADDER IS ON THE ROW NOW. It used to be a door into the panel and
+ * nothing else, on the argument that a second copy of the enforcement ladder is
+ * the code you cannot afford to have drift. The argument was right and the
+ * conclusion was wrong: it meant timing one person out cost a right-click, a
+ * "Manage members…", a second list of the same people, finding them again and
+ * another menu. What removes the drift is one implementation, not one caller.
+ * `moderationActions` decides which rungs a row may show (the same function the
+ * profile card asks), `applyMemberModeration` runs them, and
+ * `MemberModerationDialog` asks how long and whether you are sure. The panel
+ * stays for bulk work and for the ban list.
  *
  * PRESENCE IS PULLED, NOT PUSHED, and that is not this component's decision to
  * revisit: `server/src/ws/status.ts` argues it at length (a push has to reach
@@ -101,8 +118,14 @@ interface MemberSidebarProps {
   onReportUser?: (member: ServerMember) => void;
   onBlockUser: (userId: string) => void;
   onUnblockUser: (userId: string) => void;
-  /** Opens the full moderation panel — where kick, ban and timeout live. */
+  /** Opens the full moderation panel, for bulk work and the ban list. */
   onOpenMembersPanel?: () => void;
+  /**
+   * What the viewer may do to people in this server, exactly as the profile
+   * card is handed it. Null in a conversation and for anybody holding none of
+   * the staff bits, which is why this file never asks the question itself.
+   */
+  moderation?: ProfileModerationContext | null;
   /** channelId → participants, from the live `voice-roster` frames. */
   voiceOccupancy?: Record<string, VoiceParticipant[]>;
   /** This server's voice channels, for the "in voice" second line. */
@@ -165,6 +188,7 @@ export function MemberSidebar({
   onBlockUser,
   onUnblockUser,
   onOpenMembersPanel,
+  moderation = null,
   voiceOccupancy = {},
   voiceChannels = [],
   roles = [],
@@ -179,6 +203,11 @@ export function MemberSidebar({
   const searchRef = useRef<HTMLInputElement>(null);
   const [collapsed, setCollapsed] =
     useState<SectionCollapseState>(NO_COLLAPSE);
+  /** A rung picked from a row's menu, held until its dialog answers. */
+  const [pendingModeration, setPendingModeration] = useState<{
+    action: Exclude<ProfileModerationAction, "endTimeout">;
+    subject: ModerationSubject;
+  } | null>(null);
   /** section id → how many of its rows are mounted. */
   const [shown, setShown] = useState<Record<string, number>>({});
   const loading = !participants && members.length === 0;
@@ -343,6 +372,35 @@ export function MemberSidebar({
     }
   }
 
+  /**
+   * The one rung that needs no dialog. Errors land in the same line the
+   * nickname failure uses: a moderator has to be told the API said no, and the
+   * row itself has nowhere to put a sentence.
+   */
+  async function runModeration(
+    action: ProfileModerationAction,
+    member: ServerMember,
+  ) {
+    if (!moderation) {
+      return;
+    }
+    setError(null);
+    try {
+      await applyMemberModeration({
+        action,
+        serverId: moderation.serverId,
+        userId: member.id,
+      });
+      moderation.onModerated();
+    } catch (err) {
+      setError(
+        err instanceof ApiError || err instanceof Error
+          ? err.message
+          : t("member.moderationFailed"),
+      );
+    }
+  }
+
   function menuFor(member: ServerMember): ContextMenuItemDef[] {
     const items: ContextMenuItemDef[] = [];
     if (onMention && member.username) {
@@ -363,6 +421,39 @@ export function MemberSidebar({
         label: t("member.nickname"),
         onSelect: () => void changeNickname(member),
       });
+    }
+    // The ladder, on the row. Only ever the rungs `moderationActions` allows,
+    // which is the same judgement the card makes and mirrors the server's
+    // `requireOutranked`. A plain member reads this list and finds nothing of
+    // it, and a moderator never sees a rung the API would refuse.
+    const rungs = participants
+      ? []
+      : moderationActions(member.id, currentUserId, moderation);
+    if (rungs.length > 0) {
+      items.push({ id: "sep-mod", label: "", separator: true });
+      for (const rung of rungs) {
+        items.push({
+          id: `mod-${rung}`,
+          label: moderationActionLabel(rung, t),
+          danger: moderationNeedsConfirmation(rung),
+          onSelect: () => {
+            if (rung === "endTimeout") {
+              // Lifting a sentence takes nothing away, so it is the one rung
+              // with nothing to ask: no duration, no confirmation.
+              void runModeration(rung, member);
+              return;
+            }
+            setPendingModeration({
+              action: rung,
+              subject: {
+                id: member.id,
+                displayName: memberDisplayName(member),
+              },
+            });
+          },
+        });
+      }
+      items.push({ id: "sep-after-mod", label: "", separator: true });
     }
     if (member.id !== currentUserId) {
       items.push(
@@ -580,6 +671,21 @@ export function MemberSidebar({
           {sections.map(renderSection)}
         </div>
       </aside>
+      {moderation && (
+        <MemberModerationDialog
+          action={pendingModeration?.action ?? null}
+          subject={pendingModeration?.subject ?? null}
+          serverId={moderation.serverId}
+          onDone={() => {
+            moderation.onModerated();
+            // A kick or a ban takes the row this menu was opened on off the
+            // list. `onRolesChanged` is the shell's roster re-read, and the
+            // roster is the thing the reader is looking at right now.
+            moderation.onRolesChanged?.();
+          }}
+          onClose={() => setPendingModeration(null)}
+        />
+      )}
     </>
   );
 }

@@ -2035,6 +2035,7 @@
   "member.nickname": "Mudar apelido",
   "member.nicknamePrompt": "Apelido nesta comunidade (deixe em branco pra limpar)",
   "member.nicknameFailed": "Não deu pra mudar o apelido",
+  "member.moderationFailed": "Não deu pra fazer isso agora",
   "roles.newPlaceholder": "Novo cargo",
   "roles.add": "Adicionar",
   "roles.name": "Nome do cargo",

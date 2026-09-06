@@ -361,12 +361,21 @@ export type ProfileModerationAction = "timeout" | "endTimeout" | "kick" | "ban";
  * that last one, shared with iOS and mirroring the server's `requireOutranked`,
  * so this surface cannot offer something the API will refuse.
  *
- * UNKNOWN RANK OFFERS NOTHING. `canModerateMember` deliberately allows a `null`
- * target so a *pre-emptive ban* of a non-member stays possible, but that is not
- * this surface: a card opened on a name in a server channel is about somebody in
- * that server, and if the roster has not arrived yet the honest answer is to
- * draw no menu rather than to offer a kick that would 404. The panel is where
- * you ban somebody who is not here.
+ * UNKNOWN RANK OFFERS THE BAN, AND ONLY THE BAN. The rank comes from the
+ * roster the shell holds, and a name in a transcript is regularly not in it:
+ * the person left, or was already removed, or the roster of a two-thousand
+ * member community has not landed yet. This used to draw an empty menu, which
+ * is how the owner of the biggest community here found a profile card with
+ * Block and Report on it and nothing else. The tools were there, and the one
+ * fact the card could not look up took all of them away.
+ *
+ * A kick and a timeout genuinely need a membership, so an unknown rank still
+ * does not offer them: they would 404 on somebody who has gone. A ban does not:
+ * `canModerateMember` allows a null target precisely so a *pre-emptive* ban
+ * stays possible, and banning the person who just left after saying it is the
+ * case a moderator is in when this happens. If the actor turns out to be
+ * outranked, `requireOutranked` refuses on the server and the card prints why,
+ * which is the same treatment every other rung already gets.
  */
 export function moderationActions(
   subjectId: string,
@@ -376,9 +385,12 @@ export function moderationActions(
   if (!context) {
     return [];
   }
+  if (currentUserId && currentUserId === subjectId) {
+    return [];
+  }
   const targetRole = context.memberRoles.get(subjectId);
   if (!targetRole) {
-    return [];
+    return context.bits && !context.bits.ban ? [] : ["ban"];
   }
   const bits = context.bits;
   const outranks = bits
