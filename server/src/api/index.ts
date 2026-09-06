@@ -133,16 +133,23 @@ import {
 import {
   // --- voice moderation ---
   disconnectVoiceUser,
+  findVoiceChannelForUser,
+  findVoicePeerIdentities,
   getRoomTransport,
-  getVoiceChannelForUser,
   getVoicePeer,
-  getVoicePeerIdentities,
+  isRoomPinnedLocally,
   leaveVoiceByResumeToken,
   notifyVoiceModeration,
   refreshVoiceIdentity,
 } from "../ws/voice.js";
+import { verifyVoiceResumeToken } from "../ws/voice-resume-token.js";
 // --- voice moderation ---
 import { setSfuUserMuted } from "../voice/admin.js";
+import {
+  getVoicePeerRow,
+  isVoiceRegistryEnabled,
+  readVoiceRoomTransport,
+} from "../voice/registry.js";
 import { resolveCanSpeak } from "../voice/speak.js";
 import { invalidateUserCache, resolveAuthSession } from "../auth/clerk.js";
 import {
@@ -429,6 +436,7 @@ import {
   listServerMembers,
   listUnread,
   markChannelRead,
+  resolveMemberName,
   searchUsersByPrefix,
   setMemberNickname,
   toPublicUser,
@@ -1735,14 +1743,42 @@ router.post("/api/voice/token", async ({ req, user }) => {
   const body = voiceSessionRequestSchema.parse(await readJsonBody(req));
 
   // The peer id must be a live peer owned by this user, in this channel —
-  // otherwise a caller could mint a token impersonating someone else.
-  const peer = getVoicePeer(body.peerId);
-  if (
-    !peer ||
-    peer.userId !== user.id ||
-    peer.voiceChannelId !== body.voiceChannelId
-  ) {
-    throw new Forbidden("Unknown or mismatched voice peer");
+  // otherwise a caller could mint a token impersonating someone else. Three
+  // proofs, in order of cost:
+  //
+  // 1. The resume HMAC, if the client sent one. `welcome` minted it for
+  //    exactly { user, peer, channel }, so a valid one is sufficient on its
+  //    own and needs no lookup at all. This is the proof that works when the
+  //    request lands on an API instance that never saw the join (HTTP is
+  //    balanced per request; the socket is on one machine).
+  // 2. This instance's peer map: exact for anybody whose socket is here, and
+  //    the whole story on a single machine. Old clients without the field
+  //    keep working through it.
+  // 3. The `voice_peers` row, when VOICE_REGISTRY is on: the peer is real but
+  //    its socket is elsewhere.
+  //
+  // The display name is resolved here rather than copied from the peer, so
+  // every proof yields the same name the join would have.
+  const proven =
+    verifyVoiceResumeToken(body.resumeToken, {
+      userId: user.id,
+      peerId: body.peerId,
+      voiceChannelId: body.voiceChannelId,
+    }) !== null;
+  if (!proven) {
+    const local = getVoicePeer(body.peerId);
+    const peer =
+      local ??
+      (isVoiceRegistryEnabled() ? await getVoicePeerRow(body.peerId) : null);
+    const peerChannel =
+      peer && "voiceChannelId" in peer ? peer.voiceChannelId : peer?.channelId;
+    if (
+      !peer ||
+      peer.userId !== user.id ||
+      peerChannel !== body.voiceChannelId
+    ) {
+      throw new Forbidden("Unknown or mismatched voice peer");
+    }
   }
 
   const channel = await requireChannelAccess(body.voiceChannelId, user.id);
@@ -1753,23 +1789,29 @@ router.post("/api/voice/token", async ({ req, user }) => {
     body.voiceChannelId,
     user.id,
   );
+  const displayName = await resolveMemberName(
+    channel.kind === "server" ? (channel.server_id ?? null) : null,
+    user,
+  );
 
   // The room's transport is pinned when its first peer joins and stated in
   // `welcome`; a client in a peer-to-peer room has no business minting an SFU
   // token, and every token minted starts LiveKit participant-minutes billing.
-  if (getRoomTransport(body.voiceChannelId) !== "livekit") {
+  // A room pinned on another instance is only visible through its row.
+  let transport = getRoomTransport(body.voiceChannelId);
+  if (isVoiceRegistryEnabled() && !isRoomPinnedLocally(body.voiceChannelId)) {
+    transport = (await readVoiceRoomTransport(body.voiceChannelId)) ?? transport;
+  }
+  if (transport !== "livekit") {
     throw new HttpError(409, "This room runs peer-to-peer");
   }
 
   try {
-    // `peer.userId` — not `user.id` — only because the two were just proved
-    // equal above; keeping the token's identity and its metadata sourced from
-    // the same verified peer record is what stops them drifting apart.
     return await createLiveKitSession(
       body.voiceChannelId,
       body.peerId,
-      peer.displayName,
-      peer.userId,
+      displayName,
+      user.id,
       { canSpeak },
     );
   } catch (error) {
@@ -4688,7 +4730,10 @@ async function requireVoiceTarget(
   targetUserId: string,
 ): Promise<string> {
   const channelIds = await listServerChannelIds(serverId);
-  const voiceChannelId = getVoiceChannelForUser(targetUserId, channelIds);
+  const voiceChannelId = await findVoiceChannelForUser(
+    targetUserId,
+    channelIds,
+  );
   if (!voiceChannelId) {
     throw new NotFound("That member is not in a voice channel in this server");
   }
@@ -4738,9 +4783,12 @@ router.post(
       changes: [{ key: "channelId", old: voiceChannelId, new: null }],
     });
 
-    disconnectVoiceUser(userId!, voiceChannelId, {
-      message: "A moderator disconnected you from voice.",
-    });
+    disconnectVoiceUser(
+      userId!,
+      voiceChannelId,
+      { message: "A moderator disconnected you from voice." },
+      await findVoicePeerIdentities(userId!, voiceChannelId),
+    );
     return { ok: true };
   },
 );
@@ -4800,10 +4848,15 @@ router.post(
       changes: [{ key: "channelId", old: fromChannelId, new: body.channelId }],
     });
 
-    disconnectVoiceUser(userId!, fromChannelId, {
-      movedToChannelId: body.channelId,
-      message: `A moderator moved you to ${destination.name}.`,
-    });
+    disconnectVoiceUser(
+      userId!,
+      fromChannelId,
+      {
+        movedToChannelId: body.channelId,
+        message: `A moderator moved you to ${destination.name}.`,
+      },
+      await findVoicePeerIdentities(userId!, fromChannelId),
+    );
     return { ok: true };
   },
 );
@@ -4840,7 +4893,7 @@ router.post(
       voiceChannelId,
       userId!,
       body.muted,
-      getVoicePeerIdentities(userId!, voiceChannelId),
+      await findVoicePeerIdentities(userId!, voiceChannelId),
     );
     if (!changed) {
       // Unlike an eviction, the mute IS the action — nothing was committed

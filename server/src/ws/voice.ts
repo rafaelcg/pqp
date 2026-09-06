@@ -48,6 +48,19 @@ import {
   resolveVoiceTransport,
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
+import {
+  deleteVoicePeer,
+  isVoicePeerRetired,
+  isVoiceRegistryEnabled,
+  listVoicePeersForUser,
+  listVoicePeersInRoom,
+  listVoiceRoomOccupancy,
+  markVoicePeerOrphaned,
+  pinVoiceRoom,
+  retireVoicePeerId,
+  unpinVoiceRoomIfEmpty,
+  upsertVoicePeer,
+} from "../voice/registry.js";
 import { forEachAuthenticatedSocket } from "./sockets.js";
 import {
   coalesceWindowFor,
@@ -149,8 +162,51 @@ interface VoicePeer {
  * degrades to "you only see the people who happen to share your instance".
  * That is a display bug, not an audio one, and it is the piece to put on the
  * bus first if multi-instance voice is ever wanted.
+ *
+ * THE WAY OUT IS THE VOICE REGISTRY (`voice/registry.ts`,
+ * `docs/plans/MULTI_INSTANCE_VOICE.md`), behind `VOICE_REGISTRY=postgres`.
+ * As of milestone M1 it is write-through only: every change to this map is
+ * copied to `voice_peers`, the transport pin goes through an atomic insert on
+ * `voice_rooms` so two instances cannot disagree, and the three places that
+ * must answer for the whole cluster from one HTTP request (the SFU token
+ * mint, moderation targeting, the operator snapshot) read the rows after the
+ * map. Fan-out still reads this map and nothing else; rosters over the bus
+ * are M2. With the flag off (the default) `registryOn()` is false on every
+ * path below and this file behaves exactly as it did before the registry.
  */
 const peers = new Map<string, VoicePeer>();
+
+function registryOn(): boolean {
+  return isVoiceRegistryEnabled();
+}
+
+/**
+ * Copy a peer to its registry row. Fire-and-forget: the map is the source of
+ * truth for this instance and has already been updated; a failed write is
+ * logged inside the registry and costs the cluster one stale row, not the
+ * caller a frame.
+ */
+function writePeerRow(peer: VoicePeer): void {
+  if (!registryOn()) {
+    return;
+  }
+  void upsertVoicePeer({
+    peerId: peer.id,
+    channelId: peer.voiceChannelId,
+    userId: peer.userId,
+    displayName: peer.displayName,
+    avatarUrl: peer.avatarUrl,
+    muted: peer.muted,
+    deafened: peer.deafened,
+    sharingScreen: peer.sharingScreen,
+    cameraStreamId: peer.cameraStreamId,
+    screenAudioStreamId: peer.screenAudioStreamId,
+    canSpeak: peer.canSpeak,
+    canResume: peer.canResume,
+    orphanedAt: peer.orphanedAt === undefined ? null : new Date(peer.orphanedAt),
+    transport: getRoomTransport(peer.voiceChannelId),
+  });
+}
 const socketToPeerId = new Map<WebSocket, string>();
 /** Peer ids removed in this process (leave / kick / TTL). Blocks reconstruct for the token's life so a hangup cannot resurrect the id. */
 const retiredPeerIds = new Map<string, ReturnType<typeof setTimeout>>();
@@ -205,6 +261,16 @@ function configuredTransport(): VoiceRoomTransport {
  */
 export function getRoomTransport(voiceChannelId: string): VoiceRoomTransport {
   return roomTransports.get(voiceChannelId) ?? configuredTransport();
+}
+
+/**
+ * Whether *this process* holds the room's pin. When it does not and the
+ * registry is on, the room may still be live on another instance, and the
+ * caller (the token mint) should consult `voice_rooms` before assuming the
+ * configured ceiling.
+ */
+export function isRoomPinnedLocally(voiceChannelId: string): boolean {
+  return roomTransports.has(voiceChannelId);
 }
 
 /**
@@ -294,6 +360,9 @@ function retirePeerId(peerId: string): void {
       retiredPeerIds.delete(peerId);
     }, VOICE_RESUME_TOKEN_TTL_MS),
   );
+  if (registryOn()) {
+    void retireVoicePeerId(peerId);
+  }
 }
 
 /**
@@ -361,6 +430,7 @@ export async function refreshVoiceIdentity(
         { id: userId, display_name: profile.display_name },
       );
       peer.avatarUrl = profile.avatar_url;
+      writePeerRow(peer);
       rooms.add(peer.voiceChannelId);
       broadcastToRoom(peer.voiceChannelId, {
         type: "peer-updated",
@@ -444,8 +514,7 @@ export interface VoiceActivitySnapshot {
   }[];
 }
 
-export function getVoiceActivitySnapshot(): VoiceActivitySnapshot {
-  rollPeakDay();
+function localRoomOccupancy(): VoiceActivitySnapshot["rooms"] {
   const sizes = new Map<string, { participants: number; sharingScreen: number }>();
   for (const peer of peers.values()) {
     let room = sizes.get(peer.voiceChannelId);
@@ -458,18 +527,41 @@ export function getVoiceActivitySnapshot(): VoiceActivitySnapshot {
       room.sharingScreen += 1;
     }
   }
+  return [...sizes.entries()]
+    .map(([voiceChannelId, room]) => ({ voiceChannelId, ...room }))
+    .sort((a, b) => b.participants - a.participants);
+}
+
+/**
+ * Async only for the registry: with it on, rooms and participants come from
+ * `voice_peers`, so the operator dashboard counts the whole cluster rather
+ * than the instance that happened to serve the request. The peak stays
+ * per-process, as the payload states. A failed read falls back to the map.
+ */
+export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot> {
+  rollPeakDay();
+  let rooms = localRoomOccupancy();
+  if (registryOn()) {
+    try {
+      rooms = await listVoiceRoomOccupancy();
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "occupancy",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   let largestRoomNow = 0;
-  for (const room of sizes.values()) {
+  let participants = 0;
+  for (const room of rooms) {
+    participants += room.participants;
     if (room.participants > largestRoomNow) {
       largestRoomNow = room.participants;
     }
   }
-  const rooms = [...sizes.entries()]
-    .map(([voiceChannelId, room]) => ({ voiceChannelId, ...room }))
-    .sort((a, b) => b.participants - a.participants);
   return {
-    activeRooms: sizes.size,
-    participants: peers.size,
+    activeRooms: rooms.length,
+    participants,
     largestRoomNow,
     peakRoomSizeToday: Math.max(peakRoomSizeToday, largestRoomNow),
     peakTrackedSince,
@@ -594,6 +686,11 @@ function removePeer(peerId: string) {
   // moves. Orphans keep the pin so a resume cannot flip transport.
   if (getRoomPeers(voiceChannelId).length === 0) {
     roomTransports.delete(voiceChannelId);
+  }
+  if (registryOn()) {
+    // One statement: the row goes, and the room row with it if this was the
+    // last peer anywhere in the cluster (not only on this instance).
+    void deleteVoicePeer(peerId);
   }
   retirePeerId(peerId);
   onLiveRoomMaybeEmpty(voiceChannelId, peer.socket);
@@ -755,6 +852,9 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
       removePeer(peerId);
     }
   }, VOICE_RESUME_TTL_MS);
+  if (registryOn()) {
+    void markVoicePeerOrphaned(peerId, new Date(peer.orphanedAt));
+  }
   onLiveRoomMaybeEmpty(peer.voiceChannelId, socket);
   logEvent("voice.orphan", {
     peerId,
@@ -954,6 +1054,8 @@ async function reattachVoicePeer(
     user,
   );
   peer.avatarUrl = user.avatar_url;
+  // Clears `orphaned_at` and re-stamps this instance on the row.
+  writePeerRow(peer);
   logEvent("voice.resume", {
     peerId: peer.id,
     userId: peer.userId,
@@ -1080,12 +1182,70 @@ export async function handleVoiceMessage(
       "mesh",
       "livekit",
     ];
-    const resume = planVoiceResume(user.id, payload, capabilities);
-    const transport: VoiceRoomTransport =
+    let resume = planVoiceResume(user.id, payload, capabilities);
+    // The registry's copy of `retiredPeerIds`: a hangup on another instance
+    // (or on this one, before a restart emptied the map) must not be
+    // resurrected here. Same rule as the local check, one row read.
+    if (resume.kind === "reconstruct" && registryOn()) {
+      let retired = false;
+      try {
+        retired = await isVoicePeerRetired(resume.peerId);
+      } catch (error) {
+        logEvent("voice.registryReadFailed", {
+          op: "retired",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (retired) {
+        resume = { kind: "cold" };
+      }
+      if (socket.readyState !== 1) {
+        return;
+      }
+    }
+    let transport: VoiceRoomTransport =
       roomTransports.get(payload.voiceChannelId) ??
       (resume.kind === "reconstruct"
         ? resume.transport
         : (opening?.transport ?? configuredTransport()));
+
+    // THE ATOMIC PIN. With the registry on, an unpinned room's decision goes
+    // through `voice_rooms` before it is applied here: whoever inserts first
+    // decides, and the loser adopts the stored transport, so two instances
+    // that open the same channel in the same second (or with different
+    // LiveKit config mid-rollout) cannot split the call. A reconstruct whose
+    // token remembers another transport becomes a cold join, exactly as it
+    // does against a local pin. A failed insert falls back to the local
+    // decision, which is what this instance did before the registry existed.
+    const pinnedHere =
+      registryOn() && !roomTransports.has(payload.voiceChannelId);
+    if (pinnedHere) {
+      try {
+        const stored = await pinVoiceRoom(payload.voiceChannelId, transport);
+        if (stored !== transport) {
+          logEvent("voice.transportAdopted", {
+            channelId: payload.voiceChannelId,
+            wanted: transport,
+            stored,
+          });
+          transport = stored;
+          if (resume.kind === "reconstruct") {
+            resume = { kind: "cold" };
+          }
+        }
+      } catch (error) {
+        logEvent("voice.registryPinFailed", {
+          channelId: payload.voiceChannelId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      // Same reason as the readiness check above: the await may have outlived
+      // the socket, and a pinned room nobody joined must not stay pinned.
+      if (socket.readyState !== 1) {
+        void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
+        return;
+      }
+    }
 
     // A client that cannot run this room's transport is refused *here*, before
     // a peer exists. Admitting it and letting it discover the mismatch a round
@@ -1095,6 +1255,9 @@ export async function handleVoiceMessage(
       const stale = socketToPeerId.get(socket);
       if (stale) {
         removePeer(stale);
+      }
+      if (pinnedHere) {
+        void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
       }
       logEvent("voice.transportUnsupported", {
         userId: user.id,
@@ -1163,6 +1326,9 @@ export async function handleVoiceMessage(
         voiceChannelId: payload.voiceChannelId,
         limit: MESH_VOICE_LIMIT,
       });
+      if (pinnedHere) {
+        void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
+      }
       return;
     }
 
@@ -1250,6 +1416,8 @@ export async function handleVoiceMessage(
       roomSize: getRoomPeers(payload.voiceChannelId).length,
       resumed: resume.kind === "reconstruct",
     });
+    // After the pin so the row carries the room's transport.
+    writePeerRow(peer);
 
     await welcomeVoicePeer(peer, resume.kind === "reconstruct");
     return;
@@ -1318,6 +1486,7 @@ export async function handleVoiceMessage(
     peer.screenAudioStreamId = payload.sharing
       ? (payload.audioStreamId ?? null)
       : null;
+    writePeerRow(peer);
     await broadcastRoster(peer.voiceChannelId);
     return;
   }
@@ -1345,6 +1514,7 @@ export async function handleVoiceMessage(
     // display honest against one that does not.
     peer.muted = payload.muted || !peer.canSpeak;
     peer.deafened = payload.deafened;
+    writePeerRow(peer);
     await broadcastRoster(peer.voiceChannelId);
     return;
   }
@@ -1432,6 +1602,7 @@ export async function handleVoiceMessage(
       }
     }
     peer.cameraStreamId = payload.streamId;
+    writePeerRow(peer);
     await broadcastRoster(peer.voiceChannelId);
     return;
   }
@@ -1903,6 +2074,58 @@ export function getVoicePeerIdentities(
   );
 }
 
+// The cluster-aware pair of the two lookups above, for the moderation routes.
+// Local map first (free, and exact for anybody on this instance), then the
+// registry rows when the flag is on, so a moderator's target on the *other*
+// machine is still found and still reaches the SFU. The notice and the mesh
+// half stay local in M1; `voice.moderation` over the bus is M4.
+
+export async function findVoiceChannelForUser(
+  userId: string,
+  channelIds: ReadonlySet<string>,
+): Promise<string | null> {
+  const local = getVoiceChannelForUser(userId, channelIds);
+  if (local || !registryOn()) {
+    return local;
+  }
+  try {
+    for (const row of await listVoicePeersForUser(userId)) {
+      if (channelIds.has(row.channelId)) {
+        return row.channelId;
+      }
+    }
+  } catch (error) {
+    logEvent("voice.registryReadFailed", {
+      op: "channelForUser",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return null;
+}
+
+export async function findVoicePeerIdentities(
+  userId: string,
+  voiceChannelId: string,
+): Promise<Map<string, string>> {
+  const known = getVoicePeerIdentities(userId, voiceChannelId);
+  if (!registryOn()) {
+    return known;
+  }
+  try {
+    for (const row of await listVoicePeersInRoom(voiceChannelId)) {
+      if (row.userId === userId) {
+        known.set(row.peerId, row.userId);
+      }
+    }
+  } catch (error) {
+    logEvent("voice.registryReadFailed", {
+      op: "peerIdentities",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  return known;
+}
+
 /**
  * Deliver a `voice-moderation` frame to every socket this user holds in the
  * room. Used on its own for the SFU mute (where the peer stays), and by
@@ -1948,8 +2171,15 @@ export function disconnectVoiceUser(
   userId: string,
   voiceChannelId: string,
   notice: { movedToChannelId?: string; message: string },
+  /** Peer ids seen elsewhere in the cluster (`findVoicePeerIdentities`), merged into the SFU sweep's hint. */
+  knownIdentities: Map<string, string> = getVoicePeerIdentities(
+    userId,
+    voiceChannelId,
+  ),
 ): void {
-  const knownIdentities = getVoicePeerIdentities(userId, voiceChannelId);
+  for (const [peerId, owner] of getVoicePeerIdentities(userId, voiceChannelId)) {
+    knownIdentities.set(peerId, owner);
+  }
 
   notifyVoiceModeration(userId, voiceChannelId, {
     action: notice.movedToChannelId ? "moved" : "disconnected",
@@ -2042,6 +2272,7 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
           voiceChannelId,
           canSpeak: next,
         });
+        writePeerRow(peer);
       }
       logEvent("voice.speakChanged", {
         userId,
