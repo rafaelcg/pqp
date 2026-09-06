@@ -280,6 +280,7 @@ function writePeerRow(peer: VoicePeer): void {
       cameraStreamId: peer.cameraStreamId,
       screenAudioStreamId: peer.screenAudioStreamId,
       canSpeak: peer.canSpeak,
+      canStream: peer.canStream,
       canResume: peer.canResume,
       orphanedAt:
         peer.orphanedAt === undefined ? null : new Date(peer.orphanedAt),
@@ -301,6 +302,7 @@ function rowToParticipant(row: VoicePeerRow): VoiceParticipant {
     muted: row.muted,
     deafened: row.deafened,
     canSpeak: row.canSpeak,
+    canStream: row.canStream,
   };
 }
 
