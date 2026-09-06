@@ -1,18 +1,27 @@
 import {
+  ArrowDown,
+  ArrowUp,
+  Archive,
   ChevronRight,
+  Copy,
+  FolderInput,
+  FolderMinus,
   FolderPlus,
   HeadphoneOff,
-  Archive,
   Lock,
   MicOff,
+  Pencil,
+  Phone,
   Plus,
   ScreenShare,
-  Video,
   Search,
   Settings,
   Star,
+  StarOff,
+  Trash2,
   UserPlus,
   Users,
+  Video,
   X,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -63,7 +72,7 @@ const SEARCH_SHORTCUT_HINT =
     ? "⌘K"
     : "Ctrl K";
 
-/** Equal-width action tiles on a channel row (Join, star). */
+/** Equal-width action tiles on a channel row (star, settings). */
 const CHANNEL_ACTION_TILE =
   "flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-ink-3";
 
@@ -162,11 +171,12 @@ interface ChannelListProps {
     isPrivate: boolean,
   ) => void;
   onRenameChannel: (channel: Channel) => void;
-  onEditChannelMeta?: (channel: Channel) => void;
+  onOpenChannelSettings: (
+    channel: Channel,
+    section: "overview" | "permissions" | "webhooks",
+    options?: { forceAdvanced?: boolean },
+  ) => void;
   onDeleteChannel: (channelId: string) => void;
-  onTogglePrivate: (channel: Channel) => void;
-  onManageChannelMembers: (channel: Channel) => void;
-  onManageWebhooks: (channel: Channel) => void;
   onMoveChannel: (
     channelId: string,
     parentId: string | null,
@@ -213,11 +223,8 @@ export function ChannelList({
   onJoinVoice,
   onCreateChannel,
   onRenameChannel,
-  onEditChannelMeta,
+  onOpenChannelSettings,
   onDeleteChannel,
-  onTogglePrivate,
-  onManageChannelMembers,
-  onManageWebhooks,
   onMoveChannel,
   favoriteChannelIds = [],
   onFavoriteChannelIdsChange,
@@ -425,16 +432,10 @@ export function ChannelList({
                 }
               : undefined
           }
-          onRename={() => onRenameChannel(channel)}
-          onEditMeta={
-            onEditChannelMeta ? () => onEditChannelMeta(channel) : undefined
+          onOpenSettings={(section, options) =>
+            onOpenChannelSettings(channel, section, options)
           }
           onDelete={() => onDeleteChannel(channel.id)}
-          onTogglePrivate={() => onTogglePrivate(channel)}
-          onManageMembers={() => onManageChannelMembers(channel)}
-          onManageWebhooks={
-            channel.type === "text" ? () => onManageWebhooks(channel) : undefined
-          }
           categories={categoryOptions}
           onMoveToCategory={(categoryId) =>
             onMoveChannel(
@@ -515,14 +516,25 @@ export function ChannelList({
 
   const headerItems: ContextMenuItemDef[] = server
     ? [
-        { id: "invite", label: t("chrome.invitePeople"), onSelect: onInvite },
-        { id: "members", label: t("chrome.members"), onSelect: onOpenMembers },
+        {
+          id: "invite",
+          label: t("chrome.invitePeople"),
+          icon: UserPlus,
+          onSelect: onInvite,
+        },
+        {
+          id: "members",
+          label: t("chrome.members"),
+          icon: Users,
+          onSelect: onOpenMembers,
+        },
         ...(canManage
           ? [
               { id: "sep", label: "", separator: true },
               {
                 id: "settings",
                 label: t("chrome.communitySettings"),
+                icon: Settings,
                 onSelect: onOpenServerSettings,
               },
             ]
@@ -1004,11 +1016,17 @@ function CategoryHeader({
   const { t } = useTranslation();
   const items: ContextMenuItemDef[] = canManage
     ? [
-        { id: "rename", label: t("chrome.renameCategory"), onSelect: onRename },
+        {
+          id: "rename",
+          label: t("chrome.renameCategory"),
+          icon: Pencil,
+          onSelect: onRename,
+        },
         { id: "sep", label: "", separator: true },
         {
           id: "delete",
           label: t("chrome.deleteCategory"),
+          icon: Trash2,
           danger: true,
           onSelect: onDelete,
         },
@@ -1068,12 +1086,8 @@ function ChannelRow({
   onToggleFavorite,
   onSelect,
   onJoinVoice,
-  onRename,
-  onEditMeta,
+  onOpenSettings,
   onDelete,
-  onTogglePrivate,
-  onManageMembers,
-  onManageWebhooks,
   categories,
   onMoveToCategory,
   onMoveUp,
@@ -1096,12 +1110,11 @@ function ChannelRow({
   onToggleFavorite?: () => void;
   onSelect: () => void;
   onJoinVoice?: () => void;
-  onRename: () => void;
-  onEditMeta?: () => void;
+  onOpenSettings: (
+    section: "overview" | "permissions" | "webhooks",
+    options?: { forceAdvanced?: boolean },
+  ) => void;
   onDelete: () => void;
-  onTogglePrivate: () => void;
-  onManageMembers: () => void;
-  onManageWebhooks?: () => void;
   categories: Array<{ id: string; name: string }>;
   onMoveToCategory: (categoryId: string | null) => void;
   onMoveUp?: () => void;
@@ -1113,6 +1126,9 @@ function ChannelRow({
 }) {
   const { t } = useTranslation();
   const notifications = useChannelNotificationLevel(channel);
+  const canOpenSettings = canManage || canManageRoles;
+  const openSettings = () =>
+    onOpenSettings(canManage ? "overview" : "permissions");
   const items: ContextMenuItemDef[] = [];
 
   if (onToggleFavorite) {
@@ -1121,6 +1137,7 @@ function ChannelRow({
       label: isFavorite
         ? t("chrome.unfavoriteChannel")
         : t("chrome.favoriteChannel"),
+      icon: isFavorite ? StarOff : Star,
       onSelect: onToggleFavorite,
     });
   }
@@ -1129,58 +1146,46 @@ function ChannelRow({
     items.push({
       id: "join",
       label: t("voice.join"),
+      icon: Phone,
       onSelect: onJoinVoice,
     });
   }
 
-  if (canManage) {
-    if (onToggleFavorite) {
+  if (canOpenSettings) {
+    if (items.length > 0) {
       items.push({ id: "sep-fav", label: "", separator: true });
     }
-    items.push({ id: "rename", label: t("chrome.renameChannel"), onSelect: onRename });
-    if (onEditMeta) {
-      items.push({
-        id: "meta",
-        label: t("chrome.channelSettings"),
-        onSelect: onEditMeta,
-      });
-    }
     items.push({
-      id: "private",
-      label: channel.isPrivate ? t("chrome.makePublic") : t("chrome.makePrivate"),
-      onSelect: onTogglePrivate,
+      id: "settings",
+      label: t("chrome.channelSettings"),
+      icon: Settings,
+      onSelect: openSettings,
     });
-    if (channel.isPrivate || canManageRoles) {
-      items.push({
-        id: "invite-private",
-        label: channel.isPrivate
-          ? t("chrome.manageAccess")
-          : t("channelPerms.title"),
-        onSelect: onManageMembers,
-      });
-    }
-    if (onManageWebhooks) {
-      items.push({
-        id: "webhooks",
-        label: t("chrome.manageWebhooks"),
-        onSelect: onManageWebhooks,
-      });
-    }
-    items.push({ id: "sep-1", label: "", separator: true });
+  }
+
+  if (canManage) {
+    const moveItems: ContextMenuItemDef[] = [];
     if (onMoveUp) {
-      items.push({ id: "move-up", label: t("chrome.moveUp"), onSelect: onMoveUp });
+      moveItems.push({
+        id: "move-up",
+        label: t("chrome.moveUp"),
+        icon: ArrowUp,
+        onSelect: onMoveUp,
+      });
     }
     if (onMoveDown) {
-      items.push({
+      moveItems.push({
         id: "move-down",
         label: t("chrome.moveDown"),
+        icon: ArrowDown,
         onSelect: onMoveDown,
       });
     }
     if (channel.parentId) {
-      items.push({
+      moveItems.push({
         id: "uncategorize",
         label: t("chrome.removeFromCategory"),
+        icon: FolderMinus,
         onSelect: () => onMoveToCategory(null),
       });
     }
@@ -1188,17 +1193,22 @@ function ChannelRow({
       if (category.id === channel.parentId) {
         continue;
       }
-      items.push({
+      moveItems.push({
         id: `move-to-${category.id}`,
         label: t("chrome.moveToCategory", { name: category.name }),
+        icon: FolderInput,
         onSelect: () => onMoveToCategory(category.id),
       });
+    }
+    if (moveItems.length > 0) {
+      items.push({ id: "sep-1", label: "", separator: true }, ...moveItems);
     }
     items.push(
       { id: "sep-2", label: "", separator: true },
       {
         id: "delete",
         label: t("chrome.deleteChannel"),
+        icon: Trash2,
         danger: true,
         onSelect: onDelete,
       },
@@ -1206,29 +1216,25 @@ function ChannelRow({
   }
 
   if (!canManage && isFavorite && (onMoveUp || onMoveDown)) {
-    if (onToggleFavorite) {
+    if (items.length > 0) {
       items.push({ id: "sep-fav-move", label: "", separator: true });
     }
     if (onMoveUp) {
-      items.push({ id: "move-up", label: t("chrome.moveUp"), onSelect: onMoveUp });
+      items.push({
+        id: "move-up",
+        label: t("chrome.moveUp"),
+        icon: ArrowUp,
+        onSelect: onMoveUp,
+      });
     }
     if (onMoveDown) {
       items.push({
         id: "move-down",
         label: t("chrome.moveDown"),
+        icon: ArrowDown,
         onSelect: onMoveDown,
       });
     }
-  }
-
-  if (!canManage && canManageRoles) {
-    items.push({
-      id: "invite-private",
-      label: channel.isPrivate
-        ? t("chrome.manageAccess")
-        : t("channelPerms.title"),
-      onSelect: onManageMembers,
-    });
   }
 
   items.push(
@@ -1238,6 +1244,7 @@ function ChannelRow({
     {
       id: "copy-id",
       label: t("chrome.copyChannelId"),
+      icon: Copy,
       onSelect: () => void navigator.clipboard.writeText(channel.id),
     },
     ...notificationLevelItems("notify", notifications, "server"),
@@ -1256,7 +1263,7 @@ function ChannelRow({
         onDragStart={(event) => {
           if (
             (event.target as HTMLElement).closest(
-              "[data-channel-favorite], [data-channel-join]",
+              "[data-channel-favorite], [data-channel-join], [data-channel-settings]",
             )
           ) {
             event.preventDefault();
@@ -1369,6 +1376,30 @@ function ChannelRow({
               <Star
                 className={cn("h-3.5 w-3.5", isFavorite && "fill-current")}
               />
+            </button>
+          </Tooltip>
+        )}
+        {canOpenSettings && (
+          <Tooltip label={t("chrome.channelSettings")}>
+            <button
+              type="button"
+              data-channel-settings=""
+              draggable={false}
+              className={cn(
+                CHANNEL_ACTION_TILE,
+                "text-paper-muted transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                selected
+                  ? "opacity-100"
+                  : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+              )}
+              aria-label={t("chrome.channelSettings")}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openSettings();
+              }}
+            >
+              <Settings className="h-3.5 w-3.5" />
             </button>
           </Tooltip>
         )}

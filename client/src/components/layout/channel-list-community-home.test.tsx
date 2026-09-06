@@ -64,9 +64,7 @@ const baseProps = {
   onCreateChannel: () => {},
   onRenameChannel: () => {},
   onDeleteChannel: () => {},
-  onTogglePrivate: () => {},
-  onManageChannelMembers: () => {},
-  onManageWebhooks: () => {},
+  onOpenChannelSettings: () => {},
   onMoveChannel: () => {},
   onInvite: () => {},
   onOpenMembers: () => {},
@@ -101,6 +99,21 @@ describe("ChannelList Community Home row", () => {
     expect(html).toContain("Baú");
     // The badge is a fact about the server, not about the flag.
     expect(html).not.toContain(">Community<");
+  });
+
+  it("canManage: each channel row has a settings cog", () => {
+    const html = renderList(<ChannelList {...baseProps} canManage />);
+    expect(html.match(/data-channel-settings/g)?.length).toBe(2);
+  });
+
+  it("roles-only: the settings cog still shows", () => {
+    const html = renderList(<ChannelList {...baseProps} canManageRoles />);
+    expect(html.match(/data-channel-settings/g)?.length).toBe(2);
+  });
+
+  it("member: no settings cog on the channel rows", () => {
+    const html = renderList(<ChannelList {...baseProps} />);
+    expect(html).not.toContain("data-channel-settings");
   });
 
   it("flag on + community server: the Community badge shows", () => {

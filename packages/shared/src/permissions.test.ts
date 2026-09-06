@@ -31,9 +31,9 @@ const ADMIN = Permission.ADMINISTRATOR;
 
 describe("permission bitfields", () => {
   it("round-trips as a decimal string, never a JS number", () => {
-    expect(serializePermissions(PERMISSION_DEFAULT_EVERYONE)).toBe("571073");
-    expect(parsePermissions("571073")).toBe(PERMISSION_DEFAULT_EVERYONE);
-    expect(serializePermissions(PERMISSION_ALL)).toBe("2097151");
+    expect(serializePermissions(PERMISSION_DEFAULT_EVERYONE)).toBe("2668225");
+    expect(parsePermissions("2668225")).toBe(PERMISSION_DEFAULT_EVERYONE);
+    expect(serializePermissions(PERMISSION_ALL)).toBe("8388607");
     expect(parsePermissions(PERMISSION_ALL)).toBe(PERMISSION_ALL);
   });
 
@@ -79,6 +79,23 @@ describe("permission bitfields", () => {
     expect(
       hasPermission(PERMISSION_DEFAULT_MODERATOR, Permission.MANAGE_WEBHOOKS),
     ).toBe(false);
+  });
+
+  it("gives Stream to everyone and Move to the moderator extras", () => {
+    expect(hasPermission(PERMISSION_DEFAULT_EVERYONE, Permission.STREAM)).toBe(
+      true,
+    );
+    expect(hasPermission(PERMISSION_DEFAULT_EVERYONE, Permission.MOVE_MEMBERS)).toBe(
+      false,
+    );
+    expect(
+      hasPermission(PERMISSION_DEFAULT_MODERATOR, Permission.MOVE_MEMBERS),
+    ).toBe(true);
+    expect(hasPermission(PERMISSION_DEFAULT_MODERATOR, Permission.STREAM)).toBe(
+      false,
+    );
+    expect(hasPermission(PERMISSION_ALL, Permission.STREAM)).toBe(true);
+    expect(hasPermission(PERMISSION_ALL, Permission.MOVE_MEMBERS)).toBe(true);
   });
 
   it("seeds Manager without Administrator and Moderator as extras only", () => {

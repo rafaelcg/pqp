@@ -11,6 +11,7 @@ export function CheckRow({
   onCheckedChange,
   disabled,
   label,
+  title,
   swatch,
   className,
 }: {
@@ -18,6 +19,7 @@ export function CheckRow({
   onCheckedChange: (checked: boolean) => void;
   disabled?: boolean;
   label: string;
+  title?: string;
   swatch?: string | null;
   className?: string;
 }) {
@@ -26,6 +28,8 @@ export function CheckRow({
       type="button"
       role="checkbox"
       aria-checked={checked}
+      aria-label={title ? `${label}. ${title}` : undefined}
+      title={title}
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
@@ -50,7 +54,7 @@ export function CheckRow({
         className={cn(
           "flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] transition-colors duration-150",
           checked ? "bg-signal" : "bg-ink-3 ring-1 ring-inset ring-ink-4",
-          disabled && "opacity-50",
+          disabled && !checked && "opacity-50",
         )}
       >
         {checked ? <Check className="h-3 w-3 text-ink" strokeWidth={3} /> : null}

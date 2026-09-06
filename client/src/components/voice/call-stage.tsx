@@ -1706,6 +1706,7 @@ function CallControls({
   // The room's rule, not a choice: SPEAK denied. Mute is locked shut, and
   // share and camera are not offered at all, since presenting is speaking.
   const listenOnly = !voiceState.canSpeak;
+  const noVideo = !voiceState.canStream;
 
   return (
     <div className={cn("flex flex-col items-center", collapsed ? "gap-0" : "gap-1.5")}>
@@ -1831,7 +1832,7 @@ function CallControls({
           {t("voice.bar.listenOnly")}
         </span>
       )}
-      {!listenOnly && (
+      {!noVideo && (
       <Tooltip
         label={
           voiceState.isCameraOn
@@ -1907,7 +1908,7 @@ function CallControls({
           everyone's voices back into the call; see
           `lib/screen-capture-audio.ts`. */}
       {canShare &&
-        !listenOnly &&
+        !noVideo &&
         onStartScreenShare &&
         onShareSystemAudioChange &&
         /* Hidden where the platform cannot deliver it. A dead toggle is not a
@@ -1939,7 +1940,7 @@ function CallControls({
             </button>
           </Tooltip>
         )}
-      {!canShare && !listenOnly && onStartScreenShare && (
+      {!canShare && !noVideo && onStartScreenShare && (
         <Tooltip
           label={t("voice.control.shareUnavailable")}
           detail={screenShareUnavailableMessage("no-api")}
@@ -1960,7 +1961,7 @@ function CallControls({
           </button>
         </Tooltip>
       )}
-      {canShare && !listenOnly && (onStartScreenShare || onStopScreenShare) && (
+      {canShare && !noVideo && (onStartScreenShare || onStopScreenShare) && (
         <Tooltip
           label={
             voiceState.isSharingScreen
