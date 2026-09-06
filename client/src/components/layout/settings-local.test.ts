@@ -16,9 +16,12 @@ vi.stubGlobal("localStorage", {
   },
 });
 
-const { defaultLocalSettings, loadLocalSettings } = await import(
-  "./settings-modal"
-);
+const {
+  defaultLocalSettings,
+  displayMicLevel,
+  loadLocalSettings,
+  sliderToVadThreshold,
+} = await import("./settings-modal");
 
 describe("loadLocalSettings vadThreshold", () => {
   afterEach(() => {
@@ -42,5 +45,15 @@ describe("loadLocalSettings vadThreshold", () => {
 
     store.set("pqp-local-settings", JSON.stringify({ vadThreshold: "loud" }));
     expect(loadLocalSettings().vadThreshold).toBe(SPEAKING_THRESHOLD);
+  });
+});
+
+describe("mic meter slider scale", () => {
+  it("round-trips a slider percent onto the same displayed line", () => {
+    const volume = 1;
+    for (const percent of [0, 8, 40, 100]) {
+      const stored = sliderToVadThreshold(percent, volume);
+      expect(Math.round(displayMicLevel(stored, volume) * 100)).toBe(percent);
+    }
   });
 });

@@ -576,13 +576,24 @@ function chipClass(selected: boolean): string {
 /**
  * The live bar and the voice-activity line share this scale, so the marker
  * sits on the same coordinates as the level the person is watching.
+ *
+ * The 1.8 gain is how the existing meter made a typical speaking level fill
+ * more than a sliver of the bar. The volume floor stops a dragged-down
+ * input volume from pinning the line to the left edge.
  */
-function displayMicLevel(raw: number, volume: number): number {
-  return Math.min(1, raw * 1.8 * Math.max(0.15, volume));
+const MIC_LEVEL_DISPLAY_GAIN = 1.8;
+const MIC_LEVEL_VOLUME_FLOOR = 0.15;
+
+export function displayMicLevel(raw: number, volume: number): number {
+  return Math.min(
+    1,
+    raw * MIC_LEVEL_DISPLAY_GAIN * Math.max(MIC_LEVEL_VOLUME_FLOOR, volume),
+  );
 }
 
-function sliderToVadThreshold(percent: number, volume: number): number {
-  const scale = 1.8 * Math.max(0.15, volume);
+export function sliderToVadThreshold(percent: number, volume: number): number {
+  const scale =
+    MIC_LEVEL_DISPLAY_GAIN * Math.max(MIC_LEVEL_VOLUME_FLOOR, volume);
   return parseVadThreshold(percent / 100 / scale);
 }
 
@@ -697,7 +708,12 @@ function MicLevelMeter({
       <span className="block text-xs uppercase tracking-wide text-paper-muted">
         {gated ? t("settings.voice.sensitivity") : label}
       </span>
-      <div className="relative h-2">
+      <div
+        className={cn(
+          "relative h-2 rounded-full",
+          gated && "has-[:focus]:ring-2 has-[:focus]:ring-signal/60",
+        )}
+      >
         <div
           className="h-2 overflow-hidden rounded-full bg-ink"
           role="progressbar"
@@ -715,21 +731,25 @@ function MicLevelMeter({
           <>
             <div
               aria-hidden
-              className="pointer-events-none absolute top-[-3px] h-[14px] w-0.5 -translate-x-1/2 rounded-full bg-paper"
+              className="pointer-events-none absolute top-[-3px] h-[14px] w-1 -translate-x-1/2 rounded-full bg-paper"
               style={{ left: `${thresholdPct}%` }}
             />
             <input
               type="range"
               min={0}
               max={100}
+              step={1}
               value={thresholdPct}
               onChange={(e) =>
                 onThresholdChange?.(
                   sliderToVadThreshold(Number(e.target.value), inputVolume),
                 )
               }
-              className="absolute inset-0 h-2 w-full cursor-pointer opacity-0"
+              className="absolute -inset-y-2 inset-x-0 w-full cursor-pointer opacity-0"
               aria-label={t("settings.voice.sensitivity")}
+              aria-valuetext={t("settings.voice.percent", {
+                percent: thresholdPct,
+              })}
             />
           </>
         )}
