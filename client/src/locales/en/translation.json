@@ -882,6 +882,8 @@
   "call.quality.receiving.none": "Nobody is sending you video right now.",
   "call.quality.receiving.sendersChoice": "The sender picks that size. Nothing on this side can raise it, so ask them to send more if it is too soft.",
   "call.quality.receive.hint": "Auto follows the size of the picture on this screen. A fixed choice is the largest size this device will accept, and it is remembered on this device.",
+  "call.quality.receive.cellularDefault": "Mobile data: starting at 360p to keep the bill down. Pick a size to change it.",
+  "call.quality.receive.largeRoomCap": "Large room: shares arrive at up to 720p unless the presenter picked 1080p.",
   "call.quality.send.largeRoomCap": "Large room: your screen goes out at 720p to keep it smooth for everyone. Pick 1080p to send it anyway.",
   "call.panel.mute": "Mute",
   "call.panel.unmute": "Unmute",

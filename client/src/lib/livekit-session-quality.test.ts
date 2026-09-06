@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceSessionInfo } from "@pqp/shared";
+import type { RemotePeer } from "./peer-connection-manager";
+import { bindRemoteVideo } from "./remote-video-binding";
+import { HIDDEN_GRACE_MS, OFFSCREEN_GRACE_MS } from "./remote-video-delivery";
 
 /**
  * The SFU half of the video quality control.
@@ -105,6 +108,9 @@ interface FakeRemotePublication {
   isSubscribed: boolean;
   requested: number[];
   setVideoQuality: (quality: number) => void;
+  /** Every `setEnabled` the delivery rule sent, in order. */
+  enabled: boolean[];
+  setEnabled: (enabled: boolean) => void;
 }
 
 interface FakeRemoteParticipant {
@@ -191,6 +197,10 @@ class FakeRoom {
       setVideoQuality(quality: number) {
         this.requested.push(quality);
       },
+      enabled: [],
+      setEnabled(enabled: boolean) {
+        this.enabled.push(enabled);
+      },
     };
     participant.videoTrackPublications.set(`${source}-sid`, publication);
     const track = {
@@ -200,6 +210,15 @@ class FakeRoom {
     };
     this.handlers.get(RoomEvent.TrackSubscribed)?.(track, publication, participant);
     return publication;
+  }
+  unsubscribe(participant: FakeRemoteParticipant, source: string) {
+    const publication = participant.videoTrackPublications.get(`${source}-sid`);
+    participant.videoTrackPublications.delete(`${source}-sid`);
+    this.handlers.get(RoomEvent.TrackUnsubscribed)?.(
+      { kind: Track.Kind.Video },
+      publication,
+      participant,
+    );
   }
 }
 
@@ -628,5 +647,156 @@ describe("the layer this viewer asks for", () => {
 
     expect(screen.requested.at(-1)).toBe(0);
     expect(camera.requested.at(-1)).toBe(0);
+  });
+});
+
+/**
+ * The delivery rule wired to the room: a tile binding its element through
+ * `bindRemoteVideo` is what keeps a publication flowing, and the tab going
+ * to the background is what pauses all of them. Audio publications never
+ * pass through the rule at all; the fake room only hands video to it.
+ */
+describe("video nobody is drawing", () => {
+  let peers: RemotePeer[] = [];
+  /** A stand-in `document` whose visibility the test flips. */
+  const doc = {
+    visibilityState: "visible" as "visible" | "hidden",
+    listeners: new Set<() => void>(),
+    addEventListener(_type: string, listener: () => void) {
+      this.listeners.add(listener);
+    },
+    removeEventListener(_type: string, listener: () => void) {
+      this.listeners.delete(listener);
+    },
+    setVisibility(state: "visible" | "hidden") {
+      this.visibilityState = state;
+      for (const listener of this.listeners) {
+        listener();
+      }
+    },
+  };
+
+  async function watchedSession() {
+    return connectLiveKit({
+      session: SESSION,
+      lookupIdentity: () => undefined,
+      onPeersChanged: (next) => {
+        peers = next;
+      },
+      onError: () => {},
+    });
+  }
+
+  function video() {
+    return { srcObject: null } as unknown as HTMLVideoElement;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    peers = [];
+    doc.visibilityState = "visible";
+    doc.listeners.clear();
+    // Not `vi.stubGlobal`: unstubbing that would also drop the file-level
+    // `MediaStream` stub every other suite here relies on.
+    (globalThis as { document?: unknown }).document = doc;
+  });
+
+  afterEach(() => {
+    delete (globalThis as { document?: unknown }).document;
+    vi.useRealTimers();
+  });
+
+  it("pauses a share no tile ever bound, and resumes when one does", async () => {
+    await watchedSession();
+    const rafa = room().join("rafa");
+    const publication = room().subscribe(rafa, Track.Source.ScreenShare);
+
+    vi.advanceTimersByTime(OFFSCREEN_GRACE_MS);
+    expect(publication.enabled).toEqual([false]);
+
+    const stream = peers.find((p) => p.peerId === "rafa")?.screenStream;
+    expect(stream).toBeTruthy();
+    bindRemoteVideo(video(), stream!);
+    // The fake publication has no private `requestedDisabled`, so the
+    // fallback `setEnabled(true)` is what lifts the pause.
+    expect(publication.enabled).toEqual([false, true]);
+  });
+
+  it("pauses a parked camera tile a grace after its element goes, not before", async () => {
+    await watchedSession();
+    const rafa = room().join("rafa");
+    const publication = room().subscribe(rafa, Track.Source.Camera);
+    const stream = peers.find((p) => p.peerId === "rafa")?.cameraStream;
+    const unbind = bindRemoteVideo(video(), stream!);
+    vi.advanceTimersByTime(OFFSCREEN_GRACE_MS * 2);
+    expect(publication.enabled).toEqual([]);
+
+    unbind();
+    expect(publication.enabled).toEqual([]);
+    vi.advanceTimersByTime(OFFSCREEN_GRACE_MS);
+    expect(publication.enabled).toEqual([false]);
+  });
+
+  it("hands the decision back to the library when the field is there", async () => {
+    await watchedSession();
+    const rafa = room().join("rafa");
+    const publication = room().subscribe(rafa, Track.Source.ScreenShare) as FakeRemotePublication & {
+      requestedDisabled?: boolean;
+      updates: number;
+      emitTrackUpdate: () => void;
+    };
+    publication.requestedDisabled = undefined;
+    publication.updates = 0;
+    publication.emitTrackUpdate = () => {
+      publication.updates += 1;
+    };
+
+    vi.advanceTimersByTime(OFFSCREEN_GRACE_MS);
+    expect(publication.enabled).toEqual([false]);
+    const stream = peers.find((p) => p.peerId === "rafa")?.screenStream;
+    bindRemoteVideo(video(), stream!);
+
+    // No `setEnabled(true)`: that would pin the track on and switch the
+    // adaptive-stream pause off for the rest of the call.
+    expect(publication.enabled).toEqual([false]);
+    expect(publication.requestedDisabled).toBeUndefined();
+    expect(publication.updates).toBe(1);
+  });
+
+  it("pauses every video ten seconds into the background and resumes on return", async () => {
+    await watchedSession();
+    const rafa = room().join("rafa");
+    const screen = room().subscribe(rafa, Track.Source.ScreenShare);
+    const camera = room().subscribe(rafa, Track.Source.Camera);
+    const peer = peers.find((p) => p.peerId === "rafa")!;
+    bindRemoteVideo(video(), peer.screenStream!);
+    bindRemoteVideo(video(), peer.cameraStream!);
+
+    doc.setVisibility("hidden");
+    vi.advanceTimersByTime(HIDDEN_GRACE_MS - 1);
+    expect(screen.enabled).toEqual([]);
+    vi.advanceTimersByTime(1);
+    expect(screen.enabled).toEqual([false]);
+    expect(camera.enabled).toEqual([false]);
+
+    doc.setVisibility("visible");
+    expect(screen.enabled).toEqual([false, true]);
+    expect(camera.enabled).toEqual([false, true]);
+  });
+
+  it("stops listening to the tab when the session ends", async () => {
+    const sfu = await watchedSession();
+    expect(doc.listeners.size).toBe(1);
+    await sfu.disconnect();
+    expect(doc.listeners.size).toBe(0);
+  });
+
+  it("forgets an unsubscribed track", async () => {
+    await watchedSession();
+    const rafa = room().join("rafa");
+    const publication = room().subscribe(rafa, Track.Source.ScreenShare);
+    room().unsubscribe(rafa, Track.Source.ScreenShare);
+    vi.advanceTimersByTime(OFFSCREEN_GRACE_MS * 2);
+    expect(publication.enabled).toEqual([]);
   });
 });
