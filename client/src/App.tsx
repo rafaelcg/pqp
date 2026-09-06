@@ -1341,6 +1341,39 @@ function MainAppContent({
     };
   }, [voice]);
 
+  // Electron: the tray menu. Commands come in, the state they act on goes out.
+  useEffect(() => {
+    const desktop = getDesktop();
+    if (!desktop?.onVoiceCommand) {
+      return;
+    }
+    return desktop.onVoiceCommand((command) => {
+      if (voice.getState().status !== "connected") {
+        return;
+      }
+      if (command === "toggleMute") {
+        voice.toggleMute();
+      } else if (command === "toggleDeafen") {
+        voice.toggleDeafen();
+      } else if (command === "leave") {
+        voice.leave();
+      }
+    });
+  }, [voice]);
+
+  const inCall = voiceState.status === "connected";
+  useEffect(() => {
+    const desktop = getDesktop();
+    if (!desktop?.setVoiceState) {
+      return;
+    }
+    desktop.setVoiceState({
+      inCall,
+      muted: inCall && voiceState.isMuted,
+      deafened: inCall && voiceState.isDeafened,
+    });
+  }, [inCall, voiceState.isMuted, voiceState.isDeafened]);
+
   const [shortcutOverlayOpen, setShortcutOverlayOpen] = useState(false);
 
   const clearUnread = useCallback(async (channelId: string): Promise<string | null> => {

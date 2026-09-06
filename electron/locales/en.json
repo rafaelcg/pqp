@@ -32,5 +32,19 @@
   "share.permissionDismiss": "Not now",
   "share.failedTitle": "Screen sharing could not start",
   "share.failedBody": "pqp could not list the screens and windows on this computer. Try again, and if it keeps happening, restart pqp.",
-  "share.failedDismiss": "OK"
+  "share.failedDismiss": "OK",
+  "tray.idle": "Not in a call",
+  "tray.inCall": "In a call",
+  "tray.mute": "Mute",
+  "tray.unmute": "Unmute",
+  "tray.deafen": "Deafen",
+  "tray.undeafen": "Undeafen",
+  "tray.leave": "Leave call",
+  "tray.show": "Show pqp",
+  "tray.keepInTray": "Keep in tray while in a call",
+  "tray.quit": "Quit pqp",
+  "tray.tooltipIdle": "pqp",
+  "tray.tooltipLive": "pqp - mic on",
+  "tray.tooltipMuted": "pqp - muted",
+  "tray.tooltipDeafened": "pqp - deafened"
 }

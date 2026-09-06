@@ -10,6 +10,8 @@ const {
   systemPreferences,
   desktopCapturer,
   dialog,
+  globalShortcut,
+  Tray,
 } = require("electron");
 const fs = require("node:fs");
 const path = require("node:path");
@@ -36,6 +38,22 @@ const {
   screenPermission,
   captureResponse,
 } = require("./lib/display-sources");
+const {
+  isAcceptableAccelerator,
+  createHoldTracker,
+} = require("./lib/global-ptt");
+const { trayIconKind, trayIconImage } = require("./lib/tray-icon");
+const {
+  buildTrayTemplate,
+  trayTooltip,
+  shouldHideToTray,
+  normalizeVoiceState,
+} = require("./lib/tray-menu");
+const {
+  DEFAULT_KEEP_IN_TRAY,
+  loadTrayPrefs,
+  saveTrayPrefs,
+} = require("./lib/tray-state");
 
 const PROTOCOL = "pqp";
 const DEFAULT_DEV_URL = "http://localhost:5173/app";
@@ -81,6 +99,35 @@ const desktopAuth = createDesktopAuthController({
 });
 /** @type {BrowserWindow | null} */
 let pickerWindow = null;
+
+/** @type {Electron.Tray | null} */
+let tray = null;
+/** What the renderer last said about the call, for the tray icon and menu. */
+let voiceState = { inCall: false, muted: false, deafened: false };
+/** `{ keepInTray: boolean }`, read from userData at startup. */
+let trayPrefs = { keepInTray: DEFAULT_KEEP_IN_TRAY };
+/** True from `before-quit` on, so the close handler stops hiding to the tray. */
+let quitting = false;
+
+/**
+ * Global push-to-talk.
+ *
+ * `pttAccelerator` is what the renderer asked for and stays set while the app
+ * window is focused; `pttRegistered` is what `globalShortcut` actually holds.
+ * They differ on purpose: a registered accelerator is swallowed system-wide,
+ * including by our own window, so while the window is focused the shell lets
+ * go of the key and the renderer's own keydown / keyup pair does the work.
+ * That pair is exact, and the global one has to infer its release from
+ * auto-repeat (see lib/global-ptt.js), so the precise half wins wherever it
+ * is available.
+ */
+/** @type {string | null} */
+let pttAccelerator = null;
+/** @type {string | null} */
+let pttRegistered = null;
+const pttHold = createHoldTracker((held) => {
+  sendToRenderer("pqp:ptt-held", held);
+});
 
 /**
  * How long the picker window gets to load before the share is abandoned.
@@ -1027,11 +1074,222 @@ function createWindow(appUrl, allowedOrigin) {
     }
   });
 
+  // The global push-to-talk key is held only while this window is elsewhere.
+  // See syncPushToTalkRegistration for why focus is the switch.
+  mainWindow.on("focus", () => syncPushToTalkRegistration());
+  mainWindow.on("blur", () => syncPushToTalkRegistration());
+
+  /**
+   * Closing during a call hides to the tray instead of ending the app.
+   *
+   * Quitting the shell mid-call drops you out of the call, which is not what
+   * the close button means to somebody who is talking to five people and
+   * wants the window off their screen. Only during a call, only while the tray
+   * preference is on, and never on the way to a real quit — so Cmd+Q, the tray
+   * Quit item and an update restart all still work.
+   */
+  mainWindow.on("close", (event) => {
+    if (
+      !shouldHideToTray({
+        inCall: voiceState.inCall,
+        keepInTray: trayPrefs.keepInTray,
+        quitting,
+      })
+    ) {
+      return;
+    }
+    if (!tray || tray.isDestroyed()) {
+      // Nothing to minimize *to*. Closing is better than a window that cannot
+      // be got back.
+      return;
+    }
+    event.preventDefault();
+    mainWindow?.hide();
+  });
+
   mainWindow.on("closed", () => {
     mainWindow = null;
+    // A window that is gone cannot be typing into, so the shell takes the key.
+    syncPushToTalkRegistration();
   });
 
   mainWindow.loadURL(appUrl);
+}
+
+/**
+ * Bring the window back from wherever it went: minimized, hidden to the tray,
+ * or closed entirely on macOS. `recreateWindow` is set once the app URL is
+ * known; before that there is nothing to show.
+ * @type {(() => void) | null}
+ */
+let recreateWindow = null;
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    recreateWindow?.();
+    return;
+  }
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function sendVoiceCommand(command) {
+  sendToRenderer("pqp:voice-command", command);
+  // Mute and deafen are answered in place; leaving a call is the one where the
+  // person almost certainly wants to look at the window afterwards.
+  if (command === "leave") {
+    showMainWindow();
+  }
+}
+
+/**
+ * Repaint the tray from `voiceState` and `trayPrefs`.
+ *
+ * Rebuilt whole rather than patched: an Electron menu item's label cannot be
+ * changed after `buildFromTemplate`, and a nine-item menu is not worth the
+ * bookkeeping to do it any other way.
+ */
+function refreshTray() {
+  if (!tray || tray.isDestroyed()) {
+    return;
+  }
+  try {
+    tray.setImage(trayIconImage(trayIconKind(voiceState), process.platform));
+    tray.setToolTip(trayTooltip(voiceState, t));
+    tray.setContextMenu(
+      Menu.buildFromTemplate(
+        buildTrayTemplate(voiceState, trayPrefs, t, {
+          toggleMute: () => sendVoiceCommand("toggleMute"),
+          toggleDeafen: () => sendVoiceCommand("toggleDeafen"),
+          leave: () => sendVoiceCommand("leave"),
+          show: () => showMainWindow(),
+          setKeepInTray: (value) => {
+            trayPrefs = { keepInTray: value === true };
+            saveTrayPrefs(app.getPath("userData"), trayPrefs);
+            refreshTray();
+          },
+          quit: () => {
+            quitting = true;
+            app.quit();
+          },
+        }),
+      ),
+    );
+  } catch (err) {
+    console.warn("[pqp] tray refresh failed:", err?.message ?? err);
+  }
+}
+
+/**
+ * Create the tray once, at startup.
+ *
+ * It stays there whether or not a call is up: a tray icon that appears and
+ * disappears is a tray icon nobody can find, and this one is also the only way
+ * back to a window that was closed to the tray. A machine with no tray at all
+ * (some minimal Linux desktops) throws here, and the app carries on without
+ * one — every action in the menu exists elsewhere.
+ */
+function createTray() {
+  if (tray && !tray.isDestroyed()) {
+    return;
+  }
+  try {
+    tray = new Tray(trayIconImage("idle", process.platform));
+  } catch (err) {
+    console.warn("[pqp] tray unavailable:", err?.message ?? err);
+    tray = null;
+    return;
+  }
+  // Windows and Linux: a plain click is how people expect to get the window
+  // back. macOS opens the menu on click by convention, so leave it alone.
+  if (process.platform !== "darwin") {
+    tray.on("click", () => showMainWindow());
+  }
+  tray.on("double-click", () => showMainWindow());
+  refreshTray();
+}
+
+/**
+ * Hold or release the global push-to-talk key.
+ *
+ * Registered only while the app window is NOT focused. A `globalShortcut` is
+ * consumed system-wide, so keeping it while focused would steal the key from
+ * the renderer, which has the real keydown / keyup pair and does not have to
+ * infer the release from auto-repeat (see lib/global-ptt.js).
+ */
+function syncPushToTalkRegistration() {
+  const focused = Boolean(
+    mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
+  );
+  const wanted = focused ? null : pttAccelerator;
+  if (wanted === pttRegistered) {
+    return pttRegistered !== null;
+  }
+  if (pttRegistered) {
+    try {
+      globalShortcut.unregister(pttRegistered);
+    } catch {
+      // Already gone (another app took it, the OS dropped it): nothing to do.
+    }
+    pttRegistered = null;
+    // Never inherit a held key across a registration change.
+    pttHold.release();
+  }
+  if (!wanted) {
+    return false;
+  }
+  let ok = false;
+  try {
+    ok = globalShortcut.register(wanted, () => pttHold.press());
+  } catch (err) {
+    console.warn("[pqp] push-to-talk register failed:", err?.message ?? err);
+    ok = false;
+  }
+  if (ok) {
+    pttRegistered = wanted;
+  }
+  return ok;
+}
+
+/**
+ * Take (or drop) a push-to-talk accelerator on the renderer's behalf.
+ *
+ * Answers whether the key is usable, which is not the same as whether it is
+ * registered right now: a request made while the window is focused registers
+ * nothing (by design, above), so the answer is a probe — take the key, see if
+ * the OS agrees, hand it straight back, then let the focus rule decide. A key
+ * another application already owns comes back false and the client stays
+ * in-window only.
+ */
+function setPushToTalkAccelerator(accelerator) {
+  if (accelerator === null) {
+    pttAccelerator = null;
+    syncPushToTalkRegistration();
+    return false;
+  }
+  if (!isAcceptableAccelerator(accelerator)) {
+    return false;
+  }
+  pttAccelerator = accelerator;
+  if (syncPushToTalkRegistration()) {
+    return true;
+  }
+  let available = false;
+  try {
+    available = globalShortcut.register(accelerator, () => pttHold.press());
+    if (available) {
+      globalShortcut.unregister(accelerator);
+    }
+  } catch {
+    available = false;
+  }
+  if (!available) {
+    pttAccelerator = null;
+  }
+  return available;
 }
 
 function collectDeepLinkFromArgv(argv) {
@@ -1048,12 +1306,9 @@ if (!gotLock) {
 } else {
   app.on("second-instance", (_event, argv) => {
     collectDeepLinkFromArgv(argv);
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) {
-        mainWindow.restore();
-      }
-      mainWindow.focus();
-    }
+    // `showMainWindow` rather than focus: the first instance may be hidden in
+    // the tray, and launching the app again is a request to see it.
+    showMainWindow();
   });
 
   // macOS deep links
@@ -1109,6 +1364,9 @@ if (!gotLock) {
     const next = loadLocale(app.getPath("userData"), app.getLocale());
     setLanguage(next);
     createAppMenu();
+    // The tray menu is built from the same catalogue and would otherwise keep
+    // the old language until the next state change.
+    refreshTray();
     return next;
   });
 
@@ -1117,6 +1375,26 @@ if (!gotLock) {
       return;
     }
     applyBadgeCount(Math.max(0, Math.floor(count)));
+  });
+
+  ipcMain.handle("pqp:ptt-bind", (_event, accelerator) => {
+    if (accelerator !== null && typeof accelerator !== "string") {
+      return false;
+    }
+    return setPushToTalkAccelerator(accelerator);
+  });
+
+  ipcMain.on("pqp:voice-state", (_event, payload) => {
+    const next = normalizeVoiceState(payload);
+    if (
+      next.inCall === voiceState.inCall &&
+      next.muted === voiceState.muted &&
+      next.deafened === voiceState.deafened
+    ) {
+      return;
+    }
+    voiceState = next;
+    refreshTray();
   });
 
   ipcMain.on("pqp:notify", (_event, payload) => {
@@ -1137,6 +1415,8 @@ if (!gotLock) {
     const locale = loadLocale(app.getPath("userData"), app.getLocale());
     setLanguage(locale);
     createAppMenu();
+    trayPrefs = loadTrayPrefs(app.getPath("userData"));
+    createTray();
     collectDeepLinkFromArgv(process.argv);
 
     let appUrl;
@@ -1150,6 +1430,7 @@ if (!gotLock) {
 
     console.log(`[pqp] Loading ${appUrl}`);
     const allowedOrigin = configureSessionSecurity(appUrl);
+    recreateWindow = () => createWindow(appUrl, allowedOrigin);
     createWindow(appUrl, allowedOrigin);
     initAutoUpdate(() => mainWindow);
 
@@ -1163,17 +1444,38 @@ if (!gotLock) {
   });
 
   app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") {
-      app.quit();
+    // The tray keeps the app alive on every platform now: closing the window
+    // during a call hides it, and hiding is not a reason to quit and hang up.
+    // Without a tray (or without a call) the old rule stands.
+    if (process.platform === "darwin") {
+      return;
     }
+    if (tray && !tray.isDestroyed() && voiceState.inCall && !quitting) {
+      return;
+    }
+    app.quit();
   });
 
   app.on("before-quit", () => {
+    quitting = true;
     desktopAuth.stop();
     if (staticServer) {
       const server = staticServer;
       staticServer = null;
       server.close().catch(() => {});
     }
+  });
+
+  // Belt and braces: Electron unregisters on exit anyway, but a stuck global
+  // hotkey is the failure people would have to reboot to clear.
+  app.on("will-quit", () => {
+    pttAccelerator = null;
+    pttRegistered = null;
+    pttHold.dispose();
+    globalShortcut.unregisterAll();
+    if (tray && !tray.isDestroyed()) {
+      tray.destroy();
+    }
+    tray = null;
   });
 }
