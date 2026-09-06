@@ -418,6 +418,9 @@ object PqpIcons {
     val Speakerphone get() = Lucide.volume2
     val Earpiece get() = Lucide.phone
     val HangUp get() = Lucide.phoneOff
+
+    /** Place or answer a conversation call. */
+    val Call get() = Lucide.phone
     val ShareScreen get() = Lucide.screenShare
     val StopSharing get() = Lucide.screenShareOff
     val EnterFullscreen get() = Lucide.maximize

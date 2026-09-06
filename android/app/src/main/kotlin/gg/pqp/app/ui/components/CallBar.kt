@@ -53,6 +53,9 @@ import gg.pqp.app.ui.theme.Motion
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
+import androidx.compose.ui.res.pluralStringResource
+import gg.pqp.app.voice.OutgoingCall
+import gg.pqp.app.voice.OutgoingPhase
 import gg.pqp.app.voice.VoiceController
 import gg.pqp.app.voice.VoiceStage
 import gg.pqp.app.voice.VoiceState
@@ -73,7 +76,18 @@ import gg.pqp.app.voice.serverMutedPeers
  * paints anything.
  */
 @Composable
-fun CallBar(state: VoiceState, controller: VoiceController, modifier: Modifier = Modifier) {
+fun CallBar(
+    state: VoiceState,
+    controller: VoiceController,
+    modifier: Modifier = Modifier,
+    /**
+     * The conversation call this device placed, when the room on the strip is
+     * that call. It is the difference between "1 in this call", which reads as
+     * a broken call, and "Calling…", which is what is actually happening while
+     * a ring is out.
+     */
+    call: OutgoingCall? = null,
+) {
     AnimatedVisibility(
         visible = state.isActive,
         enter = expandVertically(),
@@ -112,6 +126,12 @@ fun CallBar(state: VoiceState, controller: VoiceController, modifier: Modifier =
                         // unreachable peer takes the line over the head count.
                         val unreachable = state.unreachablePeers > 0 &&
                             state.stage != VoiceStage.Joining
+                        // Only while it is this room's own call, and only
+                        // until somebody answers: after that the head count is
+                        // the truer line.
+                        val ringing = call
+                            ?.takeIf { it.conversationId == state.channelId }
+                            ?.takeIf { it.phase != OutgoingPhase.Answered }
                         Text(
                             text = when {
                                 state.stage == VoiceStage.Joining ->
@@ -128,13 +148,25 @@ fun CallBar(state: VoiceState, controller: VoiceController, modifier: Modifier =
                                 state.serverMuted ->
                                     stringResource(R.string.voice_server_muted_you)
 
+                                ringing?.phase == OutgoingPhase.NoAnswer ->
+                                    stringResource(R.string.call_no_answer)
+
+                                ringing != null && ringing.declinedUserIds.isNotEmpty() ->
+                                    pluralStringResource(
+                                        R.plurals.call_declined,
+                                        ringing.declinedUserIds.size,
+                                        ringing.declinedUserIds.size,
+                                    )
+
+                                ringing != null -> stringResource(R.string.call_ringing)
+
                                 else -> stringResource(
                                     R.string.voice_participants,
                                     state.participants.size,
                                 )
                             },
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (unreachable) {
+                            color = if (unreachable || ringing?.phase == OutgoingPhase.NoAnswer) {
                                 MaterialTheme.colorScheme.error
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant

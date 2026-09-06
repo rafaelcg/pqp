@@ -17,6 +17,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- An incoming DM call buzzes the phone while the app is open. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <!-- Screen sharing. The consent dialog is the system's and cannot be
          skipped; this permission only lets the same call keep running while
          the screen is being captured. The type is added to the *running* voice

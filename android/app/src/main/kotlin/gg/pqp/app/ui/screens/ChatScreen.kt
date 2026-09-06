@@ -139,6 +139,12 @@ fun ChatScreen(
      * the server's `message-rejected` corrects the countdown if this is stale.
      */
     slowmodeSeconds: Int = 0,
+    /**
+     * Actions for the app bar's trailing edge. A conversation puts the call
+     * button here; a server channel has nothing to add. A slot rather than a
+     * flag, so that this screen does not have to know what a call is.
+     */
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {}
 ) {
     val context = LocalContext.current
     // Built from the application context, so the reader outlives this
@@ -249,6 +255,7 @@ fun ChatScreen(
                             )
                         }
                     },
+                    actions = actions,
                     colors = pqpTopBarColors(),
                 )
                 ChromeDivider()
