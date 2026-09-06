@@ -44,6 +44,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import { ComposerFormatPreview } from "@/components/chat/composer-format-preview";
 import { PollComposer } from "@/components/chat/poll-composer";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -1513,6 +1514,13 @@ export function MessageComposer({
               );
             })}
           </div>
+        )}
+        {isFormatBarOpen && (
+          <ComposerFormatPreview
+            body={body}
+            label={t("composer.formatPreview")}
+            onActivate={() => inputRef.current?.focus()}
+          />
         )}
       </div>
       )}
