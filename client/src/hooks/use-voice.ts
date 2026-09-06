@@ -1231,10 +1231,13 @@ export function createVoiceController(transport: RealtimeTransport) {
 
   function startVoiceActivityPoll() {
     stopVoiceActivityPoll();
-    voiceActivityPollId = setInterval(
-      syncVoiceActivityGate,
-      VOICE_ACTIVITY_POLL_MS,
-    ) as unknown as number;
+    const id = setInterval(syncVoiceActivityGate, VOICE_ACTIVITY_POLL_MS);
+    // Node test runners treat a live interval as an open handle. The browser
+    // returns a number, which has no unref; a Timeout does.
+    if (typeof id === "object" && id !== null && "unref" in id) {
+      (id as { unref: () => void }).unref();
+    }
+    voiceActivityPollId = id as unknown as number;
   }
 
   function stopSpeakingLoop() {
