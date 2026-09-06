@@ -69,17 +69,17 @@ If the browser connects to the signal socket and then logs `could not establish 
 
 ### Speak permission (`Permission.SPEAK`)
 
-The roles editor and the per-channel overwrite editor expose **Speak**. It is enforced, permissively: every existing role and channel already carries the bit, so nothing changes on deploy until an owner takes it away.
+The roles editor and the per-channel overwrite editor expose **Speak** (microphone) and **Video** (`Permission.STREAM`: camera and screen share). Both are enforced, permissively: existing roles that had Speak also received Stream, and existing Speak overwrites were copied onto Stream, so a listen-only lobby stays silent on camera and screen until an owner splits them.
 
-**How an owner makes a stage.** In the voice channel's permissions, set Speak to *Deny* for `@everyone` and to *Allow* for a moderator (or "speaker") role. Everyone else joins muted and cannot unmute; moderators talk. Owner and Administrator resolve to every bit, so they can never lock themselves out. The overwrite editor says this in one line under the Speak row.
+**How an owner makes a stage.** In the voice channel's permissions, set Speak to *Deny* for `@everyone` and to *Allow* for a moderator (or "speaker") role. The Quem fala recipe writes Stream the same way. Everyone else joins muted and cannot unmute; moderators talk. Owner and Administrator resolve to every bit, so they can never lock themselves out. Avançado can then deny Video while leaving Speak, or the reverse.
 
 **What is enforced where.**
 
 | Path | Enforcement |
 |---|---|
 | Join (`ws/voice.ts`) | SPEAK is resolved with CONNECT (one query, with the channel's overwrites) and written into the peer. `welcome.canSpeak` and every roster entry's `canSpeak` carry it. A false value logs `voice.speakDenied` once per join. |
-| SFU token (`POST /api/voice/token`) | The LiveKit grant is `canPublish = SPEAK`. Screen share and camera are publishes too, so a listener cannot present. `canSubscribe` stays true. The response carries `speak`. **This is the real enforcement:** LiveKit refuses the publish, so a modified client is still silent. |
-| Live change | Every permissions bump (role edit, overwrite, role granted or removed) re-resolves SPEAK for everyone in that server's rooms (`reevaluateVoiceSpeak`, hooked on `onPermissionsUpdate`, local and cluster-relayed alike). A change sends `voice-speak-changed { canSpeak }` to that person and, on the SFU, rewrites their participant permission (`setSfuUserCanPublish`: mutes every published track, then `updateParticipant` with `canPublish`). A grant works without re-minting a token; the client publishes its mic as soon as it is told. |
+| SFU token (`POST /api/voice/token`) | The LiveKit grant is `canPublish` when SPEAK or STREAM is held, with `canPublishSources` when only one of them is. `canSubscribe` stays true. The response carries `speak` and `stream`. **This is the real enforcement:** LiveKit refuses the publish, so a modified client is still silent. |
+| Live change | Every permissions bump (role edit, overwrite, role granted or removed) re-resolves SPEAK and STREAM for everyone in that server's rooms (`reevaluateVoiceSpeak`, hooked on `onPermissionsUpdate`, local and cluster-relayed alike). A change sends `voice-speak-changed { canSpeak, canStream }` to that person and, on the SFU, rewrites their participant permission (`setSfuUserCanPublish`: mutes tracks they may no longer publish, then `updateParticipant` with the split grant). A grant works without re-minting a token; the client publishes its mic as soon as it is told. |
 | Roster claims | `set-sharing-screen` and `set-camera` are refused for a listener (`screen-share-denied` / `camera-denied`), and `set-voice-state` cannot show a listener as unmuted. |
 | Client | Joins muted, the unmute is disabled ("Listening only. You do not have permission to speak in this channel."), share and camera buttons are not offered, push-to-talk does not open the mic, and a "Listen only" badge sits in the call bar. A mid-call grant unlocks the controls with a notice and leaves the person muted until they unmute. |
 

@@ -130,7 +130,8 @@ async function join(rec: Recorder, userId: string, voiceChannelId: string) {
 }
 
 const LISTENER_BITS = Permission.CONNECT;
-const SPEAKER_BITS = Permission.CONNECT | Permission.SPEAK;
+const SPEAKER_BITS =
+  Permission.CONNECT | Permission.SPEAK | Permission.STREAM;
 
 describe("SPEAK in voice rooms", () => {
   beforeEach(() => {
@@ -149,7 +150,9 @@ describe("SPEAK in voice rooms", () => {
       const rec = await join(recorder(), "quiet", STAGE);
       const welcome = frame(rec, "welcome")!;
       expect(welcome.canSpeak).toBe(false);
+      expect(welcome.canStream).toBe(false);
       expect((welcome.self as { canSpeak: boolean }).canSpeak).toBe(false);
+      expect((welcome.self as { canStream: boolean }).canStream).toBe(false);
     });
 
     it("says true for a member with SPEAK, and by default", async () => {
@@ -157,7 +160,9 @@ describe("SPEAK in voice rooms", () => {
       const loud = await join(recorder(), "loud", STAGE);
       const anyone = await join(recorder(), "anyone", STAGE);
       expect(frame(loud, "welcome")!.canSpeak).toBe(true);
+      expect(frame(loud, "welcome")!.canStream).toBe(true);
       expect(frame(anyone, "welcome")!.canSpeak).toBe(true);
+      expect(frame(anyone, "welcome")!.canStream).toBe(true);
       // The listener flag rides on the roster others receive too.
       const peers = frame(anyone, "welcome")!.peers as Array<{
         userId: string;
@@ -200,6 +205,36 @@ describe("SPEAK in voice rooms", () => {
       expect(quiet.cameraStreamId ?? null).toBeNull();
     });
 
+    it("lets a speaker keep the mic when Stream is denied", async () => {
+      bits.byUser.set("mic", Permission.CONNECT | Permission.SPEAK);
+      const rec = await join(recorder(), "mic", STAGE);
+      const welcome = frame(rec, "welcome")!;
+      expect(welcome.canSpeak).toBe(true);
+      expect(welcome.canStream).toBe(false);
+
+      await handleVoiceMessage(
+        { socket: rec.socket, user: asUser("mic") },
+        { type: "set-sharing-screen", sharing: true },
+      );
+      await handleVoiceMessage(
+        { socket: rec.socket, user: asUser("mic") },
+        { type: "set-camera", streamId: "cam-1" },
+      );
+      expect(frame(rec, "screen-share-denied")).toBeDefined();
+      expect(frame(rec, "camera-denied")).toBeDefined();
+
+      await handleVoiceMessage(
+        { socket: rec.socket, user: asUser("mic") },
+        { type: "set-voice-state", muted: false, deafened: false },
+      );
+      const watcher = await join(recorder(), "watcher", STAGE);
+      const peers = frame(watcher, "welcome")!.peers as Array<{
+        userId: string;
+        muted: boolean;
+      }>;
+      expect(peers.find((p) => p.userId === "mic")!.muted).toBe(false);
+    });
+
     it("keeps a listener shown as muted even if their client says otherwise", async () => {
       bits.byUser.set("quiet", LISTENER_BITS);
       const rec = await join(recorder(), "quiet", STAGE);
@@ -225,7 +260,12 @@ describe("SPEAK in voice rooms", () => {
       bits.byUser.set("member", LISTENER_BITS);
       await reevaluateVoiceSpeak(SERVER);
       expect(framesOf(rec, "voice-speak-changed")).toEqual([
-        { type: "voice-speak-changed", voiceChannelId: STAGE, canSpeak: false },
+        {
+          type: "voice-speak-changed",
+          voiceChannelId: STAGE,
+          canSpeak: false,
+          canStream: false,
+        },
       ]);
 
       // Idempotent: nothing changed, nothing sent.
@@ -238,6 +278,7 @@ describe("SPEAK in voice rooms", () => {
         type: "voice-speak-changed",
         voiceChannelId: STAGE,
         canSpeak: true,
+        canStream: true,
       });
       expect(setSfuUserCanPublish).not.toHaveBeenCalled();
     });
@@ -255,12 +296,12 @@ describe("SPEAK in voice rooms", () => {
       expect(frame(rec, "voice-speak-changed")).toMatchObject({ canSpeak: false });
       expect(frame(bystander, "voice-speak-changed")).toBeUndefined();
       expect(setSfuUserCanPublish).toHaveBeenCalledTimes(1);
-      const [room, userId, canPublish, identities] = vi.mocked(
+      const [room, userId, grant, identities] = vi.mocked(
         setSfuUserCanPublish,
       ).mock.calls[0]!;
       expect(room).toBe(STAGE);
       expect(userId).toBe("member");
-      expect(canPublish).toBe(false);
+      expect(grant).toEqual({ canSpeak: false, canStream: false });
       expect(identities.get(peerId)).toBe("member");
 
       bits.byUser.set("member", SPEAKER_BITS);
@@ -268,7 +309,7 @@ describe("SPEAK in voice rooms", () => {
       expect(setSfuUserCanPublish).toHaveBeenLastCalledWith(
         STAGE,
         "member",
-        true,
+        { canSpeak: true, canStream: true },
         expect.any(Map),
       );
     });

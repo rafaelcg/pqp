@@ -52,7 +52,9 @@ const FLAG_LABEL: Record<PermissionFlagKey, MessageKey> = {
   MENTION_EVERYONE: "roles.perm.MENTION_EVERYONE",
   CONNECT: "roles.perm.CONNECT",
   SPEAK: "roles.perm.SPEAK",
+  STREAM: "roles.perm.STREAM",
   MUTE_MEMBERS: "roles.perm.MUTE_MEMBERS",
+  MOVE_MEMBERS: "roles.perm.MOVE_MEMBERS",
   CHANGE_NICKNAME: "roles.perm.CHANGE_NICKNAME",
   MANAGE_NICKNAMES: "roles.perm.MANAGE_NICKNAMES",
   MANAGE_ROLES: "roles.perm.MANAGE_ROLES",
@@ -72,7 +74,10 @@ const FLAG_HINT: Partial<Record<PermissionFlagKey, MessageKey>> = {
   READ_MESSAGE_HISTORY: "roles.permHint.READ_MESSAGE_HISTORY",
   MENTION_EVERYONE: "roles.permHint.MENTION_EVERYONE",
   MUTE_MEMBERS: "roles.permHint.MUTE_MEMBERS",
+  CONNECT: "roles.permHint.CONNECT",
   SPEAK: "roles.permHint.SPEAK",
+  STREAM: "roles.permHint.STREAM",
+  MOVE_MEMBERS: "roles.permHint.MOVE_MEMBERS",
   CHANGE_NICKNAME: "roles.permHint.CHANGE_NICKNAME",
   MANAGE_NICKNAMES: "roles.permHint.MANAGE_NICKNAMES",
   MANAGE_ROLES: "roles.permHint.MANAGE_ROLES",
@@ -102,6 +107,7 @@ const PERMISSION_GROUPS = [
       "MODERATE_MEMBERS",
       "MANAGE_MESSAGES",
       "MUTE_MEMBERS",
+      "MOVE_MEMBERS",
       "MANAGE_NICKNAMES",
     ],
   },
@@ -117,7 +123,7 @@ const PERMISSION_GROUPS = [
   },
   {
     heading: "roles.group.voice",
-    keys: ["CONNECT", "SPEAK"],
+    keys: ["CONNECT", "SPEAK", "STREAM"],
   },
 ] as const satisfies readonly {
   heading: MessageKey;

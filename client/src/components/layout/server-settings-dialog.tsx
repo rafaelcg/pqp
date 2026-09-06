@@ -1,12 +1,5 @@
 import type { AuditLogEntry, Server } from "@pqp/shared";
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Image as ImageIcon,
   KeyRound,
@@ -20,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { SectionRail } from "@/components/ui/section-rail";
 import { ReportsSection } from "@/components/layout/reports-section";
 import { ServerIdentitySection } from "@/components/layout/server-identity-section";
 import { CommunityHomeSettingsSection } from "@/components/community-home/community-home-settings-section";
@@ -201,111 +195,6 @@ const SECTIONS: SectionDef[] = [
   },
 ];
 
-/**
- * The section rail. Structurally the one in `settings-modal.tsx`, deliberately
- * — two rails that behaved differently at the same width would be worse than
- * either. See that file for why it is a real tablist rather than a list of
- * buttons: arrow keys move between sections and only the selected tab is in the
- * tab order, so a keyboard user crosses five sections with two keystrokes.
- *
- * The one difference is that the list is passed in rather than module-level: an
- * admin sees two of these five, and a rail whose arrow keys walked onto a
- * section that is not rendered would be a trap.
- */
-function SectionRail({
-  sections,
-  active,
-  onSelect,
-  idFor,
-  panelId,
-}: {
-  sections: SectionDef[];
-  active: SectionId;
-  onSelect: (id: SectionId) => void;
-  idFor: (id: SectionId) => string;
-  panelId: string;
-}) {
-  const { t } = useTranslation();
-  const railRef = useRef<HTMLDivElement>(null);
-
-  function move(to: number) {
-    const index = (to + sections.length) % sections.length;
-    const next = sections[index]!;
-    onSelect(next.id);
-    const tabs =
-      railRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
-    tabs?.[index]?.focus();
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const current = sections.findIndex((section) => section.id === active);
-    switch (event.key) {
-      case "ArrowRight":
-      case "ArrowDown":
-        event.preventDefault();
-        move(current + 1);
-        break;
-      case "ArrowLeft":
-      case "ArrowUp":
-        event.preventDefault();
-        move(current - 1);
-        break;
-      case "Home":
-        event.preventDefault();
-        move(0);
-        break;
-      case "End":
-        event.preventDefault();
-        move(sections.length - 1);
-        break;
-      default:
-        break;
-    }
-  }
-
-  return (
-    <div
-      ref={railRef}
-      role="tablist"
-      aria-label={t("serverSettings.nav.label")}
-      onKeyDown={handleKeyDown}
-      className={cn(
-        // The phone strip scrolls sideways *inside the panel*. That is the only
-        // place sideways scrolling is allowed to exist here — the page itself
-        // must never move, which is what the 390px layout test measures.
-        "flex shrink-0 gap-1 overflow-x-auto border-b border-ink-4 px-3 py-2",
-        "sm:w-56 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-b-0 sm:border-r sm:px-3 sm:py-4",
-      )}
-    >
-      {sections.map((section) => {
-        const selected = section.id === active;
-        const Icon = section.icon;
-        return (
-          <button
-            key={section.id}
-            id={idFor(section.id)}
-            type="button"
-            role="tab"
-            aria-selected={selected}
-            aria-controls={panelId}
-            tabIndex={selected ? 0 : -1}
-            onClick={() => onSelect(section.id)}
-            className={cn(
-              "flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 sm:w-full",
-              selected
-                ? "bg-signal/12 font-medium text-paper"
-                : "text-paper-muted hover:bg-ink-3 hover:text-paper",
-              section.id === "danger" && !selected && "text-danger/80",
-            )}
-          >
-            <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-            {t(section.label)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 /** Heading for the pane, so a section always says what it is. */
 function SectionHeader({ section }: { section: SectionDef }) {
@@ -861,11 +750,17 @@ export function ServerSettingsDialog({
     >
       <div className="flex h-full min-h-0 flex-col sm:flex-row">
         <SectionRail
-          sections={sections}
+          sections={sections.map((section) => ({
+            id: section.id,
+            label: t(section.label),
+            icon: section.icon,
+            danger: section.id === "danger",
+          }))}
           active={active.id}
           onSelect={setSection}
           idFor={(id) => `${tabIdPrefix}-${id}`}
           panelId={panelId}
+          label={t("serverSettings.nav.label")}
         />
 
         <div

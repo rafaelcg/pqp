@@ -452,6 +452,11 @@ export function MembersPanel({
   const canBan = bits ? bits.ban : role === "owner" || role === "admin";
   const canTimeout = bits ? bits.timeout : role === "owner" || role === "admin";
   const canMute = bits ? bits.mute : role === "owner" || role === "admin";
+  const canMove = bits ? bits.move : role === "owner" || role === "admin";
+  const canMuteIn = (channelId: string) =>
+    bits?.canMuteIn(channelId) ?? canMute;
+  const canMoveIn = (channelId: string) =>
+    bits?.canMoveIn(channelId) ?? canMove;
   const canNick = bits ? bits.nicknames : role === "owner" || role === "admin";
   const canRoles = bits ? bits.manageRoles : role === "owner" || role === "admin";
   const timeoutByUser = new Map(timeouts.map((one) => [one.userId, one]));
@@ -990,8 +995,8 @@ export function MembersPanel({
         );
       }
       const voice = voiceByUser.get(member.id);
-      if (voice && (canTimeout || canMute)) {
-        if (canTimeout && voiceChannels.length > 1) {
+      if (voice && (canMoveIn(voice.channelId) || canMuteIn(voice.channelId))) {
+        if (canMoveIn(voice.channelId) && voiceChannels.length > 1) {
           actions.push({
             id: "voice-move",
             label: t("member.moveVoice"),
@@ -999,7 +1004,7 @@ export function MembersPanel({
               setPendingMove({ member, fromChannelId: voice.channelId }),
           });
         }
-        if (canMute) {
+        if (canMuteIn(voice.channelId)) {
           actions.push({
             id: "voice-mute",
             label: voice.serverMuted
@@ -1008,7 +1013,7 @@ export function MembersPanel({
             onSelect: () => void serverMuteVoice(member, !voice.serverMuted),
           });
         }
-        if (canTimeout) {
+        if (canMoveIn(voice.channelId)) {
           actions.push({
             id: "voice-disconnect",
             label: t("member.disconnectVoice", { channel: voice.channelName }),
