@@ -2538,6 +2538,7 @@ function MainAppContent({
       inputVolume: localSettings.inputVolume,
       startMuted: shouldJoinMuted(localSettings.muteOnJoin, occupantsAlreadyInRoom),
       inputMode: localSettings.inputMode,
+      vadThreshold: localSettings.vadThreshold,
       processing: localSettings.micProcessing,
     });
   }
@@ -2583,6 +2584,7 @@ function MainAppContent({
       inputVolume: localSettings.inputVolume,
       startMuted: localSettings.muteOnJoin,
       inputMode: localSettings.inputMode,
+      vadThreshold: localSettings.vadThreshold,
       processing: localSettings.micProcessing,
     };
     if (ring) {
@@ -2618,6 +2620,7 @@ function MainAppContent({
     // in, and switching it mid-call only flips `track.enabled`, so there is no
     // reason to defer it and no risk of interrupting anything.
     voice.setInputMode(next.inputMode);
+    voice.setVadThreshold(next.vadThreshold);
     if (
       next.inputDeviceId !== prevDeviceId &&
       voice.getState().status !== "idle"

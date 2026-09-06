@@ -64,7 +64,10 @@ import {
 import {
   createSpeakingTracker,
   createStreamAnalyser,
+  parseVadThreshold,
   readAnalyserLevel,
+  SPEAKING_HANGOVER_MS,
+  SPEAKING_THRESHOLD,
 } from "@/lib/voice-audio";
 import { playCue, stopAllSoundLoops, whenCueSettled } from "@/lib/sounds";
 
@@ -127,8 +130,9 @@ const TRANSPORT_FAILURE_KEY: Record<
 /**
  * How the microphone decides whether to transmit.
  *
- * - `voice-activity` — open whenever you are not muted. What this app has
- *   always done, and still the default.
+ * - `voice-activity` — open while the local speaking tracker is above the
+ *   sensitivity threshold (plus a short hold-open tail). Mute and deafen
+ *   still close it.
  * - `push-to-talk` — closed unless a key (or the hold button) is down.
  */
 export type VoiceInputMode = "voice-activity" | "push-to-talk";
@@ -142,6 +146,8 @@ export interface VoiceAudioOptions {
    */
   startMuted?: boolean;
   inputMode?: VoiceInputMode;
+  /** Local voice-activity sensitivity. Same 0..1 scale as the speaking tracker. */
+  vadThreshold?: number;
   processing?: MicProcessing;
 }
 
@@ -164,11 +170,11 @@ export interface VoiceState {
   inputMode: VoiceInputMode;
   /**
    * Whether audio is actually leaving this machine right now — the one thing
-   * a push-to-talk user needs to be able to check at a glance.
+   * a push-to-talk or voice-activity user needs to be able to check at a glance.
    *
-   * Derived, never set: `!muted && !deafened && (voice-activity || key held)`.
-   * The UI reads this rather than `isMuted` when it wants to say "you are
-   * live", because in push-to-talk those two answer different questions.
+   * Derived, never set: `!muted && !deafened && (voice-activity speaking ||
+   * key held)`. The UI reads this rather than `isMuted` when it wants to say
+   * "you are live", because those two answer different questions.
    */
   isTransmitting: boolean;
   error: string | null;
@@ -661,6 +667,17 @@ export function createVoiceController(transport: RealtimeTransport) {
     { analyser: AnalyserNode; dispose: () => void }
   >();
   const speakingTracker = createSpeakingTracker();
+  /**
+   * Own tracker for the transmit gate. The speaking-ring tracker above is
+   * shared with remote peers and must keep the fixed ring threshold; this one
+   * follows the person's sensitivity slider and its own hangover tail.
+   */
+  const voiceActivityTracker = createSpeakingTracker({
+    threshold: SPEAKING_THRESHOLD,
+    hangoverMs: SPEAKING_HANGOVER_MS,
+  });
+  let vadThreshold = SPEAKING_THRESHOLD;
+  let voiceActivityOpen = false;
   // Peers the server has told us are in *our* room. Signaling from anyone else
   // is dropped so a stray/cross-room offer can never open a mic connection.
   const knownPeerIds = new Set<string>();
@@ -833,6 +850,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         ringOnWelcomeChannelId = null;
         releaseCameraCapture();
         pushToTalkHeld = false;
+        voiceActivityOpen = false;
+        voiceActivityTracker.clear();
         state.isTransmitting = false;
         void teardownSfu();
         manager?.dispose();
@@ -879,6 +898,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     releaseScreenCapture();
     releaseCameraCapture();
     pushToTalkHeld = false;
+    voiceActivityOpen = false;
+    voiceActivityTracker.clear();
     state.isTransmitting = false;
     state.status = "idle";
     state.peerId = null;
@@ -922,8 +943,9 @@ export function createVoiceController(transport: RealtimeTransport) {
    * Everything that could close the mic is folded in here rather than at each
    * call site, so there is exactly one expression to get right — and so a mode
    * change, a mute, a deafen and a released key all funnel through the same
-   * recomputation. Mute and deafen outrank push-to-talk deliberately: holding
-   * the key while muted must not transmit, or the mute button would be a lie.
+   * recomputation. Mute and deafen outrank every input mode: holding the key
+   * or crossing the voice-activity line while muted must not transmit, or the
+   * mute button would be a lie.
    */
   function micShouldBeOpen(): boolean {
     // The rule outranks every choice below it: a held push-to-talk key or a
@@ -934,7 +956,50 @@ export function createVoiceController(transport: RealtimeTransport) {
     if (state.isDeafened || state.isMuted) {
       return false;
     }
-    return state.inputMode === "voice-activity" || pushToTalkHeld;
+    if (state.inputMode === "push-to-talk") {
+      return pushToTalkHeld;
+    }
+    return voiceActivityOpen;
+  }
+
+  function applyVadThreshold(value: number) {
+    vadThreshold = parseVadThreshold(value);
+    voiceActivityTracker.setThreshold(vadThreshold);
+  }
+
+  /**
+   * Voice activity has to keep hearing the capture to decide when to open.
+   * Mute, deafen and a missing SPEAK grant still cut the raw track.
+   */
+  function captureShouldStayLive(): boolean {
+    if (!state.canSpeak || state.isDeafened || state.isMuted) {
+      return false;
+    }
+    return state.inputMode === "voice-activity" || state.isTransmitting;
+  }
+
+  /**
+   * Read the local analyser and open or close the outgoing track.
+   *
+   * Called from the speaking loop so the gate and the speaking ring share one
+   * clock. Silence fails closed; a short hangover keeps the last syllable.
+   */
+  function syncVoiceActivityGate() {
+    if (state.inputMode !== "voice-activity") {
+      voiceActivityOpen = false;
+      return;
+    }
+    if (!pipeline || !state.canSpeak || state.isMuted || state.isDeafened) {
+      voiceActivityOpen = false;
+      voiceActivityTracker.update("local", 0, false);
+      return;
+    }
+    const level = readAnalyserLevel(pipeline.analyser);
+    voiceActivityOpen = voiceActivityTracker.update("local", level, true);
+    if (micShouldBeOpen() !== state.isTransmitting) {
+      applyMute();
+      emit();
+    }
   }
 
   /**
@@ -1005,8 +1070,9 @@ export function createVoiceController(transport: RealtimeTransport) {
     for (const track of pipeline.processedStream.getAudioTracks()) {
       track.enabled = state.isTransmitting;
     }
+    const captureLive = captureShouldStayLive();
     for (const track of pipeline.rawStream.getAudioTracks()) {
-      track.enabled = state.isTransmitting;
+      track.enabled = captureLive;
     }
   }
 
@@ -1123,6 +1189,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       speakingRaf = 0;
     }
     speakingTracker.clear();
+    voiceActivityTracker.clear();
+    voiceActivityOpen = false;
     if (state.speakingPeerIds.length > 0) {
       state.speakingPeerIds = [];
       emit();
@@ -1133,6 +1201,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     stopSpeakingLoop();
     const tick = () => {
       const next: string[] = [];
+      syncVoiceActivityGate();
       // `isTransmitting`, not `!isMuted`: in push-to-talk between presses the
       // mic is live and the analyser still reads a level, but nobody can hear
       // it. Lighting the speaking ring then would be the panel claiming you are
@@ -1642,6 +1711,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     releaseScreenCapture();
     releaseCameraCapture();
     pushToTalkHeld = false;
+    voiceActivityOpen = false;
+    voiceActivityTracker.clear();
     state = {
       status: "idle",
       peerId: null,
@@ -2179,7 +2250,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Never inherit a key held from before the join — there is no keyup owed
       // to us for a press that happened while we were not in a call.
       pushToTalkHeld = false;
+      voiceActivityOpen = false;
+      voiceActivityTracker.clear();
       state.inputMode = options?.inputMode ?? state.inputMode;
+      if (options?.vadThreshold !== undefined) {
+        applyVadThreshold(options.vadThreshold);
+      }
       state.isTransmitting = micShouldBeOpen();
       emit();
 
@@ -2881,10 +2957,27 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       state.inputMode = mode;
       // A key held while the mode changes is owed a keyup that may never be
-      // recognised as ours. Drop it and start closed.
+      // recognised as ours. Drop it and start closed. Voice activity starts
+      // closed too: the speaking loop reopens it on the next frame that is
+      // actually above the line.
       pushToTalkHeld = false;
+      voiceActivityOpen = false;
+      voiceActivityTracker.clear();
       applyMute();
       emit();
+    },
+
+    /**
+     * Sensitivity for voice-activity mode. Mid-call it only changes the
+     * tracker threshold — no recapture, no renegotiation.
+     */
+    setVadThreshold(threshold: number) {
+      const next = parseVadThreshold(threshold);
+      if (vadThreshold === next) {
+        return;
+      }
+      applyVadThreshold(next);
+      syncVoiceActivityGate();
     },
 
     /**

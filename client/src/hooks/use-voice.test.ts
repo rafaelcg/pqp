@@ -1897,7 +1897,8 @@ describe("speak permission", () => {
 
     voice.toggleMute();
     expect(voice.getState().isMuted).toBe(false);
-    expect(voice.getState().isTransmitting).toBe(true);
+    // Voice activity waits for a level above the gate; unmute is not a transmit.
+    expect(voice.getState().isTransmitting).toBe(false);
   });
 
   it("mutes and stops presenting when SPEAK is taken away mid-call", async () => {
@@ -1908,7 +1909,7 @@ describe("speak permission", () => {
     await settle();
     await voice.startScreenShare();
     expect(voice.getState().isSharingScreen).toBe(true);
-    expect(voice.getState().isTransmitting).toBe(true);
+    expect(voice.getState().isTransmitting).toBe(false);
 
     voice.handleSignaling({
       type: "voice-speak-changed",

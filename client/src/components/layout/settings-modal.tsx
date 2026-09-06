@@ -59,6 +59,10 @@ import {
 } from "@/components/voice/push-to-talk";
 import type { VoiceInputMode } from "@/hooks/use-voice";
 import {
+  parseVadThreshold,
+  SPEAKING_THRESHOLD,
+} from "@/lib/voice-audio";
+import {
   defaultMicProcessing,
   ensureCameraPermission,
   ensureMediaPermission,
@@ -146,6 +150,12 @@ export interface LocalSettings {
    * syncing it to a phone or a different layout is meaningless.
    */
   inputMode: VoiceInputMode;
+  /**
+   * Voice-activity sensitivity, 0..1 on the same scale as the speaking
+   * tracker. Device-local with `inputMode`: it describes this mic in this
+   * room, and `@pqp/shared` has no preference key for it yet.
+   */
+  vadThreshold: number;
   pushToTalkKey: KeyBinding;
   /** getUserMedia processing flags. Also pending a shared-schema key. */
   micProcessing: MicProcessing;
@@ -180,6 +190,7 @@ export const defaultLocalSettings: LocalSettings = {
   // Voice activity stays the default: it is what every existing user already
   // has, and push-to-talk is a choice people make, not one made for them.
   inputMode: "voice-activity",
+  vadThreshold: SPEAKING_THRESHOLD,
   pushToTalkKey: defaultPushToTalkBinding,
   micProcessing: defaultMicProcessing,
   // Auto, always. A default that pins a size would be a default that is wrong
@@ -219,6 +230,7 @@ export function loadLocalSettings(): LocalSettings {
           : defaultLocalSettings.outputDeviceId,
       inputMode:
         parsed.inputMode === "push-to-talk" ? "push-to-talk" : "voice-activity",
+      vadThreshold: parseVadThreshold(parsed.vadThreshold),
       // A binding that no longer parses — hand-edited storage, or a key this
       // build has since started refusing — falls back rather than leaving
       // push-to-talk bound to nothing and the user apparently mute.
@@ -562,6 +574,19 @@ function chipClass(selected: boolean): string {
 /* ------------------------------------------------------------------- voice */
 
 /**
+ * The live bar and the voice-activity line share this scale, so the marker
+ * sits on the same coordinates as the level the person is watching.
+ */
+function displayMicLevel(raw: number, volume: number): number {
+  return Math.min(1, raw * 1.8 * Math.max(0.15, volume));
+}
+
+function sliderToVadThreshold(percent: number, volume: number): number {
+  const scale = 1.8 * Math.max(0.15, volume);
+  return parseVadThreshold(percent / 100 / scale);
+}
+
+/**
  * Volume only scales how the level reads, so it is held in a ref: putting it in
  * the effect deps would tear down the preview stream and re-prompt
  * `getUserMedia` on every slider tick.
@@ -571,11 +596,16 @@ function MicLevelMeter({
   inputVolume,
   liveAnalyser,
   active,
+  threshold,
+  onThresholdChange,
 }: {
   deviceId: string;
   inputVolume: number;
   liveAnalyser: AnalyserNode | null;
   active: boolean;
+  /** When set, the meter also hosts the voice-activity sensitivity line. */
+  threshold?: number;
+  onThresholdChange?: (value: number) => void;
 }) {
   const { t } = useTranslation();
   const [level, setLevel] = useState(0);
@@ -607,7 +637,7 @@ function MicLevelMeter({
           sum += v;
         }
         const avg = sum / data.length / 255;
-        setLevel(Math.min(1, avg * 1.8 * Math.max(0.15, volumeRef.current)));
+        setLevel(displayMicLevel(avg, volumeRef.current));
         raf = requestAnimationFrame(tick);
       };
       tick();
@@ -656,25 +686,59 @@ function MicLevelMeter({
   }, [active, deviceId, liveAnalyser]);
 
   const label = t("settings.voice.inputLevel");
+  const gated = threshold !== undefined && onThresholdChange !== undefined;
+  const thresholdPct =
+    threshold !== undefined
+      ? Math.round(displayMicLevel(threshold, inputVolume) * 100)
+      : 0;
 
   return (
     <div className="space-y-1.5">
       <span className="block text-xs uppercase tracking-wide text-paper-muted">
-        {label}
+        {gated ? t("settings.voice.sensitivity") : label}
       </span>
-      <div
-        className="h-2 overflow-hidden rounded-full bg-ink"
-        role="progressbar"
-        aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(level * 100)}
-      >
+      <div className="relative h-2">
         <div
-          className="h-full rounded-full bg-signal transition-[width] duration-75"
-          style={{ width: `${Math.round(level * 100)}%` }}
-        />
+          className="h-2 overflow-hidden rounded-full bg-ink"
+          role="progressbar"
+          aria-label={label}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(level * 100)}
+        >
+          <div
+            className="h-full rounded-full bg-signal transition-[width] duration-75"
+            style={{ width: `${Math.round(level * 100)}%` }}
+          />
+        </div>
+        {gated && (
+          <>
+            <div
+              aria-hidden
+              className="pointer-events-none absolute top-[-3px] h-[14px] w-0.5 -translate-x-1/2 rounded-full bg-paper"
+              style={{ left: `${thresholdPct}%` }}
+            />
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={thresholdPct}
+              onChange={(e) =>
+                onThresholdChange?.(
+                  sliderToVadThreshold(Number(e.target.value), inputVolume),
+                )
+              }
+              className="absolute inset-0 h-2 w-full cursor-pointer opacity-0"
+              aria-label={t("settings.voice.sensitivity")}
+            />
+          </>
+        )}
       </div>
+      {gated && (
+        <span className="block text-xs text-paper-muted">
+          {t("settings.voice.sensitivityHint")}
+        </span>
+      )}
     </div>
   );
 }
@@ -824,6 +888,16 @@ function VoiceSection({
         inputVolume={draftLocal.inputVolume}
         liveAnalyser={voiceAnalyser}
         active={metering}
+        threshold={
+          draftLocal.inputMode === "voice-activity"
+            ? draftLocal.vadThreshold
+            : undefined
+        }
+        onThresholdChange={
+          draftLocal.inputMode === "voice-activity"
+            ? (vadThreshold) => patchLocal({ vadThreshold })
+            : undefined
+        }
       />
 
       <fieldset className="space-y-2">
