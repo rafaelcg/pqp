@@ -8,6 +8,7 @@ import {
   Video,
   VideoOff,
 } from "lucide-react";
+import { FeatureHint } from "@/components/layout/feature-hint";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { supportsScreenShare } from "@/components/voice/capabilities";
@@ -72,6 +73,8 @@ interface VoiceStatusBarProps {
   onToggleScreenShare?: () => void;
   onOpen: () => void;
   onLeave: () => void;
+  /** One-shot share / Watch party coachmark when the stage is not on screen. */
+  shareHintEnabled?: boolean;
 }
 
 const ACTION = "h-10 w-full shrink-0";
@@ -104,6 +107,7 @@ export function VoiceStatusBar({
   onToggleScreenShare,
   onOpen,
   onLeave,
+  shareHintEnabled = false,
 }: VoiceStatusBarProps) {
   const { t } = useTranslation();
   const connected = status === "connected";
@@ -130,6 +134,15 @@ export function VoiceStatusBar({
 
   return (
     <div className="border-t border-ink-4/60 bg-ink px-2 py-2">
+      {shareHintEnabled && (
+        <div className="mb-2">
+          <FeatureHint
+            id="watchParty"
+            enabled
+            body={t("featureHint.watchParty.strip")}
+          />
+        </div>
+      )}
       <div className="flex items-center gap-1.5">
         {connected ? (
           <span

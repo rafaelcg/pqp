@@ -13,6 +13,8 @@
  *  3. mobileBeta — phone browsers only; the campaign for the native apps
  *  4. whatsNew — Novidades now lives on the rail
  *  5. cargos — staff who can manage roles
+ *  6. shortcuts — Cmd+/ map; last, and skipped while an attached feature
+ *     hint is up (see `lib/feature-hints.ts`)
  */
 export const CORNER_HINT_ORDER = [
   "update",
@@ -20,6 +22,7 @@ export const CORNER_HINT_ORDER = [
   "mobileBeta",
   "whatsNew",
   "cargos",
+  "shortcuts",
 ] as const;
 export type CornerHintId = (typeof CORNER_HINT_ORDER)[number];
 
