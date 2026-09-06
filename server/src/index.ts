@@ -53,6 +53,11 @@ import {
 } from "./services/outgoing-webhooks.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
+  READY_PATH,
+  readyHandler,
+  startReadySampler,
+} from "./services/ready.js";
+import {
   getStatusSummary,
   pruneStatusSamples,
   recordStatusSamples,
@@ -158,6 +163,8 @@ async function serveStatic(
   return true;
 }
 
+const handleReady = readyHandler();
+
 const httpServer = createServer((req, res) => {
   void (async () => {
     const url = new URL(
@@ -167,6 +174,10 @@ const httpServer = createServer((req, res) => {
     const pathname = url.pathname;
 
     if (pathname === "/health") {
+      // FLY'S CHECK (fly.toml). Keep it exactly this shallow: one SELECT 1 and
+      // nothing else, because a dependency-aware answer here makes Fly restart
+      // the only machine on a Postgres blip. External monitors get /ready.
+      //
       // Report unhealthy if the DB is unreachable so the platform can restart /
       // route away instead of serving a process with a dead pool.
       try {
@@ -212,6 +223,14 @@ const httpServer = createServer((req, res) => {
         ...SECURITY_HEADERS,
       });
       res.end(JSON.stringify({ ok: verdict.ok }));
+      return;
+    }
+
+    if (pathname === READY_PATH) {
+      // The deep check for external monitors: Postgres, the pool's shape over
+      // time, LiveKit and storage when configured. 503 when any is not ok.
+      // Rate limit, timeouts and caches all live in services/ready.ts.
+      await handleReady(req, res);
       return;
     }
 
@@ -449,6 +468,11 @@ const STATUS_SAMPLE_INTERVAL_MS = 60_000;
 
 const statusLimiter = createRateLimiter({ capacity: 60, refillPerSecond: 1 });
 
+// Feeds /ready's "queued for more than 10 s" and "full for more than 30 s"
+// clocks once a second, so those windows mean continuous and not "seen at two
+// instants a minute apart".
+const stopReadySampler = startReadySampler();
+
 const statusSampler = setInterval(() => {
   void recordStatusSamples().catch((error) => {
     console.error("[status] sample failed:", error);
@@ -648,6 +672,7 @@ process.on("uncaughtException", (error) => {
 async function shutdown(signal: string) {
   console.log(`[shutdown] ${signal} — draining`);
   clearInterval(heartbeat);
+  stopReadySampler();
   clearInterval(rateLimitSweep);
   clearInterval(attachmentSweep);
   clearInterval(pendingDeletionSweep);

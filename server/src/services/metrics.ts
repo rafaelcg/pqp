@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { getPool } from "../db.js";
 import { runtimeSnapshot, type RuntimeMetrics } from "../lib/runtime.js";
+import { checkReady, type ReadyReport } from "./ready.js";
 import { getVoiceActivitySnapshot } from "../ws/voice.js";
 import {
   acquisitionReport,
@@ -73,6 +74,12 @@ export interface AdminMetrics {
    * pool's own counters); there is no query behind it. See lib/runtime.ts.
    */
   runtime: RuntimeMetrics;
+  /**
+   * The verdict `GET /ready` gives an external monitor, verbatim, so the
+   * dashboard and UptimeRobot never disagree. Not cached here: ready.ts
+   * bounds its own cost (one SELECT 1; remote probes cached for 30 s).
+   */
+  ready: ReadyReport;
   users: {
     total: number;
     last24h: number;
@@ -307,7 +314,7 @@ function hoursAgo(column: string): string {
  * Expressed as a type rather than as a convention on purpose: it makes it
  * impossible to accidentally compute the live block inside the cached one.
  */
-type CachedMetrics = Omit<AdminMetrics, "runtime">;
+type CachedMetrics = Omit<AdminMetrics, "runtime" | "ready">;
 
 async function computeAdminMetrics(): Promise<CachedMetrics> {
   const pool = getPool();
@@ -858,8 +865,8 @@ async function getCachedMetrics(): Promise<CachedMetrics> {
  * `runtime` block and start serving a stale one.
  */
 export async function getAdminMetrics(): Promise<AdminMetrics> {
-  const payload = await getCachedMetrics();
-  return { ...payload, runtime: runtimeSnapshot() };
+  const [payload, ready] = await Promise.all([getCachedMetrics(), checkReady()]);
+  return { ...payload, runtime: runtimeSnapshot(), ready };
 }
 
 /** Test hook: forget the cached payload. */
