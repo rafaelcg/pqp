@@ -108,6 +108,8 @@ vi.mock("@/lib/peer-connection-manager", () => ({
 const sfuScreenPublishes: (MediaStream | null)[] = [];
 /** Microphone publications the SFU stub was asked for. */
 const sfuMicPublishes: MediaStream[] = [];
+/** Every LiveKit publication mute the stub was asked for, in order. */
+const sfuMuteCalls: boolean[] = [];
 
 vi.mock("@/lib/livekit-session", () => ({
   connectLiveKit: vi.fn(async () => ({
@@ -115,7 +117,9 @@ vi.mock("@/lib/livekit-session", () => ({
       sfuMicPublishes.push(stream);
     },
     replaceTrack: async () => {},
-    setMuted: async () => {},
+    setMuted: async (muted: boolean) => {
+      sfuMuteCalls.push(muted);
+    },
     publishScreen: async (stream: MediaStream) => {
       sfuScreenPublishes.push(stream);
     },
@@ -358,6 +362,8 @@ describe("screen share audio", () => {
     managers.length = 0;
     stoppedTracks.length = 0;
     sfuScreenPublishes.length = 0;
+    sfuMicPublishes.length = 0;
+    sfuMuteCalls.length = 0;
     vi.mocked(connectLiveKit).mockClear();
   });
 
@@ -1078,6 +1084,8 @@ describe("lobby presence sounds", () => {
   beforeEach(() => {
     installBrowserStubs();
     managers.length = 0;
+    sfuMicPublishes.length = 0;
+    sfuMuteCalls.length = 0;
     playCueMock.mockReset();
     whenCueSettledMock.mockReset();
     whenCueSettledMock.mockImplementation(async () => {});
@@ -1481,6 +1489,78 @@ describe("lobby presence sounds", () => {
     expect(
       sent.some((m) => m.type === "set-voice-state" && m.muted === true),
     ).toBe(true);
+    expect(voice.getState().self?.muted).toBe(true);
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: other,
+      participants: [
+        {
+          ...welcome("mesh", [], other).self,
+          muted: false,
+          deafened: false,
+        },
+      ],
+    });
+    expect(voice.getState().isMuted).toBe(true);
+    expect(voice.getState().self?.muted).toBe(true);
+    expect(
+      voice.getState().occupancy[other]?.every((person) => person.muted),
+    ).toBe(true);
+  });
+
+  it("keeps mute on the SFU send path after a self-move, even when welcome says unmuted", async () => {
+    const other = "00000000-0000-4000-8000-0000000000ee";
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => sfuSession(), "livekit");
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("livekit"));
+    await settle();
+    voice.setMuted(true);
+    sfuMuteCalls.length = 0;
+    sfuMicPublishes.length = 0;
+
+    await voice.join(other, { startMuted: false });
+    expect(voice.getState().isMuted).toBe(true);
+
+    voice.handleSignaling(welcome("livekit", [], other));
+    await settle();
+
+    expect(voice.getState().isMuted).toBe(true);
+    expect(voice.getState().self?.muted).toBe(true);
+    for (const stream of sfuMicPublishes) {
+      for (const track of stream.getAudioTracks()) {
+        expect(track.enabled).toBe(false);
+      }
+    }
+    expect(sfuMuteCalls).not.toContain(false);
+    expect(sfuMuteCalls.some((muted) => muted === true)).toBe(true);
+  });
+
+  it("lets you unmute after a muted room switch", async () => {
+    const other = "00000000-0000-4000-8000-0000000000ee";
+    const voice = createVoiceController(createTransport().transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    voice.setMuted(true);
+    await voice.join(other, { startMuted: false });
+    voice.handleSignaling(welcome("mesh", [], other));
+    await settle();
+    voice.setMuted(false);
+    expect(voice.getState().isMuted).toBe(false);
+    voice.handleSignaling({
+      type: "voice-roster",
+      voiceChannelId: other,
+      participants: [
+        {
+          ...welcome("mesh", [], other).self,
+          muted: false,
+          deafened: false,
+        },
+      ],
+    });
+    expect(voice.getState().isMuted).toBe(false);
   });
 
   it("keeps deafen across a room switch", async () => {
@@ -1892,6 +1972,7 @@ describe("speak permission", () => {
     stoppedTracks.length = 0;
     sfuScreenPublishes.length = 0;
     sfuMicPublishes.length = 0;
+    sfuMuteCalls.length = 0;
     vi.mocked(connectLiveKit).mockClear();
   });
 
