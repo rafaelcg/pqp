@@ -108,6 +108,7 @@ interface PqpDesktop {
   isElectron: true;
   hasCustomTitleBar: boolean;
   onToggleMute(cb: () => void): () => void;
+  onToggleDeafen?(cb: () => void): () => void;
   onDeepLink(cb: (appPath: string) => void): () => void;
   getPendingDeepLink(): Promise<string | null>;
 }
@@ -119,7 +120,7 @@ declare global {
 }
 ```
 
-Mute accelerator: **Cmd/Ctrl+Shift+M** (View → Toggle Mute). The client toggles mute when connected to a voice channel.
+Mute accelerator: **Cmd/Ctrl+Shift+M** (View → Toggle Mute). Deafen: **Cmd/Ctrl+Shift+D**. The client toggles when connected to a voice channel. Remapped chords live in the renderer; the menu keeps the Discord defaults.
 
 ## Deep links (`pqp://`)
 

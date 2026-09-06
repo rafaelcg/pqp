@@ -153,12 +153,14 @@ export function isTextEntryTarget(target: unknown): boolean {
 }
 
 /**
- * Does this keydown match the binding *and* land somewhere it is allowed to?
+ * Does this keydown match the binding's code and chord?
  *
- * Every clause is a reason someone would otherwise have been transmitting
- * without meaning to.
+ * Ignores the event target. Auto-repeat and IME composition still fail.
+ * Push-to-talk adds the text-entry trap on top via `shouldEngage`. App
+ * shortcuts reuse this so Cmd/Ctrl chords can fire while the composer is
+ * focused without opening the mic on a letter.
  */
-export function shouldEngage(
+export function matchesBinding(
   event: KeyEventLike,
   binding: KeyBinding,
 ): boolean {
@@ -169,9 +171,6 @@ export function shouldEngage(
   }
   // Mid-IME composition: every keystroke is going into the candidate window.
   if (event.isComposing) {
-    return false;
-  }
-  if (isTextEntryTarget(event.target)) {
     return false;
   }
   if (event.code !== binding.code) {
@@ -188,6 +187,22 @@ export function shouldEngage(
     event.shiftKey === binding.shift &&
     event.metaKey === binding.meta
   );
+}
+
+/**
+ * Does this keydown match the binding *and* land somewhere it is allowed to?
+ *
+ * Every clause is a reason someone would otherwise have been transmitting
+ * without meaning to.
+ */
+export function shouldEngage(
+  event: KeyEventLike,
+  binding: KeyBinding,
+): boolean {
+  if (isTextEntryTarget(event.target)) {
+    return false;
+  }
+  return matchesBinding(event, binding);
 }
 
 /**

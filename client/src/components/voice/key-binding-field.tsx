@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Keyboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -8,11 +8,14 @@ import {
   isModifierCode,
   type KeyBinding,
 } from "@/components/voice/push-to-talk";
+import { useTranslation } from "@/lib/i18n";
 
 interface KeyBindingFieldProps {
   binding: KeyBinding;
   onChange: (binding: KeyBinding) => void;
   label: string;
+  /** Label of the row that already owns this chord, if any. */
+  takenBy?: (binding: KeyBinding) => string | null;
 }
 
 /**
@@ -33,9 +36,15 @@ export function KeyBindingField({
   binding,
   onChange,
   label,
+  takenBy,
 }: KeyBindingFieldProps) {
+  const { t } = useTranslation();
   const [capturing, setCapturing] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
+  const takenByRef = useRef(takenBy);
+  const tRef = useRef(t);
+  takenByRef.current = takenBy;
+  tRef.current = t;
 
   useEffect(() => {
     if (!capturing) {
@@ -65,9 +74,13 @@ export function KeyBindingField({
 
       const outcome = captureBinding(event);
       if (!outcome.ok) {
-        setRefused(
-          "That key is reserved — Tab, Enter, Escape and Backspace stay with the app.",
-        );
+        setRefused(tRef.current("keyBinding.refused"));
+        return;
+      }
+      const taken = takenByRef.current?.(outcome.binding);
+      if (taken) {
+        setRefused(tRef.current("keyBinding.conflict", { action: taken }));
+        setCapturing(false);
         return;
       }
       setRefused(null);
@@ -82,9 +95,16 @@ export function KeyBindingField({
         return;
       }
       pendingModifier = null;
+      const next = captureModifier(event);
+      const taken = takenByRef.current?.(next);
+      if (taken) {
+        setRefused(tRef.current("keyBinding.conflict", { action: taken }));
+        setCapturing(false);
+        return;
+      }
       setRefused(null);
       setCapturing(false);
-      onChange(captureModifier(event));
+      onChange(next);
     }
 
     window.addEventListener("keydown", onKeyDown, true);
@@ -95,6 +115,10 @@ export function KeyBindingField({
     };
   }, [capturing, onChange]);
 
+  useEffect(() => {
+    setRefused(null);
+  }, [binding]);
+
   return (
     <div className="space-y-1.5">
       <span className="block text-xs uppercase tracking-wide text-paper-muted">
@@ -103,10 +127,11 @@ export function KeyBindingField({
       <Button
         type="button"
         variant="secondary"
-        className="w-full justify-start font-mono"
+        className="h-auto min-h-9 w-full justify-start whitespace-normal font-mono"
         aria-live="polite"
         // The pressed state is what tells a screen reader the field is armed
         // and swallowing keys, which is otherwise invisible.
+        data-key-binding-field=""
         aria-pressed={capturing}
         onClick={() => {
           setRefused(null);
@@ -117,7 +142,7 @@ export function KeyBindingField({
         onBlur={() => setCapturing(false)}
       >
         <Keyboard className="h-4 w-4 shrink-0" aria-hidden="true" />
-        {capturing ? "Press any key… (Esc cancels)" : formatBinding(binding)}
+        {capturing ? t("keyBinding.press") : formatBinding(binding)}
       </Button>
       {refused && (
         <p role="status" className="text-xs text-warning">
