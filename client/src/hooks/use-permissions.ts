@@ -85,5 +85,17 @@ export function usePermissions(serverId: string | null) {
     [channelBits, serverBits],
   );
 
-  return { can, version, serverBits, refresh };
+  const canAny = useCallback(
+    (bit: PermissionBit | bigint) => {
+      if (hasPermission(serverBits, bit)) {
+        return true;
+      }
+      return Object.values(channelBits).some((mask) =>
+        hasPermission(mask, bit),
+      );
+    },
+    [channelBits, serverBits],
+  );
+
+  return { can, canAny, version, serverBits, refresh };
 }

@@ -153,7 +153,7 @@ import {
   isVoiceRegistryEnabled,
   readVoiceRoomTransport,
 } from "../voice/registry.js";
-import { resolveCanSpeak } from "../voice/speak.js";
+import { resolveVoicePublish } from "../voice/speak.js";
 import {
   createDesktopSignInToken,
   invalidateUserCache,
@@ -1837,7 +1837,7 @@ router.post("/api/voice/token", async ({ req, user }) => {
   const channel = await requireChannelAccess(body.voiceChannelId, user.id);
   // Resolved at mint time, not copied from the join: a role edit between the
   // two must land in the token. The SFU only ever consults the grant.
-  const canSpeak = await resolveCanSpeak(
+  const { canSpeak, canStream } = await resolveVoicePublish(
     channel,
     body.voiceChannelId,
     user.id,
@@ -1865,7 +1865,7 @@ router.post("/api/voice/token", async ({ req, user }) => {
       body.peerId,
       displayName,
       user.id,
-      { canSpeak },
+      { canSpeak, canStream },
     );
   } catch (error) {
     console.error("[voice] token minting failed:", error);
@@ -4877,11 +4877,13 @@ async function requireVoiceModeration(
   actorId: string,
   targetUserId: string,
   action: "disconnect" | "move" | "mute",
+  voiceChannelId: string,
 ): Promise<void> {
   await requirePermission(
     serverId,
     actorId,
-    action === "mute" ? Permission.MUTE_MEMBERS : Permission.MODERATE_MEMBERS,
+    action === "mute" ? Permission.MUTE_MEMBERS : Permission.MOVE_MEMBERS,
+    voiceChannelId,
   );
   if (targetUserId === actorId) {
     throw new HttpError(400, "Use the leave button on yourself");
@@ -4900,8 +4902,14 @@ async function requireVoiceModeration(
 router.post(
   "/api/servers/:serverId/members/:userId/voice-disconnect",
   async ({ user }, { serverId, userId }) => {
-    await requireVoiceModeration(serverId!, user.id, userId!, "disconnect");
     const voiceChannelId = await requireVoiceTarget(serverId!, userId!);
+    await requireVoiceModeration(
+      serverId!,
+      user.id,
+      userId!,
+      "disconnect",
+      voiceChannelId,
+    );
 
     await logAudit({
       serverId: serverId!,
@@ -4944,8 +4952,15 @@ const voiceMoveSchema = z.object({ channelId: z.string().uuid() });
 router.post(
   "/api/servers/:serverId/members/:userId/voice-move",
   async ({ req, user }, { serverId, userId }) => {
-    await requireVoiceModeration(serverId!, user.id, userId!, "move");
     const body = voiceMoveSchema.parse(await readJsonBody(req));
+    const fromChannelId = await requireVoiceTarget(serverId!, userId!);
+    await requireVoiceModeration(
+      serverId!,
+      user.id,
+      userId!,
+      "move",
+      fromChannelId,
+    );
 
     const destination = await requireServerChannel(body.channelId);
     if (destination.server_id !== serverId) {
@@ -4965,7 +4980,6 @@ router.post(
       throw new Forbidden("They don't have access to that channel");
     }
 
-    const fromChannelId = await requireVoiceTarget(serverId!, userId!);
     if (fromChannelId === body.channelId) {
       throw new HttpError(400, "They are already in that channel");
     }
@@ -5009,9 +5023,15 @@ const voiceMuteSchema = z.object({ muted: z.boolean() });
 router.post(
   "/api/servers/:serverId/members/:userId/voice-mute",
   async ({ req, user }, { serverId, userId }) => {
-    await requireVoiceModeration(serverId!, user.id, userId!, "mute");
     const body = voiceMuteSchema.parse(await readJsonBody(req));
     const voiceChannelId = await requireVoiceTarget(serverId!, userId!);
+    await requireVoiceModeration(
+      serverId!,
+      user.id,
+      userId!,
+      "mute",
+      voiceChannelId,
+    );
 
     if (getRoomTransport(voiceChannelId) !== "livekit") {
       throw new HttpError(

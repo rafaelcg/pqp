@@ -5,7 +5,7 @@ import {
   useSignIn,
   useUser,
 } from "@clerk/clerk-react";
-import { Lock, Menu, Phone, Pin, Settings, Shield, Users, Video } from "lucide-react";
+import { Lock, Menu, Phone, Pin, Settings, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -44,9 +44,10 @@ import {
 } from "@/components/layout/app-loading-shell";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { ChannelList } from "@/components/layout/channel-list";
-import { ChannelMembersPanel } from "@/components/layout/channel-members-panel";
-import { WebhooksPanel } from "@/components/layout/webhooks-panel";
-import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
+import {
+  ChannelSettingsDialog,
+  type ChannelSettingsSectionId,
+} from "@/components/layout/channel-settings-dialog";
 import { DmCallStage } from "@/components/dm/dm-call-stage";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
@@ -957,9 +958,11 @@ function MainAppContent({
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [pinsOpen, setPinsOpen] = useState(false);
-  const [channelMembersChannel, setChannelMembersChannel] =
-    useState<Channel | null>(null);
-  const [webhooksChannel, setWebhooksChannel] = useState<Channel | null>(null);
+  const [channelSettings, setChannelSettings] = useState<{
+    channelId: string;
+    section: ChannelSettingsSectionId;
+    forceAdvanced: boolean;
+  } | null>(null);
   const [channelPrompt, setChannelPrompt] = useState<ChannelPromptState | null>(
     null,
   );
@@ -969,9 +972,6 @@ function MainAppContent({
   const [pendingLeaveServerId, setPendingLeaveServerId] = useState<
     string | null
   >(null);
-  const [channelMetaChannel, setChannelMetaChannel] = useState<Channel | null>(
-    null,
-  );
   const [composerInsert, setComposerInsert] = useState<string | null>(null);
   const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
@@ -1626,9 +1626,14 @@ function MainAppContent({
       kick: perms.can(Permission.KICK_MEMBERS),
       ban: perms.can(Permission.BAN_MEMBERS),
       timeout: perms.can(Permission.MODERATE_MEMBERS),
-      mute: perms.can(Permission.MUTE_MEMBERS),
+      mute: perms.canAny(Permission.MUTE_MEMBERS),
+      move: perms.canAny(Permission.MOVE_MEMBERS),
       nicknames: perms.can(Permission.MANAGE_NICKNAMES),
       manageRoles: perms.can(Permission.MANAGE_ROLES),
+      canMuteIn: (channelId: string) =>
+        perms.can(Permission.MUTE_MEMBERS, channelId),
+      canMoveIn: (channelId: string) =>
+        perms.can(Permission.MOVE_MEMBERS, channelId),
     }),
     [perms],
   );
@@ -1637,6 +1642,7 @@ function MainAppContent({
     moderationBits.ban ||
     moderationBits.timeout ||
     moderationBits.mute ||
+    moderationBits.move ||
     moderationBits.nicknames ||
     moderationBits.manageRoles;
 
@@ -2727,7 +2733,11 @@ function MainAppContent({
         if (channel.type !== "category") {
           await selectChannel(channel.id);
           if (channel.isPrivate) {
-            setChannelMembersChannel(channel);
+            setChannelSettings({
+              channelId: channel.id,
+              section: "permissions",
+              forceAdvanced: false,
+            });
           }
         }
         return;
@@ -2746,23 +2756,6 @@ function MainAppContent({
     } catch (error) {
       setAppError(
         error instanceof Error ? error.message : "Channel action failed",
-      );
-    }
-  }
-
-  async function handleTogglePrivate(channel: Channel) {
-    try {
-      const { channel: updated } = await updateChannel(channel.id, {
-        isPrivate: !channel.isPrivate,
-      });
-      setChannels((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
-      if (updated.isPrivate) {
-        setChannelMembersChannel(updated);
-      }
-      setAppError(null);
-    } catch (error) {
-      setAppError(
-        error instanceof Error ? error.message : "Failed to update channel",
       );
     }
   }
@@ -4268,36 +4261,23 @@ function MainAppContent({
               <Pin className="h-4 w-4" />
             </button>
           </Tooltip>
-          {canManageChannels && selectedChannel.kind === "server" && (
+          {(canManageChannels || canManageRoles) &&
+            selectedChannel.kind === "server" && (
             <Tooltip label={t("chrome.channelSettings")}>
               <button
                 type="button"
                 className={HEADER_ACTION_TILE}
-                onClick={() => setChannelMetaChannel(selectedChannel)}
+                data-channel-header-settings=""
+                aria-label={t("chrome.channelSettings")}
+                onClick={() =>
+                  setChannelSettings({
+                    channelId: selectedChannel.id,
+                    section: canManageChannels ? "overview" : "permissions",
+                    forceAdvanced: false,
+                  })
+                }
               >
                 <Settings className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
-          {(canManageRoles || (canManageChannels && selectedChannel.isPrivate)) &&
-            selectedChannel.kind === "server" && (
-            <Tooltip
-              label={
-                selectedChannel.isPrivate
-                  ? t("chrome.access")
-                  : t("channelPerms.title")
-              }
-            >
-              <button
-                type="button"
-                className={HEADER_ACTION_TILE}
-                onClick={() => setChannelMembersChannel(selectedChannel)}
-              >
-                {selectedChannel.isPrivate ? (
-                  <Lock className="h-4 w-4" />
-                ) : (
-                  <Shield className="h-4 w-4" />
-                )}
               </button>
             </Tooltip>
           )}
@@ -4826,7 +4806,13 @@ function MainAppContent({
           onRenameChannel={(channel) =>
             setChannelPrompt({ mode: "rename", channel })
           }
-          onEditChannelMeta={setChannelMetaChannel}
+          onOpenChannelSettings={(channel, section, options) =>
+            setChannelSettings({
+              channelId: channel.id,
+              section,
+              forceAdvanced: options?.forceAdvanced ?? false,
+            })
+          }
           onDeleteChannel={(id) => void handleDeleteChannel(id)}
           onMoveChannel={(id, parentId, index) =>
             void handleMoveChannel(id, parentId, index)
@@ -4840,9 +4826,6 @@ function MainAppContent({
               : []
           }
           onFavoriteChannelIdsChange={handleFavoriteChannelIdsChange}
-          onTogglePrivate={(ch) => void handleTogglePrivate(ch)}
-          onManageChannelMembers={setChannelMembersChannel}
-          onManageWebhooks={setWebhooksChannel}
           onInvite={() => setInviteMode("create")}
           onOpenMembers={() => setMembersOpen(true)}
           onOpenServerSettings={() => setServerSettingsOpen(true)}
@@ -5359,24 +5342,25 @@ function MainAppContent({
         }}
       />
 
-      <ChannelMembersPanel
-        open={channelMembersChannel !== null}
-        channelId={channelMembersChannel?.id ?? null}
-        channelName={channelMembersChannel?.name ?? null}
-        channelType={channelMembersChannel?.type ?? "text"}
-        isPrivate={channelMembersChannel?.isPrivate ?? false}
+      <ChannelSettingsDialog
+        open={channelSettings !== null}
+        channel={
+          channelSettings
+            ? (channels.find((c) => c.id === channelSettings.channelId) ?? null)
+            : null
+        }
+        requestedSection={channelSettings?.section ?? "overview"}
+        forceAdvanced={channelSettings?.forceAdvanced ?? false}
         serverId={selectedServerId}
         roles={serverRoles}
+        canManageChannels={canManageChannels}
         canManageRoles={canManageRoles}
-        canManageAccess={canManageChannels}
-        onClose={() => setChannelMembersChannel(null)}
-      />
-
-      <WebhooksPanel
-        open={webhooksChannel !== null}
-        channelId={webhooksChannel?.id ?? null}
-        channelName={webhooksChannel?.name ?? null}
-        onClose={() => setWebhooksChannel(null)}
+        onClose={() => setChannelSettings(null)}
+        onChannelUpdated={(updated) => {
+          setChannels((prev) =>
+            prev.map((c) => (c.id === updated.id ? updated : c)),
+          );
+        }}
       />
 
       <PinnedMessagesPanel
@@ -5482,25 +5466,6 @@ function MainAppContent({
           <CallRatingPrompt call={ratableCall} onDone={dismissCallRating} />
         </div>
       )}
-
-      <ChannelMetaDialog
-        open={channelMetaChannel !== null}
-        channel={channelMetaChannel}
-        onClose={() => setChannelMetaChannel(null)}
-        onSave={async (updates) => {
-          if (!channelMetaChannel) {
-            return;
-          }
-          const { channel } = await updateChannel(
-            channelMetaChannel.id,
-            updates,
-          );
-          setChannels((prev) =>
-            prev.map((c) => (c.id === channel.id ? channel : c)),
-          );
-          setChannelMetaChannel(null);
-        }}
-      />
 
       {/* Last dialog so the map stacks above Settings (and Esc hits this layer). */}
       <ShortcutOverlay
