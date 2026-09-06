@@ -1925,7 +1925,14 @@ describe("speak permission", () => {
 
     voice.setMuted(false);
     expect(voice.getState().isMuted).toBe(false);
+    // The microphone is still this person's to open. Voice activity is the
+    // default input mode and its gate only opens on sound, so push-to-talk is
+    // what shows the Stream refusal did not reach the mic.
+    voice.setInputMode("push-to-talk");
+    voice.setPushToTalkActive(true);
     expect(voice.getState().isTransmitting).toBe(true);
+    voice.setPushToTalkActive(false);
+    voice.setInputMode("voice-activity");
 
     await voice.startScreenShare();
     expect(displayMediaCalls).toHaveLength(0);
