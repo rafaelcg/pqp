@@ -5,7 +5,7 @@ import {
   showsVoiceRoomSize,
   toVoiceRoomSizeOption,
   validateChannelIconInput,
-} from "./channel-meta-dialog";
+} from "@/lib/channel-meta";
 
 describe("validateChannelIconInput", () => {
   it("accepts an empty value — clearing the icon", () => {

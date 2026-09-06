@@ -171,10 +171,16 @@ export interface VoiceState {
    * Whether the room's rules let this person talk: `Permission.SPEAK`, as the
    * server resolved it for this channel. Unlike `isMuted` it is not a choice.
    * False means: joined muted, the unmute control is locked, push-to-talk
-   * does not open the mic, and share and camera are off the table. Flips
-   * mid-call on `voice-speak-changed`. Always true in a conversation call.
+   * does not open the mic. Flips mid-call on `voice-speak-changed`. Always
+   * true in a conversation call.
    */
   canSpeak: boolean;
+  /**
+   * Whether the room's rules let this person present: `Permission.STREAM`.
+   * False hides camera and screen share. Absent on an older server is
+   * treated as `canSpeak`.
+   */
+  canStream: boolean;
   inputMode: VoiceInputMode;
   /**
    * Whether audio is actually leaving this machine right now — the one thing
@@ -754,6 +760,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     isMuted: false,
     isDeafened: false,
     canSpeak: true,
+    canStream: true,
     inputMode: "voice-activity",
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
     isTransmitting: false,
@@ -1073,28 +1080,62 @@ export function createVoiceController(transport: RealtimeTransport) {
    * `true` after `false` unlocks the controls and publishes the mic muted,
    * leaving the unmute to the person.
    */
-  function applySpeakRule(canSpeak: boolean, source: "welcome" | "change") {
-    const was = state.canSpeak;
+  function applyPublishRules(
+    canSpeak: boolean,
+    canStream: boolean,
+    source: "welcome" | "change",
+  ) {
+    const wasSpeak = state.canSpeak;
+    const wasStream = state.canStream;
     state.canSpeak = canSpeak;
+    state.canStream = canStream;
     if (!canSpeak) {
       state.isMuted = true;
       applyMute();
+    }
+    if (!canStream) {
       if (screenCaptureStream) {
         void stopScreenShareInternal();
       }
       if (cameraCaptureStream) {
         void stopCameraInternal();
       }
-      if (was || source === "welcome") {
+    }
+    if (source === "welcome") {
+      if (!canSpeak) {
         state.notice = translateMessage("voice.notice.speakDenied");
+      } else if (!canStream) {
+        state.notice = translateMessage("voice.notice.streamDenied");
       }
       return;
     }
-    if (!was && source === "change") {
+    if (wasSpeak && !canSpeak) {
+      state.notice = translateMessage("voice.notice.speakDenied");
+      return;
+    }
+    if (!wasSpeak && canSpeak) {
       applyMute();
       state.notice = translateMessage("voice.notice.speakGranted");
       void publishMicWhenAllowed();
+      return;
     }
+    if (wasStream && !canStream) {
+      state.notice = translateMessage("voice.notice.streamDenied");
+      return;
+    }
+    if (!wasStream && canStream) {
+      state.notice = translateMessage("voice.notice.streamGranted");
+    }
+  }
+
+  function publishFlagsFrom(message: {
+    canSpeak?: boolean;
+    canStream?: boolean;
+    self?: { canSpeak?: boolean; canStream?: boolean };
+  }): { canSpeak: boolean; canStream: boolean } {
+    const canSpeak = message.canSpeak ?? message.self?.canSpeak ?? true;
+    const canStream = message.canStream ?? message.self?.canStream ?? canSpeak;
+    return { canSpeak, canStream };
   }
 
   function applyMuteToPipeline() {
@@ -1878,6 +1919,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       isMuted: false,
       isDeafened: false,
       canSpeak: true,
+      canStream: true,
       inputMode: state.inputMode,
       isTransmitting: false,
       error: null,
@@ -2034,8 +2076,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.self = message.self;
           state.roomTransport = roomTransport;
           state.status = "connected";
-          applySpeakRule(
-            message.canSpeak ?? message.self.canSpeak ?? true,
+          applyPublishRules(
+            publishFlagsFrom(message).canSpeak,
+            publishFlagsFrom(message).canStream,
             "change",
           );
           for (const peer of welcomePeers) {
@@ -2068,8 +2111,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.transportFailure = null;
         // Before any media is built, so a listener's SFU session never tries
         // to publish and a mesh listener's track starts disabled.
-        applySpeakRule(
-          message.canSpeak ?? message.self.canSpeak ?? true,
+        applyPublishRules(
+          publishFlagsFrom(message).canSpeak,
+          publishFlagsFrom(message).canStream,
           "welcome",
         );
 
@@ -2183,7 +2227,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         ) {
           return;
         }
-        applySpeakRule(message.canSpeak, "change");
+        applyPublishRules(
+          message.canSpeak,
+          message.canStream ?? message.canSpeak,
+          "change",
+        );
         emit();
         break;
       case "peer-joined": {
@@ -2640,8 +2688,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       // Presenting is speaking. The button is hidden for a listener; this is
       // for the keyboard shortcut and the desktop menu.
-      if (!state.canSpeak) {
-        state.notice = translateMessage("voice.notice.speakDenied");
+      if (!state.canStream) {
+        state.notice = translateMessage("voice.notice.streamDenied");
         emit();
         return;
       }
@@ -2897,8 +2945,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
-      if (!state.canSpeak) {
-        state.notice = translateMessage("voice.notice.speakDenied");
+      if (!state.canStream) {
+        state.notice = translateMessage("voice.notice.streamDenied");
         emit();
         return;
       }

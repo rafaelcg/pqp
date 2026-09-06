@@ -11,9 +11,16 @@ export const CHANNEL_OVERWRITE_BITS_TEXT = [
   "MANAGE_MESSAGES",
 ] as const satisfies readonly PermissionFlagKey[];
 
+/**
+ * Channel editor only: who can be here and who can talk or present.
+ * Mute and Move stay on Cargos. The server still honours a channel
+ * overwrite for those bits if one exists (import or API).
+ */
 export const CHANNEL_OVERWRITE_BITS_VOICE = [
   "VIEW_CHANNEL",
   "CONNECT",
+  "SPEAK",
+  "STREAM",
 ] as const satisfies readonly PermissionFlagKey[];
 
 export type OverwriteState = "allow" | "inherit" | "deny";

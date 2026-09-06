@@ -1,3 +1,4 @@
+import { AtSign, Bell, BellOff, Undo2, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useNavigate } from "react-router-dom";
 import type { Channel } from "@pqp/shared";
@@ -73,16 +74,20 @@ export function useChannelNotificationLevel(
   };
 }
 
-const LEVEL_LABELS: { level: NotificationLevel; key: "notify.level.all" | "notify.level.mentions" | "notify.level.none" }[] = [
-  { level: "all", key: "notify.level.all" },
-  { level: "mentions", key: "notify.level.mentions" },
-  { level: "none", key: "notify.level.none" },
+const LEVEL_LABELS: {
+  level: NotificationLevel;
+  key: "notify.level.all" | "notify.level.mentions" | "notify.level.none";
+  icon: LucideIcon;
+}[] = [
+  { level: "all", key: "notify.level.all", icon: Bell },
+  { level: "mentions", key: "notify.level.mentions", icon: AtSign },
+  { level: "none", key: "notify.level.none", icon: BellOff },
 ];
 
 /**
  * The notification block shared by the channel and server context menus.
  *
- * The menu primitive has no checked state, so the active level is marked in the
+ * The active level is a tick on the right (`checked`), not a glyph in the
  * label. `inherits` names what "Reset" would fall back to, which is the only
  * way to tell a channel explicitly set to "All" from one that merely follows a
  * server that is.
@@ -94,20 +99,24 @@ export function notificationLevelItems(
 ): ContextMenuItemDef[] {
   const items: ContextMenuItemDef[] = [
     { id: `${prefix}-sep`, label: "", separator: true },
-    { id: `${prefix}-heading`, label: translateMessage("notify.menu.heading"), disabled: true },
-    ...LEVEL_LABELS.map(({ level: value, key }) => {
-      const label = translateMessage(key);
-      return {
-        id: `${prefix}-${value}`,
-        label: value === level ? `${label} ✓` : label,
-        onSelect: () => setLevel(value),
-      };
-    }),
+    {
+      id: `${prefix}-heading`,
+      label: translateMessage("notify.menu.heading"),
+      disabled: true,
+    },
+    ...LEVEL_LABELS.map(({ level: value, key, icon }) => ({
+      id: `${prefix}-${value}`,
+      label: translateMessage(key),
+      icon,
+      checked: value === level,
+      onSelect: () => setLevel(value),
+    })),
   ];
   if (overridden && inherits) {
     items.push({
       id: `${prefix}-reset`,
       label: translateMessage("notify.menu.reset", { inherits }),
+      icon: Undo2,
       onSelect: () => setLevel(null),
     });
   }

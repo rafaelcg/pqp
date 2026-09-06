@@ -1,7 +1,8 @@
-import { RoomServiceClient, TrackType } from "livekit-server-sdk";
+import { RoomServiceClient, TrackSource, TrackType } from "livekit-server-sdk";
 import { logEvent } from "../lib/log.js";
 import {
   isLiveKitConfigured,
+  liveKitPublishGrant,
   mintedAtFromParticipantMetadata,
   TOKEN_TTL_SECONDS,
   userIdFromParticipantMetadata,
@@ -542,15 +543,12 @@ export async function setSfuUserMuted(
  *
  * `updateParticipant` rewrites the LiveKit permission set atomically, so every
  * field is stated (the SDK note says as much: partial means "the rest become
- * false"). Revoking `canPublish` makes the SFU unpublish the participant's
- * tracks itself and refuse the next publish, whatever the client does, which
- * is what makes this a rule rather than a request. A minted token is not
- * consulted again after connect, so this is also the only way to change the
- * grant without a reconnect; granting works the same way, and the client
- * publishes its mic as soon as it is told.
+ * false"). Revoking publish on a source makes the SFU refuse the next publish
+ * of that source. A minted token is not consulted again after connect, so this
+ * is also the only way to change the grant without a reconnect.
  *
- * Belt and braces on revoke: every published track is also muted first, so
- * a LiveKit build that unpublishes lazily still goes quiet at once.
+ * Belt and braces on revoke: tracks the person may no longer publish are muted
+ * first, so a LiveKit build that unpublishes lazily still goes quiet at once.
  *
  * Same contract as `setSfuUserMuted`: never rejects, fails open on a
  * participant it cannot identify, returns true when at least one participant
@@ -560,13 +558,14 @@ export async function setSfuUserMuted(
 export async function setSfuUserCanPublish(
   room: string,
   userId: string,
-  canPublish: boolean,
+  grant: { canSpeak: boolean; canStream: boolean },
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<boolean> {
   const client = getRoomService();
   if (!client) {
     return false;
   }
+  const publish = liveKitPublishGrant(grant);
 
   let participants;
   try {
@@ -575,7 +574,8 @@ export async function setSfuUserCanPublish(
     logEvent("voice.sfuPublishGrantFailed", {
       room,
       userId,
-      canPublish,
+      canSpeak: grant.canSpeak,
+      canStream: grant.canStream,
       stage: "list",
       error: describeError(error),
     });
@@ -593,29 +593,34 @@ export async function setSfuUserCanPublish(
       if (participantUserId !== userId) {
         return;
       }
-      if (!canPublish) {
-        for (const published of participant.tracks ?? []) {
-          try {
-            await client.mutePublishedTrack(room, identity, published.sid, true);
-          } catch (error) {
-            logEvent("voice.sfuPublishGrantFailed", {
-              room,
-              identity,
-              userId,
-              canPublish,
-              stage: "mute",
-              trackSid: published.sid,
-              error: describeError(error),
-            });
-          }
+      for (const published of participant.tracks ?? []) {
+        if (!shouldMutePublishedTrack(published, grant)) {
+          continue;
+        }
+        try {
+          await client.mutePublishedTrack(room, identity, published.sid, true);
+        } catch (error) {
+          logEvent("voice.sfuPublishGrantFailed", {
+            room,
+            identity,
+            userId,
+            canSpeak: grant.canSpeak,
+            canStream: grant.canStream,
+            stage: "mute",
+            trackSid: published.sid,
+            error: describeError(error),
+          });
         }
       }
       try {
         await client.updateParticipant(room, identity, {
           permission: {
-            canPublish,
+            canPublish: publish.canPublish ?? false,
             canSubscribe: true,
             canPublishData: false,
+            ...(publish.canPublishSources
+              ? { canPublishSources: publish.canPublishSources }
+              : {}),
           },
         });
         changed = true;
@@ -623,14 +628,16 @@ export async function setSfuUserCanPublish(
           room,
           identity,
           userId,
-          canPublish,
+          canSpeak: grant.canSpeak,
+          canStream: grant.canStream,
         });
       } catch (error) {
         logEvent("voice.sfuPublishGrantFailed", {
           room,
           identity,
           userId,
-          canPublish,
+          canSpeak: grant.canSpeak,
+          canStream: grant.canStream,
           stage: "update",
           error: describeError(error),
         });
@@ -638,6 +645,32 @@ export async function setSfuUserCanPublish(
     }),
   );
   return changed;
+}
+
+function shouldMutePublishedTrack(
+  track: { source?: TrackSource; type?: TrackType },
+  grant: { canSpeak: boolean; canStream: boolean },
+): boolean {
+  if (!grant.canSpeak && !grant.canStream) {
+    return true;
+  }
+  if (track.source === TrackSource.MICROPHONE) {
+    return !grant.canSpeak;
+  }
+  if (
+    track.source === TrackSource.CAMERA ||
+    track.source === TrackSource.SCREEN_SHARE ||
+    track.source === TrackSource.SCREEN_SHARE_AUDIO
+  ) {
+    return !grant.canStream;
+  }
+  if (track.type === TrackType.VIDEO) {
+    return !grant.canStream;
+  }
+  if (track.type === TrackType.AUDIO) {
+    return !grant.canSpeak;
+  }
+  return false;
 }
 
 // --- end voice moderation -----------------------------------------------------
