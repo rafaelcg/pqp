@@ -1,5 +1,11 @@
-import { ChevronDown, ChevronRight, X } from "lucide-react";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { ChevronDown, ChevronRight, Search, X } from "lucide-react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { PublicUser, VoiceParticipant } from "@pqp/shared";
 import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -8,7 +14,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
-import { ApiError, memberDisplayName, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
+import { ApiError, memberDisplayName, memberMatchesQuery, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
 import { highestRoleColor, identityMarks, rankBadges } from "@/lib/author-display";
 import { useTranslation } from "@/lib/i18n";
 import { displayRoleName } from "@/lib/role-labels";
@@ -103,6 +109,11 @@ interface MemberSidebarProps {
   voiceChannels?: ReadonlyArray<{ id: string; name: string }>;
   /** Server roles, for hoist sections and name colour. */
   roles?: readonly ServerRole[];
+  /**
+   * Accepted-friend ids from the shell's friends snapshot. Incoming and
+   * outgoing requests stay out: those people are not friends yet.
+   */
+  friendIds?: ReadonlySet<string>;
   canManageNicknames?: boolean;
   showManageRoster?: boolean;
 }
@@ -157,12 +168,15 @@ export function MemberSidebar({
   voiceOccupancy = {},
   voiceChannels = [],
   roles = [],
+  friendIds,
   canManageNicknames = false,
   showManageRoster = false,
 }: MemberSidebarProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
   const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const [collapsed, setCollapsed] =
     useState<SectionCollapseState>(NO_COLLAPSE);
   /** section id → how many of its rows are mounted. */
@@ -173,25 +187,32 @@ export function MemberSidebar({
   // every roster patch would slam the list shut each time a pip moved.
   useEffect(() => {
     setError(null);
+    setQuery("");
     setShown({});
     setCollapsed(NO_COLLAPSE);
   }, [serverId]);
 
   // Escape closes the DRAWER only. In column mode it is not a transient thing
   // covering anything, so eating Escape there would take the key away from the
-  // popover and the composer for no gain.
+  // popover and the composer for no gain. A typed query is dismissed first so
+  // the first Escape is "back to the roster", not "close the list".
   useEffect(() => {
     if (!open || wide) {
       return;
     }
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        onClose();
+      if (event.key !== "Escape") {
+        return;
       }
+      if (query.trim()) {
+        setQuery("");
+        return;
+      }
+      onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, wide, onClose]);
+  }, [open, wide, onClose, query]);
 
   // ----------------------------------------------------------------- grouping
 
@@ -229,10 +250,25 @@ export function MemberSidebar({
     [participants, self, members, adminRoleId, ownerRoleId],
   );
 
+  const conversationKey = serverId
+    ?? (participants ? participants.map((person) => person.id).sort().join(",") : "");
+
+  useEffect(() => {
+    setQuery("");
+  }, [conversationKey]);
+
+  const searching = query.trim().length > 0;
+  const visibleRows = useMemo(
+    () => rows.filter((member) => memberMatchesQuery(member, query)),
+    [rows, query],
+  );
+
   const sections = useMemo(
     () =>
-      participants ? singleSection(rows) : groupMembers(rows, hoistedRoles),
-    [participants, rows, hoistedRoles],
+      participants
+        ? singleSection(visibleRows)
+        : groupMembers(visibleRows, hoistedRoles, friendIds),
+    [participants, visibleRows, hoistedRoles, friendIds],
   );
 
   // userId → where they are in this server's voice, from the live rosters. Same
@@ -258,14 +294,24 @@ export function MemberSidebar({
   // ---------------------------------------------------------------- rendering
 
   function headingFor(section: MemberSection<ServerMember>): string {
-    const label =
-      section.kind === "role"
-        ? (section.label ?? t("memberList.admins"))
-        : section.kind === "offline"
-          ? t("memberList.offline")
-          : section.kind === "all"
-            ? t("memberList.participants")
-            : t("memberList.online");
+    let label: string;
+    switch (section.kind) {
+      case "role":
+        label = section.label ?? t("memberList.admins");
+        break;
+      case "friends":
+        label = t("memberList.friends");
+        break;
+      case "offline":
+        label = t("memberList.offline");
+        break;
+      case "all":
+        label = t("memberList.participants");
+        break;
+      case "online":
+        label = t("memberList.online");
+        break;
+    }
     return t("memberList.sectionHeading", {
       label,
       count: section.members.length,
@@ -356,28 +402,34 @@ export function MemberSidebar({
   }
 
   function renderSection(section: MemberSection<ServerMember>): ReactNode {
-    const shut = sectionCollapsed(section, collapsed);
+    const shut = searching ? false : sectionCollapsed(section, collapsed);
     const limit = shown[section.id] ?? MEMBER_PAGE_SIZE;
     const visible = shut ? [] : section.members.slice(0, limit);
     const remaining = shut ? 0 : section.members.length - visible.length;
 
     return (
       <section key={section.id} data-member-section={section.id} className="mb-4">
-        <button
-          type="button"
-          aria-expanded={!shut}
-          className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted hover:text-paper"
-          onClick={() =>
-            setCollapsed((prev) => toggleSectionCollapse(section, prev))
-          }
-        >
-          {shut ? (
-            <ChevronRight className="h-3 w-3 shrink-0" />
-          ) : (
-            <ChevronDown className="h-3 w-3 shrink-0" />
-          )}
-          <span className="truncate">{headingFor(section)}</span>
-        </button>
+        {searching ? (
+          <div className="flex w-full items-center gap-1 px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+            <span className="truncate">{headingFor(section)}</span>
+          </div>
+        ) : (
+          <button
+            type="button"
+            aria-expanded={!shut}
+            className="flex w-full items-center gap-1 rounded px-1 py-1 text-left text-[11px] font-semibold uppercase tracking-wider text-paper-muted hover:text-paper"
+            onClick={() =>
+              setCollapsed((prev) => toggleSectionCollapse(section, prev))
+            }
+          >
+            {shut ? (
+              <ChevronRight className="h-3 w-3 shrink-0" />
+            ) : (
+              <ChevronDown className="h-3 w-3 shrink-0" />
+            )}
+            <span className="truncate">{headingFor(section)}</span>
+          </button>
+        )}
         {visible.map((member) => (
           <MemberRow
             key={member.id}
@@ -453,6 +505,56 @@ export function MemberSidebar({
           </Tooltip>
         </div>
 
+        {rows.length > 0 && (
+          <div role="search" className="shrink-0 px-2 pb-1 pt-2">
+            <div className="relative">
+              <Search
+                aria-hidden="true"
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-paper-muted"
+              />
+              <input
+                ref={searchRef}
+                type="search"
+                value={query}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                enterKeyHint="search"
+                aria-label={t("memberList.search")}
+                placeholder={t("memberList.search")}
+                className={cn(
+                  "h-9 w-full appearance-none rounded-xl bg-ink-2 pl-9 text-sm text-paper placeholder:text-paper-muted",
+                  "focus:outline-none focus:ring-2 focus:ring-signal/60",
+                  "[&::-webkit-search-cancel-button]:hidden",
+                  searching ? "pr-9" : "pr-3",
+                )}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape" && query) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setQuery("");
+                  }
+                }}
+              />
+              {searching && (
+                <button
+                  type="button"
+                  aria-label={t("memberList.searchClear")}
+                  className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-paper-muted hover:bg-ink-3 hover:text-paper focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+                  onClick={() => {
+                    setQuery("");
+                    searchRef.current?.focus();
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-3">
           {error && (
             <p role="alert" className="px-1 pb-2 text-xs text-danger">
@@ -470,7 +572,9 @@ export function MemberSidebar({
           )}
           {!loading && sections.length === 0 && !error && (
             <p className="px-1 py-2 text-xs text-paper-muted">
-              {t("memberList.empty")}
+              {searching
+                ? t("memberList.noMatches", { query: query.trim() })
+                : t("memberList.empty")}
             </p>
           )}
           {sections.map(renderSection)}

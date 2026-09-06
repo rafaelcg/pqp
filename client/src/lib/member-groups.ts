@@ -20,9 +20,14 @@ import type { UserStatus } from "@pqp/shared";
  *     the heading is who holds the role, not who is reachable this minute.
  *     Within the section, people who are around sit above people who are
  *     not, then the usual name order.
- *  3. OFFLINE IS EVERYONE WITH NO HOIST, at the bottom. Empty sections still
- *     do not exist: a cargo nobody holds is omitted, not drawn as "Admins — 0".
- *  4. WITHIN A SECTION: around first, then display name, case- and
+ *  3. FRIENDS WHO ARE AROUND sit after the hoisted cargos and before Online.
+ *     The caller passes accepted-friend ids. A friend who already landed in a
+ *     hoisted cargo stays there — no second row. Offline friends stay in
+ *     Offline. An empty Friends heading is omitted.
+ *  4. OFFLINE IS EVERYONE WITH NO HOIST who is not around, at the bottom.
+ *     Empty sections still do not exist: a cargo nobody holds is omitted, not
+ *     drawn as "Admins — 0".
+ *  5. WITHIN A SECTION: around first, then display name, case- and
  *     accent-insensitively, then id. The id tie-break is not cosmetic — two
  *     people called "ana" would otherwise swap places between renders, and
  *     this list re-renders every time anybody's status changes.
@@ -61,7 +66,7 @@ export interface GroupableMember {
  * participant list carries no status at all, so claiming they are online would
  * be inventing the fact the split is supposed to report.
  */
-export type MemberSectionKind = "role" | "online" | "offline" | "all";
+export type MemberSectionKind = "role" | "friends" | "online" | "offline" | "all";
 
 export interface MemberSection<T> {
   /** Stable across renders: React keys and the collapse state hang off it. */
@@ -155,10 +160,12 @@ function compareHoistedMembers(
 export function groupMembers<T extends GroupableMember>(
   members: readonly T[],
   hoistedRoles: readonly HoistedRole[] = [],
+  friendIds?: ReadonlySet<string>,
 ): MemberSection<T>[] {
   const byHoisted = new Map<string, T[]>(
     hoistedRoles.map((role) => [role.id, []]),
   );
+  const friends: T[] = [];
   const online: T[] = [];
   const offline: T[] = [];
 
@@ -167,6 +174,8 @@ export function groupMembers<T extends GroupableMember>(
     const match = hoistedRoles.find((role) => held.has(role.id));
     if (match) {
       byHoisted.get(match.id)!.push(member);
+    } else if (friendIds?.has(member.id) && isAround(member.status)) {
+      friends.push(member);
     } else if (isAround(member.status)) {
       online.push(member);
     } else {
@@ -185,6 +194,13 @@ export function groupMembers<T extends GroupableMember>(
         members: bucket.sort(compareHoistedMembers),
       });
     }
+  }
+  if (friends.length > 0) {
+    sections.push({
+      id: "friends",
+      kind: "friends",
+      members: friends.sort(compareMembers),
+    });
   }
   if (online.length > 0) {
     sections.push({
