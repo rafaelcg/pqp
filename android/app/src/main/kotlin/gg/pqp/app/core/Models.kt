@@ -354,6 +354,13 @@ data class VoiceSessionResponse(
      * refused by LiveKit itself.
      */
     val speak: Boolean = true,
+    /**
+     * Whether the token carries a camera or screen-share grant
+     * (`Permission.STREAM` in this channel). Absent reads as [speak], matching
+     * `voiceSessionSchema`. Like [speak] the client does not act on it yet:
+     * LiveKit itself refuses a publish the grant does not cover.
+     */
+    val stream: Boolean = speak,
 )
 
 /**
