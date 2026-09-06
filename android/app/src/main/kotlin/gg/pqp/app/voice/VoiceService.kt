@@ -79,6 +79,21 @@ class VoiceService : Service() {
         return START_NOT_STICKY
     }
 
+    // There is deliberately no `onTaskRemoved` hang-up here.
+    //
+    // It was considered, on the theory that swiping the app away leaves the
+    // server holding a voice peer nobody is behind. It does not: this is a
+    // foreground service and the manifest sets no `android:stopWithTask`, so
+    // Android delivers `onTaskRemoved` and then leaves the service running.
+    // Swiping pqp out of Recents during a call keeps the call alive behind its
+    // ongoing notification, which is what the notification is for and what
+    // people expect from every other voice app. Leaving from there is the hang
+    // up action on that notification.
+    //
+    // Ending the call on task removal would be a behaviour change for the mesh
+    // path as much as for the SFU one, and adding a transport is not the place
+    // to make it.
+
     override fun onDestroy() {
         projecting = false
         super.onDestroy()

@@ -174,11 +174,13 @@ fun ChannelsScreen(
     val roomFull = stringResource(R.string.voice_room_full)
     val unsupported = stringResource(R.string.voice_transport_unsupported)
     val screenDenied = stringResource(R.string.voice_screen_share_denied)
+    val backendUnreachable = stringResource(R.string.voice_backend_unreachable)
     LaunchedEffect(voiceState.refusal) {
         when (voiceState.refusal) {
             Refusal.RoomFull -> snackbars.showSnackbar(roomFull)
             Refusal.TransportUnsupported -> snackbars.showSnackbar(unsupported)
             Refusal.ScreenShareDenied -> snackbars.showSnackbar(screenDenied)
+            Refusal.VoiceBackendUnreachable -> snackbars.showSnackbar(backendUnreachable)
             null -> return@LaunchedEffect
         }
         voice.dismissRefusal()

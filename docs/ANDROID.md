@@ -492,8 +492,16 @@ unread badge standing.
 
 ## Voice
 
-Full-mesh WebRTC (`io.github.webrtc-sdk:android`), matching the server's default
-backend. Signalling is the same `/ws` socket the chat uses.
+Two transports, and the server picks which one a room runs on. Full-mesh WebRTC
+(`io.github.webrtc-sdk:android`) and LiveKit SFU audio
+(`io.livekit:livekit-android`), behind one `VoiceTransport` interface that
+`VoiceController` swaps at `welcome`. Signalling, presence and the roster are
+the same `/ws` socket the chat uses on both; only the media moves.
+
+The SFU path is **audio only** and its credentials come from
+`POST /api/voice/token` after `welcome`, never from `welcome` itself. See
+*What voice is verified to do* for the (short) list of what has actually been
+observed on it.
 
 **Audio has been heard end to end between two clients.** The measurement and the
 rig are in *What voice is verified to do* below; the short version is that both
@@ -553,10 +561,14 @@ Other things the mesh depends on, each of which is a comment at its site:
   screen and leaves the presenter's voice playing.
 - **Deafening forces the microphone off too.** Being heard while hearing nothing
   is a trap rather than a feature, and it is what both other clients do.
-- **`transports: ["mesh"]` is declared on `join-voice-room`.** The room's
-  transport is decided by the server and is binding; declaring up front lets it
-  refuse *before* creating a peer, so a mesh-only client never appears in an SFU
-  room's roster as somebody who can neither hear nor be heard.
+- **`transports: ["mesh", "livekit"]` is declared on `join-voice-room`.** The
+  room's transport is decided by the server and is binding; declaring up front
+  lets it refuse *before* creating a peer, so a client never appears in the
+  roster of a room it cannot run as somebody who can neither hear nor be heard.
+  Widening that array is the one line that turns a clean refusal into a silent
+  ghost, so it is also the last line to change, and `WireProtocolTest` pins both
+  literals. Omitting the field entirely is worse again: the server reads an
+  absent `transports` as "both".
 - **ICE servers always exist.** A failed `/api/ice-servers` used to leave the
   peer connection with an empty server list, which is not "STUN only" but "host
   candidates only": it works on one wifi and nowhere else, and it looks exactly
@@ -648,6 +660,13 @@ notification with nothing behind it.
 It does own one piece of *ordering*, and that is deliberate. See the screen
 sharing section below.
 
+**Swiping pqp out of Recents during a call does not end the call.** The manifest
+sets no `android:stopWithTask`, so Android delivers `onTaskRemoved` to a running
+foreground service and then leaves it running: the call carries on behind its
+ongoing notification, and the Hang up action on that notification is how it
+ends. This is what every other voice app does, so `VoiceService` deliberately
+does not hang up on task removal, and there is a comment at the site saying so.
+
 `POST_NOTIFICATIONS` is requested alongside `RECORD_AUDIO`. Only the microphone
 gates the call, but a refused notification leaves a call running that nothing on
 screen mentions.
@@ -710,8 +729,32 @@ Also verified between the two clients:
   above.
 
 Still known-missing rather than broken: no speaking indicators, no per-peer
-volume, no push-to-talk, no camera (send or receive), no screen-share audio, and
-LiveKit rooms are refused rather than joined.
+volume, no push-to-talk, no camera (send or receive), and no screen-share audio.
+
+**LiveKit rooms are now joined rather than refused, and nothing about that path
+has been heard end to end.** It is built against the server's contract and the
+web client's behaviour, it compiles, and its bookkeeping is unit-tested; no
+audio has been observed over it from this client. Screen share is deliberately
+absent there (the button is hidden rather than left to fail) and `statsFor`
+answers null, because LiveKit's stats arrive in the *other* libwebrtc's types.
+Mesh is untouched.
+
+Two properties of that path are worth stating precisely, because both are the
+kind of thing that is easy to believe without checking:
+
+- **It subscribes to audio and nothing else.** The room is joined with
+  `autoSubscribe = false` and each publication is asked for by kind, so a 1080p
+  screen share from a web participant is never sent to the phone at all. The
+  earlier version auto-subscribed and dropped the frames in the callback, which
+  looks identical on screen and is not identical on a mobile bill.
+  `livekitSubscribesTo` is the whole decision and is unit-tested.
+- **The people already in the room are read from the join response.** LiveKit
+  builds them without emitting `ParticipantConnected`, so joining a call in
+  progress relies on seeding from `room.remoteParticipants` right after
+  `connect()` returns. That is also what subscribes to their microphones.
+  `LiveKitPeerIndex.seedAll` is unit-tested; the call site that feeds it is
+  verified by reading, because nothing in the module can build a `Room` without
+  a device.
 
 ### Getting real ICE locally, which is what unblocked all of this
 
@@ -1631,7 +1674,11 @@ picker GIF is always one somebody sent from the web or the iOS client.
   a `LazyColumn`, all bidding for the same audio focus as a call.
 - **It costs 0.72 MB.** `media3-exoplayer` plus `media3-ui` plus `coil-gif`,
   measured as the difference between two shrunk release APKs rather than from
-  the artifact sizes, on a 55 MB APK that is mostly the WebRTC native libs.
+  the artifact sizes, on what was then a 55 MB APK that is mostly the WebRTC
+  native libs. It is a 103 MB APK now: LiveKit ships a second, prefixed
+  libwebrtc (`liblkjingle_peerconnection_so.so`, 47.6 MB compressed across the
+  four ABIs) alongside the app's own. Play splits an AAB per ABI so a phone
+  downloads roughly 12 MB more; the universal GitHub-beta APK carries all of it.
 - **Audio attachments are still a download chip.** The web renders an `<audio>`
   element with `preload="none"`; this does not. That is the next obvious piece,
   and `MediaContractTest` pins it as a decision rather than an oversight.
@@ -1640,7 +1687,9 @@ picker GIF is always one somebody sent from the web or the iOS client.
 search, members and moderation surfaces, profile editing, communities, game
 connections. Invites can be redeemed from a link but not created or shown. No
 camera (send or receive), no screen-share audio, no speaking indicators, no
-per-peer volume, no push-to-talk. LiveKit rooms are refused rather than joined.
+per-peer volume, no push-to-talk. LiveKit rooms are joined but no audio has been
+heard over that path from this client; it is audio-only by construction and can
+neither share nor watch a screen.
 `assembleRelease` is unsigned unless a Play upload keystore is provided
 (see [`ANDROID_RELEASE.md`](./ANDROID_RELEASE.md)). The GitHub beta APK is
 a separate `sideload` build type, debug-signed on purpose.

@@ -15,6 +15,7 @@ media3 = "1.10.1"
 splashscreen = "1.2.0"
 clerk = "1.1.4"
 webrtc = "144.7559.14"
+livekit = "2.28.1"
 firebaseBom = "34.18.0"
 googleServices = "4.5.0"
 junit = "4.13.2"
@@ -55,6 +56,7 @@ media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "medi
 
 clerk-ui = { group = "com.clerk", name = "clerk-android-ui", version.ref = "clerk" }
 webrtc = { group = "io.github.webrtc-sdk", name = "android", version.ref = "webrtc" }
+livekit = { group = "io.livekit", name = "livekit-android", version.ref = "livekit" }
 
 # The BOM pins firebase-messaging's version, so the artifact below carries none.
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }

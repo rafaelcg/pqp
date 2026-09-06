@@ -41,3 +41,29 @@
 -dontwarn org.conscrypt.**
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
+
+# LiveKit ships a SECOND libwebrtc, prefixed, with the same JNI_OnLoad in it.
+#
+# `io.livekit:livekit-android` pulls `io.github.webrtc-sdk:android-prefixed`,
+# the same generated code relocated under `livekit.org.*` and packaged as
+# `liblkjingle_peerconnection_so.so`. It coexists with the app's own
+# `org.webrtc` build by design (two artifacts, two namespaces, two native
+# libraries), so every rule above covers none of it, and
+# `strings liblkjingle_peerconnection_so.so` contains
+# `livekit/org/jni_zero/JniInit` exactly as its unprefixed twin does.
+#
+# Unlike `io.github.webrtc-sdk:android`, which ships no consumer rules at all
+# (which is why the crash happened), the LiveKit AAR carries a `proguard.txt`
+# that keeps `livekit.org.webrtc.**` members with native methods and everything
+# annotated `@livekit.**.CalledByNative`. That is enough today: a minified build
+# with the two lines below commented out still contains `JniInit`, which was
+# checked rather than assumed.
+#
+# They stay anyway, because "today" is doing a lot of work in that sentence. A
+# library's consumer rules are the library's to narrow on any version bump, and
+# the failure mode when they do is not a build error. It is SIGTRAP on the
+# first voice channel, on release builds only. The rules are the cheap half; the
+# half that actually proves it is `nativeJniClasses` in build.gradle.kts, which
+# now greps the built APK and AAB for one class per prefixed package.
+-keep class livekit.org.webrtc.** { *; }
+-keep class livekit.org.jni_zero.** { *; }
