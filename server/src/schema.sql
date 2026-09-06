@@ -3218,21 +3218,21 @@ END $$;
 -- Stream rides with Speak so an existing listen-only overwrite stays silent
 -- on camera and screen too. Move rides with timeout, which is what move and
 -- disconnect used before they had their own bit.
+--
+-- One-shot via data_migrations, not a comment on roles.permissions. That
+-- column's comment is already the MANAGE_WEBHOOKS fingerprint; sharing it
+-- made this block and that one re-run on every boot, which OR'd STREAM back
+-- onto any role an owner had split to mic-only.
 DO $$
 DECLARE
-  rule CONSTANT TEXT := 'OR STREAM(2097152) where SPEAK; copy SPEAK overwrite onto STREAM; OR MOVE(4194304) where MODERATE';
-  marker CONSTANT TEXT := 'pqp-stream-move-bits ' || md5(rule);
-  col_attnum SMALLINT;
   speak CONSTANT BIGINT := 8192;
   stream CONSTANT BIGINT := 2097152;
   moderate CONSTANT BIGINT := 262144;
   move CONSTANT BIGINT := 4194304;
 BEGIN
-  SELECT a.attnum INTO col_attnum FROM pg_attribute a
-  WHERE a.attrelid = 'roles'::regclass AND a.attname = 'permissions'
-    AND NOT a.attisdropped;
-
-  IF col_description('roles'::regclass, col_attnum) IS NOT DISTINCT FROM marker THEN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'stream_move_bits_2026_09'
+  ) THEN
     RETURN;
   END IF;
 
@@ -3251,10 +3251,7 @@ BEGIN
   UPDATE servers
      SET permissions_version = permissions_version + 1;
 
-  EXECUTE format(
-    'COMMENT ON COLUMN roles.permissions IS %L',
-    marker
-  );
+  INSERT INTO data_migrations (name) VALUES ('stream_move_bits_2026_09');
 END $$;
 
 -- Who may VIEW this channel (the effective row: parent for a thread).
