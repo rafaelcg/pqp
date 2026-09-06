@@ -47,6 +47,14 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     lateinit var push: gg.pqp.app.push.PushController
         private set
 
+    /**
+     * Application-scoped for the same reason [voice] is, and one reason more:
+     * a ring arrives whatever screen is open, and `call-incoming` has to be
+     * caught even when the person is nowhere near the conversation it is for.
+     */
+    lateinit var calls: gg.pqp.app.voice.CallController
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -62,6 +70,7 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
         session = SessionStore(appScope, http)
         voice = gg.pqp.app.voice.VoiceController(this, session, appScope)
         push = gg.pqp.app.push.PushController(this, session, appScope)
+        calls = gg.pqp.app.voice.CallController(this, session, voice, appScope)
     }
 
     /**

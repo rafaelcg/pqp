@@ -683,6 +683,45 @@ Audio uses `MODE_IN_COMMUNICATION` with a `USAGE_VOICE_COMMUNICATION` focus
 request, which is what puts the volume rocker on the call stream and turns on
 the platform's echo cancellation.
 
+### DM calls ring, and the ring is foreground only
+
+A conversation call is an ordinary voice room on the conversation's channel id:
+same `join-voice-room`, same pinned transport, same roster. What makes it a
+call is the ring, and that is five frames in `packages/shared/src/signaling.ts`
+(`call-ring`, `call-decline`, `call-incoming`, `call-ring-cancelled`,
+`call-declined`).
+
+Three rules carry over from the web client and each one is a bug if it is
+broken:
+
+1. **The ring waits for the room.** The server only accepts `call-ring` from a
+   live peer of exactly that room, so it is sent when the voice state says the
+   join is connected, never on the tap. Sent early it is dropped in silence and
+   nobody's phone rings.
+2. **Answering is joining.** There is no accept frame. `CallEffect.JoinCall`
+   is the whole answer, and the server stops ringing the account's other
+   devices itself.
+3. **Dismissing the card sends nothing.** Decline tells the caller no; the
+   cross is silence on this device only, and the call stays joinable while the
+   caller keeps ringing.
+
+The decisions live in `CallMachine`, a pure function with no Android in it, so
+they are pinned by plain JVM tests (`CallMachineTest`, 25 of them) rather than
+by an emulator. `CallController` owns the socket, the clocks and the ringtone
+and does what the machine says. `CallFramesTest` reads the shared schemas off
+disk the way the rest of `protocol/` does, so a renamed frame fails the Android
+build instead of becoming a phone that never rings.
+
+The ringtone is the phone's own, on the ringtone stream, so the volume rocker
+and the silent switch apply as they would to a phone call. Silent is silent,
+vibrate is vibrate, and Do Not Disturb wins outright; the card appears in every
+case, only the noise is gated.
+
+**Foreground only.** A ring with the app closed needs a push that wakes the
+process, and the FCM server leg does not exist (see the push row above). Nothing
+here is verified on hardware yet: it compiles, the state machine is tested, and
+no two phones have rung each other.
+
 ### What voice is verified to do, and what it is not
 
 Tested with **two emulators in one room** on two separate dev-bypass accounts,

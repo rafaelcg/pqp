@@ -330,4 +330,18 @@
     <string name="chance_left">%d no baralho</string>
     <string name="chance_new_deck">Baralho novo · %d no baralho</string>
     <string name="chance_shuffled">Embaralhou · %d no baralho</string>
+
+    <!-- Chamadas na DM -->
+    <string name="call_start">Ligar</string>
+    <string name="call_incoming_title">Chamada recebida</string>
+    <string name="call_incoming_group_title">Chamada de grupo recebida</string>
+    <string name="call_accept">Atender</string>
+    <string name="call_decline">Recusar</string>
+    <string name="call_ignore">Ignorar</string>
+    <string name="call_ringing">Chamando\u2026</string>
+    <string name="call_no_answer">Ningu\u00e9m atendeu</string>
+    <plurals name="call_declined">
+        <item quantity="one">%1$d recusou</item>
+        <item quantity="other">%1$d recusaram</item>
+    </plurals>
 </resources>
