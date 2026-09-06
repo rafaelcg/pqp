@@ -20,10 +20,10 @@ RUN set -eux; \
     apt-get clean; rm -rf /var/lib/apt/lists/*; \
     pg_dump --version; aws --version
 
-RUN useradd --create-home --uid 10001 backup
-COPY --chown=backup:backup backup.sh /usr/local/bin/backup.sh
+RUN useradd --create-home --uid 10001 pqpbackup
+COPY --chown=pqpbackup:pqpbackup backup.sh /usr/local/bin/backup.sh
 RUN chmod +x /usr/local/bin/backup.sh
 
-USER backup
-WORKDIR /home/backup
+USER pqpbackup
+WORKDIR /home/pqpbackup
 CMD ["/usr/local/bin/backup.sh"]
