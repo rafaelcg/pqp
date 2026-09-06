@@ -17,6 +17,7 @@ const SECTIONS = [
   "Profile",
   "Connections",
   "Voice & Video",
+  "Keyboard",
   "Notifications",
   "Appearance & Language",
   "Privacy",

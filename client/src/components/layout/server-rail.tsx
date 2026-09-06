@@ -1,4 +1,16 @@
-import { Compass, MessageCircle, Plus, Sparkles, UserPlus } from "lucide-react";
+import {
+  Compass,
+  Eye,
+  EyeOff,
+  LogOut,
+  MessageCircle,
+  PinOff,
+  Plus,
+  Settings,
+  Sparkles,
+  UserPlus,
+  Users,
+} from "lucide-react";
 import type { DmSummary, PublicUser, Server } from "@pqp/shared";
 import {
   formatBadgeCount,
@@ -218,16 +230,19 @@ export function ServerRail({
           {
             id: "invite",
             label: t("chrome.invitePeople"),
+            icon: UserPlus,
             onSelect: () => onInvite(server.id),
           },
           {
             id: "members",
             label: t("chrome.members"),
+            icon: Users,
             onSelect: () => onOpenMembers(server.id),
           },
           {
             id: "settings",
             label: t("chrome.communitySettings"),
+            icon: Settings,
             onSelect: () => onOpenSettings(server.id),
           },
         ];
@@ -240,6 +255,7 @@ export function ServerRail({
             label: server.showOnProfile
               ? t("communities.hideFromProfile")
               : t("communities.showOnProfile"),
+            icon: server.showOnProfile ? EyeOff : Eye,
             onSelect: () =>
               onToggleProfileVisibility(server.id, !server.showOnProfile),
           });
@@ -253,6 +269,7 @@ export function ServerRail({
             {
               id: "leave",
               label: t("chrome.leaveCommunity"),
+              icon: LogOut,
               danger: true,
               onSelect: () => onLeaveServer(server.id),
             },
@@ -434,6 +451,7 @@ function PinnedConversationButton({
         {
           id: "unpin",
           label: t("chrome.unpinConversation"),
+          icon: PinOff,
           onSelect: onUnpin,
         },
       ]

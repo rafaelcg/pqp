@@ -8,7 +8,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { Gamepad2, Bell, Bug, Database, Mic, Palette, ShieldCheck, UserRound, type LucideIcon } from "lucide-react";
+import { Gamepad2, Bell, Bug, Database, Keyboard, Mic, Palette, ShieldCheck, UserRound, type LucideIcon } from "lucide-react";
 import {
   canRenameHandle,
   deleteConfirmationMatches,
@@ -42,7 +42,18 @@ import { useAccentHue } from "@/hooks/use-accent-hue";
 import { useAppearance } from "@/hooks/use-appearance";
 import { useContrast } from "@/hooks/use-contrast";
 import { useTheme } from "@/hooks/use-theme";
+import { ACTION_LABEL, GROUP_LABEL } from "@/components/layout/shortcut-overlay";
 import { KeyBindingField } from "@/components/voice/key-binding-field";
+import { isApplePlatform } from "@/lib/composer-formatting";
+import {
+  findBindingConflict,
+  parseShortcutOverrides,
+  resolveShortcutBindings,
+  SHORTCUT_GROUPS,
+  type BindableId,
+  type ShortcutAction,
+  type ShortcutOverrides,
+} from "@/lib/keyboard-shortcuts";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
 import {
   DEFAULT_VIDEO_QUALITY,
@@ -58,6 +69,10 @@ import {
   type KeyBinding,
 } from "@/components/voice/push-to-talk";
 import type { VoiceInputMode } from "@/hooks/use-voice";
+import {
+  parseVadThreshold,
+  SPEAKING_THRESHOLD,
+} from "@/lib/voice-audio";
 import {
   defaultMicProcessing,
   ensureCameraPermission,
@@ -146,7 +161,19 @@ export interface LocalSettings {
    * syncing it to a phone or a different layout is meaningless.
    */
   inputMode: VoiceInputMode;
+  /**
+   * Voice-activity sensitivity, 0..1 on the same scale as the speaking
+   * tracker. Device-local with `inputMode`: it describes this mic in this
+   * room, and `@pqp/shared` has no preference key for it yet.
+   */
+  vadThreshold: number;
   pushToTalkKey: KeyBinding;
+  /**
+   * Remapped Discord-style shortcuts. Device-local for the same reason as
+   * the PTT key: a `KeyboardEvent.code` is this keyboard. Absent keys keep
+   * the platform default (Cmd on Apple, Ctrl elsewhere).
+   */
+  shortcuts: ShortcutOverrides;
   /** getUserMedia processing flags. Also pending a shared-schema key. */
   micProcessing: MicProcessing;
   /**
@@ -180,7 +207,9 @@ export const defaultLocalSettings: LocalSettings = {
   // Voice activity stays the default: it is what every existing user already
   // has, and push-to-talk is a choice people make, not one made for them.
   inputMode: "voice-activity",
+  vadThreshold: SPEAKING_THRESHOLD,
   pushToTalkKey: defaultPushToTalkBinding,
+  shortcuts: {},
   micProcessing: defaultMicProcessing,
   // Auto, always. A default that pins a size would be a default that is wrong
   // on somebody's uplink.
@@ -219,11 +248,13 @@ export function loadLocalSettings(): LocalSettings {
           : defaultLocalSettings.outputDeviceId,
       inputMode:
         parsed.inputMode === "push-to-talk" ? "push-to-talk" : "voice-activity",
+      vadThreshold: parseVadThreshold(parsed.vadThreshold),
       // A binding that no longer parses — hand-edited storage, or a key this
       // build has since started refusing — falls back rather than leaving
       // push-to-talk bound to nothing and the user apparently mute.
       pushToTalkKey:
         parseBinding(parsed.pushToTalkKey) ?? defaultLocalSettings.pushToTalkKey,
+      shortcuts: parseShortcutOverrides(parsed.shortcuts),
       micProcessing: {
         echoCancellation: parsed.micProcessing?.echoCancellation !== false,
         noiseSuppression: parsed.micProcessing?.noiseSuppression !== false,
@@ -322,6 +353,8 @@ interface SettingsModalProps {
    * last-visited behaviour the dialog already has.
    */
   requestedSection?: SectionId | null;
+  /** Open the shortcut map. Settings stays up; the overlay stacks on top. */
+  onShowShortcutOverlay?: () => void;
 }
 
 /* ------------------------------------------------------------------ layout */
@@ -344,6 +377,7 @@ type SectionId =
   | "profile"
   | "connections"
   | "voice"
+  | "keyboard"
   | "notifications"
   | "appearance"
   | "privacy"
@@ -378,6 +412,12 @@ const SECTIONS: SectionDef[] = [
     label: "settings.section.voice",
     description: "settings.voice.description",
     icon: Mic,
+  },
+  {
+    id: "keyboard",
+    label: "settings.section.keyboard",
+    description: "settings.keyboard.description",
+    icon: Keyboard,
   },
   {
     id: "notifications",
@@ -562,6 +602,35 @@ function chipClass(selected: boolean): string {
 /* ------------------------------------------------------------------- voice */
 
 /**
+ * The live bar and the voice-activity line share this scale, so the marker
+ * sits on the same coordinates as the level the person is watching.
+ *
+ * The 1.8 gain is how the existing meter made a typical speaking level fill
+ * more than a sliver of the bar. The volume floor stops a dragged-down
+ * input volume from pinning the line to the left edge.
+ *
+ * This is the Settings bar, not the gate. The gate reads
+ * `pipeline.analyser` (after the input-volume gain). The preview stream
+ * here is raw getUserMedia. The marker matches this bar; a quiet talker
+ * still has to move the line until their bar crosses it.
+ */
+const MIC_LEVEL_DISPLAY_GAIN = 1.8;
+const MIC_LEVEL_VOLUME_FLOOR = 0.15;
+
+export function displayMicLevel(raw: number, volume: number): number {
+  return Math.min(
+    1,
+    raw * MIC_LEVEL_DISPLAY_GAIN * Math.max(MIC_LEVEL_VOLUME_FLOOR, volume),
+  );
+}
+
+export function sliderToVadThreshold(percent: number, volume: number): number {
+  const scale =
+    MIC_LEVEL_DISPLAY_GAIN * Math.max(MIC_LEVEL_VOLUME_FLOOR, volume);
+  return parseVadThreshold(percent / 100 / scale);
+}
+
+/**
  * Volume only scales how the level reads, so it is held in a ref: putting it in
  * the effect deps would tear down the preview stream and re-prompt
  * `getUserMedia` on every slider tick.
@@ -571,11 +640,16 @@ function MicLevelMeter({
   inputVolume,
   liveAnalyser,
   active,
+  threshold,
+  onThresholdChange,
 }: {
   deviceId: string;
   inputVolume: number;
   liveAnalyser: AnalyserNode | null;
   active: boolean;
+  /** When set, the meter also hosts the voice-activity sensitivity line. */
+  threshold?: number;
+  onThresholdChange?: (value: number) => void;
 }) {
   const { t } = useTranslation();
   const [level, setLevel] = useState(0);
@@ -607,7 +681,7 @@ function MicLevelMeter({
           sum += v;
         }
         const avg = sum / data.length / 255;
-        setLevel(Math.min(1, avg * 1.8 * Math.max(0.15, volumeRef.current)));
+        setLevel(displayMicLevel(avg, volumeRef.current));
         raf = requestAnimationFrame(tick);
       };
       tick();
@@ -656,25 +730,68 @@ function MicLevelMeter({
   }, [active, deviceId, liveAnalyser]);
 
   const label = t("settings.voice.inputLevel");
+  const gated = threshold !== undefined && onThresholdChange !== undefined;
+  const thresholdPct =
+    threshold !== undefined
+      ? Math.round(displayMicLevel(threshold, inputVolume) * 100)
+      : 0;
 
   return (
     <div className="space-y-1.5">
       <span className="block text-xs uppercase tracking-wide text-paper-muted">
-        {label}
+        {gated ? t("settings.voice.sensitivity") : label}
       </span>
       <div
-        className="h-2 overflow-hidden rounded-full bg-ink"
-        role="progressbar"
-        aria-label={label}
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(level * 100)}
+        className={cn(
+          "relative h-2 rounded-full",
+          gated && "has-[:focus]:ring-2 has-[:focus]:ring-signal/60",
+        )}
       >
         <div
-          className="h-full rounded-full bg-signal transition-[width] duration-75"
-          style={{ width: `${Math.round(level * 100)}%` }}
-        />
+          className="h-2 overflow-hidden rounded-full bg-ink"
+          role="progressbar"
+          aria-label={label}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(level * 100)}
+        >
+          <div
+            className="h-full rounded-full bg-signal transition-[width] duration-75"
+            style={{ width: `${Math.round(level * 100)}%` }}
+          />
+        </div>
+        {gated && (
+          <>
+            <div
+              aria-hidden
+              className="pointer-events-none absolute top-[-3px] h-[14px] w-1 -translate-x-1/2 rounded-full bg-paper"
+              style={{ left: `${thresholdPct}%` }}
+            />
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={thresholdPct}
+              onChange={(e) =>
+                onThresholdChange?.(
+                  sliderToVadThreshold(Number(e.target.value), inputVolume),
+                )
+              }
+              className="absolute -inset-y-2 inset-x-0 w-full cursor-pointer opacity-0"
+              aria-label={t("settings.voice.sensitivity")}
+              aria-valuetext={t("settings.voice.percent", {
+                percent: thresholdPct,
+              })}
+            />
+          </>
+        )}
       </div>
+      {gated && (
+        <span className="block text-xs text-paper-muted">
+          {t("settings.voice.sensitivityHint")}
+        </span>
+      )}
     </div>
   );
 }
@@ -824,6 +941,16 @@ function VoiceSection({
         inputVolume={draftLocal.inputVolume}
         liveAnalyser={voiceAnalyser}
         active={metering}
+        threshold={
+          draftLocal.inputMode === "voice-activity"
+            ? draftLocal.vadThreshold
+            : undefined
+        }
+        onThresholdChange={
+          draftLocal.inputMode === "voice-activity"
+            ? (vadThreshold) => patchLocal({ vadThreshold })
+            : undefined
+        }
       />
 
       <fieldset className="space-y-2">
@@ -858,6 +985,14 @@ function VoiceSection({
             <KeyBindingField
               label={t("settings.voice.pttKey")}
               binding={draftLocal.pushToTalkKey}
+              takenBy={(binding) => {
+                const conflict = findBindingConflict(
+                  bindableMap(draftLocal),
+                  "pushToTalk",
+                  binding,
+                );
+                return conflict ? t(ACTION_LABEL[conflict]) : null;
+              }}
               onChange={(pushToTalkKey) => patchLocal({ pushToTalkKey })}
             />
             {/* The honest limit, stated where the binding is set rather than
@@ -1020,6 +1155,118 @@ function VoiceSection({
         />
         <span className="text-sm">{t("settings.voice.compactPeers")}</span>
       </label>
+    </div>
+  );
+}
+
+function bindableMap(
+  settings: LocalSettings,
+): Record<BindableId, KeyBinding> {
+  return {
+    ...resolveShortcutBindings(settings.shortcuts, isApplePlatform()),
+    pushToTalk: settings.pushToTalkKey,
+  };
+}
+
+function KeyboardSection({
+  draftLocal,
+  patchLocal,
+  onShowOverlay,
+}: {
+  draftLocal: LocalSettings;
+  patchLocal: (partial: Partial<LocalSettings>) => void;
+  onShowOverlay: () => void;
+}) {
+  const { t } = useTranslation();
+  const canBindKey = useMemo(() => supportsKeyBinding(), []);
+  const bindings = useMemo(
+    () => resolveShortcutBindings(draftLocal.shortcuts, isApplePlatform()),
+    [draftLocal.shortcuts],
+  );
+  const owned = bindableMap(draftLocal);
+
+  function remap(action: ShortcutAction, binding: KeyBinding) {
+    if (findBindingConflict(owned, action, binding)) {
+      return;
+    }
+    patchLocal({
+      shortcuts: { ...draftLocal.shortcuts, [action]: binding },
+    });
+  }
+
+  function takenBy(action: BindableId) {
+    return (binding: KeyBinding) => {
+      const conflict = findBindingConflict(owned, action, binding);
+      return conflict ? t(ACTION_LABEL[conflict]) : null;
+    };
+  }
+
+  return (
+    <div className="space-y-5">
+      <p className="text-sm text-paper-muted">{t("settings.keyboard.hint")}</p>
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          type="button"
+          variant="secondary"
+          className="w-full whitespace-normal"
+          onClick={onShowOverlay}
+        >
+          {t("settings.keyboard.showMap")}
+        </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          className="w-full whitespace-normal"
+          onClick={() =>
+            patchLocal({
+              shortcuts: {},
+              pushToTalkKey: defaultPushToTalkBinding,
+            })
+          }
+        >
+          {t("settings.keyboard.reset")}
+        </Button>
+      </div>
+      {canBindKey ? (
+        <div className="space-y-6">
+          {SHORTCUT_GROUPS.map((group) => (
+            <section key={group.id}>
+              <h4 className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-paper-muted">
+                {t(GROUP_LABEL[group.id])}
+              </h4>
+              <ul className="divide-y divide-ink-4/70">
+                {group.actions.map((action) => (
+                  <li key={action} className="py-3">
+                    <KeyBindingField
+                      label={t(ACTION_LABEL[action])}
+                      binding={bindings[action]}
+                      takenBy={takenBy(action)}
+                      onChange={(binding) => remap(action, binding)}
+                    />
+                  </li>
+                ))}
+                {group.id === "voice" && (
+                  <li className="py-3">
+                    <KeyBindingField
+                      label={t(ACTION_LABEL.pushToTalk)}
+                      binding={draftLocal.pushToTalkKey}
+                      takenBy={takenBy("pushToTalk")}
+                      onChange={(binding) =>
+                        patchLocal({ pushToTalkKey: binding })
+                      }
+                    />
+                  </li>
+                )}
+              </ul>
+            </section>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-paper-muted">
+          {t("settings.voice.pttNoKeyboard")}
+        </p>
+      )}
+      <p className="text-xs text-paper-muted">{t("settings.keyboard.pttNote")}</p>
     </div>
   );
 }
@@ -2771,6 +3018,7 @@ export function SettingsModal({
   onUnblockUser,
   onAudioSettingsLive,
   requestedSection = null,
+  onShowShortcutOverlay,
 }: SettingsModalProps) {
   const { t } = useTranslation();
   const [displayName, setDisplayName] = useState("");
@@ -3027,6 +3275,14 @@ export function SettingsModal({
                 devicesError={devicesError}
                 voiceAnalyser={voiceAnalyser}
                 metering={voiceVisible}
+              />
+            )}
+
+            {section === "keyboard" && (
+              <KeyboardSection
+                draftLocal={draftLocal}
+                patchLocal={patchLocal}
+                onShowOverlay={() => onShowShortcutOverlay?.()}
               />
             )}
 

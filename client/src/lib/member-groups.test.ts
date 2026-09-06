@@ -202,6 +202,84 @@ describe("groupMembers", () => {
     groupMembers(roster);
     expect(roster.map((m) => m.id)).toEqual(["1", "2"]);
   });
+
+  it("lifts around friends above Online, after hoisted cargos", () => {
+    const sections = groupMembers(
+      [
+        person("1", "Zed", "member", "online"),
+        person("2", "Bea", "member", "online"),
+        person("3", "Ana", "admin", "online", ["admin-role"]),
+      ],
+      [ADMIN],
+      new Set(["2"]),
+    );
+    expect(sections.map((s) => s.id)).toEqual([
+      "role:admin-role",
+      "friends",
+      "online",
+    ]);
+    expect(sections[1]!.members.map((m) => m.id)).toEqual(["2"]);
+    expect(sections[2]!.members.map((m) => m.id)).toEqual(["1"]);
+  });
+
+  it("keeps a hoisted friend in their cargo, never duplicated under Friends", () => {
+    const sections = groupMembers(
+      [
+        person("1", "Ana", "admin", "online", ["admin-role"]),
+        person("2", "Bea", "member", "online"),
+      ],
+      [ADMIN],
+      new Set(["1", "2"]),
+    );
+    expect(sections.map((s) => s.id)).toEqual(["role:admin-role", "friends"]);
+    expect(sections[0]!.members.map((m) => m.id)).toEqual(["1"]);
+    expect(sections[1]!.members.map((m) => m.id)).toEqual(["2"]);
+  });
+
+  it("leaves offline friends in Offline and omits an empty Friends heading", () => {
+    const sections = groupMembers(
+      [
+        person("1", "Bea", "member", "offline"),
+        person("2", "Zed", "member", "online"),
+      ],
+      [],
+      new Set(["1"]),
+    );
+    expect(sections.map((s) => s.id)).toEqual(["online", "offline"]);
+    expect(sections[0]!.members.map((m) => m.id)).toEqual(["2"]);
+    expect(sections[1]!.members.map((m) => m.id)).toEqual(["1"]);
+  });
+
+  it("keeps an offline hoisted friend in their cargo, not under Friends", () => {
+    const sections = groupMembers(
+      [person("1", "Ana", "admin", "offline", ["admin-role"])],
+      [ADMIN],
+      new Set(["1"]),
+    );
+    expect(sections.map((s) => s.id)).toEqual(["role:admin-role"]);
+  });
+
+  it("counts idle and dnd friends as around", () => {
+    const sections = groupMembers(
+      [
+        person("1", "Idle", "member", "idle"),
+        person("2", "Busy", "member", "dnd"),
+      ],
+      [],
+      new Set(["1", "2"]),
+    );
+    expect(sections.map((s) => s.id)).toEqual(["friends"]);
+    expect(sections[0]!.members.map((m) => m.id)).toEqual(["2", "1"]);
+  });
+
+  it("ignores incoming-only ids that are not on the roster", () => {
+    const sections = groupMembers(
+      [person("1", "Zed", "member", "online")],
+      [],
+      new Set(["someone-else"]),
+    );
+    expect(sections.map((s) => s.id)).toEqual(["online"]);
+  });
 });
 
 describe("singleSection", () => {

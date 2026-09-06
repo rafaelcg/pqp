@@ -28,6 +28,7 @@ import {
   capturesSystemAudio,
   screenCaptureEnvironment,
   screenCaptureOptions,
+  type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
@@ -64,7 +65,10 @@ import {
 import {
   createSpeakingTracker,
   createStreamAnalyser,
+  parseVadThreshold,
   readAnalyserLevel,
+  SPEAKING_HANGOVER_MS,
+  SPEAKING_THRESHOLD,
 } from "@/lib/voice-audio";
 import { playCue, stopAllSoundLoops, whenCueSettled } from "@/lib/sounds";
 
@@ -75,6 +79,13 @@ const VOICE_RESUME_GRACE_MS = 90_000;
 
 /** WebSocket handshake to `welcome`. Signalling only, so 12s is generous. */
 const JOIN_TIMEOUT_MS = 12_000;
+/**
+ * Voice-activity gate poll. `requestAnimationFrame` is frozen on a hidden
+ * tab (and on a minimized Electron window), which is exactly when people
+ * talk into this app. An interval still fires; Chrome may later clamp it
+ * toward 1s, which is a late open, not a stuck one.
+ */
+const VOICE_ACTIVITY_POLL_MS = 50;
 /**
  * `welcome` to media up on an SFU room. This used to share the 12s above,
  * which was sized for a handful of peers. On 2026-09-05 a ~90-person watch
@@ -127,8 +138,9 @@ const TRANSPORT_FAILURE_KEY: Record<
 /**
  * How the microphone decides whether to transmit.
  *
- * - `voice-activity` — open whenever you are not muted. What this app has
- *   always done, and still the default.
+ * - `voice-activity` — open while the local speaking tracker is above the
+ *   sensitivity threshold (plus a short hold-open tail). Mute and deafen
+ *   still close it.
  * - `push-to-talk` — closed unless a key (or the hold button) is down.
  */
 export type VoiceInputMode = "voice-activity" | "push-to-talk";
@@ -142,6 +154,8 @@ export interface VoiceAudioOptions {
    */
   startMuted?: boolean;
   inputMode?: VoiceInputMode;
+  /** Local voice-activity sensitivity. Same 0..1 scale as the speaking tracker. */
+  vadThreshold?: number;
   processing?: MicProcessing;
 }
 
@@ -157,18 +171,24 @@ export interface VoiceState {
    * Whether the room's rules let this person talk: `Permission.SPEAK`, as the
    * server resolved it for this channel. Unlike `isMuted` it is not a choice.
    * False means: joined muted, the unmute control is locked, push-to-talk
-   * does not open the mic, and share and camera are off the table. Flips
-   * mid-call on `voice-speak-changed`. Always true in a conversation call.
+   * does not open the mic. Flips mid-call on `voice-speak-changed`. Always
+   * true in a conversation call.
    */
   canSpeak: boolean;
+  /**
+   * Whether the room's rules let this person present: `Permission.STREAM`.
+   * False hides camera and screen share. Absent on an older server is
+   * treated as `canSpeak`.
+   */
+  canStream: boolean;
   inputMode: VoiceInputMode;
   /**
    * Whether audio is actually leaving this machine right now — the one thing
-   * a push-to-talk user needs to be able to check at a glance.
+   * a push-to-talk or voice-activity user needs to be able to check at a glance.
    *
-   * Derived, never set: `!muted && !deafened && (voice-activity || key held)`.
-   * The UI reads this rather than `isMuted` when it wants to say "you are
-   * live", because in push-to-talk those two answer different questions.
+   * Derived, never set: `!muted && !deafened && (voice-activity speaking ||
+   * key held)`. The UI reads this rather than `isMuted` when it wants to say
+   * "you are live", because those two answer different questions.
    */
   isTransmitting: boolean;
   error: string | null;
@@ -655,12 +675,24 @@ export function createVoiceController(transport: RealtimeTransport) {
   let screenCaptureStream: MediaStream | null = null;
   let joinTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let speakingRaf = 0;
+  let voiceActivityPollId = 0;
   let iceServers: RTCIceServer[] = getDefaultIceServers();
   const remoteAnalysers = new Map<
     string,
     { analyser: AnalyserNode; dispose: () => void }
   >();
   const speakingTracker = createSpeakingTracker();
+  /**
+   * Own tracker for the transmit gate. The speaking-ring tracker above is
+   * shared with remote peers and must keep the fixed ring threshold; this one
+   * follows the person's sensitivity slider and its own hangover tail.
+   */
+  const voiceActivityTracker = createSpeakingTracker({
+    threshold: SPEAKING_THRESHOLD,
+    hangoverMs: SPEAKING_HANGOVER_MS,
+  });
+  let vadThreshold = SPEAKING_THRESHOLD;
+  let voiceActivityOpen = false;
   // Peers the server has told us are in *our* room. Signaling from anyone else
   // is dropped so a stray/cross-room offer can never open a mic connection.
   const knownPeerIds = new Set<string>();
@@ -712,6 +744,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     isMuted: false,
     isDeafened: false,
     canSpeak: true,
+    canStream: true,
     inputMode: "voice-activity",
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
     isTransmitting: false,
@@ -833,6 +866,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         ringOnWelcomeChannelId = null;
         releaseCameraCapture();
         pushToTalkHeld = false;
+        voiceActivityOpen = false;
+        voiceActivityTracker.clear();
         state.isTransmitting = false;
         void teardownSfu();
         manager?.dispose();
@@ -879,6 +914,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     releaseScreenCapture();
     releaseCameraCapture();
     pushToTalkHeld = false;
+    voiceActivityOpen = false;
+    voiceActivityTracker.clear();
     state.isTransmitting = false;
     state.status = "idle";
     state.peerId = null;
@@ -922,8 +959,9 @@ export function createVoiceController(transport: RealtimeTransport) {
    * Everything that could close the mic is folded in here rather than at each
    * call site, so there is exactly one expression to get right — and so a mode
    * change, a mute, a deafen and a released key all funnel through the same
-   * recomputation. Mute and deafen outrank push-to-talk deliberately: holding
-   * the key while muted must not transmit, or the mute button would be a lie.
+   * recomputation. Mute and deafen outrank every input mode: holding the key
+   * or crossing the voice-activity line while muted must not transmit, or the
+   * mute button would be a lie.
    */
   function micShouldBeOpen(): boolean {
     // The rule outranks every choice below it: a held push-to-talk key or a
@@ -934,7 +972,56 @@ export function createVoiceController(transport: RealtimeTransport) {
     if (state.isDeafened || state.isMuted) {
       return false;
     }
-    return state.inputMode === "voice-activity" || pushToTalkHeld;
+    if (state.inputMode === "push-to-talk") {
+      return pushToTalkHeld;
+    }
+    return voiceActivityOpen;
+  }
+
+  function applyVadThreshold(value: number) {
+    vadThreshold = parseVadThreshold(value);
+    voiceActivityTracker.setThreshold(vadThreshold);
+  }
+
+  /**
+   * Voice activity has to keep hearing the capture to decide when to open.
+   * Mute, deafen and a missing SPEAK grant still cut the raw track.
+   */
+  function captureShouldStayLive(): boolean {
+    if (!state.canSpeak || state.isDeafened || state.isMuted) {
+      return false;
+    }
+    return state.inputMode === "voice-activity" || state.isTransmitting;
+  }
+
+  /**
+   * Read the local analyser and open or close the outgoing track.
+   *
+   * Called from the speaking loop so the gate and the speaking ring share one
+   * clock. Silence fails closed; a short hangover keeps the last syllable.
+   */
+  function syncVoiceActivityGate() {
+    if (state.inputMode !== "voice-activity") {
+      voiceActivityOpen = false;
+      return;
+    }
+    if (!pipeline || !state.canSpeak || state.isMuted || state.isDeafened) {
+      voiceActivityOpen = false;
+      voiceActivityTracker.update("local", 0, false);
+      return;
+    }
+    // Fail closed if the analyser cannot be read (closed context, test stub).
+    if (typeof pipeline.analyser.getByteFrequencyData !== "function") {
+      voiceActivityOpen = false;
+      voiceActivityTracker.update("local", 0, false);
+      return;
+    }
+    const level = readAnalyserLevel(pipeline.analyser);
+    voiceActivityOpen = voiceActivityTracker.update("local", level, true);
+    if (micShouldBeOpen() !== state.isTransmitting) {
+      applyMute();
+      emit();
+    }
   }
 
   /**
@@ -951,7 +1038,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
     try {
       await sfu.publish(pipeline.processedStream);
-      await sfu.setMuted(!state.isTransmitting);
+      sfuPublicationMuted = null;
+      await applyPublicationMute();
     } catch (err) {
       if (attempt >= 5) {
         state.error = err instanceof Error ? err.message : String(err);
@@ -973,28 +1061,62 @@ export function createVoiceController(transport: RealtimeTransport) {
    * `true` after `false` unlocks the controls and publishes the mic muted,
    * leaving the unmute to the person.
    */
-  function applySpeakRule(canSpeak: boolean, source: "welcome" | "change") {
-    const was = state.canSpeak;
+  function applyPublishRules(
+    canSpeak: boolean,
+    canStream: boolean,
+    source: "welcome" | "change",
+  ) {
+    const wasSpeak = state.canSpeak;
+    const wasStream = state.canStream;
     state.canSpeak = canSpeak;
+    state.canStream = canStream;
     if (!canSpeak) {
       state.isMuted = true;
       applyMute();
+    }
+    if (!canStream) {
       if (screenCaptureStream) {
         void stopScreenShareInternal();
       }
       if (cameraCaptureStream) {
         void stopCameraInternal();
       }
-      if (was || source === "welcome") {
+    }
+    if (source === "welcome") {
+      if (!canSpeak) {
         state.notice = translateMessage("voice.notice.speakDenied");
+      } else if (!canStream) {
+        state.notice = translateMessage("voice.notice.streamDenied");
       }
       return;
     }
-    if (!was && source === "change") {
+    if (wasSpeak && !canSpeak) {
+      state.notice = translateMessage("voice.notice.speakDenied");
+      return;
+    }
+    if (!wasSpeak && canSpeak) {
       applyMute();
       state.notice = translateMessage("voice.notice.speakGranted");
       void publishMicWhenAllowed();
+      return;
     }
+    if (wasStream && !canStream) {
+      state.notice = translateMessage("voice.notice.streamDenied");
+      return;
+    }
+    if (!wasStream && canStream) {
+      state.notice = translateMessage("voice.notice.streamGranted");
+    }
+  }
+
+  function publishFlagsFrom(message: {
+    canSpeak?: boolean;
+    canStream?: boolean;
+    self?: { canSpeak?: boolean; canStream?: boolean };
+  }): { canSpeak: boolean; canStream: boolean } {
+    const canSpeak = message.canSpeak ?? message.self?.canSpeak ?? true;
+    const canStream = message.canStream ?? message.self?.canStream ?? canSpeak;
+    return { canSpeak, canStream };
   }
 
   function applyMuteToPipeline() {
@@ -1005,9 +1127,26 @@ export function createVoiceController(transport: RealtimeTransport) {
     for (const track of pipeline.processedStream.getAudioTracks()) {
       track.enabled = state.isTransmitting;
     }
+    const captureLive = captureShouldStayLive();
     for (const track of pipeline.rawStream.getAudioTracks()) {
-      track.enabled = state.isTransmitting;
+      track.enabled = captureLive;
     }
+  }
+
+  /**
+   * LiveKit publication mute is the remote-visible mute: user mute, deafen,
+   * or SPEAK revoked. Voice-activity word boundaries only flip
+   * `track.enabled` — publishing mute on every syllable fans TrackMuted to
+   * the whole room.
+   */
+  function publicationShouldBeMuted(): boolean {
+    if (!state.canSpeak || state.isDeafened || state.isMuted) {
+      return true;
+    }
+    if (state.inputMode === "voice-activity") {
+      return false;
+    }
+    return !state.isTransmitting;
   }
 
   /**
@@ -1015,14 +1154,26 @@ export function createVoiceController(transport: RealtimeTransport) {
    *
    * Disabling the track is what stops mesh peers hearing anything — an
    * `enabled: false` track sends silence over the existing sender, which is why
-   * push-to-talk never renegotiates. LiveKit needs to be told separately: it
-   * has its own publication state, and leaving that unmuted would keep sending
-   * (silent) packets and, worse, keep the SFU's own speaking indicator lit for
-   * everyone else in the room.
+   * push-to-talk never renegotiates. LiveKit still needs `published.mute()`
+   * when the person meant to be muted (or is on push-to-talk between presses).
    */
+  let sfuPublicationMuted: boolean | null = null;
+
+  function applyPublicationMute() {
+    const next = publicationShouldBeMuted();
+    if (!sfu || sfuPublicationMuted === next) {
+      return Promise.resolve();
+    }
+    sfuPublicationMuted = next;
+    return sfu.setMuted(next).catch((err) => {
+      sfuPublicationMuted = null;
+      throw err;
+    });
+  }
+
   function applyMute() {
     applyMuteToPipeline();
-    void sfu?.setMuted(!state.isTransmitting);
+    applyPublicationMute();
   }
 
   /**
@@ -1079,7 +1230,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       if (sfu) {
         await sfu.replaceTrack(pipeline.processedStream);
-        await sfu.setMuted(!state.isTransmitting);
+        sfuPublicationMuted = null;
+        await applyPublicationMute();
       }
       emit();
     } catch (err) {
@@ -1117,12 +1269,33 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
   }
 
+  function stopVoiceActivityPoll() {
+    if (voiceActivityPollId) {
+      clearInterval(voiceActivityPollId);
+      voiceActivityPollId = 0;
+    }
+  }
+
+  function startVoiceActivityPoll() {
+    stopVoiceActivityPoll();
+    const id = setInterval(syncVoiceActivityGate, VOICE_ACTIVITY_POLL_MS);
+    // Node test runners treat a live interval as an open handle. The browser
+    // returns a number, which has no unref; a Timeout does.
+    if (typeof id === "object" && id !== null && "unref" in id) {
+      (id as { unref: () => void }).unref();
+    }
+    voiceActivityPollId = id as unknown as number;
+  }
+
   function stopSpeakingLoop() {
     if (speakingRaf) {
       cancelAnimationFrame(speakingRaf);
       speakingRaf = 0;
     }
+    stopVoiceActivityPoll();
     speakingTracker.clear();
+    voiceActivityTracker.clear();
+    voiceActivityOpen = false;
     if (state.speakingPeerIds.length > 0) {
       state.speakingPeerIds = [];
       emit();
@@ -1131,8 +1304,12 @@ export function createVoiceController(transport: RealtimeTransport) {
 
   function startSpeakingLoop() {
     stopSpeakingLoop();
+    startVoiceActivityPoll();
     const tick = () => {
       const next: string[] = [];
+      // The interval keeps the gate alive on a hidden tab. This rAF path is
+      // the low-latency one while the tab is visible.
+      syncVoiceActivityGate();
       // `isTransmitting`, not `!isMuted`: in push-to-talk between presses the
       // mic is live and the analyser still reads a level, but nobody can hear
       // it. Lighting the speaking ring then would be the panel claiming you are
@@ -1174,6 +1351,7 @@ export function createVoiceController(transport: RealtimeTransport) {
   async function teardownSfu() {
     const session = sfu;
     sfu = null;
+    sfuPublicationMuted = null;
     state.usingSfu = false;
     identities.clear();
     if (session) {
@@ -1487,9 +1665,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       // LiveKit would refuse it. The mic is published if SPEAK arrives later.
       if (pipeline && state.canSpeak) {
         await sfu.publish(pipeline.processedStream);
-        // The gate, not the mute flag — a push-to-talk user who joins an SFU
-        // room without the key down must be published muted.
-        await sfu.setMuted(!state.isTransmitting);
+        sfuPublicationMuted = null;
+        // Push-to-talk joins muted. Voice activity keeps the publication
+        // live and gates with `track.enabled` so word boundaries do not
+        // signal TrackMuted to the room.
+        await applyPublicationMute();
       }
       // Before anything is published, so a camera or a share carried across a
       // reconnect is republished at the chosen quality. Without this a session
@@ -1642,6 +1822,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     releaseScreenCapture();
     releaseCameraCapture();
     pushToTalkHeld = false;
+    voiceActivityOpen = false;
+    voiceActivityTracker.clear();
     state = {
       status: "idle",
       peerId: null,
@@ -1649,6 +1831,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       isMuted: false,
       isDeafened: false,
       canSpeak: true,
+      canStream: true,
       inputMode: state.inputMode,
       isTransmitting: false,
       error: null,
@@ -1801,8 +1984,9 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.self = message.self;
           state.roomTransport = roomTransport;
           state.status = "connected";
-          applySpeakRule(
-            message.canSpeak ?? message.self.canSpeak ?? true,
+          applyPublishRules(
+            publishFlagsFrom(message).canSpeak,
+            publishFlagsFrom(message).canStream,
             "change",
           );
           for (const peer of welcomePeers) {
@@ -1834,8 +2018,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.transportFailure = null;
         // Before any media is built, so a listener's SFU session never tries
         // to publish and a mesh listener's track starts disabled.
-        applySpeakRule(
-          message.canSpeak ?? message.self.canSpeak ?? true,
+        applyPublishRules(
+          publishFlagsFrom(message).canSpeak,
+          publishFlagsFrom(message).canStream,
           "welcome",
         );
 
@@ -1945,7 +2130,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         ) {
           return;
         }
-        applySpeakRule(message.canSpeak, "change");
+        applyPublishRules(
+          message.canSpeak,
+          message.canStream ?? message.canSpeak,
+          "change",
+        );
         emit();
         break;
       case "peer-joined": {
@@ -2179,7 +2368,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Never inherit a key held from before the join — there is no keyup owed
       // to us for a press that happened while we were not in a call.
       pushToTalkHeld = false;
+      voiceActivityOpen = false;
+      voiceActivityTracker.clear();
       state.inputMode = options?.inputMode ?? state.inputMode;
+      if (options?.vadThreshold !== undefined) {
+        applyVadThreshold(options.vadThreshold);
+      }
       state.isTransmitting = micShouldBeOpen();
       emit();
 
@@ -2371,15 +2565,20 @@ export function createVoiceController(transport: RealtimeTransport) {
      *   NOT mean a silent share: a Chrome tab share still carries that tab's
      *   own audio, which is the route that cannot echo. See
      *   `lib/screen-capture-audio.ts` for why the default moved.
+     * @param intent Watch party passes `{ preferBrowserTab: true }` so the
+     *   picker steers at a tab. That path never takes `shareSystemAudio`.
      */
-    async startScreenShare(shareSystemAudio = false) {
+    async startScreenShare(
+      shareSystemAudio = false,
+      intent: ScreenCaptureIntent = {},
+    ) {
       if (state.status !== "connected") {
         return;
       }
       // Presenting is speaking. The button is hidden for a listener; this is
       // for the keyboard shortcut and the desktop menu.
-      if (!state.canSpeak) {
-        state.notice = translateMessage("voice.notice.speakDenied");
+      if (!state.canStream) {
+        state.notice = translateMessage("voice.notice.streamDenied");
         emit();
         return;
       }
@@ -2414,6 +2613,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       const options = screenCaptureOptions(
         shareSystemAudio,
         screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null),
+        intent,
       );
       // What was actually asked for, not what was ticked. In a browser this is
       // true even unticked, because a tab share carries the tab's own sound and
@@ -2634,8 +2834,8 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
-      if (!state.canSpeak) {
-        state.notice = translateMessage("voice.notice.speakDenied");
+      if (!state.canStream) {
+        state.notice = translateMessage("voice.notice.streamDenied");
         emit();
         return;
       }
@@ -2881,10 +3081,27 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       state.inputMode = mode;
       // A key held while the mode changes is owed a keyup that may never be
-      // recognised as ours. Drop it and start closed.
+      // recognised as ours. Drop it and start closed. Voice activity starts
+      // closed too: the speaking loop reopens it on the next frame that is
+      // actually above the line.
       pushToTalkHeld = false;
+      voiceActivityOpen = false;
+      voiceActivityTracker.clear();
       applyMute();
       emit();
+    },
+
+    /**
+     * Sensitivity for voice-activity mode. Mid-call it only changes the
+     * tracker threshold — no recapture, no renegotiation.
+     */
+    setVadThreshold(threshold: number) {
+      const next = parseVadThreshold(threshold);
+      if (vadThreshold === next) {
+        return;
+      }
+      applyVadThreshold(next);
+      syncVoiceActivityGate();
     },
 
     /**

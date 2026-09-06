@@ -114,6 +114,73 @@ describe("summariseStats", () => {
     expect(paths[0]!.relayed).toBe(true);
   });
 
+  it("puts inbound packet counts on the selected path, audio included", () => {
+    const audio: RtcStatLike = {
+      id: "IA1",
+      type: "inbound-rtp",
+      kind: "audio",
+      packetsLost: 3,
+      packetsReceived: 97,
+    };
+    const marks = new Map();
+    const first = summariseStats(
+      PEER,
+      report([audio]),
+      roles,
+      new Map(),
+      undefined,
+      undefined,
+      marks,
+    );
+    // First window has no previous mark, same as bitrate.
+    expect(first.paths[0]!.packetsLost).toBeNull();
+    expect(first.paths[0]!.packetsReceived).toBeNull();
+
+    const later: RtcStatLike = { ...audio, packetsLost: 5, packetsReceived: 195 };
+    const { paths } = summariseStats(
+      PEER,
+      report([later]),
+      roles,
+      new Map(),
+      undefined,
+      undefined,
+      marks,
+    );
+    expect(paths[0]!.packetsLost).toBe(2);
+    expect(paths[0]!.packetsReceived).toBe(98);
+  });
+
+  it("windows path loss so an early bad patch does not pin the bar", () => {
+    const inbound = (lost: number, received: number): RtcStatLike => ({
+      id: "IA1",
+      type: "inbound-rtp",
+      kind: "audio",
+      packetsLost: lost,
+      packetsReceived: received,
+    });
+    const marks = new Map();
+    summariseStats(
+      PEER,
+      report([inbound(40, 60)]),
+      roles,
+      new Map(),
+      undefined,
+      undefined,
+      marks,
+    );
+    const clean = summariseStats(
+      PEER,
+      report([inbound(40, 260)]),
+      roles,
+      new Map(),
+      undefined,
+      undefined,
+      marks,
+    );
+    expect(clean.paths[0]!.packetsLost).toBe(0);
+    expect(clean.paths[0]!.packetsReceived).toBe(200);
+  });
+
   it("falls back to the nominated pair when no transport names one", () => {
     const withoutTransport = report()
       .filter((stat) => stat.type !== "transport")

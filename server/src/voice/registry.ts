@@ -196,6 +196,7 @@ export interface VoicePeerRow {
   cameraStreamId: string | null;
   screenAudioStreamId: string | null;
   canSpeak: boolean;
+  canStream: boolean;
   canResume: boolean;
   orphanedAt: Date | null;
 }
@@ -218,6 +219,7 @@ interface VoicePeerDbRow {
   camera_stream_id: string | null;
   screen_audio_stream_id: string | null;
   can_speak: boolean;
+  can_stream: boolean;
   can_resume: boolean;
   orphaned_at: Date | null;
 }
@@ -236,6 +238,7 @@ function mapRow(row: VoicePeerDbRow): VoicePeerRow {
     cameraStreamId: row.camera_stream_id,
     screenAudioStreamId: row.screen_audio_stream_id,
     canSpeak: row.can_speak,
+    canStream: row.can_stream,
     canResume: row.can_resume,
     orphanedAt: row.orphaned_at,
   };
@@ -243,7 +246,7 @@ function mapRow(row: VoicePeerDbRow): VoicePeerRow {
 
 const PEER_COLUMNS = `peer_id, channel_id, user_id, instance_id, display_name, avatar_url,
        muted, deafened, sharing_screen, camera_stream_id, screen_audio_stream_id,
-       can_speak, can_resume, orphaned_at`;
+       can_speak, can_stream, can_resume, orphaned_at`;
 /** The same list qualified as `p.<column>`, for statements that join `voice_peers p`. */
 const PEER_COLUMNS_OF_P = PEER_COLUMNS.split(",")
   .map((column) => `p.${column.trim()}`)
@@ -277,8 +280,8 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
         `INSERT INTO voice_peers (
            peer_id, channel_id, user_id, instance_id, display_name, avatar_url,
            muted, deafened, sharing_screen, camera_stream_id,
-           screen_audio_stream_id, can_speak, can_resume, orphaned_at
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+           screen_audio_stream_id, can_speak, can_stream, can_resume, orphaned_at
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          ON CONFLICT (peer_id) DO UPDATE SET
            channel_id = EXCLUDED.channel_id,
            user_id = EXCLUDED.user_id,
@@ -291,6 +294,7 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
            camera_stream_id = EXCLUDED.camera_stream_id,
            screen_audio_stream_id = EXCLUDED.screen_audio_stream_id,
            can_speak = EXCLUDED.can_speak,
+           can_stream = EXCLUDED.can_stream,
            can_resume = EXCLUDED.can_resume,
            orphaned_at = EXCLUDED.orphaned_at,
            updated_at = NOW()`,
@@ -307,6 +311,7 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
           peer.cameraStreamId,
           peer.screenAudioStreamId,
           peer.canSpeak,
+          peer.canStream,
           peer.canResume,
           peer.orphanedAt,
         ],
@@ -442,7 +447,7 @@ interface RosterDbRow extends VoicePeerDbRow {
 const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport,
        p.peer_id, p.channel_id, p.user_id, p.instance_id, p.display_name,
        p.avatar_url, p.muted, p.deafened, p.sharing_screen, p.camera_stream_id,
-       p.screen_audio_stream_id, p.can_speak, p.can_resume, p.orphaned_at
+       p.screen_audio_stream_id, p.can_speak, p.can_stream, p.can_resume, p.orphaned_at
   FROM voice_rooms r
   LEFT JOIN voice_peers p ON p.channel_id = r.channel_id`;
 

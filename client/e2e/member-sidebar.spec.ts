@@ -277,7 +277,7 @@ test("a second account coming online moves out of Offline while you watch", asyn
     // The guest opens a real client. Nothing is clicked on the first page.
     await openAs(second.page, path, "roster-h");
 
-    // Status is a pull surface by design; the sidebar's `presence-update` nudge
+    // Status is a pull surface by design; the shell's `presence-update` nudge
     // usually lands this in about a second, and the 15s poll is the ceiling.
     await expect(
       section(page, "online").getByText(shared.guest.displayName),

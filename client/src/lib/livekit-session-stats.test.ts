@@ -33,6 +33,7 @@ const RoomEvent = {
   ParticipantDisconnected: "participantDisconnected",
   Disconnected: "disconnected",
   ConnectionStateChanged: "connectionStateChanged",
+  ConnectionQualityChanged: "connectionQualityChanged",
   MediaDevicesError: "mediaDevicesError",
 };
 

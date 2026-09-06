@@ -1,7 +1,13 @@
 import { Loader2, MicOff, PhoneOff, ScreenShare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
+import { VoiceQualityMeter } from "@/components/voice/voice-quality-meter";
+import { useVoiceLinkQuality } from "@/hooks/use-voice-link-quality";
 import { useTranslation } from "@/lib/i18n";
+import {
+  aggregateQuality,
+  type VoiceLinkQuality,
+} from "@/lib/voice-link-quality";
 import { cn } from "@/lib/utils";
 
 interface VoiceStatusBarProps {
@@ -31,6 +37,11 @@ interface VoiceStatusBarProps {
    * the rest of the app, and a locked mic with no label reads as broken.
    */
   listenOnly?: boolean;
+  /**
+   * SFU readings already attached to remote peers. The mesh half is sampled
+   * here; this list is how LiveKit's Excellent / Good / Poor reach the strip.
+   */
+  peerQualities?: VoiceLinkQuality[];
   onOpen: () => void;
   onLeave: () => void;
 }
@@ -50,12 +61,18 @@ export function VoiceStatusBar({
   inputMode = "voice-activity",
   isTransmitting = true,
   listenOnly = false,
+  peerQualities = [],
   onOpen,
   onLeave,
 }: VoiceStatusBarProps) {
   const { t } = useTranslation();
   const connected = status === "connected";
   const total = peerCount + 1;
+  const meshQuality = useVoiceLinkQuality(connected);
+  const quality = aggregateQuality([
+    ...Object.values(meshQuality),
+    ...peerQualities,
+  ]);
 
   return (
     <div className="border-t border-ink-4/60 bg-ink px-2 py-2">
@@ -86,6 +103,9 @@ export function VoiceStatusBar({
             </span>
           )}
         </p>
+        {connected && (
+          <VoiceQualityMeter quality={quality} compact className="shrink-0" />
+        )}
         {isPresenting && (
           <span className="flex shrink-0 items-center gap-1 rounded bg-signal/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-signal">
             <ScreenShare className="h-3 w-3" aria-hidden="true" />
@@ -101,8 +121,7 @@ export function VoiceStatusBar({
             {t("voice.bar.listenOnly")}
           </span>
         )}
-        {/* i18n: needs `voice.bar.pttLive` / `voice.bar.pttIdle`. */}
-        {connected && inputMode === "push-to-talk" && !isMuted && (
+        {connected && !isMuted && !listenOnly && (
           <span
             className={cn(
               "shrink-0 rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide",
@@ -111,7 +130,13 @@ export function VoiceStatusBar({
                 : "bg-ink-3 text-paper-muted",
             )}
           >
-            {isTransmitting ? "Live" : "PTT"}
+            {inputMode === "push-to-talk"
+              ? isTransmitting
+                ? t("voice.bar.pttLive")
+                : t("voice.bar.pttIdle")
+              : isTransmitting
+                ? t("voice.bar.vadLive")
+                : t("voice.bar.vadIdle")}
           </span>
         )}
         {usingSfu && (

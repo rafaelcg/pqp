@@ -47,7 +47,7 @@ import {
   evictSfuUsersExcept,
   setSfuUserCanPublish,
 } from "../voice/admin.js";
-import { resolveCanSpeak } from "../voice/speak.js";
+import { resolveVoicePublish } from "../voice/speak.js";
 import {
   getServerVoiceBackend,
   isLiveKitConfigured,
@@ -126,11 +126,14 @@ interface VoicePeer {
   /**
    * `Permission.SPEAK` as resolved at join (and re-resolved by
    * `reevaluateVoiceSpeak` when the server's permissions change). Unlike
-   * `muted` this IS enforcement: it gates share and camera declarations here,
-   * and on the SFU it is the publish grant. In a mesh room the media never
-   * touches this process, so there the client is what honours it.
+   * `muted` this IS enforcement: it gates the unmute declaration here, and
+   * on the SFU it is the microphone publish grant.
    */
   canSpeak: boolean;
+  /**
+   * `Permission.STREAM`: camera and screen share. Independent of SPEAK.
+   */
+  canStream: boolean;
   /** Set when the socket closed; cleared on resume. Absent = live. */
   orphanedAt?: number;
   orphanTimer?: ReturnType<typeof setTimeout>;
@@ -277,6 +280,7 @@ function writePeerRow(peer: VoicePeer): void {
       cameraStreamId: peer.cameraStreamId,
       screenAudioStreamId: peer.screenAudioStreamId,
       canSpeak: peer.canSpeak,
+      canStream: peer.canStream,
       canResume: peer.canResume,
       orphanedAt:
         peer.orphanedAt === undefined ? null : new Date(peer.orphanedAt),
@@ -298,6 +302,7 @@ function rowToParticipant(row: VoicePeerRow): VoiceParticipant {
     muted: row.muted,
     deafened: row.deafened,
     canSpeak: row.canSpeak,
+    canStream: row.canStream,
   };
 }
 
@@ -772,6 +777,7 @@ function toParticipant(peer: VoicePeer): VoiceParticipant {
     muted: peer.muted,
     deafened: peer.deafened,
     canSpeak: peer.canSpeak,
+    canStream: peer.canStream,
   };
 }
 
@@ -1507,6 +1513,7 @@ async function welcomeVoicePeer(
     resumed: resumed || undefined,
     resumeToken: resumeToken ?? undefined,
     canSpeak: peer.canSpeak,
+    canStream: peer.canStream,
   });
 
   // What the room is watching, to this socket alone and only if there is a
@@ -1651,9 +1658,10 @@ export async function handleVoiceMessage(
       refuseResume();
       return;
     }
-    // SPEAK rides on the same resolution as CONNECT: one query, two bits. A
-    // conversation has neither roles nor overwrites, so it stays true there.
+    // SPEAK and STREAM ride on the same resolution as CONNECT: one query.
+    // A conversation has neither roles nor overwrites, so both stay true there.
     let canSpeak = true;
+    let canStream = true;
     if (channel.kind === "server" && channel.server_id) {
       const perms = await computeMemberPermissions(
         channel.server_id,
@@ -1665,6 +1673,7 @@ export async function handleVoiceMessage(
         return;
       }
       canSpeak = hasPermission(perms, Permission.SPEAK);
+      canStream = hasPermission(perms, Permission.STREAM);
     }
 
     // What this room would open on, if this join is the one that opens it. A
@@ -1916,8 +1925,14 @@ export async function handleVoiceMessage(
       // this welcome; the SFU grant for a still-connected participant is the
       // live path's job (`reevaluateVoiceSpeak`), which ran when it changed.
       resume.peer.canSpeak = canSpeak;
+      resume.peer.canStream = canStream;
       if (!canSpeak) {
         resume.peer.muted = true;
+      }
+      if (!canStream) {
+        resume.peer.sharingScreen = false;
+        resume.peer.screenAudioStreamId = null;
+        resume.peer.cameraStreamId = null;
       }
       await reattachVoicePeer(resume.peer, socket, user);
       return;
@@ -1962,9 +1977,10 @@ export async function handleVoiceMessage(
       muted: (adopted?.muted ?? false) || !canSpeak,
       deafened: adopted?.deafened ?? false,
       canSpeak,
+      canStream,
       canResume: payload.resume === true,
     };
-    if (adopted && !canSpeak) {
+    if (adopted && !canStream) {
       peer.sharingScreen = false;
       peer.cameraStreamId = null;
       peer.screenAudioStreamId = null;
@@ -2057,7 +2073,7 @@ export async function handleVoiceMessage(
     //
     // Presenting is speaking: no SPEAK, no share. The client already hides
     // the button; this refuses the roster claim from one that did not.
-    if (payload.sharing && !peer.canSpeak) {
+    if (payload.sharing && !peer.canStream) {
       send(peer.socket, {
         type: "screen-share-denied",
         voiceChannelId: peer.voiceChannelId,
@@ -2211,7 +2227,7 @@ export async function handleVoiceMessage(
     // same tick as the write, and never refuse a live camera that is only
     // re-declaring (a device switch sends a new stream id). Turning off is
     // always allowed.
-    if (payload.streamId && !peer.canSpeak) {
+    if (payload.streamId && !peer.canStream) {
       send(peer.socket, {
         type: "camera-denied",
         voiceChannelId: peer.voiceChannelId,
@@ -2874,40 +2890,45 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
     }
     let rosterDirty = false;
     for (const [userId, userPeers] of byUser) {
-      let next: boolean;
+      let next;
       try {
-        next = await resolveCanSpeak(channel, voiceChannelId, userId);
+        next = await resolveVoicePublish(channel, voiceChannelId, userId);
       } catch (error) {
         console.error("[voice] speak re-check failed:", error);
         continue;
       }
-      const changed = userPeers.filter((peer) => peer.canSpeak !== next);
+      const changed = userPeers.filter(
+        (peer) =>
+          peer.canSpeak !== next.canSpeak || peer.canStream !== next.canStream,
+      );
       if (changed.length === 0) {
         continue;
       }
       rosterDirty = true;
       for (const peer of changed) {
-        peer.canSpeak = next;
-        if (!next) {
-          // A presenter who lost SPEAK is no longer presenting. The client
-          // stops the capture on the frame below; the SFU drops the tracks
-          // with the grant; this keeps the roster from advertising either.
+        peer.canSpeak = next.canSpeak;
+        peer.canStream = next.canStream;
+        if (!next.canSpeak) {
+          peer.muted = true;
+        }
+        if (!next.canStream) {
           peer.sharingScreen = false;
           peer.screenAudioStreamId = null;
           peer.cameraStreamId = null;
-          peer.muted = true;
         }
         send(peer.socket, {
           type: "voice-speak-changed",
           voiceChannelId,
-          canSpeak: next,
+          canSpeak: next.canSpeak,
+          canStream: next.canStream,
         });
         writePeerRow(peer);
       }
       logEvent("voice.speakChanged", {
         userId,
         voiceChannelId,
-        canSpeak: next,
+        canSpeak: next.canSpeak,
+        canStream: next.canStream,
         transport: getRoomTransport(voiceChannelId),
       });
       if (getRoomTransport(voiceChannelId) === "livekit") {

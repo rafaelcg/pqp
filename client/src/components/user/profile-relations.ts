@@ -313,8 +313,11 @@ export interface ProfileModerationBits {
   ban: boolean;
   timeout: boolean;
   mute: boolean;
+  move: boolean;
   nicknames: boolean;
   manageRoles: boolean;
+  canMuteIn: (channelId: string) => boolean;
+  canMoveIn: (channelId: string) => boolean;
 }
 
 export interface ProfileModerationContext {

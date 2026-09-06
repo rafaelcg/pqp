@@ -13,6 +13,7 @@ import {
   createAvatarUploadSchema,
   createServerImageUploadSchema,
   createBlockSchema,
+  createChannelMessageSchema,
   createChannelSchema,
   moveChannelSchema,
   createDmSchema,
@@ -127,8 +128,10 @@ import {
   forEachAuthenticatedSocket,
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
+  postChannelMessage,
   resolveEmbedInBackground,
   resolveStatuses,
+  takeMessageBudget,
 } from "../ws/index.js";
 import {
   // --- voice moderation ---
@@ -150,8 +153,13 @@ import {
   isVoiceRegistryEnabled,
   readVoiceRoomTransport,
 } from "../voice/registry.js";
-import { resolveCanSpeak } from "../voice/speak.js";
-import { invalidateUserCache, resolveAuthSession } from "../auth/clerk.js";
+import { resolveVoicePublish } from "../voice/speak.js";
+import {
+  createDesktopSignInToken,
+  invalidateUserCache,
+  isClerkUserId,
+  resolveAuthSession,
+} from "../auth/clerk.js";
 import {
   AGE_GATE_BLOCKED_MESSAGE,
   AGE_GATE_PENDING_MESSAGE,
@@ -174,6 +182,7 @@ import {
   sendJson,
 } from "../lib/http.js";
 import { Etagged, etagged } from "../lib/etag.js";
+import { logEvent } from "../lib/log.js";
 import {
   clientAddress,
   createRateLimiter,
@@ -261,6 +270,8 @@ import {
   getOutgoingWebhookRow,
   listOutgoingWebhooks,
   rotateOutgoingWebhookSecret,
+  serverHasActiveOutgoingWebhook,
+  statusWithCharacterHook,
   updateOutgoingWebhook,
 } from "../services/outgoing-webhooks.js";
 import {
@@ -511,6 +522,15 @@ const connectionLimiter = createRateLimiter({
   refillPerSecond: 0.2,
 });
 /**
+ * Minting a desktop handoff ticket hits Clerk on the request path. A handful
+ * of retries is a person clicking twice; a scripted flood would burn the
+ * Backend API quota and produce live sign-in tokens.
+ */
+const desktopHandoffLimiter = createRateLimiter({
+  capacity: 8,
+  refillPerSecond: 0.2,
+});
+/**
  * Search is also per-keystroke, but the expensive party is our own database
  * rather than a third party's quota: one query ranks every visible message in a
  * server. The burst covers a debounced session of typing plus paging through
@@ -676,6 +696,7 @@ export function resetApiRateLimits(): void {
   anonLimiter.reset();
   gifLimiter.reset();
   connectionLimiter.reset();
+  desktopHandoffLimiter.reset();
   searchLimiter.reset();
   uploadLimiter.reset();
   homeCommentLimiter.reset();
@@ -890,6 +911,38 @@ function refuseCharacterSelfService(user: DbUser): void {
     );
   }
 }
+
+// ---------------------------------------------------------------- desktop
+
+/**
+ * One-shot Clerk ticket so the Electron shell can adopt a session the user
+ * finished in their system browser. Age-gate exempt on purpose: a new sign-up
+ * has never seen the dialog, and the ticket only transfers identity.
+ */
+router.post("/api/desktop/handoff", async ({ req, res, user }) => {
+  if (!isClerkUserId(user.clerk_id)) {
+    throw new HttpError(403, "Desktop handoff is only for Clerk accounts");
+  }
+  const key = `user:${user.id}`;
+  if (!desktopHandoffLimiter.take(key)) {
+    res.setHeader("Retry-After", String(desktopHandoffLimiter.retryAfter(key)));
+    throw new HttpError(429, "Slow down");
+  }
+  try {
+    const ticket = await createDesktopSignInToken(user.clerk_id);
+    const uaRaw = req.headers["user-agent"];
+    const ua = Array.isArray(uaRaw) ? uaRaw[0] : uaRaw;
+    logEvent("desktop.handoff", {
+      userId: user.id,
+      ip: clientAddress(req as never),
+      ua: ua ? ua.slice(0, 200) : undefined,
+    });
+    return { ticket };
+  } catch (error) {
+    console.error("[pqp] desktop handoff mint failed", error);
+    throw new HttpError(503, "Could not start desktop sign-in");
+  }
+});
 
 // ---------------------------------------------------------------- profile
 
@@ -1784,7 +1837,7 @@ router.post("/api/voice/token", async ({ req, user }) => {
   const channel = await requireChannelAccess(body.voiceChannelId, user.id);
   // Resolved at mint time, not copied from the join: a role edit between the
   // two must land in the token. The SFU only ever consults the grant.
-  const canSpeak = await resolveCanSpeak(
+  const { canSpeak, canStream } = await resolveVoicePublish(
     channel,
     body.voiceChannelId,
     user.id,
@@ -1812,7 +1865,7 @@ router.post("/api/voice/token", async ({ req, user }) => {
       body.peerId,
       displayName,
       user.id,
-      { canSpeak },
+      { canSpeak, canStream },
     );
   } catch (error) {
     console.error("[voice] token minting failed:", error);
@@ -3794,6 +3847,73 @@ router.post(
 
 // --------------------------------------------------------------- messages
 
+/**
+ * HTTP send for character accounts. Same `createMessage` + fan-out as the
+ * WebSocket `message-create` frame, gated on `users.is_character` and the
+ * existing `Bearer character:<token>` branch. A Clerk session cannot use
+ * this; a character that is not in the channel gets the same 404 as any
+ * other access miss.
+ *
+ * Text only. Attachments, chance and polls stay on the socket. A thread
+ * reply is a POST to the thread's channel id.
+ */
+router.post(
+  "/api/channels/:channelId/messages",
+  async ({ req, res, user }, { channelId }) => {
+    if (!user.is_character) {
+      throw new Forbidden(
+        "Only a character account can send messages over HTTP",
+      );
+    }
+    const body = createChannelMessageSchema.parse(await readJsonBody(req));
+    // The same per-user send bucket the socket charges, on top of the
+    // API-wide `writeLimiter`. Without it HTTP would allow a burst three
+    // times the size the socket does for the same account.
+    const budget = takeMessageBudget(user.id);
+    if (!budget.ok) {
+      res.setHeader(
+        "Retry-After",
+        String(Math.max(1, Math.ceil(budget.retryAfterMs / 1000))),
+      );
+      throw new HttpError(429, "Slow down");
+    }
+    const posted = await postChannelMessage({
+      author: user,
+      channelId: channelId!,
+      body: body.body,
+      replyToId: body.replyToId,
+    });
+    if (!posted.ok) {
+      switch (posted.reason) {
+        case "no-access":
+          throw new NotFound("Channel not found");
+        case "cannot-send":
+          throw new Forbidden("You cannot send messages here");
+        case "undeliverable":
+          throw new Forbidden("You cannot send to this conversation");
+        case "slow-mode":
+        case "rate-limited":
+          if (posted.retryAfterMs && posted.retryAfterMs > 0) {
+            res.setHeader(
+              "Retry-After",
+              String(Math.max(1, Math.ceil(posted.retryAfterMs / 1000))),
+            );
+          }
+          throw new HttpError(429, "Slow down");
+        case "bad-reply":
+          throw new HttpError(400, "Reply is not in this channel");
+        case "empty":
+          throw new HttpError(400, "A message needs a body");
+        default: {
+          posted.reason satisfies never;
+          throw new HttpError(400, "A message needs a body");
+        }
+      }
+    }
+    return created({ message: posted.message });
+  },
+);
+
 router.get(
   "/api/channels/:channelId/messages",
   async ({ url, user }, { channelId }) => {
@@ -4153,11 +4273,22 @@ router.get("/api/servers/:serverId/members", async ({ user }, { serverId }) => {
   await requireServerMember(serverId!, user.id);
   const members = await listServerMembers(serverId!);
   const statuses = resolveStatuses(members.map((member) => member.id));
+  // Characters that only POST have no socket, so the registry calls them
+  // offline. Paint them online on this roster while the server's outgoing
+  // hook is `active` — that is "Grok can still be woken", not a stored
+  // presence bit. A live socket still wins (idle / dnd / invisible).
+  const hookListening = members.some((member) => member.isCharacter)
+    ? await serverHasActiveOutgoingWebhook(serverId!)
+    : false;
   return {
     members: members.map((member) => ({
       ...member,
       // `offline` is the floor, and it is what an invisible member resolves to.
-      status: statuses.get(member.id) ?? "offline",
+      status: statusWithCharacterHook(
+        statuses.get(member.id) ?? "offline",
+        member.isCharacter,
+        hookListening,
+      ),
     })),
   };
 });
@@ -4746,11 +4877,13 @@ async function requireVoiceModeration(
   actorId: string,
   targetUserId: string,
   action: "disconnect" | "move" | "mute",
+  voiceChannelId: string,
 ): Promise<void> {
   await requirePermission(
     serverId,
     actorId,
-    action === "mute" ? Permission.MUTE_MEMBERS : Permission.MODERATE_MEMBERS,
+    action === "mute" ? Permission.MUTE_MEMBERS : Permission.MOVE_MEMBERS,
+    voiceChannelId,
   );
   if (targetUserId === actorId) {
     throw new HttpError(400, "Use the leave button on yourself");
@@ -4769,8 +4902,14 @@ async function requireVoiceModeration(
 router.post(
   "/api/servers/:serverId/members/:userId/voice-disconnect",
   async ({ user }, { serverId, userId }) => {
-    await requireVoiceModeration(serverId!, user.id, userId!, "disconnect");
     const voiceChannelId = await requireVoiceTarget(serverId!, userId!);
+    await requireVoiceModeration(
+      serverId!,
+      user.id,
+      userId!,
+      "disconnect",
+      voiceChannelId,
+    );
 
     await logAudit({
       serverId: serverId!,
@@ -4813,8 +4952,15 @@ const voiceMoveSchema = z.object({ channelId: z.string().uuid() });
 router.post(
   "/api/servers/:serverId/members/:userId/voice-move",
   async ({ req, user }, { serverId, userId }) => {
-    await requireVoiceModeration(serverId!, user.id, userId!, "move");
     const body = voiceMoveSchema.parse(await readJsonBody(req));
+    const fromChannelId = await requireVoiceTarget(serverId!, userId!);
+    await requireVoiceModeration(
+      serverId!,
+      user.id,
+      userId!,
+      "move",
+      fromChannelId,
+    );
 
     const destination = await requireServerChannel(body.channelId);
     if (destination.server_id !== serverId) {
@@ -4834,7 +4980,6 @@ router.post(
       throw new Forbidden("They don't have access to that channel");
     }
 
-    const fromChannelId = await requireVoiceTarget(serverId!, userId!);
     if (fromChannelId === body.channelId) {
       throw new HttpError(400, "They are already in that channel");
     }
@@ -4878,9 +5023,15 @@ const voiceMuteSchema = z.object({ muted: z.boolean() });
 router.post(
   "/api/servers/:serverId/members/:userId/voice-mute",
   async ({ req, user }, { serverId, userId }) => {
-    await requireVoiceModeration(serverId!, user.id, userId!, "mute");
     const body = voiceMuteSchema.parse(await readJsonBody(req));
     const voiceChannelId = await requireVoiceTarget(serverId!, userId!);
+    await requireVoiceModeration(
+      serverId!,
+      user.id,
+      userId!,
+      "mute",
+      voiceChannelId,
+    );
 
     if (getRoomTransport(voiceChannelId) !== "livekit") {
       throw new HttpError(

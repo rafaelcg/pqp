@@ -1,5 +1,11 @@
-import { SignInButton, SignUpButton, useAuth, useUser } from "@clerk/clerk-react";
-import { Lock, Menu, Phone, Pin, Settings, Shield, Users, Video } from "lucide-react";
+import {
+  SignInButton,
+  SignUpButton,
+  useAuth,
+  useSignIn,
+  useUser,
+} from "@clerk/clerk-react";
+import { Lock, Menu, Phone, Pin, Settings, Users, Video } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -18,7 +24,6 @@ import type {
   ChannelKind,
   DmSummary,
   MemberRole,
-  ProfileUpdate,
   SanctionNotice,
   Server,
   ThreadSummary,
@@ -39,9 +44,10 @@ import {
 } from "@/components/layout/app-loading-shell";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { ChannelList } from "@/components/layout/channel-list";
-import { ChannelMembersPanel } from "@/components/layout/channel-members-panel";
-import { WebhooksPanel } from "@/components/layout/webhooks-panel";
-import { ChannelMetaDialog } from "@/components/layout/channel-meta-dialog";
+import {
+  ChannelSettingsDialog,
+  type ChannelSettingsSectionId,
+} from "@/components/layout/channel-settings-dialog";
 import { DmCallStage } from "@/components/dm/dm-call-stage";
 import { IncomingCallOverlay } from "@/components/dm/incoming-call-overlay";
 import { ConnectionBanner } from "@/components/layout/connection-banner";
@@ -92,6 +98,16 @@ import {
   type LocalSettings,
   type SettingsSectionId,
 } from "@/components/layout/settings-modal";
+import { ShortcutOverlay } from "@/components/layout/shortcut-overlay";
+import { isApplePlatform } from "@/lib/composer-formatting";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
+import {
+  channelIsUnread,
+  navigableChannelIds,
+  stepChannelId,
+  stepUnreadChannelId,
+  type ShortcutAction,
+} from "@/lib/keyboard-shortcuts";
 import { SanctionNoticeBar } from "@/components/layout/sanction-notice-bar";
 import { SsoServerSuggestions } from "@/components/layout/sso-server-suggestions";
 import { UserPanel } from "@/components/layout/user-panel";
@@ -110,6 +126,7 @@ import { useCallRating } from "@/hooks/use-call-rating";
 import { usePermissions } from "@/hooks/use-permissions";
 import { ShareHandleButton } from "@/components/handle/share-handle-button";
 import { BetaTag } from "@/components/ui/beta-tag";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { PromptDialog } from "@/components/ui/prompt-dialog";
 import { Tooltip, TooltipProvider } from "@/components/ui/tooltip";
 import { Seo } from "@/components/marketing/seo";
@@ -234,6 +251,17 @@ import {
   pickServerLandingTarget,
 } from "@/lib/community-home";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
+import {
+  applyDesktopAuthStart,
+  completeDesktopSecondFactor,
+  desktopAuthEndedHandoff,
+  desktopSignedOutPath,
+  pickPreferredSecondFactor,
+  redeemDesktopTicket,
+  secondFactorNeedsPrepare,
+  shouldRedeemDesktopTicket,
+  type SecondFactorStrategy,
+} from "@/lib/desktop-auth-flow";
 import { getDesktop } from "@/lib/desktop";
 import {
   describeActivity,
@@ -243,7 +271,9 @@ import {
   unreadByServer,
 } from "@/lib/notifications";
 import { setSoundOutput } from "@/lib/sounds";
+import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
+import { mergeMemberStatuses } from "@/lib/member-roster";
 import { useChannelNotifications } from "@/hooks/use-notifications";
 import { useUserStatus } from "@/hooks/use-status";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
@@ -257,6 +287,7 @@ import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall } from "@/lib/in-call-state";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export type TokenResolver = (options?: {
   forceRefresh?: boolean;
@@ -304,6 +335,7 @@ export function App({ devBypass = false }: AppProps) {
 function ClerkAppGate() {
   const { t } = useTranslation();
   const { isLoaded, isSignedIn } = useAuth();
+  const { signIn, setActive } = useSignIn();
   const location = useLocation();
   stashConnectionCallbackFromWindow(location.pathname, location.search);
   /**
@@ -317,6 +349,188 @@ function ClerkAppGate() {
    * not a route this build recognises.
    */
   const redirectUrl = signedOutRedirectPath(location.pathname);
+  const desktop = getDesktop();
+  const canDesktopAuth = typeof desktop?.startDesktopAuth === "function";
+  const [waiting, setWaiting] = useState(false);
+  const [browserUrl, setBrowserUrl] = useState<string | null>(null);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [authMode, setAuthMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [mfa, setMfa] = useState<{
+    strategy: SecondFactorStrategy;
+    strategies: SecondFactorStrategy[];
+  } | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
+  const [mfaBusy, setMfaBusy] = useState(false);
+  const [inAppFallback, setInAppFallback] = useState(false);
+  const signInRef = useRef(signIn);
+  const setActiveRef = useRef(setActive);
+  const lastTicketRef = useRef<string | null>(null);
+  const queuedTicketRef = useRef<string | null>(null);
+  signInRef.current = signIn;
+  setActiveRef.current = setActive;
+
+  const redeemTicket = useCallback(
+    async (ticket: string) => {
+      const currentSignIn = signInRef.current;
+      const currentSetActive = setActiveRef.current;
+      if (!currentSignIn || !currentSetActive) {
+        queuedTicketRef.current = ticket;
+        return;
+      }
+      if (!shouldRedeemDesktopTicket(lastTicketRef.current, ticket)) {
+        return;
+      }
+      lastTicketRef.current = ticket;
+      queuedTicketRef.current = null;
+      void getDesktop()?.getPendingDesktopAuthTicket?.();
+      setHandoffError(null);
+      setMfa(null);
+      setInAppFallback(false);
+      try {
+        const classified = await redeemDesktopTicket(currentSignIn, ticket);
+        if (classified.kind === "complete") {
+          await currentSetActive({ session: classified.sessionId });
+          return;
+        }
+        if (classified.kind === "second_factor") {
+          const strategy = pickPreferredSecondFactor(classified.strategies);
+          if (secondFactorNeedsPrepare(strategy)) {
+            await currentSignIn.prepareSecondFactor({ strategy });
+          }
+          setWaiting(false);
+          setMfaCode("");
+          setMfa({ strategies: classified.strategies, strategy });
+          return;
+        }
+        setWaiting(false);
+        setHandoffError(t("signedOut.waiting.error"));
+        setInAppFallback(true);
+      } catch {
+        setWaiting(false);
+        setHandoffError(t("signedOut.waiting.error"));
+        setInAppFallback(true);
+      }
+    },
+    [t],
+  );
+
+  const submitDesktopMfa = useCallback(async () => {
+    const currentSignIn = signInRef.current;
+    const currentSetActive = setActiveRef.current;
+    if (!currentSignIn || !currentSetActive || !mfa) {
+      return;
+    }
+    const code = mfaCode.trim();
+    if (!code) {
+      return;
+    }
+    setMfaBusy(true);
+    setHandoffError(null);
+    try {
+      const classified = await completeDesktopSecondFactor(currentSignIn, {
+        strategy: mfa.strategy,
+        code,
+      });
+      if (classified.kind === "complete") {
+        await currentSetActive({ session: classified.sessionId });
+        return;
+      }
+      if (classified.kind === "second_factor") {
+        setHandoffError(t("signedOut.waiting.mfa.error"));
+        return;
+      }
+      setMfa(null);
+      setHandoffError(t("signedOut.waiting.error"));
+      setInAppFallback(true);
+    } catch {
+      setHandoffError(t("signedOut.waiting.mfa.error"));
+    } finally {
+      setMfaBusy(false);
+    }
+  }, [mfa, mfaCode, t]);
+
+  const cancelDesktopMfa = useCallback(() => {
+    setMfa(null);
+    setMfaCode("");
+    setInAppFallback(true);
+  }, []);
+
+  useEffect(() => {
+    if (!signIn) {
+      return;
+    }
+    if (queuedTicketRef.current) {
+      void redeemTicket(queuedTicketRef.current);
+    }
+    if (!canDesktopAuth || !desktop) {
+      return;
+    }
+    void desktop.getPendingDesktopAuthTicket?.().then((ticket) => {
+      if (ticket) {
+        void redeemTicket(ticket);
+      }
+    });
+  }, [canDesktopAuth, desktop, redeemTicket, signIn]);
+
+  useEffect(() => {
+    if (!canDesktopAuth || !desktop) {
+      return;
+    }
+    void desktop.getDesktopAuthStatus?.().then((status) => {
+      if (status?.active) {
+        setWaiting(true);
+        setBrowserUrl(status.url);
+      }
+    });
+    const offTicket = desktop.onDesktopAuthTicket?.((ticket) => {
+      void redeemTicket(ticket);
+    });
+    const offEnded = desktop.onDesktopAuthEnded?.((reason) => {
+      const ended = desktopAuthEndedHandoff(reason);
+      setWaiting(ended.waiting);
+      setBrowserUrl(null);
+      if (ended.expired) {
+        setHandoffError(t("signedOut.waiting.expired"));
+      }
+    });
+    return () => {
+      offTicket?.();
+      offEnded?.();
+    };
+  }, [canDesktopAuth, desktop, redeemTicket, t]);
+
+  const startDesktopAuth = useCallback(
+    async (mode: "sign-in" | "sign-up") => {
+      if (!desktop?.startDesktopAuth) {
+        return;
+      }
+      setAuthMode(mode);
+      setHandoffError(null);
+      setCopied(false);
+      setMfa(null);
+      setMfaCode("");
+      setInAppFallback(false);
+      setWaiting(true);
+      const result = await desktop.startDesktopAuth(mode);
+      const view = applyDesktopAuthStart(result);
+      setBrowserUrl(view.url || null);
+      setWaiting(view.waiting);
+      if (view.failed) {
+        setHandoffError(t("signedOut.waiting.error"));
+      }
+    },
+    [desktop, t],
+  );
+
+  const cancelDesktopAuth = useCallback(() => {
+    void desktop?.cancelDesktopAuth?.();
+    setWaiting(false);
+    setBrowserUrl(null);
+    setHandoffError(null);
+    setMfa(null);
+    setMfaCode("");
+  }, [desktop]);
 
   if (!isLoaded) {
     return <AppLoadingShell label={t("app.loading.signingIn")} />;
@@ -324,7 +538,7 @@ function ClerkAppGate() {
 
   if (!isSignedIn) {
     return (
-      <div className="relative flex h-full flex-col items-start justify-end overflow-hidden p-8 sm:p-12">
+      <div className="relative flex h-full flex-col items-start justify-end overflow-y-auto p-8 sm:p-12">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,var(--glow-accent),transparent_40%)]" />
         <div className="animate-rise relative z-10 max-w-lg">
           <Link
@@ -334,18 +548,152 @@ function ClerkAppGate() {
             pqp.gg
             <BetaTag />
           </Link>
-          <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
-            {t("signedOut.title")}
-          </h1>
-          <p className="mt-4 max-w-sm text-paper-muted">{t("signedOut.body")}</p>
-          <div className="mt-8 flex flex-wrap gap-3">
-            <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
-              <Button>{t("signedOut.createAccount")}</Button>
-            </SignUpButton>
-            <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
-              <Button variant="secondary">{t("nav.signIn")}</Button>
-            </SignInButton>
-          </div>
+          {mfa && canDesktopAuth ? (
+            <>
+              <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
+                {t("signedOut.waiting.mfa.title")}
+              </h1>
+              <p className="mt-4 max-w-sm text-paper-muted">
+                {t("signedOut.waiting.mfa.body")}
+              </p>
+              {handoffError ? (
+                <p className="mt-4 text-danger">{handoffError}</p>
+              ) : null}
+              <form
+                className="mt-8 flex w-full max-w-sm flex-col gap-3"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void submitDesktopMfa();
+                }}
+              >
+                <Input
+                  value={mfaCode}
+                  onChange={(event) => setMfaCode(event.target.value)}
+                  autoComplete="one-time-code"
+                  autoFocus
+                  placeholder={t("signedOut.waiting.mfa.placeholder")}
+                  disabled={mfaBusy}
+                />
+                <Button
+                  className="w-full whitespace-normal"
+                  type="submit"
+                  disabled={mfaBusy}
+                >
+                  {t("signedOut.waiting.mfa.submit")}
+                </Button>
+                <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
+                  <Button
+                    className="w-full whitespace-normal"
+                    variant="secondary"
+                    type="button"
+                  >
+                    {t("signedOut.waiting.inApp")}
+                  </Button>
+                </SignInButton>
+                <Button
+                  className="w-full whitespace-normal"
+                  variant="ghost"
+                  type="button"
+                  onClick={cancelDesktopMfa}
+                >
+                  {t("signedOut.waiting.cancel")}
+                </Button>
+              </form>
+            </>
+          ) : waiting && canDesktopAuth ? (
+            <>
+              <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
+                {t("signedOut.waiting.title")}
+              </h1>
+              <p className="mt-4 max-w-sm text-paper-muted">
+                {t("signedOut.waiting.body")}
+              </p>
+              {handoffError ? (
+                <p className="mt-4 text-danger">{handoffError}</p>
+              ) : null}
+              <div className="mt-8 flex w-full max-w-sm flex-col gap-3">
+                <Button
+                  className="w-full whitespace-normal"
+                  variant="secondary"
+                  onClick={() => {
+                    void startDesktopAuth(authMode);
+                  }}
+                >
+                  {t("signedOut.waiting.reopen")}
+                </Button>
+                {browserUrl ? (
+                  <Button
+                    className="w-full whitespace-normal"
+                    variant="secondary"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(browserUrl).then(() => {
+                        setCopied(true);
+                      });
+                    }}
+                  >
+                    {copied
+                      ? t("signedOut.waiting.copied")
+                      : t("signedOut.waiting.copy")}
+                  </Button>
+                ) : null}
+                <Button
+                  className="w-full whitespace-normal"
+                  variant="ghost"
+                  onClick={cancelDesktopAuth}
+                >
+                  {t("signedOut.waiting.cancel")}
+                </Button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h1 className="font-display text-5xl font-extrabold leading-[0.95] sm:text-6xl">
+                {t("signedOut.title")}
+              </h1>
+              <p className="mt-4 max-w-sm text-paper-muted">{t("signedOut.body")}</p>
+              {handoffError ? (
+                <p className="mt-4 text-danger">{handoffError}</p>
+              ) : null}
+              <div className="mt-8 flex flex-wrap gap-3">
+                {canDesktopAuth ? (
+                  <div className="flex w-full max-w-sm flex-col gap-3">
+                    <Button
+                      className="w-full whitespace-normal"
+                      onClick={() => void startDesktopAuth("sign-up")}
+                    >
+                      {t("signedOut.createAccount")}
+                    </Button>
+                    <Button
+                      className="w-full whitespace-normal"
+                      variant="secondary"
+                      onClick={() => void startDesktopAuth("sign-in")}
+                    >
+                      {t("nav.signIn")}
+                    </Button>
+                    {inAppFallback ? (
+                      <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
+                        <Button
+                          className="w-full whitespace-normal"
+                          variant="ghost"
+                        >
+                          {t("signedOut.waiting.inApp")}
+                        </Button>
+                      </SignInButton>
+                    ) : null}
+                  </div>
+                ) : (
+                  <>
+                    <SignUpButton mode="modal" forceRedirectUrl={redirectUrl}>
+                      <Button>{t("signedOut.createAccount")}</Button>
+                    </SignUpButton>
+                    <SignInButton mode="modal" forceRedirectUrl={redirectUrl}>
+                      <Button variant="secondary">{t("nav.signIn")}</Button>
+                    </SignInButton>
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     );
@@ -499,8 +847,9 @@ function MainAppContent({
       }
     ).Clerk;
     if (!isDevAuthBypassEnabled() && clerk?.signOut) {
-      void clerk.signOut({ redirectUrl: "/" }).catch(() => {
-        window.location.replace("/");
+      const home = desktopSignedOutPath();
+      void clerk.signOut({ redirectUrl: home }).catch(() => {
+        window.location.replace(home);
       });
       return;
     }
@@ -576,22 +925,13 @@ function MainAppContent({
   // in the channel header rather than in the panel.
   const memberSidebar = useMemberSidebar();
   /**
-   * Two live signals the member sidebar cannot receive on its own.
-   *
-   * `memberRosterNudge` is bumped on any `presence-update` frame: status itself
-   * is a pull surface by design (see `server/src/ws/status.ts`), but "somebody
-   * just started looking at a channel in here" is a frame this client already
-   * gets for nothing, and it is the same event as "somebody just came online"
-   * almost every time. The sidebar debounces it into one re-read, which turns a
-   * 15-second worst case into about a second for the case people actually watch.
-   *
-   * `lastProfileUpdate` carries a rename or a new avatar straight into the
-   * roster. A fresh object per frame is what makes the sidebar's effect fire
-   * even when the same person changes the same field twice.
+   * Bumped on any `presence-update` frame. Status itself is a pull surface
+   * (see `server/src/ws/status.ts`); the frame is only "somebody started
+   * looking at a channel in here", which is the cheapest hint that presence
+   * may have moved. The shared roster hook debounces it into one re-read so
+   * both the sidebar and the transcript pips update from the same map.
    */
   const [memberRosterNudge, setMemberRosterNudge] = useState(0);
-  const [lastProfileUpdate, setLastProfileUpdate] =
-    useState<ProfileUpdate | null>(null);
   // Bumped on `community-home-update` for the OPEN server only — Baú refetches
   // its posts rather than the client trying to patch one row from the frame,
   // since the frame carries no post id (see `communityHomeUpdateSchema`).
@@ -618,15 +958,20 @@ function MainAppContent({
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [pinsOpen, setPinsOpen] = useState(false);
-  const [channelMembersChannel, setChannelMembersChannel] =
-    useState<Channel | null>(null);
-  const [webhooksChannel, setWebhooksChannel] = useState<Channel | null>(null);
+  const [channelSettings, setChannelSettings] = useState<{
+    channelId: string;
+    section: ChannelSettingsSectionId;
+    forceAdvanced: boolean;
+  } | null>(null);
   const [channelPrompt, setChannelPrompt] = useState<ChannelPromptState | null>(
     null,
   );
-  const [channelMetaChannel, setChannelMetaChannel] = useState<Channel | null>(
-    null,
-  );
+  const [pendingDeleteChannelId, setPendingDeleteChannelId] = useState<
+    string | null
+  >(null);
+  const [pendingLeaveServerId, setPendingLeaveServerId] = useState<
+    string | null
+  >(null);
   const [composerInsert, setComposerInsert] = useState<string | null>(null);
   const [droppedFiles, setDroppedFiles] = useState<File[] | null>(null);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
@@ -656,6 +1001,10 @@ function MainAppContent({
    * bring back a 401 on every cold boot.
    */
   const friends = useFriendsStore(bootstrapReady);
+  const memberSidebarFriendIds = useMemo(
+    () => new Set(friends.data.friends.map((friend) => friend.id)),
+    [friends.data.friends],
+  );
   /**
    * False on every deployment that has not turned the directory on, which is
    * all of them today. Nothing about Communities renders while it is false —
@@ -957,18 +1306,31 @@ function MainAppContent({
     onHeldChange: handlePushToTalk,
   });
 
-  // Electron: Cmd/Ctrl+Shift+M → toggle mute when connected to voice.
+  // Electron app menu: mute (and deafen on shells that ship the item).
+  // The renderer table owns the same chords on the web; on desktop the
+  // default mute/deafen chords stay with the menu so they do not toggle twice.
   useEffect(() => {
     const desktop = getDesktop();
     if (!desktop) {
       return;
     }
-    return desktop.onToggleMute(() => {
+    const offMute = desktop.onToggleMute(() => {
       if (voice.getState().status === "connected") {
         voice.toggleMute();
       }
     });
+    const offDeafen = desktop.onToggleDeafen?.(() => {
+      if (voice.getState().status === "connected") {
+        voice.toggleDeafen();
+      }
+    });
+    return () => {
+      offMute();
+      offDeafen?.();
+    };
   }, [voice]);
+
+  const [shortcutOverlayOpen, setShortcutOverlayOpen] = useState(false);
 
   const clearUnread = useCallback(async (channelId: string): Promise<string | null> => {
     unreadHoldRef.current.delete(channelId);
@@ -1110,6 +1472,8 @@ function MainAppContent({
       setServerRoles([]);
       return;
     }
+    setServerMembers([]);
+    setMentionMembers([]);
     let cancelled = false;
     void Promise.all([
       fetchMembers(selectedServerId),
@@ -1140,6 +1504,15 @@ function MainAppContent({
       cancelled = true;
     };
   }, [conversationParticipants, selectedServerId]);
+
+  const applyRosterPayload = useCallback((incoming: ServerMember[]) => {
+    setServerMembers((prev) => mergeMemberStatuses(prev, incoming));
+  }, []);
+  useMemberRosterRefresh(
+    conversationParticipants ? null : selectedServerId,
+    memberRosterNudge,
+    applyRosterPayload,
+  );
 
   const mentionCandidates = useMemo(() => {
     if (conversationParticipants) {
@@ -1253,9 +1626,14 @@ function MainAppContent({
       kick: perms.can(Permission.KICK_MEMBERS),
       ban: perms.can(Permission.BAN_MEMBERS),
       timeout: perms.can(Permission.MODERATE_MEMBERS),
-      mute: perms.can(Permission.MUTE_MEMBERS),
+      mute: perms.canAny(Permission.MUTE_MEMBERS),
+      move: perms.canAny(Permission.MOVE_MEMBERS),
       nicknames: perms.can(Permission.MANAGE_NICKNAMES),
       manageRoles: perms.can(Permission.MANAGE_ROLES),
+      canMuteIn: (channelId: string) =>
+        perms.can(Permission.MUTE_MEMBERS, channelId),
+      canMoveIn: (channelId: string) =>
+        perms.can(Permission.MOVE_MEMBERS, channelId),
     }),
     [perms],
   );
@@ -1264,6 +1642,7 @@ function MainAppContent({
     moderationBits.ban ||
     moderationBits.timeout ||
     moderationBits.mute ||
+    moderationBits.move ||
     moderationBits.nicknames ||
     moderationBits.manageRoles;
 
@@ -1797,9 +2176,10 @@ function MainAppContent({
           }
 
           // Somebody started or stopped looking at a channel. The chat
-          // controller wants it for the header count; the member sidebar wants
-          // it as the cheapest available hint that presence has moved. Neither
-          // is the frame's owner, so it is nudged here and still falls through.
+          // controller wants it for the header count; the shared roster
+          // treats it as the cheapest available hint that presence has
+          // moved (status is not on this frame). Neither is the frame's
+          // owner, so it is nudged here and still falls through.
           if (message.type === "presence-update") {
             setMemberRosterNudge((n) => n + 1);
           }
@@ -1912,13 +2292,28 @@ function MainAppContent({
           //
           // The moderation *panel* is not, deliberately: it fetches its own
           // roster when opened and is closed the overwhelming majority of the
-          // time. The member SIDEBAR is the opposite case — it is open all the
-          // time at desktop widths — so the frame is parked here and it patches
-          // itself from it rather than refetching a hundred rows for one name.
+          // time. The shared member roster (sidebar + transcript pips) is the
+          // opposite case — it is on screen all the time at desktop widths —
+          // so name and avatar are patched in place rather than refetching a
+          // hundred rows for one person.
           if (message.type === "profile-update") {
             chat.applyProfileUpdate(message);
             threadChat.applyProfileUpdate(message);
-            setLastProfileUpdate(message);
+            setServerMembers((prev) =>
+              prev.some((one) => one.id === message.userId)
+                ? prev.map((one) =>
+                    one.id === message.userId
+                      ? {
+                          ...one,
+                          displayName: message.displayName,
+                          username: message.username,
+                          tag: message.tag,
+                          avatarUrl: message.avatarUrl,
+                        }
+                      : one,
+                  )
+                : prev,
+            );
             setConversations((prev) =>
               prev.map((conversation) =>
                 conversation.participants.some(
@@ -2164,6 +2559,77 @@ function MainAppContent({
     [openChannel, syncRoute],
   );
 
+  const handleShortcut = useCallback(
+    (action: ShortcutAction) => {
+      switch (action) {
+        case "toggleOverlay":
+          setShortcutOverlayOpen((open) => !open);
+          return;
+        case "toggleMute":
+          if (voice.getState().status === "connected") {
+            voice.toggleMute();
+          }
+          return;
+        case "toggleDeafen":
+          if (voice.getState().status === "connected") {
+            voice.toggleDeafen();
+          }
+          return;
+        case "openUserSettings":
+          setShortcutOverlayOpen(false);
+          setSettingsSection(null);
+          setSettingsOpen(true);
+          return;
+        case "previousChannel":
+        case "nextChannel":
+        case "previousUnreadChannel":
+        case "nextUnreadChannel": {
+          const direction =
+            action === "previousChannel" || action === "previousUnreadChannel"
+              ? -1
+              : 1;
+          const inServer = selection.kind === "server";
+          const ids = inServer
+            ? navigableChannelIds(channels)
+            : conversations.map((conversation) => conversation.channelId);
+          const next =
+            action === "previousUnreadChannel" || action === "nextUnreadChannel"
+              ? stepUnreadChannelId(
+                  ids,
+                  selectedChannelId,
+                  (id) => channelIsUnread(unread, id),
+                  direction,
+                )
+              : stepChannelId(ids, selectedChannelId, direction);
+          if (!next) {
+            return;
+          }
+          if (inServer) {
+            void selectChannel(next);
+          } else {
+            void selectConversation(next);
+          }
+        }
+      }
+    },
+    [
+      channels,
+      conversations,
+      selectChannel,
+      selectConversation,
+      selectedChannelId,
+      selection.kind,
+      unread,
+      voice,
+    ],
+  );
+
+  const shortcutBindings = useKeyboardShortcuts({
+    overrides: localSettings.shortcuts,
+    isMac: isApplePlatform(),
+    onAction: handleShortcut,
+  });
+
   const handleForwardPick = useCallback(
     async (target: ForwardTarget) => {
       const message = forwardMessage;
@@ -2267,7 +2733,11 @@ function MainAppContent({
         if (channel.type !== "category") {
           await selectChannel(channel.id);
           if (channel.isPrivate) {
-            setChannelMembersChannel(channel);
+            setChannelSettings({
+              channelId: channel.id,
+              section: "permissions",
+              forceAdvanced: false,
+            });
           }
         }
         return;
@@ -2290,27 +2760,16 @@ function MainAppContent({
     }
   }
 
-  async function handleTogglePrivate(channel: Channel) {
-    try {
-      const { channel: updated } = await updateChannel(channel.id, {
-        isPrivate: !channel.isPrivate,
-      });
-      setChannels((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
-      if (updated.isPrivate) {
-        setChannelMembersChannel(updated);
-      }
-      setAppError(null);
-    } catch (error) {
-      setAppError(
-        error instanceof Error ? error.message : "Failed to update channel",
-      );
-    }
+  async function handleDeleteChannel(channelId: string) {
+    setPendingDeleteChannelId(channelId);
   }
 
-  async function handleDeleteChannel(channelId: string) {
-    if (!window.confirm(t("chrome.deleteChannelConfirm"))) {
+  async function confirmDeleteChannel() {
+    const channelId = pendingDeleteChannelId;
+    if (!channelId) {
       return;
     }
+    setPendingDeleteChannelId(null);
     try {
       await deleteChannel(channelId);
       // The server SETs NULL any channel's parent_id that pointed at what was
@@ -2468,9 +2927,15 @@ function MainAppContent({
   );
 
   async function handleLeaveServer(serverId: string) {
-    if (!window.confirm(t("chrome.leaveServer"))) {
+    setPendingLeaveServerId(serverId);
+  }
+
+  async function confirmLeaveServer() {
+    const serverId = pendingLeaveServerId;
+    if (!serverId) {
       return;
     }
+    setPendingLeaveServerId(null);
     try {
       await leaveServer(serverId);
       await dropServer(serverId);
@@ -2538,6 +3003,7 @@ function MainAppContent({
       inputVolume: localSettings.inputVolume,
       startMuted: shouldJoinMuted(localSettings.muteOnJoin, occupantsAlreadyInRoom),
       inputMode: localSettings.inputMode,
+      vadThreshold: localSettings.vadThreshold,
       processing: localSettings.micProcessing,
     });
   }
@@ -2583,6 +3049,7 @@ function MainAppContent({
       inputVolume: localSettings.inputVolume,
       startMuted: localSettings.muteOnJoin,
       inputMode: localSettings.inputMode,
+      vadThreshold: localSettings.vadThreshold,
       processing: localSettings.micProcessing,
     };
     if (ring) {
@@ -2618,6 +3085,7 @@ function MainAppContent({
     // in, and switching it mid-call only flips `track.enabled`, so there is no
     // reason to defer it and no risk of interrupting anything.
     voice.setInputMode(next.inputMode);
+    voice.setVadThreshold(next.vadThreshold);
     if (
       next.inputDeviceId !== prevDeviceId &&
       voice.getState().status !== "idle"
@@ -3583,6 +4051,9 @@ function MainAppContent({
           usingSfu={voiceState.usingSfu}
           isPresenting={voiceState.screenSharePeerIds.length > 0}
           listenOnly={!voiceState.canSpeak}
+          peerQualities={voiceState.remotePeers.flatMap((peer) =>
+            peer.quality ? [peer.quality] : [],
+          )}
           onOpen={() => void openVoiceChannel()}
           onLeave={() => voice.leave()}
         />
@@ -3790,36 +4261,23 @@ function MainAppContent({
               <Pin className="h-4 w-4" />
             </button>
           </Tooltip>
-          {canManageChannels && selectedChannel.kind === "server" && (
+          {(canManageChannels || canManageRoles) &&
+            selectedChannel.kind === "server" && (
             <Tooltip label={t("chrome.channelSettings")}>
               <button
                 type="button"
                 className={HEADER_ACTION_TILE}
-                onClick={() => setChannelMetaChannel(selectedChannel)}
+                data-channel-header-settings=""
+                aria-label={t("chrome.channelSettings")}
+                onClick={() =>
+                  setChannelSettings({
+                    channelId: selectedChannel.id,
+                    section: canManageChannels ? "overview" : "permissions",
+                    forceAdvanced: false,
+                  })
+                }
               >
                 <Settings className="h-4 w-4" />
-              </button>
-            </Tooltip>
-          )}
-          {(canManageRoles || (canManageChannels && selectedChannel.isPrivate)) &&
-            selectedChannel.kind === "server" && (
-            <Tooltip
-              label={
-                selectedChannel.isPrivate
-                  ? t("chrome.access")
-                  : t("channelPerms.title")
-              }
-            >
-              <button
-                type="button"
-                className={HEADER_ACTION_TILE}
-                onClick={() => setChannelMembersChannel(selectedChannel)}
-              >
-                {selectedChannel.isPrivate ? (
-                  <Lock className="h-4 w-4" />
-                ) : (
-                  <Shield className="h-4 w-4" />
-                )}
               </button>
             </Tooltip>
           )}
@@ -3894,8 +4352,11 @@ function MainAppContent({
             onToggleMute={() => voice.toggleMute()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
-            onStartScreenShare={() =>
-              void voice.startScreenShare(shareSystemAudio)
+            onStartScreenShare={(intent) =>
+              voice.startScreenShare(
+                intent?.preferBrowserTab ? false : shareSystemAudio,
+                intent,
+              )
             }
             onShareWithoutSound={() => {
               // Disarm the opt-in too: it is what failed, and the next share
@@ -3946,7 +4407,12 @@ function MainAppContent({
           onToggleMute={() => voice.toggleMute()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
-          onStartScreenShare={() => void voice.startScreenShare(shareSystemAudio)}
+          onStartScreenShare={(intent) =>
+            voice.startScreenShare(
+              intent?.preferBrowserTab ? false : shareSystemAudio,
+              intent,
+            )
+          }
           onShareWithoutSound={() => {
             setShareSystemAudio(false);
             void voice.startScreenShare(false);
@@ -4340,7 +4806,13 @@ function MainAppContent({
           onRenameChannel={(channel) =>
             setChannelPrompt({ mode: "rename", channel })
           }
-          onEditChannelMeta={setChannelMetaChannel}
+          onOpenChannelSettings={(channel, section, options) =>
+            setChannelSettings({
+              channelId: channel.id,
+              section,
+              forceAdvanced: options?.forceAdvanced ?? false,
+            })
+          }
           onDeleteChannel={(id) => void handleDeleteChannel(id)}
           onMoveChannel={(id, parentId, index) =>
             void handleMoveChannel(id, parentId, index)
@@ -4354,9 +4826,6 @@ function MainAppContent({
               : []
           }
           onFavoriteChannelIdsChange={handleFavoriteChannelIdsChange}
-          onTogglePrivate={(ch) => void handleTogglePrivate(ch)}
-          onManageChannelMembers={setChannelMembersChannel}
-          onManageWebhooks={setWebhooksChannel}
           onInvite={() => setInviteMode("create")}
           onOpenMembers={() => setMembersOpen(true)}
           onOpenServerSettings={() => setServerSettingsOpen(true)}
@@ -4651,8 +5120,14 @@ function MainAppContent({
           canManageNicknames={canManageNicknames}
           showManageRoster={canStaff}
           blockedUserIds={blockedUserIds}
-          refreshNudge={memberRosterNudge}
-          profileUpdate={lastProfileUpdate}
+          members={serverMembers}
+          onMemberNickname={(userId, nickname) => {
+            setServerMembers((prev) =>
+              prev.map((row) =>
+                row.id === userId ? { ...row, nickname } : row,
+              ),
+            );
+          }}
           onMention={(username) => setComposerInsert(`@${username}`)}
           onBlockUser={(userId) => void handleBlockUser(userId)}
           onUnblockUser={(userId) => void handleUnblockUser(userId)}
@@ -4670,6 +5145,7 @@ function MainAppContent({
             .filter((c) => c.type === "voice")
             .map((c) => ({ id: c.id, name: c.name }))}
           roles={serverRoles}
+          friendIds={memberSidebarFriendIds}
         />
       )}
 
@@ -4692,6 +5168,7 @@ function MainAppContent({
         voiceAnalyser={voice.getAnalyser()}
         blockedUsers={blockedUsers}
         onClose={() => setSettingsOpen(false)}
+        onShowShortcutOverlay={() => setShortcutOverlayOpen(true)}
         onLocalSave={setLocalSettings}
         onUserUpdated={(updated) => {
           setUser(updated);
@@ -4865,24 +5342,25 @@ function MainAppContent({
         }}
       />
 
-      <ChannelMembersPanel
-        open={channelMembersChannel !== null}
-        channelId={channelMembersChannel?.id ?? null}
-        channelName={channelMembersChannel?.name ?? null}
-        channelType={channelMembersChannel?.type ?? "text"}
-        isPrivate={channelMembersChannel?.isPrivate ?? false}
+      <ChannelSettingsDialog
+        open={channelSettings !== null}
+        channel={
+          channelSettings
+            ? (channels.find((c) => c.id === channelSettings.channelId) ?? null)
+            : null
+        }
+        requestedSection={channelSettings?.section ?? "overview"}
+        forceAdvanced={channelSettings?.forceAdvanced ?? false}
         serverId={selectedServerId}
         roles={serverRoles}
+        canManageChannels={canManageChannels}
         canManageRoles={canManageRoles}
-        canManageAccess={canManageChannels}
-        onClose={() => setChannelMembersChannel(null)}
-      />
-
-      <WebhooksPanel
-        open={webhooksChannel !== null}
-        channelId={webhooksChannel?.id ?? null}
-        channelName={webhooksChannel?.name ?? null}
-        onClose={() => setWebhooksChannel(null)}
+        onClose={() => setChannelSettings(null)}
+        onChannelUpdated={(updated) => {
+          setChannels((prev) =>
+            prev.map((c) => (c.id === updated.id ? updated : c)),
+          );
+        }}
       />
 
       <PinnedMessagesPanel
@@ -4895,6 +5373,23 @@ function MainAppContent({
         canUnpin={selectedServerId ? canManageMessages : true}
         onClose={() => setPinsOpen(false)}
         onJumpToMessage={(messageId) => void jumpToMessage(messageId)}
+      />
+
+      <ConfirmDialog
+        open={pendingDeleteChannelId !== null}
+        title={t("chrome.deleteChannel")}
+        description={t("chrome.deleteChannelConfirm")}
+        confirmLabel={t("chrome.deleteChannel")}
+        onConfirm={() => void confirmDeleteChannel()}
+        onClose={() => setPendingDeleteChannelId(null)}
+      />
+      <ConfirmDialog
+        open={pendingLeaveServerId !== null}
+        title={t("chrome.leaveCommunity")}
+        description={t("chrome.leaveServer")}
+        confirmLabel={t("chrome.leaveCommunity")}
+        onConfirm={() => void confirmLeaveServer()}
+        onClose={() => setPendingLeaveServerId(null)}
       />
 
       <PromptDialog
@@ -4972,23 +5467,12 @@ function MainAppContent({
         </div>
       )}
 
-      <ChannelMetaDialog
-        open={channelMetaChannel !== null}
-        channel={channelMetaChannel}
-        onClose={() => setChannelMetaChannel(null)}
-        onSave={async (updates) => {
-          if (!channelMetaChannel) {
-            return;
-          }
-          const { channel } = await updateChannel(
-            channelMetaChannel.id,
-            updates,
-          );
-          setChannels((prev) =>
-            prev.map((c) => (c.id === channel.id ? channel : c)),
-          );
-          setChannelMetaChannel(null);
-        }}
+      {/* Last dialog so the map stacks above Settings (and Esc hits this layer). */}
+      <ShortcutOverlay
+        open={shortcutOverlayOpen}
+        bindings={shortcutBindings}
+        pushToTalkKey={localSettings.pushToTalkKey}
+        onClose={() => setShortcutOverlayOpen(false)}
       />
     </div>
     </ProfilePopoverProvider>

@@ -11,12 +11,12 @@ name: Label (PR size)
 # buckets (XS through XL, no XXL) so 1000+ is the one that means "probably
 # split this".
 #
-# The label is a review signal. It does not block merge. `drops-voice` stays
-# a human label, because "will this hang up a live call even after resume"
-# is a product question the size of the diff cannot answer. A server or
-# `packages/shared` change is `restarts-api`: Fly closes every `/ws`, but
-# an API restart alone does not earn `drops-voice` (web and Electron resume
-# after #162).
+# The labels are a review signal. They do not block merge. `drops-voice`
+# stays a human label, because "will this hang up a live call even after
+# resume" is a product question the size of the diff cannot answer. This
+# workflow stamps `restarts-api` when the diff touches `server/` or
+# `packages/shared`. Fly closes every `/ws`, but an API restart alone does
+# not earn `drops-voice` (web and Electron resume after #162).
 #
 # WHY pull_request_target
 # Fork PRs get a read-only GITHUB_TOKEN on `pull_request`, so they could not
@@ -76,6 +76,7 @@ jobs:
           gh label create "size/M"  --color "eebb00" --description "100-249 lines, ignoring lockfiles" --force >/dev/null
           gh label create "size/L"  --color "ee9900" --description "250-999 lines, ignoring lockfiles" --force >/dev/null
           gh label create "size/XL" --color "ee5500" --description "1000+ lines, ignoring lockfiles" --force >/dev/null
+          gh label create "restarts-api" --color "c5def5" --description "Merging redeploys pqp-api and closes every /ws. Not a voice hangup." --force >/dev/null
 
           ignored() {
             local path="$1"
@@ -95,7 +96,13 @@ jobs:
 
           TOTAL=0
           SKIPPED=0
+          RESTARTS=0
           while IFS=$'\t' read -r file additions deletions; do
+            case "$file" in
+              server/*|packages/shared/*)
+                RESTARTS=1
+                ;;
+            esac
             if ignored "$file"; then
               SKIPPED=$((SKIPPED + additions + deletions))
               echo "ignore  +${additions} -${deletions}  ${file}"
@@ -118,6 +125,9 @@ jobs:
           fi
 
           echo "counted ${TOTAL} lines (skipped ${SKIPPED} in lockfiles/minified) → ${SIZE}"
+          if [ "$RESTARTS" -eq 1 ]; then
+            echo "diff touches server/ or packages/shared → restarts-api"
+          fi
 
           EXISTING="$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name')"
 
@@ -127,16 +137,27 @@ jobs:
               remove_args+=(--remove-label "$label")
             fi
           done
+          if [ "$RESTARTS" -eq 0 ] && printf '%s\n' "$EXISTING" | grep -Fxq "restarts-api"; then
+            remove_args+=(--remove-label "restarts-api")
+          fi
 
           add_args=()
           if ! printf '%s\n' "$EXISTING" | grep -Fxq "$SIZE"; then
             add_args+=(--add-label "$SIZE")
           fi
+          if [ "$RESTARTS" -eq 1 ] && ! printf '%s\n' "$EXISTING" | grep -Fxq "restarts-api"; then
+            add_args+=(--add-label "restarts-api")
+          fi
+
+          SUMMARY="$SIZE"
+          if [ "$RESTARTS" -eq 1 ]; then
+            SUMMARY="${SUMMARY} + restarts-api"
+          fi
 
           if [ ${#remove_args[@]} -eq 0 ] && [ ${#add_args[@]} -eq 0 ]; then
-            echo "Already labelled ${SIZE}"
+            echo "Already labelled ${SUMMARY}"
             exit 0
           fi
 
           gh pr edit "$PR_NUMBER" "${remove_args[@]}" "${add_args[@]}"
-          echo "Applied ${SIZE}"
+          echo "Applied ${SUMMARY}"

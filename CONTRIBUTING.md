@@ -85,8 +85,8 @@ hangup.** The server compiles `@pqp/shared` into itself, so a change there is a
 server change even when the feature is entirely client-side. Fly redeploys
 `pqp-api` and every `/ws` closes. After #162, refreshed web and Electron resume
 the same peer id; iOS, Android, failed resume, and tabs that have not refreshed
-still drop out of voice. Say `restarts-api` in the PR so it can be merged at a
-sensible hour. Apply `drops-voice` only when the change itself will hang up a
+still drop out of voice. Put the `restarts-api` label on the PR so it can be
+merged at a sensible hour. Apply `drops-voice` only when the change itself will hang up a
 live call even after resume. Details in [`docs/DEPLOY.md`](./docs/DEPLOY.md).
 
 ## Before you open the PR
@@ -159,7 +159,8 @@ asking for that permission in advance.
 automatically, including our own work. This is a side project, so expect days
 rather than hours, and nudge us if it goes quiet. That is not rudeness, it is
 helpful. CI also stamps a `size/XS`–`size/XL` label from the diff (lockfiles
-do not count). That is a review signal, not a merge gate.
+do not count), and `restarts-api` when the diff touches `server/` or
+`packages/shared`. Those are review signals, not merge gates.
 
 **Some PRs will be declined, and it is worth saying why in advance.** Almost
 never because the code is bad. Usually because the feature pulls pqp somewhere

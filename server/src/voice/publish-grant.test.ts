@@ -26,7 +26,7 @@ vi.mock("livekit-server-sdk", async (importOriginal) => {
 
 const { resetSfuAdminClient, setSfuUserCanPublish } = await import("./admin.js");
 const { participantMetadataFor } = await import("./backends.js");
-const { TrackType } = await import("livekit-server-sdk");
+const { TrackSource, TrackType } = await import("livekit-server-sdk");
 
 const ROOM = "channel-1";
 
@@ -73,7 +73,12 @@ describe("SFU publish grant (live SPEAK change)", () => {
   it("is a no-op, not a crash, when LiveKit is not configured", async () => {
     unconfigureLiveKit();
     await expect(
-      setSfuUserCanPublish(ROOM, "user-1", false, new Map()),
+      setSfuUserCanPublish(
+        ROOM,
+        "user-1",
+        { canSpeak: false, canStream: false },
+        new Map(),
+      ),
     ).resolves.toBe(false);
     expect(lk.listParticipants).not.toHaveBeenCalled();
   });
@@ -90,7 +95,12 @@ describe("SFU publish grant (live SPEAK change)", () => {
     ]);
 
     await expect(
-      setSfuUserCanPublish(ROOM, "user-1", false, new Map()),
+      setSfuUserCanPublish(
+        ROOM,
+        "user-1",
+        { canSpeak: false, canStream: false },
+        new Map(),
+      ),
     ).resolves.toBe(true);
 
     // Audio AND video: a presenter who lost SPEAK stops presenting.
@@ -109,13 +119,48 @@ describe("SFU publish grant (live SPEAK change)", () => {
     });
   });
 
+  it("revoking Stream alone mutes video tracks and leaves the mic", async () => {
+    lk.listParticipants.mockResolvedValue([
+      participant("peer-target", "user-1", [
+        { sid: "TR_mic", type: TrackType.AUDIO },
+        { sid: "TR_screen", type: TrackType.VIDEO },
+      ]),
+    ]);
+
+    await expect(
+      setSfuUserCanPublish(
+        ROOM,
+        "user-1",
+        { canSpeak: true, canStream: false },
+        new Map(),
+      ),
+    ).resolves.toBe(true);
+
+    expect(lk.mutePublishedTrack.mock.calls).toEqual([
+      [ROOM, "peer-target", "TR_screen", true],
+    ]);
+    expect(lk.updateParticipant).toHaveBeenCalledWith(ROOM, "peer-target", {
+      permission: {
+        canPublish: true,
+        canSubscribe: true,
+        canPublishData: false,
+        canPublishSources: [TrackSource.MICROPHONE],
+      },
+    });
+  });
+
   it("granting rewrites the permission without touching tracks", async () => {
     lk.listParticipants.mockResolvedValue([
       participant("peer-target", "user-1", []),
     ]);
 
     await expect(
-      setSfuUserCanPublish(ROOM, "user-1", true, new Map()),
+      setSfuUserCanPublish(
+        ROOM,
+        "user-1",
+        { canSpeak: true, canStream: true },
+        new Map(),
+      ),
     ).resolves.toBe(true);
 
     expect(lk.mutePublishedTrack).not.toHaveBeenCalled();
@@ -138,7 +183,7 @@ describe("SFU publish grant (live SPEAK change)", () => {
       setSfuUserCanPublish(
         ROOM,
         "user-1",
-        false,
+        { canSpeak: false, canStream: false },
         new Map([["peer-old", "user-1"]]),
       ),
     ).resolves.toBe(true);
@@ -150,7 +195,12 @@ describe("SFU publish grant (live SPEAK change)", () => {
   it("reports failure instead of rejecting when the SFU is unreachable", async () => {
     lk.listParticipants.mockRejectedValue(new Error("connect ECONNREFUSED"));
     await expect(
-      setSfuUserCanPublish(ROOM, "user-1", false, new Map()),
+      setSfuUserCanPublish(
+        ROOM,
+        "user-1",
+        { canSpeak: false, canStream: false },
+        new Map(),
+      ),
     ).resolves.toBe(false);
   });
 });

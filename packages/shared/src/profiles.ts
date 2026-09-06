@@ -110,6 +110,7 @@ export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
   "convite",
   "legal",
   "login",
+  "desktop-login",
   "entrar",
   "logout",
   "sair",

@@ -3,6 +3,8 @@ export interface PqpDesktop {
   isElectron: true;
   hasCustomTitleBar: boolean;
   onToggleMute(cb: () => void): () => void;
+  /** Subscribe to Cmd/Ctrl+Shift+D deafen toggle from the app menu. */
+  onToggleDeafen?(cb: () => void): () => void;
   /** In-app path under `/app` (main process maps `pqp://` → `/app/...`). */
   onDeepLink(cb: (appPath: string) => void): () => void;
   getPendingDeepLink(): Promise<string | null>;
@@ -31,6 +33,19 @@ export interface PqpDesktop {
     path: string;
   }): void;
   onNotificationClick?(cb: (appPath: string) => void): () => void;
+  /**
+   * Present only in shells that open Clerk in the system browser. Absence
+   * means keep the in-app modal — the hosted client runs inside older
+   * binaries, same as `canShareScreen`.
+   */
+  startDesktopAuth?(
+    mode: "sign-in" | "sign-up",
+  ): Promise<{ ok: boolean; url: string }>;
+  cancelDesktopAuth?(): Promise<void>;
+  getDesktopAuthStatus?(): Promise<{ active: boolean; url: string | null }>;
+  getPendingDesktopAuthTicket?(): Promise<string | null>;
+  onDesktopAuthTicket?(cb: (ticket: string) => void): () => void;
+  onDesktopAuthEnded?(cb: (reason: "expired" | "cancelled") => void): () => void;
 }
 
 export function getDesktop(): PqpDesktop | undefined {

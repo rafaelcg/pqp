@@ -1,6 +1,7 @@
 import { useClerk } from "@clerk/clerk-react";
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { desktopSignedOutPath } from "@/lib/desktop-auth-flow";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { useTranslation } from "@/lib/i18n";
 
@@ -43,10 +44,9 @@ function ClerkSignOut({ className }: { className?: string }) {
     <Button
       variant="ghost"
       className={className}
-      // Redirect to the landing page rather than staying put. `/app` behind a
-      // dead session renders the signed-out prompt, which reads as an error
-      // right after a deliberate action; the homepage reads as having left.
-      onClick={() => void signOut({ redirectUrl: "/" })}
+      // Web goes to `/`. Electron stays on `/app` so Clerk does not hop
+      // into Chrome. The signed-out prompt is the next screen there.
+      onClick={() => void signOut({ redirectUrl: desktopSignedOutPath() })}
     >
       <LogOut aria-hidden className="h-4 w-4" />
       {t("settings.signOut")}

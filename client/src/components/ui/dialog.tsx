@@ -100,7 +100,7 @@ function useVisualViewport(open: boolean): ViewportBox | null {
 
 interface DialogProps {
   open: boolean;
-  title: string;
+  title: ReactNode;
   /** Small label above the title, e.g. "Members". */
   eyebrow?: string;
   description?: string;
@@ -196,7 +196,16 @@ export function Dialog({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
+    function isTopLayer(): boolean {
+      const layer = panelRef.current?.closest("[data-dialog-layer]");
+      const layers = document.querySelectorAll("[data-dialog-layer]");
+      return !layer || layers[layers.length - 1] === layer;
+    }
+
     function onKeyDown(event: KeyboardEvent) {
+      if (!isTopLayer()) {
+        return;
+      }
       if (event.key === "Escape") {
         if (
           event.target instanceof Element &&
@@ -327,8 +336,15 @@ export function Dialog({
                   {eyebrow}
                 </p>
               )}
-              <h2 id={titleId} className="truncate font-display text-2xl font-bold">
-                {title}
+              <h2
+                id={titleId}
+                className="min-w-0 font-display text-2xl font-bold"
+              >
+                {typeof title === "string" ? (
+                  <span className="block truncate">{title}</span>
+                ) : (
+                  title
+                )}
               </h2>
               {description && (
                 <p id={descriptionId} className="mt-1 text-sm text-paper-muted">

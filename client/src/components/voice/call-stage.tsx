@@ -7,6 +7,7 @@ import {
   LayoutGrid,
   Loader2,
   Maximize2,
+  MonitorPlay,
   PanelLeftClose,
   PanelLeftOpen,
   Mic,
@@ -33,6 +34,7 @@ import {
   type RefObject,
   type SyntheticEvent,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   CAMERA_LIMIT,
   SCREEN_SHARE_LIMIT,
@@ -40,6 +42,7 @@ import {
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { VideoQuality } from "@/lib/video-quality";
+import { isDesktopApp } from "@/lib/desktop";
 import { shareStreamHasAudio } from "@/lib/screen-capture-audio";
 import {
   canShareScreenAudio,
@@ -98,6 +101,9 @@ import {
 } from "@/lib/participant-rail-preference";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import { PeerTileControls } from "@/components/voice/peer-tile-controls";
+import { VoiceQualityMeter } from "@/components/voice/voice-quality-meter";
+import { useVoiceLinkQuality } from "@/hooks/use-voice-link-quality";
+import type { VoiceLinkQuality } from "@/lib/voice-link-quality";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
 import {
   requestConnectionCheck,
@@ -153,6 +159,7 @@ interface StagePerson {
   volume?: number;
   onSetVolume?: (volume: number) => void;
   onRetry?: () => void;
+  quality?: VoiceLinkQuality | null;
 }
 
 const PIP_CORNER_CLASS: Record<PipCorner, string> = {
@@ -461,7 +468,9 @@ export interface CallStageProps {
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
-  onStartScreenShare?: () => void;
+  onStartScreenShare?: (
+    intent?: { preferBrowserTab?: boolean },
+  ) => void | Promise<void>;
   /**
    * Start the same share with no sound at all. Offered only after sound is
    * what killed the last attempt, and separate from `onStartScreenShare`
@@ -629,7 +638,9 @@ function ActiveCall({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
-  onStartScreenShare?: () => void;
+  onStartScreenShare?: (
+    intent?: { preferBrowserTab?: boolean },
+  ) => void | Promise<void>;
   /**
    * Start the same share with no sound at all. Offered only after sound is
    * what killed the last attempt, and separate from `onStartScreenShare`
@@ -675,6 +686,7 @@ function ActiveCall({
   }, [callingOut, playOutgoingRingtone]);
   const roster = voiceState.occupancy[channelId] ?? [];
   const rosterByPeerId = new Map(roster.map((p) => [p.peerId, p]));
+  const meshQuality = useVoiceLinkQuality(voiceState.status !== "idle");
 
   const speaking = new Set(voiceState.speakingPeerIds);
   const self: StagePerson | null = currentUser
@@ -712,6 +724,7 @@ function ActiveCall({
         : undefined,
       onRetry:
         failed && onRetryPeer ? () => onRetryPeer(peer.peerId) : undefined,
+      quality: peer.quality ?? meshQuality[peer.peerId] ?? null,
     };
   });
 
@@ -1665,7 +1678,9 @@ function CallControls({
   onVideoQualityChange: (quality: VideoQuality) => void;
   qualityMenuOpen: boolean;
   onQualityMenuOpenChange: (open: boolean) => void;
-  onStartScreenShare?: () => void;
+  onStartScreenShare?: (
+    intent?: { preferBrowserTab?: boolean },
+  ) => void | Promise<void>;
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
@@ -1685,7 +1700,16 @@ function CallControls({
   // Probed once per mount — whether the browser has getDisplayMedia never
   // changes mid-session. Same probe the channel voice panel uses.
   const canShare = useMemo(() => supportsScreenShare(), []);
+  // Watch party is a Chrome tab plus that tab's sound. The shell picker
+  // lists screens and windows only, so the same door there would start a
+  // silent share and the prompt would be a lie.
+  const canWatchParty = canShare && !isDesktopApp();
   const [shareHint, setShareHint] = useState<string | null>(null);
+  useEffect(() => {
+    if (voiceState.isSharingScreen || voiceState.error) {
+      setShareHint(null);
+    }
+  }, [voiceState.isSharingScreen, voiceState.error]);
   const shareAtCap = isScreenShareAtCap(
     voiceState.screenSharePeerIds,
     voiceState.peerId,
@@ -1703,9 +1727,10 @@ function CallControls({
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
   const size = collapsed ? "h-8 w-8" : "h-10 w-10";
   const iconSize = collapsed ? "h-3.5 w-3.5" : "h-4 w-4";
-  // The room's rule, not a choice: SPEAK denied. Mute is locked shut, and
-  // share and camera are not offered at all, since presenting is speaking.
+  // SPEAK denied locks mute. STREAM denied hides camera and share. The two
+  // bits are independent: a stage can let someone present without talking.
   const listenOnly = !voiceState.canSpeak;
+  const noVideo = !voiceState.canStream;
 
   return (
     <div className={cn("flex flex-col items-center", collapsed ? "gap-0" : "gap-1.5")}>
@@ -1831,7 +1856,7 @@ function CallControls({
           {t("voice.bar.listenOnly")}
         </span>
       )}
-      {!listenOnly && (
+      {!noVideo && (
       <Tooltip
         label={
           voiceState.isCameraOn
@@ -1907,7 +1932,7 @@ function CallControls({
           everyone's voices back into the call; see
           `lib/screen-capture-audio.ts`. */}
       {canShare &&
-        !listenOnly &&
+        !noVideo &&
         onStartScreenShare &&
         onShareSystemAudioChange &&
         /* Hidden where the platform cannot deliver it. A dead toggle is not a
@@ -1939,7 +1964,7 @@ function CallControls({
             </button>
           </Tooltip>
         )}
-      {!canShare && !listenOnly && onStartScreenShare && (
+      {!canShare && !noVideo && onStartScreenShare && (
         <Tooltip
           label={t("voice.control.shareUnavailable")}
           detail={screenShareUnavailableMessage("no-api")}
@@ -1960,7 +1985,7 @@ function CallControls({
           </button>
         </Tooltip>
       )}
-      {canShare && !listenOnly && (onStartScreenShare || onStopScreenShare) && (
+      {canShare && !noVideo && (onStartScreenShare || onStopScreenShare) && (
         <Tooltip
           label={
             voiceState.isSharingScreen
@@ -2009,6 +2034,45 @@ function CallControls({
           </button>
         </Tooltip>
       )}
+      {canWatchParty &&
+        !listenOnly &&
+        onStartScreenShare &&
+        !voiceState.isSharingScreen && (
+          <Tooltip
+            label={t("voice.control.watchParty")}
+            detail={t("voice.control.watchPartyHint")}
+          >
+            <button
+              type="button"
+              aria-label={t("voice.control.watchParty")}
+              aria-disabled={shareCappedOut || undefined}
+              className={cn(
+                "flex items-center justify-center rounded-full",
+                size,
+                shareCappedOut && "opacity-40",
+                "bg-ink-3 text-paper hover:bg-ink-4",
+              )}
+              onClick={() => {
+                if (shareCappedOut) {
+                  return;
+                }
+                // Paint the hint in this click, before getDisplayMedia opens
+                // the picker and the rest of the page stops updating. Clear
+                // once the picker settles: cancel, error, or a live share.
+                flushSync(() => {
+                  setShareHint(t("voice.control.watchPartyHint"));
+                });
+                void Promise.resolve(
+                  onStartScreenShare({ preferBrowserTab: true }),
+                ).finally(() => {
+                  setShareHint(null);
+                });
+              }}
+            >
+              <MonitorPlay className={iconSize} />
+            </button>
+          </Tooltip>
+        )}
       {showGridToggle && onToggleGrid && (
         <Tooltip
           label={preferGrid ? t("call.stage.focus") : t("call.stage.grid")}
@@ -2232,6 +2296,12 @@ function PrimaryTile({
         connectingLabel={t("voice.tile.connecting")}
         prominent
       />
+      {!person.isSelf && (
+        <VoiceQualityMeter
+          quality={person.quality ?? null}
+          className="absolute right-2 top-2 z-20"
+        />
+      )}
       <PeerTileControls
         name={person.name}
         volume={person.volume}
@@ -2296,6 +2366,13 @@ function GridTile({
         connecting={person.connecting}
         connectingLabel={t("voice.tile.connecting")}
       />
+      {!person.isSelf && (
+        <VoiceQualityMeter
+          quality={person.quality ?? null}
+          compact
+          className="absolute right-1.5 top-1.5 z-20"
+        />
+      )}
       <PeerTileControls
         name={person.name}
         volume={person.volume}
@@ -2463,6 +2540,13 @@ function MiniTile({
           name={person.isSelf ? youLabel : person.name}
           muted={person.muted}
         />
+        {!person.isSelf && (
+          <VoiceQualityMeter
+            quality={person.quality ?? null}
+            compact
+            className="absolute right-1 top-1 z-20"
+          />
+        )}
         <PeerTileControls
           name={person.name}
           volume={person.volume}

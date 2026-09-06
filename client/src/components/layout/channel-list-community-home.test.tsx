@@ -64,9 +64,7 @@ const baseProps = {
   onCreateChannel: () => {},
   onRenameChannel: () => {},
   onDeleteChannel: () => {},
-  onTogglePrivate: () => {},
-  onManageChannelMembers: () => {},
-  onManageWebhooks: () => {},
+  onOpenChannelSettings: () => {},
   onMoveChannel: () => {},
   onInvite: () => {},
   onOpenMembers: () => {},
@@ -80,6 +78,28 @@ function renderList(node: ReactElement) {
     </MemoryRouter>,
   );
 }
+
+describe("ChannelList selected row", () => {
+  it("marks the open channel as the current page", () => {
+    const html = renderList(<ChannelList {...baseProps} />);
+    expect(html).toContain("geral");
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+  });
+
+  it("marks only Baú as current when the home row is selected", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        communityHomeEnabled
+        communityHomeSelected
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+    expect(html).toContain("data-community-home-row");
+    expect(html).toMatch(/data-community-home-row[^>]*aria-current="page"/);
+  });
+});
 
 describe("ChannelList Community Home row", () => {
   it("flag off: no Home row in the channel list", () => {
@@ -101,6 +121,21 @@ describe("ChannelList Community Home row", () => {
     expect(html).toContain("Baú");
     // The badge is a fact about the server, not about the flag.
     expect(html).not.toContain(">Community<");
+  });
+
+  it("canManage: each channel row has a settings cog", () => {
+    const html = renderList(<ChannelList {...baseProps} canManage />);
+    expect(html.match(/data-channel-settings/g)?.length).toBe(2);
+  });
+
+  it("roles-only: the settings cog still shows", () => {
+    const html = renderList(<ChannelList {...baseProps} canManageRoles />);
+    expect(html.match(/data-channel-settings/g)?.length).toBe(2);
+  });
+
+  it("member: no settings cog on the channel rows", () => {
+    const html = renderList(<ChannelList {...baseProps} />);
+    expect(html).not.toContain("data-channel-settings");
   });
 
   it("flag on + community server: the Community badge shows", () => {
