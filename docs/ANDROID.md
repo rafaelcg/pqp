@@ -752,11 +752,17 @@ SFU and logged `voice.leave`, and walking straight into a `mesh`-pinned channel
 logged `voice transport LiveKit -> Mesh; disposing the old engine` and came up
 Connected with the screen-share button back. What was **not** heard: audio
 itself, because the emulator has no microphone input and nothing was listening
-on the host, so the claim is "tracks flow", not "voices flow". Screen share is
-deliberately absent on this transport (the button is hidden rather than left
-to fail), incoming screen shares are not rendered, and `statsFor` answers null,
-because LiveKit's stats arrive in the *other* libwebrtc's types. Mesh is
-untouched.
+on the host, so the claim is "tracks flow", not "voices flow". Publishing a
+screen is deliberately absent on this transport (the button is hidden rather
+than left to fail) and `statsFor` answers null, because LiveKit's stats arrive
+in the *other* libwebrtc's types. Mesh is untouched.
+
+Watching somebody else's share on this transport was added afterwards and is
+**unverified on hardware**: it compiles, the subscription rule and the layer
+ceiling are unit-tested, and the wiring is verified by reading, but no phone
+has yet drawn a frame that came from an SFU. What that verification needs is
+the rig two paragraphs down plus a web participant presenting into the same
+`livekit`-pinned channel.
 
 The failure path was also exercised, by accident first: with `LIVEKIT_URL`
 pointing at the host's LAN IP the app refused the SFU leg (`CLEARTEXT
@@ -778,12 +784,13 @@ production build talks `wss://` to a public host and needs none of this.
 Two properties of that path are worth stating precisely, because both are the
 kind of thing that is easy to believe without checking:
 
-- **It subscribes to audio and nothing else.** The room is joined with
-  `autoSubscribe = false` and each publication is asked for by kind, so a 1080p
-  screen share from a web participant is never sent to the phone at all. The
-  earlier version auto-subscribed and dropped the frames in the callback, which
-  looks identical on screen and is not identical on a mobile bill.
-  `livekitSubscribesTo` is the whole decision and is unit-tested.
+- **It subscribes to audio and to screen shares, and to nothing else.** The
+  room is joined with `autoSubscribe = false` and each publication is asked for
+  by kind and source, so a camera from a web participant is never sent to the
+  phone at all, and a share that nobody has opened is subscribed but disabled.
+  The first version of this path auto-subscribed and dropped the frames in the
+  callback, which looks identical on screen and is not identical on a mobile
+  bill. `livekitSubscribesTo` is the whole decision and is unit-tested.
 - **The people already in the room are read from the join response.** LiveKit
   builds them without emitting `ParticipantConnected`, so joining a call in
   progress relies on seeding from `room.remoteParticipants` right after
@@ -924,16 +931,22 @@ renegotiation dropped the m-line rather than leaving a frozen last frame.
 
 ### Receiving
 
-The mesh's ordinary video path, plus a renderer, and it was built **before**
-sending was called done because it is the only honest way to see what sending
-produces.
+**Both transports.** Sending is mesh-only, watching is not: a phone in a
+LiveKit room sees the share and hears it. That is where watch parties happen,
+and being able to hear the room but not see the film was the gap.
 
-Every video track this client receives is a screen share: the roster's
-`cameraStreamId` is what marks a camera and this app never sends one. When a
-participant's roster entry says `sharingScreen` **and** a track has actually
-arrived (two conditions, because the roster is the faster of the two and
-offering a viewer on it alone puts a black rectangle in front of people), the
-call bar grows a "*Name* is sharing a screen / Watch" row.
+The mesh's ordinary video path came first, plus a renderer, and it was built
+**before** sending was called done because it is the only honest way to see
+what sending produces.
+
+On the mesh, every video track this client receives is a screen share: the
+roster's `cameraStreamId` is what marks a camera and this app never sends one.
+On the SFU there is no elimination to do, because LiveKit labels the
+publication `SCREEN_SHARE`. Either way, when a participant's roster entry says
+`sharingScreen` **and** a track has actually arrived (two conditions, because
+the roster is the faster of the two and offering a viewer on it alone puts a
+black rectangle in front of people), the call bar grows a "*Name* is sharing a
+screen / Watch" row.
 
 Watching opens a full-screen `Dialog` around a `SurfaceViewRenderer`, not a
 navigation destination. A share starts and stops on somebody else's schedule, so
@@ -941,16 +954,61 @@ it must not be a place in the back stack that outlives it. The renderer is
 scaled `SCALE_ASPECT_FIT`: cropping a shared screen to a phone's aspect ratio
 hides whatever the presenter was pointing at.
 
+**Two renderers, and the compiler picks.** There are two libwebrtc builds in
+this process (`org.webrtc` for the mesh, `livekit.org.webrtc` for the SFU) and
+a renderer initialised on one cannot draw the other's frames: it compiles and
+then fails at the first frame. So a screen leaves a transport as a
+`RemoteScreen`, a sealed type with one case per namespace, each carrying the GL
+context or the `Room` its own renderer needs, and `RemoteScreenView` is a `when`
+over the two. The LiveKit case uses LiveKit's own `SurfaceViewRenderer`
+initialised through `Room.initVideoRenderer` and attached with `addRenderer`,
+because that is what registers the view with adaptive stream; a plain renderer
+would draw the same picture and tell the SFU nothing about its size.
+
+**What the SFU is asked for, and when.** Two rules, both about the bill, and
+both mirroring the web:
+
+- **Nothing flows until somebody taps Watch.** The publication is subscribed
+  and immediately `setEnabled(false)`, and only the open viewer lifts it
+  (`VoiceTransport.setWatchingScreen`, driven by a `DisposableEffect` around
+  the dialog). So a share in a room this phone is only listening to costs a
+  signalling frame and no video. The back gesture, the presenter stopping and
+  the call ending all pass through the same dispose, so a share cannot be left
+  flowing to nobody.
+- **The layer is capped at 720p, or 360p on a metered link**
+  (`screenReceiveLayerFor`, tested). The presenter publishes simulcast layers,
+  so there is a phone-sized copy on the server to ask for; adaptive stream
+  still shrinks below that ceiling for a small view. `HIGH` is never asked for
+  by default, because under adaptive stream it means "no ceiling", which is a
+  desktop's default and not a phone's. The metered signal is
+  `ConnectivityManager.isActiveNetworkMetered`, read each time a layer is
+  chosen, so a phone that leaves Wi-Fi mid-call is noticed by the next share it
+  opens.
+
+**A share's sound is carried on the SFU**, and only there: the mesh path
+never announced an `audioStreamId` from this client and the web's
+`screenAudioStreamId` is not read yet. The `SCREEN_SHARE_AUDIO` publication is
+subscribed with the voice, silenced by deafen like everything else, never
+counted as the presenter being audible, and gated on the roster having
+announced the share, exactly as `audibleScreenPeerIds` does on the web: an
+unannounced publication stays silent.
+
 `set-sharing-screen` is sent **after** the capture is alive, and
 `screen-share-denied` (the server's `SCREEN_SHARE_LIMIT`, 2 on mesh) tears the
 capture down rather than leaving a live projection nobody can see.
 
 ### What screen sharing does not do
 
-No **screen audio**. `MediaProjection` can record device playback from Android
-10, but only from apps that allow it, so a system-audio track nobody can rely on
-would be worse than an honest silent share. `audioStreamId` is therefore always
-null, which the protocol already treats as the common case.
+No **sending on the SFU**. The button is hidden on a LiveKit room rather than
+left to fail: it raises Android's consent dialog, and taking a projection grant
+only to publish nothing is worse than not offering. Mesh sending is untouched.
+
+No **screen audio out of this device**. `MediaProjection` can record device
+playback from Android 10, but only from apps that allow it, so a system-audio
+track nobody can rely on would be worse than an honest silent share.
+`audioStreamId` is therefore always null, which the protocol already treats as
+the common case. Hearing somebody *else's* share is a different question and is
+answered above, on the SFU.
 
 No window or app picker of our own: Android's consent dialog offers "one app"
 or "entire screen", and that is the platform's choice to present, not ours. No
@@ -1912,10 +1970,12 @@ picker GIF is always one somebody sent from the web or the iOS client.
 **Not built:** a GIF picker, replies, editing, pinning, threads,
 search, members and moderation surfaces, profile editing, communities, game
 connections. Invites can be redeemed from a link but not created or shown. No
-camera (send or receive), no screen-share audio, no speaking indicators, no
-per-peer volume, no push-to-talk. LiveKit rooms are joined but no audio has been
-heard over that path from this client; it is audio-only by construction and can
-neither share nor watch a screen.
+camera (send or receive), no screen-share audio *out of* this device, no
+speaking indicators, no per-peer volume, no push-to-talk. LiveKit rooms are
+joined and can now be watched in: an incoming screen share renders, with the
+presentation's sound, at a capped layer. No audio has been heard over that path
+from this client and no SFU frame has been drawn on hardware. Publishing a
+screen stays mesh-only.
 `assembleRelease` is unsigned unless a Play upload keystore is provided
 (see [`ANDROID_RELEASE.md`](./ANDROID_RELEASE.md)). The GitHub beta APK is
 a separate `sideload` build type, debug-signed on purpose.

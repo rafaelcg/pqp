@@ -2,8 +2,6 @@ package gg.pqp.app.voice
 
 import android.content.Intent
 import gg.pqp.app.core.IceServer
-import org.webrtc.EglBase
-import org.webrtc.VideoTrack
 
 /**
  * Which media transport a room runs on.
@@ -61,16 +59,13 @@ fun voiceTransportKindFor(transport: String?): VoiceTransportKind? = when (trans
  * `livekit.org.webrtc.VideoTrack` cannot be handed to a renderer built on an
  * `org.webrtc.EglBase.Context`.
  *
- * [eglContext] and [remoteScreenFor] are therefore typed in the **mesh**
- * namespace on purpose. That is not an oversight to be fixed by generalising
- * them; it is the compiler enforcing that LiveKit video never reaches the mesh
- * renderer. A LiveKit implementation answers null to both, and the screen-share
- * UI already treats a null EGL context as "there is nothing to watch".
+ * [remoteScreenFor] therefore hands out a [RemoteScreen], a sealed type with
+ * one case per namespace, each carrying the GL context its own renderer must
+ * be initialised with. The UI picks the renderer by `when` over the case, so
+ * the compiler is what keeps LiveKit video away from the mesh renderer and the
+ * other way round; there is no shared `VideoTrack` type to cast through.
  */
 interface VoiceTransport {
-
-    /** For a renderer: the same GL context the decoders draw into, or null. */
-    val eglContext: EglBase.Context?
 
     /** This device is capturing and publishing its screen. */
     val isSharingScreen: Boolean
@@ -149,6 +144,17 @@ interface VoiceTransport {
     /** The last stats sample for a peer, or null when there is none. */
     fun statsFor(remotePeerId: String): PeerMediaStats?
 
-    /** This peer's incoming screen video, for a renderer to attach to. */
-    fun remoteScreenFor(remotePeerId: String): VideoTrack?
+    /** This peer's incoming screen, with what a renderer needs to draw it. */
+    fun remoteScreenFor(remotePeerId: String): RemoteScreen?
+
+    /**
+     * The viewer for this peer's share opened or closed.
+     *
+     * Mesh ignores it: a mesh presenter encodes one stream per peer and the
+     * receiver has no say in its size or whether it flows. On an SFU it is the
+     * difference between paying for a share and not: delivery of the video is
+     * paused while nobody is drawing it and the phone's layer ceiling is
+     * re-applied when somebody is.
+     */
+    fun setWatchingScreen(remotePeerId: String, watching: Boolean)
 }

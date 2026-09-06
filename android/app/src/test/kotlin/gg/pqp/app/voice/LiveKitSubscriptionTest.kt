@@ -1,12 +1,14 @@
 package gg.pqp.app.voice
 
 import io.livekit.android.room.track.Track
+import io.livekit.android.room.track.VideoQuality
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * What this client asks the SFU to send it.
+ * What this client asks the SFU to send it, and how big.
  *
  * The room is joined with `autoSubscribe = false`, so every byte that arrives
  * over the LiveKit leg arrives because [livekitSubscribesTo] said yes. Nothing
@@ -14,21 +16,32 @@ import org.junit.Test
  * test can reach; the wiring that calls it is verified by reading.
  *
  * The case that matters is the one that costs money: a web participant sharing
- * a 1080p screen into a room a phone is in. With auto-subscribe that stream was
- * received and decoded on mobile data and then dropped on the floor.
+ * a 1080p screen into a room a phone is in. That share is now wanted, because
+ * it is the watch party, so the second half of the bill is
+ * [screenReceiveLayerFor]: the layer a phone asks for is never the 1080p one.
  */
 class LiveKitSubscriptionTest {
 
     @Test
-    fun `audio is subscribed to`() {
-        assertTrue(livekitSubscribesTo(Track.Kind.AUDIO))
+    fun `a microphone is subscribed to`() {
+        assertTrue(livekitSubscribesTo(Track.Kind.AUDIO, Track.Source.MICROPHONE))
     }
 
     @Test
-    fun `video is never subscribed to`() {
+    fun `a share's sound is subscribed to`() {
+        assertTrue(livekitSubscribesTo(Track.Kind.AUDIO, Track.Source.SCREEN_SHARE_AUDIO))
+    }
+
+    @Test
+    fun `a screen share is subscribed to`() {
+        assertTrue(livekitSubscribesTo(Track.Kind.VIDEO, Track.Source.SCREEN_SHARE))
+    }
+
+    @Test
+    fun `a camera is never subscribed to`() {
         assertFalse(
-            "a camera or a screen share is not ours to decode",
-            livekitSubscribesTo(Track.Kind.VIDEO),
+            "this client draws no camera tiles, so a camera is not ours to decode",
+            livekitSubscribesTo(Track.Kind.VIDEO, Track.Source.CAMERA),
         )
     }
 
@@ -41,13 +54,31 @@ class LiveKitSubscriptionTest {
      */
     @Test
     fun `an unrecognised kind is refused`() {
-        assertFalse(livekitSubscribesTo(Track.Kind.UNRECOGNIZED))
+        assertFalse(livekitSubscribesTo(Track.Kind.UNRECOGNIZED, Track.Source.SCREEN_SHARE))
     }
 
-    /** Every kind that exists is decided, so a new one cannot slip through as audio. */
+    /** Video is admitted by source, so an unlabelled or unknown video stays out. */
     @Test
-    fun `only audio is accepted, across every kind the sdk defines`() {
-        val accepted = Track.Kind.entries.filter { livekitSubscribesTo(it) }
-        assertTrue("expected audio alone, got $accepted", accepted == listOf(Track.Kind.AUDIO))
+    fun `video of any other source is refused`() {
+        val accepted = Track.Source.entries.filter { livekitSubscribesTo(Track.Kind.VIDEO, it) }
+        assertEquals(listOf(Track.Source.SCREEN_SHARE), accepted)
+    }
+
+    @Test
+    fun `wifi asks for the 720p layer`() {
+        assertEquals(VideoQuality.MEDIUM, screenReceiveLayerFor(metered = false))
+    }
+
+    @Test
+    fun `a metered link asks for the 360p layer`() {
+        assertEquals(VideoQuality.LOW, screenReceiveLayerFor(metered = true))
+    }
+
+    /** HIGH means "no ceiling" under adaptive stream: a desktop's default, not a phone's. */
+    @Test
+    fun `a phone never asks for the top layer by default`() {
+        listOf(true, false).forEach { metered ->
+            assertTrue(screenReceiveLayerFor(metered) != VideoQuality.HIGH)
+        }
     }
 }

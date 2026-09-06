@@ -20,6 +20,7 @@ import io.livekit.android.room.track.LocalAudioTrack
 import io.livekit.android.room.track.LocalAudioTrackOptions
 import io.livekit.android.room.track.RemoteAudioTrack
 import io.livekit.android.room.track.RemoteTrackPublication
+import io.livekit.android.room.track.RemoteVideoTrack
 import io.livekit.android.room.track.Track
 import io.livekit.android.room.track.TrackPublication
 import kotlinx.coroutines.CoroutineScope
@@ -27,28 +28,45 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
-import org.webrtc.EglBase
-import org.webrtc.VideoTrack
 
 /**
  * LiveKit SFU audio, for a room the server put on the `livekit` transport.
  *
  * Presence, the roster and every refusal still ride `/ws`; only the media moves.
  * Read [VoiceTransport] first, in particular the note about there being two
- * WebRTC namespaces in this process, which is why nothing in this file mentions
- * `org.webrtc` except to answer null to it.
+ * WebRTC namespaces in this process, which is why nothing in this file imports
+ * `org.webrtc`: every video type here is LiveKit's own, and it leaves as a
+ * [RemoteScreen.LiveKit] so a renderer on the other namespace can never be
+ * handed it.
+ *
+ * ### What this does with video
+ *
+ * **Watches screen shares.** A `SCREEN_SHARE` publication is subscribed and
+ * handed up as a [RemoteScreen.LiveKit] for the call bar's Watch row, with its
+ * `SCREEN_SHARE_AUDIO` companion playing as the presentation's sound. This is
+ * where watch parties happen, and a phone that could hear the room but not see
+ * the film was the platform gap. Two things keep it off the bill:
+ *
+ * - **Delivery is paused until somebody taps Watch.** The publication is
+ *   `setEnabled(false)` the moment it is subscribed and only enabled by
+ *   [setWatchingScreen], so a share in a room this phone is merely listening to
+ *   is a subscription on paper and no bytes on the wire. The web does the same
+ *   with `remote-video-delivery.ts`.
+ * - **The layer is capped.** Adaptive stream is on, so LiveKit measures the
+ *   renderer and asks the SFU for the smallest simulcast layer that covers it,
+ *   and [screenReceiveLayerFor] lays a ceiling over that: 720p on Wi-Fi, 360p on
+ *   a metered link. A phone never asks for the 1080p layer by default.
  *
  * ### What this deliberately does not do
  *
- * **Screen share.** [startScreenShare] answers false and the call bar hides its
- * button on this transport (`VoiceState.screenShareSupported`). A button that
- * raises Android's consent dialog, takes the grant and then publishes nothing
- * would be worse than no button, and mesh screen share is untouched.
+ * **Publish a screen.** [startScreenShare] answers false and the call bar hides
+ * its button on this transport (`VoiceState.screenShareSupported`). A button
+ * that raises Android's consent dialog, takes the grant and then publishes
+ * nothing would be worse than no button, and mesh screen share is untouched.
  *
- * **Receive video of any kind.** Not by ignoring frames but by never asking for
- * them: the room is joined with `autoSubscribe = false` and this client
- * subscribes publication by publication, to audio only. See
- * [livekitSubscribesTo].
+ * **Receive a camera.** Not by ignoring frames but by never asking for them:
+ * the room is joined with `autoSubscribe = false` and this client subscribes
+ * publication by publication. See [livekitSubscribesTo].
  *
  * **Fall back to mesh.** There is no path in here that does. The server pins a
  * room's transport for its lifetime; a client that could not reach the SFU and
@@ -72,6 +90,14 @@ class LiveKitEngine(
     private val onFailed: (String) -> Unit,
     /** Connected and publishing. The caller re-declares mute and deafen. */
     private val onConnected: () -> Unit,
+    /** A participant's screen arrived or went away. Null means "gone". */
+    private val onRemoteScreen: (String, RemoteScreen?) -> Unit = { _, _ -> },
+    /**
+     * Whether the active network is metered, read when a layer is chosen. A
+     * function rather than a value because a phone walks from Wi-Fi to mobile
+     * data mid-call, and the next share it opens should notice.
+     */
+    private val isMetered: () -> Boolean = { false },
 ) : VoiceTransport {
 
     private var room: Room? = null
@@ -91,6 +117,22 @@ class LiveKitEngine(
     private val peers = LiveKitPeerIndex()
     private val peerLock = Any()
 
+    /**
+     * The screen-share video being shown per peer. The index under [peerLock]
+     * decides *which* sid is the screen; this only holds the track for it.
+     */
+    private val screens = HashMap<String, RemoteVideoTrack>()
+
+    /**
+     * Peers the `/ws` roster currently says are presenting.
+     *
+     * The gate on a presentation's sound, exactly as on the web
+     * (`audibleScreenPeerIds`): a `SCREEN_SHARE_AUDIO` publication nobody
+     * announced over `set-sharing-screen` stays silent. The Watch row reads the
+     * same roster fact, so sound and picture are offered together.
+     */
+    private val sharingByRoster = mutableSetOf<String>()
+
     @Volatile private var muted = false
     @Volatile private var deafened = false
 
@@ -105,17 +147,6 @@ class LiveKitEngine(
 
     /** Non-null between [start] and [stop]. Guards late callbacks from an old room. */
     @Volatile private var localPeerId: String? = null
-
-    /**
-     * Null, always, and not a stub to be filled in later.
-     *
-     * The GL context a renderer needs belongs to whichever libwebrtc decoded
-     * the frames, and on this transport that is LiveKit's. Handing back an
-     * `org.webrtc` context here would compile and then fail at the first
-     * `initVideoRenderer`. The screen-share UI reads a null context as "there
-     * is nothing to watch", which is the truth on this path.
-     */
-    override val eglContext: EglBase.Context? get() = null
 
     override val isSharingScreen: Boolean get() = false
 
@@ -155,12 +186,15 @@ class LiveKitEngine(
         val created = LiveKit.create(
             context.applicationContext,
             RoomOptions(
-                // Adaptive stream is a video feature: it raises and lowers the
-                // quality of a subscribed video track by how visible its
-                // renderer is. There are no video subscriptions here (see
-                // `livekitSubscribesTo`) and no renderers, so it has nothing to
-                // act on. Off matches the web client.
-                adaptiveStream = false,
+                // On, as on the web. Adaptive stream measures the renderer a
+                // subscribed video is drawn into and asks the SFU for the
+                // smallest simulcast layer that covers it, and pauses the
+                // video when no renderer is visible. The renderer has to be
+                // registered through `Room.initVideoRenderer` for the SDK to
+                // see it; `RemoteScreenView` does that. A manual
+                // `setVideoQuality` is a ceiling laid over the measurement,
+                // not a replacement for it: see `screenReceiveLayerFor`.
+                adaptiveStream = true,
                 dynacast = true,
             ),
             LiveKitOverrides(
@@ -226,13 +260,13 @@ class LiveKitEngine(
         val participants = room.remoteParticipants.values.toList()
         val ids = participants.mapNotNull { it.identity?.value }
         synchronized(peerLock) { peers.seedAll(ids) }.forEach(::report)
-        participants.forEach(::subscribeToAudio)
+        participants.forEach(::subscribeToPublications)
         Log.i(TAG, "SFU join found ${participants.size} participant(s) already in the room")
     }
 
-    /** Ask for every audio publication this participant already has. */
-    private fun subscribeToAudio(participant: Participant) {
-        participant.trackPublications.values.forEach(::subscribeIfAudio)
+    /** Ask for every wanted publication this participant already has. */
+    private fun subscribeToPublications(participant: Participant) {
+        participant.trackPublications.values.forEach(::subscribeIfWanted)
     }
 
     /**
@@ -242,9 +276,9 @@ class LiveKitEngine(
      * `TrackPublished` covers this client's own microphone as well as other
      * people's tracks.
      */
-    private fun subscribeIfAudio(publication: TrackPublication) {
+    private fun subscribeIfWanted(publication: TrackPublication) {
         val remote = publication as? RemoteTrackPublication ?: return
-        if (!livekitSubscribesTo(remote.kind)) return
+        if (!livekitSubscribesTo(remote.kind, remote.source)) return
         // `isDesired` is "we have asked", which is the question here.
         // `subscribed` is not: it stays false between the ask and the track
         // arriving, so it would let a second request through on every event.
@@ -296,17 +330,18 @@ class LiveKitEngine(
                         report(peerId)
                     }
                     // Somebody can arrive with publications already on them.
-                    subscribeToAudio(participant)
+                    subscribeToPublications(participant)
                 }
 
-                // Somebody unmuted, or published late. Nothing arrives on its
-                // own now that `autoSubscribe` is off, so this is the only way
-                // a track that appears mid-call is ever heard.
-                is RoomEvent.TrackPublished -> subscribeIfAudio(event.publication)
+                // Somebody unmuted, published late, or started a share.
+                // Nothing arrives on its own now that `autoSubscribe` is off,
+                // so this is the only way a track that appears mid-call is
+                // ever heard or seen.
+                is RoomEvent.TrackPublished -> subscribeIfWanted(event.publication)
 
                 is RoomEvent.ParticipantDisconnected -> {
                     val peerId = event.participant.identity?.value ?: return@collect
-                    synchronized(peerLock) { peers.forget(peerId) }
+                    forgetPeer(peerId)
                 }
 
                 is RoomEvent.Disconnected -> {
@@ -332,20 +367,37 @@ class LiveKitEngine(
     private fun onTrackSubscribed(event: RoomEvent.TrackSubscribed) {
         val peerId = event.participant.identity?.value ?: return
         val track = event.track
-        if (track !is RemoteAudioTrack) {
-            // Should not happen: only audio is ever subscribed to (see
-            // `subscribeIfAudio`), so a video track arriving here means the
-            // server subscribed us to something we did not ask for. Dropped
-            // rather than rendered, and said out loud rather than swallowed,
-            // because silently decoding video is the bill nobody can explain.
-            Log.w(TAG, "unexpected non-audio subscription from $peerId; ignoring")
+        val publication = event.publication
+        if (track is RemoteVideoTrack) {
+            if (publication.source != Track.Source.SCREEN_SHARE) {
+                // Only a screen is ever asked for (see `livekitSubscribesTo`),
+                // so a camera arriving here means the server subscribed us to
+                // something we did not ask for. Dropped rather than rendered,
+                // and said out loud rather than swallowed, because silently
+                // decoding video is the bill nobody can explain.
+                Log.w(TAG, "unexpected ${publication.source} video from $peerId; ignoring")
+                return
+            }
+            // A remote participant's publication always is one; the event's
+            // static type is the base class because the same event shape
+            // carries local publications elsewhere in the SDK.
+            val remote = publication as? RemoteTrackPublication
+            if (remote == null) {
+                Log.w(TAG, "screen share from $peerId is not a remote publication; ignoring")
+                return
+            }
+            onScreenSubscribed(peerId, remote, track)
             return
         }
-        if (event.publication.source == Track.Source.SCREEN_SHARE_AUDIO) {
+        if (track !is RemoteAudioTrack) {
+            Log.w(TAG, "unexpected ${track.kind} subscription from $peerId; ignoring")
+            return
+        }
+        if (publication.source == Track.Source.SCREEN_SHARE_AUDIO) {
             // A presentation's sound, not a person's voice. It must not be what
-            // makes somebody count as audible, and it must still be silenced by
-            // deafen.
-            track.enabled = !deafened
+            // makes somebody count as audible, it must still be silenced by
+            // deafen, and it only plays for a presenter the roster announced.
+            track.enabled = screenAudioEnabledFor(peerId)
             return
         }
         track.enabled = !deafened
@@ -357,11 +409,103 @@ class LiveKitEngine(
 
     private fun onTrackUnsubscribed(event: RoomEvent.TrackUnsubscribed) {
         val peerId = event.participant.identity?.value ?: return
-        if (event.track !is RemoteAudioTrack) return
         val sid = event.publications.sid
+        if (event.track is RemoteVideoTrack) {
+            val gone = synchronized(peerLock) {
+                peers.screenTrackRemoved(peerId, sid).also { if (it) screens.remove(peerId) }
+            }
+            if (gone) onRemoteScreen(peerId, null)
+            return
+        }
+        if (event.track !is RemoteAudioTrack) return
         if (synchronized(peerLock) { peers.voiceTrackRemoved(peerId, sid) }) {
             report(peerId)
         }
+    }
+
+    /**
+     * A screen-share video arrived. Filed, capped, paused, then announced.
+     *
+     * Paused before it is announced, in that order: `setEnabled(false)` tells
+     * the SFU to stop forwarding this publication, and it goes out before the
+     * call bar can offer a Watch button, so the window in which a share this
+     * phone has not opened is costing anybody bytes is as short as the
+     * signalling round trip. [setWatchingScreen] lifts it.
+     *
+     * The layer ceiling goes on at the same time, so that when delivery is
+     * lifted the first frames are already the phone-sized layer rather than a
+     * burst of 1080p while the ceiling catches up.
+     */
+    private fun onScreenSubscribed(
+        peerId: String,
+        publication: RemoteTrackPublication,
+        track: RemoteVideoTrack,
+    ) {
+        val room = room ?: return
+        val shown = synchronized(peerLock) {
+            peers.screenTrackAdded(peerId, publication.sid).also { if (it) screens[peerId] = track }
+        }
+        if (!shown) {
+            Log.w(TAG, "second screen share from $peerId while one is live; ignoring")
+            return
+        }
+        applyScreenDelivery(publication, watching = false)
+        onRemoteScreen(peerId, RemoteScreen.LiveKit(track, room))
+    }
+
+    private fun applyScreenDelivery(publication: RemoteTrackPublication, watching: Boolean) {
+        runCatching { publication.setVideoQuality(screenReceiveLayerFor(isMetered())) }
+            .onFailure { Log.w(TAG, "SFU receive quality rejected; keeping the current layer", it) }
+        runCatching { publication.setEnabled(watching) }
+            .onFailure { Log.w(TAG, "could not ${if (watching) "resume" else "pause"} ${publication.sid}", it) }
+    }
+
+    private fun screenPublicationFor(peerId: String): RemoteTrackPublication? {
+        val sid = synchronized(peerLock) { peers.screenTrackFor(peerId) } ?: return null
+        val participant = room?.remoteParticipants?.values?.firstOrNull { it.identity?.value == peerId }
+            ?: return null
+        return participant.trackPublications[sid] as? RemoteTrackPublication
+    }
+
+    /**
+     * The viewer opened or closed on this peer's share.
+     *
+     * Explicit on both ends rather than left to adaptive stream alone. The
+     * SDK pauses a track once every renderer it was given has gone invisible,
+     * but before a renderer has ever been attached it has nothing to compare
+     * against and leaves the publication delivering. Naming the state here is
+     * what makes the pause certain; the SDK's measurement then only ever
+     * shrinks the layer below the ceiling while the viewer is open.
+     */
+    override fun setWatchingScreen(remotePeerId: String, watching: Boolean) {
+        val publication = screenPublicationFor(remotePeerId) ?: return
+        applyScreenDelivery(publication, watching)
+    }
+
+    /** A presentation's sound plays only for an announced presenter, and never while deafened. */
+    private fun screenAudioEnabledFor(peerId: String): Boolean =
+        !deafened && synchronized(peerLock) { peerId in sharingByRoster }
+
+    /** Re-apply deafen and the roster gate to every audio track of one participant. */
+    private fun applyAudioEnabled(participant: Participant) {
+        val peerId = participant.identity?.value ?: return
+        participant.audioTrackPublications.forEach { (publication, track) ->
+            val audio = track as? RemoteAudioTrack ?: return@forEach
+            audio.enabled = if (publication.source == Track.Source.SCREEN_SHARE_AUDIO) {
+                screenAudioEnabledFor(peerId)
+            } else {
+                !deafened
+            }
+        }
+    }
+
+    private fun forgetPeer(peerId: String) {
+        val hadScreen = synchronized(peerLock) {
+            sharingByRoster.remove(peerId)
+            peers.forget(peerId)
+            screens.remove(peerId) != null
+        }
+        if (hadScreen) onRemoteScreen(peerId, null)
     }
 
     private fun report(peerId: String) {
@@ -415,14 +559,7 @@ class LiveKitEngine(
 
     override fun setDeafened(value: Boolean, mutedByUser: Boolean) {
         deafened = value
-        val room = room
-        if (room != null) {
-            room.remoteParticipants.values.forEach { participant ->
-                participant.audioTrackPublications.forEach { (_, track) ->
-                    (track as? RemoteAudioTrack)?.enabled = !value
-                }
-            }
-        }
+        room?.remoteParticipants?.values?.forEach(::applyAudioEnabled)
         // Being heard while hearing nothing is a trap rather than a feature,
         // and it is what the mesh path, the web and iOS all do.
         // `canPublishAudio` for the same reason as on the mesh path:
@@ -442,7 +579,7 @@ class LiveKitEngine(
     override fun addPeer(remotePeerId: String) = Unit
 
     override fun removePeer(remotePeerId: String) {
-        synchronized(peerLock) { peers.forget(remotePeerId) }
+        forgetPeer(remotePeerId)
     }
 
     override fun handleOffer(from: String, sdp: String) = Unit
@@ -459,7 +596,24 @@ class LiveKitEngine(
     /** Mesh classifies video by elimination; an SFU labels it. Nothing to feed. */
     override fun setPeerCameraStreamId(remotePeerId: String, streamId: String?) = Unit
 
-    override fun setPeerSharingScreen(remotePeerId: String, sharing: Boolean) = Unit
+    /**
+     * The roster said this peer is or is not presenting.
+     *
+     * The SFU labels the video itself, so unlike the mesh this is not what
+     * decides which track is the screen. It is the gate on the share's
+     * *sound*: the roster is the source of who, and a `SCREEN_SHARE_AUDIO`
+     * publication from somebody the roster never announced stays silent, as on
+     * the web. Fed from every roster frame, so a repeat is absorbed.
+     */
+    override fun setPeerSharingScreen(remotePeerId: String, sharing: Boolean) {
+        val changed = synchronized(peerLock) {
+            if (sharing) sharingByRoster.add(remotePeerId) else sharingByRoster.remove(remotePeerId)
+        }
+        if (!changed) return
+        room?.remoteParticipants?.values
+            ?.firstOrNull { it.identity?.value == remotePeerId }
+            ?.let(::applyAudioEnabled)
+    }
 
     /** The SFU muted the publication itself; nothing reaches this phone to gate. */
     override fun setPeerServerMuted(remotePeerId: String, muted: Boolean) = Unit
@@ -491,7 +645,12 @@ class LiveKitEngine(
         val mic = micTrack
         room = null
         micTrack = null
-        synchronized(peerLock) { peers.clear() }
+        val showing = synchronized(peerLock) {
+            sharingByRoster.clear()
+            peers.clear()
+            screens.keys.toList().also { screens.clear() }
+        }
+        showing.forEach { onRemoteScreen(it, null) }
         // The capture first, then the room. `release` would take the track with
         // it, but only after `disconnect` has finished its round trip, and the
         // gap is a microphone still recording for somebody who has hung up.
@@ -531,7 +690,11 @@ class LiveKitEngine(
      */
     override fun statsFor(remotePeerId: String): PeerMediaStats? = null
 
-    override fun remoteScreenFor(remotePeerId: String): VideoTrack? = null
+    override fun remoteScreenFor(remotePeerId: String): RemoteScreen? {
+        val room = room ?: return null
+        val track = synchronized(peerLock) { screens[remotePeerId] } ?: return null
+        return RemoteScreen.LiveKit(track, room)
+    }
 
     companion object {
         private const val TAG = "pqp.voice"
@@ -548,25 +711,3 @@ class LiveKitEngine(
         private const val JOIN_TIMEOUT_MS = 45_000L
     }
 }
-
-/**
- * Whether this client asks the SFU for a publication at all.
- *
- * Audio, and nothing else. The room is joined with `autoSubscribe = false`
- * precisely so this decision exists, and it is a top-level function rather than
- * a `when` inside the engine because it is the only part of the subscription
- * path a test on this machine can reach: nothing in this module can build a
- * `Room` without a device.
- *
- * Video is refused by kind rather than by source, so a camera, a screen share
- * and anything LiveKit adds later are all covered without this having to be
- * updated. There is no renderer on this transport and no GL context to give one
- * ([LiveKitEngine.eglContext] is null), so a subscribed video track could only
- * ever be decoded and dropped, which on Brazilian mobile data is somebody
- * paying for frames nobody sees.
- *
- * Screen share **audio** is not excluded here. It is audio, it is small, and
- * the engine already handles it separately: silenced by
- * deafen like everything else, and never what makes somebody count as audible.
- */
-fun livekitSubscribesTo(kind: Track.Kind): Boolean = kind == Track.Kind.AUDIO

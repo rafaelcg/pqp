@@ -6,6 +6,7 @@ import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioFocusRequest
 import android.media.AudioManager
+import android.net.ConnectivityManager
 import android.os.Build
 import android.util.Log
 import gg.pqp.app.R
@@ -33,8 +34,6 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import org.webrtc.EglBase
-import org.webrtc.VideoTrack
 
 enum class VoiceStage { Idle, Joining, Connected, Refused }
 
@@ -75,8 +74,8 @@ data class VoiceState(
      * hidden rather than left to fail: it raises Android's consent dialog, and
      * taking a projection grant only to publish nothing is a worse answer than
      * not offering. Mesh is unaffected and still shares screens. Watching
-     * somebody else's share is a separate question and is also LiveKit-less
-     * here, because no track is ever subscribed on that transport.
+     * somebody else's share is a separate question with a different answer:
+     * both transports deliver one into [VoiceController.remoteScreens].
      */
     val screenShareSupported: Boolean = true,
     /**
@@ -151,7 +150,7 @@ class VoiceController(
     private val _state = MutableStateFlow(VoiceState())
     val state: StateFlow<VoiceState> = _state.asStateFlow()
 
-    private val _remoteScreens = MutableStateFlow<Map<String, VideoTrack>>(emptyMap())
+    private val _remoteScreens = MutableStateFlow<Map<String, RemoteScreen>>(emptyMap())
 
     /**
      * Every screen being shared *to* this device, keyed by the presenter's peer
@@ -162,8 +161,11 @@ class VoiceController(
      * single track, the second share to arrive simply overwrote the first, so
      * one of the two presenters disappeared from this device with nothing
      * anywhere saying why.
+     *
+     * A [RemoteScreen] rather than a track, because which renderer can draw it
+     * depends on which transport it came over, and both feed this map.
      */
-    val remoteScreens: StateFlow<Map<String, VideoTrack>> = _remoteScreens.asStateFlow()
+    val remoteScreens: StateFlow<Map<String, RemoteScreen>> = _remoteScreens.asStateFlow()
 
     private val peerMedia = java.util.concurrent.ConcurrentHashMap<String, PeerMediaState>()
 
@@ -204,15 +206,18 @@ class VoiceController(
         scope = scope,
         signal = { frame -> session.realtime.send(frame.toJsonObject()) },
         onPeerState = ::onPeerMediaState,
-        onRemoteScreen = { peerId, track ->
-            _remoteScreens.value = _remoteScreens.value.toMutableMap().apply {
-                if (track == null) remove(peerId) else put(peerId, track)
-            }
-        },
+        onRemoteScreen = ::onRemoteScreen,
         // Posted rather than run inline: this arrives on the projection's own
         // callback thread, from inside the capturer we are about to dispose.
         onScreenShareEnded = { scope.launch { stopScreenShare() } },
     )
+
+    /** Both engines file into the same map; the UI does not care which one did. */
+    private fun onRemoteScreen(peerId: String, screen: RemoteScreen?) {
+        _remoteScreens.value = _remoteScreens.value.toMutableMap().apply {
+            if (screen == null) remove(peerId) else put(peerId, screen)
+        }
+    }
 
     private fun createLiveKitEngine(): LiveKitEngine = LiveKitEngine(
         context = context,
@@ -237,6 +242,14 @@ class VoiceController(
             // between the two, the publication was created from the local
             // flags and the roster has to be told the same thing.
             pushVoiceState()
+        },
+        onRemoteScreen = ::onRemoteScreen,
+        isMetered = {
+            // Mobile data, or a hotspot the OS knows is metered: the SFU is
+            // asked for the 360p layer of a share instead of 720p.
+            val connectivity =
+                context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            connectivity?.isActiveNetworkMetered == true
         },
     )
 
@@ -265,8 +278,13 @@ class VoiceController(
         engineKind = kind
     }
 
-    /** The GL context a `SurfaceViewRenderer` has to be initialised with. */
-    val eglContext: EglBase.Context? get() = engine.eglContext
+    /**
+     * The viewer for a share opened or closed. On the SFU this is what starts
+     * and stops the video actually flowing; see [VoiceTransport.setWatchingScreen].
+     */
+    fun setWatchingScreen(peerId: String, watching: Boolean) {
+        engine.setWatchingScreen(peerId, watching)
+    }
 
     private val audioManager =
         context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
