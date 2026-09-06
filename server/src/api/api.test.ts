@@ -1075,6 +1075,28 @@ describeDb("API authorization", () => {
       return result.rows[0]!.id;
     }
 
+    it("refuses HTTP send from a person — that path is for character tokens", async () => {
+      const { textChannelId } = await makeServer();
+      const posted = await call(
+        owner,
+        "POST",
+        `/api/channels/${textChannelId}/messages`,
+        { body: "from the app" },
+      );
+      expect(posted.status).toBe(403);
+    });
+
+    it("refuses HTTP send without a bearer", async () => {
+      const { textChannelId } = await makeServer();
+      const posted = await call(
+        null,
+        "POST",
+        `/api/channels/${textChannelId}/messages`,
+        { body: "anon" },
+      );
+      expect(posted.status).toBe(401);
+    });
+
     it("lets an author edit their own message and nobody else", async () => {
       const { textChannelId } = await makeServer();
       const messageId = await postMessage(textChannelId);

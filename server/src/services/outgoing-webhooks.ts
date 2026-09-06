@@ -5,6 +5,7 @@ import type {
   OutgoingWebhook,
   OutgoingWebhookAuthHeaderName,
   UpdateOutgoingWebhookBody,
+  UserStatus,
 } from "@pqp/shared";
 import {
   formatUserTag,
@@ -252,6 +253,43 @@ function normalizeAuth(
     throw new HttpError(400, "That auth header is not allowed");
   }
   return { name, value };
+}
+
+/**
+ * Is this server currently able to wake an external bot?
+ *
+ * Used only to paint `is_character` members as online on the member list when
+ * they have no socket. A stored "always online" flag would stay green after
+ * the hook died, which is the failure mode `status.ts` exists to prevent.
+ * `active` is the only healthy status; `failing` and `disabled` mean the
+ * wake is not landing.
+ */
+export async function serverHasActiveOutgoingWebhook(
+  serverId: string,
+): Promise<boolean> {
+  const result = await getPool().query<{ listening: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM outgoing_webhooks
+        WHERE server_id = $1 AND status = 'active'
+     ) AS listening`,
+    [serverId],
+  );
+  return result.rows[0]?.listening === true;
+}
+
+/**
+ * Socket status wins. A character with no socket is online only while this
+ * server has an `active` outgoing hook. Humans are never rewritten.
+ */
+export function statusWithCharacterHook(
+  status: UserStatus,
+  isCharacter: boolean,
+  hookListening: boolean,
+): UserStatus {
+  if (isCharacter && status === "offline" && hookListening) {
+    return "online";
+  }
+  return status;
 }
 
 export async function listOutgoingWebhooks(
