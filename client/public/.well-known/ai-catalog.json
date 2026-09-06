@@ -1,0 +1,33 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "pqp",
+    "identifier": "https://pqp.gg"
+  },
+  "entries": [
+    {
+      "identifier": "urn:air:pqp.gg:skill:pqp-public-surfaces",
+      "displayName": "pqp public surfaces",
+      "type": "text/markdown",
+      "url": "https://pqp.gg/.well-known/agent-skills/pqp-public-surfaces/SKILL.md",
+      "description": "What an agent can read on pqp.gg without an account: public profiles, public communities, invite links, release notes and the source repository. pqp has no agent-facing API.",
+      "representativeQueries": [
+        "what is pqp.gg",
+        "show me the public profile pqp.gg/@rafa",
+        "what does a pqp community page at pqp.gg/c/valorant contain",
+        "is pqp open source and can I self-host it"
+      ]
+    },
+    {
+      "identifier": "urn:air:pqp.gg:catalog:api",
+      "displayName": "pqp API catalog",
+      "type": "application/linkset+json",
+      "url": "https://pqp.gg/.well-known/api-catalog",
+      "description": "RFC 9727 linkset naming the pqp API origin and its live status document. Every API route requires a signed-in user session.",
+      "representativeQueries": [
+        "is pqp.gg up right now",
+        "where is the pqp API documented"
+      ]
+    }
+  ]
+}

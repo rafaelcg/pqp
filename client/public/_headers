@@ -38,4 +38,22 @@
 # live status live. Cheap, standard, and true — unlike advertising agent
 # registration surfaces this product does not have.
 /
-  Link: </.well-known/api-catalog>; rel="api-catalog", <https://api.pqp.gg/status.json>; rel="status"
+  Link: </.well-known/api-catalog>; rel="api-catalog", <https://api.pqp.gg/status.json>; rel="status", </llms.txt>; rel="describedby"; type="text/plain", </sitemap.xml>; rel="sitemap"; type="application/xml"
+
+# Agent-readable siblings of the pages above. Same reasoning as the two
+# extension-less files at the top: Pages guesses a media type from the
+# extension, and `.txt` guessed as `text/plain` is right while the two JSON
+# documents and the SKILL.md are worth stating. The skill file is markdown that
+# a fetcher should be able to read inline, hence the charset.
+/llms.txt
+  Content-Type: text/plain; charset=utf-8
+/llms-full.txt
+  Content-Type: text/plain; charset=utf-8
+/.well-known/ai-catalog.json
+  Content-Type: application/json
+  Access-Control-Allow-Origin: *
+/.well-known/agent-skills/index.json
+  Content-Type: application/json
+  Access-Control-Allow-Origin: *
+/.well-known/agent-skills/*
+  Access-Control-Allow-Origin: *

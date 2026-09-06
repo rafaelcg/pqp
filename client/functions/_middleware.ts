@@ -17,6 +17,10 @@ import {
   marketingPageFromMetaPath,
 } from "../src/lib/marketing-meta";
 import {
+  markdownTwinFor,
+  prefersMarkdown,
+} from "../src/lib/markdown-negotiation";
+import {
   handleFromMetaPath,
   injectProfileHead,
   preferredLocale,
@@ -268,6 +272,40 @@ export async function onRequest(context: PagesContext): Promise<Response> {
       });
     }
     return response;
+  }
+
+  // `Accept: text/markdown` on a page that has a written markdown twin. This
+  // sits above every other branch because it answers with a different document
+  // entirely, not with a rewritten head, and below the hashed-asset guard
+  // because that one is about not serving HTML for a stylesheet. Only GET, and
+  // only when the twin is actually there: every failure falls through to the
+  // ordinary HTML page.
+  if (context.request.method === "GET" && prefersMarkdown(context.request.headers.get("accept"))) {
+    const twin = markdownTwinFor(url.pathname);
+    const assets = context.env.ASSETS;
+    if (twin && assets) {
+      try {
+        const twinUrl = new URL(twin, context.request.url);
+        const markdown = await assets.fetch(new Request(twinUrl.toString()));
+        if (markdown.ok) {
+          const body = await markdown.text();
+          return new Response(body, {
+            status: 200,
+            headers: {
+              "content-type": "text/markdown; charset=utf-8",
+              "cache-control": "public, max-age=300",
+              vary: "accept",
+              // Rough, and honest about being rough: a whole-word-ish count is
+              // within a factor the caller can budget with, and the header is
+              // optional anyway.
+              "x-markdown-tokens": String(Math.ceil(body.split(/\s+/).filter(Boolean).length * 1.3)),
+            },
+          });
+        }
+      } catch {
+        // Fall through to HTML. A markdown variant is a nicety; the page is not.
+      }
+    }
   }
 
   const handle = handleFromMetaPath(url.pathname);
