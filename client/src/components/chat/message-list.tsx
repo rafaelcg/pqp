@@ -489,8 +489,11 @@ export function MessageList({
   }, [channelId, leaveSelectMode]);
 
   // Escape is the way out, the same as it is out of the menu and the picker.
+  // Not while the confirm is open: there Escape means "not that", and throwing
+  // the selection away as well would make backing out of the dialog cost the
+  // work of picking a hundred rows again.
   useEffect(() => {
-    if (!selecting) {
+    if (!selecting || bulkConfirmOpen) {
       return;
     }
     function onKey(event: KeyboardEvent) {
@@ -500,7 +503,7 @@ export function MessageList({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selecting, leaveSelectMode]);
+  }, [selecting, bulkConfirmOpen, leaveSelectMode]);
 
   const toggleSelected = useCallback(
     (messageId: string, extend: boolean) => {
@@ -1265,7 +1268,10 @@ export function MessageList({
         <div
           role="group"
           aria-label={t("chat.bulk.barAria")}
-          className="flex flex-wrap items-center justify-between gap-2 border-t border-ink-4 bg-ink-2/95 px-4 py-2"
+          // Above the corner card's z-30. Those cards are hints and they park
+          // in the same bottom-right corner as this bar's buttons; a hint must
+          // not sit on top of the button that ends a destructive flow.
+          className="relative z-40 flex flex-wrap items-center justify-between gap-2 border-t border-ink-4 bg-ink-2 px-4 py-2"
         >
           <p className="min-w-0 text-xs text-paper-muted">
             {selectedIds.size === 0
@@ -2264,7 +2270,10 @@ const MessageRow = memo(function MessageRow({
               so keyboard reach goes through that single, already-tested
               path rather than duplicating it four buttons at a time on
               every row's tab stop. */}
-          {isReal && !isEditing && (
+          {/* Hidden while picking a set: the toolbar sits above the row's
+              select overlay, so leaving it up offers React and Reply on a row
+              whose only job right now is to be ticked. */}
+          {isReal && !isEditing && !selecting && (
             <div
               className={cn(
                 "absolute -top-3 right-2 z-10 items-center gap-0.5 rounded-md border border-ink-4 bg-ink-2 p-0.5 shadow-sm",
@@ -2437,6 +2446,20 @@ const MessageRow = memo(function MessageRow({
                         }}
                       >
                         {t("chat.delete")}
+                      </MoreMenuItem>
+                    )}
+                    {/* Also here, not only in the right-click menu. A
+                        right-click is not an affordance at all on a trackpad
+                        somebody has never right-clicked, and this is the one
+                        action a moderator has to find under pressure. */}
+                    {isReal && onStartSelect && (
+                      <MoreMenuItem
+                        onSelect={() => {
+                          setMoreOpen(false);
+                          onStartSelect();
+                        }}
+                      >
+                        {t("chat.bulk.select")}
                       </MoreMenuItem>
                     )}
                   </div>
