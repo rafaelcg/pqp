@@ -3,7 +3,10 @@ import type { VoiceRoomTransport, WatchPartyState } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { INSTANCE_ID } from "../lib/bus.js";
 import { logEvent } from "../lib/log.js";
-import { VOICE_RESUME_TOKEN_TTL_MS } from "../ws/voice-resume-token.js";
+import {
+  VOICE_RESUME_TOKEN_TTL_MS,
+  VOICE_RESUME_TTL_MS,
+} from "../ws/voice-resume-token.js";
 
 /**
  * The voice registry: `ws/voice.ts`'s peer map and transport pin, written to
@@ -29,7 +32,13 @@ import { VOICE_RESUME_TOKEN_TTL_MS } from "../ws/voice-resume-token.js";
  * map, the watch party lives in `voice_rooms.watch_party`, and the bus frames
  * (`voice.room`, `voice.identity`, `voice.watch`) are *hints* that tell the
  * other instance to re-read: a dropped frame costs latency, never a ghost.
- * Cross-instance resume and the dead-instance reconcile are M3.
+ *
+ * M3 MADE THE ROWS SURVIVE THEIR INSTANCE. A resume that lands on the other
+ * machine adopts the row (`adoptVoicePeer`, one conditional UPDATE), the
+ * instance lease gets its consequences (`reconcileVoiceRegistry`: rows of a
+ * dead instance are orphaned, then deleted after the resume window, and
+ * room rows nobody is in are swept), and `voice_retired_peers` is the only
+ * retired store while the flag is on.
  *
  * WRITES NEVER THROW INTO THE HANDLER. A failed registry write is logged and
  * otherwise ignored: the local map has already been updated and the sockets
@@ -235,6 +244,10 @@ function mapRow(row: VoicePeerDbRow): VoicePeerRow {
 const PEER_COLUMNS = `peer_id, channel_id, user_id, instance_id, display_name, avatar_url,
        muted, deafened, sharing_screen, camera_stream_id, screen_audio_stream_id,
        can_speak, can_resume, orphaned_at`;
+/** The same list qualified as `p.<column>`, for statements that join `voice_peers p`. */
+const PEER_COLUMNS_OF_P = PEER_COLUMNS.split(",")
+  .map((column) => `p.${column.trim()}`)
+  .join(", ");
 
 /**
  * Write a peer's whole row, creating it on join and replacing it on every
@@ -555,6 +568,202 @@ export function clearWatchPartyIfEmpty(channelId: string): Promise<unknown> {
   );
 }
 
+// --- adopt ------------------------------------------------------------------
+
+export interface VoicePeerAdoption {
+  /** The row as it now stands: this instance's, no longer orphaned. */
+  row: VoicePeerRow;
+  /** Who held it before, and whether their lease was still good. */
+  previousInstanceId: string;
+  previousOrphanedAt: Date | null;
+  previousOwnerAlive: boolean;
+}
+
+/**
+ * Take over a peer row held by another instance: the third resume plan
+ * (`docs/plans/MULTI_INSTANCE_VOICE.md` 5.2). One conditional UPDATE, so a
+ * row that was deleted or re-owned in the meantime is a null, never a seat
+ * stolen back. The proof of ownership is the caller's (the resume HMAC);
+ * the `user_id` / `channel_id` clauses only make a forged claim a no-op.
+ *
+ * The previous owner's liveness rides along so the caller can log which
+ * case it was; the treatment is the same either way (adopt, publish
+ * `voice.room adopted` so the old owner drops its local entry without a
+ * `peer-left`). A dead owner is simply one that is not listening.
+ */
+export async function adoptVoicePeer(
+  peerId: string,
+  userId: string,
+  channelId: string,
+  ttlMs = INSTANCE_TTL_MS,
+): Promise<VoicePeerAdoption | null> {
+  const result = await getPool().query<
+    VoicePeerDbRow & {
+      previous_instance_id: string;
+      previous_orphaned_at: Date | null;
+      previous_owner_alive: boolean;
+    }
+  >(
+    `WITH before AS (
+       SELECT p.peer_id, p.instance_id, p.orphaned_at,
+              EXISTS (
+                SELECT 1 FROM voice_instances i
+                 WHERE i.instance_id = p.instance_id
+                   AND i.heartbeat_at > NOW() - ($5::bigint * INTERVAL '1 millisecond')
+              ) AS owner_alive
+         FROM voice_peers p
+        WHERE p.peer_id = $1 AND p.user_id = $2 AND p.channel_id = $3
+          FOR UPDATE
+     )
+     UPDATE voice_peers p
+        SET instance_id = $4, orphaned_at = NULL, updated_at = NOW()
+       FROM before
+      WHERE p.peer_id = before.peer_id
+      RETURNING ${PEER_COLUMNS_OF_P},
+                before.instance_id AS previous_instance_id,
+                before.orphaned_at AS previous_orphaned_at,
+                before.owner_alive AS previous_owner_alive`,
+    [peerId, userId, channelId, INSTANCE_ID, ttlMs],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    row: mapRow(row),
+    previousInstanceId: row.previous_instance_id,
+    previousOrphanedAt: row.previous_orphaned_at,
+    previousOwnerAlive: row.previous_owner_alive,
+  };
+}
+
+// --- reconcile --------------------------------------------------------------
+
+export interface VoiceReconcileResult {
+  /** Rows whose instance's lease expired this pass: seat held, socket gone. */
+  orphaned: { peerId: string; channelId: string }[];
+  /** Orphans of a dead instance past the resume window: gone, and retired. */
+  removed: { peerId: string; channelId: string }[];
+  /** Room rows with no peer row left. */
+  roomsSwept: number;
+  /** Lease rows of dead instances, dropped once their peers were orphaned. */
+  instancesSwept: number;
+}
+
+/**
+ * The instance lease's consequences. Every instance runs this after its own
+ * heartbeat, and every statement is written so two instances running it in
+ * the same second do no harm: each row is orphaned once (the `IS NULL`
+ * guard), deleted once (`RETURNING` names the deleter), and the room sweep
+ * and the retired sweep are plain idempotent deletes.
+ *
+ * A dead instance is one whose heartbeat is older than `ttlMs`, or one with
+ * no lease row at all (a clean shutdown withdraws its row, and any peer row
+ * it left behind is an orphan its own close handlers already stamped). This
+ * instance's own rows are never touched: it is alive by definition, and its
+ * own orphan timers are the authority on its own seats.
+ *
+ * `orphaned_at` is set to the dead lease's last heartbeat, not to now, so the
+ * resume window is measured from the moment the instance stopped answering:
+ * a client that comes back within `VOICE_RESUME_TTL_MS` of its machine dying
+ * keeps its seat, one that does not is cleaned up by whoever is alive.
+ *
+ * Room rows are swept only once they are older than `roomGraceMs`, so a
+ * room another instance pinned a moment ago and is about to write its first
+ * peer into is left alone (`writePeer` re-asserts the row anyway).
+ */
+export async function reconcileVoiceRegistry(options: {
+  instanceId?: string;
+  ttlMs?: number;
+  resumeTtlMs?: number;
+  roomGraceMs?: number;
+} = {}): Promise<VoiceReconcileResult> {
+  const me = options.instanceId ?? INSTANCE_ID;
+  const ttlMs = options.ttlMs ?? INSTANCE_TTL_MS;
+  const resumeTtlMs = options.resumeTtlMs ?? VOICE_RESUME_TTL_MS;
+  const roomGraceMs = options.roomGraceMs ?? 30_000;
+  const pool = getPool();
+
+  const orphaned = await pool.query<{ peer_id: string; channel_id: string }>(
+    `UPDATE voice_peers p
+        SET orphaned_at = COALESCE(i.heartbeat_at, NOW()), updated_at = NOW()
+       FROM voice_peers q
+       LEFT JOIN voice_instances i ON i.instance_id = q.instance_id
+      WHERE q.peer_id = p.peer_id
+        AND p.orphaned_at IS NULL
+        AND p.instance_id <> $1
+        AND (i.instance_id IS NULL
+             OR i.heartbeat_at < NOW() - ($2::bigint * INTERVAL '1 millisecond'))
+      RETURNING p.peer_id, p.channel_id`,
+    [me, ttlMs],
+  );
+
+  // Delete, retire and unpin in one statement, so a resume racing this
+  // pass either adopts the row (and the delete sees nothing) or finds it
+  // gone *and* retired (and cold-joins). The room row goes with the last
+  // peer exactly as in `deleteVoicePeer`.
+  const removed = await pool.query<{ peer_id: string; channel_id: string }>(
+    `WITH gone AS (
+       DELETE FROM voice_peers p
+        USING voice_peers q
+        LEFT JOIN voice_instances i ON i.instance_id = q.instance_id
+        WHERE q.peer_id = p.peer_id
+          AND p.instance_id <> $1
+          AND p.orphaned_at IS NOT NULL
+          AND p.orphaned_at < NOW() - ($3::bigint * INTERVAL '1 millisecond')
+          AND (i.instance_id IS NULL
+               OR i.heartbeat_at < NOW() - ($2::bigint * INTERVAL '1 millisecond'))
+        RETURNING p.peer_id, p.channel_id
+     ),
+     retired AS (
+       INSERT INTO voice_retired_peers (peer_id)
+       SELECT peer_id FROM gone
+       ON CONFLICT (peer_id) DO UPDATE SET retired_at = NOW()
+     ),
+     unpinned AS (
+       DELETE FROM voice_rooms r
+        USING gone
+        WHERE r.channel_id = gone.channel_id
+          AND NOT EXISTS (
+            SELECT 1 FROM voice_peers p
+             WHERE p.channel_id = gone.channel_id
+               AND p.peer_id <> ALL (SELECT peer_id FROM gone)
+          )
+     )
+     SELECT peer_id, channel_id FROM gone`,
+    [me, ttlMs, resumeTtlMs],
+  );
+
+  const rooms = await pool.query(
+    `DELETE FROM voice_rooms r
+      WHERE r.created_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
+        AND NOT EXISTS (SELECT 1 FROM voice_peers p WHERE p.channel_id = r.channel_id)`,
+    [roomGraceMs],
+  );
+
+  // After the orphaning above, which is what needed the dead lease's
+  // timestamp. Its peers are stamped; the lease itself is noise now.
+  const instances = await pool.query(
+    `DELETE FROM voice_instances
+      WHERE instance_id <> $1
+        AND heartbeat_at < NOW() - ($2::bigint * INTERVAL '1 millisecond')`,
+    [me, ttlMs],
+  );
+
+  await sweepRetiredVoicePeerIds();
+
+  const asPeer = (row: { peer_id: string; channel_id: string }) => ({
+    peerId: row.peer_id,
+    channelId: row.channel_id,
+  });
+  return {
+    orphaned: orphaned.rows.map(asPeer),
+    removed: removed.rows.map(asPeer),
+    roomsSwept: rooms.rowCount ?? 0,
+    instancesSwept: instances.rowCount ?? 0,
+  };
+}
+
 // --- retired ids ------------------------------------------------------------
 
 /** Block reconstruct of a hung-up id cluster-wide for the token's life. */
@@ -580,7 +789,7 @@ export async function isVoicePeerRetired(peerId: string): Promise<boolean> {
 }
 
 /** Retired ids older than the token TTL can never be replayed; drop them. */
-async function sweepRetiredVoicePeerIds(): Promise<void> {
+export async function sweepRetiredVoicePeerIds(): Promise<void> {
   await getPool().query(
     `DELETE FROM voice_retired_peers
       WHERE retired_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')`,
@@ -634,24 +843,37 @@ export async function listLiveVoiceInstances(
 }
 
 /**
- * Announce this instance every `INSTANCE_HEARTBEAT_MS`, and take the chance
- * to sweep expired retired ids (cheap, indexed on the primary key only, and
- * it has to run somewhere). Dead instance rows are left for M3's reconcile,
- * which is where "this instance is dead" gets its consequences. Returns a
- * stop function that withdraws the row, so a clean shutdown is not mistaken
- * for a crash for the next 45 seconds.
+ * Announce this instance every `INSTANCE_HEARTBEAT_MS`, then run `afterBeat`
+ * (the reconcile in `ws/voice.ts`, which also sweeps expired retired ids).
+ * The beat comes first so this instance is never dead by its own clock when
+ * the reconcile reads the leases. Returns a stop function that withdraws
+ * the row, so a clean shutdown is not mistaken for a crash for the next 45
+ * seconds. One beat at a time: a slow database must not stack them.
  */
 export function startVoiceInstanceHeartbeat(
   intervalMs = INSTANCE_HEARTBEAT_MS,
+  afterBeat: () => Promise<unknown> = sweepRetiredVoicePeerIds,
 ): () => Promise<void> {
-  const beat = () =>
-    heartbeatVoiceInstance()
-      .then(() => sweepRetiredVoicePeerIds())
-      .catch((error: unknown) => {
-        logEvent("voice.heartbeatFailed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
+  let running: Promise<void> | null = null;
+  const beat = () => {
+    if (running) {
+      return running;
+    }
+    running = heartbeatVoiceInstance()
+      .then(() => afterBeat())
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          logEvent("voice.heartbeatFailed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      )
+      .finally(() => {
+        running = null;
       });
+    return running;
+  };
   void beat();
   const timer = setInterval(() => {
     void beat();
@@ -659,6 +881,7 @@ export function startVoiceInstanceHeartbeat(
   timer.unref?.();
   return async () => {
     clearInterval(timer);
+    await running?.catch(() => {});
     await withdrawVoiceInstance().catch(() => {});
   };
 }

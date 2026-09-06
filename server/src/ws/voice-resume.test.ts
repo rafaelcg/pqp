@@ -59,6 +59,7 @@ const {
   resetVoicePeers,
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
+  runVoiceReconcile,
 } = await import("./voice.js");
 const { setCoalesceImmediate } = await import("./fanout.js");
 // Fake timers in the TTL tests would freeze the roster's coalescing window.
@@ -410,9 +411,41 @@ describe("voice session resume", () => {
     removeVoicePeerBySocket(a.socket);
     expect(typesOf(observer)).not.toContain("peer-left");
 
-    expect(leaveVoiceByResumeToken(peerId, token)).toBe(true);
+    // Removed before the promise is even awaited: the beacon route does not
+    // wait, so a local seat has to go in the same tick as the call.
+    const first = leaveVoiceByResumeToken(peerId, token);
     expect(frame(observer, "peer-left")?.peerId).toBe(peerId);
-    expect(leaveVoiceByResumeToken(peerId, token)).toBe(false);
+    await expect(first).resolves.toBe(true);
+    await expect(leaveVoiceByResumeToken(peerId, token)).resolves.toBe(false);
+
+    // And the id is retired here, so the tab that beaconed cannot come back
+    // under it: the same rule the registry enforces cluster-wide with the
+    // flag on, kept in-process with it off.
+    const again = await join(recorder(), userId, channel, {
+      resumePeerId: peerId,
+      resumeToken: token,
+    });
+    expect(frame(again, "welcome")?.peerId).not.toBe(peerId);
+    expect(frame(again, "welcome")?.resumed).toBeUndefined();
+  });
+
+  it("with the registry off, the reconcile is a no-op and the beacon knows nothing but this process", async () => {
+    // No database is configured in this suite: a reconcile that reached for
+    // one would throw, and a beacon for an id this process never held has
+    // no row to consult. Both are the flag-off contract.
+    await expect(runVoiceReconcile()).resolves.toEqual({
+      orphaned: 0,
+      removed: 0,
+      roomsSwept: 0,
+    });
+    const peerId = randomUUID();
+    const token = mintVoiceResumeToken({
+      userId: randomUUID(),
+      peerId,
+      voiceChannelId: randomUUID(),
+      transport: "mesh",
+    })!;
+    await expect(leaveVoiceByResumeToken(peerId, token)).resolves.toBe(false);
   });
 
   it("removes an orphan when leave carries the resume pair on a new socket", async () => {
