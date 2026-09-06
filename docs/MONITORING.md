@@ -507,10 +507,148 @@ contact.
 
 ---
 
+## Logs in Grafana Cloud (Loki)
+
+The GitHub Actions probes above answer "is it down" and "is it throwing".
+Loki answers "what happened, when, how often": every `pqp-api` log line is
+searchable for 14 days, panels graph the application events per minute, and
+alert rules fire from the same data. Stack: https://smallkestrel237.grafana.net
+(datasource `grafanacloud-logs`, hosted-logs user `1777547`). The
+`pqp-ops` service-account token lives in `~/.config/pqp/grafana.env`, never
+in the repo.
+
+### How the lines get there
+
+```
+pqp-api (Fly, gru) -> Fly NATS log stream -> pqp-log-shipper (Fly, Vector) -> Loki push
+```
+
+`tools/log-shipper/` holds the Fly app: the official
+`flyio/log-shipper` image with `SUBJECT = "logs.pqp-api.>"`, so only the API
+is shipped (not the worker, not staging). Its README lists the five secrets
+and where each value comes from. Four are staged; `LOKI_PASSWORD` needs a
+grafana.com Access Policy token with `logs:write`, which only the org owner
+can create, then `fly deploy` from that directory. Until then every panel
+below shows "No data" and the alert rules stay in `Normal` (no data resolves to
+OK on purpose: a silent shipper must not page as an outage).
+
+Deploying or restarting the shipper never touches `pqp-api`.
+
+### The log format, and why it stays
+
+The API logs `[pqp] key=value` text, not JSON:
+
+```
+[pqp] ws.close connId=42 userId=... code=1006 wasInVoice=true
+[voice] token minting failed: ...
+```
+
+`logEvent` in `server/src/lib/log.ts` writes the first kind: one line per
+event, `[pqp] <event.name>` then `key=value` pairs, nothing quoted. The second
+kind is a plain `console.warn` / `console.error` with a `[module]` prefix. Do
+not switch either to JSON: `scripts/monitor/errors.mjs` (the error heartbeat)
+parses the text, and `fly logs` in a terminal is still the fastest debugging
+tool. LogQL handles the text fine; every pattern below is a substring filter.
+
+### LogQL patterns
+
+All queries start from `{app="pqp-api"}` (Vector labels: `app`, `region`,
+`instance`, `level`). The event name is unique enough that a substring match
+does the job; wrap in `count_over_time` for a rate.
+
+| What | LogQL |
+|---|---|
+| Every structured event | `{app="pqp-api"} \|= "[pqp]"` |
+| One event | `{app="pqp-api"} \|= "voice.join"` |
+| Events per minute | `sum(count_over_time({app="pqp-api"} \|= "ws.connect" [1m]))` |
+| Error lines | `{app="pqp-api"} \|~ "\\[error\\]\|unhandled\|Connection terminated"` |
+| Errors from one module | `{app="pqp-api"} \|= "[voice]" \|~ "failed\|error"` |
+| Pull a field out | `{app="pqp-api"} \|= "ws.close" \| logfmt \| code = "1006"` |
+| Count by a field | `sum by (code) (count_over_time({app="pqp-api"} \|= "ws.close" \| logfmt [5m]))` |
+
+`| logfmt` works because `logEvent` prints `key=value` separated by single
+spaces. It parses everything after `[pqp] event.name` too, so a field whose
+value contains spaces breaks the parse for that line. Keep values
+space-free (ids, numbers, enums), which is what `logEvent` callers already do.
+
+### What is on the dashboard and what alerts
+
+Dashboard **pqp API events** (folder `pqp`, uid `pqp-api-events`):
+https://smallkestrel237.grafana.net/d/pqp-api-events
+
+| Panel | Events |
+|---|---|
+| Error lines per minute | `[error]`, `unhandled`, `Connection terminated` |
+| Voice joins / leaves | `voice.join`, `voice.leave` |
+| Voice refused | `voice.roomFull`, `voice.transportUnsupported`, `voice.speakDenied` |
+| WS connects / closes | `ws.connect`, `ws.close` |
+| WS auth failures, floods | `ws.authFail`, `ws.authTimeout`, `ws.flood`, `ws.heartbeatTerminate`, `ws.backpressureDrop` |
+| Account created | `turma1000.stamped` (see the gap below) |
+| Calls and watch parties | `voice.callRing`, `voice.callEnded`, `voice.watchPartyStart`, `voice.watchPartyEnd` |
+| Last 50 error lines | the error filter above, newest first |
+
+Alert rules (folder `pqp`, group `pqp-api-logs`, evaluated every minute,
+all routed to the contact point `rafael-email`):
+
+| Rule | Fires when |
+|---|---|
+| error lines > 20 in 5m | more than 20 error lines in the last 5 minutes, sustained 5 minutes |
+| Connection terminated > 5 in 5m | Postgres is dropping connections (the 2026-09-05 outage shape) |
+| voice.roomFull in last 5m | any join refused for room size; the mesh cap is being hit |
+| no ws.connect for 15m (12:00-03:00 UTC) | nobody connected for 15 minutes during active hours; mute timing `pqp-quiet-hours` silences it 03:00-12:00 UTC |
+
+The synthetic checks on `/health` and `sfu.pqp.gg` (ids 6260, 6261) and the
+contact point predate this and live in the same stack.
+
+Gap worth closing: **there is no signup event.** `insertNewUser` in
+`server/src/services/users.ts` creates the row silently; the only line it
+emits is `turma1000.stamped`, which stops after the 1000th account. Add
+`logEvent("user.created", { userId })` there when a server change is going out
+anyway (`restarts-api`), then point the "Account created" panel at it.
+
+### Adding a panel
+
+1. Explore, datasource `grafanacloud-logs`, get the query right there first.
+2. Dashboard > Add > Visualization, paste the query, set the legend, Save.
+   The dashboard is not provisioned from the repo; the UI is the source of
+   truth, and the JSON model can be exported from Settings if it ever needs to
+   move.
+
+### Adding a dashboard-friendly log tag
+
+Use `logEvent("area.thing", { fields })` from `server/src/lib/log.ts`, not a
+bare `console.log`:
+
+- Name: `area.camelCase` (`voice.join`, `ws.close`, `bus.connectFailed`).
+  The name is what every LogQL filter greps, so make it unique, do not reuse
+  a prefix of another event (`voice.join` also matches `voice.joinFailed`;
+  prefer `voice.refused` over `voice.joinRefused`).
+- Fields: ids, numbers, enums, booleans. No spaces, no free text, no message
+  bodies, no emails (`| logfmt` and the privacy posture both depend on it).
+- One line per occurrence. Aggregations are Loki's job.
+- Failures stay on `console.warn` / `console.error` with a `[module]` prefix
+  and the word `failed`, so the error panel and `scripts/monitor/errors.mjs`
+  both keep seeing them.
+
+### Cost
+
+Grafana Cloud free tier: 50 GB of logs per month, 14 days retention, and
+the stack's trial (30 days from 2026-09-06) is on the Pro tier meanwhile. A
+12 minute `fly logs` sample on 2026-09-06 (a quiet Sunday morning, one
+machine) was 100 lines, 12.9 KB after stripping ANSI: about 18 bytes/s, so
+roughly **0.05 GB/month**. A busy evening with a large watch party is maybe
+20x that; a MoonKase-sized spike (2026-09-05) a few hundred times for an
+hour. Even a permanent 100x would sit at 5 GB, a tenth of the free tier. The
+`SUBJECT` filter in `fly.toml` is what keeps the worker and staging out; widen
+it to `logs.>` only with that arithmetic in mind.
+
+---
+
 ## Files
 
 | Path | Role |
 |---|---|
+| `tools/log-shipper/` | Fly app `pqp-log-shipper`: ships `pqp-api` logs to Grafana Cloud Loki |
 | `.github/workflows/monitor-uptime.yml` | Every 10 min; availability |
 | `.github/workflows/monitor-errors.yml` | Every 15 min; production log error rate and support-bot liveness |
 | `.github/workflows/monitor-limits.yml` | Daily; certificates, domain, quotas |
