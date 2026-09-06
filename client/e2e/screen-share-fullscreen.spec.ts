@@ -148,9 +148,23 @@ test("a viewer can put someone else's share fullscreen", async ({
       .poll(async () => (await measure(viewer)).fullscreen, { timeout: 10_000 })
       .toBe(true);
 
+    // Polled, not sampled once: `document.fullscreenElement` is set by the
+    // browser one paint before React has re-rendered the stage into its
+    // one-picture form, so a single read here catches the frame in between —
+    // stage already fullscreen, listener row still laid out under it. The
+    // claim is unchanged (a boxed video never reaches the viewport's height,
+    // however long you wait); only the race is gone.
+    await expect
+      .poll(
+        async () => {
+          const now = await measure(viewer);
+          return now.height > now.viewport.height * 0.9;
+        },
+        { timeout: 10_000 },
+      )
+      .toBe(true);
     const after = await measure(viewer);
     expect(after.width).toBe(after.viewport.width);
-    expect(after.height).toBeGreaterThan(after.viewport.height * 0.9);
   } finally {
     await leaveVoiceIfConnected(page);
     await leaveVoiceIfConnected(viewer).catch(() => {});
