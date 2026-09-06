@@ -9,10 +9,13 @@ import {
   type PollRequest,
 } from "@pqp/shared";
 import {
+  ALargeSmall,
   AlertCircle,
   Angry,
   BarChart3,
+  Bold,
   CheckCircle2,
+  Code,
   Coins,
   CornerUpLeft,
   Dices,
@@ -20,6 +23,8 @@ import {
   HelpCircle,
   ImagePlay,
   Info,
+  Italic,
+  List,
   LogIn,
   Meh,
   Mic,
@@ -30,7 +35,10 @@ import {
   Shuffle,
   Smile,
   Spade,
+  SquareCode,
+  Strikethrough,
   Terminal,
+  TextQuote,
   User,
   UserPlus,
   X,
@@ -91,7 +99,10 @@ import {
   applyFormattingEdit,
   formattingMarkerForKey,
   isApplePlatform,
+  toggleBlockFormatting,
   toggleFormatting,
+  type BlockFormat,
+  type FormattingMarker,
 } from "@/lib/composer-formatting";
 import { translateMessage, useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -157,6 +168,35 @@ const COMPOSER_LINE_PX = 20;
 const COMPOSER_PAD_Y_PX = 8;
 
 const MENU_ID = "composer-autocomplete";
+const FORMAT_BAR_ID = "composer-format-bar";
+
+type FormatAction = {
+  id: string;
+  kind: FormattingMarker | BlockFormat;
+  labelKey:
+    | "composer.formatBold"
+    | "composer.formatItalic"
+    | "composer.formatStrike"
+    | "composer.formatCode"
+    | "composer.formatFence"
+    | "composer.formatQuote"
+    | "composer.formatList";
+  icon: LucideIcon;
+};
+
+const FORMAT_ACTIONS: FormatAction[] = [
+  { id: "bold", kind: "**", labelKey: "composer.formatBold", icon: Bold },
+  { id: "italic", kind: "*", labelKey: "composer.formatItalic", icon: Italic },
+  { id: "strike", kind: "~~", labelKey: "composer.formatStrike", icon: Strikethrough },
+  { id: "code", kind: "`", labelKey: "composer.formatCode", icon: Code },
+  { id: "fence", kind: "fence", labelKey: "composer.formatFence", icon: SquareCode },
+  { id: "quote", kind: "quote", labelKey: "composer.formatQuote", icon: TextQuote },
+  { id: "list", kind: "list", labelKey: "composer.formatList", icon: List },
+];
+
+function isBlockFormat(kind: FormattingMarker | BlockFormat): kind is BlockFormat {
+  return kind === "quote" || kind === "list" || kind === "fence";
+}
 
 /**
  * One glance-able mark per slash command in the autocomplete menu. Purely
@@ -292,6 +332,7 @@ export function MessageComposer({
   const [isGifPickerOpen, setIsGifPickerOpen] = useState(false);
   const [isPollComposerOpen, setIsPollComposerOpen] = useState(false);
   const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false);
+  const [isFormatBarOpen, setIsFormatBarOpen] = useState(false);
   const [gifQuery, setGifQuery] = useState("");
   const [isGifSearchEnabled, setIsGifSearchEnabled] = useState(false);
   const [attachmentLimits, setAttachmentLimits] = useState<{
@@ -656,6 +697,21 @@ export function MessageComposer({
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [isInsertMenuOpen]);
+
+  function applyComposerFormat(kind: FormattingMarker | BlockFormat) {
+    const input = inputRef.current;
+    if (!input || disabled || isRunningSlash) {
+      return;
+    }
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    const edit = isBlockFormat(kind)
+      ? toggleBlockFormatting(input.value, start, end, kind)
+      : toggleFormatting(input.value, start, end, kind);
+    applyFormattingEdit(input, edit);
+    setBody(input.value);
+    setCaret(edit.selectionStart);
+  }
 
   function syncCaret(input: HTMLTextAreaElement) {
     setCaret(input.selectionStart ?? input.value.length);
@@ -1044,6 +1100,11 @@ export function MessageComposer({
         }
         return;
       }
+      if (isFormatBarOpen) {
+        event.preventDefault();
+        setIsFormatBarOpen(false);
+        return;
+      }
       // Only once nothing is layered on top: Escape backing out of the reply
       // should not also close a menu the user opened over it.
       if (replyTarget && onCancelReply) {
@@ -1064,16 +1125,7 @@ export function MessageComposer({
     const marker = formattingMarkerForKey(event, isApplePlatform());
     if (marker) {
       event.preventDefault();
-      const input = event.currentTarget;
-      const edit = toggleFormatting(
-        input.value,
-        input.selectionStart ?? input.value.length,
-        input.selectionEnd ?? input.value.length,
-        marker,
-      );
-      applyFormattingEdit(input, edit);
-      setBody(input.value);
-      setCaret(edit.selectionStart);
+      applyComposerFormat(marker);
       return;
     }
 
@@ -1203,6 +1255,15 @@ export function MessageComposer({
   }
 
   const insertItems = [
+    {
+      id: "format",
+      label: t("composer.format"),
+      icon: ALargeSmall,
+      onSelect: () => {
+        setIsInsertMenuOpen(false);
+        setIsFormatBarOpen((open) => !open);
+      },
+    },
     isAttachmentsEnabled
       ? {
           id: "attach",
@@ -1256,7 +1317,7 @@ export function MessageComposer({
   return (
     <form
       onSubmit={(event) => void handleSubmit(event)}
-      className="safe-pb relative border-t border-border/60 px-3 py-3 sm:px-4"
+      className="safe-pb relative max-h-[min(60dvh,100%)] overflow-y-auto border-t border-border/60 px-3 py-3 sm:px-4"
     >
       {menuKind && (
         <AutocompleteMenu
@@ -1367,6 +1428,33 @@ export function MessageComposer({
           ))}
         </ul>
       )}
+      {isFormatBarOpen && (
+        <div
+          id={FORMAT_BAR_ID}
+          role="toolbar"
+          aria-label={t("composer.format")}
+          className="mb-2 grid grid-cols-7 gap-1"
+        >
+          {FORMAT_ACTIONS.map((action) => {
+            const Icon = action.icon;
+            return (
+              <Tooltip key={action.id} label={t(action.labelKey)}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled={disabled || isRunningSlash}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => applyComposerFormat(action.kind)}
+                  className="h-8 w-full min-w-0 text-paper-muted hover:text-signal"
+                >
+                  <Icon className="h-4 w-4" />
+                </Button>
+              </Tooltip>
+            );
+          })}
+        </div>
+      )}
       <div
         className={cn(
           "grid grid-cols-[auto_minmax(0,1fr)_auto] gap-2",
@@ -1392,7 +1480,31 @@ export function MessageComposer({
             }}
           />
         )}
-        <div className="relative flex items-center">
+        <div className="relative flex items-center gap-2">
+          <div className="hidden sm:block">
+            <Tooltip label={t("composer.format")}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled={disabled}
+                aria-expanded={isFormatBarOpen}
+                aria-controls={isFormatBarOpen ? FORMAT_BAR_ID : undefined}
+                aria-pressed={isFormatBarOpen}
+                onClick={() => {
+                  setIsInsertMenuOpen(false);
+                  setIsFormatBarOpen((open) => !open);
+                }}
+                onMouseDown={(event) => event.preventDefault()}
+                className={cn(
+                  COMPOSER_ICON_BUTTON,
+                  isFormatBarOpen && "bg-ink-3 text-signal",
+                )}
+              >
+                <ALargeSmall className="h-5 w-5" />
+              </Button>
+            </Tooltip>
+          </div>
           <div ref={insertMenuRef} className="relative sm:hidden">
             <Button
               type="button"
