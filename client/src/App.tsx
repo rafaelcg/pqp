@@ -80,7 +80,11 @@ import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { canActOnMemberClient } from "@/lib/role-hierarchy";
-import { moveMembersBit } from "@/lib/voice-occupant-dnd";
+import {
+  cloneVoiceOccupancy,
+  moveMembersBit,
+  moveOccupantSeat,
+} from "@/lib/voice-occupant-dnd";
 import { useUpdatePromptShowing } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
@@ -1097,6 +1101,7 @@ function MainAppContent({
   );
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+  const [pendingVoiceMoves, setPendingVoiceMoves] = useState<string[]>([]);
   /**
    * The standing opt-in to sending this machine's whole sound with a share.
    *
@@ -3002,12 +3007,29 @@ function MainAppContent({
     voiceServerIdRef.current = selectedServerId;
     refreshIceServers();
 
+    const current = voice.getState();
+    const switching =
+      current.status !== "idle" &&
+      current.voiceChannelId !== null &&
+      current.voiceChannelId !== channelId;
+    if (switching && current.self && pendingVoiceMoves.includes(current.self.userId)) {
+      return;
+    }
+
     // A crowd is joined muted regardless of the preference; see join-muted.ts.
-    const occupantsAlreadyInRoom = voiceState.occupancy[channelId]?.length ?? 0;
+    // A room switch keeps the mute the person already chose.
+    const occupantsAlreadyInRoom = current.occupancy[channelId]?.length ?? 0;
     await voice.join(channelId, {
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,
-      startMuted: shouldJoinMuted(localSettings.muteOnJoin, occupantsAlreadyInRoom),
+      ...(switching
+        ? {}
+        : {
+            startMuted: shouldJoinMuted(
+              localSettings.muteOnJoin,
+              occupantsAlreadyInRoom,
+            ),
+          }),
       inputMode: localSettings.inputMode,
       vadThreshold: localSettings.vadThreshold,
       processing: localSettings.micProcessing,
@@ -3031,13 +3053,22 @@ function MainAppContent({
   }
 
   async function handleMoveVoiceOccupant(userId: string, channelId: string) {
-    if (!selectedServerId) {
+    if (!selectedServerId || pendingVoiceMoves.includes(userId)) {
       return;
     }
+    const snapshot = cloneVoiceOccupancy(voice.getState().occupancy);
+    const { next } = moveOccupantSeat(snapshot, userId, channelId);
+    voice.replaceOccupancy(next);
+    setPendingVoiceMoves((ids) =>
+      ids.includes(userId) ? ids : [...ids, userId],
+    );
     try {
       await moveMemberVoice(selectedServerId, userId, channelId);
     } catch (err) {
+      voice.replaceOccupancy(snapshot);
       setAppError(voiceModerationError(err, t("member.moveFailed")));
+    } finally {
+      setPendingVoiceMoves((ids) => ids.filter((id) => id !== userId));
     }
   }
 
@@ -4888,6 +4919,7 @@ function MainAppContent({
           onSelectChannel={(id) => void selectChannel(id)}
           onJoinVoice={handleJoinVoiceFromList}
           currentUserId={user?.id ?? null}
+          pendingMoveUserIds={pendingVoiceMoves}
           peerVolumes={voiceState.peerVolumes}
           voiceRoomTransports={voiceRoomTransports}
           canMoveIn={(channelId) => perms.can(moveMembersBit(), channelId)}

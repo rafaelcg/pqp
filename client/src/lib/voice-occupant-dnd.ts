@@ -1,4 +1,4 @@
-import { Permission } from "@pqp/shared";
+import { Permission, type VoiceParticipant } from "@pqp/shared";
 
 /**
  * Dragging people between voice channels, Discord-style.
@@ -128,6 +128,52 @@ export function voiceOccupantMenuActions(input: {
   }
   items.push("copyName");
   return items;
+}
+
+export function cloneVoiceOccupancy(
+  occupancy: Record<string, VoiceParticipant[]>,
+): Record<string, VoiceParticipant[]> {
+  const next: Record<string, VoiceParticipant[]> = {};
+  for (const [channelId, people] of Object.entries(occupancy)) {
+    next[channelId] = [...people];
+  }
+  return next;
+}
+
+/**
+ * Move one seated person onto another voice channel in the local roster.
+ * Used for the optimistic seat (paint now, rollback if the move fails).
+ */
+export function moveOccupantSeat(
+  occupancy: Record<string, VoiceParticipant[]>,
+  userId: string,
+  toChannelId: string,
+): {
+  next: Record<string, VoiceParticipant[]>;
+  fromChannelId: string | null;
+  moved: VoiceParticipant | null;
+} {
+  const next = cloneVoiceOccupancy(occupancy);
+  let fromChannelId: string | null = null;
+  let moved: VoiceParticipant | null = null;
+  for (const [channelId, people] of Object.entries(next)) {
+    const index = people.findIndex((person) => person.userId === userId);
+    if (index === -1) {
+      continue;
+    }
+    moved = people[index]!;
+    fromChannelId = channelId;
+    people.splice(index, 1);
+    if (people.length === 0) {
+      delete next[channelId];
+    }
+    break;
+  }
+  if (!moved || fromChannelId === toChannelId) {
+    return { next: occupancy, fromChannelId, moved };
+  }
+  next[toChannelId] = [...(next[toChannelId] ?? []), moved];
+  return { next, fromChannelId, moved };
 }
 
 export function dropReasonMessageKey(
