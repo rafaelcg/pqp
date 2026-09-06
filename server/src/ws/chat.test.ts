@@ -577,6 +577,15 @@ describe("message-rejected", () => {
     expect(restoreDmParticipants).not.toHaveBeenCalled();
   });
 
+  it("refuses a character into a non-server channel", async () => {
+    const posted = await postChannelMessage({
+      author: { ...asUser("bot"), is_character: true },
+      channelId: nextChannelId(),
+      body: "oi",
+    });
+    expect(posted).toEqual({ ok: false, reason: "cannot-send" });
+  });
+
   it("restores a closed 1:1 from the shared send path", async () => {
     const channelId = nextChannelId();
     const posted = await postChannelMessage({

@@ -30,7 +30,7 @@ const { createMessage } = await import("../services/messages.js");
 const { listRoles, upsertChannelOverwrite } = await import(
   "../services/roles.js"
 );
-const { clearAuthCaches } = await import("../auth/clerk.js");
+const { clearAuthCaches, DEV_AUTH_TOKEN } = await import("../auth/clerk.js");
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { postChannelMessage, resetChatRateLimits } = await import(
   "../ws/chat.js"
@@ -261,6 +261,41 @@ describeDb("character HTTP send", () => {
       });
       expect(posted.status).toBe(404);
     });
+  });
+
+  it("403s a Clerk session and the dev-bypass token", async () => {
+    const { channelId } = await seated("clerk_owner_human_http");
+    const previousBypass = process.env.DEV_AUTH_BYPASS;
+    process.env.DEV_AUTH_BYPASS = "true";
+    try {
+      await withGate(async () => {
+        const humanToken = `${DEV_AUTH_TOKEN}:humanhttp`;
+        const declared = await fetch(`${baseUrl}/api/me/age-check`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${humanToken}`,
+          },
+          body: JSON.stringify({ dateOfBirth: "1990-01-02" }),
+        });
+        expect(declared.status).toBe(200);
+
+        const posted = await send(humanToken, channelId, {
+          body: "from the app",
+        });
+        expect(posted.status).toBe(403);
+        expect(posted.body.error).toBe(
+          "Only a character account can send messages over HTTP",
+        );
+      });
+    } finally {
+      if (previousBypass === undefined) {
+        delete process.env.DEV_AUTH_BYPASS;
+      } else {
+        process.env.DEV_AUTH_BYPASS = previousBypass;
+      }
+      clearAuthCaches();
+    }
   });
 
   it("403s when the character cannot send in that channel", async () => {
