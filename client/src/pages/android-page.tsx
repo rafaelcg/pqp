@@ -1,5 +1,5 @@
 import { type CSSProperties } from "react";
-import { Gift, MonitorUp, Smartphone, Sparkles } from "lucide-react";
+import { Gift, Mic, Smartphone, Sparkles } from "lucide-react";
 import { Link } from "react-router-dom";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
@@ -16,6 +16,12 @@ import { testflightUrl } from "@/lib/testflight";
  * URL comes from `android-apk.ts`, so the button is real whether or not a
  * build-time override is set.
  *
+ * The copy names the build (0.2.0, beta) and what it does not do yet, so
+ * nobody installs it expecting a screen-share viewer or a camera. Voice on
+ * this build joins every room, LiveKit ones included; the earlier build was
+ * refused from large rooms, which is why the CTA was switched off for a day
+ * (`VITE_ANDROID_APK_URL` set to a space on Pages, not a code change).
+ *
  * The hero is a two-column split (copy left, a real screenshot right) on
  * the same grid `/download` uses. The photo is a capture of the running app,
  * not a CSS phone, because we now have one.
@@ -27,17 +33,17 @@ function stagger(i: number): CSSProperties {
 
 interface Perk {
   id: string;
-  icon: typeof MonitorUp;
+  icon: typeof Mic;
   title: MessageKey;
   body: MessageKey;
 }
 
 const PERKS: Perk[] = [
   {
-    id: "share",
-    icon: MonitorUp,
-    title: "androidPage.perk.share.title",
-    body: "androidPage.perk.share.body",
+    id: "voice",
+    icon: Mic,
+    title: "androidPage.perk.voice.title",
+    body: "androidPage.perk.voice.body",
   },
   {
     id: "early",
@@ -117,6 +123,9 @@ export function AndroidPage() {
                     <p className="text-sm text-paper-muted">
                       {t("androidPage.cta.sub")}
                     </p>
+                    <p className="text-sm text-paper-muted">
+                      {t("androidPage.version")}
+                    </p>
                   </>
                 ) : (
                   <p className="text-sm text-paper-muted">
@@ -192,6 +201,10 @@ export function AndroidPage() {
           </section>
 
           <p className="mx-auto mt-14 max-w-xl text-pretty text-center text-sm leading-relaxed text-paper-muted">
+            {t("androidPage.notYet")}
+          </p>
+
+          <p className="mx-auto mt-4 max-w-xl text-pretty text-center text-sm leading-relaxed text-paper-muted">
             {t("androidPage.honest")}
           </p>
 
