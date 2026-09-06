@@ -122,6 +122,12 @@ fly machine update <machine-id> -a pqp-db-backup --image registry.fly.io/pqp-db-
 
 `fly machine list -a pqp-db-backup` gives the id. Secret changes (`fly secrets set`) apply to the next run without touching the machine.
 
+Notes from the first production run (2026-09-06):
+
+- The Dockerfile's non-root user is `pqpbackup`, not `backup`: Debian ships a system user called `backup` (uid 34), so `useradd backup` fails the build.
+- The machine (`nightly-dump`, `shared-cpu-1x`, 512 MB) finished in 12 seconds end to end: dump 6 s, upload plus `head-object` 6 s, exit code 0, no OOM. The compressed dump of the ~80 MB database was 6.2 MB. 512 MB is plenty; do not bump it without a reason.
+- The machine was created at 08:56 UTC, so Fly's daily restart lands around 08:56 UTC (05:56 São Paulo), not 04:00. Fly does not show a next-run time anywhere; `fly machine status <id> -a pqp-db-backup --display-config` only confirms `"schedule": "daily"`. To move the hour, destroy the machine and re-run step 4 at the wanted time.
+
 There is no GitHub Actions path; it would only be a `fly machine run` wrapped in a workflow with another long-lived Fly token in GitHub, which is not worth the extra credential. A one-off backup before a risky change is
 
 ```bash
@@ -135,6 +141,16 @@ fly machine run registry.fly.io/pqp-db-backup:v1 -a pqp-db-backup --region gru -
 ```bash
 fly logs -a pqp-db-backup --no-tail | tail -20     # want a line ending "OK", not "ERROR:"
 fly machine list -a pqp-db-backup                  # state stopped, last exit code 0
+```
+
+The log lines that matter are `upload verified (<bytes>)` followed by `OK`; the byte count is the `head-object` answer, so a line like that means the object is in R2 at that size.
+
+A second check without the R2 keys, from `tools/admin-dashboard` where wrangler is logged in (the `--remote` flag is required; without it wrangler reads its local emulator and reports "key does not exist"):
+
+```bash
+KEY=pqp-db/2026-09-06/fly-db-20260906T085652Z.dump.gz   # from the log
+wrangler r2 object get "pqp-db-backups/$KEY" --file /tmp/dump-check --remote
+ls -l /tmp/dump-check && gzip -t /tmp/dump-check && rm /tmp/dump-check
 ```
 
 Optionally list the bucket from a laptop with the R2 credentials: `aws --endpoint-url https://<account-id>.r2.cloudflarestorage.com s3 ls s3://pqp-db-backups/pqp-db/ --recursive | tail -3`. Nobody is paged for a failure; look at this weekly, and always before touching the cluster.
