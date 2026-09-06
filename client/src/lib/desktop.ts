@@ -31,7 +31,32 @@ export interface PqpDesktop {
     path: string;
   }): void;
   onNotificationClick?(cb: (appPath: string) => void): () => void;
+  /**
+   * Global push-to-talk. Hand the shell an Electron accelerator (see
+   * `push-to-talk-accelerator.ts`) or `null` to let go of it. Resolves with
+   * whether the OS accepted the registration; a key another app already owns
+   * comes back `false` and push-to-talk stays in-window only. Older shells
+   * predate the bridge, so both may be absent.
+   */
+  bindPushToTalk?(accelerator: string | null): Promise<boolean>;
+  /** Presses and releases of the bound key while another app is focused. */
+  onPushToTalk?(cb: (held: boolean) => void): () => void;
+  /**
+   * Mirror the call state into the main process so the tray icon and menu
+   * can say it. Idle is all three false.
+   */
+  setVoiceState?(state: DesktopVoiceState): void;
+  /** Mute, deafen and leave requested from the tray menu. */
+  onVoiceCommand?(cb: (command: DesktopVoiceCommand) => void): () => void;
 }
+
+export interface DesktopVoiceState {
+  inCall: boolean;
+  muted: boolean;
+  deafened: boolean;
+}
+
+export type DesktopVoiceCommand = "toggleMute" | "toggleDeafen" | "leave";
 
 export function getDesktop(): PqpDesktop | undefined {
   if (typeof window === "undefined") {

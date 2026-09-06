@@ -30,5 +30,19 @@
   "share.permissionDismiss": "Agora não",
   "share.failedTitle": "Não deu para começar o compartilhamento",
   "share.failedBody": "O pqp não conseguiu listar as telas e janelas deste computador. Tente de novo e, se continuar, reinicie o pqp.",
-  "share.failedDismiss": "OK"
+  "share.failedDismiss": "OK",
+  "tray.idle": "Fora de call",
+  "tray.inCall": "Em call",
+  "tray.mute": "Mutar",
+  "tray.unmute": "Desmutar",
+  "tray.deafen": "Deafen",
+  "tray.undeafen": "Tirar deafen",
+  "tray.leave": "Sair da call",
+  "tray.show": "Abrir o pqp",
+  "tray.keepInTray": "Manter na bandeja durante a call",
+  "tray.quit": "Sair do pqp",
+  "tray.tooltipIdle": "pqp",
+  "tray.tooltipLive": "pqp - microfone ligado",
+  "tray.tooltipMuted": "pqp - mutado",
+  "tray.tooltipDeafened": "pqp - com deafen"
 }
