@@ -355,6 +355,18 @@ describe("voice-activity gate", () => {
     expect(outgoingOpen()).toBe(false);
   });
 
+  it("re-applies LiveKit mute after a publish that replaces the track", async () => {
+    const { voice } = await connected("livekit");
+    voice.toggleMute();
+    expect(sfuMuteLog.at(-1)).toBe(true);
+    const mutesAfterButton = sfuMuteLog.length;
+
+    await voice.setInputDevice("other-mic");
+    expect(sfuMuteLog.length).toBe(mutesAfterButton + 1);
+    expect(sfuMuteLog.at(-1)).toBe(true);
+    expect(outgoingOpen()).toBe(false);
+  });
+
   it("opens and closes the gate from the poll when rAF does not tick", async () => {
     const { voice } = await connected();
 

@@ -1030,6 +1030,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     }
     try {
       await sfu.publish(pipeline.processedStream);
+      sfuPublicationMuted = null;
       await applyPublicationMute();
     } catch (err) {
       if (attempt >= 5) {
@@ -1122,7 +1123,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       return Promise.resolve();
     }
     sfuPublicationMuted = next;
-    return sfu.setMuted(next);
+    return sfu.setMuted(next).catch((err) => {
+      sfuPublicationMuted = null;
+      throw err;
+    });
   }
 
   function applyMute() {
@@ -1184,6 +1188,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       if (sfu) {
         await sfu.replaceTrack(pipeline.processedStream);
+        sfuPublicationMuted = null;
         await applyPublicationMute();
       }
       emit();
@@ -1618,6 +1623,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // LiveKit would refuse it. The mic is published if SPEAK arrives later.
       if (pipeline && state.canSpeak) {
         await sfu.publish(pipeline.processedStream);
+        sfuPublicationMuted = null;
         // Push-to-talk joins muted. Voice activity keeps the publication
         // live and gates with `track.enabled` so word boundaries do not
         // signal TrackMuted to the room.
