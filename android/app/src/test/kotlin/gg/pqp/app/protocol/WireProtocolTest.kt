@@ -1,6 +1,10 @@
 package gg.pqp.app.protocol
 
 import gg.pqp.app.core.DevTokenProvider
+import gg.pqp.app.core.VoiceLeaveBeacon
+import gg.pqp.app.core.VoiceSessionRequest
+import gg.pqp.app.core.VoiceSessionResponse
+import kotlinx.serialization.descriptors.elementNames
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,6 +22,8 @@ class WireProtocolTest {
     private val api = "packages/shared/src/api.ts"
     private val auth = "packages/shared/src/auth.ts"
     private val wsIndex = "server/src/ws/index.ts"
+    private val voiceBackend = "packages/shared/src/voice-backend.ts"
+    private val apiIndex = "server/src/api/index.ts"
 
     /**
      * The handshake is the one part of the protocol with no zod schema: the
@@ -227,26 +233,113 @@ class WireProtocolTest {
     }
 
     /**
-     * The room transport name.
+     * The room transport names, both of them.
      *
-     * `join-voice-room` declares `transports: ["mesh"]` so the server can
-     * refuse *before* creating a peer. Spell it wrong and a mesh-only client
-     * lands in a LiveKit room as somebody who can neither hear nor be heard.
+     * `join-voice-room` declares what this client can run so the server can
+     * refuse *before* creating a peer. Spell one wrong and it is dropped from
+     * the declaration silently, which is not a refusal but the opposite of one:
+     * **the server reads an absent or short `transports` array as permission
+     * for the transports it does not see named, and an absent field entirely as
+     * "both"**. Either way somebody lands in a room they cannot hear.
+     *
+     * Both literals are asserted, in both directions, for that reason: the
+     * schema still has to offer them, and the client still has to name them.
      */
     @Test
-    fun `the mesh transport name matches shared`() {
+    fun `the room transport names match shared`() {
         val transports = RepoSources.enumValues(
             "packages/shared/src/signaling.ts",
             "voiceRoomTransportSchema",
         )
-        assertTrue(
-            "voiceRoomTransportSchema no longer offers \"mesh\"",
-            transports.contains("mesh"),
-        )
         val controller = RepoSources.androidSources.getValue("VoiceController.kt")
+
+        listOf("mesh", "livekit").forEach { transport ->
+            assertTrue(
+                "voiceRoomTransportSchema no longer offers \"$transport\"",
+                transports.contains(transport),
+            )
+            assertTrue(
+                "VoiceController no longer declares the \"$transport\" transport on " +
+                    "join-voice-room. The server treats a transport this client does not " +
+                    "name as one it cannot run, so dropping it here silently locks Android " +
+                    "out of every room the server puts on it.",
+                controller.contains("""JsonPrimitive("$transport")"""),
+            )
+        }
+
+        // The other half of the same fact: `welcome` states the room's
+        // transport and `voiceTransportKindFor` is the only thing that reads
+        // it. A literal that drifts out of step there refuses a room this
+        // client can perfectly well run.
+        val kinds = RepoSources.androidSources.getValue("VoiceTransport.kt")
         assertTrue(
-            "VoiceController no longer declares the mesh transport on join-voice-room",
-            controller.contains("""JsonPrimitive("mesh")"""),
+            "voiceTransportKindFor no longer recognises the \"livekit\" transport",
+            kinds.contains(""""livekit" -> VoiceTransportKind.LiveKit"""),
+        )
+    }
+
+    /**
+     * `POST /api/voice/token`, field for field.
+     *
+     * This is the one request in the voice path with no frame schema behind it
+     * and no runtime symptom when it is wrong: the server parses the body with
+     * zod, so a renamed request field is a 400 the moment somebody joins an SFU
+     * room, and a renamed *response* field decodes to a Kotlin default: an
+     * empty `url` and an empty `token`, which present as the SFU being
+     * unreachable rather than as a protocol mismatch.
+     *
+     * Exact equality in both directions, unlike [ModelShapeTest]'s
+     * subset check, because these two objects are small and total: the client
+     * needs every field the server sends and sends every field it needs.
+     */
+    @Test
+    fun `the voice session request and response match shared`() {
+        assertEquals(
+            "voiceSessionRequestSchema in $voiceBackend and VoiceSessionRequest disagree",
+            RepoSources.objectKeys(voiceBackend, "voiceSessionRequestSchema").toSet(),
+            VoiceSessionRequest.serializer().descriptor.elementNames.toSet(),
+        )
+        assertEquals(
+            "voiceSessionSchema in $voiceBackend and VoiceSessionResponse disagree",
+            RepoSources.objectKeys(voiceBackend, "voiceSessionSchema").toSet(),
+            VoiceSessionResponse.serializer().descriptor.elementNames.toSet(),
+        )
+        // `backend` is an enum nested inside the object rather than a named
+        // schema, so it is read straight out of the text. It is the value
+        // `LiveKitEngine` is the implementation of; a second one appearing here
+        // means a backend this client would connect to and not understand.
+        val backends = Regex("""backend:\s*z\.enum\(\[([^\]]*)]""")
+            .find(RepoSources.stripComments(RepoSources.read(voiceBackend)))
+            ?.let { match ->
+                Regex(""""([^"]+)"""").findAll(match.groupValues[1])
+                    .map { it.groupValues[1] }
+                    .toList()
+            }
+            ?: error("voiceSessionSchema no longer declares a backend enum")
+        assertEquals(listOf("livekit"), backends)
+    }
+
+    /**
+     * The leave beacon, which the server matches by hand.
+     *
+     * `handleVoiceLeaveBeacon` runs *before* auth resolution and reads the body
+     * with `typeof body.resumePeerId === "string"` rather than with a schema.
+     * There is no zod object to compare against and no error to observe: a
+     * misspelled field is a 204 that does nothing, and the ghost it leaves in
+     * everybody else's roster is the only symptom.
+     */
+    @Test
+    fun `the voice leave beacon fields match the server`() {
+        val server = RepoSources.read(apiIndex)
+        VoiceLeaveBeacon.serializer().descriptor.elementNames.forEach { field ->
+            assertTrue(
+                "server/src/api/index.ts no longer reads \"$field\" off the leave beacon body",
+                server.contains("body.$field"),
+            )
+        }
+        assertTrue(
+            "The server no longer serves POST /api/voice/leave",
+            server.contains("\"/api/voice/leave\""),
         )
     }
 

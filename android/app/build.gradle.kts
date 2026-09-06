@@ -98,8 +98,8 @@ android {
         // Bump this for every upload, forever. A version code is not a version,
         // it is a monotonic upload counter, and the day it stops moving is the
         // day a fix silently cannot ship.
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -329,13 +329,32 @@ abstract class VerifyNativeJniClassesTask : DefaultTask() {
 }
 
 /**
- * One from each package `io.github.webrtc-sdk:android` ships. `JniInit` is the
- * one that was actually missing.
+ * One from each package the two WebRTC artifacts ship. `JniInit` is the one
+ * that was actually missing.
+ *
+ * **Two artifacts, because there are two libwebrtc builds in this app.**
+ * `io.github.webrtc-sdk:android` is the mesh path's, under `org.webrtc`;
+ * `io.livekit:livekit-android` pulls `io.github.webrtc-sdk:android-prefixed`,
+ * the same generated code relocated under `livekit.org.*` and shipped as
+ * `liblkjingle_peerconnection_so.so`. They are unrelated Java namespaces that
+ * coexist on purpose, and a keep rule for one covers none of the other.
+ *
+ * That is exactly how this check would have gone quietly useless: adding
+ * LiveKit and leaving this list alone keeps it green while covering nothing of
+ * the newly-added native surface, and the crash it exists to prevent
+ * (`FindClass("livekit/org/jni_zero/JniInit")` failing inside `JNI_OnLoad`,
+ * then SIGTRAP) would ship to Play again in a shape nobody could reproduce on
+ * an emulator. Every entry below was read out of the artifact it names.
  */
 val nativeJniClasses = listOf(
+    // io.github.webrtc-sdk:android, the mesh path.
     "Lorg/jni_zero/JniInit;",
     "Lorg/webrtc/PeerConnectionFactory;",
     "Lorg/webrtc/audio/JavaAudioDeviceModule;",
+    // io.github.webrtc-sdk:android-prefixed, LiveKit's.
+    "Llivekit/org/jni_zero/JniInit;",
+    "Llivekit/org/webrtc/PeerConnectionFactory;",
+    "Llivekit/org/webrtc/audio/JavaAudioDeviceModule;",
 )
 
 androidComponents {
@@ -392,6 +411,7 @@ kotlin {
 }
 
 dependencies {
+    implementation(libs.livekit)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
     implementation(libs.androidx.lifecycle.runtime.ktx)

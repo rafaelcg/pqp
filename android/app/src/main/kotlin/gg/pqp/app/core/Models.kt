@@ -289,6 +289,61 @@ data class IceServersResponse(val iceServers: List<IceServer> = emptyList())
 @Serializable
 data class VoiceBackendResponse(@SerialName("backend") val backend: String = "mesh")
 
+/**
+ * What `POST /api/voice/token` is asked for.
+ *
+ * `peerId` is the id the WS voice room assigned in its `welcome`, and the
+ * server refuses any other: it looks the peer up, checks it is live and owned
+ * by the caller, and mints the SFU token with that id as the LiveKit
+ * *identity*. That is what keeps one roster across both halves of the call:
+ * `/ws` says who is in the room, LiveKit says whose audio this is, and the peer
+ * id is the only thing that joins them.
+ *
+ * Pinned field-for-field against `voiceSessionRequestSchema` in
+ * `packages/shared/src/voice-backend.ts` by `WireProtocolTest`.
+ */
+@Serializable
+data class VoiceSessionRequest(
+    val voiceChannelId: String,
+    val peerId: String,
+)
+
+/**
+ * The SFU credentials, which `welcome` deliberately does not carry.
+ *
+ * Mirrors `voiceSessionSchema`. `identity` is echoed back rather than trusted
+ * blindly anywhere: it is the peer id that was sent, and a mismatch would mean
+ * the server minted a token for somebody else.
+ */
+@Serializable
+data class VoiceSessionResponse(
+    val backend: String,
+    val url: String,
+    val token: String,
+    val room: String,
+    val identity: String,
+    /**
+     * Whether the token carries a publish grant (`Permission.SPEAK` in this
+     * channel). Absent reads as true, matching `voiceSessionSchema`. The
+     * client does not act on it yet: a listen-only member's publish is
+     * refused by LiveKit itself.
+     */
+    val speak: Boolean = true,
+)
+
+/**
+ * The body of the leave beacon. See `ApiClient.leaveVoiceBeacon`.
+ *
+ * Field names are matched loosely by the server (`typeof … === "string"`),
+ * which means a typo here is a 204 that does nothing rather than an error.
+ * `WireProtocolTest` pins them against `server/src/api/index.ts`.
+ */
+@Serializable
+data class VoiceLeaveBeacon(
+    val resumePeerId: String,
+    val resumeToken: String,
+)
+
 // --- errors ---
 
 @Serializable
