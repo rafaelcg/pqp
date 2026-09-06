@@ -1,13 +1,6 @@
 import { ChevronDown, ChevronRight, X } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import type { ProfileUpdate, PublicUser, VoiceParticipant } from "@pqp/shared";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import type { PublicUser, VoiceParticipant } from "@pqp/shared";
 import { ContextMenu, type ContextMenuItemDef } from "@/components/ui/context-menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { StatusDot } from "@/components/user/status-dot";
@@ -15,7 +8,7 @@ import { UserAvatar } from "@/components/user/user-avatar";
 import { RankMarks } from "@/components/user/rank-marks";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
 import type { ProfileSubject } from "@/components/user/profile-relations";
-import { ApiError, fetchMembers, memberDisplayName, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
+import { ApiError, memberDisplayName, updateMemberNickname, type ServerMember, type ServerRole } from "@/lib/api";
 import { highestRoleColor, identityMarks, rankBadges } from "@/lib/author-display";
 import { useTranslation } from "@/lib/i18n";
 import { displayRoleName } from "@/lib/role-labels";
@@ -33,6 +26,8 @@ import {
   type SectionCollapseState,
 } from "@/lib/member-groups";
 import { cn } from "@/lib/utils";
+
+const EMPTY_MEMBERS: readonly ServerMember[] = [];
 
 /**
  * The member list, as a sidebar that is simply *there*.
@@ -57,30 +52,10 @@ import { cn } from "@/lib/utils";
  *
  * PRESENCE IS PULLED, NOT PUSHED, and that is not this component's decision to
  * revisit: `server/src/ws/status.ts` argues it at length (a push has to reach
- * every member of every server the changing person shares). What is new here is
- * that the list is now open ~all the time on a desktop, so the polling had to
- * get cheaper rather than more frequent:
- *
- *  - it stops entirely while the tab is hidden, and re-reads once on return;
- *  - a `presence-update` frame — which the client already receives, for free,
- *    when somebody starts looking at a channel in this server — nudges a read
- *    immediately, so the common "they just showed up" case lands in a second
- *    rather than at the next tick;
- *  - `profile-update` frames are patched in place, never refetched.
+ * every member of every server the changing person shares). The poll and the
+ * `presence-update` nudge live on the shared roster in `App.tsx` so the
+ * transcript pip and this list read the same map. This file only draws it.
  */
-
-const STATUS_REFRESH_MS = 15_000;
-
-/** How long a burst of frames is allowed to coalesce into one read. */
-const NUDGE_DEBOUNCE_MS = 400;
-
-/**
- * Closest together two nudged reads may land. Three seconds keeps "they just
- * came online" feeling immediate while capping a busy server at a third of a
- * request per second per open sidebar — comfortably under what the 15-second
- * poll alone would cost across a handful of readers.
- */
-const NUDGE_FLOOR_MS = 3_000;
 
 interface MemberSidebarProps {
   open: boolean;
@@ -110,12 +85,12 @@ interface MemberSidebarProps {
   role: MemberRole;
   blockedUserIds: ReadonlySet<string>;
   /**
-   * Bumped by the shell when a frame suggests presence may have moved. Any
-   * change triggers one debounced re-read; the value itself means nothing.
+   * The selected server's roster, owned by the shell. Same map the
+   * transcript pips read. Ignored in a conversation (see `participants`).
    */
-  refreshNudge?: number;
-  /** The last `profile-update` frame, applied to the roster in place. */
-  profileUpdate?: ProfileUpdate | null;
+  members?: readonly ServerMember[];
+  /** Writes a nickname back onto the shared roster after a successful edit. */
+  onMemberNickname?: (userId: string, nickname: string | null) => void;
   onMention?: (username: string) => void;
   onReportUser?: (member: ServerMember) => void;
   onBlockUser: (userId: string) => void;
@@ -172,8 +147,8 @@ export function MemberSidebar({
   self,
   currentUserId,
   blockedUserIds,
-  refreshNudge = 0,
-  profileUpdate = null,
+  members = EMPTY_MEMBERS,
+  onMemberNickname,
   onMention,
   onReportUser,
   onBlockUser,
@@ -187,146 +162,20 @@ export function MemberSidebar({
 }: MemberSidebarProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
-  const [members, setMembers] = useState<ServerMember[]>([]);
-  const membersRef = useRef(members);
-  membersRef.current = members;
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
   const [collapsed, setCollapsed] =
     useState<SectionCollapseState>(NO_COLLAPSE);
   /** section id → how many of its rows are mounted. */
   const [shown, setShown] = useState<Record<string, number>>({});
+  const loading = !participants && members.length === 0;
 
-  const active = open && serverId !== null;
-  /** When the last read went out, for the nudge's rate floor. */
-  const lastLoadAt = useRef(0);
-
-  // ------------------------------------------------------------------ loading
-
-  const load = useCallback(
-    async (signal: { cancelled: boolean }, showSpinner: boolean) => {
-      if (!serverId) {
-        return;
-      }
-      lastLoadAt.current = Date.now();
-      if (showSpinner) {
-        setLoading(true);
-      }
-      try {
-        const res = await fetchMembers(serverId);
-        if (!signal.cancelled) {
-          setMembers(res.members);
-          setError(null);
-        }
-      } catch {
-        if (signal.cancelled) {
-          return;
-        }
-        // A failed *refresh* leaves the last known roster on screen: it is stale,
-        // not wrong, and an error banner over a working list would teach people
-        // to ignore the banner. Only a failed first read has nothing to show.
-        if (showSpinner && membersRef.current.length === 0) {
-          setError(t("memberList.loadFailed"));
-        }
-      } finally {
-        if (!signal.cancelled && showSpinner) {
-          setLoading(false);
-        }
-      }
-    },
-    [serverId, t],
-  );
-
-  // Wipe only when the server changes. `load` also changes when the catalogue
-  // hydrates (`t`), and resetting the roster then flashes an empty list and
-  // can pin a transient 404 as "Server not found".
+  // Wipe pagination / collapse only when the server changes. Resetting on
+  // every roster patch would slam the list shut each time a pip moved.
   useEffect(() => {
-    if (!active) {
-      return;
-    }
-    setMembers([]);
     setError(null);
     setShown({});
     setCollapsed(NO_COLLAPSE);
-  }, [active, serverId]);
-
-  useEffect(() => {
-    if (!active) {
-      return;
-    }
-    const signal = { cancelled: false };
-    void load(signal, true);
-    return () => {
-      signal.cancelled = true;
-    };
-  }, [active, load]);
-
-  // The poll. Paused while the tab is hidden — a member list nobody is looking
-  // at is the case the pull design exists to make free — and re-read once on the
-  // way back, since the roster has had the whole hidden period to move.
-  useEffect(() => {
-    if (!active) {
-      return;
-    }
-    const signal = { cancelled: false };
-    let timer: ReturnType<typeof setInterval> | null = null;
-
-    const stop = () => {
-      if (timer !== null) {
-        clearInterval(timer);
-        timer = null;
-      }
-    };
-    const start = () => {
-      stop();
-      timer = setInterval(() => void load(signal, false), STATUS_REFRESH_MS);
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        void load(signal, false);
-        start();
-      } else {
-        stop();
-      }
-    };
-
-    if (document.visibilityState === "visible") {
-      start();
-    }
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      signal.cancelled = true;
-      stop();
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [active, load]);
-
-  // The nudge: somebody's presence probably just changed.
-  //
-  // Debounced AND floored. Debounced because one person switching channels
-  // produces two frames in as many milliseconds; floored because a busy server
-  // produces them all day, and an unfloored nudge would turn a 15-second poll
-  // into a request per frame — the sidebar would end up costing more than the
-  // push design this deliberately avoids.
-  const firstNudge = useRef(true);
-  useEffect(() => {
-    if (!active) {
-      return;
-    }
-    if (firstNudge.current) {
-      // The mount's own value is not an event — the first read already covers it.
-      firstNudge.current = false;
-      return;
-    }
-    const signal = { cancelled: false };
-    const since = Date.now() - lastLoadAt.current;
-    const delay = Math.max(NUDGE_DEBOUNCE_MS, NUDGE_FLOOR_MS - since);
-    const timer = setTimeout(() => void load(signal, false), delay);
-    return () => {
-      signal.cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [refreshNudge, active, load]);
+  }, [serverId]);
 
   // Escape closes the DRAWER only. In column mode it is not a transient thing
   // covering anything, so eating Escape there would take the key away from the
@@ -343,29 +192,6 @@ export function MemberSidebar({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, wide, onClose]);
-
-  // A rename or a new avatar, from anywhere on the instance. Patched rather than
-  // refetched: the frame carries every field that changed.
-  useEffect(() => {
-    if (!profileUpdate) {
-      return;
-    }
-    setMembers((prev) =>
-      prev.some((one) => one.id === profileUpdate.userId)
-        ? prev.map((one) =>
-            one.id === profileUpdate.userId
-              ? {
-                  ...one,
-                  displayName: profileUpdate.displayName,
-                  username: profileUpdate.username,
-                  tag: profileUpdate.tag,
-                  avatarUrl: profileUpdate.avatarUrl,
-                }
-              : one,
-          )
-        : prev,
-    );
-  }, [profileUpdate]);
 
   // ----------------------------------------------------------------- grouping
 
@@ -461,11 +287,7 @@ export function MemberSidebar({
     try {
       const nickname = trimmed.length === 0 ? null : trimmed;
       await updateMemberNickname(serverId, member.id, nickname);
-      setMembers((prev) =>
-        prev.map((row) =>
-          row.id === member.id ? { ...row, nickname } : row,
-        ),
-      );
+      onMemberNickname?.(member.id, nickname);
     } catch (err) {
       setError(
         err instanceof ApiError
