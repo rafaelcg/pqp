@@ -3,6 +3,10 @@ import type { PeerConnectionState, RemotePeer } from "./peer-connection-manager"
 import type { ReceiveQuality } from "./receive-quality";
 import { registerRemoteVideoBinding } from "./remote-video-binding";
 import {
+  createRemoteVideoDelivery,
+  type DeliveryPublication,
+} from "./remote-video-delivery";
+import {
   cameraBitrateFor,
   DEFAULT_VIDEO_QUALITY,
   LARGE_ROOM_SCREEN_BITRATE,
@@ -190,15 +194,64 @@ export async function connectLiveKit({
   let receiveQuality: ReceiveQuality = "auto";
 
   /**
+   * Pauses delivery of video nobody is drawing (no bound element, or the tab
+   * hidden for a while) with `setEnabled(false)`. See `remote-video-delivery.ts`.
+   *
+   * LIFTING A PAUSE CLEARS THE MANUAL REQUEST RATHER THAN SETTING ONE.
+   * Verified against livekit-client 2.21.0 (`RemoteTrackPublication.isEnabled`):
+   * `setEnabled(true)` records `requestedDisabled = false`, and from then on
+   * the publication is enabled whatever the adaptive-stream visibility says,
+   * so the library's own pause for an attached element that scrolls out of
+   * view, and its five-second background pause, would be switched off for
+   * that track for the rest of the call. Resetting the field to `undefined`
+   * hands the decision back to the library. The field is private in the
+   * typings and plain on the object, reached by name like
+   * `stopObservingElement` below; a build without it gets `setEnabled(true)`.
+   */
+  const delivery = createRemoteVideoDelivery({
+    release(publication) {
+      const internal = publication as unknown as {
+        requestedDisabled?: boolean;
+        emitTrackUpdate?: () => void;
+      };
+      if (
+        "requestedDisabled" in internal &&
+        typeof internal.emitTrackUpdate === "function"
+      ) {
+        internal.requestedDisabled = undefined;
+        internal.emitTrackUpdate();
+        return;
+      }
+      publication.setEnabled(true);
+    },
+  });
+
+  function onVisibilityChange() {
+    delivery.setTabHidden(document.visibilityState === "hidden");
+  }
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    onVisibilityChange();
+  }
+
+  /**
    * `remoteVideoTrack.stopObservingElement` is the half of `detach` that stops
    * measuring without touching `srcObject`. It is marked private in the
    * typings and public on the object; reached by name so a build where it has
    * gone simply stops measuring on unmount, which costs nothing.
+   *
+   * The same two calls are how the delivery rule learns whether anything is
+   * drawing the track: each bound element counts, and a track with none
+   * pauses after a short grace.
    */
-  function bindingFor(track: { attach(el: HTMLMediaElement): HTMLMediaElement }) {
+  function bindingFor(
+    track: { attach(el: HTMLMediaElement): HTMLMediaElement },
+    publication: DeliveryPublication,
+  ) {
     return {
       attach(element: HTMLVideoElement) {
         track.attach(element);
+        delivery.attached(publication);
       },
       detach(element: HTMLVideoElement) {
         const stop = (
@@ -209,6 +262,7 @@ export async function connectLiveKit({
         if (typeof stop === "function") {
           stop.call(track, element);
         }
+        delivery.detached(publication);
       },
     };
   }
@@ -276,7 +330,10 @@ export async function connectLiveKit({
         // The SFU labels every video publication with its source, so camera
         // and screen never need the stream-id dance the mesh path does.
         const stream = new MediaStream([track.mediaStreamTrack]);
-        registerRemoteVideoBinding(stream, bindingFor(track));
+        registerRemoteVideoBinding(stream, bindingFor(track, pub));
+        // Delivered until the rule says otherwise: a tile binds within a
+        // frame, and one that never does is what the rule is for.
+        delivery.register(pub);
         // The viewer's ceiling rides on every subscription, including the
         // ones that arrive after the choice: a share that starts mid-call
         // must not come in at 1080p on a phone that asked for 720p.
@@ -305,6 +362,7 @@ export async function connectLiveKit({
     })
     .on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
       if (track.kind === Track.Kind.Video) {
+        delivery.unregister(pub);
         if (pub.source === Track.Source.ScreenShare) {
           screenStreams.delete(participant.identity);
           snapshot();
@@ -929,6 +987,10 @@ export async function connectLiveKit({
 
     async disconnect() {
       unregisterStats();
+      delivery.dispose();
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
       frameMarks.clear();
       streams.clear();
       screenStreams.clear();

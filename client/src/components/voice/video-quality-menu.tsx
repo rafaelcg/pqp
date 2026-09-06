@@ -8,9 +8,11 @@ import {
   RECEIVE_QUALITIES,
   setReceiveQuality,
   useReceiveQuality,
+  useReceiveQualityReason,
   type ReceiveQuality,
 } from "@/lib/receive-quality";
 import {
+  LARGE_ROOM_PARTICIPANTS,
   screenSimulcastPlan,
   VIDEO_QUALITIES,
   type VideoQuality,
@@ -120,6 +122,7 @@ export function VideoQualityMenu({
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
   const receiveQuality = useReceiveQuality();
+  const receiveReason = useReceiveQualityReason();
 
   // Same dismissal contract as the user-panel popover: a press anywhere else,
   // or Escape. Anchored on the wrapper rather than the panel so a press on the
@@ -158,6 +161,15 @@ export function VideoQualityMenu({
     usingSfu &&
     isSharingScreen &&
     screenSimulcastPlan(value, participantCount).capped;
+
+  // The receiving half's honest line: why what arrives may be smaller than
+  // the row that is ticked. Mobile data set the default (this device, no
+  // choice made), or the room's size holds every presenter to 720p (the
+  // sending half already says so to the presenter, so it is not said twice
+  // to the one person who is both).
+  const receiveCellularDefault = usingSfu && receiveReason === "cellular";
+  const receiveLargeRoomCap =
+    usingSfu && !isSharingScreen && participantCount > LARGE_ROOM_PARTICIPANTS;
 
   return (
     <div ref={rootRef} className="relative">
@@ -253,6 +265,22 @@ export function VideoQualityMenu({
                   </button>
                 );
               })}
+            {receiveCellularDefault && (
+              <p
+                data-testid="receive-reason-cellular"
+                className="px-2.5 pb-0.5 pt-1 text-xs text-paper-muted"
+              >
+                {t("call.quality.receive.cellularDefault")}
+              </p>
+            )}
+            {receiveLargeRoomCap && (
+              <p
+                data-testid="receive-reason-large-room"
+                className="px-2.5 pb-0.5 pt-1 text-xs text-paper-muted"
+              >
+                {t("call.quality.receive.largeRoomCap")}
+              </p>
+            )}
             {usingSfu && (
               <p className="px-2.5 pb-0.5 pt-1 text-xs text-paper-muted">
                 {t("call.quality.receive.hint")}
