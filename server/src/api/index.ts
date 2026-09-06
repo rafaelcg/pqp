@@ -143,6 +143,7 @@ import {
 } from "../ws/voice.js";
 // --- voice moderation ---
 import { setSfuUserMuted } from "../voice/admin.js";
+import { resolveCanSpeak } from "../voice/speak.js";
 import { invalidateUserCache, resolveAuthSession } from "../auth/clerk.js";
 import {
   AGE_GATE_BLOCKED_MESSAGE,
@@ -1744,7 +1745,14 @@ router.post("/api/voice/token", async ({ req, user }) => {
     throw new Forbidden("Unknown or mismatched voice peer");
   }
 
-  await requireChannelAccess(body.voiceChannelId, user.id);
+  const channel = await requireChannelAccess(body.voiceChannelId, user.id);
+  // Resolved at mint time, not copied from the join: a role edit between the
+  // two must land in the token. The SFU only ever consults the grant.
+  const canSpeak = await resolveCanSpeak(
+    channel,
+    body.voiceChannelId,
+    user.id,
+  );
 
   // The room's transport is pinned when its first peer joins and stated in
   // `welcome`; a client in a peer-to-peer room has no business minting an SFU
@@ -1762,6 +1770,7 @@ router.post("/api/voice/token", async ({ req, user }) => {
       body.peerId,
       peer.displayName,
       peer.userId,
+      { canSpeak },
     );
   } catch (error) {
     console.error("[voice] token minting failed:", error);

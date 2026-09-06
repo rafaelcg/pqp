@@ -106,10 +106,14 @@ vi.mock("@/lib/peer-connection-manager", () => ({
 
 /** Screen publications the SFU stub was asked for, in order. */
 const sfuScreenPublishes: (MediaStream | null)[] = [];
+/** Microphone publications the SFU stub was asked for. */
+const sfuMicPublishes: MediaStream[] = [];
 
 vi.mock("@/lib/livekit-session", () => ({
   connectLiveKit: vi.fn(async () => ({
-    publish: async () => {},
+    publish: async (stream: MediaStream) => {
+      sfuMicPublishes.push(stream);
+    },
     replaceTrack: async () => {},
     setMuted: async () => {},
     publishScreen: async (stream: MediaStream) => {
@@ -1780,5 +1784,170 @@ describe("voice session resume", () => {
     });
     expect(voice.getState().status).toBe("idle");
     expect(managers[0]?.disposed).toBe(true);
+  });
+});
+
+/**
+ * `Permission.SPEAK`, as the client honours it.
+ *
+ * On the SFU the server has already refused the publish grant, so most of
+ * this is the UI agreeing with a fact. In a mesh room the media never touches
+ * the server and this IS the enforcement (see docs/voice-backends.md, "Speak
+ * permission"), which is why every path that could open the mic is pinned
+ * here: the toggle, push-to-talk, a device swap, and the SFU publish.
+ */
+describe("speak permission", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    stoppedTracks.length = 0;
+    sfuScreenPublishes.length = 0;
+    sfuMicPublishes.length = 0;
+    vi.mocked(connectLiveKit).mockClear();
+  });
+
+  function listenerWelcome(transport?: "mesh" | "livekit") {
+    const message = welcome(transport);
+    return { ...message, canSpeak: false, self: { ...message.self, canSpeak: false } };
+  }
+
+  it("joins a mesh room muted, with the mic locked shut", async () => {
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(listenerWelcome("mesh"));
+    await settle();
+
+    const state = voice.getState();
+    expect(state.status).toBe("connected");
+    expect(state.canSpeak).toBe(false);
+    expect(state.isMuted).toBe(true);
+    expect(state.isTransmitting).toBe(false);
+    expect(state.notice).toContain("do not have permission to speak");
+
+    // The unmute is a no-op, not a toggle.
+    voice.toggleMute();
+    expect(voice.getState().isMuted).toBe(true);
+    expect(voice.getState().isTransmitting).toBe(false);
+    voice.setMuted(false);
+    expect(voice.getState().isMuted).toBe(true);
+
+    // Push-to-talk cannot open it either.
+    voice.setInputMode("push-to-talk");
+    voice.setPushToTalkActive(true);
+    expect(voice.getState().isTransmitting).toBe(false);
+    voice.setPushToTalkActive(false);
+
+    // The roster is told we are muted, never unmuted.
+    const declared = sent.filter((m) => m.type === "set-voice-state");
+    expect(declared.every((m) => m.muted === true)).toBe(true);
+  });
+
+  it("refuses to share a screen or open a camera", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(listenerWelcome("mesh"));
+    await settle();
+
+    await voice.startScreenShare();
+    expect(displayMediaCalls).toHaveLength(0);
+    expect(voice.getState().isSharingScreen).toBe(false);
+    await voice.toggleCamera();
+    expect(voice.getState().isCameraOn).toBe(false);
+    expect(voice.getState().notice).toContain("do not have permission to speak");
+  });
+
+  it("never publishes a microphone to the SFU without SPEAK", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => sfuSession());
+    await voice.join(CHANNEL);
+    voice.handleSignaling(listenerWelcome("livekit"));
+    await settle();
+    await settle();
+
+    expect(voice.getState().status).toBe("connected");
+    expect(voice.getState().usingSfu).toBe(true);
+    expect(sfuMicPublishes).toHaveLength(0);
+  });
+
+  it("unlocks when SPEAK arrives mid-call, staying muted until the person unmutes", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => sfuSession());
+    await voice.join(CHANNEL);
+    voice.handleSignaling(listenerWelcome("livekit"));
+    await settle();
+    await settle();
+
+    voice.handleSignaling({
+      type: "voice-speak-changed",
+      voiceChannelId: CHANNEL,
+      canSpeak: true,
+    });
+    await settle();
+
+    const state = voice.getState();
+    expect(state.canSpeak).toBe(true);
+    expect(state.isMuted).toBe(true);
+    expect(state.notice).toContain("You can speak now");
+    // The mic is published (muted) so the unmute is instant.
+    expect(sfuMicPublishes).toHaveLength(1);
+
+    voice.toggleMute();
+    expect(voice.getState().isMuted).toBe(false);
+    expect(voice.getState().isTransmitting).toBe(true);
+  });
+
+  it("mutes and stops presenting when SPEAK is taken away mid-call", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    await voice.startScreenShare();
+    expect(voice.getState().isSharingScreen).toBe(true);
+    expect(voice.getState().isTransmitting).toBe(true);
+
+    voice.handleSignaling({
+      type: "voice-speak-changed",
+      voiceChannelId: CHANNEL,
+      canSpeak: false,
+    });
+    await settle();
+
+    const state = voice.getState();
+    expect(state.canSpeak).toBe(false);
+    expect(state.isMuted).toBe(true);
+    expect(state.isTransmitting).toBe(false);
+    expect(state.isSharingScreen).toBe(false);
+    expect(state.notice).toContain("do not have permission to speak");
+    voice.toggleMute();
+    expect(voice.getState().isMuted).toBe(true);
+  });
+
+  it("ignores a speak change aimed at another room, and resets on leave", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+
+    voice.handleSignaling({
+      type: "voice-speak-changed",
+      voiceChannelId: "00000000-0000-4000-8000-0000000000ff",
+      canSpeak: false,
+    });
+    expect(voice.getState().canSpeak).toBe(true);
+
+    voice.handleSignaling({
+      type: "voice-speak-changed",
+      voiceChannelId: CHANNEL,
+      canSpeak: false,
+    });
+    expect(voice.getState().canSpeak).toBe(false);
+    voice.leave();
+    expect(voice.getState().canSpeak).toBe(true);
   });
 });

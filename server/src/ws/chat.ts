@@ -546,12 +546,38 @@ export async function notifyPermissionsUpdate(
   }
 }
 
+/**
+ * In-process subscribers to "this server's permissions changed". Voice uses
+ * it to re-resolve SPEAK for the people already in that server's rooms. A
+ * listener registry rather than a direct call so `voice.ts`, which already
+ * imports this module, does not have to be imported back. Runs for the local
+ * bump and for one relayed over the cluster bus alike, because both go
+ * through `deliverPermissionsUpdate`.
+ */
+const permissionsListeners = new Set<(serverId: string) => void>();
+
+export function onPermissionsUpdate(
+  listener: (serverId: string) => void,
+): () => void {
+  permissionsListeners.add(listener);
+  return () => {
+    permissionsListeners.delete(listener);
+  };
+}
+
 /** Test seam and local half. Membership is passed in so unit tests need no DB. */
 export function deliverPermissionsUpdate(
   serverId: string,
   version: number,
   memberIds: readonly string[],
 ): void {
+  for (const listener of permissionsListeners) {
+    try {
+      listener(serverId);
+    } catch (error) {
+      console.error("[ws] permissions-update listener failed:", error);
+    }
+  }
   const allowed = new Set(memberIds);
   const payload = encode({
     type: "permissions-update",

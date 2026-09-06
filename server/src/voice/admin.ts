@@ -521,4 +521,109 @@ export async function setSfuUserMuted(
   return changed;
 }
 
+/**
+ * Grant or revoke one user's right to publish in one SFU room, live: the
+ * enforcement half of `Permission.SPEAK` for a participant who is already
+ * connected when the permission changes (a role edit, a channel overwrite).
+ *
+ * `updateParticipant` rewrites the LiveKit permission set atomically, so every
+ * field is stated (the SDK note says as much: partial means "the rest become
+ * false"). Revoking `canPublish` makes the SFU unpublish the participant's
+ * tracks itself and refuse the next publish, whatever the client does, which
+ * is what makes this a rule rather than a request. A minted token is not
+ * consulted again after connect, so this is also the only way to change the
+ * grant without a reconnect; granting works the same way, and the client
+ * publishes its mic as soon as it is told.
+ *
+ * Belt and braces on revoke: every published track is also muted first, so
+ * a LiveKit build that unpublishes lazily still goes quiet at once.
+ *
+ * Same contract as `setSfuUserMuted`: never rejects, fails open on a
+ * participant it cannot identify, returns true when at least one participant
+ * was updated. The voice room calls it fire-and-forget (the permission change
+ * has already committed); anything that needs the outcome awaits it directly.
+ */
+export async function setSfuUserCanPublish(
+  room: string,
+  userId: string,
+  canPublish: boolean,
+  knownIdentities: ReadonlyMap<string, string>,
+): Promise<boolean> {
+  const client = getRoomService();
+  if (!client) {
+    return false;
+  }
+
+  let participants;
+  try {
+    participants = await client.listParticipants(room);
+  } catch (error) {
+    logEvent("voice.sfuPublishGrantFailed", {
+      room,
+      userId,
+      canPublish,
+      stage: "list",
+      error: describeError(error),
+    });
+    return false;
+  }
+
+  let changed = false;
+  await Promise.all(
+    participants.map(async (participant) => {
+      const identity = participant.identity;
+      const participantUserId =
+        userIdFromParticipantMetadata(participant.metadata) ??
+        knownIdentities.get(identity) ??
+        null;
+      if (participantUserId !== userId) {
+        return;
+      }
+      if (!canPublish) {
+        for (const published of participant.tracks ?? []) {
+          try {
+            await client.mutePublishedTrack(room, identity, published.sid, true);
+          } catch (error) {
+            logEvent("voice.sfuPublishGrantFailed", {
+              room,
+              identity,
+              userId,
+              canPublish,
+              stage: "mute",
+              trackSid: published.sid,
+              error: describeError(error),
+            });
+          }
+        }
+      }
+      try {
+        await client.updateParticipant(room, identity, {
+          permission: {
+            canPublish,
+            canSubscribe: true,
+            canPublishData: false,
+          },
+        });
+        changed = true;
+        logEvent("voice.sfuPublishGrant", {
+          room,
+          identity,
+          userId,
+          canPublish,
+        });
+      } catch (error) {
+        logEvent("voice.sfuPublishGrantFailed", {
+          room,
+          identity,
+          userId,
+          canPublish,
+          stage: "update",
+          error: describeError(error),
+        });
+      }
+    }),
+  );
+  return changed;
+}
+
 // --- end voice moderation -----------------------------------------------------
