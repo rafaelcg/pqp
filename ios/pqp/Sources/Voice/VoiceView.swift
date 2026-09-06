@@ -302,7 +302,10 @@ struct VoiceView: View {
                 }
                 .accessibilityIdentifier("voice.camera")
                 .accessibilityLabel(model.isCameraOn ? "Turn camera off" : "Turn camera on")
-                .disabled(model.status != .connected)
+                // Also while a toggle is running: opening a capture device
+                // takes long enough to tap again, and two starts against one
+                // camera is how it ends up opening neither.
+                .disabled(model.status != .connected || model.isCameraBusy)
             }
 
             circleButton(

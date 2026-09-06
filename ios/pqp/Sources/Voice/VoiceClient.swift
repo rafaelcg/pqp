@@ -84,6 +84,18 @@ actor VoiceClient {
     /// Our own capture. The source outlives a camera flip; the capturer does not.
     private var cameraSource: RTCVideoSource?
     private var cameraCapturer: RTCCameraVideoCapturer?
+    /// Sits between the capturer and the source and counts frames, so "the
+    /// capture session started" can be told apart from "the camera is sending
+    /// a picture". Held here because `RTCVideoCapturer.delegate` is **weak**:
+    /// drop this and frames stop reaching the source entirely.
+    private var cameraProbe: CameraFrameProbe?
+    /// Bumped by every teardown (`stopCamera`, `disconnectAll`). `startCamera`
+    /// reads it before its awaits and re-reads it after: an actor suspends at
+    /// `await`, so a `leave` or a socket reconnect can land in the middle of a
+    /// start, and without this the capture that was in flight is installed
+    /// into a room that no longer exists — a lit camera light on a call the
+    /// person already left.
+    private var cameraGeneration = 0
     private var localVideoTrack: RTCVideoTrack?
     /// The MediaStream id our camera is published under. This is the value that
     /// travels on `set-camera` and comes back on everyone's roster as
@@ -432,19 +444,52 @@ actor VoiceClient {
     /// caller must announce over `set-camera` — receivers cannot classify the
     /// arriving video without it. Announce *before* the track lands if possible;
     /// the roster re-check covers the other ordering.
-    func startCamera() async -> (track: UncheckedBox<RTCVideoTrack>, streamId: String)? {
+    ///
+    /// THROWS RATHER THAN LYING. This used to be `try? await
+    /// capturer.startCapture(…)` and then carry on regardless: a capture
+    /// session that refused to open (the usual cause is the device still held
+    /// by the previous call's session, or by another app) produced a published
+    /// track carrying no frames, a lit camera button, a black tile at the far
+    /// end, and not one word anywhere. `startCaptureWithDevice:…:completionHandler:`
+    /// reports a real `NSError` and it was being discarded. It is the whole
+    /// reason the camera "sometimes did not turn on".
+    ///
+    /// A failed start also tears its own half-built capture down, so the
+    /// device is free for the next attempt instead of being held by an object
+    /// nobody has a reference to.
+    func startCamera() async throws -> (track: UncheckedBox<RTCVideoTrack>, streamId: String) {
         if let localVideoTrack, let localCameraStreamId {
             return (UncheckedBox(localVideoTrack), localCameraStreamId)
         }
         guard let device = Self.captureDevice(front: usesFrontCamera),
               let chosen = Self.bestFormat(for: device, lines: videoQuality.cameraProfile.lines)
-        else { return nil }
+        else { throw CameraFailure.noDevice }
 
+        let generation = cameraGeneration
         let source = factory.videoSource()
-        let capturer = RTCCameraVideoCapturer(delegate: source)
+        let probe = CameraFrameProbe(forwardingTo: source)
+        let capturer = RTCCameraVideoCapturer(delegate: probe)
         let fps = Self.captureFrameRate(for: chosen.format, ceiling: videoQuality.cameraProfile.frameRate)
         cameraCaptureLines = chosen.lines
-        try? await capturer.startCapture(with: device, format: chosen.format, fps: fps)
+        var opened = false
+        do {
+            try await capturer.startCapture(with: device, format: chosen.format, fps: fps)
+            // The room can go away while the device is opening: an actor
+            // suspends at `await`, and `leave` / a socket reconnect is one
+            // `disconnectAll` away.
+            opened = generation == cameraGeneration
+        } catch {
+            opened = false
+        }
+        guard opened else {
+            // Nothing has been stored yet, so this is the only chance to close
+            // the session. Left dangling it keeps the device claimed and the
+            // *next* start fails too, which is what turns one bad tap into a
+            // camera that stays broken for the rest of the call.
+            await capturer.stopCapture()
+            cameraCaptureLines = 0
+            throw CameraFailure.captureFailed
+        }
 
         // Unique per capture, not per app: the id is the receiver's whole basis
         // for telling this stream from a screen share, and a constant would
@@ -453,6 +498,7 @@ actor VoiceClient {
         let track = factory.videoTrack(with: source, trackId: "pqp-video-0")
         cameraSource = source
         cameraCapturer = capturer
+        cameraProbe = probe
         localVideoTrack = track
         localCameraStreamId = streamId
 
@@ -472,6 +518,7 @@ actor VoiceClient {
     /// Stops the capture and unpublishes. The capture is released rather than
     /// merely disabled: a camera light with nothing behind it is not acceptable.
     func stopCamera() async {
+        cameraGeneration &+= 1
         guard localVideoTrack != nil else { return }
         await cameraCapturer?.stopCapture()
         for (peerId, sender) in cameraSenders {
@@ -479,6 +526,7 @@ actor VoiceClient {
         }
         cameraSenders.removeAll()
         cameraCapturer = nil
+        cameraProbe = nil
         cameraSource = nil
         localVideoTrack = nil
         localCameraStreamId = nil
@@ -486,6 +534,19 @@ actor VoiceClient {
         for peerId in connections.keys {
             await negotiate(with: peerId)
         }
+    }
+
+    /// Whether the capture that is running has actually delivered a frame.
+    ///
+    /// A started `AVCaptureSession` is not a picture. It can be interrupted the
+    /// instant it opens — the phone went to the background between the tap and
+    /// the first frame, another app has the device — and neither AVFoundation
+    /// nor WebRTC reports that back through `startCapture`. Counting frames is
+    /// the only honest answer, and it is the same test
+    /// `ScreenShareController` applies to a broadcast that starts and sends
+    /// nothing.
+    func cameraHasFrames() -> Bool {
+        (cameraProbe?.frameCount ?? 0) > 0
     }
 
     /// Front ↔ back. The source and the track survive, so nothing renegotiates
@@ -919,7 +980,7 @@ actor VoiceClient {
         emit()
     }
 
-    func disconnectAll() {
+    func disconnectAll() async {
         statsTimer?.cancel()
         statsTimer = nil
         speaking.removeAll()
@@ -936,8 +997,16 @@ actor VoiceClient {
         peerConnectionState.removeAll()
         // The camera is hardware: leaving the capturer running after a hang-up
         // is a lit camera light on a call that ended.
-        cameraCapturer?.stopCapture()
+        //
+        // AWAITED, not fired and forgotten. `AVCaptureDevice` is exclusive, so
+        // a session still shutting down is a session still holding the camera,
+        // and the very next thing that happens after a socket reconnect is a
+        // rejoin followed by somebody pressing the camera button again. That
+        // start then failed on a device the previous call had not let go of.
+        cameraGeneration &+= 1
+        await cameraCapturer?.stopCapture()
         cameraCapturer = nil
+        cameraProbe = nil
         cameraSource = nil
         localVideoTrack = nil
         localCameraStreamId = nil
@@ -1343,4 +1412,41 @@ private final class PeerDelegate: NSObject, RTCPeerConnectionDelegate, @unchecke
     func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didRemove candidates: [RTCIceCandidate]) {}
     func peerConnection(_ peerConnection: RTCPeerConnection, didOpen dataChannel: RTCDataChannel) {}
+}
+
+/// Counts camera frames on their way to the `RTCVideoSource`.
+///
+/// WebRTC's capturer talks to exactly one delegate and `RTCVideoSource` is
+/// normally it. Slipping this in between is the only way to know whether a
+/// capture session that reported success is producing anything, which is a
+/// different question from whether it started and the one the person holding
+/// the phone actually cares about.
+///
+/// Frames arrive on AVFoundation's capture queue, so the counter is behind a
+/// lock and the type is `@unchecked Sendable` for the same reason every other
+/// WebRTC callback in this file is: the SDK predates Swift concurrency.
+///
+/// It forwards first and counts second — nothing here may sit between a frame
+/// and the encoder.
+final class CameraFrameProbe: NSObject, RTCVideoCapturerDelegate, @unchecked Sendable {
+    private let downstream: RTCVideoCapturerDelegate
+    private let lock = NSLock()
+    private var count = 0
+
+    init(forwardingTo downstream: RTCVideoCapturerDelegate) {
+        self.downstream = downstream
+    }
+
+    var frameCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    func capturer(_ capturer: RTCVideoCapturer, didCapture frame: RTCVideoFrame) {
+        downstream.capturer(capturer, didCapture: frame)
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
 }

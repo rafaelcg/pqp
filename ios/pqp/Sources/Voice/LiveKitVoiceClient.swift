@@ -45,6 +45,9 @@ actor LiveKitVoiceClient {
     private var isMuted = false
     private var isDeafened = false
     private var localCamera: LocalVideoTrack?
+    /// Attached to our own camera track to count frames. Kept here because a
+    /// track holds its renderers strongly and this one has to come off again.
+    private var cameraProbe: LiveKitCameraFrameProbe?
     private var usesFrontCamera = true
     /// Our screen, while the ReplayKit bridge is feeding one. The track is
     /// created on `startScreenShare` and *published on the first frame*: the
@@ -189,29 +192,52 @@ actor LiveKitVoiceClient {
     /// the server counts cameras against the room's cap by it. Receivers on
     /// LiveKit ignore the value; receivers do not exist on any other transport
     /// in this room.
-    func startCamera() async -> (feed: VideoFeed, streamId: String)? {
-        guard let room, room.connectionState == .connected else { return nil }
+    /// Throws rather than answering nil, so the model can say *why* rather
+    /// than showing one sentence for every refusal. The mesh half of this
+    /// (`VoiceClient.startCamera`) makes the same promise.
+    func startCamera() async throws -> (feed: VideoFeed, streamId: String) {
+        guard let room, room.connectionState == .connected else {
+            throw CameraFailure.captureFailed
+        }
         if let localCamera {
             return (.livekit(localCamera), "pqp-camera-livekit")
         }
+        let publication: LocalTrackPublication?
         do {
-            let publication = try await room.localParticipant.setCamera(
+            publication = try await room.localParticipant.setCamera(
                 enabled: true,
                 captureOptions: CameraCaptureOptions(position: usesFrontCamera ? .front : .back)
             )
-            guard let track = publication?.track as? LocalVideoTrack else { return nil }
-            localCamera = track
-            return (.livekit(track), "pqp-camera-" + UUID().uuidString)
         } catch {
-            return nil
+            throw CameraFailure.captureFailed
         }
+        guard let track = publication?.track as? LocalVideoTrack else {
+            throw CameraFailure.captureFailed
+        }
+        localCamera = track
+        // Counts frames on the published track, so "the SDK published it" can
+        // be told apart from "the camera is producing a picture". See
+        // `CameraFrameProbe` for the mesh twin and why the difference matters.
+        let probe = LiveKitCameraFrameProbe()
+        cameraProbe = probe
+        track.add(videoRenderer: probe)
+        return (.livekit(track), "pqp-camera-" + UUID().uuidString)
+    }
+
+    /// Whether the published camera has actually delivered a frame.
+    func cameraHasFrames() -> Bool {
+        (cameraProbe?.frameCount ?? 0) > 0
     }
 
     /// Unpublishes rather than mutes: a muted camera track on this SDK keeps the
     /// capture session open, and a lit camera light on a call whose camera is
     /// off is not acceptable.
     func stopCamera() async {
-        guard let room, localCamera != nil else { return }
+        guard let room, let track = localCamera else { return }
+        if let cameraProbe {
+            track.remove(videoRenderer: cameraProbe)
+        }
+        cameraProbe = nil
         localCamera = nil
         // `getTrackPublication(source:)` is not public on this SDK version, so
         // the camera publication is found by walking our own publications.
@@ -361,6 +387,7 @@ actor LiveKitVoiceClient {
         self.room = nil
         bridge = nil
         localCamera = nil
+        cameraProbe = nil
         screenPublish?.cancel()
         screenPublish = nil
         localScreen = nil
@@ -598,5 +625,34 @@ func liveKitRotation(degrees: Int) -> VideoRotation {
     case 180: ._180
     case 270: ._270
     default: ._0
+    }
+}
+
+/// Counts frames on our own published camera track.
+///
+/// The SFU twin of `CameraFrameProbe`. `setCamera(enabled:)` returning a
+/// publication means the SDK created a track and told the server about it; it
+/// does not mean `AVCaptureSession` is producing anything. Attaching a
+/// renderer is the SDK's only way to be told about frames.
+///
+/// It renders nothing and claims no size, so adaptive stream (off for these
+/// rooms anyway) can never pick a layer because of it.
+final class LiveKitCameraFrameProbe: NSObject, VideoRenderer, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    var frameCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
+
+    @MainActor var isAdaptiveStreamEnabled: Bool { false }
+    @MainActor var adaptiveStreamSize: CGSize { .zero }
+
+    func render(frame: VideoFrame) {
+        lock.lock()
+        count += 1
+        lock.unlock()
     }
 }
