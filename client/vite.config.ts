@@ -140,11 +140,23 @@ export default defineConfig({
         // the navigation never reaches Cloudflare, the shell is served for
         // /r/x, the router matches nothing and drops the person on `/` with no
         // ref recorded. Verified happening in a real browser on 22 Aug 2026.
+        //
+        // The machine-readable files are in here for a third reason: they are
+        // real files, not routes, and a returning visitor with this worker
+        // installed who opens /llms.txt or /.well-known/agent-skills/index.json
+        // would otherwise be handed the SPA shell. Nothing that grades this
+        // site runs a service worker, so this is for the human who clicks one
+        // of these links.
         navigateFallbackDenylist: [
           /^\/api\//,
           /^\/status\.json$/,
           /^\/ws/,
           /^\/r\//,
+          /^\/\.well-known\//,
+          /^\/llms(-full)?\.txt$/,
+          /^\/index\.md$/,
+          /^\/robots\.txt$/,
+          /^\/sitemap\.xml$/,
         ],
         cleanupOutdatedCaches: true,
         // Adds the notificationclick handler. Android Chrome only permits

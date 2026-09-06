@@ -46,4 +46,52 @@ Allow: /app/invite/
 # screen.
 Disallow: /app
 
+# There is no API on this host (it lives on api.pqp.gg), so this is a fence
+# against a crawler that guesses; it costs nothing and reads as intended.
+Disallow: /api
+
+# Content Signals (contentsignals.org, draft-romm-aipref-contentsignals). What
+# this site is willing to be used for by whoever fetches it. Search and
+# answering a question from a fetched page are fine, that is how a public
+# profile or a release note gets found. Training is not: most of what is public
+# here is other people's words and pictures on their own pages, and it is not
+# ours to hand over as a corpus. One line to flip if that changes.
+Content-Signal: search=yes, ai-input=yes, ai-train=no
+
+# AI crawlers, named. RFC 9309 says a wildcard group already binds every one of
+# them, and it does; the point of naming them is that an operator reading this
+# file, or a scanner grading it, should not have to infer our policy from a
+# rule written for Googlebot. The rules are the same as the wildcard group's on
+# purpose: what is public is public for everybody, what is behind a login is
+# behind a login for everybody. The Content-Signal line is repeated because the
+# draft scopes it to the group it sits in.
+User-agent: GPTBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: ClaudeBot
+User-agent: Claude-Web
+User-agent: Claude-SearchBot
+User-agent: Claude-User
+User-agent: anthropic-ai
+User-agent: Google-Extended
+User-agent: Applebot-Extended
+User-agent: Amazonbot
+User-agent: PerplexityBot
+User-agent: Bytespider
+User-agent: CCBot
+User-agent: meta-externalagent
+Allow: /
+Allow: /@
+Allow: /c/
+Allow: /app/invite/
+Disallow: /app
+Disallow: /api
+Content-Signal: search=yes, ai-input=yes, ai-train=no
+
+# ARD (agenticresourcediscovery.org) points at the same manifest the
+# well-known path serves. Listed here because the draft names robots.txt as a
+# discovery mechanism and a scanner that only reads this file should still find
+# it.
+Agentmap: https://pqp.gg/.well-known/ai-catalog.json
+
 Sitemap: https://pqp.gg/sitemap.xml

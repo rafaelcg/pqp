@@ -1,0 +1,56 @@
+# pqp, in full
+
+pqp (https://pqp.gg) is an open-source voice and text chat for groups of friends, in the shape of Discord. This file is the expanded companion to https://pqp.gg/llms.txt. It describes the product as it is, not as it is planned; when something is a beta or off by default, it says so.
+
+## What it is
+
+- Servers (called halls in the code) with text channels and voice channels.
+- Voice is WebRTC. Small rooms are a peer-to-peer mesh; larger rooms use a LiveKit SFU when the hosted instance has one configured. The server decides the transport per room.
+- Screen share with audio from the browser, and watch parties.
+- Direct messages, friends, reactions, attachments (S3-compatible storage, off unless configured), GIFs.
+- Roles: owner, admin, member. Invites are links; joining needs an account.
+- Communities: an opt-in public directory of joinable servers. Off by default on a self-host.
+- Public handles: a person can claim `pqp.gg/@handle` and get a public profile page. Communities that opt in get `pqp.gg/c/slug`.
+- Baú: a durable media feed inside a server, behind its own flag.
+- Game connections: Steam, Battle.net and Twitch can be linked to a profile and shown publicly if the person opts in.
+- Written in Brazilian Portuguese first, with English as the second language.
+
+## Platforms
+
+- Web: https://pqp.gg/app (needs an account)
+- Desktop: Electron shell, https://pqp.gg/download
+- iOS: native SwiftUI client, TestFlight beta, https://pqp.gg/beta
+- Android: native Kotlin and Compose client, APK beta, https://pqp.gg/android
+
+## Accounts and access
+
+Accounts are created through Clerk on the web app. There are no API keys, no OAuth client registration for third parties, no bot token model and no agent registration. Every request to https://api.pqp.gg needs a session token of a signed-in person, including the configuration endpoints. This is deliberate for a small product, and it means there is nothing on the API an autonomous agent can use on its own.
+
+What is reachable without an account:
+
+- The public pages listed in https://pqp.gg/llms.txt
+- `https://pqp.gg/@handle`: a public profile. Display name, avatar, optional banner, public community badges, opted-in game connections, approved testimonials, join month. No id, no email, no presence. Only handles that were claimed resolve; the rest show a claim page.
+- `https://pqp.gg/c/slug`: a public community poster. Name, tagline, category, member count, pictures. Never a member list.
+- `https://pqp.gg/app/invite/<code>`: an invite door. The page tells nothing about the server behind it; joining needs an account.
+- `https://api.pqp.gg/status.json`: live status
+
+Neither profiles nor communities are enumerable. There is no listing endpoint and the sitemap lists only static pages, on purpose.
+
+## Open source and self-hosting
+
+The whole product is at https://github.com/rafaelcg/pqp under the AGPL. It is a pnpm monorepo: a React and Vite client, a Node API with WebSocket chat and voice signaling, Postgres, a shared Zod protocol package, an Electron shell, and the native iOS and Android clients. The README and `docs/` cover running it locally and deploying it. The hosted instance runs the SPA on Cloudflare Pages and the API on Fly.io in São Paulo. Analytics, advertising tags and donation links are gated behind hosted-only environment variables so a self-host does not inherit them.
+
+## Content and safety
+
+Public pages are other people's words and pictures on their own pages. The site's robots.txt carries a Content Signal of `search=yes, ai-input=yes, ai-train=no`: indexing and answering from a fetched page are fine, training is not. Reports about content go to the instance operator; the security contact is in https://pqp.gg/.well-known/security.txt.
+
+## Machine-readable pointers
+
+- https://pqp.gg/robots.txt
+- https://pqp.gg/sitemap.xml
+- https://pqp.gg/.well-known/api-catalog (RFC 9727 linkset)
+- https://pqp.gg/.well-known/agent-skills/index.json (Agent Skills discovery)
+- https://pqp.gg/.well-known/ai-catalog.json (ARD capability manifest, pointing at the same two things)
+- https://pqp.gg/.well-known/security.txt (RFC 9116)
+
+There is no MCP server, no A2A agent card, no OAuth discovery, no WebMCP tools and no commerce protocol on this domain. If one of those appears in a discovery document on pqp.gg it is because it exists, not because a checklist asked for it.
