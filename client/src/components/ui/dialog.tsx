@@ -196,7 +196,16 @@ export function Dialog({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
 
+    function isTopLayer(): boolean {
+      const layer = panelRef.current?.closest("[data-dialog-layer]");
+      const layers = document.querySelectorAll("[data-dialog-layer]");
+      return !layer || layers[layers.length - 1] === layer;
+    }
+
     function onKeyDown(event: KeyboardEvent) {
+      if (!isTopLayer()) {
+        return;
+      }
       if (event.key === "Escape") {
         if (
           event.target instanceof Element &&
