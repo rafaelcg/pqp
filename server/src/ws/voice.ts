@@ -280,6 +280,7 @@ function writePeerRow(peer: VoicePeer): void {
       cameraStreamId: peer.cameraStreamId,
       screenAudioStreamId: peer.screenAudioStreamId,
       canSpeak: peer.canSpeak,
+      canStream: peer.canStream,
       canResume: peer.canResume,
       orphanedAt:
         peer.orphanedAt === undefined ? null : new Date(peer.orphanedAt),
@@ -304,6 +305,7 @@ function rowToParticipant(row: VoicePeerRow): VoiceParticipant {
     // The sanction is per-process (see `roomServerMutes`); a row held by
     // another instance carries no flag, so this reads false there.
     serverMuted: isVoiceUserServerMuted(row.channelId, row.userId),
+    canStream: row.canStream,
   };
 }
 
