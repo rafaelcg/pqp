@@ -4224,12 +4224,9 @@ function MainAppContent({
               : t("voice.channelFallback"))
           }
           status={voiceState.status}
-          peerCount={voiceState.remotePeers.length}
           isMuted={voiceState.isMuted}
           inputMode={voiceState.inputMode}
           isTransmitting={voiceState.isTransmitting}
-          usingSfu={voiceState.usingSfu}
-          isPresenting={voiceState.screenSharePeerIds.length > 0}
           listenOnly={!voiceState.canSpeak}
           peerQualities={voiceState.remotePeers.flatMap((peer) =>
             peer.quality ? [peer.quality] : [],
