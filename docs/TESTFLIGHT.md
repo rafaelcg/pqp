@@ -13,9 +13,117 @@ instead of a dead join URL.
 |---|---|
 | Bundle ID | `gg.pqp.app` (`ios/project.yml`) |
 | Team | `WXBFUF9WMA` |
-| Version | Check `ios/pqp/Info.plist` (`CFBundleShortVersionString` / `CFBundleVersion`) — builds have already been uploaded manually |
+| Version | `ios/pqp/Info.plist` and `ios/pqp/Broadcast/Info.plist`, which must agree. `1.0` since build 10; `CFBundleVersion` is what moves. Build 18 is the latest uploaded |
+| App Store Connect app id | `6799265799` |
 | Release API | `https://api.pqp.gg` + live Clerk publishable key in Release config |
 | Public App Store listing | Not yet |
+
+## Cutting a build
+
+There is **no CI workflow for iOS**. `.github/workflows/` builds the web, the
+API, Electron and Android; the iOS build is produced on a Mac by hand, with the
+commands below. They are the ones that produced build 18, in order, and they
+work unattended.
+
+### 1. Bump both build numbers
+
+`CFBundleShortVersionString` has been `1.0` since build 10 and stays there;
+`CFBundleVersion` is the number that moves, one per upload. It lives in **two**
+Info.plists and they must match, or App Store Connect refuses the upload:
+
+```bash
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 18" ios/pqp/Info.plist
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 18" ios/pqp/Broadcast/Info.plist
+```
+
+What is already uploaded is the authoritative answer to "which number is next":
+
+```bash
+# 6799265799 is the app's App Store Connect id
+GET /v1/builds?filter[app]=6799265799&sort=-version
+```
+
+### 2. Archive and export
+
+The `.xcodeproj` is generated, so regenerate it first.
+
+```bash
+cd ios && xcodegen generate
+
+xcodebuild -project pqp.xcodeproj -scheme pqp \
+  -configuration Release \
+  -destination 'generic/platform=iOS' \
+  -archivePath /tmp/pqp.xcarchive \
+  archive
+
+xcodebuild -exportArchive \
+  -archivePath /tmp/pqp.xcarchive \
+  -exportOptionsPlist ios/ExportOptions.plist \
+  -exportPath /tmp/pqp-export
+```
+
+`ios/ExportOptions.plist` is committed: `app-store-connect`, manual signing,
+team `WXBFUF9WMA`, and the two profiles named per bundle id. Signing needs, in
+the login keychain and in `~/Library/MobileDevice/Provisioning Profiles/`:
+
+| Thing | Value |
+|---|---|
+| Certificate | `Apple Distribution: Rafael Cammarano Guglielmi (WXBFUF9WMA)` |
+| App profile | `pqp appstore` (expires 30 Mar 2027) |
+| Extension profile | `pqp broadcast appstore` (expires 30 Mar 2027) |
+
+Check the archive before uploading it. Both bundle versions, and the four
+entitlements that a Release build has silently shipped without before:
+
+```bash
+/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" /tmp/pqp.xcarchive/Products/Applications/pqp.app/Info.plist
+/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" /tmp/pqp.xcarchive/Products/Applications/pqp.app/PlugIns/pqpBroadcast.appex/Info.plist
+codesign -d --entitlements :- /tmp/pqp.xcarchive/Products/Applications/pqp.app
+```
+
+`aps-environment` must read `production` (Xcode rewrites it on export),
+`com.apple.developer.applesignin` must be present, and
+`beta-reports-active` is what makes it a TestFlight build.
+
+### 3. Upload
+
+Uploading needs an **App Store Connect API key**: a key id, the team's issuer
+id, and the `.p8`. None of it is in the repo and none of it ever should be.
+
+| Piece | Where it lives |
+|---|---|
+| `.p8` | `~/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8` (the path `altool` searches; keep it out of any repo) |
+| Key id | The filename |
+| Issuer id | Not on this machine under any pqp path. It is the same issuer for every app on team `WXBFUF9WMA`, and it is in GitHub as the `APPLE_API_ISSUER` secret, which Electron notarization uses |
+
+```bash
+xcrun altool --validate-app -f /tmp/pqp-export/pqp.ipa -t ios \
+  --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
+
+xcrun altool --upload-app -f /tmp/pqp-export/pqp.ipa -t ios \
+  --apiKey "$KEY_ID" --apiIssuer "$ISSUER_ID"
+```
+
+Validate first. It catches the mismatched-bundle-version case in seconds
+instead of after a 30 MB transfer and an email from Apple.
+
+Processing takes a few minutes. Poll it rather than watching the web UI:
+
+```bash
+GET /v1/builds?filter[app]=6799265799&sort=-version   # processingState PROCESSING then VALID
+```
+
+### 4. Release notes
+
+The "What to Test" text is per build and per locale, and it is what a tester
+actually reads in the TestFlight app:
+
+```bash
+POST /v1/betaBuildLocalizations   # locale pt-BR, whatsNew: the notes, build: the build id
+```
+
+Write it in plain Brazilian Portuguese, aimed at somebody holding a phone, with
+no jargon and no em dashes. Say what changed and what to poke at.
 
 ## Sign-in information ≠ Apple ID
 
@@ -51,7 +159,7 @@ Contact: <your abuse email>
 ## External TestFlight (public / invite link)
 
 1. Confirm distribution profiles (`pqp appstore`, `pqp broadcast appstore`) are valid.
-2. Archive Release in Xcode → upload to App Store Connect.
+2. Archive, export and upload: **Cutting a build** above.
 3. Internal testing first — smoke the demo account on a device.
 4. Fill Test Information (above).
 5. External group → add build → **Beta App Review**.
