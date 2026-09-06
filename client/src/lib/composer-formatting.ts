@@ -1,24 +1,36 @@
 /**
- * Keyboard formatting for the message composer: Ctrl/Cmd+B and friends wrap
- * the selection in the markdown the bubble actually renders.
+ * Formatting for the message composer: wrap keys and the format bar both
+ * produce the markdown the bubble actually renders.
  *
  * The composer is a plain textarea, so "bold" here means typing `**` on both
  * sides of the selection, the same thing a person does by hand today. What the
- * shortcuts add is the part that is fiddly by hand: putting both markers in at
- * once, undoing a wrap with the same key (toggle), and leaving the selection on
- * the inner text so a second shortcut stacks (`***bold italic***`).
+ * shortcuts and buttons add is the part that is fiddly by hand: putting both
+ * markers in at once, undoing a wrap with the same action (toggle), and leaving
+ * the selection on the inner text so a second shortcut stacks
+ * (`***bold italic***`).
  *
  * Only markers `message-body.tsx` renders are offered. `remark-gfm` gives us
- * `strong`, `em`, `del` and `code`; there is no underline, and `__text__` is
- * CommonMark's second spelling of bold, so Ctrl+U is deliberately not bound.
- * A shortcut that produced literal underscores would be worse than none.
+ * `strong`, `em`, `del`, `code`, quotes, lists and fences; there is no
+ * underline, and `__text__` is CommonMark's second spelling of bold, so Ctrl+U
+ * is deliberately not bound. A shortcut that produced literal underscores
+ * would be worse than none. Underline and spoilers stay out until iOS paints
+ * them: leaking raw `||` on the phone is worse than no button.
  *
  * Everything in this file is pure so the unit tests can hit it directly; the
- * composer's keydown handler only decides how to apply the returned edit to
- * the DOM (see `applyFormattingEdit`).
+ * composer only decides how to apply the returned edit to the DOM (see
+ * `applyFormattingEdit`).
  */
 
 export type FormattingMarker = "**" | "*" | "~~" | "`";
+
+/** Line-prefix and fence wraps the format bar offers on top of the inline markers. */
+export type BlockFormat = "quote" | "list" | "fence";
+
+const QUOTE_PREFIX = "> ";
+const LIST_PREFIX = "- ";
+const FENCE_OPEN = "```\n";
+const FENCE_CLOSE = "\n```";
+const QUOTE_LINE = /^> ?/;
 
 export interface FormattingEdit {
   /** The whole textarea value after the edit. */
@@ -82,6 +94,58 @@ function markerPresent(marker: FormattingMarker, run: number): boolean {
 }
 
 /**
+ * Clamp the range and snap edges off a surrogate pair. A browser never puts
+ * a selection between the two halves, but a programmatic caller can, and a
+ * marker there renders as two broken glyphs.
+ */
+function normalizeSelection(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): { start: number; end: number } {
+  let start = Math.max(0, Math.min(selectionStart, selectionEnd, value.length));
+  let end = Math.min(value.length, Math.max(selectionStart, selectionEnd));
+  const caretOnly = start === end;
+  if (isLowSurrogate(value, start) && isHighSurrogate(value, start - 1)) start -= 1;
+  if (caretOnly) {
+    end = start;
+  } else if (isLowSurrogate(value, end) && isHighSurrogate(value, end - 1)) {
+    end += 1;
+  }
+  return { start, end };
+}
+
+/**
+ * The whole lines the selection touches. A trailing newline that is only the
+ * last character of a non-empty selection is the end of the last line, not
+ * an extra empty one after it.
+ */
+function lineRange(value: string, start: number, end: number): { start: number; end: number } {
+  const lineStart = value.lastIndexOf("\n", start - 1) + 1;
+  const last = end > start && end > 0 && value[end - 1] === "\n" ? end - 1 : end;
+  const newline = value.indexOf("\n", last);
+  return { start: lineStart, end: newline === -1 ? value.length : newline };
+}
+
+function makeEdit(
+  value: string,
+  replaceStart: number,
+  replaceEnd: number,
+  replacement: string,
+  selectionStart: number,
+  selectionEnd: number,
+): FormattingEdit {
+  return {
+    value: value.slice(0, replaceStart) + replacement + value.slice(replaceEnd),
+    selectionStart,
+    selectionEnd,
+    replaceStart,
+    replaceEnd,
+    replacement,
+  };
+}
+
+/**
  * Wrap the selection in `marker`, or unwrap it when the marker is already
  * there. With no selection, insert the pair and put the caret between them.
  */
@@ -93,20 +157,7 @@ export function toggleFormatting(
 ): FormattingEdit {
   const len = marker.length;
   const char = marker[0]!;
-  let start = Math.max(0, Math.min(selectionStart, selectionEnd, value.length));
-  let end = Math.min(value.length, Math.max(selectionStart, selectionEnd));
-
-  // A browser never puts a selection edge between the two halves of a
-  // surrogate pair, but a programmatic caller can. Snap outwards rather than
-  // split an emoji in two, since a marker between the halves renders as two
-  // broken glyphs.
-  const caretOnly = start === end;
-  if (isLowSurrogate(value, start) && isHighSurrogate(value, start - 1)) start -= 1;
-  if (caretOnly) {
-    end = start;
-  } else if (isLowSurrogate(value, end) && isHighSurrogate(value, end - 1)) {
-    end += 1;
-  }
+  let { start, end } = normalizeSelection(value, selectionStart, selectionEnd);
 
   // Caret only. An empty pair the caret is already sitting inside is the
   // result of pressing the shortcut a moment ago with nothing selected, so the
@@ -197,6 +248,200 @@ export function toggleFormatting(
   };
 }
 
+function lineHasQuote(line: string): boolean {
+  return QUOTE_LINE.test(line);
+}
+
+function stripQuote(line: string): string {
+  return line.replace(QUOTE_LINE, "");
+}
+
+function addQuote(line: string): string {
+  return lineHasQuote(line) ? line : `${QUOTE_PREFIX}${line}`;
+}
+
+function lineHasList(line: string): boolean {
+  return line.startsWith(LIST_PREFIX);
+}
+
+function stripList(line: string): string {
+  return lineHasList(line) ? line.slice(LIST_PREFIX.length) : line;
+}
+
+function addList(line: string): string {
+  return lineHasList(line) ? line : `${LIST_PREFIX}${line}`;
+}
+
+function toggleLinePrefix(
+  value: string,
+  start: number,
+  end: number,
+  hasPrefix: (line: string) => boolean,
+  strip: (line: string) => string,
+  add: (line: string) => string,
+): FormattingEdit {
+  const range = lineRange(value, start, end);
+  const block = value.slice(range.start, range.end);
+  const lines = block.split("\n");
+  const unwrap = lines.every(hasPrefix);
+  const nextLines = lines.map((line) => (unwrap ? strip(line) : add(line)));
+  const replacement = nextLines.join("\n");
+  const caretOnly = start === end;
+  if (caretOnly) {
+    const prefixDelta = replacement.length - block.length;
+    const nextCaret = Math.max(range.start, Math.min(range.end + prefixDelta, start + prefixDelta));
+    return makeEdit(value, range.start, range.end, replacement, nextCaret, nextCaret);
+  }
+  return makeEdit(
+    value,
+    range.start,
+    range.end,
+    replacement,
+    range.start,
+    range.start + replacement.length,
+  );
+}
+
+function toggleFence(value: string, start: number, end: number): FormattingEdit {
+  if (
+    start === end &&
+    value.slice(start - FENCE_OPEN.length, start) === FENCE_OPEN &&
+    value.slice(start, start + FENCE_CLOSE.length) === FENCE_CLOSE
+  ) {
+    return makeEdit(
+      value,
+      start - FENCE_OPEN.length,
+      start + FENCE_CLOSE.length,
+      "",
+      start - FENCE_OPEN.length,
+      start - FENCE_OPEN.length,
+    );
+  }
+
+  const selected = value.slice(start, end);
+  if (
+    selected.length >= FENCE_OPEN.length + FENCE_CLOSE.length &&
+    selected.startsWith(FENCE_OPEN) &&
+    selected.endsWith(FENCE_CLOSE)
+  ) {
+    const inner = selected.slice(FENCE_OPEN.length, selected.length - FENCE_CLOSE.length);
+    return makeEdit(value, start, end, inner, start, start + inner.length);
+  }
+
+  if (
+    value.slice(start - FENCE_OPEN.length, start) === FENCE_OPEN &&
+    value.slice(end, end + FENCE_CLOSE.length) === FENCE_CLOSE
+  ) {
+    return makeEdit(
+      value,
+      start - FENCE_OPEN.length,
+      end + FENCE_CLOSE.length,
+      selected,
+      start - FENCE_OPEN.length,
+      start - FENCE_OPEN.length + selected.length,
+    );
+  }
+
+  const range = start === end ? { start, end } : lineRange(value, start, end);
+  const block = value.slice(range.start, range.end);
+  if (
+    block.length >= FENCE_OPEN.length + FENCE_CLOSE.length &&
+    block.startsWith(FENCE_OPEN) &&
+    block.endsWith(FENCE_CLOSE)
+  ) {
+    const inner = block.slice(FENCE_OPEN.length, block.length - FENCE_CLOSE.length);
+    return makeEdit(value, range.start, range.end, inner, range.start, range.start + inner.length);
+  }
+  if (
+    value.slice(range.start - FENCE_OPEN.length, range.start) === FENCE_OPEN &&
+    value.slice(range.end, range.end + FENCE_CLOSE.length) === FENCE_CLOSE
+  ) {
+    return makeEdit(
+      value,
+      range.start - FENCE_OPEN.length,
+      range.end + FENCE_CLOSE.length,
+      block,
+      range.start - FENCE_OPEN.length,
+      range.start - FENCE_OPEN.length + block.length,
+    );
+  }
+
+  if (start === end) {
+    const atLineStart = start === 0 || value[start - 1] === "\n";
+    const atLineEnd = start === value.length || value[start] === "\n";
+    const lead = atLineStart ? "" : "\n";
+    const tail = atLineEnd ? "" : "\n";
+    const replacement = `${lead}${FENCE_OPEN}${FENCE_CLOSE}${tail}`;
+    const caret = start + lead.length + FENCE_OPEN.length;
+    return makeEdit(value, start, end, replacement, caret, caret);
+  }
+
+  const replacement = `${FENCE_OPEN}${block}${FENCE_CLOSE}`;
+  return makeEdit(
+    value,
+    range.start,
+    range.end,
+    replacement,
+    range.start + FENCE_OPEN.length,
+    range.start + FENCE_OPEN.length + block.length,
+  );
+}
+
+/**
+ * Quote, list, or fence the selection, or unwrap it when the same wrap is
+ * already there. Quote and list expand to the lines the caret or selection
+ * touches. A fence does the same, so mid-line wraps stay CommonMark blocks
+ * rather than becoming a code span. With no selection it inserts an empty
+ * pair on its own lines and leaves the caret between the markers.
+ */
+export function toggleBlockFormatting(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  kind: BlockFormat,
+): FormattingEdit {
+  const { start, end } = normalizeSelection(value, selectionStart, selectionEnd);
+  if (kind === "fence") {
+    return toggleFence(value, start, end);
+  }
+  if (kind === "quote") {
+    return toggleLinePrefix(value, start, end, lineHasQuote, stripQuote, addQuote);
+  }
+  return toggleLinePrefix(value, start, end, lineHasList, stripList, addList);
+}
+
+/**
+ * Form chrome. Must not set overflow or a max height: `@` `:` `/` menus, the
+ * warning strip and the phone + menu all sit `absolute bottom-full` on this
+ * node, and a scroll container clips them.
+ */
+export const COMPOSER_FORM_CLASS =
+  "safe-pb relative border-t border-border/60 px-3 py-3 sm:px-4";
+
+/**
+ * Odd ``` before the caret means the user is still inside a fence. Enter
+ * then inserts a newline (Discord) instead of sending a half-written block.
+ */
+export function caretInsideUnclosedFence(value: string, caret: number): boolean {
+  const clamped = Math.max(0, Math.min(caret, value.length));
+  const markers = value.slice(0, clamped).match(/```/g);
+  return (markers?.length ?? 0) % 2 === 1;
+}
+
+/**
+ * Empty, or only an empty fence the format bar just inserted.
+ *
+ * The fence has to span lines: a one-line ```` ```code``` ```` is a code span
+ * with text in it, and must stay sendable.
+ */
+export function composerBodyIsEmpty(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return true;
+  }
+  return /^```[^\n]*\n\s*```$/.test(trimmed);
+}
+
 /** The subset of a keydown event the shortcut table needs. */
 export interface ShortcutKey {
   key: string;
@@ -257,6 +502,10 @@ export function isApplePlatform(nav: Pick<Navigator, "platform" | "userAgent"> =
  * itself since no event fires. Returns whether an `input` event was dispatched.
  */
 export function applyFormattingEdit(input: HTMLTextAreaElement, edit: FormattingEdit): boolean {
+  // insertText/delete run on the active element. A format-bar click can leave
+  // the button focused; without this, Chromium reports success and appends
+  // the replacement at the end instead of wrapping the selection.
+  input.focus();
   input.setSelectionRange(edit.replaceStart, edit.replaceEnd);
   let dispatched = false;
   if (typeof document !== "undefined" && typeof document.execCommand === "function") {
@@ -273,6 +522,9 @@ export function applyFormattingEdit(input: HTMLTextAreaElement, edit: Formatting
   }
   if (!dispatched) {
     input.setRangeText(edit.replacement, edit.replaceStart, edit.replaceEnd, "end");
+  } else if (input.value !== edit.value) {
+    input.setRangeText(edit.value, 0, input.value.length, "end");
+    dispatched = false;
   }
   input.setSelectionRange(edit.selectionStart, edit.selectionEnd);
   return dispatched;

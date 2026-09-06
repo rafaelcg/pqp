@@ -58,3 +58,28 @@ test("a shortcut with nothing selected leaves the caret between the markers", as
   await composer.pressSequentially("soft");
   await expect(composer).toHaveValue("*soft*");
 });
+
+test("the format bar shows a live preview of bold and code, not the markers", async ({
+  page,
+}) => {
+  await openApp(page);
+  const composer = page.getByPlaceholder(/^Message /);
+  await composer.click();
+  await page.getByRole("button", { name: "Formatting" }).click();
+  await expect(page.locator("#composer-format-bar")).toBeVisible();
+
+  const word = `prev${Date.now()}`;
+  await composer.fill(word);
+  await composer.press(`${MOD}+a`);
+  await page.getByRole("button", { name: "Bold" }).click();
+  await expect(composer).toHaveValue(`**${word}**`);
+
+  const preview = page.getByRole("region", { name: "Preview" });
+  await expect(preview.locator("strong")).toHaveText(word);
+  await expect(preview).not.toContainText("**");
+
+  await composer.fill(`\`${word}\``);
+  await expect(composer).toHaveValue(`\`${word}\``);
+  await expect(preview.locator("code")).toHaveText(word);
+  await expect(preview).not.toContainText("`");
+});
