@@ -24,6 +24,14 @@ packages:
   WebRTC:
     url: https://github.com/stasel/WebRTC
     from: "150.0.0"
+  # LiveKit's client SDK, for rooms the server pins to the SFU. It ships its
+  # own WebRTC build (LiveKitWebRTC, every ObjC symbol prefixed LKRTC), so it
+  # links alongside the mesh's framework above without a collision; the two
+  # never run at once, because a room has exactly one transport. Pinned exact,
+  # like the web's livekit-client, so a build is reproducible.
+  LiveKit:
+    url: https://github.com/livekit/client-sdk-swift
+    exactVersion: "2.16.0"
 
 settings:
   base:
@@ -146,6 +154,8 @@ targets:
         product: ClerkKitUI
       - package: WebRTC
         product: WebRTC
+      - package: LiveKit
+        product: LiveKit
       # Embedded into the app bundle. Without this the broadcast picker finds no
       # extension and its sheet is empty.
       - target: pqpBroadcast

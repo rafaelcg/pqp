@@ -333,7 +333,7 @@ struct VoiceView: View {
 /// does. The name sits on the picture rather than under it, because the tiles
 /// are small and a caption row would take a third of the height.
 private struct VoiceCameraTile: View {
-    let track: RTCVideoTrack?
+    let track: VideoFeed?
     let name: String
     var isSpeaking: Bool = false
     var isMuted: Bool = false

@@ -163,6 +163,41 @@ Without it the app hides the attach button rather than failing on tap.
 
 ## Voice
 
+Two transports, one screen. The server pins a room to `mesh` or `livekit` and
+says which in `welcome.transport`; `VoiceTransportPlan` turns that into the
+decision, and the two models (`VoiceModel` for channels, `CallModel` for DM
+calls) hand the media to `VoiceClient` (the mesh) or `LiveKitVoiceClient` (the
+SFU). Both produce the same `[VoicePeerState]` and `[String: PeerVideo]`, and
+`VideoFeed` wraps whichever video track type arrived, so nothing above them
+knows there are two. Pinned by `VoiceTransportTests`.
+
+### LiveKit rooms
+
+`join-voice-room` declares `transports: ["mesh", "livekit"]`. On a `livekit`
+welcome the app builds no peer connections: it `POST`s `/api/voice/token` with
+`{ voiceChannelId, peerId }`, connects a LiveKit `Room` (`client-sdk-swift`
+2.16.0, pinned exact in `project.yml`) to the URL it gets back, publishes the
+microphone with DTX and RED, and subscribes to remote audio, cameras and screen
+shares. Participant identity is the peer id, so tracks are filed beside the
+roster entry with the same id. Mute toggles the published track
+(`setMicrophone(enabled:)`); deafen sets every remote track's playout volume to
+zero through the same `RemoteAudioMixer` the mesh uses; speaker vs earpiece is
+`AudioManager.shared.isSpeakerOutputPreferred`, and the SDK owns the
+`AVAudioSession` configuration while a room is up. The mesh's own audio session
+is released (`disconnectAll`) before the room connects, so the two WebRTC builds
+never hold the session at once.
+
+Failure is the web's: a token error, a connect refusal, or 45 s
+(`sfuJoinTimeout`) without a connected room leaves the WS room and shows "Could
+not reach the voice server, so you have not joined this call". Never a mesh
+instead; see `docs/voice-backends.md` "One room, one transport".
+
+Not yet on LiveKit: publishing a screen share (the ReplayKit bridge feeds the
+mesh's video source and is not armed in a LiveKit room, so the button is hidden
+there) and the video quality ladder. Receiving shares, with their audio, works.
+
+### Mesh rooms
+
 Full-mesh WebRTC, matching the server's default backend. The signalling relay is
 the same `/ws` socket the chat uses; `VoiceClient` owns the peer connections.
 
@@ -326,9 +361,14 @@ read the Video section. Numbers well under the choice with "limited by your
 connection" is bandwidth; under it with "limited by this phone" is the encoder
 giving up on CPU; at the choice is the ladder working.
 
-A call survives a socket drop by being **rebuilt, not resumed**. The server
-drops the voice peer when the socket closes and a reconnect mints a *new* peer
-id, so the old mesh is unusable; `ready` tears everything down and rejoins.
+A **mesh** call survives a socket drop by being **rebuilt, not resumed**. The
+server drops the voice peer when the socket closes and a reconnect mints a
+*new* peer id, so the old mesh is unusable; `ready` tears everything down and
+rejoins. A **LiveKit** call keeps its media: on an SFU deployment (read from
+`GET /api/voice/backend` before joining) the join declares `resume: true`, the
+`resumeToken` from `welcome` is presented on the rejoin, and when the next
+`welcome` says `resumed` for the same peer id nothing is rebuilt. When the
+server declines and mints a new id, media is reconnected once for that id.
 
 ### The socket that looked online and was not
 

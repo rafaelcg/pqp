@@ -152,7 +152,7 @@ struct ScreenShareControlButton: View {
 /// it. Tap for fullscreen, which is the only way a laptop screen is readable on a
 /// phone.
 struct ScreenShareStage: View {
-    let track: RTCVideoTrack?
+    let track: VideoFeed?
     let presenterName: String?
     var identifier: String = "voice.screenShare"
     var presenters: [(peerId: String, name: String)] = []
@@ -227,7 +227,7 @@ struct ScreenShareStage: View {
 /// from it, and a wide screen shrunk to fit is still the whole picture.
 struct ScreenShareFullscreenView: View {
     @Environment(\.dismiss) private var dismiss
-    let track: RTCVideoTrack?
+    let track: VideoFeed?
     let presenterName: String?
 
     var body: some View {
