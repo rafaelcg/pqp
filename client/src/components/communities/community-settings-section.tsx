@@ -219,8 +219,8 @@ export function CommunitySettingsSection({
         {t("communities.settings.title")}
       </h3>
 
-      {/* Both paragraphs render whether or not the switch is on. Reading what
-          listing means only after you have turned it on is the wrong order. */}
+      {/* Both paragraphs render whether or not either switch is on. Reading
+          what the two mean only after you have ticked one is the wrong order. */}
       <p className="text-sm text-paper-muted">
         {t("communities.settings.explainer")}
       </p>
