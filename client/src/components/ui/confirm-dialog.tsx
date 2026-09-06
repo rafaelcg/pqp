@@ -39,14 +39,21 @@ export function ConfirmDialog({
       closeOnBackdrop={false}
       onClose={onClose}
       footer={
-        <div className="grid w-full grid-cols-2 gap-2">
-          <Button type="button" variant="ghost" className="min-w-0" onClick={onClose}>
+        <div className="grid w-full min-w-0 grid-cols-2 gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            autoFocus={destructive}
+            className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center"
+            onClick={onClose}
+          >
             {t("common.cancel")}
           </Button>
           <Button
             type="button"
             variant={destructive ? "danger" : "default"}
-            className="min-w-0"
+            autoFocus={!destructive}
+            className="h-auto min-h-9 w-full min-w-0 whitespace-normal px-2 text-center"
             onClick={() => {
               onConfirm();
               onClose();

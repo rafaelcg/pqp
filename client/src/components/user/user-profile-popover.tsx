@@ -1075,29 +1075,31 @@ function UserProfileCard({
   return (
     <>
       {createPortal(
-    <div
-      ref={cardRef}
-      role="dialog"
-      aria-label={t("profile.cardLabel", { name: subject.displayName })}
-      data-profile-card=""
-      style={{
-        left: placement?.left ?? 0,
-        top: placement?.top ?? 0,
-        width: CARD_WIDTH,
-        // Invisible until measured, so it never flashes at the top-left corner.
-        visibility: placement ? "visible" : "hidden",
-      }}
-      // The whole card scrolls. A nested pane under the medals was not
-      // enough: at high zoom the identity and NESTA COMUNIDADE already fill
-      // the viewport cap, the inner scroller shrinks to nothing, and the
-      // bottom of the card is unreachable. overflow-y on this node is what
-      // a daft zoom needs. Mais opens downward so Block is not clipped.
-      // Drop under the confirm Dialog (z-60) so the in-app confirm is on top.
-      className={cn(
-        "fixed max-h-[calc(100dvh-16px)] overflow-y-auto overscroll-contain rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] animate-fade-in",
-        pendingConfirm ? "z-[50]" : "z-[110]",
-      )}
-    >
+        <div
+          ref={cardRef}
+          role="dialog"
+          aria-label={t("profile.cardLabel", { name: subject.displayName })}
+          aria-hidden={pendingConfirm ? true : undefined}
+          inert={pendingConfirm ? true : undefined}
+          data-profile-card=""
+          style={{
+            left: placement?.left ?? 0,
+            top: placement?.top ?? 0,
+            width: CARD_WIDTH,
+            // Invisible until measured, so it never flashes at the top-left corner.
+            visibility: placement ? "visible" : "hidden",
+          }}
+          // The whole card scrolls. A nested pane under the medals was not
+          // enough: at high zoom the identity and NESTA COMUNIDADE already fill
+          // the viewport cap, the inner scroller shrinks to nothing, and the
+          // bottom of the card is unreachable. overflow-y on this node is what
+          // a daft zoom needs. Mais opens downward so Block is not clipped.
+          // Drop under the confirm Dialog (z-60) so the in-app confirm is on top.
+          className={cn(
+            "fixed max-h-[calc(100dvh-16px)] overflow-y-auto overscroll-contain rounded-2xl border border-ink-4 bg-ink-2 shadow-[var(--shadow-popover)] animate-fade-in",
+            pendingConfirm ? "z-[50]" : "z-[110]",
+          )}
+        >
       {/* No banner image exists on the server, so the band is a quiet wash of
           the accent into the surface — enough depth that the card reads as an
           object rather than a grey rectangle, without inventing an upload
@@ -1577,7 +1579,7 @@ function UserProfileCard({
           </div>
         )}
       </div>
-    </div>,
+        </div>,
         document.body,
       )}
       <ConfirmDialog
@@ -1599,7 +1601,9 @@ function UserProfileCard({
         confirmLabel={t("profile.block")}
         onConfirm={() => {
           onBlockUser(subject.id);
-          onClose();
+          // ConfirmDialog still calls onClose (pendingConfirm). Close the card
+          // after that so we do not setState on an unmounted tree.
+          queueMicrotask(onClose);
         }}
         onClose={() => setPendingConfirm(null)}
       />

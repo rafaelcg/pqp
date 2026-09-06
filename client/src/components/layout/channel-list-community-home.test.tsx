@@ -87,6 +87,20 @@ describe("ChannelList selected row", () => {
     expect(html).toContain("geral");
     expect(html.match(/aria-current="page"/g)).toHaveLength(1);
   });
+
+  it("marks only Baú as current when the home row is selected", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        communityHomeEnabled
+        communityHomeSelected
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+    expect(html).toContain("data-community-home-row");
+    expect(html).toMatch(/data-community-home-row[^>]*aria-current="page"/);
+  });
 });
 
 describe("ChannelList Community Home row", () => {
