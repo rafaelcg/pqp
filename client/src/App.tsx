@@ -79,6 +79,8 @@ import { CargosHint } from "@/components/layout/cargos-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
+import { canActOnMemberClient } from "@/lib/role-hierarchy";
+import { moveMembersBit } from "@/lib/voice-occupant-dnd";
 import { useUpdatePromptShowing } from "@/lib/update-prompt-state";
 import { isAutomatedBrowser } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
@@ -165,6 +167,10 @@ import {
   markChannelRead,
   markCommunityHomeRead,
   moveChannel,
+  moveMemberVoice,
+  disconnectMemberVoice,
+  setMemberVoiceMuted,
+  kickMember,
   setAuthTokenProvider,
   unblockUser,
   updateChannel,
@@ -3008,7 +3014,7 @@ function MainAppContent({
     });
   }
 
-  /** Sidebar double-click: open the channel and join, unless already in it. */
+  /** Sidebar: open the channel and join, unless already in it. */
   function handleJoinVoiceFromList(channelId: string) {
     void selectChannel(channelId);
     if (
@@ -3018,6 +3024,87 @@ function MainAppContent({
       return;
     }
     void handleJoinVoice(channelId);
+  }
+
+  function voiceModerationError(err: unknown, fallback: string): string {
+    return err instanceof ApiError ? err.message : fallback;
+  }
+
+  async function handleMoveVoiceOccupant(userId: string, channelId: string) {
+    if (!selectedServerId) {
+      return;
+    }
+    try {
+      await moveMemberVoice(selectedServerId, userId, channelId);
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("member.moveFailed")));
+    }
+  }
+
+  async function handleDisconnectVoiceOccupant(userId: string) {
+    if (!selectedServerId) {
+      return;
+    }
+    try {
+      await disconnectMemberVoice(selectedServerId, userId);
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("member.disconnectFailed")));
+    }
+  }
+
+  async function handleServerMuteOccupant(userId: string) {
+    if (!selectedServerId) {
+      return;
+    }
+    try {
+      await setMemberVoiceMuted(selectedServerId, userId, true);
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("member.muteFailed")));
+    }
+  }
+
+  async function handleKickOccupant(userId: string, name: string) {
+    if (!selectedServerId) {
+      return;
+    }
+    if (!window.confirm(t("profile.mod.kick.title", { name }))) {
+      return;
+    }
+    try {
+      await kickMember(selectedServerId, userId);
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("member.removeFailed")));
+    }
+  }
+
+  function canKickOccupant(userId: string): boolean {
+    if (!moderationBits.kick || !user) {
+      return false;
+    }
+    const actor = serverMembers.find((row) => row.id === user.id);
+    const target = serverMembers.find((row) => row.id === userId);
+    if (!target) {
+      return false;
+    }
+    if (!actor) {
+      return (
+        (selectedServer?.role === "owner" ||
+          selectedServer?.role === "admin") &&
+        target.role === "member"
+      );
+    }
+    return canActOnMemberClient(
+      actor,
+      target,
+      serverRoles.map((entry) => ({
+        id: entry.id,
+        position: entry.position,
+        permissions: entry.permissions,
+        systemKey: entry.systemKey,
+      })),
+      user.id,
+      userId,
+    );
   }
 
   // --- conversation calls ---------------------------------------------------
@@ -4800,6 +4887,32 @@ function MainAppContent({
           onMobileClose={() => setMobileNavOpen(false)}
           onSelectChannel={(id) => void selectChannel(id)}
           onJoinVoice={handleJoinVoiceFromList}
+          currentUserId={user?.id ?? null}
+          peerVolumes={voiceState.peerVolumes}
+          voiceRoomTransports={voiceRoomTransports}
+          canMoveIn={(channelId) => perms.can(moveMembersBit(), channelId)}
+          canConnectIn={(channelId) =>
+            perms.can(Permission.CONNECT, channelId)
+          }
+          canMuteIn={(channelId) =>
+            perms.can(Permission.MUTE_MEMBERS, channelId)
+          }
+          canKickUser={canKickOccupant}
+          onMoveVoiceOccupant={(userId, channelId) =>
+            void handleMoveVoiceOccupant(userId, channelId)
+          }
+          onDisconnectVoiceOccupant={(userId) =>
+            void handleDisconnectVoiceOccupant(userId)
+          }
+          onServerMuteOccupant={(userId) =>
+            void handleServerMuteOccupant(userId)
+          }
+          onKickOccupant={(userId, name) =>
+            void handleKickOccupant(userId, name)
+          }
+          onSetPeerVolume={(userId, volume) =>
+            voice.setPeerVolume(userId, volume)
+          }
           onCreateChannel={(type, isPrivate) =>
             setChannelPrompt({ mode: "create", type, isPrivate })
           }

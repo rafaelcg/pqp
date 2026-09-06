@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { VoiceParticipant } from "@pqp/shared";
-import { VoiceOccupantBadges } from "./channel-list";
+import { VoiceOccupantBadges } from "./voice-occupant-badges";
 
 /**
  * The channel-list occupant badges — the "see who is muted from outside the
