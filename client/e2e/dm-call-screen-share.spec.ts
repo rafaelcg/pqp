@@ -323,3 +323,95 @@ test("the participant rail beside a share scrolls, hides, and stays hidden acros
     await callee.context.close();
   }
 });
+
+/**
+ * Video-player chrome. With a share on stage the controls bar and the title
+ * overlay leave after a few idle seconds and come back on a pointer move;
+ * resting on the bar or focusing a control inside it holds them. The rules
+ * are unit-tested with fake timers in `use-idle-chrome.test.ts`; this pins
+ * that the stage actually wires them to real pointer and focus events.
+ */
+test("the call chrome hides over an idle share and returns on movement, hover or focus", async ({
+  page,
+  browser,
+}) => {
+  const pair = await seedConversation("chrome-a", "chrome-b");
+  const callee = await openCallee(browser, pair);
+
+  try {
+    await openConversation(page, pair.conversationId, pair.callerSuffix);
+    await page
+      .getByRole("button", { name: "Start video call", exact: true })
+      .click();
+    await expect(page.getByTestId("call-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    await callee.page
+      .getByRole("button", { name: "Accept" })
+      .click({ timeout: 20_000 });
+    await expectVideoPlaying(callee.page, pair.callerName);
+
+    await page
+      .getByRole("button", { name: "Share your screen", exact: true })
+      .click();
+    await expect(
+      callee.page.getByText(`${pair.callerName} is presenting`),
+    ).toBeVisible({ timeout: 20_000 });
+
+    const stage = callee.page.getByTestId("call-stage");
+    const bar = callee.page.getByTestId("call-controls-bar");
+    const overlay = callee.page.locator('[data-call-chrome="overlay"]');
+    const stageBox = (await stage.boundingBox())!;
+    const centre = {
+      x: stageBox.x + stageBox.width / 2,
+      y: stageBox.y + stageBox.height / 2,
+    };
+
+    // A move over the picture shows the chrome; three idle seconds hide it,
+    // bar and overlay together.
+    await callee.page.mouse.move(centre.x, centre.y);
+    await expect(bar).toHaveAttribute("data-chrome-hidden", "false");
+    await expect(bar).toHaveAttribute("data-chrome-hidden", "true", {
+      timeout: 6_000,
+    });
+    await expect(bar).toHaveCSS("opacity", "0");
+    await expect(overlay).toHaveAttribute("data-chrome-hidden", "true");
+    await expect(overlay).toHaveCSS("opacity", "0");
+    // The share itself is untouched.
+    await expect(screenVideo(callee.page)).toBeVisible();
+    await callee.page.screenshot({
+      path: "test-results/call-chrome-hidden.png",
+    });
+
+    // Movement brings it back.
+    await callee.page.mouse.move(centre.x + 40, centre.y + 20);
+    await expect(bar).toHaveAttribute("data-chrome-hidden", "false");
+    await expect(bar).toHaveCSS("opacity", "1");
+    await expect(overlay).toHaveCSS("opacity", "1");
+
+    // Resting on the bar holds it well past the idle delay.
+    const barBox = (await bar.boundingBox())!;
+    await callee.page.mouse.move(
+      barBox.x + barBox.width / 2,
+      barBox.y + barBox.height - 12,
+    );
+    await callee.page.waitForTimeout(4_500);
+    await expect(bar).toHaveAttribute("data-chrome-hidden", "false");
+
+    // Pointer parked off the stage: it hides again. Keyboard focus landing on
+    // the hang-up button reveals it, so a keyboard user is never hanging up
+    // blind.
+    await callee.page.mouse.move(centre.x, centre.y);
+    await callee.page.mouse.move(2, 2);
+    await expect(bar).toHaveAttribute("data-chrome-hidden", "true", {
+      timeout: 6_000,
+    });
+    const leave = callee.page.getByRole("button", { name: "Leave", exact: true });
+    await leave.focus();
+    await expect(leave).toBeFocused();
+    await expect(bar).toHaveAttribute("data-chrome-hidden", "false");
+    await expect(bar).toHaveCSS("opacity", "1");
+  } finally {
+    await callee.context.close();
+  }
+});
