@@ -731,13 +731,41 @@ Also verified between the two clients:
 Still known-missing rather than broken: no speaking indicators, no per-peer
 volume, no push-to-talk, no camera (send or receive), and no screen-share audio.
 
-**LiveKit rooms are now joined rather than refused, and nothing about that path
-has been heard end to end.** It is built against the server's contract and the
-web client's behaviour, it compiles, and its bookkeeping is unit-tested; no
-audio has been observed over it from this client. Screen share is deliberately
-absent there (the button is hidden rather than left to fail) and `statsFor`
-answers null, because LiveKit's stats arrive in the *other* libwebrtc's types.
-Mesh is untouched.
+**LiveKit rooms are now joined rather than refused, and the join has been run
+for real on an emulator (6 Sep 2026).** Against a local server with the
+`livekit` compose profile: `welcome` said `livekit`, the app minted a token,
+connected, and LiveKit listed the participant under the WS peer id with one
+`MICROPHONE` publication (`audio/red`, DTX). The mute button flipped that
+publication to `muted: true` on the SFU. An `lk room join --publish tone.ogg`
+bot was subscribed to (LiveKit's own log shows the phone's downtrack for that
+one track) and an `lk room join --publish-demo` video bot was not, which is
+the audio-only rule doing its job. Hanging up removed the participant from the
+SFU and logged `voice.leave`, and walking straight into a `mesh`-pinned channel
+logged `voice transport LiveKit -> Mesh; disposing the old engine` and came up
+Connected with the screen-share button back. What was **not** heard: audio
+itself, because the emulator has no microphone input and nothing was listening
+on the host, so the claim is "tracks flow", not "voices flow". Screen share is
+deliberately absent on this transport (the button is hidden rather than left
+to fail), incoming screen shares are not rendered, and `statsFor` answers null,
+because LiveKit's stats arrive in the *other* libwebrtc's types. Mesh is
+untouched.
+
+The failure path was also exercised, by accident first: with `LIVEKIT_URL`
+pointing at the host's LAN IP the app refused the SFU leg (`CLEARTEXT
+communication to 192.168.50.245 not permitted by network security policy`),
+left the WS room (server: `voice.join` then `voice.leave`, no ghost) and showed
+the "could not reach the voice server" snackbar. It never built a mesh.
+
+**Local LiveKit rig for a debug build.** The debug network security config
+allows cleartext only to `localhost`, `127.0.0.1` and `10.0.2.2`, and the SFU
+URL the app dials is whatever the server's `LIVEKIT_URL` says. So run the API
+with `LIVEKIT_URL=ws://localhost:7880`, add `adb reverse tcp:7880 tcp:7880` and
+`adb reverse tcp:7881 tcp:7881` next to the existing 3001 tunnel, and start
+the LiveKit container with `--node-ip <host LAN IP>` so its ICE candidates
+point somewhere the guest can route to. The media then goes to that LAN IP
+over UDP 7882 (or TCP 7881), which on API 36+ needs the local-network app op:
+`adb shell appops set --uid gg.pqp.app.debug ACCESS_LOCAL_NETWORK allow`. A
+production build talks `wss://` to a public host and needs none of this.
 
 Two properties of that path are worth stating precisely, because both are the
 kind of thing that is easy to believe without checking:
