@@ -2070,7 +2070,7 @@ export async function handleVoiceMessage(
       canStream,
       canResume: payload.resume === true,
     };
-    if (adopted && !canSpeak) {
+    if (adopted && !canStream) {
       peer.sharingScreen = false;
       peer.cameraStreamId = null;
       peer.screenAudioStreamId = null;
