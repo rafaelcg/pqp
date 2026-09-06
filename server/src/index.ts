@@ -17,6 +17,11 @@ import { seedDevHall } from "./services/dev-seed.js";
 import { closeBus, INSTANCE_ID, setBusTransport } from "./lib/bus.js";
 import { createPostgresBusTransport } from "./lib/bus-postgres.js";
 import {
+  startVoiceInstanceHeartbeat,
+  voiceConfigHash,
+} from "./voice/registry.js";
+import { startVoiceHello } from "./ws/voice-hello.js";
+import {
   assertCorsConfig,
   corsHeaders,
   handleCors,
@@ -449,8 +454,13 @@ function startClusterBus(): (() => void) | null {
     );
     return null;
   }
-  setBusTransport(createPostgresBusTransport());
+  const transport = createPostgresBusTransport();
+  setBusTransport(transport);
   logEvent("bus.enabled", { transport: "postgres", instance: INSTANCE_ID });
+  // Boot-time proof that LISTEN really delivers on this connection: publish
+  // `voice.hello` once connected and require our own echo (see
+  // ws/voice-hello.ts). Logs loudly on silence; failing /health on it is M5.
+  const stopHello = startVoiceHello(transport.whenConnected());
   // Two independent re-announce loops, because they answer two different
   // questions: channel presence is "who is looking at channel X", user status is
   // "is this person around at all". Both need the same guarantee — an instance
@@ -461,11 +471,43 @@ function startClusterBus(): (() => void) | null {
   return () => {
     stopPresence();
     stopStatus();
+    stopHello();
   };
 }
 
 let stopPresenceRefresh: (() => void) | null = null;
 let coldJobs: ColdJobs | null = null;
+
+/**
+ * The voice registry (`voice/registry.ts`), off by default.
+ *
+ * `postgres` makes `ws/voice.ts` copy its peer map and transport pins into
+ * the `voice_*` tables and announce this instance every 15 s. It is
+ * independent of `CLUSTER_BUS`: the registry is state, the bus is fan-out,
+ * and a deployment can turn either on first. Neither is enough for two
+ * machines on its own; `docs/plans/MULTI_INSTANCE_VOICE.md` lists what each
+ * milestone adds and when scaling past one is safe.
+ */
+function startVoiceRegistry(): (() => Promise<void>) | null {
+  const raw = process.env.VOICE_REGISTRY ?? "off";
+  if (raw === "off") {
+    return null;
+  }
+  if (raw !== "postgres") {
+    console.warn(
+      `[voice] unknown VOICE_REGISTRY=${raw}: registry stays off. ` +
+        `Supported: "postgres", "off".`,
+    );
+    return null;
+  }
+  logEvent("voice.registryEnabled", {
+    instance: INSTANCE_ID,
+    configHash: voiceConfigHash(),
+  });
+  return startVoiceInstanceHeartbeat();
+}
+
+let stopVoiceHeartbeat: (() => Promise<void>) | null = null;
 
 async function main() {
   // `WORKER_MODE=worker` on this entry point means "be the worker": hand off
@@ -494,6 +536,9 @@ async function main() {
   // exist, and before listen() so the first connected client is already served
   // by an instance that can hear the rest of the cluster.
   stopPresenceRefresh = startClusterBus();
+  // Same ordering reason: the heartbeat writes a `voice_instances` row that
+  // initDb just created.
+  stopVoiceHeartbeat = startVoiceRegistry();
 
   // The cold paths (attachment sweeps, prunes, retention, the webhook outbox:
   // jobs.ts) run here unless a separate worker owns them. After initDb so
@@ -547,6 +592,10 @@ async function shutdown(signal: string) {
   // hold the loop open on its own; closing it politely is still better than
   // having the process exit mid-stream on a push that was in flight.
   closeApnsSessions();
+  // Withdraw this instance's liveness row so a clean shutdown is not read as
+  // a crash for the next 45 s. Peer rows are left in place on purpose: they
+  // are what a client resuming onto the other machine will be matched against.
+  await stopVoiceHeartbeat?.();
   // Last, so the presence withdrawals that closing those sockets produces still
   // have a bus to travel on. Best-effort — anything that misses the window is
   // covered by the contribution TTL on the other instances.

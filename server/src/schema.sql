@@ -1390,6 +1390,82 @@ CREATE INDEX IF NOT EXISTS idx_cluster_bus_payloads_created
   ON cluster_bus_payloads (created_at);
 
 -- ---------------------------------------------------------------------------
+-- Voice registry (docs/plans/MULTI_INSTANCE_VOICE.md, section 4.1)
+-- ---------------------------------------------------------------------------
+--
+-- The voice peer map made shared, so two API instances can agree on a room.
+-- Every table here is written only when VOICE_REGISTRY=postgres; with the flag
+-- off (the default) `ws/voice.ts` never touches them and they sit empty. All
+-- additive, so a rollback is "set the flag off", never a schema change.
+--
+-- Milestone M1 is write-through: the in-process map in `ws/voice.ts` is still
+-- what fan-out reads, and these rows are a copy of it plus the one decision
+-- that has to be atomic across instances, the room's transport pin.
+
+-- One row per occupied voice room. Row exists iff the room has a peer row;
+-- the last peer's delete removes it in the same statement (see
+-- `deleteVoicePeer` in server/src/voice/registry.ts).
+CREATE TABLE IF NOT EXISTS voice_rooms (
+  channel_id        UUID PRIMARY KEY,
+  transport         TEXT NOT NULL CHECK (transport IN ('mesh', 'livekit')),
+  watch_party       JSONB,
+  watch_party_rev   BIGINT NOT NULL DEFAULT 0,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- One row per voice peer anywhere in the cluster. `instance_id` says which
+-- process holds the socket; `orphaned_at` is set when that socket closed and
+-- the seat is being held for a resume.
+CREATE TABLE IF NOT EXISTS voice_peers (
+  peer_id                UUID PRIMARY KEY,
+  channel_id             UUID NOT NULL REFERENCES voice_rooms(channel_id) ON DELETE CASCADE,
+  user_id                UUID NOT NULL,
+  instance_id            UUID NOT NULL,
+  display_name           TEXT NOT NULL,
+  avatar_url             TEXT,
+  muted                  BOOLEAN NOT NULL DEFAULT FALSE,
+  deafened               BOOLEAN NOT NULL DEFAULT FALSE,
+  sharing_screen         BOOLEAN NOT NULL DEFAULT FALSE,
+  camera_stream_id       TEXT,
+  screen_audio_stream_id TEXT,
+  can_speak              BOOLEAN NOT NULL DEFAULT TRUE,
+  can_resume             BOOLEAN NOT NULL DEFAULT FALSE,
+  orphaned_at            TIMESTAMPTZ,
+  joined_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_voice_peers_channel ON voice_peers (channel_id);
+CREATE INDEX IF NOT EXISTS idx_voice_peers_user ON voice_peers (user_id);
+CREATE INDEX IF NOT EXISTS idx_voice_peers_instance ON voice_peers (instance_id);
+
+-- Hung-up ids that must not be reconstructed for the resume token's life. The
+-- in-process `retiredPeerIds` map is the same fact for one instance; this is
+-- it for the cluster.
+CREATE TABLE IF NOT EXISTS voice_retired_peers (
+  peer_id     UUID PRIMARY KEY,
+  retired_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Instance liveness. A row whose heartbeat is older than the TTL is a dead
+-- instance. `config_hash` is a digest of the LiveKit URL and key id so two
+-- instances on different secrets are visible in the logs, never silently split.
+CREATE TABLE IF NOT EXISTS voice_instances (
+  instance_id   UUID PRIMARY KEY,
+  config_hash   TEXT NOT NULL,
+  heartbeat_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Singleton work: SFU re-sweeps that must run on exactly one instance. Created
+-- in M1 so the schema is complete; claimed and ticked from M4 on.
+CREATE TABLE IF NOT EXISTS voice_resweeps (
+  key           TEXT PRIMARY KEY,
+  scope         JSONB NOT NULL,
+  evicted_at    TIMESTAMPTZ NOT NULL,
+  until         TIMESTAMPTZ NOT NULL,
+  claimed_until TIMESTAMPTZ NOT NULL DEFAULT 'epoch'
+);
+
+-- ---------------------------------------------------------------------------
 -- Self-serve account deletion (LGPD art. 18, IV / VI)
 -- ---------------------------------------------------------------------------
 
