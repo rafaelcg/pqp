@@ -248,6 +248,20 @@ object Sizes {
 
     /** A hairline. Not `Dp.Hairline`, which is a physical pixel and vanishes. */
     val hairline = 1.dp
+
+    /**
+     * A face in the camera strip under the call bar.
+     *
+     * 4:3 and small on purpose, and the size is a bandwidth decision as much as
+     * a layout one: the strip is chrome that sits over whatever screen somebody
+     * is actually reading, and each tile on it is a video stream the phone is
+     * paying for. At 96dp about three fit on the narrowest phone we support,
+     * which is the effective ceiling on how many cameras a call can be pulling
+     * at once (`CameraDemand` pauses the ones nobody can see). Tall enough to
+     * read a face, short enough that the chat below it is still the page.
+     */
+    val cameraTileWidth = 96.dp
+    val cameraTileHeight = 72.dp
 }
 
 /**

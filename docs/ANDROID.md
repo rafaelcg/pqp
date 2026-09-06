@@ -777,7 +777,8 @@ Also verified between the two clients:
   above.
 
 Still known-missing rather than broken: no speaking indicators, no per-peer
-volume, no push-to-talk, no camera (send or receive), and no screen-share audio.
+volume, no push-to-talk, no camera **to send**, and no screen-share audio.
+Receiving somebody else's camera arrived later and is described below.
 
 **LiveKit rooms are now joined rather than refused, and the join has been run
 for real on an emulator (6 Sep 2026).** Against a local server with the
@@ -824,13 +825,15 @@ production build talks `wss://` to a public host and needs none of this.
 Two properties of that path are worth stating precisely, because both are the
 kind of thing that is easy to believe without checking:
 
-- **It subscribes to audio and to screen shares, and to nothing else.** The
-  room is joined with `autoSubscribe = false` and each publication is asked for
-  by kind and source, so a camera from a web participant is never sent to the
-  phone at all, and a share that nobody has opened is subscribed but disabled.
-  The first version of this path auto-subscribed and dropped the frames in the
-  callback, which looks identical on screen and is not identical on a mobile
-  bill. `livekitSubscribesTo` is the whole decision and is unit-tested.
+- **It subscribes to audio, screen shares and cameras, and to nothing else.**
+  The room is joined with `autoSubscribe = false` and each publication is asked
+  for by kind and source, so a source LiveKit adds later is refused by default
+  rather than decoded into a `return`. The first version of this path
+  auto-subscribed and dropped the frames in the callback, which looks identical
+  on screen and is not identical on a mobile bill. `livekitSubscribesTo` is the
+  whole decision and is unit-tested. Cameras were refused here until
+  `feat/android-livekit-cameras`; what makes them affordable now is not the
+  subscription but the delivery rules below.
 - **The people already in the room are read from the join response.** LiveKit
   builds them without emitting `ParticipantConnected`, so joining a call in
   progress relies on seeding from `room.remoteParticipants` right after
@@ -979,10 +982,12 @@ The mesh's ordinary video path came first, plus a renderer, and it was built
 **before** sending was called done because it is the only honest way to see
 what sending produces.
 
-On the mesh, every video track this client receives is a screen share: the
-roster's `cameraStreamId` is what marks a camera and this app never sends one.
-On the SFU there is no elimination to do, because LiveKit labels the
-publication `SCREEN_SHARE`. Either way, when a participant's roster entry says
+On the mesh, an incoming video track carries nothing but a stream id, and the
+roster's `cameraStreamId` is what says which one is a camera; everything else
+from that peer is a screen (`RemoteVideoIndex`, the same elimination
+`classifyVideo` does on the web). On the SFU there is no elimination to do,
+because LiveKit labels the publication `SCREEN_SHARE` or `CAMERA`. Either way,
+when a participant's roster entry says
 `sharingScreen` **and** a track has actually arrived (two conditions, because
 the roster is the faster of the two and offering a viewer on it alone puts a
 black rectangle in front of people), the call bar grows a "*Name* is sharing a
@@ -997,12 +1002,14 @@ hides whatever the presenter was pointing at.
 **Two renderers, and the compiler picks.** There are two libwebrtc builds in
 this process (`org.webrtc` for the mesh, `livekit.org.webrtc` for the SFU) and
 a renderer initialised on one cannot draw the other's frames: it compiles and
-then fails at the first frame. So a screen leaves a transport as a
-`RemoteScreen`, a sealed type with one case per namespace, each carrying the GL
-context or the `Room` its own renderer needs, and `RemoteScreenView` is a `when`
-over the two. The LiveKit case uses LiveKit's own `SurfaceViewRenderer`
+then fails at the first frame. So a video leaves a transport as a
+`RemoteVideoFeed`, a sealed type with one case per namespace, each carrying the
+GL context or the `Room` its own renderer needs, and `RemoteVideoView` is a
+`when` over the two. The LiveKit case uses LiveKit's own `SurfaceViewRenderer`
 initialised through `Room.initVideoRenderer`, which is the only way to get the
-SFU's GL context, and attaches with `addRenderer`.
+SFU's GL context, and attaches with `addRenderer`. Cameras go through the same
+type and the same two renderers; the only thing they change is the scaling,
+`SCALE_ASPECT_FILL` for a small tile and fit everywhere else.
 
 **What the SFU is asked for, and when.** Two rules, both about the bill, and
 both mirroring the web:
@@ -1066,6 +1073,95 @@ answered above, on the SFU.
 No window or app picker of our own: Android's consent dialog offers "one app"
 or "entire screen", and that is the platform's choice to present, not ours. No
 quality menu: there is one rung, and it is 720 lines.
+
+## Cameras, receiving
+
+A phone in the 5 Sep watch party saw the film and not one face. Every other
+client drew the webcams; Android refused the publications by rule
+(`livekitSubscribesTo` answered false for `CAMERA`) and said so in its own
+source. That is now the other way round on both transports.
+
+**What it looks like.** The call bar grows a strip of faces along its bottom
+edge when somebody in the room turns a camera on, and a tap on a face makes it
+full screen. That is the whole interface; nothing is announced and nothing has
+to be explained. It is deliberately not a row of "*Name* turned their camera
+on" lines like the Watch row above it: opening a share is a decision worth a
+sentence because it takes the whole phone, while a camera is something you want
+to *see*, and there can be a dozen at once. It lives on the call bar because a
+call outlives the screen that started it, so reading a channel next door does
+not hide the room's faces.
+
+**What the SFU is asked for, and when.** The same shape as the share rules, and
+tighter, because a room can hold many more cameras than screens.
+
+- **Only what is on screen is delivered.** A camera arrives *flowing* (the
+  opposite of a share, which arrives paused) and is paused a second later if
+  nothing has bound it, so the tile that appears one frame after the track is
+  never a black rectangle. Each tile and the viewer tell the transport they are
+  drawing that camera through `LifecycleStartEffect`, so being composed is not
+  enough: the app going to the background pauses every camera, and coming back
+  resumes them within a round trip. A `LazyRow` composes what fits and no more,
+  which makes scrolling the strip the thing that starts and stops paying for a
+  face.
+- **The claims are counted, not flagged** (`CameraDemand`, unit-tested). The
+  viewer is a `Dialog`, so the tile behind it stays composed and bound the whole
+  time it is open. With a boolean, closing the viewer would pause a camera that
+  is still on screen in the strip: a face that goes black when you stop looking
+  at it closely, and stays black. The *largest* surface still bound decides the
+  layer.
+- **The layer is capped per surface** (`cameraReceiveLayerFor`, tested): the
+  bottom layer for a tile, 360p for the viewer on Wi-Fi, the bottom layer again
+  on a metered link. `HIGH` is never asked for, for the same reason it is never
+  asked for of a share. Stated honestly: against a **web** publisher this
+  ceiling buys nothing, because `livekit-session.ts` publishes the camera with
+  `simulcast: false` and there is one layer on the server to give. iOS
+  publishes through `setCamera`, which does simulcast. The ceiling is applied to
+  both rather than remembered as something to switch on later.
+- **`setEnabled`, never `setSubscribed`.** Unsubscribing tears the receiver down
+  and re-subscribing renegotiates: a second of black and a new track for the
+  tile to rebind. Pausing is one signalling frame each way. Same call the web
+  makes in `remote-video-delivery.ts`, whose one-second grace period this also
+  copies so that a tile scrolled just past the strip's edge and back does not
+  blink.
+
+All of that needs `adaptiveStream = false`, for the reason spelled out under
+screen sharing: on this SDK the two controls are ignored outright on an
+adaptively managed track.
+
+**Lifecycle, the four cases that are easy to get wrong.**
+
+- **A camera for somebody already sharing a screen.** Separate slots, per peer,
+  on both transports. One slot per peer is exactly how the presenter in the
+  watch party would have lost one of her two pictures.
+- **A camera turned off and on again.** Every pqp client *unpublishes* rather
+  than muting, so the ordinary case is an unsubscribe and a fresh subscribe, and
+  the index accepts the new sid because the old one cleared its slot. The other
+  route, a publisher who mutes, drops the tile and the delivery until the
+  unmute; the subscription is left alone.
+- **A peer leaving mid-render.** The tile, the delivery claim and any pending
+  pause are all dropped together, and a stale `onDispose` arriving afterwards is
+  absorbed rather than driving a counter negative.
+- **A reconnect.** The SFU keeps neither the subscriptions nor the track
+  settings across one, so `RoomEvent.Reconnected` re-seeds the participants and
+  re-states delivery for every video this client holds, including which share a
+  viewer is open on. The index accepts a re-subscribe of the *same* sid for the
+  same reason: refusing it as a duplicate would leave the tile holding the track
+  from before the drop, which never receives another frame.
+
+**On the mesh there is nothing to ask for**, and that is why it was cheap to
+draw there too. A mesh sender encodes one stream per receiver and pushes it, so
+the camera was already arriving down the peer connection and being filed
+correctly by `RemoteVideoIndex`; it was simply shown to nobody. Rendering it
+costs no bytes that were not already being paid, and `setCameraViewer` is a
+no-op on that transport.
+
+**Not verified on hardware.** No phone has drawn a camera from either transport
+on this branch. The pure rules are unit-tested and every one of those tests was
+checked against a deliberately broken copy of the module it covers; the wiring
+is verified by reading. Confirming it needs the local LiveKit rig above plus a
+web participant with their camera on: expect the strip to appear, a face in it,
+the layer to rise when the tile is tapped, and the delivery to stop when the app
+goes to the background.
 
 ## Reactions
 
@@ -2206,13 +2302,13 @@ too: a picker GIF may have come from any of the three clients.
 
 **Not built:** a GIF picker, replies, editing, pinning, threads,
 search, members and moderation surfaces, profile editing, communities, game
-connections. No
-camera (send or receive), no screen-share audio *out of* this device, no
-speaking indicators, no per-peer volume, no push-to-talk. LiveKit rooms are
+connections. No camera **to send**, no screen-share audio *out of* this device,
+no speaking indicators, no per-peer volume, no push-to-talk. LiveKit rooms are
 joined and can now be watched in: an incoming screen share renders, with the
-presentation's sound, at a capped layer. No audio has been heard over that path
-from this client and no SFU frame has been drawn on hardware. Publishing a
-screen stays mesh-only.
+presentation's sound, at a capped layer, and remote cameras render as a strip
+of tiles under the call bar. No audio has been heard over that path from this
+client and no SFU frame has been drawn on hardware. Publishing a screen stays
+mesh-only.
 `assembleRelease` is unsigned unless a Play upload keystore is provided
 (see [`ANDROID_RELEASE.md`](./ANDROID_RELEASE.md)). The GitHub beta APK is
 a separate `sideload` build type, debug-signed on purpose.

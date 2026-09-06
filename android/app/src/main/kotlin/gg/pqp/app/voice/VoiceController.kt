@@ -20,6 +20,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
@@ -150,7 +151,7 @@ class VoiceController(
     private val _state = MutableStateFlow(VoiceState())
     val state: StateFlow<VoiceState> = _state.asStateFlow()
 
-    private val _remoteScreens = MutableStateFlow<Map<String, RemoteScreen>>(emptyMap())
+    private val _remoteScreens = MutableStateFlow<Map<String, RemoteVideoFeed>>(emptyMap())
 
     /**
      * Every screen being shared *to* this device, keyed by the presenter's peer
@@ -162,10 +163,28 @@ class VoiceController(
      * one of the two presenters disappeared from this device with nothing
      * anywhere saying why.
      *
-     * A [RemoteScreen] rather than a track, because which renderer can draw it
-     * depends on which transport it came over, and both feed this map.
+     * A [RemoteVideoFeed] rather than a track, because which renderer can draw
+     * it depends on which transport it came over, and both feed this map.
      */
-    val remoteScreens: StateFlow<Map<String, RemoteScreen>> = _remoteScreens.asStateFlow()
+    val remoteScreens: StateFlow<Map<String, RemoteVideoFeed>> = _remoteScreens.asStateFlow()
+
+    private val _remoteCameras = MutableStateFlow<Map<String, RemoteVideoFeed>>(emptyMap())
+
+    /**
+     * Every camera arriving at this device, keyed by the peer id of whoever has
+     * it on.
+     *
+     * The twin of [remoteScreens], and separate from it rather than one map of
+     * "video" because one person can have both up at once: the 5 Sep watch
+     * party had a presenter sharing her screen with her camera on, and a single
+     * slot per peer is exactly how one of the two goes missing.
+     *
+     * A camera **in this map is one to draw**. A publisher who mutes their
+     * camera without unpublishing it drops out of here (`LiveKitEngine`), so
+     * nothing downstream has to decide whether a track that receives no frames
+     * is worth a tile.
+     */
+    val remoteCameras: StateFlow<Map<String, RemoteVideoFeed>> = _remoteCameras.asStateFlow()
 
     private val peerMedia = java.util.concurrent.ConcurrentHashMap<String, PeerMediaState>()
 
@@ -207,15 +226,44 @@ class VoiceController(
         signal = { frame -> session.realtime.send(frame.toJsonObject()) },
         onPeerState = ::onPeerMediaState,
         onRemoteScreen = ::onRemoteScreen,
+        onRemoteCamera = ::onRemoteCamera,
         // Posted rather than run inline: this arrives on the projection's own
         // callback thread, from inside the capturer we are about to dispose.
         onScreenShareEnded = { scope.launch { stopScreenShare() } },
     )
 
-    /** Both engines file into the same map; the UI does not care which one did. */
-    private fun onRemoteScreen(peerId: String, screen: RemoteScreen?) {
-        _remoteScreens.value = _remoteScreens.value.toMutableMap().apply {
-            if (screen == null) remove(peerId) else put(peerId, screen)
+    /**
+     * Both engines file into the same map; the UI does not care which one did.
+     *
+     * `update` rather than a read of `.value` and a write back. These arrive on
+     * libwebrtc's signalling thread, on LiveKit's event collector and on the
+     * controller's own coroutines, and two of them announcing different people
+     * at once through a read-modify-write is one of the two disappearing with
+     * nothing anywhere saying why. `update` retries on the compare-and-set,
+     * which is exactly the guarantee that was missing.
+     */
+    private fun onRemoteScreen(peerId: String, screen: RemoteVideoFeed?) {
+        _remoteScreens.update { current ->
+            current.toMutableMap().apply {
+                if (screen == null) remove(peerId) else put(peerId, screen)
+            }
+        }
+    }
+
+    /**
+     * The same, for cameras.
+     *
+     * Handing back a rebuilt map rather than mutating one is what makes the
+     * mesh side's habit of announcing on every roster frame free: `StateFlow`
+     * drops a value equal to what it already holds, and both feed cases are
+     * data classes over a track reference, so an unchanged camera is an equal
+     * map and no recomposition.
+     */
+    private fun onRemoteCamera(peerId: String, camera: RemoteVideoFeed?) {
+        _remoteCameras.update { current ->
+            current.toMutableMap().apply {
+                if (camera == null) remove(peerId) else put(peerId, camera)
+            }
         }
     }
 
@@ -244,6 +292,7 @@ class VoiceController(
             pushVoiceState()
         },
         onRemoteScreen = ::onRemoteScreen,
+        onRemoteCamera = ::onRemoteCamera,
         isMetered = {
             // Mobile data, or a hotspot the OS knows is metered: the SFU is
             // asked for the 360p layer of a share instead of 720p.
@@ -271,6 +320,7 @@ class VoiceController(
         Log.i(TAG, "voice transport ${engineKind.name} -> ${kind.name}; disposing the old engine")
         runCatching { engine.dispose() }
         _remoteScreens.value = emptyMap()
+        _remoteCameras.value = emptyMap()
         engine = when (kind) {
             VoiceTransportKind.Mesh -> createMeshEngine()
             VoiceTransportKind.LiveKit -> createLiveKitEngine()
@@ -284,6 +334,17 @@ class VoiceController(
      */
     fun setWatchingScreen(peerId: String, watching: Boolean) {
         engine.setWatchingScreen(peerId, watching)
+    }
+
+    /**
+     * A tile or the full-screen viewer started or stopped drawing a camera.
+     *
+     * Called from the composables that draw one, for exactly as long as they
+     * are on screen. On the SFU this is the whole bandwidth rule for cameras;
+     * on a mesh it is a no-op. See [VoiceTransport.setCameraViewer].
+     */
+    fun setCameraViewer(peerId: String, surface: CameraSurface, viewing: Boolean) {
+        engine.setCameraViewer(peerId, surface, viewing)
     }
 
     private val audioManager =
@@ -699,6 +760,7 @@ class VoiceController(
         resumeToken = null
         peerMedia.clear()
         _remoteScreens.value = emptyMap()
+        _remoteCameras.value = emptyMap()
         // `engine.stop` released the capture, so the service must stop
         // claiming the projection type as well. A foreground service that
         // declares `mediaProjection` with no live projection behind it is one
@@ -1083,6 +1145,7 @@ class VoiceController(
         resumeToken = null
         peerMedia.clear()
         _remoteScreens.value = emptyMap()
+        _remoteCameras.value = emptyMap()
         releaseAudioFocus()
         VoiceService.stop(context)
     }

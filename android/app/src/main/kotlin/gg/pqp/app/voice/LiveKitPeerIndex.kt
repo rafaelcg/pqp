@@ -52,6 +52,27 @@ class LiveKitPeerIndex {
          * live share being taken away by the dead one's exit.
          */
         var screenTrack: String? = null
+
+        /** The sid of the camera currently subscribed, or null. Same rule. */
+        var cameraTrack: String? = null
+
+        /**
+         * The publisher has their camera muted.
+         *
+         * Kept apart from [cameraTrack] because they are different facts and
+         * only one of them is about this client: the track is still subscribed
+         * and its receiver is still there, the far end has simply stopped
+         * putting frames into it. Drawing a muted camera is a tile frozen on
+         * whatever frame arrived last, which is worse than no tile, so this
+         * hides it and un-hides it without touching the subscription.
+         *
+         * Every pqp client that has a camera *unpublishes* it rather than
+         * muting it (`LiveKitVoiceClient.stopCamera` on iOS, `unpublishCamera`
+         * on the web), so the ordinary camera-off arrives as an unsubscribe.
+         * This covers the other route: a server-side mute, and any client that
+         * takes it.
+         */
+        var cameraMuted = false
     }
 
     private val peers = mutableMapOf<String, Peer>()
@@ -98,13 +119,70 @@ class LiveKitPeerIndex {
      * True when it is now the screen to render, which is the only thing
      * anything above here does with it. A second screen from the same peer
      * while the first is live is filed nowhere (see [Peer.screenTrack]).
+     *
+     * The **same** sid arriving again is accepted rather than refused, and that
+     * is not the case the first-wins rule is about. A room that reconnects
+     * re-subscribes the publications it already had, so the sid comes back with
+     * a new track object behind it; refusing it would leave the tile holding
+     * the track from before the reconnect, which never receives another frame.
      */
     fun screenTrackAdded(peerId: String, trackSid: String): Boolean {
         val peer = peers.getOrPut(peerId) { Peer() }
-        if (peer.screenTrack != null) return false
+        if (peer.screenTrack != null && peer.screenTrack != trackSid) return false
         peer.screenTrack = trackSid
         return true
     }
+
+    /**
+     * This participant's camera was subscribed. Same rule as the screen, for
+     * the same two reasons: one camera per participant, and a reconnect brings
+     * the same sid back with a new track behind it.
+     */
+    fun cameraTrackAdded(peerId: String, trackSid: String): Boolean {
+        val peer = peers.getOrPut(peerId) { Peer() }
+        if (peer.cameraTrack != null && peer.cameraTrack != trackSid) return false
+        peer.cameraTrack = trackSid
+        return true
+    }
+
+    /**
+     * A camera was unsubscribed. True when it was the one being rendered.
+     *
+     * Clears the mute flag with it, so a camera that was muted when it went
+     * away does not come back invisible: the next publication starts from
+     * whatever its own `muted` says.
+     */
+    fun cameraTrackRemoved(peerId: String, trackSid: String): Boolean {
+        val peer = peers[peerId] ?: return false
+        if (peer.cameraTrack != trackSid) return false
+        peer.cameraTrack = null
+        peer.cameraMuted = false
+        return true
+    }
+
+    /** The camera sid being rendered for this peer, or null. */
+    fun cameraTrackFor(peerId: String): String? = peers[peerId]?.cameraTrack
+
+    /** Every peer currently showing a camera, muted ones excluded. */
+    fun cameraPeerIds(): Set<String> =
+        peers.filterValues { it.cameraTrack != null && !it.cameraMuted }.keys.toSet()
+
+    /**
+     * The publisher muted or unmuted their camera.
+     *
+     * True when the tile should appear or disappear because of it, which is
+     * only ever the case for a peer whose camera this client actually holds: a
+     * mute for a publication nobody subscribed to changes nothing here.
+     */
+    fun setCameraMuted(peerId: String, muted: Boolean): Boolean {
+        val peer = peers[peerId] ?: return false
+        if (peer.cameraMuted == muted) return false
+        peer.cameraMuted = muted
+        return peer.cameraTrack != null
+    }
+
+    /** Whether this peer's camera is currently muted at the far end. */
+    fun isCameraMuted(peerId: String): Boolean = peers[peerId]?.cameraMuted == true
 
     /**
      * A screen-share video was unsubscribed. True when it was the one being

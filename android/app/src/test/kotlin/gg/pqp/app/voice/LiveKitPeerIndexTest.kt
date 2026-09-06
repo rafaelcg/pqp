@@ -230,3 +230,159 @@ class LiveKitScreenIndexTest {
         assertEquals(null, index.screenTrackFor("alice"))
     }
 }
+
+/**
+ * The camera slot: which of a participant's video publications is their face,
+ * and whether it is worth drawing at all.
+ *
+ * The screen's twin, and it is a separate slot rather than a shared "video"
+ * one for the reason the 5 Sep watch party found the hard way: a presenter can
+ * have her screen and her camera up at the same time, and anything that keeps
+ * one handle per peer loses whichever arrived second.
+ */
+class LiveKitCameraIndexTest {
+
+    @Test
+    fun `a camera and a screen from one peer are both held`() {
+        val index = LiveKitPeerIndex()
+        assertTrue(index.screenTrackAdded("alice", "TR_SCREEN"))
+        assertTrue(index.cameraTrackAdded("alice", "TR_CAM"))
+        assertEquals("TR_SCREEN", index.screenTrackFor("alice"))
+        assertEquals("TR_CAM", index.cameraTrackFor("alice"))
+        assertEquals(setOf("alice"), index.screenPeerIds())
+        assertEquals(setOf("alice"), index.cameraPeerIds())
+    }
+
+    @Test
+    fun `ending a share leaves the camera alone`() {
+        val index = LiveKitPeerIndex()
+        index.screenTrackAdded("alice", "TR_SCREEN")
+        index.cameraTrackAdded("alice", "TR_CAM")
+        assertTrue(index.screenTrackRemoved("alice", "TR_SCREEN"))
+        assertEquals(
+            "the camera must survive the share it was sitting next to",
+            "TR_CAM",
+            index.cameraTrackFor("alice"),
+        )
+        assertEquals(setOf("alice"), index.cameraPeerIds())
+    }
+
+    @Test
+    fun `turning a camera off and on again is shown both times`() {
+        val index = LiveKitPeerIndex()
+        index.cameraTrackAdded("alice", "TR_1")
+        assertTrue(index.cameraTrackRemoved("alice", "TR_1"))
+        assertEquals(null, index.cameraTrackFor("alice"))
+        assertTrue(index.cameraTrackAdded("alice", "TR_2"))
+        assertEquals("TR_2", index.cameraTrackFor("alice"))
+    }
+
+    @Test
+    fun `an unsubscribe for a sid never shown does not clear a live camera`() {
+        val index = LiveKitPeerIndex()
+        index.cameraTrackAdded("alice", "TR_1")
+        assertFalse(index.cameraTrackRemoved("alice", "TR_2"))
+        assertEquals("TR_1", index.cameraTrackFor("alice"))
+    }
+
+    /**
+     * A reconnect re-subscribes what the room already had, so the same sid
+     * comes back carrying a new track object. Refusing it as a duplicate is how
+     * a tile ends up holding the track from before the drop, which never
+     * receives another frame: a face frozen for the rest of the call.
+     */
+    @Test
+    fun `the same sid arriving again is accepted, on both slots`() {
+        val index = LiveKitPeerIndex()
+        index.cameraTrackAdded("alice", "TR_CAM")
+        index.screenTrackAdded("alice", "TR_SCREEN")
+        assertTrue(
+            "a reconnect re-subscribes the camera it already had",
+            index.cameraTrackAdded("alice", "TR_CAM"),
+        )
+        assertTrue(
+            "and the share it already had",
+            index.screenTrackAdded("alice", "TR_SCREEN"),
+        )
+    }
+
+    @Test
+    fun `a second camera while one is live is ignored`() {
+        val index = LiveKitPeerIndex()
+        index.cameraTrackAdded("alice", "TR_1")
+        assertFalse(index.cameraTrackAdded("alice", "TR_2"))
+        assertEquals("TR_1", index.cameraTrackFor("alice"))
+    }
+
+    @Test
+    fun `a muted camera is held but not drawn`() {
+        val index = LiveKitPeerIndex()
+        index.cameraTrackAdded("alice", "TR_1")
+        assertTrue(index.setCameraMuted("alice", true))
+        assertTrue(index.isCameraMuted("alice"))
+        assertEquals(
+            "a muted camera would draw one frozen frame; it is not a tile",
+            emptySet<String>(),
+            index.cameraPeerIds(),
+        )
+        assertEquals(
+            "the subscription is untouched; only the drawing stopped",
+            "TR_1",
+            index.cameraTrackFor("alice"),
+        )
+        assertTrue(index.setCameraMuted("alice", false))
+        assertEquals(setOf("alice"), index.cameraPeerIds())
+    }
+
+    @Test
+    fun `a repeated mute changes nothing`() {
+        val index = LiveKitPeerIndex()
+        index.cameraTrackAdded("alice", "TR_1")
+        assertTrue(index.setCameraMuted("alice", true))
+        assertFalse(index.setCameraMuted("alice", true))
+    }
+
+    @Test
+    fun `a mute for a peer with no camera is not a tile change`() {
+        val index = LiveKitPeerIndex()
+        index.voiceTrackAdded("alice", "TR_MIC")
+        assertFalse(
+            "nothing was being drawn, so nothing appears or disappears",
+            index.setCameraMuted("alice", true),
+        )
+    }
+
+    /**
+     * The camera came back after being muted, so the mute must not come back
+     * with it: the flag belongs to the publication that has gone, and a fresh
+     * one that arrives unmuted would otherwise be invisible forever.
+     */
+    @Test
+    fun `unsubscribing a muted camera clears the mute`() {
+        val index = LiveKitPeerIndex()
+        index.cameraTrackAdded("alice", "TR_1")
+        index.setCameraMuted("alice", true)
+        index.cameraTrackRemoved("alice", "TR_1")
+        index.cameraTrackAdded("alice", "TR_2")
+        assertFalse(index.isCameraMuted("alice"))
+        assertEquals(setOf("alice"), index.cameraPeerIds())
+    }
+
+    @Test
+    fun `forgetting a peer drops their camera`() {
+        val index = LiveKitPeerIndex()
+        index.cameraTrackAdded("alice", "TR_1")
+        index.forget("alice")
+        assertEquals(null, index.cameraTrackFor("alice"))
+        assertTrue(index.cameraPeerIds().isEmpty())
+    }
+
+    @Test
+    fun `clearing the room drops every camera`() {
+        val index = LiveKitPeerIndex()
+        index.cameraTrackAdded("alice", "TR_1")
+        index.cameraTrackAdded("bob", "TR_2")
+        assertEquals(setOf("alice", "bob"), index.clear())
+        assertTrue(index.cameraPeerIds().isEmpty())
+    }
+}
