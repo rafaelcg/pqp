@@ -255,6 +255,7 @@ import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
+import { setInCall } from "@/lib/in-call-state";
 import { Button } from "@/components/ui/button";
 
 export type TokenResolver = (options?: {
@@ -3384,6 +3385,11 @@ function MainAppContent({
   }, [conversations, voiceState.occupancy]);
 
   const updatePromptShowing = useUpdatePromptShowing();
+  // Let the update card (mounted outside App) know when a reload would end a call.
+  useEffect(() => {
+    setInCall(voiceState.status !== "idle");
+    return () => setInCall(false);
+  }, [voiceState.status]);
 
   const handleQgHintShowingChange = useCallback((showing: boolean) => {
     setQgHintReady(true);
