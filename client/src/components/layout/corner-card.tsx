@@ -9,10 +9,10 @@ import { cn } from "@/lib/utils";
  * QG, the mobile beta invite, What's new, the cargos tip and the update
  * prompt used to each draw their own frame: five radii, three shadows, two
  * z-indexes, one with no entrance at all. This is the frame, once: bottom
- * right on a desktop, full width above the safe area on a phone, a pop in
- * (rise + fade) on mount and a short fade out on close so the corner never
- * blinks. Escape closes. Reduced motion keeps the cards and drops the
- * movement.
+ * right on a desktop, full width above the safe area on a phone, or inline
+ * next to a control (`layout="inline"`). A pop in (rise + fade) on mount and
+ * a short fade out on close so the corner never blinks. Escape closes. Reduced
+ * motion keeps the cards and drops the movement.
  *
  * `open` false starts the exit; the card unmounts itself when the animation
  * ends, so a parent can flip the flag and forget. A `hero` (image, live
@@ -33,6 +33,7 @@ export function CornerCard({
   footer,
   dismissLabel,
   tone = "default",
+  layout = "corner",
   dataAttribute,
 }: {
   open: boolean;
@@ -48,6 +49,11 @@ export function CornerCard({
   dismissLabel: string;
   /** `status` renders as a live region (the update prompt). */
   tone?: "default" | "status";
+  /**
+   * `corner` is the bottom-right queue. `inline` is the same frame next to
+   * the control it explains (composer Aa, Watch party on the call bar).
+   */
+  layout?: "corner" | "inline";
   /** A `data-*` hook for tests, e.g. `data-corner-card="qg"`. */
   dataAttribute?: string;
 }) {
@@ -112,7 +118,9 @@ export function CornerCard({
       aria-label={label}
       data-corner-card={dataAttribute ?? ""}
       className={cn(
-        "safe-pb fixed inset-x-3 bottom-3 z-30 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:w-[22rem]",
+        layout === "inline"
+          ? "relative z-30 w-[min(100%,17rem)]"
+          : "safe-pb fixed inset-x-3 bottom-3 z-30 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:w-[22rem]",
         leaving ? "animate-pop-out" : "animate-pop-in",
       )}
     >

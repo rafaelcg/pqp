@@ -45,6 +45,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { ComposerFormatPreview } from "@/components/chat/composer-format-preview";
+import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
+import { rememberFeatureHint } from "@/lib/feature-hints";
 import { PollComposer } from "@/components/chat/poll-composer";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
@@ -338,6 +340,12 @@ export function MessageComposer({
   const [isPollComposerOpen, setIsPollComposerOpen] = useState(false);
   const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false);
   const [isFormatBarOpen, setIsFormatBarOpen] = useState(false);
+  const formatHintEnabled = useFeatureHintEnabled("composerFormat");
+  const [wideComposer] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      Boolean(window.matchMedia?.("(min-width: 640px)")?.matches),
+  );
   const [gifQuery, setGifQuery] = useState("");
   const [isGifSearchEnabled, setIsGifSearchEnabled] = useState(false);
   const [attachmentLimits, setAttachmentLimits] = useState<{
@@ -381,6 +389,12 @@ export function MessageComposer({
   }, [slowModeUntil]);
 
   const slowModeRemaining = remainingWaitSeconds(slowModeUntil, now);
+
+  useEffect(() => {
+    if (isFormatBarOpen) {
+      rememberFeatureHint("composerFormat");
+    }
+  }, [isFormatBarOpen]);
 
   useEffect(() => {
     if (!slowModeUntil || slowModeUntil <= Date.now()) {
@@ -1360,6 +1374,21 @@ export function MessageComposer({
       onSubmit={(event) => void handleSubmit(event)}
       className={COMPOSER_FORM_CLASS}
     >
+      {formatHintEnabled && !isFormatBarOpen && !feedback && (
+        <div className="absolute bottom-full left-3 z-20 mb-2 sm:left-4">
+          <FeatureHint
+            id="composerFormat"
+            enabled
+            body={t("featureHint.composerFormat.body", {
+              control: t(
+                wideComposer
+                  ? "featureHint.composerFormat.aa"
+                  : "featureHint.composerFormat.insert",
+              ),
+            })}
+          />
+        </div>
+      )}
       {menuKind && (
         <AutocompleteMenu
           id={MENU_ID}
