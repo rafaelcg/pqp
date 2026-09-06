@@ -195,13 +195,19 @@ async function ensureExtraChannel(
 
 async function listAsCommunity(serverId: string): Promise<void> {
   try {
-    await updateCommunitySettings(serverId, {
-      isCommunity: true,
-      slug: DEV_HALL_SLUG,
-      tagline: "Sala local de demo. Gente fictícia, não é gente de verdade.",
-      category: "geral",
-      language: "pt",
-    });
+    await updateCommunitySettings(
+      serverId,
+      {
+        isCommunity: true,
+        slug: DEV_HALL_SLUG,
+        tagline: "Sala local de demo. Gente fictícia, não é gente de verdade.",
+        category: "geral",
+        language: "pt",
+      },
+      // The seeder is the owner of everything it makes, and the listing switch
+      // is the owner's — see `CommunityUpdateActor`.
+      { mayChangeListing: true },
+    );
   } catch (error) {
     logEvent("dev-seed.community-skipped", {
       reason: error instanceof Error ? error.message : String(error),

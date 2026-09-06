@@ -575,6 +575,7 @@
   "communities.settings.explainer": "Listing this community puts it in the public directory. Anyone with a pqp account can find it by name or category, see how many members it has, and join with one tap, no invite, no approval from you.",
   "communities.settings.explainerModeration": "You still run the room: kicks, bans and channel privacy all work the same. But reports about a listed community go to the people who run pqp, who can remove the listing.",
   "communities.settings.toggle": "List this community publicly",
+  "communities.settings.listingOwnerOnly": "Only the server owner turns the directory listing on or off. The public address below is yours to edit.",
   "communities.settings.tagline": "One line about it",
   "communities.settings.taglinePlaceholder": "What is this place?",
   "communities.settings.taglineHint": "{count} characters left",

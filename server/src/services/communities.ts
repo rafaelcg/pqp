@@ -481,6 +481,22 @@ export interface CommunityUpdate {
   language?: CommunityLanguage;
 }
 
+/**
+ * What the caller is allowed to move, as opposed to what they asked to move.
+ *
+ * ONE FIELD, AND IT IS THE ONLY SPLIT THAT EXISTS. Editing a community's pitch,
+ * its category, its language and its public address is Manage Server, the same
+ * bit that already renames the server and replaces its icon and its banner.
+ * Putting the server in the public directory is the owner's, and only the
+ * owner's: that is the change that makes the room findable and joinable by
+ * strangers who were never sent anything, and it is the one carrying the
+ * moderation duty (docs/CONTENT_SAFETY.md §Communities).
+ */
+export interface CommunityUpdateActor {
+  /** True only for the server's owner. */
+  mayChangeListing: boolean;
+}
+
 /** Postgres' unique-violation SQLSTATE. Same arbiter `claimHandle` leans on. */
 const UNIQUE_VIOLATION = "23505";
 
@@ -500,6 +516,29 @@ export class CommunitySlugError extends Error {
   constructor(readonly reason: CommunitySlugRefusal) {
     super("That community address cannot be used");
     this.name = "CommunitySlugError";
+  }
+}
+
+/**
+ * The listing switch was moved by somebody who may edit the server but does not
+ * own it.
+ *
+ * A SEPARATE ERROR RATHER THAN A CHECK AT THE ROUTE, because it runs INSIDE the
+ * transaction, against the row this write is about to replace, under the same
+ * `FOR UPDATE` lock everything else here uses. A route-level "read the current
+ * value, compare, then patch" would answer correctly almost always and leave
+ * one window open: an owner listing the community in the moment between an
+ * admin's read and their write, whose listing the admin's `isCommunity: false`
+ * would then silently undo. The lock closes it.
+ *
+ * Only a CHANGE is refused. An admin's save carries the whole form, so a patch
+ * that repeats the listing value it just read is not an attempt to flip
+ * anything and must not fail.
+ */
+export class CommunityListingForbiddenError extends Error {
+  constructor() {
+    super("Only the owner can list this community publicly");
+    this.name = "CommunityListingForbiddenError";
   }
 }
 
@@ -547,6 +586,7 @@ function isUniqueViolation(error: unknown): boolean {
 export async function updateCommunitySettings(
   serverId: string,
   update: CommunityUpdate,
+  actor: CommunityUpdateActor,
 ): Promise<{ settings: CommunitySettings; previous: CommunitySettings } | null> {
   const client = await getPool().connect();
   try {
@@ -569,6 +609,19 @@ export async function updateCommunitySettings(
     if (!previousRow) {
       await client.query("ROLLBACK");
       return null;
+    }
+
+    // THE LISTING IS THE OWNER'S AND THE ADDRESS IS NOT. Checked here, under
+    // the lock, against the value this write would replace — see
+    // `CommunityListingForbiddenError`. Every other field below this line is
+    // editable by anyone holding Manage Server.
+    if (
+      update.isCommunity !== undefined &&
+      update.isCommunity !== previousRow.is_community &&
+      !actor.mayChangeListing
+    ) {
+      await client.query("ROLLBACK");
+      throw new CommunityListingForbiddenError();
     }
 
     const willBeListed = update.isCommunity ?? previousRow.is_community;
@@ -643,10 +696,14 @@ export async function updateCommunitySettings(
       },
     };
   } catch (error) {
-    // A `CommunitySlugError` has already rolled back and must travel unchanged;
-    // rolling back twice is harmless but converting it here would lose the
-    // reason the route needs to name the field.
-    if (!(error instanceof CommunitySlugError)) {
+    // A `CommunitySlugError` and a `CommunityListingForbiddenError` have both
+    // already rolled back and must travel unchanged; rolling back twice is
+    // harmless, but converting either here would lose the reason the route
+    // needs to name the field, or the status it needs to answer with.
+    if (
+      !(error instanceof CommunitySlugError) &&
+      !(error instanceof CommunityListingForbiddenError)
+    ) {
       await client.query("ROLLBACK");
     }
     if (isUniqueViolation(error)) {

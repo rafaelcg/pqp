@@ -586,6 +586,7 @@ failure mode reproduced with better latency.
 | Community reports go to the **instance** queue, never to that community's owner | `resolveServerSubject` writes `context_kind = 'none'` and a NULL `server_id`; the subject lives in `reported_server_id` |
 | The operator can pull a listing over the owner's head | `servers.is_community_suspended` — see below |
 | The opt-in is audited | `server.community_update`; directory joins are `member.community_join` |
+| **Listing is the owner's; the public address is Manage Server** | `PATCH /api/servers/:id/community` runs `requirePermission(MANAGE_SERVER)`, and `updateCommunitySettings` refuses a *change* to `is_community` from anyone but the owner, under the row lock. An admin can set `pqp.gg/c/<slug>` and write the pitch; only the owner can put the room in the directory |
 
 The routing rule is the one worth restating: **a community owner must never be
 able to read or close a report about their own community.** `listServerReports`
@@ -753,8 +754,8 @@ it as one.
 
 | Column | |
 |---|---|
-| `is_community` | The owner's opt-in. False for every server until somebody ticks the box. |
-| `community_tagline` | One line, ≤140 chars, owner-written. Null is normal. |
+| `is_community` | The owner's opt-in, and **only** the owner's — an admin holding Manage Server may edit the address and the pitch, never this. False for every server until the owner ticks the box. |
+| `community_tagline` | One line, ≤140 chars, written by anyone with Manage Server. Null is normal. |
 | `community_category` | One of the ten slugs in `COMMUNITY_CATEGORIES`; `geral` is the default and the catch-all. |
 | `is_community_suspended` | **The operator's kill switch.** Set by SQL only — no route, no role, no setting writes it. Unlists without deleting anything. |
 | `member_count` | Maintained by a trigger on `server_members`. Decorative: it orders the directory and is authorised by nothing. |

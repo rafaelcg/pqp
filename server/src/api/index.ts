@@ -246,6 +246,7 @@ import {
 } from "../services/community-home.js";
 import { buildServerExport } from "../services/export.js";
 import {
+  CommunityListingForbiddenError,
   CommunitySlugError,
   findCommunityIdBySlug,
   getCommunity,
@@ -3200,12 +3201,19 @@ router.get("/api/communities/by-slug/:slug", async ({ user }, { slug }) => {
   return { community };
 });
 
-/** The owner's own view of their listing. */
+/**
+ * The listing, as the people who run the server see it.
+ *
+ * MANAGE SERVER, not owner. The panel is where the public address is set, and
+ * the address is a Manage Server field — see the PATCH below for the argument.
+ * A read gated harder than the write it feeds would leave an admin a form they
+ * can submit and cannot open.
+ */
 router.get(
   "/api/servers/:serverId/community",
   async ({ user }, { serverId }) => {
     requireCommunities();
-    await requireOwner(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     const settings = await getCommunitySettings(serverId!);
     if (!settings) {
       throw new NotFound("Server not found");
@@ -3217,11 +3225,23 @@ router.get(
 /**
  * Opt in, opt out, or edit the pitch.
  *
- * OWNER ONLY, not manager. Every other per-server setting on this route family
- * (`retention`, `ssoEmailDomain`) is owner-gated for the same reason, and this
- * one has the strongest case of the three: it makes a private room publicly
- * findable and joinable by strangers, which is not a thing an admin should be
- * able to do to somebody else's server.
+ * TWO GATES ON ONE ROUTE, AND THE SPLIT IS THE POINT.
+ *
+ * `isCommunity` — the directory listing — IS OWNER ONLY, for the reason
+ * `retention` and `ssoEmailDomain` are: it makes a private room findable and
+ * joinable by strangers who were sent nothing, and it is what attaches the
+ * moderation duty in docs/CONTENT_SAFETY.md §Communities to the instance. That
+ * is not a thing an admin should be able to do to somebody else's server. It is
+ * enforced in `updateCommunitySettings`, under the row lock, so an admin's save
+ * cannot undo a listing the owner turned on a millisecond earlier.
+ *
+ * EVERYTHING ELSE IS MANAGE SERVER, the bit that already renames the server and
+ * replaces its icon and banner. The public address is the field that motivated
+ * the split: a community's moderators are the people who hand out its link, and
+ * a setting only the owner can reach is a setting a 500-member room cannot use
+ * on the day it needs to. The address changes no permission and admits nobody
+ * on its own — it names a page whose join is the same one an invite already
+ * offers, and none of the strangers a listing brings.
  *
  * A SEPARATE ROUTE FROM `PATCH /api/servers/:serverId` on purpose. That route
  * must keep working with the flag off; this one must 404. Folding these fields
@@ -3232,7 +3252,11 @@ router.patch(
   "/api/servers/:serverId/community",
   async ({ req, user }, { serverId }) => {
     requireCommunities();
-    await requireOwner(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    // Read once, here, and handed to the service so the listing check happens
+    // under the lock rather than against a value that may already be stale.
+    const mayChangeListing =
+      (await getMemberRole(serverId!, user.id)) === "owner";
     const body = updateCommunitySchema.parse(await readJsonBody(req));
 
     // Validated here rather than in the schema for the same reason
@@ -3288,21 +3312,32 @@ router.patch(
 
     let updated;
     try {
-      updated = await updateCommunitySettings(serverId!, {
-        ...(body.isCommunity !== undefined
-          ? { isCommunity: body.isCommunity }
-          : {}),
-        ...(tagline !== undefined ? { tagline } : {}),
-        ...(body.category !== undefined ? { category: body.category } : {}),
-        ...(slug !== undefined ? { slug } : {}),
-        ...(body.language !== undefined ? { language: body.language } : {}),
-      });
+      updated = await updateCommunitySettings(
+        serverId!,
+        {
+          ...(body.isCommunity !== undefined
+            ? { isCommunity: body.isCommunity }
+            : {}),
+          ...(tagline !== undefined ? { tagline } : {}),
+          ...(body.category !== undefined ? { category: body.category } : {}),
+          ...(slug !== undefined ? { slug } : {}),
+          ...(body.language !== undefined ? { language: body.language } : {}),
+        },
+        { mayChangeListing },
+      );
     } catch (error) {
       // 409 for a collision — the status `HandleTakenError` answers, for the
       // same reason: the request was well formed and lost a race, and a retry
       // with a different value works. 422 for a name that cannot become an
       // address, because nothing about *this* request will be different on a
       // retry; the owner has to supply something.
+      // 403 and not 404: the caller may plainly see this panel and edit most
+      // of it, so hiding the field would only make the switch look broken.
+      if (error instanceof CommunityListingForbiddenError) {
+        throw new Forbidden(
+          "Only the owner can list this community in the directory",
+        );
+      }
       if (error instanceof CommunitySlugError) {
         throw new HttpError(
           error.reason === "taken" ? 409 : 422,
