@@ -1206,7 +1206,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu para ligar a câmera. Feche o que estiver usando ela e tente de novo."
+            "value" : "Não deu para ligar a câmera. Feche o que estiver usando a câmera e tente de novo."
           }
         }
       }
@@ -4196,7 +4196,7 @@
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "A câmera ligou mas a imagem não está passando. Desligue e ligue de novo."
+            "value" : "A câmera ligou, mas nenhuma imagem está chegando. Desligue e ligue de novo."
           }
         }
       }
