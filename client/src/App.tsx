@@ -4044,8 +4044,11 @@ function MainAppContent({
             onToggleMute={() => voice.toggleMute()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
-            onStartScreenShare={() =>
-              void voice.startScreenShare(shareSystemAudio)
+            onStartScreenShare={(intent) =>
+              voice.startScreenShare(
+                intent?.preferBrowserTab ? false : shareSystemAudio,
+                intent,
+              )
             }
             onShareWithoutSound={() => {
               // Disarm the opt-in too: it is what failed, and the next share
@@ -4096,7 +4099,12 @@ function MainAppContent({
           onToggleMute={() => voice.toggleMute()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
-          onStartScreenShare={() => void voice.startScreenShare(shareSystemAudio)}
+          onStartScreenShare={(intent) =>
+            voice.startScreenShare(
+              intent?.preferBrowserTab ? false : shareSystemAudio,
+              intent,
+            )
+          }
           onShareWithoutSound={() => {
             setShareSystemAudio(false);
             void voice.startScreenShare(false);

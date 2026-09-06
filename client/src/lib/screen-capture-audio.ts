@@ -77,6 +77,22 @@ export interface ScreenCaptureOptions extends DisplayMediaStreamOptions {
   selfBrowserSurface?: "include" | "exclude";
   /** Chromium: offer "share this tab instead" while a share is running. */
   surfaceSwitching?: "include" | "exclude";
+  /** Chromium: open the picker already pointed at tabs. */
+  preferCurrentTab?: boolean;
+  /** Chromium: whether entire screens are offered. */
+  monitorTypeSurfaces?: "include" | "exclude";
+}
+
+/**
+ * How the picker should be steered. The default is a normal share: screens,
+ * windows and tabs, no system audio unless the user opted in.
+ *
+ * Watch party is a tab share of the player. `preferBrowserTab` asks Chrome
+ * for a tab surface and hides the whole desktop, and it never takes the
+ * system-audio opt-in: that opt-in is the echo path.
+ */
+export interface ScreenCaptureIntent {
+  preferBrowserTab?: boolean;
 }
 
 /** `MediaTrackConstraintSet` plus the screen-audio member TypeScript lacks. */
@@ -161,6 +177,7 @@ export function screenCaptureEnvironment(
 export function screenCaptureOptions(
   shareSystemAudio: boolean,
   env: ScreenCaptureEnvironment,
+  intent: ScreenCaptureIntent = {},
 ): ScreenCaptureOptions {
   const audio: ScreenAudioConstraints = {
     echoCancellation: false,
@@ -174,8 +191,12 @@ export function screenCaptureOptions(
   // degrade to a silent share, it fails the capture. In the shell the tick only
   // counts on Windows; in a browser it always counts, because there the audio
   // the tick governs is a tab's own sound, which every platform can hand over.
+  // Watch party never takes this opt-in: it wants the player tab's sound, not
+  // the machine's mixer.
   const carriesAudio =
-    shareSystemAudio && (!env.isDesktopShell || shellCarriesScreenAudio(env));
+    shareSystemAudio &&
+    !intent.preferBrowserTab &&
+    (!env.isDesktopShell || shellCarriesScreenAudio(env));
   return {
     // `video: true` used to be the whole of this, and it is why a share arrived
     // as a slideshow. With no frameRate asked for, a capture of a large surface
@@ -188,6 +209,7 @@ export function screenCaptureOptions(
       frameRate: { ideal: 30, max: 30 },
       width: { max: 1920 },
       height: { max: 1080 },
+      ...(intent.preferBrowserTab ? { displaySurface: "browser" as const } : {}),
     },
     // In the shell, "no audio asked for" is the only way to stop it answering
     // with Windows loopback, and it costs nothing there: its picker has no tab
@@ -201,6 +223,16 @@ export function screenCaptureOptions(
     // tab is a cheaper answer than a hall of mirrors nobody can locate.
     selfBrowserSurface: "exclude",
     surfaceSwitching: "include",
+    ...(intent.preferBrowserTab
+      ? {
+          // Tab-first picker. `preferCurrentTab` is the other Chrome hint
+          // and it means "offer *this* tab", which is pqp: mutually exclusive
+          // with `selfBrowserSurface: "exclude"` and the hall-of-mirrors case.
+          // `displaySurface: "browser"` on video (above) plus hiding monitors
+          // is the valid shape that opens on the Tabs pane.
+          monitorTypeSurfaces: "exclude" as const,
+        }
+      : {}),
   };
 }
 

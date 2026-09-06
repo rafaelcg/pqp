@@ -28,6 +28,7 @@ import {
   capturesSystemAudio,
   screenCaptureEnvironment,
   screenCaptureOptions,
+  type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
@@ -2482,8 +2483,13 @@ export function createVoiceController(transport: RealtimeTransport) {
      *   NOT mean a silent share: a Chrome tab share still carries that tab's
      *   own audio, which is the route that cannot echo. See
      *   `lib/screen-capture-audio.ts` for why the default moved.
+     * @param intent Watch party passes `{ preferBrowserTab: true }` so the
+     *   picker steers at a tab. That path never takes `shareSystemAudio`.
      */
-    async startScreenShare(shareSystemAudio = false) {
+    async startScreenShare(
+      shareSystemAudio = false,
+      intent: ScreenCaptureIntent = {},
+    ) {
       if (state.status !== "connected") {
         return;
       }
@@ -2525,6 +2531,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       const options = screenCaptureOptions(
         shareSystemAudio,
         screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null),
+        intent,
       );
       // What was actually asked for, not what was ticked. In a browser this is
       // true even unticked, because a tab share carries the tab's own sound and
