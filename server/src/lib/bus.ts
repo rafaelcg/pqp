@@ -65,6 +65,8 @@ export const INSTANCE_ID = randomUUID();
 
 let transport: BusTransport | null = null;
 const handlers = new Map<string, Set<BusHandler>>();
+/** Raw-frame observers: see every frame the transport delivers, own origin included. */
+const observers = new Set<(frame: BusFrame) => void>();
 
 /**
  * Check this before building anything you intend to publish. It is the switch
@@ -108,7 +110,33 @@ export function subscribeToCluster(topic: string, handler: BusHandler): void {
   handlers.set(topic, new Set([handler]));
 }
 
+/**
+ * Watch every frame the transport hands up, *before* the origin guard drops
+ * our own. The one legitimate use is the boot-time self-echo check
+ * (`ws/voice-hello.ts`): Postgres delivers a NOTIFY back to the session that
+ * sent it, so "did our own frame come back" is the cheapest possible proof
+ * that LISTEN is really live on this connection, and a transaction-mode
+ * pooler that silently eats it is caught at boot rather than at the first
+ * split call. Not for application handlers: those go through
+ * `subscribeToCluster`, which never sees an own-origin frame.
+ */
+export function observeBusFrames(
+  observer: (frame: BusFrame) => void,
+): () => void {
+  observers.add(observer);
+  return () => {
+    observers.delete(observer);
+  };
+}
+
 function dispatch(frame: BusFrame): void {
+  for (const observer of observers) {
+    try {
+      observer(frame);
+    } catch (error) {
+      console.error("[bus] frame observer failed:", error);
+    }
+  }
   // The loop guard. Also the reason handlers never need to know whether a
   // frame is "ours": by the time one runs, it cannot be.
   if (frame.origin === INSTANCE_ID) {
@@ -143,9 +171,10 @@ export async function closeBus(): Promise<void> {
   });
 }
 
-/** Test seam: drop every subscription registered so far. */
+/** Test seam: drop every subscription and observer registered so far. */
 export function resetBusSubscriptions(): void {
   handlers.clear();
+  observers.clear();
 }
 
 /**

@@ -55,6 +55,15 @@ export function getDefaultVoiceBackend(
 export const voiceSessionRequestSchema = z.object({
   voiceChannelId: z.string().uuid(),
   peerId: z.string().uuid(),
+  /**
+   * The resume HMAC `welcome` handed out for this peer id. Optional, and
+   * older clients never send it: without it the server proves ownership
+   * against its own peer map, which is exact on a single instance. With more
+   * than one API instance the HTTP request may land on a machine that never
+   * saw this peer, and the HMAC (which already binds user, peer and channel)
+   * is the proof that works from anywhere.
+   */
+  resumeToken: z.string().min(1).optional(),
 });
 
 export const voiceSessionSchema = z.object({

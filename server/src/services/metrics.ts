@@ -421,7 +421,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
   // One snapshot, used both to look up room names below and to build the
   // payload further down. Calling it twice would let a room open between the
   // two calls and render with no name at all.
-  const voice = getVoiceActivitySnapshot();
+  const voice = await getVoiceActivitySnapshot();
 
   // The tab detail, in a second round of parallel queries. It is separate from
   // the block above only for readability; both rounds are inside the same

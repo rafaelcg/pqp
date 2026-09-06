@@ -196,7 +196,25 @@ What iOS does **not** do yet on LiveKit: publish a screen share. The ReplayKit b
 
 ### What can still split a call
 
-Two server instances with **different** LiveKit config pin the same channel differently, because `roomTransports` is per-process like `peers`. That is the same constraint that already makes mesh voice single-instance (see the block comment above `peers` in `server/src/ws/voice.ts`); nothing here fixes it, and nothing here makes it worse.
+Two server instances with **different** LiveKit config pin the same channel differently, because `roomTransports` is per-process like `peers`. That is the same constraint that already makes mesh voice single-instance (see the block comment above `peers` in `server/src/ws/voice.ts`); nothing here fixes it, and nothing here makes it worse. The registry below is the start of the fix.
+
+### The voice registry (`VOICE_REGISTRY=postgres`, off by default)
+
+Milestone M1 of [`docs/plans/MULTI_INSTANCE_VOICE.md`](./plans/MULTI_INSTANCE_VOICE.md): the peer map and the transport pin, copied into Postgres so more than one API instance can agree on a room. `server/src/voice/registry.ts` owns five tables (`voice_rooms`, `voice_peers`, `voice_retired_peers`, `voice_instances`, `voice_resweeps`), all additive and empty until the flag is on.
+
+What changes with the flag on, and only then:
+
+- **Write-through.** Every join, state change, socket loss, resume and leave in `ws/voice.ts` is copied to `voice_peers`. The in-process map is still what every roster and `peer-*` frame is built from; rosters over the bus are M2.
+- **One room, one transport, across instances.** An unpinned room's decision goes through `INSERT INTO voice_rooms ... ON CONFLICT DO NOTHING RETURNING` before it is applied. Whoever inserts first decides; the loser adopts the stored transport (`voice.transportAdopted` in the log) and a client that cannot run it is refused as usual. The last peer's delete removes the room row in the same statement.
+- **`POST /api/voice/token` from any instance.** The request may carry the `resumeToken` that `welcome` minted; a valid HMAC proves `{ user, peer, channel }` with no lookup. Without it the route checks this instance's map, then the `voice_peers` row, then 403. A room another instance pinned to mesh still answers 409. Old clients that omit the field behave exactly as before.
+- **Moderation and the operator snapshot see the cluster.** `findVoiceChannelForUser` and `findVoicePeerIdentities` read the map, then the rows, so the SFU eviction can target a participant whose socket is elsewhere; `getVoiceActivitySnapshot` counts rooms from the rows. The notice frame and the mesh half stay local until M4.
+- **Retired ids are cluster-wide.** A hung-up peer id cannot be reconstructed on another instance, or on this one after a restart, for the token's life.
+- **Liveness.** Each instance upserts `voice_instances` every 15 s (`config_hash` is a digest of the LiveKit URL and key id); a row older than 45 s is a dead instance. M3 gives that its consequences.
+- **`voice.hello` on the bus.** With `CLUSTER_BUS=postgres`, an instance publishes its config hash once connected and requires its own echo within 5 s. Silence is logged loudly (`bus.selfEchoMissing`): it means `DATABASE_URL` is a transaction-mode pooler and LISTEN is not delivering. A foreign hello with a different hash logs `voice.configDrift`. Neither fails `/health` yet.
+
+Flag off means off: `isVoiceRegistryEnabled()` is read on every path and every registry call sits behind it, so a self-host that never sets the variable runs the code that shipped before the registry existed. `server/src/ws/voice-registry.test.ts` pins that the tables stay empty through a join, a state change, an orphan and a leave with the flag off.
+
+**This is not yet enough to run two machines.** Rosters do not cross instances (M2), a peer whose instance dies is not reclaimed (M3), rings and moderation notices are local (M4), and there is no drain or mesh guard (M5). The flag exists so the write path can soak on one machine first.
 
 ## Screen-share audio
 
