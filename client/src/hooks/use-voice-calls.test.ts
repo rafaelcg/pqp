@@ -146,6 +146,8 @@ let cameraCaptures = 0;
 function installBrowserStubs() {
   const g = globalThis as unknown as Record<string, unknown>;
   g.requestAnimationFrame = () => 1;
+  g.setInterval = () => 1;
+  g.clearInterval = () => {};
   g.cancelAnimationFrame = () => {};
   Object.defineProperty(globalThis.navigator, "mediaDevices", {
     configurable: true,
