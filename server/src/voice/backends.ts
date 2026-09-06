@@ -129,13 +129,22 @@ export function mintedAtFromParticipantMetadata(
  * belongs to the requesting user before calling this — `userId` is written into
  * the token as the authority moderation later evicts on, so a mismatch here
  * would let somebody wear another account's eviction target.
+ *
+ * `canSpeak` is `Permission.SPEAK` resolved for this member in this channel
+ * (see `voice/speak.ts`). It becomes the token's publish grant, so a person
+ * without it cannot publish a microphone, a screen or a camera no matter what
+ * their client does: LiveKit refuses the publish, not the UI. Subscribe is
+ * always granted; SPEAK takes away talking, never listening. Defaults to true
+ * so a caller that has not resolved it gets the pre-enforcement token.
  */
 export async function createLiveKitSession(
   voiceChannelId: string,
   peerId: string,
   displayName: string,
   userId: string,
+  options: { canSpeak?: boolean } = {},
 ): Promise<VoiceSessionInfo> {
+  const canSpeak = options.canSpeak ?? true;
   const url = process.env.LIVEKIT_URL;
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;
@@ -156,10 +165,11 @@ export async function createLiveKitSession(
   at.addGrant({
     room: voiceChannelId,
     roomJoin: true,
-    canPublish: true,
+    // Covers mic, screen share and camera alike: only people who may speak
+    // may present. A false grant is the SFU enforcement of SPEAK.
+    canPublish: canSpeak,
     canSubscribe: true,
-    // Covers mic and screen-share video alike; no data channel needed (chat
-    // rides the app WS).
+    // No data channel needed (chat rides the app WS).
     canPublishData: false,
   });
 
@@ -169,6 +179,7 @@ export async function createLiveKitSession(
     token: await at.toJwt(),
     room: voiceChannelId,
     identity: peerId,
+    speak: canSpeak,
   };
 }
 

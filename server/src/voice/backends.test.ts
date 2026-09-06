@@ -15,7 +15,12 @@ interface TokenClaims {
   exp: number;
   nbf: number;
   metadata?: string;
-  video?: { room?: string; roomJoin?: boolean };
+  video?: {
+    room?: string;
+    roomJoin?: boolean;
+    canPublish?: boolean;
+    canSubscribe?: boolean;
+  };
 }
 
 function decodeClaims(jwt: string): TokenClaims {
@@ -63,6 +68,34 @@ describe("LiveKit token minting", () => {
    * TTL is the ceiling on how long a stale token can be replayed elsewhere. It
    * was six hours; a ban must not be survivable for an afternoon.
    */
+  /**
+   * SPEAK on the SFU is the publish grant, nothing else: LiveKit refuses the
+   * publish itself, so a client that ignores the UI is still silent. Subscribe
+   * is never withdrawn; SPEAK takes away talking, not listening.
+   */
+  it("grants publish only to a member who may speak, and subscribe to everyone", async () => {
+    const speaker = await createLiveKitSession("voice-a", "peer-1", "A", "u1", {
+      canSpeak: true,
+    });
+    const listener = await createLiveKitSession("voice-a", "peer-2", "B", "u2", {
+      canSpeak: false,
+    });
+    // No option at all: the pre-enforcement token, so nothing goes quiet on
+    // deploy for a caller that has not resolved the bit.
+    const legacy = await createLiveKitSession("voice-a", "peer-3", "C", "u3");
+
+    expect(decodeClaims(speaker.token).video?.canPublish).toBe(true);
+    expect(decodeClaims(listener.token).video?.canPublish).toBe(false);
+    expect(decodeClaims(legacy.token).video?.canPublish).toBe(true);
+    for (const session of [speaker, listener, legacy]) {
+      expect(decodeClaims(session.token).video?.canSubscribe).toBe(true);
+    }
+    // Stated in the response too, so the client knows without a round trip.
+    expect(speaker.speak).toBe(true);
+    expect(listener.speak).toBe(false);
+    expect(legacy.speak).toBe(true);
+  });
+
   it("keeps the token short-lived so a stale one cannot be replayed for long", async () => {
     const { token } = await createLiveKitSession(
       "voice-a",

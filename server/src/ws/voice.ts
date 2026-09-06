@@ -26,13 +26,15 @@ import { findTimeoutForChannel } from "../services/sanctions.js";
 import { getChannel, getChannelAudience } from "../services/servers.js";
 import { computeMemberPermissions } from "../services/permissions.js";
 import { canAccessChannel, resolveMemberName } from "../services/users.js";
-import { broadcastToChannel } from "./chat.js";
+import { broadcastToChannel, onPermissionsUpdate } from "./chat.js";
 import { resolveStatus } from "./status.js";
 import {
   evictSfuRoom,
   evictSfuUser,
   evictSfuUsersExcept,
+  setSfuUserCanPublish,
 } from "../voice/admin.js";
+import { resolveCanSpeak } from "../voice/speak.js";
 import {
   getServerVoiceBackend,
   isLiveKitConfigured,
@@ -74,6 +76,14 @@ interface VoicePeer {
   // state only: enforcement of anything never hangs off these flags.
   muted: boolean;
   deafened: boolean;
+  /**
+   * `Permission.SPEAK` as resolved at join (and re-resolved by
+   * `reevaluateVoiceSpeak` when the server's permissions change). Unlike
+   * `muted` this IS enforcement: it gates share and camera declarations here,
+   * and on the SFU it is the publish grant. In a mesh room the media never
+   * touches this process, so there the client is what honours it.
+   */
+  canSpeak: boolean;
   /** Set when the socket closed; cleared on resume. Absent = live. */
   orphanedAt?: number;
   orphanTimer?: ReturnType<typeof setTimeout>;
@@ -421,6 +431,7 @@ function toParticipant(peer: VoicePeer): VoiceParticipant {
     screenAudioStreamId: peer.screenAudioStreamId,
     muted: peer.muted,
     deafened: peer.deafened,
+    canSpeak: peer.canSpeak,
   };
 }
 
@@ -825,6 +836,7 @@ async function welcomeVoicePeer(
     transport,
     resumed: resumed || undefined,
     resumeToken: resumeToken ?? undefined,
+    canSpeak: peer.canSpeak,
   });
 
   // What the room is watching, to this socket alone and only if there is a
@@ -968,6 +980,9 @@ export async function handleVoiceMessage(
       refuseResume();
       return;
     }
+    // SPEAK rides on the same resolution as CONNECT: one query, two bits. A
+    // conversation has neither roles nor overwrites, so it stays true there.
+    let canSpeak = true;
     if (channel.kind === "server" && channel.server_id) {
       const perms = await computeMemberPermissions(
         channel.server_id,
@@ -978,6 +993,7 @@ export async function handleVoiceMessage(
         refuseResume();
         return;
       }
+      canSpeak = hasPermission(perms, Permission.SPEAK);
     }
 
     // The awaits above mean the socket may have closed, or the client may have
@@ -1078,6 +1094,13 @@ export async function handleVoiceMessage(
 
     if (resume.kind === "reattach") {
       resume.peer.canResume = payload.resume === true;
+      // A permission edit that landed during the signaling gap is carried by
+      // this welcome; the SFU grant for a still-connected participant is the
+      // live path's job (`reevaluateVoiceSpeak`), which ran when it changed.
+      resume.peer.canSpeak = canSpeak;
+      if (!canSpeak) {
+        resume.peer.muted = true;
+      }
       await reattachVoicePeer(resume.peer, socket, user);
       return;
     }
@@ -1110,13 +1133,26 @@ export async function handleVoiceMessage(
       // Not muted until the client says so: the client re-declares its state
       // right after `welcome` (including after a rejoin, where this reset
       // would otherwise erase a standing mute). See use of `set-voice-state`.
-      muted: false,
+      // The exception is a listener, who is muted by rule from the first
+      // frame and stays so whatever their client declares.
+      muted: !canSpeak,
       deafened: false,
+      canSpeak,
       canResume: payload.resume === true,
     };
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
     noteRoomSizeForPeak(getRoomPeers(payload.voiceChannelId).length);
+    if (!canSpeak) {
+      // Once per join, so an operator can see a stage working (or a member
+      // locked out by accident) without a client-side log.
+      logEvent("voice.speakDenied", {
+        peerId,
+        userId: user.id,
+        voiceChannelId: payload.voiceChannelId,
+        transport,
+      });
+    }
     // Reconstruct pins the transport the token remembered, so a deploy cannot
     // silently switch mesh ↔ LiveKit under held media. Cold join pins current
     // config when the room is empty.
@@ -1171,6 +1207,16 @@ export async function handleVoiceMessage(
     // a live sharer re-declaring (audio-id update, rejoin) must not be refused
     // for occupying their own slot. Keep this check synchronous with the
     // write: an await between them would let two clicks both pass.
+    //
+    // Presenting is speaking: no SPEAK, no share. The client already hides
+    // the button; this refuses the roster claim from one that did not.
+    if (payload.sharing && !peer.canSpeak) {
+      send(peer.socket, {
+        type: "screen-share-denied",
+        voiceChannelId: peer.voiceChannelId,
+      });
+      return;
+    }
     if (payload.sharing) {
       const limit = SCREEN_SHARE_LIMIT[getRoomTransport(peer.voiceChannelId)];
       const othersSharing = getRoomPeers(peer.voiceChannelId).filter(
@@ -1212,7 +1258,10 @@ export async function handleVoiceMessage(
     if (!stateLimiter.take(user.id)) {
       return;
     }
-    peer.muted = payload.muted;
+    // A listener cannot show as unmuted: the roster badge would claim a mic
+    // the rules do not allow. The client keeps itself muted; this keeps the
+    // display honest against one that does not.
+    peer.muted = payload.muted || !peer.canSpeak;
     peer.deafened = payload.deafened;
     await broadcastRoster(peer.voiceChannelId);
     return;
@@ -1280,6 +1329,13 @@ export async function handleVoiceMessage(
     // same tick as the write, and never refuse a live camera that is only
     // re-declaring (a device switch sends a new stream id). Turning off is
     // always allowed.
+    if (payload.streamId && !peer.canSpeak) {
+      send(peer.socket, {
+        type: "camera-denied",
+        voiceChannelId: peer.voiceChannelId,
+      });
+      return;
+    }
     if (payload.streamId) {
       const limit = CAMERA_LIMIT[getRoomTransport(peer.voiceChannelId)];
       const othersOn = getRoomPeers(peer.voiceChannelId).filter(
@@ -1827,3 +1883,109 @@ export function disconnectVoiceUser(
 }
 
 // --- end voice moderation -----------------------------------------------------
+
+// --- speak permission ---------------------------------------------------------
+//
+// SPEAK is resolved at join and written into the peer (and, on the SFU, into
+// the token's publish grant). That is right until somebody edits a role or a
+// channel overwrite while people are in the room, which is exactly when an
+// owner is *making* a stage. So every permissions bump for a server re-resolves
+// the bit for everyone in that server's rooms and pushes the difference:
+//
+// - to the person, as `voice-speak-changed`, so the client mutes or unlocks;
+// - to the SFU, as a participant permission update, so a client that ignores
+//   the frame is silenced by LiveKit anyway (and a newly allowed one can
+//   publish without re-minting a token);
+// - to the roster, since `canSpeak` rides on every participant.
+//
+// A mesh room gets the first and third only. There the media never touches
+// this process, so the client is the enforcement; `docs/voice-backends.md`
+// says so under "Speak permission".
+
+/**
+ * Re-resolve SPEAK for every peer in this server's voice rooms and apply the
+ * changes. Cheap when nothing is in voice (one Set walk); one `getChannel`
+ * per occupied room and one permission resolution per distinct user in the
+ * rooms that belong to `serverId` otherwise. Never throws.
+ */
+export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
+  const rooms = new Set<string>();
+  for (const peer of peers.values()) {
+    rooms.add(peer.voiceChannelId);
+  }
+  for (const voiceChannelId of rooms) {
+    let channel;
+    try {
+      channel = await getChannel(voiceChannelId);
+    } catch (error) {
+      console.error("[voice] speak re-check: channel lookup failed:", error);
+      continue;
+    }
+    if (!channel || channel.kind !== "server" || channel.server_id !== serverId) {
+      continue;
+    }
+    const byUser = new Map<string, VoicePeer[]>();
+    for (const peer of getRoomPeers(voiceChannelId)) {
+      const list = byUser.get(peer.userId) ?? [];
+      list.push(peer);
+      byUser.set(peer.userId, list);
+    }
+    let rosterDirty = false;
+    for (const [userId, userPeers] of byUser) {
+      let next: boolean;
+      try {
+        next = await resolveCanSpeak(channel, voiceChannelId, userId);
+      } catch (error) {
+        console.error("[voice] speak re-check failed:", error);
+        continue;
+      }
+      const changed = userPeers.filter((peer) => peer.canSpeak !== next);
+      if (changed.length === 0) {
+        continue;
+      }
+      rosterDirty = true;
+      for (const peer of changed) {
+        peer.canSpeak = next;
+        if (!next) {
+          // A presenter who lost SPEAK is no longer presenting. The client
+          // stops the capture on the frame below; the SFU drops the tracks
+          // with the grant; this keeps the roster from advertising either.
+          peer.sharingScreen = false;
+          peer.screenAudioStreamId = null;
+          peer.cameraStreamId = null;
+          peer.muted = true;
+        }
+        send(peer.socket, {
+          type: "voice-speak-changed",
+          voiceChannelId,
+          canSpeak: next,
+        });
+      }
+      logEvent("voice.speakChanged", {
+        userId,
+        voiceChannelId,
+        canSpeak: next,
+        transport: getRoomTransport(voiceChannelId),
+      });
+      if (getRoomTransport(voiceChannelId) === "livekit") {
+        void setSfuUserCanPublish(
+          voiceChannelId,
+          userId,
+          next,
+          identityMapFor(userPeers),
+        );
+      }
+    }
+    if (rosterDirty) {
+      await broadcastRoster(voiceChannelId);
+    }
+  }
+}
+
+onPermissionsUpdate((serverId) => {
+  void reevaluateVoiceSpeak(serverId).catch((error) => {
+    console.error("[voice] speak re-check failed:", error);
+  });
+});
+
+// --- end speak permission -----------------------------------------------------

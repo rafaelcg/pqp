@@ -1374,6 +1374,9 @@ function ActiveCall({
               ? null
               : (statusLine ??
                 t("call.panel.inCall", { count: remotes.length + 1 }))}
+            {!voiceState.canSpeak && (
+              <span className="ml-2 text-warning">{t("voice.bar.listenOnly")}</span>
+            )}
             {declinedNames.map((name) => (
               <span key={name} className="ml-2 text-warning">
                 {t("call.panel.declined", { name })}
@@ -1567,6 +1570,9 @@ function CallControls({
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
   const size = collapsed ? "h-8 w-8" : "h-10 w-10";
   const iconSize = collapsed ? "h-3.5 w-3.5" : "h-4 w-4";
+  // The room's rule, not a choice: SPEAK denied. Mute is locked shut, and
+  // share and camera are not offered at all, since presenting is speaking.
+  const listenOnly = !voiceState.canSpeak;
 
   return (
     <div className={cn("flex flex-col items-center", collapsed ? "gap-0" : "gap-1.5")}>
@@ -1579,7 +1585,7 @@ function CallControls({
               "w-full select-none touch-none",
               isTransmitting && "ring-2 ring-accent",
             )}
-            disabled={pushToTalkBlocked}
+            disabled={pushToTalkBlocked || listenOnly}
             aria-pressed={isTransmitting}
             onPointerDown={(event) => {
               event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -1607,7 +1613,7 @@ function CallControls({
             ) : (
               <MicOff className="h-4 w-4" aria-hidden="true" />
             )}
-            {pushToTalkBlocked
+            {pushToTalkBlocked || listenOnly
               ? t("voice.ptt.blocked")
               : isTransmitting
                 ? t("voice.ptt.transmitting")
@@ -1643,32 +1649,56 @@ function CallControls({
       {!collapsed && (
         <Tooltip
           label={
-            voiceState.isMuted ? t("voice.control.unmute") : t("voice.control.mute")
+            listenOnly
+              ? t("voice.control.listenOnlyLocked")
+              : voiceState.isMuted
+                ? t("voice.control.unmute")
+                : t("voice.control.mute")
           }
         >
-          <button
-            type="button"
-            aria-pressed={voiceState.isMuted}
-            aria-label={
-              voiceState.isMuted ? t("voice.control.unmute") : t("voice.control.mute")
-            }
-            className={cn(
-              "flex items-center justify-center rounded-full",
-              size,
-              voiceState.isMuted
-                ? "bg-danger/20 text-danger"
-                : "bg-ink-3 text-paper hover:bg-ink-4",
-            )}
-            onClick={onToggleMute}
-          >
-            {voiceState.isMuted ? (
-              <MicOff className={iconSize} />
-            ) : (
-              <Mic className={iconSize} />
-            )}
-          </button>
+          {/* The span is what the tooltip can hover: a disabled button gets
+              no pointer events, and the locked state is the one that most
+              needs its sentence. */}
+          <span className="inline-flex">
+            <button
+              type="button"
+              aria-pressed={voiceState.isMuted}
+              disabled={listenOnly}
+              aria-label={
+                listenOnly
+                  ? t("voice.control.listenOnlyLocked")
+                  : voiceState.isMuted
+                    ? t("voice.control.unmute")
+                    : t("voice.control.mute")
+              }
+              className={cn(
+                "flex items-center justify-center rounded-full",
+                size,
+                voiceState.isMuted
+                  ? "bg-danger/20 text-danger"
+                  : "bg-ink-3 text-paper hover:bg-ink-4",
+                listenOnly && "cursor-not-allowed opacity-60",
+              )}
+              onClick={onToggleMute}
+            >
+              {voiceState.isMuted ? (
+                <MicOff className={iconSize} />
+              ) : (
+                <Mic className={iconSize} />
+              )}
+            </button>
+          </span>
         </Tooltip>
       )}
+      {listenOnly && !collapsed && (
+        <span
+          data-listen-only
+          className="shrink-0 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-warning"
+        >
+          {t("voice.bar.listenOnly")}
+        </span>
+      )}
+      {!listenOnly && (
       <Tooltip
         label={
           voiceState.isCameraOn
@@ -1712,6 +1742,7 @@ function CallControls({
           )}
         </button>
       </Tooltip>
+      )}
       {/* Video, in whichever direction this call has any, immediately to the
           right of the camera. Absent on an audio-only call, so that bar is the
           bar it has always been. Sending shows the sizes; watching shows what
@@ -1740,6 +1771,7 @@ function CallControls({
           everyone's voices back into the call; see
           `lib/screen-capture-audio.ts`. */}
       {canShare &&
+        !listenOnly &&
         onStartScreenShare &&
         onShareSystemAudioChange &&
         /* Hidden where the platform cannot deliver it. A dead toggle is not a
@@ -1771,7 +1803,7 @@ function CallControls({
             </button>
           </Tooltip>
         )}
-      {!canShare && onStartScreenShare && (
+      {!canShare && !listenOnly && onStartScreenShare && (
         <Tooltip
           label={t("voice.control.shareUnavailable")}
           detail={screenShareUnavailableMessage("no-api")}
@@ -1792,7 +1824,7 @@ function CallControls({
           </button>
         </Tooltip>
       )}
-      {canShare && (onStartScreenShare || onStopScreenShare) && (
+      {canShare && !listenOnly && (onStartScreenShare || onStopScreenShare) && (
         <Tooltip
           label={
             voiceState.isSharingScreen

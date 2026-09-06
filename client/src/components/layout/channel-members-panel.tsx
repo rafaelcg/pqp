@@ -462,7 +462,14 @@ export function ChannelMembersPanel({
                           key={flag}
                           className="flex flex-col gap-1 rounded-md px-2 py-1.5 sm:flex-row sm:items-center sm:justify-between"
                         >
-                          <p className="text-sm text-paper">{t(permLabelKey(flag))}</p>
+                          <div className="min-w-0">
+                            <p className="text-sm text-paper">{t(permLabelKey(flag))}</p>
+                            {flag === "SPEAK" && channelType === "voice" && (
+                              <p className="text-xs text-paper-muted">
+                                {t("channelPerms.speakStageHint")}
+                              </p>
+                            )}
+                          </div>
                           <div className="flex rounded-md border border-ink-4">
                             {(["allow", "inherit", "deny"] as const).map((option) => (
                               <button

@@ -72,6 +72,7 @@ const FLAG_HINT: Partial<Record<PermissionFlagKey, MessageKey>> = {
   READ_MESSAGE_HISTORY: "roles.permHint.READ_MESSAGE_HISTORY",
   MENTION_EVERYONE: "roles.permHint.MENTION_EVERYONE",
   MUTE_MEMBERS: "roles.permHint.MUTE_MEMBERS",
+  SPEAK: "roles.permHint.SPEAK",
   CHANGE_NICKNAME: "roles.permHint.CHANGE_NICKNAME",
   MANAGE_NICKNAMES: "roles.permHint.MANAGE_NICKNAMES",
   MANAGE_ROLES: "roles.permHint.MANAGE_ROLES",
@@ -140,7 +141,6 @@ void _groupsCoverEveryFlag;
 const UNENFORCED_FLAGS = new Set<PermissionFlagKey>([
   "ATTACH_FILES",
   "READ_MESSAGE_HISTORY",
-  "SPEAK",
 ]);
 
 const EVERYONE_LOCKED_KEYS = new Set<PermissionFlagKey>([

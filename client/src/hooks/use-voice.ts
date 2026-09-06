@@ -150,6 +150,14 @@ export interface VoiceState {
   isMuted: boolean;
   /** Deafened silences everyone else and forces your own mic off, as in Discord. */
   isDeafened: boolean;
+  /**
+   * Whether the room's rules let this person talk: `Permission.SPEAK`, as the
+   * server resolved it for this channel. Unlike `isMuted` it is not a choice.
+   * False means: joined muted, the unmute control is locked, push-to-talk
+   * does not open the mic, and share and camera are off the table. Flips
+   * mid-call on `voice-speak-changed`. Always true in a conversation call.
+   */
+  canSpeak: boolean;
   inputMode: VoiceInputMode;
   /**
    * Whether audio is actually leaving this machine right now — the one thing
@@ -694,6 +702,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     remotePeers: [],
     isMuted: false,
     isDeafened: false,
+    canSpeak: true,
     inputMode: "voice-activity",
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
     isTransmitting: false,
@@ -908,10 +917,75 @@ export function createVoiceController(transport: RealtimeTransport) {
    * the key while muted must not transmit, or the mute button would be a lie.
    */
   function micShouldBeOpen(): boolean {
+    // The rule outranks every choice below it: a held push-to-talk key or a
+    // toggled mute button must not open a mic the channel does not allow.
+    if (!state.canSpeak) {
+      return false;
+    }
     if (state.isDeafened || state.isMuted) {
       return false;
     }
     return state.inputMode === "voice-activity" || pushToTalkHeld;
+  }
+
+  /**
+   * Publish the mic to the SFU once the room lets us.
+   *
+   * After a grant the server updates our LiveKit permission and tells us over
+   * the app WS, and the two arrive in no fixed order. `publishTrack` checks
+   * the local copy of the permission and throws when it is still the old
+   * one, so a handful of short retries covers the gap without a reconnect.
+   */
+  async function publishMicWhenAllowed(attempt = 0): Promise<void> {
+    if (!sfu || !pipeline || !state.canSpeak || !state.usingSfu) {
+      return;
+    }
+    try {
+      await sfu.publish(pipeline.processedStream);
+      await sfu.setMuted(!state.isTransmitting);
+    } catch (err) {
+      if (attempt >= 5) {
+        state.error = err instanceof Error ? err.message : String(err);
+        emit();
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await publishMicWhenAllowed(attempt + 1);
+    }
+  }
+
+  /**
+   * Apply the room's SPEAK rule to this client.
+   *
+   * `false` mutes, stops any share or camera, and says so once. On the SFU
+   * the server has already revoked the publish grant, so this is the UI
+   * catching up with a fact; in a mesh room this IS the enforcement, which
+   * is documented and accepted (docs/voice-backends.md, "Speak permission").
+   * `true` after `false` unlocks the controls and publishes the mic muted,
+   * leaving the unmute to the person.
+   */
+  function applySpeakRule(canSpeak: boolean, source: "welcome" | "change") {
+    const was = state.canSpeak;
+    state.canSpeak = canSpeak;
+    if (!canSpeak) {
+      state.isMuted = true;
+      applyMute();
+      if (screenCaptureStream) {
+        void stopScreenShareInternal();
+      }
+      if (cameraCaptureStream) {
+        void stopCameraInternal();
+      }
+      if (was || source === "welcome") {
+        state.notice = translateMessage("voice.notice.speakDenied");
+      }
+      return;
+    }
+    if (!was && source === "change") {
+      applyMute();
+      state.notice = translateMessage("voice.notice.speakGranted");
+      void publishMicWhenAllowed();
+    }
   }
 
   function applyMuteToPipeline() {
@@ -1400,7 +1474,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         await teardownSfu();
         return true;
       }
-      if (pipeline) {
+      // No publish for a listener: the token carries no grant for one and
+      // LiveKit would refuse it. The mic is published if SPEAK arrives later.
+      if (pipeline && state.canSpeak) {
         await sfu.publish(pipeline.processedStream);
         // The gate, not the mute flag — a push-to-talk user who joins an SFU
         // room without the key down must be published muted.
@@ -1559,6 +1635,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       remotePeers: [],
       isMuted: false,
       isDeafened: false,
+      canSpeak: true,
       inputMode: state.inputMode,
       isTransmitting: false,
       error: null,
@@ -1711,6 +1788,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.self = message.self;
           state.roomTransport = roomTransport;
           state.status = "connected";
+          applySpeakRule(
+            message.canSpeak ?? message.self.canSpeak ?? true,
+            "change",
+          );
           for (const peer of welcomePeers) {
             knownPeerIds.add(peer.peerId);
             identities.set(peer.peerId, toIdentity(peer));
@@ -1738,6 +1819,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.voiceChannelId = message.voiceChannelId;
         state.self = message.self;
         state.transportFailure = null;
+        // Before any media is built, so a listener's SFU session never tries
+        // to publish and a mesh listener's track starts disabled.
+        applySpeakRule(
+          message.canSpeak ?? message.self.canSpeak ?? true,
+          "welcome",
+        );
 
         for (const peer of welcomePeers) {
           knownPeerIds.add(peer.peerId);
@@ -1837,6 +1924,16 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (state.status !== "idle") {
           leaveCall();
         }
+        break;
+      case "voice-speak-changed":
+        if (
+          state.status === "idle" ||
+          message.voiceChannelId !== state.voiceChannelId
+        ) {
+          return;
+        }
+        applySpeakRule(message.canSpeak, "change");
+        emit();
         break;
       case "peer-joined": {
         const alreadyKnown = knownPeerIds.has(message.peer.peerId);
@@ -2217,14 +2314,20 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!pipeline) {
         return;
       }
-      // Undeafening is the only way back to an unmuted mic while deafened.
-      state.isMuted = state.isDeafened ? true : muted;
+      // Undeafening is the only way back to an unmuted mic while deafened,
+      // and there is no way back at all while the room says listen only.
+      state.isMuted = state.isDeafened || !state.canSpeak ? true : muted;
       applyMute();
       emit();
     },
 
     toggleMute() {
       if (!pipeline) {
+        return;
+      }
+      // Locked, not toggled: the button is disabled for this, and a shortcut
+      // or a desktop menu item that reaches here must get the same answer.
+      if (!state.canSpeak) {
         return;
       }
       if (state.isDeafened) {
@@ -2242,8 +2345,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         return;
       }
       state.isDeafened = !state.isDeafened;
-      // Deafening also mutes; undeafening restores an open mic.
-      state.isMuted = state.isDeafened;
+      // Deafening also mutes; undeafening restores an open mic, unless the
+      // room never allowed one.
+      state.isMuted = state.isDeafened || !state.canSpeak;
       applyMute();
       emit();
     },
@@ -2257,6 +2361,13 @@ export function createVoiceController(transport: RealtimeTransport) {
      */
     async startScreenShare(shareSystemAudio = false) {
       if (state.status !== "connected") {
+        return;
+      }
+      // Presenting is speaking. The button is hidden for a listener; this is
+      // for the keyboard shortcut and the desktop menu.
+      if (!state.canSpeak) {
+        state.notice = translateMessage("voice.notice.speakDenied");
+        emit();
         return;
       }
       if (
@@ -2507,6 +2618,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       if (cameraCaptureStream) {
         await stopCameraInternal();
+        emit();
+        return;
+      }
+      if (!state.canSpeak) {
+        state.notice = translateMessage("voice.notice.speakDenied");
         emit();
         return;
       }
