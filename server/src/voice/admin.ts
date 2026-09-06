@@ -98,6 +98,20 @@ export function resetSfuAdminClient(): void {
   cached = null;
 }
 
+/**
+ * The cheapest authenticated round-trip the SFU offers: `listRooms`. Resolves
+ * when it answered, rejects when it did not or when LiveKit is not
+ * configured. `services/ready.ts` owns the timeout and the cache; this is
+ * deliberately just the call.
+ */
+export async function pingSfu(): Promise<void> {
+  const client = getRoomService();
+  if (!client) {
+    throw new Error("LiveKit is not configured");
+  }
+  await client.listRooms();
+}
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

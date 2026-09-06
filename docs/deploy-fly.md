@@ -689,6 +689,42 @@ Also confirm the rate limiter is keyed correctly now that there is a new proxy i
 
 ---
 
+## 9b. External monitors: point UptimeRobot and Grafana at `/ready`, not `/health`, and why
+
+`/health` is Fly's check, and it must stay shallow. It is a single `SELECT 1`
+on a fresh connection, and that is all it should ever be: if it also judged
+the pool, the SFU or object storage, a two-minute Postgres blip would make
+Fly restart the only machine, which drops every WebSocket and turns a blip
+into an outage. So `/health` is optimised for "should this process be
+replaced?", which is a different question from "is the app working?".
+
+On 2026-09-05 those two questions had different answers for half an hour:
+Postgres was cutting established connections, every database-backed request
+failed, and `/health`, Fly's check and `/status.json` all stayed green, since
+a fresh connection could still answer `SELECT 1` and `/status.json` returns
+200 whatever it reports.
+
+`GET https://api.pqp.gg/ready` is the endpoint for a human-paging monitor:
+
+- **200** only when Postgres answers within 2 s, the pool has not been queued
+  for more than 10 s straight nor full for more than 30 s straight, and
+  LiveKit and storage (when configured) answer within 3 s.
+- **503** otherwise, with `checks.<name>.ok` telling you which one.
+- Unauthenticated, rate-limited per address, no hostnames or secrets in the
+  body. Remote probes are cached for 30 s so a monitor cannot make the API
+  hammer the SFU.
+
+```bash
+curl -s -w '\n%{http_code}\n' https://api.pqp.gg/ready
+```
+
+Point UptimeRobot at it (HTTP(s) monitor, 60 s, alert after 2 failures) and
+Grafana at the same URL (alert on status not 200). Do **not** add `/ready` to
+`fly.toml`. The full contract and the reasoning are in
+[`docs/MONITORING.md`](./MONITORING.md).
+
+---
+
 ## 10. Before a second region (e.g. `lhr`) can ever exist
 
 Adding a region means adding a machine, and this server keeps every WebSocket connection, presence entry, voice-room membership and rate-limit bucket in process memory (`server/src/ws/`, `server/src/lib/rate-limit.ts`) — so a second machine is a second, disjoint chat server behind the same hostname, and users on one simply cannot see users on the other, with no error anywhere to explain it.
