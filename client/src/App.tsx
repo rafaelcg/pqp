@@ -1987,7 +1987,18 @@ function MainAppContent({
             if (current.voiceChannelId !== message.voiceChannelId) {
               return;
             }
-            setAppError(message.message);
+            // The mute notices are the one case with local copy: the frame's
+            // sentence is English, and this is a state the person will sit
+            // in for a while, so it is worth saying in their language. The
+            // other actions keep the server's sentence verbatim (the
+            // sanction-notice principle: it already carries the whole story).
+            setAppError(
+              message.action === "muted"
+                ? translateMessage("voice.serverMuted.self")
+                : message.action === "unmuted"
+                  ? translateMessage("voice.serverMuted.cleared")
+                  : message.message,
+            );
             if (message.action === "moved" && message.movedToChannelId) {
               // Follow the move with an ordinary join: the server re-runs
               // every admission check (access, timeout, transport, room-full),
@@ -2000,7 +2011,9 @@ function MainAppContent({
               // resets the UI so we do not sit "connected" in an empty room.
               voice.leave();
             }
-            // "muted"/"unmuted": informational — the banner above is all.
+            // "muted"/"unmuted": the roster's `serverMuted` flag does the
+            // enforcing (see `serverMutedPeerIds` in `use-voice`); the banner
+            // above is the explanation.
             return;
           }
 
@@ -3593,6 +3606,7 @@ function MainAppContent({
         handle={user?.handle ?? null}
         avatarUrl={user?.avatarUrl ?? null}
         isMuted={voiceState.isMuted}
+        serverMuted={voiceState.self?.serverMuted === true}
         isDeafened={voiceState.isDeafened}
         inVoice={voiceState.status !== "idle"}
         canSpeak={voiceState.canSpeak}
@@ -4142,6 +4156,7 @@ function MainAppContent({
         outputDeviceId={localSettings.outputDeviceId}
         outputVolume={localSettings.outputVolume}
         audibleScreenPeerIds={voiceState.audibleScreenPeerIds}
+        serverMutedPeerIds={voiceState.serverMutedPeerIds}
       />
 
       {/* At the root and over everything, because the directory is a mode

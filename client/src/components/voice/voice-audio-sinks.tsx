@@ -2,6 +2,27 @@ import { useEffect, useRef } from "react";
 import { applyAudioOutputDevice } from "@/lib/audio-devices";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 
+/**
+ * What a peer's voice sink actually plays at.
+ *
+ * A moderator's mute wins over the listener's own slider: the stored value is
+ * left alone (it is the listener's setting, not the moderator's), so the
+ * moment the flag clears the person comes back at exactly the level they
+ * were set to. This is the receiving half of a server mute on a mesh room,
+ * where the muted peer's packets still arrive; the roster said zero, so zero
+ * is what every client plays, the same way every client drops a peer the
+ * roster no longer lists.
+ */
+export function resolvePeerPlaybackVolume(
+  storedVolume: number | undefined,
+  serverMuted: boolean,
+): number {
+  if (serverMuted) {
+    return 0;
+  }
+  return storedVolume ?? 1;
+}
+
 interface PeerAudioProps {
   peer: RemotePeer;
   outputDeviceId: string;
@@ -95,6 +116,13 @@ interface VoiceAudioSinksProps {
    * over it: both sinks read the same number.
    */
   screenVolumes?: Record<string, number>;
+  /**
+   * peerIds a moderator has muted for everyone (`serverMuted` on the roster).
+   * Their VOICE sink plays at zero whatever `peerVolumes` says; their screen
+   * audio is untouched, because the sanction is on the microphone and a
+   * presentation is not a microphone.
+   */
+  serverMutedPeerIds?: string[];
 }
 
 /**
@@ -111,6 +139,7 @@ export function VoiceAudioSinks({
   outputVolume = 1,
   audibleScreenPeerIds = [],
   screenVolumes = {},
+  serverMutedPeerIds = [],
 }: VoiceAudioSinksProps) {
   return (
     <>
@@ -120,7 +149,10 @@ export function VoiceAudioSinks({
           peer={peer}
           outputDeviceId={outputDeviceId}
           outputVolume={outputVolume}
-          peerVolume={peerVolumes[peer.userId ?? peer.peerId] ?? 1}
+          peerVolume={resolvePeerPlaybackVolume(
+            peerVolumes[peer.userId ?? peer.peerId],
+            serverMutedPeerIds.includes(peer.peerId),
+          )}
           isDeafened={isDeafened}
         />
       ))}
