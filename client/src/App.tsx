@@ -655,6 +655,10 @@ function MainAppContent({
    * bring back a 401 on every cold boot.
    */
   const friends = useFriendsStore(bootstrapReady);
+  const memberSidebarFriendIds = useMemo(
+    () => new Set(friends.data.friends.map((friend) => friend.id)),
+    [friends.data.friends],
+  );
   /**
    * False on every deployment that has not turned the directory on, which is
    * all of them today. Nothing about Communities renders while it is false —
@@ -4729,6 +4733,7 @@ function MainAppContent({
             .filter((c) => c.type === "voice")
             .map((c) => ({ id: c.id, name: c.name }))}
           roles={serverRoles}
+          friendIds={memberSidebarFriendIds}
         />
       )}
 
