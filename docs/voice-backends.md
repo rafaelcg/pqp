@@ -125,7 +125,7 @@ Net effect: one participant in the call, listed in the sidebar, silent, indistin
 
 **A voice room has one transport. The server picks it, states it, and does not change it while the room is occupied.**
 
-1. **Who decides.** `ws/voice.ts` takes the transport from config when a room's *first* peer joins and pins it in `roomTransports` for as long as the room has anyone in it. It is sent in `welcome.transport` and in every `voice-roster.transport`, so no client has to infer anything. The pin is dropped when the room empties, so adding, removing or repairing LiveKit takes effect on the next call in that channel without a restart.
+1. **Who decides.** `ws/voice.ts` decides the transport when a room's *first* peer joins (config, narrowed by the per-room policy below) and pins it in `roomTransports` for as long as the room has anyone in it. It is sent in `welcome.transport` and in every `voice-roster.transport`, so no client has to infer anything. The pin is dropped when the room empties, so adding, removing or repairing LiveKit takes effect on the next call in that channel without a restart.
 
 2. **Clients declare, up front, what they can run.** `join-voice-room` carries `transports: ["mesh"]` or `["mesh", "livekit"]`. A client that cannot run the room's transport is refused *before a peer is created* — it receives `voice-transport-unsupported` and nothing is broadcast, so it never appears in anyone's roster, not even for the round trip it would take to discover the mismatch. An absent `transports` field is read permissively as "both", because the only clients that omit it are builds older than the field.
 
@@ -146,6 +146,24 @@ Net effect: one participant in the call, listed in the sidebar, silent, indistin
 | SFU deployment, LiveKit host black-holes | Same as above, bounded at 12 s by the join timer instead of LiveKit's own ~15 s, and the UI says "Connecting…" throughout rather than "Voice connected". |
 
 `VoiceState.transportFailure` (`{ transport, reason: "unsupported" | "unreachable" }`) carries the outcome separately from `error`, so this is distinguishable from a mic failure or a dropped socket.
+
+### Which transport a room opens on (2026-09-06)
+
+LiveKit Cloud bills participant-minutes, and a call between three friends gains nothing from an SFU: the mesh is free, one hop shorter, and its ceiling (`MESH_VOICE_LIMIT`, 8) is far above what a small server or a DM ever fills. So with `LIVEKIT_*` configured a room still opens on **mesh** unless it can outgrow the mesh. The decision is one pure function, `resolveVoiceTransport` in `server/src/voice/transport-policy.ts`, taken once per pin:
+
+| Room | Transport | `reason` in the log line |
+|---|---|---|
+| DM or group call | mesh | `dm` |
+| Voice channel, server with fewer than 10 members | mesh | `small` |
+| Voice channel, server with 10 or more members | livekit | `large` |
+| Voice channel in a listed community (`servers.is_community`), any size | livekit | `community` |
+| Channel with `channels.voice_transport` set (`'mesh'` or `'livekit'`) | that value, regardless of the rows above | `override` |
+| No `LIVEKIT_*` on the deployment | mesh, always; nothing else is consulted | `unconfigured` |
+
+- **The override** is the channel settings dialog's "Voice room size" select (Automatic / Small, peer-to-peer / Large, voice server), `PATCH /api/channels/:id` with `voiceTransport`, Manage Channels permission. A streamer's five-member server uses it to force the SFU. Explicit `null` goes back to automatic.
+- **Cost of the decision:** one query, and only when it is needed: `getServerVoiceProfile` reads `servers.is_community` plus a correlated `COUNT(*)` over `server_members`' primary key `(server_id, user_id)`, so an index-only range scan. It is skipped for DMs, for a channel with an override, and whenever LiveKit is off. Because the result is pinned with the room, it runs once per call, never per join: a server crossing ten members mid-call does not move the call, the next call in that channel gets the SFU.
+- **Everything about the pin is unchanged.** `welcome.transport` and `voice-roster.transport` state the result; a mesh-only client (the native apps) joining a room that resolved to `livekit` is still refused with `voice-transport-unsupported`, never silently downgraded; a mesh room still stops at 8 with `voice-room-full`, which is acceptable because the policy only picks mesh for rooms that cannot reach 8 by construction, and an owner who expects to can set the override. `POST /api/voice/token` now answers 409 for a room pinned to mesh, so no participant-minute is ever billed for a peer-to-peer call.
+- **Log line**, one per pin: `[pqp] voice.transportPinned channelId=… transport=mesh reason=small` (`reason=resume` when a reconstructed resume re-pins what its token remembered).
 
 ### What can still split a call
 

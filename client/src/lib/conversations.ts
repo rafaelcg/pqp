@@ -70,6 +70,7 @@ export function conversationChannel(summary: DmSummary): Channel {
     // server-sidebar concept and a conversation lives in the Home rail.
     parentId: null,
     slowmodeSeconds: 0,
+    voiceTransport: null,
   };
 }
 

@@ -76,6 +76,7 @@ import type {
   UserSearchResponse,
   UserStatus,
   VoiceBackendType,
+  VoiceRoomTransport,
   VoiceSessionInfo,
   Webhook,
   RoleSystemKey,
@@ -853,6 +854,7 @@ export const updateChannel = (
     topic?: string | null;
     imageUrl?: string | null;
     slowmodeSeconds?: number;
+    voiceTransport?: VoiceRoomTransport | null;
   },
 ) => patch<{ channel: Channel }>(`/api/channels/${channelId}`, body);
 

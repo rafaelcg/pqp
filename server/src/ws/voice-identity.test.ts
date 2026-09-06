@@ -56,6 +56,9 @@ vi.mock("../services/servers.js", () => ({
     kind: "server",
     has: () => true,
   }),
+  // No server row to read: the transport policy falls through to the
+  // configured default, which is what these tests were written against.
+  getServerVoiceProfile: async () => null,
 }));
 
 vi.mock("../voice/admin.js", () => ({
