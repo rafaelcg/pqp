@@ -15,7 +15,7 @@ import type { DbUser } from "../db.js";
 import { createMemoryHub, type BusFrame } from "../lib/bus.js";
 
 /**
- * Voice across two instances: milestone M2 of
+ * Voice across two instances: milestones M2 and M3 of
  * `docs/plans/MULTI_INSTANCE_VOICE.md`.
  *
  * The same harness as `cluster.test.ts` (two module graphs over one memory
@@ -31,6 +31,16 @@ import { createMemoryHub, type BusFrame } from "../lib/bus.js";
  * frame) is refused and handed the row's winner; a socket authenticating on
  * B is sent A's rooms; and with either switch off, nothing crosses and the
  * flag-off instance behaves exactly as today.
+ *
+ * M3 (the "resume across instances" and "reconcile" groups): a resume on B
+ * for a seat A still holds adopts it with no `peer-left` anywhere; a seat
+ * whose instance died by lease is orphaned, comes back if the client
+ * returns within the resume window and is removed with `peer-left` on the
+ * survivor after it; a hangup on A is refused as a resume on B; the beacon
+ * on B retires a seat A holds; two instances running the reconcile at once
+ * announce each departure once. Time is shifted in SQL (`heartbeat_at`,
+ * `orphaned_at`) rather than with fake timers, because the sweep's clock is
+ * the database's `NOW()`.
  *
  * Skips without a database, like `voice-registry.test.ts`.
  */
@@ -134,7 +144,6 @@ async function bootInstance(connected = true): Promise<Instance> {
     bus.setBusTransport(bus.createMemoryTransport(hub));
   }
   const instance = { bus, voice, sockets, registry, db };
-  pools.push(db);
   booted.push(instance);
   return instance;
 }
@@ -202,7 +211,7 @@ async function join(
   );
   const welcome = frames(rec, "welcome")[0];
   if (!welcome) {
-    throw new Error("join was refused");
+    throw new Error(`join was refused: ${JSON.stringify(rec.frames)}`);
   }
   return {
     ...rec,
@@ -215,6 +224,59 @@ async function settle(): Promise<void> {
   for (const instance of booted) {
     await instance.registry.settleVoiceRegistryWrites();
   }
+}
+
+/** Make an instance's lease look `secondsAgo` old (dead past 45 s). */
+async function ageLease(instance: Instance, secondsAgo: number): Promise<void> {
+  await pools[0]!.getPool().query(
+    `UPDATE voice_instances
+        SET heartbeat_at = NOW() - ($2::int * INTERVAL '1 second')
+      WHERE instance_id = $1`,
+    [instance.bus.INSTANCE_ID, secondsAgo],
+  );
+}
+
+async function ageOrphan(peerId: string, secondsAgo: number): Promise<void> {
+  await pools[0]!.getPool().query(
+    `UPDATE voice_peers
+        SET orphaned_at = NOW() - ($2::int * INTERVAL '1 second')
+      WHERE peer_id = $1`,
+    [peerId, secondsAgo],
+  );
+}
+
+async function peerRow(
+  peerId: string,
+): Promise<{ instance_id: string; orphaned_at: Date | null } | undefined> {
+  const result = await pools[0]!.getPool().query<{
+    instance_id: string;
+    orphaned_at: Date | null;
+  }>(`SELECT instance_id, orphaned_at FROM voice_peers WHERE peer_id = $1`, [
+    peerId,
+  ]);
+  return result.rows[0];
+}
+
+async function resume(
+  instance: Instance,
+  userId: string,
+  channel: string,
+  peerId: string,
+  resumeToken: string,
+): Promise<Recorder> {
+  const rec = recorder();
+  instance.sockets.setAuthenticatedSocket(rec.socket, asUser(userId));
+  await instance.voice.handleVoiceMessage(
+    { socket: rec.socket, user: asUser(userId) },
+    {
+      type: "join-voice-room",
+      voiceChannelId: channel,
+      resume: true,
+      resumePeerId: peerId,
+      resumeToken,
+    },
+  );
+  return rec;
 }
 
 function party(rev: number, actorId: string, extra: Partial<WatchPartyState> = {}): WatchPartyState {
@@ -261,6 +323,11 @@ describeDb("voice across two instances", () => {
     for (const instance of booted) {
       instance.voice.resetVoicePeers();
       await instance.bus.closeBus();
+      // Each instance is its own pool. Closed here, not in afterAll: forty
+      // idle pools across the file is more than Postgres' default hundred
+      // connections, and a write that cannot get one is swallowed into a
+      // (mocked) log, which shows up as a row that is simply not there.
+      await instance.db.closePool().catch(() => {});
     }
     booted.length = 0;
     process.env.VOICE_REGISTRY = previousFlag;
@@ -554,6 +621,308 @@ describeDb("voice across two instances", () => {
     });
   });
 
+  describe("resume across instances", () => {
+    it("a resume on B for a seat A still holds adopts it, with no peer-left anywhere", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      const userId = randomUUID();
+      const bystanderOnA = await join(a, randomUUID(), channel);
+      const bystanderOnB = await join(b, randomUUID(), channel);
+      const seat = await join(a, userId, channel);
+      await waitFor(
+        () => frames(bystanderOnB, "peer-joined").length === 1,
+        "the seat on B",
+      );
+      await settle();
+      bystanderOnA.frames.length = 0;
+      bystanderOnB.frames.length = 0;
+
+      // The Wi-Fi blip: the client's next socket lands on B while A still
+      // thinks the old one is live.
+      const again = await resume(b, userId, channel, seat.peerId, seat.resumeToken);
+
+      const welcome = frames(again, "welcome")[0];
+      expect(welcome?.peerId).toBe(seat.peerId);
+      expect(welcome?.resumed).toBe(true);
+      // The seat is B's now, and A forgot it without a word.
+      await settle();
+      expect((await peerRow(seat.peerId))?.instance_id).toBe(b.bus.INSTANCE_ID);
+      await waitFor(
+        () => a.voice.getVoicePeer(seat.peerId) === null,
+        "A to drop the seat",
+      );
+      expect(b.voice.getVoicePeer(seat.peerId)).toMatchObject({ userId });
+      // A's room hears the person is (still) here, never that they left.
+      await waitFor(
+        () => frames(bystanderOnA, "peer-joined").length === 1,
+        "peer-joined on A",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(frames(bystanderOnA, "peer-left")).toHaveLength(0);
+      expect(frames(bystanderOnB, "peer-left")).toHaveLength(0);
+      // Both rosters still count three, once each.
+      await waitFor(
+        () => lastRoster(bystanderOnA, channel)?.participants.length === 3,
+        "roster on A",
+      );
+      expect(
+        lastRoster(bystanderOnA, channel)?.participants.filter(
+          (p) => p.peerId === seat.peerId,
+        ),
+      ).toHaveLength(1);
+      // The old socket's eventual close is nothing now.
+      a.voice.removeVoicePeerBySocket(seat.socket);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(frames(bystanderOnA, "peer-left")).toHaveLength(0);
+    });
+
+    it("A dies by lease: the seat is orphaned, a resume within the window reattaches on B", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      const userId = randomUUID();
+      const bystanderOnB = await join(b, randomUUID(), channel);
+      const seat = await join(a, userId, channel);
+      await waitFor(
+        () => frames(bystanderOnB, "peer-joined").length === 1,
+        "seat on B",
+      );
+      await settle();
+
+      // A stops answering; 60 s later B's reconcile runs.
+      await a.bus.closeBus();
+      await ageLease(a, 60);
+      bystanderOnB.frames.length = 0;
+      const first = await b.voice.runVoiceReconcile();
+      expect(first).toMatchObject({ orphaned: 1, removed: 0 });
+      const row = await peerRow(seat.peerId);
+      expect(row?.orphaned_at).not.toBeNull();
+      // Still on the roster, socket gone, seat held.
+      await settle();
+      await waitFor(
+        () => lastRoster(bystanderOnB, channel)?.participants.length === 2,
+        "roster on B still lists the orphan",
+      );
+      expect(frames(bystanderOnB, "peer-left")).toHaveLength(0);
+      // Once orphaned, a second pass is a no-op.
+      expect(await b.voice.runVoiceReconcile()).toMatchObject({
+        orphaned: 0,
+        removed: 0,
+      });
+
+      // The client comes back, on the machine that is left.
+      const again = await resume(b, userId, channel, seat.peerId, seat.resumeToken);
+      expect(frames(again, "welcome")[0]?.peerId).toBe(seat.peerId);
+      expect(frames(again, "welcome")[0]?.resumed).toBe(true);
+      await settle();
+      expect(await peerRow(seat.peerId)).toMatchObject({
+        instance_id: b.bus.INSTANCE_ID,
+        orphaned_at: null,
+      });
+      expect(frames(bystanderOnB, "peer-left")).toHaveLength(0);
+      // The seat is B's own now; the reconcile leaves it alone.
+      expect(await b.voice.runVoiceReconcile()).toMatchObject({
+        orphaned: 0,
+        removed: 0,
+      });
+    });
+
+    it("A dies by lease: past the window the seat is removed with peer-left on B and the id retired", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      const userId = randomUUID();
+      const sidebarOnB = watcher(b);
+      const bystanderOnB = await join(b, randomUUID(), channel);
+      const seat = await join(a, userId, channel);
+      await waitFor(
+        () => frames(bystanderOnB, "peer-joined").length === 1,
+        "seat on B",
+      );
+      await settle();
+
+      await a.bus.closeBus();
+      // Dead two minutes: the orphan is stamped as of the last heartbeat,
+      // which is already past the 90 s window, so one pass both orphans
+      // and removes. The client was unreachable the whole time.
+      await ageLease(a, 120);
+      bystanderOnB.frames.length = 0;
+      expect(await b.voice.runVoiceReconcile()).toMatchObject({
+        orphaned: 1,
+        removed: 1,
+      });
+      expect(await b.voice.runVoiceReconcile()).toMatchObject({
+        orphaned: 0,
+        removed: 0,
+      });
+
+      expect(frames(bystanderOnB, "peer-left")[0]?.peerId).toBe(seat.peerId);
+      await waitFor(
+        () => lastRoster(sidebarOnB, channel)?.participants.length === 1,
+        "roster on B without the dead seat",
+      );
+      expect(await peerRow(seat.peerId)).toBeUndefined();
+      // Retired: the token cannot rebuild the id on the survivor.
+      const again = await resume(b, userId, channel, seat.peerId, seat.resumeToken);
+      expect(frames(again, "welcome")[0]?.peerId).not.toBe(seat.peerId);
+      expect(frames(again, "welcome")[0]?.resumed).toBeUndefined();
+      // And the dead lease is gone.
+      const leases = await pools[0]!.getPool().query(
+        `SELECT 1 FROM voice_instances WHERE instance_id = $1`,
+        [a.bus.INSTANCE_ID],
+      );
+      expect(leases.rowCount).toBe(0);
+    });
+
+    it("sweeps a room row nobody is in, once it is old enough", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await pools[0]!.getPool().query(
+        `INSERT INTO voice_rooms (channel_id, transport, created_at)
+         VALUES ($1, 'mesh', NOW() - INTERVAL '5 minutes'),
+                ($2, 'mesh', NOW())`,
+        [channel, randomUUID()],
+      );
+      expect(await a.voice.runVoiceReconcile()).toMatchObject({ roomsSwept: 1 });
+      const rooms = await pools[0]!.getPool().query(`SELECT 1 FROM voice_rooms`);
+      expect(rooms.rowCount).toBe(1);
+    });
+
+    it("a hangup on A is refused as a resume on B", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const userId = randomUUID();
+      const seat = await join(a, userId, channel);
+      await a.voice.handleVoiceMessage(
+        { socket: seat.socket, user: asUser(userId) },
+        { type: "leave-voice-room" },
+      );
+      await settle();
+
+      const again = await resume(b, userId, channel, seat.peerId, seat.resumeToken);
+      expect(frames(again, "welcome")[0]?.peerId).not.toBe(seat.peerId);
+      expect(frames(again, "welcome")[0]?.resumed).toBeUndefined();
+    });
+
+    it("the beacon on B retires a seat A holds, and A forgets it without a second peer-left", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const userId = randomUUID();
+      const bystanderOnA = await join(a, randomUUID(), channel);
+      const bystanderOnB = await join(b, randomUUID(), channel);
+      const seat = await join(a, userId, channel);
+      await waitFor(
+        () => frames(bystanderOnB, "peer-joined").length === 1,
+        "seat on B",
+      );
+      await settle();
+      // The tab closes: `/ws` is already gone, the beacon lands on B.
+      a.voice.removeVoicePeerBySocket(seat.socket);
+      bystanderOnA.frames.length = 0;
+      bystanderOnB.frames.length = 0;
+
+      await expect(
+        b.voice.leaveVoiceByResumeToken(seat.peerId, seat.resumeToken),
+      ).resolves.toBe(true);
+
+      await settle();
+      expect(await peerRow(seat.peerId)).toBeUndefined();
+      expect(frames(bystanderOnB, "peer-left")[0]?.peerId).toBe(seat.peerId);
+      await waitFor(
+        () => frames(bystanderOnA, "peer-left").length === 1,
+        "peer-left on A",
+      );
+      await waitFor(
+        () => a.voice.getVoicePeer(seat.peerId) === null,
+        "A to drop the seat",
+      );
+      // A's orphan timer is gone with the entry: nothing fires later.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(frames(bystanderOnA, "peer-left")).toHaveLength(1);
+      // Twice is nothing, and a forged token is nothing.
+      await expect(
+        b.voice.leaveVoiceByResumeToken(seat.peerId, seat.resumeToken),
+      ).resolves.toBe(false);
+      // Retired everywhere.
+      const again = await resume(a, userId, channel, seat.peerId, seat.resumeToken);
+      expect(frames(again, "welcome")[0]?.peerId).not.toBe(seat.peerId);
+    });
+
+    it("the beacon refuses a token that does not match the row", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const seat = await join(a, randomUUID(), channel);
+      const other = await join(a, randomUUID(), randomUUID());
+      await settle();
+      await expect(
+        b.voice.leaveVoiceByResumeToken(seat.peerId, other.resumeToken),
+      ).resolves.toBe(false);
+      expect(await peerRow(seat.peerId)).toBeDefined();
+    });
+
+    it("two instances racing the reconcile announce each departure once", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const c = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      await c.registry.heartbeatVoiceInstance();
+      const bystanderOnB = await join(b, randomUUID(), channel);
+      const bystanderOnC = await join(c, randomUUID(), channel);
+      const seats = [
+        await join(a, randomUUID(), channel),
+        await join(a, randomUUID(), channel),
+      ];
+      await waitFor(
+        () => frames(bystanderOnB, "peer-joined").length === 3,
+        "everyone on B",
+      );
+      await settle();
+
+      await a.bus.closeBus();
+      await ageLease(a, 60);
+      for (const seat of seats) {
+        await ageOrphan(seat.peerId, 120);
+      }
+      // Already stamped as orphans (by A's close handlers, say) and past the
+      // window: one pass removes. Both survivors run it in the same instant.
+      bystanderOnB.frames.length = 0;
+      bystanderOnC.frames.length = 0;
+      onTheWire.length = 0;
+      const [onB, onC] = await Promise.all([
+        b.voice.runVoiceReconcile(),
+        c.voice.runVoiceReconcile(),
+      ]);
+      expect(onB.removed + onC.removed).toBe(2);
+
+      await settle();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const gone = seats.map((s) => s.peerId).sort();
+      expect(frames(bystanderOnB, "peer-left").map((f) => f.peerId).sort()).toEqual(gone);
+      expect(frames(bystanderOnC, "peer-left").map((f) => f.peerId).sort()).toEqual(gone);
+      expect(
+        onTheWire.filter((f) => f.topic === "voice.room" && (f.data as { kind: string }).kind === "left"),
+      ).toHaveLength(2);
+      const rows = await pools[0]!.getPool().query(
+        `SELECT 1 FROM voice_peers WHERE channel_id = $1`,
+        [channel],
+      );
+      expect(rows.rowCount).toBe(2);
+    });
+  });
+
   describe("with a switch off", () => {
     it("registry on, bus off: rows are written and nothing crosses", async () => {
       const channel = randomUUID();
@@ -610,6 +979,23 @@ describeDb("voice across two instances", () => {
       expect(
         (await pools[0]!.getPool().query(`SELECT 1 FROM voice_peers`)).rowCount,
       ).toBe(0);
+      // M3's paths are as off as the rest: the reconcile touches nothing,
+      // a resume for A's seat on B is a cold join, the beacon on B knows
+      // nothing of A's seat, and no frame of any of it goes out.
+      expect(await b.voice.runVoiceReconcile()).toEqual({
+        orphaned: 0,
+        removed: 0,
+        roomsSwept: 0,
+      });
+      const again = await resume(b, "x", channel, peerA.peerId, peerA.resumeToken);
+      expect(frames(again, "welcome")[0]?.peerId).not.toBe(peerA.peerId);
+      expect(frames(again, "welcome")[0]?.resumed).toBeUndefined();
+      await expect(
+        b.voice.leaveVoiceByResumeToken(peerA.peerId, peerA.resumeToken),
+      ).resolves.toBe(false);
+      expect(a.voice.getVoicePeer(peerA.peerId)).not.toBeNull();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(onTheWire.filter((f) => f.topic.startsWith("voice."))).toEqual([]);
     });
   });
 });

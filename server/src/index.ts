@@ -21,6 +21,7 @@ import {
   voiceConfigHash,
 } from "./voice/registry.js";
 import { startVoiceHello } from "./ws/voice-hello.js";
+import { runVoiceReconcile } from "./ws/voice.js";
 import {
   assertCorsConfig,
   corsHeaders,
@@ -504,7 +505,8 @@ function startVoiceRegistry(): (() => Promise<void>) | null {
     instance: INSTANCE_ID,
     configHash: voiceConfigHash(),
   });
-  return startVoiceInstanceHeartbeat();
+  // After every beat: the lease's consequences (ws/voice.ts).
+  return startVoiceInstanceHeartbeat(undefined, runVoiceReconcile);
 }
 
 let stopVoiceHeartbeat: (() => Promise<void>) | null = null;

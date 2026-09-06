@@ -5971,7 +5971,9 @@ async function handleVoiceLeaveBeacon(
   const resumeToken =
     typeof body.resumeToken === "string" ? body.resumeToken : "";
   if (isUuid(resumePeerId) && resumeToken.length > 0) {
-    leaveVoiceByResumeToken(resumePeerId, resumeToken);
+    // Local seat: removed before this returns. Foreign seat (registry on):
+    // the row, on its own time; the beacon has no reply to wait for.
+    void leaveVoiceByResumeToken(resumePeerId, resumeToken);
   }
 
   res.writeHead(204, {
