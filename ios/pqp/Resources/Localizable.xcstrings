@@ -2231,6 +2231,16 @@
         }
       }
     },
+    "Listening only. You do not have permission to speak in this channel." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Só ouvindo. Você não tem permissão para falar neste canal."
+          }
+        }
+      }
+    },
     "Load earlier messages" : {
       "localizations" : {
         "pt-BR" : {
@@ -4967,6 +4977,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você pode trocar de novo a partir de %@."
+          }
+        }
+      }
+    },
+    "You can speak now. Unmute when you are ready." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agora você pode falar. Ligue o microfone quando quiser."
           }
         }
       }

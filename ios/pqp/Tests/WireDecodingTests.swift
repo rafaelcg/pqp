@@ -206,7 +206,7 @@ final class WireDecodingTests: XCTestCase {
          "transport":"livekit"}
         """
         let event = await firstEvent(from: json)
-        guard case .voiceWelcome(_, _, _, _, let transport, _, _) = event else {
+        guard case .voiceWelcome(_, _, _, _, let transport, _, _, _) = event else {
             return XCTFail("Expected voiceWelcome, got \(String(describing: event))")
         }
         XCTAssertEqual(transport, "livekit")
@@ -220,10 +220,82 @@ final class WireDecodingTests: XCTestCase {
          "displayName":"Ana","avatarUrl":null}}
         """
         let event = await firstEvent(from: json)
-        guard case .voiceWelcome(_, _, _, _, let transport, _, _) = event else {
+        guard case .voiceWelcome(_, _, _, _, let transport, _, _, _) = event else {
             return XCTFail("Expected voiceWelcome, got \(String(describing: event))")
         }
         XCTAssertNil(transport)
+    }
+
+    /// `welcome.canSpeak` at the top level is the SPEAK rule for this seat.
+    /// Reading it wrongly is a listen-only member with an unmute button that
+    /// silently does nothing, which is gap 7 of the parity audit.
+    func testWelcomeCarriesCanSpeakFalse() async throws {
+        let json = """
+        {"type":"welcome","peerId":"p1","voiceChannelId":"33333333-3333-3333-3333-333333333333",
+         "peers":[],"self":{"peerId":"p1","userId":"44444444-4444-4444-4444-444444444444",
+         "displayName":"Ana","avatarUrl":null,"canSpeak":false},
+         "transport":"livekit","canSpeak":false}
+        """
+        let event = await firstEvent(from: json)
+        guard case .voiceWelcome(_, _, _, let selfPeer, _, _, _, let canSpeak) = event else {
+            return XCTFail("Expected voiceWelcome, got \(String(describing: event))")
+        }
+        XCTAssertFalse(canSpeak)
+        XCTAssertFalse(selfPeer.canSpeak)
+    }
+
+    /// A server that carries the bit only on `self` (or that predates the
+    /// top-level key) must still resolve it, and one that carries neither
+    /// resolves to true, which is what it enforced.
+    func testWelcomeCanSpeakFallsBackToSelfThenTrue() async throws {
+        let onSelf = """
+        {"type":"welcome","peerId":"p1","voiceChannelId":"33333333-3333-3333-3333-333333333333",
+         "peers":[],"self":{"peerId":"p1","userId":"44444444-4444-4444-4444-444444444444",
+         "displayName":"Ana","avatarUrl":null,"canSpeak":false}}
+        """
+        guard case .voiceWelcome(_, _, _, _, _, _, _, let fromSelf) = await firstEvent(from: onSelf) else {
+            return XCTFail("Expected voiceWelcome")
+        }
+        XCTAssertFalse(fromSelf)
+
+        let absent = """
+        {"type":"welcome","peerId":"p1","voiceChannelId":"33333333-3333-3333-3333-333333333333",
+         "peers":[],"self":{"peerId":"p1","userId":"44444444-4444-4444-4444-444444444444",
+         "displayName":"Ana","avatarUrl":null}}
+        """
+        guard case .voiceWelcome(_, _, _, let selfPeer, _, _, _, let canSpeak) = await firstEvent(from: absent) else {
+            return XCTFail("Expected voiceWelcome")
+        }
+        XCTAssertTrue(canSpeak)
+        XCTAssertTrue(selfPeer.canSpeak)
+    }
+
+    /// `voice-speak-changed` is the mid-call revoke. Dropping it as `.other`
+    /// leaves a mesh microphone open after a moderator took SPEAK away.
+    func testVoiceSpeakChangedDecodes() async throws {
+        let json = """
+        {"type":"voice-speak-changed",
+         "voiceChannelId":"33333333-3333-3333-3333-333333333333","canSpeak":false}
+        """
+        let event = await firstEvent(from: json)
+        guard case .voiceSpeakChanged(let channelId, let canSpeak) = event else {
+            return XCTFail("Expected voiceSpeakChanged, got \(String(describing: event))")
+        }
+        XCTAssertEqual(channelId, "33333333-3333-3333-3333-333333333333")
+        XCTAssertFalse(canSpeak)
+    }
+
+    /// The roster carries the bit for everybody, so a stage audience can be
+    /// badged; a participant without it is an ordinary speaker.
+    func testParticipantCanSpeakDefaultsToTrue() async throws {
+        let json = """
+        {"type":"peer-joined","peer":{"peerId":"p2","userId":"55555555-5555-5555-5555-555555555555",
+         "displayName":"Bia","avatarUrl":null}}
+        """
+        guard case .voicePeerJoined(let peer) = await firstEvent(from: json) else {
+            return XCTFail("Expected voicePeerJoined")
+        }
+        XCTAssertTrue(peer.canSpeak)
     }
 
     func testVoiceTransportUnsupportedDecodes() async throws {

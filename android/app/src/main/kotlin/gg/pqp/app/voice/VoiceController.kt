@@ -8,6 +8,7 @@ import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.os.Build
 import android.util.Log
+import gg.pqp.app.R
 import gg.pqp.app.core.IceServer
 import gg.pqp.app.core.PqpJson
 import gg.pqp.app.core.RealtimeClient
@@ -23,6 +24,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -55,6 +57,13 @@ data class VoiceState(
      * [absorbServerMute].
      */
     val serverMuted: Boolean = false,
+    /**
+     * The server's SPEAK rule for this seat, from `welcome.canSpeak` and
+     * `voice-speak-changed`. False locks the mute control (the seat is muted
+     * and cannot unmute), hides the share button and publishes nothing.
+     * Always true in a call that has no roles. See `SpeakRule.kt`.
+     */
+    val canSpeak: Boolean = true,
     /** Speakerphone rather than the earpiece. See [VoiceController.applyAudioRoute]. */
     val speakerphone: Boolean = true,
     /** This device is capturing and publishing its screen. */
@@ -454,9 +463,11 @@ class VoiceController(
     }
 
     fun toggleMute() {
-        // A moderator's mute is not ours to lift. The server would refuse the
-        // frame anyway; refusing here keeps the control honest and saves the
-        // round trip that would otherwise flicker the microphone icon.
+        // Neither a moderator's mute nor a listen-only seat is ours to lift.
+        // The server would refuse the frame anyway; refusing here keeps the
+        // control honest and saves the round trip that would otherwise flicker
+        // the microphone icon. `muteControlEnabled` is the one expression the
+        // call bar draws from, so the two cannot disagree.
         if (!_state.value.muteControlEnabled) return
         val muted = !_state.value.muted
         _state.value = _state.value.copy(muted = muted)
@@ -509,6 +520,9 @@ class VoiceController(
     fun startScreenShare(permission: Intent) {
         if (!_state.value.isActive) return
         if (_state.value.sharingScreen) return
+        // The server refuses the announce from a listen-only seat and the
+        // roster never carries it; the button is hidden, this is the guard.
+        if (!_state.value.canSpeak) return
         // The capture is started from inside the service, after its
         // `startForeground` has returned. Doing it here would race that call
         // and lose. See the class comment on [VoiceService].
@@ -523,7 +537,7 @@ class VoiceController(
      * be skipping it.
      */
     internal fun beginScreenCapture(permission: Intent) {
-        if (!_state.value.isActive || !_state.value.screenShareSupported) {
+        if (!_state.value.isActive || !_state.value.screenShareSupported || !_state.value.canSpeak) {
             // The button is hidden on a transport that cannot publish a screen,
             // so reaching here means the room changed under a consent dialog
             // that was already open. Give the projection straight back.
@@ -592,6 +606,7 @@ class VoiceController(
                 "peer-updated" -> onPeerUpdated(frame)
                 "peer-left" -> onPeerLeft(frame)
                 "voice-roster" -> onRoster(frame)
+                "voice-speak-changed" -> onSpeakChanged(frame)
                 "voice-room-full" -> onRefused(frame, Refusal.RoomFull)
                 "voice-transport-unsupported" -> onRefused(frame, Refusal.TransportUnsupported)
                 "screen-share-denied" -> onScreenShareDenied(frame)
@@ -701,6 +716,13 @@ class VoiceController(
         swapTransport(kind)
         acquireAudioFocus()
 
+        // Before any media is built, so a listen-only seat is muted from the
+        // first packet and the SFU join below publishes nothing at all. A
+        // fresh engine from `swapTransport` starts out allowed, so the rule is
+        // told to it on every welcome, not only when it changes.
+        val rule = speakRule(canSpeakFrom(frame), was = _state.value.canSpeak, source = SpeakRuleSource.Welcome)
+        engine.setCanPublishAudio(rule.canSpeak)
+
         val peers = frame.participants("peers")
         // Written **before** the engine is started, not after. On the SFU path
         // `start` hands the join to a coroutine that reports Connected when the
@@ -720,6 +742,9 @@ class VoiceController(
             participants = peers + listOfNotNull(frame.participant("self")),
             localPeerId = peerId,
             screenShareSupported = kind == VoiceTransportKind.Mesh,
+            canSpeak = rule.canSpeak,
+            muted = _state.value.muted || rule.mute,
+            notice = rule.notice?.let(::noticeText) ?: _state.value.notice,
         )
 
         engine.start(peerId, pendingIce)
@@ -744,6 +769,37 @@ class VoiceController(
         // every new peer id (`client/src/components/voice/voice-state-sync.ts`).
         pushVoiceState()
     }
+
+    /**
+     * A role or override edit mid-call. `false` is the safety half: on
+     * LiveKit the SFU has already dropped the grant, and in a mesh room this
+     * branch is the only thing that closes the microphone. `true` after
+     * `false` unlocks the control and leaves the unmute to the person.
+     */
+    private fun onSpeakChanged(frame: JsonObject) {
+        if (frame.str("voiceChannelId") != _state.value.channelId) return
+        if (!_state.value.isActive) return
+        val next = (frame["canSpeak"] as? JsonPrimitive)?.booleanOrNull ?: return
+        val rule = speakRule(next, was = _state.value.canSpeak, source = SpeakRuleSource.Change)
+        if (rule.stopPublishing && (_state.value.sharingScreen || engine.isSharingScreen)) {
+            stopScreenShare()
+        }
+        _state.value = _state.value.copy(
+            canSpeak = rule.canSpeak,
+            muted = _state.value.muted || rule.mute,
+            notice = rule.notice?.let(::noticeText) ?: _state.value.notice,
+        )
+        engine.setCanPublishAudio(rule.canSpeak)
+        engine.setMuted(_state.value.muted || _state.value.deafened)
+        if (rule.mute) pushVoiceState()
+    }
+
+    private fun noticeText(notice: SpeakNotice): String = context.getString(
+        when (notice) {
+            SpeakNotice.ListenOnly -> R.string.voice_listen_only_locked
+            SpeakNotice.SpeakGranted -> R.string.voice_speak_granted
+        },
+    )
 
     private fun onPeerJoined(frame: JsonObject) {
         if (!_state.value.isActive) return

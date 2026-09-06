@@ -79,7 +79,16 @@ actor LiveKitVoiceClient {
     /// own clock. `muted` is the state to publish *in*: a mute-on-join or a
     /// deafen decided before the room existed has to be true from the first
     /// packet, not applied a beat after.
-    func connect(_ info: VoiceSessionInfo, muted: Bool, speaker: Bool) async throws {
+    ///
+    /// `publishMicrophone` false is a listen-only seat (`welcome.canSpeak`).
+    /// No track is created and nothing is published: the server has already
+    /// withheld the LiveKit publish grant, and asking anyway is a refused
+    /// publish in the log for every listener in a stage. A later
+    /// `setMuted(false)`, which only happens once the rule flips to true,
+    /// publishes the track through `setMicrophone(enabled:)`.
+    func connect(
+        _ info: VoiceSessionInfo, muted: Bool, speaker: Bool, publishMicrophone: Bool = true
+    ) async throws {
         await disconnect()
         let bridge = RoomBridge(owner: self)
         self.bridge = bridge
@@ -105,6 +114,11 @@ actor LiveKitVoiceClient {
             try await room.connect(url: info.url, token: info.token)
         } catch {
             throw SfuJoinError.connect(String(describing: error))
+        }
+        if !publishMicrophone {
+            adoptExistingTracks()
+            emit()
+            return
         }
         // Published rather than captured-and-muted: the microphone is a track
         // on the room from the start, and mute toggles that track. DTX and RED
