@@ -206,11 +206,19 @@ async function countApprovedDepoimentos(userId: string): Promise<number> {
 /**
  * The communities this person is in, as badges.
  *
- * LISTED communities only, and never a suspended one: `is_community` is what
- * makes a server public, and `is_community_suspended` is the operator's kill
- * switch (see schema.sql). A private server must never appear here — that would
- * turn a public page into a disclosure of who somebody talks to, which is the
- * single worst thing this feature could do.
+ * PUBLIC communities only, and never a suspended one: `is_community` is the
+ * address switch — the room has a page at `pqp.gg/c/<slug>` that anybody can
+ * read — and `is_community_suspended` is the operator's kill switch (see
+ * schema.sql). A private server must never appear here; that would turn a
+ * public page into a disclosure of who somebody talks to, which is the single
+ * worst thing this feature could do.
+ *
+ * ON THE ADDRESS AND NOT ON `is_community_listed`, deliberately. A badge names
+ * a room whose own page is public and whose own owner published it; whether
+ * that room also chose to be browsable in the directory is a decision about
+ * discovery, not about whether its name may be said out loud. The member's own
+ * `show_on_profile` is the second consent, and it is the one that matters if
+ * they would rather not be listed as being here.
  *
  * TODO(coordinator): a per-membership `show_on_profile` opt-out is being added
  * in a parallel branch. When it lands, add `AND m.show_on_profile` to the WHERE

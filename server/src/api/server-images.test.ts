@@ -567,6 +567,7 @@ describeDb("server images", () => {
         await setImage("banner");
         await call(owner, "PATCH", `/api/servers/${serverId}/community`, {
           isCommunity: true,
+          isListed: true,
         });
 
         // Read by somebody who is not in it — a directory card is what a

@@ -109,6 +109,12 @@ Two things make it work with no new configuration:
 Every failure path (no API origin, API down, 404, timeout, malformed body)
 serves the page unchanged.
 
+A community's public page does **not** depend on the directory: `/c/<slug>`
+answers for any community with an address (`servers.is_community`), listed or
+not, which is the point of a link an owner can hand to an audience without
+opening the door to strangers browsing. Only `servers.is_community_suspended`
+takes it down.
+
 The same middleware also handles `/c/<slug>` through
 `client/src/lib/community-meta.ts` — a separate head builder rather than one
 parameterised function, because the two cards differ where it matters: a
