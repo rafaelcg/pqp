@@ -50,22 +50,23 @@ import { Achievements } from "@/components/profile/achievements";
 import {
   ApiError,
   assignMemberRole,
-  banMember,
   createConversation,
   fetchUserConnections,
   fetchUserAchievements,
-  kickMember,
-  liftTimeout,
-  timeoutMember,
   unassignMemberRole,
   updateMemberNickname,
 } from "@/lib/api";
+import {
+  applyMemberModeration,
+  describeTimeoutMinutes,
+  DEFAULT_TIMEOUT_MINUTES,
+} from "@/lib/member-moderation";
 import { displayRoleName } from "@/lib/role-labels";
 import {
   assignableRoleIds,
   canActOnMemberClient,
 } from "@/lib/role-hierarchy";
-import { useTranslation, type MessageKey, type Translator } from "@/lib/i18n";
+import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import {
   canBlock,
@@ -264,28 +265,6 @@ const ABOUT_LABEL: Record<ProfileAboutTab, MessageKey> = {
   connections: "profile.about.accounts",
   communities: "depoimentos.communities",
 };
-
-/**
- * The preset the composer opens on — one hour, the second rung of
- * `TIMEOUT_PRESET_MINUTES`. Long enough to interrupt whatever is happening,
- * short enough that being wrong costs the person an hour.
- */
-const DEFAULT_TIMEOUT_MINUTES = TIMEOUT_PRESET_MINUTES[1]!;
-
-/**
- * A preset's label. Translated per unit rather than formatted from a number,
- * because "1 day" and "7 days" pluralise differently in the languages this
- * catalogue already carries, and the presets are a fixed list of four.
- */
-function describeTimeoutMinutes(minutes: number, t: Translator["t"]): string {
-  if (minutes < 60) {
-    return t("profile.mod.duration.minutes", { count: minutes });
-  }
-  if (minutes < 60 * 24) {
-    return t("profile.mod.duration.hours", { count: minutes / 60 });
-  }
-  return t("profile.mod.duration.days", { count: minutes / (60 * 24) });
-}
 
 // --------------------------------------------------------------------- card
 
@@ -676,42 +655,40 @@ function UserProfileCard({
     const { serverId } = moderation;
     setNotice(null);
     void run(async () => {
+      // One implementation of every rung, shared with the member list's own
+      // menu. See `lib/member-moderation.ts`. What stays here is the wording
+      // this surface shows afterwards.
+      const message = await applyMemberModeration({
+        action: which,
+        serverId,
+        userId: subject.id,
+        minutes: timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES,
+        reason: which === "ban" ? banReason : timeoutReason,
+      });
+      if (which === "timeout") {
+        setTimeoutMinutes(null);
+        setTimeoutReason("");
+      }
+      if (which === "ban") {
+        setBanReason("");
+      }
+      moderation.onModerated();
       switch (which) {
-        case "timeout": {
-          const minutes = timeoutMinutes ?? DEFAULT_TIMEOUT_MINUTES;
-          const { message } = await timeoutMember(
-            serverId,
-            subject.id,
-            minutes,
-            timeoutReason.trim() || null,
-          );
-          setTimeoutMinutes(null);
-          setTimeoutReason("");
-          moderation.onModerated();
+        case "timeout":
           // The server writes the whole sentence — when it ends, what it takes
           // away — and it is the same one the sanctioned person reads. Showing
-          // it verbatim is how the two sides cannot disagree about the sentence.
+          // it verbatim is how the two sides cannot disagree about it.
           setNotice(message);
           return;
-        }
         case "endTimeout":
-          await liftTimeout(serverId, subject.id);
-          moderation.onModerated();
-          setNotice(t("profile.mod.timeoutEnded", { name: subject.displayName }));
+          setNotice(
+            t("profile.mod.timeoutEnded", { name: subject.displayName }),
+          );
           return;
         case "kick":
-          await kickMember(serverId, subject.id);
-          moderation.onModerated();
           setNotice(t("profile.mod.kicked", { name: subject.displayName }));
           return;
         case "ban":
-          // The reason the members panel drops on the floor. It is the only
-          // thing the ban list can show later about *why*, and a ban with no
-          // reason is a decision nobody — including the person who made it —
-          // can reconstruct in six months.
-          await banMember(serverId, subject.id, banReason.trim() || null);
-          setBanReason("");
-          moderation.onModerated();
           setNotice(t("profile.mod.banned", { name: subject.displayName }));
           return;
       }

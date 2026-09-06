@@ -2031,6 +2031,7 @@
   "member.nickname": "Change nickname",
   "member.nicknamePrompt": "Nickname in this community (leave blank to clear)",
   "member.nicknameFailed": "Could not change that nickname",
+  "member.moderationFailed": "Could not do that right now",
   "roles.newPlaceholder": "New role",
   "roles.add": "Add",
   "roles.name": "Role name",
