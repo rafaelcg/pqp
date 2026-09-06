@@ -3040,8 +3040,9 @@ function MainAppContent({
     refreshIceServers();
 
     const current = voice.getState();
+    const inCall = current.status !== "idle";
     const switching =
-      current.status !== "idle" &&
+      inCall &&
       current.voiceChannelId !== null &&
       current.voiceChannelId !== channelId;
     if (switching && current.self && pendingVoiceMoves.includes(current.self.userId)) {
@@ -3049,12 +3050,12 @@ function MainAppContent({
     }
 
     // A crowd is joined muted regardless of the preference; see join-muted.ts.
-    // A room switch keeps the mute the person already chose.
+    // Already in a call: never pass startMuted. A drag is not a fresh join.
     const occupantsAlreadyInRoom = current.occupancy[channelId]?.length ?? 0;
     await voice.join(channelId, {
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,
-      ...(switching
+      ...(inCall
         ? {}
         : {
             startMuted: shouldJoinMuted(
