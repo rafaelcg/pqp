@@ -19,6 +19,7 @@ interface TokenClaims {
     room?: string;
     roomJoin?: boolean;
     canPublish?: boolean;
+    canPublishSources?: string[];
     canSubscribe?: boolean;
   };
 }
@@ -92,8 +93,39 @@ describe("LiveKit token minting", () => {
     }
     // Stated in the response too, so the client knows without a round trip.
     expect(speaker.speak).toBe(true);
+    expect(speaker.stream).toBe(true);
     expect(listener.speak).toBe(false);
+    expect(listener.stream).toBe(false);
     expect(legacy.speak).toBe(true);
+    expect(legacy.stream).toBe(true);
+  });
+
+  it("lists microphone only when Stream is denied", async () => {
+    const micOnly = await createLiveKitSession("voice-a", "peer-1", "A", "u1", {
+      canSpeak: true,
+      canStream: false,
+    });
+    const video = decodeClaims(micOnly.token).video;
+    expect(video?.canPublish).toBe(true);
+    expect(video?.canPublishSources).toEqual(["microphone"]);
+    expect(micOnly.speak).toBe(true);
+    expect(micOnly.stream).toBe(false);
+  });
+
+  it("lists camera and screen when Speak is denied", async () => {
+    const videoOnly = await createLiveKitSession("voice-a", "peer-1", "A", "u1", {
+      canSpeak: false,
+      canStream: true,
+    });
+    const video = decodeClaims(videoOnly.token).video;
+    expect(video?.canPublish).toBe(true);
+    expect(video?.canPublishSources).toEqual([
+      "camera",
+      "screen_share",
+      "screen_share_audio",
+    ]);
+    expect(videoOnly.speak).toBe(false);
+    expect(videoOnly.stream).toBe(true);
   });
 
   it("keeps the token short-lived so a stale one cannot be replayed for long", async () => {

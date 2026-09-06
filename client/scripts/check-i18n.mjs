@@ -107,7 +107,7 @@ const SHELL_GLOBS = [
   "App.tsx",
   "components/layout/channel-list.tsx",
   "components/layout/server-rail.tsx",
-  "components/layout/channel-meta-dialog.tsx",
+  "components/layout/channel-settings-dialog.tsx",
   "components/chat/message-list.tsx",
   "components/chat/message-composer.tsx",
   "components/chat/pinned-messages-panel.tsx",
@@ -116,7 +116,6 @@ const SHELL_GLOBS = [
   "components/layout/reports-section.tsx",
   "components/chat/report-dialog.tsx",
   "components/layout/members-panel.tsx",
-  "components/layout/channel-members-panel.tsx",
 ];
 
 function walk(dir, acc = []) {

@@ -1882,7 +1882,56 @@ describe("speak permission", () => {
     expect(voice.getState().isSharingScreen).toBe(false);
     await voice.toggleCamera();
     expect(voice.getState().isCameraOn).toBe(false);
-    expect(voice.getState().notice).toContain("do not have permission to speak");
+    expect(voice.getState().notice).toContain(
+      "No camera or screen share in this channel",
+    );
+  });
+
+  it("treats a missing canStream as canSpeak", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    expect(voice.getState().canSpeak).toBe(true);
+    expect(voice.getState().canStream).toBe(true);
+
+    voice.handleSignaling({
+      type: "voice-speak-changed",
+      voiceChannelId: CHANNEL,
+      canSpeak: false,
+    });
+    await settle();
+    expect(voice.getState().canSpeak).toBe(false);
+    expect(voice.getState().canStream).toBe(false);
+  });
+
+  it("keeps the mic when Stream is denied and refuses camera or share", async () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling({
+      ...welcome("mesh"),
+      canSpeak: true,
+      canStream: false,
+    });
+    await settle();
+
+    expect(voice.getState().canSpeak).toBe(true);
+    expect(voice.getState().canStream).toBe(false);
+    expect(voice.getState().notice).toContain(
+      "No camera or screen share in this channel",
+    );
+
+    voice.setMuted(false);
+    expect(voice.getState().isMuted).toBe(false);
+    expect(voice.getState().isTransmitting).toBe(true);
+
+    await voice.startScreenShare();
+    expect(displayMediaCalls).toHaveLength(0);
+    expect(voice.getState().isSharingScreen).toBe(false);
+    await voice.toggleCamera();
+    expect(voice.getState().isCameraOn).toBe(false);
   });
 
   it("never publishes a microphone to the SFU without SPEAK", async () => {
@@ -1917,6 +1966,7 @@ describe("speak permission", () => {
 
     const state = voice.getState();
     expect(state.canSpeak).toBe(true);
+    expect(state.canStream).toBe(true);
     expect(state.isMuted).toBe(true);
     expect(state.notice).toContain("You can speak now");
     // The mic is published (muted) so the unmute is instant.
@@ -1947,6 +1997,7 @@ describe("speak permission", () => {
 
     const state = voice.getState();
     expect(state.canSpeak).toBe(false);
+    expect(state.canStream).toBe(false);
     expect(state.isMuted).toBe(true);
     expect(state.isTransmitting).toBe(false);
     expect(state.isSharingScreen).toBe(false);
@@ -1975,8 +2026,10 @@ describe("speak permission", () => {
       canSpeak: false,
     });
     expect(voice.getState().canSpeak).toBe(false);
+    expect(voice.getState().canStream).toBe(false);
     voice.leave();
     expect(voice.getState().canSpeak).toBe(true);
+    expect(voice.getState().canStream).toBe(true);
   });
 });
 

@@ -1,4 +1,5 @@
 import * as ContextMenuPrimitive from "@radix-ui/react-context-menu";
+import { Check, type LucideIcon } from "lucide-react";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
@@ -9,6 +10,10 @@ export interface ContextMenuItemDef {
   danger?: boolean;
   disabled?: boolean;
   separator?: boolean;
+  /** Left of the label. Menus that set this on any row reserve the column. */
+  icon?: LucideIcon;
+  /** Tick on the right. Used for exclusive choices like notification level. */
+  checked?: boolean;
 }
 
 /**
@@ -108,6 +113,7 @@ export function ContextMenu({
 
   const strip = reactions ?? [];
   const hasStrip = strip.length > 0;
+  const reserveIcon = items.some((item) => !item.separator && item.icon);
 
   if (disabled || (items.length === 0 && !hasStrip)) {
     return <>{children}</>;
@@ -193,14 +199,26 @@ export function ContextMenu({
                 key={item.id}
                 disabled={item.disabled}
                 onSelect={() => item.onSelect?.()}
+                aria-checked={item.checked}
                 className={cn(
-                  "flex cursor-default select-none items-center rounded-md px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-ink-3",
+                  "flex cursor-default select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-ink-3",
                   item.danger
                     ? "text-danger data-[highlighted]:bg-danger/15"
                     : "text-paper",
                 )}
               >
-                {item.label}
+                {reserveIcon && (
+                  <span
+                    aria-hidden="true"
+                    className="flex h-4 w-4 shrink-0 items-center justify-center"
+                  >
+                    {item.icon ? <item.icon className="h-3.5 w-3.5" /> : null}
+                  </span>
+                )}
+                <span className="min-w-0 flex-1">{item.label}</span>
+                {item.checked ? (
+                  <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                ) : null}
               </ContextMenuPrimitive.Item>
             ),
           )}

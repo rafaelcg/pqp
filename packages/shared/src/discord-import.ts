@@ -32,9 +32,11 @@ export const DiscordPermission = {
   ATTACH_FILES: 1n << 15n,
   READ_MESSAGE_HISTORY: 1n << 16n,
   MENTION_EVERYONE: 1n << 17n,
+  STREAM: 1n << 9n,
   CONNECT: 1n << 20n,
   SPEAK: 1n << 21n,
   MUTE_MEMBERS: 1n << 22n,
+  MOVE_MEMBERS: 1n << 24n,
   CHANGE_NICKNAME: 1n << 26n,
   MANAGE_NICKNAMES: 1n << 27n,
   MANAGE_ROLES: 1n << 28n,
@@ -54,9 +56,11 @@ const DISCORD_TO_PQP: ReadonlyArray<{ discord: bigint; pqp: bigint }> = [
   { discord: DiscordPermission.ATTACH_FILES, pqp: Permission.ATTACH_FILES },
   { discord: DiscordPermission.READ_MESSAGE_HISTORY, pqp: Permission.READ_MESSAGE_HISTORY },
   { discord: DiscordPermission.MENTION_EVERYONE, pqp: Permission.MENTION_EVERYONE },
+  { discord: DiscordPermission.STREAM, pqp: Permission.STREAM },
   { discord: DiscordPermission.CONNECT, pqp: Permission.CONNECT },
   { discord: DiscordPermission.SPEAK, pqp: Permission.SPEAK },
   { discord: DiscordPermission.MUTE_MEMBERS, pqp: Permission.MUTE_MEMBERS },
+  { discord: DiscordPermission.MOVE_MEMBERS, pqp: Permission.MOVE_MEMBERS },
   { discord: DiscordPermission.CHANGE_NICKNAME, pqp: Permission.CHANGE_NICKNAME },
   { discord: DiscordPermission.MANAGE_NICKNAMES, pqp: Permission.MANAGE_NICKNAMES },
   { discord: DiscordPermission.MANAGE_ROLES, pqp: Permission.MANAGE_ROLES },
@@ -64,7 +68,13 @@ const DISCORD_TO_PQP: ReadonlyArray<{ discord: bigint; pqp: bigint }> = [
 ];
 
 const OVERWRITE_PQP_BITS =
-  Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES | Permission.CONNECT;
+  Permission.VIEW_CHANNEL |
+  Permission.SEND_MESSAGES |
+  Permission.CONNECT |
+  Permission.SPEAK |
+  Permission.STREAM |
+  Permission.MUTE_MEMBERS |
+  Permission.MOVE_MEMBERS;
 
 /** Manage bits we will not put on imported `@everyone`, even if Discord had them. */
 const EVERYONE_IMPORT_DENIED =

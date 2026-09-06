@@ -100,7 +100,7 @@ function useVisualViewport(open: boolean): ViewportBox | null {
 
 interface DialogProps {
   open: boolean;
-  title: string;
+  title: ReactNode;
   /** Small label above the title, e.g. "Members". */
   eyebrow?: string;
   description?: string;
@@ -336,8 +336,15 @@ export function Dialog({
                   {eyebrow}
                 </p>
               )}
-              <h2 id={titleId} className="truncate font-display text-2xl font-bold">
-                {title}
+              <h2
+                id={titleId}
+                className="min-w-0 font-display text-2xl font-bold"
+              >
+                {typeof title === "string" ? (
+                  <span className="block truncate">{title}</span>
+                ) : (
+                  title
+                )}
               </h2>
               {description && (
                 <p id={descriptionId} className="mt-1 text-sm text-paper-muted">

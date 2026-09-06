@@ -24,7 +24,7 @@ vi.mock("../services/permissions.js", () => ({
   },
 }));
 
-const { resolveCanSpeak } = await import("./speak.js");
+const { resolveCanSpeak, resolveVoicePublish } = await import("./speak.js");
 const { Permission } = await import("@pqp/shared");
 
 const SERVER = "server-1";
@@ -71,5 +71,28 @@ describe("resolveCanSpeak", () => {
       [SERVER, "user-1", CHANNEL],
       [SERVER, "user-1", CHANNEL],
     ]);
+  });
+});
+
+describe("resolveVoicePublish", () => {
+  it("splits Speak and Stream from the same resolution", async () => {
+    resolved.calls.length = 0;
+    resolved.bits = Permission.SPEAK;
+    await expect(
+      resolveVoicePublish(
+        { kind: "server", server_id: SERVER },
+        CHANNEL,
+        "user-1",
+      ),
+    ).resolves.toEqual({ canSpeak: true, canStream: false });
+
+    resolved.bits = Permission.STREAM;
+    await expect(
+      resolveVoicePublish(
+        { kind: "server", server_id: SERVER },
+        CHANNEL,
+        "user-1",
+      ),
+    ).resolves.toEqual({ canSpeak: false, canStream: true });
   });
 });

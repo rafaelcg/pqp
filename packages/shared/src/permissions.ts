@@ -5,7 +5,7 @@ import { z } from "zod";
  *
  * Names follow Discord's published flags so the 8-step overwrite algorithm
  * (https://docs.discord.com/developers/topics/permissions) maps 1:1. The bit
- * *numbers* are ours (0–20). Never do this math in JS `number` — `1 << 31`
+ * *numbers* are ours (0–22). Never do this math in JS `number` — `1 << 31`
  * overflows; always `bigint`.
  *
  * On the wire, bitfields are decimal strings. In Postgres they are `BIGINT`.
@@ -34,12 +34,16 @@ export const Permission = {
   ADD_REACTIONS: 1n << 19n,
   /** Outgoing channel webhooks. Incoming execute tokens stay MANAGE_CHANNELS. */
   MANAGE_WEBHOOKS: 1n << 20n,
+  /** Camera and screen share. Speak is the microphone only. */
+  STREAM: 1n << 21n,
+  /** Move or disconnect someone in a voice channel. */
+  MOVE_MEMBERS: 1n << 22n,
 } as const;
 
 export type PermissionBit = (typeof Permission)[keyof typeof Permission];
 
 /** Every defined bit. Owner and Administrator resolve to this. */
-export const PERMISSION_ALL = (1n << 21n) - 1n;
+export const PERMISSION_ALL = (1n << 23n) - 1n;
 
 /**
  * Default `@everyone` mask: chat, react, attach, history, voice, own nick,
@@ -53,6 +57,7 @@ export const PERMISSION_DEFAULT_EVERYONE =
   Permission.READ_MESSAGE_HISTORY |
   Permission.CONNECT |
   Permission.SPEAK |
+  Permission.STREAM |
   Permission.CHANGE_NICKNAME |
   Permission.ADD_REACTIONS;
 
@@ -71,6 +76,7 @@ export const PERMISSION_DEFAULT_MODERATOR =
   Permission.KICK_MEMBERS |
   Permission.MODERATE_MEMBERS |
   Permission.MUTE_MEMBERS |
+  Permission.MOVE_MEMBERS |
   Permission.MANAGE_MESSAGES |
   Permission.MANAGE_NICKNAMES;
 
@@ -209,7 +215,9 @@ export const PERMISSION_FLAGS = [
   { bit: Permission.MENTION_EVERYONE, key: "MENTION_EVERYONE" },
   { bit: Permission.CONNECT, key: "CONNECT" },
   { bit: Permission.SPEAK, key: "SPEAK" },
+  { bit: Permission.STREAM, key: "STREAM" },
   { bit: Permission.MUTE_MEMBERS, key: "MUTE_MEMBERS" },
+  { bit: Permission.MOVE_MEMBERS, key: "MOVE_MEMBERS" },
   { bit: Permission.CHANGE_NICKNAME, key: "CHANGE_NICKNAME" },
   { bit: Permission.MANAGE_NICKNAMES, key: "MANAGE_NICKNAMES" },
   { bit: Permission.MANAGE_ROLES, key: "MANAGE_ROLES" },
