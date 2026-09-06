@@ -16,6 +16,7 @@ vi.mock("@/lib/api", () => ({
   apiFetch: vi.fn(),
   editMessage: vi.fn(),
   deleteMessage: vi.fn(),
+  bulkDeleteMessages: vi.fn(),
 }));
 
 vi.mock("@/lib/notifications", () => ({
@@ -646,6 +647,109 @@ describe("edit and delete", () => {
       messageId,
     } as never);
     expect(chat.getMessages()).toHaveLength(0);
+  });
+});
+
+describe("bulk delete", () => {
+  function loaded(count: number) {
+    return Array.from({ length: count }, (_, index) =>
+      serverMessage({
+        id: `00000000-0000-4000-8000-0000000000${(index + 10).toString(16)}`,
+        body: `m${index}`,
+      }),
+    );
+  }
+
+  it("removes every id a message-bulk-delete frame names, in one pass", () => {
+    const { chat } = setup();
+    const messages = loaded(4);
+    chat.setMessages(messages);
+
+    chat.handleServerMessage({
+      type: "message-bulk-delete",
+      channelId: CHANNEL,
+      messageIds: [messages[0]!.id, messages[2]!.id],
+    } as never);
+
+    expect(chat.getMessages().map((m) => m.body)).toEqual(["m1", "m3"]);
+  });
+
+  it("ignores a bulk frame for another channel", () => {
+    const { chat } = setup();
+    const messages = loaded(2);
+    chat.setMessages(messages);
+
+    chat.handleServerMessage({
+      type: "message-bulk-delete",
+      channelId: "c0000000-0000-4000-8000-0000000000ff",
+      messageIds: messages.map((m) => m.id),
+    } as never);
+
+    expect(chat.getMessages()).toHaveLength(2);
+  });
+
+  it("marks replies whose parent went in the sweep", () => {
+    const { chat } = setup();
+    const parent = serverMessage({
+      id: "00000000-0000-4000-8000-0000000000aa",
+      body: "parent",
+    });
+    const child = serverMessage({
+      id: "00000000-0000-4000-8000-0000000000bb",
+      body: "child",
+      replyTo: {
+        id: parent.id,
+        authorId: ME.id,
+        authorName: "Me",
+        excerpt: "parent",
+        deleted: false,
+      },
+    });
+    chat.setMessages([parent, child]);
+
+    chat.handleServerMessage({
+      type: "message-bulk-delete",
+      channelId: CHANNEL,
+      messageIds: [parent.id],
+    } as never);
+
+    const [remaining] = chat.getMessages();
+    expect(remaining!.body).toBe("child");
+    expect(remaining!.replyTo?.deleted).toBe(true);
+  });
+
+  it("removes only the ids the server says actually went", async () => {
+    const { chat } = setup();
+    const messages = loaded(3);
+    chat.setMessages(messages);
+
+    // Somebody else deleted the third one a moment ago, so the server answers
+    // with two. Trusting the request instead would blank a row that is still
+    // there for everyone else.
+    vi.mocked(api.bulkDeleteMessages).mockResolvedValueOnce({
+      deleted: 2,
+      messageIds: [messages[0]!.id, messages[1]!.id],
+    });
+
+    const deleted = await chat.bulkDeleteMessages(messages.map((m) => m.id));
+    expect(deleted).toBe(2);
+    expect(chat.getMessages().map((m) => m.body)).toEqual(["m2"]);
+  });
+
+  it("leaves the messages alone when the request is refused", async () => {
+    const { chat } = setup();
+    const messages = loaded(2);
+    chat.setMessages(messages);
+    vi.mocked(api.bulkDeleteMessages).mockRejectedValueOnce(
+      new Error("Slow down"),
+    );
+
+    await expect(
+      chat.bulkDeleteMessages(messages.map((m) => m.id)),
+    ).rejects.toThrow("Slow down");
+    // Nothing optimistic: a hundred rows put back after a 429 is worse than a
+    // beat of latency.
+    expect(chat.getMessages()).toHaveLength(2);
   });
 });
 

@@ -34,6 +34,7 @@ import type {
 } from "@pqp/shared";
 import { MessageComposer } from "@/components/chat/message-composer";
 import { MessageList, type MessageAuthorInfo } from "@/components/chat/message-list";
+import { BulkPurgeDialog } from "@/components/chat/bulk-purge-dialog";
 import { ForwardDialog, type ForwardTarget } from "@/components/chat/forward-dialog";
 import { ThreadPanel } from "@/components/chat/thread-panel";
 import {
@@ -151,6 +152,7 @@ import { createVoiceController } from "@/hooks/use-voice";
 import {
   ApiError,
   blockUser,
+  bulkDeleteMessages,
   createChannel,
   createThread,
   createVoiceSession,
@@ -985,6 +987,15 @@ function MainAppContent({
   const [pendingDeleteChannelId, setPendingDeleteChannelId] = useState<
     string | null
   >(null);
+  /**
+   * The channel whose "clear recent messages" dialog is open. Holds the name
+   * as well as the id: the dialog says which channel it is about, and by the
+   * time it is answered the list may have moved on.
+   */
+  const [purgeChannel, setPurgeChannel] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [pendingLeaveServerId, setPendingLeaveServerId] = useState<
     string | null
   >(null);
@@ -2241,6 +2252,7 @@ function MainAppContent({
             message.type === "message-delete" ||
             message.type === "reaction-broadcast" ||
             message.type === "message-deleted" ||
+            message.type === "message-bulk-delete" ||
             message.type === "presence-update" ||
             message.type === "typing-broadcast" ||
             message.type === "poll-update" ||
@@ -2826,6 +2838,39 @@ function MainAppContent({
 
   async function handleDeleteChannel(channelId: string) {
     setPendingDeleteChannelId(channelId);
+  }
+
+  /**
+   * The message list's multi-select, already confirmed there.
+   *
+   * The rows leave every open client through the `message-bulk-delete` frame,
+   * this one included, so there is nothing to splice here, only a refusal to
+   * surface. A silent failure would look exactly like a successful purge until
+   * the next reload put a hundred messages back.
+   */
+  async function handleBulkDeleteSelected(messageIds: string[]) {
+    try {
+      await chat.bulkDeleteMessages(messageIds);
+    } catch (error) {
+      setAppError(
+        error instanceof Error ? error.message : "Failed to delete messages",
+      );
+    }
+  }
+
+  /**
+   * The channel menu's "clear recent messages", already confirmed in its own
+   * dialog. Acts on whichever channel the menu was opened on, which is not
+   * necessarily the open one.
+   */
+  async function handleBulkDeleteRecent(channelId: string, count: number) {
+    try {
+      await bulkDeleteMessages(channelId, { count });
+    } catch (error) {
+      setAppError(
+        error instanceof Error ? error.message : "Failed to delete messages",
+      );
+    }
   }
 
   async function confirmDeleteChannel() {
@@ -4654,6 +4699,14 @@ function MainAppContent({
         onJumpToPresent={jumpToPresent}
         onEditMessage={(messageId, body) => chat.editMessage(messageId, body)}
         onDeleteMessage={(messageId) => chat.deleteMessage(messageId)}
+        // Server channels only: a conversation has no moderators, and the
+        // endpoint refuses one. Offering the mode there would be a menu entry
+        // whose confirm ends in a 404.
+        onBulkDelete={
+          selectedChannel.kind === "server" && canManageMessages
+            ? handleBulkDeleteSelected
+            : undefined
+        }
         onPinMessage={(messageId) => chat.pinMessage(messageId)}
         onUnpinMessage={(messageId) => chat.unpinMessage(messageId)}
         onReportMessage={(message) =>
@@ -4994,6 +5047,7 @@ function MainAppContent({
           selectedChannelId={selectedChannelId}
           canManage={canManageChannels}
           canManageRoles={canManageRoles}
+          canManageMessages={canManageMessages}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
           speakingPeerIds={voiceState.speakingPeerIds}
@@ -5043,6 +5097,9 @@ function MainAppContent({
             })
           }
           onDeleteChannel={(id) => void handleDeleteChannel(id)}
+          onPurgeChannel={(channel) =>
+            setPurgeChannel({ id: channel.id, name: channel.name })
+          }
           onMoveChannel={(id, parentId, index) =>
             void handleMoveChannel(id, parentId, index)
           }
@@ -5606,6 +5663,17 @@ function MainAppContent({
         canUnpin={selectedServerId ? canManageMessages : true}
         onClose={() => setPinsOpen(false)}
         onJumpToMessage={(messageId) => void jumpToMessage(messageId)}
+      />
+
+      <BulkPurgeDialog
+        open={purgeChannel !== null}
+        channelName={purgeChannel?.name ?? ""}
+        onConfirm={(count) => {
+          if (purgeChannel) {
+            void handleBulkDeleteRecent(purgeChannel.id, count);
+          }
+        }}
+        onClose={() => setPurgeChannel(null)}
       />
 
       <ConfirmDialog

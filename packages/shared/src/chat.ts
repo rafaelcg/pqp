@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   channelKindSchema,
+  MESSAGE_BULK_DELETE_MAX,
   messageBodyTextSchema,
   messagePinnedBySchema,
   messageReactionSchema,
@@ -306,6 +307,24 @@ export const messageDeletedBroadcastSchema = z.object({
   messageId: z.string().uuid(),
 });
 
+/**
+ * A moderator's bulk delete landed.
+ *
+ * One frame for the whole purge rather than up to `MESSAGE_BULK_DELETE_MAX`
+ * copies of `message-delete`. A 100-message sweep in a room with 200 people is
+ * 20,000 sends the other way, and every one of them makes each client re-scan
+ * and re-render its whole loaded window; here it is one send per socket and one
+ * pass over the list.
+ *
+ * Deliberately the same *shape* of fact as `message-delete` (ids only, never
+ * bodies) so a client can fold it into the single-delete branch it already has.
+ */
+export const messageBulkDeleteBroadcastSchema = z.object({
+  type: z.literal("message-bulk-delete"),
+  channelId: z.string().uuid(),
+  messageIds: z.array(z.string().uuid()).min(1).max(MESSAGE_BULK_DELETE_MAX),
+});
+
 export const presenceUpdateSchema = z.object({
   type: z.literal("presence-update"),
   channelId: z.string().uuid(),
@@ -350,6 +369,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   messageDeleteBroadcastSchema,
   reactionBroadcastSchema,
   messageDeletedBroadcastSchema,
+  messageBulkDeleteBroadcastSchema,
   presenceUpdateSchema,
   typingBroadcastSchema,
   channelActivitySchema,
@@ -477,6 +497,9 @@ export const CHAT_SERVER_MESSAGE_TYPES = [
   "message-update",
   "message-delete",
   "message-deleted",
+  // One moderator purge, one frame. Fanning it out to everyone in the channel
+  // is exactly right: those rows are gone for all of them.
+  "message-bulk-delete",
   "reaction-broadcast",
   "presence-update",
   "typing-broadcast",
@@ -504,6 +527,9 @@ export type MessageDeleteBroadcast = z.infer<
 export type ReactionBroadcast = z.infer<typeof reactionBroadcastSchema>;
 export type MessageDeletedBroadcast = z.infer<
   typeof messageDeletedBroadcastSchema
+>;
+export type MessageBulkDeleteBroadcast = z.infer<
+  typeof messageBulkDeleteBroadcastSchema
 >;
 export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
 export type TypingBroadcast = z.infer<typeof typingBroadcastSchema>;

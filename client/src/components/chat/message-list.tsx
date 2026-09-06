@@ -4,9 +4,11 @@ import type {
   ThreadSummary,
   WebhookEmbed,
 } from "@pqp/shared";
+import { MESSAGE_BULK_DELETE_MAX } from "@pqp/shared";
 import {
   AlertCircle,
   ArrowDown,
+  Check,
   CornerUpLeft,
   ImagePlay,
   Loader2,
@@ -71,6 +73,7 @@ import {
 } from "@/lib/anchored-panel";
 import { formatReactionWho } from "@/lib/reaction-who";
 import { translateMessage, useTranslation } from "@/lib/i18n";
+import { toggleMessageSelection } from "@/lib/message-selection";
 import {
   cn,
   formatDayLabel,
@@ -172,6 +175,14 @@ interface MessageListProps {
   onJumpToPresent?: () => Promise<boolean>;
   onEditMessage?: (messageId: string, body: string) => Promise<void>;
   onDeleteMessage?: (messageId: string) => Promise<void>;
+  /**
+   * Delete a hand-picked set in one call, MANAGE_MESSAGES only.
+   *
+   * Absent and the select mode below does not exist at all: no menu entry, no
+   * checkboxes, no bar. Present and it is still only offered to a reader who
+   * `canModerate`, since the server refuses everyone else.
+   */
+  onBulkDelete?: (messageIds: string[]) => Promise<void>;
   onRetryMessage?: (nonce: string) => void;
   onDiscardMessage?: (nonce: string) => void;
   onReplyTo?: (message: ChatMessage) => void;
@@ -314,6 +325,7 @@ export function MessageList({
   onJumpToPresent,
   onEditMessage,
   onDeleteMessage,
+  onBulkDelete,
   onRetryMessage,
   onDiscardMessage,
   onReplyTo,
@@ -353,6 +365,21 @@ export function MessageList({
   const [revealedIds, setRevealedIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  /**
+   * Multi-select for the moderator bulk delete.
+   *
+   * A mode rather than an always-live checkbox column: a checkbox on every row
+   * of an ordinary conversation is clutter for the 99% of the time nobody is
+   * clearing a raid, and it competes for the click that opens a profile or
+   * reacts. Turned on from the message menu, off by Escape or Cancel.
+   */
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [bulkConfirmOpen, setBulkConfirmOpen] = useState(false);
+  /** Where a Shift-click range starts: the last row clicked on its own. */
+  const selectAnchorRef = useRef<string | null>(null);
 
   const isPinnedRef = useRef(true);
   isPinnedRef.current = isPinned;
@@ -421,6 +448,22 @@ export function MessageList({
     () => findFirstUnreadMessageId(messages, unreadSince),
     [messages, unreadSince],
   );
+  /**
+   * The ids a selection may contain, in the order they are on screen.
+   *
+   * Optimistic and failed sends are excluded: they have no server id yet, so
+   * there is nothing for a bulk delete to name. That also makes this the array
+   * a Shift-click range walks, so a range never silently swallows a bubble that
+   * cannot go.
+   */
+  const selectableIds = useMemo(
+    () =>
+      messages
+        .filter((message) => !message.pending && !message.failed)
+        .map((message) => message.id),
+    [messages],
+  );
+  const bulkDeleteEnabled = Boolean(onBulkDelete) && canModerate;
   const unreadDividerRef = useRef<HTMLDivElement>(null);
   /** `${channelId}::${unreadSince}` once this visit has been scrolled into place. */
   const unreadLandedRef = useRef<string | null>(null);
@@ -431,6 +474,68 @@ export function MessageList({
   const markMenuRow = useCallback((id: string | null) => {
     openMenuRowIdRef.current = id;
   }, []);
+
+  const leaveSelectMode = useCallback(() => {
+    setSelecting(false);
+    setSelectedIds(new Set());
+    selectAnchorRef.current = null;
+  }, []);
+
+  // Changing channel drops the selection. Carrying it across would leave a
+  // moderator one confirm away from deleting a set they chose in another room.
+  useEffect(() => {
+    leaveSelectMode();
+    setBulkConfirmOpen(false);
+  }, [channelId, leaveSelectMode]);
+
+  // Escape is the way out, the same as it is out of the menu and the picker.
+  useEffect(() => {
+    if (!selecting) {
+      return;
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        leaveSelectMode();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selecting, leaveSelectMode]);
+
+  const toggleSelected = useCallback(
+    (messageId: string, extend: boolean) => {
+      // Read the anchor here, not inside the updater. A functional `setState`
+      // runs during the next render, by which point the line below has already
+      // moved the anchor to this very row, so the range branch would see
+      // `anchor === messageId`, skip itself, and quietly degrade every
+      // Shift-click into a plain toggle. That is invisible for two adjacent
+      // rows and wrong for every other pair.
+      const anchorId = selectAnchorRef.current;
+      selectAnchorRef.current = messageId;
+      setSelectedIds((current) =>
+        toggleMessageSelection(current, selectableIds, messageId, {
+          anchorId,
+          extend,
+          max: MESSAGE_BULK_DELETE_MAX,
+        }),
+      );
+    },
+    [selectableIds],
+  );
+
+  const startSelecting = useCallback((messageId: string) => {
+    setSelecting(true);
+    setSelectedIds(new Set([messageId]));
+    selectAnchorRef.current = messageId;
+  }, []);
+
+  async function runBulkDelete() {
+    const ids = [...selectedIds];
+    leaveSelectMode();
+    if (ids.length > 0) {
+      await onBulkDelete?.(ids);
+    }
+  }
 
   // Escape closes the menu (Radix handles that already); this only decides
   // where focus goes next. Capture phase on `window` runs before Radix's own
@@ -1045,6 +1150,18 @@ export function MessageList({
                   ? () => void onDeleteMessage(row.message.id)
                   : undefined
               }
+              selecting={selecting}
+              selected={selectedIds.has(row.message.id)}
+              onToggleSelect={
+                selecting
+                  ? (extend) => toggleSelected(row.message.id, extend)
+                  : undefined
+              }
+              onStartSelect={
+                bulkDeleteEnabled && !selecting
+                  ? () => startSelecting(row.message.id)
+                  : undefined
+              }
               onPin={
                 onPinMessage
                   ? () => void onPinMessage(row.message.id)
@@ -1143,6 +1260,47 @@ export function MessageList({
       <p role="status" aria-live="polite" className="sr-only">
         {liveAnnouncement}
       </p>
+
+      {selecting && (
+        <div
+          role="group"
+          aria-label={t("chat.bulk.barAria")}
+          className="flex flex-wrap items-center justify-between gap-2 border-t border-ink-4 bg-ink-2/95 px-4 py-2"
+        >
+          <p className="min-w-0 text-xs text-paper-muted">
+            {selectedIds.size === 0
+              ? t("chat.bulk.pick")
+              : t("chat.bulk.selected", { count: selectedIds.size })}
+            {selectedIds.size >= MESSAGE_BULK_DELETE_MAX && (
+              <span className="ml-2 text-paper-muted">
+                {t("chat.bulk.cap", { count: MESSAGE_BULK_DELETE_MAX })}
+              </span>
+            )}
+          </p>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button type="button" variant="ghost" onClick={leaveSelectMode}>
+              {t("common.cancel")}
+            </Button>
+            <Button
+              type="button"
+              variant="danger"
+              disabled={selectedIds.size === 0}
+              onClick={() => setBulkConfirmOpen(true)}
+            >
+              {t("chat.bulk.deleteAction", { count: selectedIds.size })}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={bulkConfirmOpen}
+        title={t("chat.bulk.confirmTitle", { count: selectedIds.size })}
+        description={t("chat.bulk.confirmBody", { count: selectedIds.size })}
+        confirmLabel={t("chat.bulk.deleteAction", { count: selectedIds.size })}
+        onConfirm={() => void runBulkDelete()}
+        onClose={() => setBulkConfirmOpen(false)}
+      />
 
       <TypingIndicator users={typingUsers} />
 
@@ -1417,6 +1575,15 @@ interface MessageRowProps {
   onCancelEdit: () => void;
   onSubmitEdit: (body: string) => Promise<void>;
   onDelete?: () => void;
+  /** Select mode is on for the whole log. */
+  selecting: boolean;
+  /** This row is in the pending bulk-delete set. */
+  selected: boolean;
+  /** Toggle this row. `extend` is a Shift-click: take the range from the anchor. */
+  onToggleSelect?: (extend: boolean) => void;
+  /** Turn select mode on with this row already picked. Absent when the reader
+   * cannot bulk delete, or when the mode is already on. */
+  onStartSelect?: () => void;
   onPin?: () => void;
   onUnpin?: () => void;
   onReport?: () => void;
@@ -1480,6 +1647,10 @@ const MessageRow = memo(function MessageRow({
   onCancelEdit,
   onSubmitEdit,
   onDelete,
+  selecting,
+  selected,
+  onToggleSelect,
+  onStartSelect,
   onPin,
   onUnpin,
   onReport,
@@ -1745,6 +1916,17 @@ const MessageRow = memo(function MessageRow({
           },
         ]
       : []),
+    // Not marked `danger`: turning select mode on deletes nothing. The
+    // destructive step is the bar's button and the confirm behind it.
+    ...(isReal && onStartSelect
+      ? [
+          {
+            id: "select",
+            label: t("chat.bulk.select"),
+            onSelect: selectAndClose(onStartSelect, false),
+          },
+        ]
+      : []),
     // Reporting your own message is meaningless, and a message that has not
     // been accepted by the server yet has no id to report.
     ...(canReport
@@ -1806,6 +1988,10 @@ const MessageRow = memo(function MessageRow({
           isReal ? selectAndClose(onOpenPicker, false) : undefined
         }
         moreReactionsLabel={t("reactions.more")}
+        // While picking a set, the row's one job is to be picked. A menu
+        // offering Reply and Edit over a checkbox is two interactions
+        // competing for the same click.
+        disabled={selecting}
       >
         <article
           ref={(node) => {
@@ -1833,9 +2019,39 @@ const MessageRow = memo(function MessageRow({
             message.pending && "opacity-60",
             isFlashing && "bg-accent/15 ring-1 ring-accent/50",
             mentionsYou && !isFlashing && "pqp-message-mention",
-            !mentionsYou && !isFlashing && "hover:bg-ink-3/40",
+            !mentionsYou && !isFlashing && !selecting && "hover:bg-ink-3/40",
+            selecting && "rounded-md",
+            selecting && !selected && "hover:bg-ink-3/40",
+            selected && "bg-danger/15 ring-1 ring-danger/50",
           )}
         >
+          {selecting && onToggleSelect && isReal && (
+            /* One overlay rather than a checkbox column: the row layout stays
+               exactly where it was, so nothing shifts sideways the moment the
+               mode turns on and the reader loses their place. */
+            <button
+              type="button"
+              aria-pressed={selected}
+              aria-label={t("chat.bulk.toggleAria", {
+                name: message.authorName,
+              })}
+              tabIndex={controlTabIndex}
+              onClick={(event) => onToggleSelect(event.shiftKey)}
+              className="absolute inset-0 z-10 cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "pointer-events-none absolute left-1 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center rounded border",
+                  selected
+                    ? "border-danger bg-danger text-ink-1"
+                    : "border-ink-4 bg-ink-2",
+                )}
+              >
+                {selected && <Check className="h-3 w-3" />}
+              </span>
+            </button>
+          )}
           {startsGroup ? (
             <div className="flex w-14 shrink-0 items-start justify-end pr-2">
               <div className="relative h-9 w-9 shrink-0">

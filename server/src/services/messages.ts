@@ -758,24 +758,105 @@ export async function deleteMessage(messageId: string): Promise<boolean> {
   ]);
   const deleted = (result.rowCount ?? 0) > 0;
 
-  if (deleted && attached.rows.length > 0) {
-    // Deliberately not awaited and deliberately allowed to fail. The sweeper
-    // collects every orphan an hour later and this changes nothing about
-    // whether the bytes eventually go — it only makes them go sooner, for the
-    // common case of someone deleting a 10 MiB video they just posted. Turning
-    // it into a blocking step would put a bucket round trip per attachment in
-    // front of a response that is otherwise two queries, and would let a
-    // storage outage fail a delete that has already happened.
-    void Promise.all(
-      attached.rows.map((row) =>
-        deleteObject(row.storage_key).catch((error: unknown) => {
-          console.error(
-            `[attachments] deferred delete of ${row.storage_key} to the sweeper:`,
-            error instanceof Error ? error.message : error,
-          );
-        }),
-      ),
-    );
+  if (deleted) {
+    sweepAttachmentObjects(attached.rows.map((row) => row.storage_key));
+  }
+
+  return deleted;
+}
+
+/**
+ * Best-effort bucket cleanup for attachments whose message has just gone.
+ *
+ * Deliberately not awaited and deliberately allowed to fail. The hourly sweeper
+ * collects every orphan anyway, so this changes nothing about whether the bytes
+ * eventually go, only that they go sooner, for the common case of someone
+ * deleting a 10 MiB video they just posted. Awaiting it would put a bucket
+ * round trip per attachment in front of a response that is otherwise two
+ * queries, and would let a storage outage fail a delete that has already
+ * happened.
+ */
+function sweepAttachmentObjects(storageKeys: readonly string[]): void {
+  if (storageKeys.length === 0) {
+    return;
+  }
+  void Promise.all(
+    storageKeys.map((key) =>
+      deleteObject(key).catch((error: unknown) => {
+        console.error(
+          `[attachments] deferred delete of ${key} to the sweeper:`,
+          error instanceof Error ? error.message : error,
+        );
+      }),
+    ),
+  );
+}
+
+/**
+ * The newest `limit` message ids in a channel, newest first.
+ *
+ * Ids only: the bulk delete that calls this does not need bodies, and reading
+ * them would mean paying for reactions, attachments and embeds on rows that
+ * are about to stop existing. `limit` is already capped by
+ * `MESSAGE_BULK_DELETE_MAX` at the route.
+ */
+export async function listRecentMessageIds(
+  channelId: string,
+  limit: number,
+): Promise<string[]> {
+  const result = await getPool().query<{ id: string }>(
+    `SELECT id FROM messages
+      WHERE channel_id = $1
+      ORDER BY created_at DESC, id DESC
+      LIMIT $2`,
+    [channelId, limit],
+  );
+  return result.rows.map((row) => row.id);
+}
+
+/**
+ * Delete many messages from one channel in a single statement.
+ *
+ * `channelId` is part of the WHERE clause rather than trusted from the caller's
+ * id list: a moderator holds MANAGE_MESSAGES *for a channel*, and without this
+ * an id from a private channel they cannot see, or from another server
+ * entirely, would ride along in the array and be deleted on their permission
+ * here. The route checks the permission; this query is what makes that check
+ * mean the channel it was asked about.
+ *
+ * Returns the ids that actually went, which is what the WebSocket frame and the
+ * audit count are built from, never the requested list. Ids that were already
+ * gone, or never in this channel, simply do not come back.
+ */
+export async function deleteMessagesBulk(
+  channelId: string,
+  messageIds: readonly string[],
+): Promise<string[]> {
+  if (messageIds.length === 0) {
+    return [];
+  }
+
+  // Read before the delete, for the same reason `deleteMessage` does:
+  // `message_attachments.message_id` is ON DELETE SET NULL, so once the
+  // messages are gone nothing links those rows back to them.
+  const attached = await getPool().query<{ storage_key: string }>(
+    `SELECT a.storage_key
+       FROM message_attachments a
+       JOIN messages m ON m.id = a.message_id
+      WHERE m.channel_id = $1 AND a.message_id = ANY($2::uuid[])`,
+    [channelId, messageIds],
+  );
+
+  const result = await getPool().query<{ id: string }>(
+    `DELETE FROM messages
+      WHERE channel_id = $1 AND id = ANY($2::uuid[])
+      RETURNING id`,
+    [channelId, messageIds],
+  );
+  const deleted = result.rows.map((row) => row.id);
+
+  if (deleted.length > 0) {
+    sweepAttachmentObjects(attached.rows.map((row) => row.storage_key));
   }
 
   return deleted;
