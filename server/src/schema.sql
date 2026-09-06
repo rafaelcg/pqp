@@ -1432,6 +1432,7 @@ CREATE TABLE IF NOT EXISTS voice_peers (
   camera_stream_id       TEXT,
   screen_audio_stream_id TEXT,
   can_speak              BOOLEAN NOT NULL DEFAULT TRUE,
+  can_stream             BOOLEAN NOT NULL DEFAULT TRUE,
   can_resume             BOOLEAN NOT NULL DEFAULT FALSE,
   orphaned_at            TIMESTAMPTZ,
   joined_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1440,6 +1441,9 @@ CREATE TABLE IF NOT EXISTS voice_peers (
 CREATE INDEX IF NOT EXISTS idx_voice_peers_channel ON voice_peers (channel_id);
 CREATE INDEX IF NOT EXISTS idx_voice_peers_user ON voice_peers (user_id);
 CREATE INDEX IF NOT EXISTS idx_voice_peers_instance ON voice_peers (instance_id);
+-- STREAM split landed after M1 created this table. Existing rows keep
+-- presenting (the old Speak bit covered camera and share).
+ALTER TABLE voice_peers ADD COLUMN IF NOT EXISTS can_stream BOOLEAN NOT NULL DEFAULT TRUE;
 
 -- Hung-up ids that must not be reconstructed for the resume token's life. The
 -- in-process `retiredPeerIds` map is the same fact for one instance; this is

@@ -77,7 +77,7 @@ The roles editor and the per-channel overwrite editor expose **Speak** (micropho
 
 | Path | Enforcement |
 |---|---|
-| Join (`ws/voice.ts`) | SPEAK is resolved with CONNECT (one query, with the channel's overwrites) and written into the peer. `welcome.canSpeak` and every roster entry's `canSpeak` carry it. A false value logs `voice.speakDenied` once per join. |
+| Join (`ws/voice.ts`) | SPEAK and STREAM are resolved with CONNECT (one query, with the channel's overwrites) and written into the peer. `welcome.canSpeak` / `welcome.canStream` and every roster entry carry both. A false SPEAK logs `voice.speakDenied` once per join. |
 | SFU token (`POST /api/voice/token`) | The LiveKit grant is `canPublish` when SPEAK or STREAM is held, with `canPublishSources` when only one of them is. `canSubscribe` stays true. The response carries `speak` and `stream`. **This is the real enforcement:** LiveKit refuses the publish, so a modified client is still silent. |
 | Live change | Every permissions bump (role edit, overwrite, role granted or removed) re-resolves SPEAK and STREAM for everyone in that server's rooms (`reevaluateVoiceSpeak`, hooked on `onPermissionsUpdate`, local and cluster-relayed alike). A change sends `voice-speak-changed { canSpeak, canStream }` to that person and, on the SFU, rewrites their participant permission (`setSfuUserCanPublish`: mutes tracks they may no longer publish, then `updateParticipant` with the split grant). A grant works without re-minting a token; the client publishes its mic as soon as it is told. |
 | Roster claims | `set-sharing-screen` and `set-camera` are refused for a listener (`screen-share-denied` / `camera-denied`), and `set-voice-state` cannot show a listener as unmuted. |
