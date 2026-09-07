@@ -127,6 +127,17 @@ interface Options {
    * measured.
    */
   caps: string[];
+  /**
+   * Offer `permessage-deflate` on the WebSocket handshake. `--deflate 0` makes
+   * every socket look like a client that does not implement the extension, so
+   * compressed and uncompressed can be compared on ONE server build and one
+   * machine, the same trick `--caps` plays for roster deltas.
+   *
+   * It doubles as the fallback test: with it off the run must still complete,
+   * because a client without the extension has to be served uncompressed, not
+   * refused.
+   */
+  deflate: boolean;
   /** Write the run's numbers here as JSON, for before/after comparison. */
   json: string;
   /** Postgres URL; enables exact per-statement counts via pg_stat_statements. */
@@ -176,6 +187,7 @@ function parseArgs(argv: string[]): Options {
     voice: -1,
     joinTimeoutMs: 45_000,
     caps: [...ALL_CAPS],
+    deflate: true,
     json: "",
     db: process.env.DATABASE_URL ?? "",
     secret: process.env.LOAD_TEST_TOKEN || DEV_TOKEN,
@@ -280,6 +292,9 @@ function parseArgs(argv: string[]): Options {
                 .filter((cap) => cap.length > 0);
         break;
       }
+      case "--deflate":
+        opts.deflate = next() !== "0";
+        break;
       case "--json":
         opts.json = next();
         break;
@@ -443,7 +458,25 @@ interface Client {
   index: number;
   token: string;
   socket: WebSocket;
+  /**
+   * Decompressed payload bytes: the size of the JSON the application handles.
+   *
+   * This is what every per-frame-type number below is counted in, and it is
+   * deliberately NOT the cost of the frame. With `permessage-deflate`
+   * negotiated the two differ by the compression ratio, which is the whole
+   * point of measuring both — see `wireBytes`.
+   */
   bytes: number;
+  /**
+   * TCP bytes actually read on this socket, taken from the underlying
+   * `net.Socket`. Post-compression and including WebSocket framing, so it is
+   * the number the machine's bandwidth bill is written in.
+   *
+   * Counted as an absolute reading rather than a delta per frame because
+   * `bytesRead` advances when the kernel hands over a segment, which does not
+   * line up with message boundaries.
+   */
+  wireBytesAtPhaseStart: number;
   frames: number;
   byType: Map<string, number>;
   bytesByType: Map<string, number>;
@@ -469,6 +502,51 @@ const TERMINAL_STATES = new Set<number>([
   WebSocket.CLOSING,
   WebSocket.CLOSED,
 ]);
+
+/**
+ * TCP bytes this socket has read, or 0 once it is gone.
+ *
+ * `_socket` is undocumented but stable across the whole `ws` 8.x line, and
+ * there is no public equivalent: `ws` counts nothing itself, so without this
+ * the harness can only see decompressed payload sizes and is blind to whether
+ * compression is doing anything at all.
+ */
+function wireBytesRead(client: Client): number {
+  const raw = (client.socket as unknown as { _socket?: { bytesRead?: number } })
+    ._socket;
+  return raw?.bytesRead ?? 0;
+}
+
+/** Fold every socket's reading into one total for the phase just measured. */
+function wireBytesSince(clients: Client[]): number {
+  let total = 0;
+  for (const client of clients) {
+    total += Math.max(0, wireBytesRead(client) - client.wireBytesAtPhaseStart);
+  }
+  return total;
+}
+
+function markWireBytesPhaseStart(clients: Client[]): void {
+  for (const client of clients) {
+    client.wireBytesAtPhaseStart = wireBytesRead(client);
+  }
+}
+
+/**
+ * Whether these sockets negotiated `permessage-deflate`, reported rather than
+ * assumed. A harness that silently failed to negotiate would measure the
+ * uncompressed wire twice and conclude compression does nothing, which is the
+ * same trap #323 hit when it forgot to declare `WIRE_CAPS`.
+ */
+function compressedSocketCount(clients: Client[]): number {
+  let compressed = 0;
+  for (const client of clients) {
+    if (client.socket.extensions.includes("permessage-deflate")) {
+      compressed += 1;
+    }
+  }
+  return compressed;
+}
 
 function sendFrame(client: Client, frame: unknown): void {
   if (client.socket.readyState === WebSocket.OPEN) {
@@ -500,18 +578,22 @@ async function connectClient(
   setup: Setup,
   caps: readonly string[],
   joinVoice: boolean,
+  deflate: boolean,
 ): Promise<Client> {
   const token = identityToken(`${prefix}-${index}`);
   await passGates(base, token);
   await api(base, token, "POST", `/api/invites/${setup.inviteCode}/join`);
   await spaBootstrap(base, token);
 
-  const socket = new WebSocket(wsUrl);
+  // `perMessageDeflate: false` stops `ws` sending the extension header at all,
+  // which is exactly how a stack without the extension looks to the server.
+  const socket = new WebSocket(wsUrl, { perMessageDeflate: deflate });
   const client: Client = {
     index,
     token,
     socket,
     bytes: 0,
+    wireBytesAtPhaseStart: 0,
     frames: 0,
     byType: new Map(),
     bytesByType: new Map(),
@@ -786,8 +868,11 @@ interface StampedeReport {
   max: number;
   frames: number;
   bytes: number;
+  /** Post-compression TCP bytes, the ones the bandwidth bill counts. */
+  wireBytes: number;
   framesPerJoin: number;
   bytesPerJoin: number;
+  wireBytesPerJoin: number;
   cpuSeconds: number;
   statementsPerJoin: number;
   byType: { type: string; frames: number; bytes: number }[];
@@ -826,6 +911,7 @@ async function runStampede(
     client.byType.clear();
     client.bytesByType.clear();
   }
+  markWireBytesPhaseStart(everySocket);
   const cpuStart = pid ? cpuSeconds(pid) : 0;
   const statementsStart = statementsExecuted(opts.db);
   const started = Date.now();
@@ -850,6 +936,10 @@ async function runStampede(
   const welcomed = joiners.filter((c) => c.joinMs !== null).length;
   const refused = joiners.filter((c) => c.joinRefused).length;
   const timedOut = joiners.length - welcomed - refused;
+
+  // Read before anything else touches the sockets: this is a running total on
+  // the kernel side, not something the harness accumulates.
+  const wireBytes = wireBytesSince(everySocket);
 
   let frames = 0;
   let bytes = 0;
@@ -883,8 +973,10 @@ async function runStampede(
     max: sorted[sorted.length - 1] ?? Number.NaN,
     frames,
     bytes,
+    wireBytes,
     framesPerJoin: welcomed ? Math.round(frames / welcomed) : 0,
     bytesPerJoin: welcomed ? Math.round(bytes / welcomed) : 0,
+    wireBytesPerJoin: welcomed ? Math.round(wireBytes / welcomed) : 0,
     cpuSeconds: Number(cpuUsed.toFixed(2)),
     statementsPerJoin: welcomed
       ? Number((statements / welcomed).toFixed(1))
@@ -941,6 +1033,48 @@ function pick<T>(items: T[]): T {
  * DOWNLINK of the machine running the harness before believing any latency.
  */
 const wire = { bytes: 0, frames: 0 };
+
+/**
+ * The same traffic counted on the OTHER side of compression: TCP bytes read on
+ * every arrival's socket, framing included.
+ *
+ * `wire.bytes` above is decompressed payload, which is what names the frame
+ * type that filled the link but is NOT what the link carried. With
+ * `permessage-deflate` negotiated the two differ by roughly 3x, so the
+ * "compare this against your downlink" advice is only sound against this
+ * number. Kept as a live sum over the open sockets rather than accumulated per
+ * frame, because `bytesRead` advances on kernel segments, not on messages.
+ */
+const liveSockets = new Set<WebSocket>();
+/**
+ * What closed sockets read before they went away. Without this the running
+ * total would go DOWN whenever an arrival hung up, and the per-second rate
+ * derived from it would show a negative second.
+ */
+let retiredTcpBytes = 0;
+
+function socketBytesRead(socket: WebSocket): number {
+  const raw = (socket as unknown as { _socket?: { bytesRead?: number } })._socket;
+  return raw?.bytesRead ?? 0;
+}
+
+function tcpBytesRead(): number {
+  let total = retiredTcpBytes;
+  for (const socket of liveSockets) {
+    total += socketBytesRead(socket);
+  }
+  return total;
+}
+
+function compressedLiveSockets(): { total: number; compressed: number } {
+  let compressed = 0;
+  for (const socket of liveSockets) {
+    if (socket.extensions.includes("permessage-deflate")) {
+      compressed += 1;
+    }
+  }
+  return { total: liveSockets.size, compressed };
+}
 
 /**
  * The same totals split by frame type, which is what turns "the link filled
@@ -1172,8 +1306,17 @@ async function arrive(
   // own `armJoinTimeout` starts it.
   const socketStart = Date.now();
   const sinceSocket = () => Date.now() - socketStart;
-  const socket = new WebSocket(wsUrl);
+  // Same `--deflate` honesty as the steady-state path: a capability the
+  // harness does not declare is an optimisation the run cannot see, which is
+  // the trap the first #314 comparison fell into by staying silent about
+  // `WIRE_CAPS`. A browser offers the extension, so the default must too.
+  const socket = new WebSocket(wsUrl, { perMessageDeflate: opts.deflate });
   arrival.socket = socket;
+  liveSockets.add(socket);
+  socket.on("close", () => {
+    retiredTcpBytes += socketBytesRead(socket);
+    liveSockets.delete(socket);
+  });
   let peerId = "";
   let resumeToken = "";
 
@@ -1293,6 +1436,18 @@ async function arrive(
 
 interface Sample {
   atMs: number;
+  /**
+   * The commit the target is running (`APP_VERSION`), read on every sample.
+   *
+   * THE RIG IS SHARED. On 2026-09-07 a second agent deployed their branch to
+   * `pqp-api-staging` between two runs of this script, and the second run
+   * quietly measured their code: different wire volume, CPU pegged where it
+   * had been idle, a ceiling one bucket higher, and nothing in the report to
+   * say the binary had changed underneath it. A load test that cannot tell you
+   * WHICH build it measured is not a measurement. So this is sampled, not
+   * asked for once, and the report says loudly when it moves.
+   */
+  version: string | null;
   sockets: number;
   poolBusy: number;
   poolMax: number;
@@ -1336,6 +1491,7 @@ function startMetricsSampler(
           return;
         }
         const body = (await res.json()) as {
+          version?: string | null;
           runtime?: {
             sockets?: number;
             peakPoolWaiting?: number;
@@ -1353,6 +1509,7 @@ function startMetricsSampler(
         const pool = runtime.pool ?? {};
         samples.push({
           atMs: Date.now() - startedAt,
+          version: body.version ?? null,
           sockets: runtime.sockets ?? 0,
           poolBusy: pool.busy ?? 0,
           poolMax: pool.max ?? 0,
@@ -1599,8 +1756,34 @@ function reportResources(
   harnessCpu: number,
   peakSocketsLocal: number,
   wireRates: number[],
+  tcpRates: number[],
 ): void {
   console.log("");
+  const versions = [
+    ...new Set(
+      samples
+        .map((sample) => sample.version)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  if (versions.length === 1) {
+    console.log(`target ran ${versions[0]!.slice(0, 12)} for the whole run`);
+  } else if (versions.length > 1) {
+    console.log(
+      `!! THE TARGET WAS REDEPLOYED MID-RUN: ${versions
+        .map((v) => v.slice(0, 12))
+        .join(" then ")}`,
+    );
+    console.log(
+      "!! These numbers describe more than one build and are not a measurement " +
+        "of any of them. Redeploy the build you meant and run it again.",
+    );
+  } else {
+    console.log(
+      "target version unknown (no ADMIN_METRICS_TOKEN): this run cannot say " +
+        "which build it measured",
+    );
+  }
   if (samples.length === 0) {
     console.log("no server samples were collected");
   } else {
@@ -1641,10 +1824,26 @@ function reportResources(
   if (wireRates.length > 0) {
     const peak = Math.max(...wireRates);
     console.log(
-      `wire in: ${(wire.bytes / 1024 / 1024).toFixed(1)} MB over ${wire.frames} frames; ` +
+      `payload in: ${(wire.bytes / 1024 / 1024).toFixed(1)} MB over ${wire.frames} frames; ` +
         `median ${((percentileOf(wireRates, 50) ?? 0) / 1024).toFixed(0)} KB/s, ` +
         `peak ${(peak / 1024).toFixed(0)} KB/s (${((peak * 8) / 1e6).toFixed(1)} Mbit/s)`,
     );
+    // The link carries the COMPRESSED bytes, so the downlink comparison below
+    // is only sound against this line. They differ by roughly 3x once
+    // permessage-deflate is negotiated, which is exactly the size of the
+    // mistake that reading the payload line as "wire" would produce.
+    const totalTcp = tcpBytesRead();
+    const census = compressedLiveSockets();
+    if (tcpRates.length > 0) {
+      const tcpPeak = Math.max(...tcpRates);
+      console.log(
+        `ON THE WIRE: ${(totalTcp / 1024 / 1024).toFixed(1)} MB ` +
+          `(${(wire.bytes / Math.max(1, totalTcp)).toFixed(2)}x compression, ` +
+          `${census.compressed}/${census.total} live sockets compressed); ` +
+          `median ${((percentileOf([...tcpRates].sort((a, b) => a - b), 50) ?? 0) / 1024).toFixed(0)} KB/s, ` +
+          `peak ${(tcpPeak / 1024).toFixed(0)} KB/s (${((tcpPeak * 8) / 1e6).toFixed(1)} Mbit/s)`,
+      );
+    }
     console.log(
       "  Signalling fan-out is O(room size) per arrival, so this is traffic that",
     );
@@ -1697,10 +1896,15 @@ async function joinStorm(
   const startedAt = Date.now();
   const cpuStart = process.cpuUsage();
   const wireRates: number[] = [];
+  const tcpRates: number[] = [];
   let lastWireBytes = 0;
+  let lastTcpBytes = 0;
   const wireTicker = setInterval(() => {
     wireRates.push(wire.bytes - lastWireBytes);
     lastWireBytes = wire.bytes;
+    const tcp = tcpBytesRead();
+    tcpRates.push(tcp - lastTcpBytes);
+    lastTcpBytes = tcp;
   }, 1_000);
   const sampler = startMetricsSampler(base, opts.metricsToken, samples, startedAt);
   const cpuChild = startRemoteCpuSampler(opts.flyApp, cpu);
@@ -1817,6 +2021,7 @@ async function joinStorm(
     harnessCpuPercent(cpuStart, Date.now() - startedAt),
     peakLocalSockets,
     wireRates,
+    tcpRates,
   );
 
   for (const arrival of arrivals) {
@@ -1886,6 +2091,7 @@ async function main(): Promise<void> {
           setup,
           opts.caps,
           !stampede,
+          opts.deflate,
         ),
       );
     }
@@ -1909,7 +2115,17 @@ async function main(): Promise<void> {
   }
 
   const inVoice = clients.filter((c) => c.inVoice).length;
-  console.log(`${clients.length} connected, ${inVoice} in voice`);
+  const compressed = compressedSocketCount(clients);
+  console.log(
+    `${clients.length} connected, ${inVoice} in voice, ${compressed} compressed`,
+  );
+  if (opts.deflate && compressed !== clients.length) {
+    // Loud, because the failure mode is a run that quietly measures the
+    // uncompressed wire and reports it as the compressed one.
+    console.log(
+      `  WARNING: --deflate is on but only ${compressed}/${clients.length} sockets negotiated permessage-deflate`,
+    );
+  }
 
   for (const client of clients) {
     client.bytes = 0;
@@ -1917,6 +2133,7 @@ async function main(): Promise<void> {
     client.byType.clear();
     client.bytesByType.clear();
   }
+  markWireBytesPhaseStart(clients);
 
   const voiceClients = clients.slice(0, joiners);
   const cpuStart = pid ? cpuSeconds(pid) : 0;
@@ -1926,6 +2143,24 @@ async function main(): Promise<void> {
   const perTick = (perSecond: number) => (perSecond * TICK_MS) / 1000;
   const carry = { msg: 0, typing: 0, toggle: 0, churn: 0, views: 0 };
   let sent = 0;
+
+  // Peak resident memory, sampled once a second while the load runs.
+  //
+  // This is here for compression specifically. The `ws` README's warning about
+  // permessage-deflate is a MEMORY warning — zlib contexts per socket, and
+  // fragmentation under concurrency on Linux — so a run that only reports
+  // bytes and processor cannot tell a win from a leak. A single reading at the
+  // end would miss a spike that the allocator has already given back.
+  let peakRss = 0;
+  const rssSampler = pid
+    ? setInterval(() => {
+        try {
+          peakRss = Math.max(peakRss, rssMb(pid));
+        } catch {
+          // A process that exited mid-sample is the run failing, not this.
+        }
+      }, 1_000)
+    : null;
 
   const ticker = setInterval(() => {
     carry.msg += perTick(opts.messagesPerSecond);
@@ -1995,9 +2230,13 @@ async function main(): Promise<void> {
   clearInterval(ticker);
   // Drain whatever the last tick produced.
   await new Promise((r) => setTimeout(r, 500));
+  if (rssSampler) {
+    clearInterval(rssSampler);
+  }
 
   const wallSeconds = (Date.now() - wallStart) / 1000;
   const cpuUsed = pid ? cpuSeconds(pid) - cpuStart : 0;
+  const totalWireBytes = wireBytesSince(clients);
   const totalBytes = clients.reduce((sum, c) => sum + c.bytes, 0);
   const totalFrames = clients.reduce((sum, c) => sum + c.frames, 0);
   const byType = new Map<string, number>();
@@ -2027,6 +2266,9 @@ async function main(): Promise<void> {
       `  fan-out        ${s.framesPerJoin} frames/join, ${(s.bytesPerJoin / 1024).toFixed(1)} KB/join, ${(s.bytes / 1024 / 1024).toFixed(2)} MB total`,
     );
     console.log(
+      `  ON THE WIRE    ${(s.wireBytesPerJoin / 1024).toFixed(1)} KB/join, ${(s.wireBytes / 1024 / 1024).toFixed(2)} MB total  (${(s.bytes / Math.max(1, s.wireBytes)).toFixed(2)}x compression)`,
+    );
+    console.log(
       `  server cpu     ${s.cpuSeconds}s     database ${Number.isNaN(s.statementsPerJoin) ? "n/a (no pg_stat_statements)" : `${s.statementsPerJoin} statements/join`}`,
     );
     for (const row of s.byType.slice(0, 5)) {
@@ -2045,11 +2287,16 @@ async function main(): Promise<void> {
   );
   if (pid) {
     console.log(
-      `server cpu: ${cpuUsed.toFixed(2)}s over ${wallSeconds.toFixed(1)}s = ${((cpuUsed / wallSeconds) * 100).toFixed(1)}% of one core, rss ${rssMb(pid).toFixed(0)} MB`,
+      `server cpu: ${cpuUsed.toFixed(2)}s over ${wallSeconds.toFixed(1)}s = ${((cpuUsed / wallSeconds) * 100).toFixed(1)}% of one core, rss ${rssMb(pid).toFixed(0)} MB (peak ${peakRss.toFixed(0)} MB over the run)`,
     );
   }
   console.log(
     `received: ${totalFrames} frames, ${(totalBytes / 1024 / 1024).toFixed(2)} MB total; per socket ${(totalFrames / clients.length / wallSeconds).toFixed(1)} frames/s, ${(totalBytes / clients.length / wallSeconds / 1024).toFixed(1)} KB/s`,
+  );
+  // The line that decides whether the machine runs out of bandwidth. Everything
+  // above is payload the application saw; this is what the network carried.
+  console.log(
+    `ON THE WIRE: ${(totalWireBytes / 1024 / 1024).toFixed(2)} MB (${(totalBytes / Math.max(1, totalWireBytes)).toFixed(2)}x compression, ${compressedSocketCount(clients)}/${clients.length} sockets compressed); per socket ${(totalWireBytes / clients.length / wallSeconds / 1024).toFixed(1)} KB/s; aggregate ${((totalWireBytes * 8) / wallSeconds / 1e6).toFixed(1)} Mbit/s`,
   );
   const rows = [...byType].sort((a, b) => b[1] - a[1]);
   for (const [type, count] of rows) {
@@ -2065,17 +2312,24 @@ async function main(): Promise<void> {
       opts.json,
       `${JSON.stringify(
         {
-          label: opts.caps.length > 0 ? opts.caps.join("+") : "no-caps",
+          label: `${opts.caps.length > 0 ? opts.caps.join("+") : "no-caps"}/${opts.deflate ? "deflate" : "plain"}`,
           caps: opts.caps,
           clients: clients.length,
           inVoice,
+          compressedSockets: compressedSocketCount(clients),
           stampede: stampedeReport,
           steady: {
             seconds: Number(wallSeconds.toFixed(1)),
             frames: totalFrames,
             bytes: totalBytes,
+            wireBytes: totalWireBytes,
+            compressionRatio: Number(
+              (totalBytes / Math.max(1, totalWireBytes)).toFixed(3),
+            ),
             bytesPerSecond: Math.round(totalBytes / wallSeconds),
+            wireBytesPerSecond: Math.round(totalWireBytes / wallSeconds),
             cpuSeconds: Number(cpuUsed.toFixed(2)),
+            peakServerRssMb: peakRss,
             statements,
             byType: rows.map(([type, count]) => ({
               type,

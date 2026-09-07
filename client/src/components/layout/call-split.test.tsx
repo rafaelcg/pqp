@@ -42,6 +42,16 @@ function shape(html: string): string[] {
   });
 }
 
+/**
+ * The pane's own classes. `data-call-split` says "off" for every un-split
+ * shape, so it cannot tell a stacked empty stage from a side-by-side one:
+ * the flex direction on the root is the only thing that can, and it is the
+ * thing the empty-column bug got wrong.
+ */
+function rootClass(html: string): string {
+  return /^<div[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "";
+}
+
 function render(node: React.ReactElement) {
   return renderToStaticMarkup(<TooltipProvider>{node}</TooltipProvider>);
 }
@@ -111,6 +121,33 @@ describe("CallSplit keeps the stage mounted", () => {
     }
   });
 
+  /**
+   * The last publisher leaving now changes the arrangement (an empty stage is
+   * never a column), and that is a layout change like any other: it must move
+   * classes, not elements. If it moved the `<video>` the SFU would stop
+   * sending that camera a second later, which is the failure this whole file
+   * is here to prevent.
+   */
+  it("keeps the stage as the pane's first child through every shape", () => {
+    for (const stageShape of [
+      "expanded",
+      "compact",
+      "fullscreen",
+      "none",
+    ] as const) {
+      const tags = shape(
+        split({
+          shape: stageShape,
+          preference: { ...DRAGGED, orientation: "side-by-side" },
+          paneSize: { width: 1800, height: 900 },
+        }),
+      );
+      expect(tags[1]).toContain("data-call-split-stage");
+      expect(tags[2]).toContain('data-testid="stage"');
+      expect(tags[3]).toContain('data-testid="stage-video"');
+    }
+  });
+
   it("keeps the stage ahead of the transcript in the DOM, both ways round", () => {
     for (const html of [
       split(),
@@ -175,6 +212,43 @@ describe("CallSplit draws a divider only where one can move", () => {
         preference: { ...CALL_SPLIT_DEFAULT, orientation: "side-by-side" },
       }),
     ).toMatch(/data-call-split-stage[^>]*style="width:\s*\d+px/);
+  });
+
+  /**
+   * THE EMPTY COLUMN. Reported from live use on 7 Sep 2026: side by side was
+   * chosen during a share, the share ended, and the stage pane stayed a
+   * column: a quarter of a wide window holding the slim call bar and nothing
+   * else, with the transcript wedged into what was left. A column for a
+   * picture only makes sense while there is a picture.
+   */
+  it("never draws a column for a stage with nothing on it", () => {
+    for (const stageShape of ["none", "compact", "fullscreen"] as const) {
+      const html = split({
+        shape: stageShape,
+        preference: { ...DRAGGED, orientation: "side-by-side" },
+        paneSize: { width: 1800, height: 900 },
+      });
+      // The pane is a column of rows, not two columns: the stage sits above
+      // the transcript and takes only the height the slim bar needs.
+      expect(rootClass(html)).toContain("flex-col");
+      expect(rootClass(html)).not.toContain("flex-row");
+      expect(html).not.toContain('data-call-split="side-by-side"');
+      // And nothing writes a width on the stage pane, which is what made the
+      // empty column a fixed quarter of the window.
+      expect(html).not.toMatch(/data-call-split-stage[^>]*style=/);
+    }
+  });
+
+  it("gives the column back the moment somebody publishes, unprompted", () => {
+    const preference = { ...DRAGGED, orientation: "side-by-side" as const };
+    const size = { width: 1800, height: 900 };
+    expect(
+      rootClass(split({ shape: "compact", preference, paneSize: size })),
+    ).toContain("flex-col");
+    // Same stored preference, nothing rewritten, a camera now on.
+    const back = split({ shape: "expanded", preference, paneSize: size });
+    expect(back).toContain('data-call-split="side-by-side"');
+    expect(rootClass(back)).toContain("flex-row");
   });
 
   it("falls back to stacked when the pane is too narrow for two columns", () => {

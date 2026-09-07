@@ -63,6 +63,7 @@ pnpm --filter @pqp/server exec tsx scripts/load-fanout.ts \
 | `--voice <k>` | all | Only the first k join the call; the rest are the **sidebar audience** — members who receive every roster without being in the room. Passing this also turns on the stampede phase. |
 | `--seconds` | 30 | Length of the steady-state phase. |
 | `--caps <list>` | all | Wire capabilities every socket declares at `auth`. `0` is the empty set — a client built before any of the delta frames — so a before/after comparison runs on one binary. A comma list (`--caps presence-delta`) isolates one, which is the only way to attribute a saving to the change that produced it. |
+| `--deflate 0` | on | Make every socket look like a client with no `permessage-deflate`, the same one-binary trick `--caps` plays for roster deltas. Also the fallback test: the run must still complete. |
 | `--json <path>` | — | Write the run's numbers for comparison. |
 | `--db <url>` | `$DATABASE_URL` | Exact statement counts, when `pg_stat_statements` is installed. |
 | `--msgs / --typing / --toggles / --churn / --views` | | Steady-state rates. |
@@ -166,3 +167,94 @@ writes is now a periodic whole-list snapshot**, and both are dominated by the
 copy sent to people who are NOT in the call and NOT the ones the list is about.
 Deltas made the news cheap; the keyframe is the remaining cost, and its size is
 the audience's problem rather than the room's.
+
+### Payload bytes and wire bytes are different numbers
+
+Every per-frame-type row above counts **decompressed payload**: the size of the
+JSON the application handled. With `permessage-deflate` negotiated that is no
+longer what the network carried, so the harness also reports `ON THE WIRE`,
+taken from each client socket's `bytesRead` — post-compression, framing
+included, which is the number a bandwidth bill is written in.
+
+Keep the distinction when reading a run. A change that makes frames smaller
+shows up in the payload rows; a change that makes them cheaper to send shows up
+only on the wire line.
+
+### What compression was worth
+
+Same binary, same machine, `--n 400 --voice 300 --seconds 30`, differing only in
+`--deflate`:
+
+| | `--deflate 0` | compressed |
+|---|---|---|
+| on the wire, 30s steady state | 956 MB | 310 MB |
+| per socket | 80.2 KB/s | 26.0 KB/s |
+| aggregate | 262.9 Mbit/s | 85.2 Mbit/s |
+| compression ratio | 1.00x | 2.92x |
+| server CPU | 9.7% of one core | 26.3% |
+| peak RSS | 266 MB | 365 MB |
+| stampede: on the wire | 98.5 MB | 28.6 MB (3.44x) |
+| stampede: time to join p95 | 233 ms | 310 ms |
+| convergence | 400/400 exact | 400/400 exact |
+
+At `--n 800` the same comparison is 2096 MB against 662 MB (3.17x), 857.6 Mbit/s
+against 270.7, CPU 17.0% against 60.4%, peak RSS 248 MB against 609 MB, and
+time to join p95 **344 ms against 252 ms** — compressed is *faster* there,
+because at that size the socket write path is what the join was waiting on.
+
+Read RSS as approximate: it is a high-water mark subject to when V8 last
+collected, and the two uncompressed runs above disagree with each other by
+18 MB at different socket counts.
+
+### The setting that mattered most was not a zlib setting
+
+`concurrencyLimit`. Our fan-out writes one payload to every socket that can see
+a channel, so a join storm asks for hundreds of compressions in one tick; at the
+`ws` default of 10 they queue in batches of ten and each batch costs an
+event-loop round trip. 800 sockets, 300 joining at once, only that number
+changed:
+
+| limit | join p50 | join p95 | steady CPU | peak RSS |
+|---|---|---|---|---|
+| 10 | 363 ms | 412 ms | 69.6% | 585 MB |
+| 16 | 181 ms | 297 ms | 64.6% | 609 MB |
+| 32 | 132 ms | 252 ms | 60.4% | 609 MB |
+| 64 | 121 ms | 283 ms | 60.7% | 611 MB |
+
+Memory is flat across that range, which is the point: the per-socket deflate
+contexts are what cost memory and they exist regardless, so this knob buys
+latency without spending the memory the `ws` README warns about. The reasoning
+for every option is in `server/src/lib/ws-compression.ts`.
+
+### Trimming the roster is mostly already done by compression
+
+`VoiceParticipant` carries about 346 bytes per person. Omitting every field
+whose absence already means what the value says — `sharingScreen: false`,
+`muted: false`, `deafened: false`, `serverMuted: false`, both null stream ids,
+`canSpeak: true`, and `canStream` when it matches `canSpeak` — takes that to
+193 bytes, **44% off the raw frame**.
+
+After deflate it is worth **8%**, because the fields being removed are the most
+repetitive part of the frame and therefore the part compression already had.
+Stripping one field at a time from a 250-person roster, measured on the
+compressed size:
+
+| field | raw | compressed | share of the compressed frame |
+|---|---|---|---|
+| `peerId` | 11.7 KB | 5.92 KB | 39.9% |
+| `userId` | 11.7 KB | 2.60 KB | 17.5% |
+| `displayName` | 6.6 KB | 1.77 KB | 11.9% |
+| `avatarUrl` | 16.0 KB | 1.38 KB | 9.3% |
+| everything else, combined | 33.3 KB | 1.05 KB | 7.2% |
+
+So a compressed roster is 69% identity, and identity is the part that cannot go:
+both native clients fail to decode a participant without `peerId` or `userId`
+(Android also without `displayName`), and on iOS one bad participant fails the
+whole envelope, so the frame is dropped in silence. `avatarUrl` is not derivable
+from `userId` either, because a pasted external link is a legal value.
+
+The remaining 8% is safe to take whenever someone wants it — every field listed
+is optional with the right default in the Zod schema, the Swift `init(from:)`
+and the Kotlin data class — but it is a wire change for three platforms, so it
+belongs in its own PR rather than riding along with something that has a kill
+switch it would not be covered by.

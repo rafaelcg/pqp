@@ -184,38 +184,37 @@ The per-frame-type table is the one that turns a wall into a fix. A signalling f
 
 Whichever of CPU, pool and wire hits its ceiling first is the resource that ran out, and it is the one to fix.
 
-### What the first run measured (2026-09-07)
+### What it has measured (2026-09-07)
 
-The rig: `pqp-api-staging` on `performance-2x` / 4 GB with `PG_POOL_MAX=40` (production's size), one LiveKit-pinned voice room, the harness on one laptop in Brazil whose downlink measures 703 Mbit/s. Arrivals ramped from 6/s, +3/s every 15 s.
+The rig: `pqp-api-staging` on `performance-2x` / 4 GB with `PG_POOL_MAX=40` (production's size), one LiveKit-pinned voice room, the harness on one laptop in Brazil whose downlink measures 703 Mbit/s. Arrivals ramped from 6/s, +3/s every 15 s, every welcomed socket staying in the room.
 
-| | current `main` (pre-#314) | with #314's roster deltas |
+**The ceiling on the code that is shipping today is roughly 300 to 400 people in one room, centre about 350.** Three clean runs against `main` at `0e97f22f` and `8dc691dd` put the first bucket past the client's 12 s budget at 325-349, 300-324 and 375-399. Below that, joins land in one to three seconds; above it, the p90 crosses twelve and people start seeing the join fail.
+
+| | `main` before the roster deltas | **`main` today** |
 |---|---|---|
-| **Ceiling: joins stop fitting the client's 12 s budget at** | **~225 to 250 in the room** | **~350 to 375 in the room** |
-| First arrivals over budget | from ~175 | from ~300 |
-| Arrivals attempted / reached welcome | 664 / 533 | 890 / 694 |
-| Peak sockets on the machine | 466 | 596 |
-| Machine CPU, max | 24 % of the VM | 33 % of the VM |
-| Pool saturated | 6 of 213 samples | 6 of 235 samples |
-| Bytes received, whole run | 6.6 GB / 317 k frames | 5.3 GB / 521 k frames |
-| Peak wire rate | 651 Mbit/s | 698 Mbit/s |
+| **Joins stop fitting the client's 12 s budget at** | ~225 to 250 in the room | **~300 to 400, centre ~350** |
+| Machine CPU, max | 24 % of the VM | 14 to 36 % |
+| Pool saturated | 6 of 213 samples | 4 of ~220 samples (transient queue up to 287) |
+| Peak wire rate | 651 Mbit/s | 556 to 734 Mbit/s |
 
-**What ran out is bandwidth, not CPU and not the pool.** CPU never passed a third of a two-core VM and the Postgres pool saturated for six seconds out of four minutes, as a symptom of requests already queued behind the wire rather than as the cause. The wire is the wall, and the per-frame-type table names it:
+That is about 1.4x more people than before the roster delta work, and it matches what that branch measured on this rig before it merged (350 to 375), so the improvement survived landing. It is still two to three times short of the 800 to 1000 the branch's description extrapolated: that estimate was arithmetic on one cost, and the room falls over on a different one first.
 
-| frame | pre-#314 | with #314 |
+**What runs out is bandwidth.** Not CPU, which never passed 36 % of a two-core VM. Not the Postgres pool, which saturates for four seconds out of four minutes behind requests already queued on the wire. Signalling fan-out is O(room size) per arrival, so a filling room is quadratic, and the per-frame-type table names the frame:
+
+| frame | before the deltas | today |
 |---|---|---|
-| `voice-roster` | 4 981 MB over 52 607 frames, **99 kB each** | 1 461 MB over 10 217 frames (keyframes only) |
-| `voice-roster-delta` | did not exist | 82 MB over 73 248 frames, 1.2 kB each |
-| `presence-update` | 1 555 MB, 30 kB each | **3 588 MB, 45 kB each** |
-| `peer-joined` | 40 MB, 336 bytes each | 79 MB, 335 bytes each |
+| `voice-roster` | 4 981 MB over 52 607 frames, **99 kB each** | 1 190 to 1 286 MB over ~9 000 frames (keyframes only), 147 kB each |
+| `voice-roster-delta` | did not exist | 78 to 87 MB over ~75 000 frames, 1.1 kB each |
+| `presence-update` | 1 555 MB, 30 kB each | **3 360 to 3 900 MB, 45 kB each** |
+| `peer-joined` | 40 MB, 336 bytes each | 74 to 83 MB, 335 bytes each |
 
-Signalling fan-out is O(room size) per arrival, so a filling room is quadratic. At 350 people a single join was pushing a 99 kB roster to every viewer; #314 replaces most of those with a 1.2 kB delta and moves the ceiling by about 1.5x, at which point `presence-update` becomes the largest thing on the wire and is the next one to fix.
+So the roster stopped being the largest thing on the wire and `presence-update` took over, at 45 kB a frame and roughly 70 % of the bytes. That is the next one to fix, and as of this writing two changes are in flight and **not** in these numbers: WebSocket compression with payload trimming, and audience rosters with presence deltas. Read the figure above as the state before those, not as the final ceiling.
 
-**#314's extrapolated estimate of 800 to 1000 did not hold.** Today's code stops at roughly 250, and #314's own change takes it to roughly 350, still two to three times short. The estimate was arithmetic on one cost; the measurement finds the room falls over on a different one first.
+Three caveats, all of which make the number **conservative rather than optimistic**:
 
-Two caveats, both of which make these numbers **conservative rather than optimistic**:
-
-- The harness concentrates every simulated client on one link, and that link's 703 Mbit/s is exactly where both runs peaked, so part of the slowdown at the top of each ramp is the harness. The comparison between the two code versions is still sound (same link, same ramp), and the server-side egress is real either way: those bytes have to leave the machine regardless of who receives them. To measure a distributed crowd properly, shard the harness across machines.
-- **A capability the harness does not declare is an optimisation the run cannot see.** The first #314 comparison measured no improvement at all, because `voice-roster-delta` is opt-in per socket (`caps` on the `auth` frame, `SOCKET_CAPS` in `server/src/ws/sockets.ts`) and the harness was silent, so every socket kept receiving whole rosters. The harness now declares the same `WIRE_CAPS` the browser does. Keep those two lists in step, or the next wire optimisation will measure as worthless. Worth knowing for production too: a client that does not declare the capability, which today means the native iOS and Android apps, keeps paying the full roster.
+- The harness concentrates every simulated client on one link, and that link's 703 Mbit/s is roughly where the peaks land, so part of the slowdown at the top of each ramp is the harness. The server-side egress is real either way: those bytes have to leave the machine regardless of who receives them. To measure a distributed crowd properly, shard the harness across machines.
+- **A capability the harness does not declare is an optimisation the run cannot see.** The first comparison against the roster deltas measured no improvement at all, because `voice-roster-delta` is opt-in per socket (`caps` on the `auth` frame, `SOCKET_CAPS` in `server/src/ws/sockets.ts`) and the harness was silent. `--caps` is how you choose; `--caps 0` deliberately measures an old client. Worth knowing for production too: a client that does not negotiate keeps paying the whole roster.
+- **The rig is shared, and a run that cannot say which build it measured is not a measurement.** On 2026-09-07 another agent deployed their branch to `pqp-api-staging` between two runs, and the second run quietly measured their code: different wire volume, CPU pegged where it had been idle, a ceiling a bucket higher, and nothing in the output to say the binary had changed. The report now prints `target ran <sha> for the whole run`, or shouts when that moves. Check that line before believing any number, and redeploy the build you meant before every run.
 
 ## Known caveats
 

@@ -30,6 +30,13 @@ import {
   screenCaptureOptions,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
+import {
+  canControlShareCursor,
+  cursorConstraintFor,
+  cursorRidesAlong,
+  getShareCursor,
+  type ShareCursor,
+} from "@/lib/screen-capture-cursor";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
   buildAudioConstraints,
@@ -312,6 +319,16 @@ export interface VoiceState {
    * opted in, because nothing else asks for system audio any more.
    */
   isSharingSystemAudio: boolean;
+  /**
+   * True when the person asked for their mouse to be left out and this
+   * capture carries it anyway.
+   *
+   * Read off the surface the picker returned, for the same reason as the line
+   * above: a tab share genuinely has no pointer in it, so saying otherwise
+   * would be crying wolf. What can and cannot be done about it on each engine
+   * is in `lib/screen-capture-cursor.ts`.
+   */
+  isShareCursorVisible: boolean;
   /**
    * True when the last attempt asked for sound and died AFTER the picker
    * closed, which is the one share failure a person cannot act on by reading:
@@ -806,6 +823,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     localScreenStream: null,
     isSharingScreenAudio: false,
     isSharingSystemAudio: false,
+    isShareCursorVisible: false,
     screenShareAudioFailed: false,
     incomingCalls: [],
     isCameraOn: false,
@@ -1538,6 +1556,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.localScreenStream = null;
     state.isSharingScreenAudio = false;
     state.isSharingSystemAudio = false;
+    state.isShareCursorVisible = false;
   }
 
   /**
@@ -2024,6 +2043,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       localScreenStream: null,
       isSharingScreenAudio: false,
       isSharingSystemAudio: false,
+      isShareCursorVisible: false,
       screenShareAudioFailed: false,
       incomingCalls: state.incomingCalls,
       isCameraOn: false,
@@ -2967,10 +2987,15 @@ export function createVoiceController(transport: RealtimeTransport) {
       const retryingAfterAudioFailure = state.screenShareAudioFailed;
       state.screenShareAudioFailed = false;
 
+      // The standing "leave my mouse out of it" preference, read from its own
+      // store rather than passed down four components (it is remembered per
+      // person: `lib/screen-capture-cursor.ts`). An explicit `hideCursor` on
+      // the intent still wins, so a caller can override it for one share.
+      const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
       const options = screenCaptureOptions(
         shareSystemAudio,
         screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null),
-        intent,
+        { ...intent, hideCursor },
       );
       // What was actually asked for, not what was ticked. In a browser this is
       // true even unticked, because a tab share carries the tab's own sound and
@@ -3066,6 +3091,14 @@ export function createVoiceController(transport: RealtimeTransport) {
         displaySurface,
         hasAudio,
       });
+      // Same moment, same rule, different consequence: the presenter asked for
+      // their pointer to be left out and this surface carries it anyway. Said
+      // now, while they can still pick a different surface.
+      state.isShareCursorVisible = cursorRidesAlong({
+        displaySurface,
+        hideCursor,
+        canControl: canControlShareCursor(),
+      });
       emit();
       announceSharing();
 
@@ -3083,6 +3116,38 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     async stopScreenShare() {
       await stopScreenShareInternal();
+      emit();
+    },
+
+    /**
+     * Push the cursor preference onto a share that is already running.
+     *
+     * Making somebody stop a film and start it again to get rid of a pointer
+     * is a poor answer, and `applyConstraints` is the right one: it changes a
+     * live track in place, no renegotiation, nobody's picture drops. It is
+     * only called where the engine says it can honour the constraint, because
+     * WebKit demonstrated the failure mode this guards against: the promise
+     * RESOLVES on an engine that ignores the member entirely, so a successful
+     * call proves nothing and would light a green control over an unchanged
+     * picture. No engine says yes today (see `lib/screen-capture-cursor.ts`),
+     * so today this returns having done nothing and the toggle stays hidden
+     * mid-share. It is here so the day one does, a live share follows.
+     */
+    async applyShareCursor(preference: ShareCursor) {
+      const track = screenCaptureStream?.getVideoTracks()[0];
+      if (!track || !canControlShareCursor()) {
+        return;
+      }
+      try {
+        await track.applyConstraints({
+          cursor: cursorConstraintFor(preference),
+        } as MediaTrackConstraints);
+      } catch {
+        // Overconstrained or refused. The share is untouched and still live,
+        // which is the outcome that matters; the next share asks again.
+        return;
+      }
+      state.isShareCursorVisible = false;
       emit();
     },
 

@@ -443,3 +443,182 @@ test("the channel list collapses to icons while somebody else presents, and come
     await leaveVoiceIfConnected(page).catch(() => {});
   }
 });
+
+/**
+ * The toggle used to be offered only while a stage was up, which meant the
+ * only route to a narrower channel list in a plain text channel was to wait
+ * for somebody to start sharing and let the automation do it. It is window
+ * furniture now, and it lives at the left of the channel header, next to the
+ * column it controls.
+ */
+test("the channel list collapses with no call anywhere in sight", async ({
+  page,
+}) => {
+  await ensureVoiceChannel();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openApp(page);
+
+  // Nothing is connected and nobody is presenting: no stage of any kind.
+  await expect(page.getByTestId("call-stage")).toHaveCount(0);
+  await expect(page.getByTestId("call-stage-collapsed")).toHaveCount(0);
+
+  const toggle = page.locator("[data-channel-sidebar-toggle]");
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(page.locator("[data-channel-rail]")).toHaveCount(0);
+
+  await toggle.click();
+  const rail = page.locator("[data-channel-rail]");
+  await expect(rail).toBeVisible();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  expect(
+    await page.evaluate(() => localStorage.getItem("pqp:channel-sidebar")),
+  ).toBe("icons");
+
+  // The strip still carries its own way back, so the header button is never
+  // the only exit.
+  await expect(rail.locator("[data-channel-rail-expand]")).toBeVisible();
+  await rail.locator("[data-channel-rail-expand]").click();
+  await expect(page.locator("[data-channel-rail]")).toHaveCount(0);
+  expect(
+    await page.evaluate(() => localStorage.getItem("pqp:channel-sidebar")),
+  ).toBe("open");
+
+  // And the choice is remembered, with no call ever having happened.
+  await toggle.click();
+  await page.reload();
+  await expect(page.locator("[data-channel-rail]")).toBeVisible({
+    timeout: 20_000,
+  });
+});
+
+/** What `object-fit` the browser actually resolved on the live picture. */
+function stageVideoFit(page: Page) {
+  return page.evaluate(() => {
+    const video = document.querySelector<HTMLVideoElement>(
+      '[aria-label="Your camera"]',
+    );
+    return video ? getComputedStyle(video).objectFit : null;
+  });
+}
+
+/**
+ * Fill or fit, and the two things that must not go wrong with it: the picture
+ * must not be remounted by the switch (`lib/remote-video-delivery.ts` would
+ * pause the publication a second later and the far end would go black), and
+ * the choice must outlive both a reload and a rearrangement of the panes.
+ */
+test("the whole-picture toggle sticks, and never remounts the picture", async ({
+  page,
+}) => {
+  await ensureVoiceChannel();
+  await page.setViewportSize({ width: 1800, height: 900 });
+  await openApp(page);
+  await joinLobbyWithCamera(page);
+
+  const fit = page.getByTestId("tile-fit").first();
+  // A face is cropped out of the box; that is the default this keeps.
+  await expect(fit).toHaveAttribute("data-tile-fit", "cover");
+  await expect.poll(() => stageVideoFit(page)).toBe("cover");
+
+  await markStageVideo(page);
+  await fit.click();
+
+  await expect(page.getByTestId("tile-fit").first()).toHaveAttribute(
+    "data-tile-fit",
+    "contain",
+  );
+  await expect.poll(() => stageVideoFit(page)).toBe("contain");
+  // The same element, still bound, still decoding frames.
+  expect(await stageVideoState(page)).toMatchObject({
+    sameNode: true,
+    bound: true,
+    paused: false,
+  });
+  expect((await stageVideoState(page)).width).toBeGreaterThan(0);
+  expect(
+    await page.evaluate(() => localStorage.getItem("pqp:video-fit")),
+  ).toContain('"camera":"contain"');
+
+  // --- a layout switch keeps it, and keeps the element ---------------------
+  await markStageVideo(page);
+  await page.locator("[data-call-split-toggle]").click();
+  expect((await paneGeometry(page)).orientation).toBe("side-by-side");
+  await expect(page.getByTestId("tile-fit").first()).toHaveAttribute(
+    "data-tile-fit",
+    "contain",
+  );
+  await expect.poll(() => stageVideoFit(page)).toBe("contain");
+  expect(await stageVideoState(page)).toMatchObject({
+    sameNode: true,
+    bound: true,
+    paused: false,
+  });
+
+  // --- and a reload ---------------------------------------------------------
+  await leaveVoiceIfConnected(page);
+  await page.reload();
+  await joinLobbyWithCamera(page);
+  await expect(page.getByTestId("tile-fit").first()).toHaveAttribute(
+    "data-tile-fit",
+    "contain",
+  );
+  await expect.poll(() => stageVideoFit(page)).toBe("contain");
+
+  await leaveVoiceIfConnected(page);
+});
+
+/**
+ * THE EMPTY COLUMN. Reported from live use on 7 Sep 2026: side by side was
+ * chosen during a share, the share ended, and the left column stayed. It was
+ * then a quarter of the window holding the call's control strip and nothing
+ * else, with the chat squeezed into the rest. The stored choice is kept; it
+ * is not drawn until there is a picture to draw beside the chat, which is the
+ * same treatment a window too narrow for two columns already gets.
+ */
+test("an empty stage is never given a column of its own", async ({ page }) => {
+  await ensureVoiceChannel();
+  await page.setViewportSize({ width: 1800, height: 900 });
+  await openApp(page);
+  await joinLobbyWithCamera(page);
+
+  await page.locator("[data-call-split-toggle]").click();
+  const side = await paneGeometry(page);
+  expect(side.orientation).toBe("side-by-side");
+
+  // The camera goes off, so nobody is publishing anything.
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: "Turn camera off", exact: true })
+    .click();
+  await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
+    timeout: 20_000,
+  });
+
+  const empty = await paneGeometry(page);
+  // The slim bar is a full-width row above the transcript, not a column: it
+  // spans the pane and takes a bar's worth of height rather than a quarter of
+  // the window's width.
+  expect(empty.stageWidth).toBeCloseTo(empty.paneWidth, 0);
+  expect(empty.stageHeight).toBeLessThan(empty.paneHeight / 2);
+  // And the arrangement toggle goes with it: there is nothing to arrange.
+  await expect(page.locator("[data-call-split-toggle]")).toHaveCount(0);
+
+  // Nothing was forgotten. The camera comes back and so does the column.
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: "Turn camera on", exact: true })
+    .click();
+  await expect(page.getByTestId("call-stage")).toBeVisible({ timeout: 20_000 });
+  const back = await paneGeometry(page);
+  expect(back.orientation).toBe("side-by-side");
+  expect(back.stageWidth).toBeCloseTo(side.stageWidth, 0);
+  expect(
+    await page.evaluate(() => {
+      const raw = localStorage.getItem("pqp:call-split");
+      return raw ? (JSON.parse(raw) as { orientation: string }).orientation : null;
+    }),
+  ).toBe("side-by-side");
+
+  await leaveVoiceIfConnected(page);
+});

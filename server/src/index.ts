@@ -30,7 +30,12 @@ import {
   sendError,
 } from "./lib/http.js";
 import { logEvent } from "./lib/log.js";
-import { noteRuntimeSample, registerSocketCount } from "./lib/runtime.js";
+import {
+  noteRuntimeSample,
+  registerCompressedSocketCount,
+  registerSocketCount,
+} from "./lib/runtime.js";
+import { wsPerMessageDeflate } from "./lib/ws-compression.js";
 import {
   clientAddress,
   createRateLimiter,
@@ -303,10 +308,14 @@ const httpServer = createServer((req, res) => {
   });
 });
 
+// `maxPayload` keeps its meaning under compression and gains one: `ws` passes
+// it into the extension, which stops inflating once the DECOMPRESSED size
+// crosses it. So a client cannot turn a small frame into a large allocation.
 const wss = new WebSocketServer({
   server: httpServer,
   path: "/ws",
   maxPayload: MAX_WS_PAYLOAD_BYTES,
+  perMessageDeflate: wsPerMessageDeflate(),
 });
 
 // Protocol-level heartbeat: browsers auto-reply pong, so this both reaps dead
@@ -319,6 +328,26 @@ const socketLiveness = new WeakMap<import("ws").WebSocket, boolean>();
 // socket open for its whole session, so this is the closest thing the process
 // has to "people connected". A Set's `size`, read only when the dashboard asks.
 registerSocketCount(() => wss.clients.size);
+
+// How many of those sockets actually negotiated compression.
+//
+// Pitfall 9 in CLAUDE.md is Cloudflare TURN: configured, deployed, and never
+// once used, because nothing reported which relay answered. Compression has the
+// same shape — a client that does not offer the extension is served
+// uncompressed and looks identical to one that does — so the fraction is the
+// only thing that tells "working" from "silently off for everybody". Counted on
+// demand, when the dashboard asks, never on a timer.
+registerCompressedSocketCount(() => {
+  let compressed = 0;
+  for (const socket of wss.clients) {
+    // `extensions` is the negotiated list as a comma-joined string, "" when
+    // nothing was negotiated.
+    if (socket.extensions.includes("permessage-deflate")) {
+      compressed += 1;
+    }
+  }
+  return compressed;
+});
 
 wss.on("connection", (socket, req) => {
   // Take a peak sample here rather than on a timer: the maximum number of

@@ -137,10 +137,11 @@ export function CallSplit({
   // what a first drag starts from, so the handle never jumps under the pointer.
   const naturalStage = usePaneSize(stagePaneRef);
   const { width, height } = paneSize ?? measured;
-  // Side by side is a claim about width. A pane that cannot hold two columns
-  // draws the stacked layout without touching what is stored, so widening the
-  // window brings the choice back rather than losing it.
-  const orientation = resolveOrientation(preference.orientation, width);
+  // Side by side is a claim about width AND about there being a picture. A
+  // pane that cannot hold two columns, or a stage with nothing on it, draws
+  // the stacked layout without touching what is stored: widening the window,
+  // or somebody turning a camera on, brings the choice back on its own.
+  const orientation = resolveOrientation(preference.orientation, width, shape);
   const sideBySide = orientation === "side-by-side";
   const fraction = sideBySide ? preference.side : preference.stacked;
   const container = sideBySide ? width : height;
@@ -167,8 +168,11 @@ export function CallSplit({
   const dividerAt =
     stagePx ?? (sideBySide ? naturalStage.width : naturalStage.height);
 
+  // Asked of the same function that draws the layout, rather than restated:
+  // the toggle offering an arrangement the pane would refuse to draw is the
+  // bug this used to have on an empty stage, in the other direction.
   const canSideBySide =
-    shape === "expanded" && splitAvailable(width, "side-by-side");
+    resolveOrientation("side-by-side", width, shape) === "side-by-side";
   useEffect(() => {
     onSplitStateChange?.({ active: sized, canSideBySide });
   }, [sized, canSideBySide, onSplitStateChange]);
