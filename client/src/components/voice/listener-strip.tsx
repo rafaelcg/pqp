@@ -1,6 +1,9 @@
 import { ChevronDown, ChevronUp, MicOff, ShieldBan } from "lucide-react";
-import { useEffect, useState } from "react";
-import { PeerTileControls } from "@/components/voice/peer-tile-controls";
+import { useEffect, useState, type HTMLAttributes } from "react";
+import {
+  PeerAudioMenu,
+  usePeerAudioMenu,
+} from "@/components/voice/peer-audio-menu";
 import { VoiceAvatar } from "@/components/voice/voice-avatar";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useTranslation } from "@/lib/i18n";
@@ -158,13 +161,39 @@ function ListenerChip({
   compact: boolean;
 }) {
   const { t } = useTranslation();
+  const menu = usePeerAudioMenu<HTMLSpanElement>();
   const name = person.isSelf ? `${person.name} ${youLabel}` : person.name;
+  // A chip you can act on is a button. One with no knob behind it (ourselves,
+  // or a caller that wired no setter) stays a label, because a button that
+  // opens nothing is worse than no button at all.
+  const actionable = Boolean(person.onSetVolume || person.onRetry);
+  const trigger: HTMLAttributes<HTMLSpanElement> & { tabIndex?: number } =
+    actionable
+      ? {
+          role: "button",
+          tabIndex: 0,
+          "aria-haspopup": "dialog",
+          "aria-expanded": menu.open,
+          "aria-label": t("voice.audio.title", { name: person.name }),
+          onClick: menu.toggle,
+          onKeyDown: (event) => {
+            if (event.key === "Enter" || event.key === " ") {
+              event.preventDefault();
+              menu.toggle();
+            }
+          },
+        }
+      : {};
   return (
     <span
+      ref={menu.rootRef}
       data-call-listener={person.name}
+      {...trigger}
       className={cn(
-        "group relative flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-ink-3/70 py-0.5 pl-0.5 pr-2 ring-1 ring-ink-4/60",
+        "relative flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-ink-3/70 py-0.5 pl-0.5 pr-2 ring-1 ring-ink-4/60",
         person.speaking && "ring-2 ring-success",
+        actionable &&
+          "cursor-pointer hover:bg-ink-4 focus:outline-none focus-visible:ring-2 focus-visible:ring-signal",
       )}
     >
       <VoiceAvatar
@@ -198,20 +227,24 @@ function ListenerChip({
           />
         )
       )}
-      {/* The volume slider and the Retry the rail thumbnails used to carry.
-          Above the chip, on hover or focus, because the row itself is one line
-          tall and a slider inside it would leave room for nothing else. */}
-      {(person.onSetVolume || person.onRetry) && (
-        <PeerTileControls
-          name={person.name}
-          volume={person.volume}
-          onSetVolume={person.onSetVolume}
-          failed={person.failed}
-          onRetry={person.onRetry}
-          alwaysOpen
-          className="absolute bottom-full left-0 z-30 mb-1 hidden min-w-[8rem] rounded-md bg-ink-2 p-1 shadow-lg ring-1 ring-ink-4/80 group-hover:block group-focus-within:block"
-        />
-      )}
+      {/* Above the chip, because the row itself is one line tall. Opened by a
+          click on the chip rather than by hovering it: the row is the surface
+          a phone has, and a phone has no hover. */}
+      <PeerAudioMenu
+        name={person.name}
+        open={menu.open}
+        voice={
+          person.onSetVolume
+            ? {
+                volume: person.volume ?? 1,
+                onSetVolume: person.onSetVolume,
+              }
+            : undefined
+        }
+        failed={person.failed}
+        onRetry={person.onRetry}
+        side="top"
+      />
     </span>
   );
 }

@@ -1151,6 +1151,23 @@ function MainAppContent({
   // state, and dropping every frame of it would change nothing about the call.
   useVoiceStateSync(transport, voiceState);
 
+  /**
+   * Whose screen share is currently arriving with sound.
+   *
+   * Read off the received stream rather than off what the presenter ticked,
+   * which is the same question `collectScreenTiles` answers for the stage. The
+   * sidebar needs it so that clicking a presenter under a voice channel offers
+   * the second slider ("the film, not him") and clicking anybody else does not
+   * offer a knob that moves nothing.
+   */
+  const screenAudioUserIds = useMemo(
+    () =>
+      voiceState.remotePeers
+        .filter((peer) => peer.screenAudioStream != null && peer.userId)
+        .map((peer) => peer.userId as string),
+    [voiceState.remotePeers],
+  );
+
   // "How was that call?" — armed while a call runs, fires once when one ends
   // that was long enough and had somebody else in it. See use-call-rating.ts
   // for the three gates and why the cooldown is written on show, not on answer.
@@ -5070,6 +5087,8 @@ function MainAppContent({
           currentUserId={user?.id ?? null}
           pendingMoveUserIds={pendingVoiceMoves}
           peerVolumes={voiceState.peerVolumes}
+          screenVolumes={voiceState.screenVolumes}
+          screenAudioUserIds={screenAudioUserIds}
           canMoveIn={(channelId) => perms.can(moveMembersBit(), channelId)}
           canConnectIn={(channelId) =>
             perms.can(Permission.CONNECT, channelId)
@@ -5092,6 +5111,9 @@ function MainAppContent({
           }
           onSetPeerVolume={(userId, volume) =>
             voice.setPeerVolume(userId, volume)
+          }
+          onSetScreenVolume={(userId, volume) =>
+            voice.setScreenVolume(userId, volume)
           }
           onCreateChannel={(type, isPrivate) =>
             setChannelPrompt({ mode: "create", type, isPrivate })

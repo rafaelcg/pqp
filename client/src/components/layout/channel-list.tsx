@@ -125,6 +125,13 @@ interface ChannelListProps {
   /** Seats with a move in flight: no second drag. */
   pendingMoveUserIds?: string[];
   peerVolumes?: Record<string, number>;
+  /** Screen-share playback volumes, keyed on userId like `peerVolumes`. */
+  screenVolumes?: Record<string, number>;
+  /**
+   * Whose share is currently carrying sound. Only these get the second slider:
+   * a share-volume knob on a silent share moves nothing.
+   */
+  screenAudioUserIds?: string[];
   canMoveIn?: (channelId: string) => boolean;
   canConnectIn?: (channelId: string) => boolean;
   canMuteIn?: (channelId: string) => boolean;
@@ -134,6 +141,7 @@ interface ChannelListProps {
   onServerMuteOccupant?: (userId: string, muted: boolean) => void;
   onKickOccupant?: (userId: string, name: string) => void;
   onSetPeerVolume?: (userId: string, volume: number) => void;
+  onSetScreenVolume?: (userId: string, volume: number) => void;
   onCreateChannel: (
     type: "text" | "voice" | "category",
     isPrivate: boolean,
@@ -198,6 +206,8 @@ export function ChannelList({
   currentUserId = null,
   pendingMoveUserIds = [],
   peerVolumes = {},
+  screenVolumes = {},
+  screenAudioUserIds = [],
   canMoveIn = () => false,
   canConnectIn = () => true,
   canMuteIn = () => false,
@@ -207,6 +217,7 @@ export function ChannelList({
   onServerMuteOccupant,
   onKickOccupant,
   onSetPeerVolume,
+  onSetScreenVolume,
   onCreateChannel,
   onRenameChannel,
   onOpenChannelSettings,
@@ -369,6 +380,36 @@ export function ChannelList({
       event.preventDefault();
       setDragOverId(channel.id);
     }
+  }
+
+  /**
+   * The two sliders a left-click on this row opens, or nothing.
+   *
+   * Nothing for ourselves and for a channel we are not in: playback volume is
+   * a knob on audio this machine is receiving, and offering one where no audio
+   * arrives is the same lie the old empty `role="button"` was telling.
+   */
+  function audioForOccupant(person: VoiceParticipant, channel: Channel) {
+    const isSelf = Boolean(currentUserId && person.userId === currentUserId);
+    if (isSelf || activeVoiceChannelId !== channel.id || !onSetPeerVolume) {
+      return undefined;
+    }
+    const share =
+      onSetScreenVolume && screenAudioUserIds.includes(person.userId)
+        ? {
+            volume: screenVolumes[person.userId] ?? 1,
+            onSetVolume: (volume: number) =>
+              onSetScreenVolume(person.userId, volume),
+          }
+        : undefined;
+    return {
+      voice: {
+        volume: peerVolumes[person.userId] ?? 1,
+        onSetVolume: (volume: number) =>
+          onSetPeerVolume(person.userId, volume),
+      },
+      share,
+    };
   }
 
   function menuForOccupant(
@@ -741,6 +782,7 @@ export function ChannelList({
                   canDrag={canDrag}
                   isDragging={draggedOccupant?.userId === person.userId}
                   items={menuForOccupant(person, channel)}
+                  audio={audioForOccupant(person, channel)}
                   onDragStart={(next, fromChannelId) => {
                     setDraggedId(null);
                     setDraggedOccupant({
