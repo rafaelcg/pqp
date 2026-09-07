@@ -2143,11 +2143,42 @@ export async function handleVoiceMessage(
       refuseResume();
       return;
     }
+    // `type` says which kind of *server* channel this is, and a conversation is
+    // neither: it has one room that is text and voice at once, the way a DM
+    // call works everywhere else. Gating on `type` alone rejected every
+    // conversation, since they are all stored as text.
+    //
+    // READ BEFORE THE TWO GUARDS BELOW, because it is what says which of them
+    // can possibly apply. Both used to run on every join and each is provably
+    // a no-op on half of them: `isDmSendBlocked` builds its participant set
+    // `WHERE c.kind <> 'server'` and from `dm_pairs`, so on a server channel it
+    // asks an empty set whether anybody blocked you and always answers no;
+    // `findTimeoutForChannel` joins `channels ON c.server_id = t.server_id`,
+    // which cannot match a conversation because its `server_id` is NULL (the
+    // comment below already said so, and ran the query anyway). That was one
+    // dead round trip per join either way, on the one path a watch party
+    // hammers: the 2026-09-05 party put about ten sequential queries per join
+    // against a database answering in 80 to 240 ms with the pool pinned at 25
+    // of 25. All four refusals here are the same `refuseResume()`, so which one
+    // fires first is not observable by any client.
+    const channel = await getChannel(payload.voiceChannelId);
+    if (!channel) {
+      refuseResume();
+      return;
+    }
+    if (channel.kind === "server" && channel.type !== "voice") {
+      refuseResume();
+      return;
+    }
+
     // Ringing somebody is the loudest thing one account can do to another, so a
     // block closes a 1:1's call the same way it closes its messages. Without
     // this, a blocked person keeps a working phone line to the person who
     // blocked them.
-    if (await isDmSendBlocked(payload.voiceChannelId, user.id)) {
+    if (
+      channel.kind !== "server" &&
+      (await isDmSendBlocked(payload.voiceChannelId, user.id))
+    ) {
       refuseResume();
       return;
     }
@@ -2164,24 +2195,14 @@ export async function handleVoiceMessage(
     // and on both transports. The same join reaches a conversation's call,
     // and `findTimeoutForChannel` returns nothing for those — a server's
     // moderators do not get to hang up their members' DM calls.
-    if (await findTimeoutForChannel(user.id, payload.voiceChannelId)) {
+    if (
+      channel.kind === "server" &&
+      (await findTimeoutForChannel(user.id, payload.voiceChannelId))
+    ) {
       refuseResume();
       return;
     }
 
-    // `type` says which kind of *server* channel this is, and a conversation is
-    // neither: it has one room that is text and voice at once, the way a DM
-    // call works everywhere else. Gating on `type` alone rejected every
-    // conversation, since they are all stored as text.
-    const channel = await getChannel(payload.voiceChannelId);
-    if (!channel) {
-      refuseResume();
-      return;
-    }
-    if (channel.kind === "server" && channel.type !== "voice") {
-      refuseResume();
-      return;
-    }
     // SPEAK and STREAM ride on the same resolution as CONNECT.
     // A conversation has neither roles nor overwrites, so both stay true there.
     //
