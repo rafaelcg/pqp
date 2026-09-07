@@ -64,6 +64,19 @@ export interface BlogPost {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "watch-party-e-o-aa",
+    date: "2026-09-07",
+    title: {
+      "pt-BR": "Watch party, e o Aa no chat",
+      en: "Watch party, and Aa in chat",
+    },
+    summary: {
+      "pt-BR":
+        "Watch party no Chrome, Aa com Prévia, câmera na barra da call, Fixar canal, e o mic que fecha quando você cala.",
+      en: "Watch party in Chrome, Aa with Preview, camera on the call strip, pin a channel, and a mic that closes when you stop talking.",
+    },
+  },
+  {
     slug: "bau-e-o-dm-na-barra",
     date: "2026-09-03",
     title: {
