@@ -24,6 +24,8 @@ ICE config: `GET https://api.pqp.gg/api/ice-servers`.
 
 A staging environment exists (Clerk dev instance, Fly app `pqp-api-staging`, Pages branch deploy at https://staging.pqp-3yr.pages.dev); it is documented in [`STAGING.md`](./STAGING.md).
 
+**How many people fit in one voice room, measured (2026-09-07).** On staging sized like production, joins stop fitting the client's own 12 second budget at roughly **225 to 250 people already in the room**. What runs out is **bandwidth**, not CPU (never past a third of two cores) and not the Postgres pool (saturated six seconds in four minutes, behind the wire rather than ahead of it): voice signalling fan-out is O(room size) per arrival, and a single `voice-roster` frame averaged 99 kB. #314's roster deltas take it to roughly 350, after which `presence-update` frames become the largest thing on the wire. The number is a floor, not a ceiling, because the harness concentrates every simulated client on one link. Method, safety rules and how to run it again: [`STAGING.md`](./STAGING.md) under "Load testing staging".
+
 **The API moved off Railway.** A stale copy may still answer at
 `api-production-206d.up.railway.app`, and nothing points at it. This table said
 so for three weeks after it stopped being true, which is the kind of error that
