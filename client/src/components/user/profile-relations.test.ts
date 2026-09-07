@@ -20,6 +20,7 @@ import {
   cardRoleChips,
   profileAboutTabs,
   activeProfileAboutTab,
+  publicProfileHref,
   type FriendshipState,
   type ProfileModerationContext,
   type ProfileRoleChip,
@@ -540,5 +541,14 @@ describe("activeProfileAboutTab", () => {
     expect(
       activeProfileAboutTab(["depoimentos", "communities"], "communities"),
     ).toBe("communities");
+  });
+});
+
+describe("publicProfileHref", () => {
+  it("returns the public page path only for a claimed handle", () => {
+    expect(publicProfileHref("rafa")).toBe("/@rafa");
+    expect(publicProfileHref(null)).toBeNull();
+    expect(publicProfileHref(undefined)).toBeNull();
+    expect(publicProfileHref("")).toBeNull();
   });
 });

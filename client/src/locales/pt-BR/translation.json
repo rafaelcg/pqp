@@ -1057,6 +1057,8 @@
   "profile.mod.nicknamed": "Apelido atualizado.",
   "profile.open": "Abrir o perfil de {name}",
   "profile.viewProfile": "Ver perfil",
+  "profile.viewPublic": "Ver perfil",
+  "profile.publicUrl": "pqp.gg/@{handle}",
   "profile.roles": "Cargos",
   "profile.cargos": "Cargos",
   "cargosHint.title": "Agora o cargo se marca no perfil",
