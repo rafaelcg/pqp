@@ -157,6 +157,7 @@
 
     <!-- Voz -->
     <string name="voice_leave">Sair</string>
+    <string name="voice_join">Entrar na call</string>
     <string name="voice_mute">Mudo</string>
     <string name="voice_unmute">Tirar do mudo</string>
     <string name="voice_deafen">Silenciar tudo</string>

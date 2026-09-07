@@ -127,21 +127,13 @@ struct ChannelListView: View {
                                 .padding(.top, 12)
                                 .contextMenu { channelActions(for: category) }
                             ForEach(children(of: category)) { channel in
-                                if channel.isVoice {
-                                    NavigationLink { VoiceView(channel: channel) } label: {
-                                        ChannelRow(channel: channel, unread: nil)
-                                    }
-                                    .buttonStyle(.plain)
-                                    .contextMenu { channelActions(for: channel) }
-                                } else {
-                                    NavigationLink {
-                                        chat(for: channel)
-                                    } label: {
-                                        ChannelRow(channel: channel, unread: unread[channel.id])
-                                    }
-                                    .buttonStyle(.plain)
-                                    .contextMenu { channelActions(for: channel) }
+                                NavigationLink {
+                                    chat(for: channel)
+                                } label: {
+                                    ChannelRow(channel: channel, unread: unread[channel.id])
                                 }
+                                .buttonStyle(.plain)
+                                .contextMenu { channelActions(for: channel) }
                             }
                         }
 
@@ -150,10 +142,8 @@ struct ChannelListView: View {
                                 .padding(.horizontal, 4)
                                 .padding(.top, 12)
                             ForEach(voiceChannels) { channel in
-                                NavigationLink {
-                                    VoiceView(channel: channel)
-                                } label: {
-                                    ChannelRow(channel: channel, unread: nil)
+                                NavigationLink { chat(for: channel) } label: {
+                                    ChannelRow(channel: channel, unread: unread[channel.id])
                                 }
                                 .buttonStyle(.plain)
                                 .contextMenu { channelActions(for: channel) }
@@ -302,11 +292,9 @@ struct ChannelListView: View {
         .onAppear { Task { await refreshUnread() } }
     }
 
-    /// A text channel's chat screen, plus the note that this is now where the
-    /// app was last reading. Recorded from the shell rather than from inside
-    /// `ChatView`, so "where am I" stays a navigation fact — and so a voice
-    /// channel is never recorded, since restoring one would join a call on
-    /// launch.
+    /// A channel's chat screen. Only text channels are recorded as the last
+    /// reading destination: restoring a voice room would otherwise make launch
+    /// look like consent to join its media.
     private func chat(for channel: Channel) -> some View {
         // `server` carries this account's rank, which is what lets the message
         // menu and the profile sheet offer moderation from where the offence is
@@ -314,11 +302,16 @@ struct ChannelListView: View {
         ChatView(
             channelId: channel.id,
             title: "#\(channel.name)",
-            canStartThreads: true,
+            canStartThreads: channel.isText,
             server: server,
-            slowmodeSeconds: channel.slowmodeSeconds
+            slowmodeSeconds: channel.slowmodeSeconds,
+            voiceChannel: channel.isVoice ? channel : nil
         )
-        .onAppear { LastVisited.record(channelId: channel.id, serverId: server.id) }
+        .onAppear {
+            if channel.isText {
+                LastVisited.record(channelId: channel.id, serverId: server.id)
+            }
+        }
     }
 
     private func refreshUnread() async {

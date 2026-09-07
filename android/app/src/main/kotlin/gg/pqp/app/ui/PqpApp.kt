@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -53,6 +55,8 @@ import gg.pqp.app.ui.screens.ChatScreen
 import gg.pqp.app.ui.components.FailedScreen
 import gg.pqp.app.ui.screens.SignInScreen
 import gg.pqp.app.ui.screens.YouScreen
+import gg.pqp.app.ui.theme.PqpIcons
+import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.voice.CallController
 import gg.pqp.app.voice.VoiceController
 import kotlinx.coroutines.flow.filterNotNull
@@ -89,6 +93,8 @@ import kotlinx.serialization.Serializable
      * names. It cannot be wrong, only quieter.
      */
     val serverId: String? = null,
+    /** A server voice room's text transcript. Media remains opt-in in its header. */
+    val isVoiceChannel: Boolean = false,
 )
 
 @Serializable object YouRoute
@@ -296,6 +302,7 @@ private fun SignedInNav(
                                     channel.name,
                                     channel.slowmodeSeconds,
                                     serverId = route.serverId,
+                                    isVoiceChannel = channel.isVoice,
                                 ),
                             )
                         },
@@ -322,6 +329,24 @@ private fun SignedInNav(
                         slowmodeSeconds = route.slowmodeSeconds,
                         onBack = nav::popBackStack,
                         serverId = route.serverId,
+                        actions = {
+                            if (route.isVoiceChannel) {
+                                IconButton(
+                                    onClick = {
+                                        withMicrophone {
+                                            voice.join(route.channelId, route.channelName)
+                                        }
+                                    },
+                                    modifier = Modifier.testTag("chat.joinVoice"),
+                                ) {
+                                    Icon(
+                                        PqpIcons.Call,
+                                        contentDescription = stringResource(R.string.voice_join),
+                                        modifier = Modifier.size(Sizes.iconAction),
+                                    )
+                                }
+                            }
+                        },
                     )
                 }
                 composable<YouRoute> {

@@ -1,10 +1,5 @@
 package gg.pqp.app.ui.screens
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -49,12 +44,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import gg.pqp.app.R
@@ -118,63 +111,9 @@ fun ChannelsScreen(
         servers.firstOrNull { it.id == serverId }?.communityHomeEnabled == true
 
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
-    val context = LocalContext.current
     val snackbars = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val voiceState by voice.state.collectAsStateWithLifecycle()
-
-    // Held across the permission round trip: the system dialog takes the app
-    // out of the foreground, so the channel that was tapped cannot be a local
-    // in the click handler.
-    var pendingVoice by remember { mutableStateOf<Channel?>(null) }
-
-    val micDenied = stringResource(R.string.voice_mic_denied)
-    val callPermissions = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions(),
-    ) { _ ->
-        val channel = pendingVoice
-        pendingVoice = null
-        // Only the microphone gates the call. Notifications are asked for in
-        // the same breath because the foreground service's notification is what
-        // the person uses to get back to the call and to hang up, and a refusal
-        // there leaves a call running that nothing on screen mentions.
-        //
-        // The answer is read back from the permission itself rather than from
-        // the results map: the map only carries what was *asked* this time, so
-        // a request that only needed notifications would otherwise read as a
-        // microphone refusal.
-        val micGranted =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                PackageManager.PERMISSION_GRANTED
-        when {
-            micGranted && channel != null -> voice.join(channel.id, channel.name)
-            !micGranted -> scope.launch { snackbars.showSnackbar(micDenied) }
-        }
-    }
-
-    fun joinVoice(channel: Channel) {
-        val wanted = buildList {
-            if (
-                ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                add(Manifest.permission.RECORD_AUDIO)
-            }
-            if (
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
-                PackageManager.PERMISSION_GRANTED
-            ) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-        if (wanted.isEmpty()) {
-            voice.join(channel.id, channel.name)
-        } else {
-            pendingVoice = channel
-            callPermissions.launch(wanted.toTypedArray())
-        }
-    }
 
     val roomFull = stringResource(R.string.voice_room_full)
     val unsupported = stringResource(R.string.voice_transport_unsupported)
@@ -340,9 +279,11 @@ fun ChannelsScreen(
                             ChannelRow(
                                 channel = channel,
                                 inCall = voiceState.channelId == channel.id,
-                                onClick = {
-                                    if (channel.isVoice) joinVoice(channel) else onOpenChannel(channel)
-                                },
+                                // A voice channel has a transcript too. Opening
+                                // it must not ask for the microphone or join
+                                // media; the chat header owns that explicit
+                                // action after the person can see the room.
+                                onClick = { onOpenChannel(channel) },
                             )
                         }
                     }

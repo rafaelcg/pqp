@@ -48,6 +48,9 @@ struct ChatView: View {
     /// down from it after each send instead of learning about the rule from a
     /// refusal.
     var slowmodeSeconds: Int = 0
+    /// A server voice channel's transcript. The link is intentionally here,
+    /// rather than on the list row, so opening messages never joins media.
+    var voiceChannel: Channel? = nil
 
     @State private var model = ChatModel()
     /// Applied once. Without the guard, coming back to this screen from a thread
@@ -137,6 +140,17 @@ struct ChatView: View {
         .animation(Motion.standard, value: model.editing?.id)
         .animation(Motion.standard, value: model.error)
         .toolbar {
+            if let voiceChannel {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        VoiceView(channel: voiceChannel)
+                    } label: {
+                        Label("Join", systemImage: "phone.fill")
+                    }
+                    .tint(Palette.signal)
+                    .accessibilityIdentifier("chat.joinVoice")
+                }
+            }
             if let conversation {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {

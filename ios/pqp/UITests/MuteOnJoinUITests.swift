@@ -59,7 +59,7 @@ final class MuteOnJoinUITests: XCTestCase {
 
     // MARK: - Getting into a voice channel
 
-    /// Launches, opens the seeded server, and enters its `Lobby`.
+    /// Launches, opens the seeded server, opens Lobby's chat, then joins it.
     ///
     /// The preference is read at join time from the account the app loaded at
     /// launch, so it has to be set on the server *before* this runs.
@@ -83,6 +83,13 @@ final class MuteOnJoinUITests: XCTestCase {
         let lobby = app.staticTexts["Lobby"]
         XCTAssertTrue(lobby.waitForExistence(timeout: 10), "Seeded server has no voice channel")
         lobby.tap()
+
+        let join = app.buttons["chat.joinVoice"]
+        XCTAssertTrue(
+            join.waitForExistence(timeout: 10),
+            "Opening a voice channel should show its chat before joining media"
+        )
+        join.tap()
 
         XCTAssertTrue(
             app.buttons["voice.mute"].waitForExistence(timeout: 20),
