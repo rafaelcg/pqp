@@ -12,7 +12,9 @@ import {
   connectionProviderFromPath,
   joinIntentFromSearch,
   normalizeHandle,
+  CAMERA_LIMIT,
   Permission,
+  SCREEN_SHARE_LIMIT,
   publicProfileDisplayUrl,
   validateHandle,
   buildReplyExcerpt,
@@ -127,6 +129,10 @@ import {
 import { usePushToTalk } from "@/components/voice/use-push-to-talk";
 import { useVoiceStateSync } from "@/components/voice/voice-state-sync";
 import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
+import {
+  isCameraAtCap,
+  isScreenShareAtCap,
+} from "@/lib/screen-share-roster";
 import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import { useCallRating } from "@/hooks/use-call-rating";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -4208,17 +4214,46 @@ function MainAppContent({
               ? conversationTitle(voiceConversation.participants)
               : t("voice.channelFallback"))
           }
+          channelType={
+            voiceChannel?.kind === "server" && voiceChannel.type === "text"
+              ? "text"
+              : "voice"
+          }
           status={voiceState.status}
-          peerCount={voiceState.remotePeers.length}
           isMuted={voiceState.isMuted}
           inputMode={voiceState.inputMode}
           isTransmitting={voiceState.isTransmitting}
-          usingSfu={voiceState.usingSfu}
-          isPresenting={voiceState.screenSharePeerIds.length > 0}
           listenOnly={!voiceState.canSpeak}
           peerQualities={voiceState.remotePeers.flatMap((peer) =>
             peer.quality ? [peer.quality] : [],
           )}
+          canStream={voiceState.canStream}
+          isCameraOn={voiceState.isCameraOn}
+          isSharingScreen={voiceState.isSharingScreen}
+          cameraCappedOut={
+            isCameraAtCap(
+              voiceState.cameraPeerIds,
+              voiceState.peerId,
+              voiceState.roomTransport,
+            ) && !voiceState.isCameraOn
+          }
+          shareCappedOut={
+            isScreenShareAtCap(
+              voiceState.screenSharePeerIds,
+              voiceState.peerId,
+              voiceState.roomTransport,
+            ) && !voiceState.isSharingScreen
+          }
+          cameraLimit={CAMERA_LIMIT[voiceState.roomTransport ?? "mesh"]}
+          shareLimit={SCREEN_SHARE_LIMIT[voiceState.roomTransport ?? "mesh"]}
+          onToggleCamera={() => void voice.toggleCamera()}
+          onToggleScreenShare={() => {
+            if (voiceState.isSharingScreen) {
+              void voice.stopScreenShare();
+              return;
+            }
+            void voice.startScreenShare(shareSystemAudio);
+          }}
           onOpen={() => void openVoiceChannel()}
           onLeave={() => voice.leave()}
         />

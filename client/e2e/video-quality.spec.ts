@@ -836,6 +836,7 @@ test("a camera in a server voice channel reaches the other member", async ({
 
     // ---- camera on ------------------------------------------------------
     await page
+      .getByRole("main")
       .getByRole("button", { name: "Turn camera on", exact: true })
       .click({ timeout: 10_000 });
 
@@ -888,6 +889,7 @@ test("a camera in a server voice channel reaches the other member", async ({
 
     // ---- camera off, share untouched ------------------------------------
     await page
+      .getByRole("main")
       .getByRole("button", { name: "Turn camera off", exact: true })
       .click({ timeout: 10_000 });
     await expect(remoteTile).toBeHidden({ timeout: 20_000 });
