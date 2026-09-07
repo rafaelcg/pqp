@@ -35,6 +35,8 @@ export type VoiceTransportReason =
   | "community"
   /** The channel's `voice_transport` column. */
   | "override"
+  /** Live HLS is on: Track Composite needs the SFU, even in a small server. */
+  | "hls"
   /** A server channel whose server row could not be read: configured default. */
   | "default";
 
@@ -46,6 +48,12 @@ export interface VoiceTransportDecision {
 export interface VoiceTransportPolicyInput {
   /** `getServerVoiceBackend() === "livekit" && isLiveKitConfigured()`. */
   liveKitConfigured: boolean;
+  /**
+   * `LIVE_HLS_ENABLED=true` plus the dedicated bucket. A screen-share
+   * transcode only exists on LiveKit, so a two-person staging hall cannot
+   * stay on mesh or every share misses the track.
+   */
+  liveHlsEnabled?: boolean;
   channel: {
     kind: ChannelKind;
     /** The per-channel override column; null is automatic. */
@@ -68,6 +76,9 @@ export function resolveVoiceTransport(
   }
   if (input.channel.voiceTransport) {
     return { transport: input.channel.voiceTransport, reason: "override" };
+  }
+  if (input.liveHlsEnabled && input.channel.kind === "server") {
+    return { transport: "livekit", reason: "hls" };
   }
   if (!input.server) {
     return { transport: "livekit", reason: "default" };

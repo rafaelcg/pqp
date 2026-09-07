@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "@/lib/i18n";
+import { useHlsPlaybackStats } from "@/lib/hls-playback";
 import {
   sampleVoiceStats,
   type VideoReceiverSample,
@@ -47,6 +48,7 @@ const SAMPLE_INTERVAL_MS = 2000;
 
 export function InboundVideoReadout({
   usingSfu = false,
+  watchingHls = false,
 }: {
   /**
    * Whether media is flowing through the SFU. There, the sentence about the
@@ -55,8 +57,11 @@ export function InboundVideoReadout({
    * them, so the sentence is the mesh's alone.
    */
   usingSfu?: boolean;
+  /** HLS is the picture; hide the paused WebRTC screen row. */
+  watchingHls?: boolean;
 }) {
   const { t } = useTranslation();
+  const hls = useHlsPlaybackStats();
   const [rows, setRows] = useState<VideoReceiverSample[] | null>(null);
 
   useEffect(() => {
@@ -69,7 +74,9 @@ export function InboundVideoReadout({
         if (!live) {
           return;
         }
-        setRows(liveReceiverRows(snapshot.receivers));
+        setRows(
+          liveReceiverRows(snapshot.receivers, { hideScreen: watchingHls }),
+        );
       });
     };
     tick();
@@ -78,15 +85,22 @@ export function InboundVideoReadout({
       live = false;
       clearInterval(id);
     };
-  }, []);
+  }, [watchingHls]);
+
+  const hlsLine =
+    watchingHls && hls
+      ? t("call.quality.receiving.hls", {
+          size: `${hls.width}x${hls.height}`,
+        })
+      : null;
 
   // Before the first sample lands there is nothing true to say, and "nobody is
   // sending you video" would be a claim rather than a silence.
-  if (rows === null) {
+  if (rows === null && !hlsLine) {
     return null;
   }
 
-  if (rows.length === 0) {
+  if ((rows?.length ?? 0) === 0 && !hlsLine) {
     return (
       <p className="mt-1 text-xs text-paper-muted">
         {t("call.quality.receiving.none")}
@@ -96,7 +110,10 @@ export function InboundVideoReadout({
 
   return (
     <div className="mt-1 space-y-0.5" role="status">
-      {rows.map((row, index) => {
+      {hlsLine ? (
+        <p className="text-xs text-paper-muted">{hlsLine}</p>
+      ) : null}
+      {(rows ?? []).map((row, index) => {
         const who = row.displayName ?? t("voice.share.someone");
         // Keyed by position as well as identity: `role` is "unknown" for the
         // moment between a track arriving and the roster saying what it is, and

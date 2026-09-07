@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { voiceStreamMessageSchema } from "./live-hls.js";
 import {
   setWatchPartyMessageSchema,
   watchPartyMessageSchema,
@@ -472,6 +473,8 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   voiceSpeakChangedMessageSchema,
   // --- watch party ---
   watchPartyMessageSchema,
+  // --- live HLS (screen-share egress) ---
+  voiceStreamMessageSchema,
 ]);
 
 export type VoiceParticipant = z.infer<typeof voiceParticipantSchema>;

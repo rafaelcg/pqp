@@ -81,6 +81,7 @@ import {
   type ScreenFullscreenState,
   type ScreenFullscreenTransition,
 } from "@/components/voice/screen-fullscreen";
+import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import {
   collectScreenTiles,
   type ScreenShareTile,
@@ -110,6 +111,7 @@ import {
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
+import { useLiveHlsReady } from "@/hooks/use-live-hls-src";
 import { isCameraAtCap, isScreenShareAtCap } from "@/lib/screen-share-roster";
 import {
   loadParticipantRailOpen,
@@ -830,14 +832,28 @@ function ActiveCall({
     };
   });
 
-  const screenTiles = collectScreenTiles({
+  const advertisedTiles = collectScreenTiles({
     peerIds: voiceState.screenSharePeerIds,
     localPeerId: voiceState.peerId,
     localName: currentUser?.displayName ?? t("voice.share.someone"),
     localStream: voiceState.localScreenStream,
     remotePeers: voiceState.remotePeers,
     fallbackName: t("voice.share.someone"),
+    liveStream: voiceState.liveStream,
   });
+  const readyHlsUrls = useLiveHlsReady(
+    advertisedTiles
+      .map((tile) => tile.hlsUrl)
+      .filter((url): url is string => Boolean(url)),
+  );
+  // Keep WebRTC on the tile until the playlist is a live window. A 404 or
+  // the previous share's ENDLIST is a black video, not a watch party.
+  const screenTiles = advertisedTiles.map((tile) =>
+    tile.hlsUrl && readyHlsUrls.has(tile.hlsUrl)
+      ? tile
+      : { ...tile, hlsUrl: null },
+  );
+  const watchingHls = screenTiles.some((tile) => Boolean(tile.hlsUrl));
   const focusedTile =
     screenTiles.find(
       (tile) => tile.peerId === voiceState.focusedScreenPeerId,
@@ -882,7 +898,7 @@ function ActiveCall({
           }
         : undefined;
     const share =
-      tile.hasAudio && onSetScreenVolume
+      !tile.hlsUrl && tile.hasAudio && onSetScreenVolume
         ? {
             volume: voiceState.screenVolumes[key] ?? 1,
             onSetVolume: (volume: number) => onSetScreenVolume(key, volume),
@@ -1186,6 +1202,8 @@ function ActiveCall({
       onVideoQualityChange={onVideoQualityChange}
       qualityMenuOpen={qualityMenuOpen}
       onQualityMenuOpenChange={setQualityMenuRequested}
+      watchingHls={watchingHls}
+      hlsDelaySeconds={voiceState.liveStream?.delaySeconds ?? 10}
       onStartScreenShare={onStartScreenShare}
       shareSystemAudio={shareSystemAudio}
       onShareSystemAudioChange={onShareSystemAudioChange}
@@ -1797,6 +1815,8 @@ function CallControls({
   onVideoQualityChange,
   qualityMenuOpen,
   onQualityMenuOpenChange,
+  watchingHls = false,
+  hlsDelaySeconds = 10,
   onStartScreenShare,
   onStopScreenShare,
   shareSystemAudio = false,
@@ -1823,6 +1843,8 @@ function CallControls({
   onVideoQualityChange: (quality: VideoQuality) => void;
   qualityMenuOpen: boolean;
   onQualityMenuOpenChange: (open: boolean) => void;
+  watchingHls?: boolean;
+  hlsDelaySeconds?: number;
   onStartScreenShare?: (
     intent?: { preferBrowserTab?: boolean },
   ) => void | Promise<void>;
@@ -2093,6 +2115,8 @@ function CallControls({
           isSendingVideo={voiceState.isCameraOn || voiceState.isSharingScreen}
           isSharingScreen={voiceState.isSharingScreen}
           usingSfu={voiceState.usingSfu}
+          watchingHls={watchingHls}
+          hlsDelaySeconds={hlsDelaySeconds}
           participantCount={voiceState.remotePeers.length + 1}
           buttonClassName={size}
           iconClassName={iconSize}
@@ -3195,17 +3219,29 @@ export function ScreenTileFrame({
     );
   }
 
+  const useHls = Boolean(tile.hlsUrl) && !tile.isSelf;
+
   return (
     <div className={cn("group relative", className)}>
-      <StageVideo
-        stream={tile.stream}
-        videoRef={videoRef}
-        onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
-        // Contain by default: a crop on a shared screen eats a toolbar or a
-        // margin, which is very often the thing being presented. Fill is one
-        // press away for the ultrawide monitor letterboxed into a 16:9 tile.
-        className={cn("h-full w-full", videoFitClass(fit.fit))}
-      />
+      {useHls && tile.hlsUrl ? (
+        <HlsWatchPlayer
+          src={tile.hlsUrl}
+          delaySeconds={tile.delaySeconds}
+          videoRef={videoRef}
+          onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
+          className={cn("h-full w-full", videoFitClass(fit.fit))}
+        />
+      ) : (
+        <StageVideo
+          stream={tile.stream}
+          videoRef={videoRef}
+          onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
+          // Contain by default: a crop on a shared screen eats a toolbar or a
+          // margin, which is very often the thing being presented. Fill is one
+          // press away for the ultrawide monitor letterboxed into a 16:9 tile.
+          className={cn("h-full w-full", videoFitClass(fit.fit))}
+        />
+      )}
       <TileClickTarget
         enabled={clickToFullscreen}
         label={label}

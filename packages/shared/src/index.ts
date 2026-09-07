@@ -18,6 +18,7 @@ export * from "./polls.js";
 export * from "./feedback.js";
 export * from "./friends.js";
 export * from "./gifs.js";
+export * from "./live-hls.js";
 export * from "./moderation.js";
 export * from "./permissions.js";
 export * from "./profiles.js";

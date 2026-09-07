@@ -554,6 +554,10 @@ export const fetchIceServers = () =>
 export const fetchVoiceBackend = () =>
   apiFetch<{ backend: VoiceBackendType }>("/api/voice/backend");
 
+/** Whether this deployment transcodes screen shares to HLS. */
+export const fetchLiveHlsConfig = () =>
+  apiFetch<{ enabled: boolean; delaySeconds: number }>("/api/live-hls/config");
+
 /** Mint an SFU session for a voice channel the caller has already joined. */
 export const createVoiceSession = (voiceChannelId: string, peerId: string) =>
   post<VoiceSessionInfo>("/api/voice/token", { voiceChannelId, peerId });

@@ -1,6 +1,10 @@
 .git
 .github
 **/node_modules
+.claude
+.playwright-mcp
+android
+ios
 
 # NEVER bake a credential into an image.
 #

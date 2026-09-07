@@ -60,6 +60,33 @@ describe("resolveVoiceTransport", () => {
     });
   });
 
+  it("puts a small server on the SFU when live HLS is on", () => {
+    expect(decide({ server: server(2), liveHlsEnabled: true })).toEqual({
+      transport: "livekit",
+      reason: "hls",
+    });
+  });
+
+  it("still honours an explicit mesh override when HLS is on", () => {
+    expect(
+      decide({
+        server: server(2),
+        liveHlsEnabled: true,
+        voiceTransport: "mesh",
+      }),
+    ).toEqual({ transport: "mesh", reason: "override" });
+  });
+
+  it("does not move a DM to the SFU just because HLS is on", () => {
+    expect(
+      decide({
+        channel: { kind: "dm", voiceTransport: null },
+        server: null,
+        liveHlsEnabled: true,
+      }),
+    ).toEqual({ transport: "mesh", reason: "dm" });
+  });
+
   it("lets the channel override win both ways", () => {
     // A streamer's five-member server that wants the SFU anyway...
     expect(decide({ server: server(5), voiceTransport: "livekit" })).toEqual({

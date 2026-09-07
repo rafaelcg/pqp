@@ -9,6 +9,9 @@ import { cn } from "@/lib/utils";
 export interface ScreenShareTile {
   peerId: string;
   stream: MediaStream | null;
+  /** LiveKit egress playlist for this presenter; remote tiles prefer it. */
+  hlsUrl?: string | null;
+  delaySeconds?: number;
   presenterName: string;
   isSelf: boolean;
   /**
@@ -32,12 +35,22 @@ export function collectScreenTiles(args: {
   localStream: MediaStream | null;
   remotePeers: RemotePeer[];
   fallbackName: string;
+  liveStream?: { hlsUrl: string; presenterPeerId: string; delaySeconds?: number } | null;
 }): ScreenShareTile[] {
   return args.peerIds.map((peerId) => {
+    const hls =
+      args.liveStream && args.liveStream.presenterPeerId === peerId
+        ? {
+            hlsUrl: args.liveStream.hlsUrl,
+            delaySeconds: args.liveStream.delaySeconds,
+          }
+        : { hlsUrl: null, delaySeconds: undefined };
     if (peerId === args.localPeerId) {
       return {
         peerId,
         stream: args.localStream,
+        // A presenter watching themselves 10 s late is not useful.
+        hlsUrl: null,
         presenterName: args.localName,
         isSelf: true,
         userId: null,
@@ -49,6 +62,8 @@ export function collectScreenTiles(args: {
     return {
       peerId,
       stream: remote?.screenStream ?? null,
+      hlsUrl: hls.hlsUrl,
+      delaySeconds: hls.delaySeconds,
       presenterName: remote?.displayName ?? args.fallbackName,
       isSelf: false,
       userId: remote?.userId ?? null,
