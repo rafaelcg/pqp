@@ -79,6 +79,17 @@ systemctl enable --now unattended-upgrades
 # which means false. We do not override it: a reboot mid-party is worse than a
 # kernel patch landing a day late. Reboot by hand, see the README.
 
+echo "== kernel udp buffers"
+# LiveKit asks for a 16 MB receive and send buffer on every mux socket and
+# warns on boot when the kernel clamps it ("UDP receive buffer is too small
+# for a production set-up, current 425984, suggested 5000000"). Ubuntu's
+# rmem_max is 212992. This is LiveKit's own recommendation, not something we
+# measured separately; the 4 vCPU load ladder still showed small bursty
+# receive drops from 400 subscribers upward with four ports, which is what a
+# bigger socket buffer absorbs. Only new sockets see it: restart LiveKit after.
+install -m 0644 "$HERE/sysctl-livekit.conf" /etc/sysctl.d/90-livekit.conf
+sysctl --system >/dev/null
+
 echo "== firewall"
 # Exactly the rules the production box carries. See the README for why 22 is
 # open to the world.
@@ -88,10 +99,15 @@ ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
 ufw allow 7881/tcp
-ufw allow 7882/udp
+# rtc.udp_port is the range 7882-7885 (livekit.yaml.tmpl says why: one port
+# capped a 499-viewer share at 250 to 270 Mbit/s with 58% loss, four gave
+# 805 to 901 Mbit/s with zero drops). LiveKit only binds as many of them as
+# the box has vCPUs; the rest are open so a resize needs no firewall change.
+# A box built before 2026-09-08 also carries a lone 7882/udp rule, harmless.
+ufw allow 7882:7885/udp
 ufw allow 3478/udp
 ufw allow 5349/tcp
-# NOT stale, despite rtc.udp_port being pinned to 7882. This is LiveKit's TURN
+# NOT stale, despite rtc.udp_port being pinned to 7882-7885. This is LiveKit's TURN
 # *relay* allocation range, turn.relay_range_start/end, which default to
 # 30000/40000 and which livekit.yaml does not override. Every cross-NAT client
 # that falls back to turn.pqp.gg gets its relayed candidate on a port in here:

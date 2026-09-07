@@ -98,7 +98,7 @@ One LiveKit server, one Vultr VM in São Paulo, one subdomain. No Redis, no load
 
 ```
 browser  --wss://sfu.pqp.gg:443-->  Caddy --> livekit :7880   (signal + RoomService API)
-browser  --udp  sfu.pqp.gg:7882 -->         livekit          (all media, single UDP mux port)
+browser  --udp  sfu.pqp.gg:7882-7885 -->    livekit          (all media, UDP mux, one port per vCPU)
 browser  --tcp  sfu.pqp.gg:7881 -->         livekit          (ICE over TCP fallback)
 browser  --tls  turn.pqp.gg:443 -->         livekit TURN     (relay for hostile networks)
 pqp-api (Fly gru) --https://sfu.pqp.gg--> livekit RoomService (removeParticipant, listParticipants)
@@ -149,7 +149,7 @@ sustained needs a 1 Gbps port, not a shared 100 Mbps one.
 |---|---|---|---|
 | 443 | TCP | HTTPS/WSS via Caddy to 7880 | Internet |
 | 80 | TCP | ACME issuance only | Internet |
-| 7882 | UDP | Single UDP mux port for all media ("It's possible to handle all UDP traffic on a single port. When this is set, rtc.port_range_start/end are not used") | Internet |
+| 7882-7885 | UDP | UDP mux ports for all media (`rtc.udp_port` as a range; LiveKit binds one per vCPU, up to the range size). Was a single port until 2026-09-08; see "Apply the four-port change" in section 4 for the numbers | Internet |
 | 7881 | TCP | ICE over TCP fallback | Internet |
 | 5349 | TCP | TURN/TLS (single-IP decision, see above) | Internet |
 | 3478 | UDP | TURN/UDP (optional, cheap, enable) | Internet |
@@ -195,7 +195,7 @@ ufw allow 22/tcp             # from anywhere, key auth only; see below
 ufw allow 80/tcp
 ufw allow 443/tcp
 ufw allow 7881/tcp
-ufw allow 7882/udp
+ufw allow 7882:7885/udp      # was 7882/udp until 2026-09-08; older boxes carry both rules
 ufw allow 3478/udp
 ufw allow 5349/tcp           # TURN/TLS, the single-IP decision above
 ufw allow 30000:40000/udp    # leftover ICE range, nothing listens there
@@ -237,7 +237,7 @@ Defaults quoted from upstream `config-sample.yaml`
 port: 7880                      # behind Caddy only; never exposed
 
 rtc:
-  udp_port: 7882                # single UDP mux port; port_range_* unused when set
+  udp_port: 7882-7885           # UDP mux, one socket per vCPU up to four; port_range_* unused when set
   tcp_port: 7881                # ICE over TCP fallback
   use_external_ip: true         # discover the public IP via STUN; Vultr VMs sit behind 1:1 NAT
   # node_ip: <public ip>        # uncomment only if STUN discovery picks the wrong address
@@ -402,6 +402,51 @@ reports `static`) plus `turn-cert-sync.timer` at `OnCalendar=daily`, running
 `/opt/livekit/certs/`, and `docker compose restart livekit` only if `sha256sum` changed. The script
 `find`s the certificate directory by name rather than hardcoding the ACME issuer path, so a change of
 issuer does not break it. Both files are in `tools/sfu/`.
+
+### Apply the four-port change to a running box
+
+Why: on 2026-09-07 an isolated 4 vCPU copy of the production box served one 720p share at 1.5 Mbps to
+499 viewers. With the production config (one mux port, A1) egress stuck at 250 to 270 Mbit/s at 66 to
+77% CPU, the one socket logged 137,200 kernel receive-buffer drops, viewers saw 58% packet loss and a
+median 1.2 fps. Identical except `rtc.udp_port: 7882-7885` (A2): 805 to 901 Mbit/s at 63 to 77% CPU,
+zero drops, 499 of 499 viewers decoding, zero abandons. LiveKit's own guidance is at least as many mux
+ports as vCPUs, and the binary binds `min(vCPUs, ports in the range)`: the 2 vCPU production box opens
+7882 and 7883 and the boot line still prints the whole range. The firewall opens all four so a resize
+to 4 vCPU needs no firewall change.
+
+The restart drops every SFU call for a few seconds (clients resume on their own, see `docs/voice-backends.md`).
+Run it in a quiet hour: `voice-occupancy.sh` on the Mac plus
+`curl -s localhost:6789/metrics | grep livekit_participant_total` on the box, both low.
+
+1. Back up: `cp /opt/livekit/livekit.yaml /opt/livekit/livekit.yaml.bak-$(date -u +%Y%m%dT%H%MZ)` and
+   `ufw status numbered > /root/ufw-before.txt`.
+2. Kernel buffers first, so the new sockets pick them up (LiveKit's own recommendation, it warns
+   `UDP receive buffer is too small for a production set-up, current 425984, suggested 5000000` on every
+   boot otherwise; not separately load-tested): install `tools/sfu/sysctl-livekit.conf` as
+   `/etc/sysctl.d/90-livekit.conf` and run `sysctl --system`. Check `sysctl net.core.rmem_max` says 26214400.
+3. Edit `/opt/livekit/livekit.yaml`: `udp_port: 7882` becomes `udp_port: 7882-7885`, and add the `limit:`
+   block from the template above. Or `scp -r tools/sfu` over and run `bash /opt/sfu/install.sh`, which
+   renders the same bytes and does not restart anything.
+4. `ufw allow 7882:7885/udp`. The old `7882/udp` rule can stay; it is a subset.
+5. `docker compose --project-directory /opt/livekit restart livekit`. The container is managed by
+   Docker's `restart: unless-stopped` (the systemd unit is enabled but has never been started, see the
+   README), so a plain compose restart is what survives a reboot.
+6. Verify, in this order:
+   - `docker logs livekit-livekit-1 2>&1 | grep -m1 'starting LiveKit server'` shows
+     `"rtc.portUDP":{"Start":7882,"End":7885}` (it was `"End":0`).
+   - `docker logs livekit-livekit-1 2>&1 | grep -c 'receive buffer is too small'` is 0 after the restart line.
+   - `ss -lnup | grep -E ':788[2-5]'` shows one socket per bound port per interface. On the 2 vCPU box
+     that is 7882 and 7883, each on the public v4, the v6 and `docker0` addresses; a 4 vCPU box shows all four.
+   - Drops stay at zero while rooms are active, sampled for 30 seconds:
+     `for i in 1 2 3; do awk 'NR>1 && $13>0' /proc/net/udp; sleep 10; done` prints nothing.
+   - Caddy untouched: `curl -sS -o /dev/null -w '%{http_code}\n' https://sfu.pqp.gg/` is 200.
+   - TURN still listening: `ss -lntup | grep -E ':(3478|5349) '`.
+   - `curl -s https://api.pqp.gg/ready` still reports LiveKit ok.
+   - Within ten minutes a real room reconnects: `docker logs -f livekit-livekit-1 | grep 'participant active'`.
+
+Rollback: `cp /opt/livekit/livekit.yaml.bak-<stamp> /opt/livekit/livekit.yaml`, restart the container
+the same way, and the boot line shows `"End":0` again. The extra firewall rule and the sysctl are
+harmless to leave in place.
 
 ### Metrics and one alert
 
