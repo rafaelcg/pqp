@@ -691,13 +691,72 @@ describe("message-rejected", () => {
     );
   });
 
-  it("does not enforce slow mode on a voice channel", async () => {
+  /**
+   * A voice channel carries its own chat, shown beside the call, and that
+   * chat is where a busy room floods. It used to be exempt, so a moderator
+   * running a 510-member community had the one tool for a flood greyed out on
+   * the only surface that was flooding.
+   */
+  it("enforces slow mode on a voice channel's chat", async () => {
     const serverId = "33333333-3333-4333-8333-333333333333";
     vi.mocked(getChannel).mockResolvedValue({
       kind: "server",
       server_id: serverId,
       type: "voice",
       slowmode_seconds: 5,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES,
+    );
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+
+    await post(sender, "user-a", channelId, { nonce: "first" });
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+    sender.received.length = 0;
+
+    await post(sender, "user-a", channelId);
+    expect(framesOfType(sender.received, "message-broadcast")).toHaveLength(0);
+    expect(framesOfType(sender.received, "message-rejected")).toEqual([
+      {
+        type: "message-rejected",
+        channelId,
+        nonce,
+        reason: "slow-mode",
+        retryAfterMs: 5000,
+      },
+    ]);
+  });
+
+  it("still lets MANAGE_MESSAGES through a voice channel's slow mode", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+      type: "voice",
+      slowmode_seconds: 5,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL |
+        Permission.SEND_MESSAGES |
+        Permission.MANAGE_MESSAGES,
+    );
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+
+    await post(sender, "user-a", channelId, { nonce: "first" });
+    await post(sender, "user-a", channelId, { nonce: "second" });
+
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+  });
+
+  it("leaves a voice channel with the interval off alone", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+      type: "voice",
+      slowmode_seconds: 0,
     } as Awaited<ReturnType<typeof getChannel>>);
     vi.mocked(computeMemberPermissions).mockResolvedValue(
       Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES,

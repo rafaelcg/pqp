@@ -317,7 +317,8 @@ export function ChannelSettingsDialog({
         name,
         topic: draft.topic.trim() || null,
         imageUrl: draft.imageUrl.trim() || null,
-        ...(current.kind === "server" && current.type === "text"
+        ...(current.kind === "server" &&
+        (current.type === "text" || current.type === "voice")
           ? { slowmodeSeconds: draft.slowmodeSeconds }
           : {}),
         ...(showsVoiceRoomSize(current)

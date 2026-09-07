@@ -4072,8 +4072,12 @@ function MainAppContent({
         ? channels.find((c) => c.id === selectedChannelId)
         : undefined;
     chat.setSlowMode({
+      // A voice channel's chat is slowed like any other: the composer has to
+      // hold the same way, or the wait is a rejection the sender never saw
+      // coming.
       seconds:
-        channel?.kind === "server" && channel.type === "text"
+        channel?.kind === "server" &&
+        (channel.type === "text" || channel.type === "voice")
           ? (channel.slowmodeSeconds ?? 0)
           : 0,
       bypass: perms.can(Permission.MANAGE_MESSAGES, selectedChannelId),
