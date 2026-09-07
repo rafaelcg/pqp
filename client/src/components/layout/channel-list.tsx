@@ -437,11 +437,6 @@ export function ChannelList({
                       : 0
                   }
                   onSelect={() => onSelectChannel(channel.id)}
-                  onJoinVoice={
-                    channel.type === "voice" && onJoinVoice
-                      ? () => onJoinVoice(channel.id)
-                      : undefined
-                  }
                 />
               ))}
             </div>
@@ -1631,7 +1626,6 @@ export function ChannelRailItem({
   unread,
   occupants,
   onSelect,
-  onJoinVoice,
 }: {
   channel: Channel;
   selected: boolean;
@@ -1639,7 +1633,6 @@ export function ChannelRailItem({
   unread: UnreadState;
   occupants: number;
   onSelect: () => void;
-  onJoinVoice?: () => void;
 }) {
   const { t } = useTranslation();
   const notifications = useChannelNotificationLevel(channel);
