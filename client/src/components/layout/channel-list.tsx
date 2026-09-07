@@ -20,7 +20,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useState, type DragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
 import {
   FAVORITE_CHANNELS_PER_SERVER_MAX,
   type Channel,
@@ -38,6 +38,8 @@ import { ChannelListSkeleton } from "@/components/ui/skeleton";
 import { Tooltip } from "@/components/ui/tooltip";
 import { VoiceOccupantRow } from "@/components/layout/voice-occupant-row";
 import { useProfilePopover } from "@/components/user/user-profile-popover";
+import { publicProfileHref } from "@/components/user/profile-relations";
+import type { ServerMember } from "@/lib/api";
 import {
   canDragVoiceOccupant,
   dropReasonMessageKey,
@@ -173,6 +175,11 @@ interface ChannelListProps {
   communityHomeUnread?: number;
   communityHomeSelected?: boolean;
   onSelectCommunityHome?: () => void;
+  /**
+   * Current server roster, so a seated person with a claimed handle can get
+   * Ver perfil / pqp.gg/@handle on right-click. Absent handle: no link.
+   */
+  members?: readonly ServerMember[];
 }
 
 export function ChannelList({
@@ -218,6 +225,7 @@ export function ChannelList({
   communityHomeUnread = 0,
   communityHomeSelected = false,
   onSelectCommunityHome,
+  members = [],
 }: ChannelListProps) {
   const { t } = useTranslation();
   const channelPinHintEnabled = useFeatureHintEnabled("channelPin");
@@ -260,6 +268,13 @@ export function ChannelList({
     useState<VoiceOccupantDrag | null>(null);
   const [dropHint, setDropHint] = useState<string | null>(null);
   const openProfile = useProfilePopover();
+  const memberById = useMemo(() => {
+    const map = new Map<string, ServerMember>();
+    for (const member of members) {
+      map.set(member.id, member);
+    }
+    return map;
+  }, [members]);
   const occupantCaps = {
     canMoveIn,
     canConnectIn,
@@ -376,6 +391,8 @@ export function ChannelList({
     const personal: ContextMenuItemDef[] = [];
     const mod: ContextMenuItemDef[] = [];
     const copy: ContextMenuItemDef[] = [];
+    const member = memberById.get(person.userId);
+    const publicHref = publicProfileHref(member?.handle);
     for (const action of actions) {
       if (action === "profile") {
         profile.push({
@@ -390,14 +407,28 @@ export function ChannelList({
                 {
                   id: person.userId,
                   displayName: person.displayName,
-                  tag: null,
+                  tag: member?.tag ?? null,
                   avatarUrl: person.avatarUrl,
+                  username: member?.username ?? null,
+                  roleIds: member?.roleIds,
+                  rank: member?.role,
+                  isCharacter: member?.isCharacter,
+                  handle: member?.handle ?? null,
                 },
                 anchor,
               );
             }
           },
         });
+        if (publicHref && member?.handle) {
+          profile.push({
+            id: "public-profile",
+            label: t("profile.publicUrl", { handle: member.handle }),
+            onSelect: () => {
+              window.open(publicHref, "_blank", "noopener,noreferrer");
+            },
+          });
+        }
       } else if (action === "muteForMe") {
         personal.push({
           id: "mute-for-me",

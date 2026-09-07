@@ -1057,6 +1057,8 @@
   "profile.mod.nicknamed": "Nickname updated.",
   "profile.open": "Open {name}'s profile",
   "profile.viewProfile": "View profile",
+  "profile.viewPublic": "View profile",
+  "profile.publicUrl": "pqp.gg/@{handle}",
   "profile.roles": "Roles",
   "profile.cargos": "Roles",
   "cargosHint.title": "Roles are on the profile now",

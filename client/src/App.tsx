@@ -1649,6 +1649,7 @@ function MainAppContent({
         status: member.status ?? null,
         username: member.username ?? usernameFromTag(member.tag),
         isCharacter: member.isCharacter,
+        handle: member.handle ?? null,
       });
     }
     for (const person of conversationParticipants ?? []) {
@@ -5126,6 +5127,7 @@ function MainAppContent({
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}
           communityHomeSelected={communityHomeOpen}
+          members={serverMembers}
           onSelectCommunityHome={() => {
             if (selectedServerId) {
               setWhatsNewOpen(false);
