@@ -1073,9 +1073,12 @@ function broadcastToRoom(
  *
  *  - it rides the roster's bus hint, so another instance can forward the
  *    matching `peer-*` frame to its local room before it rebuilds its roster;
- *  - it IS the roster delta (`voice-roster-delta`) for every socket that
- *    negotiated one, which is what stops a 130-person room from sending 130
- *    participants to every member of a 508-member community twice a second.
+ *  - with the registry OFF it IS the roster delta (`voice-roster-delta`) for
+ *    every socket that negotiated one, which is what stops a 130-person room
+ *    from sending 130 participants to every member of a 508-member community
+ *    twice a second. With the registry on the delta is a diff of the rows
+ *    against what this process last sent (`diffSentRoster`), because a
+ *    change made on another instance never enters this queue.
  *
  * `roster` is the escape hatch: "something changed and this queue cannot say
  * what". A window that contains one degrades to a full snapshot for everybody,
@@ -1125,6 +1128,29 @@ const lastRosterKeyframeAt = new Map<string, number>();
  * is that they are not the same promise.
  */
 const lastAudienceKeyframeAt = new Map<string, number>();
+
+/**
+ * With the registry on: the participants this process last DESCRIBED for
+ * each channel, by peer id, whichever frame carried them (whole or delta).
+ * The next roster run diffs the freshly read rows against this and sends
+ * `joined` / `updated` / `left`, which is how a change made on the OTHER
+ * instance becomes a delta here: it is in the rows and not in this entry.
+ *
+ * It is exactly "what the receivers hold", not "what the room is": a run
+ * that writes nothing (no audience) leaves it alone, and a run that wrote a
+ * snapshot replaces it with that snapshot. The coalescer serialises runs per
+ * channel and the read-diff-replace happens in one synchronous stretch, so
+ * two runs cannot diff against the same base.
+ *
+ * Absent means "send the whole roster": the first frame of a room, the run
+ * after a registry read failed (the fallback is this instance's own peers,
+ * a picture the diff must not be built on or half the room reads as `left`),
+ * a process restart, and a channel forgotten through `forgetSentRoster`.
+ * Dropped when the room is announced empty, so it is bounded by the rooms
+ * this process is currently describing. Never written with the registry
+ * off, where the event queue is the delta and this map stays empty.
+ */
+const sentRosters = new Map<string, Map<string, VoiceParticipant>>();
 
 /**
  * How long a room may be described only by deltas before its whole roster
@@ -1221,11 +1247,12 @@ function socketIsInRoom(socket: WebSocket, voiceChannelId: string): boolean {
   return peers.get(peerId)?.voiceChannelId === voiceChannelId;
 }
 
-/** Test seam: forget every sequence and keyframe clock. */
+/** Test seam: forget every sequence, keyframe clock and described roster. */
 export function resetRosterSequences(): void {
   rosterSeq.clear();
   lastRosterKeyframeAt.clear();
   lastAudienceKeyframeAt.clear();
+  sentRosters.clear();
   rosterFramesSent.deltas = 0;
   rosterFramesSent.snapshots = 0;
   rosterFramesSent.audienceSnapshots = 0;
@@ -1236,6 +1263,13 @@ function currentRosterSeq(voiceChannelId: string): number {
   return rosterSeq.get(voiceChannelId) ?? 0;
 }
 
+/** The three lists a `voice-roster-delta` carries, before the empty ones are omitted. */
+interface RosterDelta {
+  joined: VoiceParticipant[];
+  updated: VoiceParticipant[];
+  left: string[];
+}
+
 /**
  * Fold a window's events into the three lists the wire carries, or null when
  * the window cannot be described incrementally.
@@ -1244,16 +1278,14 @@ function currentRosterSeq(voiceChannelId: string): number {
  *
  *  - a `roster` event is present, which is the caller saying "something
  *    changed and I cannot name the peer";
- *  - the window is empty, which is what the cluster-bus path produces (it
- *    rebuilds from rows, and rows are not events);
+ *  - the window is empty, which no local request produces (each queues an
+ *    event) and is answered with a whole roster rather than an assumption;
  *  - nothing at all changed, in which case there is nothing to send either
  *    way and the caller decides.
+ *
+ * Registry off only. With the rows as the truth the delta is `diffSentRoster`.
  */
-function foldRoomEvents(events: readonly VoiceRoomEvent[]): {
-  joined: VoiceParticipant[];
-  updated: VoiceParticipant[];
-  left: string[];
-} | null {
+function foldRoomEvents(events: readonly VoiceRoomEvent[]): RosterDelta | null {
   if (events.length === 0 || events.some((event) => event.kind === "roster")) {
     return null;
   }
@@ -1270,6 +1302,87 @@ function foldRoomEvents(events: readonly VoiceRoomEvent[]): {
     }
   }
   return { joined, updated, left };
+}
+
+/**
+ * Whether two projections of the same peer would draw the same tile.
+ *
+ * Every field of a participant is a primitive (strings, booleans, null), so
+ * a shallow compare over the union of keys is exact, and a field added to
+ * `voiceParticipantSchema` later is compared without anyone remembering to
+ * list it here. Absent and `undefined` read as equal, which is what the wire
+ * does with them too.
+ */
+function sameParticipant(a: VoiceParticipant, b: VoiceParticipant): boolean {
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+    if (left[key] !== right[key]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The registry's delta: what changed between the roster this process last
+ * sent for the channel and the rows it has just read, and, in the same
+ * synchronous step, the replacement of that memory with what is about to go
+ * out. Null when there is nothing to diff against, which is a whole roster.
+ *
+ * `rowsRead` false means the read failed and `participants` is this
+ * instance's own peers: sent whole, exactly as before, and the memory is
+ * dropped so the next successful read is also sent whole. An empty room
+ * drops it too, so a channel costs nothing once its call is over.
+ *
+ * The lists are ABSOLUTE statements about one peer each, the same contract
+ * `foldRoomEvents` produces, so a receiver cannot tell which path built its
+ * frame. A peer whose row and local copy disagree only in a field the tile
+ * does not draw still lands in `updated`; that is a few bytes, and it is the
+ * price of never having to name here which fields matter.
+ */
+function diffSentRoster(
+  voiceChannelId: string,
+  participants: readonly VoiceParticipant[],
+  rowsRead: boolean,
+): RosterDelta | null {
+  const previous = rowsRead ? sentRosters.get(voiceChannelId) : undefined;
+  const current = new Map(participants.map((peer) => [peer.peerId, peer]));
+  if (current.size === 0 || !rowsRead) {
+    sentRosters.delete(voiceChannelId);
+  } else {
+    sentRosters.set(voiceChannelId, current);
+  }
+  if (!previous) {
+    return null;
+  }
+  const joined: VoiceParticipant[] = [];
+  const updated: VoiceParticipant[] = [];
+  const left: string[] = [];
+  for (const peer of current.values()) {
+    const before = previous.get(peer.peerId);
+    if (!before) {
+      joined.push(peer);
+    } else if (!sameParticipant(before, peer)) {
+      updated.push(peer);
+    }
+  }
+  for (const peerId of previous.keys()) {
+    if (!current.has(peerId)) {
+      left.push(peerId);
+    }
+  }
+  return { joined, updated, left };
+}
+
+/**
+ * Forget what this process last sent for a channel, so its next roster is a
+ * whole one. Called when a channel is deleted or made private (the room is
+ * being emptied under it and a later frame for it may never be written), and
+ * a test seam for "the process lost its memory mid-call".
+ */
+export function forgetSentRoster(voiceChannelId: string): void {
+  sentRosters.delete(voiceChannelId);
 }
 
 /**
@@ -1314,9 +1427,13 @@ function foldRoomEvents(events: readonly VoiceRoomEvent[]): {
  * With the registry on, the snapshot comes from `voice_peers` (this
  * instance's own peers laid over by id), read after this instance's pending
  * row writes have settled so the roster cannot run ahead of the write it
- * reports; deltas are switched off on that path entirely, because there the
- * ROWS are the truth and the local event queue is only half the story. Never
- * awaited with the flag off: no writes exist.
+ * reports. There the ROWS are the truth and the local event queue is only
+ * half the story (a join on the other machine never enters it), so the delta
+ * is not the queue folded but the rows DIFFED against what this process last
+ * sent (`diffSentRoster`). Until 2026-09-07 this path sent no deltas at all,
+ * and since production runs with the registry on, `voice.roster.deltas` read
+ * 0 there while every test of the delta path was green: the two paths must
+ * be measured separately. Never awaited with the flag off: no writes exist.
  */
 async function sendRoster(voiceChannelId: string): Promise<void> {
   let events: VoiceRoomEvent[] = [];
@@ -1325,10 +1442,14 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
       participants: VoiceParticipant[];
       transport: VoiceRoomTransport;
     } | null = null;
+    // Whether the rows were consulted at all. A failed read falls back to
+    // this instance's own peers below, and that picture must be sent whole.
+    let rowsRead = false;
     if (registryOn()) {
       await settledRowWrites(voiceChannelId);
       try {
         room = await readClusterRoom(voiceChannelId);
+        rowsRead = true;
       } catch (error) {
         logEvent("voice.registryReadFailed", {
           op: "roster",
@@ -1356,7 +1477,40 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
     pendingRoomEvents.delete(voiceChannelId);
     const transport = room?.transport ?? getRoomTransport(voiceChannelId);
 
-    if (audience) {
+    // Whether this window CAN be described incrementally at all, decided
+    // before and independently of who is owed a keyframe. It used to be the
+    // same question; splitting the clocks makes it two, because the room may
+    // be due a snapshot while the audience is still happily patching, and
+    // then the delta is still needed.
+    //
+    // Two sources, one shape. With the registry off the delta is this
+    // process's own event queue; with it on, the rows diffed against what
+    // this process last sent. The diff also REPLACES that memory, which is
+    // why it runs only when there is an audience to send to: a run that
+    // writes nothing must leave "what the receivers hold" untouched. With
+    // no audience the memory is dropped instead, so a channel deleted while
+    // its room emptied on another machine does not keep its last roster
+    // here forever; the cost is one whole roster if the lookup merely blipped.
+    let delta: RosterDelta | null = null;
+    if (!audience) {
+      sentRosters.delete(voiceChannelId);
+    } else if (registryOn()) {
+      delta = diffSentRoster(voiceChannelId, participants, rowsRead);
+    } else {
+      delta = foldRoomEvents(events);
+    }
+    // Registry only, by construction: a folded queue is never empty-handed.
+    // A diff that is means the rows say what the last frame said (a bus hint
+    // about a change this process had already read and sent), and there is
+    // nothing to write: no frame, no sequence number, no keyframe clock. The
+    // sockets are exactly as caught up as they were.
+    const unchanged =
+      delta !== null &&
+      delta.joined.length === 0 &&
+      delta.updated.length === 0 &&
+      delta.left.length === 0;
+
+    if (audience && !unchanged) {
       // The sequence and the keyframe clock only move when something is
       // actually written. A channel whose audience could not be read (it was
       // deleted, or the query failed) must not silently burn a number that
@@ -1368,12 +1522,6 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
         rosterSeq.set(voiceChannelId, seq);
       }
       const now = Date.now();
-      // Whether this window CAN be described incrementally at all, decided
-      // before and independently of who is owed a keyframe. It used to be the
-      // same question; splitting the clocks makes it two, because the room may
-      // be due a snapshot while the audience is still happily patching, and
-      // then the delta is still needed.
-      const delta = registryOn() ? null : foldRoomEvents(events);
       const roomSnapshot =
         !delta ||
         now - (lastRosterKeyframeAt.get(voiceChannelId) ?? 0) >=
@@ -1598,6 +1746,10 @@ function removePeer(peerId: string) {
 
 /** Drop every peer of a channel — used when a channel is deleted or made private. */
 export function evictVoiceChannel(voiceChannelId: string) {
+  // A deleted channel has no audience, so no later roster run will drop this
+  // for it; a channel merely made private gets one whole roster next, which
+  // is always correct.
+  forgetSentRoster(voiceChannelId);
   for (const peer of getRoomPeers(voiceChannelId)) {
     removePeer(peer.id);
   }
