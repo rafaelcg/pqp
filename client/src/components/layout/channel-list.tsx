@@ -4,6 +4,7 @@ import {
   Archive,
   ChevronRight,
   Copy,
+  Eraser,
   FolderInput,
   FolderMinus,
   FolderPlus,
@@ -109,6 +110,13 @@ interface ChannelListProps {
   selectedChannelId: string | null;
   canManage: boolean;
   canManageRoles?: boolean;
+  /**
+   * MANAGE_MESSAGES, server-wide. Gates the "clear recent messages" entry on a
+   * text channel's menu. Separate from `canManage` (MANAGE_CHANNELS) because
+   * the two cargos genuinely differ: a moderator clears a raid, a manager
+   * renames and deletes channels, and neither implies the other.
+   */
+  canManageMessages?: boolean;
   isLoading?: boolean;
   voiceOccupancy?: Record<string, VoiceParticipant[]>;
   speakingPeerIds?: string[];
@@ -153,6 +161,8 @@ interface ChannelListProps {
     options?: { forceAdvanced?: boolean },
   ) => void;
   onDeleteChannel: (channelId: string) => void;
+  /** Open the "clear recent messages" dialog for a text channel. */
+  onPurgeChannel?: (channel: Channel) => void;
   onMoveChannel: (
     channelId: string,
     parentId: string | null,
@@ -196,6 +206,7 @@ export function ChannelList({
   selectedChannelId,
   canManage,
   canManageRoles = false,
+  canManageMessages = false,
   isLoading = false,
   voiceOccupancy = {},
   speakingPeerIds = [],
@@ -222,6 +233,7 @@ export function ChannelList({
   onRenameChannel,
   onOpenChannelSettings,
   onDeleteChannel,
+  onPurgeChannel,
   onMoveChannel,
   favoriteChannelIds = [],
   onFavoriteChannelIdsChange,
@@ -701,6 +713,11 @@ export function ChannelList({
             onOpenChannelSettings(channel, section, options)
           }
           onDelete={() => onDeleteChannel(channel.id)}
+          onPurge={
+            channel.type === "text" && canManageMessages && onPurgeChannel
+              ? () => onPurgeChannel(channel)
+              : undefined
+          }
           categories={categoryOptions}
           onMoveToCategory={(categoryId) =>
             onMoveChannel(
@@ -1451,6 +1468,7 @@ function ChannelRow({
   onJoinVoice,
   onOpenSettings,
   onDelete,
+  onPurge,
   categories,
   onMoveToCategory,
   onMoveUp,
@@ -1482,6 +1500,8 @@ function ChannelRow({
     options?: { forceAdvanced?: boolean },
   ) => void;
   onDelete: () => void;
+  /** MANAGE_MESSAGES on a text channel. Absent everywhere else. */
+  onPurge?: () => void;
   categories: Array<{ id: string; name: string }>;
   onMoveToCategory: (categoryId: string | null) => void;
   onMoveUp?: () => void;
@@ -1527,6 +1547,22 @@ function ChannelRow({
       label: t("chrome.channelSettings"),
       icon: Settings,
       onSelect: openSettings,
+    });
+  }
+
+  // Above the channel-management block on purpose: clearing messages is the
+  // moderation action, deleting the channel is the management one, and a
+  // moderator who holds only the first should not have to read past the second.
+  if (onPurge) {
+    if (items.length > 0) {
+      items.push({ id: "sep-purge", label: "", separator: true });
+    }
+    items.push({
+      id: "purge",
+      label: t("chrome.purgeChannel"),
+      icon: Eraser,
+      danger: true,
+      onSelect: onPurge,
     });
   }
 

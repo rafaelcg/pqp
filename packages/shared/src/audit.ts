@@ -31,6 +31,19 @@ export const AUDIT_ACTIONS = [
   "channel.delete",
   "channel.move",
   "message.delete",
+  /**
+   * A moderator cleared many messages in one action.
+   *
+   * Its own action rather than N `message.delete` rows, for two reasons. A
+   * raid cleanup would otherwise bury every other entry in the log under 100
+   * near-identical lines, which is the opposite of what an owner opens the log
+   * for. And the interesting fact here is not any single id, it is "somebody
+   * emptied that channel", so the row targets the *channel* and carries the
+   * count in `changes`. The ids themselves are deliberately not recorded: they
+   * point at nothing now, and the bodies are gone by design (same reasoning as
+   * `message.delete`).
+   */
+  "message.bulk_delete",
   "server.update",
   "server.retention_update",
   /**

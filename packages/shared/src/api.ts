@@ -769,6 +769,59 @@ export const MESSAGE_PAGE_SIZE = 50;
 export const MESSAGE_PAGE_MAX = 100;
 
 /**
+ * How many messages one bulk delete may remove.
+ *
+ * 100, the same ceiling Discord puts on its own bulk delete. The number is not
+ * arbitrary: it is the largest page `GET /api/channels/:id/messages` will hand
+ * back (`MESSAGE_PAGE_MAX`), so "delete the last N" never has to walk more
+ * history than a single page the moderator could already have read, and one
+ * purge stays one bounded statement plus one WebSocket frame. A raid that
+ * needs more than 100 lines cleared is two clicks rather than one unbounded
+ * `DELETE ... WHERE channel_id = $1` that could take the channel with it.
+ */
+export const MESSAGE_BULK_DELETE_MAX = 100;
+
+/**
+ * POST /api/channels/:channelId/messages/bulk-delete
+ *
+ * Exactly one of the two shapes, never both and never neither:
+ *
+ * - `count` sweeps the newest N messages in the channel, which is what a
+ *   moderator wants mid-raid when reading the ids first is not realistic.
+ * - `messageIds` deletes a hand-picked set, which is what the message list's
+ *   multi-select produces.
+ *
+ * A union rather than an object with two optionals so "both" and "neither" are
+ * rejected by the schema instead of by a hand-written check the next caller
+ * forgets.
+ */
+export const bulkDeleteMessagesSchema = z.union([
+  z.object({
+    count: z.number().int().min(1).max(MESSAGE_BULK_DELETE_MAX),
+    messageIds: z.undefined().optional(),
+  }),
+  z.object({
+    messageIds: z
+      .array(z.string().uuid())
+      .min(1)
+      .max(MESSAGE_BULK_DELETE_MAX),
+    count: z.undefined().optional(),
+  }),
+]);
+export type BulkDeleteMessagesRequest = z.infer<
+  typeof bulkDeleteMessagesSchema
+>;
+
+/** What the route answers with: the ids that actually went. */
+export const bulkDeleteMessagesResponseSchema = z.object({
+  deleted: z.number().int().nonnegative(),
+  messageIds: z.array(z.string().uuid()),
+});
+export type BulkDeleteMessagesResponse = z.infer<
+  typeof bulkDeleteMessagesResponseSchema
+>;
+
+/**
  * Unread as a pair on its own, so a conversation summary counts with exactly
  * the same two numbers a channel does instead of redefining them.
  */

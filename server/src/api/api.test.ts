@@ -11,7 +11,12 @@ import {
   vi,
 } from "vitest";
 import type { WebSocket } from "ws";
-import { parseSearchSnippet, Permission, serializePermissions } from "@pqp/shared";
+import {
+  MESSAGE_BULK_DELETE_MAX,
+  parseSearchSnippet,
+  Permission,
+  serializePermissions,
+} from "@pqp/shared";
 import type { DbUser } from "../db.js";
 
 /**
@@ -1336,6 +1341,260 @@ describeDb("API authorization", () => {
         `/api/channels/${textChannelId}/messages?before=${cursor}`,
       );
       expect(res.status).toBe(400);
+    });
+  });
+
+  /**
+   * The most destructive write a moderator has. Every test here asserts the
+   * thing that would be invisible from a 200: who was allowed to call it, that
+   * the cap is the schema's and not the caller's, that the trail says what
+   * happened, and that everyone still looking at the channel was told.
+   */
+  describe("bulk message delete", () => {
+    async function seed(channelId: string, count: number, author = member) {
+      const ids: string[] = [];
+      for (let i = 0; i < count; i += 1) {
+        const row = await getPool().query<{ id: string }>(
+          `INSERT INTO messages (channel_id, author_id, body) VALUES ($1, $2, $3) RETURNING id`,
+          [channelId, author.id, `spam ${i}`],
+        );
+        ids.push(row.rows[0]!.id);
+      }
+      return ids;
+    }
+
+    function bulkDelete(
+      as: { id: string; clerk_id: string },
+      channelId: string,
+      body: unknown,
+    ) {
+      return call<{ deleted: number; messageIds: string[] }>(
+        as,
+        "POST",
+        `/api/channels/${channelId}/messages/bulk-delete`,
+        body,
+      );
+    }
+
+    async function remaining(channelId: string): Promise<number> {
+      const res = await getPool().query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM messages WHERE channel_id = $1`,
+        [channelId],
+      );
+      return Number(res.rows[0]!.count);
+    }
+
+    it("refuses a member without MANAGE_MESSAGES, even on their own messages", async () => {
+      const { textChannelId } = await makeServer();
+      const ids = await seed(textChannelId, 3, member);
+
+      // Their own messages, and still refused: clearing a set at once is a
+      // moderation action whoever wrote it.
+      expect((await bulkDelete(member, textChannelId, { messageIds: ids })).status).toBe(403);
+      expect((await bulkDelete(member, textChannelId, { count: 3 })).status).toBe(403);
+      expect(await remaining(textChannelId)).toBe(3);
+
+      const allowed = await bulkDelete(admin, textChannelId, { count: 3 });
+      expect(allowed.status).toBe(200);
+      expect(allowed.body.deleted).toBe(3);
+      expect(await remaining(textChannelId)).toBe(0);
+    });
+
+    it("refuses an outsider with a 404, not a 403", async () => {
+      const { textChannelId } = await makeServer();
+      await seed(textChannelId, 2);
+      const res = await bulkDelete(outsider, textChannelId, { count: 2 });
+      expect(res.status).toBe(404);
+      expect(await remaining(textChannelId)).toBe(2);
+    });
+
+    it("resolves the permission per channel, not per server", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const elsewhere = await call<{ channel: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/channels`,
+        { name: "elsewhere", type: "text" },
+      );
+      const elsewhereId = elsewhere.body.channel.id;
+      await seed(textChannelId, 2);
+      await seed(elsewhereId, 2);
+
+      // A plain member handed MANAGE_MESSAGES on one channel only. If the route
+      // asked the server-wide question this would either refuse both or allow
+      // both; a channel moderator must be exactly that.
+      await getPool().query(
+        `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+         VALUES ($1, 'member', $2, $3, 0)`,
+        [textChannelId, member.id, Permission.MANAGE_MESSAGES.toString()],
+      );
+
+      expect((await bulkDelete(member, textChannelId, { count: 2 })).status).toBe(200);
+      expect(await remaining(textChannelId)).toBe(0);
+
+      expect((await bulkDelete(member, elsewhereId, { count: 2 })).status).toBe(403);
+      expect(await remaining(elsewhereId)).toBe(2);
+    });
+
+    it("caps a sweep at MESSAGE_BULK_DELETE_MAX and rejects anything over it", async () => {
+      const { textChannelId } = await makeServer();
+      await seed(textChannelId, 3);
+
+      expect(
+        (await bulkDelete(admin, textChannelId, { count: MESSAGE_BULK_DELETE_MAX + 1 }))
+          .status,
+      ).toBe(400);
+      expect(
+        (
+          await bulkDelete(admin, textChannelId, {
+            messageIds: Array.from(
+              { length: MESSAGE_BULK_DELETE_MAX + 1 },
+              () => "00000000-0000-4000-8000-000000000001",
+            ),
+          })
+        ).status,
+      ).toBe(400);
+      // Neither shape, and both shapes, are equally refused.
+      expect((await bulkDelete(admin, textChannelId, {})).status).toBe(400);
+      expect((await bulkDelete(admin, textChannelId, { count: 0 })).status).toBe(400);
+      expect(await remaining(textChannelId)).toBe(3);
+    });
+
+    it("sweeps only the newest N and leaves the rest of the history alone", async () => {
+      const { textChannelId } = await makeServer();
+      const ids = await seed(textChannelId, 5);
+
+      const res = await bulkDelete(admin, textChannelId, { count: 2 });
+      expect(res.status).toBe(200);
+      expect(res.body.messageIds.sort()).toEqual(ids.slice(3).sort());
+      expect(await remaining(textChannelId)).toBe(3);
+    });
+
+    it("never reaches outside the channel it was called on", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      const other = await call<{ channel: { id: string } }>(
+        owner,
+        "POST",
+        `/api/servers/${serverId}/channels`,
+        { name: "elsewhere", type: "text" },
+      );
+      const otherId = other.body.channel.id;
+      const mine = await seed(textChannelId, 1);
+      const theirs = await seed(otherId, 1);
+
+      const res = await bulkDelete(admin, textChannelId, {
+        messageIds: [...mine, ...theirs],
+      });
+      expect(res.status).toBe(200);
+      // Only the id that was actually in this channel comes back, and only it
+      // is gone. The permission was checked for one channel; the delete must
+      // not spend it on another.
+      expect(res.body.messageIds).toEqual(mine);
+      expect(await remaining(otherId)).toBe(1);
+    });
+
+    it("writes one audit entry carrying the count, and none when nothing went", async () => {
+      const { serverId, textChannelId } = await makeServer();
+      await seed(textChannelId, 4);
+
+      await bulkDelete(admin, textChannelId, { count: 4 });
+      const log = await call<{
+        entries: Array<{
+          action: string;
+          actorId: string;
+          targetType: string;
+          targetId: string;
+          changes: Array<{ key: string; old: unknown; new: unknown }> | null;
+        }>;
+      }>(owner, "GET", `/api/servers/${serverId}/audit-log`);
+      expect(log.body.entries).toHaveLength(1);
+      expect(log.body.entries[0]).toMatchObject({
+        action: "message.bulk_delete",
+        actorId: admin.id,
+        targetType: "channel",
+        targetId: textChannelId,
+        changes: [{ key: "count", old: null, new: 4 }],
+      });
+
+      // A second sweep of an already-empty channel is not an event.
+      const again = await bulkDelete(admin, textChannelId, { count: 4 });
+      expect(again.status).toBe(200);
+      expect(again.body.deleted).toBe(0);
+      const after = await call<{ entries: unknown[] }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/audit-log`,
+      );
+      expect(after.body.entries).toHaveLength(1);
+    });
+
+    it("fans one message-bulk-delete frame out to everyone viewing the channel", async () => {
+      const { textChannelId } = await makeServer();
+      const ids = await seed(textChannelId, 3);
+
+      const watcher = recordingSocket();
+      await handleChatMessage(
+        { socket: watcher.socket, user: await asDbUser(member.id) },
+        { type: "join-channel", channelId: textChannelId },
+      );
+      watcher.received.length = 0;
+
+      await bulkDelete(admin, textChannelId, { messageIds: ids });
+
+      const frames = watcher.received
+        .map((raw) => JSON.parse(raw) as { type: string; messageIds?: string[] })
+        .filter((frame) => frame.type === "message-bulk-delete");
+      // One frame for the whole purge, not one per message.
+      expect(frames).toHaveLength(1);
+      expect(frames[0]!.messageIds!.sort()).toEqual([...ids].sort());
+      expect(typesOf(watcher.received)).not.toContain("message-delete");
+    });
+
+    it("says nothing to the channel when nothing was deleted", async () => {
+      const { textChannelId } = await makeServer();
+      const watcher = recordingSocket();
+      await handleChatMessage(
+        { socket: watcher.socket, user: await asDbUser(member.id) },
+        { type: "join-channel", channelId: textChannelId },
+      );
+      watcher.received.length = 0;
+
+      const res = await bulkDelete(admin, textChannelId, { count: 10 });
+      expect(res.status).toBe(200);
+      expect(res.body.deleted).toBe(0);
+      expect(typesOf(watcher.received)).not.toContain("message-bulk-delete");
+    });
+
+    it("refuses a conversation, which has no moderators to hold the permission", async () => {
+      // Shared membership is what the default DM privacy asks for.
+      await makeServer();
+      const created = await call<{ conversation: { channelId: string } }>(
+        owner,
+        "POST",
+        "/api/dms",
+        { userIds: [member.id] },
+      );
+      expect(created.status).toBe(201);
+      const res = await bulkDelete(
+        owner,
+        created.body.conversation.channelId,
+        { count: 1 },
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("rate limits a moderator who keeps purging", async () => {
+      const { textChannelId } = await makeServer();
+      let sawLimit = false;
+      for (let i = 0; i < 8; i += 1) {
+        await seed(textChannelId, 1);
+        const res = await bulkDelete(admin, textChannelId, { count: 1 });
+        if (res.status === 429) {
+          sawLimit = true;
+          break;
+        }
+      }
+      expect(sawLimit).toBe(true);
     });
   });
 

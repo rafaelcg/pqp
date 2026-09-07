@@ -53,6 +53,7 @@ const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
   "channel.delete": "serverSettings.audit.action.channel.delete",
   "channel.move": "serverSettings.audit.action.channel.move",
   "message.delete": "serverSettings.audit.action.message.delete",
+  "message.bulk_delete": "serverSettings.audit.action.message.bulk_delete",
   "server.update": "serverSettings.audit.action.server.update",
   "server.retention_update":
     "serverSettings.audit.action.server.retention_update",

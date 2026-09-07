@@ -18,6 +18,7 @@ import { notifyOpenChannelMessage } from "@/lib/notifications";
 import { messagePingsYou } from "@/lib/message-mentions-you";
 import {
   apiFetch,
+  bulkDeleteMessages as bulkDeleteMessagesRequest,
   deleteMessage as deleteMessageRequest,
   editMessage as editMessageRequest,
   pinMessage as pinMessageRequest,
@@ -379,6 +380,43 @@ export function createChatController(
 
   function emit() {
     listener?.();
+  }
+
+  /**
+   * Drop messages the server no longer has, whether one delete or a hundred.
+   *
+   * Does not emit: the caller decides, because a bulk frame and a single frame
+   * arrive on different paths and only one of them should also be re-rendered
+   * per id.
+   */
+  function forgetMessages(removedIds: readonly string[]): void {
+    const removed = new Set(removedIds);
+    messages = messages
+      .filter((entry) => !removed.has(entry.id))
+      // The parent column is nulled server-side, so nothing will ever re-tell
+      // us this. Marking it here is what keeps a reply from pointing at a row
+      // that is no longer on screen.
+      .map((entry) =>
+        entry.replyTo && removed.has(entry.replyTo.id)
+          ? {
+              ...entry,
+              replyTo: {
+                ...entry.replyTo,
+                authorId: null,
+                authorName: null,
+                excerpt: "",
+                deleted: true,
+              },
+            }
+          : entry,
+      );
+    // The forward cursor cannot point at a row the server has forgotten:
+    // paging from it would 400 and strand the reader in history.
+    if (newestLoadedId !== null && removed.has(newestLoadedId)) {
+      newestLoadedId =
+        [...messages].reverse().find((entry) => !isOptimistic(entry))?.id ??
+        null;
+    }
   }
 
   function clearSendTimer(nonce: string) {
@@ -1044,6 +1082,31 @@ export function createChatController(
       }
     },
 
+    /**
+     * Moderator bulk delete of a hand-picked set in the open channel.
+     *
+     * Nothing optimistic here, unlike `deleteMessage`. A hundred rows removed
+     * and then put back because the request 403'd or 429'd is a far worse
+     * moment than a beat of latency, and the server's answer is the only thing
+     * that knows which ids actually went, since some may already have been
+     * deleted by somebody else. Returns that count so the caller can say so.
+     */
+    async bulkDeleteMessages(messageIds: readonly string[]) {
+      if (!channelId || messageIds.length === 0) {
+        return 0;
+      }
+      const result = await bulkDeleteMessagesRequest(channelId, {
+        messageIds: [...messageIds],
+      });
+      // The `message-bulk-delete` frame does this too, for this socket along
+      // with every other one in the channel. Doing it here as well is what
+      // covers the case where it does not arrive: a dropped socket mid-purge
+      // would otherwise leave the moderator looking at rows they just deleted.
+      forgetMessages(result.messageIds);
+      emit();
+      return result.deleted;
+    },
+
     // Optimistic pinnedAt only — pinnedBy is left for the response/broadcast to
     // fill in, since the local session does not have its own display name to
     // hand without a round trip, and the server is about to send the real row
@@ -1297,32 +1360,19 @@ export function createChatController(
           if (message.channelId !== channelId) {
             return;
           }
-          messages = messages
-            .filter((entry) => entry.id !== message.messageId)
-            // The parent column is nulled server-side, so nothing will ever
-            // re-tell us this. Marking it here is what keeps a reply from
-            // pointing at a row that is no longer on screen.
-            .map((entry) =>
-              entry.replyTo && entry.replyTo.id === message.messageId
-                ? {
-                    ...entry,
-                    replyTo: {
-                      ...entry.replyTo,
-                      authorId: null,
-                      authorName: null,
-                      excerpt: "",
-                      deleted: true,
-                    },
-                  }
-                : entry,
-            );
-          // The forward cursor cannot point at a row the server has forgotten:
-          // paging from it would 400 and strand the reader in history.
-          if (newestLoadedId === message.messageId) {
-            newestLoadedId =
-              [...messages].reverse().find((entry) => !isOptimistic(entry))
-                ?.id ?? null;
+          forgetMessages([message.messageId]);
+          emit();
+          return;
+        }
+
+        // A moderator's bulk delete. Deliberately the same handling as a single
+        // delete, one pass instead of one pass per id: the frame carries only
+        // ids, and up to a hundred of them.
+        case "message-bulk-delete": {
+          if (message.channelId !== channelId) {
+            return;
           }
+          forgetMessages(message.messageIds);
           emit();
           return;
         }

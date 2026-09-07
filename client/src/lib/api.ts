@@ -6,6 +6,8 @@ import type {
   AuditLogPage,
   AvatarConfig,
   BlockListResponse,
+  BulkDeleteMessagesRequest,
+  BulkDeleteMessagesResponse,
   Channel,
   ChannelUnread,
   ClaimCommunityHomeMediaRequest,
@@ -938,6 +940,22 @@ export const editMessage = (messageId: string, body: string) =>
 
 export const deleteMessage = (messageId: string) =>
   del<{ ok: boolean }>(`/api/messages/${messageId}`);
+
+/**
+ * Bulk delete, MANAGE_MESSAGES only. Either the newest `count` messages in the
+ * channel or a hand-picked `messageIds` set, never both (see
+ * `bulkDeleteMessagesSchema`). The rows leave every open client through the
+ * `message-bulk-delete` frame; the response is what the caller needs to report
+ * how many actually went, which is not always what was asked for.
+ */
+export const bulkDeleteMessages = (
+  channelId: string,
+  request: BulkDeleteMessagesRequest,
+) =>
+  post<BulkDeleteMessagesResponse>(
+    `/api/channels/${channelId}/messages/bulk-delete`,
+    request,
+  );
 
 export const pinMessage = (messageId: string) =>
   post<{ message: Message }>(`/api/messages/${messageId}/pin`);

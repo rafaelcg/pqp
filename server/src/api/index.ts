@@ -7,6 +7,7 @@ import {
   auditActionSchema,
   AVATAR_IMAGE_SIZE,
   banMemberSchema,
+  bulkDeleteMessagesSchema,
   claimAvatarSchema,
   claimServerImageSchema,
   createAttachmentSchema,
@@ -300,8 +301,10 @@ import {
 import {
   ChannelPinLimitError,
   deleteMessage,
+  deleteMessagesBulk,
   getMessage,
   listMessages,
+  listRecentMessageIds,
   listPinnedMessages,
   mapMessage,
   pinMessage,
@@ -690,6 +693,24 @@ const voiceLeaveLimiter = createRateLimiter({
   capacity: 30,
   refillPerSecond: 2,
 });
+/**
+ * Bulk message delete. One call can remove a hundred rows and fan a frame out
+ * to everyone in the channel, so it is the most destructive write a moderator
+ * has, and the only one whose cost per request is bounded by a *cap* rather
+ * than by the caller's patience.
+ *
+ * A burst of five covers the real shape of a cleanup (sweep, look, sweep the
+ * rest, undo nothing because there is no undo) and sustained it is one purge
+ * every twenty seconds, which is faster than a person reads a channel and far
+ * too slow to empty a busy server with. The global `writeLimiter` still
+ * applies underneath. Keyed by user rather than by channel: the thing worth
+ * bounding is one account clearing everything it can reach, not one channel
+ * being cleaned twice.
+ */
+const bulkDeleteLimiter = createRateLimiter({
+  capacity: 5,
+  refillPerSecond: 0.05,
+});
 
 export function resetApiRateLimits(): void {
   apiLimiter.reset();
@@ -718,6 +739,7 @@ export function resetApiRateLimits(): void {
   publicProfileLimiter.reset();
   publicCommunityLimiter.reset();
   voiceLeaveLimiter.reset();
+  bulkDeleteLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -4069,6 +4091,90 @@ router.delete("/api/messages/:messageId", async ({ user }, { messageId }) => {
   }
   return { ok: true };
 });
+
+/**
+ * POST /api/channels/:channelId/messages/bulk-delete
+ *
+ * The moderation action a 200-person watch party actually needs: clear a raid
+ * in one go instead of clicking Delete a hundred times. Two shapes, one route
+ * (see `bulkDeleteMessagesSchema`): `{ count }` sweeps the newest N, and
+ * `{ messageIds }` deletes a hand-picked set.
+ *
+ * Server channels only. A conversation has no moderators, so there is nobody
+ * this permission could belong to there, and the two-person DM case that a
+ * bulk delete would serve ("unsend everything I said") is a different
+ * feature with a different rule (it would have to be author-scoped) rather
+ * than a missing branch of this one. 404 rather than 400 for the same reason
+ * `requireServerChannel` does it: a guessed channel id learns nothing.
+ *
+ * Unlike the single delete, there is no author fallback. `DELETE /api/messages/
+ * :id` lets you remove your own message with no permission at all; this route
+ * requires MANAGE_MESSAGES from everyone, including for a set that happens to
+ * be all your own. Clearing a hundred rows at once is a moderation action
+ * whoever wrote them, and the audit entry it writes should never be able to
+ * say "actor: a member with no permissions".
+ */
+router.post(
+  "/api/channels/:channelId/messages/bulk-delete",
+  async ({ user, req, res }, { channelId }) => {
+    const channel = await requireChannelAccess(channelId!, user.id);
+    if (channel.kind !== "server" || !channel.server_id) {
+      throw new NotFound("Channel not found");
+    }
+
+    // The permission is resolved *for this channel*, not for the server, so a
+    // per-channel deny overwrite refuses the purge the same way it refuses a
+    // single delete over the socket.
+    if (
+      !(await memberHasPermission(
+        channel.server_id,
+        user.id,
+        Permission.MANAGE_MESSAGES,
+        channelId,
+      ))
+    ) {
+      throw new Forbidden("You cannot delete messages in this channel");
+    }
+
+    const key = `user:${user.id}`;
+    if (!bulkDeleteLimiter.take(key)) {
+      res.setHeader("Retry-After", String(bulkDeleteLimiter.retryAfter(key)));
+      throw new HttpError(429, "Slow down");
+    }
+
+    const body = bulkDeleteMessagesSchema.parse(await readJsonBody(req));
+    const targets =
+      body.count === undefined
+        ? body.messageIds
+        : await listRecentMessageIds(channelId!, body.count);
+
+    // A `count` sweep of an empty channel, or an id list where every row has
+    // already gone. Nothing happened, so nothing is broadcast and nothing is
+    // logged. An audit entry reading "cleared 0 messages" is noise in the one
+    // place noise is most expensive.
+    const deleted = await deleteMessagesBulk(channelId!, targets);
+    if (deleted.length === 0) {
+      return { deleted: 0, messageIds: [] };
+    }
+
+    broadcastToChannel(channelId!, {
+      type: "message-bulk-delete",
+      channelId: channelId!,
+      messageIds: deleted,
+    });
+
+    await logAudit({
+      serverId: channel.server_id,
+      actorId: user.id,
+      action: "message.bulk_delete",
+      targetType: "channel",
+      targetId: channelId!,
+      changes: [{ key: "count", old: null, new: deleted.length }],
+    });
+
+    return { deleted: deleted.length, messageIds: deleted };
+  },
+);
 
 /**
  * A conversation has no moderators, so any participant — already proven by
