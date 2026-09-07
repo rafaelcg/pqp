@@ -6,6 +6,7 @@ import { currentPoolStats, type PoolStats } from "../lib/runtime.js";
 import { headObject, isStorageConfigured } from "../lib/s3.js";
 import { isLiveKitConfigured } from "../voice/backends.js";
 import { pingSfu } from "../voice/admin.js";
+import { sfuHost } from "../voice/sfu-stats.js";
 
 /**
  * `GET /ready` - the deep check, for external monitors.
@@ -23,9 +24,10 @@ import { pingSfu } from "../voice/admin.js";
  * WHAT IT SAYS. `{ ok, checks, version }`, with one entry per dependency
  * (`postgres`, `pool`, `livekit`, `storage`) carrying `ok` and, where probed,
  * `ms`. HTTP 200 only when every check is ok, 503 otherwise. Component
- * labels, booleans, counts and latencies only: no hostnames, no provider
- * names, no error strings. A stranger learns that "the database is unhappy",
- * which the app being broken already told them.
+ * labels, booleans, counts and latencies, plus one hostname: the SFU's (see
+ * `LivekitCheck` for why). No provider names, no error strings. A stranger
+ * learns that "the database is unhappy", which the app being broken already
+ * told them.
  *
  * WHAT IT MUST NOT BE. Fly's health check. `fly.toml` points at `/health`,
  * and a dependency-aware check there turns a two-minute Postgres blip into a
@@ -68,6 +70,17 @@ export interface ProbeResult {
 
 export type RemoteCheck = ProbeResult | { ok: true; skipped: true };
 
+/**
+ * The LiveKit check also names the SFU **host** (hostname only, never the
+ * key, the secret, the port or the path). This is the one hostname in the
+ * report, and it is here on purpose: production voice moved to a self-hosted
+ * SFU on 2026-09-05, a rollback to LiveKit Cloud is a one-line secret change,
+ * and a monitor that only says "livekit ok" cannot tell the two apart. Every
+ * voice client is handed this same host in its session token, so it is not a
+ * secret; it is just not repeated for storage.
+ */
+export type LivekitCheck = RemoteCheck & { host?: string };
+
 export interface PoolCheck {
   ok: boolean;
   inUse: number;
@@ -80,7 +93,7 @@ export interface ReadyReport {
   checks: {
     postgres: ProbeResult;
     pool: PoolCheck;
-    livekit: RemoteCheck;
+    livekit: LivekitCheck;
     storage: RemoteCheck;
   };
   version: string;
@@ -104,6 +117,8 @@ export interface ReadyCheckerOptions {
    * the dependency is not configured, which is reported as skipped.
    */
   probeLivekit: () => (() => Promise<unknown>) | null;
+  /** The SFU hostname to name in the report; null when not configured. */
+  livekitHost?: () => string | null;
   probeStorage: () => (() => Promise<unknown>) | null;
   version?: () => string;
   now?: () => number;
@@ -237,12 +252,14 @@ export function createReadyChecker(options: ReadyCheckerOptions): ReadyChecker {
 
   return {
     async check(): Promise<ReadyReport> {
-      const [postgres, livekit, storage] = await Promise.all([
+      const [postgres, livekitProbe, storage] = await Promise.all([
         timed(options.probePostgres, postgresTimeoutMs, now),
         remoteCheck("livekit", options.probeLivekit()),
         remoteCheck("storage", options.probeStorage()),
       ]);
       const pool = poolCheck();
+      const host = "skipped" in livekitProbe ? null : (options.livekitHost?.() ?? null);
+      const livekit: LivekitCheck = host ? { ...livekitProbe, host } : livekitProbe;
       return {
         ok: postgres.ok && pool.ok && livekit.ok && storage.ok,
         checks: { postgres, pool, livekit, storage },
@@ -277,6 +294,7 @@ const checker = createReadyChecker({
   probePostgres: () => getPool().query("SELECT 1"),
   poolStats: currentPoolStats,
   probeLivekit: () => (isLiveKitConfigured() ? () => pingSfu() : null),
+  livekitHost: sfuHost,
   probeStorage: () =>
     isStorageConfigured() ? () => headObject(STORAGE_PROBE_KEY) : null,
 });

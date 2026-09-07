@@ -10,9 +10,11 @@ not part of the product and it is not linked from anywhere.
 ## What it shows
 
 A strip of **signals** sits directly under the header: one pill per thing that
-can need attention (health, **capacity**, message volume, call quality, voice
-load, house-cast share, Android APK clicks today), coloured by state, so a scan
-does not have to read every figure below.
+can need attention, coloured by state, so a scan does not have to read every
+figure below. They are in incident order: health, **capacity**, the **SFU**,
+voice load, message volume, call quality, house-cast share, Android APK clicks
+today. Capacity and the SFU sit high because they are the two that go red for
+something nobody has complained about yet.
 Under it, one line of provenance: which account kinds the numbers exclude, the
 server's cache window (and that the capacity card sits outside it), and the
 page's own refresh interval.
@@ -28,9 +30,44 @@ between them.
 | **usuários** | signups per day over 14 days, who is actually active (24h and 7d), the returning-writer share, accepted friendships and open friend requests, what people filled in (handle / avatar / banner / game account / age check), plus first-touch acquisition and game connections |
 | **canais** | text-vs-voice composition, the eight busiest text channels of the last 24h, and the shape of the instance: direct and group conversations, private channels, channels that have never received a message |
 | **comunidades** | the directory: listed, suspended, addressed, by category, and the communities themselves. Off by default, and it says so (see below) |
-| **voz e chamadas** | the rooms open *right now* with who is sharing a screen, the voice summary against the mesh limit, and the full call-quality distribution with notes |
+| **voz e chamadas** | **voz / sfu** (the media server, see below), the rooms open *right now* with who is sharing a screen, the voice summary against the mesh limit, and the full call-quality distribution with notes |
 | **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the feedback queue with the last eight entries. The tab carries a count badge when anything is open |
 | **infra** | **capacity right now** (open WebSockets and the Postgres pool, see below), then the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
+
+### The SFU card names the host, because a rollback is invisible otherwise
+
+Production voice moved on 2026-09-05 from LiveKit Cloud to a self-hosted
+LiveKit at `wss://sfu.pqp.gg` (a Vultr box in São Paulo). Pointing the API
+back at LiveKit Cloud is one Fly secret and a restart, and **nothing in the
+product looks different afterwards**: same calls, same client, same
+`backend: "livekit"` everywhere else on this page. So the card states the
+host in full and badges it:
+
+| Badge | Means |
+|---|---|
+| **host esperado** (accent) | `sfu.pqp.gg`. The self-hosted box is serving. |
+| **host inesperado** (red) | Some other host, LiveKit Cloud included. The card names the host and repeats what was expected. |
+| **sem livekit · só mesh** (amber) | The API has no `LIVEKIT_URL` at all. Every call is peer-to-peer and the ~8-person mesh ceiling is back. |
+
+Beside it: whether `listRooms` answered and how long it took, then the counts
+**as the SFU reports them**: rooms, participants, largest room. Those come
+from `RoomServiceClient.listRooms` on the API, cached 10 s there, so the
+dashboard cannot hammer the SFU whatever its own poll rate is.
+
+The counts exist only when the SFU answered. An unreachable SFU shows dashes,
+never zeros: "0 salas" on an SFU nobody can reach reads as a quiet night
+instead of as a blind spot.
+
+**The room count is deliberately shown next to the API's own.** `salas abertas
+agora` below it is this process's peer map; the SFU card is the SFU's own
+count. When they disagree the card says so (`api diz 2 salas`), which is the
+symptom of somebody being in a call on one side and not the other.
+
+The same host rides on `/ready`'s `livekit` check (`{ ok, ms, host }`), so an
+external monitor sees the rollback too, and on the `/ready` health tile.
+Hostname only, ever: never the API key or the secret. Every voice client is
+already handed that host in its session token, so it is not a secret; it is
+just not repeated anywhere it does not earn its place.
 
 ### The capacity card is the one live thing on the page
 
@@ -74,6 +111,22 @@ The peak queue is observed at checkout (there is no event for *joining* the pool
 queue), so it can sit slightly below the true instantaneous peak and can never
 exceed it. Both peaks reset on deploy and at São Paulo midnight, and the card
 says which by naming the time it has been counting from.
+
+### How often it reads, and how it says the reading is old
+
+The page polls every **30 seconds**, which is the API's own cache window:
+faster re-reads the same payload, slower throws away freshness the API is
+already offering. A **hidden tab does not poll at all** (a phone left on this
+page in a pocket used to call the API all night for nobody), and returning to
+the tab reads immediately, so what an operator sees after unlocking a phone is
+current rather than however old the last poll was. The **atualizar** button in
+the header forces a read; a read already in flight is never started twice.
+
+Age is stated in two places rather than left as arithmetic: the header says
+`lido <stamp> · há N min`, and once the last good read is older than 75
+seconds the live chip turns amber (`leitura parada`) and a banner says how old
+the numbers on screen are. The numbers themselves stay: they were real, they
+are just not now.
 
 ### Nothing on this page is illustrative
 
@@ -124,6 +177,12 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
   over accounts older than 24 hours. **Messages are the only per-user activity
   this schema records**, so somebody who reads without posting counts as
   inactive; the pane says so rather than letting it read as retention
+- **`sfu`**: the media server as the media server sees itself. `configured`,
+  `host` (hostname only), `reachable`, `ms`, `failure`, and `rooms` /
+  `participants` / `largestRoom` when it answered. Its own 10-second cache in
+  `server/src/voice/sfu-stats.ts`, not the 30-second one, and concurrent
+  callers share one probe: the API asks the SFU at most six times a minute no
+  matter how many dashboards are open
 - voice: rooms open now (with names and who is screen-sharing), people in them,
   the largest room now against the practical mesh limit (amber past 6), and the
   largest room today (process-local; it resets on deploy and at São Paulo
@@ -173,8 +232,8 @@ uptime behind the infra tab.
 
 One more tile in that strip, `/ready`, comes from the `ready` block of
 `/metrics`: it is the verdict `GET https://api.pqp.gg/ready` gives UptimeRobot
-(200 or 503), with the failing check named and the pool's in-use / max /
-queued counts. It can be red while every `/status.json` tile is green, because
+(200 or 503), with the failing check named, the pool's in-use / max / queued
+counts, and the SFU host and its probe latency. It can be red while every `/status.json` tile is green, because
 it also watches the pool over time (queued for more than 10 s, full for more
 than 30 s), which is what the 2026-09-05 Postgres outage looked like from the
 inside. See `docs/MONITORING.md`.
@@ -242,6 +301,48 @@ counts are cached in memory for 30 seconds; the `runtime` block is not, and the
 cache is typed as `Omit<AdminMetrics, "runtime">` so it cannot become so by
 accident. The live values themselves come from `server/src/lib/runtime.ts`
 (tested in `runtime.test.ts`), which nothing queries.
+
+## Further UX work, in priority order
+
+Not done, in the order worth doing. The list is about this page during an
+incident, which is the only time it has to be good.
+
+1. **A first screen that survives an incident with no scrolling.** The signals
+   strip answers "is anything wrong" but the fix always needs the numbers
+   behind two or three different tabs (capacity in *infra*, the SFU in *voz*,
+   the report queue in *moderação*). An incident view (the pills plus the
+   half-dozen figures an operator actually opens during an outage, above the
+   tab bar) would end the tab hunt. Everything is in one payload already, so
+   this is layout, not data.
+2. **Nothing on this page has any history.** Every figure is "now" or "last
+   24 h", so an operator cannot tell a pool queue that has been climbing for
+   ten minutes from one that appeared this second, which is exactly the
+   question during the 2026-09-05 Postgres event. The page polls every 30 s
+   and could keep its own in-memory ring of the last hour of `runtime` and
+   `sfu` readings and draw a sparkline under each, with no API change and no
+   storage. It resets on reload, which is honest and still enough.
+3. **No alerting anywhere.** Somebody has to be looking at the page. A red
+   pill could at least become the tab title and the favicon (`(!) pqp admin`),
+   so a dashboard left open in a background tab is worth something.
+4. **The mobile layout still assumes a desk.** The phone pass here fixed the
+   worst of it (single-column metrics, a header that wraps, denser health
+   tiles), but the wide tables (busiest channels, communities, acquisition)
+   are still horizontal scrollers on a phone, which is a bad way to read a
+   ranking. Under ~620 px they should stack into rows instead of scrolling.
+5. **The strip cannot be scanned in a fixed order.** Pills appear and vanish
+   with the data behind them (`elenco da casa` and `apk` hide themselves when
+   empty), so the SFU pill is not always in the same place, and a scan has to
+   read rather than glance. Fixed slots with an explicit "sem dados" state
+   would make the position itself meaningful.
+6. **Colour is the only channel for state.** Green, amber and red carry every
+   verdict on the page, with no icon or shape behind them. Adding a glyph to
+   the amber and red states (and checking the palette against a deuteranopia
+   simulator) costs nothing and would not need to be revisited.
+7. **`aria-live` on nothing.** Numbers change under a screen reader with no
+   announcement; the signals strip is the one region that should be polite-live.
+8. **No visible tie to the runbook.** `docs/MONITORING.md` says what to do
+   when `na fila` is climbing or the SFU is unreachable, and the page that
+   shows those states does not link to it.
 
 ## Deploy
 
