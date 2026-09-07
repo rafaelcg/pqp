@@ -4,7 +4,7 @@ Runbook for moving the pqp API and WebSocket server from Railway to **Fly.io, re
 
 Only the API moves. The SPA stays on Cloudflare Pages; Fly serves `/api/*`, `/health`, `/status.json` and the `/ws` upgrade. Config lives in [`fly.toml`](../fly.toml) — read the header comment there before changing anything, because it explains the one constraint that governs this whole document:
 
-> **This server is single-process by design.** WebSocket connections, presence, voice-room membership and rate-limit buckets are in-process `Map`s. Two machines are two disjoint chat servers behind one hostname, and nobody gets an error — people just stop seeing each other. Exactly one machine, in exactly one region, until a pub/sub layer exists.
+> **The machine count is a decision, not a side effect.** WebSocket connections, presence and voice-room membership live in process memory and cross machines through Postgres (`CLUSTER_BUS=postgres`, `VOICE_REGISTRY=postgres`, both on in production) and the SFU. Production runs one machine by choice right now; section 6a-bis says why, what the two-machine window of 2026-09-07 showed, and what has to land before two again. One region, `gru`, always.
 
 `railway.toml` and `.github/workflows/deploy-api.yml` are deliberately left in place. They are the rollback path.
 
@@ -442,32 +442,46 @@ Then assert it, every time, because the failure is silent:
 
 ```bash
 fly machines list --app pqp-api
-# expect exactly min_machines_running rows (fly.toml; 2 since M5), all state
+# expect exactly min_machines_running rows (fly.toml; 1 today), all state
 # "started", all region "gru". CI checks the same thing after every deploy
 # and also that every started machine runs the same image.
 
 # if the count is off:
-fly scale count 2 --region gru --app pqp-api
+fly scale count 1 --region gru --app pqp-api
 ```
 
 ### 6a-bis. Running two machines (M5 of `docs/plans/MULTI_INSTANCE_VOICE.md`)
 
-Since M5 the server can run on two machines, and `fly.toml` says two (`min_machines_running = 2`, rolling deploys one at a time, `/health` polled every 10 s). What makes it safe, all of it required:
+**Production is one machine by choice, as of 2026-09-07.** `fly.toml` says `min_machines_running = 1` and live matches. The reason is narrow and specific, so read it before "fixing" the count in either direction.
+
+**What the two-machine window showed (2026-09-07, 13:20Z to 15:59Z).** Two machines ran in `gru` with `CLUSTER_BUS=postgres`, `VOICE_REGISTRY=postgres` and `LIVEKIT_*` all live on both. There was no split of the userbase: the bus self-echo passed on both machines, six LiveKit rooms spanned both machines and worked for up to 80 minutes, one cross-machine voice resume was adopted live, zero app-level errors, zero user reports. What was two-machine-specific: exactly four `voice.meshRefusedMultiInstance` refusals (loud, the client hangs up; one two-person call ended on it), and two proxy-side 1001 close bursts that are still unexplained. The refusal is the mesh guard doing what it was written to do, and it is why one machine is the choice until the guard adopts the pin instead of refusing.
+
+**Before two machines again, in this order:**
+
+1. The mesh guard adopts the pin: a mesh join into a room pinned on the other instance lands on that instance's transport (or the room opens on the SFU) instead of being refused. Today it refuses (`refuseMeshAcrossInstances` in `server/src/ws/voice.ts`).
+2. A cross-instance frames counter in `GET /api/admin/metrics`, so "the bus is carrying traffic" is a number you read, not a log line you hope for.
+3. Moderator server mutes published on the bus. `roomServerMutes` in `server/src/ws/voice.ts` is per process today, so a mute applied on one machine does not hold on the other.
+4. A staging rehearsal with `LIVEKIT_*` set (`docs/STAGING.md`, "Rehearsing two machines"; as written that section rehearses only the refusal path, because staging had no SFU).
+5. The flip below: `min_machines_running = 2` merged, `fly scale count 2`, and `voice.meshRefusedMultiInstance` staying at zero afterwards.
+
+Since M5 the server can run on two machines (rolling deploys one at a time, `/health` polled every 10 s). What makes it safe, all of it required:
 
 - `CLUSTER_BUS=postgres` and `VOICE_REGISTRY=postgres` set on the app, and `DATABASE_URL` in session mode (the `direct.` MPG host; LISTEN never delivers through a transaction pooler, and the boot self-echo check logs `bus.selfEchoMissing` if it does not).
 - `LIVEKIT_*` set. A mesh room is relayed by one process and cannot span two. With two live instances the server sends any room that would have opened on mesh to the SFU instead (`voice.meshGuardForcedSfu` in the log); without an SFU it **refuses** the join (`voice-join-refused`, reason `mesh-multi-instance`, `voice.meshRefusedMultiInstance` in the log) rather than seat somebody in a room they cannot hear, and warns once per episode at boot and every heartbeat (`voice.meshClusterUnsafe`). A mesh room that one machine already holds keeps seating people on that machine.
 - The drain (`server/src/lib/drain.ts`). On SIGTERM the machine flips `/health` to 503 so the proxy stops routing to it, withdraws its voice lease so the other machine stops counting it, waits 2 s, then closes its sockets with 1001 in batches of 50 every 100 to 150 ms (`ws.drainBatch`, `ws.drained` in the log). The clients reconnect to the machine that stayed up and resume their voice seat by id (M3). `/up`, the external monitor, does not go red on a drain: a deploy is not an incident.
 
-The flip itself, once, by hand (M6):
+The flip itself, once, by hand (M6), after the list above:
 
 ```bash
-fly secrets set CLUSTER_BUS=postgres VOICE_REGISTRY=postgres --app pqp-api   # restarts the machine
+fly secrets list --app pqp-api             # CLUSTER_BUS, VOICE_REGISTRY, LIVEKIT_* are already there (since 2026-09-07)
+gh variable set PQP_API_MACHINES --body 2  # keeps the CI assertion true between the scale and the merge
 fly scale count 2 --region gru --app pqp-api
-fly machines list --app pqp-api     # two rows, both started, both gru
-gh variable delete PQP_API_MACHINES # if it was set to 1 to keep CI green meanwhile
+fly machines list --app pqp-api            # two rows, both started, both gru
+# merge min_machines_running = 2 in fly.toml, then:
+gh variable delete PQP_API_MACHINES
 ```
 
-Until that has been done, production is one machine and the CI assertion (which reads `min_machines_running`) needs the repo variable `PQP_API_MACHINES=1`, or it fails after every deploy. Rollback at any point: `fly scale count 1 --region gru --app pqp-api`, then `PQP_API_MACHINES=1` again. Rehearse on staging first: `docs/STAGING.md`, "Rehearsing two machines".
+Rollback at any point: `fly scale count 1 --region gru --app pqp-api`, and `PQP_API_MACHINES=1` until `fly.toml` says 1 again. The CI assertion reads `min_machines_running` (or `PQP_API_MACHINES` when set), so the file and the app have to agree at every deploy; the variable exists for the minutes in between. Rehearse on staging first: `docs/STAGING.md`, "Rehearsing two machines".
 
 `-e APP_VERSION=...` is what makes `/health` report the running commit. Without it `/health` says `"version":"dev"`, which is how you tell a hand-rolled deploy from a CI one.
 

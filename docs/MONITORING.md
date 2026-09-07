@@ -66,7 +66,7 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 | `api-health` | `https://api.pqp.gg/health` returns 200 with `ok:true` | The endpoint does a real `SELECT 1`, so a 200 means process **and** database. The reported `version` is the deployed commit. |
 | `web-app` | `https://pqp.gg` returns 200 | The SPA on Cloudflare Pages. |
 | `websocket` | `wss://api.pqp.gg/ws` upgrades (101) and answers an invalid auth frame with close code 4401 | **The one a plain HTTP check misses.** Chat, presence and voice signalling all ride this socket; `/health` can be green while every WebSocket is dead. That is CLAUDE.md pitfall #9, verbatim. Needs no credential — an invalid token is enough to prove the upgrade, the message loop and the Clerk call all work. |
-| `fly-machines` | exactly **1** machine, `started`, in `gru` | A correctness invariant, not capacity. The server keeps WebSocket state, presence, voice rooms and rate-limit buckets in process memory with no pub/sub, so a second machine silently splits the userbase with no error anywhere. The deploy workflow asserts this at release time; this asserts it continuously, because a stray `fly scale count 2` or a machine Fly recreates after a host failure never goes through a deploy. |
+| `fly-machines` | exactly **1** machine, `started`, in `gru` | The machine count is a decision (`fly.toml` `min_machines_running`, `docs/deploy-fly.md` 6a-bis), and this is the continuous half of asserting it: the deploy workflow checks the number at release time, this checks it between deploys, because a stray `fly scale count 2` or a machine Fly recreates after a host failure never goes through a deploy. One today because the mesh guard hangs up peer-to-peer joins whose room is pinned on the other machine, not because machines cannot share state (the bus and the registry are on). When the flip lands, raise the count in `scripts/monitor/availability.mjs` in the same PR as `fly.toml`. |
 | `status-components` | no component in `/status.json` is `degraded` or `down` | Bridges the app's own probes (`server/src/services/status.ts`, sampled every minute) to a notification. Without it, the status page is something you have to remember to look at. `disabled` components are ignored — off on purpose is not broken. |
 
 > **Detection time is 10–30 minutes, not 10.** GitHub's cron minimum is 5
@@ -363,7 +363,7 @@ and cannot read a Managed Postgres cluster. Create a read token for the org:
 ```bash
 fly tokens create org --name pqp-monitor --expiry 8760h
 gh secret set FLY_ORG_TOKEN            # paste it
-gh variable set MONITOR_MPG_CLUSTER --body 82ylg01v4n30zx19
+gh variable set MONITOR_MPG_CLUSTER --body 9g6y30wdxzmrv5ml   # pqp-db-2, the production cluster; 82ylg01v4n30zx19 is the old one
 ```
 
 **The error heartbeat needs this same token.** `support-bot-alive` reads a
