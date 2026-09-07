@@ -33,6 +33,13 @@ vi.mock("../services/users.js", () => ({
 // may enter.
 vi.mock("../services/permissions.js", () => ({
   computeMemberPermissions: async () => (1n << 64n) - 1n,
+  // The nickname now comes back with the bits, off the one `server_members`
+  // row both were always on, so the fixture answers here as well as through
+  // `resolveMemberName` (which the resume path still uses).
+  resolveMemberChannelPermissions: async (_serverId: string, userId: string) => ({
+    permissions: (1n << 64n) - 1n,
+    nickname: naming.shown.get(userId) ?? null,
+  }),
 }));
 
 vi.mock("../services/sanctions.js", () => ({

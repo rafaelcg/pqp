@@ -181,6 +181,75 @@ export const voiceRosterMessageSchema = z.object({
   participants: z.array(voiceParticipantSchema),
   /** Same value `welcome` carries, so the room's transport is visible before joining. */
   transport: voiceRoomTransportSchema.optional(),
+  /**
+   * Where this snapshot sits in the room's roster sequence (see
+   * `voiceRosterDeltaMessageSchema`). A full roster is always authoritative:
+   * receiving one means "forget what you had, this is the room, and the next
+   * delta you may apply is `seq + 1`".
+   *
+   * Absent on a server that predates deltas, and absent reads as 0, which is
+   * also the sequence an empty room restarts from. A client that never
+   * negotiated deltas can ignore this field entirely.
+   */
+  seq: z.number().int().nonnegative().optional(),
+});
+
+/**
+ * WHAT CHANGED IN A ROOM, INSTEAD OF THE WHOLE ROOM.
+ *
+ * A `voice-roster` carries every participant to everyone who can *see* the
+ * channel, because occupancy badges are drawn for people standing outside the
+ * call. #260 bounded how often that goes out; it did nothing about its size,
+ * and size times audience is the product that actually hurts: 130 people in a
+ * community of 508 is ~45 KB per frame to every socket, which on 2026-09-05
+ * was the whole reason arrivals could not be welcomed inside the client's own
+ * give-up timer.
+ *
+ * So a room that has already been described is described incrementally. Three
+ * lists, applied IN ORDER, each an absolute statement about one peer:
+ *
+ *   joined   this peer is in the room, with this state (replace by peerId)
+ *   updated  this peer is in the room, with this state (replace by peerId)
+ *   left     this peer is not in the room (remove by peerId)
+ *
+ * `joined` and `updated` are the same operation and are separated only so a
+ * receiver can tell an arrival from a mute toggle (one plays a cue, the other
+ * does not). Because every entry is absolute rather than relative, applying
+ * one twice is the same as applying it once, which is what makes a delta that
+ * overlaps a snapshot the client already holds harmless.
+ *
+ * HOW A RECEIVER KNOWS IT IS STILL RIGHT. Two independent checks:
+ *
+ *   `seq`   monotonic per room, +1 per delta, restarted at 1 whenever the room
+ *           has been empty. Apply only when `seq === held + 1` (a client with
+ *           no state holds 0, so the first delta after an empty room is
+ *           self-sufficient). Anything else is a gap.
+ *   `size`  how many participants the room has AFTER this delta. A receiver
+ *           that applied everything and disagrees has diverged for some reason
+ *           `seq` cannot see, and is equally out of sync.
+ *
+ * On either failure the receiver stops applying deltas for that room and waits
+ * for the next full `voice-roster`, which the server sends periodically for
+ * exactly this purpose. That is the whole convergence argument: a lost or
+ * reordered frame costs a bounded interval of staleness and can never leave a
+ * peer permanently invisible, because the next snapshot replaces the state
+ * wholesale rather than patching it.
+ *
+ * Only ever sent to a socket that asked for it (`caps` on the `auth` frame).
+ * Everything else keeps receiving full rosters at the old rate.
+ */
+export const voiceRosterDeltaMessageSchema = z.object({
+  type: z.literal("voice-roster-delta"),
+  voiceChannelId: z.string(),
+  /** This delta's place in the room's sequence. Apply only when it is held + 1. */
+  seq: z.number().int().positive(),
+  /** Participants in the room once this delta has been applied. */
+  size: z.number().int().nonnegative(),
+  /** Same value the full roster carries. */
+  transport: voiceRoomTransportSchema.optional(),
+  joined: z.array(voiceParticipantSchema).optional(),
+  updated: z.array(voiceParticipantSchema).optional(),
+  left: z.array(z.string()).optional(),
 });
 
 export const voiceRoomFullMessageSchema = z.object({
@@ -381,6 +450,7 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   peerUpdatedMessageSchema,
   peerLeftMessageSchema,
   voiceRosterMessageSchema,
+  voiceRosterDeltaMessageSchema,
   voiceRoomFullMessageSchema,
   voiceTransportUnsupportedMessageSchema,
   voiceJoinRefusedMessageSchema,
@@ -412,6 +482,9 @@ export type PeerJoinedMessage = z.infer<typeof peerJoinedMessageSchema>;
 export type PeerUpdatedMessage = z.infer<typeof peerUpdatedMessageSchema>;
 export type PeerLeftMessage = z.infer<typeof peerLeftMessageSchema>;
 export type VoiceRosterMessage = z.infer<typeof voiceRosterMessageSchema>;
+export type VoiceRosterDeltaMessage = z.infer<
+  typeof voiceRosterDeltaMessageSchema
+>;
 export type VoiceRoomFullMessage = z.infer<typeof voiceRoomFullMessageSchema>;
 export type ScreenShareDeniedMessage = z.infer<
   typeof screenShareDeniedMessageSchema

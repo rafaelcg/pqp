@@ -105,9 +105,15 @@ describe("createRealtimeTransport", () => {
     expect(sockets).toHaveLength(1);
     sockets[0]!.open();
 
+    // `caps` is what this build declares it understands, so the server can
+    // keep sending an older build the frames that build knows. Asserted as a
+    // whole object on purpose: a capability added here is a promise that this
+    // bundle handles the frame, and it should not be possible to make one by
+    // accident.
     expect(JSON.parse(sockets[0]!.sent[0]!)).toEqual({
       type: "auth",
       token: "token-1",
+      caps: ["voice-roster-delta"],
     });
   });
 

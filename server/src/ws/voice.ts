@@ -42,7 +42,7 @@ import {
   getServerVoiceProfile,
   type ChannelRow,
 } from "../services/servers.js";
-import { computeMemberPermissions } from "../services/permissions.js";
+import { resolveMemberChannelPermissions } from "../services/permissions.js";
 import { canAccessChannel, resolveMemberName } from "../services/users.js";
 import { broadcastToChannel, onPermissionsUpdate } from "./chat.js";
 import { resolveStatus } from "./status.js";
@@ -84,7 +84,11 @@ import {
   upsertVoicePeer,
   type VoicePeerRow,
 } from "../voice/registry.js";
-import { forEachAuthenticatedSocket } from "./sockets.js";
+import {
+  countAuthenticatedSockets,
+  forEachAuthenticatedSocket,
+  SOCKET_CAPS,
+} from "./sockets.js";
 import {
   coalesceWindowFor,
   createCoalescer,
@@ -480,11 +484,52 @@ async function decideRoomTransport(
   });
 }
 
+/**
+ * The decision for a channel nobody has pinned yet, shared by every join
+ * racing to be the one that opens the room.
+ *
+ * `decideRoomTransport` says it runs "once per room pin, never per join", and
+ * that was true of a room people trickle into and false of the only shape that
+ * matters: 150 people tapping the channel in the same second all reach the
+ * unpinned check before any of them reaches the pin, so all 150 ran the
+ * member-count query. Measured on the harness at exactly that: 150 joins, 150
+ * `getServerVoiceProfile` calls, on the one path where the pool was already
+ * the constraint. Sharing the promise makes the stampede cost one query, which
+ * is what the comment always claimed.
+ *
+ * Held only while the room is unpinned, and dropped wherever `roomTransports`
+ * is written or cleared, so the answer can never outlive the config it was
+ * computed from.
+ */
+const pendingTransportDecisions = new Map<
+  string,
+  Promise<VoiceTransportDecision>
+>();
+
+function decideRoomTransportOnce(
+  voiceChannelId: string,
+  channel: ChannelRow,
+): Promise<VoiceTransportDecision> {
+  const existing = pendingTransportDecisions.get(voiceChannelId);
+  if (existing) {
+    return existing;
+  }
+  const decision = decideRoomTransport(channel);
+  pendingTransportDecisions.set(voiceChannelId, decision);
+  return decision;
+}
+
+/** The room is pinned, or empty: the shared decision has no more readers. */
+function forgetTransportDecision(voiceChannelId: string): void {
+  pendingTransportDecisions.delete(voiceChannelId);
+}
+
 /** Test hook: forget every pinned room transport. */
 export function resetVoiceRoomTransports(): void {
   roomTransports.clear();
   remoteTransports.clear();
   roomServerMutes.clear();
+  pendingTransportDecisions.clear();
 }
 
 /**
@@ -559,7 +604,25 @@ export function setVoiceUserServerMuted(
       roomServerMutes.delete(voiceChannelId);
     }
   }
-  return broadcastRoster(voiceChannelId);
+  // Named peers rather than a bare "something changed": `serverMuted` is
+  // computed by `toParticipant` from the map above, so every seat this person
+  // holds in this room now reads differently and nothing else does. Announcing
+  // them by name is what lets the fan-out describe this as a delta instead of
+  // re-sending the whole room.
+  const changed = getRoomPeers(voiceChannelId).filter(
+    (peer) => peer.userId === userId,
+  );
+  if (changed.length === 0) {
+    return broadcastRoster(voiceChannelId);
+  }
+  let last: Promise<void> = Promise.resolve();
+  for (const peer of changed) {
+    last = broadcastRoster(voiceChannelId, {
+      kind: "updated",
+      peer: toParticipant(peer),
+    });
+  }
+  return last;
 }
 
 /**
@@ -785,6 +848,22 @@ export interface VoiceActivitySnapshot {
   /** The transport the deployment can run. Small rooms may still open on mesh (voice/transport-policy.ts). */
   backend: VoiceRoomTransport;
   /**
+   * What the roster fan-out is actually doing, since boot.
+   *
+   * `deltas` versus `snapshots` says whether rooms are being described
+   * incrementally or whole; `socketsOnDeltas` out of `sockets` says whether
+   * clients are asking for it at all. Both are needed: a deploy where every
+   * frame is a snapshot because no client negotiated the capability is a
+   * silent no-op, and it is indistinguishable from a healthy one without the
+   * denominator.
+   */
+  roster: {
+    deltas: number;
+    snapshots: number;
+    sockets: number;
+    socketsOnDeltas: number;
+  };
+  /**
    * One entry per room that has somebody in it, largest first.
    *
    * Channel *ids* only. Resolving them to a channel and server name is the
@@ -826,6 +905,9 @@ function localRoomOccupancy(): VoiceActivitySnapshot["rooms"] {
  */
 export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot> {
   rollPeakDay();
+  const rosterSocketCensus = countAuthenticatedSockets(
+    SOCKET_CAPS.voiceRosterDelta,
+  );
   let rooms = localRoomOccupancy();
   if (registryOn()) {
     try {
@@ -852,6 +934,12 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
     peakRoomSizeToday: Math.max(peakRoomSizeToday, largestRoomNow),
     peakTrackedSince,
     backend: configuredTransport(),
+    roster: {
+      deltas: rosterFramesSent.deltas,
+      snapshots: rosterFramesSent.snapshots,
+      sockets: rosterSocketCensus.sockets,
+      socketsOnDeltas: rosterSocketCensus.withCap,
+    },
     rooms,
   };
 }
@@ -893,10 +981,20 @@ function broadcastToRoom(
 }
 
 /**
- * What changed in the room, riding on the roster's bus hint so the other
- * instance can forward the matching `peer-*` frame to its local room before
- * it rebuilds its roster. `roster` is a state toggle: those never carried a
- * room frame locally either (the roster is the whole announcement).
+ * What changed in the room. Two jobs, and they line up exactly:
+ *
+ *  - it rides the roster's bus hint, so another instance can forward the
+ *    matching `peer-*` frame to its local room before it rebuilds its roster;
+ *  - it IS the roster delta (`voice-roster-delta`) for every socket that
+ *    negotiated one, which is what stops a 130-person room from sending 130
+ *    participants to every member of a 508-member community twice a second.
+ *
+ * `roster` is the escape hatch: "something changed and this queue cannot say
+ * what". A window that contains one degrades to a full snapshot for everybody,
+ * which is always correct and never silently wrong. Every other kind is an
+ * ABSOLUTE statement about one peer (present with this state, or absent), and
+ * that is what makes applying a delta twice the same as applying it once —
+ * the property the client's convergence rule leans on.
  */
 type VoiceRoomEvent =
   | { kind: "joined"; peer: VoiceParticipant }
@@ -914,6 +1012,110 @@ type VoiceRoomEvent =
 const pendingRoomEvents = new Map<string, VoiceRoomEvent[]>();
 
 /**
+ * Where each room is in its roster sequence: the number carried by the last
+ * frame this process sent about it, full or delta alike.
+ *
+ * Deleted the moment a room is announced empty, so the next occupied room in
+ * that channel starts again at 1. That is not tidiness: a client holds 0 for a
+ * channel it has never heard about, so restarting at 1 is what lets the first
+ * delta of a new call be applied by somebody who was not watching the last
+ * one, with no extra round trip and no special case in the rule.
+ */
+const rosterSeq = new Map<string, number>();
+
+/** When this process last sent a channel's whole roster. */
+const lastRosterKeyframeAt = new Map<string, number>();
+
+/**
+ * How long a room may be described only by deltas before its whole roster
+ * goes out again.
+ *
+ * THIS IS THE CONVERGENCE GUARANTEE, and it is deliberately the server's job
+ * rather than the client's. A client that detects a gap could ask for a
+ * resync, but then a wrong or hostile client decides when the server does
+ * expensive work, and the interesting failure — a socket that entered the
+ * audience mid-call and never had a baseline at all — is one the client cannot
+ * even detect as a gap, because it has nothing to compare against.
+ *
+ * A periodic snapshot answers every case with one mechanism: whatever went
+ * wrong, and whether or not anyone noticed, the next keyframe replaces the
+ * receiver's state wholesale. So the worst staleness any roster bug can
+ * produce is bounded by this constant, by construction.
+ *
+ * Ten seconds is picked against the thing it costs. A 130-person roster to 200
+ * sockets is ~9 MB; at the old rate (twice a second above 100 people) that was
+ * ~18 MB/s, and once every ten seconds it is 0.9 MB/s, while the deltas
+ * carrying the actual news are three orders of magnitude smaller. Halving it
+ * would double the only remaining cost to buy staleness nobody can perceive in
+ * a badge.
+ */
+export const ROSTER_KEYFRAME_MS = 10_000;
+
+/**
+ * Roster frames written since boot, split by which kind.
+ *
+ * Counted per SOCKET, not per fan-out round, because the whole change is about
+ * what each socket is made to read. Read by `GET /api/admin/metrics` and
+ * nothing else, and process-local like every other counter in this file.
+ *
+ * The ratio is the only thing that says the optimisation is actually running
+ * in production rather than merely deployed. A wire feature no client asks for
+ * looks identical to a working one from the server's side, which is exactly
+ * how Cloudflare TURN sat unused for weeks (CLAUDE.md pitfall 9), so the
+ * denominator ships with the numerator.
+ */
+const rosterFramesSent = { deltas: 0, snapshots: 0 };
+
+/** Test seam: forget every sequence and keyframe clock. */
+export function resetRosterSequences(): void {
+  rosterSeq.clear();
+  lastRosterKeyframeAt.clear();
+  rosterFramesSent.deltas = 0;
+  rosterFramesSent.snapshots = 0;
+}
+
+/** The sequence a socket should adopt from a full roster of this channel. */
+function currentRosterSeq(voiceChannelId: string): number {
+  return rosterSeq.get(voiceChannelId) ?? 0;
+}
+
+/**
+ * Fold a window's events into the three lists the wire carries, or null when
+ * the window cannot be described incrementally.
+ *
+ * Null for three reasons, each of which falls back to a whole roster:
+ *
+ *  - a `roster` event is present, which is the caller saying "something
+ *    changed and I cannot name the peer";
+ *  - the window is empty, which is what the cluster-bus path produces (it
+ *    rebuilds from rows, and rows are not events);
+ *  - nothing at all changed, in which case there is nothing to send either
+ *    way and the caller decides.
+ */
+function foldRoomEvents(events: readonly VoiceRoomEvent[]): {
+  joined: VoiceParticipant[];
+  updated: VoiceParticipant[];
+  left: string[];
+} | null {
+  if (events.length === 0 || events.some((event) => event.kind === "roster")) {
+    return null;
+  }
+  const joined: VoiceParticipant[] = [];
+  const updated: VoiceParticipant[] = [];
+  const left: string[] = [];
+  for (const event of events) {
+    if (event.kind === "joined") {
+      joined.push(event.peer);
+    } else if (event.kind === "updated") {
+      updated.push(event.peer);
+    } else if (event.kind === "left") {
+      left.push(event.peerId);
+    }
+  }
+  return { joined, updated, left };
+}
+
+/**
  * Roster fan-out. Occupancy drives the channel-list badges, so it goes to
  * everyone who can *see* the channel — sending it to every socket on the
  * instance would leak cross-server presence and, worse, hand out the peer IDs
@@ -924,21 +1126,44 @@ const pendingRoomEvents = new Map<string, VoiceRoomEvent[]>();
  * deliver an older snapshot last, leaving a departed peer visible in
  * everyone's sidebar. The coalescer guarantees both.
  *
- * Encoded once as a Buffer and sent droppable: a roster is a snapshot, and a
- * socket that already has a megabyte queued is better served by the next one
- * than by a copy of this one it will read late. Measured before this existed:
- * a 200-person LiveKit room with 20 mute toggles and 4 joins/leaves a second
- * was 836 KB/s of roster *per socket*, 85% of everything the process wrote.
+ * WHAT GOES OUT. #260 bounded how OFTEN this fires; it left the frame the size
+ * of the room, and size times audience is the product that broke on
+ * 2026-09-05. So a socket that negotiated `voice-roster-delta` gets only what
+ * changed, and every other socket keeps receiving exactly the frame it has
+ * always received. Both carry the same sequence number, so a client can move
+ * between them (a keyframe interrupts a delta stream) without a handshake.
+ *
+ * ORDERING. The room snapshot and the event queue are read in one synchronous
+ * stretch with no await between them, which is what makes `size` describe
+ * exactly the events in the same frame. Reading the room after the audience
+ * await (as this did before deltas) would let a join land in the snapshot
+ * while its event was still queued for the next window, and every receiver
+ * would then compute a size one short and declare itself out of sync.
+ * Ordering is not lost by moving the read earlier: a change that lands during
+ * the await queues its own request, which the coalescer serialises behind this
+ * one.
+ *
+ * The snapshot is encoded once as a Buffer and sent droppable: a whole roster
+ * is superseded by the next one, and a socket holding a megabyte of unsent
+ * frames is better served by the next snapshot than by a late copy of this
+ * one. A DELTA IS NOT DROPPABLE, and that is the one asymmetry here worth
+ * stating: deltas compose rather than supersede, so dropping one silently
+ * corrupts every later one. It is safe to insist on sending them because they
+ * are small by construction (what changed in one window), and because a socket
+ * far enough behind to worry about is reaped by the heartbeat inside a minute,
+ * during which the deltas it accumulates are a rounding error against the
+ * megabyte it is already holding.
  *
  * With the registry on, the snapshot comes from `voice_peers` (this
  * instance's own peers laid over by id), read after this instance's pending
  * row writes have settled so the roster cannot run ahead of the write it
- * reports. Never awaited with the flag off: no writes exist.
+ * reports; deltas are switched off on that path entirely, because there the
+ * ROWS are the truth and the local event queue is only half the story. Never
+ * awaited with the flag off: no writes exist.
  */
 async function sendRoster(voiceChannelId: string): Promise<void> {
-  const events = pendingRoomEvents.get(voiceChannelId) ?? [];
-  pendingRoomEvents.delete(voiceChannelId);
-  try {
+  let events: VoiceRoomEvent[] = [];
+  {
     let room: {
       participants: VoiceParticipant[];
       transport: VoiceRoomTransport;
@@ -956,28 +1181,83 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
       }
     }
 
-    const audience = await getChannelAudience(voiceChannelId);
-    if (audience) {
-      // Read the room *after* the await so the payload reflects state at send
-      // time, not at the time the broadcast was requested. The rows were read
-      // before it; a change since then has its own roster queued behind this
-      // one.
-      const encoded = encodeFrame({
-        type: "voice-roster",
-        voiceChannelId,
-        participants:
-          room?.participants ?? getRoomPeers(voiceChannelId).map(toParticipant),
-        transport: room?.transport ?? getRoomTransport(voiceChannelId),
-      } satisfies VoiceSignalingMessage);
+    // Caught here rather than around the whole body: everything below this
+    // line is synchronous and cannot throw, so the queue is never drained by
+    // a run that then fails to describe it, and the bus hint at the end is
+    // reached on every path.
+    const audience = await getChannelAudience(voiceChannelId).catch(
+      (error: unknown) => {
+        console.error("[voice] failed to load audience for roster:", error);
+        return null;
+      },
+    );
 
-      forEachAuthenticatedSocket((socket, user) => {
-        if (audience.has(user.id)) {
-          sendEncodedDroppable(socket, encoded);
+    // --- one synchronous stretch: snapshot, queue, sequence ---------------
+    const participants =
+      room?.participants ?? getRoomPeers(voiceChannelId).map(toParticipant);
+    events = pendingRoomEvents.get(voiceChannelId) ?? [];
+    pendingRoomEvents.delete(voiceChannelId);
+    const transport = room?.transport ?? getRoomTransport(voiceChannelId);
+
+    if (audience) {
+      // The sequence and the keyframe clock only move when something is
+      // actually written. A channel whose audience could not be read (it was
+      // deleted, or the query failed) must not silently burn a number that
+      // every receiver would then be missing.
+      const seq = currentRosterSeq(voiceChannelId) + 1;
+      if (participants.length === 0) {
+        rosterSeq.delete(voiceChannelId);
+      } else {
+        rosterSeq.set(voiceChannelId, seq);
+      }
+      const now = Date.now();
+      const keyframeDue =
+        now - (lastRosterKeyframeAt.get(voiceChannelId) ?? 0) >=
+        ROSTER_KEYFRAME_MS;
+      const delta = registryOn() || keyframeDue ? null : foldRoomEvents(events);
+      if (!delta) {
+        lastRosterKeyframeAt.set(voiceChannelId, now);
+      }
+      // --- end synchronous stretch -----------------------------------------
+
+      let snapshot: Buffer | null = null;
+      const fullFrame = () => {
+        snapshot ??= encodeFrame({
+          type: "voice-roster",
+          voiceChannelId,
+          participants,
+          transport,
+          seq,
+        } satisfies VoiceSignalingMessage);
+        return snapshot;
+      };
+      const deltaFrame = delta
+        ? encodeFrame({
+            type: "voice-roster-delta",
+            voiceChannelId,
+            seq,
+            size: participants.length,
+            transport,
+            ...(delta.joined.length > 0 ? { joined: delta.joined } : {}),
+            ...(delta.updated.length > 0 ? { updated: delta.updated } : {}),
+            ...(delta.left.length > 0 ? { left: delta.left } : {}),
+          } satisfies VoiceSignalingMessage)
+        : null;
+
+      forEachAuthenticatedSocket((socket, user, caps) => {
+        if (!audience.has(user.id)) {
+          return;
+        }
+        if (deltaFrame && caps.has(SOCKET_CAPS.voiceRosterDelta)) {
+          sendEncoded(socket, deltaFrame);
+          rosterFramesSent.deltas += 1;
+          return;
+        }
+        if (sendEncodedDroppable(socket, fullFrame())) {
+          rosterFramesSent.snapshots += 1;
         }
       });
     }
-  } catch (error) {
-    console.error("[voice] failed to load audience for roster:", error);
   }
   // After the local pass, whatever the audience lookup did: a `left` that
   // never crossed is the ghost the banner warns about.
@@ -1015,11 +1295,59 @@ function broadcastRoster(
     const queue = pendingRoomEvents.get(voiceChannelId) ?? [];
     const last = queue[queue.length - 1];
     if (!(event.kind === "roster" && last?.kind === "roster")) {
-      queue.push(event);
+      pushRoomEvent(queue, event);
     }
     pendingRoomEvents.set(voiceChannelId, queue);
   }
   return rosterCoalescer.request(voiceChannelId);
+}
+
+/**
+ * Append an event, collapsing repeats about the same peer.
+ *
+ * Somebody who mutes and unmutes twice inside one coalescing window is one
+ * line on the wire, not four, and the one that survives is the newest — which
+ * matters beyond bytes, because the bus republishes this same queue and a
+ * stale duplicate crossing to another instance would be a tile flickering back
+ * to a state nobody is in.
+ *
+ * The scan runs backwards and stops at the first entry about this peer,
+ * because `left` is the one kind that must not be collapsed into: a peer that
+ * left and rejoined inside one window is genuinely two operations, and merging
+ * the second into the first would put the departure last and lose them.
+ */
+function pushRoomEvent(queue: VoiceRoomEvent[], event: VoiceRoomEvent): void {
+  const peerId =
+    event.kind === "left"
+      ? event.peerId
+      : event.kind === "roster"
+        ? null
+        : event.peer.peerId;
+  if (peerId !== null) {
+    for (let i = queue.length - 1; i >= 0; i -= 1) {
+      const held = queue[i]!;
+      if (held.kind === "roster") {
+        continue;
+      }
+      const heldPeerId = held.kind === "left" ? held.peerId : held.peer.peerId;
+      if (heldPeerId !== peerId) {
+        continue;
+      }
+      // `joined` and `updated` are the same operation on the wire (replace by
+      // id), so a newer one may take the older one's place and keep its
+      // position — including keeping a `joined` a `joined`, so the receiver
+      // still plays the arrival cue exactly once.
+      if (
+        held.kind !== "left" &&
+        (event.kind === "joined" || event.kind === "updated")
+      ) {
+        held.peer = event.peer;
+        return;
+      }
+      break;
+    }
+  }
+  queue.push(event);
 }
 
 function relayToTarget(message: VoiceSignalingMessage & { to: string }) {
@@ -1046,6 +1374,7 @@ function removePeer(peerId: string) {
   // moves. Orphans keep the pin so a resume cannot flip transport.
   if (getRoomPeers(voiceChannelId).length === 0) {
     roomTransports.delete(voiceChannelId);
+    forgetTransportDecision(voiceChannelId);
     // Same lifetime for the moderator mutes: a sanction on a call that is
     // over must not be waiting for the next call in this channel.
     roomServerMutes.delete(voiceChannelId);
@@ -1371,6 +1700,7 @@ function dropVoicePeerSilently(peerId: string): void {
   }
   if (getRoomPeers(peer.voiceChannelId).length === 0) {
     roomTransports.delete(peer.voiceChannelId);
+    forgetTransportDecision(peer.voiceChannelId);
     roomServerMutes.delete(peer.voiceChannelId);
   }
   logEvent("voice.seatReleased", {
@@ -1481,6 +1811,7 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
 
 /** Test hook: drop every peer, orphan timer, and retired-id window. */
 export function resetVoicePeers(): void {
+  resetRosterSequences();
   for (const peer of peers.values()) {
     cancelOrphan(peer);
   }
@@ -1491,6 +1822,7 @@ export function resetVoicePeers(): void {
   socketToPeerId.clear();
   retiredPeerIds.clear();
   roomTransports.clear();
+  pendingTransportDecisions.clear();
   rosterCoalescer.reset();
   pendingRoomEvents.clear();
   remoteTransports.clear();
@@ -1563,6 +1895,13 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
           roomTransports.get(voiceChannelId) ??
           room.transport ??
           configuredTransport(),
+        // The sequence this socket is now caught up to. Deliberately the last
+        // sequence SENT, not a new one: a change already folded into this
+        // snapshot may still be sitting in the coalescer's queue, and the
+        // delta that reports it will therefore be `seq + 1` and accepted.
+        // Re-applying it is a no-op, because every delta entry is an absolute
+        // statement about one peer.
+        seq: currentRosterSeq(voiceChannelId),
       });
     }),
   );
@@ -1843,22 +2182,32 @@ export async function handleVoiceMessage(
       refuseResume();
       return;
     }
-    // SPEAK and STREAM ride on the same resolution as CONNECT: one query.
+    // SPEAK and STREAM ride on the same resolution as CONNECT.
     // A conversation has neither roles nor overwrites, so both stay true there.
+    //
+    // Split into its two halves rather than `computeMemberPermissions`, to
+    // pay for this member's row once. The context carries the nickname, which
+    // is the name this call will show and was a query of its own further down;
+    // and the channel row is handed to the overwrite pass, which otherwise
+    // asks the database whether this channel is a thread — a question the row
+    // in hand already answers. Two fewer round trips per join, on the path a
+    // watch party runs several hundred times in an evening.
     let canSpeak = true;
     let canStream = true;
+    let nickname: string | null = null;
     if (channel.kind === "server" && channel.server_id) {
-      const perms = await computeMemberPermissions(
+      const resolved = await resolveMemberChannelPermissions(
         channel.server_id,
         user.id,
-        payload.voiceChannelId,
+        channel,
       );
-      if (!hasPermission(perms, Permission.CONNECT)) {
+      if (!hasPermission(resolved.permissions, Permission.CONNECT)) {
         refuseResume();
         return;
       }
-      canSpeak = hasPermission(perms, Permission.SPEAK);
-      canStream = hasPermission(perms, Permission.STREAM);
+      canSpeak = hasPermission(resolved.permissions, Permission.SPEAK);
+      canStream = hasPermission(resolved.permissions, Permission.STREAM);
+      nickname = resolved.nickname;
     }
 
     // What this room would open on, if this join is the one that opens it. A
@@ -1866,7 +2215,7 @@ export async function handleVoiceMessage(
     // skipped for every join after the first.
     const opening = roomTransports.has(payload.voiceChannelId)
       ? null
-      : await decideRoomTransport(channel);
+      : await decideRoomTransportOnce(payload.voiceChannelId, channel);
 
     // The awaits above mean the socket may have closed, or the client may have
     // sent a second join, while this one was in flight. Registering a peer for a
@@ -2135,11 +2484,10 @@ export async function handleVoiceMessage(
     // What this person is called *here*: their nickname in this server, or
     // the name on their account. Every other surface already resolves it this
     // way; voice used to read `display_name` straight, which is how somebody
-    // with a nickname had their account name shown to the whole call.
-    const shownName = await resolveMemberName(
-      channel.kind === "server" ? (channel.server_id ?? null) : null,
-      user,
-    );
+    // with a nickname had their account name shown to the whole call. Read
+    // off the permission context above rather than in a query of its own —
+    // same row, same statement, same answer as `resolveMemberName`.
+    const shownName = nickname?.trim() ? nickname.trim() : user.display_name;
     // An adopted seat keeps what its row says (a share or a camera that is
     // still up on the SFU, a standing mute), exactly as a reattach keeps
     // the peer object: the person never left. A reconstruct starts clean,
@@ -2199,6 +2547,9 @@ export async function handleVoiceMessage(
       roomTransports.set(payload.voiceChannelId, transport);
     }
     if (!wasPinned) {
+      // Pinned: every later join reads the pin, so the shared decision has no
+      // more readers and must not answer the next call in this channel.
+      forgetTransportDecision(payload.voiceChannelId);
       logEvent("voice.transportPinned", {
         channelId: payload.voiceChannelId,
         transport: roomTransports.get(payload.voiceChannelId),
@@ -2291,7 +2642,10 @@ export async function handleVoiceMessage(
       ? (payload.audioStreamId ?? null)
       : null;
     writePeerRow(peer);
-    await broadcastRoster(peer.voiceChannelId);
+    await broadcastRoster(peer.voiceChannelId, {
+      kind: "updated",
+      peer: toParticipant(peer),
+    });
     return;
   }
 
@@ -2335,7 +2689,10 @@ export async function handleVoiceMessage(
     peer.muted = muted || !peer.canSpeak;
     peer.deafened = payload.deafened;
     writePeerRow(peer);
-    await broadcastRoster(peer.voiceChannelId);
+    await broadcastRoster(peer.voiceChannelId, {
+      kind: "updated",
+      peer: toParticipant(peer),
+    });
     return;
   }
 
@@ -2456,7 +2813,10 @@ export async function handleVoiceMessage(
     }
     peer.cameraStreamId = payload.streamId;
     writePeerRow(peer);
-    await broadcastRoster(peer.voiceChannelId);
+    await broadcastRoster(peer.voiceChannelId, {
+      kind: "updated",
+      peer: toParticipant(peer),
+    });
     return;
   }
 
@@ -3230,7 +3590,7 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
       list.push(peer);
       byUser.set(peer.userId, list);
     }
-    let rosterDirty = false;
+    const relabelled: VoicePeer[] = [];
     for (const [userId, userPeers] of byUser) {
       let next;
       try {
@@ -3246,7 +3606,7 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
       if (changed.length === 0) {
         continue;
       }
-      rosterDirty = true;
+      relabelled.push(...changed);
       for (const peer of changed) {
         peer.canSpeak = next.canSpeak;
         peer.canStream = next.canStream;
@@ -3282,8 +3642,18 @@ export async function reevaluateVoiceSpeak(serverId: string): Promise<void> {
         );
       }
     }
-    if (rosterDirty) {
-      await broadcastRoster(voiceChannelId);
+    // One `updated` per peer whose bits moved, so this is a delta the size of
+    // the change rather than a whole roster to the whole server every time an
+    // owner edits a role while a stage is running.
+    let announced: Promise<void> | null = null;
+    for (const peer of relabelled) {
+      announced = broadcastRoster(voiceChannelId, {
+        kind: "updated",
+        peer: toParticipant(peer),
+      });
+    }
+    if (announced) {
+      await announced;
     }
   }
 }

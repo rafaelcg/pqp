@@ -24,6 +24,20 @@ export type RealtimeStatus =
 // only declare the link dead after MAX_MISSED_PONGS consecutive misses — one
 // slow round-trip (mobile radio, a brief server event-loop stall) must not
 // self-disconnect an otherwise healthy connection.
+/**
+ * Optional wire features this build understands, declared on the `auth` frame.
+ *
+ * The server sends the old frames to anything that does not ask, which is what
+ * lets a wire change ship without waiting for the packaged desktop shell and
+ * the two app stores. An entry here is a promise about THIS bundle, so it is
+ * only added once the handler for the frame is in the same bundle.
+ *
+ * `voice-roster-delta`: send what changed in a voice room instead of the whole
+ * room. Handled in `hooks/use-voice.ts`; the convergence rule it must obey is
+ * on `voiceRosterDeltaMessageSchema` in `@pqp/shared`.
+ */
+const WIRE_CAPS = ["voice-roster-delta"] as const;
+
 const PING_INTERVAL_MS = 20_000;
 const MAX_MISSED_PONGS = 2;
 const RECONNECT_BASE_DELAY_MS = 1_000;
@@ -316,7 +330,7 @@ export function createRealtimeTransport(): RealtimeTransport {
 
     ws.addEventListener("open", () => {
       if (ws === socket) {
-        ws.send(JSON.stringify({ type: "auth", token }));
+        ws.send(JSON.stringify({ type: "auth", token, caps: WIRE_CAPS }));
       }
     });
 

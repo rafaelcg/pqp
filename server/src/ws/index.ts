@@ -202,6 +202,16 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       }
 
       const token = (parsed as { token: string }).token;
+      // Optional wire features this build understands (`sockets.ts`).
+      // Deliberately hand-parsed rather than schema-validated: `auth` has
+      // never been through zod, a junk `caps` must not cost the socket its
+      // connection, and an entry the server does not recognise is simply not
+      // in the set. Bounded so a hostile client cannot make the server hold an
+      // arbitrary list per socket.
+      const declared = (parsed as { caps?: unknown }).caps;
+      const caps = Array.isArray(declared)
+        ? declared.filter((cap): cap is string => typeof cap === "string").slice(0, 16)
+        : [];
       const authHeader =
         isDevAuthBypassEnabled() && token === DEV_AUTH_TOKEN
           ? `Bearer ${DEV_AUTH_TOKEN}`
@@ -223,8 +233,16 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
 
       authenticated = true;
       clearTimeout(authTimeout);
-      setAuthenticatedSocket(socket, resolved.user);
-      logEvent("ws.auth", { connId, userId: resolved.user.id });
+      setAuthenticatedSocket(socket, resolved.user, caps);
+      // `caps` on the auth line is how an operator can tell, from the logs of
+      // a real deploy, whether clients are actually negotiating a new wire
+      // feature or whether the server is quietly serving everybody the old
+      // frames. Empty for every build that predates the field.
+      logEvent("ws.auth", {
+        connId,
+        userId: resolved.user.id,
+        caps: caps.length > 0 ? caps.join(",") : undefined,
+      });
       // Deliberately not awaited: it reads one row to find out whether this
       // account asked to be invisible or do-not-disturb, and `ready` must not
       // wait on a preference lookup. Until it resolves the socket is absent from

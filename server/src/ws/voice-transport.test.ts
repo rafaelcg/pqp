@@ -49,6 +49,10 @@ vi.mock("../services/sanctions.js", () => ({
 // Postgres. Everyone here is allowed in; access is proved elsewhere.
 vi.mock("../services/permissions.js", () => ({
   computeMemberPermissions: async () => (1n << 64n) - 1n,
+  resolveMemberChannelPermissions: async () => ({
+    permissions: (1n << 64n) - 1n,
+    nickname: null,
+  }),
 }));
 
 vi.mock("../services/dms.js", () => ({
@@ -324,6 +328,28 @@ describe("voice room transport", () => {
 
       expect(frame(second, "welcome")?.transport).toBe("mesh");
       expect(rows.profileReads).toBe(1);
+    });
+
+    it("reads the server row once for a whole stampede, not once per joiner", async () => {
+      // The claim above ("once per pin, never per join") was true of a room
+      // people trickle into and false of the only shape that matters. Fifty
+      // people tapping the channel in the same tick all reach the unpinned
+      // check before any of them reaches the pin, so every one of them ran the
+      // member-count query — fifty round trips on the exact path a watch party
+      // hammers, against a pool that was already the constraint on
+      // 2026-09-05. They now share one decision.
+      serverChannel(20);
+      const joiners = Array.from({ length: 50 }, (_, i) =>
+        join(track(recorder()), `stampede-${i}`, channel, ["mesh", "livekit"]),
+      );
+      const arrived = await Promise.all(joiners);
+
+      expect(rows.profileReads).toBe(1);
+      // And they all landed in the same room, on the one transport it pinned.
+      const transports = new Set(
+        arrived.map((rec) => frame(rec, "welcome")?.transport),
+      );
+      expect(transports).toEqual(new Set(["livekit"]));
     });
 
     it("re-decides for the next call once the room empties", async () => {
