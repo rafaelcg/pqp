@@ -17,6 +17,11 @@ repository.
 owner and pushes a notification to the GitHub mobile app, so it reaches a phone
 without anyone watching a dashboard.
 
+That is true of everything in this repo's own checks. The two things that live
+in Grafana Cloud instead, the log alerts on `pqp-api` and everything about the
+SFU box, notify the `rafael-email` contact point directly, because they are
+evaluated by Grafana and never run here. Both are described further down.
+
 Why this and not something else:
 
 | Channel | Verdict |
@@ -468,7 +473,7 @@ These are printed at the end of every `limits` run as well.
 | **Errors the server never logs** | — | The error heartbeat reads stdout. A route that 500s without a `console.error`, or anything that fails in the browser, is invisible to it. It measures what the server says about itself, which is not what users experience. | n/a |
 | **Scheduled workflows still enabled** | — | **GitHub disables scheduled workflows after 60 days with no repository activity.** A repo that goes quiet loses its monitoring silently. | Monthly: confirm `Monitor (uptime)` has run recently in the Actions tab |
 | **GitHub Actions minutes** | Unlimited | rafaelcg/pqp is a **public** repository and Actions minutes are free and unmetered for public repos. There is no quota to hit, so no alert was built — one would never fire. This becomes real only if the repo is ever made private. | Never, unless the repo goes private |
-| **LiveKit usage (minutes and egress)** | none yet | `LIVEKIT_*` **is** configured and the self-hosted SFU carries production voice, so the meter is the box's own bandwidth graph rather than a Cloud dashboard. A hundred-person watch party is a real egress bill on a real machine and nothing watches it. | Build one: a bandwidth alert on the SFU host, see `docs/plans/SELF_HOSTED_LIVEKIT.md` |
+| **LiveKit usage (minutes and egress)** | 5 TB/month of transfer on the Vultr plan | **Closed 2026-09-07.** Grafana Alloy on the box exports vnstat's monthly egress and alerts at 60% and 80% of the allowance, alongside CPU, memory, disk, load, room and participant counts, and container state. See "The SFU box" below. | automated |
 
 ---
 
@@ -646,11 +651,194 @@ it to `logs.>` only with that arithmetic in mind.
 
 ---
 
+## The SFU box (Vultr, São Paulo)
+
+Production voice runs on a self-hosted LiveKit at `wss://sfu.pqp.gg`, with TURN
+on `turn.pqp.gg`: one Vultr VM in São Paulo, 2 vCPU, 4 GB, `216.238.114.79`,
+LiveKit and Caddy in Docker. Until 2026-09-07 the only thing watching it was
+the synthetic HTTP check on `sfu.pqp.gg` (id 6261), which answers "the port is
+open" and nothing else. It could not see a saturated CPU, a full disk, a
+container that exited, or the number that actually costs money: **transfer**.
+
+The plan includes **5 TB of transfer a month**. Organic use measures about
+4 GB a day, so a normal month is roughly 2% of it. One large watch party can
+cost several hundred GB, and a load test costs that in minutes. Overage is
+about a cent per GB, so this is not a cliff, it is a bill: the point of the
+alerts is that nobody has to open a dashboard and do arithmetic to find out
+where the month stands.
+
+### What runs where
+
+```
+sfu box (216.238.114.79)
+  vnstat            -> monthly transfer totals, in SQLite, across reboots
+  pqp-box-metrics   -> systemd timer, every 60s, writes two .prom files
+  LiveKit :6789     -> its own Prometheus metrics, localhost only
+  Grafana Alloy     -> node exporter + textfile + systemd + LiveKit scrape
+                       -> remote_write -> Grafana Cloud Prometheus
+```
+
+**The collector lives on the box.** Not on this laptop, not in a GitHub Action
+that reads the box over SSH. A monitor that only works while somebody's laptop
+is awake is not a monitor, and the alerts most worth having (a party at
+midnight, a container that exits on a Sunday) land precisely when nobody is
+looking. Alloy is a systemd service with `Restart=always`, so it survives a
+reboot and a crash; if it stops anyway, "no metrics for 10m" fires from
+Grafana's side, which is the one failure a box-resident collector cannot
+report about itself.
+
+**Why vnstat rather than reading `/proc/net/dev`.** The kernel counters reset
+on every reboot, so anything derived from them undercounts after a restart,
+which is exactly when a heavy month is most likely to have had one. vnstat
+keeps its own database in `/var/lib/vnstat` and is designed for this. The
+alternative, persisting cumulative counters in a file and adding deltas, is
+the same job done worse: vnstat already handles reboots, interface renames,
+month rollover and a 30 day daily history.
+
+**Why LiveKit's own `:6789` and not `GET /api/admin/metrics`.** The API's
+`sfu` block reports rooms and participants from the same place: it calls
+`listRooms` on this LiveKit. Scraping the SFU directly adds no second source
+of truth, it removes a hop. It also needs no `ADMIN_METRICS_TOKEN` copied onto
+the box, and it keeps answering when the API is down, which is exactly when
+"is anyone still in a room" is worth knowing. `prometheus_port: 6789` was
+already set in `/opt/livekit/livekit.yaml`, and 6789 is not in the `ufw` allow
+list, so the port is local only. Nothing had to be restarted to turn this on.
+
+### Dashboard
+
+**pqp SFU box**, folder `pqp`, uid `pqp-sfu-box`:
+https://smallkestrel237.grafana.net/d/pqp-sfu-box
+
+Allowance used and egress against the 5 TB line, network throughput, CPU,
+memory, load, disk, LiveKit rooms and participants, packet loss, and the two
+containers' up/down.
+
+### What alerts
+
+Folder `pqp`, group `pqp-sfu-box`, evaluated every minute, all routed to the
+contact point `rafael-email`.
+
+| Rule | Fires when | For |
+|---|---|---|
+| egress past 60% of the monthly allowance | 3.0 TB out in the last 30 days | 15m |
+| egress past 80% of the monthly allowance | 4.0 TB out in the last 30 days | 15m |
+| CPU above 85% | 2 vCPU, so this is a room the box cannot serve | 10m |
+| less than 10% memory available | LiveKit gets OOM-killed rather than degrading | 10m |
+| root filesystem above 85% | usually journald or docker images | 15m |
+| load average above 4 | `node_load5` on 2 vCPU: things are queueing | 10m |
+| **no metrics for 10m** | the box is down, or Alloy on it is. `noDataState = Alerting`, deliberately: silence is the alert | 10m |
+| a docker container is not running | per container, by name | 3m |
+| a docker container restarted | `changes(pqp_sfu_container_started_seconds[10m]) > 0`; catches a policy restart *and* a `docker compose up` recreation, which resets `RestartCount` to 0 | 0s |
+| LiveKit metrics unreachable for 10m | the box is up but the SFU process is wedged or gone | 10m |
+| a watched systemd unit has failed | `livekit-docker`, `turn-cert-sync`, `pqp-box-metrics`, `alloy`, `vnstat`, `docker`. Only those six are scraped; the default is every unit on the box, which is a few hundred series for nothing | 5m |
+| the TURN cert sync has not run in 48h | `turn-cert-sync.timer` copies the Caddy-renewed certificate into LiveKit's TURN listener daily. If it stops, TURN serves the old one until it expires and cross-NAT voice breaks with no other warning | 30m |
+
+The egress rules read `pqp_sfu_egress_30d_tx_bytes`, a **rolling 30 day**
+total, not the calendar month. Vultr's allowance resets on the instance's
+billing date, which is not necessarily the 1st, and nothing on the box knows
+that date. A rolling 30 day window is always at least as large as the true
+billing-period usage, so it warns early rather than late, which is the right
+way round when the penalty is a cent per GB and not a cutoff. The calendar
+month-to-date is exported too (`pqp_sfu_egress_month_tx_bytes`) and is on the
+dashboard next to it.
+
+Inbound is measured (`..._rx_bytes`) but not alerted on: Vultr bills the
+outbound direction.
+
+### Changing the allowance
+
+The allowance is a metric, not a threshold, so the alerts stay at 60% and 80%
+whatever the plan is:
+
+1. Edit `PQP_EGRESS_ALLOWANCE_BYTES` in
+   `tools/sfu-monitoring/pqp-box-metrics.py` (default `5_000_000_000_000`,
+   5 TB read as 10^12 bytes, the smaller of the two readings of "TB", so the
+   percentage errs high).
+2. Re-run the installer (below). The next minute's scrape carries the new
+   `pqp_sfu_egress_allowance_bytes` and every panel and rule follows.
+
+Or, for a one-off without a deploy, set `PQP_EGRESS_ALLOWANCE_BYTES` in
+`/etc/systemd/system/pqp-box-metrics.service` on the box. Repo wins on the
+next install, so prefer step 1.
+
+If the billing date turns out to matter, `MonthRotate` in `/etc/vnstat.conf`
+moves vnstat's month boundary; the rolling window ignores it either way.
+
+### Installing or updating it
+
+```bash
+scp -r tools/sfu-monitoring root@216.238.114.79:/opt/
+ssh root@216.238.114.79 'bash /opt/sfu-monitoring/install.sh'
+```
+
+Idempotent, and it never touches the `livekit` or `caddy` containers, so it
+does not interrupt a call. The first run also needs the Grafana Cloud
+credentials:
+
+```bash
+ssh root@216.238.114.79 'GC_PROM_USER=3563744 GC_PROM_TOKEN=<metrics:write token> bash /opt/sfu-monitoring/install.sh'
+```
+
+`GC_PROM_USER` is the hosted-metrics instance id (3563744). The token is the
+same grafana.com Access Policy token the log shipper uses, which carries both
+`logs:write` and `metrics:write`; it is stored locally as
+`GRAFANA_LOGS_WRITE_TOKEN` in `~/.config/pqp/grafana.env` and on the box in
+`/etc/alloy/credentials.env` (0600, root). It is never in the repo.
+
+### Useful PromQL
+
+Series carry `box="sfu-pqp"` and `instance="sfu-pqp"`. The node exporter's job
+label is **`integrations/unix`**, which is Alloy's own default and overrides
+anything set in `job_name`; LiveKit's is `livekit`.
+
+| What | Query |
+|---|---|
+| Allowance used | `pqp_sfu_egress_30d_tx_bytes / pqp_sfu_egress_allowance_bytes * 100` |
+| Egress right now | `rate(node_network_transmit_bytes_total{device="enp1s0"}[5m]) * 8` |
+| CPU busy | `100 - (avg(rate(node_cpu_seconds_total{instance="sfu-pqp",mode="idle"}[5m])) * 100)` |
+| People in voice, per the SFU | `livekit_participant_total` |
+| Rooms | `livekit_room_total` |
+| Containers up | `pqp_sfu_container_running` |
+
+### Cost and cardinality
+
+About 1,000 active series, against 10,000 on the Grafana Cloud free tier (the
+stack is on a Pro trial until 2026-10-06). Go runtime, `promhttp` and
+`livekit_psrpc_*` series are dropped in `config.alloy` before they are sent,
+and `node_id` is dropped from LiveKit's series because it changes on every
+restart and would churn the series set for nothing.
+
+### Known gaps
+
+- `livekit-docker.service` is enabled but **has never been started**: the
+  containers were brought up by hand with `docker compose up -d` and stay up
+  through Docker's own `restart: unless-stopped`, which is also what would
+  bring them back after a reboot. So the "unit has failed" rule will never fire
+  for LiveKit, and the container rules are the real check. Running
+  `systemctl start livekit-docker` in a quiet moment would align the unit with
+  reality (compose does nothing when the containers already match), but it is
+  not worth doing while a room is live.
+- vnstat's history starts **2026-09-07**. Traffic before that, including the
+  load tests on the 5th and 6th, is not counted. It was roughly 15 GB, under
+  0.3% of the allowance, so it was not worth reconstructing.
+- The egress figure is the box's total, not LiveKit's share. On this box they
+  are close, since it does nothing else.
+- TURN is covered indirectly rather than probed. It is LiveKit's own listener,
+  so the container, LiveKit-scrape and `turn-cert-sync` rules cover the process
+  and its certificate, but nothing actually relays a packet through
+  `turn.pqp.gg:5349` to prove it works. `MONITOR_TLS_HOSTS` in
+  `scripts/monitor/limits.mjs` does not include either SFU hostname; the
+  `sfu.pqp.gg` certificate is watched by synthetic check 6261 instead, and
+  `turn.pqp.gg` by the sync rule above.
+
+---
+
 ## Files
 
 | Path | Role |
 |---|---|
 | `tools/log-shipper/` | Fly app `pqp-log-shipper`: ships `pqp-api` logs to Grafana Cloud Loki |
+| `tools/sfu-monitoring/` | Grafana Alloy config, the vnstat/docker textfile exporter and the installer for the SFU box |
 | `.github/workflows/monitor-uptime.yml` | Every 10 min; availability |
 | `.github/workflows/monitor-errors.yml` | Every 15 min; production log error rate and support-bot liveness |
 | `.github/workflows/monitor-limits.yml` | Daily; certificates, domain, quotas |

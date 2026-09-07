@@ -454,8 +454,12 @@ response, so the client needs no rebuild).
 - [ ] Open 20 real browser tabs (one machine is fine) on a channel with one screen share, for 10
       minutes. This exercises the real client code path (dynacast, our bitrate ceilings) that the CLI
       does not.
-- [ ] After the first real party, read the Vultr bandwidth meter for the instance and record the GB
+- [x] After the first real party, read the Vultr bandwidth meter for the instance and record the GB
       here next to the 250 GB assumption. Confirm the account is still inside the pooled allowance.
+      **Automated 2026-09-07:** vnstat on the box exports the month's egress to Grafana Cloud and
+      alerts at 60% and 80% of the 5 TB allowance, so the figure no longer has to be read off a
+      dashboard by hand. See `docs/MONITORING.md`, "The SFU box". The pooled 2 TB across the account
+      is still not visible from the box: that one is a Vultr dashboard reading.
 
 ## 5b. Results so far (2026-09-06)
 
@@ -480,7 +484,7 @@ Against Ship at $140 (4 parties) or $260 (8 parties). The Cloud project stays on
 | (a) Provision, TLS, first call | Vultr account, São Paulo VM, firewall group, DNS grey-cloud records, Docker, compose + Caddyfile + livekit.yaml from section 3, generate keys, `systemctl enable --now livekit-docker`, cert sync timer, first two-browser call from one network | 3 to 4 |
 | (b) TURN and cross-NAT | Second IP or 5349 decision, TURN cert path, mobile-data test, UDP-blocked test, relay confirmed | 2 |
 | (c) Load test | Second VM in the same region, `lk load-test` runs, 20-tab test, resize decision, tear down the tester | 2 |
-| Monitoring | Uptime check or Grafana Cloud + Alloy, one alert to your phone | 1 to 2 |
+| Monitoring | **Done 2026-09-07.** Grafana Alloy on the box: egress against the plan allowance, CPU, memory, disk, load, LiveKit rooms and participants, container and systemd unit state, twelve alert rules to email. `tools/sfu-monitoring/`, `docs/MONITORING.md` | 1 to 2 |
 | (d) Production switch | Quiet hour, `fly secrets set`, watch the API log for `voice.sfuEvictFailed`, run the kick test in production with a friend | 1 |
 | (e) Downgrade Cloud | In the LiveKit Cloud dashboard set the project to Build (free). Keep the project, keep the keys somewhere safe as the rollback secrets, do not delete it | 0.5 |
 
