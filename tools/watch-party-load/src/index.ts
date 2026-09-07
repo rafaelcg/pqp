@@ -32,6 +32,7 @@ const VIDEO_HEIGHT = 720;
 const VIDEO_FPS = 30;
 const VIDEO_BITRATE_BPS = 1_500_000;
 const AUDIO_BITRATE_BPS = 64_000;
+const MOTION_TILES = Number(process.env.PQP_LOAD_MOTION_TILES ?? 1);
 
 type Command = "prepare" | "shard" | "cleanup";
 type Manifest = {
@@ -229,16 +230,33 @@ async function publish(room: Room): Promise<{ stop: () => Promise<void>; frames:
   await participant.publishTrack(video, videoOptions);
   let tick = 0;
   let frames = 0;
-  const videoTimer = setInterval(() => {
-    // Full-frame deterministic noise keeps the encoder at its configured ceiling;
-    // a static slide or moving rectangle compresses to a deceptively tiny stream.
-    const pixels = new Uint8Array(VIDEO_WIDTH * VIDEO_HEIGHT * 4);
-    let state = (tick + 1) * 0x9e3779b1;
-    for (let pixel = 0; pixel < VIDEO_WIDTH * VIDEO_HEIGHT; pixel += 1) {
-      state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
-      const at = pixel * 4; pixels[at] = state & 255; pixels[at + 1] = (state >>> 8) & 255; pixels[at + 2] = (state >>> 16) & 255; pixels[at + 3] = 255;
+  const staticFrame = new Uint8Array(VIDEO_WIDTH * VIDEO_HEIGHT * 3 / 2);
+  for (let y = 0; y < VIDEO_HEIGHT; y += 1) {
+    for (let x = 0; x < VIDEO_WIDTH; x += 1) {
+      staticFrame[y * VIDEO_WIDTH + x] = ((x >> 4) ^ (y >> 4)) & 1 ? 74 : 148;
     }
-    videoSource.captureFrame(new VideoFrame(pixels, VIDEO_WIDTH, VIDEO_HEIGHT, VideoBufferType.RGBA), BigInt(Date.now()) * 1000n);
+  }
+  const staticChromaStart = VIDEO_WIDTH * VIDEO_HEIGHT;
+  staticFrame.fill(112, staticChromaStart, staticChromaStart + staticChromaStart / 4);
+  staticFrame.fill(144, staticChromaStart + staticChromaStart / 4);
+  const videoTimer = setInterval(() => {
+    // Screen-like background plus independently moving noisy tiles. Full
+    // frame noise needs ~1 MB/frame and a 1.5 Mbps encoder correctly drops to
+    // ~1fps; a static slide does the opposite. This is moving content that can
+    // sustain both the 30fps cadence and the intended bitrate ceiling.
+    const pixels = new Uint8Array(staticFrame);
+    let state = (tick + 1) * 0x9e3779b1;
+    for (let tile = 0; tile < MOTION_TILES; tile += 1) {
+      const left = (tile * 211 + tick * (17 + tile)) % (VIDEO_WIDTH - 160);
+      const top = (tile * 97 + tick * (11 + tile)) % (VIDEO_HEIGHT - 120);
+      for (let y = top; y < top + 120; y += 1) {
+        for (let x = left; x < left + 160; x += 1) {
+          state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+          pixels[y * VIDEO_WIDTH + x] = state & 255;
+        }
+      }
+    }
+    videoSource.captureFrame(new VideoFrame(pixels, VIDEO_WIDTH, VIDEO_HEIGHT, VideoBufferType.I420), BigInt(Date.now()) * 1000n);
     tick += 1; frames += 1;
   }, 1000 / VIDEO_FPS);
   let audioTick = 0;
