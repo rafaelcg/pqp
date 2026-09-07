@@ -121,6 +121,7 @@ export interface MessageAuthorInfo {
   status?: UserStatus | null;
   username?: string | null;
   isCharacter?: boolean;
+  handle?: string | null;
 }
 
 export interface MessageRoleColor {
@@ -2305,6 +2306,7 @@ function AuthorButton({
             roleIds: author?.roleIds,
             rank: author?.rank,
             isCharacter: author?.isCharacter,
+            handle: author?.handle ?? null,
           },
           event.currentTarget,
         );

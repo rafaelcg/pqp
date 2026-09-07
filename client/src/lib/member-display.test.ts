@@ -34,6 +34,13 @@ describe("memberMatchesQuery", () => {
     expect(memberMatchesQuery(harold, "8683")).toBe(true);
   });
 
+  it("matches a claimed public handle, and not an invented one", () => {
+    expect(memberMatchesQuery({ ...harold, handle: "neymar" }, "neymar")).toBe(
+      true,
+    );
+    expect(memberMatchesQuery(harold, "neymar")).toBe(false);
+  });
+
   it("misses a name that is not theirs", () => {
     expect(memberMatchesQuery(harold, "shield-guest")).toBe(false);
   });
