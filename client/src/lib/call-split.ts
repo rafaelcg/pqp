@@ -213,15 +213,34 @@ export function nudgeSplit(input: {
 }
 
 /**
- * The orientation actually drawn. Side by side is a claim about width, so a
- * pane that cannot hold two columns falls back to stacked without touching
- * what was stored: widen the window and the choice comes back.
+ * The orientation actually drawn.
+ *
+ * TWO CLAIMS HAVE TO HOLD, and neither of them is ever written down: what is
+ * stored is what the person asked for, and this is what the pane can honour
+ * right now. Both fall back to stacked and both come back on their own.
+ *
+ * WIDTH. Side by side needs room for two columns. A window dragged narrow
+ * draws the stacked layout and widening it brings the choice back.
+ *
+ * A PICTURE. Side by side is a column for the stage, and a stage with nothing
+ * on it has no column's worth of anything: reported from live use on 7 Sep
+ * 2026 as a quarter of the window holding the call's control strip and
+ * nothing else, with the transcript squeezed into the rest. `shape` is the
+ * same field the divider is gated on, so the rule is one sentence: the two
+ * panes sit side by side exactly where the divider between them exists. The
+ * toggle in the channel header, which was already `expanded`-only, stops
+ * disagreeing with the layout it toggles.
+ *
+ * The way back is automatic and needs no click: a camera or a share makes the
+ * stage `expanded` again, and the stored side-by-side is honoured from that
+ * render on. Nothing here writes.
  */
 export function resolveOrientation(
   preferred: CallSplitOrientation,
   paneWidth: number,
+  shape: CallStageShape,
 ): CallSplitOrientation {
-  if (preferred !== "side-by-side") {
+  if (preferred !== "side-by-side" || shape !== "expanded") {
     return "stacked";
   }
   return splitAvailable(paneWidth, "side-by-side") ? "side-by-side" : "stacked";

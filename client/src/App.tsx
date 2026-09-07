@@ -4627,6 +4627,58 @@ function MainAppContent({
         >
           <Menu className="h-5 w-5" />
         </button>
+        {/* THE CHANNEL LIST'S SWITCH, and the first thing in the header on
+            purpose.
+            It used to live at the other end of this row, among the call's
+            controls, and only while a stage was up. The only way to a narrower
+            channel list with no call on was therefore to wait for somebody to
+            share and let the automation do it, which is a preference you can
+            only express by getting lucky. Wanting the width back in a plain
+            text channel makes this window furniture, not a call control.
+            LEFT, because that is where the thing it controls is: the column
+            immediately to its left, and this header is the first row to the
+            right of it. It also lands in the slot the drawer's hamburger holds
+            below `md`, which already means "the navigation column", and it
+            mirrors the roster toggle at the far right of this same row, which
+            hides the column on THAT side. Left switch, left column; right
+            switch, right column.
+            Not in the channel list's own header: that row is 256px holding a
+            server icon, the name, and three buttons, and a fourth is what
+            turned "QG do pqp" into "QG..." the last time (see `channel-list`).
+            The strip keeps its own expand button, so this control disappearing
+            with the column can strand nobody. Desktop only: under `md` the
+            list is a drawer that is already fully hidden. */}
+        {columnLayout && selection.kind === "server" && (
+          <Tooltip
+            label={
+              sidebarIconsOnly
+                ? t("chrome.expandChannelList")
+                : t("chrome.collapseChannelList")
+            }
+            detail={t("chrome.collapseChannelListHint")}
+          >
+            <button
+              type="button"
+              data-channel-sidebar-toggle=""
+              aria-pressed={sidebarIconsOnly}
+              className={cn(
+                // The same tile as the roster toggle at the other end of this
+                // row: they are a pair, and a pair that is two sizes reads as
+                // two unrelated buttons.
+                HEADER_ACTION_TILE,
+                "mr-2 hidden md:flex",
+                sidebarIconsOnly && "text-paper",
+              )}
+              onClick={toggleChannelSidebar}
+            >
+              {sidebarIconsOnly ? (
+                <PanelLeftOpen className="h-4 w-4" />
+              ) : (
+                <PanelLeftClose className="h-4 w-4" />
+              )}
+            </button>
+          </Tooltip>
+        )}
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 truncate font-display text-base font-bold">
             {selectedChannel.imageUrl ? (
@@ -4732,46 +4784,12 @@ function MainAppContent({
                 </>
               );
             })()}
-          {/* The layout pair, next to the roster toggle that is already a
-              layout control, and only while there is a picture to make room
-              for. A call is the only time the answer to "who gets the width"
-              is interesting; the rest of the time these would be two buttons
-              nobody has a reason to press. Both are per-device and both are
-              reversible from the same spot, and the collapsed sidebar carries
-              its own way back so leaving this screen cannot strand anybody.
-              The first one also survives walking off the stage into a text
-              channel mid-share: that is exactly when the automation is holding
-              the list collapsed, so that is exactly when the way to overrule
-              it has to be in reach. */}
-          {(stageShape === "expanded" || watchingAShare) &&
-            columnLayout &&
-            selection.kind === "server" && (
-              <Tooltip
-                label={
-                  sidebarIconsOnly
-                    ? t("chrome.expandChannelList")
-                    : t("chrome.collapseChannelList")
-                }
-                detail={t("chrome.collapseChannelListHint")}
-              >
-                <button
-                  type="button"
-                  data-channel-sidebar-toggle=""
-                  aria-pressed={sidebarIconsOnly}
-                  className={cn(
-                    HEADER_ACTION_TILE,
-                    sidebarIconsOnly && "text-paper",
-                  )}
-                  onClick={toggleChannelSidebar}
-                >
-                  {sidebarIconsOnly ? (
-                    <PanelLeftOpen className="h-4 w-4" />
-                  ) : (
-                    <PanelLeftClose className="h-4 w-4" />
-                  )}
-                </button>
-              </Tooltip>
-            )}
+          {/* The arrangement of the two panes, next to the roster toggle that
+              is already a layout control, and only while there is a picture to
+              arrange around. Unlike the channel list's switch, which moved to
+              the left of this row because it is furniture, this one really is
+              a call control: with no stage there is nothing to put beside the
+              chat, and `CallSplit` would refuse the arrangement anyway. */}
           {splitState.canSideBySide && (
             <Tooltip
               label={
