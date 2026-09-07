@@ -3,7 +3,11 @@ import {
   createPeerConnectionManager,
   meshScreenBitrate,
 } from "./peer-connection-manager";
-import { screenBitrateFor } from "./video-quality";
+import {
+  DEFAULT_SCREEN_UPLOAD_BUDGET_BPS,
+  SCREEN_BUDGET_SAMPLE_MS,
+} from "./screen-upload-budget";
+import { DEFAULT_VIDEO_QUALITY, screenBitrateFor } from "./video-quality";
 
 /**
  * What the encoder is told, and whether saying no to it can break a call.
@@ -479,5 +483,168 @@ describe("the quality choice reaches the screen sender", () => {
       manager.setLocalScreenStream(fakeStream("screen")),
     ).resolves.toBeUndefined();
     expect(screenSenders()[0]?.track?.id).toBe("screen");
+  });
+});
+
+describe("the screen budget follows what the connections measure", () => {
+  const M = 1_000_000;
+
+  /** What every fake connection's selected pair will report this tick. */
+  let uplinkBps: number | null = null;
+
+  function statsReport() {
+    const rows = new Map<string, unknown>();
+    if (uplinkBps !== null) {
+      rows.set("P", {
+        type: "candidate-pair",
+        id: "P",
+        nominated: true,
+        state: "succeeded",
+        availableOutgoingBitrate: uplinkBps,
+      });
+    }
+    return rows;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    uplinkBps = null;
+    FakePeerConnection.prototype.getStats = async () => statsReport();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** One sampling tick, with the stats promises given room to settle. */
+  async function tick() {
+    await vi.advanceTimersByTimeAsync(SCREEN_BUDGET_SAMPLE_MS);
+  }
+
+  it("starts every share on the default budget, before any sample", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    for (const sender of screenSenders()) {
+      expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBe(
+        meshScreenBitrate(2, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+      );
+    }
+    manager.dispose();
+  });
+
+  it("cuts every sender when the link turns out to be short", async () => {
+    // End to end: a three-person call, two viewers, on a 3 Mbps uplink. Each
+    // connection's estimator reports its half of the pipe; the room's budget
+    // becomes the pipe, and each copy gets half of that instead of 2.5 Mbps.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    uplinkBps = 1.5 * M;
+    await tick();
+
+    for (const sender of screenSenders()) {
+      expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBe(1.5 * M);
+    }
+    manager.dispose();
+  });
+
+  it("raises past the old constant when every link reports room", async () => {
+    // Fibre, four viewers. Under the constant each copy got 1.25 Mbps with
+    // the link barely touched. Give it a few ticks of "more than this".
+    const manager = createPeerConnectionManager("z-local", () => {});
+    for (const id of ["a", "b", "c", "d"]) {
+      manager.connectToPeer(`${id}-remote`);
+    }
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    uplinkBps = 20 * M;
+    for (let i = 0; i < 6; i += 1) {
+      await tick();
+    }
+
+    for (const sender of screenSenders()) {
+      expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBeGreaterThan(
+        meshScreenBitrate(4, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+      );
+    }
+    manager.dispose();
+  });
+
+  it("still lets the chosen rung win over a generous link", async () => {
+    // The budget can only lift a share as far as the person asked for.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.setScreenQuality("360p");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    uplinkBps = 50 * M;
+    for (let i = 0; i < 6; i += 1) {
+      await tick();
+    }
+
+    expect(lastParams(screenSenders()[0]!)?.encodings[0]?.maxBitrate).toBe(
+      screenBitrateFor("360p"),
+    );
+    manager.dispose();
+  });
+
+  it("does not re-tune when the reading is inside the wobble", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    const before = screenSenders().map((s) => s.setParameters.mock.calls.length);
+
+    uplinkBps = 2.45 * M;
+    await tick();
+    await tick();
+
+    expect(screenSenders().map((s) => s.setParameters.mock.calls.length)).toEqual(
+      before,
+    );
+    manager.dispose();
+  });
+
+  it("forgets the measurement when the share ends, and stops sampling", async () => {
+    // A laptop that moved from ethernet to café wifi between two shares is the
+    // ordinary case: a reading from the last share must not carry over.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    uplinkBps = 1.5 * M;
+    await tick();
+    expect(lastParams(screenSenders()[0]!)?.encodings[0]?.maxBitrate).toBe(1.5 * M);
+
+    await manager.setLocalScreenStream(null);
+    const getStats = vi.spyOn(FakePeerConnection.prototype, "getStats");
+    await tick();
+    expect(getStats).not.toHaveBeenCalled();
+
+    await manager.setLocalScreenStream(fakeStream("screen-2"));
+    const fresh = senders.filter((s) => s.track?.id === "screen-2");
+    expect(fresh).toHaveLength(2);
+    for (const sender of fresh) {
+      expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBe(
+        meshScreenBitrate(2, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+      );
+    }
+    manager.dispose();
+  });
+
+  it("stops sampling on dispose", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    manager.dispose();
+
+    const getStats = vi.spyOn(FakePeerConnection.prototype, "getStats");
+    await tick();
+    expect(getStats).not.toHaveBeenCalled();
   });
 });
