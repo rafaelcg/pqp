@@ -714,6 +714,15 @@ export function createVoiceController(transport: RealtimeTransport) {
   // Peers the server has told us are in *our* room. Signaling from anyone else
   // is dropped so a stray/cross-room offer can never open a mic connection.
   const knownPeerIds = new Set<string>();
+  /**
+   * channelId -> the roster sequence this client has applied up to.
+   *
+   * 0, or absent, means "no baseline", which is also what an empty room
+   * restarts from — so the first delta of a fresh call (`seq` 1) is applied by
+   * somebody who was not watching the last one, with no extra round trip. See
+   * `voiceRosterDeltaMessageSchema` in `@pqp/shared` for the whole rule.
+   */
+  const rosterSeq = new Map<string, number>();
   let joinGeneration = 0;
   // The room the user means to be in. Kept across a WS drop so we can auto-
   // rejoin on reconnect instead of ejecting them from the call.
@@ -2030,58 +2039,151 @@ export function createVoiceController(transport: RealtimeTransport) {
     emit();
   }
 
+  /**
+   * The room, as the server has just described it, however it described it.
+   *
+   * Both roster frames end here with the same complete participant list: a
+   * snapshot brings its own, a delta produces one by patching the list this
+   * client already held. Everything downstream — occupancy badges, moderator
+   * mutes, camera and screen state, and the signaling allowlist — therefore
+   * reads one code path and cannot drift between the two frames.
+   *
+   * `authoritative` is the one real difference, and it is about
+   * `knownPeerIds`, which is a trust boundary rather than a display:
+   *
+   *  - A SNAPSHOT rebuilds it from scratch, so a stale id from a missed or
+   *    reordered `peer-left` cannot linger as an accepted signaling source.
+   *    That is why the periodic keyframe matters even when nothing was wrong.
+   *  - A DELTA adds and removes by name and never clears, because absence from
+   *    a delta means "unchanged", not "gone". Clearing on one would drop every
+   *    peer the delta did not happen to mention.
+   *
+   * While holding media across a signaling blip, a roster can arrive before
+   * the resume welcome (a fresh server process: empty room). Absence is not
+   * departure there either: union ids, do not clear, do not tear down peer
+   * connections.
+   */
+  function applyRoster(
+    voiceChannelId: string,
+    participants: VoiceParticipant[],
+    transport: VoiceRoomTransport | undefined,
+    authoritative: boolean,
+  ) {
+    applyPreservedSelfVoice();
+    state.occupancy = {
+      ...state.occupancy,
+      [voiceChannelId]: participants.map(overlayLocalSelfVoice),
+    };
+    if (participants.length === 0) {
+      const next = { ...state.occupancy };
+      delete next[voiceChannelId];
+      state.occupancy = next;
+      // The server forgets an empty room's sequence so the next call in this
+      // channel starts at 1; a client that kept the old number would read that
+      // first delta as a gap and sit out the whole next call until a keyframe.
+      rosterSeq.delete(voiceChannelId);
+    }
+    if (voiceChannelId !== state.voiceChannelId) {
+      return;
+    }
+    // Moderator mutes are read on every path: a roster that arrives while
+    // holding media is still the room's word on who is muted.
+    applyServerMutes(participants);
+    if (holdingMedia) {
+      for (const participant of participants) {
+        if (participant.peerId !== state.peerId) {
+          knownPeerIds.add(participant.peerId);
+        }
+      }
+      return;
+    }
+    if (authoritative) {
+      knownPeerIds.clear();
+    }
+    for (const participant of participants) {
+      if (participant.peerId !== state.peerId) {
+        knownPeerIds.add(participant.peerId);
+      }
+    }
+    if (!authoritative) {
+      // A delta's list is this client's whole belief about the room, so an id
+      // it no longer contains is one the room no longer has. Removing by
+      // difference rather than by the frame's `left` keeps this identical to
+      // what the snapshot path computes.
+      const present = new Set(participants.map((p) => p.peerId));
+      for (const peerId of knownPeerIds) {
+        if (!present.has(peerId)) {
+          knownPeerIds.delete(peerId);
+        }
+      }
+    }
+    if (transport) {
+      state.roomTransport = transport;
+    }
+    applyScreenShareRoster(participants);
+    applyCameraRoster(participants);
+    applyCameraStreamIds(participants);
+    applyScreenAudioStreamIds(participants);
+    applySharingScreen(participants);
+    pruneFailedGhostPeers();
+  }
+
   function handleSignaling(message: VoiceSignalingMessage) {
     switch (message.type) {
       case "voice-roster":
-        applyPreservedSelfVoice();
-        state.occupancy = {
-          ...state.occupancy,
-          [message.voiceChannelId]: message.participants.map(overlayLocalSelfVoice),
-        };
-        if (message.participants.length === 0) {
-          const next = { ...state.occupancy };
-          delete next[message.voiceChannelId];
-          state.occupancy = next;
-        }
-        // Rebuild the signaling allowlist from the room's authoritative roster
-        // snapshot (not just append), so a stale id from a missed/out-of-order
-        // peer-left can't linger as a trusted signaling source. Safe against
-        // dropping a valid peer: the server sends peer-joined before the roster
-        // on the same ordered socket, and only our own room's roster resets it.
-        //
-        // While holding media across a signaling blip, a roster can arrive
-        // before resume welcome (fresh process: empty room). Absence is not
-        // departure: union ids, do not clear, do not tear down PCs.
-        if (message.voiceChannelId === state.voiceChannelId) {
-          // Moderator mutes are read in both branches: a roster that arrives
-          // while holding media is still the room's word on who is muted.
-          applyServerMutes(message.participants);
-          if (holdingMedia) {
-            for (const participant of message.participants) {
-              if (participant.peerId !== state.peerId) {
-                knownPeerIds.add(participant.peerId);
-              }
-            }
-          } else {
-            knownPeerIds.clear();
-            for (const participant of message.participants) {
-              if (participant.peerId !== state.peerId) {
-                knownPeerIds.add(participant.peerId);
-              }
-            }
-            if (message.transport) {
-              state.roomTransport = message.transport;
-            }
-            applyScreenShareRoster(message.participants);
-            applyCameraRoster(message.participants);
-            applyCameraStreamIds(message.participants);
-            applyScreenAudioStreamIds(message.participants);
-            applySharingScreen(message.participants);
-            pruneFailedGhostPeers();
-          }
-        }
+        // Authoritative by definition: whatever the sequence said, and
+        // whatever this client believed, the room is this. That is what makes
+        // the periodic snapshot a repair for any delta that went wrong,
+        // including one this client had no way to notice was missing.
+        rosterSeq.set(message.voiceChannelId, message.seq ?? 0);
+        applyRoster(
+          message.voiceChannelId,
+          message.participants,
+          message.transport,
+          true,
+        );
         emit();
         break;
+      case "voice-roster-delta": {
+        // The convergence rule, in full. Two independent checks: the sequence
+        // must be the next one, and the room size after applying must be the
+        // size the server says it is. Failing either, this client stops
+        // patching and waits for the next full roster — a wrong badge for a
+        // few seconds, never a peer that is invisible until rejoin.
+        const held = rosterSeq.get(message.voiceChannelId) ?? 0;
+        if (message.seq !== held + 1) {
+          break;
+        }
+        const byId = new Map(
+          (state.occupancy[message.voiceChannelId] ?? []).map((participant) => [
+            participant.peerId,
+            participant,
+          ]),
+        );
+        // In order, and every entry an absolute statement about one peer, so
+        // replaying one that a snapshot already folded in changes nothing.
+        for (const participant of message.joined ?? []) {
+          byId.set(participant.peerId, participant);
+        }
+        for (const participant of message.updated ?? []) {
+          byId.set(participant.peerId, participant);
+        }
+        for (const peerId of message.left ?? []) {
+          byId.delete(peerId);
+        }
+        if (byId.size !== message.size) {
+          break;
+        }
+        rosterSeq.set(message.voiceChannelId, message.seq);
+        applyRoster(
+          message.voiceChannelId,
+          [...byId.values()],
+          message.transport,
+          false,
+        );
+        emit();
+        break;
+      }
       case "screen-share-denied":
         if (message.voiceChannelId !== state.voiceChannelId) {
           return;

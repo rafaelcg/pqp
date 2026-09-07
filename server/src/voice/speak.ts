@@ -22,17 +22,36 @@ export interface VoicePublishGrant {
  * true, so nothing that worked before these bits were enforced goes quiet.
  */
 export async function resolveVoicePublish(
-  channel: { kind?: string; server_id?: string | null } | null | undefined,
+  channel:
+    | {
+        kind?: string;
+        server_id?: string | null;
+        type?: string | null;
+        parent_id?: string | null;
+      }
+    | null
+    | undefined,
   channelId: string,
   userId: string,
 ): Promise<VoicePublishGrant> {
   if (!channel || channel.kind !== "server" || !channel.server_id) {
     return { canSpeak: true, canStream: true };
   }
+  // Hand over the row when the caller has one. `type` and `parent_id` are the
+  // only two columns the overwrite pass would otherwise re-read the channel
+  // for, and every caller here already holds the row (the token mint resolved
+  // access with it; the live re-check just fetched it). A caller with only an
+  // id keeps the old behaviour.
   const perms = await computeMemberPermissions(
     channel.server_id,
     userId,
-    channelId,
+    channel.type === undefined
+      ? channelId
+      : {
+          id: channelId,
+          type: channel.type ?? null,
+          parent_id: channel.parent_id ?? null,
+        },
   );
   return {
     canSpeak: hasPermission(perms, Permission.SPEAK),

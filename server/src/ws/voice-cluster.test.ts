@@ -80,6 +80,10 @@ vi.mock("../services/sanctions.js", () => ({
 
 vi.mock("../services/permissions.js", () => ({
   computeMemberPermissions: async () => (1n << 64n) - 1n,
+  resolveMemberChannelPermissions: async () => ({
+    permissions: (1n << 64n) - 1n,
+    nickname: null,
+  }),
 }));
 
 vi.mock("../services/dms.js", () => ({

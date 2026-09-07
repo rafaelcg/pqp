@@ -282,6 +282,30 @@ Flag off means off: `isVoiceRegistryEnabled()` is read on every path and every r
 
 **This is not yet enough to run two machines.** There is no drain, no rolling-deploy config, no CI count assertion and no mesh guard (M5): a mesh room is still pinned to the process that holds its peers, and a second machine would split one. The flag exists so the write path, the roster path and the reconcile can soak on one machine first.
 
+## The roster wire: a whole room, or only what changed
+
+Voice occupancy drives the channel-list badges, so `voice-roster` goes to everyone who can **see** the channel, not to the people in the call. That audience is the server's membership, and the frame is the size of the room, and the product of the two is what stopped working on 2026-09-05: 130 people in a 508-member community is roughly 45 KB to every socket, and #260 had bounded how OFTEN that goes out without touching how BIG it is.
+
+So a room that has already been described is described incrementally.
+
+- **`voice-roster-delta`** carries three lists applied in order — `joined`, `updated`, `left` — each an **absolute** statement about one peer (present with this state, or absent). Because they are absolute rather than relative, applying one twice is the same as applying it once, which is what makes a delta that overlaps a snapshot the receiver already holds harmless.
+- **`seq`** is monotonic per room, +1 per frame (full or delta), and **restarts at 1 whenever the room has been empty**. A receiver applies a delta only when `seq === held + 1`, and a receiver holding nothing holds 0 — so the first delta of a fresh call is self-sufficient for somebody who was not watching the last one.
+- **`size`** is how many participants the room has after the delta. A receiver that applied everything and still disagrees has diverged for a reason `seq` cannot see.
+- On either failure the receiver **stops applying deltas for that room** and waits. It does not ask for anything.
+
+**The convergence guarantee is the server's, not the client's.** Every `ROSTER_KEYFRAME_MS` (10 s) the whole roster goes out again, whatever happened in between. That answers every failure with one mechanism, including the one a client cannot detect as a gap at all: a socket that entered the audience mid-call and never had a baseline to compare against. Whatever went wrong, and whether or not anyone noticed, the next keyframe replaces the receiver's state wholesale — so the worst staleness any roster bug can produce is bounded by that constant, by construction. A client-driven resync would instead let a wrong or hostile client decide when the server does expensive work.
+
+Two asymmetries worth knowing:
+
+- **A snapshot rebuilds the client's signaling allowlist from scratch; a delta never clears it.** `knownPeerIds` in `client/src/hooks/use-voice.ts` is a trust boundary, not a display: absence from a delta means "unchanged", so clearing on one would drop every peer the delta did not happen to mention. The periodic keyframe is therefore what keeps a stale id from lingering as an accepted signaling source, now within 10 s rather than instantly.
+- **A snapshot may be dropped under backpressure; a delta may not.** Snapshots supersede each other, so a socket holding a megabyte of unsent frames is better served by the next one. Deltas *compose*, so dropping one silently corrupts every later one. Insisting on sending them is safe because they are small by construction and a socket far enough behind to worry about is reaped by the heartbeat inside a minute.
+
+**Compatibility is per socket, negotiated at `auth`.** A client sends `caps: ["voice-roster-delta"]` on its first frame; anything that does not ask keeps receiving a whole `voice-roster` every time anything changes, byte for byte what it received before. The packaged desktop shell and the two native apps update on their own schedule and a person in a call is the last person to want a forced refresh, so the server may never assume a client understands a frame that did not exist when that client was built. See `SOCKET_CAPS` in `server/src/ws/sockets.ts`.
+
+Deltas are **off when `VOICE_REGISTRY` is on**: there the rows are the truth and this instance's local event queue is only half the story, so that path keeps sending snapshots.
+
+`server/src/ws/voice-roster-delta.test.ts` holds the receiver rule against the server; the client half is in `client/src/hooks/use-voice.test.ts`. `server/scripts/README.md` has the measurements and how to reproduce them.
+
 ## Screen-share audio
 
 The capture is requested with `audio` plus **`systemAudio: "exclude"`**, and most of the time the browser hands back no audio track at all. That is the expected answer, not a failure:

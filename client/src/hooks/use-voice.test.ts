@@ -33,6 +33,12 @@ interface ManagerStub {
   emitState: ((peers: RemotePeer[]) => void) | null;
   /** Renames pushed onto live peers, so a profile edit can be observed. */
   identities: [string, { displayName: string; avatarUrl: string | null }][];
+  /**
+   * Offers that reached the mesh. The signaling allowlist is private to the
+   * controller, so this is how a test can tell whether a peer is still trusted
+   * — an offer from someone off the list is dropped before it gets here.
+   */
+  offers: string[];
 }
 
 const playCueMock = vi.hoisted(() => vi.fn());
@@ -60,6 +66,7 @@ vi.mock("@/lib/peer-connection-manager", () => ({
       sharingScreen: [],
       emitState: null,
       identities: [],
+      offers: [],
     };
     managers.push(stub);
     return {
@@ -91,7 +98,9 @@ vi.mock("@/lib/peer-connection-manager", () => ({
         stub.removedPeerIds.push(peerId);
         stub.peerIds = stub.peerIds.filter((id) => id !== peerId);
       },
-      handleOffer: async () => {},
+      handleOffer: async (peerId: string) => {
+        stub.offers.push(peerId);
+      },
       handleAnswer: async () => {},
       handleIceCandidate: async () => {},
       retryPeer: async () => {},
@@ -2388,5 +2397,203 @@ describe("server mute", () => {
     voice.handleSignaling({ type: "peer-left", peerId: "loud" } as never);
 
     expect(voice.getState().serverMutedPeerIds).toEqual([]);
+  });
+});
+
+/**
+ * ROSTER DELTAS: the client must end up holding the room the server holds.
+ *
+ * The server stopped sending a whole roster on every change (a 130-person room
+ * in a 508-member community was ~45 KB to every socket, twice a second, which
+ * is what stopped arrivals being welcomed on 2026-09-05). What arrives instead
+ * is a patch, and a patch is only safe while the receiver can tell that it is
+ * still in step. These tests pin that rule rather than the saving: apply, and
+ * check the resulting occupancy; break the stream, and check the client
+ * REFUSES rather than quietly diverging.
+ */
+describe("voice roster deltas", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+  });
+
+  function person(peerId: string, overrides: Record<string, unknown> = {}) {
+    return {
+      peerId,
+      userId: `user-${peerId}`,
+      displayName: peerId,
+      avatarUrl: null,
+      sharingScreen: false,
+      muted: false,
+      deafened: false,
+      serverMuted: false,
+      ...overrides,
+    };
+  }
+
+  function snapshot(
+    seq: number,
+    peers: ReturnType<typeof person>[],
+    voiceChannelId = CHANNEL,
+  ) {
+    return {
+      type: "voice-roster",
+      voiceChannelId,
+      transport: "mesh",
+      seq,
+      participants: peers,
+    } as unknown as VoiceSignalingMessage;
+  }
+
+  function delta(
+    seq: number,
+    size: number,
+    parts: {
+      joined?: ReturnType<typeof person>[];
+      updated?: ReturnType<typeof person>[];
+      left?: string[];
+    },
+    voiceChannelId = CHANNEL,
+  ) {
+    return {
+      type: "voice-roster-delta",
+      voiceChannelId,
+      transport: "mesh",
+      seq,
+      size,
+      ...parts,
+    } as unknown as VoiceSignalingMessage;
+  }
+
+  const idsIn = (voice: ReturnType<typeof createVoiceController>) =>
+    (voice.getState().occupancy[CHANNEL] ?? []).map((p) => p.peerId).sort();
+
+  it("builds occupancy from a snapshot and the deltas that follow it", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+
+    voice.handleSignaling(snapshot(4, [person("a"), person("b")]));
+    expect(idsIn(voice)).toEqual(["a", "b"]);
+
+    voice.handleSignaling(delta(5, 3, { joined: [person("c")] }));
+    expect(idsIn(voice)).toEqual(["a", "b", "c"]);
+
+    voice.handleSignaling(delta(6, 2, { left: ["a"] }));
+    expect(idsIn(voice)).toEqual(["b", "c"]);
+
+    voice.handleSignaling(
+      delta(7, 2, { updated: [person("b", { muted: true })] }),
+    );
+    expect(
+      voice.getState().occupancy[CHANNEL]?.find((p) => p.peerId === "b")?.muted,
+    ).toBe(true);
+    // The update must not have been mistaken for an arrival.
+    expect(idsIn(voice)).toEqual(["b", "c"]);
+  });
+
+  it("applies the first delta of a room it has never seen", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+
+    // No baseline at all: `seq` 1 is what the server restarts an empty room
+    // from, and a client holding nothing holds 0, so this is in step.
+    voice.handleSignaling(delta(1, 1, { joined: [person("a")] }));
+    expect(idsIn(voice)).toEqual(["a"]);
+  });
+
+  it("refuses a delta that skips a sequence, and recovers on the next snapshot", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+
+    voice.handleSignaling(snapshot(1, [person("a")]));
+    // seq 2 never arrived. Applying seq 3 would leave whoever seq 2 described
+    // invisible with nothing to notice it, so it is refused outright.
+    voice.handleSignaling(delta(3, 3, { joined: [person("c")] }));
+    expect(idsIn(voice)).toEqual(["a"]);
+
+    // Later deltas keep being refused: the client is out of step until the
+    // server's periodic snapshot arrives, which is what repairs it.
+    voice.handleSignaling(delta(4, 4, { joined: [person("d")] }));
+    expect(idsIn(voice)).toEqual(["a"]);
+
+    voice.handleSignaling(
+      snapshot(4, [person("a"), person("b"), person("c"), person("d")]),
+    );
+    expect(idsIn(voice)).toEqual(["a", "b", "c", "d"]);
+
+    // And it is back in step, not stuck refusing.
+    voice.handleSignaling(delta(5, 5, { joined: [person("e")] }));
+    expect(idsIn(voice)).toEqual(["a", "b", "c", "d", "e"]);
+  });
+
+  it("refuses a delta whose size disagrees with what applying it produced", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+
+    voice.handleSignaling(snapshot(1, [person("a")]));
+    // In sequence, and still wrong: the size is the second, independent check,
+    // and it catches a divergence no sequence number can see.
+    voice.handleSignaling(delta(2, 9, { joined: [person("b")] }));
+    expect(idsIn(voice)).toEqual(["a"]);
+  });
+
+  it("forgets the sequence when the room empties, so the next call starts clean", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+
+    voice.handleSignaling(snapshot(6, [person("a")]));
+    voice.handleSignaling(delta(7, 0, { left: ["a"] }));
+    expect(voice.getState().occupancy[CHANNEL]).toBeUndefined();
+
+    // The server restarts an empty room at 1. A client that had kept 7 would
+    // read this as a gap and sit out the whole next call.
+    voice.handleSignaling(delta(1, 1, { joined: [person("z")] }));
+    expect(idsIn(voice)).toEqual(["z"]);
+  });
+
+  it("keeps the signaling allowlist in step: a delta adds and removes, never clears", async () => {
+    const offer = (from: string) =>
+      ({ type: "offer", from, to: PEER, sdp: "s" }) as never;
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+
+    voice.handleSignaling(snapshot(1, [person(PEER), person("friend")]));
+    voice.handleSignaling(offer("friend"));
+    await settle();
+    expect(managers[0]?.offers).toEqual(["friend"]);
+
+    // A delta that mentions only the newcomer must not cost the other peer its
+    // place on the list: absence from a delta means unchanged, so this path can
+    // never clear the way a snapshot does.
+    voice.handleSignaling(delta(2, 3, { joined: [person("later")] }));
+    voice.handleSignaling(offer("friend"));
+    voice.handleSignaling(offer("later"));
+    await settle();
+    expect(managers[0]?.offers).toEqual(["friend", "friend", "later"]);
+
+    // And a departure does take the trust away with it.
+    voice.handleSignaling(delta(3, 2, { left: ["friend"] }));
+    voice.handleSignaling(offer("friend"));
+    await settle();
+    expect(managers[0]?.offers).toEqual(["friend", "friend", "later"]);
+    expect(idsIn(voice)).toEqual([PEER, "later"].sort());
+  });
+
+  it("does not touch a room the delta is not about", () => {
+    const other = "00000000-0000-4000-8000-0000000000ee";
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+
+    voice.handleSignaling(snapshot(1, [person("a")]));
+    voice.handleSignaling(snapshot(1, [person("x")], other));
+    voice.handleSignaling(delta(2, 2, { joined: [person("b")] }));
+
+    expect(idsIn(voice)).toEqual(["a", "b"]);
+    expect(voice.getState().occupancy[other]?.map((p) => p.peerId)).toEqual([
+      "x",
+    ]);
   });
 });

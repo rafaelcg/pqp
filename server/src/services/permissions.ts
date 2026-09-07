@@ -264,6 +264,8 @@ interface RoleRow {
   position: number;
   is_everyone: boolean;
   system_key: string | null;
+  /** Whether the member this context is for holds this role. */
+  held: boolean;
 }
 
 interface OverwriteRow {
@@ -278,6 +280,8 @@ function overwriteOf(row: OverwriteRow): PermissionOverwrite {
 }
 
 export interface MemberPermissionContext {
+  /** Who this context is for; the overwrite pass needs it and callers have it. */
+  userId: string;
   isOwner: boolean;
   isAdminRank: boolean;
   everyonePermissions: bigint;
@@ -285,6 +289,15 @@ export interface MemberPermissionContext {
   heldRoles: Array<{ id: string; permissions: bigint; position: number }>;
   topPosition: number;
   hasAdministrator: boolean;
+  /**
+   * What this server calls this member, or null when they use their account
+   * name. Read here because the membership row is already being fetched, and
+   * every caller that resolves permissions for a person about to be shown to
+   * other people (a voice join, an SFU token) needed it and was paying a
+   * second round trip for one nullable column. `resolveMemberName` remains the
+   * answer for callers that have no reason to resolve permissions.
+   */
+  nickname: string | null;
 }
 
 export async function loadMemberPermissionContext(
@@ -292,8 +305,12 @@ export async function loadMemberPermissionContext(
   userId: string,
 ): Promise<MemberPermissionContext | null> {
   const pool = getPool();
-  const server = await pool.query<{ owner_id: string; role: string | null }>(
-    `SELECT s.owner_id, sm.role
+  const server = await pool.query<{
+    owner_id: string;
+    role: string | null;
+    nickname: string | null;
+  }>(
+    `SELECT s.owner_id, sm.role, sm.nickname
        FROM servers s
        LEFT JOIN server_members sm
          ON sm.server_id = s.id AND sm.user_id = $2
@@ -305,20 +322,27 @@ export async function loadMemberPermissionContext(
     return null;
   }
 
+  // One statement rather than two. The old pair read every role of the server
+  // and then read this member's `member_roles` to decide which of them to
+  // keep; the join answers both at once, off the same (server_id, user_id)
+  // primary key the second query used, and the rows are identical — a
+  // `member_roles` entry for a role that no longer exists was dropped by the
+  // old filter and is dropped by the join. Every permission check in the app
+  // pays for this one, and a voice join pays for it twice (join, then the SFU
+  // token mint).
   const roles = await pool.query<RoleRow>(
-    `SELECT id, permissions::text AS permissions, position, is_everyone, system_key
-       FROM roles WHERE server_id = $1`,
-    [serverId],
-  );
-  const held = await pool.query<{ role_id: string }>(
-    `SELECT role_id FROM member_roles WHERE server_id = $1 AND user_id = $2`,
+    `SELECT r.id, r.permissions::text AS permissions, r.position, r.is_everyone,
+            r.system_key, (mr.user_id IS NOT NULL) AS held
+       FROM roles r
+       LEFT JOIN member_roles mr
+         ON mr.role_id = r.id AND mr.server_id = r.server_id AND mr.user_id = $2
+      WHERE r.server_id = $1`,
     [serverId, userId],
   );
-  const heldIds = new Set(held.rows.map((entry) => entry.role_id));
 
   const everyone = roles.rows.find((role) => role.is_everyone);
   const heldRoles = roles.rows
-    .filter((role) => heldIds.has(role.id))
+    .filter((role) => role.held)
     .map((role) => ({
       id: role.id,
       permissions: asBigInt(role.permissions),
@@ -344,6 +368,7 @@ export async function loadMemberPermissionContext(
   });
 
   return {
+    userId,
     isOwner,
     isAdminRank: row.role === "admin",
     everyonePermissions: asBigInt(everyone?.permissions ?? 0),
@@ -351,37 +376,101 @@ export async function loadMemberPermissionContext(
     heldRoles,
     topPosition,
     hasAdministrator: hasPermission(assembled, Permission.ADMINISTRATOR),
+    nickname: row.nickname,
   };
+}
+
+/**
+ * A channel a caller already has in hand.
+ *
+ * Passing this instead of an id skips the lookup that turns a thread into its
+ * parent, which every caller holding a `channels` row can answer for free and
+ * which is otherwise a round trip on paths that just read the row (the voice
+ * join reads it to check `type`, then paid for this).
+ */
+export interface PermissionChannelRef {
+  id: string;
+  type: string | null;
+  parent_id: string | null;
 }
 
 export async function computeMemberPermissions(
   serverId: string,
   userId: string,
-  channelId?: string | null,
+  channel?: string | PermissionChannelRef | null,
   options?: { timedOut?: boolean },
 ): Promise<bigint> {
+  return (
+    await resolveMemberChannelPermissions(serverId, userId, channel, options)
+  ).permissions;
+}
+
+export interface MemberChannelPermissions {
+  permissions: bigint;
+  /**
+   * What this server calls this member, or null when they use their account
+   * name. Carried here because the membership row is read either way, and a
+   * caller that resolves a member's permissions in order to *show* them to
+   * other people — the voice join, the SFU token mint — needed both and was
+   * paying two round trips for it. `resolveMemberName` stays the answer for
+   * callers with no reason to resolve permissions.
+   */
+  nickname: string | null;
+}
+
+/**
+ * The bits AND who the member is, in one pass over the same rows.
+ *
+ * `computeMemberPermissions` is this with the second half thrown away, and is
+ * still the right call for the many places that only want the bits.
+ */
+export async function resolveMemberChannelPermissions(
+  serverId: string,
+  userId: string,
+  channel?: string | PermissionChannelRef | null,
+  options?: { timedOut?: boolean },
+): Promise<MemberChannelPermissions> {
   const ctx = await loadMemberPermissionContext(serverId, userId);
   if (!ctx) {
-    return 0n;
+    return { permissions: 0n, nickname: null };
   }
+  return {
+    permissions: await applyChannelOverwrites(ctx, channel ?? null, options),
+    nickname: ctx.nickname,
+  };
+}
 
+async function applyChannelOverwrites(
+  ctx: MemberPermissionContext,
+  channel: string | PermissionChannelRef | null,
+  options?: { timedOut?: boolean },
+): Promise<bigint> {
   let everyoneOverwrite: PermissionOverwrite | null = null;
   const roleOverwrites: PermissionOverwrite[] = [];
   let memberOverwrite: PermissionOverwrite | null = null;
+  const userId = ctx.userId;
 
-  if (channelId) {
+  if (channel) {
     // Threads have no overwrite rows of their own. Privacy and send/react
     // gates follow the parent, the same way `channelVisibleSql` does.
-    const effective = await getPool().query<{ id: string }>(
-      `SELECT CASE
-         WHEN type = 'thread' AND parent_id IS NOT NULL THEN parent_id
-         ELSE id
-       END AS id
-         FROM channels
-        WHERE id = $1`,
-      [channelId],
-    );
-    const overwriteChannelId = effective.rows[0]?.id ?? channelId;
+    let overwriteChannelId: string;
+    if (typeof channel === "string") {
+      const effective = await getPool().query<{ id: string }>(
+        `SELECT CASE
+           WHEN type = 'thread' AND parent_id IS NOT NULL THEN parent_id
+           ELSE id
+         END AS id
+           FROM channels
+          WHERE id = $1`,
+        [channel],
+      );
+      overwriteChannelId = effective.rows[0]?.id ?? channel;
+    } else {
+      overwriteChannelId =
+        channel.type === "thread" && channel.parent_id
+          ? channel.parent_id
+          : channel.id;
+    }
     const overwrites = await getPool().query<OverwriteRow>(
       `SELECT target_type, target_id, allow::text AS allow, deny::text AS deny
          FROM channel_overwrites WHERE channel_id = $1`,

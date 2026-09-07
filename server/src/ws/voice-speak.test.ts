@@ -24,9 +24,15 @@ const bits = vi.hoisted(() => ({ byUser: new Map<string, bigint>() }));
 
 vi.mock("../services/permissions.js", async () => {
   const { PERMISSION_DEFAULT_EVERYONE } = await import("@pqp/shared");
+  const forUser = (userId: string) =>
+    bits.byUser.get(userId) ?? PERMISSION_DEFAULT_EVERYONE;
   return {
     computeMemberPermissions: async (_serverId: string, userId: string) =>
-      bits.byUser.get(userId) ?? PERMISSION_DEFAULT_EVERYONE,
+      forUser(userId),
+    resolveMemberChannelPermissions: async (
+      _serverId: string,
+      userId: string,
+    ) => ({ permissions: forUser(userId), nickname: null }),
   };
 });
 
