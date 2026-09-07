@@ -128,15 +128,22 @@ if [[ -z "$KEY" || -z "$SECRET" ]]; then
 fi
 [[ -n "$KEY" && -n "$SECRET" ]] || { echo "could not resolve a LiveKit key pair" >&2; exit 1; }
 
-umask 077
+LK_TMP="$(umask 077 && mktemp)"
 sed \
   -e "s|__TURN_DOMAIN__|${TURN_DOMAIN}|g" \
   -e "s|__LIVEKIT_API_KEY__|${KEY}|" \
   -e "s|__LIVEKIT_API_SECRET__|${SECRET}|" \
-  "$HERE/livekit.yaml.tmpl" >"$DEST/livekit.yaml.tmp"
-install -m 0600 "$DEST/livekit.yaml.tmp" "$DEST/livekit.yaml"
-rm -f "$DEST/livekit.yaml.tmp"
-umask 022
+  "$HERE/livekit.yaml.tmpl" >"$LK_TMP"
+# Never install a config whose keys: block did not come out right. This is the
+# one file where a bad render would take voice down at the next restart, hours
+# after this script exited.
+if grep -q '__LIVEKIT_API' "$LK_TMP" || ! grep -qE '^  [A-Za-z0-9]+: .+' "$LK_TMP"; then
+  rm -f "$LK_TMP"
+  echo "rendered livekit.yaml has no usable keys: block, refusing to install" >&2
+  exit 1
+fi
+install -m 0600 "$LK_TMP" "$DEST/livekit.yaml"
+rm -f "$LK_TMP"
 
 echo "== systemd units"
 install -m 0644 "$HERE/livekit-docker.service" /etc/systemd/system/livekit-docker.service
