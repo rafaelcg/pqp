@@ -117,7 +117,13 @@ describeDb("slow mode", () => {
       [serverId, member.id],
     );
     const textChannel = created.body.channels.find((c) => c.type === "text")!;
-    return { serverId, textChannelId: textChannel.id, created };
+    const voiceChannel = created.body.channels.find((c) => c.type === "voice")!;
+    return {
+      serverId,
+      textChannelId: textChannel.id,
+      voiceChannelId: voiceChannel.id,
+      created,
+    };
   }
 
   async function roleId(serverId: string, systemKey: string): Promise<string> {
@@ -186,6 +192,44 @@ describeDb("slow mode", () => {
       listed.body.channels.find((channel) => channel.id === textChannelId)
         ?.slowmodeSeconds,
     ).toBe(5);
+  });
+
+  /**
+   * A voice channel has a chat of its own, beside the call, and during a busy
+   * call that chat is where the flooding happens. The control was drawn for
+   * text channels only and the send path skipped voice entirely, so a
+   * moderator running a 510-member community had nothing to slow the one
+   * surface that was flooding.
+   */
+  it("stores an interval on a voice channel, whose chat is what floods", async () => {
+    const { serverId, voiceChannelId } = await makeServer();
+
+    const updated = await call<{ channel: { slowmodeSeconds: number } }>(
+      owner,
+      "PATCH",
+      `/api/channels/${voiceChannelId}`,
+      { slowmodeSeconds: 15 },
+    );
+    expect(updated.status).toBe(200);
+    expect(updated.body.channel.slowmodeSeconds).toBe(15);
+
+    const row = await getPool().query<{ slowmode_seconds: number }>(
+      `SELECT slowmode_seconds FROM channels WHERE id = $1`,
+      [voiceChannelId],
+    );
+    expect(row.rows[0]?.slowmode_seconds).toBe(15);
+
+    // And every member reads it back, which is what makes the composer hold
+    // rather than let a message go and take a rejection.
+    const listed = await call<{
+      channels: Array<{ id: string; type: string; slowmodeSeconds: number }>;
+    }>(member, "GET", `/api/servers/${serverId}/channels`);
+    expect(listed.status).toBe(200);
+    const seen = listed.body.channels.find(
+      (channel) => channel.id === voiceChannelId,
+    );
+    expect(seen?.type).toBe("voice");
+    expect(seen?.slowmodeSeconds).toBe(15);
   });
 
   it("does not let MANAGE_MESSAGES set slow mode", async () => {

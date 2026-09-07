@@ -2000,6 +2000,7 @@
   "channelMeta.iconClear": "Clear",
   "channelMeta.slowMode": "Slow mode",
   "channelMeta.slowMode.hint": "Members send once per interval. Manage Messages skips it.",
+  "channelMeta.slowMode.hintVoice": "Applies to this voice channel's chat. One message per interval, per person; Manage Messages skips it.",
   "channelMeta.slowMode.off": "Off",
   "channelMeta.slowMode.5s": "5 seconds",
   "channelMeta.slowMode.10s": "10 seconds",

@@ -114,7 +114,12 @@ export function ChannelOverviewSection({
   onJumpRecipe: () => void;
 }) {
   const { t, locale } = useTranslation();
-  const showSlowMode = channel.kind === "server" && channel.type === "text";
+  // A voice channel has a chat of its own, beside the call, and during a busy
+  // call that chat is exactly where the flooding happens. Only a category is
+  // excluded, because nothing is ever posted into one.
+  const showSlowMode =
+    channel.kind === "server" &&
+    (channel.type === "text" || channel.type === "voice");
   const showVoice = showsVoiceRoomSize(channel);
   const preview = {
     ...channel,
@@ -232,7 +237,11 @@ export function ChannelOverviewSection({
       {showSlowMode && (
         <SettingsGroup
           title={t("channelMeta.slowMode")}
-          hint={t("channelMeta.slowMode.hint")}
+          hint={
+            channel.type === "voice"
+              ? t("channelMeta.slowMode.hintVoice")
+              : t("channelMeta.slowMode.hint")
+          }
         >
           <select
             value={String(draft.slowmodeSeconds)}

@@ -2000,6 +2000,7 @@
   "channelMeta.iconClear": "Limpar",
   "channelMeta.slowMode": "Slow mode",
   "channelMeta.slowMode.hint": "Membros mandam uma vez por intervalo. Quem tem Gerenciar mensagens passa direto.",
+  "channelMeta.slowMode.hintVoice": "Vale pro chat do canal de voz. Cada pessoa manda uma mensagem por intervalo; quem tem Gerenciar mensagens passa direto.",
   "channelMeta.slowMode.off": "Desligado",
   "channelMeta.slowMode.5s": "5 segundos",
   "channelMeta.slowMode.10s": "10 segundos",

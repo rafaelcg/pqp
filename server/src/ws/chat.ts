@@ -1027,10 +1027,18 @@ export async function postChannelMessage(
     }
   }
 
+  // Slow mode covers every server channel a message can land in, and a voice
+  // channel is one of them: it carries its own chat, shown beside the call,
+  // and that chat is where a busy room floods. Excluding it meant a moderator
+  // watching two hundred people in a Lobby had the one tool for a flood
+  // greyed out on the only surface that was flooding. `category` is the sole
+  // exclusion, because nothing is ever posted into one.
   if (
     channel &&
     channel.kind === "server" &&
-    (channel.type === "text" || channel.type === "thread")
+    (channel.type === "text" ||
+      channel.type === "thread" ||
+      channel.type === "voice")
   ) {
     const seconds = channel.slowmode_seconds ?? 0;
     if (
