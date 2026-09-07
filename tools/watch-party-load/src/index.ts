@@ -32,7 +32,7 @@ const VIDEO_HEIGHT = 720;
 const VIDEO_FPS = 30;
 const VIDEO_BITRATE_BPS = 1_500_000;
 const AUDIO_BITRATE_BPS = 64_000;
-const MOTION_TILES = Number(process.env.PQP_LOAD_MOTION_TILES ?? 1);
+const MOTION_TILES = 1;
 
 type Command = "prepare" | "shard" | "cleanup";
 type Manifest = {
