@@ -541,6 +541,16 @@
         }
       }
     },
+    "Back to the voice channel" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Voltar para a call"
+          }
+        }
+      }
+    },
     "Ban" : {
       "localizations" : {
         "pt-BR" : {

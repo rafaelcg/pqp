@@ -15,6 +15,8 @@ struct OpenedConversation: Identifiable, Hashable {
 struct ChatView: View {
     @Environment(SessionStore.self) private var session
     @Environment(CallModel.self) private var call
+    @Environment(VoiceModel.self) private var voice
+    @Environment(CallRatingModel.self) private var ratings
     let channelId: String
     let title: String
     /// Set only for a conversation (a channel with no server). Calls are a DM
@@ -142,13 +144,24 @@ struct ChatView: View {
         .toolbar {
             if let voiceChannel {
                 ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        VoiceView(channel: voiceChannel)
-                    } label: {
-                        Label("Join", systemImage: "phone.fill")
+                    // A button, not a link to the stage: the stage is presented
+                    // from the root while the session is live, so this only
+                    // has to start the session. Hidden once this room is the
+                    // call: the root's banner then owns "back to it".
+                    if !voice.isLive || voice.channelId != voiceChannel.id {
+                        Button {
+                            voice.isCollapsed = false
+                            Task {
+                                await voice.join(
+                                    channel: voiceChannel, session: session, ratings: ratings
+                                )
+                            }
+                        } label: {
+                            Label("Join", systemImage: "phone.fill")
+                        }
+                        .tint(Palette.signal)
+                        .accessibilityIdentifier("chat.joinVoice")
                     }
-                    .tint(Palette.signal)
-                    .accessibilityIdentifier("chat.joinVoice")
                 }
             }
             if let conversation {
