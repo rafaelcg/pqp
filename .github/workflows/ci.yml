@@ -95,6 +95,15 @@ jobs:
       - name: Test monitor scripts
         run: node --test scripts/monitor/*.test.mjs
 
+      # `tools/support-bot` is outside the workspace too, for the reason its
+      # README gives, so `pnpm test` never saw it either. It is the one thing in
+      # this repo that writes into a public channel on its own judgement: the
+      # trigger gates, the outbound screen, the daily ceiling and the rules for
+      # answering a question nobody answered are all decided by code that CI was
+      # not running. A green PR that touches it should mean something.
+      - name: Test support bot
+        run: node --test tools/support-bot/test/*.test.js
+
       # Colour-contrast floors and the count of colour literals living outside
       # the token layer. Both are ratchets: they only move the right way.
       - name: Benchmark theme tokens

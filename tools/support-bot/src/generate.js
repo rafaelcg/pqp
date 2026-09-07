@@ -20,7 +20,11 @@
  * badly. That is the knob to reach for, and the cost table in the README says
  * what each tier does to the monthly bill.
  */
-import { buildSystemPrompt, buildUserPrompt } from "./answer.js";
+import {
+  buildSystemPrompt,
+  buildUserPrompt,
+  buildUnpromptedUserPrompt,
+} from "./answer.js";
 
 export const DEFAULT_MODEL = process.env.SUPPORT_MODEL ?? "claude-haiku-4-5";
 
@@ -80,6 +84,11 @@ export function estimateCostUsd(usage, model = DEFAULT_MODEL) {
  * `max_tokens` is small on purpose. The answer is three sentences; a ceiling
  * that cannot fit an essay is one more thing keeping the output short, and it
  * also bounds the cost of a single pathological response.
+ *
+ * `unprompted` swaps the USER half only. The system prompt, the facts, the
+ * model, the temperature and the ceiling are identical, because the thing that
+ * differs between "somebody asked me" and "nobody asked me" is the bar for
+ * speaking, not what is true.
  */
 export async function generateAnswer({
   facts,
@@ -88,9 +97,12 @@ export async function generateAnswer({
   authorName,
   maxChars,
   canned = null,
+  unprompted = false,
 }) {
   const system = buildSystemPrompt(facts, { maxChars });
-  const user = buildUserPrompt({ question, transcript, authorName });
+  const user = unprompted
+    ? buildUnpromptedUserPrompt({ question, transcript, authorName })
+    : buildUserPrompt({ question, transcript, authorName });
 
   if (canned) {
     // The fixture is a function of the question so a test can drive both

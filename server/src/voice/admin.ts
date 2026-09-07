@@ -1,4 +1,5 @@
-import { RoomServiceClient, TrackSource, TrackType } from "livekit-server-sdk";
+import { RoomServiceClient, TrackSource, TrackType, type Room } from "livekit-server-sdk";
+import { z } from "zod";
 import { logEvent } from "../lib/log.js";
 import {
   isLiveKitConfigured,
@@ -7,6 +8,12 @@ import {
   TOKEN_TTL_SECONDS,
   userIdFromParticipantMetadata,
 } from "./backends.js";
+import {
+  claimVoiceResweeps,
+  hasLiveVoiceResweeps,
+  isVoiceRegistryEnabled,
+  upsertVoiceResweep,
+} from "./registry.js";
 
 /**
  * LiveKit room administration — the SFU half of voice eviction.
@@ -113,6 +120,20 @@ export async function pingSfu(): Promise<void> {
   await client.listRooms();
 }
 
+/**
+ * Every room the SFU currently holds, for the operator dashboard's counts
+ * (`voice/sfu-stats.ts`). Same call as `pingSfu`, with the answer kept.
+ * Rejects when LiveKit is not configured or the SFU did not answer; the
+ * caller owns the timeout and the cache.
+ */
+export async function listSfuRooms(): Promise<Room[]> {
+  const client = getRoomService();
+  if (!client) {
+    throw new Error("LiveKit is not configured");
+  }
+  return client.listRooms();
+}
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -167,7 +188,10 @@ const RESWEEP_WINDOW_MS = TOKEN_TTL_SECONDS * 1000;
  */
 const RESWEEP_INTERVAL_MS = 5_000;
 
-/** Live re-sweep timers, keyed so repeated evictions of one room coalesce. */
+/**
+ * Flag-off re-sweep timers, keyed so repeated evictions of one room coalesce.
+ * With the registry on this map stays empty: the sweeps are rows (below).
+ */
 const resweeps = new Map<string, ReturnType<typeof setInterval>>();
 
 function nowSeconds(): number {
@@ -207,18 +231,148 @@ function staleFor(
 }
 
 /**
- * Re-run `sweep` every `RESWEEP_INTERVAL_MS` until pre-eviction tokens have all
- * expired.
- *
- * The timer is `unref`'d: this is cleanup for an action that has already been
- * committed and answered, and it must never be the reason a process refuses to
- * exit. A deploy that lands inside the window drops the remaining sweeps, which
- * is the same exposure a deployment without this had all the time.
- *
- * Keyed by `key` (room + intent) so banning five people in one channel leaves
- * one timer, not five, and a second ban simply restarts the window.
+ * Everything a repeat pass needs, as data. With the registry on this is the
+ * `scope` column of `voice_resweeps`, so an instance that never saw the
+ * eviction (or this one after a restart) can rebuild the sweep from the row.
+ * `knownIdentities` rides along for the same reason: a participant on a
+ * pre-metadata token is only resolvable from the roster the acting instance
+ * snapshotted before the mesh peers were dropped.
  */
-function scheduleResweep(key: string, sweep: () => Promise<void>): void {
+const resweepSpecSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("room"), room: z.string().min(1) }),
+  z.object({
+    kind: z.literal("private"),
+    room: z.string().min(1),
+    allowedUserIds: z.array(z.string()),
+    knownIdentities: z.record(z.string(), z.string()),
+  }),
+  z.object({
+    kind: z.literal("user"),
+    userId: z.string().min(1),
+    rooms: z.array(z.string()).nullable(),
+    knownIdentities: z.record(z.string(), z.string()),
+  }),
+]);
+type ResweepSpec = z.infer<typeof resweepSpecSchema>;
+
+function specFrom(
+  key: string,
+  scope: unknown,
+): ResweepSpec | null {
+  const parsed = resweepSpecSchema.safeParse(scope);
+  if (!parsed.success) {
+    logEvent("voice.sfuResweepBadScope", { key });
+    return null;
+  }
+  return parsed.data;
+}
+
+/** One pass of the sweep `spec` describes. See the three `evictSfu*` entry points for what each selects. */
+function runSweep(
+  client: RoomServiceClient,
+  spec: ResweepSpec,
+  pass: SweepPass,
+  evictedAt: number,
+): Promise<void> {
+  switch (spec.kind) {
+    case "room":
+      // No `mintedAt` test: the channel is gone, so `POST /api/voice/token`
+      // can never issue a token for this room again and every participant a
+      // repeat pass can find is by definition replaying a pre-deletion one.
+      return sweepRoom(client, spec.room, "channel", new Map(), () => true);
+    case "private": {
+      const allowed = new Set(spec.allowedUserIds);
+      return sweepRoom(
+        client,
+        spec.room,
+        "channel-private",
+        new Map(Object.entries(spec.knownIdentities)),
+        (participant) =>
+          staleFor(pass, evictedAt, participant) &&
+          (participant.userId === null || !allowed.has(participant.userId)),
+      );
+    }
+    case "user":
+      return sweepUserRooms(client, spec, pass, evictedAt);
+  }
+}
+
+async function sweepUserRooms(
+  client: RoomServiceClient,
+  spec: Extract<ResweepSpec, { kind: "user" }>,
+  pass: SweepPass,
+  evictedAt: number,
+): Promise<void> {
+  const { userId, rooms } = spec;
+  const knownIdentities = new Map(Object.entries(spec.knownIdentities));
+  // One listing narrows an arbitrary number of candidate channels down to
+  // the rooms that actually exist, so a 50-channel server costs 1 + (live
+  // voice rooms) calls instead of 50.
+  let active;
+  try {
+    active = await client.listRooms(rooms === null ? undefined : [...rooms]);
+  } catch (error) {
+    logEvent("voice.sfuEvictFailed", {
+      userId,
+      stage: "listRooms",
+      error: describeError(error),
+    });
+    return;
+  }
+
+  await Promise.all(
+    active.map((room) =>
+      sweepRoom(
+        client,
+        room.name,
+        "user",
+        knownIdentities,
+        (participant) =>
+          participant.userId === userId &&
+          staleFor(pass, evictedAt, participant),
+      ),
+    ),
+  );
+}
+
+/**
+ * Re-run the sweep every `RESWEEP_INTERVAL_MS` until pre-eviction tokens have
+ * all expired.
+ *
+ * FLAG OFF: an `unref`'d interval per key. This is cleanup for an action
+ * that has already been committed and answered, and it must never be the
+ * reason a process refuses to exit. A deploy that lands inside the window
+ * drops the remaining sweeps, which is the same exposure a deployment
+ * without this had all the time. Keyed by `key` (room + intent) so banning
+ * five people in one channel leaves one timer, not five, and a second ban
+ * simply restarts the window.
+ *
+ * REGISTRY ON: the sweep is a `voice_resweeps` row instead (section 5.4 of
+ * the plan). This process keeps one claim ticker running while it knows of
+ * a live row, and every instance also ticks after each heartbeat
+ * (`runVoiceReconcile`), so a row outlives the process that wrote it and is
+ * swept by whoever claims it, at most one sweeper per key per claim window.
+ * The upsert is tracked, so `settleSfuEvictions` covers it.
+ */
+function scheduleResweep(
+  key: string,
+  spec: ResweepSpec,
+  evictedAt: number,
+): Promise<void> {
+  if (isVoiceRegistryEnabled()) {
+    ensureClaimTicker();
+    return upsertVoiceResweep(
+      key,
+      spec,
+      new Date(evictedAt * 1000),
+      new Date(Date.now() + RESWEEP_WINDOW_MS),
+    ).catch((error: unknown) => {
+      logEvent("voice.sfuResweepRowFailed", {
+        key,
+        error: describeError(error),
+      });
+    });
+  }
   const existing = resweeps.get(key);
   if (existing) {
     clearInterval(existing);
@@ -230,18 +384,105 @@ function scheduleResweep(key: string, sweep: () => Promise<void>): void {
       resweeps.delete(key);
       return;
     }
-    void sweep();
+    const client = getRoomService();
+    if (client) {
+      void runSweep(client, spec, "resweep", evictedAt);
+    }
   }, RESWEEP_INTERVAL_MS);
   timer.unref?.();
   resweeps.set(key, timer);
+  return Promise.resolve();
 }
 
-/** Cancel every pending re-sweep. Tests use this; nothing in the app does. */
+/** The registry-on process ticker: one per process, alive while a row is. */
+let claimTicker: ReturnType<typeof setInterval> | null = null;
+let claimInFlight: Promise<number> | null = null;
+
+function ensureClaimTicker(): void {
+  if (claimTicker) {
+    return;
+  }
+  const timer = setInterval(() => {
+    void tickSfuResweeps().then(async (swept) => {
+      if (swept > 0 || claimTicker !== timer) {
+        return;
+      }
+      // Nothing won: stop when nothing is left to win. A row another
+      // instance holds keeps this ticker alive, so it can take over if
+      // that instance dies inside the window.
+      let live = true;
+      try {
+        live = await hasLiveVoiceResweeps();
+      } catch {
+        // Unknown: keep ticking, the next tick will find out.
+      }
+      if (!live && claimTicker === timer) {
+        clearInterval(timer);
+        claimTicker = null;
+      }
+    });
+  }, RESWEEP_INTERVAL_MS);
+  timer.unref?.();
+  claimTicker = timer;
+}
+
+/**
+ * One claim tick: expired rows are deleted, unclaimed live rows are claimed
+ * for `RESWEEP_CLAIM_MS`, and exactly the rows this call won are swept once.
+ * Run by the process ticker above and by `runVoiceReconcile` after every
+ * heartbeat, on every instance. Returns how many rows were swept. Never
+ * rejects; a no-op with the registry off or LiveKit unconfigured. One tick
+ * at a time per process: a slow SFU must not stack them.
+ */
+export function tickSfuResweeps(): Promise<number> {
+  if (claimInFlight) {
+    return claimInFlight;
+  }
+  const client = isVoiceRegistryEnabled() ? getRoomService() : null;
+  if (!client) {
+    return Promise.resolve(0);
+  }
+  const work = (async () => {
+    let rows;
+    try {
+      rows = await claimVoiceResweeps();
+    } catch (error) {
+      logEvent("voice.sfuResweepClaimFailed", { error: describeError(error) });
+      return 0;
+    }
+    await Promise.all(
+      rows.map((row) => {
+        const spec = specFrom(row.key, row.scope);
+        if (!spec) {
+          return Promise.resolve();
+        }
+        return runSweep(
+          client,
+          spec,
+          "resweep",
+          Math.floor(row.evictedAt.getTime() / 1000),
+        );
+      }),
+    );
+    return rows.length;
+  })();
+  claimInFlight = track(work.then(() => undefined)).then(() => work);
+  void claimInFlight.finally(() => {
+    claimInFlight = null;
+  });
+  return claimInFlight;
+}
+
+/** Cancel every pending re-sweep timer and the claim ticker. Tests use this; nothing in the app does. */
 export function stopSfuResweeps(): void {
   for (const timer of resweeps.values()) {
     clearInterval(timer);
   }
   resweeps.clear();
+  if (claimTicker) {
+    clearInterval(claimTicker);
+    claimTicker = null;
+  }
 }
 
 /**
@@ -325,6 +566,21 @@ async function sweepRoom(
   );
 }
 
+/** The first pass now, the repeats scheduled; one tracked promise for both. */
+function evict(
+  client: RoomServiceClient,
+  key: string,
+  spec: ResweepSpec,
+): Promise<void> {
+  const evictedAt = nowSeconds();
+  return track(
+    Promise.all([
+      runSweep(client, spec, "first", evictedAt),
+      scheduleResweep(key, spec, evictedAt),
+    ]).then(() => undefined),
+  );
+}
+
 /**
  * Eject everyone from a channel's SFU room — the channel (or its whole server)
  * is gone, or has just been made private with nobody carried over.
@@ -339,12 +595,7 @@ export function evictSfuRoom(room: string): Promise<void> {
   if (!client) {
     return Promise.resolve();
   }
-  const sweep = () => sweepRoom(client, room, "channel", new Map(), () => true);
-  // No `mintedAt` test: the channel is gone, so `POST /api/voice/token` can
-  // never issue a token for this room again and every participant a repeat
-  // pass can find is by definition replaying a pre-deletion one.
-  scheduleResweep(`room:${room}`, sweep);
-  return track(sweep());
+  return evict(client, `room:${room}`, { kind: "room", room });
 }
 
 /**
@@ -364,19 +615,12 @@ export function evictSfuUsersExcept(
   if (!client) {
     return Promise.resolve();
   }
-  const evictedAt = nowSeconds();
-  const sweep = (pass: SweepPass) =>
-    sweepRoom(
-      client,
-      room,
-      "channel-private",
-      knownIdentities,
-      (participant) =>
-        staleFor(pass, evictedAt, participant) &&
-        (participant.userId === null || !allowedUserIds.has(participant.userId)),
-    );
-  scheduleResweep(`private:${room}`, () => sweep("resweep"));
-  return track(sweep("first"));
+  return evict(client, `private:${room}`, {
+    kind: "private",
+    room,
+    allowedUserIds: [...allowedUserIds],
+    knownIdentities: Object.fromEntries(knownIdentities),
+  });
 }
 
 /**
@@ -407,44 +651,15 @@ export function evictSfuUser(
   if (rooms !== null && rooms.length === 0) {
     return Promise.resolve();
   }
-
-  const evictedAt = nowSeconds();
-  const sweep = async (pass: SweepPass) => {
-    // One listing narrows an arbitrary number of candidate channels down to
-    // the rooms that actually exist, so a 50-channel server costs 1 + (live
-    // voice rooms) calls instead of 50.
-    let active;
-    try {
-      active = await client.listRooms(rooms === null ? undefined : [...rooms]);
-    } catch (error) {
-      logEvent("voice.sfuEvictFailed", {
-        userId,
-        stage: "listRooms",
-        error: describeError(error),
-      });
-      return;
-    }
-
-    await Promise.all(
-      active.map((room) =>
-        sweepRoom(
-          client,
-          room.name,
-          "user",
-          knownIdentities,
-          (participant) =>
-            participant.userId === userId &&
-            staleFor(pass, evictedAt, participant),
-        ),
-      ),
-    );
-  };
-
   // Keyed on the user rather than a room: the scope is "wherever they are", and
   // a second ban of the same person should restart one window, not open a
   // second one beside it.
-  scheduleResweep(`user:${userId}`, () => sweep("resweep"));
-  return track(sweep("first"));
+  return evict(client, `user:${userId}`, {
+    kind: "user",
+    userId,
+    rooms: rooms === null ? null : [...rooms],
+    knownIdentities: Object.fromEntries(knownIdentities),
+  });
 }
 
 // --- voice moderation ---------------------------------------------------------

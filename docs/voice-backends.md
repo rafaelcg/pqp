@@ -205,20 +205,47 @@ LiveKit Cloud bills participant-minutes, and a call between three friends gains 
 
 **iOS runs LiveKit rooms** (PR feat/ios-livekit). The app declares `transports: ["mesh", "livekit"]`, and on a `welcome` that says `livekit` it builds no peer connections: it `POST`s `/api/voice/token` for the peer id the welcome minted, connects a LiveKit `Room` (`client-sdk-swift` 2.16.0) to the returned URL, publishes the microphone, and subscribes to everybody's audio, camera and screen share. Participant identity is the peer id, so the roster, the mute badges and the tiles are keyed exactly as on the mesh. The failure semantics are the web's: token 5xx, a refusing SFU, or 45 s without a connected room leaves the WS room and shows the same "Could not reach the voice server" sentence, and it never builds a mesh instead. A `/ws` blip in a LiveKit room keeps the media: the app declares `resume` on an SFU deployment (read from `GET /api/voice/backend`), presents the `resumeToken` on the rejoin, and skips the media rebuild when `welcome.resumed` comes back for the same peer id.
 
-**Android runs LiveKit rooms too** (PR #248), and since `android/livekit-share-receive`
-it can watch a share in one. It declares `transports: ["mesh", "livekit"]`,
+**Android runs LiveKit rooms too** (PR #248), watches a share in one since
+`android/livekit-share-receive`, and draws cameras since
+`feat/android-livekit-cameras`. It declares `transports: ["mesh", "livekit"]`,
 mints a token for the peer id the welcome named, connects with
 `autoSubscribe = false` and subscribes deliberately: every audio publication,
-plus `SCREEN_SHARE` video. A share arrives disabled and is only enabled while
-the viewer is open, and the layer is capped at 720p (360p on a metered link),
-so a phone in a 100-viewer watch party is not handed the 1080p layer. Both of
-those need `adaptiveStream = false` on Android: unlike livekit-client, the
-Android SDK ignores `setEnabled` and `setVideoQuality` on an adaptively managed
-track rather than treating the manual value as a ceiling. `SCREEN_SHARE_AUDIO` plays with the voice, silenced by deafen and
-gated on the roster having announced the share. What Android does **not** do on
-LiveKit: publish a screen (the button is hidden there), a camera in either
-direction, or per-peer stats, because LiveKit's stats arrive in the other
-libwebrtc's types. None of the receive path has been run on hardware yet.
+plus `SCREEN_SHARE` and `CAMERA` video. Anything else is refused by default.
+
+Delivery, not subscription, is what the phone controls, and the two videos are
+controlled differently because they are used differently:
+
+- A **share** arrives disabled and is enabled only while the viewer is open,
+  capped at 720p (360p on a metered link), so a phone in a 100-viewer watch
+  party is never handed the 1080p layer.
+- A **camera** arrives flowing and is paused a second later unless something is
+  drawing it. What draws one is a strip of tiles under the call bar plus the
+  full-screen viewer a tap opens, and each surface tells the transport it is
+  drawing that camera for as long as it is composed and the app is started, so
+  a tile scrolled off the strip, a phone in a pocket and a camera the strip has
+  no room for are all paused. Claims are *counted*, because the viewer is a
+  dialog over a strip that stays composed and closing it must not pause the
+  tile behind it. The layer is capped per surface: the bottom layer for a tile,
+  360p for the viewer on Wi-Fi, the bottom layer again on a metered link.
+  Mirrors `client/src/lib/remote-video-delivery.ts`, whose grace period it also
+  copies. The ceiling is worth less than it looks against a **web** publisher,
+  which publishes its camera with `simulcast: false`: there is one layer on the
+  server and the saving there is entirely the pausing.
+
+Both controls need `adaptiveStream = false` on Android: unlike livekit-client,
+the Android SDK ignores `setEnabled` and `setVideoQuality` on an adaptively
+managed track rather than treating the manual value as a ceiling.
+`SCREEN_SHARE_AUDIO` plays with the voice, silenced by deafen and gated on the
+roster having announced the share. A camera the publisher *mutes* rather than
+unpublishes drops its tile and its delivery until the unmute; every pqp client
+unpublishes, so that path is for the server-side mute and for other clients.
+A reconnect re-asks for both halves, the subscriptions and the track settings,
+because the SFU keeps neither across one.
+
+What Android does **not** do on LiveKit: publish a screen (the button is hidden
+there), publish a camera (it has no capture at all, on either transport), or
+per-peer stats, because LiveKit's stats arrive in the other libwebrtc's types.
+None of the receive path has been run on hardware yet.
 
 **iOS publishes screen shares on LiveKit** (PR `ios/livekit-share-send`). The ReplayKit bridge is unchanged and transport-agnostic: the extension writes NV12 over the App Group socket, and the app feeds the frames to the mesh's `RTCVideoSource` or to a LiveKit `BufferCapturer` track published as `Track.Source.ScreenShareVideo`. The bridge is armed once the room is connected, and the publish waits for the first frame, because the SDK resolves a buffer track's dimensions from what it captures. The SDK's own broadcast path is not used, deliberately: it JPEG-encodes every frame inside the ~50 MB extension process. The publish carries the web's ladder from PR #237, layer for layer (`sfuScreenPlan` in `ios/pqp/Sources/Voice/VideoQuality.swift`), including the large-room cap, so a phone cannot hand a watch party an uncapped 1080p30 stream. The share control follows `welcome.self.canSpeak`. Still mesh-only on iOS: the receive-side video quality ladder; LiveKit subscribes at the SDK's defaults. **Device-only and unverified:** ReplayKit broadcast has no simulator equivalent.
 
@@ -230,7 +257,7 @@ Two server instances with **different** LiveKit config pin the same channel diff
 
 ### The voice registry (`VOICE_REGISTRY=postgres`, off by default)
 
-Milestones M1 to M3 of [`docs/plans/MULTI_INSTANCE_VOICE.md`](./plans/MULTI_INSTANCE_VOICE.md): the peer map and the transport pin, copied into Postgres so more than one API instance can agree on a room, the roster read back from those rows, and a seat that outlives the instance that held it. `server/src/voice/registry.ts` owns five tables (`voice_rooms`, `voice_peers`, `voice_retired_peers`, `voice_instances`, `voice_resweeps`), all additive and empty until the flag is on.
+Milestones M1 to M4 of [`docs/plans/MULTI_INSTANCE_VOICE.md`](./plans/MULTI_INSTANCE_VOICE.md): the peer map and the transport pin, copied into Postgres so more than one API instance can agree on a room, the roster read back from those rows, a seat that outlives the instance that held it, and rings, moderation notices and SFU re-sweeps that cross instances. `server/src/voice/registry.ts` owns five tables (`voice_rooms`, `voice_peers`, `voice_retired_peers`, `voice_instances`, `voice_resweeps`), all additive and empty until the flag is on.
 
 What changes with the flag on, and only then:
 
@@ -240,7 +267,10 @@ What changes with the flag on, and only then:
 - **The watch party is a column (M2).** `voice_rooms.watch_party` and `watch_party_rev`. `applyWatchPartyWrite` keeps its in-memory coalescing, then the accepted state is written with the contract's ordering as the `WHERE` clause (higher `rev` wins, ties on `actorId`); a row not updated is a write that lost, and the writer is handed the row's winner alone, which is how a client that missed a frame is put back in step in one round trip. A joiner reads the row for the initial state. The columns are cleared on teardown and go with the room row when the last peer anywhere leaves.
 - **One room, one transport, across instances.** An unpinned room's decision goes through `INSERT INTO voice_rooms ... ON CONFLICT DO NOTHING RETURNING` before it is applied. Whoever inserts first decides; the loser adopts the stored transport (`voice.transportAdopted` in the log) and a client that cannot run it is refused as usual. The last peer's delete removes the room row in the same statement.
 - **`POST /api/voice/token` from any instance.** The request may carry the `resumeToken` that `welcome` minted; a valid HMAC proves `{ user, peer, channel }` with no lookup. Without it the route checks this instance's map, then the `voice_peers` row, then 403. A room another instance pinned to mesh still answers 409. Old clients that omit the field behave exactly as before.
-- **Moderation and the operator snapshot see the cluster.** `findVoiceChannelForUser` and `findVoicePeerIdentities` read the map, then the rows, so the SFU eviction can target a participant whose socket is elsewhere; `getVoiceActivitySnapshot` counts rooms from the rows. The notice frame and the mesh half stay local until M4.
+- **Moderation and the operator snapshot see the cluster.** `findVoiceChannelForUser` and `findVoicePeerIdentities` read the map, then the rows, so the SFU eviction can target a participant whose socket is elsewhere; `getVoiceActivitySnapshot` counts rooms from the rows.
+- **Moderation crosses (M4, needs the bus).** Every eviction (`evictVoiceUser`, `evictVoiceChannel`, `evictVoiceUsersExcept`, `disconnectVoiceUser`) and the SFU mute notice publish `voice.moderation` before anything else. The instance holding the target's socket says the notice, when there is one, and forgets the peer without a `peer-left`; the instance the request landed on then releases each foreign row the way the beacon does (`releaseForeignPeer`: row and retired id, `adopted` then `left` on the bus, so the departure is announced exactly once) and runs the SFU half once, with the rows' peer ids merged into the identity hint. A lost frame costs the target the notice, never the sanction: the row goes regardless.
+- **Rings cross, the ring does not (M4, needs the bus).** A call is owned by the instance holding the caller's socket: its 45 s timer, the empty-room grace and the pending set stay in that process. What crosses on `voice.call` is delivery: `call-incoming` and `call-ring-cancelled` addressed by user id to whichever sockets those people hold, `call-declined` to the call's peers, and, the other way, a `decline` or an `answered` from the other machine routed to the owner, which is the only instance that decides anything, calls `pushIncomingCall` or writes the missed-call message. Somebody already in the call on the other machine is not rung (rows), and the empty-room grace reads the rows before ending a ring, since the caller may have come back elsewhere. Accepted degradation: an owner that dies mid-ring ends the ring with no `call-ring-cancelled` and no missed-call record. The phone push already went out and the client's own timeout ends the ring on screen.
+- **SFU re-sweeps are claims (M4).** `scheduleResweep` writes a `voice_resweeps` row (the sweep is data: kind, room or user, allowed ids, `knownIdentities`, `evicted_at`, `until`) instead of a per-key interval. `tickSfuResweeps` deletes expired rows, claims live unclaimed ones for 4 s in one `UPDATE ... RETURNING`, and sweeps only what it won; it runs after every heartbeat on every instance (`runVoiceReconcile`), and a process that wrote a row keeps one 5 s ticker alive while any row is live. So at most one sweeper per key per window, no leader, and a deploy inside the fifteen-minute window no longer drops the remaining sweeps: the survivor claims the row on its next beat. With the flag off the per-key `setInterval` runs exactly as before.
 - **Retired ids are cluster-wide, and only there (M3).** A hung-up peer id cannot be reconstructed on another instance, or on this one after a restart, for the token's life. With the flag on `voice_retired_peers` is the one store; the in-process map is never written.
 - **Resume lands anywhere (M3).** A `join-voice-room` with the resume pair for a seat another instance holds *adopts* it: one conditional `UPDATE` stamps this instance on the row and clears the orphan mark, the welcome says `resumed`, the seat keeps what its row says (a share or camera still up on the SFU, a standing mute), and nobody ever hears a `peer-left` for a person who never left. The old owner is told with `voice.room { kind: "adopted" }` and forgets its entry without a word; if its socket was half-open its eventual close finds nothing. The same whether the old owner is alive (a Wi-Fi blip landing on the other machine) or dead; the log says which (`voice.resumeAdopted`). A hangup on one instance is refused as a resume on the other, because the retired row is checked first.
 - **Liveness has consequences (M3).** Each instance upserts `voice_instances` every 15 s (`config_hash` is a digest of the LiveKit URL and key id); a row older than 45 s, or absent, is a dead instance. After every beat each instance runs the reconcile (`runVoiceReconcile`): the dead instance's peer rows are stamped `orphaned_at` as of its last heartbeat (seat held, sidebar still shows them), then deleted once that is 90 s old, in one statement that also retires the id and unpins an emptied room, with `peer-left` fanned out by whoever ran the sweep and a `left` hint on the bus; room rows with no peer and older than 30 s, dead lease rows and expired retired ids go too. Every statement names exactly the rows it changed, so two instances running it in the same second announce each departure once between them. An instance never touches its own rows: its own orphan timers are the authority on its own seats.
@@ -250,7 +280,7 @@ What changes with the flag on, and only then:
 
 Flag off means off: `isVoiceRegistryEnabled()` is read on every path and every registry call sits behind it, so a self-host that never sets the variable runs the code that shipped before the registry existed. `server/src/ws/voice-registry.test.ts` pins that the tables stay empty through a join, a state change, an orphan and a leave with the flag off; `server/src/ws/voice-cluster.test.ts` runs two module graphs over one memory bus and one `pqp_test` database and pins what crosses, what does not, and that neither instance republishes what it heard.
 
-**This is not yet enough to run two machines.** Rings and moderation notices are local (M4), the SFU re-sweep timers are per process (M4), and there is no drain or mesh guard (M5). The flag exists so the write path, the roster path and the reconcile can soak on one machine first.
+**This is not yet enough to run two machines.** There is no drain, no rolling-deploy config, no CI count assertion and no mesh guard (M5): a mesh room is still pinned to the process that holds its peers, and a second machine would split one. The flag exists so the write path, the roster path and the reconcile can soak on one machine first.
 
 ## Screen-share audio
 

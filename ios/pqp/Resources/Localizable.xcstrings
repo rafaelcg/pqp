@@ -1201,12 +1201,12 @@
         }
       }
     },
-    "Could not start the camera." : {
+    "Could not start the camera. Close anything else using it and try again." : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Não deu para ligar a câmera."
+            "value" : "Não deu para ligar a câmera. Feche o que estiver usando a câmera e tente de novo."
           }
         }
       }
@@ -2587,6 +2587,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sem resposta"
+          }
+        }
+      }
+    },
+    "No camera is available on this phone." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nenhuma câmera disponível neste celular."
           }
         }
       }
@@ -4177,6 +4187,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esse aí é reservado."
+          }
+        }
+      }
+    },
+    "The camera turned on but no picture is getting through. Turn it off and on again." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A câmera ligou, mas nenhuma imagem está chegando. Desligue e ligue de novo."
           }
         }
       }

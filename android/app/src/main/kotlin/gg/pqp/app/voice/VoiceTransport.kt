@@ -59,11 +59,12 @@ fun voiceTransportKindFor(transport: String?): VoiceTransportKind? = when (trans
  * `livekit.org.webrtc.VideoTrack` cannot be handed to a renderer built on an
  * `org.webrtc.EglBase.Context`.
  *
- * [remoteScreenFor] therefore hands out a [RemoteScreen], a sealed type with
- * one case per namespace, each carrying the GL context its own renderer must
- * be initialised with. The UI picks the renderer by `when` over the case, so
- * the compiler is what keeps LiveKit video away from the mesh renderer and the
- * other way round; there is no shared `VideoTrack` type to cast through.
+ * [remoteScreenFor] and [remoteCameraFor] therefore hand out a
+ * [RemoteVideoFeed], a sealed type with one case per namespace, each carrying
+ * the GL context its own renderer must be initialised with. The UI picks the
+ * renderer by `when` over the case, so the compiler is what keeps LiveKit video
+ * away from the mesh renderer and the other way round; there is no shared
+ * `VideoTrack` type to cast through.
  */
 interface VoiceTransport {
 
@@ -145,7 +146,10 @@ interface VoiceTransport {
     fun statsFor(remotePeerId: String): PeerMediaStats?
 
     /** This peer's incoming screen, with what a renderer needs to draw it. */
-    fun remoteScreenFor(remotePeerId: String): RemoteScreen?
+    fun remoteScreenFor(remotePeerId: String): RemoteVideoFeed?
+
+    /** This peer's incoming camera, on the same terms. */
+    fun remoteCameraFor(remotePeerId: String): RemoteVideoFeed?
 
     /**
      * The viewer for this peer's share opened or closed.
@@ -157,4 +161,18 @@ interface VoiceTransport {
      * re-applied when somebody is.
      */
     fun setWatchingScreen(remotePeerId: String, watching: Boolean)
+
+    /**
+     * A surface started or stopped drawing this peer's camera.
+     *
+     * Counted rather than flagged, because a rail tile and the full-screen
+     * viewer can be drawing the same person at once; see [CameraDemand].
+     *
+     * Mesh ignores it for the same reason it ignores [setWatchingScreen], and
+     * the reason matters here: on a mesh the camera is already arriving down
+     * the peer connection whether or not anything draws it, so there is nothing
+     * to save and nothing to ask for. On an SFU it is what keeps a room full of
+     * faces from costing a phone twenty streams.
+     */
+    fun setCameraViewer(remotePeerId: String, surface: CameraSurface, viewing: Boolean)
 }

@@ -1,10 +1,7 @@
 import {
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   ChevronUp,
   EyeOff,
-  LayoutGrid,
   Loader2,
   Maximize2,
   MonitorPlay,
@@ -31,7 +28,6 @@ import {
   type CSSProperties,
   type FocusEvent as ReactFocusEvent,
   type PointerEvent as ReactPointerEvent,
-  type ReactNode,
   type RefObject,
   type SyntheticEvent,
 } from "react";
@@ -77,9 +73,18 @@ import {
 } from "@/components/voice/screen-fullscreen";
 import {
   collectScreenTiles,
-  screenShareStageLayout,
   type ScreenShareTile,
 } from "@/components/voice/screen-stage";
+import {
+  listenersOf,
+  listenerStripSlots,
+  planStage,
+  stageGridColumns,
+  tileClickFullscreens,
+  STRIP_LIMIT_NARROW,
+  STRIP_LIMIT_WIDE,
+} from "@/components/voice/stage-layout";
+import { ListenerStrip } from "@/components/voice/listener-strip";
 import {
   showsVideoQualityControl,
   videoQualityMenuOpen,
@@ -120,15 +125,11 @@ import {
   hasWatchableVideo,
   isCameraSoloId,
   isStageCollapsed,
-  isStageGrid,
   markCallStarted,
   nearestCorner,
   personKeyFromCameraSoloId,
-  pickSpotlightKey,
   rememberStageCollapsed,
-  rememberStageGrid,
   rememberStagePinnedKey,
-  resolvedStageLayout,
   shouldShowExpandedStage,
   stagePinnedKey,
   type PipCorner,
@@ -143,7 +144,7 @@ import {
  */
 
 /** How one person appears on the stage, whatever transport carried them. */
-interface StagePerson {
+export interface StagePerson {
   key: string;
   name: string;
   avatarUrl: string | null;
@@ -174,6 +175,17 @@ const PIP_CORNER_CLASS: Record<PipCorner, string> = {
   tr: "right-3 top-3",
   bl: "bottom-3 left-3",
   br: "bottom-3 right-3",
+};
+
+/**
+ * The same corners with the listener row underneath: the preview sits above
+ * it rather than on top of the last few chips.
+ */
+const PIP_CORNER_CLASS_WITH_STRIP: Record<PipCorner, string> = {
+  tl: "left-3 top-3",
+  tr: "right-3 top-3",
+  bl: "bottom-28 left-3",
+  br: "bottom-28 right-3",
 };
 
 /** The Fullscreen API under both spellings — see `screen-share-view.tsx`. */
@@ -499,7 +511,7 @@ export interface CallStageProps {
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
-  /** Shrinks the thumbnail strip. Same setting the old lobby grid used. */
+  /** Shrinks the listener chips. Same setting the old lobby grid used. */
   compactPeers?: boolean;
   /**
    * DM ringing copy. Server voice does not ring: being the only person in a
@@ -795,39 +807,51 @@ function ActiveCall({
   const focusedShareHasAudio = focusedIsLocal
     ? voiceState.isSharingScreenAudio
     : receivedShareHasAudio;
-  const splitTwo =
-    screenShareStageLayout(screenTiles.length, wide) === "split";
-
   const allPeople: StagePerson[] = [...(self ? [self] : []), ...remotes];
-  const cameraCount = allPeople.filter((person) => person.stream !== null).length;
-  const [preferGrid, setPreferGrid] = useState(() => isStageGrid(channelId));
-  const [pinnedKey, setPinnedKey] = useState(() => stagePinnedKey(channelId));
-  // Per device, and never reset by a presenter change or a new share: see the
-  // preference module. Read once on mount; the toggle is the only writer.
-  const [railOpen, setRailOpen] = useState(loadParticipantRailOpen);
-  const toggleRail = useCallback(() => {
-    setRailOpen((open) => {
+  const [pinnedTileId, setPinnedTileId] = useState(() =>
+    stagePinnedKey(channelId),
+  );
+  // Whether the listener row is showing. Per device, and never reset by a
+  // presenter change or a new share: see the preference module. It keeps the
+  // storage key the rail used, because it is the same choice ("give the
+  // picture the whole stage on this monitor") about the row that replaced it.
+  // Read once on mount; the toggle is the only writer.
+  const [stripOpen, setStripOpen] = useState(loadParticipantRailOpen);
+  const toggleStrip = useCallback(() => {
+    setStripOpen((open) => {
       saveParticipantRailOpen(!open);
       return !open;
     });
   }, []);
   useEffect(() => {
-    setPreferGrid(isStageGrid(channelId));
-    setPinnedKey(stagePinnedKey(channelId));
+    setPinnedTileId(stagePinnedKey(channelId));
   }, [channelId]);
-  const layout = resolvedStageLayout({
-    remoteCount: remotes.length,
-    hasScreenShare: voiceState.screenSharePeerIds.length > 0,
-    cameraCount,
-    preferGrid,
+  /**
+   * The whole layout, in one call: who is large, who is a chip, and whether
+   * our own camera floats. See `stage-layout.ts` for the rules and for the
+   * watch party that produced them.
+   */
+  const stage = planStage({
+    screens: screenTiles.map((tile) => ({
+      peerId: tile.peerId,
+      isSelf: tile.isSelf,
+    })),
+    people: allPeople,
+    pinnedTileId,
   });
-  const spotlightKey = pickSpotlightKey(allPeople, pinnedKey);
-  const spotlightPerson =
-    allPeople.find((person) => person.key === spotlightKey) ?? remotes[0] ?? self;
-  const stripPeople = allPeople.filter(
-    (person) => person.key !== spotlightPerson?.key,
-  );
+  const listeners = listenersOf(allPeople, screenTiles, voiceState.peerId);
+  const gridColumns = stageGridColumns(stage.tiles.length, wide);
+  const clickFullscreens = tileClickFullscreens(stage.tiles.length);
   const anyVideo = hasVideo;
+  /**
+   * The row exists only when somebody is in it, and only beside a stage.
+   *
+   * It reserves its own height AND the control bar's band below it, so an
+   * empty row is not a blank strip: it is a hundred pixels taken off the
+   * picture in a 1:1 call where nobody was ever going to be listed.
+   */
+  const showStrip =
+    listeners.length > 0 && stage.tiles.length > 0;
 
   // --- elapsed timer ------------------------------------------------------
   // Starts when the call genuinely has two ends, not while it is still
@@ -856,10 +880,10 @@ function ActiveCall({
   // --- fullscreen ---------------------------------------------------------
   const stageRef = useRef<HTMLDivElement>(null);
   const primaryVideoRef = useRef<WebkitFullscreenVideo>(null);
-  const hasPrimaryVideo =
-    screenStream !== null ||
-    (layout === "spotlight" && (spotlightPerson?.stream ?? null) !== null) ||
-    (layout === "ring" && (self?.stream ?? null) !== null);
+  // Any large picture at all, which since the stage became a grid of
+  // publishers is exactly "is anybody publishing". The iPhone native-player
+  // path needs one <video> to hand over, and the first tile is it.
+  const hasPrimaryVideo = stage.tiles.length > 0 || (self?.stream ?? null) !== null;
   const cameraSoloIds = allPeople
     .filter((person) => person.stream !== null)
     .map((person) => cameraSoloId(person.key));
@@ -942,7 +966,7 @@ function ActiveCall({
     reducedMotion,
   });
   // A touch tap is a down and an up that did not travel. Anything that moved
-  // (a scroll on the rail, a drag on the self preview) is plain activity.
+  // (a scroll on the listener row, a drag on the self preview) is activity.
   const touchDownRef = useRef<{ x: number; y: number } | null>(null);
   const onStagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.pointerType === "touch") {
@@ -1030,9 +1054,11 @@ function ActiveCall({
   const showMeshWarning =
     !voiceState.usingSfu && voiceState.remotePeers.length >= MESH_VOICE_WARNING;
 
-  const togglePin = (key: string) => {
-    const next = pinnedKey === key ? null : key;
-    setPinnedKey(next);
+  // A pin is now "make that tile the wide one", not a second layout: the
+  // stage is a grid either way, and the pinned tile takes the whole first row.
+  const togglePin = (tileId: string) => {
+    const next = pinnedTileId === tileId ? null : tileId;
+    setPinnedTileId(next);
     rememberStagePinnedKey(channelId, next);
   };
   const toggleCameraFullscreen = (key: string) => {
@@ -1058,13 +1084,6 @@ function ActiveCall({
       shareSystemAudio={shareSystemAudio}
       onShareSystemAudioChange={onShareSystemAudioChange}
       onStopScreenShare={onStopScreenShare}
-      showGridToggle={!collapsed && layout !== "screen" && cameraCount >= 2}
-      preferGrid={preferGrid}
-      onToggleGrid={() => {
-        const next = !preferGrid;
-        setPreferGrid(next);
-        rememberStageGrid(channelId, next);
-      }}
       onToggleCollapsed={() => onSetCollapsed(!userCollapsed)}
       onLeave={onLeave}
       pushToTalk={pushToTalk}
@@ -1158,220 +1177,203 @@ function ActiveCall({
       onKeyDownCapture={chrome.wake}
       onFocusCapture={chrome.wake}
     >
-      {/* --- the stage's content, by layout --------------------------------- */}
+      {/* --- the stage's content -------------------------------------------
+          One rule, whatever the transport carried it: a picture is a tile and
+          a listener is a chip. `stage-layout.ts` decides which is which; this
+          only draws it. Nothing is mounted twice, so the number of live
+          `<video>` elements is exactly the number of pictures on screen, which
+          is what the SFU's delivery rule reads (`remote-video-delivery.ts`).
+      */}
       {showMeshWarning && (
         <p className="absolute inset-x-0 top-0 z-30 bg-warning/10 px-3 py-1 text-center text-xs text-warning">
           {t("voice.meshWarning")}
         </p>
       )}
-      {soloPerson ? (
-        <PrimaryTile
-          person={soloPerson}
-          videoRef={primaryVideoRef}
-          isFullscreen
-          onToggleFullscreen={() => toggleCameraFullscreen(soloPerson.key)}
-          onPin={
-            cameraCount >= 2 ? () => togglePin(soloPerson.key) : undefined
-          }
-          pinned={pinnedKey === soloPerson.key}
-        />
-      ) : layout === "screen" ? (
-        <div className="flex h-full w-full flex-col bg-black">
-          {soloTile ? (
-            /* One share blown up on its own. The stage is already fullscreen;
-               this only decides what is on it, which is why switching between
-               the two shares costs no platform call. */
+      <div className="flex h-full w-full flex-col">
+        <div className="relative min-h-0 flex-1">
+          {soloPerson ? (
+            /* One camera alone on the stage, from a click on its tile or from
+               its own button. The stage is already fullscreen; this only
+               decides what is on it. */
+            <PrimaryTile
+              person={soloPerson}
+              videoRef={primaryVideoRef}
+              isFullscreen
+              onToggleFullscreen={() => toggleCameraFullscreen(soloPerson.key)}
+              onPin={() => togglePin(cameraSoloId(soloPerson.key))}
+              pinned={pinnedTileId === cameraSoloId(soloPerson.key)}
+            />
+          ) : soloTile ? (
+            /* The same for a share. Switching between the two costs no
+               platform call, which is why they share one solo id. */
             <ScreenTileFrame
               tile={soloTile}
               videoRef={primaryVideoRef}
               isFullscreen
-              showName
+              /* The header overlay already names a lone presenter; a second
+                 label on the picture is the same sentence twice. */
+              showName={screenTiles.length > 1}
               onToggleFullscreen={() => fullscreen.toggleScreen(soloTile.peerId)}
               audio={shareAudioControl(soloTile)}
               dismissed={shareDismissControl(soloTile)}
-              className="min-h-0 flex-1"
+              className="h-full w-full bg-black"
             />
-          ) : splitTwo ? (
-            <div className="grid min-h-0 flex-1 grid-cols-2">
-              {screenTiles.map((tile, index) => (
-                <ScreenTileFrame
-                  key={tile.peerId}
-                  tile={tile}
-                  videoRef={index === 0 ? primaryVideoRef : undefined}
-                  isFullscreen={false}
-                  showName
-                  onToggleFullscreen={() => fullscreen.toggleScreen(tile.peerId)}
-                  audio={shareAudioControl(tile)}
-              dismissed={shareDismissControl(tile)}
-                  className="h-full min-h-0"
-                />
-              ))}
-            </div>
-          ) : focusedTile ? (
-            <ScreenTileFrame
-              tile={focusedTile}
-              videoRef={primaryVideoRef}
-              isFullscreen={false}
-              onToggleFullscreen={() =>
-                fullscreen.toggleScreen(focusedTile.peerId)
-              }
-              audio={shareAudioControl(focusedTile)}
-              dismissed={shareDismissControl(focusedTile)}
-              className="min-h-0 flex-1"
-            />
-          ) : (
-            <StageVideo
-              stream={screenStream}
-              videoRef={primaryVideoRef}
-              className="min-h-0 flex-1 object-contain"
-            />
-          )}
-          {/* The switcher. Kept while one share is blown up so the other one is
-              still reachable: swapping which screen is alone on the stage is
-              pure state, so it happens without leaving fullscreen at all. */}
-          {screenTiles.length > 1 && (soloTile !== null || !splitTwo) && (
-            <div className="flex shrink-0 gap-1 overflow-x-auto p-1">
-              {screenTiles.map((tile) => {
-                const selected =
-                  tile.peerId ===
-                  (soloTile ? soloTile.peerId : focusedTile?.peerId);
-                return (
-                  <button
-                    key={tile.peerId}
-                    type="button"
-                    className={cn(
-                      "truncate rounded-md px-2 py-1 text-[11px]",
-                      selected
-                        ? "bg-signal/20 text-signal"
-                        : "bg-ink-3 text-paper-muted",
-                    )}
-                    aria-pressed={selected}
-                    onClick={() => {
-                      onFocusScreenShare?.(tile.peerId);
-                      if (soloTile && tile.peerId !== soloTile.peerId) {
-                        fullscreen.toggleScreen(tile.peerId);
-                      }
-                    }}
-                  >
-                    {tile.isSelf
-                      ? t("voice.share.youPresenting")
-                      : tile.presenterName}
-                  </button>
+          ) : stage.tiles.length > 0 ? (
+            <ul
+              data-testid="stage-grid"
+              data-columns={gridColumns}
+              className={cn(
+                "grid h-full w-full",
+                // One publisher owns the stage edge to edge, the way a single
+                // share always has. Padding is what separates tiles from each
+                // other, so with nothing to separate it is only a border of
+                // wasted picture.
+                stage.tiles.length > 1 && "gap-2 p-2",
+              )}
+              style={{
+                gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))`,
+                // The featured row (a pin, or the one screen a crowded room
+                // is watching) gets twice the height of the rows under it.
+                // Without it a share at the top of a three-row grid is a third
+                // of the stage, which is not "featured" in any useful sense.
+                gridTemplateRows: stage.featured ? "minmax(0, 2fr)" : undefined,
+                // Equal rows for the rest. Without this they size to content,
+                // and a tile whose picture is absolutely positioned has none.
+                gridAutoRows: "minmax(0, 1fr)",
+              }}
+            >
+              {stage.tiles.map((tile, index) => {
+                const wideRow = stage.featured && index === 0 && gridColumns > 1;
+                const videoRef = index === 0 ? primaryVideoRef : undefined;
+                const pinned = pinnedTileId === tile.id;
+                if (tile.kind === "screen") {
+                  const screenTile = screenTiles.find(
+                    (candidate) => candidate.peerId === tile.key,
+                  );
+                  if (!screenTile) {
+                    return null;
+                  }
+                  return (
+                    <li
+                      key={tile.id}
+                      className={cn(
+                        "relative min-h-0 overflow-hidden bg-black",
+                        stage.tiles.length > 1 && "rounded-xl",
+                        wideRow && "col-span-full",
+                      )}
+                    >
+                      <ScreenTileFrame
+                        tile={screenTile}
+                        videoRef={videoRef}
+                        isFullscreen={false}
+                        showName={stage.tiles.length > 1}
+                        clickToFullscreen={clickFullscreens}
+                        onToggleFullscreen={() => {
+                          // Keep the header's "X is presenting" line pointing
+                          // at the share the person just acted on.
+                          onFocusScreenShare?.(screenTile.peerId);
+                          fullscreen.toggleScreen(screenTile.peerId);
+                        }}
+                        onPin={
+                          stage.tiles.length > 1
+                            ? () => togglePin(tile.id)
+                            : undefined
+                        }
+                        pinned={pinned}
+                        audio={shareAudioControl(screenTile)}
+                        dismissed={shareDismissControl(screenTile)}
+                        className="h-full w-full"
+                      />
+                    </li>
+                  );
+                }
+                const person = allPeople.find(
+                  (candidate) => candidate.key === tile.key,
                 );
-              })}
-            </div>
-          )}
-          {/* Everyone in the call, small, down the screen's right edge. */}
-          <ParticipantRail
-            open={railOpen}
-            onToggle={toggleRail}
-            people={[...(self ? [self] : []), ...remotes]}
-            renderTile={(person, scrollRoot) => (
-              <RailTile
-                key={person.key}
-                scrollRoot={scrollRoot}
-                person={person}
-                youLabel={t("voice.tile.you")}
-                compact={compactPeers}
-                onToggleFullscreen={
-                  person.stream
-                    ? () => toggleCameraFullscreen(person.key)
-                    : undefined
+                if (!person) {
+                  return null;
                 }
-                onPin={
-                  cameraCount >= 2 && !person.isSelf
-                    ? () => togglePin(person.key)
-                    : undefined
-                }
-                pinned={pinnedKey === person.key}
-              />
-            )}
-          />
-        </div>
-      ) : layout === "grid" ? (
-        <ul
-          className="grid h-full w-full gap-2 p-2"
-          style={{
-            gridTemplateColumns:
-              "repeat(auto-fit, minmax(min(45%, 16rem), 1fr))",
-          }}
-        >
-          {[...(self ? [self] : []), ...remotes].map((person) => (
-            <GridTile
-              key={person.key}
-              person={person}
-              youLabel={t("voice.tile.you")}
-              isFullscreen={false}
-              onToggleFullscreen={
-                person.stream
-                  ? () => toggleCameraFullscreen(person.key)
-                  : undefined
-              }
-              onPin={cameraCount >= 2 ? () => togglePin(person.key) : undefined}
-              pinned={pinnedKey === person.key}
-            />
-          ))}
-        </ul>
-      ) : layout === "spotlight" && spotlightPerson ? (
-        <>
-          <PrimaryTile
-            person={spotlightPerson}
-            videoRef={primaryVideoRef}
-            isFullscreen={false}
-            onToggleFullscreen={
-              spotlightPerson.stream
-                ? () => toggleCameraFullscreen(spotlightPerson.key)
-                : undefined
-            }
-            onPin={
-              cameraCount >= 2 ? () => togglePin(spotlightPerson.key) : undefined
-            }
-            pinned={pinnedKey === spotlightPerson.key}
-          />
-          {stripPeople.filter((person) => !person.isSelf).length > 0 && (
-            <div className="pointer-events-auto absolute right-3 top-12 flex max-h-[40%] flex-col gap-2 overflow-y-auto overscroll-contain pr-0.5 [scrollbar-width:thin]">
-              {stripPeople
-                .filter((person) => !person.isSelf)
-                .map((person) => (
-                  <MiniTile
-                    key={person.key}
+                return (
+                  <CameraTile
+                    key={tile.id}
                     person={person}
+                    videoRef={videoRef}
                     youLabel={t("voice.tile.you")}
-                    compact={compactPeers}
-                    onToggleFullscreen={
-                      person.stream
-                        ? () => toggleCameraFullscreen(person.key)
+                    wideRow={wideRow}
+                    rounded={stage.tiles.length > 1}
+                    clickToFullscreen={clickFullscreens}
+                    onToggleFullscreen={() => toggleCameraFullscreen(person.key)}
+                    onPin={
+                      stage.tiles.length > 1
+                        ? () => togglePin(tile.id)
                         : undefined
                     }
-                    onPin={() => togglePin(person.key)}
-                    pinned={pinnedKey === person.key}
+                    pinned={pinned}
                   />
-                ))}
-            </div>
+                );
+              })}
+            </ul>
+          ) : ringing ? (
+            <RingView
+              faces={ringFaces}
+              joining={joining}
+              label={statusLine ?? t("call.panel.calling")}
+            />
+          ) : (
+            /* Nobody is publishing. Not an empty box: the people who ARE here,
+               large, in the middle. It is the same room the strip describes,
+               and the state a voice call spends most of its life in. */
+            <RoomView people={listeners} youLabel={t("voice.tile.you")} />
           )}
-        </>
-      ) : self?.stream ? (
-        <PrimaryTile
-          person={self}
-          videoRef={primaryVideoRef}
-          isFullscreen={false}
-          onToggleFullscreen={() => toggleCameraFullscreen(self.key)}
-        />
-      ) : (
-        <RingView
-          faces={ringFaces}
-          joining={joining}
-          label={statusLine ?? t("call.panel.calling")}
-        />
-      )}
+        </div>
+        {/* The strip: everybody the stage did not take. Skipped while one
+            picture is alone on the stage (that is what "alone" means) and
+            while nobody is publishing at all, because then the room view above
+            is already showing these same faces, larger. */}
+        {showStrip && !soloPerson && !soloTile && (
+          <>
+          <ListenerStrip
+            people={listeners.map((person) => ({
+              key: person.key,
+              name: person.name,
+              avatarUrl: person.avatarUrl,
+              speaking: person.speaking,
+              muted: person.muted,
+              serverMuted: person.serverMuted,
+              isSelf: person.isSelf,
+              volume: person.volume,
+              onSetVolume: person.onSetVolume,
+              failed: person.failed,
+              onRetry: person.onRetry,
+            }))}
+            limit={wide ? STRIP_LIMIT_WIDE : STRIP_LIMIT_NARROW}
+            open={stripOpen}
+            onToggle={toggleStrip}
+            youLabel={t("voice.tile.you")}
+            compact={compactPeers}
+            /* Above the control bar in the stacking order, because the bar is
+               a full-width box that deliberately keeps its pointer events even
+               while faded (`use-idle-chrome.ts`), and its gradient reaches up
+               over this row. Without this a chip is drawn and cannot be
+               pressed, which is the worst of both. */
+            className="z-30"
+          />
+          {/* The bar's own territory. The strip stops here so the hang-up
+              button is never under a chip, and the chips are never under the
+              bar's box. Grows with the home indicator, like the bar does. */}
+          <div
+            aria-hidden="true"
+            className="h-[max(4rem,calc(env(safe-area-inset-bottom)+3.5rem))] shrink-0"
+          />
+          </>
+        )}
+      </div>
 
-      {/* Self-preview: floats over spotlight and ring layouts; the grid and the
-          screen rail already carry a self tile. */}
-      {(layout === "spotlight" || layout === "ring") &&
-        self &&
-        !soloPerson?.isSelf &&
-        !(layout === "spotlight" && spotlightPerson?.isSelf) &&
-        !(layout === "ring" && self.stream) && (
+      {/* Self-preview: our own camera, floating, in the one shape that earns
+          it — somebody else is publishing exactly one picture, so the stage
+          belongs to them (`stage-layout.ts`). Hidden while our own camera is
+          the thing blown up: a preview of the picture filling the screen. */}
+      {stage.selfPreview && self && !soloPerson?.isSelf && (
         <div
           data-call-tile={self.name}
           data-call-pip=""
@@ -1381,7 +1383,10 @@ function ActiveCall({
             "absolute z-10 touch-none overflow-hidden rounded-lg bg-ink-3 shadow-lg ring-1 ring-ink-4/80",
             compactPeers ? "w-24 sm:w-32" : "w-28 sm:w-40",
             pipDrag ? "cursor-grabbing" : "cursor-grab",
-            !pipDrag && PIP_CORNER_CLASS[pipCorner],
+            !pipDrag &&
+              (showStrip
+                ? PIP_CORNER_CLASS_WITH_STRIP
+                : PIP_CORNER_CLASS)[pipCorner],
           )}
           style={pipStyle}
           onPointerDown={onPipPointerDown}
@@ -1489,9 +1494,9 @@ function ActiveCall({
           </p>
           <p className="truncate text-xs text-paper-muted" role="status">
             {/* RingView already says Connecting/Calling at centre stage.
-                A video-call ring uses the self preview instead, so the
-                overlay still has to carry that line. */}
-            {layout === "ring" && !self?.stream
+                A video-call ring puts our own camera on the stage instead, so
+                the overlay still has to carry that line. */}
+            {ringing && stage.tiles.length === 0
               ? null
               : (statusLine ??
                 t("call.panel.inCall", { count: remotes.length + 1 }))}
@@ -1670,9 +1675,6 @@ function CallControls({
   onStopScreenShare,
   shareSystemAudio = false,
   onShareSystemAudioChange,
-  showGridToggle = false,
-  preferGrid = false,
-  onToggleGrid,
   onToggleCollapsed,
   onLeave,
   pushToTalk = false,
@@ -1701,9 +1703,6 @@ function CallControls({
   shareSystemAudio?: boolean;
   onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
-  showGridToggle?: boolean;
-  preferGrid?: boolean;
-  onToggleGrid?: () => void;
   onToggleCollapsed: () => void;
   onLeave: () => void;
   pushToTalk?: boolean;
@@ -2105,23 +2104,10 @@ function CallControls({
             </button>
           </Tooltip>
         )}
-      {showGridToggle && onToggleGrid && (
-        <Tooltip
-          label={preferGrid ? t("call.stage.focus") : t("call.stage.grid")}
-        >
-          <button
-            type="button"
-            aria-pressed={preferGrid}
-            className={cn(
-              "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
-              size,
-            )}
-            onClick={onToggleGrid}
-          >
-            <LayoutGrid className={iconSize} />
-          </button>
-        </Tooltip>
-      )}
+      {/* The grid / focus toggle used to sit here. It has no question left to
+          answer: publishers are always a grid and everyone else is always a
+          chip, so the only remaining "make this one big" is fullscreen, which
+          every tile carries and a click on the picture reaches. */}
       {!collapsed && fullscreenAvailable && (
         <Tooltip
           label={
@@ -2347,18 +2333,33 @@ function PrimaryTile({
   );
 }
 
-/** One cell of the group grid. */
-function GridTile({
+/**
+ * One publisher's camera, large, as a cell of the stage grid.
+ *
+ * `object-cover` rather than `contain`: a webcam is a face, and a face is
+ * better cropped than letterboxed. A share is the opposite and keeps
+ * `object-contain` in `ScreenTileFrame`; that difference is the only one
+ * between the two kinds of tile.
+ */
+export function CameraTile({
   person,
+  videoRef,
   youLabel,
-  isFullscreen = false,
+  wideRow = false,
+  rounded = true,
+  clickToFullscreen = false,
   onToggleFullscreen,
   onPin,
   pinned = false,
 }: {
   person: StagePerson;
+  videoRef?: RefObject<WebkitFullscreenVideo | null>;
   youLabel: string;
-  isFullscreen?: boolean;
+  /** The pinned tile: the whole first row of the grid. */
+  wideRow?: boolean;
+  /** False for the lone tile, which is flush with the stage's own edges. */
+  rounded?: boolean;
+  clickToFullscreen?: boolean;
   onToggleFullscreen?: () => void;
   onPin?: () => void;
   pinned?: boolean;
@@ -2368,7 +2369,9 @@ function GridTile({
     <li
       data-call-tile={person.name}
       className={cn(
-        "group relative min-h-0 overflow-hidden rounded-xl bg-ink-2",
+        "group relative min-h-0 overflow-hidden bg-ink-2",
+        rounded && "rounded-xl",
+        wideRow && "col-span-full",
         person.speaking && "ring-2 ring-success",
         person.connecting && "opacity-70",
       )}
@@ -2377,7 +2380,11 @@ function GridTile({
         <StageVideo
           stream={person.stream}
           mirrored={person.isSelf}
-          onDoubleClick={onToggleFullscreen}
+          videoRef={videoRef}
+          // The picture answers a double click only where a single click is
+          // not already the gesture; otherwise the click would fire twice and
+          // fullscreen would toggle straight back out.
+          onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
           label={cameraLabel(t, person)}
           className="absolute inset-0 h-full w-full object-cover"
         />
@@ -2386,8 +2393,13 @@ function GridTile({
           <StageAvatar person={person} />
         </div>
       )}
+      <TileClickTarget
+        enabled={clickToFullscreen}
+        label={t("call.stage.fullscreenTile", { name: person.name })}
+        onClick={onToggleFullscreen}
+      />
       <TileOverlay
-        isFullscreen={isFullscreen}
+        isFullscreen={false}
         onToggleFullscreen={onToggleFullscreen}
         onPin={onPin}
         pinned={pinned}
@@ -2399,6 +2411,7 @@ function GridTile({
         serverMuted={person.serverMuted}
         connecting={person.connecting}
         connectingLabel={t("voice.tile.connecting")}
+        prominent
       />
       {!person.isSelf && (
         <VoiceQualityMeter
@@ -2413,187 +2426,101 @@ function GridTile({
         onSetVolume={person.onSetVolume}
         failed={person.failed}
         onRetry={person.onRetry}
-        className="absolute bottom-6 left-1 right-1"
+        className="absolute bottom-8 left-2 right-2"
       />
     </li>
   );
 }
 
 /**
- * The column of participant thumbnails beside a screen share.
+ * The transparent layer that makes a click anywhere on a tile mean "that one,
+ * fullscreen".
  *
- * Bounded by the stage (top edge to just above the controls row) so that with
- * a hundred people in a watch party it scrolls instead of running off the
- * bottom, and collapsible so the share can have the whole width. Closed, it
- * renders nothing but the reopen button: no tiles, no `<video>` elements, no
- * per-person work at all.
+ * A real `<button>`, not an `onClick` on the tile: it has to be reachable from
+ * a keyboard, it has to say what it does, and `tapIsOnStage` has to be able to
+ * tell it apart from the picture so a thumb landing here is not also counted
+ * as the tap that toggles the control chrome. It sits under the tile's own
+ * controls (`z-20`) so the fullscreen and pin buttons still get their clicks.
  */
-function ParticipantRail({
-  open,
-  onToggle,
-  people,
-  renderTile,
+function TileClickTarget({
+  enabled,
+  label,
+  onClick,
 }: {
-  open: boolean;
-  onToggle: () => void;
-  people: StagePerson[];
-  renderTile: (
-    person: StagePerson,
-    scrollRoot: RefObject<HTMLDivElement | null>,
-  ) => ReactNode;
+  enabled: boolean;
+  label: string;
+  onClick?: () => void;
 }) {
-  const { t } = useTranslation();
-  const scrollRoot = useRef<HTMLDivElement>(null);
+  if (!enabled || !onClick) {
+    return null;
+  }
   return (
-    <div
-      data-testid="participant-rail"
-      data-open={open ? "true" : "false"}
-      className="pointer-events-none absolute bottom-16 right-3 top-12 z-10 flex flex-col items-end gap-2"
-    >
-      <Tooltip label={open ? t("voice.rail.hide") : t("voice.rail.show")}>
-        <button
-          type="button"
-          aria-label={open ? t("voice.rail.hide") : t("voice.rail.show")}
-          aria-expanded={open}
-          aria-controls="participant-rail-tiles"
-          onClick={onToggle}
-          className="pointer-events-auto flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal"
-        >
-          {open ? (
-            <ChevronRight className="h-3.5 w-3.5" />
-          ) : (
-            <ChevronLeft className="h-3.5 w-3.5" />
-          )}
-        </button>
-      </Tooltip>
-      {open && (
-        <div
-          id="participant-rail-tiles"
-          ref={scrollRoot}
-          className="pointer-events-auto flex min-h-0 flex-col gap-2 overflow-y-auto overscroll-contain pr-0.5 [scrollbar-width:thin]"
-        >
-          {people.map((person) => renderTile(person, scrollRoot))}
-        </div>
-      )}
-    </div>
+    <button
+      type="button"
+      data-testid="tile-click-target"
+      aria-label={label}
+      className="absolute inset-0 z-[1] cursor-zoom-in focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-signal"
+      onClick={onClick}
+    />
   );
 }
 
 /**
- * A rail thumbnail that only keeps a live `<video>` while it is near the
- * visible part of the rail. Tiles scrolled well out of view fall back to the
- * avatar, so a long rail costs the decoders of a short one. Without an
- * `IntersectionObserver` (old WebViews, test runners) every tile is treated as
- * visible, which is the previous behaviour.
+ * Nobody is publishing: the room, drawn as the room.
+ *
+ * The stage is only expanded here because somebody just stopped a camera or
+ * the call is settling, and an empty black box reads as a bug. So it shows the
+ * same people the strip would, larger and centred, with the same overflow rule
+ * so a lobby of 200 is still one screen.
  */
-function RailTile({
-  scrollRoot,
-  ...tile
-}: MiniTileProps & { scrollRoot: RefObject<HTMLDivElement | null> }) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [near, setNear] = useState(true);
-  useEffect(() => {
-    const el = ref.current;
-    if (!el || typeof IntersectionObserver === "undefined") {
-      return;
-    }
-    const io = new IntersectionObserver(
-      ([entry]) => setNear(entry?.isIntersecting ?? true),
-      // Half a rail of slack either side, so scrolling a tile into view does
-      // not show a beat of avatar before its frames arrive.
-      { root: scrollRoot.current, rootMargin: "50% 0px" },
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [scrollRoot]);
-  return (
-    <div ref={ref} className="shrink-0">
-      <MiniTile {...tile} parked={!near} />
-    </div>
-  );
-}
-
-type MiniTileProps = {
-  person: StagePerson;
-  youLabel: string;
-  compact?: boolean;
-  onToggleFullscreen?: () => void;
-  onPin?: () => void;
-  pinned?: boolean;
-  /** Off-screen on the rail: show the avatar, keep no `<video>` alive. */
-  parked?: boolean;
-};
-
-/** A thumbnail on the screen-share rail. */
-function MiniTile({
-  person,
+export function RoomView({
+  people,
   youLabel,
-  compact = false,
-  onToggleFullscreen,
-  onPin,
-  pinned = false,
-  parked = false,
-}: MiniTileProps) {
+}: {
+  people: StagePerson[];
+  youLabel: string;
+}) {
   const { t } = useTranslation();
+  const slots = listenerStripSlots(people, ROOM_VIEW_LIMIT);
   return (
     <div
-      data-call-tile={person.name}
-      className={cn(
-        "group pointer-events-auto relative shrink-0 overflow-hidden rounded-md bg-ink-2/90",
-        compact ? "w-20 sm:w-24" : "w-24 sm:w-32",
-        person.speaking && "ring-2 ring-success",
-      )}
+      data-testid="stage-room"
+      className="flex h-full w-full flex-col items-center justify-center gap-4 p-4"
     >
-      <div className="relative aspect-video w-full">
-        {person.stream && !parked ? (
-          <StageVideo
-            stream={person.stream}
-            mirrored={person.isSelf}
-            onDoubleClick={onToggleFullscreen}
-            label={cameraLabel(t, person)}
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center">
+      <ul className="flex max-w-3xl flex-wrap items-center justify-center gap-x-5 gap-y-3">
+        {slots.shown.map((person) => (
+          <li
+            key={person.key}
+            data-call-listener={person.name}
+            className="flex w-20 flex-col items-center gap-1"
+          >
             <VoiceAvatar
               name={person.name}
               avatarUrl={person.avatarUrl}
               isSpeaking={person.speaking}
               muted={person.muted}
-              size="md"
+              size="lg"
             />
-          </div>
+            <span className="max-w-full truncate text-[11px] text-paper-muted">
+              {person.isSelf ? `${person.name} ${youLabel}` : person.name}
+            </span>
+          </li>
+        ))}
+        {slots.overflow > 0 && (
+          <li className="text-sm tabular-nums text-paper-muted">
+            +{slots.overflow}
+          </li>
         )}
-        <TileOverlay
-          onToggleFullscreen={onToggleFullscreen}
-          onPin={onPin}
-          pinned={pinned}
-          name={person.name}
-        />
-        <TileBadge
-          name={person.isSelf ? youLabel : person.name}
-          muted={person.muted}
-          serverMuted={person.serverMuted}
-        />
-        {!person.isSelf && (
-          <VoiceQualityMeter
-            quality={person.quality ?? null}
-            compact
-            className="absolute right-1 top-1 z-20"
-          />
-        )}
-        <PeerTileControls
-          name={person.name}
-          volume={person.volume}
-          onSetVolume={person.onSetVolume}
-          failed={person.failed}
-          onRetry={person.onRetry}
-          className="absolute bottom-5 left-1 right-1"
-        />
-      </div>
+      </ul>
+      <p className="text-xs text-paper-muted" role="status">
+        {t("voice.stage.noVideo")}
+      </p>
     </div>
   );
 }
+
+/** How many faces the empty-stage room view draws before it counts the rest. */
+const ROOM_VIEW_LIMIT = 12;
 
 /**
  * "Calling…": the people being rung, large, with a pulse that respects
@@ -2771,7 +2698,10 @@ function ScreenTileFrame({
   videoRef,
   isFullscreen,
   showName = false,
+  clickToFullscreen = false,
   onToggleFullscreen,
+  onPin,
+  pinned = false,
   audio,
   dismissed,
   className,
@@ -2780,7 +2710,11 @@ function ScreenTileFrame({
   videoRef?: RefObject<WebkitFullscreenVideo | null>;
   isFullscreen: boolean;
   showName?: boolean;
+  /** A click anywhere on the picture blows it up. See `TileClickTarget`. */
+  clickToFullscreen?: boolean;
   onToggleFullscreen?: () => void;
+  onPin?: () => void;
+  pinned?: boolean;
   /**
    * The slider for THIS share's sound, absent when there is no sound to move
    * (our own tile, or a share that arrived silent). It lives on the share
@@ -2833,17 +2767,24 @@ function ScreenTileFrame({
   }
 
   return (
-    <div className={cn("relative", className)}>
+    <div className={cn("group relative", className)}>
       <StageVideo
         stream={tile.stream}
         videoRef={videoRef}
-        onDoubleClick={onToggleFullscreen}
+        onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
         className="h-full w-full object-contain"
       />
-      {/* Top *left*: the stage already floats everyone's camera tiles at the
-          top right, and on a split stage the right-hand share sits underneath
-          them. */}
-      <div className="absolute left-2 top-2 flex max-w-[80%] items-center gap-1.5">
+      <TileClickTarget
+        enabled={clickToFullscreen}
+        label={label}
+        onClick={onToggleFullscreen}
+      />
+      {/* Top left, and out of the way until wanted: the stage's own title
+          overlay lives in this corner, and a tile that keeps three buttons
+          parked on top of it makes both unreadable. Same rule and the same
+          classes as a camera tile's `TileOverlay`; a touch device, which has
+          no hover to reveal anything, keeps them all the time. */}
+      <div className="absolute left-2 top-2 z-20 flex max-w-[80%] items-center gap-1.5 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100">
         {/* Only a peer's share can be declined. Declining our own would mean
             hiding the thing we are broadcasting, which is not a thing anyone
             wants and would read as having stopped. */}
@@ -2885,12 +2826,41 @@ function ScreenTileFrame({
             </button>
           </Tooltip>
         )}
-        {showName && (
-          <span className="pointer-events-none truncate rounded bg-ink/70 px-1.5 py-0.5 text-[11px] text-paper-muted">
-            {tile.isSelf ? t("voice.share.youPresenting") : tile.presenterName}
-          </span>
+        {onPin && (
+          <Tooltip
+            label={
+              pinned
+                ? t("call.stage.unpin")
+                : t("call.stage.pin", { name: tile.presenterName })
+            }
+            side="bottom"
+            align="start"
+          >
+            <button
+              type="button"
+              data-testid="share-pin"
+              aria-pressed={pinned}
+              className={cn(
+                "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
+                pinned && "text-signal",
+              )}
+              onClick={onPin}
+            >
+              <Pin className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
         )}
       </div>
+      {/* The name goes where every other tile keeps its name: the bottom left,
+          always visible, out of the title overlay's corner. It names the
+          picture rather than the act ("Sua tela"), because "X is presenting"
+          is the overlay's sentence and saying it twice is how the two ended up
+          stacked on each other. */}
+      {showName && (
+        <span className="pointer-events-none absolute bottom-0 left-0 z-10 flex max-w-full items-center gap-1 truncate rounded-tr-md bg-ink/70 px-1.5 py-0.5 text-[10px] text-paper">
+          {tile.isSelf ? t("voice.share.yourScreen") : tile.presenterName}
+        </span>
+      )}
       {/* Bottom right, away from the name and the fullscreen button. Hidden
           until hover while it sits at unity, the same rule the face tiles
           use, so a share nobody has adjusted is still just a picture. */}

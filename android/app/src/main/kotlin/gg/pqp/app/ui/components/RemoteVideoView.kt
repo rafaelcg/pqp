@@ -29,10 +29,10 @@ import gg.pqp.app.R
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
-import gg.pqp.app.voice.RemoteScreen
+import gg.pqp.app.voice.RemoteVideoFeed
 
 /**
- * Somebody else's screen, full bleed, from whichever transport it came over.
+ * Somebody else's video, full bleed, from whichever transport it came over.
  *
  * The renderer is a plain Android view because there is no Compose equivalent:
  * WebRTC hands out frames to a `VideoSink` and a `SurfaceViewRenderer` is the
@@ -42,7 +42,7 @@ import gg.pqp.app.voice.RemoteScreen
  * `org.webrtc` and LiveKit into `livekit.org.webrtc`, two unrelated libwebrtc
  * builds in this process, each with its own GL context. A renderer initialised
  * on one cannot draw the other's frames; it compiles and fails at the first
- * frame. [RemoteScreen] is sealed so the compiler picks the renderer here.
+ * frame. [RemoteVideoFeed] is sealed so the compiler picks the renderer here.
  *
  * Two lifecycle rules, and getting either wrong is a leak that survives the
  * call. The sink has to come *off* the track before the renderer is released,
@@ -50,9 +50,14 @@ import gg.pqp.app.voice.RemoteScreen
  * all: it holds an EGL surface, and a phone that opens and closes a share a few
  * times without this runs out of them.
  *
- * `SCALE_ASPECT_FIT` rather than fill, because this is a screen and not a
- * portrait video: cropping a shared screen to a phone's aspect ratio hides
- * whatever the presenter was pointing at.
+ * **Fit or fill, and it depends on what the picture is.** A shared screen is
+ * always `SCALE_ASPECT_FIT`: cropping one to a phone's aspect ratio hides
+ * whatever the presenter was pointing at, and the letterboxing is the price. A
+ * camera tile is the opposite case, `fill = true`: it is a face in a small
+ * fixed rectangle, nobody is reading its corners, and fitting a 16:9 camera
+ * into a 4:3 tile would draw two black bars and a face half the size it could
+ * be. The camera *viewer* fits again, because at full screen the bars cost
+ * nothing and cropping somebody out of their own frame is worse.
  *
  * The frame around it is the design pass's only addition here. Aspect-fit
  * letterboxes, so an unframed share is a black rectangle inside a near-black
@@ -63,9 +68,10 @@ import gg.pqp.app.voice.RemoteScreen
  * clip, so the corners are rounded by the line and by the black behind it.
  */
 @Composable
-fun RemoteScreenView(
-    screen: RemoteScreen,
+fun RemoteVideoView(
+    feed: RemoteVideoFeed,
     modifier: Modifier = Modifier,
+    fill: Boolean = false,
 ) {
     val shape = MaterialTheme.shapes.medium
     Box(
@@ -74,34 +80,48 @@ fun RemoteScreenView(
             .background(Color.Black, shape)
             .border(Sizes.hairline, MaterialTheme.colorScheme.outline, shape),
     ) {
-        when (screen) {
-            is RemoteScreen.Mesh -> MeshScreenRenderer(screen, Modifier.fillMaxSize())
-            is RemoteScreen.LiveKit -> LiveKitScreenRenderer(screen, Modifier.fillMaxSize())
+        when (feed) {
+            is RemoteVideoFeed.Mesh -> MeshVideoRenderer(feed, fill, Modifier.fillMaxSize())
+            is RemoteVideoFeed.LiveKit -> LiveKitVideoRenderer(feed, fill, Modifier.fillMaxSize())
         }
     }
 }
 
 @Composable
-private fun MeshScreenRenderer(screen: RemoteScreen.Mesh, modifier: Modifier) {
+private fun MeshVideoRenderer(feed: RemoteVideoFeed.Mesh, fill: Boolean, modifier: Modifier) {
     val context = LocalContext.current
-    val renderer = remember(screen.eglContext) {
+    val renderer = remember(feed.eglContext) {
         org.webrtc.SurfaceViewRenderer(context).apply {
-            init(screen.eglContext, null)
-            setScalingType(org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            init(feed.eglContext, null)
             setEnableHardwareScaler(true)
         }
     }
 
-    DisposableEffect(screen.track, renderer) {
-        screen.track.addSink(renderer)
-        onDispose { runCatching { screen.track.removeSink(renderer) } }
+    DisposableEffect(feed.track, renderer) {
+        feed.track.addSink(renderer)
+        onDispose { runCatching { feed.track.removeSink(renderer) } }
     }
 
     DisposableEffect(renderer) {
         onDispose { runCatching { renderer.release() } }
     }
 
-    AndroidView(factory = { renderer }, modifier = modifier)
+    // Scaling in `update`, not in `remember`, so a tile that becomes the viewer
+    // keeps its renderer and only changes how it draws. Rebuilding it on `fill`
+    // would release an EGL surface and take a live picture with it mid-tap.
+    AndroidView(
+        factory = { renderer },
+        modifier = modifier,
+        update = {
+            it.setScalingType(
+                if (fill) {
+                    org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FILL
+                } else {
+                    org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT
+                },
+            )
+        },
+    )
 }
 
 /**
@@ -109,40 +129,56 @@ private fun MeshScreenRenderer(screen: RemoteScreen.Mesh, modifier: Modifier) {
  *
  * `Room.initVideoRenderer` is the only way to get the SFU's GL context: it
  * belongs to LiveKit's libwebrtc and is not exposed on its own. It also sets
- * the scaling type and the hardware scaler, which this then overrides with
- * aspect-fit for the same reason the mesh renderer uses it.
+ * the scaling type and the hardware scaler, which this then overrides for the
+ * same reason the mesh renderer does.
  *
  * Attached with `addRenderer` rather than `addSink`, because that is the API
  * on a `RemoteVideoTrack` and it is what keeps the track's own sink list
  * right. What layer arrives, and whether anything arrives at all, is decided
  * by [gg.pqp.app.voice.LiveKitEngine] rather than by this view: the SDK's
- * view-measuring path is deliberately off there.
+ * view-measuring path is deliberately off there, so a camera keeps flowing
+ * for as long as the composable that asked for it is alive, and no longer.
  */
 @Composable
-private fun LiveKitScreenRenderer(screen: RemoteScreen.LiveKit, modifier: Modifier) {
+private fun LiveKitVideoRenderer(feed: RemoteVideoFeed.LiveKit, fill: Boolean, modifier: Modifier) {
     val context = LocalContext.current
-    val renderer = remember(screen.room) {
+    val renderer = remember(feed.room) {
         io.livekit.android.renderer.SurfaceViewRenderer(context).apply {
-            screen.room.initVideoRenderer(this)
-            setScalingType(livekit.org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT)
+            feed.room.initVideoRenderer(this)
             setEnableHardwareScaler(true)
         }
     }
 
-    DisposableEffect(screen.track, renderer) {
-        screen.track.addRenderer(renderer)
-        onDispose { runCatching { screen.track.removeRenderer(renderer) } }
+    DisposableEffect(feed.track, renderer) {
+        feed.track.addRenderer(renderer)
+        onDispose { runCatching { feed.track.removeRenderer(renderer) } }
     }
 
     DisposableEffect(renderer) {
         onDispose { runCatching { renderer.release() } }
     }
 
-    AndroidView(factory = { renderer }, modifier = modifier)
+    AndroidView(
+        factory = { renderer },
+        modifier = modifier,
+        update = {
+            it.setScalingType(
+                if (fill) {
+                    livekit.org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FILL
+                } else {
+                    livekit.org.webrtc.RendererCommon.ScalingType.SCALE_ASPECT_FIT
+                },
+            )
+        },
+    )
 }
 
 /**
  * The viewer, as a full-screen dialog rather than a navigation destination.
+ *
+ * One dialog for both kinds of video: a share opened from the Watch row and a
+ * camera opened from the strip. What differs is [fill] and the label, and
+ * neither is worth a second copy of the lifecycle rules above.
  *
  * A share starts and stops on somebody else's schedule, so it cannot be a place
  * in the back stack that outlives it: a route left behind after the presenter
@@ -156,10 +192,12 @@ private fun LiveKitScreenRenderer(screen: RemoteScreen.LiveKit, modifier: Modifi
  * pale.
  */
 @Composable
-fun ScreenShareDialog(
-    screen: RemoteScreen,
-    presenter: String,
+fun RemoteVideoDialog(
+    feed: RemoteVideoFeed,
+    name: String,
     onClose: () -> Unit,
+    closeLabel: String = stringResource(R.string.voice_close_screen),
+    fill: Boolean = false,
 ) {
     Dialog(
         onDismissRequest = onClose,
@@ -170,11 +208,12 @@ fun ScreenShareDialog(
                 .fillMaxSize()
                 .background(Color.Black),
         ) {
-            RemoteScreenView(
-                screen = screen,
+            RemoteVideoView(
+                feed = feed,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(Spacing.sm),
+                fill = fill,
             )
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
@@ -185,7 +224,7 @@ fun ScreenShareDialog(
                     .padding(Spacing.lg),
             ) {
                 Text(
-                    text = presenter,
+                    text = name,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(
@@ -207,7 +246,7 @@ fun ScreenShareDialog(
             ) {
                 Icon(
                     imageVector = PqpIcons.ExitFullscreen,
-                    contentDescription = stringResource(R.string.voice_close_screen),
+                    contentDescription = closeLabel,
                     modifier = Modifier.size(Sizes.iconAction),
                 )
             }

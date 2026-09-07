@@ -446,7 +446,7 @@ test("a group conversation gets a participant list; a 1:1 gets nothing", async (
   await expect(section(page, "all")).toContainText(third.displayName);
 });
 
-test("right-click offers the light actions and a door to the panel, not a second ban button", async ({
+test("right-click puts the ladder on the row itself, and keeps the door to the panel", async ({
   page,
 }) => {
   const shared = await seedServer("roster-k", "roster-l");
@@ -468,12 +468,16 @@ test("right-click offers the light actions and a door to the panel, not a second
   await expect(
     menu.getByRole("menuitem", { name: "Manage members" }),
   ).toBeVisible();
-  // The enforcement ladder lives in one place. If these ever appear here, two
-  // copies of it exist.
-  await expect(
-    menu.getByRole("menuitem", { name: "Ban from community" }),
-  ).toHaveCount(0);
+  // The ladder is HERE now. It used to be a door into the panel and nothing
+  // else, which meant timing one person out cost two lists and two menus.
+  // There is still only one implementation of it. See `member-moderation.ts`.
   await expect(
     menu.getByRole("menuitem", { name: "Time out" }),
-  ).toHaveCount(0);
+  ).toBeVisible();
+  await expect(
+    menu.getByRole("menuitem", { name: "Remove from community" }),
+  ).toBeVisible();
+  await expect(
+    menu.getByRole("menuitem", { name: "Ban from community" }),
+  ).toBeVisible();
 });

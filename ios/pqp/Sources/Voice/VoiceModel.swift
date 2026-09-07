@@ -274,11 +274,19 @@ final class VoiceModel {
     /// Whether there is any picture of a person to show, ours included.
     var hasCameras: Bool { isCameraOn || !cameraPeers.isEmpty }
 
+    /// True while a start or a stop is running, so the control can be shown as
+    /// working rather than as ignoring taps. See `CameraGate`.
+    private(set) var isCameraBusy = false
+    private var cameraWatchdog: Task<Void, Never>?
+
     func toggleCamera() async {
-        if isCameraOn {
-            await disableCamera()
-        } else {
-            await enableCamera()
+        switch CameraGate.act(
+            isOn: isCameraOn, isBusy: isCameraBusy,
+            isLive: status == .connected, canPublish: canSpeak
+        ) {
+        case .start: await enableCamera()
+        case .stop: await disableCamera()
+        case .ignore: return
         }
     }
 
@@ -292,34 +300,49 @@ final class VoiceModel {
 
     private func enableCamera() async {
         guard status == .connected, canSpeak else { return }
+        isCameraBusy = true
+        defer { isCameraBusy = false }
         guard await Self.requestCamera() else {
-            cameraError = String(localized: "Camera access is off. Enable it in Settings.")
+            cameraError = CameraFailure.permission.message
             return
         }
-        let started: (feed: VideoFeed, streamId: String)?
-        if transport == .livekit {
-            started = await sfu.startCamera()
-        } else if let mesh = await voice.startCamera() {
-            started = (.mesh(mesh.track.value), mesh.streamId)
-        } else {
-            started = nil
-        }
-        guard let started else {
-            cameraError = String(localized: "Could not start the camera.")
+        // `status` is re-read: asking for permission can take as long as the
+        // person takes to answer a system alert, and the room may be gone.
+        guard status == .connected, canSpeak else { return }
+        let started: (feed: VideoFeed, streamId: String)
+        do {
+            if transport == .livekit {
+                started = try await sfu.startCamera()
+            } else {
+                let mesh = try await voice.startCamera()
+                started = (.mesh(mesh.track.value), mesh.streamId)
+            }
+        } catch {
+            cameraError = (error as? CameraFailure ?? .captureFailed).message
             return
         }
         localCamera = started.feed
         isCameraOn = true
         cameraError = nil
-        await voice.setVideoMode(true)
+        // Only on the mesh: LiveKit owns its own audio session, and the mesh's
+        // `RTCAudioSession` writing a mode into it from here is a change the
+        // SFU never asked for.
+        if transport != .livekit {
+            await voice.setVideoMode(true)
+        }
         // The announcement is what lets everyone file the arriving track as a
         // face rather than a screen. Sent after publishing because the stream id
         // does not exist until then; the roster re-check on the receiving side
         // (`setPeerCameraStreamId`) is what makes either ordering correct.
         await session?.realtime.setCamera(streamId: started.streamId)
+        watchForFirstFrame()
     }
 
     private func disableCamera() async {
+        isCameraBusy = true
+        defer { isCameraBusy = false }
+        cameraWatchdog?.cancel()
+        cameraWatchdog = nil
         isCameraOn = false
         localCamera = nil
         // Told before the track goes: a peer that watches the stream vanish with
@@ -331,7 +354,29 @@ final class VoiceModel {
         } else {
             await voice.stopCamera()
         }
-        await voice.setVideoMode(false)
+        if transport != .livekit {
+            await voice.setVideoMode(false)
+        }
+    }
+
+    /// A capture that opened and never produced a picture is still a failure.
+    ///
+    /// iOS can interrupt a capture session the instant it starts and report
+    /// nothing back through the API that started it, so the only honest test is
+    /// whether a frame arrived. Same shape as the broadcast watchdog in
+    /// `ScreenShareController`, and the same reason for existing: silence is
+    /// the one outcome a person cannot act on.
+    private func watchForFirstFrame() {
+        cameraWatchdog?.cancel()
+        cameraWatchdog = Task { [weak self] in
+            try? await Task.sleep(for: CameraFailure.firstFrameDeadline)
+            guard !Task.isCancelled, let self, self.isCameraOn else { return }
+            let sawFrames = self.transport == .livekit
+                ? await self.sfu.cameraHasFrames()
+                : await self.voice.cameraHasFrames()
+            guard !Task.isCancelled, self.isCameraOn, !sawFrames else { return }
+            self.cameraError = CameraFailure.noFrames.message
+        }
     }
 
     private static func requestCamera() async -> Bool {
@@ -439,6 +484,9 @@ final class VoiceModel {
         intendedChannel = nil
         VideoQualitySettings.shared.removeListener(handlerKey)
         VideoSendReport.shared.clear()
+        cameraWatchdog?.cancel()
+        cameraWatchdog = nil
+        isCameraBusy = false
         // Announced before the socket work below, while the frame can still be
         // sent: a room that never hears the camera go off keeps drawing the last
         // thing it saw of you.
@@ -641,6 +689,8 @@ final class VoiceModel {
                 // The capture went with the mesh, so the button has to go back
                 // to off rather than claiming a camera that is no longer
                 // publishing anywhere.
+                self.cameraWatchdog?.cancel()
+                self.cameraWatchdog = nil
                 self.localCamera = nil
                 self.isCameraOn = false
                 try? await voice.startAudio()
@@ -664,6 +714,8 @@ final class VoiceModel {
                     intendedChannel = nil
                     peers = []
                     selfPeerId = nil
+                    cameraWatchdog?.cancel()
+                    cameraWatchdog = nil
                     localCamera = nil
                     isCameraOn = false
                     isServerMuted = false

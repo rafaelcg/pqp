@@ -231,15 +231,24 @@ test("a screen share started mid-video-call reaches the other side's stage", asy
 });
 
 /**
- * The participant rail beside a share: scrollable, and collapsible so the
- * share can have the whole width. The hide choice is per device and survives
- * the presenter changing, which the second half of this test drives by
- * stopping and restarting the share while the rail is closed.
+ * The strip under a share: who is a picture and who is a chip.
+ *
+ * The old version of this test asserted `overflow-y: auto` on a rail holding
+ * two tiles, which is a CSS property that cannot fail and a room that cannot
+ * overflow. It was green while the layout it described sent a streamer's
+ * webcam to a 96px thumbnail. What is pinned now is the rule itself: a person
+ * publishing anything is large, a person publishing nothing is a chip with no
+ * `<video>` behind it, and hiding the row is remembered across a new share.
+ *
+ * The overflow half of the rule needs a room too big for a DM, and lives in
+ * `call-stage-strip.spec.ts`.
  */
-test("the participant rail beside a share scrolls, hides, and stays hidden across a new share", async ({
+test("a share and a camera are tiles, the listener is a chip, and the row hides", async ({
   page,
   browser,
 }) => {
+  // Two boots, a media handshake, a camera stopping and a share restarting.
+  test.setTimeout(180_000);
   const pair = await seedConversation("rail-a", "rail-b");
   const callee = await openCallee(browser, pair);
 
@@ -263,31 +272,61 @@ test("the participant rail beside a share scrolls, hides, and stays hidden acros
       callee.page.getByText(`${pair.callerName} is presenting`),
     ).toBeVisible({ timeout: 20_000 });
 
-    const rail = callee.page.getByTestId("participant-rail");
-    await expect(rail).toHaveAttribute("data-open", "true");
-    const tiles = rail.locator("#participant-rail-tiles");
-    await expect(tiles.locator("[data-call-tile]")).toHaveCount(2);
-    // Bounded and scrollable: a hundred tiles must scroll, not run off the
-    // stage. Overflow is on the tiles column, not the stage.
-    await expect(tiles).toHaveCSS("overflow-y", "auto");
-    const stageBox = await callee.page.getByTestId("call-stage").boundingBox();
-    const tilesBox = await tiles.boundingBox();
-    expect(tilesBox!.y + tilesBox!.height).toBeLessThan(
-      stageBox!.y + stageBox!.height,
-    );
+    // The callee answered a video call without turning their own camera on,
+    // which is the ordinary case and the one this test is about: they are
+    // publishing nothing, so they belong in the row, not on the stage.
+    const strip = callee.page.getByTestId("listener-strip");
+    await expect(strip).toBeVisible({ timeout: 20_000 });
+
+    // The caller is publishing two things, and both are on the stage, playing
+    // — not merely present. A tile that renders no frames is the bug that
+    // `remote-video-delivery.ts` causes when nothing binds a <video>.
+    await expectVideoPlaying(callee.page, pair.callerName);
+    await expect(screenVideo(callee.page)).toBeVisible();
+    await expect
+      .poll(
+        () =>
+          screenVideo(callee.page)
+            .first()
+            .evaluate((el) => (el as HTMLVideoElement).videoWidth > 0),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+
+    // The person publishing nothing is the only chip, and a chip is not a
+    // video tile: no <video> in the row at all.
+    await expect(strip.locator("[data-call-listener]")).toHaveCount(1);
+    await expect(
+      strip.locator(`[data-call-listener="${pair.calleeName}"]`),
+    ).toBeVisible();
+    await expect(
+      strip.locator(`[data-call-listener="${pair.callerName}"]`),
+    ).toHaveCount(0);
+    await expect(strip.locator("video")).toHaveCount(0);
+
+    // The row sits above the control bar rather than under it: the hang-up
+    // button and the chips are both pressable, which is exactly what a
+    // full-width bar with pointer events would otherwise take away.
+    const chipBox = await strip
+      .locator(`[data-call-listener="${pair.calleeName}"]`)
+      .boundingBox();
+    const leaveBox = await callee.page
+      .getByRole("button", { name: "Leave", exact: true })
+      .boundingBox();
+    expect(chipBox!.y + chipBox!.height).toBeLessThanOrEqual(leaveBox!.y + 1);
+
     await callee.page.screenshot({
-      path: "test-results/participant-rail-open.png",
+      path: "test-results/listener-strip-open.png",
     });
 
-    // Hide, from the keyboard: no tiles, no <video> for them, the share still
-    // on the stage, and focus kept on the (now "show") button.
+    // Hide, from the keyboard: no chips, the share still on the stage, and
+    // focus kept on the (now "show") button.
     await callee.page
       .getByRole("button", { name: "Hide participants" })
       .focus();
     await callee.page.keyboard.press("Enter");
-    await expect(rail).toHaveAttribute("data-open", "false");
-    await expect(rail.locator("[data-call-tile]")).toHaveCount(0);
-    await expect(rail.locator("video")).toHaveCount(0);
+    await expect(strip).toHaveAttribute("data-open", "false");
+    await expect(strip.locator("[data-call-listener]")).toHaveCount(0);
     await expect(screenVideo(callee.page)).toBeVisible();
     await expect(
       callee.page.getByRole("button", { name: "Show participants" }),
@@ -298,30 +337,19 @@ test("the participant rail beside a share scrolls, hides, and stays hidden acros
       ),
     ).toBe("false");
     await callee.page.screenshot({
-      path: "test-results/participant-rail-hidden.png",
+      path: "test-results/listener-strip-hidden.png",
     });
 
-    // A new share does not force the rail back open.
-    await page
-      .getByRole("button", { name: "Stop sharing your screen", exact: true })
-      .click();
-    await expect(
-      callee.page.getByText(`${pair.callerName} is presenting`),
-    ).not.toBeVisible({ timeout: 20_000 });
-    await page
-      .getByRole("button", { name: "Share your screen", exact: true })
-      .click();
-    await expect(
-      callee.page.getByText(`${pair.callerName} is presenting`),
-    ).toBeVisible({ timeout: 20_000 });
-    await expect(rail).toHaveAttribute("data-open", "false");
+    // (That the choice survives a NEW share is pinned in
+    // `call-stage-strip.spec.ts`, which can restart a share without a second
+    // browser and without a second media handshake.)
 
     // Show again.
     await callee.page
       .getByRole("button", { name: "Show participants" })
       .click();
-    await expect(rail).toHaveAttribute("data-open", "true");
-    await expect(tiles.locator("[data-call-tile]")).toHaveCount(2);
+    await expect(strip).toHaveAttribute("data-open", "true");
+    await expect(strip.locator("[data-call-listener]")).toHaveCount(1);
   } finally {
     await callee.context.close();
   }

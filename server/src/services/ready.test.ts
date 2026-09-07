@@ -55,6 +55,7 @@ function harness(): Harness {
             if (livekit === "hang") return hang();
             return [];
           },
+    livekitHost: () => (livekit === "unconfigured" ? null : "sfu.pqp.gg"),
     probeStorage: () => null,
     // Real timeouts would make the suite slow; the behaviour is the same.
     postgresTimeoutMs: 5,
@@ -192,6 +193,9 @@ describe("ready checker", () => {
     let r = await h.report();
     expect(r.checks.livekit.ok).toBe(true);
     expect("ms" in r.checks.livekit).toBe(true);
+    // The SFU host rides on the check, hostname only, so a rollback to
+    // LiveKit Cloud is visible to a monitor that only reads this endpoint.
+    expect(r.checks.livekit.host).toBe("sfu.pqp.gg");
     await Promise.all([h.report(), h.report(), h.report()]);
     expect(h.livekitProbes()).toBe(1);
 
@@ -200,6 +204,7 @@ describe("ready checker", () => {
     r = await h.report();
     expect(h.livekitProbes()).toBe(2);
     expect(r.checks.livekit.ok).toBe(false);
+    expect(r.checks.livekit.host).toBe("sfu.pqp.gg");
     expect(r.ok).toBe(false);
   });
 
