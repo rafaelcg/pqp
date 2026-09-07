@@ -225,6 +225,9 @@ importers:
       '@livekit/rtc-node':
         specifier: 0.13.34
         version: 0.13.34
+      pg:
+        specifier: ^8.13.1
+        version: 8.22.0
       tsx:
         specifier: ^4.19.2
         version: 4.23.0
@@ -238,6 +241,9 @@ importers:
       '@types/node':
         specifier: ^22.10.5
         version: 22.20.1
+      '@types/pg':
+        specifier: ^8.11.10
+        version: 8.20.0
       '@types/ws':
         specifier: ^8.5.13
         version: 8.18.1

@@ -44,7 +44,9 @@ objects from `VideoStream`/`AudioStream`), not browser compositor rendering or
 audibility. Add browser/device sentinels before treating this as a product UX
 acceptance result. The runner does not provision, deploy, reset a database, or
 delete the room automatically. `cleanup` is deliberately a separate explicit
-command and only deletes the server ID recorded in the manifest.
+command. It requires an explicitly supplied `PQP_LOAD_DATABASE_URL`, deletes
+only the manifest's server, then deletes only the exact synthetic Clerk IDs
+derived from `TEST_RUN_ID`; it refuses to start without that URL.
 
 For a small isolated smoke, set `PQP_LOAD_TARGET=local`, `--participants 2`, and use only loopback
 API, WebSocket, and SFU hosts. Local mode uses the existing dev-bypass account

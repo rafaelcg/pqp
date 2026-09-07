@@ -1,6 +1,7 @@
 /* eslint-disable no-console -- this is a command-line load harness. */
 import { readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
+import { Client as PgClient } from "pg";
 import { WebSocket } from "ws";
 import {
   AudioFrame,
@@ -23,6 +24,8 @@ import {
 const STAGING_API = "https://pqp-api-staging.fly.dev";
 const STAGING_WS = "wss://pqp-api-staging.fly.dev/ws";
 const PROD_HOSTS = new Set(["pqp.gg", "api.pqp.gg", "sfu.pqp.gg"]);
+const HTTP_TIMEOUT_MS = 15_000;
+const MEDIA_CONNECT_TIMEOUT_MS = 20_000;
 
 type Command = "prepare" | "shard" | "cleanup";
 type Manifest = {
@@ -96,9 +99,20 @@ function tokenFor(runId: string, index: string | number, local: boolean): string
   return local ? `dev-local-token:${runId}-${index}` : `${need("LOAD_TEST_TOKEN")}:${runId}-${index}`;
 }
 async function api<T>(base: string, token: string, method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${base}${path}`, { method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const res = await fetch(`${base}${path}`, { method, headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` }, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(HTTP_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
   return await res.json() as T;
+}
+async function within<T>(label: string, ms: number, work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms); }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 async function passAgeGate(base: string, token: string): Promise<void> {
   const me = await api<{ ageGate?: string }>(base, token, "GET", "/api/me");
@@ -193,7 +207,7 @@ async function one(index: number, presenter: boolean, safe: ReturnType<typeof as
     const joined = await appSession(safe.apiUrl, safe.wsUrl, token, roomInfo); socket = joined.socket; result.bootstrapMs = Date.now() - started; result.welcomeMs = joined.welcomeMs;
     const tokenStarted = Date.now(); const session = await mint(safe.apiUrl, token, roomInfo, joined.peerId, joined.resumeToken, safe.sfuHost); result.tokenMs = Date.now() - tokenStarted;
     room = new Room(); room.on(RoomEvent.TrackSubscribed, (track: any) => { result.subscribedTracks += 1; consume(track, result); });
-    const connected = Date.now(); await room.connect(session.url, session.token, { autoSubscribe: true, dynacast: true }); result.rtcConnectedMs = Date.now() - connected;
+    const connected = Date.now(); await within("LiveKit connect", MEDIA_CONNECT_TIMEOUT_MS, room.connect(session.url, session.token, { autoSubscribe: true, dynacast: true })); result.rtcConnectedMs = Date.now() - connected;
     if (presenter) stopPublisher = await publish(room);
     await new Promise((resolve) => setTimeout(resolve, holdMs));
     if (!presenter && (result.videoFrames === 0 || result.audioFrames === 0)) throw new Error(`no decoded presenter media (video=${result.videoFrames}, audio=${result.audioFrames})`);
@@ -203,7 +217,10 @@ async function one(index: number, presenter: boolean, safe: ReturnType<typeof as
 }
 async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const info = manifest(safe); const shardIndex = integerArg("--shard-index", -1); const shardCount = numberArg("--shard-count", 0); const holdSeconds = numberArg("--hold-seconds", 900);
-  if (shardIndex < 0 || shardCount < 1 || shardIndex >= shardCount || holdSeconds < 600 || holdSeconds > 900) throw new Error("valid shard indexes and a 600–900 second hold are required");
+  const holdIsAllowed = safe.local
+    ? holdSeconds >= 5 && holdSeconds <= 60
+    : holdSeconds >= 600 && holdSeconds <= 900;
+  if (shardIndex < 0 || shardCount < 1 || shardIndex >= shardCount || !holdIsAllowed) throw new Error("valid shard indexes and a 5–60 second local or 600–900 second hosted hold are required");
   const indexes = Array.from({ length: info.participants }, (_, i) => i).filter((i) => i % shardCount === shardIndex);
   const results = await Promise.all(indexes.map((index) => one(index, index === 0, safe, info, holdSeconds * 1000)));
   const report = { runId: safe.runId, host: hostname(), shardIndex, shardCount, expectedParticipants: info.participants, results, passed: results.every((r) => !r.failure && (r.presenter || (r.videoFrames > 0 && r.audioFrames > 0))) };
@@ -211,8 +228,26 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   if (!report.passed) process.exitCode = 1;
 }
 async function cleanup(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
-  const info = manifest(safe); const owner = tokenFor(safe.runId, "owner", safe.local);
-  await api(safe.apiUrl, owner, "DELETE", `/api/servers/${info.serverId}`); console.log(JSON.stringify({ cleaned: true, serverId: info.serverId }));
+  const info = manifest(safe);
+  const databaseUrl = need("PQP_LOAD_DATABASE_URL");
+  const owner = tokenFor(safe.runId, "owner", safe.local);
+  const prefix = safe.local ? "dev_local_user" : "load_test_user";
+  const clerkIds = [
+    `${prefix}_${safe.runId}-owner`,
+    ...Array.from({ length: info.participants }, (_, index) => `${prefix}_${safe.runId}-${index}`),
+  ];
+  // Require the database URL before mutating anything. Cleanup is all-or-nothing
+  // from the operator's perspective: do not delete the room and strand accounts.
+  const db = new PgClient({ connectionString: databaseUrl });
+  await db.connect();
+  try {
+    await api(safe.apiUrl, owner, "DELETE", `/api/servers/${info.serverId}`);
+    const deleted = await db.query<{ clerk_id: string }>("DELETE FROM users WHERE clerk_id = ANY($1::text[]) RETURNING clerk_id", [clerkIds]);
+    if (deleted.rowCount !== clerkIds.length) throw new Error(`cleanup deleted ${deleted.rowCount ?? 0}/${clerkIds.length} scoped synthetic accounts`);
+    console.log(JSON.stringify({ cleaned: true, serverId: info.serverId, deletedSyntheticAccounts: deleted.rowCount }));
+  } finally {
+    await db.end();
+  }
 }
 const command = process.argv[2] as Command;
 if (!(["prepare", "shard", "cleanup"] as string[]).includes(command)) throw new Error("usage: run prepare|shard|cleanup");
