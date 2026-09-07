@@ -1,7 +1,35 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { CameraTile, RoomView, type StagePerson } from "./call-stage";
+import { resetVideoFitStore } from "@/hooks/use-video-fit";
+import type { ScreenShareTile } from "@/components/voice/screen-stage";
+import {
+  CameraTile,
+  RoomView,
+  ScreenTileFrame,
+  type StagePerson,
+} from "./call-stage";
+
+/**
+ * The fit preference is read from storage the first time a tile asks for it,
+ * and the environment here is `node`. Without a stub every read throws into
+ * `loadVideoFit`'s catch and every test would see the defaults, which is
+ * exactly the half of the feature that would then go untested.
+ */
+const storage = new Map<string, string>();
+
+vi.stubGlobal("localStorage", {
+  getItem: (key: string) => storage.get(key) ?? null,
+  setItem: (key: string, value: string) => {
+    storage.set(key, value);
+  },
+  removeItem: (key: string) => {
+    storage.delete(key);
+  },
+  clear: () => {
+    storage.clear();
+  },
+});
 
 /**
  * A stage tile MOUNTS A `<video>`, and that is not a cosmetic detail.
@@ -197,5 +225,139 @@ describe("RoomView", () => {
     );
     expect(html.match(/data-call-listener=/g)).toHaveLength(12);
     expect(html).toContain("+188");
+  });
+});
+
+/**
+ * FILL OR FIT, and the reason it is two preferences rather than one.
+ *
+ * A face is better cropped than letterboxed and a shared screen is the
+ * opposite: a crop eats the toolbar or the margin that is very often the
+ * thing being presented. Both defaults are what the stage already drew, so
+ * the day this ships nothing moves. What is new is the other half of each,
+ * one press away on the picture itself.
+ *
+ * THE GUARD THAT MATTERS. Flipping it must change a CLASS and nothing else.
+ * `lib/remote-video-delivery.ts` pauses an SFU publication a second after the
+ * last `<video>` bound to it goes away, so a fit toggle that swapped elements
+ * would hand the viewer a black rectangle. And the element stays `h-full
+ * w-full` in both, which is what livekit's `adaptiveStream` measures: contain
+ * paints a smaller picture inside the same box and so asks the server for no
+ * more than cover did.
+ */
+describe("fill or fit", () => {
+  afterEach(() => {
+    storage.clear();
+    resetVideoFitStore();
+  });
+
+  function storeFit(camera: string, screen: string) {
+    storage.set("pqp:video-fit", JSON.stringify({ camera, screen }));
+    resetVideoFitStore();
+  }
+
+  const screenTile: ScreenShareTile = {
+    peerId: "peer-1",
+    stream: fakeStream,
+    presenterName: "Ana",
+    isSelf: false,
+    userId: "user-1",
+    hasAudio: false,
+  };
+
+  /** The `<video>`'s class attribute, which is the whole of this feature. */
+  function videoClass(html: string): string {
+    return /<video[^>]*class="([^"]*)"/.exec(html)?.[1] ?? "";
+  }
+
+  it("crops a camera and keeps a shared screen whole, out of the box", () => {
+    const camera = render(
+      <CameraTile person={person({ stream: fakeStream })} youLabel="(you)" />,
+    );
+    expect(videoClass(camera)).toContain("object-cover");
+
+    const screen = render(
+      <ScreenTileFrame tile={screenTile} isFullscreen={false} />,
+    );
+    expect(videoClass(screen)).toContain("object-contain");
+  });
+
+  it("draws the stored answer instead, one kind at a time", () => {
+    storeFit("contain", "cover");
+    expect(
+      videoClass(
+        render(
+          <CameraTile
+            person={person({ stream: fakeStream })}
+            youLabel="(you)"
+          />,
+        ),
+      ),
+    ).toContain("object-contain");
+    expect(
+      videoClass(
+        render(<ScreenTileFrame tile={screenTile} isFullscreen={false} />),
+      ),
+    ).toContain("object-cover");
+  });
+
+  it("leaves the element the full size of its tile either way", () => {
+    for (const fit of ["cover", "contain"]) {
+      storeFit(fit, fit);
+      const html = render(
+        <CameraTile person={person({ stream: fakeStream })} youLabel="(you)" />,
+      );
+      // What `adaptiveStream` measures. Letterboxing must not be able to ask
+      // the SFU for a layer bigger than the tile can show.
+      expect(videoClass(html)).toContain("h-full");
+      expect(videoClass(html)).toContain("w-full");
+    }
+  });
+
+  it("changes the class and nothing else about the tree", () => {
+    const tile = (
+      <CameraTile
+        person={person({ stream: fakeStream })}
+        youLabel="(you)"
+        onToggleFullscreen={() => {}}
+      />
+    );
+    const cropped = render(tile);
+    storeFit("contain", "contain");
+    const whole = render(tile);
+
+    // Same elements in the same order, once the button's own state, its
+    // glyph and every class are taken out. Nothing is added, moved or
+    // removed, so React re-renders in place and the `<video>` survives.
+    const strip = (html: string) =>
+      html
+        .replace(/<svg[\s\S]*?<\/svg>/g, "SVG")
+        .replace(/data-tile-fit="[a-z]+"/g, "")
+        .replace(/aria-pressed="(true|false)"/g, "")
+        .replace(/aria-label="[^"]*"/g, "")
+        .replace(/class="[^"]*"/g, "");
+    expect(strip(whole)).toEqual(strip(cropped));
+  });
+
+  it("offers the switch on a picture and withholds it from an avatar", () => {
+    expect(
+      render(
+        <CameraTile person={person({ stream: fakeStream })} youLabel="(you)" />,
+      ),
+    ).toContain('data-testid="tile-fit"');
+    // Nothing to crop, so no control that would appear to do nothing.
+    expect(
+      render(<CameraTile person={person()} youLabel="(you)" />),
+    ).not.toContain('data-testid="tile-fit"');
+  });
+
+  it("says which way it is set, for a test and for a screen reader", () => {
+    expect(
+      render(<ScreenTileFrame tile={screenTile} isFullscreen={false} />),
+    ).toContain('data-tile-fit="contain"');
+    storeFit("cover", "cover");
+    expect(
+      render(<ScreenTileFrame tile={screenTile} isFullscreen={false} />),
+    ).toContain('data-tile-fit="cover"');
   });
 });

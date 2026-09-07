@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ChevronUp,
+  Crop,
   EyeOff,
   Loader2,
   Maximize2,
@@ -16,6 +17,7 @@ import {
   MonitorSpeaker,
   PhoneOff,
   Pin,
+  Scan,
   ScreenShare,
   ScreenShareOff,
   Video,
@@ -114,6 +116,8 @@ import {
   saveParticipantRailOpen,
 } from "@/lib/participant-rail-preference";
 import type { CallStageShape } from "@/lib/call-split";
+import { useVideoFit, type VideoFitControls } from "@/hooks/use-video-fit";
+import { videoFitClass } from "@/lib/video-fit";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import {
   PeerAudioMenu,
@@ -747,6 +751,11 @@ function ActiveCall({
 }) {
   const { t } = useTranslation();
   const wide = useLgUp();
+  // For the floating self-preview, which is a camera like any other and so
+  // follows the camera answer. It carries no button of its own: at 112px
+  // there is no room for one, and the tiles that do carry it set the same
+  // value for every camera on the stage, this one included.
+  const selfFit = useVideoFit("camera");
   const joining = voiceState.status === "joining";
   // "Calling…" is a DM we started that nobody has picked up. Alone in a
   // server Lobby is occupancy, not an outgoing ring.
@@ -1507,7 +1516,7 @@ function ActiveCall({
                 mirrored
                 onDoubleClick={() => toggleCameraFullscreen(self.key)}
                 label={t("voice.tile.yourCamera")}
-                className="h-full w-full object-cover"
+                className={cn("h-full w-full", videoFitClass(selfFit.fit))}
               />
             ) : (
               <div className="flex h-full w-full items-center justify-center">
@@ -2380,6 +2389,61 @@ function cameraLabel(
     : t("voice.tile.cameraOf", { name: person.name });
 }
 
+/**
+ * Fill the tile and lose the edges, or fit inside it and keep them.
+ *
+ * ON THE PICTURE, not in the control bar and not in Settings, because that is
+ * where the wish happens: somebody is looking at a cropped screen, cannot see
+ * the tab bar, and wants it back. A row of call controls is about the call
+ * itself, the mic and the camera and the way out; a Settings page is a second
+ * place to go looking mid-share for something that is one press away from
+ * where the eyes already are.
+ *
+ * IT CHANGES EVERY TILE OF THIS KIND, which is what the tooltip says, because
+ * the alternative is a grid where seven faces are cropped and one is not. The
+ * two kinds keep separate answers; see `lib/video-fit.ts` for why.
+ */
+function TileFitButton({
+  fit,
+  kind,
+}: {
+  fit: VideoFitControls;
+  kind: "camera" | "screen";
+}) {
+  const { t } = useTranslation();
+  const whole = fit.fit === "contain";
+  return (
+    <Tooltip
+      label={whole ? t("call.fit.fill") : t("call.fit.whole")}
+      detail={
+        kind === "screen" ? t("call.fit.hintScreen") : t("call.fit.hintCamera")
+      }
+      side="bottom"
+      align="start"
+    >
+      <button
+        type="button"
+        data-testid="tile-fit"
+        data-tile-fit={fit.fit}
+        aria-pressed={whole}
+        // No `aria-label` here: `Tooltip` puts the accessible name on the
+        // trigger, and a second one on the child is how the two drift apart.
+        className={cn(
+          "flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4",
+          whole && "text-signal",
+        )}
+        onClick={fit.toggle}
+      >
+        {whole ? (
+          <Crop className="h-3.5 w-3.5" aria-hidden="true" />
+        ) : (
+          <Scan className="h-3.5 w-3.5" aria-hidden="true" />
+        )}
+      </button>
+    </Tooltip>
+  );
+}
+
 function TileOverlay({
   isFullscreen = false,
   onToggleFullscreen,
@@ -2387,12 +2451,19 @@ function TileOverlay({
   pinned = false,
   name,
   audio,
+  fit,
 }: {
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
   onPin?: () => void;
   pinned?: boolean;
   name: string;
+  /**
+   * Only passed once this tile is actually showing a picture. A tile drawing
+   * an avatar has nothing to crop, and a control that does nothing visible is
+   * how people stop trusting the row.
+   */
+  fit?: VideoFitControls;
   /**
    * This person's sound. A round button beside fullscreen and pin, opening the
    * one panel that carries their voice and their share. A button rather than a
@@ -2404,7 +2475,7 @@ function TileOverlay({
   const { t } = useTranslation();
   const menu = usePeerAudioMenu();
   const hasAudio = Boolean(audio?.voice || audio?.share);
-  if (!onToggleFullscreen && !onPin && !hasAudio) {
+  if (!onToggleFullscreen && !onPin && !hasAudio && !fit) {
     return null;
   }
   return (
@@ -2444,6 +2515,7 @@ function TileOverlay({
           </button>
         </Tooltip>
       )}
+      {fit && <TileFitButton fit={fit} kind="camera" />}
       {onPin && (
         <Tooltip
           label={pinned ? t("call.stage.unpin") : t("call.stage.pin", { name })}
@@ -2529,6 +2601,7 @@ function PrimaryTile({
   pinned?: boolean;
 }) {
   const { t } = useTranslation();
+  const fit = useVideoFit("camera");
   return (
     <div
       data-call-tile={person.name}
@@ -2544,7 +2617,10 @@ function PrimaryTile({
           videoRef={videoRef}
           onDoubleClick={onToggleFullscreen}
           label={cameraLabel(t, person)}
-          className="h-full w-full object-cover"
+          // The element is `h-full w-full` either way: only the painting
+          // inside it changes, so `adaptiveStream` measures the same box and
+          // asks the SFU for the same layer. See `lib/video-fit.ts`.
+          className={cn("h-full w-full", videoFitClass(fit.fit))}
         />
       ) : (
         <div className="flex h-full w-full flex-col items-center justify-center gap-3">
@@ -2561,6 +2637,7 @@ function PrimaryTile({
         pinned={pinned}
         name={person.name}
         audio={person.failed ? undefined : personAudioTracks(person)}
+        fit={person.stream ? fit : undefined}
       />
       <TileBadge
         name={person.name}
@@ -2586,10 +2663,12 @@ function PrimaryTile({
 /**
  * One publisher's camera, large, as a cell of the stage grid.
  *
- * `object-cover` rather than `contain`: a webcam is a face, and a face is
- * better cropped than letterboxed. A share is the opposite and keeps
- * `object-contain` in `ScreenTileFrame`; that difference is the only one
- * between the two kinds of tile.
+ * `object-cover` rather than `contain` by DEFAULT: a webcam is a face, and a
+ * face is better cropped than letterboxed. A share is the opposite and
+ * defaults to `object-contain` in `ScreenTileFrame`; that difference is the
+ * only one between the two kinds of tile. Both are now a preference the
+ * viewer can flip from the tile itself, remembered per kind and per device
+ * (`lib/video-fit.ts`).
  */
 export function CameraTile({
   person,
@@ -2615,6 +2694,7 @@ export function CameraTile({
   pinned?: boolean;
 }) {
   const { t } = useTranslation();
+  const fit = useVideoFit("camera");
   return (
     <li
       data-call-tile={person.name}
@@ -2636,7 +2716,10 @@ export function CameraTile({
           // fullscreen would toggle straight back out.
           onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
           label={cameraLabel(t, person)}
-          className="absolute inset-0 h-full w-full object-cover"
+          className={cn(
+            "absolute inset-0 h-full w-full",
+            videoFitClass(fit.fit),
+          )}
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center">
@@ -2655,6 +2738,7 @@ export function CameraTile({
         pinned={pinned}
         name={person.name}
         audio={person.failed ? undefined : personAudioTracks(person)}
+        fit={person.stream ? fit : undefined}
       />
       <TileBadge
         name={person.isSelf ? youLabel : person.name}
@@ -3034,7 +3118,7 @@ function BannerFace({ person }: { person: OccupantFace }) {
  * (`screen-share-view.tsx`). It sits on the <video> rather than on the frame so
  * that double clicking the button itself is not counted twice.
  */
-function ScreenTileFrame({
+export function ScreenTileFrame({
   tile,
   videoRef,
   isFullscreen,
@@ -3077,6 +3161,7 @@ function ScreenTileFrame({
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu();
+  const fit = useVideoFit("screen");
   const hasAudio = Boolean(audio?.voice || audio?.share);
   const label = isFullscreen
     ? t("voice.share.exitFullscreen")
@@ -3116,7 +3201,10 @@ function ScreenTileFrame({
         stream={tile.stream}
         videoRef={videoRef}
         onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
-        className="h-full w-full object-contain"
+        // Contain by default: a crop on a shared screen eats a toolbar or a
+        // margin, which is very often the thing being presented. Fill is one
+        // press away for the ultrawide monitor letterboxed into a 16:9 tile.
+        className={cn("h-full w-full", videoFitClass(fit.fit))}
       />
       <TileClickTarget
         enabled={clickToFullscreen}
@@ -3178,6 +3266,7 @@ function ScreenTileFrame({
             </button>
           </Tooltip>
         )}
+        <TileFitButton fit={fit} kind="screen" />
         {onPin && (
           <Tooltip
             label={

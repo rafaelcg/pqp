@@ -161,9 +161,36 @@ describe("nudgeSplit", () => {
 
 describe("resolveOrientation", () => {
   it("keeps a stored side-by-side only while the pane is wide enough", () => {
-    expect(resolveOrientation("side-by-side", 1200)).toBe("side-by-side");
-    expect(resolveOrientation("side-by-side", 500)).toBe("stacked");
-    expect(resolveOrientation("stacked", 1600)).toBe("stacked");
+    expect(resolveOrientation("side-by-side", 1200, "expanded")).toBe(
+      "side-by-side",
+    );
+    expect(resolveOrientation("side-by-side", 500, "expanded")).toBe("stacked");
+    expect(resolveOrientation("stacked", 1600, "expanded")).toBe("stacked");
+  });
+
+  /**
+   * Reported from live use on 7 Sep 2026: side by side was chosen during a
+   * share, the share ended, and the left column stayed: a quarter of the
+   * window holding the call's control strip and nothing else, with the chat
+   * squeezed into the rest. A column for a stage is only a column while there
+   * is a stage.
+   */
+  it("refuses a column for a stage with nothing on it", () => {
+    for (const shape of ["none", "compact", "fullscreen"] as const) {
+      expect(resolveOrientation("side-by-side", 1600, shape)).toBe("stacked");
+    }
+  });
+
+  /**
+   * And the way back needs no click. Nothing here writes, so the stored
+   * choice is untouched by the fallback and applies again the moment somebody
+   * turns a camera on. Same treatment the narrow window already gets.
+   */
+  it("gives the column back as soon as somebody publishes again", () => {
+    expect(resolveOrientation("side-by-side", 1600, "compact")).toBe("stacked");
+    expect(resolveOrientation("side-by-side", 1600, "expanded")).toBe(
+      "side-by-side",
+    );
   });
 });
 
