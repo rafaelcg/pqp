@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { Client as PgClient } from "pg";
 import { WebSocket } from "ws";
+import { AudioEncoding, VideoEncoding } from "@livekit/rtc-ffi-bindings";
 import {
   AudioFrame,
   AudioSource,
@@ -26,6 +27,11 @@ const STAGING_WS = "wss://pqp-api-staging.fly.dev/ws";
 const PROD_HOSTS = new Set(["pqp.gg", "api.pqp.gg", "sfu.pqp.gg"]);
 const HTTP_TIMEOUT_MS = 15_000;
 const MEDIA_CONNECT_TIMEOUT_MS = 20_000;
+const VIDEO_WIDTH = 1280;
+const VIDEO_HEIGHT = 720;
+const VIDEO_FPS = 30;
+const VIDEO_BITRATE_BPS = 1_500_000;
+const AUDIO_BITRATE_BPS = 64_000;
 
 type Command = "prepare" | "shard" | "cleanup";
 type Manifest = {
@@ -48,9 +54,17 @@ type ParticipantResult = {
   welcomeMs?: number;
   tokenMs?: number;
   rtcConnectedMs?: number;
+  rtcConnectedAtMs?: number;
   videoFrames: number;
   audioFrames: number;
   subscribedTracks: number;
+  decodeSample: boolean;
+  rtp?: { bytesReceived: number; bytesSent: number; packetsLost: number; framesDecoded: number };
+  decodedVideoFps?: number;
+  publishedVideoFps?: number;
+  requestedVideoBitrateBps?: number;
+  disconnects: number;
+  flow: Array<{ atMs: number; bytesReceived: number; framesDecoded: number }>;
   failure?: string;
 };
 
@@ -178,52 +192,108 @@ function consume(track: any, stats: ParticipantResult): void {
     try { for (;;) { const { done } = await reader.read(); if (done) break; if (track.kind === TrackKind.KIND_VIDEO) stats.videoFrames += 1; else stats.audioFrames += 1; } } catch { /* disconnect owns the final state */ }
   })();
 }
-async function publish(room: Room): Promise<() => Promise<void>> {
+async function rtpStats(room: Room): Promise<NonNullable<ParticipantResult["rtp"]>> {
+  const report = await room.getRtcStats();
+  const totals = { bytesReceived: 0, bytesSent: 0, packetsLost: 0, framesDecoded: 0 };
+  for (const stat of [...report.publisherStats, ...report.subscriberStats]) {
+    if (stat.stats.case === "inboundRtp") {
+      const inbound = stat.stats.value.inbound;
+      totals.bytesReceived += Number(inbound?.bytesReceived ?? 0n);
+      totals.packetsLost += Number(stat.stats.value.received?.packetsLost ?? 0n);
+      totals.framesDecoded += inbound?.framesDecoded ?? 0;
+    }
+    if (stat.stats.case === "outboundRtp") {
+      totals.bytesSent += Number(stat.stats.value.sent?.bytesSent ?? 0n);
+    }
+  }
+  return totals;
+}
+async function publish(room: Room): Promise<{ stop: () => Promise<void>; frames: () => number }> {
   const audioSource = new AudioSource(48_000, 1);
-  const videoSource = new VideoSource(320, 180);
+  const videoSource = new VideoSource(VIDEO_WIDTH, VIDEO_HEIGHT);
   const audio = LocalAudioTrack.createAudioTrack("load-audio", audioSource);
   const video = LocalVideoTrack.createVideoTrack("load-video", videoSource);
   const audioOptions = new TrackPublishOptions(); audioOptions.source = TrackSource.SOURCE_MICROPHONE;
-  const videoOptions = new TrackPublishOptions(); videoOptions.source = TrackSource.SOURCE_SCREENSHARE;
+  const videoOptions = new TrackPublishOptions();
+  videoOptions.source = TrackSource.SOURCE_SCREENSHARE;
+  videoOptions.videoEncoding = new VideoEncoding({ maxBitrate: BigInt(VIDEO_BITRATE_BPS), maxFramerate: VIDEO_FPS });
+  audioOptions.audioEncoding = new AudioEncoding({ maxBitrate: BigInt(AUDIO_BITRATE_BPS) });
   const participant = room.localParticipant;
   if (!participant) throw new Error("LiveKit room connected without a local participant");
   await participant.publishTrack(audio, audioOptions);
   await participant.publishTrack(video, videoOptions);
   let tick = 0;
-  const timer = setInterval(() => {
-    const pixels = new Uint8Array(320 * 180 * 4);
-    for (let y = 0; y < 180; y += 1) for (let x = 0; x < 320; x += 1) { const p = (y * 320 + x) * 4; pixels[p] = (x + tick) & 255; pixels[p + 1] = (y * 2 + tick) & 255; pixels[p + 2] = (x ^ y ^ tick) & 255; pixels[p + 3] = 255; }
-    videoSource.captureFrame(new VideoFrame(pixels, 320, 180, VideoBufferType.RGBA));
-    const samples = new Int16Array(960); for (let i = 0; i < samples.length; i += 1) samples[i] = Math.round(8000 * Math.sin((tick * 960 + i) * Math.PI * 2 * 440 / 48_000));
-    void audioSource.captureFrame(new AudioFrame(samples, 48_000, 1, 960)); tick += 1;
+  let frames = 0;
+  const videoTimer = setInterval(() => {
+    // Full-frame deterministic noise keeps the encoder at its configured ceiling;
+    // a static slide or moving rectangle compresses to a deceptively tiny stream.
+    const pixels = new Uint8Array(VIDEO_WIDTH * VIDEO_HEIGHT * 4);
+    let state = (tick + 1) * 0x9e3779b1;
+    for (let pixel = 0; pixel < VIDEO_WIDTH * VIDEO_HEIGHT; pixel += 1) {
+      state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+      const at = pixel * 4; pixels[at] = state & 255; pixels[at + 1] = (state >>> 8) & 255; pixels[at + 2] = (state >>> 16) & 255; pixels[at + 3] = 255;
+    }
+    videoSource.captureFrame(new VideoFrame(pixels, VIDEO_WIDTH, VIDEO_HEIGHT, VideoBufferType.RGBA), BigInt(Date.now()) * 1000n);
+    tick += 1; frames += 1;
+  }, 1000 / VIDEO_FPS);
+  let audioTick = 0;
+  const audioTimer = setInterval(() => {
+    const samples = new Int16Array(960);
+    for (let i = 0; i < samples.length; i += 1) samples[i] = Math.round(8000 * Math.sin((audioTick * 960 + i) * Math.PI * 2 * 440 / 48_000));
+    void audioSource.captureFrame(new AudioFrame(samples, 48_000, 1, 960)); audioTick += 1;
   }, 20);
-  return async () => { clearInterval(timer); await audio.close(); await video.close(); await audioSource.close(); await videoSource.close(); };
+  return { frames: () => frames, stop: async () => { clearInterval(videoTimer); clearInterval(audioTimer); await audio.close(); await video.close(); await audioSource.close(); await videoSource.close(); } };
 }
-async function one(index: number, presenter: boolean, safe: ReturnType<typeof assertSafeTarget>, roomInfo: Manifest, holdMs: number): Promise<ParticipantResult> {
-  const result: ParticipantResult = { index, presenter, videoFrames: 0, audioFrames: 0, subscribedTracks: 0 };
-  let socket: WebSocket | undefined; let room: Room | undefined; let stopPublisher: (() => Promise<void>) | undefined;
+async function one(index: number, presenter: boolean, decodeSample: boolean, safe: ReturnType<typeof assertSafeTarget>, roomInfo: Manifest, holdMs: number, startAtMs: number): Promise<ParticipantResult> {
+  const result: ParticipantResult = { index, presenter, decodeSample, videoFrames: 0, audioFrames: 0, subscribedTracks: 0, disconnects: 0, flow: [] };
+  let socket: WebSocket | undefined; let room: Room | undefined; let publisher: Awaited<ReturnType<typeof publish>> | undefined; let intentionalDisconnect = false;
   try {
     const started = Date.now(); const token = tokenFor(safe.runId, index, safe.local);
     const joined = await appSession(safe.apiUrl, safe.wsUrl, token, roomInfo); socket = joined.socket; result.bootstrapMs = Date.now() - started; result.welcomeMs = joined.welcomeMs;
     const tokenStarted = Date.now(); const session = await mint(safe.apiUrl, token, roomInfo, joined.peerId, joined.resumeToken, safe.sfuHost); result.tokenMs = Date.now() - tokenStarted;
-    room = new Room(); room.on(RoomEvent.TrackSubscribed, (track: any) => { result.subscribedTracks += 1; consume(track, result); });
-    const connected = Date.now(); await within("LiveKit connect", MEDIA_CONNECT_TIMEOUT_MS, room.connect(session.url, session.token, { autoSubscribe: true, dynacast: true })); result.rtcConnectedMs = Date.now() - connected;
-    if (presenter) stopPublisher = await publish(room);
+    room = new Room(); room.on(RoomEvent.TrackSubscribed, (track: any) => { result.subscribedTracks += 1; if (decodeSample) consume(track, result); }); room.on(RoomEvent.Disconnected, () => { if (!intentionalDisconnect) result.disconnects += 1; });
+    const connected = Date.now(); await within("LiveKit connect", MEDIA_CONNECT_TIMEOUT_MS, room.connect(session.url, session.token, { autoSubscribe: true, dynacast: true })); result.rtcConnectedMs = Date.now() - connected; result.rtcConnectedAtMs = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, startAtMs - Date.now())));
+    if (presenter) publisher = await publish(room);
+    const collectFlow = () => void rtpStats(room!).then((stats) => result.flow.push({ atMs: Date.now() - startAtMs, bytesReceived: stats.bytesReceived, framesDecoded: stats.framesDecoded })).catch((error) => { result.failure ??= `RTP stats: ${error instanceof Error ? error.message : String(error)}`; });
+    const flowTimer = setInterval(collectFlow, 5_000);
     await new Promise((resolve) => setTimeout(resolve, holdMs));
-    if (!presenter && (result.videoFrames === 0 || result.audioFrames === 0)) throw new Error(`no decoded presenter media (video=${result.videoFrames}, audio=${result.audioFrames})`);
+    clearInterval(flowTimer);
+    result.rtp = await rtpStats(room);
+    result.decodedVideoFps = result.rtp.framesDecoded / (holdMs / 1000);
+    if (publisher) { result.publishedVideoFps = publisher.frames() / (holdMs / 1000); result.requestedVideoBitrateBps = VIDEO_BITRATE_BPS; }
+    if (!presenter && (result.subscribedTracks < 2 || result.rtp.bytesReceived === 0)) throw new Error(`no received presenter RTP (tracks=${result.subscribedTracks}, bytes=${result.rtp.bytesReceived})`);
+    if (decodeSample && !presenter && (result.videoFrames === 0 || result.audioFrames === 0)) throw new Error(`no decoded presenter media (video=${result.videoFrames}, audio=${result.audioFrames})`);
   } catch (error) { result.failure = error instanceof Error ? error.message : String(error); }
-  finally { if (stopPublisher) await stopPublisher(); if (room) await room.disconnect(); socket?.close(); }
+  finally { if (publisher) await publisher.stop(); intentionalDisconnect = true; if (room) await room.disconnect(); socket?.close(); }
   return result;
 }
 async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
-  const info = manifest(safe); const shardIndex = integerArg("--shard-index", -1); const shardCount = numberArg("--shard-count", 0); const holdSeconds = numberArg("--hold-seconds", 900);
+  const info = manifest(safe); const shardIndex = integerArg("--shard-index", -1); const shardCount = numberArg("--shard-count", 0); const holdSeconds = numberArg("--hold-seconds", 900); const decodeSamples = numberArg("--decode-sample", safe.local ? 2 : 25); const startAtMs = Number(arg("--start-at-ms", safe.local ? String(Date.now() + 1_000) : "0"));
+  const minDecodedFps = numberArg("--min-decoded-fps", 24);
   const holdIsAllowed = safe.local
     ? holdSeconds >= 5 && holdSeconds <= 60
     : holdSeconds >= 600 && holdSeconds <= 900;
-  if (shardIndex < 0 || shardCount < 1 || shardIndex >= shardCount || !holdIsAllowed) throw new Error("valid shard indexes and a 5–60 second local or 600–900 second hosted hold are required");
+  if (shardIndex < 0 || shardCount < 1 || shardIndex >= shardCount || !holdIsAllowed || !Number.isFinite(startAtMs) || startAtMs < Date.now() + (safe.local ? 0 : 30_000)) throw new Error("valid shard indexes, hold, and a shared start-at-ms at least 30s ahead are required");
   const indexes = Array.from({ length: info.participants }, (_, i) => i).filter((i) => i % shardCount === shardIndex);
-  const results = await Promise.all(indexes.map((index) => one(index, index === 0, safe, info, holdSeconds * 1000)));
-  const report = { runId: safe.runId, host: hostname(), shardIndex, shardCount, expectedParticipants: info.participants, results, passed: results.every((r) => !r.failure && (r.presenter || (r.videoFrames > 0 && r.audioFrames > 0))) };
+  const decodedIndexes = new Set(indexes.filter((index) => index !== 0).slice(0, decodeSamples));
+  const startedAt = Date.now(); const cpuStart = process.cpuUsage(); let maxRssBytes = process.memoryUsage().rss; let maxEventLoopLagMs = 0; let expectedTick = Date.now() + 1000;
+  const sampler = setInterval(() => { maxRssBytes = Math.max(maxRssBytes, process.memoryUsage().rss); maxEventLoopLagMs = Math.max(maxEventLoopLagMs, Date.now() - expectedTick); expectedTick += 1000; }, 1000);
+  const results = await Promise.all(indexes.map((index) => one(index, index === 0, decodedIndexes.has(index), safe, info, holdSeconds * 1000, startAtMs)));
+  clearInterval(sampler);
+  const wallMs = Date.now() - startedAt; const cpu = process.cpuUsage(cpuStart);
+  const decoded = results.filter((result) => result.decodeSample);
+  const totalReceivedBytes = results.reduce((sum, result) => sum + (result.rtp?.bytesReceived ?? 0), 0);
+  const totalSentBytes = results.reduce((sum, result) => sum + (result.rtp?.bytesSent ?? 0), 0);
+  const hasContinuousRtp = (result: ParticipantResult) => result.flow.length >= 2 && result.flow.slice(1).every((sample, at) => sample.bytesReceived > result.flow[at]!.bytesReceived);
+  const report = {
+    runId: safe.runId, host: hostname(), shardIndex, shardCount, expectedParticipants: info.participants, startAtMs,
+    mediaContract: { source: `${VIDEO_WIDTH}x${VIDEO_HEIGHT}@${VIDEO_FPS}`, requestedVideoBitrateBps: VIDEO_BITRATE_BPS, requestedAudioBitrateBps: AUDIO_BITRATE_BPS, decodedSampleCount: decoded.length, minDecodedFps },
+    generator: { wallMs, cpuMs: (cpu.user + cpu.system) / 1000, cpuPercentOfOneCore: ((cpu.user + cpu.system) / 1000 / wallMs) * 100, maxRssBytes, maxEventLoopLagMs },
+    aggregateRtp: { receivedBytes: totalReceivedBytes, receivedBitrateBps: totalReceivedBytes * 8_000 / (holdSeconds * 1000), sentBytes: totalSentBytes, sentBitrateBps: totalSentBytes * 8_000 / (holdSeconds * 1000) },
+    results,
+    passed: results.every((result) => !result.failure && result.disconnects === 0 && (result.rtcConnectedAtMs ?? Infinity) <= startAtMs && (!result.presenter ? result.subscribedTracks >= 2 && (result.rtp?.bytesReceived ?? 0) > 0 && hasContinuousRtp(result) : (result.publishedVideoFps ?? 0) >= VIDEO_FPS * 0.9) && (!result.decodeSample || result.presenter || (result.decodedVideoFps ?? 0) >= minDecodedFps)),
+  };
   const out = requiredArg("--report"); writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 }); console.log(JSON.stringify({ report: out, passed: report.passed, failures: results.filter((r) => r.failure).length }, null, 2));
   if (!report.passed) process.exitCode = 1;
 }
