@@ -27,6 +27,9 @@ const STAGING_WS = "wss://pqp-api-staging.fly.dev/ws";
 const PROD_HOSTS = new Set(["pqp.gg", "api.pqp.gg", "sfu.pqp.gg"]);
 const HTTP_TIMEOUT_MS = 15_000;
 const MEDIA_CONNECT_TIMEOUT_MS = 20_000;
+// A staging API machine has a finite connection pool. Joining 250 identities at
+// once turns one media test into a bootstrap-pool exhaustion test.
+const JOIN_CONCURRENCY = 12;
 const VIDEO_WIDTH = 1280;
 const VIDEO_HEIGHT = 720;
 const VIDEO_FPS = 30;
@@ -297,6 +300,18 @@ async function one(index: number, presenter: boolean, decodeSample: boolean, saf
   finally { if (publisher) await publisher.stop(); intentionalDisconnect = true; if (room) await room.disconnect(); socket?.close(); }
   return result;
 }
+async function withConcurrency<T, R>(values: T[], limit: number, work: (value: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, async () => {
+    for (;;) {
+      const at = next++;
+      if (at >= values.length) return;
+      results[at] = await work(values[at]!);
+    }
+  }));
+  return results;
+}
 async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const info = manifest(safe); const shardIndex = integerArg("--shard-index", -1); const shardCount = numberArg("--shard-count", 0); const holdSeconds = numberArg("--hold-seconds", 900); const decodeSamples = numberArg("--decode-sample", safe.local ? 2 : 25); const startAtMs = Number(arg("--start-at-ms", safe.local ? String(Date.now() + 1_000) : "0"));
   const minDecodedFps = numberArg("--min-decoded-fps", 24);
@@ -310,7 +325,7 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const decodedIndexes = new Set(indexes.filter((index) => index !== 0).slice(0, decodeSamples));
   const startedAt = Date.now(); const cpuStart = process.cpuUsage(); let maxRssBytes = process.memoryUsage().rss; let maxEventLoopLagMs = 0; let expectedTick = Date.now() + 1000;
   const sampler = setInterval(() => { maxRssBytes = Math.max(maxRssBytes, process.memoryUsage().rss); maxEventLoopLagMs = Math.max(maxEventLoopLagMs, Date.now() - expectedTick); expectedTick += 1000; }, 1000);
-  const results = await Promise.all(indexes.map((index) => one(index, index === 0, decodedIndexes.has(index), safe, info, holdSeconds * 1000, startAtMs)));
+  const results = await withConcurrency(indexes, JOIN_CONCURRENCY, (index) => one(index, index === 0, decodedIndexes.has(index), safe, info, holdSeconds * 1000, startAtMs));
   clearInterval(sampler);
   const wallMs = Date.now() - startedAt; const cpu = process.cpuUsage(cpuStart);
   const decoded = results.filter((result) => result.decodeSample);
