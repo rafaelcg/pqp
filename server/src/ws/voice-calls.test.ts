@@ -1,7 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import type { WebSocket } from "ws";
 import type { DbUser } from "../db.js";
+import { createMemoryHub } from "../lib/bus.js";
 
 /**
  * Conversation calls: a DM rings, and nothing about it leaks to any server.
@@ -21,6 +31,15 @@ import type { DbUser } from "../db.js";
 
 const CONVERSATION = randomUUID();
 const SERVER_CHANNEL = randomUUID();
+
+// The "across two instances" group at the bottom needs Postgres; the rest
+// of the file never touches it, so pointing `DATABASE_URL` at the test copy
+// changes nothing for them.
+const DATABASE_URL = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
+const describeDb = DATABASE_URL ? describe : describe.skip;
+if (DATABASE_URL) {
+  process.env.DATABASE_URL = DATABASE_URL;
+}
 
 const CALLER = randomUUID();
 const CALLEE = randomUUID();
@@ -634,5 +653,210 @@ describe("privacy and transport", () => {
     expect(
       participants.find((p) => p.userId === CALLER)?.cameraStreamId,
     ).toBe("camera-stream-1");
+  });
+});
+
+/**
+ * Rings across two instances: milestone M4 of
+ * `docs/plans/MULTI_INSTANCE_VOICE.md`, section 5.5. The ring is owned by
+ * the instance holding the caller's socket; only the fan-out crosses on
+ * `voice.call`, and a decline or an answer on the other machine is routed
+ * back to the owner. Same two-graph harness as `voice-cluster.test.ts`; the
+ * hoisted fakes are shared by both graphs, so `pushIncomingCall` and the
+ * missed-call `createMessage` are counted cluster-wide, which is the point.
+ * Real timers here: the ring ends by everybody declining, not by the clock.
+ */
+type BusModule = typeof import("../lib/bus.js");
+type VoiceModule = typeof import("./voice.js");
+type SocketsModule = typeof import("./sockets.js");
+type RegistryModule = typeof import("../voice/registry.js");
+type DbModule = typeof import("../db.js");
+
+interface Instance {
+  bus: BusModule;
+  voice: VoiceModule;
+  sockets: SocketsModule;
+  registry: RegistryModule;
+  db: DbModule;
+}
+
+describeDb("rings across two instances", () => {
+  const pools: DbModule[] = [];
+  const booted: Instance[] = [];
+  let hub = createMemoryHub();
+  const previousFlag = process.env.VOICE_REGISTRY;
+
+  async function bootInstance(): Promise<Instance> {
+    vi.resetModules();
+    const bus = (await import("../lib/bus.js")) as BusModule;
+    const db = (await import("../db.js")) as DbModule;
+    const voice = (await import("./voice.js")) as VoiceModule;
+    const sockets = (await import("./sockets.js")) as SocketsModule;
+    const registry = (await import("../voice/registry.js")) as RegistryModule;
+    bus.setBusTransport(bus.createMemoryTransport(hub));
+    const instance = { bus, voice, sockets, registry, db };
+    booted.push(instance);
+    return instance;
+  }
+
+  function authedOn(instance: Instance, userId: string): Recorder {
+    const rec = recorder();
+    instance.sockets.setAuthenticatedSocket(rec.socket, asUser(userId));
+    return rec;
+  }
+
+  async function joinOn(instance: Instance, rec: Recorder, userId: string) {
+    await instance.voice.handleVoiceMessage(
+      { socket: rec.socket, user: asUser(userId) },
+      { type: "join-voice-room", voiceChannelId: CONVERSATION },
+    );
+    expect(frame(rec, "welcome")).toBeDefined();
+  }
+
+  async function waitFor(check: () => boolean, what: string): Promise<void> {
+    const deadline = Date.now() + 3_000;
+    while (!check()) {
+      if (Date.now() > deadline) {
+        throw new Error(`timed out waiting for ${what}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  beforeAll(async () => {
+    vi.resetModules();
+    const db = (await import("../db.js")) as DbModule;
+    await db.initDb();
+    pools.push(db);
+  });
+
+  afterAll(async () => {
+    await Promise.all(pools.map((db) => db.closePool().catch(() => {})));
+  });
+
+  beforeEach(async () => {
+    vi.useRealTimers();
+    process.env.VOICE_REGISTRY = "postgres";
+    hub = createMemoryHub();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    await pools[0]!
+      .getPool()
+      .query(`TRUNCATE voice_rooms, voice_peers, voice_retired_peers, voice_instances`);
+  });
+
+  afterEach(async () => {
+    for (const instance of booted) {
+      await instance.registry.settleVoiceRegistryWrites();
+      instance.voice.resetConversationCalls();
+      instance.voice.resetVoicePeers();
+      await instance.bus.closeBus();
+      await instance.db.closePool().catch(() => {});
+    }
+    booted.length = 0;
+    process.env.VOICE_REGISTRY = previousFlag;
+    vi.restoreAllMocks();
+  });
+
+  it("the callee on B rings, and a decline on B reaches the owner on A", async () => {
+    fakes.participants.set(CONVERSATION, [CALLER, CALLEE]);
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const caller = authedOn(a, CALLER);
+    const calleeOnB = authedOn(b, CALLEE);
+    const calleeOnA = authedOn(a, CALLEE);
+
+    await joinOn(a, caller, CALLER);
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "call-ring", conversationId: CONVERSATION },
+    );
+
+    // Rung on both machines; owned on one.
+    expect(a.voice.isConversationRinging(CONVERSATION)).toBe(true);
+    expect(b.voice.isConversationRinging(CONVERSATION)).toBe(false);
+    expect(frame(calleeOnB, "call-incoming")).toMatchObject({
+      conversationId: CONVERSATION,
+      caller: { userId: CALLER },
+    });
+    expect(frame(calleeOnA, "call-incoming")).toBeDefined();
+    expect(fakes.callPushes).toHaveLength(1);
+
+    await b.voice.handleVoiceMessage(
+      { socket: calleeOnB.socket, user: asUser(CALLEE) },
+      { type: "call-decline", conversationId: CONVERSATION },
+    );
+
+    // The owner handled it: the caller hears the decline, the callee's
+    // other device stops ringing, and with nobody left the ring is over.
+    expect(frame(caller, "call-declined")).toMatchObject({ userId: CALLEE });
+    expect(frame(calleeOnA, "call-ring-cancelled")).toMatchObject({
+      reason: "declined",
+    });
+    expect(frame(calleeOnB, "call-ring-cancelled")).toMatchObject({
+      reason: "declined",
+    });
+    expect(a.voice.isConversationRinging(CONVERSATION)).toBe(false);
+    await waitFor(() => fakes.createMessageCalls.length === 1, "the missed call");
+    expect(fakes.createMessageCalls[0]).toMatchObject({
+      channelId: CONVERSATION,
+      authorId: CALLER,
+      body: MISSED_CALL_BODY,
+    });
+    // One push, one record: B delivered and routed, it never rang.
+    expect(fakes.callPushes).toHaveLength(1);
+    expect(fakes.createMessageCalls).toHaveLength(1);
+  });
+
+  it("an answer on B ends the ring on A with no missed call", async () => {
+    fakes.participants.set(CONVERSATION, [CALLER, CALLEE]);
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const caller = authedOn(a, CALLER);
+    const calleeOnB = authedOn(b, CALLEE);
+    const calleeOnA = authedOn(a, CALLEE);
+
+    await joinOn(a, caller, CALLER);
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "call-ring", conversationId: CONVERSATION },
+    );
+    expect(frame(calleeOnB, "call-incoming")).toBeDefined();
+
+    // Accepting is joining the room, on whichever machine.
+    await joinOn(b, calleeOnB, CALLEE);
+
+    await waitFor(
+      () => !a.voice.isConversationRinging(CONVERSATION),
+      "the ring to end on A",
+    );
+    expect(frame(calleeOnA, "call-ring-cancelled")).toMatchObject({
+      reason: "answered",
+    });
+    // The caller's welcome-time roster and B's join both cross; the call
+    // itself is the M2 story. What M4 owns: no record, one push.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fakes.createMessageCalls).toHaveLength(0);
+    expect(fakes.callPushes).toHaveLength(1);
+  });
+
+  it("a caller already in the call on B is not rung by a ring on A", async () => {
+    fakes.participants.set(CONVERSATION, [CALLER, CALLEE, THIRD]);
+    const a = await bootInstance();
+    const b = await bootInstance();
+    const caller = authedOn(a, CALLER);
+    const thirdOnB = authedOn(b, THIRD);
+    const calleeOnB = authedOn(b, CALLEE);
+    await joinOn(b, thirdOnB, THIRD);
+    await b.registry.settleVoiceRegistryWrites();
+
+    await joinOn(a, caller, CALLER);
+    await a.voice.handleVoiceMessage(
+      { socket: caller.socket, user: asUser(CALLER) },
+      { type: "call-ring", conversationId: CONVERSATION },
+    );
+
+    expect(frame(calleeOnB, "call-incoming")).toBeDefined();
+    expect(frame(thirdOnB, "call-incoming")).toBeUndefined();
+    expect(fakes.callPushes[0]?.rungUserIds).toEqual([CALLEE]);
   });
 });

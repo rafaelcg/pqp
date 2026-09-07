@@ -395,6 +395,29 @@ describeDb("GET /api/admin/metrics", () => {
     expect(third.body.messages.last24h).toBe(3);
   });
 
+  it("carries an sfu block that says not configured, and no credential, without LiveKit", async () => {
+    const saved = process.env.LIVEKIT_URL;
+    delete process.env.LIVEKIT_URL;
+    try {
+      const result = await call<MetricsBody & { sfu: Record<string, unknown> }>(
+        operator,
+        "/api/admin/metrics",
+      );
+      expect(result.status).toBe(200);
+      expect(result.body.sfu).toMatchObject({
+        configured: false,
+        host: null,
+        reachable: null,
+        rooms: null,
+        participants: null,
+        cacheTtlSeconds: 10,
+      });
+      expect(JSON.stringify(result.body.sfu)).not.toMatch(/secret|apiKey/i);
+    } finally {
+      if (saved !== undefined) process.env.LIVEKIT_URL = saved;
+    }
+  });
+
   it("carries a runtime block, and never a cached one", async () => {
     const first = await call<MetricsBody>(operator, "/api/admin/metrics");
     const runtime = first.body.runtime;

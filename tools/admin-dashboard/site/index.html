@@ -232,6 +232,43 @@
   .live-chip .dot { width: 7px; height: 7px; }
   .live-chip[data-state="live"] { color: var(--success); border-color: var(--success-line); }
   .live-chip[data-state="waiting"] { color: var(--faint); }
+  /* the last read is older than it should be: amber, never silently green */
+  .live-chip[data-state="stale"] { color: var(--warning); border-color: var(--warning-line); background: var(--warning-dim); }
+  .live-chip[data-state="stale"] .dot { animation: none; }
+
+  .refresh-btn {
+    appearance: none;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 11px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--muted);
+    cursor: pointer;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+  .refresh-btn:hover { background: var(--surface-2); color: var(--text); }
+  .refresh-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .refresh-btn[disabled] { opacity: 0.6; cursor: default; }
+
+  /* A read that failed after a good one: the numbers stay, the page says how old they are. */
+  .stalebox {
+    display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center;
+    padding: 10px 14px; margin: 0 0 18px;
+    border-radius: var(--r-md);
+    background: var(--warning-dim); border: 1px solid var(--warning-line);
+    font-size: 12.5px; color: var(--text);
+  }
+  .stalebox b { color: var(--warning); }
+  .stalebox code { font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; color: var(--muted); }
+
+  /* the SFU host badge: expected host is quiet, anything else shouts */
+  .tag.warn { color: var(--warning); border-color: var(--warning-line); background: var(--warning-dim); }
+  .tag.bad { color: var(--danger); border-color: var(--danger-line); background: var(--danger-dim); }
+  .sfu-host { font-family: ui-monospace, Menlo, monospace; font-size: 15px; font-weight: 600; word-break: break-all; }
 
   /* ---------- section ---------- */
   section { margin-top: 30px; }
@@ -655,8 +692,15 @@
     body { font-size: 14px; }
   }
   @media (max-width: 420px) {
-    .g-health { grid-template-columns: 1fr; }
+    /* health tiles are small enough to stay paired on a phone: eight of them
+       in one column would push the metrics below three screens of scroll */
+    .g-health { gap: 8px; }
+    .health { padding: 12px; }
+    .health .h-val { font-size: 20px; }
     .g-metrics { grid-template-columns: 1fr; }
+    .g-apps { grid-template-columns: 1fr; }
+    .top-right { width: 100%; justify-content: flex-start; }
+    .updated { align-items: flex-start; }
   }
 
 
@@ -838,9 +882,10 @@
       <span class="live-chip" id="liveChip" data-state="waiting" title="fonte dos dados">
         <span class="dot"></span> aguardando a api
       </span>
+      <button type="button" class="refresh-btn" id="refreshBtn" title="reler /metrics e /health agora">atualizar</button>
       <div class="updated">
         <b id="updatedAt">carregando</b>
-        <span>atualiza a cada 60s · fuso são paulo (brt)</span>
+        <span id="refreshEvery">atualiza a cada 30 s · fuso são paulo (brt)</span>
       </div>
     </div>
   </header>
@@ -868,6 +913,10 @@
   <!-- Where a failed read is reported. Never replaced by illustrative
        numbers: an empty panel that says why is honest, a fake one is not. -->
   <div id="loadError" hidden></div>
+  <!-- A read that failed after a good one. The last real numbers stay on the
+       page; this says how old they are, so a calm screen is never mistaken
+       for a calm system. -->
+  <div id="staleBanner" hidden></div>
 
   <div class="pane" id="pane-geral" role="tabpanel" aria-labelledby="tab-geral">
 
@@ -876,7 +925,7 @@
     <div class="sec-head">
       <h2>saúde dos serviços</h2>
       <span class="rule"></span>
-      <span class="note" id="healthNote">5 serviços operacionais · host fly.io no gru</span>
+      <span class="note" id="healthNote">carregando</span>
     </div>
     <div class="grid g-health" id="healthGrid"><!-- injected --></div>
   </section>
@@ -971,14 +1020,14 @@
       <div class="card chartcard">
         <div class="c-head">
           <span class="c-title">novos usuários por hora</span>
-          <span class="c-sum"><b id="usersSum">163</b> novos cadastros</span>
+          <span class="c-sum"><b id="usersSum">—</b> novos cadastros</span>
         </div>
         <div class="chart-scroll" id="chartUsers"></div>
       </div>
       <div class="card chartcard">
         <div class="c-head">
           <span class="c-title">mensagens por hora · de pessoas</span>
-          <span class="c-sum"><b id="msgsSum">1.321</b> mensagens</span>
+          <span class="c-sum"><b id="msgsSum">—</b> mensagens</span>
         </div>
         <div class="chart-scroll" id="chartMsgs"></div>
         <div class="chart-note" id="msgSplit"><!-- injected --></div>
@@ -1383,12 +1432,69 @@
 
   <div class="pane" id="pane-voz" role="tabpanel" aria-labelledby="tab-voz" hidden>
 
+  <!-- ============ VOICE / SFU ============
+       The SFU as the SFU sees itself, from the API's RoomServiceClient
+       (cached 10 s on the API). Production moved to a self-hosted LiveKit at
+       sfu.pqp.gg on 2026-09-05; a rollback to LiveKit Cloud is a one-line
+       secret change and invisible from the app, so the host is named here and
+       badged when it is not the expected one. -->
+  <section id="secSfu" aria-label="voz / sfu">
+    <div class="sec-head">
+      <h2>voz / sfu</h2>
+      <span class="rule"></span>
+      <span class="note" id="sfuNote">carregando</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <p class="subtle-title">servidor de mídia (livekit)</p>
+        <div class="stat-row" style="margin-bottom:10px">
+          <div class="stat-mini" id="sfuHostTile" style="flex:2 1 220px">
+            <span class="k">host configurado na api</span>
+            <span class="v sfu-host" id="sfuHost">—</span>
+            <span class="meta-row" id="sfuHostBadges" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px"></span>
+          </div>
+          <div class="stat-mini" id="sfuStateTile">
+            <span class="k">estado</span>
+            <span class="v" id="sfuState" style="font-size:18px">—</span>
+            <span class="k" style="color:var(--faint)" id="sfuStateNote">—</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:0" id="sfuExplain">
+          a api pergunta ao sfu com <code style="font-size:11px">listRooms</code> e guarda a resposta por 10 s. o esperado é <code style="font-size:11px">sfu.pqp.gg</code>; qualquer outro host quer dizer que a api foi apontada de volta para o livekit cloud (ou para nada).
+        </p>
+      </div>
+      <div class="card pad">
+        <p class="subtle-title">o que o sfu está segurando agora</p>
+        <div class="stat-row" style="margin-bottom:0">
+          <div class="stat-mini" id="sfuRoomsTile">
+            <span class="k">salas</span>
+            <span class="v num" id="sfuRooms">—</span>
+            <span class="k" style="color:var(--faint)" id="sfuRoomsNote">—</span>
+          </div>
+          <div class="stat-mini" id="sfuPeopleTile">
+            <span class="k">pessoas</span>
+            <span class="v num" id="sfuPeople">—</span>
+            <span class="k" style="color:var(--faint)" id="sfuPeopleNote">—</span>
+          </div>
+          <div class="stat-mini" id="sfuLargestTile">
+            <span class="k">maior sala</span>
+            <span class="v num" id="sfuLargest">—</span>
+            <span class="k" style="color:var(--faint)" id="sfuLargestNote">sem limite de mesh</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:14px 0 0" id="sfuDrift">
+          comparar com "salas abertas agora" abaixo: aquela lista é o mapa de pares da própria api; esta é a contagem do sfu. quando divergem, alguém está em chamada num lado e não no outro.
+        </p>
+      </div>
+    </div>
+  </section>
+
   <!-- ============ VOICE ACTIVITY ============ -->
   <section aria-label="atividade de voz">
     <div class="sec-head">
       <h2>atividade de voz</h2>
       <span class="rule"></span>
-      <span class="note" id="voiceNote">pico de sala hoje: 5 pessoas · backend mesh (webrtc)</span>
+      <span class="note" id="voiceNote">carregando</span>
     </div>
     <div class="grid g-3">
       <div class="card pad">
@@ -1415,26 +1521,26 @@
         <div class="stat-row" style="margin-bottom:0">
           <div class="stat-mini">
             <span class="k">salas ativas agora</span>
-            <span class="v num" id="vActive">2</span>
+            <span class="v num" id="vActive">—</span>
           </div>
           <div class="stat-mini">
             <span class="k">pico de sala</span>
-            <span class="v num" id="vPeak">5</span>
+            <span class="v num" id="vPeak">—</span>
           </div>
         </div>
         <div class="stat-row" style="margin-top:12px;margin-bottom:0">
           <div class="stat-mini">
             <span class="k">pessoas em chamada agora</span>
-            <span class="v num" id="vPeople">0</span>
+            <span class="v num" id="vPeople">—</span>
           </div>
           <div class="stat-mini" id="vLargestTile">
             <span class="k">maior sala agora</span>
-            <span class="v num" id="vLargest">0</span>
+            <span class="v num" id="vLargest">—</span>
             <span class="k" style="color:var(--faint)" id="vLargestNote">limite prático do mesh: 5 a 8</span>
           </div>
         </div>
-        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:14px 0 0">
-          limite prático do mesh: ~5 a 8 pares por sala. sfu (livekit) fica pronto para quando uma sala passar disso.
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:14px 0 0" id="vMeshNote">
+          limite prático do mesh: ~5 a 8 pares por sala. com o sfu (livekit) ligado esse limite não se aplica.
         </p>
       </div>
     </div>
@@ -1624,12 +1730,13 @@
       <div class="card pad">
         <p class="subtle-title">estado atual</p>
         <div class="kv-grid">
-          <div class="kv"><span class="k">versão</span><span class="v mono" id="infraVersion">v42</span></div>
+          <div class="kv"><span class="k">versão</span><span class="v mono" id="infraVersion">—</span></div>
           <div class="kv"><span class="k">região</span><span class="v mono">gru · são paulo</span></div>
           <div class="kv"><span class="k">máquina fly</span><span class="v">1/1 health checks</span></div>
           <div class="kv"><span class="k">deploy da api</span><span class="v">automático a partir do main</span></div>
           <div class="kv"><span class="k">spa estática</span><span class="v mono">cloudflare pages</span></div>
-          <div class="kv"><span class="k">banco</span><span class="v" id="infraDb">postgres · ~6ms</span></div>
+          <div class="kv"><span class="k">banco</span><span class="v" id="infraDb">—</span></div>
+          <div class="kv"><span class="k">sfu</span><span class="v mono" id="infraSfu">—</span></div>
         </div>
         <div class="stat-row" style="margin:14px 0 0">
           <div class="stat-mini" id="infraUp24Tile">
@@ -1728,6 +1835,12 @@
   function fmtPct(n, d) {
     var v = pct(n, d);
     return (Math.round(v) === v ? fmt(v) : fmtDec(v)) + "%";
+  }
+  /** A latency. Milliseconds up to a second, then seconds: "3.000 ms" reads
+      as three thousand of something and hides that it is three seconds. */
+  function fmtMs(ms) {
+    if (typeof ms !== "number" || !isFinite(ms)) return "—";
+    return ms < 1000 ? fmt(Math.round(ms)) + " ms" : fmtDec(ms / 1000) + " s";
   }
   function fmtTime(iso) {
     try {
@@ -1978,8 +2091,13 @@
       var pool = rc.pool || {};
       var poolLine = "pool " + (pool.inUse || 0) + "/" + (pool.max || 0) +
         (pool.queued ? " · " + pool.queued + " na fila" : "");
+      // The SFU host rides on the livekit check so this tile can say which
+      // one is being probed, not only that something answered.
+      var lkHost = typeof rc.livekit === "object" && typeof rc.livekit.host === "string"
+        ? rc.livekit.host : "";
       var lkLine = !rc.livekit ? "" : rc.livekit.skipped ? " · sfu n/a" :
-        " · sfu " + (rc.livekit.ok ? Math.round(rc.livekit.ms) + "ms" : "falhou");
+        " · sfu " + (lkHost ? lkHost + " " : "") +
+        (rc.livekit.ok ? Math.round(rc.livekit.ms) + "ms" : "falhou");
       readyTile.innerHTML =
         '<div class="h-top">' +
           '<span class="h-name">/ready</span>' +
@@ -2295,6 +2413,115 @@
       (mesh ? "mesh (webrtc)" : "livekit (sfu)"));
   }
 
+  /* ---------------- render: voice / sfu ----------------
+     Production voice runs on a self-hosted LiveKit at sfu.pqp.gg (Vultr, São
+     Paulo) since 2026-09-05. Pointing the API back at LiveKit Cloud is one
+     secret and a restart, and nothing in the product looks different
+     afterwards, so the host is stated in full and badged whenever it is not
+     the expected one. The counts come from the SFU itself (listRooms, cached
+     10 s on the API), which is the number to compare against the API's own
+     peer map in the table below when the two drift. */
+  var EXPECTED_SFU_HOST = "sfu.pqp.gg";
+
+  function renderSfu(d) {
+    var sfu = d.sfu;
+    if (!sfu || typeof sfu !== "object") return sectionUnavailable("secSfu", "o estado do sfu");
+    sectionRestore("secSfu");
+
+    var configured = sfu.configured === true;
+    var host = typeof sfu.host === "string" && sfu.host ? sfu.host : null;
+    var reachable = sfu.reachable === true;
+    var expected = host === EXPECTED_SFU_HOST;
+    var ms = typeof sfu.ms === "number" ? sfu.ms : null;
+
+    setText("sfuHost", host || (configured ? "host ilegível" : "nenhum"));
+    setText("infraSfu", host ? host + (reachable ? " · ok" : " · sem resposta") : "mesh (sem sfu)");
+
+    // The badge is the point of the card: an unexpected host is a rollback,
+    // and a rollback that nobody notices is how a capacity ceiling comes back.
+    var badges = $("sfuHostBadges");
+    if (badges) {
+      if (!configured) {
+        badges.innerHTML = '<span class="tag warn">sem livekit · só mesh</span>';
+      } else if (expected) {
+        badges.innerHTML = '<span class="tag accent">host esperado</span>' +
+          '<span class="tag">self-hosted · vultr gru</span>';
+      } else {
+        badges.innerHTML = '<span class="tag bad">host inesperado</span>' +
+          '<span class="tag">esperado: ' + esc(EXPECTED_SFU_HOST) + '</span>';
+      }
+    }
+
+    var stateLabel, stateNote, stateTone;
+    if (!configured) {
+      stateLabel = "desligado";
+      stateNote = "a api não tem LIVEKIT_URL · toda chamada é mesh";
+      stateTone = "attn";
+    } else if (reachable) {
+      stateLabel = "no ar";
+      stateNote = ms === null ? "respondeu ao listRooms" : "respondeu em " + fmtMs(ms);
+      stateTone = expected ? "good" : "attn";
+    } else {
+      stateLabel = "sem resposta";
+      stateNote = sfu.failure === "timeout"
+        ? "estourou o tempo do listRooms" + (ms === null ? "" : " (" + fmtMs(ms) + ")")
+        : "o listRooms falhou";
+      stateTone = "bad";
+    }
+    setText("sfuState", stateLabel);
+    setText("sfuStateNote", stateNote);
+    tone("sfuStateTile", stateTone);
+    tone("sfuHostTile", !configured ? "attn" : expected ? "" : "bad");
+
+    // Counts only exist when the SFU answered. An unreachable SFU showing
+    // "0 salas" would read as a quiet night instead of as a blind spot.
+    var known = reachable && typeof sfu.rooms === "number";
+    var rooms = known ? sfu.rooms : null;
+    var people = known && typeof sfu.participants === "number" ? sfu.participants : null;
+    var largest = known && typeof sfu.largestRoom === "number" ? sfu.largestRoom : null;
+    var apiRooms = (d.voice && typeof d.voice.activeRooms === "number") ? d.voice.activeRooms : null;
+
+    setText("sfuRooms", rooms === null ? "—" : fmt(rooms));
+    setText("sfuPeople", people === null ? "—" : fmt(people));
+    setText("sfuLargest", largest === null ? "—" : fmt(largest));
+
+    var ttl = Number(sfu.cacheTtlSeconds);
+    var freshness = isFinite(ttl) && ttl > 0 ? "cache de " + fmt(ttl) + " s" : "leitura do sfu";
+    setText("sfuRoomsNote", known ? freshness : "sem leitura");
+    // The drift against the API's own map is the reason both numbers are on
+    // the page; naming it here saves the operator the subtraction.
+    setText("sfuPeopleNote", !known ? "sem leitura"
+      : apiRooms === null ? "somadas pelo sfu"
+      : rooms === apiRooms ? "bate com o mapa da api"
+      : "api diz " + fmt(apiRooms) + (apiRooms === 1 ? " sala" : " salas"));
+    setText("sfuLargestNote", known
+      ? (largest ? "sem limite de mesh aqui" : "nenhuma sala aberta")
+      : "sem leitura");
+
+    tone("sfuRoomsTile", known ? "" : "bad");
+    tone("sfuPeopleTile", known && apiRooms !== null && rooms !== apiRooms ? "attn" : "");
+    tone("sfuLargestTile", "");
+
+    var checked = sfu.checkedAt ? fmtTime(sfu.checkedAt) : "";
+    setText("sfuNote", !configured
+      ? "nenhum sfu configurado nesta api"
+      : (host || "host desconhecido") + (checked ? " · lido às " + checked : ""));
+
+    sigState.sfu = !configured
+      ? { state: "attn", label: "sfu", value: "desligado", note: "toda chamada em mesh" }
+      : !reachable
+        ? { state: "bad", label: "sfu", value: "sem resposta",
+            note: (host || "host desconhecido") + " não respondeu" }
+        : {
+            state: expected ? "ok" : "warn",
+            label: "sfu",
+            value: fmt(rooms || 0) + (rooms === 1 ? " sala" : " salas"),
+            note: fmt(people || 0) + " pessoas · " + (host || "host desconhecido") +
+              (expected ? "" : " (não é " + EXPECTED_SFU_HOST + ")")
+          };
+    paintSignals();
+  }
+
   /* ---------------- render: call ratings ----------------
      The average is the smallest part of this: twelve ratings averaging 4,8 can
      be eleven 5s and a 3, or six 5s and six 4s, and only the distribution says
@@ -2567,7 +2794,7 @@
       parts.push('<span>cache do servidor: ' + fmt(ttl) + ' s' +
         (d && d.runtime ? ' (capacidade fora do cache)' : '') + '</span>');
     }
-    parts.push('<span>página relê a cada 60 s</span>');
+    parts.push('<span>página relê a cada ' + (REFRESH_MS / 1000) + ' s</span>');
     box.innerHTML = parts.join('<span aria-hidden="true">·</span>');
   }
 
@@ -2575,15 +2802,18 @@
      One pill per thing that can need attention. The colour is the message; the
      number is the detail behind it. Anything with no live reading stays out. */
   var sigState = {
-    health: null, capacity: null, messages: null, ratings: null, voice: null, automated: null, android: null
+    health: null, capacity: null, sfu: null, messages: null, ratings: null, voice: null,
+    automated: null, android: null
   };
 
   function paintSignals() {
     var box = $("signals");
     if (!box) return;
-    // Capacity sits second, right after health: it is the only pill that can
-    // go red for something nobody has complained about yet.
-    var order = ["health", "capacity", "messages", "ratings", "voice", "automated", "android"];
+    // Incident order, left to right: is the API up, is there room to serve,
+    // is voice up, then who is here and what they are doing. Capacity and the
+    // SFU sit high because they are the two pills that go red for something
+    // nobody has complained about yet.
+    var order = ["health", "capacity", "sfu", "voice", "messages", "ratings", "automated", "android"];
     var html = "";
     order.forEach(function (key) {
       var sig = sigState[key];
@@ -3253,6 +3483,7 @@
     skelRows("retBody", 3, 4);
     skelRows("connBody", 4, 3);
     skelRows("voiceBody", 4, 2);
+    fillSkel("sfuHostBadges", skel("skel-sm", "width:120px;display:inline-block"));
     skelRows("topChannelsBody", 4, 5);
     skelRows("commBody", 6, 3);
     skelRows("bugsBody", 3, 3);
@@ -3264,6 +3495,19 @@
      not fall back to illustrative numbers: an operator glancing at a screen
      cannot tell those from a stale reading, which is the whole failure this
      dashboard exists to avoid. */
+  /* ---------------- refresh cadence ----------------
+     The API caches its counts for 30 s and the SFU block for 10 s, so polling
+     faster than 30 s re-reads the same payload; polling slower than that
+     wastes the freshness the API is already offering. A minute was the old
+     value and it meant a screen watched during an incident could be most of a
+     minute behind the endpoint it is reading.
+
+     A hidden tab does not poll at all: a phone left on this page in a pocket
+     used to hit the API all night for nobody. Coming back to the tab reads
+     immediately, so the first thing an operator sees after unlocking the
+     phone is current rather than however old the last poll was. */
+  var REFRESH_MS = 30000;
+
   var errBox = $("loadError");
   function showLoadError(reason) {
     if (!errBox) return;
@@ -3293,15 +3537,50 @@
     }
   }
 
-  /* ---------------- last-updated clock ---------------- */
+  /* ---------------- last-updated clock ----------------
+     The stamp alone is not enough during an incident: an operator glancing at
+     a screen reads "atualizado 14:32" as current without doing the
+     subtraction. So the relative age travels with it, and past STALE_AFTER_MS
+     the chip and a banner say the numbers are old rather than letting a calm
+     screen stand in for a calm system. */
   var upEl = $("updatedAt");
   var lastLiveAt = null; // Date of the last successful /metrics read
+  var STALE_AFTER_MS = REFRESH_MS * 2.5;
+
+  function ageMs() {
+    return lastLiveAt ? Date.now() - lastLiveAt.getTime() : null;
+  }
+  function isStale() {
+    var age = ageMs();
+    return age !== null && age > STALE_AFTER_MS;
+  }
   function paintUpdated() {
-    if (lastLiveAt) {
-      upEl.textContent = "atualizado " + fmtStamp(lastLiveAt);
-    } else {
-      upEl.textContent = "atualizado " + fmtStamp(new Date());
+    if (!upEl) return;
+    if (!lastLiveAt) {
+      upEl.textContent = "sem leitura ainda";
+      return;
     }
+    var rel = fmtRelative(lastLiveAt.toISOString());
+    upEl.textContent = "lido " + fmtStamp(lastLiveAt) + (rel ? " · " + rel : "");
+    paintStale();
+  }
+
+  /* The banner for numbers that are still on screen but no longer current. */
+  var staleBox = $("staleBanner");
+  function paintStale() {
+    if (!staleBox) return;
+    if (!isStale()) {
+      if (!staleBox.hidden) { staleBox.hidden = true; staleBox.innerHTML = ""; }
+      return;
+    }
+    var rel = fmtRelative(lastLiveAt.toISOString());
+    staleBox.hidden = false;
+    staleBox.innerHTML =
+      '<div class="stalebox">' +
+        '<b>números velhos</b>' +
+        '<span>a última leitura da api voltou ' + esc(rel) + '. o que está na tela é dela, não de agora.</span>' +
+        '<code>' + esc(fmtStamp(lastLiveAt)) + '</code>' +
+      '</div>';
   }
   paintUpdated();
 
@@ -3311,14 +3590,18 @@
 
   function paintChip() {
     var live = state.metrics || state.health;
-    chip.setAttribute("data-state", live ? "live" : "waiting");
+    var stale = isStale();
+    chip.setAttribute("data-state", !live ? "waiting" : stale ? "stale" : "live");
     var label;
-    if (state.metrics && state.health) label = "ao vivo · api.pqp.gg";
+    if (stale) label = "leitura parada";
+    else if (state.metrics && state.health) label = "ao vivo · api.pqp.gg";
     else if (state.metrics) label = "ao vivo · api.pqp.gg (saúde indisponível)";
     else if (state.health) label = "saúde ao vivo · métricas indisponíveis";
     else label = "sem leitura da api";
-    if (live && state.failedOnce) label += " · última leitura " + fmtTime(lastLiveAt || new Date());
-    chip.innerHTML = (live ? '<span class="dot live"></span> ' : '<span class="dot"></span> ') + esc(label);
+    if (live && (state.failedOnce || stale) && lastLiveAt) {
+      label += " · " + fmtRelative(lastLiveAt.toISOString());
+    }
+    chip.innerHTML = (live && !stale ? '<span class="dot live"></span> ' : '<span class="dot"></span> ') + esc(label);
     chip.title = live
       ? "lido de /metrics e /health neste worker"
       : "a api não respondeu; o painel não inventa números para preencher";
@@ -3401,6 +3684,7 @@
       backend: voice.backend
     });
 
+    renderSfu(d);
     renderCallRatings(d.callRatings);
     renderVoiceRooms(voice.rooms);
     renderMessageSplit(msgs.last24h || 0, msgs.automated24h || 0);
@@ -3516,12 +3800,44 @@
     });
   }
 
+  /* A refresh that is already running is never started twice: a slow API plus
+     a poll plus an impatient tap used to queue three reads against the same
+     upstream. */
+  var refreshing = false;
+  var refreshBtn = $("refreshBtn");
+  function refreshOnce() {
+    if (refreshing) return Promise.resolve();
+    refreshing = true;
+    if (refreshBtn) { refreshBtn.disabled = true; refreshBtn.textContent = "lendo..."; }
+    return refresh().then(function () {
+      refreshing = false;
+      if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = "atualizar"; }
+    }, function () {
+      refreshing = false;
+      if (refreshBtn) { refreshBtn.disabled = false; refreshBtn.textContent = "atualizar"; }
+    });
+  }
+
   if (typeof fetch === "function") {
-    refresh();
-    setInterval(refresh, 60000);
+    setText("refreshEvery", "atualiza a cada " + (REFRESH_MS / 1000) + " s · fuso são paulo (brt)");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", function () { refreshOnce(); });
+    }
+    refreshOnce();
+    setInterval(function () {
+      // A hidden tab keeps its numbers and stops asking for new ones.
+      if (document.hidden) return;
+      refreshOnce();
+    }, REFRESH_MS);
+    // The age line has to keep moving even between reads, or "há 2 min" sits
+    // there saying 2 min for a quarter of an hour.
+    setInterval(function () { paintUpdated(); paintChip(); }, 15000);
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) refreshOnce();
+    });
   } else {
     paintChip();
-    setInterval(paintUpdated, 60000);
+    setInterval(paintUpdated, REFRESH_MS);
   }
 })();
 </script>

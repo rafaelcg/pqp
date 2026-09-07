@@ -890,3 +890,88 @@ export function startVoiceInstanceHeartbeat(
     await withdrawVoiceInstance().catch(() => {});
   };
 }
+
+// --- SFU re-sweep claims (M4) ------------------------------------------------
+//
+// `voice/admin.ts` re-runs an SFU eviction every few seconds for the token
+// TTL, because a self-hosted LiveKit admits a removed participant again on
+// the token they already hold. With one process that was a `setInterval`
+// per key. With two, both would sweep the same room, and a deploy inside
+// the window used to drop the remaining sweeps. So the sweep is a row, and
+// a tick on any instance claims what is unclaimed: `UPDATE ... WHERE
+// claimed_until < NOW() ... RETURNING *` is the whole election. At most one
+// sweeper per key per claim window, no leader, and a row outlives the
+// process that wrote it.
+
+/** Cleared and re-set on every claim; slightly shorter than the tick so a stalled sweeper hands over within one interval. */
+export const RESWEEP_CLAIM_MS = 4_000;
+
+export interface VoiceResweepRow {
+  key: string;
+  scope: unknown;
+  evictedAt: Date;
+  until: Date;
+}
+
+/**
+ * Register (or restart) a re-sweep. A second eviction under the same key
+ * replaces the scope and pushes `until` out, exactly as the in-process timer
+ * restarted its window. The writer has just run the first pass itself, so
+ * the row starts claimed for one window: nobody else re-sweeps a room that
+ * was swept a moment ago.
+ */
+export async function upsertVoiceResweep(
+  key: string,
+  scope: unknown,
+  evictedAt: Date,
+  until: Date,
+): Promise<void> {
+  await getPool().query(
+    `INSERT INTO voice_resweeps (key, scope, evicted_at, until, claimed_until)
+     VALUES ($1, $2::jsonb, $3, $4, NOW() + ($5::bigint * INTERVAL '1 millisecond'))
+     ON CONFLICT (key) DO UPDATE
+       SET scope = EXCLUDED.scope,
+           evicted_at = EXCLUDED.evicted_at,
+           until = EXCLUDED.until,
+           claimed_until = EXCLUDED.claimed_until`,
+    [key, JSON.stringify(scope), evictedAt, until, RESWEEP_CLAIM_MS],
+  );
+}
+
+/**
+ * One tick: delete what has expired, then claim every live row nobody holds.
+ * The rows returned are this instance's to sweep, once, now. Two instances
+ * ticking in the same instant cannot both get a row: the `UPDATE` takes the
+ * row lock, and the second one re-evaluates `claimed_until < NOW()` against
+ * the first one's write and skips it.
+ */
+export async function claimVoiceResweeps(): Promise<VoiceResweepRow[]> {
+  const pool = getPool();
+  await pool.query(`DELETE FROM voice_resweeps WHERE until <= NOW()`);
+  const result = await pool.query<{
+    key: string;
+    scope: unknown;
+    evicted_at: Date;
+    until: Date;
+  }>(
+    `UPDATE voice_resweeps
+        SET claimed_until = NOW() + ($1::bigint * INTERVAL '1 millisecond')
+      WHERE claimed_until < NOW() AND until > NOW()
+      RETURNING key, scope, evicted_at, until`,
+    [RESWEEP_CLAIM_MS],
+  );
+  return result.rows.map((row) => ({
+    key: row.key,
+    scope: row.scope,
+    evictedAt: row.evicted_at,
+    until: row.until,
+  }));
+}
+
+/** Whether any re-sweep is still inside its window (the process ticker stops when none is). */
+export async function hasLiveVoiceResweeps(): Promise<boolean> {
+  const result = await getPool().query(
+    `SELECT 1 FROM voice_resweeps WHERE until > NOW() LIMIT 1`,
+  );
+  return result.rows.length > 0;
+}
