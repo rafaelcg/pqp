@@ -439,6 +439,8 @@ CLOUDFLARE_REALTIME_APP_SECRET=...
 
 **LiveKit is deployed.** Production voice runs through a self-hosted server at `sfu.pqp.gg`, and `GET /ready` reports it. What follows is the decision record for how that was chosen and what it costs; the runbook for the box itself is [`plans/SELF_HOSTED_LIVEKIT.md`](./plans/SELF_HOSTED_LIVEKIT.md).
 
+**What it carries, measured.** The load-test record, the single-UDP-port finding at 500 viewers and the port change recommended for the production box (not yet applied) are in [`CAPACITY.md`](./CAPACITY.md).
+
 **What a deploy needs.** Three values on the Fly app (`fly secrets set`, not `[env]` — two of them are credentials): `LIVEKIT_URL` (`wss://…`), `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`. Nothing changes on Cloudflare Pages — the client learns the backend from `GET /api/voice/backend` at runtime, and CI does not set `VITE_VOICE_BACKEND`. Do **not** copy `client/.env`'s `VITE_VOICE_BACKEND=mesh` into the build; it forces mesh for everyone.
 
 **Option A — LiveKit Cloud.** Free "Build" tier: 5,000 WebRTC connection-minutes/month and 50 GB egress, no card. 5,000 participant-minutes is roughly *four people talking for 20 hours a month, in total* — enough to validate, not enough to run on. Next tier ("Ship") is $50/mo including 150,000 minutes, then $0.0005/participant-minute and $0.12/GB downstream. Cloud is also the only place `revokeTokenTs` works, so moderation costs one RPC instead of fifteen minutes of re-sweeping.
