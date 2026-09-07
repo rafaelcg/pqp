@@ -114,6 +114,8 @@ type ParticipantResult = {
   sentBitrateBps?: number;
   requestedVideoBitrateBps?: number;
   disconnects: number;
+  /** Milliseconds between media start and the final RTP reading. */
+  heldMs?: number;
   flow: Flow[];
   ws?: { wireBytes: number; frames: Record<string, { count: number; bytes: number }> };
   failure?: string;
@@ -579,7 +581,7 @@ function judge(result: ParticipantResult, criteria: Criteria): string[] {
   // not a VideoStream drains the frames), so a frozen decoder shows here for
   // every receiver, not only the sampled ones, and bytes still arriving cannot
   // hide it.
-  const points = [...result.flow.map((f) => ({ atMs: f.atMs, bytesReceived: f.bytesReceived, framesDecoded: f.framesDecoded })), ...(rtp ? [{ atMs: criteria.holdMs, bytesReceived: rtp.bytesReceived, framesDecoded: rtp.framesDecoded }] : [])]
+  const points = [...result.flow.map((f) => ({ atMs: f.atMs, bytesReceived: f.bytesReceived, framesDecoded: f.framesDecoded })), ...(rtp ? [{ atMs: result.heldMs ?? criteria.holdMs, bytesReceived: rtp.bytesReceived, framesDecoded: rtp.framesDecoded }] : [])]
     .sort((a, b) => a.atMs - b.atMs)
     .reduce<Array<{ atMs: number; bytesReceived: number; framesDecoded: number }>>((kept, point) => { if (kept.length === 0 || point.atMs - kept[kept.length - 1]!.atMs >= MIN_FLOW_GAP_MS) kept.push(point); return kept; }, []);
   if (points.length < 2) reasons.push(`only ${points.length} usable flow reading(s); hold at least 10 s to judge continuity`);
@@ -673,7 +675,7 @@ async function one(index: number, role: Role, legacy: boolean, decodeSample: boo
         const s = await rtpStats(room);
         if (s.framesDecoded > 0) { result.firstFrameFromConnectMs = Date.now() - result.rtcConnectedAtMs; result.firstFrameFromArrivalMs = Date.now() - result.arrivalAtMs; break; }
         if (Date.now() - pollStarted > FIRST_FRAME_ABANDON_MS) { result.firstFrameAbandoned = true; break; }
-        await sleep(250);
+        await sleep(500);
       }
       diagnostic("first-frame", index, { fromConnectMs: result.firstFrameFromConnectMs, abandoned: result.firstFrameAbandoned });
     }
@@ -688,6 +690,7 @@ async function one(index: number, role: Role, legacy: boolean, decodeSample: boo
     for (const t of timers) clearInterval(t);
     result.rtp = await rtpStats(room);
     const heldMs = Math.max(1, Date.now() - mediaStartedAt);
+    result.heldMs = heldMs;
     result.decodedVideoFps = result.rtp.framesDecoded / (heldMs / 1000);
     if (publisher && (role === "presenter" || role === "camera")) { result.sourceVideoFps = publisher.frames() / (heldMs / 1000); result.sentBitrateBps = (result.rtp.bytesSent * 8) / (heldMs / 1000); }
     if (!presenter && (result.subscribedTracks < 2 || result.rtp.bytesReceived === 0)) throw new Error(`no received presenter RTP (tracks=${result.subscribedTracks}, bytes=${result.rtp.bytesReceived})`);
