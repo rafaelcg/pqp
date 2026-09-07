@@ -6,9 +6,10 @@ export type FavoriteChannelsMap = Record<string, string[]>;
 export { FAVORITE_CHANNELS_PER_SERVER_MAX };
 
 /**
- * Collapse key for the Favorites block. Categories are keyed by their own
- * channel id; this block is not a channel, so it needs a namespaced id that
- * cannot collide with a UUID.
+ * Collapse key for the personal pin block (Pinados). Categories are keyed by
+ * their own channel id; this block is not a channel, so it needs a namespaced
+ * id that cannot collide with a UUID. The storage key stays `favorites:…` so
+ * a rename would not uncollapse everybody's list.
  */
 export function favoritesCollapseKey(serverId: string): string {
   return `favorites:${serverId}`;

@@ -10,18 +10,23 @@ import {
   Lock,
   Pencil,
   Phone,
+  Pin,
+  PinOff,
   Plus,
   Search,
   Settings,
-  Star,
-  StarOff,
   Trash2,
   UserPlus,
   Users,
   X,
 } from "lucide-react";
 import { useEffect, useState, type DragEvent, type ReactNode } from "react";
-import type { Channel, Server, VoiceParticipant } from "@pqp/shared";
+import {
+  FAVORITE_CHANNELS_PER_SERVER_MAX,
+  type Channel,
+  type Server,
+  type VoiceParticipant,
+} from "@pqp/shared";
 import { SearchDialog } from "@/components/search/search-dialog";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { ServerBanner, ServerIcon } from "@/components/layout/server-identity";
@@ -66,8 +71,8 @@ export interface UnreadState {
 
 const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
 
-/** Drop-target ids that are not channels: the Favorites / TEXT / VOICE headers. */
-const FAVORITES_ZONE = "__favorites__";
+/** Drop-target ids that are not channels: the Pinados / TEXT / VOICE headers. */
+const PINNED_ZONE = "__pinned__";
 const TEXT_ZONE = "__text__";
 const VOICE_ZONE = "__voice__";
 
@@ -77,7 +82,7 @@ const SEARCH_SHORTCUT_HINT =
     ? "⌘K"
     : "Ctrl K";
 
-/** Equal-width action tiles on a channel row (star, settings). */
+/** Equal-width action tiles on a channel row (pin, settings). */
 const CHANNEL_ACTION_TILE =
   "flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-ink-3";
 
@@ -143,8 +148,9 @@ interface ChannelListProps {
     index: number,
   ) => void;
   /**
-   * This person's favourite channel ids for the open server, in display order.
-   * A change writes the whole preference map (see `writeFavoritesForServer`).
+   * This person's pinned channel ids for the open server, in display order.
+   * Stored as `favoriteChannels` in user prefs. A change writes the whole
+   * preference map (see `writeFavoritesForServer`).
    */
   favoriteChannelIds?: string[];
   onFavoriteChannelIdsChange?: (ids: string[]) => void;
@@ -458,8 +464,25 @@ export function ChannelList({
   }
 
   /**
-   * Drop onto the Favorites header (append) or a favourite row (insert before).
-   * Categories cannot be favourited.
+   * Pin, or no-op with a hint when the per-server cap is full. Already-pinned
+   * ids still move (reorder), even at the cap.
+   */
+  function commitPin(channel: Pick<Channel, "id" | "type">, insertBeforeId?: string) {
+    const next = addFavorite(favoriteChannelIds, channel, insertBeforeId);
+    const isNew = !favoriteIdSet.has(channel.id);
+    if (isNew && next.length === favoriteChannelIds.length) {
+      setDropHint(
+        t("chrome.pinChannelFull", { count: FAVORITE_CHANNELS_PER_SERVER_MAX }),
+      );
+      window.setTimeout(() => setDropHint(null), 2500);
+      return;
+    }
+    commitFavorites(next);
+  }
+
+  /**
+   * Drop onto the Pinados header (append) or a pinned row (insert before).
+   * Categories cannot be pinned.
    */
   function handleDropOnFavorites(insertBeforeId?: string) {
     const dragged = draggedChannel();
@@ -467,7 +490,7 @@ export function ChannelList({
     if (!dragged || dragged.type === "category" || !onFavoriteChannelIdsChange) {
       return;
     }
-    commitFavorites(addFavorite(favoriteChannelIds, dragged, insertBeforeId));
+    commitPin(dragged, insertBeforeId);
   }
 
   function handleUnfavoriteDragged() {
@@ -484,10 +507,10 @@ export function ChannelList({
   }
 
   /**
-   * Dropping onto a favourite row reorders (or stars) the personal list.
-   * Dropping a favourite onto anything else unstars it; it reappears under
-   * its real parent. Shared layout (`moveChannel`) only runs for a
-   * non-favourite dropped by a manager, same as before.
+   * Dropping onto a pinned row reorders (or pins) the personal list.
+   * Dropping a pin onto anything else unpins it; it reappears under its real
+   * parent. Shared layout (`moveChannel`) only runs for an unpinned channel
+   * dropped by a manager, same as before.
    */
   function handleDrop(target: Channel) {
     if (!draggedId || draggedId === target.id) {
@@ -579,11 +602,11 @@ export function ChannelList({
           onToggleFavorite={
             channel.type !== "category" && onFavoriteChannelIdsChange
               ? () =>
-                  commitFavorites(
-                    isFavorite
-                      ? removeFavorite(favoriteChannelIds, channel.id)
-                      : addFavorite(favoriteChannelIds, channel),
-                  )
+                  isFavorite
+                    ? commitFavorites(
+                        removeFavorite(favoriteChannelIds, channel.id),
+                      )
+                    : commitPin(channel)
               : undefined
           }
           onSelect={() => {
@@ -874,15 +897,21 @@ export function ChannelList({
           <ChannelListSkeleton />
         ) : (
           <>
-            {visibleFavs.length > 0 && server && (
-              <FavoritesSection
+            {server &&
+              (visibleFavs.length > 0 ||
+                Boolean(
+                  draggedId &&
+                    !draggedOccupant &&
+                    draggedChannel()?.type !== "category",
+                )) && (
+              <PinnedChannelsSection
                 collapsed={collapsed.has(favoritesCollapseKey(server.id))}
                 onToggle={() =>
                   toggleCollapsed(favoritesCollapseKey(server.id))
                 }
-                isDragOver={dragOverId === FAVORITES_ZONE && !draggedOccupant}
+                isDragOver={dragOverId === PINNED_ZONE && !draggedOccupant}
                 onDragOver={() =>
-                  !draggedOccupant && draggedId && setDragOverId(FAVORITES_ZONE)
+                  !draggedOccupant && draggedId && setDragOverId(PINNED_ZONE)
                 }
                 onDrop={() => {
                   if (draggedOccupant) {
@@ -896,7 +925,7 @@ export function ChannelList({
                 {visibleFavs.map((channel) =>
                   renderRow(channel, visibleFavs, true),
                 )}
-              </FavoritesSection>
+              </PinnedChannelsSection>
             )}
 
             {communityHomeEnabled && server && onSelectCommunityHome && (
@@ -1106,7 +1135,7 @@ export function ChannelList({
   );
 }
 
-function FavoritesSection({
+function PinnedChannelsSection({
   collapsed,
   onToggle,
   isDragOver,
@@ -1123,7 +1152,7 @@ function FavoritesSection({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="mb-4">
+    <div className="mb-4" data-pinned-channels="">
       <div
         onDragOver={(event) => {
           event.preventDefault();
@@ -1151,7 +1180,7 @@ function FavoritesSection({
               !collapsed && "rotate-90",
             )}
           />
-          <span className="truncate">{t("chrome.favorites")}</span>
+          <span className="truncate">{t("chrome.pinnedChannels")}</span>
         </button>
       </div>
       {!collapsed && children}
@@ -1387,11 +1416,11 @@ function ChannelRow({
 
   if (onToggleFavorite) {
     items.push({
-      id: "favorite",
+      id: "pin",
       label: isFavorite
-        ? t("chrome.unfavoriteChannel")
-        : t("chrome.favoriteChannel"),
-      icon: isFavorite ? StarOff : Star,
+        ? t("chrome.unpinChannel")
+        : t("chrome.pinChannel"),
+      icon: isFavorite ? PinOff : Pin,
       onSelect: onToggleFavorite,
     });
   }
@@ -1517,7 +1546,7 @@ function ChannelRow({
         onDragStart={(event) => {
           if (
             (event.target as HTMLElement).closest(
-              "[data-channel-favorite], [data-channel-join], [data-channel-settings]",
+              "[data-channel-pin], [data-channel-join], [data-channel-settings]",
             )
           ) {
             event.preventDefault();
@@ -1610,28 +1639,24 @@ function ChannelRow({
         {onToggleFavorite && (
           <Tooltip
             label={
-              isFavorite
-                ? t("chrome.unfavoriteChannel")
-                : t("chrome.favoriteChannel")
+              isFavorite ? t("chrome.unpinChannel") : t("chrome.pinChannel")
             }
           >
             <button
               type="button"
-              data-channel-favorite=""
+              data-channel-pin=""
               draggable={false}
               className={cn(
                 CHANNEL_ACTION_TILE,
-                // The star slides in from the right edge on hover and stays
-                // put once the channel is a favourite.
+                // The pin slides in from the right edge on hover and stays
+                // put once the channel is pinned.
                 "transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none",
                 isFavorite
-                  ? "text-warning"
+                  ? "text-paper"
                   : "translate-x-2 text-paper-muted opacity-0 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:translate-x-0 group-focus-within:opacity-100",
               )}
               aria-label={
-                isFavorite
-                  ? t("chrome.unfavoriteChannel")
-                  : t("chrome.favoriteChannel")
+                isFavorite ? t("chrome.unpinChannel") : t("chrome.pinChannel")
               }
               onClick={(event) => {
                 event.preventDefault();
@@ -1639,7 +1664,7 @@ function ChannelRow({
                 onToggleFavorite();
               }}
             >
-              <Star
+              <Pin
                 className={cn("h-3.5 w-3.5", isFavorite && "fill-current")}
               />
             </button>
