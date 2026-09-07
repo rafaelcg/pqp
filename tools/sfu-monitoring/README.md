@@ -3,7 +3,10 @@
 Everything that watches the self-hosted LiveKit box (Vultr, São Paulo,
 `216.238.114.79`, serving `sfu.pqp.gg` and `turn.pqp.gg`). The prose version,
 including the thresholds and why each choice was made, is in
-[`docs/MONITORING.md`](../../docs/MONITORING.md) under "The SFU box".
+[`docs/MONITORING.md`](../../docs/MONITORING.md) under "The SFU box". The box
+itself, every config file on it and the installer that rebuilds it from a fresh
+Ubuntu image, is next door in [`tools/sfu/`](../sfu/); that installer calls this
+one at the end, so a rebuild comes up already monitored.
 
 | File | Role |
 |---|---|

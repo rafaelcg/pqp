@@ -13,6 +13,8 @@ review date is 2026-09-13, using real party counts and the LiveKit Cloud usage p
 
 Related code and docs:
 
+- `tools/sfu/` (every config file on the box, plus the installer that rebuilds it; section 7)
+- `tools/sfu-monitoring/` and `docs/MONITORING.md` (what watches the box)
 - `docs/voice-backends.md` (how the app uses LiveKit, and the eviction re-sweep)
 - `server/src/voice/backends.ts` (env vars, `TOKEN_TTL_SECONDS = 15 * 60`)
 - `server/src/voice/admin.ts` (`RESWEEP_INTERVAL_MS = 5_000`, `revokeTokenTs` is Cloud-only)
@@ -155,6 +157,12 @@ sustained needs a 1 Gbps port, not a shared 100 Mbps one.
 | 6789 | TCP | Prometheus metrics | localhost or your monitoring IP only |
 | 22 | TCP | SSH | your IP only, key auth |
 
+Correction, measured on the running box 2026-09-07: LiveKit binds 7880 and 6789 on `0.0.0.0`, not on
+loopback, so "localhost only" in the two rows above describes the intent and not the socket. What
+actually keeps them private is `ufw`. Treat the firewall as load-bearing rather than as defence in
+depth, and never disable it to debug something. The live `ufw` also still allows `30000:40000/udp`,
+LiveKit's default ICE range, left over from before `udp_port` was set; nothing listens there.
+
 Why a single UDP port instead of 50000-60000: identical behaviour for clients (ICE candidates carry the
 port), a one-line firewall rule, and it matches what our dev compose already documents. This is the
 same shape the `livekit` profile in `docker-compose.yml` binds (7880, 7881, 7882/udp).
@@ -177,21 +185,39 @@ IP (TURN record to the TURN IP), TTL 5 min during migration, then whatever you l
 
 ### Firewall (Vultr firewall group plus ufw on the box, both)
 
+What the box actually carries, read with `ufw status verbose` on 2026-09-07 and reproduced verbatim by
+`tools/sfu/install.sh`:
+
 ```
 ufw default deny incoming
-ufw allow from <your ip> to any port 22 proto tcp
+ufw default allow outgoing
+ufw allow 22/tcp             # from anywhere, key auth only; see below
 ufw allow 80/tcp
 ufw allow 443/tcp
 ufw allow 7881/tcp
 ufw allow 7882/udp
 ufw allow 3478/udp
+ufw allow 5349/tcp           # TURN/TLS, the single-IP decision above
+ufw allow 30000:40000/udp    # leftover ICE range, nothing listens there
 ufw enable
 ```
+
+Two departures from the shape this section originally proposed. SSH is open to the world rather than to
+one address: on a box you rebuild at 23:00 from wherever you happen to be, a source restriction that
+locks you out is the more likely failure. And `30000:40000/udp` is open even though `rtc.udp_port: 7882`
+means LiveKit never binds that range. Both are reproduced rather than quietly fixed, so that the
+installer rebuilds the box that exists; tightening either is one command and a one-line edit.
 
 Mirror the same in a Vultr Firewall Group attached to the instance so a mistake in ufw is not the only
 line of defence.
 
 ## 3. Configuration
+
+Since 2026-09-07 every file below lives in the repo at [`tools/sfu/`](../../tools/sfu/), with an
+idempotent installer that renders them onto a fresh Ubuntu box. That directory is the source of
+truth; the listings in this section are kept for the reasoning attached to each setting. If the two
+ever disagree, `tools/sfu/` is right, because it was verified byte for byte against the running box.
+Section 7 is the rebuild procedure.
 
 ### Generate keys on the box
 
@@ -364,10 +390,18 @@ WantedBy=multi-user.target
 Log rotation: the `journald` driver hands logs to systemd-journald; set `SystemMaxUse=500M` in
 `/etc/systemd/journald.conf`. Nothing writes to `/opt/livekit` at runtime.
 
-Cert sync for TURN, `/etc/systemd/system/caddy-cert-sync.service` (oneshot) plus a `.timer` at
-`OnCalendar=daily`: copy `/var/lib/docker/volumes/livekit_caddy_data/_data/caddy/certificates/.../turn.pqp.gg.{crt,key}`
-to `/opt/livekit/certs/`, and `docker compose restart livekit` only if `sha256sum` changed. Verify the
-exact path Caddy uses on first run; it includes the ACME issuer directory name.
+As built, this unit is `enabled` but has never been `start`ed: the containers come back after a reboot
+through Docker's own `restart: unless-stopped`, not through systemd. That works, it is just not the
+path the unit describes, so `ExecStop` has never run either. `tools/sfu/README.md` explains why the
+installer leaves the live box that way and how to hand the stack over to systemd in a quiet hour.
+
+Cert sync for TURN is `/etc/systemd/system/turn-cert-sync.service` (oneshot, no `[Install]`, so it
+reports `static`) plus `turn-cert-sync.timer` at `OnCalendar=daily`, running
+`/opt/livekit/sync-turn-cert.sh`: copy
+`/var/lib/docker/volumes/livekit_caddy_data/_data/caddy/certificates/.../turn.pqp.gg.{crt,key}` to
+`/opt/livekit/certs/`, and `docker compose restart livekit` only if `sha256sum` changed. The script
+`find`s the certificate directory by name rather than hardcoding the ACME issuer path, so a change of
+issuer does not break it. Both files are in `tools/sfu/`.
 
 ### Metrics and one alert
 
@@ -390,11 +424,12 @@ metrics endpoint).
 
 ### LiveKit version pinning and upgrades
 
-Pin the image tag (`v1.13.5` is what the re-sweep was measured against). Upgrade procedure, monthly or
-when the release notes mention security:
+Pin the image tag. `v1.13.5` is what the re-sweep was measured against; the box has been on
+**`v1.13.6`** since it was built, and `v1.13.5` is still in the local image cache as the one-command
+rollback. Upgrade procedure, monthly or when the release notes mention security:
 
 1. Read https://github.com/livekit/livekit/releases for the target tag.
-2. Edit the tag in `docker-compose.yaml`, `docker compose pull`.
+2. Edit the tag in `tools/sfu/docker-compose.yaml`, commit, copy it up, `docker compose pull`.
 3. Quiet hour, no rooms active: `docker compose up -d livekit`.
 4. Run the two-browser check from section 5 and the kick test.
 5. If it misbehaves, revert the tag and `docker compose up -d livekit`. Under one minute.
@@ -404,10 +439,9 @@ Because the API talks to LiveKit via `livekit-server-sdk`, also check that the p
 
 ### Backups
 
-There is nothing to back up. Rooms are ephemeral, keys are in two known places, TLS re-issues itself.
-The runbook for a lost box is "rebuild from this doc": provision, run the steps in section 6 up to
-milestone (a), paste the same `keys:` value so Fly secrets stay valid, point DNS at the new IP. Twenty
-minutes, of which most is waiting for ACME.
+There is nothing to back up, so Vultr's Automatic Backups ($4.80/mo) are deliberately off. Rooms are
+ephemeral, the key pair is in two known places, TLS re-issues itself. The protection is not a snapshot,
+it is that the whole box is scripted: see section 7.
 
 ### Rollback
 
@@ -489,6 +523,110 @@ Against Ship at $140 (4 parties) or $260 (8 parties). The Cloud project stays on
 | (e) Downgrade Cloud | In the LiveKit Cloud dashboard set the project to Build (free). Keep the project, keep the keys somewhere safe as the rollback secrets, do not delete it | 0.5 |
 
 Total: roughly 10 to 12 hours, spread over a week so each milestone gets a night of soak.
+
+## 7. Rebuilding the box from scratch
+
+The box is disposable on purpose: no database, no uploads, no state that outlives a reboot. The
+only irreplaceable thing on it is the LiveKit API key pair, and that is only irreplaceable because
+Fly will not let you read a secret back. Everything else is in [`tools/sfu/`](../../tools/sfu/) and
+[`tools/sfu-monitoring/`](../../tools/sfu-monitoring/).
+
+Budget **20 to 30 minutes** of wall clock, of which maybe 8 are yours and the rest is waiting: Vultr
+provisioning (2 to 3 min), `apt` and Docker (3 to 5 min), ACME issuance for two hostnames (30 s to 2
+min), DNS propagation at a 5 minute TTL, and the verification pass. It is a slow evening's job, not
+an all-nighter.
+
+### Before anything: get the key pair off the old box
+
+If the old box is reachable at all, this is the first command, because it makes the whole rebuild a
+DNS change instead of a coordinated secret rotation:
+
+```
+ssh root@216.238.114.79 'grep -A1 "^keys:" /opt/livekit/livekit.yaml'
+```
+
+Paste the same pair into the new box and the three Fly secrets on `pqp-api` stay valid, so nothing
+about the API changes and no restart is needed. If the old box is gone, skip this: the installer will
+generate a fresh pair and print the `fly secrets set` you then owe it. That is the slower path, because
+`fly secrets set` restarts the API machine and closes every `/ws`, so it wants a quiet hour.
+
+### The rebuild
+
+1. **Provision.** Vultr, São Paulo, High Performance AMD 2 vCPU / 4 GB (`vhp-2c-4gb-amd`), Ubuntu
+   24.04, your SSH key, Automatic Backups **off**. Attach the same Vultr firewall group. Note the new
+   IP. Do not repoint DNS yet.
+2. **Install.** From a checkout of this repo:
+
+   ```
+   scp -r tools/sfu tools/sfu-monitoring root@<new-ip>:/opt/
+   ssh root@<new-ip> 'LIVEKIT_API_KEY=<key> LIVEKIT_API_SECRET=<secret> \
+     GC_PROM_USER=3563744 GC_PROM_TOKEN=<metrics:write token> \
+     bash /opt/sfu/install.sh'
+   ```
+
+   The Grafana token is `GRAFANA_LOGS_WRITE_TOKEN` in `~/.config/pqp/grafana.env`
+   (`tools/sfu-monitoring/README.md`). The installer does Docker, the swapfile, the journald cap,
+   unattended-upgrades, `ufw`, `/opt/livekit`, the two systemd units, the compose stack, and then the
+   monitoring installer.
+
+   ACME will fail at this point, and that is expected: `sfu.pqp.gg` still resolves to the old box, so
+   Caddy cannot answer its own challenge. The installer waits, gives up, and carries on. Step 3 is what
+   makes it work.
+
+3. **Verify before touching DNS.** Prove the new box serves, using `--resolve` so `curl` ignores the
+   real DNS. LiveKit answers its HTTP root with 200.
+
+   ```
+   curl -sS -o /dev/null -w '%{http_code}\n' --resolve sfu.pqp.gg:443:<new-ip> https://sfu.pqp.gg/
+   ```
+
+   That still needs a certificate, so if the old box is alive and you cannot cut over blind, the honest
+   order is: check the plain HTTP path and the process first,
+
+   ```
+   ssh root@<new-ip> 'docker compose --project-directory /opt/livekit ps'
+   ssh root@<new-ip> 'curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:7880/'
+   ssh root@<new-ip> 'ufw status verbose; ss -lntup | grep -E "7880|7881|5349|6789"'
+   ```
+
+   then repoint DNS, then re-run the `--resolve` check with the certificate in place. Expect `200` in
+   both cases. If step 2's ACME wait timed out, run
+   `ssh root@<new-ip> 'cd /opt/livekit && docker compose logs --tail 50 caddy'` after the DNS change
+   and give it a minute; Caddy retries on its own.
+
+4. **Repoint DNS.** Cloudflare, `pqp.gg` zone. `sfu` and `turn`, both `A` records, both **DNS only
+   (grey cloud)**, both to the new IP, TTL 5 min during the move. An orange cloud here makes signalling
+   work and every media path fail, which is the most confusing possible outcome.
+5. **Sync the TURN certificate.** Once `turn.pqp.gg` resolves to the new box and Caddy has issued for
+   it, the daily timer would eventually do this, but do not wait:
+
+   ```
+   ssh root@<new-ip> '/opt/livekit/sync-turn-cert.sh; ls -l /opt/livekit/certs'
+   ```
+
+6. **Verify for real.** Two browsers on different networks, one on mobile data, in the same voice
+   channel, hearing each other within 5 s. Then the kick test from section 5, which is the one that
+   exercises the RoomService path from `pqp-api` to the new box. Then check that Grafana is receiving:
+   https://smallkestrel237.grafana.net/d/pqp-sfu-box
+7. **Only if the key pair changed**, and in a quiet hour:
+
+   ```
+   fly secrets set -a pqp-api LIVEKIT_URL=wss://sfu.pqp.gg LIVEKIT_API_KEY=<key> LIVEKIT_API_SECRET=<secret>
+   ```
+
+8. **Destroy the old instance** once a party has run on the new one. Not before.
+
+### If the rebuild is going badly
+
+Roll back to LiveKit Cloud with the three secrets in "Rollback" above, take the time back, and try
+again another night. The Cloud project stays on the free Build tier for exactly this.
+
+### What the rebuild does not restore
+
+Nothing, as far as the product is concerned. Rooms are ephemeral and a room's transport pin dies with
+the room. What is genuinely lost is the box's own history: vnstat's monthly transfer counter starts at
+zero, so the egress alert thresholds in `tools/sfu-monitoring` under-report until the next month rolls
+over, and the journal is gone. Neither is worth a backup.
 
 ## Sources
 

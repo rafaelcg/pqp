@@ -1,0 +1,10 @@
+#!/bin/bash
+# Copy the __TURN_DOMAIN__ certificate Caddy obtained into a path LiveKit reads, restart LiveKit only if it changed.
+set -e
+SRC=$(find /var/lib/docker/volumes/livekit_caddy_data/_data/caddy/certificates -type d -name __TURN_DOMAIN__ | head -1)
+[ -n "$SRC" ] || { echo "no turn cert yet"; exit 0; }
+before=$(sha256sum /opt/livekit/certs/__TURN_DOMAIN__.crt 2>/dev/null | cut -d" " -f1 || true)
+install -m 600 "$SRC/__TURN_DOMAIN__.crt" /opt/livekit/certs/__TURN_DOMAIN__.crt
+install -m 600 "$SRC/__TURN_DOMAIN__.key" /opt/livekit/certs/__TURN_DOMAIN__.key
+after=$(sha256sum /opt/livekit/certs/__TURN_DOMAIN__.crt | cut -d" " -f1)
+if [ "$before" != "$after" ]; then echo "turn cert changed, restarting livekit"; cd /opt/livekit && docker compose restart livekit; fi

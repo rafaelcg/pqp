@@ -1,0 +1,5 @@
+[Unit]
+Description=Sync __TURN_DOMAIN__ cert from Caddy to LiveKit
+[Service]
+Type=oneshot
+ExecStart=/opt/livekit/sync-turn-cert.sh
