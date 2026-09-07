@@ -150,6 +150,16 @@ describe("assertLoadTestAuthConfig", () => {
     setEnv({ token: "" });
     expect(() => assertLoadTestAuthConfig()).not.toThrow();
   });
+
+  /**
+   * A colon in the secret is unauthenticatable, because that is where the
+   * header is split into secret and suffix. Caught at boot rather than left to
+   * present as an unexplained 401 on every request.
+   */
+  it("throws for a token containing the suffix separator", () => {
+    setEnv({ token: `${TOKEN.slice(0, -1)}:` });
+    expect(() => assertLoadTestAuthConfig()).toThrow(/':'/);
+  });
 });
 
 describe("loadTestIdentity", () => {

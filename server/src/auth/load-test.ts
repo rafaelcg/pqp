@@ -126,6 +126,18 @@ export function assertLoadTestAuthConfig(): void {
         "Unset it, or set a strong random value.",
     );
   }
+  // The colon is the separator between the secret and the suffix, so a token
+  // containing one can never match: the header would be split somewhere inside
+  // the secret. Silently, and only ever presenting as 401, which is the worst
+  // way for a credential to be wrong. `openssl rand -base64` can emit `+` and
+  // `/` but never `:`, so this only fires on a hand-written value.
+  if (token?.includes(":")) {
+    throw new Error(
+      "LOAD_TEST_TOKEN must not contain ':'. That character separates the " +
+        "secret from the per-identity suffix, so such a token can never " +
+        "authenticate.",
+    );
+  }
 }
 
 /**
