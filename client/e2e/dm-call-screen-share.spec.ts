@@ -182,7 +182,10 @@ test("a screen share started mid-video-call reaches the other side's stage", asy
     // load scenario. The caller's camera came on with the video call; the
     // callee turns theirs on from the stage.
     await expectVideoPlaying(callee.page, pair.callerName);
-    await callee.page.getByRole("button", { name: "Turn camera on" }).click();
+    await callee.page
+      .getByRole("main")
+      .getByRole("button", { name: "Turn camera on" })
+      .click();
     await expectVideoPlaying(page, pair.calleeName);
 
     // Mid-call, the caller starts sharing.

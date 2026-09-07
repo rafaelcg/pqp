@@ -64,7 +64,10 @@ test("camera on expands the lobby stage; camera off returns the slim bar", async
     timeout: 20_000,
   });
 
-  await page.getByRole("button", { name: "Turn camera on", exact: true }).click();
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: "Turn camera on", exact: true })
+    .click();
   await expect(page.getByTestId("call-stage")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("call-stage-collapsed")).toHaveCount(0);
 
@@ -102,7 +105,10 @@ test("camera on expands the lobby stage; camera off returns the slim bar", async
     "true",
   );
 
-  await page.getByRole("button", { name: "Turn camera off", exact: true }).click();
+  await page
+    .getByRole("main")
+    .getByRole("button", { name: "Turn camera off", exact: true })
+    .click();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
     timeout: 10_000,
   });
