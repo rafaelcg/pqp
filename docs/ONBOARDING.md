@@ -20,16 +20,23 @@ Adding one means adding a row here.
 | Cargos tip | `components/layout/cargos-hint.tsx` | Corner card | can manage roles | `pqp:cargos-hint-…` (impression) |
 | Get the app strip | `components/downloads/download-hint.tsx` | Sidebar strip | desktop browser | `pqp:download-hint-dismissed` (dismiss) |
 | Cinema hint | `components/voice/cinema-hint.tsx` | One-line strip above the call controls | iPhone/iPad in a browser tab (not standalone), a share on the stage | `pqp:cinema-hint-…` (impression, `lib/cinema-hint.ts`) |
+| Composer format | `components/layout/feature-hint.tsx` in the composer | Inline CornerCard above Aa / + | first text channel, once | `pqp:feature-hint-composer-format-…` |
+| Watch party | `components/layout/feature-hint.tsx` on the call bar or the in-call strip | Inline CornerCard | first time in a call that can share | `pqp:feature-hint-watch-party-…` |
+| Channel pin | `components/layout/feature-hint.tsx` in the channel list | Inline CornerCard | first time a server list is open | `pqp:feature-hint-channel-pin-…` |
+| Shortcuts | `components/layout/shortcuts-hint.tsx` | Corner card, last in the queue | `/app` on a keyboard, after a quiet beat, no attached hint up | `pqp:feature-hint-shortcuts-…` |
 
 ## The rules
 
 **One corner at a time.** Every corner card renders through
 `components/layout/corner-card.tsx` and is arbitrated by
 `lib/corner-hints.ts` (`CORNER_HINT_ORDER`: update, qg, mobileBeta, whatsNew,
-cargos). The update prompt is mounted in `main.tsx` outside `App`; it reports
-through `lib/update-prompt-state.ts` so the queue in `App` yields to it. Two
-cards in the same corner is a stack, and the one underneath records its
-impression without ever being seen.
+cargos, shortcuts). The update prompt is mounted in `main.tsx` outside `App`;
+it reports through `lib/update-prompt-state.ts` so the queue in `App` yields
+to it. Two cards in the same corner is a stack, and the one underneath records
+its impression without ever being seen. Composer format, Watch party / share,
+and Fixar use the same `CornerCard` frame with `layout="inline"` next to the
+control; they share `lib/feature-hints.ts` so only one of those mounts, and they
+yield while a campaign owns the corner.
 
 **One shell.** `CornerCard` owns the frame (radius, border, shadow, width,
 safe area), the entrance (`animate-pop-in`), the exit (`animate-pop-out`,
@@ -41,9 +48,9 @@ the hero when there is one, in the title row otherwise). A card passes
 "show once" card was seen: never on `localhost` (developers see every card on
 every reload), never for Playwright (`navigator.webdriver`), and hostile or
 missing storage reads as seen. The per-surface libs (`qg-hint.ts`,
-`cargos-hint.ts`, `mobile-beta-hint.ts`) keep their names as thin wrappers.
-The download strip is the exception on purpose: it is furniture, written on
-dismiss, on every host.
+`cargos-hint.ts`, `mobile-beta-hint.ts`, `feature-hints.ts`) keep their names as
+thin wrappers. The download strip is the exception on purpose: it is furniture,
+written on dismiss, on every host.
 
 **Preference vs. localStorage.** Things that answer a question about the
 *account* (the wizard, the checklist, the Baú intro) are preferences and
@@ -59,7 +66,7 @@ that arrive together stagger (`--stagger`). All of it is off under
 
 1. Decide its persistence: preference (account question) or `lib/hints.ts`
    key (campaign).
-2. Render it with `CornerCard` (corner) or `animate-rise` on an inline card.
+2. Render it with `CornerCard` (corner, or `layout="inline"` next to a control).
 3. If it is a corner card, add its id to `CORNER_HINT_ORDER` in product
    order and pass `enabled={cornerHint === "<id>"}` from `App`.
 4. Add the row above.

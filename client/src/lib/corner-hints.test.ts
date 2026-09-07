@@ -27,6 +27,10 @@ describe("winningCornerHint", () => {
       "whatsNew",
     );
     expect(winningCornerHint({ cargos: true })).toBe("cargos");
+    expect(winningCornerHint({ shortcuts: true })).toBe("shortcuts");
+    expect(winningCornerHint({ cargos: true, shortcuts: true })).toBe(
+      "cargos",
+    );
   });
 
   it("a waiting build beats every campaign", () => {
