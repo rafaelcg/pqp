@@ -199,6 +199,9 @@ async function listAsCommunity(serverId: string): Promise<void> {
       serverId,
       {
         isCommunity: true,
+        // Both switches: a local directory with nothing in it teaches nobody
+        // anything, and this row exists to be browsed.
+        isListed: true,
         slug: DEV_HALL_SLUG,
         tagline: "Sala local de demo. Gente fictícia, não é gente de verdade.",
         category: "geral",

@@ -8,8 +8,10 @@ import type { ChannelKind, VoiceRoomTransport } from "@pqp/shared";
  * ceiling (`MESH_VOICE_LIMIT`, eight) is far above what a small server or a
  * DM ever fills. So the SFU is reserved for the rooms that can outgrow the
  * mesh: voice channels in servers of at least `LARGE_SERVER_MEMBER_THRESHOLD`
- * members, and any listed community, whose membership is open and can jump
- * from three to thirty in an evening.
+ * members, and any PUBLIC community — one with an address at `pqp.gg/c/<slug>`,
+ * whether or not it is also in the directory — whose membership is open and can
+ * jump from three to thirty in an evening. The address is the switch that opens
+ * the door, so it is the switch that predicts the crowd.
  *
  * Pure: no database, no env. `ws/voice.ts` gathers the inputs (one cheap query,
  * `getServerVoiceProfile`) and applies the result under the existing rule that
@@ -29,7 +31,7 @@ export type VoiceTransportReason =
   | "small"
   /** Voice channel in a server at or above the member threshold. */
   | "large"
-  /** Voice channel in a listed community, regardless of size. */
+  /** Voice channel in a public community (one with an address), any size. */
   | "community"
   /** The channel's `voice_transport` column. */
   | "override"

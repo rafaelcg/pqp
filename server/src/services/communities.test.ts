@@ -188,7 +188,18 @@ describeDb("communities", () => {
       category?: string;
       language?: string;
       tagline?: string | null;
+      /**
+       * Both switches at once, which is what almost every test here wants: a
+       * community with a public address that is also in the directory.
+       */
       listed?: boolean;
+      /**
+       * The DIRECTORY half on its own. Defaults to `listed`, so passing nothing
+       * keeps the old meaning; passing `false` with `listed` left alone makes
+       * the row this whole split exists for — a public address, no directory
+       * card.
+       */
+      inDirectory?: boolean;
       suspended?: boolean;
       extraMembers?: { id: string }[];
       /**
@@ -213,7 +224,8 @@ describeDb("communities", () => {
       `UPDATE servers SET is_community = $2, community_category = $3,
               community_tagline = $4, is_community_suspended = $5,
               community_slug = $6,
-              community_language = $7
+              community_language = $7,
+              is_community_listed = $8
        WHERE id = $1`,
       [
         serverId,
@@ -227,6 +239,8 @@ describeDb("communities", () => {
         // Only set by the tests that are about language. The default is the
         // column's own, which is the state every row in production is in.
         options.language ?? "pt",
+        (options.inDirectory ?? options.listed ?? true) &&
+          (options.listed ?? true),
       ],
     );
     return serverId;
@@ -598,7 +612,7 @@ describeDb("communities", () => {
       const card = res.body.communities[0]!;
       // The list is the assertion, and it is exhaustive on purpose: a column
       // added to `DIRECTORY_COLUMNS` has to be a deliberate decision to show a
-      // stranger, not something that arrived because it was already selected
+      // joiner, not something that arrived because it was already selected
       // somewhere else. `iconUrl` / `bannerUrl` are here because a community
       // asked to be found and its picture is what a card is for; `slug` is here
       // because the card's share button copies `pqp.gg/c/<slug>`, which is the
@@ -790,21 +804,46 @@ describeDb("communities", () => {
   // ------------------------------------------------------------- the opt-in
 
   describe("the owner's opt-in", () => {
-    it("is owner-only", async () => {
+    it("splits the address from the directory by role", async () => {
       const created = await createChatServer("Meu", owner.id);
       await getPool().query(
         `INSERT INTO server_members (server_id, user_id, role)
          VALUES ($1, $2, 'admin')`,
         [created.server.id, joiner.id],
       );
-      // An admin may not make somebody else's private room public.
+      // An admin MAY give the room a public address: they are the people who
+      // hand out the link, and it brings nobody an invite would not.
+      const addressed = await call<{ community: { isListed: boolean } }>(
+        joiner,
+        "PATCH",
+        `/api/servers/${created.server.id}/community`,
+        { isCommunity: true },
+      );
+      expect(addressed.status).toBe(200);
+      expect(addressed.body.community.isListed).toBe(false);
+      // They may NOT put somebody else's room in the directory, which is the
+      // change that brings strangers who were sent nothing.
       expect(
         (
           await call(
             joiner,
             "PATCH",
             `/api/servers/${created.server.id}/community`,
-            { isCommunity: true },
+            { isListed: true },
+          )
+        ).status,
+      ).toBe(403);
+      // Nor take the listing down sideways by emptying the address under it.
+      await call(owner, "PATCH", `/api/servers/${created.server.id}/community`, {
+        isListed: true,
+      });
+      expect(
+        (
+          await call(
+            joiner,
+            "PATCH",
+            `/api/servers/${created.server.id}/community`,
+            { isCommunity: false },
           )
         ).status,
       ).toBe(403);
@@ -835,6 +874,9 @@ describeDb("communities", () => {
       expect(res.status).toBe(200);
       expect(res.body.community).toEqual({
         isCommunity: true,
+        // The address alone. Taking a link is not asking to be browsed, so the
+        // directory half stays off until somebody says so.
+        isListed: false,
         // Derived from the name by the opt-in itself — nothing in this request
         // asked for it. See the `communitySlug` audit entry below.
         slug: "vira-comunidade",
@@ -1107,6 +1149,239 @@ describeDb("communities", () => {
       // ON DELETE SET NULL, not CASCADE: the evidence outlives the room.
       expect(queue.body.reports).toHaveLength(1);
       expect(queue.body.reports[0]!.reportedUserName).toBe("Some depois");
+    });
+  });
+
+  // ------------------------------- the address and the directory, apart
+
+  /**
+   * A public address without a directory listing.
+   *
+   * The shape a 500-member room built off a Twitch audience actually wants: a
+   * link to hand out, and no card in a directory strangers browse. Everything
+   * below is one question asked of every read path in the feature — does this
+   * path key on the ADDRESS (reachable by link) or on the DIRECTORY (findable
+   * by browsing) — because getting one of them wrong is invisible until either
+   * a private room is in the grid or a shared link 404s.
+   */
+  describe("addressed but unlisted", () => {
+    beforeEach(() => {
+      process.env.COMMUNITIES_ENABLED = "true";
+    });
+
+    it("is absent from the grid and from search", async () => {
+      await makeCommunity("So o link", { inDirectory: false, slug: "so-o-link" });
+      await makeCommunity("No diretorio");
+
+      const grid = await call<{ communities: { name: string }[] }>(
+        joiner,
+        "GET",
+        "/api/communities",
+      );
+      expect(grid.body.communities.map((c) => c.name)).toEqual(["No diretorio"]);
+
+      // Search is exempt from the member floor but NOT from the listing: a
+      // room that asked not to be browsed must not be findable by typing its
+      // name either, or "unlisted" means nothing.
+      const search = await call<{ communities: { name: string }[] }>(
+        joiner,
+        "GET",
+        "/api/communities?q=So%20o%20link",
+      );
+      expect(search.body.communities).toHaveLength(0);
+    });
+
+    it("is not readable as a directory card by id", async () => {
+      const serverId = await makeCommunity("So o link", {
+        inDirectory: false,
+        slug: "so-o-link",
+      });
+      const res = await call(
+        joiner,
+        "GET",
+        `/api/communities/${serverId}`,
+      );
+      // 404 and not 403, like every other "you cannot see this" in the feature.
+      expect(res.status).toBe(404);
+    });
+
+    it("still serves its public page to somebody with no account", async () => {
+      await makeCommunity("So o link", {
+        inDirectory: false,
+        slug: "so-o-link",
+        tagline: "manda o link pros seus",
+      });
+      const res = await fetch(`${baseUrl}/api/public/communities/so-o-link`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        community: { name: string; tagline: string | null };
+      };
+      expect(body.community.name).toBe("So o link");
+      expect(body.community.tagline).toBe("manda o link pros seus");
+    });
+
+    it("resolves its slug and admits the person holding the link", async () => {
+      const serverId = await makeCommunity("So o link", {
+        inDirectory: false,
+        slug: "so-o-link",
+      });
+      // `?join=<slug>` end to end: resolve behind auth, then the ordinary join.
+      const resolved = await call<{ community: { id: string } }>(
+        joiner,
+        "GET",
+        "/api/communities/by-slug/so-o-link",
+      );
+      expect(resolved.status).toBe(200);
+      expect(resolved.body.community.id).toBe(serverId);
+
+      const joined = await call<{ joinedNow: boolean }>(
+        joiner,
+        "POST",
+        `/api/communities/${serverId}/join`,
+      );
+      expect(joined.status).toBe(200);
+      expect(joined.body.joinedNow).toBe(true);
+    });
+
+    it("goes dark entirely when the operator suspends it", async () => {
+      await makeCommunity("So o link", {
+        inDirectory: false,
+        slug: "so-o-link",
+        suspended: true,
+      });
+      // One switch for the operator, both halves down: they never have to work
+      // out which of the two the owner had turned on.
+      const page = await fetch(`${baseUrl}/api/public/communities/so-o-link`);
+      expect(page.status).toBe(404);
+      const resolved = await call(
+        joiner,
+        "GET",
+        "/api/communities/by-slug/so-o-link",
+      );
+      expect(resolved.status).toBe(404);
+    });
+
+    it("can still be reported, and the report goes to the instance queue", async () => {
+      const serverId = await makeCommunity("So o link", {
+        inDirectory: false,
+        slug: "so-o-link",
+      });
+      const filed = await call(joiner, "POST", "/api/reports", {
+        subjectType: "server",
+        serverId,
+        reason: "other",
+        details: "a page is a public surface too",
+      });
+      expect(filed.status).toBe(201);
+
+      process.env.INSTANCE_MODERATOR_CLERK_IDS = operator.clerk_id;
+      const queue = await call<{
+        reports: { reportedUserName: string | null }[];
+      }>(operator, "GET", "/api/reports/instance");
+      expect(queue.body.reports.map((r) => r.reportedUserName)).toContain(
+        "So o link",
+      );
+
+      // And never into the accused community's own queue.
+      const ownerQueue = await call<{ reports: unknown[] }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/reports`,
+      );
+      expect(ownerQueue.body.reports).toHaveLength(0);
+    });
+  });
+
+  /**
+   * Moving the two switches, and the four rules that constrain the pair.
+   */
+  describe("the two switches", () => {
+    beforeEach(() => {
+      process.env.COMMUNITIES_ENABLED = "true";
+    });
+
+    it("gives an address without a directory card", async () => {
+      const created = await createChatServer("So o link", owner.id);
+      const res = await call<{
+        community: { isCommunity: boolean; isListed: boolean; slug: string | null };
+      }>(owner, "PATCH", `/api/servers/${created.server.id}/community`, {
+        isCommunity: true,
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.community.isCommunity).toBe(true);
+      // The default for the new half is off. Taking a link is not asking to be
+      // browsed, which is the whole point.
+      expect(res.body.community.isListed).toBe(false);
+      // The slug is derived on the transition into ADDRESSED, not into listed.
+      expect(res.body.community.slug).toBe("so-o-link");
+    });
+
+    it("refuses a listing on a room with no address", async () => {
+      const created = await createChatServer("Sem endereco", owner.id);
+      const res = await call(
+        owner,
+        "PATCH",
+        `/api/servers/${created.server.id}/community`,
+        { isListed: true },
+      );
+      // 409, not a silent "we turned both on for you": publishing a page is a
+      // separate sentence and nobody may be published without saying it.
+      expect(res.status).toBe(409);
+      const settings = await call<{
+        community: { isCommunity: boolean; isListed: boolean };
+      }>(owner, "GET", `/api/servers/${created.server.id}/community`);
+      expect(settings.body.community.isCommunity).toBe(false);
+      expect(settings.body.community.isListed).toBe(false);
+    });
+
+    it("takes the listing down with the address", async () => {
+      const serverId = await makeCommunity("Tchau", { slug: "tchau" });
+      const res = await call<{
+        community: { isCommunity: boolean; isListed: boolean };
+      }>(owner, "PATCH", `/api/servers/${serverId}/community`, {
+        isCommunity: false,
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.community.isCommunity).toBe(false);
+      // Not refused, unlike the other direction: a card whose share button
+      // leads nowhere is worse than a card that quietly went away, and the
+      // owner asked for the public half to stop.
+      expect(res.body.community.isListed).toBe(false);
+      const grid = await call<{ communities: { name: string }[] }>(
+        joiner,
+        "GET",
+        "/api/communities",
+      );
+      expect(grid.body.communities).toHaveLength(0);
+    });
+
+    it("keeps the address on the row after both are turned off", async () => {
+      const serverId = await makeCommunity("Volto ja", { slug: "volto-ja" });
+      await call(owner, "PATCH", `/api/servers/${serverId}/community`, {
+        isCommunity: false,
+      });
+      const settings = await call<{ community: { slug: string | null } }>(
+        owner,
+        "GET",
+        `/api/servers/${serverId}/community`,
+      );
+      // The URL is in screenshots; a change of mind next week must not need a
+      // new one.
+      expect(settings.body.community.slug).toBe("volto-ja");
+    });
+
+    it("records the listing in the audit trail even when nobody named it", async () => {
+      const serverId = await makeCommunity("Sumindo", { slug: "sumindo" });
+      await call(owner, "PATCH", `/api/servers/${serverId}/community`, {
+        isCommunity: false,
+      });
+      const log = await call<{
+        entries: { action: string; changes: { key: string }[] }[];
+      }>(owner, "GET", `/api/servers/${serverId}/audit-log`);
+      const entry = log.body.entries.find(
+        (e) => e.action === "server.community_update",
+      );
+      expect(entry?.changes.map((c) => c.key)).toContain("isCommunityListed");
     });
   });
 

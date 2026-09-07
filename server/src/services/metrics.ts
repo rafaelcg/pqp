@@ -553,8 +553,14 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
           AND u.created_at < now() - interval '24 hours'`,
     ),
     pool.query<{ total: string; listed: string; suspended: string; with_slug: string }>(
+      // `total` counts communities with a PUBLIC ADDRESS; `listed` counts the
+      // subset that is also in the directory. The two stopped being the same
+      // number when the switches were split, and the operator needs the second
+      // one — the directory is the surface with the moderation duty on it.
       `SELECT COUNT(*)::text AS total,
-              COUNT(*) FILTER (WHERE NOT is_community_suspended)::text AS listed,
+              COUNT(*) FILTER (
+                WHERE is_community_listed AND NOT is_community_suspended
+              )::text AS listed,
               COUNT(*) FILTER (WHERE is_community_suspended)::text AS suspended,
               COUNT(*) FILTER (WHERE community_slug IS NOT NULL)::text AS with_slug
          FROM servers

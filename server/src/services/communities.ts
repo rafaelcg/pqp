@@ -12,8 +12,25 @@ import { getPool } from "../db.js";
 import { invalidateServerAudience } from "./servers.js";
 
 /**
- * Communities — a public directory of joinable servers, and the join path that
- * needs no invite.
+ * Communities — a public page per room, a directory of the rooms that asked to
+ * be browsed, and the join path that needs no invite.
+ *
+ * TWO SWITCHES, AND KNOWING WHICH IS WHICH IS HOW THIS FILE READS.
+ *
+ *   `is_community`        THE ADDRESS. `pqp.gg/c/<slug>` answers, anybody
+ *                         holding the link can read the poster and join with
+ *                         one tap. Manage Server sets it.
+ *   `is_community_listed` THE DIRECTORY. On top of the address, the room is
+ *                         browsable and searchable by every signed-in account,
+ *                         so strangers who were sent nothing can find it. The
+ *                         owner's alone.
+ *
+ * Every read path in this file picks one of the two, deliberately:
+ * `DIRECTORY_SQL` for anything a stranger BROWSES into, `ADDRESSED_SQL` (and
+ * its viewer-less twins) for anything reached by holding the link. Getting that
+ * choice wrong in either direction is the bug this split can produce — an
+ * unlisted community leaking into the grid, or a link the owner handed out
+ * answering 404.
  *
  * FOUR RULES HOLD THIS FILE TOGETHER, and every function exists to keep one of
  * them true:
@@ -72,18 +89,25 @@ export function isCommunitiesEnabled(): boolean {
 }
 
 /**
- * The listing predicate, written once.
+ * The two predicates, each written once. `$1` is always the viewer.
  *
- * Every read path in this file interpolates this string, and none of them
- * rebuild it: "what is publicly listed" is one question, and two copies of the
- * answer is how a suspended community stays visible in search after being
- * pulled from the grid. `$1` is always the viewer.
+ * `ADDRESSED_SQL` is "this room has a public page, and it is not suspended, and
+ * you are not banned from it" — the test for anything reached by HOLDING THE
+ * LINK. `DIRECTORY_SQL` adds the one column that separates a room that can be
+ * found from a room that can be reached.
+ *
+ * Written once each because "what is browsable" and "what is reachable" are two
+ * questions, and a second copy of either answer is how a suspended community
+ * stays visible in search after being pulled from the grid.
  */
-const LISTED_SQL = `s.is_community
+const ADDRESSED_SQL = `s.is_community
    AND NOT s.is_community_suspended
    AND NOT EXISTS (
      SELECT 1 FROM server_bans b WHERE b.server_id = s.id AND b.user_id = $1
    )`;
+
+const DIRECTORY_SQL = `${ADDRESSED_SQL}
+   AND s.is_community_listed`;
 
 /**
  * The columns a stranger may read. Deliberately narrower than `SERVER_COLUMNS`
@@ -187,7 +211,7 @@ export async function listCommunities(
   options: ListCommunitiesOptions,
 ): Promise<CommunityListPage> {
   const params: unknown[] = [viewerId];
-  const filters: string[] = [LISTED_SQL];
+  const filters: string[] = [DIRECTORY_SQL];
 
   if (options.category) {
     params.push(options.category);
@@ -241,20 +265,36 @@ export async function listCommunities(
 }
 
 /**
- * One community, by id, as the directory would show it.
+ * How the caller arrived, and therefore which of the two predicates applies.
  *
- * Subject to the same predicate as the list — a suspended community, a private
- * server, or one the viewer is banned from is "not found" and not "forbidden".
- * The distinction matters: a 403 confirms the id names something.
+ *  - `"directory"`: they browsed or deep-linked into the grid, so the community
+ *    has to be LISTED. An unlisted room must be as absent here as a private one.
+ *  - `"addressed"`: they hold the link (`?join=<slug>`, the public page's CTA),
+ *    so an address is enough. Refusing here would break the one thing the split
+ *    exists to allow — handing a link to an audience without opening the
+ *    directory door.
+ *
+ * Not a boolean, because `getCommunity(id, true)` at a call site says nothing
+ * about which way round `true` is.
+ */
+export type CommunityScope = "directory" | "addressed";
+
+/**
+ * One community, by id, as a card.
+ *
+ * Subject to the predicate its `scope` names — a suspended community, a private
+ * server, or one the viewer is banned from is "not found" and not "forbidden"
+ * under either. The distinction matters: a 403 confirms the id names something.
  */
 export async function getCommunity(
   viewerId: string,
   serverId: string,
+  scope: CommunityScope = "directory",
 ): Promise<CommunitySummary | null> {
   const result = await getPool().query<DirectoryRow>(
     `SELECT ${DIRECTORY_COLUMNS}
      FROM servers s
-     WHERE s.id = $2 AND ${LISTED_SQL}`,
+     WHERE s.id = $2 AND ${scope === "directory" ? DIRECTORY_SQL : ADDRESSED_SQL}`,
     [viewerId, serverId],
   );
   const row = result.rows[0];
@@ -267,6 +307,13 @@ export type JoinCommunityResult =
 
 /**
  * Join a community. No invite, no approval, one tap.
+ *
+ * ADDRESSED IS ENOUGH, AND THAT IS THE JOIN DECISION THE SPLIT MADE. A room
+ * that is not in the directory but has handed out `pqp.gg/c/<slug>` admits the
+ * people holding that link, exactly as before: the owner's purpose in taking an
+ * address is to give their audience a way in, and a link that opens a page with
+ * a door that does not work would be a worse product than no page. What being
+ * unlisted removes is the ability to be FOUND by somebody who was sent nothing.
  *
  * MODELLED ON `redeemInvite` AND `joinServerBySso` RATHER THAN BESIDE THEM,
  * because the three differ only in what authorises the join and agree on
@@ -281,11 +328,11 @@ export type JoinCommunityResult =
  * and `joinedNow` is what lets the caller tell "welcome" from "you were already
  * here" without a second query.
  *
- * THE LISTING IS RE-CHECKED UNDER THE LOCK, not read from what the directory
- * showed. An owner unlisting their community, or an operator suspending it,
- * must beat a join that already had the card on screen — otherwise the window
- * between "pull the listing" and "the tab refreshes" is a window in which the
- * pulled listing still admits people.
+ * THE ADDRESS IS RE-CHECKED UNDER THE LOCK, not read from what the card showed.
+ * An owner turning the public page off, or an operator suspending it, must beat
+ * a join that already had the card on screen — otherwise the window between
+ * "pull the page" and "the tab refreshes" is a window in which a room nobody can
+ * reach any more still admits people.
  *
  * The member floor is NOT re-checked here. It is a browsing heuristic, not a
  * permission; refusing to admit the second member of a community would make the
@@ -364,7 +411,12 @@ export async function joinCommunity(
  * every door — reading a poster is not walking in, and the CTA on this page
  * leads to sign-up and the age gate like every other door does.
  *
- * SUSPENDED AND UNLISTED ARE THE SAME 404 AS UNKNOWN. `LISTED_SQL` cannot be
+ * NOT BEING IN THE DIRECTORY CHANGES NOTHING HERE. This page is the address,
+ * and the address is the switch this query reads; a community that took a link
+ * without opening the directory door renders exactly as a listed one does,
+ * which is the entire point of the split.
+ *
+ * SUSPENDED AND ADDRESS-LESS ARE THE SAME 404 AS UNKNOWN. `LISTED_SQL` cannot be
  * reused because it takes a viewer for the ban check and there is none here, so
  * the two predicates it does carry are restated: a suspended community and a
  * private server both answer exactly as a slug nobody holds does. Answering
@@ -436,20 +488,21 @@ export async function findCommunityIdBySlug(
   return result.rows[0]?.id ?? null;
 }
 
-/** The owner's own view of their server's listing. */
+/** The panel's own view of its server's two switches. */
 export async function getCommunitySettings(
   serverId: string,
 ): Promise<CommunitySettings | null> {
   const result = await getPool().query<{
     is_community: boolean;
+    is_community_listed: boolean;
     community_slug: string | null;
     community_tagline: string | null;
     community_category: CommunityCategory;
     community_language: CommunityLanguage;
     is_community_suspended: boolean;
   }>(
-    `SELECT is_community, community_slug, community_tagline, community_category,
-            community_language, is_community_suspended
+    `SELECT is_community, is_community_listed, community_slug, community_tagline,
+            community_category, community_language, is_community_suspended
      FROM servers WHERE id = $1`,
     [serverId],
   );
@@ -459,6 +512,7 @@ export async function getCommunitySettings(
   }
   return {
     isCommunity: row.is_community,
+    isListed: row.is_community_listed,
     slug: row.community_slug,
     tagline: row.community_tagline,
     category: row.community_category,
@@ -468,7 +522,10 @@ export async function getCommunitySettings(
 }
 
 export interface CommunityUpdate {
+  /** The public address at `pqp.gg/c/<slug>`. Manage Server may move it. */
   isCommunity?: boolean;
+  /** The directory. The owner may move it, and nobody else. */
+  isListed?: boolean;
   /** Explicit null clears; absent leaves it. */
   tagline?: string | null;
   category?: CommunityCategory;
@@ -535,10 +592,36 @@ export class CommunitySlugError extends Error {
  * that repeats the listing value it just read is not an attempt to flip
  * anything and must not fail.
  */
+export type CommunityListingRefusal =
+  /** The directory switch itself was moved by somebody who does not own the room. */
+  | "listing"
+  /**
+   * The ADDRESS was turned off on a room that is in the directory, which would
+   * have taken the listing down with it. A non-owner may set and edit the
+   * address; they may not empty the directory card by the back door.
+   */
+  | "cascade";
+
 export class CommunityListingForbiddenError extends Error {
-  constructor() {
-    super("Only the owner can list this community publicly");
+  constructor(readonly reason: CommunityListingRefusal) {
+    super("Only the owner can change this community's directory listing");
     this.name = "CommunityListingForbiddenError";
+  }
+}
+
+/**
+ * Listing was asked for on a room with no public address.
+ *
+ * REFUSED RATHER THAN TURNING BOTH ON. "Put us in the directory" and "publish a
+ * page about us" are different sentences, and a switch that silently flips a
+ * second switch is how somebody ends up published without having said so. The
+ * panel keeps the directory control disabled until the address is on, so a
+ * request that reaches this has skipped a step rather than answered a question.
+ */
+export class CommunityListingNeedsAddressError extends Error {
+  constructor() {
+    super("A community needs a public address before it can be listed");
+    this.name = "CommunityListingNeedsAddressError";
   }
 }
 
@@ -559,22 +642,34 @@ function isUniqueViolation(error: unknown): boolean {
  * UPDATE` read is what makes the before-value the one this write actually
  * replaced rather than whatever a concurrent PATCH left behind.
  *
+ * THE TWO SWITCHES MOVE UNDER FOUR RULES, and all four are enforced here rather
+ * than at the route, because all four need the row this write is replacing:
+ *
+ *  1. Only the owner moves `is_community_listed` (`mayChangeListing`).
+ *  2. Turning the ADDRESS off takes the listing with it — a directory card
+ *     whose share button leads nowhere is worse than a card that went away —
+ *     and because that is a listing change, a non-owner is refused it
+ *     (`"cascade"`) instead of being allowed to empty the directory sideways.
+ *  3. Listing without an address is refused, never auto-corrected.
+ *  4. The slug is derived on the transition into ADDRESSED, not into listed:
+ *     the address is what needs one.
+ *
  * SUSPENSION IS NOT WRITEABLE HERE and there is no code path that writes it.
- * An owner relisting a suspended community sets `is_community` back to true and
- * changes nothing — `is_community_suspended` still keeps it out of every read
- * path. That is the intended behaviour, not an oversight: the operator's
- * decision has to outrank the owner's or it is not a moderation tool.
+ * An owner relisting a suspended community sets the switches back and changes
+ * nothing — `is_community_suspended` still keeps it out of every read path.
+ * That is the intended behaviour, not an oversight: the operator's decision has
+ * to outrank the owner's or it is not a moderation tool.
  *
  * THE SLUG IS THE ONE FIELD THAT CAN REFUSE THE WHOLE PATCH. Three rules:
  *
- *  1. An explicit `slug` always wins, and always for a listing that is on or
+ *  1. An explicit `slug` always wins, and always for an address that is on or
  *     going on. Nothing derives over the top of a choice somebody typed.
  *  2. With no explicit slug, one is DERIVED FROM THE NAME on the transition
- *     into listed — and only when the row has none. A listing that already has
- *     an address keeps it through a rename, because the address is in
+ *     into ADDRESSED — and only when the row has none. A community that already
+ *     has an address keeps it through a rename, because the address is in
  *     screenshots and the name is not.
  *  3. A collision is `taken` and an underivable name is `underivable`, and both
- *     roll the transaction back. Listing a community at no address, or at a
+ *     roll the transaction back. A public switch with no page behind it, or a
  *     machine-suffixed `valorant-2` nobody chose, are both worse than asking
  *     one question.
  *
@@ -594,14 +689,16 @@ export async function updateCommunitySettings(
     const before = await client.query<{
       name: string;
       is_community: boolean;
+      is_community_listed: boolean;
       community_slug: string | null;
       community_tagline: string | null;
       community_category: CommunityCategory;
       community_language: CommunityLanguage;
       is_community_suspended: boolean;
     }>(
-      `SELECT name, is_community, community_slug, community_tagline,
-              community_category, community_language, is_community_suspended
+      `SELECT name, is_community, is_community_listed, community_slug,
+              community_tagline, community_category, community_language,
+              is_community_suspended
        FROM servers WHERE id = $1 FOR UPDATE`,
       [serverId],
     );
@@ -611,44 +708,54 @@ export async function updateCommunitySettings(
       return null;
     }
 
-    // THE LISTING IS THE OWNER'S AND THE ADDRESS IS NOT. Checked here, under
-    // the lock, against the value this write would replace — see
-    // `CommunityListingForbiddenError`. Every other field below this line is
-    // editable by anyone holding Manage Server.
-    if (
-      update.isCommunity !== undefined &&
-      update.isCommunity !== previousRow.is_community &&
-      !actor.mayChangeListing
-    ) {
+    // Rule 3: listing needs an address, and asking for one without the other is
+    // a refusal rather than a correction.
+    const willBeAddressed = update.isCommunity ?? previousRow.is_community;
+    const askedToList = update.isListed ?? previousRow.is_community_listed;
+    if (askedToList && !willBeAddressed && update.isListed === true) {
       await client.query("ROLLBACK");
-      throw new CommunityListingForbiddenError();
+      throw new CommunityListingNeedsAddressError();
+    }
+    // Rule 2: the address going off takes the listing with it.
+    const willBeListed = askedToList && willBeAddressed;
+
+    // THE DIRECTORY IS THE OWNER'S AND THE ADDRESS IS NOT. Checked here, under
+    // the lock, against the value this write would replace — see
+    // `CommunityListingForbiddenError`. Everything else on this row is editable
+    // by anyone holding Manage Server.
+    if (willBeListed !== previousRow.is_community_listed && !actor.mayChangeListing) {
+      await client.query("ROLLBACK");
+      throw new CommunityListingForbiddenError(
+        update.isListed !== undefined ? "listing" : "cascade",
+      );
     }
 
-    const willBeListed = update.isCommunity ?? previousRow.is_community;
     let nextSlug = previousRow.community_slug;
     if (update.slug !== undefined) {
       nextSlug = update.slug;
-    } else if (willBeListed && !previousRow.community_slug) {
+    } else if (willBeAddressed && !previousRow.community_slug) {
       nextSlug = deriveCommunitySlug(previousRow.name);
       if (!nextSlug) {
         // The name cannot become an address — pure emoji, or two characters.
-        // Refused rather than listed at no address, because a listing with no
-        // public page is a share button that is silently missing and an owner
-        // who cannot tell why.
+        // Refused rather than switched on at no address, because a public
+        // switch with no public page is a share button that is silently missing
+        // and an owner who cannot tell why.
         await client.query("ROLLBACK");
         throw new CommunitySlugError("underivable");
       }
     }
 
     // Absent means "not changing this", which is why each field is coalesced
-    // against the row rather than defaulted to anything. Turning the listing
-    // OFF deliberately leaves the tagline, category and SLUG behind: an owner
-    // who unlists and relists a week later should not have to retype the pitch
-    // or lose the URL, and an unlisted row is invisible to every read path
-    // anyway. The unique index is partial on `is_community` precisely so an
-    // unlisted holder does not squat the address against a live claimant.
+    // against the row rather than defaulted to anything — except the two
+    // switches, which are computed above precisely because they constrain each
+    // other. Turning either OFF deliberately leaves the tagline, category and
+    // SLUG behind: somebody who unlists and relists a week later should not have
+    // to retype the pitch or lose the URL. The unique index is partial on
+    // `is_community` so a room with no public page stops holding an address
+    // against a live claimant while still keeping it on the row.
     const result = await client.query<{
       is_community: boolean;
+      is_community_listed: boolean;
       community_slug: string | null;
       community_tagline: string | null;
       community_category: CommunityCategory;
@@ -656,22 +763,25 @@ export async function updateCommunitySettings(
       is_community_suspended: boolean;
     }>(
       `UPDATE servers SET
-         is_community = COALESCE($2, is_community),
+         is_community = $2,
+         is_community_listed = $8,
          community_tagline = CASE WHEN $3::boolean THEN $4 ELSE community_tagline END,
          community_category = COALESCE($5, community_category),
          community_slug = $6,
          community_language = COALESCE($7, community_language)
        WHERE id = $1
-       RETURNING is_community, community_slug, community_tagline,
-                 community_category, community_language, is_community_suspended`,
+       RETURNING is_community, is_community_listed, community_slug,
+                 community_tagline, community_category, community_language,
+                 is_community_suspended`,
       [
         serverId,
-        update.isCommunity ?? null,
+        willBeAddressed,
         update.tagline !== undefined,
         update.tagline ?? null,
         update.category ?? null,
         nextSlug,
         update.language ?? null,
+        willBeListed,
       ],
     );
     await client.query("COMMIT");
@@ -680,6 +790,7 @@ export async function updateCommunitySettings(
     return {
       settings: {
         isCommunity: row.is_community,
+        isListed: row.is_community_listed,
         slug: row.community_slug,
         tagline: row.community_tagline,
         category: row.community_category,
@@ -688,6 +799,7 @@ export async function updateCommunitySettings(
       },
       previous: {
         isCommunity: previousRow.is_community,
+        isListed: previousRow.is_community_listed,
         slug: previousRow.community_slug,
         tagline: previousRow.community_tagline,
         category: previousRow.community_category,
@@ -702,7 +814,8 @@ export async function updateCommunitySettings(
     // needs to name the field, or the status it needs to answer with.
     if (
       !(error instanceof CommunitySlugError) &&
-      !(error instanceof CommunityListingForbiddenError)
+      !(error instanceof CommunityListingForbiddenError) &&
+      !(error instanceof CommunityListingNeedsAddressError)
     ) {
       await client.query("ROLLBACK");
     }

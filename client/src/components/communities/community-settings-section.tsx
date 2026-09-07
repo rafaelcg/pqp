@@ -21,15 +21,26 @@ import {
 import { useTranslation } from "@/lib/i18n";
 
 /**
- * The owner's opt-in, inside Server settings.
+ * The two public switches, inside Server settings.
  *
- * THE COPY IS THE FEATURE HERE. Listing a server is the single most
- * consequential thing an owner can do to it — the room stops being private and
- * strangers can walk in without an invite and without anyone approving them —
- * and an owner who did not understand that is an owner who will be surprised by
- * their own member list. So the explainer says all three consequences in plain
- * words (findable, member count visible, one-tap join with no approval) and
- * says them BEFORE the switch, not in a tooltip beside it.
+ * TWO SWITCHES, AND THE COPY IS WHAT MAKES THEM TWO THINGS.
+ *
+ *   Endereço público  the page at `pqp.gg/c/<slug>`. Whoever gets the link
+ *                     reads the poster and walks in with one tap. Nobody finds
+ *                     the room without being sent it.
+ *   Diretório         the step on top: every signed-in account can find the
+ *                     room by browsing or searching, having been sent nothing.
+ *
+ * Each switch carries its consequence in the line directly under it, in the
+ * present tense, rather than in a paragraph above both or a tooltip beside one.
+ * The directory switch is disabled until the address is on and says why, so the
+ * dependency is visible before it is hit rather than as a refusal afterwards.
+ *
+ * THE COPY IS THE FEATURE HERE. Listing a server is the most consequential
+ * thing an owner can do to it — the room stops being private and strangers can
+ * walk in without an invite and without anyone approving them — and an owner who
+ * did not understand that is an owner who will be surprised by their own member
+ * list.
  *
  * The second paragraph is the half people forget to write: it is a public
  * surface now, so reports about it go to whoever runs the instance, and they can
@@ -38,14 +49,17 @@ import { useTranslation } from "@/lib/i18n";
  *
  * WHO SEES IT. Anyone with Manage Server, because the public address lives here
  * and the people who hand out a community's link are its moderators as often as
- * its owner. The directory switch is still the owner's alone: `canListPublicly`
- * is false for everybody else, and the server enforces the same split
+ * its owner. The directory switch is the owner's alone: `canListPublicly` is
+ * false for everybody else, and the server enforces the same split
  * independently (see the PATCH handler in api/index.ts).
  *
- * A NON-OWNER GETS THE SWITCH DISABLED AND A SENTENCE, not a hidden control.
+ * A NON-OWNER GETS A DISABLED SWITCH AND A SENTENCE, not a hidden control.
  * Hiding it would leave an admin unable to see whether the room is listed at
  * all, which is the first thing you need to know before you edit its page; and
  * a greyed box with no explanation is the shape of a bug rather than of a rule.
+ * The address switch is disabled for them too while the room is IN the
+ * directory, because turning it off there would take the listing down sideways
+ * — the server refuses exactly that, and the line under the switch says so.
  */
 export function CommunitySettingsSection({
   serverId,
@@ -63,6 +77,9 @@ export function CommunitySettingsSection({
   const [language, setLanguage] = useState<CommunityLanguage>(
     DEFAULT_COMMUNITY_LANGUAGE,
   );
+  /** The public address at `pqp.gg/c/<slug>` — `isCommunity` on the wire. */
+  const [addressed, setAddressed] = useState(false);
+  /** The directory. Owner-only, and impossible without an address. */
   const [listed, setListed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -78,6 +95,7 @@ export function CommunitySettingsSection({
    * address and never anything else — see the note on the PATCH handler.
    */
   const [slugError, setSlugError] = useState<string | null>(null);
+  const addressToggleId = useId();
   const toggleId = useId();
   const taglineId = useId();
   const categoryId = useId();
@@ -93,7 +111,8 @@ export function CommunitySettingsSection({
           return;
         }
         setSettings(res.community);
-        setListed(res.community.isCommunity);
+        setAddressed(res.community.isCommunity);
+        setListed(res.community.isListed);
         setTagline(res.community.tagline ?? "");
         setCategory(res.community.category);
         setSlug(res.community.slug ?? "");
@@ -124,12 +143,13 @@ export function CommunitySettingsSection({
     const typedSlug = slug.trim();
     try {
       const res = await updateCommunitySettings(serverId, {
+        isCommunity: addressed,
         // OMITTED ENTIRELY for a non-owner rather than sent unchanged. The
         // server refuses only a real change, so sending the value back would
         // work — but a form that cannot move a field has no business naming it,
         // and this way an admin's save can never be the write that unlists a
         // room in a race.
-        ...(canListPublicly ? { isCommunity: listed } : {}),
+        ...(canListPublicly ? { isListed: listed } : {}),
         // An emptied box means "clear it", which the API spells as explicit
         // null — sending "" would store a blank line the card reserves space for.
         tagline: tagline.trim() === "" ? null : tagline.trim(),
@@ -143,7 +163,8 @@ export function CommunitySettingsSection({
         language,
       });
       setSettings(res.community);
-      setListed(res.community.isCommunity);
+      setAddressed(res.community.isCommunity);
+      setListed(res.community.isListed);
       setTagline(res.community.tagline ?? "");
       setCategory(res.community.category);
       // The server may have DERIVED one; reading it back is what puts the
@@ -173,9 +194,16 @@ export function CommunitySettingsSection({
   }
 
   const remaining = COMMUNITY_TAGLINE_MAX_LENGTH - tagline.trim().length;
+  /**
+   * The address cannot be turned off by a non-owner while the room is listed:
+   * that write would take the listing down with it, and the server refuses it.
+   * Disabled here rather than left to fail, with the reason in the line below.
+   */
+  const addressLocked = !canListPublicly && settings?.isListed === true;
   const dirty =
     settings !== null &&
-    ((canListPublicly && listed !== settings.isCommunity) ||
+    (addressed !== settings.isCommunity ||
+      (canListPublicly && listed !== settings.isListed) ||
       (tagline.trim() || null) !== settings.tagline ||
       category !== settings.category ||
       (slug.trim() || null) !== settings.slug ||
@@ -191,8 +219,8 @@ export function CommunitySettingsSection({
         {t("communities.settings.title")}
       </h3>
 
-      {/* Both paragraphs render whether or not the switch is on. Reading what
-          listing means only after you have turned it on is the wrong order. */}
+      {/* Both paragraphs render whether or not either switch is on. Reading
+          what the two mean only after you have ticked one is the wrong order. */}
       <p className="text-sm text-paper-muted">
         {t("communities.settings.explainer")}
       </p>
@@ -215,6 +243,47 @@ export function CommunitySettingsSection({
         </p>
       ) : (
         <div className="space-y-3">
+          {/* Switch one: the address. Its consequence sits directly under it,
+              because "who can now do what" is the only thing anybody is asking
+              when their hand is on the box. */}
+          <div className="space-y-1">
+            <label
+              className="flex items-center gap-2 text-sm text-paper"
+              htmlFor={addressToggleId}
+            >
+              <input
+                id={addressToggleId}
+                type="checkbox"
+                checked={addressed}
+                disabled={saving || addressLocked}
+                className="h-4 w-4 rounded border-ink-4 bg-ink accent-signal disabled:opacity-50"
+                onChange={(e) => {
+                  setAddressed(e.target.checked);
+                  // Turning the address off takes the listing with it, which is
+                  // what the server does anyway. Showing it here keeps the form
+                  // from claiming a listing that the save is about to remove.
+                  if (!e.target.checked) {
+                    setListed(false);
+                  }
+                  setSaved(false);
+                }}
+              />
+              {t("communities.settings.addressToggle")}
+            </label>
+            <p className="pl-6 text-xs text-paper-muted">
+              {t("communities.settings.addressHint")}
+            </p>
+            {addressLocked && (
+              <p className="pl-6 text-xs text-paper-muted">
+                {t("communities.settings.addressLockedByListing")}
+              </p>
+            )}
+          </div>
+
+          {/* Switch two: the directory. Disabled until the address is on, and
+              saying which of the two reasons applies — an owner with no address
+              yet, and an admin, are stopped by different rules and a single
+              greyed box would tell neither of them which. */}
           <div className="space-y-1">
             <label
               className="flex items-center gap-2 text-sm text-paper"
@@ -224,7 +293,7 @@ export function CommunitySettingsSection({
                 id={toggleId}
                 type="checkbox"
                 checked={listed}
-                disabled={saving || !canListPublicly}
+                disabled={saving || !canListPublicly || !addressed}
                 className="h-4 w-4 rounded border-ink-4 bg-ink accent-signal disabled:opacity-50"
                 onChange={(e) => {
                   setListed(e.target.checked);
@@ -233,10 +302,19 @@ export function CommunitySettingsSection({
               />
               {t("communities.settings.toggle")}
             </label>
-            {!canListPublicly && (
-              <p className="text-xs text-paper-muted">
+            <p className="pl-6 text-xs text-paper-muted">
+              {t("communities.settings.toggleHint")}
+            </p>
+            {!canListPublicly ? (
+              <p className="pl-6 text-xs text-paper-muted">
                 {t("communities.settings.listingOwnerOnly")}
               </p>
+            ) : (
+              !addressed && (
+                <p className="pl-6 text-xs text-paper-muted">
+                  {t("communities.settings.listingNeedsAddress")}
+                </p>
+              )
             )}
           </div>
 
