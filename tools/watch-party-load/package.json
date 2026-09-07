@@ -1,0 +1,23 @@
+{
+  "name": "@pqp/watch-party-load",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "run": "tsx src/index.ts",
+    "wp": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@livekit/rtc-ffi-bindings": "0.12.73",
+    "@livekit/rtc-node": "0.13.34",
+    "pg": "^8.13.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "@types/ws": "^8.5.13"
+  }
+}
