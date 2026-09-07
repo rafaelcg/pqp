@@ -10,6 +10,7 @@ import {
   AudioStream,
   LocalAudioTrack,
   LocalVideoTrack,
+  type RemoteTrack,
   Room,
   RoomEvent,
   TrackKind,
@@ -36,6 +37,16 @@ const VIDEO_FPS = 30;
 const VIDEO_BITRATE_BPS = 1_500_000;
 const AUDIO_BITRATE_BPS = 64_000;
 const MOTION_TILES = 1;
+// Judging, not load shape. A local smoke measured the SFU's bandwidth estimate
+// reaching the 1.5 Mbps ceiling about ten seconds after the presenter started;
+// decoded frames only reach 30 fps once it has, so the decode-rate criterion
+// counts from here. `--decode-warmup-seconds` overrides it.
+const DECODE_WARMUP_SECONDS = 10;
+// Two flow readings closer than this cannot be compared: at 1.5 Mbps a shorter
+// window may legitimately carry no new bytes.
+const MIN_FLOW_GAP_MS = 1_000;
+// How long an interrupted or crashing shard may spend hanging its seats up.
+const ABORT_TIMEOUT_MS = 10_000;
 
 type Command = "prepare" | "shard" | "cleanup";
 type Manifest = {
@@ -70,7 +81,10 @@ type ParticipantResult = {
   disconnects: number;
   flow: Array<{ atMs: number; bytesReceived: number; framesDecoded: number }>;
   failure?: string;
+  /** Every pass criterion this participant missed. Empty means it passed. */
+  verdict?: string[];
 };
+type Criteria = { holdMs: number; startAtMs: number; minDecodedFps: number; warmupSeconds: number };
 
 function need(name: string): string {
   const value = process.env[name];
@@ -200,7 +214,7 @@ async function mint(base: string, token: string, room: Manifest, peerId: string,
   if (result.room !== room.voiceChannelId || !result.token) throw new Error("invalid media token response");
   return result;
 }
-function consume(track: any, stats: ParticipantResult): void {
+function consume(track: RemoteTrack, stats: ParticipantResult): void {
   const stream = track.kind === TrackKind.KIND_VIDEO ? new VideoStream(track) : new AudioStream(track);
   void (async () => {
     const reader = stream.getReader();
@@ -297,18 +311,113 @@ function joinGate(limit: number): () => Promise<() => void> {
     };
   };
 }
+/**
+ * Every participant that may hold a seat in the API's voice room, with the
+ * one function that gives it back. `one` registers itself before it joins and
+ * hangs up in its own `finally`; a signal or a crash hangs up whatever is
+ * still here (see `armAbort`), so an interrupted shard does not leave up to
+ * 25 orphan seats per process in the API's voice maps and `voice_peers`.
+ */
+const seats = new Map<number, () => Promise<void>>();
+/**
+ * Hang up over the app socket before closing it. A socket that merely closes
+ * leaves a seat that declared `resume: true` in the room as a resumable
+ * orphan for `VOICE_RESUME_TTL_MS` (90 s on the server); `leave-voice-room`
+ * removes it now. The resume pair rides along so the server can still retire
+ * the seat if this socket somehow no longer maps to it.
+ */
+async function hangUp(socket: WebSocket, peerId: string, resumeToken: string): Promise<void> {
+  if (socket.readyState !== WebSocket.OPEN) return;
+  const leave = { type: "leave-voice-room", ...(peerId && resumeToken ? { resumePeerId: peerId, resumeToken } : {}) };
+  await new Promise<void>((resolve) => socket.send(JSON.stringify(leave), () => resolve()));
+}
+let aborting = false;
+async function abortRun(code: number): Promise<never> {
+  aborting = true;
+  const pending = [...seats.values()];
+  console.error(JSON.stringify({ event: "hang-up", seats: pending.length, exitCode: code }));
+  await within("hang up", ABORT_TIMEOUT_MS, Promise.all(pending.map((leave) => leave().catch(() => {})))).catch((error) => console.error(String(error)));
+  await dispose().catch(() => {});
+  process.exit(code);
+}
+/** SIGINT, SIGTERM and a crash all hang every seat up before the process ends. */
+function armAbort(): void {
+  const onSignal = (signal: NodeJS.Signals) => { if (!aborting) void abortRun(signal === "SIGINT" ? 130 : 143); };
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  const onCrash = (error: unknown) => {
+    console.error(error);
+    if (!aborting) void abortRun(1);
+  };
+  process.on("uncaughtException", onCrash);
+  process.on("unhandledRejection", onCrash);
+}
+/**
+ * Every criterion a participant missed, empty when it passed. Scaled to the
+ * hold: continuity is judged on the flow readings the hold produced plus the
+ * final reading, and the decode rate on the seconds left after the warm-up,
+ * so a healthy 15 s smoke passes and a stalled 900 s run fails. A hold at or
+ * below the warm-up proves delivery and continuity, not the decode rate.
+ */
+function judge(result: ParticipantResult, criteria: Criteria): string[] {
+  const reasons: string[] = [];
+  const rtp = result.rtp;
+  if (result.failure) reasons.push(`failed: ${result.failure}`);
+  if (result.disconnects > 0) reasons.push(`${result.disconnects} unexpected disconnect(s)`);
+  if ((result.rtcConnectedAtMs ?? Infinity) > criteria.startAtMs) reasons.push("RTC connected after start-at-ms");
+  if (result.presenter) {
+    if ((rtp?.outboundVideoFps ?? 0) < VIDEO_FPS * 0.9) reasons.push(`presenter outbound video ${rtp?.outboundVideoFps ?? 0} fps, need ${VIDEO_FPS * 0.9}`);
+    return reasons;
+  }
+  if (result.subscribedTracks < 2) reasons.push(`subscribed ${result.subscribedTracks} track(s), need 2`);
+  if ((rtp?.bytesReceived ?? 0) === 0) reasons.push("no RTP received");
+  // Continuity. Every subscriber decodes natively (rtc-node decodes whether or
+  // not a VideoStream drains the frames), so a frozen decoder shows here for
+  // every receiver, not only the sampled ones, and bytes still arriving cannot
+  // hide it.
+  const points = [...result.flow, ...(rtp ? [{ atMs: criteria.holdMs, bytesReceived: rtp.bytesReceived, framesDecoded: rtp.framesDecoded }] : [])]
+    .sort((a, b) => a.atMs - b.atMs)
+    .reduce<ParticipantResult["flow"]>((kept, point) => { if (kept.length === 0 || point.atMs - kept[kept.length - 1]!.atMs >= MIN_FLOW_GAP_MS) kept.push(point); return kept; }, []);
+  if (points.length < 2) reasons.push(`only ${points.length} usable flow reading(s); hold at least 10 s to judge continuity`);
+  for (let at = 1; at < points.length; at += 1) {
+    const [before, after] = [points[at - 1]!, points[at]!];
+    if (after.bytesReceived <= before.bytesReceived) reasons.push(`RTP stalled between ${before.atMs} ms and ${after.atMs} ms`);
+    if (after.framesDecoded <= before.framesDecoded) reasons.push(`decoder stalled between ${before.atMs} ms and ${after.atMs} ms`);
+  }
+  const steadySeconds = Math.max(0, criteria.holdMs / 1000 - criteria.warmupSeconds);
+  const minDecodedFrames = Math.ceil(criteria.minDecodedFps * steadySeconds);
+  if (result.decodeSample && (rtp?.framesDecoded ?? 0) < minDecodedFrames) reasons.push(`decoded ${rtp?.framesDecoded ?? 0} frames, need ${minDecodedFrames} (${criteria.minDecodedFps} fps over the ${steadySeconds} s after a ${criteria.warmupSeconds} s warm-up)`);
+  return reasons;
+}
 async function one(index: number, presenter: boolean, decodeSample: boolean, safe: ReturnType<typeof assertSafeTarget>, roomInfo: Manifest, holdMs: number, startAtMs: number, acquireJoin: () => Promise<() => void>): Promise<ParticipantResult> {
   const result: ParticipantResult = { index, presenter, decodeSample, videoFrames: 0, audioFrames: 0, subscribedTracks: 0, disconnects: 0, flow: [] };
   let socket: WebSocket | undefined; let room: Room | undefined; let publisher: Awaited<ReturnType<typeof publish>> | undefined; let intentionalDisconnect = false; let releaseJoin: (() => void) | undefined;
+  let peerId = ""; let resumeToken = "";
+  // Idempotent: the normal path, a signal and a crash may all reach it.
+  let leaving: Promise<void> | undefined;
+  const leave = (): Promise<void> => (leaving ??= (async () => {
+    releaseJoin?.(); releaseJoin = undefined;
+    // rtc-node may already have released a handle after a failed connect. A
+    // teardown error belongs to that one synthetic participant; it must not
+    // abort every other in-flight participant or turn a failed run into no
+    // report at all.
+    if (publisher) await publisher.stop().catch(() => {});
+    intentionalDisconnect = true;
+    if (socket) await hangUp(socket, peerId, resumeToken).catch(() => {});
+    if (room) await room.disconnect().catch(() => {});
+    socket?.close();
+    seats.delete(index);
+  })());
+  seats.set(index, leave);
   try {
     releaseJoin = await acquireJoin();
     diagnostic("join-slot-acquired", index);
     const started = Date.now(); const token = tokenFor(safe.runId, index, safe.local);
-    const joined = await appSession(safe.apiUrl, safe.wsUrl, token, roomInfo); socket = joined.socket; result.bootstrapMs = Date.now() - started; result.welcomeMs = joined.welcomeMs;
+    const joined = await appSession(safe.apiUrl, safe.wsUrl, token, roomInfo); socket = joined.socket; peerId = joined.peerId; resumeToken = joined.resumeToken; result.bootstrapMs = Date.now() - started; result.welcomeMs = joined.welcomeMs;
     diagnostic("app-session-ready", index, { bootstrapMs: result.bootstrapMs, welcomeMs: result.welcomeMs });
     const tokenStarted = Date.now(); const session = await mint(safe.apiUrl, token, roomInfo, joined.peerId, joined.resumeToken, safe.sfuHost); result.tokenMs = Date.now() - tokenStarted;
     diagnostic("media-token-ready", index, { tokenMs: result.tokenMs });
-    room = new Room(); room.on(RoomEvent.TrackSubscribed, (track: any) => { result.subscribedTracks += 1; if (decodeSample) consume(track, result); }); room.on(RoomEvent.Disconnected, () => { if (!intentionalDisconnect) result.disconnects += 1; });
+    room = new Room(); room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack) => { result.subscribedTracks += 1; if (decodeSample) consume(track, result); }); room.on(RoomEvent.Disconnected, () => { if (!intentionalDisconnect) result.disconnects += 1; });
     const connected = Date.now(); await within("LiveKit connect", MEDIA_CONNECT_TIMEOUT_MS, room.connect(session.url, session.token, { autoSubscribe: true, dynacast: true })); result.rtcConnectedMs = Date.now() - connected; result.rtcConnectedAtMs = Date.now();
     diagnostic("rtc-connected", index, { rtcConnectedMs: result.rtcConnectedMs });
     releaseJoin(); releaseJoin = undefined;
@@ -326,21 +435,14 @@ async function one(index: number, presenter: boolean, decodeSample: boolean, saf
     if (decodeSample && !presenter && (result.videoFrames === 0 || result.audioFrames === 0)) throw new Error(`no decoded presenter media (video=${result.videoFrames}, audio=${result.audioFrames})`);
   } catch (error) { result.failure = error instanceof Error ? error.message : String(error); diagnostic("participant-failed", index, { failure: result.failure }); }
   finally {
-    releaseJoin?.();
-    // rtc-node may already have released a handle after a failed connect. A
-    // teardown error belongs to that one synthetic participant; it must not
-    // abort every other in-flight participant or turn a failed run into no
-    // report at all.
-    if (publisher) await publisher.stop().catch(() => {});
-    intentionalDisconnect = true;
-    if (room) await room.disconnect().catch(() => {});
-    socket?.close();
+    await leave();
   }
   return result;
 }
 async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const info = manifest(safe); const shardIndex = integerArg("--shard-index", -1); const shardCount = numberArg("--shard-count", 0); const holdSeconds = numberArg("--hold-seconds", 900); const decodeSamples = numberArg("--decode-sample", safe.local ? 2 : 25); const startAtMs = Number(arg("--start-at-ms", safe.local ? String(Date.now() + 1_000) : "0"));
   const minDecodedFps = numberArg("--min-decoded-fps", 24);
+  const warmupSeconds = numberArg("--decode-warmup-seconds", DECODE_WARMUP_SECONDS);
   const holdIsAllowed = safe.local
     ? holdSeconds >= 5 && holdSeconds <= 60
     : safe.diagnostic
@@ -348,28 +450,34 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
     : safe.smoke
       ? holdSeconds >= 60 && holdSeconds <= 120
       : holdSeconds >= 600 && holdSeconds <= 900;
-  if (shardIndex < 0 || shardCount < 1 || shardIndex >= shardCount || !holdIsAllowed || !Number.isFinite(startAtMs) || startAtMs < Date.now() + (safe.local ? 0 : 30_000)) throw new Error("valid shard indexes, a 5–60s local / 60–120s explicit staging smoke / 600–900s 500-person hold, and a shared start-at-ms at least 30s ahead are required");
+  if (shardIndex < 0 || shardCount < 1 || shardIndex >= shardCount || !holdIsAllowed || !Number.isFinite(startAtMs) || startAtMs < Date.now() + (safe.local ? 0 : 30_000)) throw new Error("valid shard indexes, a 5 to 60s local / 60 to 120s explicit staging smoke / 600 to 900s 500-person hold, and a shared start-at-ms at least 30s ahead are required");
   const indexes = Array.from({ length: info.participants }, (_, i) => i).filter((i) => i % shardCount === shardIndex);
   const decodedIndexes = new Set(indexes.filter((index) => index !== 0).slice(0, decodeSamples));
   const startedAt = Date.now(); const cpuStart = process.cpuUsage(); let maxRssBytes = process.memoryUsage().rss; let maxEventLoopLagMs = 0; let expectedTick = Date.now() + 1000;
   const sampler = setInterval(() => { maxRssBytes = Math.max(maxRssBytes, process.memoryUsage().rss); maxEventLoopLagMs = Math.max(maxEventLoopLagMs, Date.now() - expectedTick); expectedTick += 1000; }, 1000);
   const acquireJoin = joinGate(JOIN_CONCURRENCY);
+  armAbort();
   const results = await Promise.all(indexes.map((index) => one(index, index === 0, decodedIndexes.has(index), safe, info, holdSeconds * 1000, startAtMs, acquireJoin)));
   clearInterval(sampler);
   const wallMs = Date.now() - startedAt; const cpu = process.cpuUsage(cpuStart);
   const decoded = results.filter((result) => result.decodeSample);
   const totalReceivedBytes = results.reduce((sum, result) => sum + (result.rtp?.bytesReceived ?? 0), 0);
   const totalSentBytes = results.reduce((sum, result) => sum + (result.rtp?.bytesSent ?? 0), 0);
-  const hasContinuousRtp = (result: ParticipantResult) => result.flow.length >= 2 && result.flow.slice(1).every((sample, at) => sample.bytesReceived > result.flow[at]!.bytesReceived);
+  const criteria: Criteria = { holdMs: holdSeconds * 1000, startAtMs, minDecodedFps, warmupSeconds };
+  for (const result of results) result.verdict = judge(result, criteria);
+  const failed = results.filter((result) => result.verdict!.length > 0);
   const report = {
     runId: safe.runId, host: hostname(), shardIndex, shardCount, expectedParticipants: info.participants, startAtMs,
-    mediaContract: { source: `${VIDEO_WIDTH}x${VIDEO_HEIGHT}@${VIDEO_FPS}`, requestedVideoBitrateBps: VIDEO_BITRATE_BPS, requestedAudioBitrateBps: AUDIO_BITRATE_BPS, decodedSampleCount: decoded.length, minDecodedFps },
+    mediaContract: { source: `${VIDEO_WIDTH}x${VIDEO_HEIGHT}@${VIDEO_FPS}`, requestedVideoBitrateBps: VIDEO_BITRATE_BPS, requestedAudioBitrateBps: AUDIO_BITRATE_BPS, decodedSampleCount: decoded.length, minDecodedFps, decodeWarmupSeconds: warmupSeconds, minDecodedFrames: Math.ceil(minDecodedFps * Math.max(0, holdSeconds - warmupSeconds)) },
     generator: { wallMs, cpuMs: (cpu.user + cpu.system) / 1000, cpuPercentOfOneCore: ((cpu.user + cpu.system) / 1000 / wallMs) * 100, maxRssBytes, maxEventLoopLagMs },
     aggregateRtp: { receivedBytes: totalReceivedBytes, receivedBitrateBps: totalReceivedBytes * 8_000 / (holdSeconds * 1000), sentBytes: totalSentBytes, sentBitrateBps: totalSentBytes * 8_000 / (holdSeconds * 1000) },
     results,
-    passed: results.every((result) => !result.failure && result.disconnects === 0 && (result.rtcConnectedAtMs ?? Infinity) <= startAtMs && (!result.presenter ? result.subscribedTracks >= 2 && (result.rtp?.bytesReceived ?? 0) > 0 && hasContinuousRtp(result) : (result.rtp?.outboundVideoFps ?? 0) >= VIDEO_FPS * 0.9) && (!result.decodeSample || result.presenter || (result.decodedVideoFps ?? 0) >= minDecodedFps)),
+    passed: failed.length === 0,
   };
-  const out = requiredArg("--report"); writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 }); console.log(JSON.stringify({ report: out, passed: report.passed, failures: results.filter((r) => r.failure).length }, null, 2));
+  const out = requiredArg("--report"); writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
+  // The first few verdicts on the console so a red run says why without
+  // opening the report.
+  console.log(JSON.stringify({ report: out, passed: report.passed, failures: results.filter((r) => r.failure).length, missedCriteria: failed.length, verdicts: failed.slice(0, 10).map((result) => ({ index: result.index, verdict: result.verdict })) }, null, 2));
   if (!report.passed) process.exitCode = 1;
 }
 async function cleanup(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
@@ -394,8 +502,25 @@ async function cleanup(safe: ReturnType<typeof assertSafeTarget>): Promise<void>
     await db.end();
   }
 }
-const command = process.argv[2] as Command;
-if (!(["prepare", "shard", "cleanup"] as string[]).includes(command)) throw new Error("usage: run prepare|shard|cleanup");
-const safe = assertSafeTarget();
-try { if (command === "prepare") await prepare(safe); else if (command === "shard") await shard(safe); else await cleanup(safe); }
-finally { await dispose(); }
+const USAGE = [
+  "usage: pnpm exec tsx src/index.ts <command> [flags]   (or: pnpm wp <command> [flags])",
+  "  prepare --manifest <file> [--participants N]",
+  "  shard   --manifest <file> --shard-index I --shard-count N --report <file>",
+  "          [--hold-seconds S] [--decode-sample N] [--start-at-ms T]",
+  "          [--min-decoded-fps F] [--decode-warmup-seconds S]",
+  "  cleanup --manifest <file>            (also needs PQP_LOAD_DATABASE_URL)",
+  "  help",
+  "env: TEST_RUN_ID, PQP_LOAD_TARGET=staging|local, PQP_LOAD_SFU_HOST,",
+  "     LOAD_TEST_TOKEN (staging only), PQP_LOAD_API_URL / PQP_LOAD_WS_URL",
+  "     (loopback overrides), PQP_LOAD_SMOKE=1, PQP_LOAD_DIAGNOSTIC=1",
+].join("\n");
+const command = process.argv[2] as Command | "help" | "--help" | "-h" | undefined;
+if (command === "help" || command === "--help" || command === "-h") {
+  console.log(USAGE);
+  await dispose();
+} else {
+  if (!(["prepare", "shard", "cleanup"] as string[]).includes(command ?? "")) throw new Error(USAGE);
+  const safe = assertSafeTarget();
+  try { if (command === "prepare") await prepare(safe); else if (command === "shard") await shard(safe); else await cleanup(safe); }
+  finally { await dispose(); }
+}
