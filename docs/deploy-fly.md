@@ -436,17 +436,38 @@ fly deploy \
   -e APP_VERSION="$(git rev-parse HEAD)"
 ```
 
-**`--ha=false` is not optional.** A plain `fly deploy` on a first release creates **two** machines. Two machines is the split-brain failure at the top of this document.
+**`--ha=false` is not optional.** A plain `fly deploy` on a first release creates **two** machines on its own. The machine count is a deliberate manual step (below), never a side effect of a deploy, because two machines are only safe with every invariant in the header of `fly.toml` in force.
 
 Then assert it, every time, because the failure is silent:
 
 ```bash
 fly machines list --app pqp-api
-# expect exactly one row, state "started", region "gru"
+# expect exactly min_machines_running rows (fly.toml; 2 since M5), all state
+# "started", all region "gru". CI checks the same thing after every deploy
+# and also that every started machine runs the same image.
 
-# if more than one appeared:
-fly scale count 1 --region gru --app pqp-api
+# if the count is off:
+fly scale count 2 --region gru --app pqp-api
 ```
+
+### 6a-bis. Running two machines (M5 of `docs/plans/MULTI_INSTANCE_VOICE.md`)
+
+Since M5 the server can run on two machines, and `fly.toml` says two (`min_machines_running = 2`, rolling deploys one at a time, `/health` polled every 10 s). What makes it safe, all of it required:
+
+- `CLUSTER_BUS=postgres` and `VOICE_REGISTRY=postgres` set on the app, and `DATABASE_URL` in session mode (the `direct.` MPG host; LISTEN never delivers through a transaction pooler, and the boot self-echo check logs `bus.selfEchoMissing` if it does not).
+- `LIVEKIT_*` set. A mesh room is relayed by one process and cannot span two. With two live instances the server sends any room that would have opened on mesh to the SFU instead (`voice.meshGuardForcedSfu` in the log); without an SFU it **refuses** the join (`voice-join-refused`, reason `mesh-multi-instance`, `voice.meshRefusedMultiInstance` in the log) rather than seat somebody in a room they cannot hear, and warns once per episode at boot and every heartbeat (`voice.meshClusterUnsafe`). A mesh room that one machine already holds keeps seating people on that machine.
+- The drain (`server/src/lib/drain.ts`). On SIGTERM the machine flips `/health` to 503 so the proxy stops routing to it, withdraws its voice lease so the other machine stops counting it, waits 2 s, then closes its sockets with 1001 in batches of 50 every 100 to 150 ms (`ws.drainBatch`, `ws.drained` in the log). The clients reconnect to the machine that stayed up and resume their voice seat by id (M3). `/up`, the external monitor, does not go red on a drain: a deploy is not an incident.
+
+The flip itself, once, by hand (M6):
+
+```bash
+fly secrets set CLUSTER_BUS=postgres VOICE_REGISTRY=postgres --app pqp-api   # restarts the machine
+fly scale count 2 --region gru --app pqp-api
+fly machines list --app pqp-api     # two rows, both started, both gru
+gh variable delete PQP_API_MACHINES # if it was set to 1 to keep CI green meanwhile
+```
+
+Until that has been done, production is one machine and the CI assertion (which reads `min_machines_running`) needs the repo variable `PQP_API_MACHINES=1`, or it fails after every deploy. Rollback at any point: `fly scale count 1 --region gru --app pqp-api`, then `PQP_API_MACHINES=1` again. Rehearse on staging first: `docs/STAGING.md`, "Rehearsing two machines".
 
 `-e APP_VERSION=...` is what makes `/health` report the running commit. Without it `/health` says `"version":"dev"`, which is how you tell a hand-rolled deploy from a CI one.
 
@@ -794,9 +815,9 @@ Grafana at the same URL (alert on status not 200). Do **not** add `/ready` to
 
 ## 10. Before a second region (e.g. `lhr`) can ever exist
 
-Adding a region means adding a machine, and this server keeps every WebSocket connection, presence entry, voice-room membership and rate-limit bucket in process memory (`server/src/ws/`, `server/src/lib/rate-limit.ts`) — so a second machine is a second, disjoint chat server behind the same hostname, and users on one simply cannot see users on the other, with no error anywhere to explain it.
+A second machine in `gru` is covered by section 6a-bis (the Postgres bus, the voice registry, LiveKit and the drain). A second *region* is a different question: every one of those goes through the database, and a machine in `lhr` would pay a transatlantic round trip on every chat frame, every roster read and every heartbeat, which is worse than the latency it was meant to save. Rate-limit buckets are also still per process (`server/src/lib/rate-limit.ts`), which the plan accepts for two machines in one region and not for more.
 
-A second region is therefore blocked on a shared pub/sub and presence layer (Redis or equivalent) that fans chat, presence and voice signalling out across instances, plus a shared rate-limit store; only once messages and presence survive a machine boundary do `fly scale count`, multi-region, and zero-downtime blue-green deploys become available at all.
+A second region is therefore blocked on a database (or a replica with its own bus) next to it, and on a shared rate-limit store; until then, `fly scale count` stays in `gru`, and the CI assertion fails on any other region.
 
 ---
 

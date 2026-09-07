@@ -253,7 +253,13 @@ None of the receive path has been run on hardware yet.
 
 ### What can still split a call
 
-Two server instances with **different** LiveKit config pin the same channel differently, because `roomTransports` is per-process like `peers`. That is the same constraint that already makes mesh voice single-instance (see the block comment above `peers` in `server/src/ws/voice.ts`); nothing here fixes it, and nothing here makes it worse. The registry below is the start of the fix.
+With the registry off (the default, and every self-host): two server instances with **different** LiveKit config pin the same channel differently, because `roomTransports` is per-process like `peers`, and a mesh room is relayed by the one process that holds its peers. That is why a flag-off deployment is single-machine, full stop.
+
+With the registry on and two live instances (M5 of the plan, 2026-09-06):
+
+- **Transport disagreement cannot split a call any more.** The pin is one row in `voice_rooms`; whoever inserts first decides, the other adopts (`voice.transportAdopted`). Two images mid-rollout with different LiveKit config still log `voice.configDrift` from the `voice.hello` exchange, and the CI assertion after a deploy fails if the started machines are not on one image.
+- **Mesh cannot split a call any more, because it is not allowed to try.** The mesh guard in `join-voice-room` counts the other live leases in `voice_instances`. When there is at least one, a room that would open on mesh opens on LiveKit instead (`voice.meshGuardForcedSfu`), and a join into a room another machine already holds on mesh, or any mesh join on a deployment with no SFU, is refused with `voice-join-refused` and `reason: "mesh-multi-instance"` (`voice.meshRefusedMultiInstance`). The instance that holds a mesh room keeps seating people on it: every peer of that room is there. A machine that is draining withdraws its lease before it closes a single socket, so it stops counting at once. Two live instances with `LIVEKIT_*` unset warn once per episode (`voice.meshClusterUnsafe`), at boot and on every heartbeat after.
+- **What can still split a call:** a client that cannot run LiveKit on a two-machine deployment (Android, which declares `["mesh"]`) is refused from every room the guard sent to the SFU, exactly as it is refused from a large server's room today; that is a refusal, visible, not a split. And a `DATABASE_URL` through a transaction-mode pooler, where LISTEN never delivers: the rows are still right, the hints never arrive, and the other machine's sidebar is stale until something local makes it re-read the rows. `bus.selfEchoMissing` at boot is the tell; the plan's note on failing `/health` for it is still open.
 
 ### The voice registry (`VOICE_REGISTRY=postgres`, off by default)
 
@@ -280,7 +286,7 @@ What changes with the flag on, and only then:
 
 Flag off means off: `isVoiceRegistryEnabled()` is read on every path and every registry call sits behind it, so a self-host that never sets the variable runs the code that shipped before the registry existed. `server/src/ws/voice-registry.test.ts` pins that the tables stay empty through a join, a state change, an orphan and a leave with the flag off; `server/src/ws/voice-cluster.test.ts` runs two module graphs over one memory bus and one `pqp_test` database and pins what crosses, what does not, and that neither instance republishes what it heard.
 
-**This is not yet enough to run two machines.** There is no drain, no rolling-deploy config, no CI count assertion and no mesh guard (M5): a mesh room is still pinned to the process that holds its peers, and a second machine would split one. The flag exists so the write path, the roster path and the reconcile can soak on one machine first.
+**With M5 (the drain, the two-machine `fly.toml`, the CI count and image assertion, and the mesh guard above) the code is enough to run two machines.** Production has not been flipped: that is M6 (`docs/deploy-fly.md` 6a-bis), after a staging rehearsal (`docs/STAGING.md`). The flag exists so the write path, the roster path and the reconcile can soak on one machine first.
 
 ## The roster wire: a whole room, or only what changed
 

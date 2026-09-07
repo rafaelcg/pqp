@@ -59,6 +59,7 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import {
+  guardMeshAcrossInstances,
   resolveVoiceTransport,
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
@@ -69,6 +70,7 @@ import {
   getVoicePeerRow,
   isVoicePeerRetired,
   isVoiceRegistryEnabled,
+  listLiveVoiceInstances,
   listVoicePeersForUser,
   listVoicePeersInRoom,
   listVoiceRoomOccupancy,
@@ -522,6 +524,81 @@ function decideRoomTransportOnce(
 /** The room is pinned, or empty: the shared decision has no more readers. */
 function forgetTransportDecision(voiceChannelId: string): void {
   pendingTransportDecisions.delete(voiceChannelId);
+}
+
+/**
+ * Live instances other than this one, from the leases. A failed read counts
+ * as none: the guard then behaves as the flag-off path, which is what this
+ * instance did before the registry existed, and the failure is logged.
+ */
+async function countOtherLiveVoiceInstances(): Promise<number> {
+  try {
+    const live = await listLiveVoiceInstances();
+    return live.filter((row) => row.instanceId !== INSTANCE_ID).length;
+  } catch (error) {
+    logEvent("voice.registryReadFailed", {
+      op: "instances",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
+  }
+}
+
+function refuseMeshAcrossInstances(
+  socket: WebSocket,
+  userId: string,
+  voiceChannelId: string,
+  detail: { otherInstances: number; reason: "mesh-multi-instance" },
+): void {
+  logEvent("voice.meshRefusedMultiInstance", {
+    userId,
+    voiceChannelId,
+    otherInstances: detail.otherInstances,
+    liveKitConfigured: configuredTransport() === "livekit",
+  });
+  // `voice-join-refused` is what makes a holding client hang up rather than
+  // sit on live media outside the room; a cold joiner sees the same frame
+  // and shows the call as not connected. The reason is for the log line the
+  // client writes; older clients ignore the field.
+  send(socket, {
+    type: "voice-join-refused",
+    voiceChannelId,
+    reason: detail.reason,
+  });
+}
+
+let meshClusterWarned = false;
+
+/**
+ * The boot (and every beat after) warning: two live instances and no SFU
+ * means every mesh join that is not already held here is refused by the
+ * guard above. Loud once per episode, quiet again once the cluster is back
+ * to one instance or LiveKit is configured. Flag off: never runs.
+ */
+async function warnIfMeshAcrossInstances(): Promise<void> {
+  if (configuredTransport() === "livekit") {
+    meshClusterWarned = false;
+    return;
+  }
+  const others = await countOtherLiveVoiceInstances();
+  if (others === 0) {
+    meshClusterWarned = false;
+    return;
+  }
+  if (meshClusterWarned) {
+    return;
+  }
+  meshClusterWarned = true;
+  console.warn(
+    `[voice] ${others + 1} live instances and LIVEKIT_* is unset: every mesh ` +
+      `join that this instance does not already hold will be refused. ` +
+      `Configure LiveKit or scale back to one machine ` +
+      `(docs/plans/MULTI_INSTANCE_VOICE.md, M5).`,
+  );
+  logEvent("voice.meshClusterUnsafe", {
+    instance: INSTANCE_ID,
+    otherInstances: others,
+  });
 }
 
 /** Test hook: forget every pinned room transport. */
@@ -1833,6 +1910,9 @@ export async function runVoiceReconcile(): Promise<{
   // The SFU re-sweep claims ride on the same beat (plan section 5.4): every
   // instance ticks, and only the rows this tick won are swept.
   await tickSfuResweeps();
+  // And the mesh guard's warning (M5), on the first beat after boot and on
+  // every beat after: a sibling that appeared while LiveKit is unset.
+  await warnIfMeshAcrossInstances();
   const touched = new Set<string>();
   for (const { peerId, channelId } of result.removed) {
     broadcastToRoom(channelId, { type: "peer-left", peerId });
@@ -2399,6 +2479,49 @@ export async function handleVoiceMessage(
         ? resume.transport
         : (opening?.transport ?? configuredTransport()));
 
+    // THE MESH GUARD (M5). A mesh room lives in the process that relays its
+    // offers, so with a second live instance a mesh join can only be safe
+    // when this instance already holds the room (every peer is here, and
+    // the local pin says so). Otherwise the room goes to the SFU when the
+    // deployment has one, and is refused when it does not: a call that is
+    // refused is a call the person can retry; a call split across two
+    // machines is one where the sidebar shows people who cannot hear each
+    // other, with no error anywhere. Counted from the leases (`voice_
+    // instances`), so a machine that drained is not counted from the moment
+    // it withdrew. Flag off: never consulted, exactly as before.
+    let otherInstances = 0;
+    if (
+      registryOn() &&
+      transport === "mesh" &&
+      !roomTransports.has(payload.voiceChannelId)
+    ) {
+      otherInstances = await countOtherLiveVoiceInstances();
+      if (socket.readyState !== 1) {
+        return;
+      }
+      const guard = guardMeshAcrossInstances({
+        liveKitConfigured: configuredTransport() === "livekit",
+        otherLiveInstances: otherInstances,
+      });
+      if (guard.kind === "force-livekit") {
+        logEvent("voice.meshGuardForcedSfu", {
+          userId: user.id,
+          voiceChannelId: payload.voiceChannelId,
+          otherInstances,
+        });
+        transport = "livekit";
+        if (resume.kind === "reconstruct" || resume.kind === "adopt") {
+          resume = { kind: "cold" };
+        }
+      } else if (guard.kind === "refuse") {
+        refuseMeshAcrossInstances(socket, user.id, payload.voiceChannelId, {
+          otherInstances,
+          reason: guard.reason,
+        });
+        return;
+      }
+    }
+
     // THE ATOMIC PIN. With the registry on, an unpinned room's decision goes
     // through `voice_rooms` before it is applied here: whoever inserts first
     // decides, and the loser adopts the stored transport, so two instances
@@ -2428,6 +2551,18 @@ export async function handleVoiceMessage(
           channelId: payload.voiceChannelId,
           error: error instanceof Error ? error.message : String(error),
         });
+      }
+      // The guard again, after the pin: a room another instance opened on
+      // mesh (before the second machine came up, or on a mesh-only
+      // deployment) keeps its transport, and its peers are over there. This
+      // instance cannot relay to them, so the join is refused rather than
+      // seated in a room it cannot hear. Nothing to unpin: the row is theirs.
+      if (otherInstances > 0 && transport === "mesh") {
+        refuseMeshAcrossInstances(socket, user.id, payload.voiceChannelId, {
+          otherInstances,
+          reason: "mesh-multi-instance",
+        });
+        return;
       }
       // Same reason as the readiness check above: the await may have outlived
       // the socket, and a pinned room nobody joined must not stay pinned.

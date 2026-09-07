@@ -8,25 +8,31 @@
 #
 # THE ONE THING TO KNOW BEFORE EDITING THIS FILE
 # ----------------------------------------------
-# This server is single-process BY DESIGN. WebSocket connection state, presence,
-# voice-room membership and rate-limit buckets all live in in-process Maps
-# (server/src/ws/, server/src/lib/rate-limit.ts). There is no pub/sub layer yet.
-# Therefore:
-#   * A SECOND MACHINE SILENTLY SPLITS THE USERBASE. Two machines are two
-#     disjoint chat servers behind one hostname. Nobody gets an error; people
-#     just stop seeing each other's messages and voice peers. Do not raise the
-#     machine count, do not add a region, do not use a deploy strategy that runs
-#     two machines at once (bluegreen, canary).
-#   * AN AUTO-STOPPED MACHINE DROPS EVERY LIVE WEBSOCKET at once, which
-#     client-side looks exactly like the "Realtime connection closed" incident
-#     this codebase already has scar tissue from (CLAUDE.md pitfall #9).
+# This server keeps WebSocket connection state, presence, voice-room membership
+# and rate-limit buckets in process memory (server/src/ws/,
+# server/src/lib/rate-limit.ts). It can run on more than one machine ONLY
+# with the whole of docs/plans/MULTI_INSTANCE_VOICE.md in force:
+#   * CLUSTER_BUS=postgres      chat, presence and voice hints cross instances
+#   * VOICE_REGISTRY=postgres   rooms, seats and transport pins live in Postgres
+#   * LIVEKIT_* set             a mesh room is relayed by one process and cannot
+#                               span two; with two live instances the server
+#                               sends new rooms to the SFU, and REFUSES mesh
+#                               joins when there is no SFU (the M5 guard).
+#   * DATABASE_URL session-mode (LISTEN never delivers through a transaction
+#                               pooler; the boot self-echo check says so loudly)
+# With any of those missing, two machines are two disjoint chat servers behind
+# one hostname. Nobody gets an error; people just stop seeing each other.
 #
-# Machine count is NOT expressible in fly.toml — Fly controls it with
-# `fly scale count` and the `--ha` flag on `fly deploy`. So the guard rails are:
-#   * first deploy:  fly deploy --ha=false     (plain `fly deploy` creates TWO)
-#   * every deploy:  fly deploy --ha=false     (CI does this; see deploy-api-fly.yml)
-#   * assert:        fly machines list -a pqp-api   -> exactly one, in gru
-# CI fails the job if the count is ever not 1.
+# The invariant CI asserts after every deploy (deploy-api-fly.yml): the number
+# of started machines equals `min_machines_running` below (or the repo variable
+# PQP_API_MACHINES, which overrides it during the flip), all in gru. Machine
+# count itself is NOT expressible here; it is `fly scale count N --region gru`,
+# a deliberate manual step recorded in docs/deploy-fly.md. Deploys pass
+# --ha=false so they never add a machine on their own.
+#
+# AN AUTO-STOPPED MACHINE DROPS EVERY LIVE WEBSOCKET at once, which client-side
+# looks exactly like the "Realtime connection closed" incident this codebase
+# already has scar tissue from (CLAUDE.md pitfall #10). Keep auto-stop off.
 
 app = "pqp-api"
 
@@ -35,10 +41,14 @@ app = "pqp-api"
 # Keep the database in the same region — a cross-region DB would undo the win.
 primary_region = "gru"
 
-# The server installs SIGTERM/SIGINT handlers that close every socket with
-# code 1001 ("going away") and drain the HTTP server and pg pool before exit
-# (server/src/index.ts). Give it room to finish; the clients reconnect with
-# backoff on 1001 rather than treating it as an error.
+# The server installs SIGTERM/SIGINT handlers that drain (server/src/index.ts,
+# server/src/lib/drain.ts): `/health` answers 503 at once so the proxy stops
+# routing here, the voice lease is withdrawn, then after a 2 s settle every
+# socket is closed with code 1001 ("going away") in batches of 50 every
+# ~100-150 ms, so the machine that stays up sees a ramp of reconnects rather
+# than a stampede; then the HTTP server, bus and pg pool close. The whole
+# thing is capped at 25 s in the process, inside this timeout. The clients
+# reconnect with backoff on 1001 rather than treating it as an error.
 kill_signal = "SIGTERM"
 kill_timeout = 30
 
@@ -94,17 +104,24 @@ kill_timeout = 30
   auto_stop_machines = "off"
 
   # OFF for symmetry and to keep machine lifecycle entirely manual. Note this
-  # can only ever *restart the one machine you already have* — Fly's proxy never
-  # creates machines, so this is not the second-machine risk; that risk lives in
+  # can only ever *restart a machine you already have*. Fly's proxy never
+  # creates machines, so this is not the extra-machine risk; that risk lives in
   # `fly scale count` / `fly deploy --ha`. If you would rather the proxy be able
   # to wake a machine that somehow ended up stopped, flipping this to true is
-  # safe. It is false here so that "the machine is down" surfaces as an outage
+  # safe. It is false here so that "a machine is down" surfaces as an outage
   # you investigate rather than a latency spike you never notice.
   auto_start_machines = false
 
-  # Documentation of intent more than a lever: with auto-stop off nothing is
-  # stopping the machine in the first place.
-  min_machines_running = 1
+  # The intended machine count (M5 of docs/plans/MULTI_INSTANCE_VOICE.md).
+  # With auto-stop off this is not a lever Fly pulls; it is the number CI
+  # asserts after a deploy, and the number `fly scale count` has to be set to
+  # by hand, in gru. Two, so a rolling deploy always has one machine up and
+  # the sockets of the one being replaced ramp over to it. Until the flip
+  # (M6) production is still one machine: set the repo variable
+  # PQP_API_MACHINES=1 so the CI assertion matches reality, and remove it
+  # once `fly scale count 2` has been run. Never raise this without
+  # CLUSTER_BUS, VOICE_REGISTRY and LIVEKIT_* all set (banner above).
+  min_machines_running = 2
 
   processes = ["app"]
 
@@ -133,15 +150,19 @@ kill_timeout = 30
   # reachable". That is what gates a deploy: a machine whose check never goes
   # green fails the release instead of quietly replacing a working one.
   #
-  # Deliberately slack timings. With one machine, "unhealthy" means the proxy
-  # has nowhere to route — a tight interval turns a two-second Postgres blip
-  # into a user-visible outage. 30s/5s tolerates a blip; a genuinely dead pool
-  # still fails within a minute.
+  # It also answers 503 from the moment the process gets SIGTERM
+  # (server/src/lib/drain.ts), which is how a rolling deploy hands the
+  # sockets over: the proxy stops routing to the draining machine within one
+  # interval, and the reconnects land on the other one. 10 s rather than the
+  # old 30 s for that reason; with two machines an unhealthy one has a
+  # sibling to fail over to, so a tight interval no longer turns a Postgres
+  # blip into an outage. Note `/up` (the external monitor) deliberately does
+  # NOT go red on a drain: a deploy is not an incident.
   [[http_service.checks]]
     method = "GET"
     path = "/health"
     protocol = "http"
-    interval = "30s"
+    interval = "10s"
     timeout = "5s"
     # initDb() runs the whole of server/src/schema.sql before listen(), and the
     # first boot against an empty database is the slow one. Do not shrink this
@@ -168,15 +189,17 @@ kill_timeout = 30
   memory = "4gb"
 
 [deploy]
-  # rolling + max_unavailable = 1 on a single machine means: replace that one
-  # machine in place. It costs a few seconds of downtime per deploy, and the
-  # clients reconnect (client/src/lib/realtime.ts backs off and re-resolves a
-  # Clerk token per attempt).
+  # rolling + max_unavailable = 1 (an integer: one machine at a time). With
+  # two machines the other stays up throughout, and the one being replaced
+  # drains its sockets over to it (kill_timeout above). With one machine it
+  # means: replace that one machine in place, a few seconds of downtime, and
+  # the clients reconnect (client/src/lib/realtime.ts backs off and
+  # re-resolves a Clerk token per attempt).
   #
-  # DO NOT switch this to "bluegreen" or "canary" to avoid that downtime. Both
-  # run a second machine alongside the first, which is precisely the split-brain
-  # this app cannot survive. Zero-downtime deploys are blocked on the same
-  # pub/sub workstream as multi-region.
+  # DO NOT switch this to "bluegreen" or "canary". Both double the machine
+  # count during the deploy, and the drain story is written for in-place
+  # rolling; the cluster invariants in the banner are per machine, not per
+  # release.
   strategy = "rolling"
   max_unavailable = 1
 
