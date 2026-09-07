@@ -51,6 +51,16 @@ export type LiveHlsTrackFinder = (
 interface RoomHls {
   egressId: string;
   stream: LiveHlsStream;
+  /**
+   * The screen track sid the egress was started on. A Track Composite egress
+   * is bound to one sid; when the presenter republishes (a quality pick that
+   * changes the top layer, the room crossing the large-room line, a
+   * reconnect), the old sid goes away, the egress keeps running on audio
+   * alone and the playlist stops growing. Verified on staging 2026-09-07:
+   * "writer finished" for the video track, then no segment for 21 s until
+   * stop. So a same-presenter reconcile compares this to what the SFU has.
+   */
+  videoTrackId: string;
 }
 
 const rooms = new Map<string, RoomHls>();
@@ -175,10 +185,7 @@ function getEgress(): LiveHlsEgressApi | null {
   };
 }
 
-function isTrackSource(
-  source: unknown,
-  wanted: TrackSource,
-): boolean {
+function isTrackSource(source: unknown, wanted: TrackSource): boolean {
   return source === wanted || source === TrackSource[wanted];
 }
 
@@ -280,6 +287,27 @@ async function findScreenTracks(
   return null;
 }
 
+/**
+ * One look at the SFU, no retries: this runs while a share is already up,
+ * so an empty answer means "cannot tell right now", not "not sharing yet".
+ */
+async function probeScreenTracks(
+  roomName: string,
+): Promise<LiveHlsScreenTracks | null> {
+  try {
+    if (injectedFinder) {
+      return await injectedFinder(roomName);
+    }
+    return await defaultFindTracks(roomName, false);
+  } catch (error) {
+    logEvent("voice.hlsTrackProbeFailed", {
+      room: roomName,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
 function playlistUrl(channelId: string, startedAt: number): string {
   // LiveKit treats filenamePrefix as a file prefix, not a directory.
   // Segments land at live/{channel}/{startedAt}_00000.ts; a reused
@@ -333,12 +361,13 @@ async function stopRoom(channelId: string): Promise<void> {
 async function startRoom(
   channelId: string,
   presenterPeerId: string,
+  knownTracks?: LiveHlsScreenTracks,
 ): Promise<LiveHlsStream | null> {
   const egress = getEgress();
   if (!egress || !isLiveHlsEnabled()) {
     return null;
   }
-  const tracks = await findScreenTracks(channelId);
+  const tracks = knownTracks ?? (await findScreenTracks(channelId));
   if (!tracks) {
     logEvent("voice.hlsNoScreenTrack", { channelId, presenterPeerId });
     return null;
@@ -362,7 +391,11 @@ async function startRoom(
       presenterPeerId,
       delaySeconds: delaySeconds(),
     };
-    rooms.set(channelId, { egressId: started.egressId, stream });
+    rooms.set(channelId, {
+      egressId: started.egressId,
+      stream,
+      videoTrackId: tracks.videoTrackId,
+    });
     const ready = await waitForLivePlaylist(stream.hlsUrl);
     logEvent("voice.hlsStarted", {
       channelId,
@@ -383,7 +416,10 @@ async function startRoom(
 
 /**
  * First sharer in the room wins. A later share does not steal the transcode.
- * `presenterPeerId: null` means nobody is sharing — stop if we were.
+ * `presenterPeerId: null` means nobody is sharing: stop if we were. The
+ * same presenter re-declaring is a no-op unless their screen track is a new
+ * sid, in which case the egress is bound to a dead track and is restarted
+ * (new playlist URL, so the caller broadcasts it and viewers reload).
  */
 export async function reconcileLiveHls(
   channelId: string,
@@ -404,7 +440,18 @@ export async function reconcileLiveHls(
     return null;
   }
   if (current && current.stream.presenterPeerId === presenterPeerId) {
-    return current.stream;
+    const tracks = await probeScreenTracks(channelId);
+    if (!tracks || tracks.videoTrackId === current.videoTrackId) {
+      return current.stream;
+    }
+    logEvent("voice.hlsTrackReplaced", {
+      channelId,
+      egressId: current.egressId,
+      from: current.videoTrackId,
+      to: tracks.videoTrackId,
+    });
+    await stopRoom(channelId);
+    return startRoom(channelId, presenterPeerId, tracks);
   }
   if (current) {
     await stopRoom(channelId);
