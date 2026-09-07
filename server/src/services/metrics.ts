@@ -143,6 +143,14 @@ export interface AdminMetrics {
     roster: {
       deltas: number;
       snapshots: number;
+      /**
+       * How many of `snapshots` went to somebody who is not in the call.
+       *
+       * Says whether the remaining whole-roster cost belongs to the room or to
+       * the sidebar, which is the difference between "make the roster smaller"
+       * and "stop sending it to the audience" as the next thing to do.
+       */
+      audienceSnapshots: number;
       sockets: number;
       socketsOnDeltas: number;
     };

@@ -98,6 +98,7 @@ const {
   sendAllVoiceRosters,
   setVoiceUserServerMuted,
   ROSTER_KEYFRAME_MS,
+  ROSTER_AUDIENCE_KEYFRAME_MS,
 } = await import("./voice.js");
 
 const {
@@ -403,8 +404,11 @@ describe("voice roster deltas", () => {
     expect(watcher.gaps).toBeGreaterThan(0);
     expect(watcher.belief.size).toBe(1);
 
-    // The keyframe is the repair, and it needs nothing from the client.
-    now += ROSTER_KEYFRAME_MS;
+    // The keyframe is the repair, and it needs nothing from the client. This
+    // watcher is not in the call, so its bound is the audience interval: the
+    // repair is the same mechanism and the same certainty, on a longer clock,
+    // which is the trade the split makes explicit.
+    now += ROSTER_AUDIENCE_KEYFRAME_MS;
     const d = client(channel);
     await join(d);
     expect(watcher.framesOfType("voice-roster").length).toBe(2);
@@ -438,21 +442,24 @@ describe("voice roster deltas", () => {
 
   it("sends a whole roster again once the keyframe interval passes", async () => {
     const channel = randomUUID();
-    const watcher = client(channel);
+    // In the call: the ten-second promise, because this socket's roster is the
+    // signalling allowlist and not a badge.
+    const participant = client(channel);
+    await join(participant);
     const a = client(channel);
     await join(a);
-    expect(watcher.framesOfType("voice-roster")).toHaveLength(1);
+    const before = participant.framesOfType("voice-roster").length;
 
     now += ROSTER_KEYFRAME_MS - 1;
     const b = client(channel);
     await join(b);
-    expect(watcher.framesOfType("voice-roster")).toHaveLength(1);
+    expect(participant.framesOfType("voice-roster")).toHaveLength(before);
 
     now += 1;
     const c = client(channel);
     await join(c);
-    expect(watcher.framesOfType("voice-roster")).toHaveLength(2);
-    await expectConverged(watcher, channel);
+    expect(participant.framesOfType("voice-roster")).toHaveLength(before + 1);
+    await expectConverged(participant, channel);
   });
 
   it("restarts the sequence when the room empties, so the next call needs no snapshot", async () => {
@@ -554,5 +561,180 @@ describe("voice roster deltas", () => {
     expect(deltaBytes * 5).toBeLessThan(fullBytes);
     await expectConverged(modern, channel);
     await expectConverged(legacy, channel);
+  });
+});
+
+/**
+ * THE PEOPLE IN THE CALL AND THE PEOPLE LOOKING AT IT ARE NOT OWED THE SAME
+ * THING, AND THE ONLY WAY TO SHIP THAT IS TO PROVE THE AUDIENCE LOSES NOTHING.
+ *
+ * A roster goes to everyone who can *see* the channel, and that audience is
+ * routinely several times the size of the room, so most of the whole-roster
+ * cost is paid on behalf of a sidebar badge. Restating the whole list to them
+ * less often is the saving; the risk it buys is entirely one-directional —
+ * every plausible bug here shows up as a badge that is quietly WRONG, never as
+ * an error — so every test below asserts the audience's reconstructed belief
+ * rather than which frames it was sent.
+ *
+ * The two halves, stated once:
+ *
+ *  - a participant must never lose somebody from their call, because their
+ *    roster is the allowlist that decides whose offer may open a microphone;
+ *  - an audience member must never lose a badge, because that is the entire
+ *    reason they are sent a roster at all.
+ */
+describe("the room and the audience", () => {
+  it("keeps a participant on the ten-second promise and lets the audience wait", async () => {
+    const channel = randomUUID();
+    const watcher = client(channel);
+    const participant = client(channel);
+    await join(participant);
+
+    const watcherBefore = watcher.framesOfType("voice-roster").length;
+    const participantBefore = participant.framesOfType("voice-roster").length;
+
+    // Ten seconds and a bit. The call is owed a whole roster; the sidebar is
+    // not, and the difference is the entire change.
+    now += ROSTER_KEYFRAME_MS + 1;
+    const a = client(channel);
+    await join(a);
+    expect(participant.framesOfType("voice-roster")).toHaveLength(
+      participantBefore + 1,
+    );
+    expect(watcher.framesOfType("voice-roster")).toHaveLength(watcherBefore);
+
+    // Thirty seconds from the start, and the sidebar gets its turn.
+    now += ROSTER_AUDIENCE_KEYFRAME_MS - ROSTER_KEYFRAME_MS;
+    const b = client(channel);
+    await join(b);
+    expect(watcher.framesOfType("voice-roster")).toHaveLength(
+      watcherBefore + 1,
+    );
+  });
+
+  it("never lets the audience lose a badge while it waits", async () => {
+    const channel = randomUUID();
+    const watcher = client(channel);
+    const a = client(channel);
+    const b = client(channel);
+    const c = client(channel);
+    await join(a);
+    await join(b);
+    await join(c);
+
+    // A whole audience keyframe interval of nothing but deltas: arrivals,
+    // departures, mutes, a moderator mute. If any one of them failed to reach
+    // the sidebar the badge it draws would be wrong, and nothing would say so.
+    // Three steps that together stay just inside the audience interval, and
+    // each of which is past the room's — so the room is handed snapshots
+    // throughout while the sidebar is handed nothing but patches.
+    const step = Math.floor(ROSTER_AUDIENCE_KEYFRAME_MS / 3) - 1;
+    const snapshotsBefore = watcher.framesOfType("voice-roster").length;
+    now += step;
+    await setMuted(a, true);
+    now += step;
+    await setVoiceUserServerMuted(channel, b.user.id, true);
+    await flush();
+    now += step;
+    await leave(c);
+    const d = client(channel);
+    await join(d);
+
+    // Still no whole roster for the watcher, and it is nonetheless exactly
+    // right — membership, self-mute and moderator mute alike.
+    expect(watcher.framesOfType("voice-roster")).toHaveLength(snapshotsBefore);
+    await expectConverged(watcher, channel);
+    const held = (userId: string) =>
+      [...watcher.belief.values()].find((p) => p.userId === userId);
+    // The person who muted themselves reads as muted, and is not confused with
+    // the person a moderator silenced — the two badges are different icons and
+    // a delta that merged them would draw the wrong one.
+    expect(held(a.user.id)?.muted).toBe(true);
+    expect(held(a.user.id)?.serverMuted).toBe(false);
+    expect(held(b.user.id)?.serverMuted).toBe(true);
+    // And the person who left is gone rather than lingering in the sidebar.
+    expect(
+      [...watcher.belief.values()].map((p) => p.userId),
+    ).not.toContain(c.user.id);
+  });
+
+  it("never lets a participant lose somebody from their call", async () => {
+    const channel = randomUUID();
+    const participant = client(channel);
+    await join(participant);
+    const others: Client[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const c = client(channel);
+      others.push(c);
+      await join(c);
+      // Straddle both intervals, so the run crosses a keyframe boundary for
+      // the room and not for the audience, and vice versa.
+      now += ROSTER_KEYFRAME_MS - 1;
+    }
+    await leave(others[1]!);
+    now += ROSTER_AUDIENCE_KEYFRAME_MS;
+    await setMuted(others[2]!, true);
+
+    await expectConverged(participant, channel);
+    // Named rather than counted: a count would pass on the wrong four people.
+    expect(
+      [...participant.belief.values()].map((p) => p.userId).sort(),
+    ).toEqual(
+      [
+        participant.user.id,
+        others[0]!.user.id,
+        others[2]!.user.id,
+        others[3]!.user.id,
+      ].sort(),
+    );
+  });
+
+  it("decides per socket, so one account may be in the call and watching it", async () => {
+    const channel = randomUUID();
+    // Two sockets, one account: the laptop is in the call, the phone is
+    // looking at the sidebar. Reading this from the user rather than from the
+    // socket would give one of them the wrong promise.
+    const laptop = client(channel);
+    const phone = client(channel);
+    setAuthenticatedSocket(phone.socket, laptop.user, [
+      SOCKET_CAPS.voiceRosterDelta,
+    ]);
+    await join(laptop);
+    const other = client(channel);
+    await join(other);
+
+    const laptopBefore = laptop.framesOfType("voice-roster").length;
+    const phoneBefore = phone.framesOfType("voice-roster").length;
+    now += ROSTER_KEYFRAME_MS + 1;
+    const third = client(channel);
+    await join(third);
+
+    expect(laptop.framesOfType("voice-roster")).toHaveLength(laptopBefore + 1);
+    expect(phone.framesOfType("voice-roster")).toHaveLength(phoneBefore);
+    // Both still hold the room; only the shape of how they were told differs.
+    await expectConverged(laptop, channel);
+    await expectConverged(phone, channel);
+  });
+
+  it("says how much of the remaining whole-roster cost is the audience's", async () => {
+    const channel = randomUUID();
+    // Three watchers to one participant, which is roughly the shape a
+    // community around a call actually has.
+    const watchers = [client(channel), client(channel), client(channel)];
+    const participant = client(channel);
+    await join(participant);
+    const other = client(channel);
+    await join(other);
+
+    const snapshot = await getVoiceActivitySnapshot();
+    expect(snapshot.roster.snapshots).toBeGreaterThan(0);
+    // The number that decides what to do next: if this is most of
+    // `snapshots`, the remaining cost belongs to the sidebar rather than to
+    // the room, and a compact audience frame is the next move.
+    expect(snapshot.roster.audienceSnapshots).toBeGreaterThan(0);
+    expect(snapshot.roster.audienceSnapshots).toBeLessThanOrEqual(
+      snapshot.roster.snapshots,
+    );
+    expect(watchers).toHaveLength(3);
   });
 });

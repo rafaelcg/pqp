@@ -168,6 +168,40 @@ copy sent to people who are NOT in the call and NOT the ones the list is about.
 Deltas made the news cheap; the keyframe is the remaining cost, and its size is
 the audience's problem rather than the room's.
 
+### The third baseline: the room and the audience
+
+A voice roster goes to everyone who can *see* the channel, so most of that
+keyframe cost is paid on behalf of a sidebar badge rather than a call. The two
+are not owed the same thing — a participant's roster is the signalling
+allowlist, an audience member's is an icon — so the audience's whole-roster
+interval is `ROSTER_AUDIENCE_KEYFRAME_MS` (30 s) against the room's
+`ROSTER_KEYFRAME_MS` (10 s). **Neither is the delta rate; both keep receiving
+every change as it happens.**
+
+Measure it with a realistic audience: `--voice` well below `--n`, since a
+community around a call is several times its size. `--n 800 --voice 200`:
+
+| | one clock (10 s for everyone) | room 10 s / audience 30 s |
+|---|---|---|
+| `voice-roster` keyframes | 110.6 MB, 2400 frames | **48.6 MB, 1124 frames** |
+| per socket | 4.6 KB/s | **2.0 KB/s** |
+| everything the server wrote | 635.4 MB | 578.9 MB |
+| convergence | 800/800 exact, 0 gaps | 800/800 exact, 0 gaps |
+
+The frame count is the arithmetic made visible: 200 participants at three
+keyframes each plus 600 watchers at one is 1200, against 800 × 3 = 2400. **The
+saving scales with the audience fraction**, so a big community around a small
+call gains more than this and a full room gains nothing, which is the correct
+shape for it to have.
+
+Total only moves 8.9% here, and the reason is worth knowing before reading too
+much into it: this harness puts all 800 sockets in ONE text channel, so
+`presence-update`'s list is 800 people and its keyframes (180.6 MB, unchanged
+by this) are inflated relative to a real deployment where people are spread
+across channels. The roster has no such spread — it goes to the whole server
+whatever channel you are looking at — so in production the roster keyframe is a
+much larger share of the wire than this table shows.
+
 ### Payload bytes and wire bytes are different numbers
 
 Every per-frame-type row above counts **decompressed payload**: the size of the
