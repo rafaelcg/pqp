@@ -6,7 +6,11 @@ import {
   type RefObject,
 } from "react";
 import { useTranslation } from "@/lib/i18n";
-import { setHlsPlaybackStats } from "@/lib/hls-playback";
+import {
+  chooseHlsEngine,
+  isAutoplayRefusal,
+  setHlsPlaybackStats,
+} from "@/lib/hls-playback";
 import { cn } from "@/lib/utils";
 
 /**
@@ -32,9 +36,13 @@ export function HlsWatchPlayer({
   const { t } = useTranslation();
   const innerRef = useRef<HTMLVideoElement | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
+  // Autoplay with sound was refused (a tab that resumed the call without a
+  // click, Safari's default). The picture runs muted and one tap fixes it.
+  const [needsUnmute, setNeedsUnmute] = useState(false);
 
   useEffect(() => {
     setHasFrame(false);
+    setNeedsUnmute(false);
     setHlsPlaybackStats(null);
   }, [src]);
 
@@ -65,17 +73,45 @@ export function HlsWatchPlayer({
     video.addEventListener("playing", onPlaying);
     video.addEventListener("loadedmetadata", reportSize);
 
-    async function attach() {
-      if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = src;
-        void video.play().catch(() => {});
-        return;
+    // A refused play() is a paused element behind the "loading" overlay
+    // forever, not an error event. Retry muted so the picture at least
+    // shows, and offer the sound back with a tap.
+    async function play() {
+      try {
+        await video.play();
+      } catch (error) {
+        if (cancelled || !isAutoplayRefusal(error)) {
+          return;
+        }
+        video.muted = true;
+        try {
+          await video.play();
+          if (!cancelled) {
+            setNeedsUnmute(true);
+          }
+        } catch {
+          // Still refused even muted; the user can tap the frame.
+        }
       }
+    }
+
+    async function attach() {
+      // hls.js first, whenever MSE exists. Chrome answers "maybe" to the
+      // native probe and then never plays; see `chooseHlsEngine`.
       const { default: Hls } = await import("hls.js");
       if (cancelled) {
         return;
       }
-      if (!Hls.isSupported()) {
+      const engine = chooseHlsEngine({
+        nativeHls: video.canPlayType("application/vnd.apple.mpegurl"),
+        mseSupported: Hls.isSupported(),
+      });
+      if (engine === "native") {
+        video.src = src;
+        void play();
+        return;
+      }
+      if (engine === "none") {
         return;
       }
       const player = new Hls({
@@ -91,7 +127,7 @@ export function HlsWatchPlayer({
       player.loadSource(src);
       player.attachMedia(video);
       player.on(Hls.Events.MANIFEST_PARSED, () => {
-        void video.play().catch(() => {});
+        void play();
       });
     }
 
@@ -131,6 +167,21 @@ export function HlsWatchPlayer({
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40 text-sm text-paper-muted">
           {t("voice.hls.buffering")}
         </div>
+      ) : null}
+      {hasFrame && needsUnmute ? (
+        <button
+          type="button"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1.5 text-sm font-medium text-paper hover:bg-black/90"
+          onClick={() => {
+            const el = videoRef?.current ?? innerRef.current;
+            if (el) {
+              el.muted = false;
+            }
+            setNeedsUnmute(false);
+          }}
+        >
+          {t("voice.hls.unmute")}
+        </button>
       ) : null}
     </div>
   );
