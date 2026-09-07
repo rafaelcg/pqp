@@ -88,6 +88,15 @@ enum RealtimeEvent: Sendable {
     /// is replaced and NOTHING is renegotiated.
     case voicePeerUpdated(VoiceParticipant)
     case voicePeerLeft(peerId: String)
+    /// The whole room, however the server described it.
+    ///
+    /// Two frames arrive here as one event. `voice-roster` carries every
+    /// participant and is what a socket receives when it has negotiated
+    /// nothing; `voice-roster-delta` carries only what changed, and
+    /// `VoiceRosterTracker` turns it back into this before it is yielded. A
+    /// delta the tracker refuses (a sequence gap, a size that disagrees)
+    /// yields nothing at all, so a receiver of this case is always looking at
+    /// a room the server and this client agree about.
     case voiceRoster(voiceChannelId: String, participants: [VoiceParticipant])
     /// The SPEAK rule for this seat changed mid-call: a role edit, a channel
     /// override, a timeout. `false` mutes and locks the controls; `true`
@@ -279,6 +288,44 @@ actor RealtimeClient {
     private var missedPongs = 0
     /// One reconnect at a time — see `scheduleReconnect`.
     private var isReconnecting = false
+    /// The baseline every `voice-roster-delta` is applied to. Kept here rather
+    /// than in `VoiceModel` or `CallModel` because the sequence is a property
+    /// of the SOCKET, not of whichever room this device happens to be in: both
+    /// of those models see only their own channel, and neither is alive at all
+    /// while the phone is merely sitting in a text channel receiving the
+    /// rosters this change exists to shrink. See `VoiceRosterTracker`.
+    private var rosterTracker = VoiceRosterTracker()
+
+    /**
+     OPTIONAL WIRE FEATURES THIS BUILD UNDERSTANDS, declared on `auth`.
+
+     The server keeps sending the old frames to anything that does not ask,
+     which is the only reason a wire change can ship at all while an app store
+     review sits between a merge and a phone. An entry here is a promise about
+     THIS build, so it is added alongside the handler for the frame and never
+     before it.
+
+     `voice-roster-delta`: send what changed in a voice room instead of the
+     whole room. Applied by `VoiceRosterTracker` under the convergence rule
+     written on `voiceRosterDeltaMessageSchema` in `@pqp/shared`. The web
+     client declares the identical string in `client/src/lib/realtime.ts` and
+     the server reads it in `server/src/ws/sockets.ts`.
+     */
+    static let wireCaps = ["voice-roster-delta"]
+
+    /**
+     The handshake, as a value rather than as a side effect.
+
+     Pulled out of `openSocket` so a test can read what this build actually
+     declares. A capability this app can apply but forgets to ask for costs
+     nothing visible: the server keeps sending whole rosters, everything
+     carries on working, and the only trace is a phone quietly paying for
+     frames it did not need. That is the failure this whole change exists to
+     remove, so it is pinned from inside rather than hoped for.
+     */
+    static func authFrame(token: String) -> [String: Any] {
+        ["type": "auth", "token": token, "caps": wireCaps]
+    }
 
     /// Matches the web client (`PING_INTERVAL_MS` / `MAX_MISSED_PONGS`). The
     /// server answers `{"type":"ping"}` with `{"type":"pong"}`; two misses in a
@@ -354,7 +401,12 @@ actor RealtimeClient {
         task = socket
         socket.resume()
 
-        await send(raw: ["type": "auth", "token": token])
+        // A new socket, so every roster sequence this app was following belongs
+        // to a connection that is gone, and possibly to a server process that
+        // has restarted its numbering. The full rosters the server sends right
+        // after `auth` are what re-baseline whatever is still live.
+        rosterTracker.forgetAll()
+        await send(raw: RealtimeClient.authFrame(token: token))
         listen()
         // The channel re-joins wait for `ready`. The server verifies the token
         // asynchronously, and any frame that lands during that window hits an
@@ -676,6 +728,20 @@ actor RealtimeClient {
         let candidate: IceCandidatePayload?
         let limit: Int?
         let transport: String?
+        /// Roster frames only: where this frame sits in the room's sequence.
+        /// Absent on a `voice-roster` from a server that predates deltas, and
+        /// absent reads as 0. See `VoiceRosterTracker`.
+        let seq: Int?
+        /// `voice-roster-delta` only: how many participants the room has once
+        /// the frame has been applied. The second, independent check on a
+        /// delta, and the one that catches divergence `seq` cannot see.
+        let size: Int?
+        /// `voice-roster-delta` only. Absent means "nothing of this kind
+        /// changed", never "nobody is here".
+        let joined: [VoiceParticipant]?
+        let updated: [VoiceParticipant]?
+        /// `voice-roster-delta` only: peer ids, not participants.
+        let left: [String]?
         /// `welcome` only. See `RealtimeEvent.voiceWelcome`.
         let resumed: Bool?
         let resumeToken: String?
@@ -702,6 +768,7 @@ actor RealtimeClient {
             case displayName, added, users, serverId, mention
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
             case candidate, limit, transport, version, resumed, resumeToken, canSpeak
+            case seq, size, joined, updated, left
             case conversationId, kind, caller, reason, thread, retryAfterMs
             // `self` is a Swift keyword, so the wire key is remapped.
             case selfPeer = "self"
@@ -850,10 +917,43 @@ actor RealtimeClient {
         case "peer-left":
             guard let peerId = envelope.peerId else { return }
             event = .voicePeerLeft(peerId: peerId)
+        // BOTH ROSTER FRAMES LEAVE HERE AS THE SAME EVENT, carrying the whole
+        // room. A snapshot brings its own list; a delta produces one by
+        // patching the list this client already held. Everything downstream
+        // reads one case and therefore cannot behave differently depending on
+        // which frame the server happened to send, which is the property worth
+        // having: `VoiceModel` and `CallModel` both fold a roster into their
+        // peers by peer id and remove nobody (departures are `peer-left`, which
+        // still arrives for the room this device is in), so a complete list is
+        // exactly what both of them already expect.
         case "voice-roster":
             guard let voiceChannelId = envelope.voiceChannelId else { return }
-            event = .voiceRoster(voiceChannelId: voiceChannelId,
-                                 participants: envelope.participants ?? [])
+            let participants = envelope.participants ?? []
+            // Recorded even though the list is passed on verbatim: a snapshot
+            // is the baseline every following delta is measured against, and
+            // its `seq` is the number they have to follow on from.
+            rosterTracker.apply(snapshot: participants,
+                                voiceChannelId: voiceChannelId,
+                                seq: envelope.seq)
+            event = .voiceRoster(voiceChannelId: voiceChannelId, participants: participants)
+        case "voice-roster-delta":
+            // Only ever sent to a socket that asked for it on `auth`. A frame
+            // the tracker refuses is not an error and is deliberately silent:
+            // nothing is emitted, the models keep the room they had, and the
+            // server's next full roster repairs the state wholesale.
+            guard let voiceChannelId = envelope.voiceChannelId,
+                  let seq = envelope.seq,
+                  let size = envelope.size,
+                  let participants = rosterTracker.apply(
+                      deltaFor: voiceChannelId,
+                      seq: seq,
+                      size: size,
+                      joined: envelope.joined ?? [],
+                      updated: envelope.updated ?? [],
+                      left: envelope.left ?? []
+                  )
+            else { return }
+            event = .voiceRoster(voiceChannelId: voiceChannelId, participants: participants)
         case "voice-speak-changed":
             guard let voiceChannelId = envelope.voiceChannelId,
                   let canSpeak = envelope.canSpeak else { return }
