@@ -510,8 +510,17 @@ const writeLimiter = createRateLimiter({
  * every caller looks like the same address — so this bucket is deliberately
  * coarse. The per-user buckets above do the real work; this one only exists to
  * stop an unauthenticated flood from reaching Clerk token verification.
+ *
+ * Tunable for the same reason the per-identity budgets above are, plus one
+ * specific to measurement: a load harness runs from a single address, so every
+ * simulated client shares this one bucket and it becomes the ceiling long
+ * before the server does. A run that leaves it at 60/s measures this line, not
+ * the API. Defaults unchanged; see docs/STAGING.md.
  */
-const anonLimiter = createRateLimiter({ capacity: 240, refillPerSecond: 60 });
+const anonLimiter = createRateLimiter({
+  capacity: limitFromEnv("RATE_LIMIT_ANON_CAPACITY", 240),
+  refillPerSecond: limitFromEnv("RATE_LIMIT_ANON_REFILL", 60),
+});
 /**
  * GIF search is a per-keystroke read against someone else's quota, so it gets a
  * tighter budget than the general one: enough for a debounced session of

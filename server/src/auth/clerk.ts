@@ -11,6 +11,11 @@ import {
 } from "../services/users.js";
 import { getAgeGateStatus, type AgeGateStatus } from "../services/age-gate.js";
 import {
+  assertLoadTestAuthConfig,
+  isLoadTestAuthEnabled,
+  loadTestIdentity,
+} from "./load-test.js";
+import {
   CHARACTER_TOKEN_PREFIX,
   isCharacterAccountsEnabled,
   resolveCharacterToken,
@@ -90,6 +95,7 @@ export function isDevAuthBypassEnabled(): boolean {
 }
 
 export function assertAuthConfig(): void {
+  assertLoadTestAuthConfig();
   if (
     process.env.DEV_AUTH_BYPASS === "true" &&
     process.env.NODE_ENV === "production"
@@ -495,6 +501,33 @@ export async function verifyAuthHeader(
       // not survive the next call. Reachable only under the bypass, which
       // already refuses to run when NODE_ENV=production.
       emailDomains: devEmailDomains(),
+    };
+  }
+
+  /**
+   * The load-test branch — hundreds of throwaway identities on staging.
+   *
+   * Placed directly after the bypass because it is the same idea with the
+   * public constant swapped for a secret, and ahead of Clerk for the same
+   * reason the character branch is: a load-test token is not a JWT and would
+   * otherwise cost a guaranteed-failing `verifyToken` (plus a logged rejection)
+   * on every one of the thousands of requests a run makes.
+   *
+   * `isLoadTestAuthEnabled()` is false unless a long secret is set AND this is
+   * a `-staging` Fly app (or a non-production host off Fly), so on `pqp-api`
+   * this branch does not exist. See auth/load-test.ts.
+   *
+   * `emailDomains: []` is a statement, not a placeholder: a load-test identity
+   * proves no address, so it can never be granted an SSO domain join.
+   * `upsertUser` rewrites the column with this on every request.
+   */
+  const loadIdentity = isLoadTestAuthEnabled() ? loadTestIdentity(token) : null;
+  if (loadIdentity) {
+    return {
+      clerkId: loadIdentity.clerkId,
+      displayName: loadIdentity.displayName,
+      avatarUrl: null,
+      emailDomains: [],
     };
   }
 
