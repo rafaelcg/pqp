@@ -113,3 +113,32 @@ describe("VoiceStatusBar", () => {
     expect(html).toContain('aria-label="Disconnect from voice"');
   });
 });
+
+/**
+ * The 72px sidebar. Two controls survive the squeeze, and one sentence.
+ */
+describe("VoiceStatusBar compact", () => {
+  it("keeps the call and the way out of it", () => {
+    const html = render({ compact: true });
+    expect(html).toContain("data-voice-bar-compact");
+    expect(html).toContain('aria-label="Disconnect from voice"');
+    expect(html).toContain('data-voice-bar-channel="voice"');
+    // Camera and share go: they are on the stage, which is what the collapsed
+    // sidebar just made room for.
+    expect(html).not.toContain('aria-label="Turn camera on"');
+    expect(html).not.toContain('aria-label="Share screen"');
+  });
+
+  it("still says the state in words, because a colour is not a sentence", () => {
+    // Also why every other spec's `waitUntilVoiceConnected` keeps working
+    // while a share has the sidebar collapsed: the words are here, for a
+    // screen reader, whatever the column is wide enough to print.
+    const connected = render({ compact: true });
+    expect(connected).toContain("Voice connected");
+    expect(connected).toContain("sr-only");
+
+    const joining = render({ compact: true, status: "joining" });
+    expect(joining).toContain("Connecting");
+    expect(joining).not.toContain("Voice connected");
+  });
+});
