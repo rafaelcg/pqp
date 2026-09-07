@@ -35,8 +35,12 @@ export type RealtimeStatus =
  * `voice-roster-delta`: send what changed in a voice room instead of the whole
  * room. Handled in `hooks/use-voice.ts`; the convergence rule it must obey is
  * on `voiceRosterDeltaMessageSchema` in `@pqp/shared`.
+ *
+ * `presence-delta`: send who arrived and who left a channel instead of every
+ * viewer of it. Handled in `hooks/use-chat.ts`, under the same convergence
+ * rule, written out on `presenceDeltaSchema` in `@pqp/shared`.
  */
-const WIRE_CAPS = ["voice-roster-delta"] as const;
+const WIRE_CAPS = ["voice-roster-delta", "presence-delta"] as const;
 
 const PING_INTERVAL_MS = 20_000;
 const MAX_MISSED_PONGS = 2;

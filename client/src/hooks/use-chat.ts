@@ -338,6 +338,14 @@ export function createChatController(
 ) {
   let messages: ChatMessage[] = [];
   let presence: PresenceUpdate["users"] = [];
+  /**
+   * The presence sequence this controller has applied up to for its channel.
+   *
+   * 0 means "no baseline", which is also what an empty channel restarts from,
+   * so the first delta after an empty channel is self-sufficient. See
+   * `presenceDeltaSchema` in `@pqp/shared` for the whole rule.
+   */
+  let presenceSeq = 0;
   /** One in-flight vote per poll so a double-tap cannot stack optimistic counts. */
   const pollVotesInFlight = new Set<string>();
   let channelId: string | null = null;
@@ -625,6 +633,11 @@ export function createChatController(
     }
     messages = [];
     presence = [];
+    // The sequence belongs to the channel, not to the socket, so switching
+    // channels must forget it. Keeping it would make the new channel's
+    // baseline-then-delta pair read as a gap and leave the subtitle stale
+    // until the next keyframe.
+    presenceSeq = 0;
     pollVotesInFlight.clear();
     hasMore = false;
     hasNewer = false;
@@ -1415,9 +1428,46 @@ export function createChatController(
 
         case "presence-update": {
           if (message.channelId === channelId) {
+            // Authoritative by definition: whatever the sequence said and
+            // whatever this controller believed, the channel is this. That is
+            // what makes the server's periodic snapshot a repair for any delta
+            // that went wrong, including one this client had no way to notice
+            // was missing.
+            presenceSeq = message.seq ?? 0;
             presence = message.users;
             emit();
           }
+          return;
+        }
+
+        case "presence-delta": {
+          if (message.channelId !== channelId) {
+            return;
+          }
+          // The convergence rule, in full, and deliberately the same one the
+          // voice roster applies. Two independent checks: the sequence must be
+          // the next one, and the viewer count after applying must be the
+          // count the server says it is. Failing either, this controller stops
+          // patching and waits for the next whole list — a wrong subtitle for
+          // a few seconds, never a viewer list that is quietly wrong forever.
+          if (message.seq !== presenceSeq + 1) {
+            return;
+          }
+          const byId = new Map(presence.map((user) => [user.id, user]));
+          // In order, and every entry an absolute statement about one person,
+          // so replaying one a snapshot already folded in changes nothing.
+          for (const user of message.joined ?? []) {
+            byId.set(user.id, user);
+          }
+          for (const userId of message.left ?? []) {
+            byId.delete(userId);
+          }
+          if (byId.size !== message.size) {
+            return;
+          }
+          presenceSeq = message.seq;
+          presence = [...byId.values()];
+          emit();
           return;
         }
 

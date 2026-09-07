@@ -24,6 +24,14 @@ export const SOCKET_CAPS = {
    * the room changes, which is what every client did before.
    */
   voiceRosterDelta: "voice-roster-delta",
+  /**
+   * This socket understands `presence-delta` and applies it under the sequence
+   * rule in `@pqp/shared`'s `presenceDeltaSchema` — the same rule as the voice
+   * roster's, on purpose. Without it a socket keeps receiving the whole viewer
+   * list of a channel every time anybody opens or closes it, which is what
+   * every client did before.
+   */
+  presenceDelta: "presence-delta",
 } as const;
 
 export interface AuthenticatedSocket {

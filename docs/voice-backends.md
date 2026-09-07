@@ -299,7 +299,18 @@ So a room that has already been described is described incrementally.
 - **`size`** is how many participants the room has after the delta. A receiver that applied everything and still disagrees has diverged for a reason `seq` cannot see.
 - On either failure the receiver **stops applying deltas for that room** and waits. It does not ask for anything.
 
-**The convergence guarantee is the server's, not the client's.** Every `ROSTER_KEYFRAME_MS` (10 s) the whole roster goes out again, whatever happened in between. That answers every failure with one mechanism, including the one a client cannot detect as a gap at all: a socket that entered the audience mid-call and never had a baseline to compare against. Whatever went wrong, and whether or not anyone noticed, the next keyframe replaces the receiver's state wholesale — so the worst staleness any roster bug can produce is bounded by that constant, by construction. A client-driven resync would instead let a wrong or hostile client decide when the server does expensive work.
+**The convergence guarantee is the server's, not the client's.** Every keyframe interval the whole roster goes out again, whatever happened in between. That answers every failure with one mechanism, including the one a client cannot detect as a gap at all: a socket that entered the audience mid-call and never had a baseline to compare against. Whatever went wrong, and whether or not anyone noticed, the next keyframe replaces the receiver's state wholesale — so the worst staleness any roster bug can produce is bounded by that constant, by construction. A client-driven resync would instead let a wrong or hostile client decide when the server does expensive work.
+
+**The room and the audience are not owed the same interval.** A roster goes to everyone who can see the channel, and that audience is routinely several times the size of the room, so most of the keyframe cost is paid on behalf of a sidebar badge rather than a call. The two are genuinely different promises:
+
+| receiver | interval | what a stale one costs |
+|---|---|---|
+| in the call | `ROSTER_KEYFRAME_MS`, 10 s | the signalling allowlist (`knownPeerIds`), which decides whose offer may open a microphone, and the prune of a dead peer connection |
+| watching the channel | `ROSTER_AUDIENCE_KEYFRAME_MS`, 30 s | a mic-off icon next to a channel this browser is not in |
+
+Decided **per socket**, not per account: the same person can hold a tab in the call and a phone looking at the sidebar, and they are not owed the same frames. Neither number is the delta rate — both keep receiving every change as it happens, and this only governs how often the whole list is restated. Thirty seconds rather than a minute because the saving is a ratio (most of it is already had at 3x) while what grows linearly is the one case a keyframe is the only answer to: a socket that gained audience membership mid-session and holds no baseline at all, so it cannot detect its own gap and cannot ask.
+
+Measured at 800 sockets with 200 in one call: whole-roster frames 2400 → 1124, 110.6 MB → 48.6 MB. The arithmetic is visible in the frame count (200 participants at three keyframes each plus 600 watchers at one), so **the saving scales with the audience fraction** — a big community around a small call gains more, a full room gains nothing.
 
 Two asymmetries worth knowing:
 

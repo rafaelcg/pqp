@@ -1349,3 +1349,198 @@ describe("chance and polls", () => {
     ]);
   });
 });
+
+/**
+ * The receiver half of `presenceDeltaSchema`.
+ *
+ * The server may now describe a channel's viewers incrementally, and the whole
+ * safety of that rests on this controller refusing to patch when it cannot
+ * prove it is still right. These tests are therefore about the REFUSALS as
+ * much as the happy path: a controller that applied every delta it was handed
+ * would pass a "deltas work" test and still drift out of sync in production.
+ */
+describe("presence deltas", () => {
+  const A = {
+    id: "a0000000-0000-4000-8000-00000000000a",
+    name: "Ana",
+    avatarUrl: null,
+  };
+  const B = {
+    id: "b0000000-0000-4000-8000-00000000000b",
+    name: "Bia",
+    avatarUrl: null,
+  };
+  const C = {
+    id: "c0000000-0000-4000-8000-00000000000c",
+    name: "Caio",
+    avatarUrl: null,
+  };
+
+  type Chat = ReturnType<typeof createChatController>;
+
+  function baseline(chat: Chat, seq = 1) {
+    chat.handleServerMessage({
+      type: "presence-update",
+      channelId: CHANNEL,
+      users: [A, B],
+      seq,
+    } as never);
+  }
+
+  function ids(chat: Chat) {
+    return chat
+      .getPresence()
+      .map((u) => u.id)
+      .sort();
+  }
+
+  it("applies an arrival and a departure without a whole list", () => {
+    const { chat } = setup();
+    baseline(chat);
+
+    chat.handleServerMessage({
+      type: "presence-delta",
+      channelId: CHANNEL,
+      seq: 2,
+      size: 3,
+      joined: [C],
+    } as never);
+    expect(ids(chat)).toEqual([A.id, B.id, C.id].sort());
+
+    chat.handleServerMessage({
+      type: "presence-delta",
+      channelId: CHANNEL,
+      seq: 3,
+      size: 2,
+      left: [A.id],
+    } as never);
+    expect(ids(chat)).toEqual([B.id, C.id].sort());
+  });
+
+  it("refuses a delta that is not the next one, rather than guessing", () => {
+    const { chat } = setup();
+    baseline(chat);
+
+    // seq 3 arrives with 2 never applied: a gap. Applying it would silently
+    // omit whatever seq 2 said, which is the exact failure the rule exists to
+    // prevent — a viewer invisible until the next whole list.
+    chat.handleServerMessage({
+      type: "presence-delta",
+      channelId: CHANNEL,
+      seq: 3,
+      size: 3,
+      joined: [C],
+    } as never);
+    expect(chat.getPresence()).toHaveLength(2);
+
+    // And it stays stopped: the next delta is still a gap against the
+    // sequence it actually holds.
+    chat.handleServerMessage({
+      type: "presence-delta",
+      channelId: CHANNEL,
+      seq: 4,
+      size: 3,
+      joined: [C],
+    } as never);
+    expect(chat.getPresence()).toHaveLength(2);
+  });
+
+  it("refuses a delta whose size does not match what applying it produced", () => {
+    const { chat } = setup();
+    baseline(chat);
+
+    // The sequence is right, so `seq` alone would wave this through. The size
+    // is the second, independent check: this client and the server disagree
+    // about the channel for a reason the sequence cannot see.
+    chat.handleServerMessage({
+      type: "presence-delta",
+      channelId: CHANNEL,
+      seq: 2,
+      size: 9,
+      joined: [C],
+    } as never);
+    expect(chat.getPresence()).toHaveLength(2);
+  });
+
+  it("a whole list repairs a client that stopped patching", () => {
+    const { chat } = setup();
+    baseline(chat);
+    chat.handleServerMessage({
+      type: "presence-delta",
+      channelId: CHANNEL,
+      seq: 5,
+      size: 3,
+      joined: [C],
+    } as never);
+    expect(chat.getPresence()).toHaveLength(2);
+
+    // The server's periodic keyframe. Authoritative whatever went wrong, and
+    // it re-anchors the sequence so patching resumes.
+    chat.handleServerMessage({
+      type: "presence-update",
+      channelId: CHANNEL,
+      users: [A, B, C],
+      seq: 6,
+    } as never);
+    expect(chat.getPresence()).toHaveLength(3);
+
+    chat.handleServerMessage({
+      type: "presence-delta",
+      channelId: CHANNEL,
+      seq: 7,
+      size: 2,
+      left: [C.id],
+    } as never);
+    expect(ids(chat)).toEqual([A.id, B.id].sort());
+  });
+
+  it("ignores a delta for a channel it is not showing", () => {
+    const { chat } = setup();
+    baseline(chat);
+    chat.handleServerMessage({
+      type: "presence-delta",
+      channelId: "d0000000-0000-4000-8000-0000000000dd",
+      seq: 2,
+      size: 0,
+      left: [A.id, B.id],
+    } as never);
+    expect(chat.getPresence()).toHaveLength(2);
+  });
+
+  it("forgets the sequence on a channel switch", () => {
+    const { chat } = setup();
+    baseline(chat, 40);
+    const other = "e0000000-0000-4000-8000-0000000000ee";
+    chat.joinChannel(other);
+
+    // The new channel restarts at 1. A controller that kept 40 would read this
+    // as a gap and show an empty channel until the next keyframe, which is a
+    // regression a "deltas work" test would never catch.
+    chat.handleServerMessage({
+      type: "presence-update",
+      channelId: other,
+      users: [],
+      seq: 0,
+    } as never);
+    chat.handleServerMessage({
+      type: "presence-delta",
+      channelId: other,
+      seq: 1,
+      size: 1,
+      joined: [C],
+    } as never);
+    expect(ids(chat)).toEqual([C.id]);
+  });
+
+  it("still reads a whole list from a server that sends no sequence at all", () => {
+    const { chat } = setup();
+    // A server mid-rollout, or one that predates deltas entirely: `seq` absent
+    // reads as 0 and the list is applied exactly as it always was.
+    chat.handleServerMessage({
+      type: "presence-update",
+      channelId: CHANNEL,
+      users: [A, B, C],
+    } as never);
+    expect(chat.getPresence()).toHaveLength(3);
+  });
+});
