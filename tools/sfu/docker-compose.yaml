@@ -1,0 +1,22 @@
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.6
+    command: --config /etc/livekit.yaml
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+      - ./certs:/opt/livekit/certs:ro
+    logging: { driver: journald }
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging: { driver: journald }
+volumes:
+  caddy_data:
+  caddy_config:

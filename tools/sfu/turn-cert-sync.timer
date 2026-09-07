@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily turn cert sync
+[Timer]
+OnCalendar=daily
+Persistent=true
+[Install]
+WantedBy=timers.target
