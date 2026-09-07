@@ -62,7 +62,7 @@ pnpm --filter @pqp/server exec tsx scripts/load-fanout.ts \
 | `--n` | 200 | Sockets to open. Each is a distinct account. |
 | `--voice <k>` | all | Only the first k join the call; the rest are the **sidebar audience** — members who receive every roster without being in the room. Passing this also turns on the stampede phase. |
 | `--seconds` | 30 | Length of the steady-state phase. |
-| `--caps 0` | on | Make every socket look like a client built before roster deltas, so a before/after comparison runs on one binary. |
+| `--caps <list>` | all | Wire capabilities every socket declares at `auth`. `0` is the empty set — a client built before any of the delta frames — so a before/after comparison runs on one binary. A comma list (`--caps presence-delta`) isolates one, which is the only way to attribute a saving to the change that produced it. |
 | `--deflate 0` | on | Make every socket look like a client with no `permessage-deflate`, the same one-binary trick `--caps` plays for roster deltas. Also the fallback test: the run must still complete. |
 | `--json <path>` | — | Write the run's numbers for comparison. |
 | `--db <url>` | `$DATABASE_URL` | Exact statement counts, when `pg_stat_statements` is installed. |
@@ -120,6 +120,53 @@ Two things that reading those numbers should not miss:
   party actually is, which is what the steady-state row measures.
 - **`presence-update` is now the biggest thing this server writes** (846 MB of
   the 1104 MB above). The voice roster is no longer the wall; chat presence is.
+
+### The second baseline: presence deltas
+
+Same machine, same binary, `--caps` the only difference again. `presence-update`
+is the same shape of problem the roster was — every viewer of a channel, to
+every viewer of that channel — so it gets the same treatment and the same
+convergence rule.
+
+`--n 400 --voice 300 --seconds 30`:
+
+| | roster deltas only | + presence deltas |
+|---|---|---|
+| presence bytes, 30s steady state | 845.4 MB | 49.4 MB (2.1 delta + 47.2 keyframe) |
+| per socket | 71.0 KB/s | 4.2 KB/s |
+| everything the server wrote | 1103.8 MB | 311.2 MB |
+| per socket | 92.6 KB/s | 26.1 KB/s |
+| server CPU | 10.5% of one core | 10.6% |
+| stampede: time to join p95 | 227 ms | 212 ms |
+| convergence | 400/400 exact, 0 gaps | 400/400 exact, 0 gaps |
+
+`--n 800 --voice 600 --seconds 30`, which is where the curve rather than the
+point becomes readable:
+
+| | roster deltas only | + presence deltas |
+|---|---|---|
+| presence bytes | 2924.7 MB | 185.9 MB |
+| everything the server wrote | 3652.0 MB | 922.2 MB |
+| per socket | 153.2 KB/s | 38.7 KB/s |
+| stampede: time to join p95 | 1949 ms | 1503 ms |
+| convergence | 800/800 exact, 0 gaps | 800/800 exact, 0 gaps |
+
+**Reading the curve.** Total outbound goes as roughly `N^1.72` before and
+`N^1.57` after, because both frames are quadratic (a list of the room, to the
+room) and shrinking the frame does not change that — it moves the constant, and
+the constant is what the ceiling is made of. Fitting the two measured points on
+each curve, the outbound rate that the "before" configuration reaches at ~360
+concurrent is the rate the "after" configuration reaches at ~800. **So the
+ceiling roughly doubles**, and the check is in the table: at 800 sockets the
+after run writes 30.2 MB/s, which is what the before run wrote at ~360.
+
+**What is now the biggest thing on the wire, and it is one thing, not two.**
+Of the 922 MB above, `voice-roster` keyframes are 384.6 MB and
+`presence-update` keyframes are 180.3 MB — **61% of everything the server
+writes is now a periodic whole-list snapshot**, and both are dominated by the
+copy sent to people who are NOT in the call and NOT the ones the list is about.
+Deltas made the news cheap; the keyframe is the remaining cost, and its size is
+the audience's problem rather than the room's.
 
 ### Payload bytes and wire bytes are different numbers
 

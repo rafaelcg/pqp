@@ -325,16 +325,88 @@ export const messageBulkDeleteBroadcastSchema = z.object({
   messageIds: z.array(z.string().uuid()).min(1).max(MESSAGE_BULK_DELETE_MAX),
 });
 
+/** One viewer, as presence names them. `name`, not `displayName`: see below. */
+export const presenceUserSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  avatarUrl: z.string().nullable(),
+});
+
 export const presenceUpdateSchema = z.object({
   type: z.literal("presence-update"),
   channelId: z.string().uuid(),
-  users: z.array(
-    z.object({
-      id: z.string().uuid(),
-      name: z.string(),
-      avatarUrl: z.string().nullable(),
-    }),
-  ),
+  users: z.array(presenceUserSchema),
+  /**
+   * Where this snapshot sits in the channel's presence sequence (see
+   * `presenceDeltaSchema`). A full list is always authoritative: receiving one
+   * means "forget what you had, this is the channel, and the next delta you
+   * may apply is `seq + 1`".
+   *
+   * Absent on a server that predates deltas, and absent reads as 0, which is
+   * also the sequence an empty channel restarts from. A client that never
+   * negotiated deltas can ignore this field entirely.
+   */
+  seq: z.number().int().nonnegative().optional(),
+});
+
+/**
+ * WHO ARRIVED AND WHO LEFT, INSTEAD OF EVERYONE WHO IS HERE.
+ *
+ * `presence-update` is quadratic by construction: it lists every viewer of a
+ * channel and it goes to every viewer of that channel, so one person clicking
+ * between channels costs the whole list to the whole room. #260's coalescer
+ * bounded how OFTEN that happens and left the frame the size of the audience,
+ * and once the voice roster stopped being the biggest thing on the wire this
+ * became it: measured on the harness at 846 MB of the 1104 MB the server wrote
+ * in a 30-second run, roughly 45 KB a frame.
+ *
+ * So a channel that has already been described is described incrementally. Two
+ * lists, applied IN ORDER, each an absolute statement about one person:
+ *
+ *   joined   this person is viewing, under this name and picture (replace by id)
+ *   left     this person is not viewing (remove by id)
+ *
+ * There is no `updated`: a viewer whose name or avatar changed is simply
+ * `joined` again, because "replace by id" is already the operation and a
+ * second verb for it would be a second code path saying the same thing. That
+ * also means applying an entry twice is the same as applying it once, which is
+ * what makes a delta overlapping a snapshot the receiver already holds
+ * harmless.
+ *
+ * HOW A RECEIVER KNOWS IT IS STILL RIGHT. The same two independent checks the
+ * voice roster uses, deliberately identical so there is one rule to reason
+ * about rather than two:
+ *
+ *   `seq`   monotonic per channel, +1 per frame, restarted at 1 whenever the
+ *           channel has been empty. Apply only when `seq === held + 1` (a
+ *           client with no state holds 0).
+ *   `size`  how many viewers the channel has AFTER this delta. A receiver that
+ *           applied everything and disagrees has diverged for a reason `seq`
+ *           cannot see, and is equally out of sync.
+ *
+ * On either failure the receiver stops applying deltas for that channel and
+ * waits for the next full `presence-update`, which the server sends
+ * periodically for exactly this purpose. A lost or reordered frame therefore
+ * costs a bounded interval of staleness and can never leave a viewer
+ * permanently miscounted.
+ *
+ * INVISIBILITY IS NOT A DELTA CONCERN. Hidden people are filtered out where
+ * the roster is built, before any of this runs, so they are absent from the
+ * snapshot and absent from every delta computed against it. Going invisible
+ * while viewing produces an ordinary `left`; coming back produces a `joined`.
+ *
+ * Only ever sent to a socket that asked for it (`caps` on the `auth` frame).
+ * Everything else keeps receiving whole lists at the old rate.
+ */
+export const presenceDeltaSchema = z.object({
+  type: z.literal("presence-delta"),
+  channelId: z.string().uuid(),
+  /** This delta's place in the channel's sequence. Apply only when it is held + 1. */
+  seq: z.number().int().positive(),
+  /** Viewers in the channel once this delta has been applied. */
+  size: z.number().int().nonnegative(),
+  joined: z.array(presenceUserSchema).optional(),
+  left: z.array(z.string().uuid()).optional(),
 });
 
 /**
@@ -371,6 +443,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   messageDeletedBroadcastSchema,
   messageBulkDeleteBroadcastSchema,
   presenceUpdateSchema,
+  presenceDeltaSchema,
   typingBroadcastSchema,
   channelActivitySchema,
   profileUpdateSchema,
@@ -531,7 +604,9 @@ export type MessageDeletedBroadcast = z.infer<
 export type MessageBulkDeleteBroadcast = z.infer<
   typeof messageBulkDeleteBroadcastSchema
 >;
+export type PresenceUser = z.infer<typeof presenceUserSchema>;
 export type PresenceUpdate = z.infer<typeof presenceUpdateSchema>;
+export type PresenceDelta = z.infer<typeof presenceDeltaSchema>;
 export type TypingBroadcast = z.infer<typeof typingBroadcastSchema>;
 export type ChannelActivity = z.infer<typeof channelActivitySchema>;
 export type ProfileUpdate = z.infer<typeof profileUpdateSchema>;

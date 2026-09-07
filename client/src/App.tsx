@@ -1060,7 +1060,7 @@ function MainAppContent({
   }, []);
 
   /**
-   * Bumped on any `presence-update` frame. Status itself is a pull surface
+   * Bumped on any `presence-update` or `presence-delta` frame. Status itself is a pull surface
    * (see `server/src/ws/status.ts`); the frame is only "somebody started
    * looking at a channel in here", which is the cheapest hint that presence
    * may have moved. The shared roster hook debounces it into one re-read so
@@ -2392,7 +2392,13 @@ function MainAppContent({
           // treats it as the cheapest available hint that presence has
           // moved (status is not on this frame). Neither is the frame's
           // owner, so it is nudged here and still falls through.
-          if (message.type === "presence-update") {
+          // Both presence frames, or the nudge would stop firing for every
+          // client that negotiated deltas and the member roster would go
+          // stale for exactly the builds the optimisation is aimed at.
+          if (
+            message.type === "presence-update" ||
+            message.type === "presence-delta"
+          ) {
             setMemberRosterNudge((n) => n + 1);
           }
 
@@ -2404,6 +2410,7 @@ function MainAppContent({
             message.type === "message-deleted" ||
             message.type === "message-bulk-delete" ||
             message.type === "presence-update" ||
+            message.type === "presence-delta" ||
             message.type === "typing-broadcast" ||
             message.type === "poll-update" ||
             message.type === "message-rejected"
