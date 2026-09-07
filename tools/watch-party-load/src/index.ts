@@ -315,7 +315,17 @@ async function one(index: number, presenter: boolean, decodeSample: boolean, saf
     if (!presenter && (result.subscribedTracks < 2 || result.rtp.bytesReceived === 0)) throw new Error(`no received presenter RTP (tracks=${result.subscribedTracks}, bytes=${result.rtp.bytesReceived})`);
     if (decodeSample && !presenter && (result.videoFrames === 0 || result.audioFrames === 0)) throw new Error(`no decoded presenter media (video=${result.videoFrames}, audio=${result.audioFrames})`);
   } catch (error) { result.failure = error instanceof Error ? error.message : String(error); }
-  finally { releaseJoin?.(); if (publisher) await publisher.stop(); intentionalDisconnect = true; if (room) await room.disconnect(); socket?.close(); }
+  finally {
+    releaseJoin?.();
+    // rtc-node may already have released a handle after a failed connect. A
+    // teardown error belongs to that one synthetic participant; it must not
+    // abort every other in-flight participant or turn a failed run into no
+    // report at all.
+    if (publisher) await publisher.stop().catch(() => {});
+    intentionalDisconnect = true;
+    if (room) await room.disconnect().catch(() => {});
+    socket?.close();
+  }
   return result;
 }
 async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
