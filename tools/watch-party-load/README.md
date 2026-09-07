@@ -149,3 +149,71 @@ pnpm exec tsx src/index.ts shard --manifest /tmp/wpl.json --shard-index 0 --shar
 `PQP_LOAD_API_URL` / `PQP_LOAD_WS_URL` move it off port 3001 (loopback only).
 Give `--start-at-ms` a few seconds of headroom: every client must hold an RTC
 connection before that instant or it is judged late.
+
+## Stampede mode, legacy sockets, publishers, churn (2026-09-07 additions)
+
+The barrier described above (everyone connected before `--start-at-ms`, the
+presenter starting media at that instant) measures a room that was already
+full when the stream began. A watch party is the opposite: the stream is live
+and people pile in. `--arrival-window-seconds W` switches to that shape. The
+presenter connects and publishes as soon as it can; receiver `i` arrives at
+`start + lead + (i - 1) x W / (N - 1)` (`--arrival-lead-seconds`, default 10),
+and every timer is the receiver's own: welcome is measured from socket open
+the way `JOIN_TIMEOUT_MS` in `client/src/hooks/use-voice.ts` arms it (12 s per
+attempt, 1 s doubling backoff to 30 s, give up at `--join-deadline-seconds`),
+the first decoded frame is polled from RTC connect and abandoned at 45 s
+(`SFU_JOIN_TIMEOUT_MS`), and the hold runs from the receiver's own media
+start. The barrier rule in `judge()` does not apply in this mode; the 45 s
+first-frame budget and the expected received height do.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--arrival-window-seconds W` | 0 (barrier) | Stampede: presenter live first, receivers spread across W seconds |
+| `--arrival-lead-seconds L` | 10 | Seconds the presenter is live before the first receiver arrives |
+| `--legacy-share P` | 0 | P% of receivers (indexes 80 to 99 of every hundred, never the presenter) send `auth` with no `caps` and no `permessage-deflate`, which is what a native app that has not updated looks like to the server |
+| `--presenter-profile 720p\|720p-simulcast\|1080p` | 720p | The client's ladder (`client/src/lib/video-quality.ts`): a room above 20 people holds the share at 720p / 1.5 Mbps unless the presenter chose 1080p by name, which is 4 Mbps with simulcast rungs under it |
+| `--screen-pin high\|medium\|low\|none` | none | Ask the SFU for a specific simulcast layer of the share, through the FFI request rtc-node has no public method for. rtc-node has no adaptiveStream, so `none` already receives the top layer |
+| `--audio-publishers N` / `--camera-publishers M` | 0 / 0 | Indexes 1..N publish a speech-shaped signal (not a tone, so Opus and the SFU's speaker detection treat it as a voice); the next M publish a 1080p30 / 2.5 Mbps camera with simulcast. Receivers pin camera tracks to `--camera-pin` (default `low`, the small tile) |
+| `--cold-bootstrap` | off | The browser's 21-request first load (`coldBootstrap` in `server/scripts/load-fanout.ts`) instead of the thin four GETs |
+| `--churn-every-ms MS` / `--churn-rtc-every N` | 0 / 10 | Run D: this process drops one receiver's app socket without a leave every MS during the hold and reconnects with the resume pair, recording `resumed: true` and the time to welcome; every Nth churn also drops the LiveKit room, re-mints and reconnects, recording the time to the first frame again |
+| `--join-concurrency N` | 12 | Joins in flight per process |
+| `--presenter-only` / `--no-presenter` | | Run the presenter in a process of its own: the shard that would contain index 0 passes `--no-presenter` |
+| `PQP_LOAD_SIZE_OVERRIDE=1` | | Hosted counts from 2 to 2000 and holds from 5 s to 30 min, for calibration and the stall check. The production refusals are untouched |
+| `PQP_LOAD_TRACE=1` | | Per-participant event lines on stderr without the `wpdiag-` run-id rule |
+
+Every result now carries `role`, `legacy`, `socketOpenToWelcomeMs`,
+`welcomeAttempts`, `firstFrameFromArrivalMs`, `firstFrameFromConnectMs`,
+inbound `frameWidth`/`frameHeight`/`framesPerSecond`/`framesDropped`/
+`freezeCount`/`pliCount`/`nackCount` in every 5 s `flow` sample, the
+presenter's outbound layers, a `ws` block with the bytes the app socket
+received per frame type (this is how the report says what a socket without
+the delta caps pays), a `failureClass` (`proxy-limit`, `generator:fds`,
+`rate-limit:<path>`, `server:<status>`, `welcome-timeout`,
+`rtc-connect-timeout`, `rtc-node:handle`) and `churns[]` when run D is on.
+
+### Sizing a generator, measured
+
+One 12 vCPU Vultr box (`vhp-12c-24gb-amd`, São Paulo), 95 receivers of a
+720p30 / 1.5 Mbps share, 2026-09-07:
+
+- **One Node process for all 95 plus the presenter does not work.** Event-loop
+  lag reached 4.3 s, the presenter's capture fell to 21 fps, receivers decoded
+  12 fps median, the last arrivals failed with rtc-node handle errors and
+  connect timeouts, while the SFU sat at 17% CPU. That is a generator
+  ceiling that would have been read as a server one.
+- **Three processes of about 32 receivers plus the presenter in its own
+  process is clean**: 95/95 first frame within 45 s (p95 1.3 s from arrival),
+  29.7 fps decoded on every receiver, presenter 30.1 fps, loop lag under
+  170 ms. Whole-VM CPU p95 76%, of which about 0.08 of a core per receiver is
+  libwebrtc decoding 720p30 (every subscriber decodes whether or not a
+  `VideoStream` drains it), so budget 80 to 90 receivers per 12 vCPU box to
+  stay under the 70% gate.
+- `--decode-sample` is not free: each drained receiver copies 1.38 MB per
+  frame across the FFI on the main thread, 41 MB/s at 30 fps. Ten per process
+  was enough to starve the loop; one or two per process is plenty, because
+  `framesDecoded` already proves decoding for every receiver.
+- rtc-node's FFI finalizer can throw `trying to drop an invalid handle` for a
+  participant whose connect already failed. `armAbort` counts and survives
+  that one error class (`generator.uncaughtErrors` in the report) instead of
+  hanging up every other seat in the shard, which is what a 96-client
+  calibration lost 95 seats to.
