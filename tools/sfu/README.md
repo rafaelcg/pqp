@@ -23,13 +23,17 @@ The rebuild procedure is section 7 of that file.
 | `docker-compose.yaml` | The two containers, pinned. `network_mode: host` because UDP mux and TURN want the real interface. | `/opt/livekit/docker-compose.yaml` |
 | `sync-turn-cert.sh.tmpl` | Copies the TURN certificate out of Caddy's volume into a path LiveKit can read, and restarts LiveKit only when the hash changed. | `/opt/livekit/sync-turn-cert.sh` (0700) |
 | `livekit-docker.service` | systemd wrapper around `docker compose up -d` in `/opt/livekit`. | `/etc/systemd/system/` |
+| `sshd-hardening.conf` | Turns SSH password authentication off. Sorts ahead of Ubuntu's `50-cloud-init.conf`, which turns it back on. | `/etc/ssh/sshd_config.d/01-pqp-hardening.conf` (0600) |
+| `fail2ban-jail-sshd.conf` | The SSH jail. Reads the journal, with the `journalmatch` corrected for Ubuntu. | `/etc/fail2ban/jail.d/pqp-sshd.local` |
 | `turn-cert-sync.service.tmpl` / `.timer` | Runs the cert sync daily. | `/etc/systemd/system/` |
 
 Rendering the templates with the production defaults (`sfu.pqp.gg`,
 `turn.pqp.gg`) reproduces the files on the box **byte for byte**; that was
 checked by sha256 on 2026-09-07, with the `keys:` line normalised on both
 sides. `docker-compose.yaml`, `livekit-docker.service` and
-`turn-cert-sync.timer` are committed verbatim and hash-match directly.
+`turn-cert-sync.timer` are committed verbatim and hash-match directly, as are
+`sshd-hardening.conf` and `fail2ban-jail-sshd.conf`, which were copied down off the
+box rather than written up to it.
 
 ## How the pieces fit
 
@@ -74,6 +78,11 @@ ssh root@216.238.114.79 'bash /opt/sfu/install.sh'
 Overridable with environment variables: `SFU_DOMAIN`, `TURN_DOMAIN`,
 `ACME_EMAIL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`.
 
+The run turns SSH password authentication off and installs a fail2ban jail; see
+"SSH: keys only, plus a jail" below. On a fresh box that step is skipped,
+loudly, if `/root/.ssh/authorized_keys` is empty, so it cannot seal you out of a
+machine you have not put a key on yet.
+
 ## The secret
 
 `livekit.yaml` carries one secret, the LiveKit API key pair in its `keys:`
@@ -115,8 +124,10 @@ disagreed, reality won and this section says so.
 | Swap | 8 GB `/swapfile`, in `/etc/fstab` |
 | journald | `SystemMaxUse=500M` |
 | Upgrades | `unattended-upgrades` enabled, `Automatic-Reboot` left at its commented default (false) |
+| SSH | OpenSSH 9.6p1, port 22, **password auth off**, pubkey on, root key-only, one key in `authorized_keys` |
+| fail2ban | 1.0.2, enabled, `sshd` jail on the systemd journal, `nftables` ban action |
 
-Four things worth knowing that the plan document did not say:
+Five things worth knowing that the plan document did not say:
 
 1. **`livekit-docker.service` is enabled but has never been started.** It is
    `enabled` / `inactive (dead)`. The containers come back after a reboot
@@ -127,17 +138,40 @@ Four things worth knowing that the plan document did not say:
    "localhost only" for both. They are private only because `ufw` denies them.
    The firewall is load-bearing, not defence in depth, for the RoomService API
    and the metrics endpoint. Do not turn `ufw` off to debug something.
-3. **`ufw` allows `30000:40000/udp`.** LiveKit's default ICE port range, left
-   over from before `rtc.udp_port: 7882` was set. Nothing listens there now
-   (`ss -lntup` confirms), so it is an open hole to no process rather than a
-   risk, but it is noise. The installer reproduces it, because this directory's
-   job is to rebuild the box that exists, not to redesign it. Drop it in one
-   command when you next want to tidy: `ufw delete allow 30000:40000/udp`, then
-   delete the line from `install.sh`.
-4. **SSH is open to the world** on 22/tcp, key auth only. The plan says
-   `ufw allow from <your ip> to any port 22`. Reproduced as-is for the same
-   reason: a rebuild that locks you out of the new box at 23:00 is worse than
-   the risk it avoids. Tighten it after the box is up, by hand.
+3. **`ufw` allows `30000:40000/udp`, and it is load-bearing.** An earlier
+   version of this file called it stale, left over from before
+   `rtc.udp_port: 7882` was pinned, and said nothing listened there. That was
+   wrong, and the mistake is worth understanding because the evidence for it
+   looks convincing. `30000:40000` is LiveKit's **TURN relay allocation
+   range**, `turn.relay_range_start` / `turn.relay_range_end`, which default to
+   exactly those numbers and which `livekit.yaml` does not override. LiveKit
+   says so on every boot:
+
+   ```
+   docker logs livekit-livekit-1 | grep 'Starting TURN server'
+   ... "turn.relay_range_start":30000,"turn.relay_range_end":40000 ...
+   ```
+
+   A relay socket exists only while a TURN allocation is live, so `ss -lnup`
+   shows an empty range whenever no cross-NAT client is relaying, which is most
+   of the time. **The empty range is not evidence that the rule is unused.** It
+   is a sampling artefact, and it is what produced the wrong conclusion. The
+   traffic is real and you can see it in the ICE candidates of any relayed
+   participant:
+
+   ```
+   docker logs livekit-livekit-1 | grep -o 'udp relay [0-9.]*:[0-9]*' | sort -u
+   ```
+
+   Deleting the rule would break relayed calls for precisely the users who have
+   no other path to the box. Leave it.
+4. **SSH is key-only and rate-limited**, and open to the world on 22/tcp. See
+   the section below. The plan's `ufw allow from <your ip> to any port 22` is
+   still not done, deliberately: a rebuild that locks you out of the new box at
+   23:00 is worse than the risk it avoids, and with passwords off plus a jail
+   in front, what is left on 22 is noise rather than exposure.
+5. **LiveKit binds 7880 and 6789 on `0.0.0.0`.** This is item 2 above and it is
+   the one real thing still outstanding. See "Known and not yet fixed".
 
 `turn-cert-sync.service` reports `static` rather than `enabled`, which is
 correct: it has no `[Install]` section, and the `.timer` is what is enabled.
@@ -146,6 +180,119 @@ Minor and left alone: `livekit-docker.service` has
 `After=network-online.target` without the matching
 `Wants=network-online.target`, so the ordering is advisory. It does not matter
 while Docker's restart policy is the real boot path.
+
+## SSH: keys only, plus a jail
+
+Hardened 2026-09-07. Before that the box was taking **5,411 failed password
+attempts in 24 hours** and answering every one of them, because
+`/etc/ssh/sshd_config.d/50-cloud-init.conf` contained
+`PasswordAuthentication yes` and quietly beat the `no` in the main
+`sshd_config`. sshd takes the *first* value it sees for a keyword and the
+`Include` of the drop-in directory sits at line 12, above the setting it
+overrides. Reading `sshd_config` told you the opposite of the truth.
+
+**Always check the outcome, never the file:**
+
+```bash
+ssh root@216.238.114.79 'sshd -T | grep -E "^(passwordauthentication|pubkeyauthentication|permitrootlogin) "'
+# passwordauthentication no
+# pubkeyauthentication yes
+# permitrootlogin without-password
+```
+
+`sshd-hardening.conf` lands as `01-pqp-hardening.conf` and wins by sorting
+ahead of the cloud-init file. The number is the mechanism; do not renumber it
+above `50-`. `PermitRootLogin` is untouched and was already key-only.
+
+If you ever change this by hand, reload rather than restart, validate first,
+and prove a *new* connection works before you close the one you have:
+
+```bash
+ssh root@216.238.114.79 'sshd -t && systemctl reload ssh'   # reload keeps sessions
+ssh -o ControlPath=none root@216.238.114.79 'echo still reachable'
+```
+
+A belt-and-braces trick for doing this alone, which is what was used here: arm
+a revert before you touch anything, and disarm it once a fresh connection has
+proved itself.
+
+```bash
+systemd-run --on-active=15min --unit=pqp-sshd-revert-guard \
+  /bin/bash -c 'rm -f /etc/ssh/sshd_config.d/01-pqp-hardening.conf; sshd -t && systemctl reload ssh'
+# ... prove a new connection works ...
+systemctl stop pqp-sshd-revert-guard.timer
+```
+
+**There is exactly one key in `/root/.ssh/authorized_keys`.** With passwords
+off that key is now the only way in, and losing it means a Vultr console
+session or a rebuild. Adding a second one is cheap insurance and is not done
+yet.
+
+`install.sh` refuses to disable password auth when `authorized_keys` is empty,
+which is what stops a fresh-box run from sealing you out of a machine you have
+not put a key on yet.
+
+### fail2ban
+
+`fail2ban-jail-sshd.conf` installs the `sshd` jail: 4 failures in 30 minutes earns
+a week, doubling to a cap of five weeks for repeat offenders.
+
+The one line that matters is the `journalmatch`. fail2ban ships
+
+```
+journalmatch = _SYSTEMD_UNIT=sshd.service + _COMM=sshd
+```
+
+which is right on RHEL and **wrong on Ubuntu**, where the unit is `ssh.service`.
+On this box the journal holds 21,905 lines under `ssh.service` and exactly one
+under `sshd.service`. With the shipped value the jail starts, reports healthy,
+and watches nothing forever. That is the failure mode to check for, and it is
+invisible unless you look at the counters:
+
+```bash
+ssh root@216.238.114.79 'fail2ban-client status sshd'
+```
+
+`Journal matches` must name `ssh.service`, and on a box being knocked on the
+counters must move within a minute or two. `Total failed: 0` an hour after a
+restart means the jail is decorative, not that the internet has gone quiet.
+
+Two things deliberately chosen:
+
+- **`mode = normal`, not `aggressive`.** Aggressive counts ordinary connection
+  closes and would eventually ban an admin on a flaky link. In normal mode a
+  successful key login matches nothing, so key-based access cannot ban itself.
+  `ignoreip` is loopback only for the same reason: nothing else needs it.
+- **The Debian default `nftables` ban action**, left alone rather than switched
+  to the `ufw` action. It writes to its own `inet f2b-table` at hook priority
+  -1 and never touches ufw's ruleset, so a ban is one set element rather than a
+  firewall reload under a live call. The rule is scoped to `tcp dport 22`, so
+  it cannot touch media on any UDP port:
+
+  ```bash
+  ssh root@216.238.114.79 'nft list table inet f2b-table'
+  ```
+
+## Known and not yet fixed
+
+**LiveKit binds 7880 (RoomService API) and 6789 (Prometheus) on `0.0.0.0`.**
+`ufw` is the only thing keeping them private, so the firewall is load-bearing
+rather than defence in depth. Do not turn `ufw` off to debug something.
+
+6789 is the easy half and worth doing: Alloy scrapes it over loopback
+(`tools/sfu-monitoring/config.alloy` points at `localhost:6789`), so binding it
+to `127.0.0.1` costs nothing and removes an unauthenticated metrics endpoint
+from the public interface. LiveKit has no per-listener bind address for it, so
+this means either a `prometheus_port` behind a loopback-only publish or moving
+the container off `network_mode: host`, and **either way it needs a LiveKit
+restart, which hangs up every call in progress**. Not a thing to do while the
+box is carrying traffic. Pair it with the `systemctl start livekit-docker`
+alignment below and spend one quiet hour on both.
+
+7880 is the harder half and should stay as it is for now: Caddy reverse-proxies
+to it on `127.0.0.1:7880`, but LiveKit also needs 7880 reachable for its own
+purposes, and the RoomService API is authenticated by the API key pair. The
+firewall is doing real work there and the change is not obviously safe.
 
 ## Decision: systemd or Docker's restart policy
 

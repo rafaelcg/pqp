@@ -80,8 +80,8 @@ systemctl enable --now unattended-upgrades
 # kernel patch landing a day late. Reboot by hand, see the README.
 
 echo "== firewall"
-# Exactly the rules the production box carries as of 2026-09-07. See the README
-# for why 22 is open to the world and why 30000:40000/udp is here at all.
+# Exactly the rules the production box carries. See the README for why 22 is
+# open to the world.
 ufw default deny incoming
 ufw default allow outgoing
 ufw allow 22/tcp
@@ -91,10 +91,80 @@ ufw allow 7881/tcp
 ufw allow 7882/udp
 ufw allow 3478/udp
 ufw allow 5349/tcp
+# NOT stale, despite rtc.udp_port being pinned to 7882. This is LiveKit's TURN
+# *relay* allocation range, turn.relay_range_start/end, which default to
+# 30000/40000 and which livekit.yaml does not override. Every cross-NAT client
+# that falls back to turn.pqp.gg gets its relayed candidate on a port in here:
+#   docker logs livekit-livekit-1 | grep -o 'udp relay [0-9.]*:[0-9]*'
+# A relay socket only exists while an allocation is live, so `ss -lnup` shows
+# an empty range most of the time. That emptiness is not evidence. Deleting
+# this rule is a way to break relayed calls for exactly the users who have no
+# other path. Confirm against the startup line before you touch it:
+#   docker logs livekit-livekit-1 | grep 'Starting TURN server'
 ufw allow 30000:40000/udp
 # Only enable when it is off. `ufw enable` on a live box reloads every rule,
 # and there is no reason to shake the firewall under a call in progress.
 ufw status | grep -q '^Status: active' || ufw --force enable
+
+echo "== ssh: keys only"
+# Ubuntu ships /etc/ssh/sshd_config.d/50-cloud-init.conf with
+# "PasswordAuthentication yes", which silently overrides the "no" in the main
+# sshd_config: sshd takes the first value it sees for a keyword, and the
+# Include of the drop-in directory comes first. Our file sorts ahead of the
+# cloud-init one and wins the same way. Do not renumber it above 50-.
+#
+# The guard below is the whole reason this section is safe to run unattended
+# during a 23:00 rebuild: no key on disk means no way back in, so we leave
+# password auth alone and say so loudly rather than sealing the box.
+if [[ -s /root/.ssh/authorized_keys ]]; then
+  install -m 0600 "$HERE/sshd-hardening.conf" /etc/ssh/sshd_config.d/01-pqp-hardening.conf
+  # Validate before touching the running daemon, then reload rather than
+  # restart, so sessions in flight (including the one running this script)
+  # survive. `systemctl reload ssh` runs `sshd -t` itself and refuses a bad
+  # config, but check here too so the failure names this script.
+  if sshd -t; then
+    systemctl reload ssh
+    sshd -T | grep -qx 'passwordauthentication no' \
+      && echo "   password auth off, pubkey on" \
+      || echo "   !! sshd -T still reports password auth on, investigate"
+  else
+    rm -f /etc/ssh/sshd_config.d/01-pqp-hardening.conf
+    echo "   !! sshd -t rejected the config, drop-in removed, nothing reloaded" >&2
+    exit 1
+  fi
+else
+  echo "   !! /root/.ssh/authorized_keys is empty or missing."
+  echo "   !! Leaving password authentication ON so this does not lock you out."
+  echo "   !! Add your key, then re-run this script."
+fi
+
+echo "== fail2ban"
+# Not what keeps the box safe (password auth is off above). This is here to
+# stop the several thousand daily knocks from filling the journal and burning
+# CPU on key exchanges that can never succeed.
+#
+# python3-systemd is not optional: the jail below reads the journal, and
+# without the bindings fail2ban fails to initialise the backend and the jail
+# runs watching nothing.
+apt-get install -y fail2ban python3-systemd >/dev/null
+F2B_JAIL=/etc/fail2ban/jail.d/pqp-sshd.local
+# Only restart when the jail actually changed. A restart resets the in-memory
+# counters and re-reads the journal from findtime back, so doing it on every
+# drift check would keep the jail permanently forgetful.
+if ! cmp -s "$HERE/fail2ban-jail-sshd.conf" "$F2B_JAIL"; then
+  install -m 0644 "$HERE/fail2ban-jail-sshd.conf" "$F2B_JAIL"
+  if fail2ban-client -t >/dev/null 2>&1; then
+    systemctl enable fail2ban >/dev/null
+    systemctl restart fail2ban
+  else
+    echo "   !! fail2ban config test failed, not restarting it" >&2
+    fail2ban-client -t || true
+  fi
+else
+  systemctl enable fail2ban >/dev/null
+  systemctl is-active --quiet fail2ban || systemctl start fail2ban
+  echo "   jail unchanged, left running"
+fi
 
 echo "== /opt/livekit"
 mkdir -p "$DEST/certs"
@@ -184,6 +254,11 @@ echo "== state"
 docker compose --project-directory "$DEST" ps
 systemctl is-enabled livekit-docker turn-cert-sync.timer
 systemctl is-active turn-cert-sync.timer
+sshd -T | grep -E '^(passwordauthentication|pubkeyauthentication|permitrootlogin) '
+# "Journal matches" must name ssh.service and the counters must be non-zero
+# within a minute or two on a box that is being knocked on. A jail reporting
+# "Total failed: 0" forever is watching the wrong log, not enjoying the quiet.
+fail2ban-client status sshd || true
 ufw status verbose
 curl -sS -o /dev/null -w "https://${SFU_DOMAIN}/ -> %{http_code}\n" "https://${SFU_DOMAIN}/" || true
 curl -sS -o /dev/null -w "https://${TURN_DOMAIN}/ -> %{http_code}\n" "https://${TURN_DOMAIN}/" || true
