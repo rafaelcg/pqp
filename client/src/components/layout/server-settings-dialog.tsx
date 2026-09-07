@@ -826,8 +826,14 @@ export function ServerSettingsDialog({
                   />
                 )}
 
-              {serverId && isOwner && communitiesEnabled && (
-                <CommunitySettingsSection serverId={serverId} />
+              {/* Manage Server opens the panel; only the owner may tick the
+                  directory switch inside it. The address is the half a
+                  community's moderators actually need. */}
+              {serverId && (isOwner || canManageServer) && communitiesEnabled && (
+                <CommunitySettingsSection
+                  serverId={serverId}
+                  canListPublicly={isOwner}
+                />
               )}
             </>
           )}

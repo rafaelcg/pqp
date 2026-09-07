@@ -36,13 +36,24 @@ import { useTranslation } from "@/lib/i18n";
  * pull the listing. Saying that up front is both honest and the thing that makes
  * a suspension later feel like a rule rather than an ambush.
  *
- * Rendered only when the deployment has communities on — the parent checks the
- * config — and only for the owner, which the server enforces independently.
+ * WHO SEES IT. Anyone with Manage Server, because the public address lives here
+ * and the people who hand out a community's link are its moderators as often as
+ * its owner. The directory switch is still the owner's alone: `canListPublicly`
+ * is false for everybody else, and the server enforces the same split
+ * independently (see the PATCH handler in api/index.ts).
+ *
+ * A NON-OWNER GETS THE SWITCH DISABLED AND A SENTENCE, not a hidden control.
+ * Hiding it would leave an admin unable to see whether the room is listed at
+ * all, which is the first thing you need to know before you edit its page; and
+ * a greyed box with no explanation is the shape of a bug rather than of a rule.
  */
 export function CommunitySettingsSection({
   serverId,
+  canListPublicly,
 }: {
   serverId: string;
+  /** True only for the server's owner. */
+  canListPublicly: boolean;
 }) {
   const { t } = useTranslation();
   const [settings, setSettings] = useState<CommunitySettings | null>(null);
@@ -113,7 +124,12 @@ export function CommunitySettingsSection({
     const typedSlug = slug.trim();
     try {
       const res = await updateCommunitySettings(serverId, {
-        isCommunity: listed,
+        // OMITTED ENTIRELY for a non-owner rather than sent unchanged. The
+        // server refuses only a real change, so sending the value back would
+        // work — but a form that cannot move a field has no business naming it,
+        // and this way an admin's save can never be the write that unlists a
+        // room in a race.
+        ...(canListPublicly ? { isCommunity: listed } : {}),
         // An emptied box means "clear it", which the API spells as explicit
         // null — sending "" would store a blank line the card reserves space for.
         tagline: tagline.trim() === "" ? null : tagline.trim(),
@@ -159,7 +175,7 @@ export function CommunitySettingsSection({
   const remaining = COMMUNITY_TAGLINE_MAX_LENGTH - tagline.trim().length;
   const dirty =
     settings !== null &&
-    (listed !== settings.isCommunity ||
+    ((canListPublicly && listed !== settings.isCommunity) ||
       (tagline.trim() || null) !== settings.tagline ||
       category !== settings.category ||
       (slug.trim() || null) !== settings.slug ||
@@ -199,20 +215,30 @@ export function CommunitySettingsSection({
         </p>
       ) : (
         <div className="space-y-3">
-          <label className="flex items-center gap-2 text-sm text-paper" htmlFor={toggleId}>
-            <input
-              id={toggleId}
-              type="checkbox"
-              checked={listed}
-              disabled={saving}
-              className="h-4 w-4 rounded border-ink-4 bg-ink accent-signal"
-              onChange={(e) => {
-                setListed(e.target.checked);
-                setSaved(false);
-              }}
-            />
-            {t("communities.settings.toggle")}
-          </label>
+          <div className="space-y-1">
+            <label
+              className="flex items-center gap-2 text-sm text-paper"
+              htmlFor={toggleId}
+            >
+              <input
+                id={toggleId}
+                type="checkbox"
+                checked={listed}
+                disabled={saving || !canListPublicly}
+                className="h-4 w-4 rounded border-ink-4 bg-ink accent-signal disabled:opacity-50"
+                onChange={(e) => {
+                  setListed(e.target.checked);
+                  setSaved(false);
+                }}
+              />
+              {t("communities.settings.toggle")}
+            </label>
+            {!canListPublicly && (
+              <p className="text-xs text-paper-muted">
+                {t("communities.settings.listingOwnerOnly")}
+              </p>
+            )}
+          </div>
 
           <div className="space-y-1">
             <label

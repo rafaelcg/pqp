@@ -575,6 +575,7 @@
   "communities.settings.explainer": "Listar esta comunidade coloca ela no diretório público. Qualquer pessoa com conta no pqp acha ela pelo nome ou pela categoria, vê quantos membros tem e entra com um toque, sem convite e sem você aprovar.",
   "communities.settings.explainerModeration": "A sala continua sendo sua: expulsar, banir e canal privado funcionam igual. Mas denúncia sobre comunidade listada vai pra quem cuida do pqp, que pode tirar a listagem do ar.",
   "communities.settings.toggle": "Listar esta comunidade publicamente",
+  "communities.settings.listingOwnerOnly": "Só quem é dono do servidor liga ou desliga a listagem no diretório. O endereço público aqui embaixo você edita normal.",
   "communities.settings.tagline": "Uma linha sobre ela",
   "communities.settings.taglinePlaceholder": "O que rola aqui?",
   "communities.settings.taglineHint": "faltam {count} caracteres",
