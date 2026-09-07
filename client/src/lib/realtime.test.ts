@@ -113,7 +113,7 @@ describe("createRealtimeTransport", () => {
     expect(JSON.parse(sockets[0]!.sent[0]!)).toEqual({
       type: "auth",
       token: "token-1",
-      caps: ["voice-roster-delta"],
+      caps: ["voice-roster-delta", "presence-delta"],
     });
   });
 

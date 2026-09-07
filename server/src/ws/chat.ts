@@ -58,7 +58,12 @@ import {
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
 import { canAccessChannel } from "../services/users.js";
-import { forEachAuthenticatedSocket } from "./sockets.js";
+import {
+  countAuthenticatedSockets,
+  forEachAuthenticatedSocket,
+  SOCKET_CAPS,
+  socketHasCap,
+} from "./sockets.js";
 import {
   coalesceWindowFor,
   createCoalescer,
@@ -170,6 +175,105 @@ interface PresenceUser {
 }
 
 /**
+ * WHAT EACH CHANNEL'S VIEWERS WERE LAST TOLD, so the next frame can say only
+ * what changed. channelId → userId → the entry as it went out.
+ *
+ * Deliberately a diff against the last frame rather than a queue of events,
+ * which is where this departs from the voice roster's machinery while keeping
+ * every one of its guarantees. Three reasons, and they are all about this
+ * frame's shape rather than a preference:
+ *
+ *  - presence has no events. It is an INDEX (`channelPresence`) that callers
+ *    mutate and then ask to be re-sent; there is nothing to enqueue without
+ *    inventing a parallel bookkeeping that could disagree with the index. The
+ *    voice roster had a queue already, for the cluster bus.
+ *  - it makes `size` free and always right, because both sides of the diff are
+ *    the same list the frame is built from — the failure the roster guards
+ *    against by reading the room and the queue in one synchronous stretch
+ *    cannot arise here at all.
+ *  - it covers the CLUSTER path for nothing. `sendPresence` merges other
+ *    instances' contributions before this runs, so a viewer who arrived on
+ *    another machine is an ordinary diff entry. The roster had to switch
+ *    deltas off under the registry precisely because there the rows are the
+ *    truth and the local queue is only half the story.
+ *
+ * What a receiver sees is byte-identical in contract either way: same `seq`
+ * rule, same `size` check, same periodic keyframe, so there is one convergence
+ * argument in this codebase and not two.
+ *
+ * Dropped the moment a channel is announced empty, with its sequence.
+ */
+const lastPresenceSent = new Map<string, Map<string, PresenceUser>>();
+
+/** Where each channel is in its presence sequence: the last number sent. */
+const presenceSeq = new Map<string, number>();
+
+/** When this process last sent a channel's whole viewer list. */
+const lastPresenceKeyframeAt = new Map<string, number>();
+
+/**
+ * How long a channel may be described only by deltas before the whole viewer
+ * list goes out again.
+ *
+ * THIS IS THE CONVERGENCE GUARANTEE, and it is the server's job for the same
+ * reason it is on the voice roster: a client that detects a gap could ask for
+ * a resync, but then a wrong or hostile client decides when the server does
+ * expensive work, and the interesting failure — a socket whose keyframe was
+ * dropped for backpressure and which therefore has no baseline at all — is one
+ * the client cannot distinguish from a quiet channel. A periodic snapshot
+ * answers every case with one mechanism, so the worst staleness any presence
+ * bug can produce is bounded by this constant, by construction.
+ *
+ * Ten seconds, matching `ROSTER_KEYFRAME_MS`. Same arithmetic: the snapshot is
+ * the only remaining cost and the deltas carrying the actual news are orders
+ * of magnitude smaller, so halving it would double the cost to buy staleness
+ * nobody can perceive in a "12 people here" subtitle.
+ */
+export const PRESENCE_KEYFRAME_MS = 10_000;
+
+/**
+ * Presence frames written since boot, split by kind, counted per SOCKET.
+ *
+ * Read by `GET /api/admin/metrics` and nothing else. The ratio is the only
+ * thing that says the optimisation is running in production rather than merely
+ * deployed: a deploy where every frame is a snapshot because no client
+ * negotiated the capability is a silent no-op that looks exactly like a
+ * healthy one from the server's side (CLAUDE.md pitfall 9), so the denominator
+ * ships with the numerator.
+ */
+const presenceFramesSent = { deltas: 0, snapshots: 0 };
+
+/** What the presence fan-out is doing since boot, for the operator dashboard. */
+export function getPresenceFanoutStats(): {
+  deltas: number;
+  snapshots: number;
+  sockets: number;
+  socketsOnDeltas: number;
+} {
+  const census = countAuthenticatedSockets(SOCKET_CAPS.presenceDelta);
+  return {
+    deltas: presenceFramesSent.deltas,
+    snapshots: presenceFramesSent.snapshots,
+    sockets: census.sockets,
+    socketsOnDeltas: census.withCap,
+  };
+}
+
+/** Test seam: forget every presence sequence, baseline and keyframe clock. */
+export function resetPresenceSequences(): void {
+  lastPresenceSent.clear();
+  presenceSeq.clear();
+  lastPresenceKeyframeAt.clear();
+  presenceFramesSent.deltas = 0;
+  presenceFramesSent.snapshots = 0;
+}
+
+/** Two entries describe the same person the same way. */
+function samePresenceUser(a: PresenceUser, b: PresenceUser): boolean {
+  return a.name === b.name && a.avatarUrl === b.avatarUrl;
+}
+
+/**
  * What *other* instances have told us they are showing this channel to:
  * channelId → instance id → its contribution.
  *
@@ -242,6 +346,16 @@ function localPresenceUsers(channelId: string): PresenceUser[] {
 function sendPresence(channelId: string): void {
   const present = channelPresence.get(channelId);
   if (!present || present.size === 0) {
+    // Nobody left to tell. Forget the sequence and the baseline with it: the
+    // next call in this channel restarts at 1 and opens with a keyframe, which
+    // is what a client holding nothing is able to apply. Leaving them behind
+    // would work too (a stale diff against a room nobody is in resolves to a
+    // no-op on the new viewers' baseline) but it would be correct by accident
+    // rather than by construction, and it would leak a map per channel ever
+    // opened.
+    presenceSeq.delete(channelId);
+    lastPresenceSent.delete(channelId);
+    lastPresenceKeyframeAt.delete(channelId);
     return;
   }
 
@@ -263,19 +377,162 @@ function sendPresence(channelId: string): void {
     }
   }
 
-  const payload = encodeFrame({
-    type: "presence-update",
-    channelId,
-    users: [...byUser.values()],
-  } satisfies ChatServerMessage);
+  const users = [...byUser.values()];
+
+  // --- sequence, baseline and the choice of frame -------------------------
+  //
+  // All synchronous, and deliberately so: nothing between reading the index
+  // above and writing the baseline below may await, or a viewer arriving in
+  // the gap would be counted in one and not the other, and every receiver
+  // would compute a size that disagrees with the server's.
+  const seq = (presenceSeq.get(channelId) ?? 0) + 1;
+  const previous = lastPresenceSent.get(channelId);
+  const now = Date.now();
+  const keyframeDue =
+    !previous ||
+    now - (lastPresenceKeyframeAt.get(channelId) ?? 0) >= PRESENCE_KEYFRAME_MS;
+
+  const delta = keyframeDue ? null : diffPresence(previous, byUser);
+  if (!delta) {
+    lastPresenceKeyframeAt.set(channelId, now);
+  }
+  if (users.length === 0) {
+    // The channel is empty of *visible* viewers (everyone left, or everyone
+    // still here is invisible). Forget the sequence so the next occupied run
+    // restarts at 1, which is exactly what a client holding nothing expects,
+    // and forget the baseline so the next frame is a keyframe.
+    presenceSeq.delete(channelId);
+    lastPresenceSent.delete(channelId);
+    lastPresenceKeyframeAt.delete(channelId);
+  } else {
+    presenceSeq.set(channelId, seq);
+    lastPresenceSent.set(channelId, byUser);
+  }
+
+  let snapshot: Buffer | null = null;
+  const fullFrame = () => {
+    snapshot ??= encodeFrame({
+      type: "presence-update",
+      channelId,
+      users,
+      seq,
+    } satisfies ChatServerMessage);
+    return snapshot;
+  };
+  const deltaFrame = delta
+    ? encodeFrame({
+        type: "presence-delta",
+        channelId,
+        seq,
+        size: users.length,
+        ...(delta.joined.length > 0 ? { joined: delta.joined } : {}),
+        ...(delta.left.length > 0 ? { left: delta.left } : {}),
+      } satisfies ChatServerMessage)
+    : null;
 
   // The recipients of a channel's presence are exactly the people present in
   // it, so this walks the same index the payload was built from rather than
-  // every socket on the process. Droppable: a viewer list is a snapshot the
-  // next one supersedes.
+  // every socket on the process.
+  //
+  // A SNAPSHOT IS DROPPABLE and A DELTA IS NOT, which is the one asymmetry
+  // here worth stating. A viewer list is superseded by the next one, so a
+  // socket already holding a megabyte is better served by the next snapshot
+  // than by a late copy of this one; deltas COMPOSE rather than supersede, so
+  // dropping one would silently corrupt every later one. Insisting on sending
+  // them is safe because they are small by construction (what changed in one
+  // window), and a socket far enough behind to worry about is reaped by the
+  // heartbeat inside a minute. A dropped snapshot is not a hole either: the
+  // receiver's sequence stops advancing, so the next delta reads as a gap and
+  // it waits for the following keyframe rather than patching a stale list.
   for (const conn of present) {
-    sendEncodedDroppable(conn.socket, payload);
+    if (deltaFrame && socketHasCap(conn.socket, SOCKET_CAPS.presenceDelta)) {
+      sendEncoded(conn.socket, deltaFrame);
+      presenceFramesSent.deltas += 1;
+      continue;
+    }
+    if (sendEncodedDroppable(conn.socket, fullFrame())) {
+      presenceFramesSent.snapshots += 1;
+    }
   }
+}
+
+/**
+ * What changed between the list a channel's viewers were last sent and the
+ * list they are about to be sent, or null when there is no baseline to diff
+ * against.
+ *
+ * `joined` is "present with this state", so it carries both genuine arrivals
+ * and anybody whose name or picture changed — one verb, because the receiver's
+ * operation for both is the same replace-by-id.
+ */
+function diffPresence(
+  previous: ReadonlyMap<string, PresenceUser>,
+  next: ReadonlyMap<string, PresenceUser>,
+): { joined: PresenceUser[]; left: string[] } | null {
+  const joined: PresenceUser[] = [];
+  const left: string[] = [];
+  for (const [id, user] of next) {
+    const held = previous.get(id);
+    if (!held || !samePresenceUser(held, user)) {
+      joined.push(user);
+    }
+  }
+  for (const id of previous.keys()) {
+    if (!next.has(id)) {
+      left.push(id);
+    }
+  }
+  return { joined, left };
+}
+
+/**
+ * The whole viewer list, to one socket, because it has no baseline for this
+ * channel and every frame after this one may be a delta.
+ *
+ * The joiner's own arrival is what triggers the coalesced fan-out, and that
+ * fan-out is a delta for everybody who was already here — but this socket held
+ * nothing, so the same frame would read as a gap and it would sit on a wrong
+ * count until the next keyframe. Sending the baseline here costs one frame per
+ * channel opened, against a snapshot every ten seconds to everyone, and it is
+ * the same trick `sendAllVoiceRosters` plays for a freshly authenticated
+ * socket.
+ *
+ * `seq` is deliberately the last sequence SENT rather than a new one: the
+ * coalesced delta that reports this arrival will therefore be `seq + 1` and be
+ * accepted, and re-applying an arrival this snapshot already contains is a
+ * no-op because every delta entry is an absolute statement about one person.
+ *
+ * Only for sockets that negotiated deltas. Everything else receives the
+ * coalesced whole list exactly as it always did, and needs no baseline.
+ */
+function sendPresenceBaseline(conn: ChatConnection, channelId: string): void {
+  if (!socketHasCap(conn.socket, SOCKET_CAPS.presenceDelta)) {
+    return;
+  }
+  const byUser = new Map<string, PresenceUser>(
+    localPresenceUsers(channelId).map((user) => [user.id, user]),
+  );
+  if (isBusEnabled()) {
+    const cutoff = Date.now() - PRESENCE_TTL_MS;
+    for (const contribution of remotePresence.get(channelId)?.values() ?? []) {
+      if (contribution.at < cutoff) {
+        continue;
+      }
+      for (const user of contribution.users) {
+        byUser.set(user.id, user);
+      }
+    }
+  }
+  sendEncoded(
+    conn.socket,
+    encodeFrame({
+      type: "presence-update",
+      channelId,
+      users: [...byUser.values()],
+      seq: presenceSeq.get(channelId) ?? 0,
+    } satisfies ChatServerMessage),
+  );
+  presenceFramesSent.snapshots += 1;
 }
 
 /**
@@ -338,6 +595,12 @@ function joinChannel(conn: ChatConnection, channelId: string): void {
   present.add(conn);
   channelPresence.set(channelId, present);
   conn.channelId = channelId;
+  // Entering the index is exactly the moment this socket starts receiving the
+  // channel's presence, and therefore the moment it needs something to apply
+  // deltas to. Here rather than at the two `join-channel` handlers because
+  // this helper is the ONLY way in, silent joins included, and a recipient
+  // with no baseline would sit on a wrong count until the next keyframe.
+  sendPresenceBaseline(conn, channelId);
 }
 
 function leaveChannel(conn: ChatConnection) {
@@ -372,6 +635,10 @@ function joinThread(conn: ChatConnection, channelId: string): void {
   present.add(conn);
   channelPresence.set(channelId, present);
   conn.threadChannelId = channelId;
+  // Same reason as `joinChannel`. Harmless when the primary slot already names
+  // this channel: a second baseline is one more absolute statement about the
+  // same list, and the sequence it carries is the same one.
+  sendPresenceBaseline(conn, channelId);
 }
 
 function leaveThread(conn: ChatConnection): void {

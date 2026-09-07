@@ -34,8 +34,11 @@
  *   pnpm --filter @pqp/server exec tsx scripts/load-fanout.ts --spawn \
  *     --n 200 --voice 150 --seconds 30 --json /tmp/after.json
  *
- * `--caps 0` makes every socket look like a client built before roster deltas
- * existed, so a before/after comparison runs on one binary.
+ * `--caps 0` makes every socket look like a client built before any of the
+ * delta frames existed, so a before/after comparison runs on one binary rather
+ * than on two deploys that differ in a hundred other ways. `--caps <a,b>`
+ * turns on named ones only, which is how a saving gets attributed to the
+ * change that produced it instead of to the pair.
  *
  * `--db <url>` (default `$DATABASE_URL`) reports exact statement counts from
  * `pg_stat_statements` when that extension is installed.
@@ -76,6 +79,18 @@ import { WebSocket } from "ws";
 
 type Mode = "steady" | "join";
 
+/**
+ * Every wire capability a current client declares, which is what the harness
+ * declares by default so a plain run measures what a real deploy costs.
+ *
+ * Kept as a literal rather than imported from `src/`: this script is not part
+ * of the API (nothing here is imported by `src/`), and a hard-coded list is
+ * also the honest one — the point of a `--caps 0` run is to reproduce a client
+ * that does NOT track the server, so a list that silently followed the server
+ * would defeat the measurement it exists for.
+ */
+const ALL_CAPS = ["voice-roster-delta", "presence-delta"] as const;
+
 interface Options {
   /**
    * `steady` keeps the two phases above (connect, optional stampede, then
@@ -100,8 +115,18 @@ interface Options {
   voice: number;
   /** A join that has not been welcomed in this long counts as failed. */
   joinTimeoutMs: number;
-  /** Negotiate `voice-roster-delta` at auth. 0 measures a client that cannot. */
-  caps: boolean;
+  /**
+   * Wire capabilities every socket declares at `auth`.
+   *
+   * `--caps 0` is the empty set: a client built before any of this, which is
+   * what makes a before/after comparison run on ONE binary rather than on two
+   * deploys that differ in a hundred other ways. A comma list isolates one
+   * capability at a time (`--caps presence-delta`), which is the only way to
+   * attribute a saving to the change that produced it — with both on, the
+   * roster's saving and presence's saving are one number and neither is
+   * measured.
+   */
+  caps: string[];
   /** Write the run's numbers here as JSON, for before/after comparison. */
   json: string;
   /** Postgres URL; enables exact per-statement counts via pg_stat_statements. */
@@ -150,7 +175,7 @@ function parseArgs(argv: string[]): Options {
     prefix: `load${Date.now().toString(36).slice(-4)}`,
     voice: -1,
     joinTimeoutMs: 45_000,
-    caps: true,
+    caps: [...ALL_CAPS],
     json: "",
     db: process.env.DATABASE_URL ?? "",
     secret: process.env.LOAD_TEST_TOKEN || DEV_TOKEN,
@@ -244,9 +269,17 @@ function parseArgs(argv: string[]): Options {
       case "--no-bootstrap":
         opts.bootstrap = false;
         break;
-      case "--caps":
-        opts.caps = next() !== "0";
+      case "--caps": {
+        const raw = next();
+        opts.caps =
+          raw === "0"
+            ? []
+            : raw
+                .split(",")
+                .map((cap) => cap.trim())
+                .filter((cap) => cap.length > 0);
         break;
+      }
       case "--json":
         opts.json = next();
         break;
@@ -465,7 +498,7 @@ async function connectClient(
   index: number,
   prefix: string,
   setup: Setup,
-  caps: boolean,
+  caps: readonly string[],
   joinVoice: boolean,
 ): Promise<Client> {
   const token = identityToken(`${prefix}-${index}`);
@@ -584,7 +617,7 @@ async function connectClient(
       // Per-socket capability negotiation, exactly as the SPA does it. With
       // `--caps 0` this socket is an old build and keeps receiving whole
       // rosters, which is what makes a before/after run possible on one binary.
-      ...(caps ? { caps: ["voice-roster-delta"] } : {}),
+      ...(caps.length > 0 ? { caps: [...caps] } : {}),
     }),
   );
   await ready;
@@ -1170,11 +1203,12 @@ async function arrive(
         JSON.stringify({
           type: "auth",
           token,
-          // Same per-socket negotiation `connectClient` does. A harness that
-          // stays silent here keeps receiving whole rosters and measures the
-          // server as it was before roster deltas, which is a real result
-          // only when `--caps 0` asked for it.
-          ...(opts.caps ? { caps: ["voice-roster-delta"] } : {}),
+          // Same per-socket negotiation `connectClient` does, and the same
+          // list, so the two modes cannot measure different wires. A harness
+          // that stays silent here keeps receiving whole rosters and whole
+          // viewer lists, which is a real result only when `--caps 0` asked
+          // for it.
+          ...(opts.caps.length > 0 ? { caps: [...opts.caps] } : {}),
         }),
       );
     });
@@ -1981,7 +2015,7 @@ async function main(): Promise<void> {
   if (stampedeReport) {
     const s = stampedeReport;
     console.log(
-      `=== STAMPEDE (${s.joiners} joins at once, ${clients.length} sockets, roster deltas ${opts.caps ? "on" : "off"}) ===`,
+      `=== STAMPEDE (${s.joiners} joins at once, ${clients.length} sockets, caps ${opts.caps.length > 0 ? opts.caps.join("+") : "none"}) ===`,
     );
     console.log(
       `  welcomed ${s.welcomed}/${s.joiners}   refused ${s.refused}   timed out ${s.timedOut}   in ${s.elapsedSeconds}s`,
@@ -2031,7 +2065,8 @@ async function main(): Promise<void> {
       opts.json,
       `${JSON.stringify(
         {
-          label: opts.caps ? "roster-deltas" : "full-rosters",
+          label: opts.caps.length > 0 ? opts.caps.join("+") : "no-caps",
+          caps: opts.caps,
           clients: clients.length,
           inVoice,
           stampede: stampedeReport,

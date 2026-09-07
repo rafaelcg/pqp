@@ -4,6 +4,7 @@ import { runtimeSnapshot, type RuntimeMetrics } from "../lib/runtime.js";
 import { checkReady, type ReadyReport } from "./ready.js";
 import { readSfuStats, type SfuStats } from "../voice/sfu-stats.js";
 import { getVoiceActivitySnapshot } from "../ws/voice.js";
+import { getPresenceFanoutStats } from "../ws/chat.js";
 import {
   acquisitionReport,
   retentionBySource,
@@ -108,6 +109,22 @@ export interface AdminMetrics {
   distinctSenders24h: number;
   activeTextChannels24h: number;
   channels: { text: number; voice: number; category: number; thread: number };
+  /**
+   * What the channel-presence fan-out is doing since the last deploy: frames
+   * that went out as a delta against frames that went out as a whole viewer
+   * list, and how many connected sockets asked for deltas at all.
+   *
+   * Same pair, and the same reasoning, as `voice.roster`. The denominator is
+   * the half that distinguishes "the optimisation is running" from "no client
+   * negotiated it and every frame is still a whole list", which look identical
+   * from the server's side.
+   */
+  presence: {
+    deltas: number;
+    snapshots: number;
+    sockets: number;
+    socketsOnDeltas: number;
+  };
   voice: {
     activeRooms: number;
     participants: number;
@@ -719,6 +736,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     distinctSenders24h: Number(m?.senders ?? 0),
     activeTextChannels24h: Number(m?.active_text_channels ?? 0),
     channels: channelCounts,
+    presence: getPresenceFanoutStats(),
     voice: {
       activeRooms: voice.activeRooms,
       participants: voice.participants,
