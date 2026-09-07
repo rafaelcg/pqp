@@ -27,13 +27,15 @@ TURN_DOMAIN="${TURN_DOMAIN:-turn.pqp.gg}"
 ACME_EMAIL="${ACME_EMAIL:-rafaelcg@gmail.com}"
 
 render() { # render <template> <destination> <mode>
+  local tmp
+  tmp="$(mktemp)"
   sed \
     -e "s|__SFU_DOMAIN__|${SFU_DOMAIN}|g" \
     -e "s|__TURN_DOMAIN__|${TURN_DOMAIN}|g" \
     -e "s|__ACME_EMAIL__|${ACME_EMAIL}|g" \
-    "$1" >"$2.tmp"
-  install -m "$3" "$2.tmp" "$2"
-  rm -f "$2.tmp"
+    "$1" >"$tmp"
+  install -m "$3" "$tmp" "$2"
+  rm -f "$tmp"
 }
 
 echo "== packages"
@@ -80,8 +82,8 @@ systemctl enable --now unattended-upgrades
 echo "== firewall"
 # Exactly the rules the production box carries as of 2026-09-07. See the README
 # for why 22 is open to the world and why 30000:40000/udp is here at all.
-ufw --force default deny incoming
-ufw --force default allow outgoing
+ufw default deny incoming
+ufw default allow outgoing
 ufw allow 22/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
@@ -90,7 +92,9 @@ ufw allow 7882/udp
 ufw allow 3478/udp
 ufw allow 5349/tcp
 ufw allow 30000:40000/udp
-ufw --force enable
+# Only enable when it is off. `ufw enable` on a live box reloads every rule,
+# and there is no reason to shake the firewall under a call in progress.
+ufw status | grep -q '^Status: active' || ufw --force enable
 
 echo "== /opt/livekit"
 mkdir -p "$DEST/certs"
@@ -115,8 +119,8 @@ if [[ -z "$KEY" || -z "$SECRET" ]]; then
 fi
 if [[ -z "$KEY" || -z "$SECRET" ]]; then
   echo "   no key pair given and none on disk; generating one"
-  docker run --rm livekit/livekit-server generate-keys | tee "$DEST/keys.txt"
-  chmod 0600 "$DEST/keys.txt"
+  ( umask 077; docker run --rm livekit/livekit-server generate-keys >"$DEST/keys.txt" )
+  cat "$DEST/keys.txt"
   KEY=$(awk -F': *' '/API Key/{print $2}' "$DEST/keys.txt" | tr -d '[:space:]')
   SECRET=$(awk -F': *' '/API Secret/{print $2}' "$DEST/keys.txt" | tr -d '[:space:]')
   echo "   !! set these three on Fly before this box can serve production:"
@@ -161,9 +165,9 @@ else
 fi
 
 echo "== monitoring"
-if [[ -x "$HERE/../sfu-monitoring/install.sh" ]]; then
+if [[ -f "$HERE/../sfu-monitoring/install.sh" ]]; then
   bash "$HERE/../sfu-monitoring/install.sh"
-elif [[ -x /opt/sfu-monitoring/install.sh ]]; then
+elif [[ -f /opt/sfu-monitoring/install.sh ]]; then
   bash /opt/sfu-monitoring/install.sh
 else
   echo "   tools/sfu-monitoring not next to this script; copy it over and run its install.sh"
