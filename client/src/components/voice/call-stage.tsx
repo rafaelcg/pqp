@@ -2155,6 +2155,12 @@ function CallControls({
                 : t("voice.control.hideCursorDetail")
             }
           >
+            {/* KEEP THE LABEL SHORT AND FREE OF COMMON VERBS. A tooltip label
+                becomes the control's accessible name, and Playwright's
+                `getByRole("button", { name })` matches a name by SUBSTRING, so
+                an English label reading "Leave your mouse out of what you
+                share" made every `name: "Leave"` in the suite ambiguous and
+                took the hang-up button down with it. */}
             <button
               type="button"
               data-testid="share-cursor-toggle"
