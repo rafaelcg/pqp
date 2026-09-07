@@ -2,7 +2,7 @@ import type { WebSocket } from "ws";
 import { CHAT_CLIENT_MESSAGE_TYPES } from "@pqp/shared";
 import { DEV_AUTH_TOKEN, isDevAuthBypassEnabled, resolveAuthUser } from "../auth/clerk.js";
 import { logEvent, nextConnectionId } from "../lib/log.js";
-import { createRateLimiter } from "../lib/rate-limit.js";
+import { createRateLimiter, limitFromEnv } from "../lib/rate-limit.js";
 import { handleChatMessage } from "./chat.js";
 import {
   deleteAuthenticatedSocket,
@@ -85,10 +85,17 @@ const VOICE_MESSAGE_TYPES = new Set([
  * which behind a proxy without `TRUST_PROXY` is shared by every client — so it
  * is deliberately coarse. The per-user limits in the chat and voice handlers do
  * the real work.
+ *
+ * Tunable, defaults unchanged, for the measurement reason spelled out on
+ * `anonLimiter` in api/index.ts: every client of a load harness arrives from
+ * one address and sends three frames on arrival (`auth`, `join-channel`,
+ * `join-voice-room`), so at the default 200/s this bucket caps the *harness* at
+ * roughly 66 arrivals a second and closes the rest with 4429. Leaving it there
+ * measures this line rather than the join path. See docs/STAGING.md.
  */
 const socketLimiter = createRateLimiter({
-  capacity: 600,
-  refillPerSecond: 200,
+  capacity: limitFromEnv("RATE_LIMIT_SOCKET_CAPACITY", 600),
+  refillPerSecond: limitFromEnv("RATE_LIMIT_SOCKET_REFILL", 200),
 });
 
 /** Sockets that have not answered our last ping. */
