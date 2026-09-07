@@ -189,6 +189,16 @@ class VoiceController(
     private val peerMedia = java.util.concurrent.ConcurrentHashMap<String, PeerMediaState>()
 
     /**
+     * The baseline every `voice-roster-delta` is applied to, and the sequence
+     * that says whether it may be applied at all. Written only by
+     * [onRoster] and [onRosterDelta]; forgotten whenever this device's
+     * relationship to a room changes under it (join, leave, socket drop),
+     * because a sequence held across one of those is a number the server no
+     * longer shares.
+     */
+    private val rosterTracker = VoiceRosterTracker()
+
+    /**
      * The media half of the current call, and it changes with the room.
      *
      * A `var` because the server decides a room's transport and pins it, so
@@ -409,6 +419,11 @@ class VoiceController(
         wantedChannel = channelId to channelName
         needsRejoin = false
         peerMedia.clear()
+        // A new room, or the same room rebuilt after a drop. Either way the
+        // sequence this device was following belongs to the call it is
+        // leaving, and `welcome` carries no sequence of its own: the first
+        // full roster after the join is what supplies the next baseline.
+        rosterTracker.forget()
         _state.value = VoiceState(
             channelId = channelId,
             channelName = channelName,
@@ -685,6 +700,7 @@ class VoiceController(
                 "peer-updated" -> onPeerUpdated(frame)
                 "peer-left" -> onPeerLeft(frame)
                 "voice-roster" -> onRoster(frame)
+                "voice-roster-delta" -> onRosterDelta(frame)
                 "voice-speak-changed" -> onSpeakChanged(frame)
                 "voice-room-full" -> onRefused(frame, Refusal.RoomFull)
                 "voice-transport-unsupported" -> onRefused(frame, Refusal.TransportUnsupported)
@@ -759,6 +775,11 @@ class VoiceController(
         resumePeerId = null
         resumeToken = null
         peerMedia.clear()
+        // The socket is what carried the sequence, and a fresh one may land on
+        // a server process that restarted its numbering at 1. Holding the old
+        // number would refuse every delta of the rebuilt call until a keyframe;
+        // holding no number accepts the first one it is offered.
+        rosterTracker.forget()
         _remoteScreens.value = emptyMap()
         _remoteCameras.value = emptyMap()
         // `engine.stop` released the capture, so the service must stop
@@ -924,8 +945,49 @@ class VoiceController(
     }
 
     private fun onRoster(frame: JsonObject) {
-        if (frame.str("voiceChannelId") != _state.value.channelId) return
-        absorbRoster(frame.participants("participants"))
+        val channelId = frame.str("voiceChannelId") ?: return
+        if (channelId != _state.value.channelId) return
+        // Recorded even though the participants are used verbatim: a snapshot
+        // is the baseline every following delta is measured against, and its
+        // `seq` is the number they have to follow on from.
+        absorbRoster(
+            rosterTracker.snapshot(
+                channelId,
+                frame.participants("participants"),
+                frame.int("seq"),
+            ),
+        )
+    }
+
+    /**
+     * What changed in the room, rather than the whole room.
+     *
+     * Only ever sent to a socket that asked for it on `auth`
+     * ([RealtimeClient.WIRE_CAPS]), and applied only when [VoiceRosterTracker]
+     * says the sequence and the size both line up. A refused delta is not an
+     * error and is deliberately silent about the participant list: it leaves
+     * everything exactly as it was and lets the server's next full roster,
+     * which it sends every ~10s for precisely this purpose, replace the state
+     * wholesale.
+     *
+     * The result goes through [absorbRoster] like any other roster, so the
+     * moderator mutes, the camera stream ids and the screen bookkeeping cannot
+     * drift between a delta and a snapshot: there is one code path for both.
+     */
+    private fun onRosterDelta(frame: JsonObject) {
+        val channelId = frame.str("voiceChannelId") ?: return
+        if (channelId != _state.value.channelId) return
+        val seq = frame.int("seq") ?: return
+        val size = frame.int("size") ?: return
+        val participants = rosterTracker.delta(
+            channelId = channelId,
+            seq = seq,
+            size = size,
+            joined = frame.participants("joined"),
+            updated = frame.participants("updated"),
+            left = frame.peerIds("left"),
+        ) ?: return
+        absorbRoster(participants)
     }
 
     /**
@@ -1144,6 +1206,7 @@ class VoiceController(
         resumePeerId = null
         resumeToken = null
         peerMedia.clear()
+        rosterTracker.forget()
         _remoteScreens.value = emptyMap()
         _remoteCameras.value = emptyMap()
         releaseAudioFocus()
@@ -1156,6 +1219,14 @@ class VoiceController(
     private fun JsonObject.participant(key: String): VoiceParticipant? = runCatching {
         PqpJson.decodeFromJsonElement(VoiceParticipant.serializer(), this[key]!!.jsonObject)
     }.getOrNull()
+
+    private fun JsonObject.int(key: String): Int? =
+        (this[key] as? JsonPrimitive)?.intOrNull
+
+    /** `voice-roster-delta.left`, which is peer ids and not participants. */
+    private fun JsonObject.peerIds(key: String): List<String> = runCatching {
+        this[key]!!.jsonArray.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+    }.getOrDefault(emptyList())
 
     private fun JsonObject.participants(key: String): List<VoiceParticipant> = runCatching {
         this[key]!!.jsonArray.mapNotNull { element ->

@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -249,13 +251,7 @@ class RealtimeClient(
                 // `Authorization` header on this socket; a socket that says
                 // anything else first is closed 4401.
                 webSocket.send(
-                    PqpJson.encodeToString(
-                        JsonObject.serializer(),
-                        buildJsonObject {
-                            put("type", "auth")
-                            put("token", token)
-                        },
-                    ),
+                    PqpJson.encodeToString(JsonObject.serializer(), authFrame(token)),
                 )
             }
 
@@ -436,6 +432,46 @@ class RealtimeClient(
 
     companion object {
         private const val TAG = "pqp.realtime"
+
+        /**
+         * OPTIONAL WIRE FEATURES THIS BUILD UNDERSTANDS, declared on `auth`.
+         *
+         * The server keeps sending the old frames to anything that does not
+         * ask, which is the only reason a wire change can ship at all while
+         * two app stores and a packaged desktop shell update on their own
+         * schedules. An entry here is a promise about THIS build, so it is
+         * added alongside the handler for the frame and never before it.
+         *
+         * `voice-roster-delta`: send what changed in a voice room instead of
+         * the whole room. Handled by [gg.pqp.app.voice.VoiceRosterTracker] and
+         * `VoiceController.onRosterDelta`; the convergence rule it has to obey
+         * is written on `voiceRosterDeltaMessageSchema` in `@pqp/shared`. The
+         * web client declares the identical string in
+         * `client/src/lib/realtime.ts`, and the server reads it in
+         * `server/src/ws/sockets.ts`.
+         */
+        val WIRE_CAPS = listOf("voice-roster-delta")
+
+        /**
+         * The handshake, as a value rather than as a side effect.
+         *
+         * Pulled out of `onOpen` so a test can read what this build actually
+         * declares. A capability the app can apply but forgets to ask for
+         * costs nothing visible and shows up only as a phone quietly paying
+         * for frames it did not need, which is the failure mode this whole
+         * change exists to remove: measuring it from outside is impossible,
+         * so it is pinned from inside.
+         */
+        internal fun authFrame(token: String): JsonObject = buildJsonObject {
+            put("type", "auth")
+            put("token", token)
+            // Declared on the handshake and nowhere else: the server decides
+            // per socket which frames this build gets, so a wire feature can
+            // ship without waiting for the Play Store. Unknown entries are
+            // ignored by the server, and an absent array means "none of them",
+            // which is what every build before this one said.
+            put("caps", buildJsonArray { WIRE_CAPS.forEach { add(JsonPrimitive(it)) } })
+        }
 
         /**
          * Whether a failed send should tear the socket down, or wait.

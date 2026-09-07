@@ -1,10 +1,13 @@
 package gg.pqp.app.protocol
 
 import gg.pqp.app.core.DevTokenProvider
+import gg.pqp.app.core.RealtimeClient
 import gg.pqp.app.core.VoiceLeaveBeacon
 import gg.pqp.app.core.VoiceSessionRequest
 import gg.pqp.app.core.VoiceSessionResponse
 import kotlinx.serialization.descriptors.elementNames
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -142,6 +145,12 @@ class WireProtocolTest {
             "peer-updated",
             "peer-left",
             "voice-roster",
+            // The compact roster. Losing this branch does not break the call:
+            // the server keeps sending whole rosters to anything that does not
+            // negotiate the capability. It breaks the phone's data bill, which
+            // is invisible from here, so the branch is named rather than left
+            // to whoever notices.
+            "voice-roster-delta",
             "voice-room-full",
             "voice-transport-unsupported",
             // The mid-call SPEAK revoke. In a mesh room this client is the
@@ -364,6 +373,77 @@ class WireProtocolTest {
         assertTrue(
             "voiceTransportKindFor no longer recognises the \"livekit\" transport",
             kinds.contains(""""livekit" -> VoiceTransportKind.LiveKit"""),
+        )
+    }
+
+    /**
+     * THE CAPABILITY THIS BUILD ASKS FOR, against the two places that answer.
+     *
+     * `voice-roster-delta` is opt-in per socket: the server sends whole
+     * rosters to anything that does not declare it, so getting the string
+     * wrong, or dropping the array from the handshake, produces no error
+     * anywhere. The app carries on working and the phone quietly keeps paying
+     * for ~99 kB frames it does not need. That is precisely the shape of
+     * CLAUDE.md pitfall 9, where Cloudflare TURN was configured, deployed and
+     * never once used, so the only defence is to pin the string in both
+     * directions rather than trust it.
+     *
+     * Four hand-copies of one literal: `@pqp/shared`'s schema, the server's
+     * `SOCKET_CAPS`, the web client's `WIRE_CAPS`, and this app's. Three of
+     * them are read off disk here.
+     */
+    @Test
+    fun `the roster delta capability matches the server and the web client`() {
+        val cap = "voice-roster-delta"
+
+        assertTrue(
+            "$signaling no longer declares the $cap frame, so this app is negotiating " +
+                "a capability that does not exist any more.",
+            RepoSources.frameTypeLiterals(signaling).contains(cap),
+        )
+        assertTrue(
+            "server/src/ws/sockets.ts no longer names \"$cap\" in SOCKET_CAPS. The server " +
+                "matches this string exactly; a rename there makes every Android socket " +
+                "silently fall back to whole rosters.",
+            RepoSources.read("server/src/ws/sockets.ts").contains("\"$cap\""),
+        )
+        assertTrue(
+            "server/src/ws/index.ts no longer reads `caps` off the auth frame, so nothing " +
+                "this handshake declares is heard at all.",
+            RepoSources.stripComments(RepoSources.read(wsIndex)).contains("caps"),
+        )
+        assertTrue(
+            "client/src/lib/realtime.ts no longer declares \"$cap\". The two clients must " +
+                "ask for the same string; a phone left behind is a phone on mobile data " +
+                "paying for frames the browser stopped receiving.",
+            RepoSources.read("client/src/lib/realtime.ts").contains("\"$cap\""),
+        )
+
+        assertEquals(
+            "RealtimeClient.WIRE_CAPS is the promise this build makes about which frames " +
+                "it can apply. Add an entry only alongside its handler.",
+            listOf(cap),
+            RealtimeClient.WIRE_CAPS,
+        )
+    }
+
+    /**
+     * And the handshake actually carries them.
+     *
+     * Separate from the test above on purpose. A correct `WIRE_CAPS` that
+     * never reaches `onOpen` is the same outcome as no capability at all, and
+     * neither the app nor the server would say a word about it.
+     */
+    @Test
+    fun `the auth frame declares the capabilities this build can apply`() {
+        val frame = RealtimeClient.authFrame("token-123")
+
+        assertEquals("auth", frame["type"]?.jsonPrimitive?.content)
+        assertEquals("token-123", frame["token"]?.jsonPrimitive?.content)
+        assertEquals(
+            "The auth frame must declare exactly RealtimeClient.WIRE_CAPS",
+            RealtimeClient.WIRE_CAPS,
+            frame["caps"]?.jsonArray?.map { it.jsonPrimitive.content },
         )
     }
 
