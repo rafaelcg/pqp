@@ -97,6 +97,7 @@ import { QgHint } from "@/components/layout/qg-hint";
 import { ShortcutsHint } from "@/components/layout/shortcuts-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
 import { isDesktopApp } from "@/lib/desktop";
+import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
   winningFeatureHint,
@@ -1247,6 +1248,22 @@ function MainAppContent({
    * the button it changes.
    */
   const [shareSystemAudio, setShareSystemAudio] = useState(false);
+  /**
+   * The cursor preference, in the opposite arrangement, and deliberately.
+   *
+   * It is remembered per person (`lib/screen-capture-cursor.ts`) because it
+   * cannot hurt the room the way the line above can, and the person it exists
+   * for shares a film every night. It is read from its own store rather than
+   * held here, so changing it costs no prop through four components. This
+   * effect is the mid-share half: a share already running follows the new
+   * preference in place, no picker, no restart, no dropped picture. Today the
+   * controller finds no engine that can honour it and returns having done
+   * nothing; the wiring is what makes a live share follow the day one can.
+   */
+  const shareCursor = useShareCursor();
+  useEffect(() => {
+    void voice.applyShareCursor(shareCursor);
+  }, [voice, shareCursor]);
   // --- voice state ---
   // Mirror this client's mute/deafen onto the wire so the roster can badge it
   // for everyone else. Lives outside the voice controller: it is display

@@ -161,6 +161,46 @@ describe("screenCaptureOptions", () => {
     }
   });
 
+  it("asks for the cursor the person wants, in every environment", () => {
+    // The constraint is spec-shaped and unconditional: an unknown dictionary
+    // member is dropped by the bindings, so asking costs nothing and the day
+    // an engine implements it every client already asked correctly. It must
+    // not depend on the shell, on the platform, or on the audio opt-in, all of
+    // which decide entirely different parts of this request.
+    for (const env of [browser, oldBrowser, shell, newShell, macShell]) {
+      for (const shareSystemAudio of [false, true]) {
+        expect(
+          screenCaptureOptions(shareSystemAudio, env, { hideCursor: true })
+            .video,
+        ).toMatchObject({ cursor: "never" });
+        expect(
+          screenCaptureOptions(shareSystemAudio, env, { hideCursor: false })
+            .video,
+        ).toMatchObject({ cursor: "always" });
+      }
+    }
+  });
+
+  it("shows the cursor when nobody said otherwise", () => {
+    // A missing preference is a presenter, not a viewer: losing the pointer
+    // you are pointing with is the expensive way to be wrong.
+    expect(screenCaptureOptions(false, browser).video).toMatchObject({
+      cursor: "always",
+    });
+  });
+
+  it("carries the cursor preference into a Watch party tab share", () => {
+    // A tab has no pointer in it either way, but the request still has to say
+    // what was wanted: the surface is only known after the picker closes, so
+    // the constraint cannot be conditional on it.
+    expect(
+      screenCaptureOptions(true, browser, {
+        preferBrowserTab: true,
+        hideCursor: true,
+      }).video,
+    ).toMatchObject({ displaySurface: "browser", cursor: "never" });
+  });
+
   it("does not steer a normal share toward a tab", () => {
     const options = screenCaptureOptions(false, browser);
     expect(options.preferCurrentTab).toBeUndefined();

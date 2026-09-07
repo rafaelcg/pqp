@@ -203,6 +203,14 @@ function screenPermission(platform, status) {
  * screens and windows, never tabs, so there is no tab-audio path for
  * `audio: false` to take away.
  *
+ * THE MOUSE POINTER IS NOT ANSWERABLE HERE, and it is worth saying so because
+ * this is where you would look. The callback names a SOURCE, not a capture
+ * option, and Chromium then wraps every screen and every window capturer in a
+ * `DesktopAndCursorComposer` with no flag between it and the embedder, so the
+ * shell has no more control over the cursor than the page does. Nothing to add
+ * to this function: the desktop app and the browser are in the same position,
+ * which is why `client/src/lib/screen-capture-cursor.ts` treats them alike.
+ *
  * Do not "helpfully" default this to loopback. A true `audioRequested` is a
  * statement that a human ticked something, and it is the only such statement
  * this function will ever get. Keep macOS and Linux video-only: loopback
