@@ -30,7 +30,7 @@
  * JSON. The strings below are duplicates of `landing.seo.*`,
  * `vsDiscord.seo.*`, `tela.seo.*`, `claim.seo.*`, `betaPage.seo.*`,
  * `androidPage.seo.*`, `downloadPage.seo.*`, `vsDiscord.faq.*` and
- * `tela.faq.*`, and
+ * `tela.faq.*`, `landing.faq.*`, and
  * `marketing-meta.test.ts` pins each pair against the JSON catalogues — the
  * duplication cannot drift without failing the suite.
  */
@@ -107,13 +107,13 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
   "/": {
     canonicalPath: "/",
     title: {
-      "pt-BR": "pqp: chat em grupo com voz e tela compartilhada",
-      en: "pqp: group chat with voice and screen sharing",
+      "pt-BR": "pqp: voz, tela compartilhada e chat pra sua galera, código aberto",
+      en: "pqp: voice, screen share and chat for your crew, open source",
     },
     description: {
       "pt-BR":
-        "Voz, texto e tela compartilhada pra sua galera, direto no navegador. Crie uma comunidade e mande o link. Código aberto, de graça, e o servidor pode ser seu.",
-      en: "Voice, text, and screen sharing for your people, straight from the browser. Make a community, send the link. Open source, free, and the server can be yours.",
+        "Canal de voz, tela compartilhada com som e chat completo, direto no navegador. De graça, código aberto, e já rolou watch party com mais de cem pessoas. Cria a comunidade e manda o link.",
+      en: "Voice channels, screen share with sound and a full chat, straight from the browser. Free, open source, and a watch party for over a hundred people already ran on it. Make a community, send the link.",
     },
   },
   "/vs-discord": {
@@ -245,6 +245,74 @@ const PAGE_COPY: Record<MarketingPage, PageCopy> = {
       en: "Live operational status for the hosted pqp service.",
     },
   },
+};
+
+/**
+ * The homepage FAQ, duplicated from `landing.faq.*` in the JSON catalogues and
+ * served as FAQPage JSON-LD, in the page's own order (`LANDING_FAQ_IDS` in
+ * `pages/landing-page.tsx`). Same truth rules as the other two: product claims
+ * only, the capacity answer says where the number came from, and the Discord
+ * import answer says what does not come along. The suite pins every string
+ * here against its JSON twin.
+ */
+export const LANDING_FAQ: Record<
+  MarketingLocale,
+  { question: string; answer: string }[]
+> = {
+  "pt-BR": [
+    {
+      question: "O pqp é de graça mesmo?",
+      answer:
+        "É. Código aberto sob AGPL, sem plano pago e sem limite artificial de sala. Dá pra apoiar o projeto com uma doação, e doar não desbloqueia nada.",
+    },
+    {
+      question: "Preciso instalar alguma coisa?",
+      answer:
+        "Não. Funciona no navegador, no computador e no celular. Tem app de desktop pra Mac, Windows e Linux, e beta pra iPhone e Android se preferir.",
+    },
+    {
+      question: "Quantas pessoas cabem numa call?",
+      answer:
+        "Mais de cem numa sala só, com tela compartilhada rodando, já aconteceu no pqp.gg. Uma cópia auto-hospedada sem servidor de mídia fica em torno de oito por canal.",
+    },
+    {
+      question: "Dá pra trazer o meu servidor do Discord?",
+      answer:
+        "Dá pra trazer o layout: cola um link de template discord.new e o pqp recria as categorias, os canais e as permissões principais. Mensagens e membros não vêm junto.",
+    },
+    {
+      question: "O que acontece com os meus dados?",
+      answer:
+        "Ficam em servidores em São Paulo. Você exporta a sua conta e a sua comunidade quando quiser, e apaga a conta de dentro do app. Ou roda a sua própria cópia e fica com tudo na sua máquina.",
+    },
+  ],
+  en: [
+    {
+      question: "Is pqp really free?",
+      answer:
+        "Yes. Open source under AGPL, no paid plan and no artificial room limit. You can support the project with a donation, and donating unlocks nothing.",
+    },
+    {
+      question: "Do I need to install anything?",
+      answer:
+        "No. It works in the browser, on the computer and on the phone. There is a desktop app for Mac, Windows and Linux, and betas for iPhone and Android if you prefer.",
+    },
+    {
+      question: "How many people fit in one call?",
+      answer:
+        "Over a hundred in one room, with a screen share running, has already happened on pqp.gg. A self-hosted copy without a media server stays around eight per channel.",
+    },
+    {
+      question: "Can I bring my Discord server?",
+      answer:
+        "You can bring the layout: paste a discord.new template link and pqp recreates the categories, channels and the main permissions. Messages and members do not come along.",
+    },
+    {
+      question: "What happens to my data?",
+      answer:
+        "It lives on servers in São Paulo. You can export your account and your community whenever you want, and delete the account from inside the app. Or run your own copy and keep everything on your machine.",
+    },
+  ],
 };
 
 /**
@@ -396,10 +464,10 @@ export function escapeHtml(value: string): string {
  *
  * Every page carries the WebSite node. The landing adds SoftwareApplication —
  * the page is the product — mirroring what the shipped `index.html` says
- * (`applicationCategory`, a zero-price Offer). `/vs-discord` adds FAQPage,
- * whose questions are the FAQ section actually rendered on the page — schema
- * for copy a visitor can read, never schema alone. `/tela` does the same
- * with its own six.
+ * (`applicationCategory`, a zero-price Offer) and, since the redesign, its
+ * own FAQPage. `/vs-discord` adds FAQPage too, whose questions are the FAQ
+ * section actually rendered on the page — schema for copy a visitor can
+ * read, never schema alone. `/tela` does the same with its own six.
  */
 function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
   const graph: Record<string, unknown>[] = [
@@ -422,11 +490,13 @@ function jsonLdFor(page: MarketingPage, locale: MarketingLocale): string {
     });
   }
   const faq =
-    page === "/vs-discord"
-      ? VS_DISCORD_FAQ[locale]
-      : page === "/tela"
-        ? TELA_FAQ[locale]
-        : null;
+    page === "/"
+      ? LANDING_FAQ[locale]
+      : page === "/vs-discord"
+        ? VS_DISCORD_FAQ[locale]
+        : page === "/tela"
+          ? TELA_FAQ[locale]
+          : null;
   if (faq) {
     graph.push({
       "@type": "FAQPage",

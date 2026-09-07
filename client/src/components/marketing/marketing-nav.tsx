@@ -37,9 +37,12 @@ export function MarketingNav({ variant = "solid" }: MarketingNavProps) {
       </Link>
 
       <nav className="hidden items-center gap-8 md:flex">
-        <a href="/#how" className={linkClass}>
-          {t("nav.howItWorks")}
+        <a href="/#features" className={linkClass}>
+          {t("nav.features")}
         </a>
+        <Link to="/vs-discord" className={linkClass}>
+          {t("footer.vsDiscord")}
+        </Link>
         <Link to="/download" className={linkClass}>
           {t("nav.download")}
         </Link>
