@@ -93,12 +93,13 @@ function integerArg(name: string, fallback: number): number {
   if (!Number.isInteger(value)) throw new Error(`${name} must be an integer`);
   return value;
 }
-function assertSafeTarget(): { runId: string; apiUrl: string; wsUrl: string; sfuHost: string; local: boolean } {
+function assertSafeTarget(): { runId: string; apiUrl: string; wsUrl: string; sfuHost: string; local: boolean; smoke: boolean } {
   const runId = need("TEST_RUN_ID");
   if (!/^[a-z0-9][a-z0-9-]{2,48}$/.test(runId)) throw new Error("TEST_RUN_ID must be a lowercase, traceable run id");
   const target = need("PQP_LOAD_TARGET");
   if (target !== "staging" && target !== "local") throw new Error("PQP_LOAD_TARGET must be staging or local");
   const local = target === "local";
+  const smoke = process.env.PQP_LOAD_SMOKE === "1";
   const apiUrl = process.env.PQP_LOAD_API_URL ?? (local ? "http://localhost:3001" : STAGING_API);
   const wsUrl = process.env.PQP_LOAD_WS_URL ?? (local ? "ws://localhost:3001/ws" : STAGING_WS);
   const api = new URL(apiUrl);
@@ -108,7 +109,7 @@ function assertSafeTarget(): { runId: string; apiUrl: string; wsUrl: string; sfu
   const sfuHost = need("PQP_LOAD_SFU_HOST").toLowerCase();
   if (PROD_HOSTS.has(sfuHost) || sfuHost.endsWith(".pqp.gg")) throw new Error("production SFU hosts are forbidden");
   if (local && !["localhost", "127.0.0.1", "::1"].includes(sfuHost)) throw new Error("local runs may only use a loopback SFU host");
-  return { runId, apiUrl, wsUrl, sfuHost, local };
+  return { runId, apiUrl, wsUrl, sfuHost, local, smoke };
 }
 function tokenFor(runId: string, index: string | number, local: boolean): string {
   return local ? `dev-local-token:${runId}-${index}` : `${need("LOAD_TEST_TOKEN")}:${runId}-${index}`;
@@ -135,7 +136,7 @@ async function passAgeGate(base: string, token: string): Promise<void> {
 }
 async function prepare(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const total = numberArg("--participants", 500);
-  if (total !== 500 && !(safe.local && total >= 2 && total <= 5)) throw new Error("hosted runs require exactly 500 participants; local smoke permits 2–5");
+  if (total !== 500 && !(safe.local && total >= 2 && total <= 5) && !(safe.smoke && total === 2)) throw new Error("hosted runs require exactly 500 participants; local smoke permits 2–5; staging smoke is exactly 2 with PQP_LOAD_SMOKE=1");
   const owner = tokenFor(safe.runId, "owner", safe.local);
   await passAgeGate(safe.apiUrl, owner);
   const created = await api<{ server: { id: string }; channels: Array<{ id: string; type: string }> }>(safe.apiUrl, owner, "POST", "/api/servers", { name: `Load ${safe.runId}` });
@@ -150,7 +151,7 @@ async function prepare(safe: ReturnType<typeof assertSafeTarget>): Promise<void>
 }
 function manifest(safe: ReturnType<typeof assertSafeTarget>): Manifest {
   const parsed = JSON.parse(readFileSync(requiredArg("--manifest"), "utf8")) as Manifest;
-  if (parsed.version !== 1 || parsed.runId !== safe.runId || parsed.apiUrl !== safe.apiUrl || parsed.wsUrl !== safe.wsUrl || (parsed.participants !== 500 && !(safe.local && parsed.participants >= 2 && parsed.participants <= 5))) throw new Error("manifest does not match this allowed run");
+  if (parsed.version !== 1 || parsed.runId !== safe.runId || parsed.apiUrl !== safe.apiUrl || parsed.wsUrl !== safe.wsUrl || (parsed.participants !== 500 && !(safe.local && parsed.participants >= 2 && parsed.participants <= 5) && !(safe.smoke && parsed.participants === 2))) throw new Error("manifest does not match this allowed run");
   return parsed;
 }
 async function appSession(base: string, wsUrl: string, token: string, room: Manifest): Promise<{ socket: WebSocket; peerId: string; resumeToken: string; welcomeMs: number }> {
@@ -296,8 +297,10 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const minDecodedFps = numberArg("--min-decoded-fps", 24);
   const holdIsAllowed = safe.local
     ? holdSeconds >= 5 && holdSeconds <= 60
-    : holdSeconds >= 600 && holdSeconds <= 900;
-  if (shardIndex < 0 || shardCount < 1 || shardIndex >= shardCount || !holdIsAllowed || !Number.isFinite(startAtMs) || startAtMs < Date.now() + (safe.local ? 0 : 30_000)) throw new Error("valid shard indexes, hold, and a shared start-at-ms at least 30s ahead are required");
+    : safe.smoke
+      ? holdSeconds >= 60 && holdSeconds <= 120
+      : holdSeconds >= 600 && holdSeconds <= 900;
+  if (shardIndex < 0 || shardCount < 1 || shardIndex >= shardCount || !holdIsAllowed || !Number.isFinite(startAtMs) || startAtMs < Date.now() + (safe.local ? 0 : 30_000)) throw new Error("valid shard indexes, a 5–60s local / 60–120s explicit staging smoke / 600–900s 500-person hold, and a shared start-at-ms at least 30s ahead are required");
   const indexes = Array.from({ length: info.participants }, (_, i) => i).filter((i) => i % shardCount === shardIndex);
   const decodedIndexes = new Set(indexes.filter((index) => index !== 0).slice(0, decodeSamples));
   const startedAt = Date.now(); const cpuStart = process.cpuUsage(); let maxRssBytes = process.memoryUsage().rss; let maxEventLoopLagMs = 0; let expectedTick = Date.now() + 1000;

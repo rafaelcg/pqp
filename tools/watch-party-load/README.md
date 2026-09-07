@@ -66,6 +66,11 @@ egress sustains the observed receiver bitrate with >=20% headroom. A report's
 RTP bitrate is measured at its receivers; it does not substitute for the SFU's
 aggregate NIC metric.
 
+Before the 500 run, an explicitly named staging smoke may use exactly two
+participants and a 60–120 second hold. It is unavailable unless
+`PQP_LOAD_SMOKE=1` is set, retains every staging/SFU safety gate, and is not a
+capacity result. Do not use it as a shortcut for the 500 contract.
+
 The report proves packet/frame delivery through the Node RTC SDK (decoded frame
 objects from `VideoStream`/`AudioStream`), not browser compositor rendering or
 audibility. Add browser/device sentinels before treating this as a product UX
