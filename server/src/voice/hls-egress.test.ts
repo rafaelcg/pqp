@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EncodingOptionsPreset } from "livekit-server-sdk";
 import {
+  type LiveHlsEgressApi,
   isLiveHlsEnabled,
   liveHlsConfig,
   liveHlsStreamFor,
@@ -74,7 +75,9 @@ describe("live HLS egress", () => {
 
   it("starts on the first sharer and is a no-op if they keep sharing", async () => {
     enableHls();
-    const start = vi.fn(async () => ({ egressId: "EG_1" }));
+    const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+      async () => ({ egressId: "EG_1" }),
+    );
     const stop = vi.fn();
     setLiveHlsTestHooks({
       egress: { startTrackCompositeEgress: start, stopEgress: stop },
@@ -109,6 +112,68 @@ describe("live HLS egress", () => {
     expect(again).toEqual(first);
     expect(start).toHaveBeenCalledTimes(1);
     expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("restarts on a new screen track sid from the same presenter", async () => {
+    enableHls();
+    let egressN = 0;
+    const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+      async () => ({ egressId: `EG_${(egressN += 1)}` }),
+    );
+    const stop = vi.fn();
+    let videoTrackId = "TR_V1";
+    setLiveHlsTestHooks({
+      egress: { startTrackCompositeEgress: start, stopEgress: stop },
+      findTracks: async () => ({ videoTrackId, audioTrackId: "TR_A" }),
+    });
+
+    const first = await reconcileLiveHls(CHANNEL, "peer-1");
+    expect(first).not.toBeNull();
+    // The presenter republished: a quality pick that changed the top layer,
+    // or the room crossing the large-room line. Same peer, new sid.
+    videoTrackId = "TR_V2";
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    const second = await reconcileLiveHls(CHANNEL, "peer-1");
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stop).toHaveBeenCalledWith("EG_1");
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(start.mock.calls[1]![2]).toEqual(
+      expect.objectContaining({ videoTrackId: "TR_V2" }),
+    );
+    expect(second?.presenterPeerId).toBe("peer-1");
+    expect(second?.hlsUrl).not.toBe(first?.hlsUrl);
+    expect(liveHlsStreamFor(CHANNEL)).toEqual(second);
+
+    // Same sid again: nothing moves.
+    const third = await reconcileLiveHls(CHANNEL, "peer-1");
+    expect(third).toEqual(second);
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the egress when the SFU cannot be asked which sid is live", async () => {
+    enableHls();
+    const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+      async () => ({ egressId: "EG_1" }),
+    );
+    const stop = vi.fn();
+    let calls = 0;
+    setLiveHlsTestHooks({
+      egress: { startTrackCompositeEgress: start, stopEgress: stop },
+      findTracks: async () => {
+        calls += 1;
+        if (calls > 1) {
+          throw new Error("ListParticipants: 503");
+        }
+        return { videoTrackId: "TR_V1", audioTrackId: "TR_A" };
+      },
+    });
+
+    const first = await reconcileLiveHls(CHANNEL, "peer-1");
+    const again = await reconcileLiveHls(CHANNEL, "peer-1");
+    expect(again).toEqual(first);
+    expect(stop).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledTimes(1);
   });
 
   it("stops when nobody is sharing", async () => {
