@@ -1826,6 +1826,9 @@ export function createVoiceController(transport: RealtimeTransport) {
 
       sfu = await connectLiveKit({
         session,
+        // The list this tab already holds for the mesh, read now so a refresh
+        // between calls reaches the next connection and this one is left be.
+        iceServers,
         lookupIdentity: (id) => identities.get(id),
         onPeersChanged: (remote) => {
           state.remotePeers = remote;
