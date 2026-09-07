@@ -810,6 +810,14 @@ restart and would churn the series set for nothing.
 
 ### Known gaps
 
+- `livekit-docker.service` is enabled but **has never been started**: the
+  containers were brought up by hand with `docker compose up -d` and stay up
+  through Docker's own `restart: unless-stopped`, which is also what would
+  bring them back after a reboot. So the "unit has failed" rule will never fire
+  for LiveKit, and the container rules are the real check. Running
+  `systemctl start livekit-docker` in a quiet moment would align the unit with
+  reality (compose does nothing when the containers already match), but it is
+  not worth doing while a room is live.
 - vnstat's history starts **2026-09-07**. Traffic before that, including the
   load tests on the 5th and 6th, is not counted. It was roughly 15 GB, under
   0.3% of the allowance, so it was not worth reconstructing.
