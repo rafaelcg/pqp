@@ -1,0 +1,8 @@
+[Unit]
+Description=Write pqp SFU box textfile metrics (egress from vnstat, docker container state)
+After=docker.service vnstat.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pqp-box-metrics
+Nice=10

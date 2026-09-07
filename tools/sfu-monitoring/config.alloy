@@ -1,0 +1,109 @@
+// Grafana Alloy on the self-hosted SFU box (Vultr, Sao Paulo, sfu.pqp.gg).
+//
+// Three scrape sources, one destination:
+//   * the built-in node exporter        -> CPU, memory, disk, load, network
+//   * its textfile collector            -> monthly egress (vnstat) + docker state
+//   * LiveKit's own /metrics on :6789   -> rooms and participants
+// all remote-written to the pqp Grafana Cloud stack.
+//
+// Credentials come from /etc/alloy/credentials.env (root-owned, 0600) via a
+// systemd drop-in. Nothing secret belongs in this file: it is in the repo.
+
+prometheus.exporter.unix "box" {
+  set_collectors = [
+    "cpu",
+    "diskstats",
+    "filesystem",
+    "loadavg",
+    "meminfo",
+    "netdev",
+    "os",
+    "stat",
+    "textfile",
+    "time",
+    "uname",
+    "vmstat",
+  ]
+
+  filesystem {
+    fs_types_exclude     = "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs)$"
+    mount_points_exclude = "^/(dev|proc|run/credentials/.+|sys|var/lib/docker/.+)($|/)"
+    mount_timeout        = "5s"
+  }
+
+  netdev {
+    device_exclude = "^(veth.*|br-.*|docker.*|lo)$"
+  }
+
+  textfile {
+    directory = "/var/lib/node_exporter/textfile_collector"
+  }
+}
+
+discovery.relabel "box" {
+  targets = prometheus.exporter.unix.box.targets
+
+  rule {
+    target_label = "instance"
+    replacement  = "sfu-pqp"
+  }
+}
+
+// The unix exporter carries its own job label, `integrations/unix`; a
+// job_name here would be silently overridden by it. Query with that label,
+// not with the one you expected.
+prometheus.scrape "box" {
+  targets         = discovery.relabel.box.output
+  scrape_interval = "60s"
+  forward_to      = [prometheus.remote_write.grafana_cloud.receiver]
+}
+
+// LiveKit already exposes Prometheus metrics on 127.0.0.1:6789
+// (`prometheus_port: 6789` in /opt/livekit/livekit.yaml, set when the box was
+// built). The port is not in the ufw allow list, so it is local only. This is
+// the same source `GET /api/admin/metrics` reads through listRooms, minus the
+// round trip through Fly: it keeps answering when the API is down, which is
+// exactly when "is anyone still in a room" is worth knowing.
+prometheus.scrape "livekit" {
+  targets = [{
+    __address__ = "127.0.0.1:6789",
+    instance    = "sfu-pqp",
+  }]
+  job_name        = "livekit"
+  scrape_interval = "60s"
+  forward_to      = [prometheus.relabel.livekit.receiver]
+}
+
+prometheus.relabel "livekit" {
+  forward_to = [prometheus.remote_write.grafana_cloud.receiver]
+
+  // Go runtime and RPC-internal series are ~40% of LiveKit's output and none
+  // of it is actionable here. Dropped before it costs a series.
+  rule {
+    source_labels = ["__name__"]
+    regex         = "(go|promhttp|livekit_psrpc|livekit_pubsubtime)_.*"
+    action        = "drop"
+  }
+
+  // node_id changes on every LiveKit restart, so keeping it would churn the
+  // series set on a single-node deployment for no gain.
+  rule {
+    action = "labeldrop"
+    regex  = "node_id"
+  }
+}
+
+prometheus.remote_write "grafana_cloud" {
+  external_labels = {
+    box = "sfu-pqp",
+  }
+
+  endpoint {
+    url = "https://prometheus-prod-40-prod-sa-east-1.grafana.net/api/prom/push"
+
+    basic_auth {
+      username = sys.env("GC_PROM_USER")
+      password = sys.env("GC_PROM_TOKEN")
+    }
+  }
+}
