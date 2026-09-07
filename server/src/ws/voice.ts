@@ -860,6 +860,16 @@ export interface VoiceActivitySnapshot {
   roster: {
     deltas: number;
     snapshots: number;
+    /**
+     * How many of `snapshots` went to somebody who is NOT in the call.
+     *
+     * The one number that says whether the remaining whole-roster cost belongs
+     * to the room or to the sidebar, which is the difference between "make the
+     * roster smaller" and "stop sending the roster to the audience" as the
+     * next thing to do. Measured rather than assumed, because the ratio
+     * depends entirely on how big the server is around the call.
+     */
+    audienceSnapshots: number;
     sockets: number;
     socketsOnDeltas: number;
   };
@@ -937,6 +947,7 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
     roster: {
       deltas: rosterFramesSent.deltas,
       snapshots: rosterFramesSent.snapshots,
+      audienceSnapshots: rosterFramesSent.audienceSnapshots,
       sockets: rosterSocketCensus.sockets,
       socketsOnDeltas: rosterSocketCensus.withCap,
     },
@@ -1023,8 +1034,20 @@ const pendingRoomEvents = new Map<string, VoiceRoomEvent[]>();
  */
 const rosterSeq = new Map<string, number>();
 
-/** When this process last sent a channel's whole roster. */
+/** When this process last sent a channel's whole roster to the people in it. */
 const lastRosterKeyframeAt = new Map<string, number>();
+
+/**
+ * When it last sent one to the people merely watching the channel.
+ *
+ * A separate clock rather than a divisor on the first, because the two move
+ * independently: a window that cannot be described incrementally is a snapshot
+ * for everybody and resets both, and after that each falls due on its own
+ * interval. Sharing one clock would either drag the room down to the
+ * audience's rate or drag the audience up to the room's, and the entire point
+ * is that they are not the same promise.
+ */
+const lastAudienceKeyframeAt = new Map<string, number>();
 
 /**
  * How long a room may be described only by deltas before its whole roster
@@ -1052,6 +1075,39 @@ const lastRosterKeyframeAt = new Map<string, number>();
 export const ROSTER_KEYFRAME_MS = 10_000;
 
 /**
+ * The same guarantee, for people who are NOT in the call.
+ *
+ * A roster goes to everyone who can *see* the channel, because occupancy is
+ * drawn in the sidebar for people standing outside it. That audience is
+ * frequently several times the size of the room, so it is the audience — not
+ * the room — that most of the keyframe cost belongs to: measured at 800
+ * sockets with 600 in one call, whole-roster snapshots were 384.6 MB of the
+ * 922.2 MB this server wrote, and every socket paid the same 160 KB every ten
+ * seconds whether it was in the call or looking at a badge.
+ *
+ * The two are not owed the same thing, and that is the whole of this split:
+ *
+ *  - A PARTICIPANT's roster is a trust boundary. It rebuilds `knownPeerIds`,
+ *    the allowlist that decides whose offer may open a microphone, and it is
+ *    what prunes a dead peer connection. Ten seconds is how long a signalling
+ *    bug may last, and it stays ten seconds.
+ *  - The AUDIENCE's roster is a badge. The worst a stale one produces is a
+ *    mic-off icon that is a few seconds out of date next to a channel nobody
+ *    in this browser is in.
+ *
+ * Thirty seconds rather than a minute, deliberately. The saving is a ratio, so
+ * most of it is already had at 3x and doubling again buys little; what doubles
+ * linearly is the one case a keyframe is the only answer to — a socket that
+ * gained audience membership mid-session and holds no baseline at all, which
+ * cannot detect its own gap and so cannot ask. Thirty seconds keeps that
+ * inside "you would notice it fix itself"; sixty does not.
+ *
+ * Neither clock is the delta rate. Both audiences keep receiving every change
+ * as it happens; this only governs how often the whole list is restated.
+ */
+export const ROSTER_AUDIENCE_KEYFRAME_MS = 30_000;
+
+/**
  * Roster frames written since boot, split by which kind.
  *
  * Counted per SOCKET, not per fan-out round, because the whole change is about
@@ -1064,14 +1120,38 @@ export const ROSTER_KEYFRAME_MS = 10_000;
  * how Cloudflare TURN sat unused for weeks (CLAUDE.md pitfall 9), so the
  * denominator ships with the numerator.
  */
-const rosterFramesSent = { deltas: 0, snapshots: 0 };
+const rosterFramesSent = { deltas: 0, snapshots: 0, audienceSnapshots: 0 };
+
+/**
+ * Whether this socket is IN the call it is about to be told about, as opposed
+ * to merely allowed to see the channel.
+ *
+ * Read from the socket rather than from the user, because the same account can
+ * hold a tab in the call and a phone looking at the sidebar, and the whole
+ * split below is about giving each what it is actually owed. `socketToPeerId`
+ * is the process's own map, so this is two hash lookups on a path that already
+ * walks every socket.
+ *
+ * An orphaned peer (a refresh mid-call, holding its seat for 90s) still counts
+ * as in the room: its socket is gone, so it receives nothing either way, and
+ * the socket that resumes it re-enters through the join path.
+ */
+function socketIsInRoom(socket: WebSocket, voiceChannelId: string): boolean {
+  const peerId = socketToPeerId.get(socket);
+  if (peerId === undefined) {
+    return false;
+  }
+  return peers.get(peerId)?.voiceChannelId === voiceChannelId;
+}
 
 /** Test seam: forget every sequence and keyframe clock. */
 export function resetRosterSequences(): void {
   rosterSeq.clear();
   lastRosterKeyframeAt.clear();
+  lastAudienceKeyframeAt.clear();
   rosterFramesSent.deltas = 0;
   rosterFramesSent.snapshots = 0;
+  rosterFramesSent.audienceSnapshots = 0;
 }
 
 /** The sequence a socket should adopt from a full roster of this channel. */
@@ -1211,12 +1291,25 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
         rosterSeq.set(voiceChannelId, seq);
       }
       const now = Date.now();
-      const keyframeDue =
+      // Whether this window CAN be described incrementally at all, decided
+      // before and independently of who is owed a keyframe. It used to be the
+      // same question; splitting the clocks makes it two, because the room may
+      // be due a snapshot while the audience is still happily patching, and
+      // then the delta is still needed.
+      const delta = registryOn() ? null : foldRoomEvents(events);
+      const roomSnapshot =
+        !delta ||
         now - (lastRosterKeyframeAt.get(voiceChannelId) ?? 0) >=
-        ROSTER_KEYFRAME_MS;
-      const delta = registryOn() || keyframeDue ? null : foldRoomEvents(events);
-      if (!delta) {
+          ROSTER_KEYFRAME_MS;
+      const audienceSnapshot =
+        !delta ||
+        now - (lastAudienceKeyframeAt.get(voiceChannelId) ?? 0) >=
+          ROSTER_AUDIENCE_KEYFRAME_MS;
+      if (roomSnapshot) {
         lastRosterKeyframeAt.set(voiceChannelId, now);
+      }
+      if (audienceSnapshot) {
+        lastAudienceKeyframeAt.set(voiceChannelId, now);
       }
       // --- end synchronous stretch -----------------------------------------
 
@@ -1248,13 +1341,21 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
         if (!audience.has(user.id)) {
           return;
         }
-        if (deltaFrame && caps.has(SOCKET_CAPS.voiceRosterDelta)) {
+        // Which promise this socket is owed, decided per socket because the
+        // same account can hold a tab in the call and a phone looking at the
+        // sidebar, and they are not owed the same thing.
+        const inRoom = socketIsInRoom(socket, voiceChannelId);
+        const owedSnapshot = inRoom ? roomSnapshot : audienceSnapshot;
+        if (deltaFrame && !owedSnapshot && caps.has(SOCKET_CAPS.voiceRosterDelta)) {
           sendEncoded(socket, deltaFrame);
           rosterFramesSent.deltas += 1;
           return;
         }
         if (sendEncodedDroppable(socket, fullFrame())) {
           rosterFramesSent.snapshots += 1;
+          if (!inRoom) {
+            rosterFramesSent.audienceSnapshots += 1;
+          }
         }
       });
     }
