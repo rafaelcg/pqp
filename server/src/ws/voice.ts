@@ -1152,24 +1152,28 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
     events = pendingRoomEvents.get(voiceChannelId) ?? [];
     pendingRoomEvents.delete(voiceChannelId);
     const transport = room?.transport ?? getRoomTransport(voiceChannelId);
-    const seq = currentRosterSeq(voiceChannelId) + 1;
-    if (participants.length === 0) {
-      rosterSeq.delete(voiceChannelId);
-    } else {
-      rosterSeq.set(voiceChannelId, seq);
-    }
-    const now = Date.now();
-    const keyframeDue =
-      now - (lastRosterKeyframeAt.get(voiceChannelId) ?? 0) >=
-      ROSTER_KEYFRAME_MS;
-    const delta =
-      registryOn() || keyframeDue ? null : foldRoomEvents(events);
-    if (!delta) {
-      lastRosterKeyframeAt.set(voiceChannelId, now);
-    }
-    // --- end synchronous stretch -----------------------------------------
 
     if (audience) {
+      // The sequence and the keyframe clock only move when something is
+      // actually written. A channel whose audience could not be read (it was
+      // deleted, or the query failed) must not silently burn a number that
+      // every receiver would then be missing.
+      const seq = currentRosterSeq(voiceChannelId) + 1;
+      if (participants.length === 0) {
+        rosterSeq.delete(voiceChannelId);
+      } else {
+        rosterSeq.set(voiceChannelId, seq);
+      }
+      const now = Date.now();
+      const keyframeDue =
+        now - (lastRosterKeyframeAt.get(voiceChannelId) ?? 0) >=
+        ROSTER_KEYFRAME_MS;
+      const delta = registryOn() || keyframeDue ? null : foldRoomEvents(events);
+      if (!delta) {
+        lastRosterKeyframeAt.set(voiceChannelId, now);
+      }
+      // --- end synchronous stretch -----------------------------------------
+
       let snapshot: Buffer | null = null;
       const fullFrame = () => {
         snapshot ??= encodeFrame({
