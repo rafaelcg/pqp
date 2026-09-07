@@ -168,15 +168,21 @@ Unsetting `PG_POOL_MAX` restores the `10` in `fly.staging.toml`. Then wipe the a
 
 ### Reading the output
 
-Four blocks, in the order they matter.
+Five blocks, in the order they matter.
 
-**Time to welcome, p50 / p90 / p99.** Measured from the start of one simulated person's arrival to the `welcome` frame, which is the same span the browser puts its own 12 s timer on. p99 is the number to care about: p50 stays flat long after the room has started failing for the unlucky.
+**Time to welcome, p50 / p90 / p99.** Measured **from the socket**, not from the top of the attempt, because that is where the browser arms its own 12 s timer (`armJoinTimeout` in `client/src/hooks/use-voice.ts`). The cold-browser HTTP that runs before it gets its own `boot` column and is not charged to the join budget. p99 is the number to care about: p50 stays flat long after the room has started failing for the unlucky.
 
 **The occupancy table.** One row per 25 people already in the room when this person arrived, and it is the answer to the actual question. Not "how slow did it get" but "how many people could already be in there". `over` counts arrivals that took longer than the client budget, `failed` counts the ones that never got in at all. The `CEILING:` line under the table is the first bucket where p90 crossed the budget or more than half the arrivals failed.
 
 **Failures by cause.** `transport-refused`, `join-refused` and `room-full` are the server saying no, and each names a specific rule. `closed:4429` is a rate limiter. If you see it, one of the buckets above was not lifted and the run measured the limiter. `closed:1006` and `http:503` mean the machine stopped answering. `timeout` is the residual bucket and is what an overloaded server produces: no refusal, just nothing back inside the budget. Note that a *cold* join the server refuses sends nothing at all (`refuseResume` only answers a resume attempt), so a genuine refusal and an overloaded server both land here; the harness invites every account into the server first so that ambiguity does not normally arise.
 
-**Resources.** `peak sockets` against `soft_limit`/`hard_limit` in `fly.staging.toml`. `pool busy` against `pool max`: `busy == max` with a non-empty queue is the unambiguous wall, and `peak queued` is the deepest queue the process saw even between samples. `machine cpu` is the whole VM, so on a 2-vCPU machine 100 % means both cores. Whichever of those three hits its ceiling first is the resource that ran out, and it is the one to fix.
+**Resources.** `peak sockets` against `soft_limit`/`hard_limit` in `fly.staging.toml`. `pool busy` against `pool max`: `busy == max` with a non-empty queue is the unambiguous wall, and `peak queued` is the deepest queue the process saw even between samples. `machine cpu` is the whole VM, so on a 2-vCPU machine 100 % means both cores.
+
+**The wire, and the harness's own vital signs.** `wire in` is every byte the run received, with a per-frame-type table under it. Read this **before** believing any latency above it, for two reasons. Signalling fan-out is O(room size) per arrival, so a filling room is quadratic and the bytes land on one link instead of the N households they would in production: a peak near that machine's downlink means the run measured the link. And `harness: N% of one core` is the load generator itself, which does every TLS handshake and parses every fanned-out frame; past roughly 80 % it is the thing being measured, and the run wants sharding across processes or machines.
+
+The per-frame-type table is the one that turns a wall into a fix. A signalling frame should be a few hundred bytes; a type averaging tens of kilobytes is a whole-collection re-send, and the table names it.
+
+Whichever of CPU, pool and wire hits its ceiling first is the resource that ran out, and it is the one to fix.
 
 ### What the first run measured (2026-09-07)
 
