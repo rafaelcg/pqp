@@ -1773,6 +1773,7 @@ export function resetVoicePeers(): void {
   socketToPeerId.clear();
   retiredPeerIds.clear();
   roomTransports.clear();
+  pendingTransportDecisions.clear();
   rosterCoalescer.reset();
   pendingRoomEvents.clear();
   remoteTransports.clear();
