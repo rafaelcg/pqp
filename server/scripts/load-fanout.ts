@@ -1259,6 +1259,18 @@ async function arrive(
 
 interface Sample {
   atMs: number;
+  /**
+   * The commit the target is running (`APP_VERSION`), read on every sample.
+   *
+   * THE RIG IS SHARED. On 2026-09-07 a second agent deployed their branch to
+   * `pqp-api-staging` between two runs of this script, and the second run
+   * quietly measured their code: different wire volume, CPU pegged where it
+   * had been idle, a ceiling one bucket higher, and nothing in the report to
+   * say the binary had changed underneath it. A load test that cannot tell you
+   * WHICH build it measured is not a measurement. So this is sampled, not
+   * asked for once, and the report says loudly when it moves.
+   */
+  version: string | null;
   sockets: number;
   poolBusy: number;
   poolMax: number;
@@ -1302,6 +1314,7 @@ function startMetricsSampler(
           return;
         }
         const body = (await res.json()) as {
+          version?: string | null;
           runtime?: {
             sockets?: number;
             peakPoolWaiting?: number;
@@ -1319,6 +1332,7 @@ function startMetricsSampler(
         const pool = runtime.pool ?? {};
         samples.push({
           atMs: Date.now() - startedAt,
+          version: body.version ?? null,
           sockets: runtime.sockets ?? 0,
           poolBusy: pool.busy ?? 0,
           poolMax: pool.max ?? 0,
@@ -1567,6 +1581,31 @@ function reportResources(
   wireRates: number[],
 ): void {
   console.log("");
+  const versions = [
+    ...new Set(
+      samples
+        .map((sample) => sample.version)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  if (versions.length === 1) {
+    console.log(`target ran ${versions[0]!.slice(0, 12)} for the whole run`);
+  } else if (versions.length > 1) {
+    console.log(
+      `!! THE TARGET WAS REDEPLOYED MID-RUN: ${versions
+        .map((v) => v.slice(0, 12))
+        .join(" then ")}`,
+    );
+    console.log(
+      "!! These numbers describe more than one build and are not a measurement " +
+        "of any of them. Redeploy the build you meant and run it again.",
+    );
+  } else {
+    console.log(
+      "target version unknown (no ADMIN_METRICS_TOKEN): this run cannot say " +
+        "which build it measured",
+    );
+  }
   if (samples.length === 0) {
     console.log("no server samples were collected");
   } else {
