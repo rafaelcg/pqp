@@ -162,6 +162,14 @@ interface ConnectOptions {
   lookupIdentity: (peerId: string) => LiveKitIdentity | undefined;
   onPeersChanged: (peers: RemotePeer[]) => void;
   onError: (message: string) => void;
+  /**
+   * The share on the wire is a new publication (new track sid) while the
+   * capture is the same. Fires after a quality pick or a room-size change
+   * republished under a different layer set, and after `publishScreen`
+   * replaced a live share. The HLS egress is bound to a sid, so the server
+   * needs to hear about this to restart it on the new one.
+   */
+  onScreenRepublished?: () => void;
 }
 
 function connectionStateFor(subscribed: boolean): PeerConnectionState {
@@ -173,6 +181,7 @@ export async function connectLiveKit({
   lookupIdentity,
   onPeersChanged,
   onError,
+  onScreenRepublished,
 }: ConnectOptions): Promise<LiveKitSession> {
   const {
     Room,
@@ -850,6 +859,7 @@ export async function connectLiveKit({
           return;
         }
         await publishScreenVideo(track, plan);
+        onScreenRepublished?.();
         return;
       }
       if (plan.topBitrate !== published.topBitrate) {
@@ -920,6 +930,7 @@ export async function connectLiveKit({
       if (!videoTrack) {
         throw new Error("No video track to publish");
       }
+      const replacing = publishedScreenTrack !== null;
       if (publishedScreenTrack) {
         await room.localParticipant.unpublishTrack(publishedScreenTrack);
       }
@@ -932,6 +943,9 @@ export async function connectLiveKit({
       const plan = currentScreenPlan();
       await constrainScreenCapture(videoTrack, plan.topHeight);
       await publishScreenVideo(videoTrack, plan);
+      if (replacing) {
+        onScreenRepublished?.();
+      }
 
       // The audio half. Absent from most captures, so its absence is not an
       // error, but a re-publish (after a reconnect) must not leave the previous
