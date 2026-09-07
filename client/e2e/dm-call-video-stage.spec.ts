@@ -198,7 +198,10 @@ test("desktop: a 1:1 video call gives the remote person at least half the viewpo
     await expectVideoPlaying(callee.page, pair.callerName);
 
     // Callee answers with their own camera from the stage controls.
-    await callee.page.getByRole("button", { name: "Turn camera on" }).click();
+    await callee.page
+      .getByRole("main")
+      .getByRole("button", { name: "Turn camera on" })
+      .click();
     await expectVideoPlaying(page, pair.calleeName);
 
     // THE measurement: the remote person occupies at least half the viewport.
@@ -268,7 +271,10 @@ test("desktop: a voice-only DM stays a slim bar until a camera turns on", async 
     await expect(page.getByTestId("call-stage")).toHaveCount(0);
 
     await waitUntilVoiceConnected(page);
-    await page.getByRole("button", { name: "Turn camera on", exact: true }).click();
+    await page
+      .getByRole("main")
+      .getByRole("button", { name: "Turn camera on", exact: true })
+      .click();
     await expect(page.getByTestId("call-stage")).toBeVisible({ timeout: 20_000 });
   } finally {
     await callee.context.close();
@@ -315,7 +321,10 @@ test.describe("mobile viewport", () => {
       // The caller's video arriving proves the callee is connected — the
       // camera toggle is a deliberate no-op while a join is still settling.
       await expectVideoPlaying(callee.page, pair.callerName);
-      await callee.page.getByRole("button", { name: "Turn camera on" }).click();
+      await callee.page
+      .getByRole("main")
+      .getByRole("button", { name: "Turn camera on" })
+      .click();
       await expectVideoPlaying(page, pair.calleeName);
 
       // The stage spans the whole chat pane, flush to the right edge. (The
