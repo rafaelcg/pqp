@@ -124,7 +124,10 @@ interface ChannelListProps {
   activeVoiceChannelId: string | null;
   unread: Record<string, UnreadState>;
   onSelectChannel: (channelId: string) => void;
-  /** Voice channels only. Used by the context menu and occupant drag/drop. */
+  /**
+   * Voice channels only. Double-click joins the call so you do not have to
+   * open the channel and then hit Join. Single click still just selects.
+   */
   onJoinVoice?: (channelId: string) => void;
   /** The signed-in account, for self-drag and "mute for me". */
   currentUserId?: string | null;
@@ -437,6 +440,11 @@ export function ChannelList({
                       : 0
                   }
                   onSelect={() => onSelectChannel(channel.id)}
+                  onJoinVoice={
+                    channel.type === "voice" && onJoinVoice
+                      ? () => onJoinVoice(channel.id)
+                      : undefined
+                  }
                 />
               ))}
             </div>
@@ -1626,6 +1634,7 @@ export function ChannelRailItem({
   unread,
   occupants,
   onSelect,
+  onJoinVoice,
 }: {
   channel: Channel;
   selected: boolean;
@@ -1633,6 +1642,7 @@ export function ChannelRailItem({
   unread: UnreadState;
   occupants: number;
   onSelect: () => void;
+  onJoinVoice?: () => void;
 }) {
   const { t } = useTranslation();
   const notifications = useChannelNotificationLevel(channel);
@@ -1656,7 +1666,7 @@ export function ChannelRailItem({
           hasUnread && !selected && !connected && "text-paper",
           muted && !selected && !connected && "opacity-50",
         )}
-        onClick={onSelect}
+        onClick={onJoinVoice && !connected ? onJoinVoice : onSelect}
       >
         <ChannelIcon channel={channel} className="h-4 w-4" />
         {hasUnread && (
@@ -1954,12 +1964,15 @@ function ChannelRow({
             className="absolute -left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper"
           />
         )}
-        {/* A voice row opens its transcript just like a text row. Joining media
-            is deliberate and lives in the selected channel's header, so
-            reading or replying never asks for the microphone. */}
+        {/* A voice row is the call: one click joins it, the way a text row
+            opens its channel. The old phone tile and double-click were two
+            more ways to do the same thing, and the tile read as a state
+            ("someone is calling") rather than an action. Connected rows
+            fall back to plain selection, so clicking the room you are in
+            just shows it. */}
         <button
           type="button"
-          onClick={onSelect}
+          onClick={onJoinVoice && !connected ? onJoinVoice : onSelect}
           aria-current={announceCurrent ? "page" : undefined}
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
