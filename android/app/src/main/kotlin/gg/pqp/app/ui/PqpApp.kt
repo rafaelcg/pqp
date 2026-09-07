@@ -60,6 +60,7 @@ import gg.pqp.app.ui.screens.YouScreen
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.voice.CallController
+import gg.pqp.app.voice.Refusal
 import gg.pqp.app.voice.VoiceController
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.serialization.Serializable
@@ -174,6 +175,35 @@ private fun SignedInNav(
             android.widget.Toast.makeText(context, micDenied, android.widget.Toast.LENGTH_LONG).show()
         },
     )
+
+    // The server's answer to a join or a screen share, and a moderator's
+    // notice, shown from here rather than from any one screen. A join starts
+    // from a chat screen, a share from the call bar, and the person may have
+    // navigated on by the time the answer lands; a collector that lives on the
+    // channel list was out of composition for every one of those. A toast,
+    // like the microphone refusal above, because there is no scaffold at this
+    // level to host a snackbar. The frame's own sentence is shown verbatim for
+    // a notice: the server already wrote and translated it.
+    val roomFull = stringResource(R.string.voice_room_full)
+    val unsupported = stringResource(R.string.voice_transport_unsupported)
+    val screenDenied = stringResource(R.string.voice_screen_share_denied)
+    val backendUnreachable = stringResource(R.string.voice_backend_unreachable)
+    LaunchedEffect(voiceState.refusal) {
+        val text = when (voiceState.refusal) {
+            Refusal.RoomFull -> roomFull
+            Refusal.TransportUnsupported -> unsupported
+            Refusal.ScreenShareDenied -> screenDenied
+            Refusal.VoiceBackendUnreachable -> backendUnreachable
+            null -> return@LaunchedEffect
+        }
+        android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_LONG).show()
+        voice.dismissRefusal()
+    }
+    LaunchedEffect(voiceState.notice) {
+        val notice = voiceState.notice ?: return@LaunchedEffect
+        android.widget.Toast.makeText(context, notice, android.widget.Toast.LENGTH_LONG).show()
+        voice.dismissNotice()
+    }
 
     // A tapped notification, routed only once the app is signed in and has a
     // NavController. Anything tapped earlier waited on the controller.
@@ -332,7 +362,14 @@ private fun SignedInNav(
                         onBack = nav::popBackStack,
                         serverId = route.serverId,
                         actions = {
-                            if (route.isVoiceChannel) {
+                            // Offered only while this room is not already the
+                            // call. Once joining or connected, the call bar
+                            // above the NavHost owns every voice control, and a
+                            // second `join` mid-connect would tear the session
+                            // down and rebuild it.
+                            val inThisRoom =
+                                voiceState.channelId == route.channelId && voiceState.isActive
+                            if (route.isVoiceChannel && !inThisRoom) {
                                 IconButton(
                                     onClick = {
                                         withMicrophone {

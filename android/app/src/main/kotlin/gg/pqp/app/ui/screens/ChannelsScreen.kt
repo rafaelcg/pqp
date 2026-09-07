@@ -21,8 +21,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -66,7 +64,6 @@ import gg.pqp.app.ui.theme.Motion
 import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
-import gg.pqp.app.voice.Refusal
 import gg.pqp.app.voice.VoiceController
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.contentOrNull
@@ -111,34 +108,11 @@ fun ChannelsScreen(
         servers.firstOrNull { it.id == serverId }?.communityHomeEnabled == true
 
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
-    val snackbars = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val voiceState by voice.state.collectAsStateWithLifecycle()
-
-    val roomFull = stringResource(R.string.voice_room_full)
-    val unsupported = stringResource(R.string.voice_transport_unsupported)
-    val screenDenied = stringResource(R.string.voice_screen_share_denied)
-    val backendUnreachable = stringResource(R.string.voice_backend_unreachable)
-    LaunchedEffect(voiceState.refusal) {
-        when (voiceState.refusal) {
-            Refusal.RoomFull -> snackbars.showSnackbar(roomFull)
-            Refusal.TransportUnsupported -> snackbars.showSnackbar(unsupported)
-            Refusal.ScreenShareDenied -> snackbars.showSnackbar(screenDenied)
-            Refusal.VoiceBackendUnreachable -> snackbars.showSnackbar(backendUnreachable)
-            null -> return@LaunchedEffect
-        }
-        voice.dismissRefusal()
-    }
-
-    // Voice moderation. The frame carries the whole sentence, already written
-    // and already translated by the server, so it is shown verbatim rather than
-    // mapped onto a string this client picked. An eviction the target cannot
-    // see is indistinguishable from a network failure.
-    LaunchedEffect(voiceState.notice) {
-        val notice = voiceState.notice ?: return@LaunchedEffect
-        snackbars.showSnackbar(notice)
-        voice.dismissNotice()
-    }
+    // Voice refusals and moderation notices are shown by `PqpApp`, not here:
+    // a join now starts from the chat screen, and a screen share from the call
+    // bar, so this screen is usually not the one on top when the answer lands.
 
     LaunchedEffect(serverId) {
         channels = runCatching { session.api.channels(serverId) }.getOrDefault(emptyList())
@@ -226,7 +200,6 @@ fun ChannelsScreen(
                 ChromeDivider()
             }
         },
-        snackbarHost = { SnackbarHost(snackbars) },
     ) { padding ->
         val list = channels
         when {
