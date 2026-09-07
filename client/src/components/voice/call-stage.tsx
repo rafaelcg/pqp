@@ -107,7 +107,12 @@ import {
   saveParticipantRailOpen,
 } from "@/lib/participant-rail-preference";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
-import { PeerTileControls } from "@/components/voice/peer-tile-controls";
+import {
+  PeerAudioMenu,
+  PeerAudioMenuButton,
+  usePeerAudioMenu,
+  type PeerAudioTrack,
+} from "@/components/voice/peer-audio-menu";
 import { VoiceQualityMeter } from "@/components/voice/voice-quality-meter";
 import { useVoiceLinkQuality } from "@/hooks/use-voice-link-quality";
 import type { VoiceLinkQuality } from "@/lib/voice-link-quality";
@@ -167,8 +172,33 @@ export interface StagePerson {
   volumeKey?: string;
   volume?: number;
   onSetVolume?: (volume: number) => void;
+  /**
+   * The same knob for the screen this person is sharing, when that share
+   * carries sound. Separate from `volume` because a film and a voice are two
+   * different things to turn down, and the moderator who asked for this asked
+   * for both in the same breath.
+   */
+  shareVolume?: number;
+  onSetShareVolume?: (volume: number) => void;
   onRetry?: () => void;
   quality?: VoiceLinkQuality | null;
+}
+
+/**
+ * A person's two sliders, or nothing when the caller wired neither. Kept as a
+ * function so every surface that draws a face asks the same question.
+ */
+export function personAudioTracks(person: StagePerson): {
+  voice?: PeerAudioTrack;
+  share?: PeerAudioTrack;
+} | undefined {
+  const voice = person.onSetVolume
+    ? { volume: person.volume ?? 1, onSetVolume: person.onSetVolume }
+    : undefined;
+  const share = person.onSetShareVolume
+    ? { volume: person.shareVolume ?? 1, onSetVolume: person.onSetShareVolume }
+    : undefined;
+  return voice || share ? { voice, share } : undefined;
 }
 
 const PIP_CORNER_CLASS: Record<PipCorner, string> = {
@@ -748,6 +778,13 @@ function ActiveCall({
       onSetVolume: onSetPeerVolume
         ? (volume: number) => onSetPeerVolume(volumeKey, volume)
         : undefined,
+      // Only while this person's share is actually carrying sound. A second
+      // slider for a silent share is a knob that moves nothing.
+      shareVolume: voiceState.screenVolumes[volumeKey] ?? 1,
+      onSetShareVolume:
+        onSetScreenVolume && peer.screenAudioStream != null
+          ? (volume: number) => onSetScreenVolume(volumeKey, volume)
+          : undefined,
       onRetry:
         failed && onRetryPeer ? () => onRetryPeer(peer.peerId) : undefined,
       quality: peer.quality ?? meshQuality[peer.peerId] ?? null,
@@ -793,14 +830,26 @@ function ActiveCall({
   }
 
   function shareAudioControl(tile: ScreenShareTile) {
-    if (tile.isSelf || !tile.hasAudio || !onSetScreenVolume) {
+    if (tile.isSelf) {
       return undefined;
     }
     const key = tile.userId ?? tile.peerId;
-    return {
-      volume: voiceState.screenVolumes[key] ?? 1,
-      onSetVolume: (volume: number) => onSetScreenVolume(key, volume),
-    };
+    const presenter = remotes.find((person) => person.volumeKey === key);
+    const voice =
+      presenter?.onSetVolume && !presenter.failed
+        ? {
+            volume: presenter.volume ?? 1,
+            onSetVolume: presenter.onSetVolume,
+          }
+        : undefined;
+    const share =
+      tile.hasAudio && onSetScreenVolume
+        ? {
+            volume: voiceState.screenVolumes[key] ?? 1,
+            onSetVolume: (volume: number) => onSetScreenVolume(key, volume),
+          }
+        : undefined;
+    return voice || share ? { voice, share } : undefined;
   }
   const receivedShareHasAudio = useReceivedShareAudio(
     focusedIsLocal ? null : screenStream,
@@ -1113,6 +1162,8 @@ function ActiveCall({
                     avatarUrl: person.avatarUrl,
                     volume: remote?.volume,
                     onSetVolume: remote?.onSetVolume,
+                    shareVolume: remote?.shareVolume,
+                    onSetShareVolume: remote?.onSetShareVolume,
                     failed: remote?.failed,
                     onRetry: remote?.onRetry,
                   };
@@ -1123,6 +1174,8 @@ function ActiveCall({
                   avatarUrl: person.avatarUrl,
                   volume: person.volume,
                   onSetVolume: person.onSetVolume,
+                  shareVolume: person.shareVolume,
+                  onSetShareVolume: person.onSetShareVolume,
                   failed: person.failed,
                   onRetry: person.onRetry,
                 }))
@@ -2208,19 +2261,39 @@ function TileOverlay({
   onPin,
   pinned = false,
   name,
+  audio,
 }: {
   isFullscreen?: boolean;
   onToggleFullscreen?: () => void;
   onPin?: () => void;
   pinned?: boolean;
   name: string;
+  /**
+   * This person's sound. A round button beside fullscreen and pin, opening the
+   * one panel that carries their voice and their share. A button rather than a
+   * slider parked on the picture, because that slider was revealed by hover,
+   * and on a phone hover is no control at all.
+   */
+  audio?: { voice?: PeerAudioTrack; share?: PeerAudioTrack };
 }) {
   const { t } = useTranslation();
-  if (!onToggleFullscreen && !onPin) {
+  const menu = usePeerAudioMenu();
+  const hasAudio = Boolean(audio?.voice || audio?.share);
+  if (!onToggleFullscreen && !onPin && !hasAudio) {
     return null;
   }
   return (
-    <div className="absolute left-2 top-2 z-20 flex items-center gap-1 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100">
+    <div
+      ref={menu.rootRef}
+      className={cn(
+        "absolute left-2 top-2 z-20 flex items-center gap-1",
+        // An open panel keeps its own chrome visible; otherwise the row
+        // follows the tile's hover, and stays put on a touch screen.
+        menu.open
+          ? "opacity-100"
+          : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
+      )}
+    >
       {onToggleFullscreen && (
         <Tooltip
           label={
@@ -2265,6 +2338,51 @@ function TileOverlay({
           </button>
         </Tooltip>
       )}
+      {hasAudio && (
+        <div className="relative">
+          <PeerAudioMenuButton
+            name={name}
+            open={menu.open}
+            onToggle={menu.toggle}
+            muted={audio?.voice?.volume === 0}
+          />
+          <PeerAudioMenu
+            name={name}
+            open={menu.open}
+            voice={audio?.voice}
+            share={audio?.share}
+            side="bottom"
+            align="start"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The always-visible way back from a dead peer connection. Never inside the
+ * audio panel: a tile that has failed is showing nothing, and the one control
+ * that fixes it must not be one click further away than it used to be.
+ */
+function TileRetry({
+  onRetry,
+  className,
+}: {
+  onRetry: () => void;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className={cn("absolute z-20", className)}>
+      <Button
+        variant="secondary"
+        size="sm"
+        className="h-6 px-2 text-[10px]"
+        onClick={onRetry}
+      >
+        {t("voice.tile.retry")}
+      </Button>
     </div>
   );
 }
@@ -2317,6 +2435,7 @@ function PrimaryTile({
         onPin={onPin}
         pinned={pinned}
         name={person.name}
+        audio={person.failed ? undefined : personAudioTracks(person)}
       />
       <TileBadge
         name={person.name}
@@ -2332,14 +2451,9 @@ function PrimaryTile({
           className="absolute right-2 top-2 z-20"
         />
       )}
-      <PeerTileControls
-        name={person.name}
-        volume={person.volume}
-        onSetVolume={person.onSetVolume}
-        failed={person.failed}
-        onRetry={person.onRetry}
-        className="absolute bottom-8 left-2 right-2"
-      />
+      {person.failed && person.onRetry && (
+        <TileRetry onRetry={person.onRetry} className="bottom-8 left-2" />
+      )}
     </div>
   );
 }
@@ -2415,6 +2529,7 @@ export function CameraTile({
         onPin={onPin}
         pinned={pinned}
         name={person.name}
+        audio={person.failed ? undefined : personAudioTracks(person)}
       />
       <TileBadge
         name={person.isSelf ? youLabel : person.name}
@@ -2431,14 +2546,9 @@ export function CameraTile({
           className="absolute right-1.5 top-1.5 z-20"
         />
       )}
-      <PeerTileControls
-        name={person.name}
-        volume={person.volume}
-        onSetVolume={person.onSetVolume}
-        failed={person.failed}
-        onRetry={person.onRetry}
-        className="absolute bottom-8 left-2 right-2"
-      />
+      {person.failed && person.onRetry && (
+        <TileRetry onRetry={person.onRetry} className="bottom-8 left-2" />
+      )}
     </li>
   );
 }
@@ -2500,22 +2610,7 @@ export function RoomView({
     >
       <ul className="flex max-w-3xl flex-wrap items-center justify-center gap-x-5 gap-y-3">
         {slots.shown.map((person) => (
-          <li
-            key={person.key}
-            data-call-listener={person.name}
-            className="flex w-20 flex-col items-center gap-1"
-          >
-            <VoiceAvatar
-              name={person.name}
-              avatarUrl={person.avatarUrl}
-              isSpeaking={person.speaking}
-              muted={person.muted}
-              size="lg"
-            />
-            <span className="max-w-full truncate text-[11px] text-paper-muted">
-              {person.isSelf ? `${person.name} ${youLabel}` : person.name}
-            </span>
-          </li>
+          <RoomFace key={person.key} person={person} youLabel={youLabel} />
         ))}
         {slots.overflow > 0 && (
           <li className="text-sm tabular-nums text-paper-muted">
@@ -2527,6 +2622,81 @@ export function RoomView({
         {t("voice.stage.noVideo")}
       </p>
     </div>
+  );
+}
+
+/**
+ * One face in the room view, and the way to that person's sound.
+ *
+ * THIS IS THE STATE A VOICE CALL SPENDS MOST OF ITS LIFE IN. Nobody has a
+ * camera on, nobody is sharing, so there are no tiles and no listener strip,
+ * and until now no volume control of any kind was reachable from here: the
+ * room drew faces and nothing else. Clicking one now opens the same panel every
+ * other surface opens.
+ */
+function RoomFace({
+  person,
+  youLabel,
+}: {
+  person: StagePerson;
+  youLabel: string;
+}) {
+  const { t } = useTranslation();
+  const menu = usePeerAudioMenu<HTMLLIElement>();
+  const audio = person.failed ? undefined : personAudioTracks(person);
+  const actionable = Boolean(audio || (person.failed && person.onRetry));
+  return (
+    <li
+      ref={menu.rootRef}
+      data-call-listener={person.name}
+      className="relative flex w-20 flex-col items-center gap-1"
+    >
+      {actionable ? (
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={menu.open}
+          aria-label={t("voice.audio.title", { name: person.name })}
+          onClick={menu.toggle}
+          className="flex flex-col items-center gap-1 rounded-lg p-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-signal"
+        >
+          <VoiceAvatar
+            name={person.name}
+            avatarUrl={person.avatarUrl}
+            isSpeaking={person.speaking}
+            muted={person.muted}
+            size="lg"
+          />
+          <span className="max-w-[5rem] truncate text-[11px] text-paper-muted">
+            {person.name}
+          </span>
+        </button>
+      ) : (
+        <>
+          <VoiceAvatar
+            name={person.name}
+            avatarUrl={person.avatarUrl}
+            isSpeaking={person.speaking}
+            muted={person.muted}
+            size="lg"
+          />
+          <span className="max-w-full truncate text-[11px] text-paper-muted">
+            {person.isSelf ? `${person.name} ${youLabel}` : person.name}
+          </span>
+        </>
+      )}
+      <PeerAudioMenu
+        name={person.name}
+        open={menu.open}
+        voice={audio?.voice}
+        share={audio?.share}
+        failed={person.failed}
+        onRetry={person.onRetry}
+        side="bottom"
+        align="start"
+        className="left-1/2 -translate-x-1/2"
+      />
+    </li>
   );
 }
 
@@ -2639,20 +2809,20 @@ function TileBadge({
   );
 }
 
+export interface OccupantFace {
+  key: string;
+  displayName: string;
+  avatarUrl: string | null;
+  volume?: number;
+  onSetVolume?: (volume: number) => void;
+  shareVolume?: number;
+  onSetShareVolume?: (volume: number) => void;
+  failed?: boolean;
+  onRetry?: () => void;
+}
+
 /** Small overlapped avatar row for the banner states. */
-export function OccupantFaces({
-  faces,
-}: {
-  faces: {
-    key: string;
-    displayName: string;
-    avatarUrl: string | null;
-    volume?: number;
-    onSetVolume?: (volume: number) => void;
-    failed?: boolean;
-    onRetry?: () => void;
-  }[];
-}) {
+export function OccupantFaces({ faces }: { faces: OccupantFace[] }) {
   const interactive = faces.some(
     (person) => person.onSetVolume || person.onRetry,
   );
@@ -2662,27 +2832,62 @@ export function OccupantFaces({
       aria-hidden={interactive ? undefined : true}
     >
       {faces.slice(0, 3).map((person) => (
-        <span key={person.key} className="group relative inline-flex">
-          <UserAvatar
-            name={person.displayName}
-            avatarUrl={person.avatarUrl}
-            rounded="full"
-            className="h-6 w-6 ring-2 ring-ink-2"
-            fallbackClassName="bg-ink-4 text-[10px] text-paper"
-          />
-          {(person.onSetVolume || person.onRetry) && (
-            <PeerTileControls
-              name={person.displayName}
-              volume={person.volume}
-              onSetVolume={person.onSetVolume}
-              failed={person.failed}
-              onRetry={person.onRetry}
-              alwaysOpen
-              className="absolute left-0 top-full z-30 hidden min-w-[8rem] rounded-md bg-ink-2 p-1 shadow-lg ring-1 ring-ink-4/80 group-hover:block group-focus-within:block"
-            />
-          )}
-        </span>
+        <BannerFace key={person.key} person={person} />
       ))}
+    </span>
+  );
+}
+
+/**
+ * One of the three faces on the collapsed bar, and the way to that person's
+ * sound while the stage is folded away. Pressed, not hovered: the collapsed
+ * bar is what a phone sees for most of a call.
+ */
+function BannerFace({ person }: { person: OccupantFace }) {
+  const { t } = useTranslation();
+  const menu = usePeerAudioMenu<HTMLSpanElement>();
+  const voice = person.onSetVolume
+    ? { volume: person.volume ?? 1, onSetVolume: person.onSetVolume }
+    : undefined;
+  const share = person.onSetShareVolume
+    ? { volume: person.shareVolume ?? 1, onSetVolume: person.onSetShareVolume }
+    : undefined;
+  const actionable = Boolean(voice || share || (person.failed && person.onRetry));
+  const avatar = (
+    <UserAvatar
+      name={person.displayName}
+      avatarUrl={person.avatarUrl}
+      rounded="full"
+      className="h-6 w-6 ring-2 ring-ink-2"
+      fallbackClassName="bg-ink-4 text-[10px] text-paper"
+    />
+  );
+  return (
+    <span ref={menu.rootRef} className="relative inline-flex">
+      {actionable ? (
+        <button
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={menu.open}
+          aria-label={t("voice.audio.title", { name: person.displayName })}
+          className="inline-flex rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-signal"
+          onClick={menu.toggle}
+        >
+          {avatar}
+        </button>
+      ) : (
+        avatar
+      )}
+      <PeerAudioMenu
+        name={person.displayName}
+        open={menu.open}
+        voice={voice}
+        share={share}
+        failed={person.failed}
+        onRetry={person.onRetry}
+        side="bottom"
+        align="start"
+      />
     </span>
   );
 }
@@ -2727,12 +2932,13 @@ function ScreenTileFrame({
   onPin?: () => void;
   pinned?: boolean;
   /**
-   * The slider for THIS share's sound, absent when there is no sound to move
-   * (our own tile, or a share that arrived silent). It lives on the share
-   * rather than on the presenter's face because that is where the sound
-   * appears to come from, and because the face already carries their voice.
+   * The presenter's sound: their voice, and this share's audio when it carries
+   * any. Both rows of one panel rather than a lone slider on the corner of the
+   * picture, because "turn the film down but not him" and "turn him down but
+   * not the film" are the same question about the same person, and the person
+   * asking has to be able to find them together.
    */
-  audio?: { volume: number; onSetVolume: (volume: number) => void };
+  audio?: { voice?: PeerAudioTrack; share?: PeerAudioTrack };
   /**
    * The "not watching this one" state, and the way out of it.
    *
@@ -2745,6 +2951,8 @@ function ScreenTileFrame({
   className?: string;
 }) {
   const { t } = useTranslation();
+  const menu = usePeerAudioMenu();
+  const hasAudio = Boolean(audio?.voice || audio?.share);
   const label = isFullscreen
     ? t("voice.share.exitFullscreen")
     : tile.isSelf
@@ -2795,7 +3003,15 @@ function ScreenTileFrame({
           parked on top of it makes both unreadable. Same rule and the same
           classes as a camera tile's `TileOverlay`; a touch device, which has
           no hover to reveal anything, keeps them all the time. */}
-      <div className="absolute left-2 top-2 z-20 flex max-w-[80%] items-center gap-1.5 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100">
+      <div
+        ref={menu.rootRef}
+        className={cn(
+          "absolute left-2 top-2 z-20 flex max-w-[80%] items-center gap-1.5",
+          menu.open
+            ? "opacity-100"
+            : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
+        )}
+      >
         {/* Only a peer's share can be declined. Declining our own would mean
             hiding the thing we are broadcasting, which is not a thing anyone
             wants and would read as having stopped. */}
@@ -2861,6 +3077,24 @@ function ScreenTileFrame({
             </button>
           </Tooltip>
         )}
+        {hasAudio && (
+          <div className="relative">
+            <PeerAudioMenuButton
+              name={tile.presenterName}
+              open={menu.open}
+              onToggle={menu.toggle}
+              muted={audio?.share?.volume === 0}
+            />
+            <PeerAudioMenu
+              name={tile.presenterName}
+              open={menu.open}
+              voice={audio?.voice}
+              share={audio?.share}
+              side="bottom"
+              align="start"
+            />
+          </div>
+        )}
       </div>
       {/* The name goes where every other tile keeps its name: the bottom left,
           always visible, out of the title overlay's corner. It names the
@@ -2871,18 +3105,6 @@ function ScreenTileFrame({
         <span className="pointer-events-none absolute bottom-0 left-0 z-10 flex max-w-full items-center gap-1 truncate rounded-tr-md bg-ink/70 px-1.5 py-0.5 text-[10px] text-paper">
           {tile.isSelf ? t("voice.share.yourScreen") : tile.presenterName}
         </span>
-      )}
-      {/* Bottom right, away from the name and the fullscreen button. Hidden
-          until hover while it sits at unity, the same rule the face tiles
-          use, so a share nobody has adjusted is still just a picture. */}
-      {audio && (
-        <div className="group absolute bottom-2 right-2 w-32">
-          <PeerTileControls
-            name={t("voice.share.audioOf", { name: tile.presenterName })}
-            volume={audio.volume}
-            onSetVolume={audio.onSetVolume}
-          />
-        </div>
       )}
     </div>
   );

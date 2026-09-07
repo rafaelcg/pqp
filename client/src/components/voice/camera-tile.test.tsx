@@ -76,6 +76,43 @@ describe("CameraTile", () => {
     expect(html).toContain('aria-label="Unpin"');
   });
 
+  /**
+   * A tile that draws a person and offers no way to turn them down is the bug
+   * a 510-member community's moderator reported: the control was there, under
+   * a hover, and he never found it. The button is what makes it findable, so
+   * losing it is a regression a test has to catch.
+   */
+  it("offers this person's sound from the tile itself", () => {
+    const html = render(
+      <CameraTile
+        person={person({ stream: fakeStream, volume: 1, onSetVolume: () => {} })}
+        youLabel="(you)"
+      />,
+    );
+    expect(html).toContain('data-testid="peer-audio-open"');
+    expect(html).toContain('aria-label="Ana&#x27;s audio"');
+  });
+
+  it("has no volume button on our own tile, which has no knob behind it", () => {
+    const html = render(
+      <CameraTile
+        person={person({ stream: fakeStream, isSelf: true })}
+        youLabel="(you)"
+      />,
+    );
+    expect(html).not.toContain('data-testid="peer-audio-open"');
+  });
+
+  it("keeps Retry on the picture rather than behind the menu", () => {
+    const html = render(
+      <CameraTile
+        person={person({ failed: true, onRetry: () => {} })}
+        youLabel="(you)"
+      />,
+    );
+    expect(html).toContain("Retry");
+  });
+
   it("answers a click on the picture once the stage holds more than one tile", () => {
     const alone = render(
       <CameraTile
@@ -119,6 +156,34 @@ describe("RoomView", () => {
     expect(html).toContain('data-call-listener="Bia"');
     expect(html).toContain("Nobody has a camera or a screen on");
     expect(html).not.toContain("<video");
+  });
+
+  /**
+   * THE STATE A VOICE CALL SPENDS MOST OF ITS LIFE IN. No camera, no share, so
+   * no tiles and no listener strip: this view is the whole call. It used to
+   * draw faces and nothing else, which is why per-person volume read as
+   * missing to somebody who never turns a camera on.
+   */
+  it("lets a face be pressed for that person's sound", () => {
+    const html = render(
+      <RoomView
+        people={[person({ key: "a", name: "Ana", volume: 1, onSetVolume: () => {} })]}
+        youLabel="(you)"
+      />,
+    );
+    expect(html).toContain('aria-haspopup="dialog"');
+    expect(html).toContain('aria-label="Ana&#x27;s audio"');
+  });
+
+  it("leaves our own face a label, because there is no knob on our own voice", () => {
+    const html = render(
+      <RoomView
+        people={[person({ key: "me", name: "Rafa", isSelf: true })]}
+        youLabel="(you)"
+      />,
+    );
+    expect(html).not.toContain('aria-haspopup="dialog"');
+    expect(html).toContain("(you)");
   });
 
   it("counts a room too big to draw, rather than drawing all of it", () => {

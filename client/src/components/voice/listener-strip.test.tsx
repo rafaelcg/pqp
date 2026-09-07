@@ -54,6 +54,24 @@ describe("ListenerStrip", () => {
     expect(html).not.toContain("<video");
   });
 
+  /**
+   * The chip is the trigger. It used to reveal a slider on hover, which a
+   * phone cannot do and a person scanning the row does not know to try.
+   */
+  it("makes a listener pressable when there is a volume behind them", () => {
+    const html = render([
+      listener("Ana", { volume: 1, onSetVolume: () => {} }),
+    ]);
+    expect(html).toContain('aria-haspopup="dialog"');
+    expect(html).toContain('aria-label="Ana&#x27;s audio"');
+  });
+
+  it("leaves a chip with no knob behind it as a label, not a dead button", () => {
+    const html = render([listener("Ana", { isSelf: true })]);
+    expect(html).not.toContain('aria-haspopup="dialog"');
+    expect(html).not.toContain('role="button"');
+  });
+
   it("marks us, so a person can find themselves in the room", () => {
     const html = render([listener("Ana", { isSelf: true })]);
     expect(html).toContain("(you)");

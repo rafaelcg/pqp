@@ -287,6 +287,42 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
       .poll(() => strip(page).locator("[data-call-listener]").count())
       .toBe(4);
 
+    // --- one person's sound, found by clicking that person ---------------
+    // The knob shipped months ago and a moderator running a 510-member
+    // community reported it as missing, because every copy of it was revealed
+    // by HOVER: a phone has no hover, and nobody scanning a row of faces
+    // thinks to rest a pointer on one. Pressing the chip is the gesture.
+    const chipName = (await strip(page)
+      .locator("[data-call-listener]")
+      .first()
+      .getAttribute("data-call-listener"))!;
+    await strip(page).locator(`[data-call-listener="${chipName}"]`).click();
+    const panel = page.getByTestId("peer-audio-menu");
+    await expect(panel).toBeVisible();
+    await expect(panel).toHaveAccessibleName(`${chipName}'s audio`);
+    const slider = panel.getByLabel(`Volume for ${chipName}`);
+    await expect(slider).toBeVisible();
+    // It moves, and the panel says where it landed.
+    await slider.fill("0.5");
+    await expect(panel.getByText("50%")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(panel).toHaveCount(0);
+
+    // The same panel from the sidebar seat, which is where the moderator
+    // actually clicked: that row has advertised itself as a button since it
+    // was written and did nothing when pressed.
+    await page
+      .getByRole("button", { name: `${chipName}, in voice` })
+      .click();
+    await expect(page.getByTestId("peer-audio-menu")).toBeVisible();
+    // The level he just set is the level he finds here: one setting, one
+    // person, whichever surface he opened it from.
+    await expect(
+      page.getByTestId("peer-audio-menu").getByText("50%"),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("peer-audio-menu")).toHaveCount(0);
+
     // Hiding the strip leaves the share the whole stage, and is remembered.
     await page.getByRole("button", { name: "Hide participants" }).click();
     await expect(strip(page)).toHaveAttribute("data-open", "false");

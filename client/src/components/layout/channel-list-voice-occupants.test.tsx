@@ -143,6 +143,55 @@ describe("ChannelList voice occupants", () => {
     expect(html).not.toContain("ring-accent");
   });
 
+  /**
+   * The row a moderator actually clicked. It has been a `role="button"` with
+   * no `onClick` since it was written, so "click the person in the
+   * call", where Discord puts per-person volume and the first thing anybody
+   * tries, did nothing, and he reported the feature as missing.
+   */
+  it("opens the person's sound when you click them under the voice channel", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        currentUserId={andre.userId}
+        peerVolumes={{ [rafa.userId]: 1 }}
+        onSetPeerVolume={() => {}}
+      />,
+    );
+    expect(html).toMatch(
+      new RegExp(
+        `aria-haspopup="dialog"[^>]*data-voice-occupant="${rafa.userId}"`,
+      ),
+    );
+  });
+
+  it("offers no volume on our own seat, which has no knob behind it", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        currentUserId={andre.userId}
+        onSetPeerVolume={() => {}}
+      />,
+    );
+    expect(html).not.toMatch(
+      new RegExp(
+        `aria-haspopup="dialog"[^>]*data-voice-occupant="${andre.userId}"`,
+      ),
+    );
+  });
+
+  it("offers no volume for a call we are not in, where no audio arrives", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        currentUserId={andre.userId}
+        activeVoiceChannelId={null}
+        onSetPeerVolume={() => {}}
+      />,
+    );
+    expect(html).not.toContain('aria-haspopup="dialog"');
+  });
+
   it("lets you drag yourself without Move Members", () => {
     const html = renderList(
       <ChannelList
