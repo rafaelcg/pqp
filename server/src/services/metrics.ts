@@ -117,6 +117,19 @@ export interface AdminMetrics {
     peakTrackedSince: string;
     backend: "mesh" | "livekit";
     /**
+     * What the roster fan-out is doing since the last deploy: how many frames
+     * went out as a delta against how many went out whole, and how many
+     * sockets asked for deltas at all. The second pair is the denominator that
+     * distinguishes "the optimisation is running" from "no client negotiated
+     * it and every frame is still a whole roster".
+     */
+    roster: {
+      deltas: number;
+      snapshots: number;
+      sockets: number;
+      socketsOnDeltas: number;
+    };
+    /**
      * The rooms that have somebody in them right now, largest first.
      *
      * A DM call has no server channel behind it, so `channel` is null there
@@ -707,6 +720,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       peakRoomSizeToday: voice.peakRoomSizeToday,
       peakTrackedSince: voice.peakTrackedSince,
       backend: voice.backend,
+      roster: voice.roster,
       rooms: voice.rooms.map((room) => {
         const named = roomNames.get(room.voiceChannelId);
         return {

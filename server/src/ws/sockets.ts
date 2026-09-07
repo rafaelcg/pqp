@@ -68,6 +68,27 @@ export function deleteAuthenticatedSocket(socket: WebSocket): void {
   sockets.delete(socket);
 }
 
+/**
+ * How many sockets are authenticated, and how many of them negotiated a given
+ * capability. Exists for the operator dashboard: a wire feature that clients
+ * are not actually asking for is the failure mode that looks exactly like
+ * success (pitfall 9 in CLAUDE.md, where Cloudflare TURN was configured,
+ * deployed and never once used), and a fraction is the only thing that tells
+ * the two apart from outside.
+ */
+export function countAuthenticatedSockets(cap: string): {
+  sockets: number;
+  withCap: number;
+} {
+  let withCap = 0;
+  for (const entry of sockets.values()) {
+    if (entry.caps.has(cap)) {
+      withCap += 1;
+    }
+  }
+  return { sockets: sockets.size, withCap };
+}
+
 export function forEachAuthenticatedSocket(
   callback: (socket: WebSocket, user: DbUser, caps: ReadonlySet<string>) => void,
 ): void {

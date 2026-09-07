@@ -234,7 +234,15 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       authenticated = true;
       clearTimeout(authTimeout);
       setAuthenticatedSocket(socket, resolved.user, caps);
-      logEvent("ws.auth", { connId, userId: resolved.user.id });
+      // `caps` on the auth line is how an operator can tell, from the logs of
+      // a real deploy, whether clients are actually negotiating a new wire
+      // feature or whether the server is quietly serving everybody the old
+      // frames. Empty for every build that predates the field.
+      logEvent("ws.auth", {
+        connId,
+        userId: resolved.user.id,
+        caps: caps.length > 0 ? caps.join(",") : undefined,
+      });
       // Deliberately not awaited: it reads one row to find out whether this
       // account asked to be invisible or do-not-disturb, and `ready` must not
       // wait on a preference lookup. Until it resolves the socket is absent from

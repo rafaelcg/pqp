@@ -84,7 +84,11 @@ import {
   upsertVoicePeer,
   type VoicePeerRow,
 } from "../voice/registry.js";
-import { forEachAuthenticatedSocket, SOCKET_CAPS } from "./sockets.js";
+import {
+  countAuthenticatedSockets,
+  forEachAuthenticatedSocket,
+  SOCKET_CAPS,
+} from "./sockets.js";
 import {
   coalesceWindowFor,
   createCoalescer,
@@ -844,6 +848,22 @@ export interface VoiceActivitySnapshot {
   /** The transport the deployment can run. Small rooms may still open on mesh (voice/transport-policy.ts). */
   backend: VoiceRoomTransport;
   /**
+   * What the roster fan-out is actually doing, since boot.
+   *
+   * `deltas` versus `snapshots` says whether rooms are being described
+   * incrementally or whole; `socketsOnDeltas` out of `sockets` says whether
+   * clients are asking for it at all. Both are needed: a deploy where every
+   * frame is a snapshot because no client negotiated the capability is a
+   * silent no-op, and it is indistinguishable from a healthy one without the
+   * denominator.
+   */
+  roster: {
+    deltas: number;
+    snapshots: number;
+    sockets: number;
+    socketsOnDeltas: number;
+  };
+  /**
    * One entry per room that has somebody in it, largest first.
    *
    * Channel *ids* only. Resolving them to a channel and server name is the
@@ -885,6 +905,9 @@ function localRoomOccupancy(): VoiceActivitySnapshot["rooms"] {
  */
 export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot> {
   rollPeakDay();
+  const rosterSocketCensus = countAuthenticatedSockets(
+    SOCKET_CAPS.voiceRosterDelta,
+  );
   let rooms = localRoomOccupancy();
   if (registryOn()) {
     try {
@@ -911,6 +934,12 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
     peakRoomSizeToday: Math.max(peakRoomSizeToday, largestRoomNow),
     peakTrackedSince,
     backend: configuredTransport(),
+    roster: {
+      deltas: rosterFramesSent.deltas,
+      snapshots: rosterFramesSent.snapshots,
+      sockets: rosterSocketCensus.sockets,
+      socketsOnDeltas: rosterSocketCensus.withCap,
+    },
     rooms,
   };
 }
@@ -1022,10 +1051,27 @@ const lastRosterKeyframeAt = new Map<string, number>();
  */
 export const ROSTER_KEYFRAME_MS = 10_000;
 
+/**
+ * Roster frames written since boot, split by which kind.
+ *
+ * Counted per SOCKET, not per fan-out round, because the whole change is about
+ * what each socket is made to read. Read by `GET /api/admin/metrics` and
+ * nothing else, and process-local like every other counter in this file.
+ *
+ * The ratio is the only thing that says the optimisation is actually running
+ * in production rather than merely deployed. A wire feature no client asks for
+ * looks identical to a working one from the server's side, which is exactly
+ * how Cloudflare TURN sat unused for weeks (CLAUDE.md pitfall 9), so the
+ * denominator ships with the numerator.
+ */
+const rosterFramesSent = { deltas: 0, snapshots: 0 };
+
 /** Test seam: forget every sequence and keyframe clock. */
 export function resetRosterSequences(): void {
   rosterSeq.clear();
   lastRosterKeyframeAt.clear();
+  rosterFramesSent.deltas = 0;
+  rosterFramesSent.snapshots = 0;
 }
 
 /** The sequence a socket should adopt from a full roster of this channel. */
@@ -1204,9 +1250,12 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
         }
         if (deltaFrame && caps.has(SOCKET_CAPS.voiceRosterDelta)) {
           sendEncoded(socket, deltaFrame);
+          rosterFramesSent.deltas += 1;
           return;
         }
-        sendEncodedDroppable(socket, fullFrame());
+        if (sendEncodedDroppable(socket, fullFrame())) {
+          rosterFramesSent.snapshots += 1;
+        }
       });
     }
   }

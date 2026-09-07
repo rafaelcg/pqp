@@ -90,6 +90,7 @@ const { setCoalesceImmediate } = await import("./fanout.js");
 setCoalesceImmediate(true);
 
 const {
+  getVoiceActivitySnapshot,
   handleVoiceMessage,
   resetVoicePeers,
   resetVoiceRateLimits,
@@ -498,6 +499,32 @@ describe("voice roster deltas", () => {
     expect(late.gaps).toBe(0);
     await expectConverged(late, channel);
     expect(late.belief.size).toBe(3);
+  });
+
+  it("reports what the fan-out is doing, with the denominator that makes it readable", async () => {
+    // The failure this exists to catch is not an exception. If no client ever
+    // negotiated the capability, every frame would still be a whole roster and
+    // the server would look exactly as healthy as one where the change is
+    // working — the shape of CLAUDE.md's pitfall 9, where Cloudflare TURN was
+    // configured, deployed, and never once used. So the operator snapshot
+    // carries both numbers, and this pins that it does.
+    const channel = randomUUID();
+    const modern = client(channel);
+    const legacy = client(channel, false);
+    const a = client(channel);
+    await join(a);
+    const b = client(channel);
+    await join(b);
+
+    const snapshot = await getVoiceActivitySnapshot();
+    expect(snapshot.roster.deltas).toBeGreaterThan(0);
+    expect(snapshot.roster.snapshots).toBeGreaterThan(0);
+    // Three of the four sockets asked for deltas; the legacy one did not, and
+    // is why `snapshots` above is not zero.
+    expect(snapshot.roster.sockets).toBe(4);
+    expect(snapshot.roster.socketsOnDeltas).toBe(3);
+    void modern;
+    void legacy;
   });
 
   it("costs a fraction of the bytes a whole roster costs, at room size", async () => {

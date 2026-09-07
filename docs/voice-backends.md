@@ -304,6 +304,15 @@ Two asymmetries worth knowing:
 
 Deltas are **off when `VOICE_REGISTRY` is on**: there the rows are the truth and this instance's local event queue is only half the story, so that path keeps sending snapshots.
 
+**How to tell, from outside, that any of this is running.** A roster bug is silent by construction: it shows up as somebody missing from a participant list, never as an error, and a deploy where no client negotiated the capability would serve whole rosters forever and look exactly as healthy as one where the change works. So `GET /api/admin/metrics` carries `voice.roster`:
+
+| field | what it says |
+|---|---|
+| `deltas` / `snapshots` | roster frames written since boot, by kind. Deltas should dominate heavily once a room is busy. |
+| `socketsOnDeltas` / `sockets` | how many connected clients asked for deltas at all. This is the denominator; without it the pair above cannot distinguish "working" from "nobody is using it". |
+
+The `ws.auth` log line carries the negotiated `caps` for the same reason, so a single connection can be traced. Both exist because of CLAUDE.md pitfall 9, where Cloudflare TURN was configured, deployed and never once used, and nothing anywhere said so.
+
 `server/src/ws/voice-roster-delta.test.ts` holds the receiver rule against the server; the client half is in `client/src/hooks/use-voice.test.ts`. `server/scripts/README.md` has the measurements and how to reproduce them.
 
 ## Screen-share audio
