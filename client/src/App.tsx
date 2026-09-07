@@ -5,7 +5,19 @@ import {
   useSignIn,
   useUser,
 } from "@clerk/clerk-react";
-import { Lock, Menu, Phone, Pin, Settings, Users, Video } from "lucide-react";
+import {
+  Columns2,
+  Lock,
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Phone,
+  Pin,
+  Rows2,
+  Settings,
+  Users,
+  Video,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -130,6 +142,22 @@ import { UserPanel } from "@/components/layout/user-panel";
 import { ConnectionCallbackOverlay } from "@/components/connections/connection-callback";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
+import { CallSplit, type CallSplitState } from "@/components/layout/call-split";
+import {
+  CALL_SPLIT_DEFAULT,
+  loadCallSplit,
+  saveCallSplit,
+  type CallSplitPreference,
+  type CallStageShape,
+} from "@/lib/call-split";
+import {
+  channelSidebarIconsOnly,
+  loadChannelSidebarPreference,
+  saveChannelSidebarPreference,
+  toggledChannelSidebarPreference,
+  type ChannelSidebarPreference,
+} from "@/lib/channel-sidebar-preference";
+import { useMdUp } from "@/hooks/use-md-up";
 import { supportsScreenShare } from "@/components/voice/capabilities";
 import {
   formatBinding,
@@ -967,6 +995,69 @@ function MainAppContent({
   // per-device preference plus a media query, and the button that flips it lives
   // in the channel header rather than in the panel.
   const memberSidebar = useMemberSidebar();
+
+  // --- how the call and the transcript share the pane ---------------------
+  // Two per-device preferences, neither synced, for the reason the roster's is
+  // not: they are opinions about a monitor, not about a person. The rules and
+  // the storage live in `lib/call-split.ts` and
+  // `lib/channel-sidebar-preference.ts`; what is here is the state, and the
+  // two toggles in the channel header that write it.
+  const [callSplit, setCallSplit] =
+    useState<CallSplitPreference>(CALL_SPLIT_DEFAULT);
+  useEffect(() => {
+    // Read after the first paint: a denied localStorage must not be able to
+    // stop the app rendering, and an Electron window that restores its
+    // geometry late still gets the same answer.
+    setCallSplit(loadCallSplit());
+  }, []);
+  const [stageShape, setStageShape] = useState<CallStageShape>("none");
+  const handleStageShape = useCallback((shape: CallStageShape) => {
+    setStageShape(shape);
+  }, []);
+  const [splitState, setSplitState] = useState<CallSplitState>({
+    active: false,
+    canSideBySide: false,
+  });
+  const handleSplitState = useCallback((next: CallSplitState) => {
+    setSplitState((previous) =>
+      previous.active === next.active &&
+      previous.canSideBySide === next.canSideBySide
+        ? previous
+        : next,
+    );
+  }, []);
+  const handleCallSplitChange = useCallback(
+    (next: CallSplitPreference, persist: boolean) => {
+      setCallSplit(next);
+      if (persist) {
+        // A drag writes once, when it lets go: a `setItem` per pointer move is
+        // a synchronous disk write per frame.
+        saveCallSplit(next);
+      }
+    },
+    [],
+  );
+  const toggleSplitOrientation = useCallback(() => {
+    setCallSplit((previous) => {
+      const next: CallSplitPreference = {
+        ...previous,
+        orientation:
+          previous.orientation === "side-by-side" ? "stacked" : "side-by-side",
+      };
+      saveCallSplit(next);
+      return next;
+    });
+  }, []);
+
+  // The channel list as a strip of icons. `auto` follows the share until
+  // somebody touches the toggle; after that it is theirs.
+  const columnLayout = useMdUp();
+  const [channelSidebar, setChannelSidebar] =
+    useState<ChannelSidebarPreference>("auto");
+  useEffect(() => {
+    setChannelSidebar(loadChannelSidebarPreference());
+  }, []);
+
   /**
    * Bumped on any `presence-update` frame. Status itself is a pull surface
    * (see `server/src/ws/status.ts`); the frame is only "somebody started
@@ -4316,12 +4407,51 @@ function MainAppContent({
       ? selectedServerId !== null
       : memberSidebarParticipants !== null);
 
+  // SOMEBODY ELSE is presenting in the call we are in. The one moment the
+  // 16rem of channel names is worth less than the pixels it costs.
+  //
+  // Deliberately not "a screen is being shared", which would include our own.
+  // The presenter is looking at the thing they are sharing, not at pqp, and
+  // they are the person most likely to be running the room from the voice
+  // seats in that very list — where the per-person volume control lives.
+  // Taking the list away from the one person using it, at the moment they
+  // start using it, is not a saving. The viewer, who has no reason to touch
+  // the channel list while watching, is who this is for.
+  const watchingAShare =
+    voiceState.status === "connected" &&
+    voiceState.screenSharePeerIds.some(
+      (peerId) => peerId !== voiceState.peerId,
+    );
+  const sidebarIconsOnly = channelSidebarIconsOnly(channelSidebar, {
+    watchingAShare,
+    columnLayout,
+  });
+  // A plain function, not a `useCallback`: it is read below the early returns
+  // that this component is full of, and nothing takes it as a dependency.
+  const toggleChannelSidebar = () => {
+    setChannelSidebar((previous) => {
+      const iconsNow = channelSidebarIconsOnly(previous, {
+        watchingAShare,
+        columnLayout,
+      });
+      // Whichever way it is now, the click makes the opposite explicit, so the
+      // share stops moving it from here on.
+      const next = toggledChannelSidebarPreference(iconsNow);
+      saveChannelSidebarPreference(next);
+      return next;
+    });
+  };
+
   /**
    * The bottom of whichever sidebar is showing. Shared rather than duplicated:
    * an ongoing call and the mute button must not vanish because the reader
    * switched to their conversations.
+   *
+   * `compact` is the icons-only strip: 72px, so the call bar keeps the two
+   * controls that cannot wait (which call, and the way out) and the user panel
+   * stacks. Nothing is dropped that has no second home.
    */
-  const sidebarFooter = () => (
+  const sidebarFooter = (compact = false) => (
     <>
       {voiceState.status !== "idle" && (
         <VoiceStatusBar
@@ -4382,9 +4512,11 @@ function MainAppContent({
             )
           }
           onLeave={() => voice.leave()}
+          compact={compact}
         />
       )}
       <UserPanel
+        compact={compact}
         displayName={user?.displayName ?? "User"}
         tag={user?.tag ?? null}
         handle={user?.handle ?? null}
@@ -4579,6 +4711,73 @@ function MainAppContent({
                 </>
               );
             })()}
+          {/* The layout pair, next to the roster toggle that is already a
+              layout control, and only while there is a picture to make room
+              for. A call is the only time the answer to "who gets the width"
+              is interesting; the rest of the time these would be two buttons
+              nobody has a reason to press. Both are per-device and both are
+              reversible from the same spot, and the collapsed sidebar carries
+              its own way back so leaving this screen cannot strand anybody.
+              The first one also survives walking off the stage into a text
+              channel mid-share: that is exactly when the automation is holding
+              the list collapsed, so that is exactly when the way to overrule
+              it has to be in reach. */}
+          {(stageShape === "expanded" || watchingAShare) &&
+            columnLayout &&
+            selection.kind === "server" && (
+              <Tooltip
+                label={
+                  sidebarIconsOnly
+                    ? t("chrome.expandChannelList")
+                    : t("chrome.collapseChannelList")
+                }
+                detail={t("chrome.collapseChannelListHint")}
+              >
+                <button
+                  type="button"
+                  data-channel-sidebar-toggle=""
+                  aria-pressed={sidebarIconsOnly}
+                  className={cn(
+                    HEADER_ACTION_TILE,
+                    sidebarIconsOnly && "text-paper",
+                  )}
+                  onClick={toggleChannelSidebar}
+                >
+                  {sidebarIconsOnly ? (
+                    <PanelLeftOpen className="h-4 w-4" />
+                  ) : (
+                    <PanelLeftClose className="h-4 w-4" />
+                  )}
+                </button>
+              </Tooltip>
+            )}
+          {splitState.canSideBySide && (
+            <Tooltip
+              label={
+                callSplit.orientation === "side-by-side"
+                  ? t("call.split.stack")
+                  : t("call.split.sideBySide")
+              }
+              detail={t("call.split.orientationHint")}
+            >
+              <button
+                type="button"
+                data-call-split-toggle=""
+                aria-pressed={callSplit.orientation === "side-by-side"}
+                className={cn(
+                  HEADER_ACTION_TILE,
+                  callSplit.orientation === "side-by-side" && "text-paper",
+                )}
+                onClick={toggleSplitOrientation}
+              >
+                {callSplit.orientation === "side-by-side" ? (
+                  <Rows2 className="h-4 w-4" />
+                ) : (
+                  <Columns2 className="h-4 w-4" />
+                )}
+              </button>
+            </Tooltip>
+          )}
           <Tooltip label={t("chrome.pins")}>
             <button
               type="button"
@@ -4660,12 +4859,28 @@ function MainAppContent({
             onDismiss={() => setArrivalServerId(null)}
           />
         )}
+      {/* The call and the transcript, and the divider between them. The stage
+          goes in `stage` and everything that used to follow it goes in the
+          children, so the DOM order is the same three slots whichever way the
+          two are arranged: nothing on the stage is ever unmounted by a layout
+          change, which is what keeps an SFU camera delivered
+          (`lib/remote-video-delivery.ts`). With no call, or a call collapsed to
+          the slim bar, `CallSplit` draws no divider and sizes nothing. */}
+      <CallSplit
+        shape={stageShape}
+        preference={callSplit}
+        onPreferenceChange={handleCallSplitChange}
+        onSplitStateChange={handleSplitState}
+        stage={
+          <>
       {/* The conversation's call surface: invisible until a call exists, a
           join banner while others talk, the full stage once we are in. */}
       {selectedChannel.kind === "server" &&
         selectedChannel.type === "voice" &&
         user && (
           <VoiceChannelStage
+            fill={splitState.active}
+            onShapeChange={handleStageShape}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
             currentUser={{
@@ -4719,6 +4934,8 @@ function MainAppContent({
         )}
       {activeConversation && user && (
         <DmCallStage
+          fill={splitState.active}
+          onShapeChange={handleStageShape}
           conversation={activeConversation}
           currentUser={{
             id: user.id,
@@ -4751,6 +4968,9 @@ function MainAppContent({
           compactPeers={localSettings.compactPeers}
         />
       )}
+          </>
+        }
+      >
       <MessageList
         messages={chat.getMessages()}
         currentUserId={user?.id ?? null}
@@ -4885,6 +5105,7 @@ function MainAppContent({
         slowModeUntil={chat.getSlowModeHeldUntil() || null}
         placeholder={t("composer.placeholder", { name: selectedChannel.name })}
       />
+      </CallSplit>
     </div>
   ) : null;
 
@@ -5201,7 +5422,9 @@ function MainAppContent({
           onInvite={() => setInviteMode("create")}
           onOpenMembers={() => setMembersOpen(true)}
           onOpenServerSettings={() => setServerSettingsOpen(true)}
-          footer={sidebarFooter()}
+          iconsOnly={sidebarIconsOnly}
+          onExpand={toggleChannelSidebar}
+          footer={sidebarFooter(sidebarIconsOnly)}
           communityHomeEnabled={communityHomeEnabled}
           communityHomeShowNew={communityHomeRowNew}
           communityHomeUnread={communityHomeUnread}

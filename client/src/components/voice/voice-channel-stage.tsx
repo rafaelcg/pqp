@@ -1,4 +1,5 @@
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
+import type { CallStageShape } from "@/lib/call-split";
 import type { VideoQuality } from "@/lib/video-quality";
 import { CallStage } from "@/components/voice/call-stage";
 
@@ -34,6 +35,8 @@ export function VoiceChannelStage({
   onWatchShare,
   onRetryPeer,
   compactPeers = false,
+  fill = false,
+  onShapeChange,
 }: {
   channelId: string;
   channelName: string;
@@ -66,6 +69,9 @@ export function VoiceChannelStage({
   onWatchShare?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
   compactPeers?: boolean;
+  /** The pane's divider owns the stage's height. See `CallSplit`. */
+  fill?: boolean;
+  onShapeChange?: (shape: CallStageShape) => void;
 }) {
   const inThisCall =
     voiceState.voiceChannelId === channelId && voiceState.status !== "idle";
@@ -101,6 +107,8 @@ export function VoiceChannelStage({
       onRetryPeer={onRetryPeer}
       compactPeers={compactPeers}
       ringWhenAlone={false}
+      fill={fill}
+      onShapeChange={onShapeChange}
     />
   );
 }

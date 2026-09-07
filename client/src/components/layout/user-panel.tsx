@@ -52,6 +52,13 @@ interface UserPanelProps {
    * field for anyone who has opened Voice or Appearance once.
    */
   onOpenProfile: () => void;
+  /**
+   * The sidebar is 72px of icons, so this row stacks instead of spanning.
+   * Nothing is dropped: mute, deafen and the gear are the three controls a
+   * person needs without opening a channel, and losing any of them to a
+   * collapsed sidebar would be a way to get stranded muted.
+   */
+  compact?: boolean;
 }
 
 /**
@@ -110,6 +117,7 @@ export function UserPanel({
   onOpenSettings,
   onOpenProfile,
   onOpenFeedback,
+  compact = false,
 }: UserPanelProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -121,7 +129,10 @@ export function UserPanel({
   // APK/TestFlight hop in a 16rem sidebar is noise, and this strip used to
   // open a desktop-shaped dialog on a phone.
   const onPhone = isAndroidDevice() || isIOSDevice();
-  const showHint = showDownload && !hintDismissed && !onPhone;
+  // Not on the icons-only strip: the hint is a sentence and a button in a
+  // 72px column, which renders as two unexplained glyphs. It comes back with
+  // the labels, and it is a one-shot invitation rather than a control.
+  const showHint = showDownload && !hintDismissed && !onPhone && !compact;
 
   useEffect(() => {
     if (!open) {
@@ -168,7 +179,12 @@ export function UserPanel({
           }}
         />
       )}
-      <div className="relative flex items-center gap-2 px-2 py-2">
+      <div
+        className={cn(
+          "relative flex gap-2 px-2 py-2",
+          compact ? "flex-col items-center gap-1" : "items-center",
+        )}
+      >
         {open && (
           <div
             ref={popoverRef}
@@ -282,7 +298,10 @@ export function UserPanel({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-ink-2"
+        className={cn(
+          "flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-left hover:bg-ink-2",
+          !compact && "flex-1",
+        )}
         onClick={() => setOpen((prev) => !prev)}
       >
         <span className="relative shrink-0">
@@ -299,7 +318,7 @@ export function UserPanel({
             ringClassName="rounded-full bg-ink ring-2 ring-ink"
           />
         </span>
-        <span className="min-w-0 flex-1">
+        <span className={cn("min-w-0 flex-1", compact && "hidden")}>
           <span className="block truncate text-sm font-semibold">
             {displayName}
           </span>

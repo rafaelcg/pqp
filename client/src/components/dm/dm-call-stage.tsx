@@ -1,6 +1,7 @@
 import { Phone } from "lucide-react";
 import type { DmSummary } from "@pqp/shared";
 import type { VoiceState } from "@/hooks/use-voice";
+import type { CallStageShape } from "@/lib/call-split";
 import type { VideoQuality } from "@/lib/video-quality";
 import { useTranslation } from "@/lib/i18n";
 import { conversationTitle } from "@/lib/conversations";
@@ -35,6 +36,8 @@ export function DmCallStage({
   onShareSystemAudioChange,
   onFocusScreenShare,
   compactPeers = false,
+  fill = false,
+  onShapeChange,
 }: {
   conversation: DmSummary;
   currentUser: {
@@ -58,6 +61,9 @@ export function DmCallStage({
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   compactPeers?: boolean;
+  /** The pane's divider owns the stage's height. See `CallSplit`. */
+  fill?: boolean;
+  onShapeChange?: (shape: CallStageShape) => void;
 }) {
   const { t } = useTranslation();
   const channelId = conversation.channelId;
@@ -127,6 +133,8 @@ export function DmCallStage({
       onShareSystemAudioChange={onShareSystemAudioChange}
       onFocusScreenShare={onFocusScreenShare}
       compactPeers={compactPeers}
+      fill={fill}
+      onShapeChange={onShapeChange}
     />
   );
 }

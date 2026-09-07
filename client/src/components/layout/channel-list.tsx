@@ -9,6 +9,7 @@ import {
   FolderMinus,
   FolderPlus,
   Lock,
+  PanelLeftOpen,
   Pencil,
   Phone,
   Pin,
@@ -198,6 +199,19 @@ interface ChannelListProps {
    * Ver perfil / pqp.gg/@handle on right-click. Absent handle: no link.
    */
   members?: readonly ServerMember[];
+  /**
+   * Draw the list as a strip of icons instead of a 16rem column, giving the
+   * width back to whatever is on the right — in practice a screen share.
+   * `lib/channel-sidebar-preference.ts` owns the rule; this only draws it, and
+   * only above `md`, where the list is a column rather than a drawer.
+   */
+  iconsOnly?: boolean;
+  /**
+   * Puts the labels back. Without it there is no way out of the strip, so
+   * without it the strip is not drawn at all: `iconsOnly` alone cannot strand
+   * anybody in a sidebar they cannot reopen.
+   */
+  onExpand?: () => void;
 }
 
 export function ChannelList({
@@ -249,6 +263,8 @@ export function ChannelList({
   communityHomeSelected = false,
   onSelectCommunityHome,
   members = [],
+  iconsOnly = false,
+  onExpand,
 }: ChannelListProps) {
   const { t } = useTranslation();
   const channelPinHintEnabled = useFeatureHintEnabled("channelPin");
@@ -317,6 +333,127 @@ export function ChannelList({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [hasServer]);
+
+  // --- icons only ---------------------------------------------------------
+  // Below every hook, so the strip and the column are the same component with
+  // the same state: expanding puts you back on the category you had collapsed
+  // and the search you had open, because neither was ever unmounted.
+  //
+  // The drawer is never drawn as a strip (`mobileOpen`): under `md` the list
+  // is already fully hidden, so collapsing it saves nothing and costs the
+  // names. `App.tsx` will not ask for it there either; this is the belt.
+  if (iconsOnly && !mobileOpen && onExpand) {
+    const railGroups = channelRailGroups({
+      favorites: visibleFavs,
+      text: topLevelText,
+      voice: topLevelVoice,
+      categories,
+      childrenByCategory,
+    });
+
+    return (
+      <aside
+        data-immersive-hide=""
+        data-channel-rail=""
+        className="hidden w-[72px] shrink-0 flex-col border-r border-ink-4/60 bg-channel md:flex"
+      >
+        <div className="flex flex-col items-center gap-1 border-b border-ink-4/60 px-2 py-2">
+          <Tooltip label={t("chrome.expandChannelList")} side="right">
+            <button
+              type="button"
+              data-channel-rail-expand=""
+              className="flex h-9 w-9 items-center justify-center rounded-lg text-paper-muted hover:bg-ink-3 hover:text-paper"
+              onClick={onExpand}
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+            </button>
+          </Tooltip>
+          {server && (
+            <Tooltip label={t("chrome.searchMessages")} side="right">
+              <button
+                type="button"
+                className="flex h-9 w-9 items-center justify-center rounded-lg text-paper-muted hover:bg-ink-3 hover:text-paper"
+                onClick={() => setSearchOpen(true)}
+              >
+                <Search className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
+        </div>
+        {server && (
+          <SearchDialog
+            open={searchOpen}
+            serverId={server.id}
+            serverName={server.name}
+            onClose={() => setSearchOpen(false)}
+            onNavigate={onMobileClose}
+          />
+        )}
+        <div className="flex flex-1 flex-col items-center gap-1 overflow-y-auto px-2 py-2">
+          {communityHomeEnabled && server && onSelectCommunityHome && (
+            <Tooltip label={t("communityHome.channelName")} side="right">
+              <button
+                type="button"
+                data-community-home-row
+                aria-current={communityHomeSelected ? "page" : undefined}
+                className={cn(
+                  "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors",
+                  communityHomeSelected
+                    ? "bg-ink-4 text-signal"
+                    : "text-paper-muted hover:bg-ink-4/70 hover:text-paper",
+                )}
+                onClick={onSelectCommunityHome}
+              >
+                <Archive className="h-4 w-4" aria-hidden />
+                {communityHomeUnread > 0 && (
+                  <span
+                    data-community-home-unread
+                    className="absolute -right-1 -top-1 min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+                    aria-label={t("communityHome.badge.unread", {
+                      count: communityHomeUnread,
+                    })}
+                  >
+                    {formatBadgeCount(communityHomeUnread)}
+                  </span>
+                )}
+              </button>
+            </Tooltip>
+          )}
+          {railGroups.map((group, index) => (
+            <div
+              key={group.key}
+              className={cn(
+                "flex w-full flex-col items-center gap-1",
+                index > 0 && "mt-1 border-t border-ink-4/50 pt-2",
+              )}
+            >
+              {group.channels.map((channel) => (
+                <ChannelRailItem
+                  key={channel.id}
+                  channel={channel}
+                  selected={selectedChannelId === channel.id}
+                  connected={activeVoiceChannelId === channel.id}
+                  unread={unread[channel.id] ?? EMPTY_UNREAD}
+                  occupants={
+                    channel.type === "voice"
+                      ? (voiceOccupancy[channel.id]?.length ?? 0)
+                      : 0
+                  }
+                  onSelect={() => onSelectChannel(channel.id)}
+                  onJoinVoice={
+                    channel.type === "voice" && onJoinVoice
+                      ? () => onJoinVoice(channel.id)
+                      : undefined
+                  }
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+        {footer}
+      </aside>
+    );
+  }
 
   function toggleCollapsed(categoryId: string) {
     setCollapsed(toggleCollapsedCategory(categoryId));
@@ -1446,6 +1583,120 @@ function CategoryHeader({
         </button>
       </div>
     </ContextMenu>
+  );
+}
+
+/**
+ * What the icons-only strip shows, in order, as thin dividers between groups.
+ *
+ * The category headers themselves go: a category is a label, and a label is
+ * the one thing a 72px strip has no room for. Its channels keep their place in
+ * the order and gain a hairline above them, so the shape of the server is
+ * still legible without a word. Empty groups are dropped rather than drawn as
+ * a stray divider.
+ */
+export function channelRailGroups(input: {
+  favorites: Channel[];
+  text: Channel[];
+  voice: Channel[];
+  categories: Channel[];
+  childrenByCategory: Map<string, Channel[]>;
+}): { key: string; channels: Channel[] }[] {
+  return [
+    { key: "favorites", channels: input.favorites },
+    { key: "text", channels: input.text },
+    { key: "voice", channels: input.voice },
+    ...input.categories.map((category) => ({
+      key: category.id,
+      channels: input.childrenByCategory.get(category.id) ?? [],
+    })),
+  ].filter((group) => group.channels.length > 0);
+}
+
+/**
+ * One channel on the icons-only strip.
+ *
+ * Everything the wide row says with words this says with position: the glyph
+ * is the channel, the tooltip on hover and the `aria-label` are its name, the
+ * pip on the left edge is unread, the red number is a mention, the small
+ * number under a speaker is how many people are in that call, and the signal
+ * ring is the call you are in. A muted channel keeps its glyph and loses the
+ * pip, exactly as the wide row does.
+ *
+ * A component of its own rather than a loop body because of the hook: the
+ * notification level is per channel, and "muted" has to mean the same thing in
+ * both layouts or the strip would shout about a channel you silenced.
+ */
+export function ChannelRailItem({
+  channel,
+  selected,
+  connected,
+  unread,
+  occupants,
+  onSelect,
+  onJoinVoice,
+}: {
+  channel: Channel;
+  selected: boolean;
+  connected: boolean;
+  unread: UnreadState;
+  occupants: number;
+  onSelect: () => void;
+  onJoinVoice?: () => void;
+}) {
+  const { t } = useTranslation();
+  const notifications = useChannelNotificationLevel(channel);
+  const muted = notifications.level === "none";
+  const hasUnread = !selected && unread.count > 0 && !muted;
+  const mentions = selected || muted ? 0 : unread.mentions;
+  return (
+    <Tooltip label={channel.name} side="right">
+      <button
+        type="button"
+        data-channel-id={channel.id}
+        data-channel-type={channel.type}
+        aria-current={selected ? "page" : undefined}
+        className={cn(
+          "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors",
+          selected
+            ? "bg-ink-3 text-paper"
+            : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
+          connected &&
+            "bg-signal/10 text-signal ring-1 ring-inset ring-signal/30",
+          hasUnread && !selected && !connected && "text-paper",
+          muted && !selected && !connected && "opacity-50",
+        )}
+        onClick={onJoinVoice && !connected ? onJoinVoice : onSelect}
+      >
+        <ChannelIcon channel={channel} className="h-4 w-4" />
+        {hasUnread && (
+          <>
+            <span
+              aria-hidden="true"
+              className="absolute -left-2 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper"
+            />
+            <span className="sr-only">{t("chrome.unreadSr")}</span>
+          </>
+        )}
+        {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
+        {mentions > 0 && (
+          <span
+            className="absolute -right-1 -top-1 min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+            aria-label={t("chrome.unreadMentions", { count: mentions })}
+          >
+            {formatBadgeCount(mentions)}
+          </span>
+        )}
+        {occupants > 0 && (
+          <span
+            className="absolute -bottom-1 -right-1 min-w-4 rounded-full bg-ink-4 px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+            aria-label={t("chrome.inCall", { count: occupants })}
+          >
+            {formatBadgeCount(occupants)}
+          </span>
+        )}
+      </button>
+    </Tooltip>
   );
 }
 

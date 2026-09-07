@@ -71,6 +71,12 @@ interface VoiceStatusBarProps {
   onLeave: () => void;
   /** One-shot share / Watch party coachmark when the stage is not on screen. */
   shareHintEnabled?: boolean;
+  /**
+   * The sidebar is 72px of icons. Only the two things that cannot wait survive
+   * the squeeze: the call you are in, and the way out of it. Camera and share
+   * are on the stage, which is what the collapsed sidebar made room for.
+   */
+  compact?: boolean;
 }
 
 const ACTION = "h-9 w-full shrink-0 rounded-lg";
@@ -102,6 +108,7 @@ export function VoiceStatusBar({
   onOpen,
   onLeave,
   shareHintEnabled = false,
+  compact = false,
 }: VoiceStatusBarProps) {
   const { t } = useTranslation();
   const connected = status === "connected";
@@ -131,6 +138,70 @@ export function VoiceStatusBar({
     !listenOnly &&
     inputMode === "push-to-talk" &&
     !isTransmitting;
+
+  if (compact) {
+    return (
+      <div
+        data-voice-bar-compact=""
+        className="flex flex-col items-center gap-1 border-t border-ink-4/60 bg-ink px-2 py-2"
+      >
+        {/* The sentence survives the squeeze even though the room for it does
+            not. A 72px column cannot print "Voice connected", but a screen
+            reader must still hear the same words the wide bar gives it: the
+            state of your microphone is not a thing to say in colour alone.
+            `aria-live` for the same reason the wide bar has it — connecting
+            turning into connected is news. */}
+        <p aria-live="polite" className="sr-only">
+          {connected ? t("voice.bar.connected") : t("voice.bar.connecting")}
+        </p>
+        {connected ? (
+          <span
+            aria-hidden="true"
+            className="h-2 w-2 shrink-0 rounded-full bg-success shadow-[0_0_8px_var(--glow-success)]"
+          />
+        ) : (
+          <Loader2
+            aria-hidden="true"
+            className="h-3 w-3 shrink-0 animate-spin text-warning"
+          />
+        )}
+        {connected && (
+          <Tooltip
+            label={
+              channelType === "text"
+                ? t("voice.bar.openText", { name: channelName })
+                : t("voice.bar.open", { name: channelName })
+            }
+            side="right"
+          >
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              data-voice-bar-channel={channelType}
+              onClick={onOpen}
+            >
+              {channelType === "text" ? (
+                <Hash className="h-4 w-4" />
+              ) : (
+                <Volume2 className="h-4 w-4" />
+              )}
+            </Button>
+          </Tooltip>
+        )}
+        <Tooltip label={t("voice.bar.leave")} side="right">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8 shrink-0"
+            onClick={onLeave}
+          >
+            <PhoneOff className="h-4 w-4 text-danger" />
+          </Button>
+        </Tooltip>
+      </div>
+    );
+  }
 
   return (
     <div className="border-t border-ink-4/60 bg-ink px-2 py-2">

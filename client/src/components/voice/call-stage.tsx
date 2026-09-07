@@ -106,6 +106,7 @@ import {
   loadParticipantRailOpen,
   saveParticipantRailOpen,
 } from "@/lib/participant-rail-preference";
+import type { CallStageShape } from "@/lib/call-split";
 import { useTranslation, type MessageKey, type MessageVars } from "@/lib/i18n";
 import {
   PeerAudioMenu,
@@ -549,6 +550,20 @@ export interface CallStageProps {
    * Lobby is occupancy, not an outgoing call.
    */
   ringWhenAlone?: boolean;
+  /**
+   * The stage's height is the container's, not its own `svh` rule. Set by
+   * `CallSplit` once the divider is in charge of the number; false everywhere
+   * the stage still sizes itself (a pane too short to split, a phone in
+   * landscape, an Electron window mid-resize).
+   */
+  fill?: boolean;
+  /**
+   * Tells the pane what the stage currently is, so the divider is offered on
+   * an expanded stage and on nothing else. Must be stable across renders: the
+   * cleanup reports `none`, and an unstable identity would fire it on every
+   * commit.
+   */
+  onShapeChange?: (shape: CallStageShape) => void;
 }
 
 export function CallStage({
@@ -581,6 +596,8 @@ export function CallStage({
   onRetryPeer,
   compactPeers = false,
   ringWhenAlone = true,
+  fill = false,
+  onShapeChange,
 }: CallStageProps) {
   const [userCollapsed, setUserCollapsed] = useState(() =>
     isStageCollapsed(channelId),
@@ -635,6 +652,8 @@ export function CallStage({
       onRetryPeer={onRetryPeer}
       compactPeers={compactPeers}
       ringWhenAlone={ringWhenAlone}
+      fill={fill}
+      onShapeChange={onShapeChange}
     />
   );
 }
@@ -672,6 +691,8 @@ function ActiveCall({
   onRetryPeer,
   compactPeers = false,
   ringWhenAlone = true,
+  fill = false,
+  onShapeChange,
 }: {
   channelId: string;
   title: string;
@@ -714,6 +735,8 @@ function ActiveCall({
   onRetryPeer?: (peerId: string) => void;
   compactPeers?: boolean;
   ringWhenAlone?: boolean;
+  fill?: boolean;
+  onShapeChange?: (shape: CallStageShape) => void;
 }) {
   const { t } = useTranslation();
   const wide = useLgUp();
@@ -943,6 +966,23 @@ function ActiveCall({
     hasPrimaryVideo,
     [...voiceState.screenSharePeerIds, ...cameraSoloIds],
   );
+  // What the pane around us is looking at. Only an expanded stage has a size
+  // worth dragging, and only the stage knows whether it is one: `collapsed`
+  // folds in a collapse this person toggled in here. `CallSplit` reads it to
+  // decide whether to draw a divider at all.
+  const shape: CallStageShape = fullscreen.isFullscreen
+    ? "fullscreen"
+    : collapsed
+      ? "compact"
+      : "expanded";
+  useEffect(() => {
+    onShapeChange?.(shape);
+  }, [shape, onShapeChange]);
+  useEffect(() => {
+    // Leaving the call takes the stage with it, and a pane still holding a
+    // height for a stage that is gone is a gap where the transcript should be.
+    return () => onShapeChange?.("none");
+  }, [onShapeChange]);
   // Phone held sideways with a share on: the shell's columns step aside.
   // Everything but the flag lives in the hook (`use-immersive-stage.ts`).
   const immersive = useImmersiveStage({
@@ -1213,9 +1253,14 @@ function ActiveCall({
               // area and hide the exit control under Safari's toolbar, which
               // is how somebody gets stuck in a fullscreen they cannot leave.
               "fixed inset-0 z-50 h-auto max-h-none"
-          : anyVideo
-            ? "h-[68svh] min-h-[280px]"
-            : "h-[38svh] max-h-[420px] min-h-[220px]",
+          : fill
+            ? // The divider owns the number now. `min-h-0` rather than a
+              // floor, because the floor is enforced in `clampSplit` against
+              // the live pane: a second one here would fight it.
+              "h-full min-h-0"
+            : anyVideo
+              ? "h-[68svh] min-h-[280px]"
+              : "h-[38svh] max-h-[420px] min-h-[220px]",
       )}
       onPointerMove={(event) => {
         // Touch "moves" are scrolls and drags, answered on pointer up.
