@@ -29,6 +29,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import livekit.org.webrtc.PeerConnection
 
 /**
  * LiveKit SFU audio, for a room the server put on the `livekit` transport.
@@ -198,17 +199,21 @@ class LiveKitEngine(
 
     override val isSharingScreen: Boolean get() = false
 
+    /** The `/api/ice-servers` list of the current join; read once, at connect. */
+    private var ice: List<IceServer> = emptyList()
+
     /**
-     * [ice] is ignored, on purpose.
-     *
-     * The list from `GET /api/ice-servers` is for peer connections this client
-     * builds. The SFU leg's ICE configuration comes from the LiveKit server in
-     * its join response, which is the only thing that knows the relays that
-     * deployment actually has.
+     * [ice] is the list `GET /api/ice-servers` gave this join, the same one the
+     * mesh path configures its peer connections with. It used to be ignored
+     * here on the theory that the LiveKit server knows its own relays; it does,
+     * and on the hosted deployment they are the media box itself, with a TLS
+     * relay port that Caddy owns. It reaches the SDK only when it carries a
+     * relay; see [sfuIceServers] for the rule and for what the SDK does with it.
      */
     override fun start(localPeerId: String, ice: List<IceServer>) {
         stop()
         this.localPeerId = localPeerId
+        this.ice = ice
 
         joinJob = scope.launch {
             try {
@@ -225,6 +230,39 @@ class LiveKitEngine(
                 fail(error.message ?: error::class.java.simpleName)
             }
         }
+    }
+
+    /**
+     * Nothing is pulled down off the SFU until this client asks for it by name.
+     * With `autoSubscribe = true` a phone in a room where somebody is
+     * presenting from the web receives and decodes that 1080p screen share in
+     * full, on mobile data, to hand the frames to a `return` in
+     * `onTrackSubscribed`. Subscribing deliberately is the difference between
+     * not showing video and not paying for it.
+     *
+     * [relays] is the output of [sfuIceServers]. Empty means the join
+     * response's servers, as before. Non-empty is passed as BOTH `rtcConfig`
+     * and `iceServers`, because in livekit-android 2.28.1 `iceServers` alone is
+     * ignored (`RTCEngine.makeRTCConfig` only merges it into a supplied
+     * `rtcConfig`); the empty `RTCConfiguration` is what the SDK builds itself
+     * on the other branch, so nothing else about the peer connections changes,
+     * and `iceTransportPolicy` stays at its default. This is LiveKit's own
+     * relocated WebRTC namespace (`livekit.org.webrtc`), not the mesh's
+     * `org.webrtc`; see [VoiceTransport] on why the two must never meet.
+     */
+    private fun connectOptionsFor(relays: List<IceServer>): ConnectOptions {
+        if (relays.isEmpty()) return ConnectOptions(autoSubscribe = false)
+        val servers = relays.map { server ->
+            PeerConnection.IceServer.builder(server.urlList)
+                .setUsername(server.username.orEmpty())
+                .setPassword(server.credential.orEmpty())
+                .createIceServer()
+        }
+        return ConnectOptions(
+            autoSubscribe = false,
+            rtcConfig = PeerConnection.RTCConfiguration(emptyList()),
+            iceServers = servers,
+        )
     }
 
     private suspend fun connect(peerId: String) {
@@ -289,13 +327,7 @@ class LiveKitEngine(
         created.connect(
             credentials.url,
             credentials.token,
-            // Nothing is pulled down off the SFU until this client asks for it
-            // by name. With `autoSubscribe = true` a phone in a room where
-            // somebody is presenting from the web receives and decodes that
-            // 1080p screen share in full, on mobile data, to hand the frames to
-            // a `return` in `onTrackSubscribed`. Subscribing deliberately is
-            // the difference between not showing video and not paying for it.
-            ConnectOptions(autoSubscribe = false),
+            connectOptionsFor(sfuIceServers(ice)),
         )
         if (this.localPeerId != peerId) {
             // Left while the socket was coming up.

@@ -97,8 +97,14 @@ actor LiveKitVoiceClient {
     /// publish in the log for every listener in a stage. A later
     /// `setMuted(false)`, which only happens once the rule flips to true,
     /// publishes the track through `setMicrophone(enabled:)`.
+    ///
+    /// `iceServers` is the list `/api/ice-servers` gave this join, the same one
+    /// the mesh path configures its peer connections with. It reaches the SDK
+    /// only when it carries a relay; see `SfuIceServers` for why, and for what
+    /// the SDK does with it (replaces the join response's list).
     func connect(
-        _ info: VoiceSessionInfo, muted: Bool, speaker: Bool, publishMicrophone: Bool = true
+        _ info: VoiceSessionInfo, muted: Bool, speaker: Bool, publishMicrophone: Bool = true,
+        iceServers: [IceServerConfig] = []
     ) async throws {
         await disconnect()
         let bridge = RoomBridge(owner: self)
@@ -110,9 +116,15 @@ actor LiveKitVoiceClient {
         // around the tracks it holds, which is the same configuration the mesh
         // path writes by hand.
         AudioManager.shared.isSpeakerOutputPreferred = speaker
+        // Our relays, not the media box's. Read at connect time, so a list
+        // refreshed between calls reaches the next room and never this one.
+        // `iceTransportPolicy` stays `.all`.
+        let relays = SfuIceServers.select(iceServers).map { server in
+            IceServer(urls: server.urlList, username: server.username, credential: server.credential)
+        }
         let room = Room(
             delegate: bridge,
-            connectOptions: ConnectOptions(),
+            connectOptions: ConnectOptions(iceServers: relays),
             // Same two switches as the web session. No adaptive stream: the
             // phone shows one share at a time at a size the SFU cannot guess
             // from a SwiftUI frame. Dynacast, so a camera nobody is looking at

@@ -91,6 +91,33 @@ The roles editor and the per-channel overwrite editor expose **Speak** (micropho
 
 Tests: `server/src/voice/backends.test.ts` (the grant), `server/src/voice/speak.test.ts` (the resolver), `server/src/voice/publish-grant.test.ts` (the live SFU update), `server/src/ws/voice-speak.test.ts` (welcome, roster, refusals, live change), `client/src/hooks/use-voice.test.ts` ("speak permission"), `ios/pqp/Tests/VoiceSpeakRuleTests.swift` and `ios/pqp/Tests/WireDecodingTests.swift`, `android/app/src/test/kotlin/gg/pqp/app/voice/SpeakRuleTest.kt`.
 
+### ICE servers on the SFU: ours, not the media box's
+
+Until 8 Sep 2026 every LiveKit participant took its ICE servers from the LiveKit server's join response and nothing else. On the hosted deployment that list is the media box's built-in TURN, `turn:216.238.114.79:3478?transport=udp` and `turns:turn.pqp.gg:443?transport=tcp`, and port 443 on that box belongs to Caddy, so the TLS relay was dead and only UDP relay worked. Meanwhile `GET /api/ice-servers` (Cloudflare TURN first, 24 h credentials cached 1 h, then Metered, then static) was fetched by all three clients and used by the mesh path only. Two consequences: someone on a UDP-blocked network could not join an SFU room at all, and relayed viewers (about 9% of joins, measured) went through the media box twice.
+
+All three clients now hand the list they already fetched for the mesh to the LiveKit connection, under one rule, **only when the list carries at least one `turn:` / `turns:` entry**. An empty list, a failed fetch, or a STUN-only list passes nothing, so the server's own relays keep working, because on the web and iOS a client list *replaces* the server's. Nothing is fetched twice: the list is read at connect time, so a refreshed credential reaches the next call and an existing connection is left alone. `iceTransportPolicy` stays at its default. Mesh calls are untouched.
+
+| Client | Where | What the pinned SDK does with a client list |
+|---|---|---|
+| Web | `client/src/lib/sfu-ice-servers.ts`, passed as `room.connect(url, token, { rtcConfig: { iceServers } })` from `livekit-session.ts`; `use-voice.ts` forwards the list `setIceServers` stored | livekit-client 2.21.0 applies the join response's servers only when `rtcConfig.iceServers` is absent (`RTCEngine.makeRTCConfiguration`). `rtcConfig` is a **connect** option, copied onto the engine in `Room.connect`; both `PCTransport`s are built from it (single-PC mode is the default, so usually there is one). |
+| iOS | `ios/pqp/Sources/Voice/SfuIceServers.swift`, `ConnectOptions(iceServers:)` in `LiveKitVoiceClient.connect`; `CallModel` / `VoiceModel` keep the join's fetch | client-sdk-swift 2.16.0 overwrites the server list whenever `connectOptions.iceServers` is non-empty (`Room+Engine.swift`). |
+| Android | `android/.../voice/SfuIceServers.kt`, `ConnectOptions(rtcConfig = RTCConfiguration(emptyList()), iceServers = ...)` in `LiveKitEngine` | livekit-android 2.28.1 ignores `ConnectOptions.iceServers` unless `rtcConfig` is also given, merges it into that config, and uses the server list only when the merged list is empty (`RTCEngine.makeRTCConfig`). So a non-empty list replaces there too, and the empty `RTCConfiguration` is required. |
+
+Tests: `client/src/lib/sfu-ice-servers.test.ts`, `client/src/lib/livekit-session-ice.test.ts` (asserts the `Room.connect` arguments, the only place the option is honoured), `client/src/hooks/use-voice.test.ts` ("hands the ICE servers this tab already holds"), `ios/pqp/Tests/SfuIceServersTests.swift`, `android/app/src/test/kotlin/gg/pqp/app/voice/SfuIceServersTest.kt`.
+
+**Verifying it in production.** The LiveKit log line `participant active` on the media box carries `connectionType` and the selected candidate pair. Once web clients have picked up the build, relayed web participants must show Cloudflare relay addresses instead of `216.238.114.x`, and `connectionType=turn` participants should start appearing from networks that block UDP:
+
+```bash
+journalctl -u livekit --since "1 hour ago" | grep "participant active" | grep -E "connectionType|candidate|relay"
+# relay share and who is relaying through what
+journalctl -u livekit --since "1 hour ago" | grep "participant active" | grep -oE '"connectionType": *"[a-z]+"' | sort | uniq -c
+journalctl -u livekit --since "1 hour ago" | grep "participant active" | grep -c "216.238.114"
+```
+
+A `216.238.114.x` relay address on a web participant after the deploy means that tab has not refreshed yet (client deploys reach users gradually), or its `/api/ice-servers` fetch came back without a TURN entry. iOS and Android change with their next TestFlight and sideload builds, not with the web deploy.
+
+**Cost.** Cloudflare TURN is US$0.05/GB after 1 TB/month free. At the measured 9% relay share a 500-viewer, 3-hour party relays about 95 GB, inside the free tier.
+
 ### Moderation must reach the SFU (`server/src/voice/admin.ts`)
 
 Mesh eviction drops a peer from the signaling map, which makes the other clients tear down their connections to it. With an SFU the media never touches the app server, so that alone does **nothing** to the call — a kicked or banned account stays in the LiveKit room and keeps talking. Mesh and SFU must never disagree about who belongs in a call.
