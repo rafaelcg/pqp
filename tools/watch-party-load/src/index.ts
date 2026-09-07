@@ -276,15 +276,33 @@ async function publish(room: Room): Promise<{ stop: () => Promise<void>; frames:
   }, 20);
   return { frames: () => frames, stop: async () => { clearInterval(videoTimer); clearInterval(audioTimer); await audio.close(); await video.close(); await audioSource.close(); await videoSource.close(); } };
 }
-async function one(index: number, presenter: boolean, decodeSample: boolean, safe: ReturnType<typeof assertSafeTarget>, roomInfo: Manifest, holdMs: number, startAtMs: number): Promise<ParticipantResult> {
+function joinGate(limit: number): () => Promise<() => void> {
+  let available = limit;
+  const waiting: Array<() => void> = [];
+  return async () => {
+    if (available === 0) await new Promise<void>((resolve) => waiting.push(resolve));
+    else available -= 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = waiting.shift();
+      if (next) next();
+      else available += 1;
+    };
+  };
+}
+async function one(index: number, presenter: boolean, decodeSample: boolean, safe: ReturnType<typeof assertSafeTarget>, roomInfo: Manifest, holdMs: number, startAtMs: number, acquireJoin: () => Promise<() => void>): Promise<ParticipantResult> {
   const result: ParticipantResult = { index, presenter, decodeSample, videoFrames: 0, audioFrames: 0, subscribedTracks: 0, disconnects: 0, flow: [] };
-  let socket: WebSocket | undefined; let room: Room | undefined; let publisher: Awaited<ReturnType<typeof publish>> | undefined; let intentionalDisconnect = false;
+  let socket: WebSocket | undefined; let room: Room | undefined; let publisher: Awaited<ReturnType<typeof publish>> | undefined; let intentionalDisconnect = false; let releaseJoin: (() => void) | undefined;
   try {
+    releaseJoin = await acquireJoin();
     const started = Date.now(); const token = tokenFor(safe.runId, index, safe.local);
     const joined = await appSession(safe.apiUrl, safe.wsUrl, token, roomInfo); socket = joined.socket; result.bootstrapMs = Date.now() - started; result.welcomeMs = joined.welcomeMs;
     const tokenStarted = Date.now(); const session = await mint(safe.apiUrl, token, roomInfo, joined.peerId, joined.resumeToken, safe.sfuHost); result.tokenMs = Date.now() - tokenStarted;
     room = new Room(); room.on(RoomEvent.TrackSubscribed, (track: any) => { result.subscribedTracks += 1; if (decodeSample) consume(track, result); }); room.on(RoomEvent.Disconnected, () => { if (!intentionalDisconnect) result.disconnects += 1; });
     const connected = Date.now(); await within("LiveKit connect", MEDIA_CONNECT_TIMEOUT_MS, room.connect(session.url, session.token, { autoSubscribe: true, dynacast: true })); result.rtcConnectedMs = Date.now() - connected; result.rtcConnectedAtMs = Date.now();
+    releaseJoin(); releaseJoin = undefined;
     await new Promise((resolve) => setTimeout(resolve, Math.max(0, startAtMs - Date.now())));
     if (presenter) publisher = await publish(room);
     const collectFlow = () => void rtpStats(room!).then((stats) => result.flow.push({ atMs: Date.now() - startAtMs, bytesReceived: stats.bytesReceived, framesDecoded: stats.framesDecoded })).catch((error) => { result.failure ??= `RTP stats: ${error instanceof Error ? error.message : String(error)}`; });
@@ -297,20 +315,8 @@ async function one(index: number, presenter: boolean, decodeSample: boolean, saf
     if (!presenter && (result.subscribedTracks < 2 || result.rtp.bytesReceived === 0)) throw new Error(`no received presenter RTP (tracks=${result.subscribedTracks}, bytes=${result.rtp.bytesReceived})`);
     if (decodeSample && !presenter && (result.videoFrames === 0 || result.audioFrames === 0)) throw new Error(`no decoded presenter media (video=${result.videoFrames}, audio=${result.audioFrames})`);
   } catch (error) { result.failure = error instanceof Error ? error.message : String(error); }
-  finally { if (publisher) await publisher.stop(); intentionalDisconnect = true; if (room) await room.disconnect(); socket?.close(); }
+  finally { releaseJoin?.(); if (publisher) await publisher.stop(); intentionalDisconnect = true; if (room) await room.disconnect(); socket?.close(); }
   return result;
-}
-async function withConcurrency<T, R>(values: T[], limit: number, work: (value: T) => Promise<R>): Promise<R[]> {
-  const results = new Array<R>(values.length);
-  let next = 0;
-  await Promise.all(Array.from({ length: Math.min(limit, values.length) }, async () => {
-    for (;;) {
-      const at = next++;
-      if (at >= values.length) return;
-      results[at] = await work(values[at]!);
-    }
-  }));
-  return results;
 }
 async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const info = manifest(safe); const shardIndex = integerArg("--shard-index", -1); const shardCount = numberArg("--shard-count", 0); const holdSeconds = numberArg("--hold-seconds", 900); const decodeSamples = numberArg("--decode-sample", safe.local ? 2 : 25); const startAtMs = Number(arg("--start-at-ms", safe.local ? String(Date.now() + 1_000) : "0"));
@@ -325,7 +331,8 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const decodedIndexes = new Set(indexes.filter((index) => index !== 0).slice(0, decodeSamples));
   const startedAt = Date.now(); const cpuStart = process.cpuUsage(); let maxRssBytes = process.memoryUsage().rss; let maxEventLoopLagMs = 0; let expectedTick = Date.now() + 1000;
   const sampler = setInterval(() => { maxRssBytes = Math.max(maxRssBytes, process.memoryUsage().rss); maxEventLoopLagMs = Math.max(maxEventLoopLagMs, Date.now() - expectedTick); expectedTick += 1000; }, 1000);
-  const results = await withConcurrency(indexes, JOIN_CONCURRENCY, (index) => one(index, index === 0, decodedIndexes.has(index), safe, info, holdSeconds * 1000, startAtMs));
+  const acquireJoin = joinGate(JOIN_CONCURRENCY);
+  const results = await Promise.all(indexes.map((index) => one(index, index === 0, decodedIndexes.has(index), safe, info, holdSeconds * 1000, startAtMs, acquireJoin)));
   clearInterval(sampler);
   const wallMs = Date.now() - startedAt; const cpu = process.cpuUsage(cpuStart);
   const decoded = results.filter((result) => result.decodeSample);
