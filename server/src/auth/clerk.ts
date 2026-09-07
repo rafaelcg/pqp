@@ -505,7 +505,7 @@ export async function verifyAuthHeader(
   }
 
   /**
-   * The load-test branch — hundreds of throwaway identities on staging.
+   * The load-test branch: hundreds of throwaway identities on staging.
    *
    * Placed directly after the bypass because it is the same idea with the
    * public constant swapped for a secret, and ahead of Clerk for the same

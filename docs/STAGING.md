@@ -46,7 +46,7 @@ echo 'DROP OWNED BY current_user;' | fly mpg connect dzx6qo65q9n0jpv5 -d pqp-sta
 fly machine start -a pqp-api-staging    # boot reapplies schema.sql, including CREATE EXTENSION pgcrypto
 ```
 
-`dzx6qo65q9n0jpv5` is the **staging** cluster (`fly mpg list -o personal` to look it up). Read that id before pressing enter. Production is `9g6y30wdxzmrv5ml`, and the same command aimed there — with or without `-d` — drops production's tables.
+`dzx6qo65q9n0jpv5` is the **staging** cluster (`fly mpg list -o personal` to look it up). Read that id before pressing enter. Production is `9g6y30wdxzmrv5ml`, and the same command aimed there, with or without `-d`, drops production's tables.
 
 ## Credentials that back it (names only, never values)
 
@@ -79,7 +79,7 @@ Read these before the commands, because the commands are easy and two of these m
 
 ### Where the tokens live
 
-`~/.config/pqp/staging-load-test.env`, mode 0600, holding `LOAD_TEST_TOKEN` and `ADMIN_METRICS_TOKEN` — the same values that are set as Fly secrets on `pqp-api-staging`. Load them into the shell and they are the two the harness reads:
+`~/.config/pqp/staging-load-test.env`, mode 0600, holding `LOAD_TEST_TOKEN` and `ADMIN_METRICS_TOKEN`, the same values that are set as Fly secrets on `pqp-api-staging`. Load them into the shell and they are the two the harness reads:
 
 ```bash
 set -a; . ~/.config/pqp/staging-load-test.env; set +a
@@ -89,7 +89,7 @@ Rotating either is one `openssl rand -base64 48`, one `fly secrets set -a pqp-ap
 
 ### Prepare staging (before the run)
 
-Size it like production, give it an SFU so one room can hold more than `MESH_VOICE_LIMIT` (8) peers, and lift the two **address-keyed** rate limiters — a harness runs from one IP, so at their defaults those buckets are the ceiling and the run measures them instead of the server.
+Size it like production, give it an SFU so one room can hold more than `MESH_VOICE_LIMIT` (8) peers, and lift the two **address-keyed** rate limiters, because a harness runs from one IP so at their defaults those buckets are the ceiling and the run measures them instead of the server.
 
 ```bash
 # 1. Deploy the branch you want to measure. Do this FIRST: a deploy resets the
@@ -116,6 +116,8 @@ fly secrets set -a pqp-api-staging \
 ```
 
 `/ready` will report LiveKit unhealthy while step 4 is in place, because the host is deliberately fake. That is expected and is one more reason to undo it afterwards.
+
+The one lever that is **not** a secret is fly-proxy's per-machine connection ceiling, `[http_service.concurrency]` in `fly.staging.toml` (soft 400 / hard 600, the same numbers production runs). It only takes effect through a config deploy, so overriding it means `fly deploy -c <edited copy> -a pqp-api-staging --image <current image> --ha=false`, and the next CI deploy puts it back. Tested on 2026-09-07 at 4000/5000 and it changed nothing: the room fell over at ~460 sockets on bandwidth long before the proxy limit was in play. Do not spend time on it again unless a run actually reaches 600 connections.
 
 ### Run it
 
@@ -156,15 +158,48 @@ Four blocks, in the order they matter.
 
 **Time to welcome, p50 / p90 / p99.** Measured from the start of one simulated person's arrival to the `welcome` frame, which is the same span the browser puts its own 12 s timer on. p99 is the number to care about: p50 stays flat long after the room has started failing for the unlucky.
 
-**The occupancy table.** One row per 25 people already in the room when this person arrived, and it is the answer to the actual question — not "how slow did it get" but "how many people could already be in there". `over` counts arrivals that took longer than the client budget, `failed` counts the ones that never got in at all. The `CEILING:` line under the table is the first bucket where p90 crossed the budget or more than half the arrivals failed.
+**The occupancy table.** One row per 25 people already in the room when this person arrived, and it is the answer to the actual question. Not "how slow did it get" but "how many people could already be in there". `over` counts arrivals that took longer than the client budget, `failed` counts the ones that never got in at all. The `CEILING:` line under the table is the first bucket where p90 crossed the budget or more than half the arrivals failed.
 
-**Failures by cause.** `transport-refused`, `join-refused` and `room-full` are the server saying no, and each names a specific rule. `closed:4429` is a rate limiter — if you see it, one of the buckets above was not lifted and the run measured the limiter. `closed:1006` and `http:503` mean the machine stopped answering. `timeout` is the residual bucket and is what an overloaded server produces: no refusal, just nothing back inside the budget. Note that a *cold* join the server refuses sends nothing at all (`refuseResume` only answers a resume attempt), so a genuine refusal and an overloaded server both land here; the harness invites every account into the server first so that ambiguity does not normally arise.
+**Failures by cause.** `transport-refused`, `join-refused` and `room-full` are the server saying no, and each names a specific rule. `closed:4429` is a rate limiter. If you see it, one of the buckets above was not lifted and the run measured the limiter. `closed:1006` and `http:503` mean the machine stopped answering. `timeout` is the residual bucket and is what an overloaded server produces: no refusal, just nothing back inside the budget. Note that a *cold* join the server refuses sends nothing at all (`refuseResume` only answers a resume attempt), so a genuine refusal and an overloaded server both land here; the harness invites every account into the server first so that ambiguity does not normally arise.
 
 **Resources.** `peak sockets` against `soft_limit`/`hard_limit` in `fly.staging.toml`. `pool busy` against `pool max`: `busy == max` with a non-empty queue is the unambiguous wall, and `peak queued` is the deepest queue the process saw even between samples. `machine cpu` is the whole VM, so on a 2-vCPU machine 100 % means both cores. Whichever of those three hits its ceiling first is the resource that ran out, and it is the one to fix.
+
+### What the first run measured (2026-09-07)
+
+The rig: `pqp-api-staging` on `performance-2x` / 4 GB with `PG_POOL_MAX=40` (production's size), one LiveKit-pinned voice room, the harness on one laptop in Brazil whose downlink measures 703 Mbit/s. Arrivals ramped from 6/s, +3/s every 15 s.
+
+| | current `main` (pre-#314) | with #314's roster deltas |
+|---|---|---|
+| **Ceiling: joins stop fitting the client's 12 s budget at** | **~225 to 250 in the room** | **~350 to 375 in the room** |
+| First arrivals over budget | from ~175 | from ~300 |
+| Arrivals attempted / reached welcome | 664 / 533 | 890 / 694 |
+| Peak sockets on the machine | 466 | 596 |
+| Machine CPU, max | 24 % of the VM | 33 % of the VM |
+| Pool saturated | 6 of 213 samples | 6 of 235 samples |
+| Bytes received, whole run | 6.6 GB / 317 k frames | 5.3 GB / 521 k frames |
+| Peak wire rate | 651 Mbit/s | 698 Mbit/s |
+
+**What ran out is bandwidth, not CPU and not the pool.** CPU never passed a third of a two-core VM and the Postgres pool saturated for six seconds out of four minutes, as a symptom of requests already queued behind the wire rather than as the cause. The wire is the wall, and the per-frame-type table names it:
+
+| frame | pre-#314 | with #314 |
+|---|---|---|
+| `voice-roster` | 4 981 MB over 52 607 frames, **99 kB each** | 1 461 MB over 10 217 frames (keyframes only) |
+| `voice-roster-delta` | did not exist | 82 MB over 73 248 frames, 1.2 kB each |
+| `presence-update` | 1 555 MB, 30 kB each | **3 588 MB, 45 kB each** |
+| `peer-joined` | 40 MB, 336 bytes each | 79 MB, 335 bytes each |
+
+Signalling fan-out is O(room size) per arrival, so a filling room is quadratic. At 350 people a single join was pushing a 99 kB roster to every viewer; #314 replaces most of those with a 1.2 kB delta and moves the ceiling by about 1.5x, at which point `presence-update` becomes the largest thing on the wire and is the next one to fix.
+
+**#314's extrapolated estimate of 800 to 1000 did not hold.** Today's code stops at roughly 250, and #314's own change takes it to roughly 350, still two to three times short. The estimate was arithmetic on one cost; the measurement finds the room falls over on a different one first.
+
+Two caveats, both of which make these numbers **conservative rather than optimistic**:
+
+- The harness concentrates every simulated client on one link, and that link's 703 Mbit/s is exactly where both runs peaked, so part of the slowdown at the top of each ramp is the harness. The comparison between the two code versions is still sound (same link, same ramp), and the server-side egress is real either way: those bytes have to leave the machine regardless of who receives them. To measure a distributed crowd properly, shard the harness across machines.
+- **A capability the harness does not declare is an optimisation the run cannot see.** The first #314 comparison measured no improvement at all, because `voice-roster-delta` is opt-in per socket (`caps` on the `auth` frame, `SOCKET_CAPS` in `server/src/ws/sockets.ts`) and the harness was silent, so every socket kept receiving whole rosters. The harness now declares the same `WIRE_CAPS` the browser does. Keep those two lists in step, or the next wire optimisation will measure as worthless. Worth knowing for production too: a client that does not declare the capability, which today means the native iOS and Android apps, keeps paying the full roster.
 
 ## Known caveats
 
 - **Canonical URLs point at production.** Marketing and blog routes pin their canonical tag to https://pqp.gg (`client/src/lib/marketing-meta.ts`, `client/src/lib/blog-meta.ts`), so staging pages carry prod canonicals. Harmless for testing; it only means staging marketing pages are not independently indexable, which is a feature.
 - **Game connections do not work.** Steam, Battle.net and Twitch OAuth apps are registered for the production origin only; the staging origin has no provider registrations, so those linking flows will fail or stay hidden.
 - **First request after idle is slow.** A parked machine takes a few seconds to wake. If a probe or test suite hits a timeout, retry once before suspecting the deploy.
-- **Voice on staging is signalling only unless LiveKit is configured.** There is no TURN and no SFU by default, so a load test that needs one room bigger than `MESH_VOICE_LIMIT` has to set `LIVEKIT_*` first — see the load-test runbook below.
+- **Voice on staging is signalling only unless LiveKit is configured.** There is no TURN and no SFU by default, so a load test that needs one room bigger than `MESH_VOICE_LIMIT` has to set `LIVEKIT_*` first. See the load-test runbook below.

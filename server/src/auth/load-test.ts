@@ -48,7 +48,7 @@
  * rather than ignored, and that is the point: a five-character
  * `LOAD_TEST_TOKEN` is a mistake somebody made on purpose, and it must not
  * degrade quietly into a working backdoor. Blank is a separate case and means
- * "not set" — see `assertLoadTestAuthConfig`.
+ * "not set". See `assertLoadTestAuthConfig`.
  *
  * Same reasoning and roughly the same number as `ADMIN_METRICS_TOKEN_MIN_LENGTH`.
  */
@@ -111,7 +111,7 @@ export function isLoadTestAuthEnabled(): boolean {
  * Fatal misconfiguration, called from the entrypoint alongside
  * `assertAuthConfig`'s other checks.
  *
- * Only the short-token case throws — see the header for why a secret on the
+ * Only the short-token case throws. The header says why a secret on the
  * wrong host is closed rather than fatal.
  */
 export function assertLoadTestAuthConfig(): void {
@@ -132,7 +132,7 @@ export function assertLoadTestAuthConfig(): void {
  * Constant-time string comparison over the secret half of the header.
  *
  * `timingSafeEqual` needs equal lengths and throws otherwise, and the lengths
- * here are attacker-controlled — so length is compared first and the result
+ * here are attacker-controlled, so length is compared first and the result
  * folded in, which leaks only the length of the configured token. That is the
  * same trade `ADMIN_METRICS_PATH`'s check makes.
  */
@@ -149,7 +149,7 @@ function secretEquals(candidate: string, expected: string): boolean {
 
 /**
  * The bearer token, optionally carrying `:suffix` to name a distinct throwaway
- * identity — the same shape and the same purpose as `devBypassIdentity`.
+ * identity. Same shape and same purpose as `devBypassIdentity`.
  *
  * One account is not enough to load test with: every write budget, typing
  * limit and voice room limiter is keyed on the user id, so N simulated clients
