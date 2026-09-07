@@ -59,9 +59,9 @@ type ParticipantResult = {
   audioFrames: number;
   subscribedTracks: number;
   decodeSample: boolean;
-  rtp?: { bytesReceived: number; bytesSent: number; packetsLost: number; framesDecoded: number };
+  rtp?: { bytesReceived: number; bytesSent: number; packetsLost: number; framesDecoded: number; outboundVideoFps: number; outboundVideoWidth: number; outboundVideoHeight: number };
   decodedVideoFps?: number;
-  publishedVideoFps?: number;
+  sourceVideoFps?: number;
   requestedVideoBitrateBps?: number;
   disconnects: number;
   flow: Array<{ atMs: number; bytesReceived: number; framesDecoded: number }>;
@@ -194,7 +194,7 @@ function consume(track: any, stats: ParticipantResult): void {
 }
 async function rtpStats(room: Room): Promise<NonNullable<ParticipantResult["rtp"]>> {
   const report = await room.getRtcStats();
-  const totals = { bytesReceived: 0, bytesSent: 0, packetsLost: 0, framesDecoded: 0 };
+  const totals = { bytesReceived: 0, bytesSent: 0, packetsLost: 0, framesDecoded: 0, outboundVideoFps: 0, outboundVideoWidth: 0, outboundVideoHeight: 0 };
   for (const stat of [...report.publisherStats, ...report.subscriberStats]) {
     if (stat.stats.case === "inboundRtp") {
       const inbound = stat.stats.value.inbound;
@@ -204,6 +204,11 @@ async function rtpStats(room: Room): Promise<NonNullable<ParticipantResult["rtp"
     }
     if (stat.stats.case === "outboundRtp") {
       totals.bytesSent += Number(stat.stats.value.sent?.bytesSent ?? 0n);
+      if (stat.stats.value.stream?.kind === "video") {
+        totals.outboundVideoFps = Math.max(totals.outboundVideoFps, stat.stats.value.outbound?.framesPerSecond ?? 0);
+        totals.outboundVideoWidth = Math.max(totals.outboundVideoWidth, stat.stats.value.outbound?.frameWidth ?? 0);
+        totals.outboundVideoHeight = Math.max(totals.outboundVideoHeight, stat.stats.value.outbound?.frameHeight ?? 0);
+      }
     }
   }
   return totals;
@@ -261,7 +266,7 @@ async function one(index: number, presenter: boolean, decodeSample: boolean, saf
     clearInterval(flowTimer);
     result.rtp = await rtpStats(room);
     result.decodedVideoFps = result.rtp.framesDecoded / (holdMs / 1000);
-    if (publisher) { result.publishedVideoFps = publisher.frames() / (holdMs / 1000); result.requestedVideoBitrateBps = VIDEO_BITRATE_BPS; }
+    if (publisher) { result.sourceVideoFps = publisher.frames() / (holdMs / 1000); result.requestedVideoBitrateBps = VIDEO_BITRATE_BPS; }
     if (!presenter && (result.subscribedTracks < 2 || result.rtp.bytesReceived === 0)) throw new Error(`no received presenter RTP (tracks=${result.subscribedTracks}, bytes=${result.rtp.bytesReceived})`);
     if (decodeSample && !presenter && (result.videoFrames === 0 || result.audioFrames === 0)) throw new Error(`no decoded presenter media (video=${result.videoFrames}, audio=${result.audioFrames})`);
   } catch (error) { result.failure = error instanceof Error ? error.message : String(error); }
@@ -292,7 +297,7 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
     generator: { wallMs, cpuMs: (cpu.user + cpu.system) / 1000, cpuPercentOfOneCore: ((cpu.user + cpu.system) / 1000 / wallMs) * 100, maxRssBytes, maxEventLoopLagMs },
     aggregateRtp: { receivedBytes: totalReceivedBytes, receivedBitrateBps: totalReceivedBytes * 8_000 / (holdSeconds * 1000), sentBytes: totalSentBytes, sentBitrateBps: totalSentBytes * 8_000 / (holdSeconds * 1000) },
     results,
-    passed: results.every((result) => !result.failure && result.disconnects === 0 && (result.rtcConnectedAtMs ?? Infinity) <= startAtMs && (!result.presenter ? result.subscribedTracks >= 2 && (result.rtp?.bytesReceived ?? 0) > 0 && hasContinuousRtp(result) : (result.publishedVideoFps ?? 0) >= VIDEO_FPS * 0.9) && (!result.decodeSample || result.presenter || (result.decodedVideoFps ?? 0) >= minDecodedFps)),
+    passed: results.every((result) => !result.failure && result.disconnects === 0 && (result.rtcConnectedAtMs ?? Infinity) <= startAtMs && (!result.presenter ? result.subscribedTracks >= 2 && (result.rtp?.bytesReceived ?? 0) > 0 && hasContinuousRtp(result) : (result.rtp?.outboundVideoFps ?? 0) >= VIDEO_FPS * 0.9) && (!result.decodeSample || result.presenter || (result.decodedVideoFps ?? 0) >= minDecodedFps)),
   };
   const out = requiredArg("--report"); writeFileSync(out, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 }); console.log(JSON.stringify({ report: out, passed: report.passed, failures: results.filter((r) => r.failure).length }, null, 2));
   if (!report.passed) process.exitCode = 1;

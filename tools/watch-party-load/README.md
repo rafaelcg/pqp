@@ -59,7 +59,8 @@ host-side egress counters as the authority for aggregate egress and headroom.
 
 The first acceptance contract is: all 500 tokened clients connect and receive
 RTP; each shard has 25 decoded samples at >=24 fps; presenter input is >=27
-fps; median sampled loss <1%; no unexpected disconnects; each generator stays
+fps and its outbound RTP video is >=27 fps at 1280×720; median sampled loss
+<1%; no unexpected disconnects; each generator stays
 below 70% of one core per allocated vCPU with no growing event-loop lag; SFU
 egress sustains the observed receiver bitrate with >=20% headroom. A report's
 RTP bitrate is measured at its receivers; it does not substitute for the SFU's
