@@ -96,13 +96,15 @@ function integerArg(name: string, fallback: number): number {
   if (!Number.isInteger(value)) throw new Error(`${name} must be an integer`);
   return value;
 }
-function assertSafeTarget(): { runId: string; apiUrl: string; wsUrl: string; sfuHost: string; local: boolean; smoke: boolean } {
+function assertSafeTarget(): { runId: string; apiUrl: string; wsUrl: string; sfuHost: string; local: boolean; smoke: boolean; diagnostic: boolean } {
   const runId = need("TEST_RUN_ID");
   if (!/^[a-z0-9][a-z0-9-]{2,48}$/.test(runId)) throw new Error("TEST_RUN_ID must be a lowercase, traceable run id");
   const target = need("PQP_LOAD_TARGET");
   if (target !== "staging" && target !== "local") throw new Error("PQP_LOAD_TARGET must be staging or local");
   const local = target === "local";
   const smoke = process.env.PQP_LOAD_SMOKE === "1";
+  const diagnostic = process.env.PQP_LOAD_DIAGNOSTIC === "1";
+  if (diagnostic && (local || !runId.startsWith("wpdiag-"))) throw new Error("staging diagnostic runs require a wpdiag-* run id");
   const apiUrl = process.env.PQP_LOAD_API_URL ?? (local ? "http://localhost:3001" : STAGING_API);
   const wsUrl = process.env.PQP_LOAD_WS_URL ?? (local ? "ws://localhost:3001/ws" : STAGING_WS);
   const api = new URL(apiUrl);
@@ -112,7 +114,10 @@ function assertSafeTarget(): { runId: string; apiUrl: string; wsUrl: string; sfu
   const sfuHost = need("PQP_LOAD_SFU_HOST").toLowerCase();
   if (PROD_HOSTS.has(sfuHost) || sfuHost.endsWith(".pqp.gg")) throw new Error("production SFU hosts are forbidden");
   if (local && !["localhost", "127.0.0.1", "::1"].includes(sfuHost)) throw new Error("local runs may only use a loopback SFU host");
-  return { runId, apiUrl, wsUrl, sfuHost, local, smoke };
+  return { runId, apiUrl, wsUrl, sfuHost, local, smoke, diagnostic };
+}
+function diagnostic(event: string, index: number, extra: Record<string, unknown> = {}): void {
+  if (process.env.PQP_LOAD_DIAGNOSTIC === "1") console.error(JSON.stringify({ event, index, at: new Date().toISOString(), ...extra }));
 }
 function tokenFor(runId: string, index: string | number, local: boolean): string {
   return local ? `dev-local-token:${runId}-${index}` : `${need("LOAD_TEST_TOKEN")}:${runId}-${index}`;
@@ -139,7 +144,7 @@ async function passAgeGate(base: string, token: string): Promise<void> {
 }
 async function prepare(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const total = numberArg("--participants", 500);
-  if (total !== 500 && !(safe.local && total >= 2 && total <= 5) && !(safe.smoke && total === 2)) throw new Error("hosted runs require exactly 500 participants; local smoke permits 2–5; staging smoke is exactly 2 with PQP_LOAD_SMOKE=1");
+  if (total !== 500 && !(safe.local && total >= 2 && total <= 5) && !(safe.smoke && total === 2) && !(safe.diagnostic && total >= 2 && total <= 24)) throw new Error("hosted runs require exactly 500 participants; local smoke permits 2–5; staging smoke is exactly 2; diagnostic staging permits 2–24");
   // Reserve the report path first. A failed write after server creation leaves
   // an invite and synthetic users with no manifest capable of cleaning them.
   const output = requiredArg("--manifest");
@@ -159,7 +164,7 @@ async function prepare(safe: ReturnType<typeof assertSafeTarget>): Promise<void>
 }
 function manifest(safe: ReturnType<typeof assertSafeTarget>): Manifest {
   const parsed = JSON.parse(readFileSync(requiredArg("--manifest"), "utf8")) as Manifest;
-  if (parsed.version !== 1 || parsed.runId !== safe.runId || parsed.apiUrl !== safe.apiUrl || parsed.wsUrl !== safe.wsUrl || (parsed.participants !== 500 && !(safe.local && parsed.participants >= 2 && parsed.participants <= 5) && !(safe.smoke && parsed.participants === 2))) throw new Error("manifest does not match this allowed run");
+  if (parsed.version !== 1 || parsed.runId !== safe.runId || parsed.apiUrl !== safe.apiUrl || parsed.wsUrl !== safe.wsUrl || (parsed.participants !== 500 && !(safe.local && parsed.participants >= 2 && parsed.participants <= 5) && !(safe.smoke && parsed.participants === 2) && !(safe.diagnostic && parsed.participants >= 2 && parsed.participants <= 24))) throw new Error("manifest does not match this allowed run");
   return parsed;
 }
 async function appSession(base: string, wsUrl: string, token: string, room: Manifest): Promise<{ socket: WebSocket; peerId: string; resumeToken: string; welcomeMs: number }> {
@@ -297,12 +302,17 @@ async function one(index: number, presenter: boolean, decodeSample: boolean, saf
   let socket: WebSocket | undefined; let room: Room | undefined; let publisher: Awaited<ReturnType<typeof publish>> | undefined; let intentionalDisconnect = false; let releaseJoin: (() => void) | undefined;
   try {
     releaseJoin = await acquireJoin();
+    diagnostic("join-slot-acquired", index);
     const started = Date.now(); const token = tokenFor(safe.runId, index, safe.local);
     const joined = await appSession(safe.apiUrl, safe.wsUrl, token, roomInfo); socket = joined.socket; result.bootstrapMs = Date.now() - started; result.welcomeMs = joined.welcomeMs;
+    diagnostic("app-session-ready", index, { bootstrapMs: result.bootstrapMs, welcomeMs: result.welcomeMs });
     const tokenStarted = Date.now(); const session = await mint(safe.apiUrl, token, roomInfo, joined.peerId, joined.resumeToken, safe.sfuHost); result.tokenMs = Date.now() - tokenStarted;
+    diagnostic("media-token-ready", index, { tokenMs: result.tokenMs });
     room = new Room(); room.on(RoomEvent.TrackSubscribed, (track: any) => { result.subscribedTracks += 1; if (decodeSample) consume(track, result); }); room.on(RoomEvent.Disconnected, () => { if (!intentionalDisconnect) result.disconnects += 1; });
     const connected = Date.now(); await within("LiveKit connect", MEDIA_CONNECT_TIMEOUT_MS, room.connect(session.url, session.token, { autoSubscribe: true, dynacast: true })); result.rtcConnectedMs = Date.now() - connected; result.rtcConnectedAtMs = Date.now();
+    diagnostic("rtc-connected", index, { rtcConnectedMs: result.rtcConnectedMs });
     releaseJoin(); releaseJoin = undefined;
+    diagnostic("join-slot-released", index);
     await new Promise((resolve) => setTimeout(resolve, Math.max(0, startAtMs - Date.now())));
     if (presenter) publisher = await publish(room);
     const collectFlow = () => void rtpStats(room!).then((stats) => result.flow.push({ atMs: Date.now() - startAtMs, bytesReceived: stats.bytesReceived, framesDecoded: stats.framesDecoded })).catch((error) => { result.failure ??= `RTP stats: ${error instanceof Error ? error.message : String(error)}`; });
@@ -314,7 +324,7 @@ async function one(index: number, presenter: boolean, decodeSample: boolean, saf
     if (publisher) { result.sourceVideoFps = publisher.frames() / (holdMs / 1000); result.requestedVideoBitrateBps = VIDEO_BITRATE_BPS; }
     if (!presenter && (result.subscribedTracks < 2 || result.rtp.bytesReceived === 0)) throw new Error(`no received presenter RTP (tracks=${result.subscribedTracks}, bytes=${result.rtp.bytesReceived})`);
     if (decodeSample && !presenter && (result.videoFrames === 0 || result.audioFrames === 0)) throw new Error(`no decoded presenter media (video=${result.videoFrames}, audio=${result.audioFrames})`);
-  } catch (error) { result.failure = error instanceof Error ? error.message : String(error); }
+  } catch (error) { result.failure = error instanceof Error ? error.message : String(error); diagnostic("participant-failed", index, { failure: result.failure }); }
   finally {
     releaseJoin?.();
     // rtc-node may already have released a handle after a failed connect. A
@@ -333,6 +343,8 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const minDecodedFps = numberArg("--min-decoded-fps", 24);
   const holdIsAllowed = safe.local
     ? holdSeconds >= 5 && holdSeconds <= 60
+    : safe.diagnostic
+      ? holdSeconds >= 5 && holdSeconds <= 60
     : safe.smoke
       ? holdSeconds >= 60 && holdSeconds <= 120
       : holdSeconds >= 600 && holdSeconds <= 900;
