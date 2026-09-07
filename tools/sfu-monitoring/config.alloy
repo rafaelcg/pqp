@@ -1,10 +1,11 @@
 // Grafana Alloy on the self-hosted SFU box (Vultr, Sao Paulo, sfu.pqp.gg).
 //
-// Three scrape sources, one destination:
-//   * the built-in node exporter        -> CPU, memory, disk, load, network
-//   * its textfile collector            -> monthly egress (vnstat) + docker state
-//   * LiveKit's own /metrics on :6789   -> rooms and participants
-// all remote-written to the pqp Grafana Cloud stack.
+// Two scrape targets, one destination:
+//   * the built-in node exporter       -> CPU, memory, disk, load, network,
+//                                         six systemd units, and its textfile
+//                                         collector (vnstat egress + docker)
+//   * LiveKit's own /metrics on :6789  -> rooms and participants
+// both remote-written to the pqp Grafana Cloud stack.
 //
 // Credentials come from /etc/alloy/credentials.env (root-owned, 0600) via a
 // systemd drop-in. Nothing secret belongs in this file: it is in the repo.
