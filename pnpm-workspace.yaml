@@ -3,6 +3,7 @@ packages:
   - client
   - electron
   - packages/shared
+  - tools/watch-party-load
 
 allowBuilds:
   "@clerk/shared": true
