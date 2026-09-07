@@ -2,6 +2,19 @@
 
 Open-source Discord-like voice + text chat (pqp.gg). See [`CLAUDE.md`](./CLAUDE.md) for the stack and how to run.
 
+## Agent delegation
+
+Act as the lead engineering agent. Prefer Astra for orchestration, architecture decisions, ambiguous implementation decisions, cross-cutting changes, the final implementation plan, integration, and final review.
+
+Delegate aggressively when work can proceed independently: repository exploration, finding files, tracing call paths, investigating patterns, straightforward tests, mechanical refactors, documentation lookup, and reviewing a proposed implementation.
+
+- Give each agent a narrow objective, explicit file ownership where it edits, and a clear completion criterion.
+- Run independent tasks in parallel. Give agents only the context needed for their task.
+- Ask for concise findings with evidence, verification results, and anything they could not verify.
+- When model selection is available, use cheaper/faster models for routine work: Luna for narrow lookups and mechanical tasks, Terra for bounded coding, tests, and reviews. Escalate difficult findings to the lead agent.
+- State whether an agent may merge or deploy and which gate applies. One agent owns a shared deployment or staging environment at a time.
+- The lead agent owns integration and final review. Model preferences here guide delegation; the main model is selected in the app or CLI.
+
 ## i18n
 
 Read [`docs/I18N.md`](./docs/I18N.md) before adding copy.
