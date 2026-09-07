@@ -16,7 +16,7 @@ name: Android
 # GitHub's workflow parser does not expand aliases, so an anchor here silently
 # becomes an empty filter and the workflow runs on everything.
 #
-# The three non-Android entries are not padding. The Android client hand-copies
+# The non-Android entries are not padding. The Android client hand-copies
 # every wire fact out of them, and the tests in
 # `android/app/src/test/kotlin/gg/pqp/app/protocol` read them off disk to check
 # the copies still match. A protocol change on the server has to be able to fail
@@ -29,14 +29,20 @@ on:
       - ".github/workflows/android.yml"
       - "packages/shared/src/**"
       - "server/src/ws/**"
+      - "server/src/api/index.ts"
       - "client/src/lib/peer-connection-manager.ts"
+      - "client/src/lib/realtime.ts"
+      - "client/src/lib/emoji-shortcodes.ts"
   pull_request:
     paths:
       - "android/**"
       - ".github/workflows/android.yml"
       - "packages/shared/src/**"
       - "server/src/ws/**"
+      - "server/src/api/index.ts"
       - "client/src/lib/peer-connection-manager.ts"
+      - "client/src/lib/realtime.ts"
+      - "client/src/lib/emoji-shortcodes.ts"
   workflow_dispatch:
 
 concurrency:
