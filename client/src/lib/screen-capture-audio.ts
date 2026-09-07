@@ -60,6 +60,11 @@
  *   tab-audio path for `audio: false` to take away.
  */
 
+import {
+  cursorConstraintFor,
+  type CursorCaptureConstraint,
+} from "./screen-capture-cursor";
+
 /**
  * The display-capture options the DOM lib does not know about yet.
  *
@@ -70,7 +75,10 @@
  * feature is most likely to make. A browser that does not know a key ignores
  * it, which is the degradation we want.
  */
-export interface ScreenCaptureOptions extends DisplayMediaStreamOptions {
+export interface ScreenCaptureOptions
+  extends Omit<DisplayMediaStreamOptions, "video"> {
+  /** Widened so the cursor constraint the DOM lib omits can be carried. */
+  video?: boolean | ScreenVideoConstraints;
   /** Chromium: offer the machine's own output as a capturable source. */
   systemAudio?: "include" | "exclude";
   /** Chromium: whether the tab running this app may be picked. */
@@ -90,15 +98,27 @@ export interface ScreenCaptureOptions extends DisplayMediaStreamOptions {
  * Watch party is a tab share of the player. `preferBrowserTab` asks Chrome
  * for a tab surface and hides the whole desktop, and it never takes the
  * system-audio opt-in: that opt-in is the echo path.
+ *
+ * `hideCursor` is the standing "leave my mouse out of it" preference
+ * (`lib/screen-capture-cursor.ts`). It rides on the intent rather than on its
+ * own parameter because it is the same kind of thing: a steer on the capture
+ * we are about to ask for, decided before the picker opens.
  */
 export interface ScreenCaptureIntent {
   preferBrowserTab?: boolean;
+  hideCursor?: boolean;
 }
 
 /** `MediaTrackConstraintSet` plus the screen-audio member TypeScript lacks. */
 type ScreenAudioConstraints = MediaTrackConstraints & {
   /** Chrome 141+: drop audio this document itself produced. */
   restrictOwnAudio?: boolean;
+};
+
+/** `MediaTrackConstraintSet` plus the cursor member TypeScript lacks. */
+type ScreenVideoConstraints = MediaTrackConstraints & {
+  /** Screen Capture spec: whether the pointer is drawn into the capture. */
+  cursor?: CursorCaptureConstraint;
 };
 
 export interface ScreenCaptureEnvironment {
@@ -173,6 +193,10 @@ export function screenCaptureEnvironment(
  * noise suppression exist for a person talking into a laptop and would chew
  * holes in a film's soundtrack, and (see the file header) neither of them can
  * touch this echo anyway.
+ *
+ * `intent.hideCursor` puts the spec's cursor constraint on the video request.
+ * What that is worth on each engine, and why it is asked for anyway, is in
+ * `lib/screen-capture-cursor.ts`.
  */
 export function screenCaptureOptions(
   shareSystemAudio: boolean,
@@ -209,6 +233,15 @@ export function screenCaptureOptions(
       frameRate: { ideal: 30, max: 30 },
       width: { max: 1920 },
       height: { max: 1080 },
+      // Asked for unconditionally, not feature-detected like `restrictOwnAudio`
+      // above, and the difference is deliberate. An audio constraint an engine
+      // cannot honour can fail the whole capture, so that one is only sent
+      // where it is known; an unknown *dictionary member* is dropped by the
+      // bindings before any capturer sees it, which is what all three engines
+      // do with `cursor` today. So it costs nothing to ask, and the day one of
+      // them implements it every client already asked for the right thing. The
+      // promise is gated elsewhere (`canControlShareCursor`), not here.
+      cursor: cursorConstraintFor(intent.hideCursor ? "hide" : "show"),
       ...(intent.preferBrowserTab ? { displaySurface: "browser" as const } : {}),
     },
     // In the shell, "no audio asked for" is the only way to stop it answering

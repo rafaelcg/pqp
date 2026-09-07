@@ -9,6 +9,8 @@ import {
   PanelLeftOpen,
   Mic,
   MicOff,
+  MousePointer2,
+  MousePointerBan,
   ShieldBan,
   Minimize2,
   MonitorSpeaker,
@@ -39,8 +41,13 @@ import {
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { VideoQuality } from "@/lib/video-quality";
-import { isDesktopApp } from "@/lib/desktop";
+import { desktopContext, isDesktopApp } from "@/lib/desktop";
 import { shareStreamHasAudio } from "@/lib/screen-capture-audio";
+import {
+  canControlShareCursor,
+  setShareCursor,
+  useShareCursor,
+} from "@/lib/screen-capture-cursor";
 import {
   canShareScreenAudio,
   detectFullscreenMode,
@@ -1630,6 +1637,17 @@ function ActiveCall({
                     {t("voice.share.systemAudioLive")}
                   </span>
                 )}
+                {/* The honest half of the cursor preference. They asked for
+                    the pointer to be left out, they picked a screen or a
+                    window, and no browser can leave it out of one of those.
+                    Said here rather than swallowed, with the surface that
+                    genuinely has no pointer named: a tab, which the shell's
+                    picker does not have, hence the desktop wording. */}
+                {focusedIsLocal && voiceState.isShareCursorVisible && (
+                  <span className="ml-1 block text-warning">
+                    {t("voice.share.cursorLive", desktopContext())}
+                  </span>
+                )}
               </span>
             )}
           </p>
@@ -1819,6 +1837,12 @@ function CallControls({
   // lists screens and windows only, so the same door there would start a
   // silent share and the prompt would be a lie.
   const canWatchParty = canShare && !isDesktopApp();
+  // Remembered per person, so it is read from its own store rather than passed
+  // down with the rest. Unlike the sound opt-in beside it, this one is only
+  // still useful mid-share where the engine can change a live track, which is
+  // nowhere today: see `lib/screen-capture-cursor.ts`.
+  const shareCursor = useShareCursor();
+  const cursorLiveControl = useMemo(() => canControlShareCursor(), []);
   const watchPartyHintEnabled = useFeatureHintEnabled("watchParty");
   const [shareHint, setShareHint] = useState<string | null>(null);
   useEffect(() => {
@@ -2101,6 +2125,62 @@ function CallControls({
               onClick={() => onShareSystemAudioChange(!shareSystemAudio)}
             >
               <MonitorSpeaker className={iconSize} />
+            </button>
+          </Tooltip>
+        )}
+      {/* Whether your mouse pointer goes out with the share.
+          THE REPORT (QG, 5 Sep 2026): a film shared from one window while the
+          person plays a game in another, and the pointer drawn over the film
+          every time it moves. Presenting wants the opposite: pointing at
+          things IS the share. So it is a preference, and it is remembered,
+          which the sound toggle beside it deliberately is not.
+          Armed before the share, like that one, and it stays put mid-share
+          only where the engine can change a live track. Today no engine
+          implements the constraint at all, so what a `hide` actually buys is
+          the line under the share saying this surface carries the pointer and
+          a tab does not. `lib/screen-capture-cursor.ts` has the measurements. */}
+      {canShare &&
+        !noVideo &&
+        onStartScreenShare &&
+        (!voiceState.isSharingScreen || cursorLiveControl) && (
+          <Tooltip
+            label={
+              shareCursor === "hide"
+                ? t("voice.control.showCursor")
+                : t("voice.control.hideCursor")
+            }
+            detail={
+              cursorLiveControl
+                ? undefined
+                : t("voice.control.hideCursorDetail")
+            }
+          >
+            {/* KEEP THE LABEL SHORT AND FREE OF COMMON VERBS. A tooltip label
+                becomes the control's accessible name, and Playwright's
+                `getByRole("button", { name })` matches a name by SUBSTRING, so
+                an English label reading "Leave your mouse out of what you
+                share" made every `name: "Leave"` in the suite ambiguous and
+                took the hang-up button down with it. */}
+            <button
+              type="button"
+              data-testid="share-cursor-toggle"
+              aria-pressed={shareCursor === "hide"}
+              className={cn(
+                "flex items-center justify-center rounded-full",
+                size,
+                shareCursor === "hide"
+                  ? "bg-signal/20 text-signal"
+                  : "bg-ink-3 text-paper hover:bg-ink-4",
+              )}
+              onClick={() =>
+                setShareCursor(shareCursor === "hide" ? "show" : "hide")
+              }
+            >
+              {shareCursor === "hide" ? (
+                <MousePointerBan className={iconSize} />
+              ) : (
+                <MousePointer2 className={iconSize} />
+              )}
             </button>
           </Tooltip>
         )}
