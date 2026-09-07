@@ -1,0 +1,16 @@
+# LiveKit Egress. Same API key pair as the LiveKit server on this box.
+# S3 here is the LIVE HLS bucket, never the attachment bucket.
+api_key: __LIVEKIT_API_KEY__
+api_secret: __LIVEKIT_API_SECRET__
+ws_url: ws://127.0.0.1:7880
+insecure: true
+redis:
+  address: 127.0.0.1:6379
+log_level: info
+health_port: 7981
+s3:
+  access_key: __LIVE_HLS_S3_ACCESS_KEY_ID__
+  secret: __LIVE_HLS_S3_SECRET_ACCESS_KEY__
+  region: auto
+  endpoint: __LIVE_HLS_S3_ENDPOINT__
+  bucket: __LIVE_HLS_S3_BUCKET__

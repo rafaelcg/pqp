@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { voiceStreamMessageSchema } from "./live-hls.js";
 import {
   liveReactionMessageSchema,
   liveReactionsMessageSchema,
@@ -479,6 +480,8 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   // --- live reactions --- see packages/shared/src/live-reactions.ts. Coalesced
   // counts for the room, never per person and never stored.
   liveReactionsMessageSchema,
+  // --- live HLS (screen-share egress) ---
+  voiceStreamMessageSchema,
 ]);
 
 export type VoiceParticipant = z.infer<typeof voiceParticipantSchema>;

@@ -5,6 +5,7 @@ import {
   type ClientRelayMessage,
   type VoiceParticipant,
   type VoiceRoomTransport,
+  type LiveHlsStream,
   type VoiceSessionInfo,
   type VoiceSignalingMessage,
   type LiveReactionEmoji,
@@ -270,6 +271,11 @@ export interface VoiceState {
   isSharingScreen: boolean;
   /** peerIds currently sharing, in roster order. */
   screenSharePeerIds: string[];
+  /**
+   * LiveKit egress playlist for the room's current screen share, or null.
+   * Remote tiles play this instead of the WebRTC screen track.
+   */
+  liveStream: LiveHlsStream | null;
   /** peerIds whose camera is on, from the roster's `cameraStreamId`. */
   cameraPeerIds: string[];
   /**
@@ -818,6 +824,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     roomTransport: null,
     isSharingScreen: false,
     screenSharePeerIds: [],
+    liveStream: null,
     cameraPeerIds: [],
     focusedScreenPeerId: null,
     dismissedSharePeerIds: [],
@@ -2041,6 +2048,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       roomTransport: null,
       isSharingScreen: false,
       screenSharePeerIds: [],
+      liveStream: null,
       cameraPeerIds: [],
       focusedScreenPeerId: null,
       dismissedSharePeerIds: [],
@@ -2587,6 +2595,13 @@ export function createVoiceController(transport: RealtimeTransport) {
           emit();
         }
         break;
+      case "voice-stream":
+        if (message.channelId !== state.voiceChannelId) {
+          return;
+        }
+        state.liveStream = message.stream;
+        emit();
+        break;
     }
   }
 
@@ -2719,6 +2734,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // share ids would otherwise leak into the welcome diff and look like
       // newcomers. Empty previous is the locked "join into live shares" rule.
       state.screenSharePeerIds = [];
+      state.liveStream = null;
       state.cameraPeerIds = [];
       state.focusedScreenPeerId = null;
       state.audibleScreenPeerIds = [];
@@ -3132,13 +3148,16 @@ export function createVoiceController(transport: RealtimeTransport) {
         canControl: canControlShareCursor(),
       });
       emit();
-      announceSharing();
 
       try {
         await manager?.setLocalScreenStream(stream);
         if (sfu) {
           await sfu.publishScreen(stream);
         }
+        // After the SFU publish, not before. Live HLS looks up the
+        // SCREEN_SHARE track the moment this frame lands; announcing first
+        // made every staging start miss the track and fall back to WebRTC.
+        announceSharing();
       } catch (err) {
         state.error = screenShareErrorMessage(err);
         await stopScreenShareInternal();

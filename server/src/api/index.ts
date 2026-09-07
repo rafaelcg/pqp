@@ -120,6 +120,7 @@ import {
   getServerVoiceBackend,
   isLiveKitConfigured,
 } from "../voice/backends.js";
+import { liveHlsConfig } from "../voice/hls-egress.js";
 import {
   applyManualStatus,
   broadcastProfileUpdate,
@@ -1835,6 +1836,8 @@ router.get("/api/voice/backend", async () => {
     backend: backend === "livekit" && !isLiveKitConfigured() ? "mesh" : backend,
   };
 });
+
+router.get("/api/live-hls/config", async () => liveHlsConfig());
 
 router.post("/api/voice/token", async ({ req, user }) => {
   if (!isLiveKitConfigured()) {
