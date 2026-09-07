@@ -859,6 +859,7 @@
   "voice.tile.live": "Live",
   "voice.hls.delay": "~{seconds}s delay",
   "voice.hls.buffering": "Loading the stream…",
+  "voice.hls.unmute": "Tap for sound",
   "voice.tile.holdToTalk": "Hold to talk",
   "voice.ptt.hold": "Hold to talk",
   "voice.ptt.transmitting": "Transmitting",
