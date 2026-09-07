@@ -19,6 +19,7 @@ prometheus.exporter.unix "box" {
     "netdev",
     "os",
     "stat",
+    "systemd",
     "textfile",
     "time",
     "uname",
@@ -33,6 +34,17 @@ prometheus.exporter.unix "box" {
 
   netdev {
     device_exclude = "^(veth.*|br-.*|docker.*|lo)$"
+  }
+
+  // Only the units worth waking up for. The default is every unit on the box,
+  // which is a few hundred series for nothing. turn-cert-sync is in here
+  // because a daily cert copy that starts failing is otherwise invisible until
+  // TURN stops negotiating TLS.
+  systemd {
+    unit_include    = "^(livekit-docker|turn-cert-sync|pqp-box-metrics|alloy|vnstat|docker)\\.(service|timer)$"
+    enable_restarts = false
+    start_time      = false
+    task_metrics    = false
   }
 
   textfile {

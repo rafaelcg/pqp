@@ -674,7 +674,7 @@ sfu box (216.238.114.79)
   vnstat            -> monthly transfer totals, in SQLite, across reboots
   pqp-box-metrics   -> systemd timer, every 60s, writes two .prom files
   LiveKit :6789     -> its own Prometheus metrics, localhost only
-  Grafana Alloy     -> node exporter + textfile + LiveKit scrape
+  Grafana Alloy     -> node exporter + textfile + systemd + LiveKit scrape
                        -> remote_write -> Grafana Cloud Prometheus
 ```
 
@@ -730,6 +730,8 @@ contact point `rafael-email`.
 | a docker container is not running | per container, by name | 3m |
 | a docker container restarted | `changes(pqp_sfu_container_started_seconds[10m]) > 0`; catches a policy restart *and* a `docker compose up` recreation, which resets `RestartCount` to 0 | 0s |
 | LiveKit metrics unreachable for 10m | the box is up but the SFU process is wedged or gone | 10m |
+| a watched systemd unit has failed | `livekit-docker`, `turn-cert-sync`, `pqp-box-metrics`, `alloy`, `vnstat`, `docker`. Only those six are scraped; the default is every unit on the box, which is a few hundred series for nothing | 5m |
+| the TURN cert sync has not run in 48h | `turn-cert-sync.timer` copies the Caddy-renewed certificate into LiveKit's TURN listener daily. If it stops, TURN serves the old one until it expires and cross-NAT voice breaks with no other warning | 30m |
 
 The egress rules read `pqp_sfu_egress_30d_tx_bytes`, a **rolling 30 day**
 total, not the calendar month. Vultr's allowance resets on the instance's
@@ -813,10 +815,13 @@ restart and would churn the series set for nothing.
   0.3% of the allowance, so it was not worth reconstructing.
 - The egress figure is the box's total, not LiveKit's share. On this box they
   are close, since it does nothing else.
-- Nothing alerts on TURN specifically. TURN is LiveKit's own, so the container
-  and LiveKit-scrape rules cover the process; a broken TLS cert on
-  `turn.pqp.gg` would show up as a failed relay, not as an alert. The daily
-  cert check in `limits` covers `sfu.pqp.gg` only.
+- TURN is covered indirectly rather than probed. It is LiveKit's own listener,
+  so the container, LiveKit-scrape and `turn-cert-sync` rules cover the process
+  and its certificate, but nothing actually relays a packet through
+  `turn.pqp.gg:5349` to prove it works. `MONITOR_TLS_HOSTS` in
+  `scripts/monitor/limits.mjs` does not include either SFU hostname; the
+  `sfu.pqp.gg` certificate is watched by synthetic check 6261 instead, and
+  `turn.pqp.gg` by the sync rule above.
 
 ---
 
