@@ -78,9 +78,16 @@ import { AgeGateDialog } from "@/components/user/age-gate-dialog";
 import { OnboardingFlow } from "@/components/onboarding/onboarding-flow";
 import { NewDmDialog } from "@/components/user/new-dm-dialog";
 import { CargosHint } from "@/components/layout/cargos-hint";
+import { FeatureHintProvider } from "@/components/layout/feature-hint";
 import { MobileBetaHint } from "@/components/layout/mobile-beta-hint";
 import { QgHint } from "@/components/layout/qg-hint";
+import { ShortcutsHint } from "@/components/layout/shortcuts-hint";
 import { winningCornerHint } from "@/lib/corner-hints";
+import { isDesktopApp } from "@/lib/desktop";
+import {
+  featureHintEligible,
+  winningFeatureHint,
+} from "@/lib/feature-hints";
 import { canActOnMemberClient } from "@/lib/role-hierarchy";
 import {
   cloneVoiceOccupancy,
@@ -122,6 +129,7 @@ import { UserPanel } from "@/components/layout/user-panel";
 import { ConnectionCallbackOverlay } from "@/components/connections/connection-callback";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
+import { supportsScreenShare } from "@/components/voice/capabilities";
 import {
   formatBinding,
   supportsKeyBinding,
@@ -932,6 +940,23 @@ function MainAppContent({
   const [wantsWhatsNew, setWantsWhatsNew] = useState(
     () => !isAutomatedBrowser() && !isWhatsNewSeen(),
   );
+  const [wantsComposerFormatHint] = useState(() =>
+    featureHintEligible("composerFormat"),
+  );
+  const [wantsWatchPartyHint] = useState(() =>
+    featureHintEligible("watchParty"),
+  );
+  const [wantsChannelPinHint] = useState(() =>
+    featureHintEligible("channelPin"),
+  );
+  const [wantsShortcutsHint] = useState(() =>
+    featureHintEligible("shortcuts") && supportsKeyBinding(),
+  );
+  const [shortcutsQuietReady, setShortcutsQuietReady] = useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setShortcutsQuietReady(true), 1600);
+    return () => window.clearTimeout(timer);
+  }, []);
   const [membersOpen, setMembersOpen] = useState(false);
   const [serverSettingsSection, setServerSettingsSection] = useState<
     "roles" | undefined
@@ -4158,16 +4183,45 @@ function MainAppContent({
   const canManageNicknames = perms.can(Permission.MANAGE_NICKNAMES);
   /**
    * One corner card. QG first (the house), then the phone-app invite,
-   * then Novidades on the rail, then cargos. WhatsNew used to mount
-   * outside this queue and stack on the others; it does not any more.
+   * then Novidades on the rail, then cargos, then the quiet shortcuts
+   * card. Attached feature hints (format bar, Watch party) sit next to
+   * their control and yield while a campaign owns the corner.
    */
+  const viewingThisCall = Boolean(
+    voiceState.voiceChannelId &&
+      (voiceState.voiceChannelId === selectedChannelId ||
+        voiceState.voiceChannelId === activeConversation?.channelId),
+  );
+  const attachedFeatureHint = winningFeatureHint({
+    watchParty:
+      wantsWatchPartyHint &&
+      voiceState.status === "connected" &&
+      voiceState.canStream &&
+      supportsScreenShare(),
+    composerFormat:
+      wantsComposerFormatHint &&
+      selectedChannel?.type === "text" &&
+      !communityHomeOpen,
+    channelPin:
+      wantsChannelPinHint &&
+      selection.kind === "server" &&
+      Boolean(selectedServerId),
+  });
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
     qg: qgHintShowing,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,
     cargos: qgHintReady && Boolean(canManageRoles && selectedServerId),
+    shortcuts:
+      wantsShortcutsHint &&
+      shortcutsQuietReady &&
+      attachedFeatureHint === null,
   });
+  const liveAttachedHint =
+    cornerHint === null || cornerHint === "shortcuts"
+      ? attachedFeatureHint
+      : null;
 
   const voiceChannel =
     voiceState.voiceChannelId
@@ -4256,6 +4310,15 @@ function MainAppContent({
             void voice.startScreenShare(shareSystemAudio);
           }}
           onOpen={() => void openVoiceChannel()}
+          shareHintEnabled={
+            liveAttachedHint === "watchParty" &&
+            !(
+              viewingThisCall &&
+              voiceState.canSpeak &&
+              !isDesktopApp() &&
+              supportsScreenShare()
+            )
+          }
           onLeave={() => voice.leave()}
         />
       )}
@@ -4760,6 +4823,7 @@ function MainAppContent({
     // the view, every profile card, and the two badges. Outside the popover
     // provider because the card is one of its consumers.
     <FriendsContext.Provider value={friends}>
+    <FeatureHintProvider winner={liveAttachedHint}>
     {/* One provider for the whole app: the profile card is opened from the
         transcript, the members panel and the conversation list, and every one of
         them wants the same block list, the same "open this DM" navigation and
@@ -5664,6 +5728,10 @@ function MainAppContent({
           setServerSettingsOpen(true);
         }}
       />
+      <ShortcutsHint
+        enabled={cornerHint === "shortcuts"}
+        shortcutLabel={formatBinding(shortcutBindings.toggleOverlay)}
+      />
       <WhatsNewPrompt
         enabled={cornerHint === "whatsNew"}
         onOpen={handleOpenWhatsNew}
@@ -5710,6 +5778,7 @@ function MainAppContent({
 
     </div>
     </ProfilePopoverProvider>
+    </FeatureHintProvider>
     </FriendsContext.Provider>
   );
 }
