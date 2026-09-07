@@ -11,7 +11,7 @@ export const privacyEn: LegalDocument = {
   description:
     "How pqp.gg handles personal data: what we collect, our legal bases, where it is processed, retention, and your rights under the LGPD and UK data protection law.",
   heading: "Privacy Policy",
-  updated: "2 September 2026",
+  updated: "7 September 2026",
   sections: [
     {
       id: "intro",
@@ -364,18 +364,71 @@ export const privacyEn: LegalDocument = {
       body: (
         <>
           <p>
-            In the configuration pqp.gg runs today, voice is{" "}
-            <strong>peer-to-peer</strong>. Your audio goes directly from your
-            device to the other people in the channel over WebRTC, encrypted end
-            to end by the browser (DTLS-SRTP).{" "}
-            <strong>
-              It does not pass through our servers, and we could not record it
-              if we wanted to.
-            </strong>{" "}
-            What our server handles is signalling only: who is in which voice
-            channel, and the connection-setup messages the browsers exchange.
+            Voice and video take one of two paths on pqp.gg, and which one your
+            call gets is decided when the call starts. In a small room, audio
+            and screen-share video go{" "}
+            <strong>straight from your device to the other people</strong> in
+            the channel over WebRTC, encrypted by the browser (DTLS-SRTP), and
+            pass through no server of ours at all. In a large room they are
+            relayed by a <strong>media server we run ourselves</strong>, in São
+            Paulo, Brazil.
           </p>
-          <p>Two honest caveats:</p>
+          <p>Which rooms are which:</p>
+          <ul>
+            <li>
+              A call in a DM or a group DM is always direct between the people
+              on it.
+            </li>
+            <li>
+              A voice channel in a server with fewer than 10 members is direct
+              between the people on it.
+            </li>
+            <li>
+              A voice channel in a server with 10 members or more goes through
+              the media server.
+            </li>
+            <li>
+              So does any voice channel in a community, whatever its size. A
+              community here means a server that has been given a public address
+              at <strong>pqp.gg/c/…</strong>, whether or not it also appears in
+              the public directory. The address is what lets strangers in, so it
+              is what we treat as the sign of a room that can fill up.
+            </li>
+            <li>
+              Anyone who can manage a server&apos;s channels, normally its owner
+              and its admins, can pin either path per channel, under{" "}
+              <strong>Voice room size</strong> in the channel settings, and that
+              choice replaces the rule above.
+            </li>
+          </ul>
+          <p>
+            The choice is made when the first person joins and holds until the
+            room empties. A call already in progress never switches paths.
+          </p>
+          <p>
+            <strong>
+              What the relayed path means for you, in plain terms.
+            </strong>{" "}
+            To pass your audio and video on to everyone else, the media server
+            decrypts what you send and encrypts it again for each person
+            receiving it. That is what a media server does; there is no way to
+            relay media without handling it. So in a large room the encryption
+            is between you and our server rather than end to end between the
+            participants, and the sentence that used to sit here, that your
+            audio could not reach us even if we wanted it to, has stopped being
+            true of every call.
+          </p>
+          <p>
+            <strong>What we do with it: pass it on and drop it.</strong> Nothing
+            is recorded, nothing is stored, and no person listens. The machine
+            runs the media server and nothing else: no recording service, no
+            queue, and no disk that media is written to. None of the tokens we
+            issue to join a room carries permission to record. Media exists in
+            that server&apos;s memory for as long as it takes to forward a
+            packet. We also cannot go back afterwards and retrieve a call,
+            because no copy of it was ever made.
+          </p>
+          <p>Three honest caveats:</p>
           <ul>
             <li>
               <strong>STUN and TURN.</strong> To connect two devices behind home
@@ -383,23 +436,37 @@ export const privacyEn: LegalDocument = {
               impossible (common on mobile networks) the encrypted audio is
               relayed through a <strong>TURN</strong> server. Those third
               parties see the IP addresses of the people on the call, and the
-              TURN relay carries the media — but it is still encrypted between
+              TURN relay carries the media, but it is still encrypted between
               the participants, so the relay cannot listen to it. Our STUN/TURN
               providers today are <strong>Cloudflare Realtime TURN</strong>,
-              then Metered / Open Relay if Cloudflare is not configured, then
-              a static relay (ExpressTURN on pqp.gg) as the fallback, plus
-              public STUN servers run by Google and Cloudflare.
+              then Metered / Open Relay if Cloudflare is not configured, then a
+              static relay (ExpressTURN on pqp.gg) as the fallback, plus public
+              STUN servers run by Google and Cloudflare. In a large room that
+              same job is done by the media server itself, on the same machine,
+              with no third party in the middle.
             </li>
             <li>
-              <strong>Large calls.</strong> Because every participant connects
-              directly to every other one, this design only stretches so far
-              before the connections get heavy. The software also supports a
-              media server (SFU) for bigger channels, which <em>would</em> place
-              audio on a third-party server. That mode is{" "}
-              <strong>not enabled</strong> on pqp.gg. If we turn it on, we will
-              update this page before we do.
+              <strong>Who looks after the machine.</strong> The media server is
+              a virtual machine we rent from <strong>Vultr</strong> in São Paulo
+              and administer ourselves. Vultr provides the hardware, the network
+              and the building; the software running on it is ours.
+            </li>
+            <li>
+              <strong>This is a promise, not a proof.</strong> On the direct
+              path we could not record your call if we wanted to, because it
+              never reaches us. On the relayed path we could, and we do not.
+              Anyone with administrative access to that machine could add a
+              recorder, and what stands between you and that is the word of the
+              person who runs pqp.gg plus the configuration described above. We
+              would rather say so plainly than let the old sentence go on
+              covering both cases.
             </li>
           </ul>
+          <p>
+            This changed on <strong>5 September 2026</strong>, when the media
+            server went into production. Before that date every call on pqp.gg
+            was direct between the participants.
+          </p>
         </>
       ),
     },
@@ -522,6 +589,14 @@ export const privacyEn: LegalDocument = {
               <strong>São Paulo, Brazil (Fly region gru)</strong>.
             </li>
             <li>
+              <strong>Vultr</strong>, the virtual machine our voice media
+              server runs on, in <strong>São Paulo, Brazil</strong>. The
+              software on it is ours; Vultr provides the machine and the
+              network. In a large room your audio and screen-share video pass
+              through it to be relayed, as described under &quot;Voice
+              calls&quot; above.
+            </li>
+            <li>
               <strong>Umami</strong> — cookieless visit counts, hosted by its
               makers in the EU. Set out under &quot;Site analytics&quot; above.
             </li>
@@ -612,9 +687,11 @@ export const privacyEn: LegalDocument = {
             Google Fonts operate globally and typically process data in the
             United States and Europe. The application servers and database run
             on <strong>Fly.io</strong> in{" "}
-            <strong>São Paulo, Brazil (Fly region gru)</strong>. The person who
-            operates pqp.gg is in the United Kingdom, so anything handled by a
-            human is handled there.
+            <strong>São Paulo, Brazil (Fly region gru)</strong>, and the voice
+            media server runs on a Vultr machine in <strong>São Paulo</strong>{" "}
+            as well, so a relayed call does not leave Brazil either. The person
+            who operates pqp.gg is in the United Kingdom, so anything handled by
+            a human is handled there.
           </p>
           <p>
             The honest basis for those transfers: these are ordinary commercial
@@ -925,12 +1002,14 @@ export const privacyEn: LegalDocument = {
       heading: "Security",
       body: (
         <p>
-          Traffic is encrypted in transit. Voice audio is encrypted between
-          participants. Attachment links are short-lived and signed rather than
-          public. Our server refuses to fetch link previews from internal
-          network addresses. No system is perfectly secure, and this one is
-          maintained by one person with no security team behind them — if you
-          find a vulnerability, please tell us at{" "}
+          Traffic is encrypted in transit. Voice is encrypted in transit on both
+          paths: end to end between the participants in a small room, and
+          between you and our media server in a large one, where it has to
+          handle the media in order to relay it. Attachment links are
+          short-lived and signed rather than public. Our server refuses to fetch
+          link previews from internal network addresses. No system is perfectly
+          secure, and this one is maintained by one person with no security team
+          behind them. If you find a vulnerability, please tell us at{" "}
           <strong>contato@pqp.gg</strong> before you tell anyone else. If a
           breach creates a real risk to you, we will tell you and the relevant
           regulator, as LGPD art. 48 and UK GDPR arts. 33–34 require.

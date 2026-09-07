@@ -12,7 +12,7 @@ export const termsEn: LegalDocument = {
   description:
     "Terms for using the hosted pqp.gg service: what pqp actually is, eligibility (18+), acceptable use, moderation, reporting and takedowns.",
   heading: "Terms of Service",
-  updated: "2 September 2026",
+  updated: "7 September 2026",
   sections: [
     {
       id: "intro",
@@ -362,17 +362,20 @@ export const termsEn: LegalDocument = {
       heading: "Voice and media",
       body: (
         <p>
-          Voice uses WebRTC. In the configuration pqp.gg runs today, audio
-          and screen-share video travel directly between participants and are not
-          routed through, recorded by, or stored on our servers. A watch party
+          Voice uses WebRTC. In a small room, audio and screen-share video
+          travel directly between participants and pass through no server of
+          ours. In a large room they are relayed by a media server we run
+          ourselves in São Paulo, Brazil, which passes them on and keeps
+          nothing: no call is recorded by us or stored by us on either path.
+          Which rooms are which, and what relaying means for your data, is set
+          out in the <Link to="/privacy">Privacy Policy</Link>. A watch party
           syncs a YouTube video on each person&apos;s device; we do not host
-          that stream. That design has a practical ceiling: every person in a
-          channel connects to every other one, so a busy voice channel gets
-          heavy on everybody&apos;s connection. Quality depends on your network
-          and your peers, and we do not guarantee uninterrupted audio. You are
-          responsible for what you share on screen and for what you play in a
-          watch party. See the <Link to="/privacy">Privacy Policy</Link>{" "}
-          for what this means for your data.
+          that stream. The direct path has a practical ceiling: every person in
+          a channel connects to every other one, so a busy direct room gets
+          heavy on everybody&apos;s connection. Quality depends on your network,
+          and on the direct path on your peers too, and we do not guarantee
+          uninterrupted audio. You are responsible for what you share on screen
+          and for what you play in a watch party.
         </p>
       ),
     },

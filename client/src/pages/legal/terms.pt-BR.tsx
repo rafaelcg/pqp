@@ -27,7 +27,7 @@ export const termsPtBr: LegalDocument = {
   description:
     "Termos de uso do serviço hospedado pqp.gg: o que o pqp é de verdade, quem pode usar (18+), uso aceitável, moderação, denúncias e remoção de conteúdo.",
   heading: "Termos de Uso",
-  updated: "2 de setembro de 2026",
+  updated: "7 de setembro de 2026",
   sections: [
     {
       id: "intro",
@@ -404,22 +404,25 @@ export const termsPtBr: LegalDocument = {
     },
     {
       id: "voice",
-      sourceRev: "3598afd0",
+      sourceRev: "a679eede",
       heading: "Voz e mídia",
       body: (
         <p>
-          A voz usa WebRTC. Na configuração que o pqp.gg roda hoje, o áudio e o
-          vídeo de tela compartilhada vão direto entre os participantes: não
-          passam pelos nossos servidores, não são gravados por eles nem
-          armazenados neles. Uma watch party sincroniza um vídeo do YouTube no
-          aparelho de cada um; a gente não hospeda esse stream. Esse desenho tem
-          um teto prático: cada pessoa no canal se conecta com todas as outras,
-          então um canal de voz cheio pesa na conexão de todo mundo. A qualidade
-          depende da sua rede e da rede das outras pessoas, e a gente não
+          A voz usa WebRTC. Em sala pequena, o áudio e o vídeo de tela
+          compartilhada vão direto entre os participantes e não passam por
+          servidor nenhum nosso. Em sala grande, eles são repassados por um
+          servidor de mídia que a gente mesmo roda em São Paulo, no Brasil, que
+          repassa e não guarda nada: nenhuma chamada é gravada nem armazenada
+          pela gente, em nenhum dos dois caminhos. Quais salas são quais, e o
+          que esse repasse significa para os seus dados, está na{" "}
+          <Link to="/privacy">Política de Privacidade</Link>. Uma watch party
+          sincroniza um vídeo do YouTube no aparelho de cada um; a gente não
+          hospeda esse stream. O caminho direto tem um teto prático: cada pessoa
+          no canal se conecta com todas as outras, então uma sala direta cheia
+          pesa na conexão de todo mundo. A qualidade depende da sua rede e, no
+          caminho direto, da rede das outras pessoas também, e a gente não
           garante áudio sem interrupção. Você responde pelo que compartilha na
-          tela e pelo que toca numa watch party. Veja a{" "}
-          <Link to="/privacy">Política de Privacidade</Link> para o que isso
-          significa para os seus dados.
+          tela e pelo que toca numa watch party.
         </p>
       ),
     },
