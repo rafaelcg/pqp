@@ -247,6 +247,29 @@ async function join(
   };
 }
 
+/** The same audience socket, having negotiated `voice-roster-delta` at auth. */
+function deltaWatcher(instance: Instance): Recorder {
+  const rec = recorder();
+  instance.sockets.setAuthenticatedSocket(rec.socket, asUser(randomUUID()), [
+    instance.sockets.SOCKET_CAPS.voiceRosterDelta,
+  ]);
+  return rec;
+}
+
+interface DeltaFrame {
+  seq: number;
+  size: number;
+  joined?: { peerId: string }[];
+  updated?: { peerId: string; muted: boolean }[];
+  left?: string[];
+}
+
+function deltas(rec: Recorder, channel: string): DeltaFrame[] {
+  return frames(rec, "voice-roster-delta").filter(
+    (f) => f.voiceChannelId === channel,
+  ) as unknown as DeltaFrame[];
+}
+
 async function settle(): Promise<void> {
   for (const instance of booted) {
     await instance.registry.settleVoiceRegistryWrites();
@@ -396,6 +419,59 @@ describeDb("voice across two instances", () => {
           (p) => p.peerId,
         ),
       ).toEqual([inRoomOnB.peerId]);
+    });
+
+    it("a join, a toggle and a leave on A reach a B watcher that asked for deltas as deltas", async () => {
+      // The registry path used to send no deltas at all: the local event
+      // queue could not describe a change made on the other machine, so
+      // every change went to every audience socket as a whole roster. Now
+      // the rows are diffed against what B last sent, and A's peer is in the
+      // rows and not in that memory, which is exactly a `joined`.
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnB = deltaWatcher(b);
+      await join(b, randomUUID(), channel);
+      await waitFor(
+        () => lastRoster(sidebarOnB, channel)?.participants.length === 1,
+        "B's own roster on B",
+      );
+
+      const userA = randomUUID();
+      const joiner = await join(a, userA, channel);
+      await waitFor(() => deltas(sidebarOnB, channel).length === 1, "joined delta on B");
+      expect(deltas(sidebarOnB, channel)[0]).toMatchObject({
+        seq: 2,
+        size: 2,
+        joined: [{ peerId: joiner.peerId }],
+      });
+      expect(deltas(sidebarOnB, channel)[0]?.left).toBeUndefined();
+
+      await a.voice.handleVoiceMessage(
+        { socket: joiner.socket, user: asUser(userA) },
+        { type: "set-voice-state", muted: true, deafened: false },
+      );
+      await waitFor(() => deltas(sidebarOnB, channel).length === 2, "updated delta on B");
+      expect(deltas(sidebarOnB, channel)[1]).toMatchObject({
+        seq: 3,
+        size: 2,
+        updated: [{ peerId: joiner.peerId, muted: true }],
+      });
+
+      await a.voice.handleVoiceMessage(
+        { socket: joiner.socket, user: asUser(userA) },
+        { type: "leave-voice-room" },
+      );
+      await waitFor(() => deltas(sidebarOnB, channel).length === 3, "left delta on B");
+      expect(deltas(sidebarOnB, channel)[2]).toMatchObject({
+        seq: 4,
+        size: 1,
+        left: [joiner.peerId],
+      });
+      // Three changes on A, one whole roster on B: the one that opened the room.
+      expect(
+        frames(sidebarOnB, "voice-roster").filter((f) => f.voiceChannelId === channel),
+      ).toHaveLength(1);
     });
 
     it("a leave on A removes the peer on B", async () => {
@@ -699,13 +775,16 @@ describeDb("voice across two instances", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(frames(bystanderOnA, "peer-left")).toHaveLength(0);
       expect(frames(bystanderOnB, "peer-left")).toHaveLength(0);
-      // Both rosters still count three, once each.
-      await waitFor(
-        () => lastRoster(bystanderOnA, channel)?.participants.length === 3,
-        "roster on A",
-      );
+      // A's room still counts three, once each. Read through a fresh socket
+      // rather than waited for on the wire: the seat changing hands changes
+      // nothing about who is in the room, so A's roster run finds the rows
+      // saying what its last frame said and, since the deltas, writes
+      // nothing rather than restating the room to everyone.
+      const probeOnA = recorder();
+      await a.voice.sendAllVoiceRosters(probeOnA.socket, asUser(randomUUID()));
+      expect(lastRoster(probeOnA, channel)?.participants).toHaveLength(3);
       expect(
-        lastRoster(bystanderOnA, channel)?.participants.filter(
+        lastRoster(probeOnA, channel)?.participants.filter(
           (p) => p.peerId === seat.peerId,
         ),
       ).toHaveLength(1);
