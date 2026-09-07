@@ -118,6 +118,8 @@ type ParticipantResult = {
   heldMs?: number;
   flow: Flow[];
   ws?: { wireBytes: number; frames: Record<string, { count: number; bytes: number }> };
+  /** Run D: every reconnect this participant performed during its hold. */
+  churns?: Array<{ atMs: number; resumed: boolean; welcomeMs?: number; rtc: boolean; rtcConnectedMs?: number; firstFrameMs?: number; failure?: string }>;
   failure?: string;
   failureClass?: string;
   /** Every pass criterion this participant missed. Empty means it passed. */
@@ -275,12 +277,37 @@ type AppSession = { socket: WebSocket; peerId: string; resumeToken: string; welc
  * does. Every frame the socket receives is counted by type so the report can
  * say what a socket without the delta caps pays.
  */
-async function appSession(base: string, wsUrl: string, token: string, room: Manifest, legacy: boolean, deadlineAtMs: number, index: number): Promise<AppSession> {
-  const started = Date.now();
-  await passAgeGate(base, token);
-  await api(base, token, "POST", `/api/invites/${room.inviteCode}/join`);
-  await Promise.all([api(base, token, "GET", "/api/me"), api(base, token, "GET", "/api/servers"), api(base, token, "GET", "/api/friends"), api(base, token, "GET", "/api/dms")]);
-  const counters: WsCounters = { wireBytes: 0, frames: {} };
+/**
+ * The browser's first load, as `coldBootstrap` in server/scripts/load-fanout.ts
+ * replays it: 21 requests in App.tsx order, roughly a hundred pool checkouts.
+ * The thin bootstrap (age gate, invite, four GETs) is what the harness shipped
+ * with; --cold-bootstrap swaps this in for the runs that measure the API path.
+ */
+async function coldBootstrap(base: string, token: string, room: Manifest): Promise<void> {
+  const get = (path: string, method = "GET") => api(base, token, method, path, method === "POST" ? {} : undefined).then(() => undefined, (error) => { throw error; });
+  const all = (...paths: string[]) => Promise.all(paths.map((p) => get(p)));
+  await get("/api/me");
+  await all("/api/ice-servers", "/api/voice/backend");
+  await all("/api/servers", "/api/community-home/config");
+  await all("/api/dms", "/api/blocks", "/api/attachments/config", "/api/communities/config", "/api/friends", "/api/me/depoimentos/pending");
+  await all(`/api/servers/${room.serverId}/channels`, `/api/servers/${room.serverId}/unread`);
+  await all(`/api/servers/${room.serverId}/members`, `/api/servers/${room.serverId}/roles`, `/api/servers/${room.serverId}/permissions`);
+  await all(`/api/channels/${room.voiceChannelId}/messages`, "/api/gifs/config");
+  await get(`/api/channels/${room.voiceChannelId}/read`, "POST");
+  await get("/api/ice-servers");
+}
+type Resume = { peerId: string; resumeToken: string };
+/**
+ * One app-socket handshake: auth (with or without the delta caps, and with or
+ * without permessage-deflate, to mirror a native app that has not updated),
+ * the channel and voice joins, and the welcome. One attempt is 12 s from
+ * socket open like the browser's; a miss closes the socket and retries with
+ * backoff until the deadline, which is what a person's client does. With a
+ * resume pair it is the reconnect path and the welcome should say
+ * `resumed: true`. Every frame the socket receives is counted by type so the
+ * report can say what a socket without the delta caps pays.
+ */
+async function openAppSocket(wsUrl: string, token: string, room: Manifest, legacy: boolean, deadlineAtMs: number, index: number, counters: WsCounters, started: number, resume?: Resume): Promise<AppSession> {
   let attempts = 0;
   let backoff = 1_000;
   for (;;) {
@@ -310,7 +337,7 @@ async function appSession(base: string, wsUrl: string, token: string, room: Mani
           slot.count += 1; slot.bytes += bytes;
           if (type === "ready") {
             socket.send(JSON.stringify({ type: "join-channel", channelId: room.textChannelId }));
-            socket.send(JSON.stringify({ type: "join-voice-room", voiceChannelId: room.voiceChannelId, transports: ["livekit"], resume: true }));
+            socket.send(JSON.stringify({ type: "join-voice-room", voiceChannelId: room.voiceChannelId, transports: ["livekit"], resume: true, ...(resume ? { resumePeerId: resume.peerId, resumeToken: resume.resumeToken } : {}) }));
           }
           if (type === "welcome") {
             if (!frame.peerId) { reject(new Error("welcome missing peer id")); return; }
@@ -330,6 +357,16 @@ async function appSession(base: string, wsUrl: string, token: string, room: Mani
       backoff = Math.min(backoff * 2, 30_000);
     }
   }
+}
+/** The cold-browser HTTP, then the app socket. */
+async function appSession(base: string, wsUrl: string, token: string, room: Manifest, legacy: boolean, deadlineAtMs: number, index: number, cold: boolean): Promise<AppSession> {
+  const started = Date.now();
+  await passAgeGate(base, token);
+  await api(base, token, "POST", `/api/invites/${room.inviteCode}/join`);
+  if (cold) await coldBootstrap(base, token, room);
+  else await Promise.all([api(base, token, "GET", "/api/me"), api(base, token, "GET", "/api/servers"), api(base, token, "GET", "/api/friends"), api(base, token, "GET", "/api/dms")]);
+  const counters: WsCounters = { wireBytes: 0, frames: {} };
+  return openAppSocket(wsUrl, token, room, legacy, deadlineAtMs, index, counters, started);
 }
 async function mint(base: string, token: string, room: Manifest, peerId: string, resumeToken: string, expectedSfuHost: string): Promise<Session> {
   const result = await api<Session>(base, token, "POST", "/api/voice/token", { voiceChannelId: room.voiceChannelId, peerId, ...(resumeToken ? { resumeToken } : {}) });
@@ -606,8 +643,13 @@ type ShardPlan = {
   screenPin: VideoQuality | null;
   cameraPin: VideoQuality | null;
   joinDeadlineMs: number;
+  coldBootstrap: boolean;
+  /** Run D: this process reconnects one receiver every this many ms during the hold (0 = off). */
+  churnEveryMs: number;
+  /** Run D: every Nth churn also drops the LiveKit room and re-mints (0 = never). */
+  churnRtcEvery: number;
 };
-async function one(index: number, role: Role, legacy: boolean, decodeSample: boolean, safe: ReturnType<typeof assertSafeTarget>, roomInfo: Manifest, plan: ShardPlan, arriveAtMs: number, acquireJoin: () => Promise<() => void>): Promise<ParticipantResult> {
+async function one(index: number, role: Role, legacy: boolean, decodeSample: boolean, safe: ReturnType<typeof assertSafeTarget>, roomInfo: Manifest, plan: ShardPlan, arriveAtMs: number, acquireJoin: () => Promise<() => void>, churnSlot = -1, churnSlots = 1): Promise<ParticipantResult> {
   const presenter = role === "presenter";
   const result: ParticipantResult = { index, role, presenter, legacy, decodeSample, welcomeAttempts: 0, videoFrames: 0, audioFrames: 0, subscribedTracks: 0, disconnects: 0, flow: [] };
   let socket: WebSocket | undefined; let room: Room | undefined; let publisher: Publisher | undefined; let intentionalDisconnect = false; let releaseJoin: (() => void) | undefined; let wsCounters: WsCounters | undefined;
@@ -640,20 +682,23 @@ async function one(index: number, role: Role, legacy: boolean, decodeSample: boo
     releaseJoin = await acquireJoin();
     diagnostic("join-slot-acquired", index, { waitedMs: Date.now() - result.arrivalAtMs });
     const started = Date.now(); const token = tokenFor(safe.runId, index, safe.local);
-    const joined = await appSession(safe.apiUrl, safe.wsUrl, token, roomInfo, legacy, result.arrivalAtMs + plan.joinDeadlineMs, index);
+    const joined = await appSession(safe.apiUrl, safe.wsUrl, token, roomInfo, legacy, result.arrivalAtMs + plan.joinDeadlineMs, index, plan.coldBootstrap);
     socket = joined.socket; peerId = joined.peerId; resumeToken = joined.resumeToken; wsCounters = joined.counters;
     result.bootstrapMs = Date.now() - started; result.welcomeMs = joined.welcomeMs; result.socketOpenToWelcomeMs = joined.socketOpenToWelcomeMs; result.welcomeAttempts = joined.attempts; result.resumed = joined.resumed;
     diagnostic("app-session-ready", index, { bootstrapMs: result.bootstrapMs, welcomeMs: result.welcomeMs, socketOpenToWelcomeMs: result.socketOpenToWelcomeMs });
+    const wireRoom = (r: Room) => {
+      r.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, publication: RemoteTrackPublication) => {
+        result.subscribedTracks += 1;
+        if (track.kind === TrackKind.KIND_VIDEO) {
+          const pin = publication.source === TrackSource.SOURCE_SCREENSHARE ? plan.screenPin : plan.cameraPin;
+          if (pin !== null) { try { pinQuality(publication, pin); } catch (error) { diagnostic("pin-failed", index, { message: error instanceof Error ? error.message : String(error) }); } }
+        }
+        if (decodeSample) consume(track, result);
+      });
+      r.on(RoomEvent.Disconnected, () => { if (!intentionalDisconnect) result.disconnects += 1; });
+    };
     room = new Room();
-    room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, publication: RemoteTrackPublication) => {
-      result.subscribedTracks += 1;
-      if (track.kind === TrackKind.KIND_VIDEO) {
-        const pin = publication.source === TrackSource.SOURCE_SCREENSHARE ? plan.screenPin : plan.cameraPin;
-        if (pin !== null) { try { pinQuality(publication, pin); } catch (error) { diagnostic("pin-failed", index, { message: error instanceof Error ? error.message : String(error) }); } }
-      }
-      if (decodeSample) consume(track, result);
-    });
-    room.on(RoomEvent.Disconnected, () => { if (!intentionalDisconnect) result.disconnects += 1; });
+    wireRoom(room);
     // Mint immediately before connect: the token has a TTL and a slow ramp
     // must not turn into expiry failures.
     const tokenStarted = Date.now(); const session = await mint(safe.apiUrl, token, roomInfo, joined.peerId, joined.resumeToken, safe.sfuHost); result.tokenMs = Date.now() - tokenStarted;
@@ -686,6 +731,45 @@ async function one(index: number, role: Role, legacy: boolean, decodeSample: boo
     const holdUntil = stampede
       ? (presenter ? plan.startAtMs + plan.arrivalLeadMs + plan.arrivalWindowMs + plan.holdMs + 20_000 : mediaStartedAt + plan.holdMs)
       : plan.startAtMs + plan.holdMs + (presenter ? 5_000 : 0);
+    if (plan.churnEveryMs > 0 && role !== "presenter" && churnSlot >= 0) {
+      // Staggered across this process: slot k churns at (k+1) x every, then
+      // every (slots x every) after that, never in the last 60 s of the hold.
+      result.churns = [];
+      let churnAt = mediaStartedAt + (churnSlot + 1) * plan.churnEveryMs;
+      let n = 0;
+      while (churnAt < holdUntil - 60_000) {
+        await sleep(churnAt - Date.now());
+        const rtc = plan.churnRtcEvery > 0 && ((churnSlot + n * churnSlots) % plan.churnRtcEvery === 0);
+        const record: NonNullable<ParticipantResult["churns"]>[number] = { atMs: Date.now() - mediaStartedAt, resumed: false, rtc };
+        result.churns.push(record);
+        try {
+          // The app socket drops without a leave, the way a flaky link does.
+          const old = socket; socket = undefined;
+          old?.close();
+          const t0 = Date.now();
+          const again = await openAppSocket(safe.wsUrl, token, roomInfo, legacy, Date.now() + 60_000, index, wsCounters!, t0, { peerId, resumeToken });
+          socket = again.socket; record.welcomeMs = again.socketOpenToWelcomeMs; record.resumed = again.resumed;
+          if (again.peerId !== peerId) record.failure = `resumed with a different peer id (${again.resumed ? "resumed" : "fresh"})`;
+          peerId = again.peerId; resumeToken = again.resumeToken || resumeToken;
+          if (rtc) {
+            intentionalDisconnect = true;
+            await room!.disconnect().catch(() => {});
+            const session = await mint(safe.apiUrl, token, roomInfo, peerId, resumeToken, safe.sfuHost);
+            const fresh = new Room(); wireRoom(fresh);
+            intentionalDisconnect = false;
+            const c0 = Date.now();
+            await within("LiveKit reconnect", MEDIA_CONNECT_TIMEOUT_MS, fresh.connect(session.url, session.token, { autoSubscribe: true, dynacast: true }));
+            record.rtcConnectedMs = Date.now() - c0;
+            room = fresh;
+            const p0 = Date.now(); const baseline = 0;
+            for (;;) { const st = await rtpStats(room); if (st.framesDecoded > baseline) { record.firstFrameMs = Date.now() - p0; break; } if (Date.now() - p0 > FIRST_FRAME_ABANDON_MS) { record.failure = "no frame within 45 s after RTC reconnect"; break; } await sleep(500); }
+          }
+        } catch (error) { record.failure = error instanceof Error ? error.message : String(error); }
+        diagnostic("churn", index, record as unknown as Record<string, unknown>);
+        n += 1;
+        churnAt = mediaStartedAt + (churnSlot + 1 + n * churnSlots) * plan.churnEveryMs;
+      }
+    }
     await sleep(holdUntil - Date.now());
     for (const t of timers) clearInterval(t);
     result.rtp = await rtpStats(room);
@@ -730,6 +814,9 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const cameraPublishers = numberArg("--camera-publishers", 0);
   const joinConcurrency = numberArg("--join-concurrency", 12);
   const joinDeadlineSeconds = numberArg("--join-deadline-seconds", 120);
+  const coldBoot = has("--cold-bootstrap");
+  const churnEveryMs = numberArg("--churn-every-ms", 0);
+  const churnRtcEvery = numberArg("--churn-rtc-every", 10);
   const presenterOnly = has("--presenter-only");
   const noPresenter = has("--no-presenter");
   const pinArg = (name: string, fallback: string): VideoQuality | null => { const v = arg(name, fallback); if (v === "none") return null; if (v === "high") return VideoQuality.HIGH; if (v === "medium") return VideoQuality.MEDIUM; if (v === "low") return VideoQuality.LOW; throw new Error(`${name} must be high|medium|low|none`); };
@@ -739,6 +826,7 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
     cameraVideo: profileFor(arg("--camera-profile", "1080p"), TrackSource.SOURCE_CAMERA),
     screenPin: pinArg("--screen-pin", "none"), cameraPin: pinArg("--camera-pin", "low"),
     joinDeadlineMs: joinDeadlineSeconds * 1000,
+    coldBootstrap: coldBoot, churnEveryMs, churnRtcEvery,
   };
   const holdIsAllowed = sizeOverride
     ? holdSeconds >= 5 && holdSeconds <= 1800
@@ -767,7 +855,8 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const acquireJoin = joinGate(joinConcurrency);
   armAbort();
   console.error(JSON.stringify({ shard: shardIndex, of: shardCount, participants: indexes.length, roles: { presenter: indexes.filter((i) => roleOf(i) === "presenter").length, audio: indexes.filter((i) => roleOf(i) === "audio").length, camera: indexes.filter((i) => roleOf(i) === "camera").length, receiver: indexes.filter((i) => roleOf(i) === "receiver").length }, legacy: indexes.filter(isLegacy).length, mode: plan.arrivalWindowMs > 0 ? "stampede" : "barrier", startAt: new Date(startAtMs).toISOString(), lastArrival: new Date(Math.max(...indexes.map(arriveAt))).toISOString() }));
-  const results = await Promise.all(indexes.map((index) => one(index, roleOf(index), isLegacy(index), decodedIndexes.has(index), safe, info, plan, arriveAt(index), acquireJoin)));
+  const churners = indexes.filter((i) => roleOf(i) !== "presenter");
+  const results = await Promise.all(indexes.map((index) => one(index, roleOf(index), isLegacy(index), decodedIndexes.has(index), safe, info, plan, arriveAt(index), acquireJoin, churners.indexOf(index), Math.max(1, churners.length))));
   clearInterval(sampler);
   const wallMs = Date.now() - startedAt; const cpu = process.cpuUsage(cpuStart);
   const decoded = results.filter((result) => result.decodeSample);
@@ -782,7 +871,7 @@ async function shard(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   for (const r of results) if (r.failureClass) failureClasses[r.failureClass] = (failureClasses[r.failureClass] ?? 0) + 1;
   const report = {
     runId: safe.runId, host: hostname(), shardIndex, shardCount, expectedParticipants: info.participants, startAtMs,
-    plan: { holdSeconds, arrivalWindowSeconds, arrivalLeadSeconds, legacyShare, audioPublishers, cameraPublishers, joinConcurrency, presenterProfile: arg("--presenter-profile", "720p"), cameraProfile: arg("--camera-profile", "1080p"), screenPin: arg("--screen-pin", "none"), cameraPin: arg("--camera-pin", "low"), presenterOnly, noPresenter },
+    plan: { holdSeconds, arrivalWindowSeconds, arrivalLeadSeconds, legacyShare, audioPublishers, cameraPublishers, joinConcurrency, presenterProfile: arg("--presenter-profile", "720p"), cameraProfile: arg("--camera-profile", "1080p"), screenPin: arg("--screen-pin", "none"), cameraPin: arg("--camera-pin", "low"), presenterOnly, noPresenter, coldBootstrap: coldBoot, churnEveryMs, churnRtcEvery },
     mediaContract: { source: `${plan.presenterVideo.width}x${plan.presenterVideo.height}@${plan.presenterVideo.fps}`, requestedVideoBitrateBps: plan.presenterVideo.bitrate, requestedAudioBitrateBps: AUDIO_BITRATE_BPS, decodedSampleCount: decoded.length, minDecodedFps, decodeWarmupSeconds: warmupSeconds, minDecodedFrames: Math.ceil(minDecodedFps * Math.max(0, holdSeconds - warmupSeconds)) },
     generator: { wallMs, cpuMs: (cpu.user + cpu.system) / 1000, cpuPercentOfOneCore: ((cpu.user + cpu.system) / 1000 / wallMs) * 100, maxRssBytes, maxEventLoopLagMs, uncaughtErrors },
     aggregateRtp: { receivedBytes: totalReceivedBytes, receivedBitrateBps: totalReceivedBytes * 8_000 / (holdSeconds * 1000), sentBytes: totalSentBytes, sentBitrateBps: totalSentBytes * 8_000 / (holdSeconds * 1000) },
@@ -829,6 +918,8 @@ const USAGE = [
   "          [--presenter-profile 720p|720p-simulcast|1080p] [--screen-pin high|medium|low|none]",
   "          [--audio-publishers N] [--camera-publishers M] [--camera-profile 1080p|720p] [--camera-pin low|none]",
   "          [--join-concurrency N] [--join-deadline-seconds S] [--presenter-only] [--no-presenter]",
+  "          [--cold-bootstrap]            the browser's 21-request first load instead of the thin one",
+  "          [--churn-every-ms MS] [--churn-rtc-every N]   run D: this process reconnects one receiver every MS (resume pair, expect resumed:true); every Nth also drops the LiveKit room and re-mints",
   "  cleanup --manifest <file>            (also needs PQP_LOAD_DATABASE_URL)",
   "  help",
   "env: TEST_RUN_ID, PQP_LOAD_TARGET=staging|local, PQP_LOAD_SFU_HOST,",
