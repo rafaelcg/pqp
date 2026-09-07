@@ -1848,6 +1848,14 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.error = msg;
           emit();
         },
+        // A republished share is a new sid on the SFU. Re-declaring it lets
+        // the server notice and restart the HLS egress, which is otherwise
+        // left transcoding a track that no longer exists.
+        onScreenRepublished: () => {
+          if (screenCaptureStream) {
+            announceSharing();
+          }
+        },
       });
 
       if (state.peerId !== peerId) {
