@@ -101,6 +101,18 @@ export interface RuntimeMetrics {
   /** WebSocket connections open right now. */
   sockets: number;
   /**
+   * How many of `sockets` negotiated `permessage-deflate`.
+   *
+   * Read it as a fraction of `sockets`, not on its own. A client that does not
+   * offer the extension is served uncompressed and is indistinguishable from a
+   * working compressed one from the outside, so this number is what stops
+   * "compression is on" from being an assumption (CLAUDE.md pitfall 9). Every
+   * stack that connects to this server was measured offering the extension, so
+   * a fraction well below 1 means something in front of the API is stripping
+   * the header, not that a client is old.
+   */
+  compressedSockets: number;
+  /**
    * Highest concurrent sockets since `peakTrackedSince`.
    *
    * Exact, not sampled: a peak is always reached immediately after a socket
@@ -141,11 +153,21 @@ export interface RuntimeMetrics {
 // -------------------------------------------------------------- registration
 
 let readSocketCount: (() => number) | null = null;
+let readCompressedSocketCount: (() => number) | null = null;
 let readPoolStats: (() => PoolStats) | null = null;
 
 /** Called once by `index.ts` with `() => wss.clients.size`. */
 export function registerSocketCount(read: () => number): void {
   readSocketCount = read;
+}
+
+/**
+ * Called once by `index.ts` with a count of the sockets that negotiated
+ * `permessage-deflate`. Unregistered in tests and in any process that never
+ * builds a WebSocket server, where it reads as 0.
+ */
+export function registerCompressedSocketCount(read: () => number): void {
+  readCompressedSocketCount = read;
 }
 
 /** Called by `db.ts` when it creates the pool. */
@@ -227,6 +249,14 @@ function safeSocketCount(): number {
   }
 }
 
+function safeCompressedSocketCount(): number {
+  try {
+    return readCompressedSocketCount?.() ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Fold the current values into the high-water marks.
  *
@@ -264,6 +294,7 @@ export function runtimeSnapshot(): RuntimeMetrics {
   return {
     sampledAt: new Date().toISOString(),
     sockets: safeSocketCount(),
+    compressedSockets: safeCompressedSocketCount(),
     peakSockets,
     pool: {
       ...stats,
@@ -279,6 +310,7 @@ export function runtimeSnapshot(): RuntimeMetrics {
 /** Test hook: forget both registrations and every peak. */
 export function resetRuntimeMetrics(): void {
   readSocketCount = null;
+  readCompressedSocketCount = null;
   readPoolStats = null;
   peakSockets = 0;
   peakPoolWaiting = 0;

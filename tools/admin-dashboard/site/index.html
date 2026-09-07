@@ -1686,6 +1686,11 @@
             <span class="v num" id="rtPeakSockets">—</span>
             <span class="k" style="color:var(--faint)" id="rtPeakSocketsNote">—</span>
           </div>
+          <div class="stat-mini" id="rtCompressedTile">
+            <span class="k">comprimidas</span>
+            <span class="v num" id="rtCompressed">—</span>
+            <span class="k" style="color:var(--faint)" id="rtCompressedNote">—</span>
+          </div>
         </div>
         <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:0">
           cada cliente logado segura uma conexão pela sessão inteira, então isto é o mais perto de "gente conectada" que o processo sabe. o pico é exato, não amostrado: ele é medido toda vez que uma conexão abre.
@@ -3308,6 +3313,19 @@
     setText("rtSockets", fmt(sockets));
     setText("rtPeakSockets", fmt(Number(rt.peakSockets) || 0));
     setText("rtPeakSocketsNote", since ? "contado desde " + since : "zera no deploy");
+
+    // permessage-deflate é negociado por socket. Um cliente que não oferece a
+    // extensão recebe tudo sem compressão e, de fora, é idêntico a um que
+    // negociou — então a fração é a única coisa que separa "está ligado" de
+    // "está desligado para todo mundo" (pitfall 9). Todo stack que fala com
+    // esta API oferece a extensão, então bem abaixo de 100% quer dizer que
+    // algo na frente da API está tirando o cabeçalho.
+    var compressed = Number(rt.compressedSockets) || 0;
+    var pct = sockets > 0 ? Math.round((compressed / sockets) * 100) : 0;
+    setText("rtCompressed", sockets > 0 ? pct + "%" : "—");
+    setText("rtCompressedNote", sockets > 0
+      ? fmt(compressed) + " de " + fmt(sockets) + (pct >= 95 ? "" : " · confira o proxy")
+      : "sem sockets abertas");
 
     var peakBusy = Number(rt.peakPoolBusy) || 0;
     var hitCeiling = max > 0 && peakBusy >= max;
