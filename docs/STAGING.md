@@ -216,6 +216,170 @@ Three caveats, all of which make the number **conservative rather than optimisti
 - **A capability the harness does not declare is an optimisation the run cannot see.** The first comparison against the roster deltas measured no improvement at all, because `voice-roster-delta` is opt-in per socket (`caps` on the `auth` frame, `SOCKET_CAPS` in `server/src/ws/sockets.ts`) and the harness was silent. `--caps` is how you choose; `--caps 0` deliberately measures an old client. Worth knowing for production too: a client that does not negotiate keeps paying the whole roster.
 - **The rig is shared, and a run that cannot say which build it measured is not a measurement.** On 2026-09-07 another agent deployed their branch to `pqp-api-staging` between two runs, and the second run quietly measured their code: different wire volume, CPU pegged where it had been idle, a ceiling a bucket higher, and nothing in the output to say the binary had changed. The report now prints `target ran <sha> for the whole run`, or shouts when that moves. Check that line before believing any number, and redeploy the build you meant before every run.
 
+### What it has measured (2026-09-07, evening): 500 in one room with real media
+
+The morning runs above drove the app WebSocket only. This rig put 500 real
+media subscribers through the whole path: cold HTTP, app socket, `welcome`,
+`POST /api/voice/token`, LiveKit connect, and a 720p30 share decoded by every
+receiver, from four Vultr boxes in São Paulo against `pqp-api-staging` and an
+isolated test SFU built from `tools/sfu/install.sh`. Harness:
+`tools/watch-party-load` (PR #337 plus the stampede-mode additions described
+in its README). Nothing here touched production; the generators had
+`api.pqp.gg` and `sfu.pqp.gg` denied in their firewall and the harness refuses
+both by name.
+
+**The rig.** Staging on `performance-2x` / 4 GB, `PG_POOL_MAX=40`, image
+`53099a94`, a config deploy of an edited `fly.staging.toml` with
+`soft_limit 1000 / hard_limit 2000`, `auto_stop_machines off`,
+`min_machines_running 1` (never committed; the next CI deploy reverts it), and
+the two address-keyed limiters lifted (`RATE_LIMIT_ANON_*`,
+`RATE_LIMIT_SOCKET_*`); the per-identity API and write limiters stayed at
+their defaults. Test SFU: Vultr `vhp-4c-8gb-amd` (4 vCPU, twice production's
+2), LiveKit 1.13.6 from the committed template under sslip.io names, fresh key
+pair, `LIVEKIT_*` on staging pointed at it. Generators: four
+`vhp-12c-24gb-amd`, four Node processes each of about 31 receivers plus the
+presenter in a process of its own on the first box; links measured at 23 Gbit/s
+between boxes and to the SFU. Arrival: presenter live first, 499 receivers
+over 90 s (5.5/s), 20% of them with no `caps` and no `permessage-deflate`,
+then a 600 s hold. Sampled every second on the API machine (`/proc/stat`,
+`/proc/net/dev`, `/ready` for the pool, `/api/admin/metrics` every 30 s), the
+SFU (the same plus `/proc/net/snmp` UDP errors and LiveKit's `:6789/metrics`)
+and every generator (CPU split incl. steal, ingress, UDP errors).
+
+**Why the previous attempt stalled at 61.** The pre-auth `anonLimiter`
+(240 tokens, 60/s refill, keyed by client address) charges every `/api`
+request, and on Fly the address is the rightmost `X-Forwarded-For` entry, the
+one fly-proxy appends, so a harness's forged header is ignored and every
+client on one generator shares one bucket. Confirmed without load: 300
+concurrent requests from one box with 300 distinct forged addresses at the
+default limits answered 285 x 401 and 15 x 429 (the bucket plus what refilled
+during the burst); after lifting the two pairs, 300 x 401. At roughly four
+pre-socket requests per client, 240 tokens is about 60 clients, then 429s:
+the 61.
+
+**Control, API only** (`load-fanout --mode join`, ramp 4/s +4 every 20 s to
+1200 from one box): joins stop fitting the client's 12 s budget at roughly
+650 to 674 people already in the room; at 475 to 524 occupants welcome p90 was
+2.2 s. The machine was at 100% CPU and the pool at 40/40 with a queue of 616
+from about 545 occupants at a 20/s arrival rate, and 93% of the 347 Mbit/s of
+egress was `voice-roster` keyframes at 192 kB each, because with
+`VOICE_REGISTRY=postgres` the roster deltas do not run (`server/src/ws/voice.ts`,
+`registryOn() ? null : foldRoomEvents(events)`). That is the join path's own
+ceiling and it sits above 500.
+
+**Generators.** One Node process for 95 receivers is itself a ceiling (event
+loop lag 4.3 s, presenter capture at 21 fps, decoded 12 fps median, rtc-node
+handle errors on the last arrivals, with the SFU at 17% CPU). Split across
+processes of about 31 receivers with the presenter in its own process it is
+clean, and the cost is decode: about 0.08 of a core per receiver of 720p30,
+paid by every subscriber whether or not a `VideoStream` drains it. A 12 vCPU
+box therefore holds 80 to 90 receivers under the 70% gate; 500 needs six such
+boxes, and four ran at 87 to 94% during A2, which is why A2's receiver-side
+sustained figure is labelled generator-limited below. Details and the numbers
+are in `tools/watch-party-load/README.md`.
+
+**Run A1, single UDP mux port (production's `livekit.yaml`).** 499 of 499 joined
+(welcome p95 66 ms from socket open, 778 ms with the cold HTTP; API pool 16 of
+40, CPU 16% p95). Then the media path collapsed: 229 receivers never decoded a
+frame within 45 s, the 270 that did decoded 1.2 fps median for the rest of the
+hold with 58% packet loss, 194 froze, 627 k PLIs and 20 M NACKs went up to the
+SFU and it retransmitted 812 packets. The SFU sat at 66 to 77% CPU (LiveKit at
+236% of 400%) pushing only 250 to 270 Mbit/s against about 800 expected, and its
+one UDP socket dropped 137,200 inbound packets on its 416 kB receive buffer in
+bursts of 700 to 1100 a second. LiveKit says so itself on every boot, on
+production too: `UDP receive buffer is too small for a production set-up,
+current 425984, suggested 5000000`.
+
+**Run A2, four UDP mux ports (`rtc.udp_port: 7882-7885`, nothing else changed).**
+468 receivers present (one generator process died in native libwebrtc ninety
+seconds in and took 31 with it). **468 of 468 decoded within 45 s** (p50 811 ms,
+p95 1.4 s, p99 1.6 s from their own arrival), decoded 29.7 fps median and 29.4
+at p5 at 720 lines, packet loss 0.000% median and 0.001% p95, zero PLIs. The
+SFU carried **805 to 853 Mbit/s at 67 to 78% CPU of 4 vCPU with zero
+receive-buffer drops for the whole run**; the API pool peaked at 18 of 40 with
+CPU at 15% p95. 131 receivers recorded at least one freeze, 105 of them on the
+one generator that was at 94% CPU and also ran the presenter (15,243 decoder
+frames dropped there, none elsewhere), so the sustained-receipt figure of 72%
+is the generators' number, not the SFU's. No receive-buffer drops means the
+raised-buffer condition was not triggered; the one attributable change between
+A1 and A2 is the port count.
+
+**Ladder F, the 4 vCPU test box, 720p / 1.5 Mbit/s, four ports, `lk load-test`
+subscribers (no decode) against our own presenter, three minutes a step.**
+
+| subscribers | egress, steady p50 (peak) | SFU CPU p50 (p95) | receive-buffer drops per s, mean (peak) | loss (lk aggregate) | per subscriber |
+|---|---|---|---|---|---|
+| 200 | 343 (376) Mbit/s | 26% (28%) | 0 (0) | 0.00% | 1.50 Mbit/s |
+| 300 | 516 (565) | 37% (39%) | 0 (0) | 0.00% | 1.50 |
+| 400 | 687 (746) | 48% (52%) | 5 (711) | 0.00% | 1.40 |
+| 500 | 858 (951) | 59% (63%) | 3 (441) | 0.00% | 1.40 |
+| 600 | 588 (956) | 81% (84%) | 26 (1735) | 26.6% | 0.55 |
+| 700 | 549 (907) | 85% (86%) | 8 (616) | 26.9% | 0.42 |
+| 800 | 547 (911) | 84% (86%) | 15 (2313) | 27.2% | 0.35 |
+
+Between 500 and 600 subscribers the 4 vCPU box stops delivering: egress falls
+rather than rises, CPU pins in the low 80s and a quarter of the packets never
+reach anyone. Bursty receive-buffer drops start at 400 at no cost to loss; the
+buffer condition is what the raised-buffer follow-up is for.
+
+**Run A2 repeated on six generators (four Vultr 12 vCPU plus two Fly
+performance-16x, 26 receiver processes of 19), four ports, same everything.**
+500 present, **499 of 499 decoded within 45 s** (p50 835 ms, p95 1.7 s, p99
+2.4 s from arrival), welcome p95 65 ms from socket open (801 ms with the cold
+HTTP), decoded fps median 29.5 and p5 27.7, loss median 0.000% and p95 0.027%,
+10 PLIs in ten minutes, presenter 30.1 fps at 1.35 Mbit/s. **SFU: 880 to 935
+Mbit/s steady (p95 913, peak 1011), CPU 63 to 81% (p95 76%, peak 82%) of 4 vCPU,
+zero receive-buffer drops.** API pool 14 of 40, CPU 14% p95. Sustained receipt
+56%: one Fly box ran at 90% CPU and froze all 95 of its receivers (96,785 frames
+dropped by its own decoders); the four Vultr boxes, all under 66% CPU, froze 55
+of their 309 receivers once each with zero dropped frames and 111 lost packets
+between them, which is the shape of brief jitter at the edge of the box's CPU
+rather than a starved generator. Read A2 as: at 500 the four-port 4 vCPU box
+delivers the full 720p stream to everyone with roughly a quarter of its CPU
+left, and the first thing to give at 500 is smoothness, not delivery.
+
+**What the numbers say.**
+
+| condition | outcome at 500 |
+|---|---|
+| single mux port (production's config), 4 vCPU | fails: 54% ever decode, 58% loss, 250 to 270 Mbit/s out of the box, receive-buffer overflow on the one socket |
+| four mux ports, nothing else changed, 4 vCPU | passes delivery: 100% decode within 45 s (p95 1.4 to 1.7 s), 0.000% loss, 880 to 935 Mbit/s at 76% CPU p95 |
+| four ports, lk subscribers, 4 vCPU (ladder F) | fine to 500, collapses between 500 and 600 |
+| join path alone (control A) | fits the 12 s budget to about 650 in the room |
+
+**The one change to make on production before next weekend is
+`rtc.udp_port: 7882-7885` (plus `ufw allow 7883:7885/udp`) in
+`tools/sfu/livekit.yaml.tmpl`.** On the test box it was the difference between a
+party that fails at 500 and one that passes. Two caveats that decide whether
+500 fits on the box production runs today: production is 2 vCPU, not 4, and the
+2 vCPU ladder (condition E) was not run because the rig was torn down first; the
+4 vCPU box broke between 500 and 600, so on 2 vCPU expect the break well under
+500 unless a ladder says otherwise. And the LiveKit boot warning about the UDP
+receive buffer (`current 425984, suggested 5000000`) is real: raise
+`net.core.rmem_max` / `wmem_max` on the box the next quiet hour, as its own
+change, and watch `RcvbufErrors` in `/proc/net/snmp`.
+
+**Not run tonight** (the rig was destroyed while the session was down): the
+third repeat of A2; B (explicit 1080p at 4 Mbit/s with receivers pinned to the
+top layer); C (50 voices and 10 cameras); D (join storm with resume); E (the 2
+vCPU ladder and the confirmation at its found count); the raised-buffer and
+`limit` conditions. The harness flags for B, C and D exist and were smoke-tested
+at small scale; the ladder scripts are in this run's scratch directory.
+
+**Operational lessons.** The Vultr account's monthly fee cap refused new
+machines mid-session; Fly performance-16x machines in `gru` work as generators
+(bootstrapped from `node:22-bookworm`, production addresses dropped with
+`iptables`) and cost about $0.70 an hour each. The Vultr API key is
+IP-restricted, so a VPN on the laptop makes every Vultr call fail with
+`Unauthorized IP address` until it drops. `pkill -f <pattern>` from an ssh
+command whose own command line contains the pattern kills the session.
+rtc-node under 12 concurrent connects per process segfaulted once in 43
+process-runs; there is no catching that, only smaller shards.
+
+**Cost.** About five hours of Vultr at $0.86 an hour plus two Fly machines for
+about three hours, under $12 for the compute, and the staging cluster's
+performance-2x hours.
+
 ## Known caveats
 
 - **Canonical URLs point at production.** Marketing and blog routes pin their canonical tag to https://pqp.gg (`client/src/lib/marketing-meta.ts`, `client/src/lib/blog-meta.ts`), so staging pages carry prod canonicals. Harmless for testing; it only means staging marketing pages are not independently indexable, which is a feature.

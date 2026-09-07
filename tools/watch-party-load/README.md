@@ -217,3 +217,13 @@ One 12 vCPU Vultr box (`vhp-12c-24gb-amd`, São Paulo), 95 receivers of a
   that one error class (`generator.uncaughtErrors` in the report) instead of
   hanging up every other seat in the shard, which is what a 96-client
   calibration lost 95 seats to.
+
+### Results, 2026-09-07 (staging, isolated 4 vCPU test SFU)
+
+Full write-up in `docs/STAGING.md`. Headline: with the SFU on one UDP mux port
+(production's config) a 500-person room fails (54% ever decode, 58% loss); with
+`rtc.udp_port: 7882-7885` and nothing else changed it passes delivery (100%
+decode within 45 s, p95 1.4 to 1.7 s, 0.000% loss, 880 to 935 Mbit/s at 76%
+CPU p95 on 4 vCPU). Generator sizing that produced clean numbers: 19 to 31
+receivers per Node process, four to five processes per 12 to 16 vCPU box, the
+presenter alone in its own process, one decode sample per process.
