@@ -34,6 +34,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -638,6 +639,13 @@ class ChatViewModel(
                 // still relayed. Handling one of them leaves deleted messages
                 // on screen for whoever is connected to the wrong instance.
                 "message-delete", "message-deleted" -> onDelete(frame)
+                // A moderator purged a run of messages. Deliberately the same
+                // shape of fact as the single delete (ids only, never bodies),
+                // so it folds into the branch above rather than needing one of
+                // its own. Without it a purge leaves every message it removed
+                // sitting on the phone until the app is relaunched, which
+                // looks exactly like the purge having failed.
+                "message-bulk-delete" -> onBulkDelete(frame)
                 "reaction-broadcast" -> onReaction(frame)
                 "typing-broadcast" -> onTyping(frame)
                 "message-rejected" -> onRejected(frame)
@@ -798,6 +806,26 @@ class ChatViewModel(
         _state.value = _state.value.copy(
             messages = _state.value.messages.filterNot { it.id == id },
             pinned = PinnedMessages.remove(_state.value.pinned, id),
+        )
+    }
+
+    /**
+     * The same removal, for a run of messages at once. One pass over the list
+     * rather than one state write per id, which is the whole reason the server
+     * sends one frame instead of a hundred.
+     */
+    private fun onBulkDelete(frame: JsonObject) {
+        if (frame.string("channelId") != channelId) return
+        val ids = runCatching {
+            frame["messageIds"]!!.jsonArray.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+        }.getOrDefault(emptyList())
+        if (ids.isEmpty()) return
+        val removed = ids.toSet()
+        _state.value = _state.value.copy(
+            messages = _state.value.messages.filterNot { it.id in removed },
+            pinned = ids.fold(_state.value.pinned) { pinned, id ->
+                PinnedMessages.remove(pinned, id)
+            },
         )
     }
 
