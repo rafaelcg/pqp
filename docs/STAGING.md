@@ -40,13 +40,25 @@ A deploy to staging never restarts production: the workflow only talks to `pqp-a
 
 Wipe the contents of `pqp-staging` in place; the next boot recreates the whole schema from `server/src/schema.sql`. Dropping the database itself is not an option on Managed Postgres: the `schema_admin` role owns neither the database nor the `public` schema (both belong to `postgres`, and there is no `fly mpg databases delete`), so `DROP DATABASE` and `DROP SCHEMA public` are both refused. What the role can drop is everything it created, which is exactly the app's tables and the `pgcrypto` extension (the app's `fly-user` login resolves to `schema_admin` on this cluster).
 
+**`fly mpg connect` cannot do this on the new cluster.** It authenticates as an MPG system role there, and `DROP OWNED BY current_user` comes back `ERROR: MPG system roles cannot be modified`. The app's own `fly-user` login is the one that owns the tables, so go in through the proxy with its password (the one in `DATABASE_URL`):
+
 ```bash
-fly machine stop -a pqp-api-staging     # so nothing holds connections or recreates tables mid-wipe
-echo 'DROP OWNED BY current_user;' | fly mpg connect dzx6qo65q9n0jpv5 -d pqp-staging
-fly machine start -a pqp-api-staging    # boot reapplies schema.sql, including CREATE EXTENSION pgcrypto
+fly machine stop <machine id> -a pqp-api-staging   # nothing holding connections or recreating tables mid-wipe
+fly mpg proxy dzx6qo65q9n0jpv5 -p 16394 &          # STAGING cluster; production is 9g6y30wdxzmrv5ml
+psql -h 127.0.0.1 -p 16394 -U fly-user -d pqp-staging -c 'DROP OWNED BY current_user;'
+fly machine start <machine id> -a pqp-api-staging  # boot reapplies schema.sql, including CREATE EXTENSION pgcrypto
 ```
 
-`dzx6qo65q9n0jpv5` is the **staging** cluster (`fly mpg list -o personal` to look it up). Read that id before pressing enter. Production is `9g6y30wdxzmrv5ml`, and the same command aimed there, with or without `-d`, drops production's tables.
+Read that cluster id before pressing enter, every time.
+
+**After a load test you usually want the smaller version**, which keeps the staging accounts you signed up by hand and removes only what the run created. Verified on 2026-09-07, when it took the database from 5 638 users back to 3:
+
+```sql
+DELETE FROM servers WHERE name LIKE 'Load %';
+DELETE FROM users  WHERE clerk_id LIKE 'load\_test\_user%';
+```
+
+Every load-test identity carries the `load_test_user` prefix (`LOAD_TEST_CLERK_ID_PREFIX` in `server/src/auth/load-test.ts`) precisely so that this is one greppable `DELETE`, and the foreign keys cascade the memberships, messages and voice rows away with them.
 
 ## Credentials that back it (names only, never values)
 
