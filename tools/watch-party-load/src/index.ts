@@ -1,5 +1,5 @@
 /* eslint-disable no-console -- this is a command-line load harness. */
-import { readFileSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { Client as PgClient } from "pg";
 import { WebSocket } from "ws";
@@ -137,6 +137,11 @@ async function passAgeGate(base: string, token: string): Promise<void> {
 async function prepare(safe: ReturnType<typeof assertSafeTarget>): Promise<void> {
   const total = numberArg("--participants", 500);
   if (total !== 500 && !(safe.local && total >= 2 && total <= 5) && !(safe.smoke && total === 2)) throw new Error("hosted runs require exactly 500 participants; local smoke permits 2–5; staging smoke is exactly 2 with PQP_LOAD_SMOKE=1");
+  // Reserve the report path first. A failed write after server creation leaves
+  // an invite and synthetic users with no manifest capable of cleaning them.
+  const output = requiredArg("--manifest");
+  const fd = openSync(output, "wx", 0o600);
+  closeSync(fd);
   const owner = tokenFor(safe.runId, "owner", safe.local);
   await passAgeGate(safe.apiUrl, owner);
   const created = await api<{ server: { id: string }; channels: Array<{ id: string; type: string }> }>(safe.apiUrl, owner, "POST", "/api/servers", { name: `Load ${safe.runId}` });
@@ -146,7 +151,7 @@ async function prepare(safe: ReturnType<typeof assertSafeTarget>): Promise<void>
   await api(safe.apiUrl, owner, "PATCH", `/api/channels/${voice.id}`, { voiceTransport: "livekit" });
   const invite = await api<{ invite: { code: string } }>(safe.apiUrl, owner, "POST", `/api/servers/${created.server.id}/invites`, {});
   const manifest: Manifest = { version: 1, runId: safe.runId, apiUrl: safe.apiUrl, wsUrl: safe.wsUrl, participants: total, serverId: created.server.id, textChannelId: text.id, voiceChannelId: voice.id, inviteCode: invite.invite.code, createdAt: new Date().toISOString() };
-  writeFileSync(requiredArg("--manifest"), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(output, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   console.log(JSON.stringify({ prepared: true, manifest: arg("--manifest"), runId: safe.runId, participants: total }, null, 2));
 }
 function manifest(safe: ReturnType<typeof assertSafeTarget>): Manifest {
