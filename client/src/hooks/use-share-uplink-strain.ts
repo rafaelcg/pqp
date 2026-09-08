@@ -19,7 +19,7 @@ import type { VideoQuality } from "@/lib/video-quality";
  * `OutboundVideoReadout` prints it, but only inside the video quality menu and
  * the Settings dialog. Nobody experiencing a bad share opens a menu to read a
  * diagnostic; they open the chat and say the app is bad. This is the same
- * lesson as PR #319, where per-peer volume had shipped months earlier and a
+ * lesson as PR 319, where per-peer volume had shipped months earlier and a
  * moderator still could not find it, because it was revealed by hover.
  *
  * So this hook is not new measurement. It is the existing measurement, made
