@@ -67,6 +67,7 @@
     <string name="chat_reject_cannot_send">Você não tem permissão pra mandar aqui</string>
     <string name="chat_reject_undeliverable">Essa mensagem não foi entregue</string>
     <string name="chat_reject_slow_mode">Slow mode tá ligado.</string>
+    <string name="chat_reject_automod">O AutoMod bloqueou essa mensagem.</string>
     <string name="chat_reject_generic">Falha ao enviar</string>
     <string name="chat_slow_mode_wait">Slow mode. Espera %1$ds pra mandar de novo.</string>
     <string name="chat_reply">Responder</string>

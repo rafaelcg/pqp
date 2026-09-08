@@ -149,6 +149,8 @@ struct MessageRejection: Hashable, Sendable {
     let nonce: String?
     let reason: String
     let retryAfterMs: Int?
+    /// `automod` only: the rule's own copy, when the owner wrote one.
+    var automodMessage: String? = nil
 }
 
 /// `sanctionNoticeSchema` — currently always a timeout. `message` is the whole
@@ -762,6 +764,8 @@ actor RealtimeClient {
         /// `message-rejected` only: how long the sender must wait, when the
         /// refusal is a temporary one.
         let retryAfterMs: Int?
+        /// `message-rejected` with `reason: automod`: the rule's own copy.
+        let automodMessage: String?
 
         enum CodingKeys: String, CodingKey {
             case type, nonce, message, channelId, messageId, emoji, userId
@@ -769,7 +773,7 @@ actor RealtimeClient {
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
             case candidate, limit, transport, version, resumed, resumeToken, canSpeak
             case seq, size, joined, updated, left
-            case conversationId, kind, caller, reason, thread, retryAfterMs
+            case conversationId, kind, caller, reason, thread, retryAfterMs, automodMessage
             // `self` is a Swift keyword, so the wire key is remapped.
             case selfPeer = "self"
         }
@@ -852,7 +856,8 @@ actor RealtimeClient {
                 channelId: channelId,
                 nonce: envelope.nonce,
                 reason: reason,
-                retryAfterMs: envelope.retryAfterMs
+                retryAfterMs: envelope.retryAfterMs,
+                automodMessage: envelope.automodMessage
             ))
         // Two spellings on the wire — `message-deleted` is a legacy duplicate
         // that is still emitted, so both are handled.

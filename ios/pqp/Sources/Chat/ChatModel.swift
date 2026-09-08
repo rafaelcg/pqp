@@ -367,6 +367,7 @@ final class ChatModel {
         case "cannot-send": String(localized: "You don't have permission to send here")
         case "undeliverable": String(localized: "This message wasn't delivered")
         case "slow-mode": String(localized: "Slow mode is on.")
+        case "automod": String(localized: "AutoMod blocked this message.")
         default: String(localized: "This message wasn't sent.")
         }
     }
@@ -615,7 +616,8 @@ final class ChatModel {
             if !body.isEmpty {
                 draft = draft.isEmpty ? body : body + "\n" + draft
             }
-            error = ChatModel.rejectionCopy(for: rejection.reason)
+            // An AutoMod refusal may carry the owner's own words; they win.
+            error = rejection.automodMessage ?? ChatModel.rejectionCopy(for: rejection.reason)
             // A temporary refusal names its wait; the composer counts it
             // down. A `slow-mode` without one falls back to the channel's
             // interval, which is the most the server would charge.
