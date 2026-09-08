@@ -20,10 +20,13 @@
  * resize safe: shrink the window and the stored 420 is clamped down on the
  * spot rather than pushing the chat off screen.
  *
- * THE MINIMUM IS MEASURED, not guessed. At 180px a row still fits the icon,
- * a truncating name, the pin and the gear, and the user footer still fits an
- * avatar, a name and its two buttons. Below that the footer's controls start
- * overlapping the name, so 180 is the floor.
+ * THE MINIMUM IS MEASURED, not guessed, and it is 200 rather than the 180 it
+ * started at. Channel rows survive 180 happily. `broder-do-role` and
+ * `staff-e-cargos` still read in full beside their padlock. What does not is
+ * the header: its 36px server icon and three fixed-width buttons leave the
+ * server's name about 12px at 180, which renders as nothing at all, and the
+ * footer's name and handle collapse to two characters each. At 200 the name
+ * is short but present, the handle reads, and every channel row is untouched.
  *
  * NOTHING HERE TOUCHES THE DOM. The clamping, the parsing and the keyboard
  * step maths are the whole of the logic, which is why they live in a module
@@ -36,7 +39,7 @@ const STORAGE_KEY = "pqp:channel-sidebar-width";
 export const CHANNEL_SIDEBAR_DEFAULT_WIDTH = 256;
 
 /** See the header: the narrowest width where the row and the footer still work. */
-export const CHANNEL_SIDEBAR_MIN_WIDTH = 180;
+export const CHANNEL_SIDEBAR_MIN_WIDTH = 200;
 
 /** The absolute cap, before the viewport fraction is applied. */
 export const CHANNEL_SIDEBAR_MAX_WIDTH = 420;

@@ -1141,8 +1141,11 @@ export function ChannelList({
                   </span>
                 )}
               </div>
+              {/* `truncate`: without it the rank sits outside its own column
+                  and runs under the three buttons to its right, which is what
+                  a narrowed sidebar shows first. */}
               {server?.role && (
-                <p className="mt-0.5 text-[11px] uppercase tracking-wider text-paper-muted">
+                <p className="mt-0.5 truncate text-[11px] uppercase tracking-wider text-paper-muted">
                   {server.role}
                 </p>
               )}
