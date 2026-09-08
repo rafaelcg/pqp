@@ -82,12 +82,15 @@ export function resolveVoiceTransport(
 }
 
 /**
- * M5's mesh guard, the pure half. A mesh room is relayed by the process
- * holding its peers, so once a second instance is live a mesh join that
- * this instance does not already hold cannot be seated safely. `ws/voice.ts`
- * consults it only with the registry on, only for a room it has no local
- * pin for, and only when the decision was mesh; a room this instance holds
- * is never guarded (every peer is here).
+ * M5's mesh guard, the pure half. `ws/voice.ts` consults it only with the
+ * registry on, only for a room NOBODY has pinned yet (a room pinned by
+ * another instance is adopted whatever its transport, since mesh signaling
+ * crosses on `voice.signal`), and only when the decision was mesh. With a
+ * second instance live and an SFU configured, a fresh room opens on the SFU:
+ * the transport built for a room that spans machines, and a fresh room is
+ * free to take it. Without an SFU the room opens on mesh, relayed across the
+ * bus. It used to refuse that case, and a refusal is a hangup for a client
+ * holding media, which is what the 2026-09-07 window paid for four times.
  *
  * `otherLiveInstances` is the count of leases other than this instance's,
  * from `listLiveVoiceInstances()`. Zero means single-machine, and the guard
@@ -99,12 +102,10 @@ export interface ClusterMeshGuardInput {
 }
 
 export type ClusterMeshGuardVerdict =
-  /** One machine: nothing to guard. */
+  /** One machine, or two without an SFU: the room opens on mesh. */
   | { kind: "keep" }
-  /** Two or more machines and an SFU to send the room to instead. */
-  | { kind: "force-livekit" }
-  /** Two or more machines, no SFU: refuse rather than split the call. */
-  | { kind: "refuse"; reason: "mesh-multi-instance" };
+  /** Two or more machines and an SFU to open the room on instead. */
+  | { kind: "force-livekit" };
 
 export function guardMeshAcrossInstances(
   input: ClusterMeshGuardInput,
@@ -115,5 +116,5 @@ export function guardMeshAcrossInstances(
   if (input.liveKitConfigured) {
     return { kind: "force-livekit" };
   }
-  return { kind: "refuse", reason: "mesh-multi-instance" };
+  return { kind: "keep" };
 }

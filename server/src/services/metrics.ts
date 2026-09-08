@@ -134,6 +134,17 @@ export interface AdminMetrics {
     peakTrackedSince: string;
     backend: "mesh" | "livekit";
     /**
+     * Voice frames over the cluster bus since the last deploy, on the
+     * instance that answered: published for sockets held on another
+     * machine, and received from the bus for sockets held here. Both zero
+     * on one machine; both climbing within a minute of two machines
+     * sharing a room. Zero after a flip is a bus that is not delivering.
+     */
+    cluster: {
+      framesRelayed: number;
+      framesReceived: number;
+    };
+    /**
      * What the roster fan-out is doing since the last deploy: how many frames
      * went out as a delta against how many went out whole, and how many
      * sockets asked for deltas at all. The second pair is the denominator that
@@ -752,6 +763,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       peakRoomSizeToday: voice.peakRoomSizeToday,
       peakTrackedSince: voice.peakTrackedSince,
       backend: voice.backend,
+      cluster: voice.cluster,
       roster: voice.roster,
       rooms: voice.rooms.map((room) => {
         const named = roomNames.get(room.voiceChannelId);

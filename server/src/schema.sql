@@ -1445,6 +1445,19 @@ CREATE INDEX IF NOT EXISTS idx_voice_peers_instance ON voice_peers (instance_id)
 -- presenting (the old Speak bit covered camera and share).
 ALTER TABLE voice_peers ADD COLUMN IF NOT EXISTS can_stream BOOLEAN NOT NULL DEFAULT TRUE;
 
+-- A moderator's mute on one person in one room, the cluster's copy of
+-- `roomServerMutes` in server/src/ws/voice.ts. Keyed on the (room, user)
+-- pair and not on the peer row, because the sanction is on the person and a
+-- peer is a seat: a rejoin mints a new seat and must come back muted. The
+-- room's lifetime is the sanction's: the row cascades away with the room
+-- row, exactly as the in-process map is cleared when the last peer leaves.
+CREATE TABLE IF NOT EXISTS voice_server_mutes (
+  channel_id  UUID NOT NULL REFERENCES voice_rooms(channel_id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL,
+  muted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (channel_id, user_id)
+);
+
 -- Hung-up ids that must not be reconstructed for the resume token's life. The
 -- in-process `retiredPeerIds` map is the same fact for one instance; this is
 -- it for the cluster.

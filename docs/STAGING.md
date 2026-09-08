@@ -387,35 +387,45 @@ performance-2x hours.
 - **First request after idle is slow.** A parked machine takes a few seconds to wake. If a probe or test suite hits a timeout, retry once before suspecting the deploy.
 - **Voice on staging is signalling only unless LiveKit is configured.** There is no TURN and no SFU by default, so a load test that needs one room bigger than `MESH_VOICE_LIMIT` has to set `LIVEKIT_*` first. See the load-test runbook below.
 
-## Rehearsing two machines (M5 of `docs/plans/MULTI_INSTANCE_VOICE.md`)
+## Rehearsing two machines (step 4 of `docs/deploy-fly.md` 6a-bis)
 
-Before production is ever scaled to two (`docs/deploy-fly.md` 6a-bis), run the whole thing here once. Staging has no LiveKit, so this rehearses the bus, the registry, the drain and the mesh guard's *refusal* path; the SFU path is what production will take and can only be watched there.
+Before production is ever scaled to two again, run this once here, with LiveKit set, so the rehearsal takes the path production takes. Written as a checklist an agent can execute: every step has a command, what it must show, and what to do if it does not. Do not touch `pqp-api` (production) at any point; every command below names `pqp-api-staging`. Everything here is temporary and the last section undoes it.
 
-**Set up (all temporary, undo at the end):**
+Prerequisites: `fly` and `gh` authenticated (`fly auth whoami`, `gh auth status`), the three `LIVEKIT_*` values from the operator (never from a doc or a commit; a second LiveKit Cloud project is ideal, the production one is acceptable because room names are channel UUIDs from a different database and cannot collide), and two browser profiles signed up on the staging Clerk dev instance (`localStorage` suffixes do not exist on staging).
+
+**Set up:**
 
 ```bash
-# 1. The two flags. `fly secrets set` restarts the machine.
-fly secrets set CLUSTER_BUS=postgres VOICE_REGISTRY=postgres -a pqp-api-staging
+# 1. The flags and the SFU. `fly secrets set` restarts the machine.
+fly secrets set CLUSTER_BUS=postgres VOICE_REGISTRY=postgres \
+  LIVEKIT_URL=<wss://...> LIVEKIT_API_KEY=<...> LIVEKIT_API_SECRET=<...> \
+  -a pqp-api-staging
+curl -s https://pqp-api-staging.fly.dev/ready | jq .checks.livekit   # {"ok":true,...}; staging may already carry LIVEKIT_* (it did on 2026-09-08), then skip the three
 
 # 2. Auto-stop off for the rehearsal. fly.staging.toml says "stop" / min 0;
 #    a parked machine would count as one instance that stopped answering.
 #    Edit fly.staging.toml locally (auto_stop_machines = "off",
-#    min_machines_running = 2) and deploy it; do not commit that edit.
-gh workflow run deploy-staging.yml --ref <your-branch>   # or fly deploy -c fly.staging.toml -a pqp-api-staging --ha=false
+#    min_machines_running = 2) and deploy it from a branch; do not merge that edit.
+gh workflow run deploy-staging.yml --ref <your-branch>
+gh run watch                                                    # green before going on
 
 # 3. Two machines, same region.
 fly scale count 2 --region gru -a pqp-api-staging
 fly machines list -a pqp-api-staging      # two rows, both "started", both gru
 ```
 
-**Verify, in this order:**
+**Verify, in this order. Each step is pass or stop; on a stop, scale back (below) and report the step and the log lines.**
 
-1. `fly logs -a pqp-api-staging` shows `voice.registryEnabled` from both instance ids, then `bus.selfEcho` from both (never `bus.selfEchoMissing`: that means `DATABASE_URL` is a transaction-mode pooler and LISTEN is not delivering, stop here). No `voice.configDrift`.
-2. `voice.meshClusterUnsafe` appears once from each instance within 15 s (no LiveKit on staging: that is the guard saying so).
-3. Two browsers (`localStorage.setItem("pqp:dev-user-suffix", "bob")` is not available here; sign up twice on the Clerk dev instance). Send a message in a text channel from one and confirm it appears in the other without a refresh; open the same server in both and confirm presence agrees. Reload each a few times: every `fly logs` line is prefixed with the machine id, so the `ws.*` lines for your two users tell you which machine each socket landed on, and you want to see both ids across reloads.
-4. Voice, the refusal path: join a voice channel in browser A. In browser B, join the same channel. If B is on the other machine, it must show the call as not connected within a second, with `voice-join-refused` (`reason: mesh-multi-instance`) in the WS frames and `voice.meshRefusedMultiInstance` in the logs, and A must **not** see B in the room. If B landed on the same machine it simply joins; reload B until it lands on the other one. Nobody may ever appear in a room they cannot hear.
-5. The drain. With both browsers connected and A still in voice, `fly machine restart <id of the machine A is on> -a pqp-api-staging`. In the logs: `[shutdown] SIGTERM`, then `ws.drainBatch` lines, then `ws.drained`, all inside a few seconds. In the browsers: at most a brief "reconnecting", no "Realtime connection closed" banner that stays, and both land on the surviving machine (the machine id prefix on their `ws.*` log lines). A's voice seat resumes with the same peer id (`voice.resumeAdopted` in the logs, `resumed: true` in the `welcome` frame). `curl -s -o /dev/null -w '%{http_code}' https://pqp-api-staging.fly.dev/health` during the drain answers 503 once the draining machine is the one hit, and `/up` stays 200 throughout.
-6. Once the restarted machine is back, repeat step 5 on the other one. Then a real deploy (`gh workflow run deploy-staging.yml --ref <branch>`): the rolling strategy does step 5 to each machine in turn, and the deploy-staging job's own checks pass.
+1. **Bus and registry alive on both.** `fly logs -a pqp-api-staging` shows `voice.registryEnabled` from both machine ids, then `bus.selfEcho` from both. Stop on `bus.selfEchoMissing` (that is `DATABASE_URL` through a transaction-mode pooler; LISTEN is not delivering) or on `voice.configDrift` (the two machines have different LiveKit config; a secrets change landed on one).
+2. **Two sockets on two machines.** Open `/app` in both browsers. Every `fly logs` line is prefixed with the machine id, so the `ws.*` lines for your two users say which machine each socket landed on. Reload one browser until the two users are on different machines; if ten reloads never split them, stop (the proxy is pinning connections, which the whole rehearsal assumes it does not).
+3. **Chat and presence cross.** Send a message from A; it appears in B without a refresh. Both open the same server; the member list's online state agrees. Fail: stop.
+4. **A voice room spans the machines.** A joins a voice channel; B joins the same one. B's `welcome` frame (DevTools, WS) says `transport: "livekit"` and lists A's peer; both tiles appear on both screens, both hear each other, and `fly logs` shows `voice.join` from each machine id for that channel. `voice.meshGuardForcedSfu` may appear (a small staging server would otherwise be mesh); `voice-join-refused` must not appear anywhere. Fail: stop.
+5. **The counters climb.** `curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" https://pqp-api-staging.fly.dev/api/admin/metrics | jq .voice.cluster`, several times: it answers from whichever machine takes the request, and within a minute of step 4 both `framesRelayed` and `framesReceived` are above zero on both (keep calling until both machine ids have answered; `fly logs` says which one served each request). Zero after a minute on a machine that has a peer in the room: stop, the bus is not delivering.
+6. **A mesh room spans the machines too.** Pick a DM between the two users (a conversation call is mesh whatever the SFU) and call from A; B answers. The `welcome` on B says `transport: "mesh"`, `fly logs` shows `voice.meshPinAdopted` from B's machine if A pinned first, both hear each other, and the WS frames on B show an `offer` arriving from A's peer id and an `answer` going back. Fail (no audio, or `voice-join-refused`): stop.
+7. **A moderator mute holds across machines.** On a staging server both belong to, with A as owner: in the voice channel from step 4, A opens B's member card and mutes B for everyone. B's tile shows the server-mute badge on both screens, B's own client refuses to unmute (the mic button snaps back), and `fly logs` shows `voice.serverMute` on the bus if B's socket is on the other machine. A unmutes B; B can talk again. Then B leaves and rejoins while muted (repeat the mute first): B comes back muted. Fail: stop.
+8. **A resume crosses.** With A in the voice channel, `fly machine restart <id of the machine A is on> -a pqp-api-staging`. Logs: `[shutdown] SIGTERM`, `ws.drainBatch` lines, `ws.drained`, all inside a few seconds. Browsers: at most a brief "reconnecting", no "Realtime connection closed" banner that stays, and A's socket lands on the survivor (machine id prefix). A's seat resumes with the same peer id (`voice.resumeAdopted` in the logs, `resumed: true` in the `welcome` frame) and A keeps hearing B. `curl -s -o /dev/null -w '%{http_code}' https://pqp-api-staging.fly.dev/health` during the drain answers 503 once the draining machine is the one hit; `/up` stays 200 throughout. Fail: stop.
+9. **The other machine too.** Once the restarted machine is back (`fly machines list`), repeat step 8 on the other one.
+10. **A real deploy.** `gh workflow run deploy-staging.yml --ref <your-branch>` and `gh run watch`: the rolling strategy does step 8 to each machine in turn, both browsers stay connected, the job's own checks pass, and afterwards `fly machines list` shows two started machines on the new image.
 
 **Scale back (do not leave staging on two machines; it doubles the bill and parks nothing):**
 
@@ -423,8 +433,8 @@ fly machines list -a pqp-api-staging      # two rows, both "started", both gru
 fly scale count 1 --region gru -a pqp-api-staging
 git checkout fly.staging.toml                       # auto-stop "stop", min 0 again
 gh workflow run deploy-staging.yml --ref staging    # redeploys the committed file
-fly secrets unset CLUSTER_BUS VOICE_REGISTRY -a pqp-api-staging   # optional; harmless to leave on one machine
+fly secrets unset LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET -a pqp-api-staging   # unless staging is meant to keep an SFU
 fly machines list -a pqp-api-staging                # one row
 ```
 
-Record the date and the outcome in the M5 line of the plan's status header when it has been done.
+`CLUSTER_BUS` and `VOICE_REGISTRY` are harmless to leave on one machine (production runs them on one). Record the date, the step reached and the outcome in the M6 line of the plan's status header; a full pass is what unblocks step 5 of `docs/deploy-fly.md` 6a-bis.
