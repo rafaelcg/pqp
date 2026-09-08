@@ -1542,7 +1542,7 @@ function ThemePicker() {
       <div
         role="radiogroup"
         aria-label={t("settings.appearance.theme")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg bg-surface-2 p-0.5"
+        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
         onKeyDown={handleKeyDown}
       >
         {THEME_OPTIONS.map((option) => {
@@ -1623,7 +1623,7 @@ function ContrastPicker() {
       <div
         role="radiogroup"
         aria-label={t("settings.appearance.contrast")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg bg-surface-2 p-0.5"
+        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
         onKeyDown={handleKeyDown}
       >
         {CONTRAST_OPTIONS.map((option) => {
@@ -1693,7 +1693,7 @@ function LanguagePicker() {
       <div
         role="radiogroup"
         aria-label={t("settings.appearance.language")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg bg-surface-2 p-0.5"
+        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
       >
         {SUPPORTED_LOCALES.map((option) => {
           const selected = option === locale;
