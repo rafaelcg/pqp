@@ -27,6 +27,18 @@ import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } fr
 
 const run = promisify(execFile);
 const SHARE_RATE = process.env.SHARE_RATE ?? "3mbit";
+/**
+ * Turn the sharer's camera on as well, so the run exercises two video senders
+ * on one uplink rather than one. The camera and the screen divide the same
+ * measured budget (`meshCameraBitrate`), and that split is the thing this mode
+ * exists to check: before it, each sender assumed it owned the link.
+ *
+ * Read by the ORCHESTRATOR and handed to the agents through `room.json`. The
+ * agents run in containers whose environment comes from docker-compose, so an
+ * env var exported beside `node run.mjs` never reaches them — the first
+ * attempt at this silently ran without a camera and looked like a pass.
+ */
+const WITH_CAMERA = process.env.WITH_CAMERA === "true";
 
 const ROLE = process.env.PQP_HARNESS_ROLE ?? null;
 // Long enough to show an unshaped baseline, then the controller's reaction
@@ -192,7 +204,10 @@ function readLines(path) {
 function fmtSender(s) {
   if (!s) return "no sender";
   const paths = s.paths ? ` paths[${s.paths.join(",")}]` : "";
-  return `${s.kbps ?? "?"} kbps actual, ${s.targetKbps ?? "?"} target, ceiling ${s.ceilingKbps ?? "?"}, limited by ${s.limitedBy ?? "?"}${paths}`;
+  const cam = s.camera
+    ? ` | camera ceiling ${s.camera.ceilingKbps ?? "?"} (${s.camera.kbps ?? "?"} kbps)`
+    : "";
+  return `${s.kbps ?? "?"} kbps actual, ${s.targetKbps ?? "?"} target, ceiling ${s.ceilingKbps ?? "?"}, limited by ${s.limitedBy ?? "?"}${paths}${cam}`;
 }
 
 function fmtReceiver(r) {
@@ -224,7 +239,10 @@ async function orchestratorMain() {
 
   console.log("Seeding three accounts and a voice channel...");
   const { serverId, sharerName } = await seedRoom();
-  writeFileSync(`${COORD_DIR}room.json`, JSON.stringify({ serverId, sharerName }));
+  writeFileSync(
+    `${COORD_DIR}room.json`,
+    JSON.stringify({ serverId, sharerName, withCamera: WITH_CAMERA }),
+  );
 
   console.log("Waiting for all three agents to join voice...");
   await Promise.all(
@@ -333,7 +351,7 @@ async function agentMain(role) {
 
   console.log(`[${role}] waiting for the room...`);
   await waitFile("room.json");
-  const { serverId, sharerName } = JSON.parse(
+  const { serverId, sharerName, withCamera } = JSON.parse(
     readFileSync(`${coord}room.json`, "utf8"),
   );
 
@@ -372,7 +390,9 @@ async function agentMain(role) {
     await page.getByRole("button", { name: "Send" }).waitFor({ timeout: 20_000 });
 
     console.log(`[${role}] joining voice...`);
-    await page.getByRole("button", { name: /stage/ }).first().click();
+    // Double click, not click: since #360 a single click selects a voice
+    // channel and only a double click joins it.
+    await page.getByRole("button", { name: /stage/ }).first().dblclick();
     await page.getByTestId("call-stage-collapsed").waitFor({ timeout: 20_000 });
     await page.getByText("Voice connected").waitFor({ timeout: 20_000 });
     writeFileSync(`${coord}${role}-joined`, "");
@@ -385,6 +405,18 @@ async function agentMain(role) {
       // baseline and then the controller's reaction to it changing — the
       // scenario the PR describes — rather than a link already constrained
       // before the first frame went out.
+      if (withCamera) {
+        // Before the share, so the split is in force from the first frame the
+        // screen sends rather than arriving as a mid-run correction.
+        console.log(`[${role}] turning the camera on...`);
+        // `.first()`: the label appears on the stage control, the voice bar
+        // and the call panel, and any of the three does the job.
+        await page
+          .getByRole("button", { name: "Turn camera on", exact: true })
+          .first()
+          .click({ timeout: 10_000 });
+        await page.waitForTimeout(2000);
+      }
       console.log(`[${role}] starting the screen share...`);
       await page
         .getByRole("button", { name: "Share your screen", exact: true })
@@ -433,6 +465,15 @@ async function agentMain(role) {
         role === "sharer"
           ? snap.senders.find((s) => s.role === "screen") ?? null
           : snap.receivers.find((r) => r.role === "screen") ?? null;
+      if (sample && role === "sharer") {
+        // The other sender on the same uplink. Its ceiling beside the screen's
+        // is the whole question in camera mode: the two must fit in one
+        // viewer's share of the budget, not each claim the lot.
+        const camera = snap.senders.find((s) => s.role === "camera");
+        sample.camera = camera
+          ? { ceilingKbps: camera.ceilingKbps, kbps: camera.kbps }
+          : null;
+      }
       // The per-path estimates the budget controller actually reads. Without
       // these the table shows the ceiling it chose and gives no way to check
       // WHY, which is exactly the question two rejected models turned on: is a

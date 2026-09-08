@@ -39,9 +39,20 @@ share ran unshaped for 9 seconds, then the sharer's container was capped to
 3 Mbit — a link that, split two ways, can carry about 1500 kbps a copy.
 
 ```
-3 Mbit shaped mid-share : ceiling -> 1494 kbps a copy, paths [1729,1608]
-1 Mbit shaped mid-share : ceiling ->  500 kbps a copy, paths [536,413]
+screen only  (SHARE_RATE=3mbit) : ceiling -> 1494 kbps a copy, paths [1729,1608]
+screen only  (SHARE_RATE=1mbit) : ceiling ->  500 kbps a copy, paths [536,413]
+
+WITH_CAMERA=true 3mbit : screen 1062 + camera 531 = 1593 a copy  (x2 = 3186)
+WITH_CAMERA=true 1mbit : screen  369 + camera 185 =  554 a copy  (x2 = 1108)
 ```
+
+`WITH_CAMERA=true` turns the sharer's camera on before the share starts, so
+the run exercises two video senders dividing one uplink instead of one sender
+owning it. The two ceilings come out at the 2:1 ratio of their chosen ladders
+(an Auto screen is 3 Mbps, an Auto camera 1.5), and their sum times the viewer
+count is the shaped link. Before `meshCameraBitrate` existed the camera took
+its full chosen ceiling per viewer no matter the room, so the same 3 Mbit run
+would have asked for about 2994 kbps a copy, nearly double the link.
 
 Two copies of each ceiling is 2988 and 1000 kbps, which is the shaped link in
 both cases. The `paths[...]` figures are the per-path `availableOutgoingBitrate`
