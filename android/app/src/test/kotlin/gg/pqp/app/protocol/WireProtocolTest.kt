@@ -209,6 +209,17 @@ class WireProtocolTest {
         // Coalesced emoji burst counts for a channel's live reactions. No
         // reaction-overlay surface on the phone yet.
         "live-reactions" to "no live reactions surface on the phone",
+        // The two live-HLS frames. `voice-stream` is the playlist for the
+        // room's current screen share; `channel-live` is the sidebar's "this
+        // room is live" plus its seatless watcher count. Both are behind
+        // LIVE_HLS_ENABLED, both feed a watch surface the phone does not
+        // draw, and Android watches a share over WebRTC when it is in the
+        // call. Neither has ever had a branch here: the entries were missing
+        // rather than the frames being handled, and this test could not say
+        // so because Gradle had cached `testDebugUnitTest` past every change
+        // to `packages/shared`, which is not one of its declared inputs.
+        "voice-stream" to "no HLS watch surface on the phone",
+        "channel-live" to "no live badge or seatless watch surface on the phone",
         // A mesh room moved onto the voice server mid-call so a fourth camera
         // would fit. Following it means tearing the mesh down and bringing a
         // LiveKit session up against the SAME peer id, which this client has
