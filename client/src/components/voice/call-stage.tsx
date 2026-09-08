@@ -59,6 +59,7 @@ import {
 } from "@/components/voice/capabilities";
 import { attemptElementFullscreen } from "@/components/voice/element-fullscreen";
 import { CinemaHint } from "@/components/voice/cinema-hint";
+import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { useImmersiveStage } from "@/hooks/use-immersive-stage";
 import {
   chooseFullscreenStrategy,
@@ -1838,6 +1839,12 @@ function ActiveCall({
         onFocusCapture={() => setBarFocused(true)}
         onBlurCapture={onBarBlur}
       >
+        <CapacityNotice
+          voiceChannelId={voiceState.voiceChannelId}
+          transport={voiceState.roomTransport}
+          roseFrom={voiceState.capacityRoseFrom}
+          visible={!chrome.hidden}
+        />
         <CinemaHint visible={screenStream !== null} />
         {controls}
       </div>

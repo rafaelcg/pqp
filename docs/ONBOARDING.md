@@ -20,6 +20,7 @@ Adding one means adding a row here.
 | Cargos tip | `components/layout/cargos-hint.tsx` | Corner card | can manage roles | `pqp:cargos-hint-…` (impression) |
 | Get the app strip | `components/downloads/download-hint.tsx` | Sidebar strip | desktop browser | `pqp:download-hint-dismissed` (dismiss) |
 | Cinema hint | `components/voice/cinema-hint.tsx` | One-line strip above the call controls | iPhone/iPad in a browser tab (not standalone), a share on the stage | `pqp:cinema-hint-…` (impression, `lib/cinema-hint.ts`) |
+| Call grew | `components/voice/capacity-notice.tsx` | Inline CornerCard above the call controls | the room's limits went up while you were sitting in it | `pqp:voice-capacity-<voiceChannelId>` (impression, `lib/voice-capacity.ts`) |
 | Composer format | `components/layout/feature-hint.tsx` in the composer | Inline CornerCard above Aa / + | first text channel, once | `pqp:feature-hint-composer-format-…` |
 | Watch party | `components/layout/feature-hint.tsx` on the call bar or the in-call strip | Inline CornerCard | first time in a call that can share | `pqp:feature-hint-watch-party-…` |
 | Channel pin | `components/layout/feature-hint.tsx` in the channel list | Inline CornerCard | first time a server list is open | `pqp:feature-hint-channel-pin-…` |
@@ -51,6 +52,17 @@ missing storage reads as seen. The per-surface libs (`qg-hint.ts`,
 `cargos-hint.ts`, `mobile-beta-hint.ts`, `feature-hints.ts`) keep their names as
 thin wrappers. The download strip is the exception on purpose: it is furniture,
 written on dismiss, on every host.
+
+**Say what changed, not what it is called.** The call-grew card fires on the
+*capability*, never on the transport's name: `lib/voice-capacity.ts` reads
+`MESH_VOICE_LIMIT`, `SCREEN_SHARE_LIMIT` and `CAMERA_LIMIT` out of
+`@pqp/shared` and compares the before with the after, so a room that changed
+media path without gaining anything says nothing, and the numbers in the
+sentence cannot drift from the numbers the server enforces. It is keyed per
+voice channel, and only somebody who was seated across the change has a
+"before" to have grown from (`VoiceState.capacityRoseFrom`), so a person who
+walks into an already-promoted room is told nothing, because nothing changed
+for them.
 
 **Preference vs. localStorage.** Things that answer a question about the
 *account* (the wizard, the checklist, the Baú intro) are preferences and

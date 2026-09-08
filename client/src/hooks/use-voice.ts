@@ -290,6 +290,19 @@ export interface VoiceState {
    * so the server never got to promote the room.
    */
   canPromoteTransport: boolean;
+  /**
+   * The transport this room ran on before it changed underneath us, or null.
+   *
+   * Set only from `voice-transport-changed`, which the server sends to the
+   * sockets that were already seated. That is exactly the audience for "the
+   * limits just went up": somebody who joins after the move gets `welcome`
+   * instead, never this, and is told nothing, because nothing changed for
+   * them. Cleared with the seat, so it does not follow us into the next room.
+   *
+   * Whether the change actually RAISED anything is not decided here: that is
+   * `lib/voice-capacity.ts`, off the shared limit maps.
+   */
+  capacityRoseFrom: VoiceRoomTransport | null;
   /** True when this client is the one presenting. */
   isSharingScreen: boolean;
   /** peerIds currently sharing, in roster order. */
@@ -928,6 +941,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     transportFailure: null,
     roomTransport: null,
     canPromoteTransport: false,
+    capacityRoseFrom: null,
     isSharingScreen: false,
     screenSharePeerIds: [],
     liveStream: null,
@@ -2174,7 +2188,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       usingSfu: false,
       transportFailure: null,
       roomTransport: null,
-    canPromoteTransport: false,
+      canPromoteTransport: false,
+      capacityRoseFrom: null,
       isSharingScreen: false,
       screenSharePeerIds: [],
       liveStream: null,
@@ -2467,6 +2482,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.peerId = message.peerId;
         state.voiceChannelId = message.voiceChannelId;
         state.transportFailure = null;
+        // A fresh seat, so there is no "before" to have grown from. This is
+        // what keeps the capacity card off the screen of somebody who walks
+        // into a room that was already promoted.
+        state.capacityRoseFrom = null;
         // Before any media is built, so a listener's SFU session never tries
         // to publish and a mesh listener's track starts disabled.
         applyPublishRules(
@@ -2632,6 +2651,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           refuseTransport({ transport: message.transport, reason: "promoted" });
           break;
         }
+        // Recorded before the new transport lands: this is the "before" the
+        // capacity card compares against (`lib/voice-capacity.ts`). Only the
+        // sockets that were seated across the move get this frame, which is
+        // exactly who should be told the room grew.
+        state.capacityRoseFrom = state.roomTransport ?? "mesh";
         state.roomTransport = message.transport;
         state.notice = translateMessage(promotionNoticeKey(message.reason));
         for (const peer of message.participants) {
