@@ -125,6 +125,21 @@ export async function pinVoiceRoom(
   channelId: string,
   wanted: VoiceRoomTransport,
 ): Promise<VoiceRoomTransport> {
+  return (await claimVoiceRoomTransport(channelId, wanted)).transport;
+}
+
+/**
+ * `pinVoiceRoom` with the outcome attached: `won` is true when this call
+ * inserted the row, false when the room was already pinned (by another
+ * instance, or by a row the sweep has not reached yet) and the stored
+ * transport is what came back. The join path logs an adopted mesh pin from
+ * it, so the number that used to be a refusal has a line in the log without
+ * a second read.
+ */
+export async function claimVoiceRoomTransport(
+  channelId: string,
+  wanted: VoiceRoomTransport,
+): Promise<{ transport: VoiceRoomTransport; won: boolean }> {
   const pool = getPool();
   const inserted = await pool.query<{ transport: VoiceRoomTransport }>(
     `INSERT INTO voice_rooms (channel_id, transport)
@@ -135,11 +150,11 @@ export async function pinVoiceRoom(
   );
   const won = inserted.rows[0]?.transport;
   if (won) {
-    return won;
+    return { transport: won, won: true };
   }
   const existing = await readVoiceRoomTransport(channelId);
   if (existing) {
-    return existing;
+    return { transport: existing, won: false };
   }
   // The row was deleted between the two statements (the room's last peer
   // left at the same moment). Rare; one more attempt is enough, because a
@@ -151,7 +166,11 @@ export async function pinVoiceRoom(
      RETURNING transport`,
     [channelId, wanted],
   );
-  return retry.rows[0]?.transport ?? (await readVoiceRoomTransport(channelId)) ?? wanted;
+  if (retry.rows[0]) {
+    return { transport: retry.rows[0].transport, won: true };
+  }
+  const stored = await readVoiceRoomTransport(channelId);
+  return stored ? { transport: stored, won: false } : { transport: wanted, won: true };
 }
 
 export async function readVoiceRoomTransport(

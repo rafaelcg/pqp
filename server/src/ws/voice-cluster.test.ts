@@ -51,8 +51,10 @@ import { createMemoryHub, type BusFrame } from "../lib/bus.js";
  * The two-machine prerequisites (the "mesh across instances" and
  * "moderator mutes across instances" groups): a mesh room pinned on A
  * seats and resumes on B with offer, answer and ICE crossing on
- * `voice.signal`, never a `voice-join-refused`; a fresh room still opens on
- * the SFU while two are live; a frame never crosses into another room; the
+ * `voice.signal`, never a `voice-join-refused`; a fresh room gets the
+ * policy's transport with two live and an SFU configured (small stays mesh,
+ * a community or a ten-member server goes to LiveKit) and a mesh pin beats
+ * the joiner's own policy; a frame never crosses into another room; the
  * ceiling counts both machines; the operator counters climb; a moderator's
  * mute set on A holds on B, survives a resume and a rejoin through a third
  * process, and dies with the room.
@@ -1216,8 +1218,8 @@ describeDb("voice across two instances", () => {
   describe("mesh across instances", () => {
     // What the 2026-09-07 window paid for: a mesh room pinned on one machine
     // hung up every resume that landed on the other. Now the pin is adopted
-    // and the signaling crosses on `voice.signal`; the SFU is still where a
-    // FRESH room goes while two are live and one is configured.
+    // and the signaling crosses on `voice.signal`, and a fresh room gets the
+    // policy's transport whether one machine is live or two.
     const small = { isCommunity: false, memberCount: 3 };
 
     async function roomRow(channel: string): Promise<string | undefined> {
@@ -1327,30 +1329,96 @@ describeDb("voice across two instances", () => {
       await waitFor(() => frames(again, "answer").length === 1, "the answer on B");
     });
 
-    it("a fresh room with two live instances and an SFU opens on LiveKit", async () => {
+    it("two live instances, SFU configured: a small server room is mesh on both, and the offer crosses", async () => {
+      // Production's posture at the flip. Until 2026-09-08 the guard sent
+      // this room to the SFU because a second machine was up; now the
+      // policy alone decides, so a night's forty small rooms stay off the
+      // media box.
       backend.configured = "livekit";
       backend.profile = small;
       const channel = randomUUID();
       const a = await bootInstance();
-      await a.registry.heartbeatVoiceInstance();
-      // Control: alone, a three-member server is a mesh room.
-      const alone = await join(a, randomUUID(), randomUUID());
-      expect(frames(alone, "welcome")[0]?.transport).toBe("mesh");
-
       const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
       await b.registry.heartbeatVoiceInstance();
+
       const onA = await join(a, randomUUID(), channel);
+      expect(frames(onA, "welcome")[0]?.transport).toBe("mesh");
+      await settle();
+      expect(await roomRow(channel)).toBe("mesh");
+
+      const onB = await join(b, randomUUID(), channel);
+      const welcome = frames(onB, "welcome")[0];
+      expect(welcome?.transport).toBe("mesh");
+      expect(
+        (welcome?.peers as { peerId: string }[]).map((p) => p.peerId),
+      ).toEqual([onA.peerId]);
+      expect(frames(onB, "voice-join-refused")).toHaveLength(0);
+
+      await signal(b, onB, { type: "offer", to: onA.peerId, sdp: "v=0 sfu-up" });
+      await waitFor(() => frames(onA, "offer").length === 1, "the offer on A");
+      expect(frames(onA, "offer")[0]).toMatchObject({ from: onB.peerId });
+      await signal(a, onA, { type: "answer", to: onB.peerId, sdp: "v=0 back" });
+      await waitFor(() => frames(onB, "answer").length === 1, "the answer on B");
+    });
+
+    it("two live instances, SFU configured: a community and a ten-member server still open on LiveKit", async () => {
+      backend.configured = "livekit";
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+
+      backend.profile = { isCommunity: true, memberCount: 3 };
+      const community = randomUUID();
+      const onA = await join(a, randomUUID(), community);
       expect(frames(onA, "welcome")[0]?.transport).toBe("livekit");
       await settle();
-      expect(await roomRow(channel)).toBe("livekit");
-      const onB = await join(b, randomUUID(), channel);
+      expect(await roomRow(community)).toBe("livekit");
+      const onB = await join(b, randomUUID(), community);
       expect(frames(onB, "welcome")[0]?.transport).toBe("livekit");
 
-      // B's shutdown withdraws its lease ahead of closing its sockets, and
-      // the next fresh room on A is a mesh room again.
-      await b.registry.withdrawVoiceInstance();
-      const after = await join(a, randomUUID(), randomUUID());
-      expect(frames(after, "welcome")[0]?.transport).toBe("mesh");
+      backend.profile = { isCommunity: false, memberCount: 10 };
+      const large = randomUUID();
+      const largeOnB = await join(b, randomUUID(), large);
+      expect(frames(largeOnB, "welcome")[0]?.transport).toBe("livekit");
+      await settle();
+      expect(await roomRow(large)).toBe("livekit");
+      const largeOnA = await join(a, randomUUID(), large);
+      expect(frames(largeOnA, "welcome")[0]?.transport).toBe("livekit");
+
+      // And the same second machine does not push a small room over.
+      backend.profile = small;
+      const smallRoom = await join(a, randomUUID(), randomUUID());
+      expect(frames(smallRoom, "welcome")[0]?.transport).toBe("mesh");
+    });
+
+    it("a mesh pin on A is adopted by a cold join on B even when B's own policy would say LiveKit", async () => {
+      // The server crossed the member threshold while the call was on: A's
+      // room is pinned mesh, B's policy now answers LiveKit for the same
+      // channel, and the pin wins, so nobody is split off the call.
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      const onA = await join(a, randomUUID(), channel);
+      expect(frames(onA, "welcome")[0]?.transport).toBe("mesh");
+      await settle();
+
+      backend.profile = { isCommunity: false, memberCount: 10 };
+      const onB = await join(b, randomUUID(), channel);
+      const welcome = frames(onB, "welcome")[0];
+      expect(welcome?.transport).toBe("mesh");
+      expect(frames(onB, "voice-join-refused")).toHaveLength(0);
+      expect(
+        (welcome?.peers as { peerId: string }[]).map((p) => p.peerId),
+      ).toEqual([onA.peerId]);
+      expect(await roomRow(channel)).toBe("mesh");
+      await signal(b, onB, { type: "offer", to: onA.peerId, sdp: "adopted" });
+      await waitFor(() => frames(onA, "offer").length === 1, "the offer on A");
     });
 
     it("a signaling frame never crosses into another room", async () => {

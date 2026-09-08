@@ -65,7 +65,6 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import {
-  guardMeshAcrossInstances,
   resolveVoiceTransport,
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
@@ -77,7 +76,6 @@ import {
   isVoicePeerRetired,
   isVoiceRegistryEnabled,
   isVoiceServerMuted as isVoiceServerMutedInRegistry,
-  listLiveVoiceInstances,
   listVoicePeersForUser,
   listVoicePeersInRoom,
   listVoiceRoomOccupancy,
@@ -85,8 +83,7 @@ import {
   listVoiceRosters,
   markVoicePeerOrphaned,
   persistWatchParty,
-  pinVoiceRoom,
-  readVoiceRoomTransport,
+  claimVoiceRoomTransport,
   readWatchParty,
   reconcileVoiceRegistry,
   retireVoicePeerId,
@@ -241,10 +238,11 @@ interface VoicePeer {
  * action publishes `voice.moderation` so the instance holding the target's
  * socket says the notice and drops the peer before the row goes; the SFU
  * re-sweeps are `voice_resweeps` rows claimed by whoever ticks. M5 added
- * the guard that sends a room that would open on mesh to the SFU while a
- * second instance is live. What that guard first did with a room ALREADY
- * pinned on mesh by another instance was refuse the join, and on 2026-09-07
- * that hung up four resumes in one afternoon, so mesh now crosses too:
+ * a guard that refused a mesh join while a second instance was live, then
+ * one that sent a fresh mesh room to the SFU instead; on 2026-09-07 the
+ * refusal hung up four resumes in one afternoon, and the SFU detour would
+ * have put every small room on one media box, so both are gone and mesh
+ * crosses like everything else (the transport is the policy's, pinned once):
  * offer, answer and ICE for a peer this instance does not hold ride
  * `voice.signal` to the instance that does (point 1 above), the joiner's
  * peer list and the `peer-*` frames already come from the rows and the bus
@@ -552,24 +550,6 @@ function decideRoomTransportOnce(
 /** The room is pinned, or empty: the shared decision has no more readers. */
 function forgetTransportDecision(voiceChannelId: string): void {
   pendingTransportDecisions.delete(voiceChannelId);
-}
-
-/**
- * Live instances other than this one, from the leases. A failed read counts
- * as none: the guard then behaves as the flag-off path, which is what this
- * instance did before the registry existed, and the failure is logged.
- */
-async function countOtherLiveVoiceInstances(): Promise<number> {
-  try {
-    const live = await listLiveVoiceInstances();
-    return live.filter((row) => row.instanceId !== INSTANCE_ID).length;
-  } catch (error) {
-    logEvent("voice.registryReadFailed", {
-      op: "instances",
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return 0;
-  }
 }
 
 /** Test hook: forget every pinned room transport. */
@@ -2677,74 +2657,21 @@ export async function handleVoiceMessage(
         ? resume.transport
         : (opening?.transport ?? configuredTransport()));
 
-    // THE MESH GUARD (M5). With a second live instance, a room that would
-    // OPEN on mesh opens on the SFU instead when the deployment has one: the
-    // SFU is the transport built for a room that spans machines, and a fresh
-    // room is free to take it. A room that is ALREADY pinned on mesh by the
-    // other instance is a different case, and the one this guard used to
-    // get wrong: it refused the join (four hung-up resumes on 2026-09-07,
-    // `voice.meshRefusedMultiInstance`), on the theory that a mesh room
-    // lives in the process that relays its offers. It does not have to:
-    // the joiner's peer list already comes from the rows, `peer-*` frames
-    // already cross on `voice.room`, and a signaling frame for a peer held
-    // elsewhere now crosses on `voice.signal` (`relayToTarget`). So the
-    // stored pin is read first and adopted whatever it says, and the guard
-    // only decides for a room nobody has pinned. Counted from the leases
-    // (`voice_instances`), so a machine that drained is not counted from
-    // the moment it withdrew. Flag off: never consulted, exactly as before.
-    if (
-      registryOn() &&
-      transport === "mesh" &&
-      !roomTransports.has(payload.voiceChannelId)
-    ) {
-      const otherInstances = await countOtherLiveVoiceInstances();
-      if (socket.readyState !== 1) {
-        return;
-      }
-      if (otherInstances > 0) {
-        let stored: VoiceRoomTransport | null = null;
-        try {
-          stored = await readVoiceRoomTransport(payload.voiceChannelId);
-        } catch (error) {
-          logEvent("voice.registryReadFailed", {
-            op: "meshGuard",
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-        if (socket.readyState !== 1) {
-          return;
-        }
-        if (stored !== null) {
-          // Pinned elsewhere: the room is on that transport, and the pin
-          // below adopts it. A mesh pin is logged so the flip's log has the
-          // number that used to be a refusal.
-          if (stored === "mesh") {
-            logEvent("voice.meshPinAdopted", {
-              userId: user.id,
-              voiceChannelId: payload.voiceChannelId,
-              otherInstances,
-              resumed: resume.kind !== "cold",
-            });
-          }
-        } else {
-          const guard = guardMeshAcrossInstances({
-            liveKitConfigured: configuredTransport() === "livekit",
-            otherLiveInstances: otherInstances,
-          });
-          if (guard.kind === "force-livekit") {
-            logEvent("voice.meshGuardForcedSfu", {
-              userId: user.id,
-              voiceChannelId: payload.voiceChannelId,
-              otherInstances,
-            });
-            transport = "livekit";
-            if (resume.kind === "reconstruct" || resume.kind === "adopt") {
-              resume = { kind: "cold" };
-            }
-          }
-        }
-      }
-    }
+    // NO MESH GUARD ANY MORE. Until 2026-09-08 a second live instance made
+    // a room that would open on mesh open on the SFU instead (and, before
+    // that, refused the join outright: four hung-up calls in the 2026-09-07
+    // window). Both were a stand-in for the mesh not crossing machines. It
+    // does now: the joiner's peer list comes from the rows, `peer-*` frames
+    // cross on `voice.room`, a signaling frame for a peer held elsewhere
+    // crosses on `voice.signal` (`relayToTarget` and its subscriber), and
+    // the ceiling counts the rows. So the transport a room opens on is the
+    // policy's answer (`transport-policy.ts`: DMs and small servers mesh,
+    // communities and large servers the SFU, the per-channel override
+    // first) on one machine and on two alike; the only cluster step is the
+    // atomic pin below, which makes two machines opening the same channel in
+    // the same second agree. Sending every small room to the SFU because a
+    // second machine was up would have put a night's forty mesh rooms on a
+    // two-core media box that cannot carry them.
 
     // THE ATOMIC PIN. With the registry on, an unpinned room's decision goes
     // through `voice_rooms` before it is applied here: whoever inserts first
@@ -2758,7 +2685,11 @@ export async function handleVoiceMessage(
       registryOn() && !roomTransports.has(payload.voiceChannelId);
     if (pinnedHere) {
       try {
-        const stored = await pinVoiceRoom(payload.voiceChannelId, transport);
+        const claim = await claimVoiceRoomTransport(
+          payload.voiceChannelId,
+          transport,
+        );
+        const stored = claim.transport;
         if (stored !== transport) {
           logEvent("voice.transportAdopted", {
             channelId: payload.voiceChannelId,
@@ -2766,11 +2697,18 @@ export async function handleVoiceMessage(
             stored,
           });
           transport = stored;
+        } else if (!claim.won && stored === "mesh") {
+          // Pinned mesh by another process and adopted here: the number
+          // that used to be a refusal, kept in the log for the flip.
+          logEvent("voice.meshPinAdopted", {
+            userId: user.id,
+            voiceChannelId: payload.voiceChannelId,
+            resumed: resume.kind !== "cold",
+          });
         }
         // A resume is only kept on the transport its token remembers: the
-        // media it is holding was built for that one. The guard above may
-        // have wanted the SFU for it, and the room said otherwise; what
-        // matters is the room's answer against the token's, not the guard's.
+        // media it is holding was built for that one. What matters is the
+        // room's answer against the token's.
         if (
           (resume.kind === "reconstruct" || resume.kind === "adopt") &&
           resume.transport !== stored
