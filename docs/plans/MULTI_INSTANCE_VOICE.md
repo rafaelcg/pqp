@@ -402,15 +402,16 @@ machine holds it before the row is deleted.
   check fires during the window), wait ~2 s, then close sockets with 1001 in
   **jittered batches over ~8-10 s** (e.g. 50 sockets per 500 ms) instead of all
   at once, so the surviving machine sees a ramp, not a stampede (the address
-  limiter in `ws/index.ts` measured ~300 simultaneous joiners as its ceiling;
-  `TRUST_PROXY=true` keeps that per client, but the pool and Clerk verification
-  still prefer a ramp). Then `httpServer.close()`, `closeBus()`, `closePool()`.
+  limiter in `ws/index.ts` has a measured ceiling on simultaneous joiners from
+  one address; `TRUST_PROXY=true` keeps that per client, but the pool and Clerk
+  verification still prefer a ramp). Then `httpServer.close()`, `closeBus()`, `closePool()`.
 - `[[http_service.checks]]`: `interval = "10s"`, `timeout = "5s"`, `grace_period
   = "30s"`. Tighter interval is now safe because an unhealthy machine has a
   sibling to fail over to.
-- `[http_service.concurrency]` stays `type = "connections"`, `soft_limit = 400`,
-  `hard_limit = 600`; the proxy prefers the machine under its soft limit, which
-  spreads reconnects.
+- `[http_service.concurrency]` stays `type = "connections"` at whatever
+  `fly.toml` currently sets; the proxy prefers the machine under its soft limit,
+  which spreads reconnects. (Those limits were raised after this was written;
+  read the committed file rather than a number here.)
 - `auto_stop_machines = "off"`, `auto_start_machines = false`, and
   `min_machines_running = 2`.
 - Remove the single-machine banner and replace it with the new invariant

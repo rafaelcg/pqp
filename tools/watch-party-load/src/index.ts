@@ -40,6 +40,13 @@ setGlobalDispatcher(new Agent({ connections: 16, keepAliveTimeout: 1000 }));
 
 const STAGING_API = "https://pqp-api-staging.fly.dev";
 const STAGING_WS = "wss://pqp-api-staging.fly.dev/ws";
+// SAFETY, NOT CONFIGURATION: this harness generates hundreds of real clients on
+// the real application path, so it must never be pointed at production. The
+// hosted target is pinned to the exact staging API and WebSocket below, and any
+// SFU host in this set, or under *.pqp.gg at all, is refused outright (see
+// parseTarget). Local mode is restricted to loopback. Do not relax any of these
+// three checks, not even "just to check something quickly": generators are also
+// firewalled against api.pqp.gg and sfu.pqp.gg, and this is the second lock.
 const PROD_HOSTS = new Set(["pqp.gg", "api.pqp.gg", "sfu.pqp.gg"]);
 const HTTP_TIMEOUT_MS = 15_000;
 const MEDIA_CONNECT_TIMEOUT_MS = 20_000;

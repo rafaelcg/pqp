@@ -127,12 +127,13 @@ single-thread work and benefits from the faster cores. Verify the plan's network
 sustained needs a 1 Gbps port, not a shared 100 Mbps one.
 
 **What actually happened:** the box stayed 2 vCPU until a much larger question came
-up on 2026-09-07, a 500-viewer watch party, not the 100-to-150-viewer parties this
-section sized for (see "5b. Results so far" below and `docs/CAPACITY.md`). That load
-test found the single UDP mux port failed at 500 viewers regardless of CPU; the port
-change and the resize to 4 vCPU / 8 GB both landed on 2026-09-08, at $48/mo list,
-about $72/mo in São Paulo (price now confirmed, not "verify", see "Resize the box"
-below). Production is 4 vCPU today.
+up on 2026-09-07, a watch party several times the size this section sized for (see
+"5b. Results so far" below and `docs/CAPACITY.md` for the method; the measured
+figures are held privately, and that document says where). That load test found the
+single UDP mux port failing first regardless of CPU; the port change and the resize
+to 4 vCPU / 8 GB both landed on 2026-09-08, at $48/mo list, about $72/mo in São
+Paulo (price now confirmed, not "verify", see "Resize the box" below). Production is
+4 vCPU today.
 
 ### TLS and hostnames
 
@@ -413,14 +414,18 @@ issuer does not break it. Both files are in `tools/sfu/`.
 
 ### Apply the four-port change to a running box
 
-Why: on 2026-09-07 an isolated 4 vCPU copy of the production box served one 720p share at 1.5 Mbps to
-499 viewers. With the production config (one mux port, A1) egress stuck at 250 to 270 Mbit/s at 66 to
-77% CPU, the one socket logged 137,200 kernel receive-buffer drops, viewers saw 58% packet loss and a
-median 1.2 fps. Identical except `rtc.udp_port: 7882-7885` (A2): 805 to 901 Mbit/s at 63 to 77% CPU,
-zero drops, 499 of 499 viewers decoding, zero abandons. LiveKit's own guidance is at least as many mux
-ports as vCPUs, and the binary binds `min(vCPUs, ports in the range)`: the 2 vCPU production box opens
-7882 and 7883 and the boot line still prints the whole range. The firewall opens all four so a resize
-to 4 vCPU needs no firewall change.
+Why: **one UDP mux port serialises the SFU's whole receive path onto one kernel socket, and that
+socket's receive buffer overflows long before the box's cores are busy.** On 2026-09-07 an isolated
+copy of the production box was run twice at the same viewer count with one 720p share, identical
+except for the port range. With a single port the box pushed a fraction of the egress the room asked
+for, the socket logged tens of thousands of kernel receive-buffer drops, and most viewers saw heavy
+packet loss and a frame rate near zero, all while CPU had headroom left. With `rtc.udp_port:
+7882-7885` and nothing else changed, every viewer decoded the full stream, loss was unmeasurable and
+the drop counter stayed at zero. The measured figures are in the operator's copy,
+`~/.config/pqp/capacity-measured.md` (see [`docs/CAPACITY.md`](../CAPACITY.md) for why they are not
+in this repository). LiveKit's own guidance is at least as many mux ports as vCPUs, and the binary
+binds `min(vCPUs, ports in the range)`: a 2 vCPU box opens 7882 and 7883 and the boot line still
+prints the whole range. The firewall opens all four so a resize to 4 vCPU needs no firewall change.
 
 The restart drops every SFU call for a few seconds (clients resume on their own, see `docs/voice-backends.md`).
 Run it in a quiet hour: `voice-occupancy.sh` on the Mac plus
@@ -471,7 +476,7 @@ untouched, and `https://api.pqp.gg/ready` still reported LiveKit ok.
 
 ### Resize the box
 
-Once the port change is in and holding, resizing from 2 vCPU to 4 is the other half of the A1/A2
+Once the port change is in and holding, resizing from 2 vCPU to 4 is the other half of the same
 gap: LiveKit binds `min(vCPUs, ports)`, so the four ports opened above only pay off once there are
 four cores to bind them to.
 
@@ -597,9 +602,11 @@ response, so the client needs no rebuild).
   about 70% of one core (35% of the box) mid-run while the tester itself shared the same two cores, so
   the real headroom is better than that number. Memory 350 MB. The 2 vCPU / 4 GB plan was enough for the
   100 to 150 viewer parties seen as of this date; no resize needed before the production switch. That
-  held until the 500-viewer watch-party load test on 2026-09-07 found the single UDP mux port, not the
-  CPU, failing first at that scale; the box was resized to 4 vCPU / 8 GB on 2026-09-08 alongside the
-  port change (`docs/CAPACITY.md`, "Resize the box" below).
+  held until the much larger watch-party load test on 2026-09-07 found the single UDP mux port, not
+  the CPU, failing first at that scale; the box was resized to 4 vCPU / 8 GB on 2026-09-08 alongside
+  the port change (`docs/CAPACITY.md`, "Resize the box" below). Note that this bullet's own numbers
+  are a loopback `lk load-test`, which bypasses every line of pqp's own code and is a LiveKit sizing
+  datapoint, not a capacity figure for the product.
 - Not yet done: a phone on mobile data across NAT, and the UDP-blocked TURN path. The switch itself
   has happened; `sfu.pqp.gg` serves and `GET https://api.pqp.gg/ready` reports LiveKit healthy.
 
