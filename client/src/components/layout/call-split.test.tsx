@@ -110,7 +110,9 @@ describe("CallSplit keeps the stage mounted", () => {
   it("mounts a video on the stage in every layout it can draw", () => {
     for (const html of [
       split(),
-      split({ preference: { ...CALL_SPLIT_DEFAULT, orientation: "side-by-side" } }),
+      split({
+        preference: { ...CALL_SPLIT_DEFAULT, orientation: "side-by-side" },
+      }),
       split({ shape: "compact" }),
       split({ shape: "fullscreen" }),
       // Too short to split: the un-split fallback, which is a phone sideways.
@@ -151,9 +153,11 @@ describe("CallSplit keeps the stage mounted", () => {
   it("keeps the stage ahead of the transcript in the DOM, both ways round", () => {
     for (const html of [
       split(),
-      split({ preference: { ...CALL_SPLIT_DEFAULT, orientation: "side-by-side" } }),
+      split({
+        preference: { ...CALL_SPLIT_DEFAULT, orientation: "side-by-side" },
+      }),
     ]) {
-      expect(html.indexOf('data-call-split-stage')).toBeLessThan(
+      expect(html.indexOf("data-call-split-stage")).toBeLessThan(
         html.indexOf('data-testid="call-split-divider"'),
       );
       expect(html.indexOf('data-testid="call-split-divider"')).toBeLessThan(
@@ -296,5 +300,113 @@ describe("CallSplit's divider", () => {
     expect(html).toMatch(
       new RegExp(`style="height:\\s*${900 - MIN_CHAT_HEIGHT_PX}px`),
     );
+  });
+});
+
+describe("CallSplit puts a pane away without unmounting it", () => {
+  const COLLAPSED_CHAT: CallSplitPreference = { ...DRAGGED, collapsed: "chat" };
+  const COLLAPSED_STAGE: CallSplitPreference = {
+    ...DRAGGED,
+    collapsed: "stage",
+  };
+
+  /**
+   * THE BUG THIS PINS, and it is the whole reason the collapse is a `hidden`
+   * attribute rather than a conditional render. Unmounting the collapsed pane
+   * takes the stage's `onShapeChange` reporter with it, the pane's shape falls
+   * to "none", `resolveCollapsed` stops honouring the collapse, and the stage
+   * comes straight back: a click that undid itself. Unmounting the `<video>`
+   * would also make `lib/remote-video-delivery.ts` tear the SFU subscription
+   * down, so coming back would cost a renegotiation.
+   */
+  it("keeps the hidden stage, and its video, in the tree", () => {
+    const html = split({ preference: COLLAPSED_STAGE });
+    expect(html).toContain('data-testid="stage"');
+    expect(html).toContain('data-testid="stage-video"');
+    expect(html).toMatch(/data-call-split-stage[^>]*hidden=""/);
+  });
+
+  it("keeps the hidden transcript in the tree, so it does not lose its place", () => {
+    const html = split({ preference: COLLAPSED_CHAT });
+    expect(html).toContain('data-testid="chat"');
+    // The transcript's own wrapper carries the attribute, not the stage's.
+    expect(html).not.toMatch(/data-call-split-stage[^>]*hidden=""/);
+    // The last element opened before the transcript is the one hidden.
+    expect(html).toMatch(/hidden=""[^>]*>\s*<div data-testid="chat"/);
+  });
+
+  it("hides exactly one pane, and neither by default", () => {
+    const both = split();
+    // `hidden=""`, the attribute. Not `overflow-hidden` or `aria-hidden`,
+    // which the pane is full of.
+    expect(both).not.toMatch(/\shidden=""/);
+    expect(both).not.toContain("data-call-split-collapsed");
+  });
+
+  it("offers the way back from the boundary the pane was on", () => {
+    for (const [preference, which] of [
+      [COLLAPSED_STAGE, "stage"],
+      [COLLAPSED_CHAT, "chat"],
+    ] as const) {
+      const html = split({ preference });
+      expect(html).toContain(`data-call-split-restore="${which}"`);
+      expect(html).toContain(`data-call-split-collapsed="${which}"`);
+      // And no divider, because there are no longer two things to drag apart.
+      expect(html).not.toContain('data-testid="call-split-divider"');
+    }
+  });
+
+  it("offers both ends of the drag as buttons while the divider is there", () => {
+    const html = split();
+    expect(html).toContain('data-testid="call-split-collapse-stage"');
+    expect(html).toContain('data-testid="call-split-collapse-chat"');
+  });
+
+  /**
+   * A collapse is a deliberate, named, reversible act; a drag is not. So the
+   * minimums stop applying to the pane that is put away, and go on protecting
+   * the one that is left: the visible pane simply takes the whole container,
+   * which is by definition at least its own minimum.
+   */
+  it("stops writing a fixed size on a stage that owns the whole pane", () => {
+    const html = split({ preference: COLLAPSED_CHAT });
+    expect(html).not.toMatch(/data-call-split-stage[^>]*style=/);
+    expect(html).toMatch(/data-call-split-stage[^>]*class="[^"]*flex-1/);
+  });
+
+  it("still clamps the visible pane the moment both are back", () => {
+    // Same stored fraction that would starve the transcript, with the
+    // collapse cleared: the minimum is enforced exactly as before.
+    const html = split({
+      preference: { ...CALL_SPLIT_DEFAULT, stacked: 1, collapsed: "none" },
+      paneSize: { width: 1400, height: 908 },
+    });
+    expect(html).toMatch(
+      new RegExp(`style="height:\\s*${900 - MIN_CHAT_HEIGHT_PX}px`),
+    );
+  });
+
+  it("survives an orientation change, because the wish is about the panes", () => {
+    // Rotating the layout must not read as the app forgetting. Both
+    // arrangements honour the same stored collapse.
+    for (const orientation of ["stacked", "side-by-side"] as const) {
+      const html = split({
+        preference: { ...COLLAPSED_CHAT, orientation },
+        paneSize: { width: 1800, height: 900 },
+      });
+      expect(html).toContain('data-call-split-collapsed="chat"');
+      expect(html).toContain('data-call-split-restore="chat"');
+    }
+  });
+
+  it("ignores a collapse where there are not two panes to arrange", () => {
+    // Putting the chat away to make room for a slim call bar is not a thing
+    // anybody means, and the stored wish is left alone so it comes back with
+    // the picture.
+    for (const stageShape of ["none", "compact", "fullscreen"] as const) {
+      const html = split({ shape: stageShape, preference: COLLAPSED_CHAT });
+      expect(html).not.toContain("data-call-split-collapsed");
+      expect(html).not.toContain('data-testid="call-split-restore"');
+    }
   });
 });

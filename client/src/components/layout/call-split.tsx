@@ -8,6 +8,12 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+} from "lucide-react";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
   CALL_SPLIT_DIVIDER_PX,
@@ -15,10 +21,12 @@ import {
   CALL_SPLIT_STEP_PX,
   clampSplit,
   nudgeSplit,
+  resolveCollapsed,
   resolveOrientation,
   splitAvailable,
   splitBounds,
   splitFraction,
+  type CallSplitCollapsed,
   type CallSplitPreference,
   type CallStageShape,
 } from "@/lib/call-split";
@@ -143,6 +151,9 @@ export function CallSplit({
   // or somebody turning a camera on, brings the choice back on its own.
   const orientation = resolveOrientation(preference.orientation, width, shape);
   const sideBySide = orientation === "side-by-side";
+  // Same rule as the orientation, one line below it on purpose: stored is what
+  // they asked for, this is what the pane can honour now.
+  const collapsed = resolveCollapsed(preference.collapsed, shape);
   const fraction = sideBySide ? preference.side : preference.stacked;
   const container = sideBySide ? width : height;
   const bounds = splitBounds(orientation);
@@ -158,12 +169,18 @@ export function CallSplit({
   // actually moved the divider. Until then the stage keeps its own height rule
   // and the transcript keeps the rest, so the minimums bound a drag rather
   // than silently re-deciding every first render.
+  // A COLLAPSED PANE HAS NO DIVIDER, because there is nothing between two
+  // things to drag. The minimums stop applying to the hidden pane for the
+  // same reason: they exist so a DRAG cannot strand somebody with a sliver,
+  // and a collapse is a deliberate, named, reversible act rather than a slip
+  // of the pointer. The visible pane simply takes the whole container, which
+  // is by definition at least its own minimum.
   const resizable =
-    shape === "expanded" && splitAvailable(container, orientation);
+    shape === "expanded" &&
+    collapsed === "none" &&
+    splitAvailable(container, orientation);
   const sized = resizable && fraction !== null;
-  const stagePx = sized
-    ? clampSplit({ fraction, container, ...bounds })
-    : null;
+  const stagePx = sized ? clampSplit({ fraction, container, ...bounds }) : null;
   /** Where the divider is right now, dragged or not. */
   const dividerAt =
     stagePx ?? (sideBySide ? naturalStage.width : naturalStage.height);
@@ -173,9 +190,21 @@ export function CallSplit({
   // bug this used to have on an empty stage, in the other direction.
   const canSideBySide =
     resolveOrientation("side-by-side", width, shape) === "side-by-side";
+  // `active` is "the pane owns the stage's size", and a stage with the chat
+  // put away owns all of it. Without this the stage keeps its own `68svh`
+  // rule inside a pane it has entirely to itself, and the person who asked
+  // for the call to fill the pane gets a band of empty pane under it.
+  const fills = sized || collapsed === "chat";
   useEffect(() => {
-    onSplitStateChange?.({ active: sized, canSideBySide });
-  }, [sized, canSideBySide, onSplitStateChange]);
+    onSplitStateChange?.({ active: fills, canSideBySide });
+  }, [fills, canSideBySide, onSplitStateChange]);
+
+  const setCollapsed = useCallback(
+    (next: CallSplitCollapsed) => {
+      onPreferenceChange({ ...preference, collapsed: next }, true);
+    },
+    [onPreferenceChange, preference],
+  );
 
   const dragRef = useRef<{ origin: number; startPx: number } | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -244,7 +273,9 @@ export function CallSplit({
     if (!resizable) {
       return;
     }
-    const step = event.shiftKey ? CALL_SPLIT_STEP_COARSE_PX : CALL_SPLIT_STEP_PX;
+    const step = event.shiftKey
+      ? CALL_SPLIT_STEP_COARSE_PX
+      : CALL_SPLIT_STEP_PX;
     const grow = sideBySide ? "ArrowRight" : "ArrowDown";
     const shrink = sideBySide ? "ArrowLeft" : "ArrowUp";
     let deltaPx: number | null = null;
@@ -282,21 +313,40 @@ export function CallSplit({
       ref={paneRef}
       data-call-split={resizable ? orientation : "off"}
       data-call-split-sized={sized ? "" : undefined}
+      data-call-split-collapsed={collapsed === "none" ? undefined : collapsed}
       className={cn(
         "flex min-h-0 min-w-0 flex-1",
         sideBySide ? "flex-row" : "flex-col",
       )}
     >
+      {/* HIDDEN, NOT UNMOUNTED, and the first version of this made exactly
+          that mistake. Unmounting the stage takes its `onShapeChange`
+          reporter with it, so the pane's shape falls to "none",
+          `resolveCollapsed` stops honouring the collapse, and the stage comes
+          straight back: a click that undid itself. Hiding it also keeps the
+          media alive, which is what anybody hiding the video to read the chat
+          wants: `lib/remote-video-delivery.ts` tears a subscription down when
+          the last `<video>` bound to it LEAVES THE TREE, and coming back from
+          a collapse should not cost a renegotiation. */}
       <div
         ref={stagePaneRef}
         data-call-split-stage=""
+        hidden={collapsed === "stage"}
         className={cn(
           "flex min-h-0 min-w-0 flex-col",
           // A fullscreen stage takes the pane: the element-fullscreen mode
           // sizes itself `h-full`, and `h-full` of a shrink-to-fit box is
           // zero. Everything else is either the dragged size below or the
           // stage's own height rule, and both want to shrink to fit.
-          shape === "fullscreen" ? "flex-1" : "shrink-0",
+          //
+          // A HIDDEN CHAT MAKES THE STAGE THE WHOLE PANE, and it has to be
+          // said here rather than left to `shrink-0`: with the transcript
+          // gone there is nothing to shrink against, so the stage sizes to
+          // its own content and a video runs straight off the pane and under
+          // the member list, taking the restore strip off-screen with it.
+          collapsed === "chat" || shape === "fullscreen"
+            ? "flex-1"
+            : "shrink-0",
           sized && "overflow-hidden",
         )}
         style={
@@ -309,7 +359,16 @@ export function CallSplit({
       >
         {stage}
       </div>
-      {resizable ? (
+      {collapsed !== "none" ? (
+        /* The way back, in the place the pane used to be, so it is where the
+           eye already is rather than in a menu. A collapsed pane that cannot
+           be restored from the boundary is a pane somebody has lost. */
+        <SplitRestoreBar
+          sideBySide={sideBySide}
+          collapsed={collapsed}
+          onRestore={() => setCollapsed("none")}
+        />
+      ) : resizable ? (
         <SplitDivider
           sideBySide={sideBySide}
           dragging={dragging}
@@ -321,9 +380,17 @@ export function CallSplit({
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
           onKeyDown={onKeyDown}
+          onCollapse={setCollapsed}
         />
       ) : null}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
+      {/* Same reasoning for the transcript: unmounting it would lose the
+          scroll position and re-fetch the page on every restore. */}
+      <div
+        hidden={collapsed === "chat"}
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+      >
+        {children}
+      </div>
     </div>
   );
 }
@@ -350,6 +417,7 @@ function SplitDivider({
   onPointerUp,
   onPointerCancel,
   onKeyDown,
+  onCollapse,
 }: {
   sideBySide: boolean;
   dragging: boolean;
@@ -361,49 +429,189 @@ function SplitDivider({
   onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onKeyDown: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
+  onCollapse: (which: CallSplitCollapsed) => void;
 }) {
   const { t } = useTranslation();
   return (
-    <Tooltip
-      label={t("call.split.resize")}
-      detail={t("call.split.hint")}
-      side={sideBySide ? "right" : "bottom"}
-    >
     <div
-      role="separator"
-      tabIndex={0}
-      data-testid="call-split-divider"
-      aria-orientation={sideBySide ? "vertical" : "horizontal"}
-      aria-valuenow={percent}
-      aria-valuemin={minPercent}
-      aria-valuemax={maxPercent}
-      aria-valuetext={t("call.split.value", { percent })}
+      data-call-split-boundary=""
       className={cn(
-        // The `::before` is the hit area: 8px is a fine LINE and a poor
-        // TARGET, and a thumb on a phone is nowhere near that accurate. It
-        // reaches 6px into each neighbour without taking any layout, which is
-        // also why the resize cursor appears just before the pointer arrives.
-        "group relative flex shrink-0 touch-none select-none items-center justify-center border-y border-ink-4/60 bg-ink-2/70 transition-colors before:absolute before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
-        sideBySide
-          ? "h-full w-2 cursor-col-resize border-x border-y-0 before:inset-y-0 before:-inset-x-1.5"
-          : "h-2 w-full cursor-row-resize before:inset-x-0 before:-inset-y-1.5",
-        dragging ? "bg-accent/25" : "hover:bg-ink-3",
+        "group/boundary flex shrink-0",
+        sideBySide ? "h-full flex-col" : "w-full flex-row",
       )}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerCancel}
-      onKeyDown={onKeyDown}
     >
-      <span
-        aria-hidden="true"
-        className={cn(
-          "rounded-full transition-colors",
-          sideBySide ? "h-10 w-1" : "h-1 w-10",
-          dragging ? "bg-accent" : "bg-ink-4 group-hover:bg-paper-muted",
-        )}
+      {/* THE TWO ENDS OF THE DRAG, AS BUTTONS.
+          A divider can already be dragged to the minimum, and the minimum is
+          deliberately not zero. These say the thing the drag is forbidden
+          from saying: put that one away entirely. They sit on the divider
+          because that is where the boundary between the two panes is, they
+          are real buttons so the keyboard reaches them, and the restore lands
+          in the same place so nothing is ever lost behind a menu. */}
+      <SplitCollapseButton
+        sideBySide={sideBySide}
+        toward="stage"
+        onCollapse={onCollapse}
+      />
+      <Tooltip
+        label={t("call.split.resize")}
+        detail={t("call.split.hint")}
+        side={sideBySide ? "right" : "bottom"}
+      >
+        <div
+          role="separator"
+          tabIndex={0}
+          data-testid="call-split-divider"
+          aria-orientation={sideBySide ? "vertical" : "horizontal"}
+          aria-valuenow={percent}
+          aria-valuemin={minPercent}
+          aria-valuemax={maxPercent}
+          aria-valuetext={t("call.split.value", { percent })}
+          className={cn(
+            // The `::before` is the hit area: 8px is a fine LINE and a poor
+            // TARGET, and a thumb on a phone is nowhere near that accurate. It
+            // reaches 6px into each neighbour without taking any layout, which is
+            // also why the resize cursor appears just before the pointer arrives.
+            "group relative flex touch-none select-none items-center justify-center border-y border-ink-4/60 bg-ink-2/70 transition-colors before:absolute before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+            // `flex-1` rather than `w-full` / `h-full`: the handle shares the
+            // boundary with the two collapse buttons now, and a child claiming
+            // the whole length of its own parent would push them off the end.
+            sideBySide
+              ? "w-2 flex-1 cursor-col-resize border-x border-y-0 before:inset-y-0 before:-inset-x-1.5"
+              : "h-2 flex-1 cursor-row-resize before:inset-x-0 before:-inset-y-1.5",
+            dragging ? "bg-accent/25" : "hover:bg-ink-3",
+          )}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerCancel={onPointerCancel}
+          onKeyDown={onKeyDown}
+        >
+          <span
+            aria-hidden="true"
+            className={cn(
+              "rounded-full transition-colors",
+              sideBySide ? "h-10 w-1" : "h-1 w-10",
+              dragging ? "bg-accent" : "bg-ink-4 group-hover:bg-paper-muted",
+            )}
+          />
+        </div>
+      </Tooltip>
+      <SplitCollapseButton
+        sideBySide={sideBySide}
+        toward="chat"
+        onCollapse={onCollapse}
       />
     </div>
+  );
+}
+
+/**
+ * One end of the divider: put the pane on this side away.
+ *
+ * The chevron points the way the pane goes, which is the convention every
+ * splitter in every editor uses and needs no copy to read. The tooltip and the
+ * accessible name say which pane in words.
+ *
+ * Quiet until the pointer is somewhere near the boundary, because this is a
+ * control people use once a call and not furniture, but revealed by hovering
+ * the divider rather than by hovering the button itself: a control that only
+ * appears once the pointer is already on it is a control nobody finds.
+ */
+function SplitCollapseButton({
+  sideBySide,
+  toward,
+  onCollapse,
+}: {
+  sideBySide: boolean;
+  /** Which pane this button hides. */
+  toward: "stage" | "chat";
+  onCollapse: (which: CallSplitCollapsed) => void;
+}) {
+  const { t } = useTranslation();
+  const label =
+    toward === "stage"
+      ? t("call.split.collapseStage")
+      : t("call.split.collapseChat");
+  const Icon = sideBySide
+    ? toward === "stage"
+      ? ChevronLeft
+      : ChevronRight
+    : toward === "stage"
+      ? ChevronUp
+      : ChevronDown;
+  return (
+    <Tooltip
+      label={label}
+      detail={t("call.split.collapseHint")}
+      side={sideBySide ? "right" : "bottom"}
+    >
+      <button
+        type="button"
+        data-testid={`call-split-collapse-${toward}`}
+        className={cn(
+          // The `::before` is the hit area, for the reason the divider has
+          // one: the boundary is 8px thick and a thumb is not.
+          "relative flex shrink-0 items-center justify-center bg-ink-2/70 text-paper-muted opacity-0 transition-opacity before:absolute before:content-[''] hover:bg-ink-3 hover:text-paper focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent group-hover/boundary:opacity-100 motion-reduce:transition-none",
+          sideBySide
+            ? "h-8 w-2 before:inset-y-0 before:-inset-x-1.5"
+            : "h-2 w-8 before:inset-x-0 before:-inset-y-1.5",
+        )}
+        onClick={() => onCollapse(toward)}
+      >
+        <Icon className="h-3 w-3" aria-hidden="true" />
+      </button>
+    </Tooltip>
+  );
+}
+
+/**
+ * A collapsed pane's way back: a thin bar exactly where the pane was, with the
+ * chevron pointing at where it will reappear from.
+ *
+ * It is a full edge rather than a small button on purpose. A collapsed pane is
+ * the one state of this component somebody can be stuck in, and a strip along
+ * the whole boundary is impossible to miss and impossible to miss clicking,
+ * which a chevron in a corner is not.
+ */
+function SplitRestoreBar({
+  sideBySide,
+  collapsed,
+  onRestore,
+}: {
+  sideBySide: boolean;
+  collapsed: CallSplitCollapsed;
+  onRestore: () => void;
+}) {
+  const { t } = useTranslation();
+  const label =
+    collapsed === "stage"
+      ? t("call.split.restoreStage")
+      : t("call.split.restoreChat");
+  const Icon = sideBySide
+    ? collapsed === "stage"
+      ? ChevronRight
+      : ChevronLeft
+    : collapsed === "stage"
+      ? ChevronDown
+      : ChevronUp;
+  return (
+    <Tooltip
+      label={label}
+      detail={t("call.split.collapseHint")}
+      side={sideBySide ? "right" : "bottom"}
+    >
+      <button
+        type="button"
+        data-testid="call-split-restore"
+        data-call-split-restore={collapsed}
+        className={cn(
+          "flex shrink-0 items-center justify-center border-ink-4/60 bg-ink-2/70 text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
+          sideBySide ? "h-full w-4 border-x" : "h-4 w-full border-y",
+        )}
+        onClick={onRestore}
+      >
+        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
     </Tooltip>
   );
 }
