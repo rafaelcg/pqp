@@ -19,7 +19,7 @@ import { buildStorageConfig, type StorageConfig } from "../lib/s3.js";
  *
  * Off unless `LIVE_HLS_ENABLED=true` and the public URL plus a *separate*
  * S3 set (`LIVE_HLS_S3_*`) are present. Attachment `S3_*` is deliberately
- * not reused — that bucket is private.
+ * not reused: that bucket is private.
  */
 
 const TRACK_FIND_ATTEMPTS = 16;
