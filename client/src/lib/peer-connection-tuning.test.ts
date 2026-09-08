@@ -274,6 +274,30 @@ describe("screen budget across a growing room", () => {
     );
   });
 
+  it("never asks a measured link for more than it has, at any room size", () => {
+    // THE BUG THIS PINS, and it is specifically a weak-connection bug, which
+    // is to say a bug for most of this app's users. A 600 kbps per-copy floor
+    // used to sit under the division. Against the old constant 5 Mbps budget
+    // it never fired (5 Mbps across the seven remote peers a mesh can hold is
+    // 714 kbps, already over it), so nobody had seen what it does once the
+    // budget is a *measurement*: a room cut to the 1 Mbps minimum floored
+    // every copy back up to 600 kbps and asked a measured 1 Mbps link for
+    // 4.2 Mbps. That is the over-commit this module exists to prevent, and it
+    // fired only when the link had already been measured as weak.
+    const budget = 1_000_000;
+    for (const viewers of [2, 3, 5, 7]) {
+      const perCopy = meshScreenBitrate(viewers, "auto", budget);
+      expect(perCopy * viewers).toBeLessThanOrEqual(budget);
+    }
+  });
+
+  it("changes nothing for a room running on the un-measured default", () => {
+    // The other half of the argument for removing the floor: it was dormant.
+    // Every room on the starting budget gets exactly what it got before.
+    expect(meshScreenBitrate(2, "auto", 5_000_000)).toBe(2_500_000);
+    expect(meshScreenBitrate(7, "auto", 5_000_000)).toBe(714_286);
+  });
+
   it("clamps a call to the chosen ceiling rather than the raw share", () => {
     // Which is why the peer-count arithmetic could never explain a bad DM: the
     // clamp, not the division, is what a small call actually runs into.
@@ -318,12 +342,27 @@ describe("the quality choice reaches the screen sender", () => {
     expect(meshScreenBitrate(8, "1080p")).toBe(meshScreenBitrate(8, "auto"));
   });
 
-  it("never drops a share below the floor, whatever is chosen", () => {
+  it("keeps every room a mesh can actually hold above 600 kbps a copy", () => {
+    // WAS "never drops a share below the floor". The 600 kbps per-copy floor
+    // is gone (see `meshScreenBitrate` for why: against a *measured* budget it
+    // asked a 1 Mbps link for up to 4.2 Mbps). What survives is the property
+    // the floor was written to protect, and it turns out not to have needed
+    // the floor: a mesh holds `MESH_VOICE_LIMIT` (8) people, so seven remote
+    // peers, and the starting budget divided seven ways is 714 kbps.
     for (const rung of ["auto", "1080p", "720p", "480p", "360p"] as const) {
-      for (const peers of [1, 2, 4, 8, 16]) {
+      for (const peers of [1, 2, 4, 7]) {
         expect(meshScreenBitrate(peers, rung)).toBeGreaterThanOrEqual(600_000);
       }
     }
+  });
+
+  it("divides honestly past the mesh's own size, rather than inventing a floor", () => {
+    // Sixteen peers is not a room this app can open (the mesh caps at 8), but
+    // it is the shape the old floor test used, and the answer now is the
+    // honest one: the budget divided, not a number that would have the room
+    // ask for 9.6 Mbps of a 5 Mbps budget.
+    expect(meshScreenBitrate(16, "auto")).toBe(312_500);
+    expect(meshScreenBitrate(16, "auto") * 16).toBeLessThanOrEqual(5_000_000);
   });
 
   it("leaves every crowded room exactly where it was before the raise", () => {

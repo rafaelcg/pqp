@@ -295,7 +295,6 @@ export interface PeerConnectionManager {
  * `startScreenBudgetSampling` below for when.
  */
 const SCREEN_UPLOAD_BUDGET_BPS = DEFAULT_SCREEN_UPLOAD_BUDGET_BPS;
-const SCREEN_MIN_BITRATE_BPS = 600_000;
 /**
  * The most any single screen sender may be given, whatever else is agreed.
  *
@@ -342,10 +341,28 @@ const SCREEN_MAX_FRAMERATE = 30;
  *    stops a six-way call asking one domestic uplink for 24 Mbps. `budgetBps`
  *    is what the link has been measured to carry (`screen-upload-budget.ts`),
  *    starting from the 5 Mbps default before any measurement exists.
- *  - the **floor**, which only ever lifts the *budget share*, never the chosen
- *    ceiling. It exists so the division cannot produce something unwatchable
- *    in a big room. It is not a licence to exceed what the user asked for,
- *    which is why the chosen ceiling is the outermost `min`.
+ * THERE USED TO BE A THIRD TERM, a 600 kbps per-copy floor, and removing it is
+ * the point of this change rather than a simplification of it. It was written
+ * to stop the division producing something unwatchable in a big room, and
+ * under the old constant budget it never once fired: 5 Mbps split across the
+ * most peers a mesh can hold (`MESH_VOICE_LIMIT` is 8, so seven remote) is
+ * 714 kbps, already above it. It was dormant.
+ *
+ * Making the budget a measurement woke it up, and only ever in the case it
+ * gets wrong. A budget cut to its 1 Mbps minimum gives each of seven viewers
+ * 143 kbps, the floor lifted each copy back to 600 kbps, and the room then
+ * asked a **measured** 1 Mbps link for 4.2 Mbps — the exact over-commit this
+ * whole file exists to stop, reintroduced at the bottom of the range, which is
+ * where a weak connection lives. A floor cannot conjure capacity: sending four
+ * times the link into the link does not produce a watchable picture, it
+ * produces the collapse.
+ *
+ * So the measured budget is authoritative and nothing may floor its way past
+ * it. The room total staying above something unwatchable is already handled
+ * one level up, by `MIN_SCREEN_UPLOAD_BUDGET_BPS`, which is the right place
+ * for it: a floor on the whole room, not on each copy of it. Where the honest
+ * per-copy answer is genuinely too small, the answer is the SFU
+ * (`transport-policy.ts`), not a number that lies about the link.
  */
 export function meshScreenBitrate(
   peerCount: number,
@@ -354,9 +371,7 @@ export function meshScreenBitrate(
 ): number {
   const share = budgetBps / Math.max(1, peerCount);
   const chosen = Math.min(screenBitrateFor(quality), SCREEN_MAX_BITRATE_BPS);
-  return Math.round(
-    Math.min(chosen, Math.max(SCREEN_MIN_BITRATE_BPS, share)),
-  );
+  return Math.round(Math.min(chosen, share));
 }
 
 /** The camera's own ceiling. Framerate is what the whole tuning protects. */
