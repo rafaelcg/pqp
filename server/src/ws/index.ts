@@ -82,6 +82,10 @@ const VOICE_MESSAGE_TYPES = new Set([
   // Same reasoning as the line above: a reaction is something said inside a
   // voice room, over the share that room is watching.
   "live-reaction",
+  // --- live HLS watch mode ---
+  // A viewer without a seat, counted by the voice handler because that is
+  // where the stream and the room live.
+  "watch-live",
 ]);
 
 /**

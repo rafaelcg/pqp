@@ -88,7 +88,7 @@ describe("cold jobs", () => {
 
   it("fires each job on its own cadence", async () => {
     jobs = startColdJobs();
-    expect(jobs.count).toBe(11);
+    expect(jobs.count).toBe(12);
 
     await vi.advanceTimersByTimeAsync(OUTGOING_WEBHOOK_TICK_MS);
     expect(deliverDueOutgoingWebhooks).toHaveBeenCalledTimes(1);

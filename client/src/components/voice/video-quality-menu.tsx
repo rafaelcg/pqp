@@ -12,9 +12,10 @@ import {
   type ReceiveQuality,
 } from "@/lib/receive-quality";
 import {
+  availableVideoQualities,
+  coerceVideoQuality,
   LARGE_ROOM_PARTICIPANTS,
   screenSimulcastPlan,
-  VIDEO_QUALITIES,
   type VideoQuality,
 } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
@@ -65,6 +66,10 @@ import { cn } from "@/lib/utils";
  * to 720p unless they picked 1080p by name (`screenSimulcastPlan`). A cap
  * that acts silently reads as a broken setting, so while it is in effect the
  * sending half says so, and says how to override it.
+ *
+ * NO 1080P AT ALL past `HUGE_ROOM_OR_HLS_1080P_LIMIT` people or while an HLS
+ * egress is live (`availableVideoQualities`). A stored 1080p reads as Auto in
+ * here for as long as that holds; the preference itself is kept.
  */
 const LABELS: Record<VideoQuality, MessageKey> = {
   auto: "settings.voice.videoQuality.auto",
@@ -85,13 +90,16 @@ const ITEM_CLASS =
   "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-sm text-paper outline-none hover:bg-ink-3 focus-visible:bg-ink-3";
 
 export function VideoQualityMenu({
-  value,
+  value: rawValue,
   open,
   onOpenChange,
   onChange,
   isSendingVideo,
   isSharingScreen = false,
   usingSfu = false,
+  watchingHls = false,
+  hlsLive = false,
+  hlsDelaySeconds = 10,
   participantCount = 1,
   buttonClassName,
   iconClassName,
@@ -114,6 +122,14 @@ export function VideoQualityMenu({
   isSharingScreen?: boolean;
   /** Media on the SFU: the receive list exists, the mesh sentence does not. */
   usingSfu?: boolean;
+  /**
+   * Viewer is on the HLS playlist. That encode is one size; the receive
+   * list would change a paused WebRTC track and nothing on the picture.
+   */
+  watchingHls?: boolean;
+  /** An HLS egress of this room's share is running: 1080p is off the list. */
+  hlsLive?: boolean;
+  hlsDelaySeconds?: number;
   /** Everybody in the room, this machine included. Decides the cap note. */
   participantCount?: number;
   buttonClassName?: string;
@@ -123,6 +139,8 @@ export function VideoQualityMenu({
   const rootRef = useRef<HTMLDivElement>(null);
   const receiveQuality = useReceiveQuality();
   const receiveReason = useReceiveQualityReason();
+  const qualities = availableVideoQualities({ participantCount, hlsLive });
+  const value = coerceVideoQuality(rawValue, qualities);
 
   // Same dismissal contract as the user-panel popover: a press anywhere else,
   // or Escape. Anchored on the wrapper rather than the panel so a press on the
@@ -185,7 +203,7 @@ export function VideoQualityMenu({
             </p>
           )}
           {isSendingVideo &&
-            VIDEO_QUALITIES.map((quality) => {
+            qualities.map((quality) => {
               const selected = quality === value;
               return (
                 <button
@@ -239,6 +257,7 @@ export function VideoQualityMenu({
               {t("call.quality.receiving")}
             </p>
             {usingSfu &&
+              !watchingHls &&
               RECEIVE_QUALITIES.map((quality) => {
                 const selected = quality === receiveQuality;
                 return (
@@ -265,7 +284,15 @@ export function VideoQualityMenu({
                   </button>
                 );
               })}
-            {receiveCellularDefault && (
+            {watchingHls && (
+              <p
+                data-testid="receive-reason-hls"
+                className="px-2.5 pb-0.5 pt-1 text-xs text-paper-muted"
+              >
+                {t("call.quality.receive.hls", { seconds: hlsDelaySeconds })}
+              </p>
+            )}
+            {receiveCellularDefault && !watchingHls && (
               <p
                 data-testid="receive-reason-cellular"
                 className="px-2.5 pb-0.5 pt-1 text-xs text-paper-muted"
@@ -273,7 +300,7 @@ export function VideoQualityMenu({
                 {t("call.quality.receive.cellularDefault")}
               </p>
             )}
-            {receiveLargeRoomCap && (
+            {receiveLargeRoomCap && !watchingHls && (
               <p
                 data-testid="receive-reason-large-room"
                 className="px-2.5 pb-0.5 pt-1 text-xs text-paper-muted"
@@ -281,13 +308,16 @@ export function VideoQualityMenu({
                 {t("call.quality.receive.largeRoomCap")}
               </p>
             )}
-            {usingSfu && (
+            {usingSfu && !watchingHls && (
               <p className="px-2.5 pb-0.5 pt-1 text-xs text-paper-muted">
                 {t("call.quality.receive.hint")}
               </p>
             )}
             <div className="px-2.5">
-              <InboundVideoReadout usingSfu={usingSfu} />
+              <InboundVideoReadout
+                usingSfu={usingSfu}
+                watchingHls={watchingHls}
+              />
             </div>
           </div>
         </div>

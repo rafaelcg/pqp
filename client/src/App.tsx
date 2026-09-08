@@ -359,6 +359,10 @@ import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall } from "@/lib/in-call-state";
+import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
+import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
+import { WatchChannelStage } from "@/components/voice/watch-stage";
+import { HlsHostAckSheet } from "@/components/voice/hls-host-ack-sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -1465,6 +1469,43 @@ function MainAppContent({
   selectedServerIdRef.current = selectedServerId;
   const serversRef = useRef(servers);
   serversRef.current = servers;
+
+  // One-time "you're responsible for what you stream" sheet, gating the
+  // first watch-party / HLS broadcast start per user per server.
+  const hlsHostAck = useHlsHostAck();
+  const [hlsHostAckServerId, setHlsHostAckServerId] = useState<string | null>(
+    null,
+  );
+  // Whether this server may go out as HLS at all (the operator's per-server
+  // allowlist). A server that cannot has no broadcast to acknowledge, so the
+  // sheet is neither fetched nor shown there. Null is "not answered yet",
+  // which asks the old way rather than skipping a disclosure by accident.
+  const liveHlsConfig = useLiveHlsConfig(selectedServerId);
+  const liveHlsConfigRef = useRef(liveHlsConfig);
+  liveHlsConfigRef.current = liveHlsConfig;
+  const startScreenShareGated = useCallback(
+    (audio: boolean) => {
+      const serverId = selectedServerIdRef.current;
+      if (!serverId) {
+        // DM / conversation voice: no server, nothing to gate.
+        void voice.startScreenShare(audio);
+        return;
+      }
+      if (liveHlsConfigRef.current?.enabled === false) {
+        void voice.startScreenShare(audio);
+        return;
+      }
+      void hlsHostAck.checkNeedsAck(serverId).then((needsAck) => {
+        if (needsAck) {
+          setHlsHostAckServerId(serverId);
+          return;
+        }
+        void voice.startScreenShare(audio);
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hlsHostAck],
+  );
   const perms = usePermissions(selectedServerId);
   const permsRef = useRef(perms);
   permsRef.current = perms;
@@ -4655,7 +4696,7 @@ function MainAppContent({
               void voice.stopScreenShare();
               return;
             }
-            void voice.startScreenShare(shareSystemAudio);
+            startScreenShareGated(shareSystemAudio);
           }}
           onOpen={() => void openVoiceChannel()}
           shareHintEnabled={
@@ -5080,6 +5121,30 @@ function MainAppContent({
           <>
       {/* The conversation's call surface: invisible until a call exists, a
           join banner while others talk, the full stage once we are in. */}
+      {/* Watch mode without a seat: the channel's HLS stream, for someone
+          who opened a live room and did not press Entrar. Nothing at all
+          for a quiet room, and nothing once they are in the call (the stage
+          above takes over). */}
+      {selectedChannel.kind === "server" &&
+        isVoiceRoomChannelType(selectedChannel.type) &&
+        user && (
+          <WatchChannelStage
+            fill={splitState.active}
+            onShapeChange={handleStageShape}
+            channelId={selectedChannel.id}
+            channelName={selectedChannel.name}
+            serverName={selectedServer?.name ?? null}
+            serverIconUrl={selectedServer?.iconUrl ?? null}
+            voiceState={voiceState}
+            onJoin={() => void handleJoinVoice(selectedChannel.id)}
+            onSetWatchingLive={(channelId, watching) =>
+              voice.setWatchingLive(channelId, watching)
+            }
+            onSeedChannelLive={(channelId, live) =>
+              voice.seedChannelLive(channelId, live)
+            }
+          />
+        )}
       {selectedChannel.kind === "server" &&
         isVoiceRoomChannelType(selectedChannel.type) &&
         user && (
@@ -5088,6 +5153,8 @@ function MainAppContent({
             onShapeChange={handleStageShape}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
+            serverName={selectedServer?.name ?? null}
+            serverIconUrl={selectedServer?.iconUrl ?? null}
             currentUser={{
               id: user.id,
               displayName: user.displayName,
@@ -5576,6 +5643,7 @@ function MainAppContent({
           canManageMessages={canManageMessages}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
+          channelLive={voiceState.channelLive}
           speakingPeerIds={voiceState.speakingPeerIds}
           activeVoiceChannelId={voiceState.voiceChannelId}
           unread={unread}
@@ -6218,6 +6286,19 @@ function MainAppContent({
           }
         }}
         onClose={() => setPurgeChannel(null)}
+      />
+
+      <HlsHostAckSheet
+        open={hlsHostAckServerId !== null}
+        onConfirm={() => {
+          const serverId = hlsHostAckServerId;
+          if (!serverId) {
+            return;
+          }
+          void hlsHostAck.confirm(serverId);
+          void voice.startScreenShare(shareSystemAudio);
+        }}
+        onClose={() => setHlsHostAckServerId(null)}
       />
 
       <ConfirmDialog

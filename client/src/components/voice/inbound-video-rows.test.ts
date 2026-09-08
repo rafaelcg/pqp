@@ -71,4 +71,24 @@ describe("liveReceiverRows", () => {
   it("yields no rows for a room where nothing is subscribed", () => {
     expect(liveReceiverRows([])).toEqual([]);
   });
+
+  it("can hide the WebRTC screen row once HLS is the picture", () => {
+    // The screen publication stays subscribed; delivery pauses it so fps
+    // and kbps go to zero, and leaving it in the list reads as 720p of
+    // nothing while the HLS player is what is actually on stage.
+    const rows = liveReceiverRows(
+      [
+        row({
+          displayName: "Rafa",
+          role: "screen",
+          width: 1280,
+          height: 720,
+          framesDecoded: 40,
+        }),
+        row({ displayName: "Rafa", role: "camera", attached: true }),
+      ],
+      { hideScreen: true },
+    );
+    expect(rows.map((r) => r.role)).toEqual(["camera"]);
+  });
 });

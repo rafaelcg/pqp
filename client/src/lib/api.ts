@@ -81,6 +81,7 @@ import type {
   VoiceBackendType,
   VoiceRoomTransport,
   VoiceSessionInfo,
+  LiveHlsStream,
   Webhook,
   RoleSystemKey,
   OutgoingWebhook,
@@ -104,6 +105,17 @@ let tokenProvider: TokenProvider = async () => null;
 
 export function setAuthTokenProvider(provider: TokenProvider): void {
   tokenProvider = provider;
+}
+
+/**
+ * The raw Bearer token, for the rare caller that cannot go through
+ * `apiFetch` -- today only hls.js's `xhrSetup`, which needs the header on a
+ * request it issues itself against the signed HLS playlist proxy.
+ */
+export async function getAuthToken(
+  options?: Parameters<TokenProvider>[0],
+): Promise<string | null> {
+  return tokenProvider(options);
 }
 
 export class ApiError extends Error {
@@ -554,6 +566,36 @@ export const fetchIceServers = () =>
 /** Which media path the server is configured for (mesh vs SFU). */
 export const fetchVoiceBackend = () =>
   apiFetch<{ backend: VoiceBackendType }>("/api/voice/backend");
+
+/** Whether this deployment transcodes screen shares to HLS. */
+/**
+ * Whether the egress is on, and for this server in particular when one is
+ * named: `enabled` reflects the server-side per-server allowlist, never a
+ * build flag. `delaySeconds` is what the badge should claim.
+ */
+export interface LiveHlsConfig {
+  enabled: boolean;
+  delaySeconds: number;
+}
+
+export const fetchLiveHlsConfig = (serverId?: string) =>
+  apiFetch<LiveHlsConfig>(
+    serverId
+      ? `/api/live-hls/config?serverId=${encodeURIComponent(serverId)}`
+      : "/api/live-hls/config",
+  );
+
+/**
+ * What a channel's `channel-live` would say right now, for a client that
+ * opened the channel before its socket delivered one. `stream.hlsUrl` is
+ * API-relative like the frame's; resolve it with `resolveHlsUrl`.
+ */
+export const fetchChannelLive = (channelId: string) =>
+  apiFetch<{
+    stream: LiveHlsStream | null;
+    watching: number;
+    participants: number;
+  }>(`/api/channels/${channelId}/live`);
 
 /** Mint an SFU session for a voice channel the caller has already joined. */
 export const createVoiceSession = (voiceChannelId: string, peerId: string) =>

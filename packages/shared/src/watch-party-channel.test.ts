@@ -5,6 +5,7 @@ import {
   defaultRolePermissions,
   isVoiceRoomChannelType,
   liveStateFromRoster,
+  liveStateFromStream,
   PERMISSION_ALL,
   PERMISSION_DEFAULT_EVERYONE,
   PERMISSION_DEFAULT_MODERATOR,
@@ -109,5 +110,50 @@ describe("watch party channel type", () => {
       startedAt: null,
       hlsUrl: null,
     });
+  });
+});
+
+describe("liveStateFromStream", () => {
+  const stream = {
+    hlsUrl: "/api/voice/hls-playlist/c1/1700000000000?t=tok",
+    startedAt: 1700000000000,
+    presenterPeerId: "host",
+    delaySeconds: 10,
+  };
+  const seat = (peerId: string, sharingScreen = false) => ({
+    peerId,
+    sharingScreen,
+  });
+
+  it("counts the room minus the presenter, plus the seatless watchers", () => {
+    const state = liveStateFromStream(
+      stream,
+      [seat("host", true), seat("a"), seat("b")],
+      7,
+    );
+    expect(state).toEqual({
+      live: true,
+      presenterPeerId: "host",
+      viewerCount: 9,
+      startedAt: 1700000000000,
+      hlsUrl: stream.hlsUrl,
+    });
+  });
+
+  it("does not subtract a presenter who is not on the roster", () => {
+    // Egress keeps running for a moment after the host's socket dropped; the
+    // two people left in the room are still two viewers, not one.
+    expect(liveStateFromStream(stream, [seat("a"), seat("b")], 0).viewerCount).toBe(2);
+  });
+
+  it("is the watchers alone when nobody else is seated", () => {
+    expect(liveStateFromStream(stream, undefined, 3).viewerCount).toBe(3);
+    expect(liveStateFromStream(stream, [seat("host", true)], 0).viewerCount).toBe(0);
+  });
+
+  it("is not live without a stream, whatever the roster says", () => {
+    expect(liveStateFromStream(null, [seat("host", true), seat("a")], 4)).toEqual(
+      liveStateFromRoster(undefined),
+    );
   });
 });

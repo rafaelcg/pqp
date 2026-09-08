@@ -1,5 +1,10 @@
 import { z } from "zod";
 import {
+  channelLiveMessageSchema,
+  voiceStreamMessageSchema,
+  watchLiveMessageSchema,
+} from "./live-hls.js";
+import {
   liveReactionMessageSchema,
   liveReactionsMessageSchema,
 } from "./live-reactions.js";
@@ -479,6 +484,9 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   // --- live reactions --- see packages/shared/src/live-reactions.ts. Coalesced
   // counts for the room, never per person and never stored.
   liveReactionsMessageSchema,
+  // --- live HLS (screen-share egress) ---
+  voiceStreamMessageSchema,
+  channelLiveMessageSchema,
 ]);
 
 export type VoiceParticipant = z.infer<typeof voiceParticipantSchema>;
@@ -608,6 +616,8 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   setWatchPartyMessageSchema,
   // --- live reactions ---
   liveReactionMessageSchema,
+  // --- live HLS watch mode (no seat) ---
+  watchLiveMessageSchema,
 ]);
 
 export type VoiceClientMessage = z.infer<typeof voiceClientMessageSchema>;

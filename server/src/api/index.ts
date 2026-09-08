@@ -120,6 +120,21 @@ import {
   getServerVoiceBackend,
   isLiveKitConfigured,
 } from "../voice/backends.js";
+import { liveHlsConfig } from "../voice/hls-egress.js";
+import {
+  buildSignedPlaylist,
+  HlsPlaylistNotFound,
+  HlsPlaylistUnavailable,
+  resolveHlsPlaylistViewer,
+} from "../voice/hls-playlist-proxy.js";
+import {
+  HLS_VIEWER_TOKEN_PARAM,
+  stampViewerStream,
+} from "../voice/hls-viewer-token.js";
+import {
+  acknowledgeHlsHost,
+  hasAcknowledgedHlsHost,
+} from "../services/hls-host-ack.js";
 import {
   applyManualStatus,
   broadcastProfileUpdate,
@@ -142,6 +157,7 @@ import {
   disconnectVoiceUser,
   findVoiceChannelForUser,
   findVoicePeerIdentities,
+  getChannelLiveState,
   getRoomTransport,
   getVoicePeer,
   isRoomPinnedLocally,
@@ -1835,6 +1851,120 @@ router.get("/api/voice/backend", async () => {
     backend: backend === "livekit" && !isLiveKitConfigured() ? "mesh" : backend,
   };
 });
+
+// `?serverId=` answers for that server (the allowlist applies); without it,
+// the global flag, which is what a client asks before it knows the server.
+router.get("/api/live-hls/config", async ({ url }) =>
+  liveHlsConfig(url.searchParams.get("serverId")),
+);
+
+/**
+ * The signed playlist proxy (`hls-playlist-proxy.ts`): rewrites the live
+ * playlist's segment lines into absolute presigned URLs on every request, so
+ * the bucket can stay fully private. Auth is the normal Bearer flow (CLAUDE.md
+ * pitfall #8) plus the same channel-access check every other voice route
+ * uses -- a viewer who cannot see the channel cannot watch its stream either.
+ *
+ * The same path also answers WITHOUT a header when the URL carries a valid
+ * per-viewer `?t=` token (Safari's native player, iOS): that branch lives in
+ * `handleApi`, ahead of the Bearer resolution, and ends in this same
+ * function, so the channel-access check runs on both.
+ */
+async function hlsPlaylistResponse(
+  res: ServerResponse,
+  channelId: string,
+  startedAt: string,
+  userId: string,
+): Promise<RawResponse> {
+  await requireChannelAccess(channelId, userId);
+  const parsedStartedAt = Number(startedAt);
+  if (!Number.isFinite(parsedStartedAt)) {
+    throw new NotFound("No live stream for this channel");
+  }
+  let body: string;
+  try {
+    body = await buildSignedPlaylist(channelId, parsedStartedAt);
+  } catch (error) {
+    if (error instanceof HlsPlaylistNotFound) {
+      throw new NotFound("No live stream for this channel");
+    }
+    if (error instanceof HlsPlaylistUnavailable) {
+      throw new HttpError(503, "Live HLS storage unavailable");
+    }
+    throw error;
+  }
+  res.setHeader("Cache-Control", "no-store");
+  return new RawResponse(body, "application/vnd.apple.mpegurl");
+}
+
+router.get(
+  "/api/voice/hls-playlist/:channelId/:startedAt",
+  async ({ user, res }, { channelId, startedAt }) =>
+    hlsPlaylistResponse(res, channelId!, startedAt!, user.id),
+);
+
+const HLS_PLAYLIST_PATH = /^\/api\/voice\/hls-playlist\/([^/]{1,64})\/(\d{1,20})$/;
+
+/**
+ * The header-less half of the playlist proxy. Only reached when the request
+ * has no `Authorization` header and the `?t=` token verifies for exactly
+ * this channel and session (`resolveHlsPlaylistViewer`); anything else falls
+ * through to the ordinary Bearer resolution and its 401. The verified user
+ * then goes through the same channel-access check and rate limit as a
+ * Bearer caller.
+ */
+async function serveHlsPlaylistWithToken(
+  req: IncomingMessage,
+  res: ServerResponse,
+  channelId: string,
+  startedAt: string,
+  userId: string,
+): Promise<void> {
+  if (!apiLimiter.take(`user:${userId}`)) {
+    res.setHeader("Retry-After", String(apiLimiter.retryAfter(`user:${userId}`)));
+    sendError(res, 429, "Too many requests", req);
+    return;
+  }
+  try {
+    const result = await hlsPlaylistResponse(res, channelId, startedAt, userId);
+    res.writeHead(200, {
+      "content-type": result.contentType,
+      ...SECURITY_HEADERS,
+      ...corsHeaders(req),
+    });
+    res.end(result.body);
+  } catch (error) {
+    if (error instanceof HttpError) {
+      sendError(res, error.status, error.message, req);
+      return;
+    }
+    console.error("[voice] hls playlist (token) failed:", error);
+    sendError(res, 500, "Internal server error", req);
+  }
+}
+
+/**
+ * Host acknowledgment sheet: "you are responsible for what you stream".
+ * `GET` tells the client whether to show it before the presenter starts
+ * sharing; `POST` records the confirm so it never shows again for that
+ * user+server pair.
+ */
+router.get(
+  "/api/voice/hls-host-ack/:serverId",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    return { acknowledged: await hasAcknowledgedHlsHost(user.id, serverId!) };
+  },
+);
+
+router.post(
+  "/api/voice/hls-host-ack/:serverId",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    await acknowledgeHlsHost(user.id, serverId!);
+    return { acknowledged: true };
+  },
+);
 
 router.post("/api/voice/token", async ({ req, user }) => {
   if (!isLiveKitConfigured()) {
@@ -3823,6 +3953,22 @@ router.post(
     }
   },
 );
+
+/**
+ * The channel-level live state for a client that opened the channel before
+ * its socket was up (or lost the `channel-live` frame): the stream stamped
+ * for this caller, watchers without a seat, and seats. The socket path is
+ * the live one; this is belt and braces, and the same VIEW check.
+ */
+router.get("/api/channels/:channelId/live", async ({ user }, { channelId }) => {
+  await requireChannelAccess(channelId!, user.id);
+  const state = getChannelLiveState(channelId!);
+  return {
+    stream: state.stream ? stampViewerStream(state.stream, user.id) : null,
+    watching: state.watching,
+    participants: state.participants,
+  };
+});
 
 router.get(
   "/api/channels/:channelId/sessions/upcoming",
@@ -6541,6 +6687,34 @@ export async function handleApi(
   if (req.method === "POST" && pathname === "/api/voice/leave") {
     await handleVoiceLeaveBeacon(req, res);
     return;
+  }
+
+  // The HLS playlist proxy for players that cannot send a header: a verified
+  // per-viewer `?t=` token stands in for the Bearer. With a header present,
+  // or with no valid token, the request takes the normal route below.
+  const hlsPlaylistMatch =
+    req.method === "GET" && !req.headers.authorization
+      ? HLS_PLAYLIST_PATH.exec(pathname)
+      : null;
+  if (hlsPlaylistMatch) {
+    const viewer = resolveHlsPlaylistViewer({
+      bearerUserId: null,
+      token: new URL(req.url ?? "/", "http://localhost").searchParams.get(
+        HLS_VIEWER_TOKEN_PARAM,
+      ),
+      channelId: hlsPlaylistMatch[1]!,
+      startedAt: Number(hlsPlaylistMatch[2]),
+    });
+    if (viewer) {
+      await serveHlsPlaylistWithToken(
+        req,
+        res,
+        hlsPlaylistMatch[1]!,
+        hlsPlaylistMatch[2]!,
+        viewer.userId,
+      );
+      return;
+    }
   }
 
   // The operator dashboard's machine token, for exactly one GET and nothing

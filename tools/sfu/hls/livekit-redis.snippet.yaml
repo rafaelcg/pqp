@@ -1,0 +1,4 @@
+# Append to /opt/livekit/livekit.yaml on a staging box only.
+# Production stays single-node with no Redis.
+redis:
+  address: 127.0.0.1:6379

@@ -5,6 +5,7 @@ import {
   type ClientRelayMessage,
   type VoiceParticipant,
   type VoiceRoomTransport,
+  type LiveHlsStream,
   type VoiceSessionInfo,
   type VoiceSignalingMessage,
   type LiveReactionEmoji,
@@ -65,6 +66,7 @@ import {
   subscribeReceiveQuality,
 } from "@/lib/receive-quality";
 import { beaconVoiceLeave } from "@/lib/voice-leave-beacon";
+import { resolveHlsUrl } from "@/lib/hls-playback";
 import {
   applyCameraQuality,
   cameraBitrateFor,
@@ -270,6 +272,19 @@ export interface VoiceState {
   isSharingScreen: boolean;
   /** peerIds currently sharing, in roster order. */
   screenSharePeerIds: string[];
+  /**
+   * LiveKit egress playlist for the room's current screen share, or null.
+   * Remote tiles play this instead of the WebRTC screen track.
+   */
+  liveStream: LiveHlsStream | null;
+  /**
+   * channelId -> what the server last said about that channel's HLS stream,
+   * for every channel this socket may view, seat or no seat (`channel-live`).
+   * `liveStream` above is the room we are IN; this is the sidebar's and the
+   * seatless watcher's view of every room. `watching` counts the people on
+   * the playlist without a seat; the room's own people are in `occupancy`.
+   */
+  channelLive: Record<string, ChannelLive>;
   /** peerIds whose camera is on, from the roster's `cameraStreamId`. */
   cameraPeerIds: string[];
   /**
@@ -359,6 +374,12 @@ export interface VoiceState {
   localCameraStream: MediaStream | null;
   /** Users who declined the current call's ring (cleared on join/leave). */
   callDeclinedUserIds: string[];
+}
+
+/** One channel's `channel-live` answer. `stream: null` is "nothing live". */
+export interface ChannelLive {
+  stream: LiveHlsStream | null;
+  watching: number;
 }
 
 /** One ringing invitation, as shown on the incoming-call surface. */
@@ -746,6 +767,13 @@ export function createVoiceController(transport: RealtimeTransport) {
   // The room the user means to be in. Kept across a WS drop so we can auto-
   // rejoin on reconnect instead of ejecting them from the call.
   let intendedChannelId: string | null = null;
+  /**
+   * The channel this socket is watching WITHOUT a seat (`watch-live`), or
+   * null. Kept outside `state` for the same reason `intendedChannelId` is: it
+   * is what to re-announce after a reconnect, since the server counts sockets
+   * and a fresh socket is not on its list until it says so again.
+   */
+  let watchingChannelId: string | null = null;
   /** Channel switch in flight: keep "Na call" up while WebRTC rebuilds. */
   let switchingRooms = false;
   /**
@@ -818,6 +846,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     roomTransport: null,
     isSharingScreen: false,
     screenSharePeerIds: [],
+    liveStream: null,
+    channelLive: {},
     cameraPeerIds: [],
     focusedScreenPeerId: null,
     dismissedSharePeerIds: [],
@@ -1049,6 +1079,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       self: self ? { ...self } : null,
       incomingCalls: [...state.incomingCalls],
       callDeclinedUserIds: [...state.callDeclinedUserIds],
+      channelLive: { ...state.channelLive },
     };
   }
 
@@ -1841,6 +1872,14 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.error = msg;
           emit();
         },
+        // A republished share is a new sid on the SFU. Re-declaring it lets
+        // the server notice and restart the HLS egress, which is otherwise
+        // left transcoding a track that no longer exists.
+        onScreenRepublished: () => {
+          if (screenCaptureStream) {
+            announceSharing();
+          }
+        },
       });
 
       if (state.peerId !== peerId) {
@@ -2041,6 +2080,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       roomTransport: null,
       isSharingScreen: false,
       screenSharePeerIds: [],
+      liveStream: null,
+      // Channel-level, not room-level: hanging up does not make the sidebar
+      // forget which rooms are live.
+      channelLive: state.channelLive,
       cameraPeerIds: [],
       focusedScreenPeerId: null,
       dismissedSharePeerIds: [],
@@ -2587,7 +2630,66 @@ export function createVoiceController(transport: RealtimeTransport) {
           emit();
         }
         break;
+      case "voice-stream":
+        if (message.channelId !== state.voiceChannelId) {
+          return;
+        }
+        // `hlsUrl` may be API-relative (the signed playlist proxy) rather
+        // than a full URL, when `LIVE_HLS_SIGNED_URLS` is on. See
+        // `resolveHlsUrl`.
+        state.liveStream = message.stream
+          ? { ...message.stream, hlsUrl: resolveHlsUrl(message.stream.hlsUrl) }
+          : null;
+        emit();
+        break;
+      case "channel-live":
+        // Every channel this socket may view, in or out of the room. Same
+        // URL treatment as `voice-stream`; the room's own `liveStream` is
+        // left to that frame so the two never disagree about the room we
+        // are actually in.
+        state.channelLive = {
+          ...state.channelLive,
+          [message.channelId]: {
+            stream: message.stream
+              ? {
+                  ...message.stream,
+                  hlsUrl: resolveHlsUrl(message.stream.hlsUrl),
+                }
+              : null,
+            watching: message.watching,
+          },
+        };
+        emit();
+        break;
     }
+  }
+
+  /**
+   * Tell the server we are (or are no longer) on this channel's playlist
+   * without a seat. Idempotent: the same answer twice sends nothing, so a
+   * stage that re-renders is not a second viewer.
+   */
+  function sendWatchLive(channelId: string, watching: boolean) {
+    if (watching) {
+      if (watchingChannelId === channelId) {
+        return;
+      }
+      if (watchingChannelId) {
+        transport.sendVoice({
+          type: "watch-live",
+          channelId: watchingChannelId,
+          watching: false,
+        });
+      }
+      watchingChannelId = channelId;
+      transport.sendVoice({ type: "watch-live", channelId, watching: true });
+      return;
+    }
+    if (watchingChannelId !== channelId) {
+      return;
+    }
+    watchingChannelId = null;
+    transport.sendVoice({ type: "watch-live", channelId, watching: false });
   }
 
   if (typeof globalThis.window?.addEventListener === "function") {
@@ -2719,6 +2821,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // share ids would otherwise leak into the welcome diff and look like
       // newcomers. Empty previous is the locked "join into live shares" rule.
       state.screenSharePeerIds = [];
+      state.liveStream = null;
       state.cameraPeerIds = [];
       state.focusedScreenPeerId = null;
       state.audibleScreenPeerIds = [];
@@ -2726,6 +2829,9 @@ export function createVoiceController(transport: RealtimeTransport) {
       // otherwise the UI cannot tell which channel is connecting.
       state.voiceChannelId = voiceChannelId;
       intendedChannelId = voiceChannelId;
+      // A seat is counted on the roster; staying on the watch list too would
+      // count this person twice.
+      sendWatchLive(voiceChannelId, false);
       // Joining a conversation that was ringing us IS the acceptance, so the
       // invitation surface for it comes down; declines belong to the last call.
       removeIncomingCall(voiceChannelId);
@@ -2890,6 +2996,14 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     /** WS reconnected: resume the same peer id, or rejoin if we have no token. */
     async notifyReconnected() {
+      // The server counts watchers per socket, and this is a new socket.
+      if (watchingChannelId) {
+        transport.sendVoice({
+          type: "watch-live",
+          channelId: watchingChannelId,
+          watching: true,
+        });
+      }
       if (!intendedChannelId || state.status === "idle") {
         return;
       }
@@ -3132,13 +3246,16 @@ export function createVoiceController(transport: RealtimeTransport) {
         canControl: canControlShareCursor(),
       });
       emit();
-      announceSharing();
 
       try {
         await manager?.setLocalScreenStream(stream);
         if (sfu) {
           await sfu.publishScreen(stream);
         }
+        // After the SFU publish, not before. Live HLS looks up the
+        // SCREEN_SHARE track the moment this frame lands; announcing first
+        // made every staging start miss the track and fall back to WebRTC.
+        announceSharing();
       } catch (err) {
         state.error = screenShareErrorMessage(err);
         await stopScreenShareInternal();
@@ -3607,6 +3724,46 @@ export function createVoiceController(transport: RealtimeTransport) {
 
     hasMeshWarning() {
       return state.remotePeers.length >= MESH_VOICE_WARNING;
+    },
+
+    /**
+     * Watch mode without a seat: "I am on this channel's HLS playlist"
+     * (`true`) or "I stopped" (`false`). The server answers with a
+     * `channel-live` carrying the new count. Never sent for the room we are
+     * in; a seat is already counted on the roster. Survives a reconnect
+     * (`notifyReconnected` re-announces it) and ends on `join`.
+     */
+    /**
+     * `GET /api/channels/:id/live`, for a socket that opened the channel
+     * before it received a `channel-live`. Never overwrites what the socket
+     * has already been told: the frame is newer than the request by
+     * definition, and the seed is only there to cover the gap before it.
+     */
+    seedChannelLive(channelId: string, live: ChannelLive) {
+      if (state.channelLive[channelId]) {
+        return;
+      }
+      state.channelLive = {
+        ...state.channelLive,
+        [channelId]: {
+          stream: live.stream
+            ? { ...live.stream, hlsUrl: resolveHlsUrl(live.stream.hlsUrl) }
+            : null,
+          watching: live.watching,
+        },
+      };
+      emit();
+    },
+
+    setWatchingLive(channelId: string, watching: boolean) {
+      if (
+        watching &&
+        state.voiceChannelId === channelId &&
+        state.status !== "idle"
+      ) {
+        return;
+      }
+      sendWatchLive(channelId, watching);
     },
   };
 }

@@ -2619,3 +2619,116 @@ describe("voice roster deltas", () => {
     ]);
   });
 });
+
+/**
+ * Watch mode without a seat.
+ *
+ * `channel-live` reaches every socket that may view the channel, in the room
+ * or not, and is what the sidebar pill and the seatless watch stage read.
+ * `watch-live` is the one thing that stage says back, and the server counts
+ * sockets, so the controller has to say it once, take it back when the stage
+ * goes, say it again on a fresh socket, and never say it for the room this
+ * person actually sits in.
+ */
+describe("watch mode without a seat", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    stoppedTracks.length = 0;
+    playCueMock.mockReset();
+  });
+
+  const WATCHED = "00000000-0000-4000-8000-0000000000ee";
+  const stream = {
+    hlsUrl: "/api/voice/hls-playlist/ee/1700000000000?t=tok",
+    startedAt: 1700000000000,
+    presenterPeerId: "host",
+    delaySeconds: 10,
+  };
+
+  it("keeps channel-live per channel, with the playlist URL resolved", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.handleSignaling({
+      type: "channel-live",
+      channelId: WATCHED,
+      stream,
+      watching: 4,
+    });
+    const live = voice.getState().channelLive[WATCHED];
+    expect(live?.watching).toBe(4);
+    expect(live?.stream?.presenterPeerId).toBe("host");
+    expect(live?.stream?.hlsUrl.endsWith(stream.hlsUrl)).toBe(true);
+    // The room we are in is `liveStream`'s business, untouched by this frame.
+    expect(voice.getState().liveStream).toBeNull();
+
+    voice.handleSignaling({
+      type: "channel-live",
+      channelId: WATCHED,
+      stream: null,
+      watching: 0,
+    });
+    expect(voice.getState().channelLive[WATCHED]).toEqual({
+      stream: null,
+      watching: 0,
+    });
+  });
+
+  it("says watch-live once, takes it back once, and repeats neither", () => {
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setWatchingLive(WATCHED, true);
+    voice.setWatchingLive(WATCHED, true);
+    expect(sent).toEqual([
+      { type: "watch-live", channelId: WATCHED, watching: true },
+    ]);
+    voice.setWatchingLive(WATCHED, false);
+    voice.setWatchingLive(WATCHED, false);
+    expect(sent).toEqual([
+      { type: "watch-live", channelId: WATCHED, watching: true },
+      { type: "watch-live", channelId: WATCHED, watching: false },
+    ]);
+  });
+
+  it("re-announces the watched channel on a fresh socket", async () => {
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setWatchingLive(WATCHED, true);
+    sent.length = 0;
+    await voice.notifyReconnected();
+    expect(sent).toEqual([
+      { type: "watch-live", channelId: WATCHED, watching: true },
+    ]);
+  });
+
+  it("stops watching the room it joins: a seat is already counted", async () => {
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setWatchingLive(WATCHED, true);
+    sent.length = 0;
+    await voice.join(WATCHED);
+    const watchFrames = sent.filter((m) => m.type === "watch-live");
+    expect(watchFrames).toEqual([
+      { type: "watch-live", channelId: WATCHED, watching: false },
+    ]);
+    // And does not start again for the room we now sit in.
+    sent.length = 0;
+    voice.setWatchingLive(WATCHED, true);
+    expect(sent.filter((m) => m.type === "watch-live")).toEqual([]);
+  });
+
+  it("seeds a channel from the API only until the socket has spoken", () => {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.seedChannelLive(WATCHED, { stream, watching: 2 });
+    expect(voice.getState().channelLive[WATCHED]?.watching).toBe(2);
+    voice.handleSignaling({
+      type: "channel-live",
+      channelId: WATCHED,
+      stream,
+      watching: 5,
+    });
+    voice.seedChannelLive(WATCHED, { stream: null, watching: 0 });
+    expect(voice.getState().channelLive[WATCHED]?.watching).toBe(5);
+  });
+});
