@@ -360,6 +360,7 @@ import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
+import { WatchChannelStage } from "@/components/voice/watch-stage";
 import { HlsHostAckSheet } from "@/components/voice/hls-host-ack-sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -5108,6 +5109,30 @@ function MainAppContent({
           <>
       {/* The conversation's call surface: invisible until a call exists, a
           join banner while others talk, the full stage once we are in. */}
+      {/* Watch mode without a seat: the channel's HLS stream, for someone
+          who opened a live room and did not press Entrar. Nothing at all
+          for a quiet room, and nothing once they are in the call (the stage
+          above takes over). */}
+      {selectedChannel.kind === "server" &&
+        isVoiceRoomChannelType(selectedChannel.type) &&
+        user && (
+          <WatchChannelStage
+            fill={splitState.active}
+            onShapeChange={handleStageShape}
+            channelId={selectedChannel.id}
+            channelName={selectedChannel.name}
+            serverName={selectedServer?.name ?? null}
+            serverIconUrl={selectedServer?.iconUrl ?? null}
+            voiceState={voiceState}
+            onJoin={() => void handleJoinVoice(selectedChannel.id)}
+            onSetWatchingLive={(channelId, watching) =>
+              voice.setWatchingLive(channelId, watching)
+            }
+            onSeedChannelLive={(channelId, live) =>
+              voice.seedChannelLive(channelId, live)
+            }
+          />
+        )}
       {selectedChannel.kind === "server" &&
         isVoiceRoomChannelType(selectedChannel.type) &&
         user && (
@@ -5606,6 +5631,7 @@ function MainAppContent({
           canManageMessages={canManageMessages}
           isLoading={channelsLoading}
           voiceOccupancy={voiceState.occupancy}
+          channelLive={voiceState.channelLive}
           speakingPeerIds={voiceState.speakingPeerIds}
           activeVoiceChannelId={voiceState.voiceChannelId}
           unread={unread}

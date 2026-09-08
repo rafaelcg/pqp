@@ -28,12 +28,14 @@ import {
   isVoiceRoomChannelType,
   isWatchPartyChannelType,
   liveStateFromRoster,
+  liveStateFromStream,
   type Channel,
   type ChannelLiveState,
   type ChannelType,
   type Server,
   type VoiceParticipant,
 } from "@pqp/shared";
+import type { ChannelLive } from "@/hooks/use-voice";
 import { SearchDialog } from "@/components/search/search-dialog";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { ServerBanner, ServerIcon } from "@/components/layout/server-identity";
@@ -130,6 +132,13 @@ interface ChannelListProps {
   canManageMessages?: boolean;
   isLoading?: boolean;
   voiceOccupancy?: Record<string, VoiceParticipant[]>;
+  /**
+   * channelId -> the server's `channel-live` for it: the HLS stream (or
+   * null) and how many people watch it without a seat. Preferred over the
+   * roster for the live row, because the roster only reaches this client
+   * for rooms it is in or has been told about, and never counts watchers.
+   */
+  channelLive?: Record<string, ChannelLive>;
   speakingPeerIds?: string[];
   activeVoiceChannelId: string | null;
   unread: Record<string, UnreadState>;
@@ -225,6 +234,20 @@ interface ChannelListProps {
   onExpand?: () => void;
 }
 
+/**
+ * The row's live state, merged from both sources. A `channel-live` answer,
+ * even `stream: null`, outranks the roster: it is the server's word on the
+ * egress, while a `sharingScreen` flag is only the WebRTC share.
+ */
+export function liveStateForChannel(
+  live: ChannelLive | undefined,
+  participants: readonly VoiceParticipant[] | undefined,
+): ChannelLiveState {
+  return live
+    ? liveStateFromStream(live.stream, participants, live.watching)
+    : liveStateFromRoster(participants);
+}
+
 export function ChannelList({
   server,
   channels,
@@ -234,6 +257,7 @@ export function ChannelList({
   canManageMessages = false,
   isLoading = false,
   voiceOccupancy = {},
+  channelLive = {},
   speakingPeerIds = [],
   activeVoiceChannelId,
   unread,
@@ -311,11 +335,18 @@ export function ChannelList({
         ),
       )
     : [];
-  /** Live state per voice room, derived from the roster (see @pqp/shared). */
+  /**
+   * Live state per watch party room: the server's `channel-live` when it has
+   * said anything about the channel, the roster otherwise (see @pqp/shared).
+   */
   function liveStateFor(channel: Channel): ChannelLiveState | undefined {
-    return watchPartyOn && isWatchPartyChannelType(channel.type)
-      ? liveStateFromRoster(voiceOccupancy[channel.id])
-      : undefined;
+    if (!watchPartyOn || !isWatchPartyChannelType(channel.type)) {
+      return undefined;
+    }
+    return liveStateForChannel(
+      channelLive[channel.id],
+      voiceOccupancy[channel.id],
+    );
   }
   const categories = sortByPosition(
     channels.filter((c) => c.type === "category"),

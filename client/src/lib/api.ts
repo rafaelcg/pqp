@@ -81,6 +81,7 @@ import type {
   VoiceBackendType,
   VoiceRoomTransport,
   VoiceSessionInfo,
+  LiveHlsStream,
   Webhook,
   RoleSystemKey,
   OutgoingWebhook,
@@ -569,6 +570,18 @@ export const fetchVoiceBackend = () =>
 /** Whether this deployment transcodes screen shares to HLS. */
 export const fetchLiveHlsConfig = () =>
   apiFetch<{ enabled: boolean; delaySeconds: number }>("/api/live-hls/config");
+
+/**
+ * What a channel's `channel-live` would say right now, for a client that
+ * opened the channel before its socket delivered one. `stream.hlsUrl` is
+ * API-relative like the frame's; resolve it with `resolveHlsUrl`.
+ */
+export const fetchChannelLive = (channelId: string) =>
+  apiFetch<{
+    stream: LiveHlsStream | null;
+    watching: number;
+    participants: number;
+  }>(`/api/channels/${channelId}/live`);
 
 /** Mint an SFU session for a voice channel the caller has already joined. */
 export const createVoiceSession = (voiceChannelId: string, peerId: string) =>

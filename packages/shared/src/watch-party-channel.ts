@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { LiveHlsStream } from "./live-hls.js";
 import { hasPermission, Permission } from "./permissions.js";
 import { voiceParticipantSchema } from "./signaling.js";
 
@@ -20,8 +21,9 @@ import { voiceParticipantSchema } from "./signaling.js";
  * on a `voice-stream` message; the field names here match it on purpose so
  * that branch can build a `ChannelLiveState` from its stream without renaming.
  *
- * TODO(hls): when `voice-stream` lands on main, prefer its `stream` over the
- * roster derivation in `liveStateFromRoster` (fill `hlsUrl` and `startedAt`).
+ * With `channel-live` on main, `liveStateFromStream` is that richer answer:
+ * the sidebar prefers it whenever the server has told this socket about a
+ * stream, and falls back to `liveStateFromRoster` otherwise.
  */
 
 /** Channel types that open a voice room. */
@@ -93,5 +95,37 @@ export function liveStateFromRoster(
     viewerCount: participants.length - 1,
     startedAt: null,
     hlsUrl: null,
+  };
+}
+
+/**
+ * Live state as a `channel-live` frame tells it. The stream is the truth about
+ * whether the channel is live and who is presenting; the audience is everyone
+ * in the room besides the presenter (the roster) plus everyone watching the
+ * HLS playlist without a seat (`watching`, counted by the server).
+ *
+ * `stream: null` is "nothing live", whatever the roster says: the egress is
+ * gone, and a peer still flagged `sharingScreen` for a moment is the WebRTC
+ * share winding down, not a watch party.
+ */
+export function liveStateFromStream(
+  stream: LiveHlsStream | null,
+  participants: readonly RosterPeer[] | undefined,
+  watching: number,
+): ChannelLiveState {
+  if (!stream) {
+    return CHANNEL_NOT_LIVE;
+  }
+  const seated = participants ?? [];
+  const presenterSeated = seated.some(
+    (peer) => peer.peerId === stream.presenterPeerId,
+  );
+  const roomViewers = Math.max(0, seated.length - (presenterSeated ? 1 : 0));
+  return {
+    live: true,
+    presenterPeerId: stream.presenterPeerId,
+    viewerCount: roomViewers + Math.max(0, Math.floor(watching)),
+    startedAt: stream.startedAt,
+    hlsUrl: stream.hlsUrl,
   };
 }
