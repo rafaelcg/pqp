@@ -1,4 +1,7 @@
-import type { VoiceRoomTransport } from "@pqp/shared";
+import {
+  MESH_ROOM_PROMOTION_SIZE,
+  type VoiceRoomTransport,
+} from "@pqp/shared";
 
 /**
  * WHEN A MESH ROOM MAY BE MOVED TO THE SFU, AND WHAT THAT COSTS THE BOX.
@@ -68,6 +71,36 @@ export function promotionBudgetMbps(): number {
   return parsed;
 }
 
+/**
+ * How many people in a mesh room move it to the SFU, or `null` for "never on
+ * size alone". `VOICE_PROMOTION_ROOM_SIZE`, or `MESH_ROOM_PROMOTION_SIZE`.
+ * Read per call, never cached, so tonight's number can change without a deploy.
+ *
+ * `0` is the off switch and the reason this returns a nullable: the trigger is
+ * new, it fires on ordinary joins rather than on a click, and something that
+ * cannot be turned off in one command should not be shipped an hour before a
+ * peak. Anything under 2 is also off, because a threshold of 1 would move a
+ * room the moment one person opened it, which is every call.
+ *
+ * An unreadable value is the default, exactly as if it were unset: the same
+ * rule as `promotionBudgetMbps`, and for the same reason. A typo must not
+ * silently change the shape of the night.
+ */
+export function promotionRoomSize(): number | null {
+  const raw = process.env.VOICE_PROMOTION_ROOM_SIZE?.trim();
+  if (!raw) {
+    return MESH_ROOM_PROMOTION_SIZE;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return MESH_ROOM_PROMOTION_SIZE;
+  }
+  if (parsed < 2) {
+    return null;
+  }
+  return Math.floor(parsed);
+}
+
 /** One room on the SFU, as the load estimate reads it. */
 export interface SfuRoomLoad {
   /** The voice channel id, so the candidate can be found in the list. */
@@ -119,7 +152,7 @@ export type PromotionRefusal =
   /** The client at the door cannot run LiveKit, so the move would not seat it. */
   | "joiner-cannot-follow";
 
-export interface FullRoomPromotionGate {
+export interface JoinPromotionGate {
   /** `channels.voice_transport`: the operator's explicit choice, or null. */
   channelOverride: VoiceRoomTransport | null;
   /** The transports the client at the door declared in its `join-voice-room`. */
@@ -127,27 +160,28 @@ export interface FullRoomPromotionGate {
 }
 
 /**
- * The two things that stop a FULL mesh room from being promoted before the
- * box is ever priced. Both are about the room-full trigger specifically, so
- * they live beside the budget rather than inside it.
+ * The two things that stop a JOIN from moving a mesh room, before the box is
+ * ever priced. Both belong to the join-triggered promotions (`room-full` and
+ * `room-size`), so they live beside the budget rather than inside it.
  *
  * `mesh-override` is the important one. The transport a room opens on is
  * usually a policy guess (server size), and a guess is exactly what a
  * promotion is allowed to correct. `channels.voice_transport = 'mesh'` is not
  * a guess: it is the channel settings dialog's "Small, peer-to-peer", chosen
  * by somebody with Manage Channels, most often to keep a private call off a
- * shared media box. A ninth person at the door does not get to overrule that;
- * they get the same "room is full" everyone got before.
+ * shared media box. A person at the door does not get to overrule that; they
+ * get exactly what they got before this existed.
  *
- * `joiner-cannot-follow` is arithmetic, not policy. The trigger for this
- * promotion is one person's join, so a promotion that cannot seat that person
- * (a mesh-only client) spends the box, moves everybody, and still turns them
- * away. Refusing here leaves the room where it is.
+ * `joiner-cannot-follow` is arithmetic, not policy. The trigger here is one
+ * person's join, so a promotion that cannot seat that person (a mesh-only
+ * client) spends the box, moves everybody, and still turns them away, or in
+ * the room-size case admits nobody and evicts the joiner instead. Refusing
+ * leaves the room where it is, and the next capable joiner moves it.
  *
  * Returns null when neither applies, and the ordinary budget guard decides.
  */
-export function blockFullRoomPromotion(
-  gate: FullRoomPromotionGate,
+export function blockJoinPromotion(
+  gate: JoinPromotionGate,
 ): PromotionRefusal | null {
   if (gate.channelOverride === "mesh") {
     return "mesh-override";

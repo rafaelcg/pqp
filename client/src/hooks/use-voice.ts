@@ -733,14 +733,23 @@ function screenShareErrorMessage(err: unknown): string {
 /**
  * The sentence for a room that just moved onto the voice server.
  *
- * Four triggers, two sentences: what the person watching cares about is
- * whether the call grew room for more video or for more people. `room-full`
- * and `stale-pin` are both the second one from the seat's point of view, and
- * an unknown reason from a newer server reads as that too, which is the safe
- * side: it is true of every promotion.
+ * Five triggers, two sentences. `cameras` and `screens` answer a click the
+ * person just made, so they name it. Everything else is the room having grown
+ * under them, and an unknown reason from a newer server reads as that too,
+ * which is the safe side because it is true of every promotion.
+ *
+ * `room-size` deliberately does NOT get a sentence of its own. The capacity
+ * card in `lib/voice-capacity.ts` already tells this exact person that
+ * screens and cameras just went up, with numbers read out of the limits that
+ * enforce them. A second, vaguer line saying the same thing at the same
+ * moment is noise, and it is the trigger that fires most often.
+ *
+ * (Do not write a bare PR reference like a three or four digit number after a
+ * hash anywhere under `client/src`: `bench/theme-tokens.mjs` reads it as a
+ * hex colour literal and fails the build. Name the file instead.)
  */
 function promotionNoticeKey(
-  reason: "cameras" | "screens" | "room-full" | "stale-pin",
+  reason: "cameras" | "screens" | "room-full" | "room-size" | "stale-pin",
 ): MessageKey {
   if (reason === "cameras") {
     return "voice.notice.promotedForCameras";

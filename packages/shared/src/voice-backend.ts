@@ -16,6 +16,37 @@ export const MESH_VOICE_LIMIT = 8;
 export const MESH_VOICE_WARNING = 6;
 
 /**
+ * How many people have to be in a mesh room before it moves to the media
+ * server, whatever the room's size policy said when it opened.
+ *
+ * WHY THIS EXISTS AT ALL. Every cap a small call meets is a mesh cap:
+ * `CAMERA_LIMIT.mesh` is 3 and `SCREEN_SHARE_LIMIT.mesh` is 2, both because a
+ * mesh encodes one copy per peer, so the fourth camera in a six-person room
+ * asks each publisher for about 7.5 Mbit/s of upload that a home connection in
+ * Brazil does not have. The room moves to the SFU when somebody hits one of
+ * those, which works but makes the caps something people meet, in the middle
+ * of a call, as a refusal. Moving earlier means nobody meets them.
+ *
+ * WHY FOUR. Rafael's line: "a 2 or 3 person call is fine. 4 or 5 becomes a
+ * proper thing. I want people to be able to share screen or use webcam." Four
+ * is where a call stops being a chat and starts being an event, and it is also
+ * exactly where the mesh arithmetic turns: three cameras is the mesh limit, so
+ * a room of four is the first size at which somebody is told no.
+ *
+ * WHY NOT LOWER. Two and three person calls stay peer to peer on purpose.
+ * Direct is one hop instead of two, so it is the lowest latency path we have;
+ * it costs the media box nothing; and it keeps working if the box does not.
+ * Most calls are this size, so this is also what keeps the box's load
+ * proportional to the calls that actually need it.
+ *
+ * The server may override this with `VOICE_PROMOTION_ROOM_SIZE` (see
+ * `promotionRoomSize` in `server/src/voice/promotion.ts`), which is a tuning
+ * knob, not a second policy: `0` turns the trigger off. The constant is the
+ * default and the number the client reasons about.
+ */
+export const MESH_ROOM_PROMOTION_SIZE = 4;
+
+/**
  * How many people may share a screen in one call at the same time.
  *
  * Mesh encodes a copy per peer connection, so two is the ceiling that still

@@ -80,10 +80,11 @@ import {
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
 import {
-  blockFullRoomPromotion,
+  blockJoinPromotion,
   decidePromotion,
   estimateSfuLoadMbps,
   promotionBudgetMbps,
+  promotionRoomSize,
   type SfuRoomLoad,
 } from "../voice/promotion.js";
 import { readSfuStats } from "../voice/sfu-stats.js";
@@ -3231,7 +3232,81 @@ export async function handleVoiceMessage(
       occupying = occupyingOf();
     }
 
-    // THE NINTH PERSON. `MESH_VOICE_LIMIT` is eight and the number is right:
+    // THE FOURTH PERSON, which is the one that stops anybody meeting a cap.
+    //
+    // Every limit a small call runs into is a mesh limit: three cameras, two
+    // screen shares, eight people. The room moves when somebody hits one, and
+    // that works, but it means the caps are still something people MEET, mid
+    // call, as a refusal or as a stutter. Rafael's framing: "a 2 or 3 person
+    // call is fine. 4 or 5 becomes a proper thing. I want people to be able to
+    // share screen or use webcam."
+    //
+    // So the room moves at `MESH_ROOM_PROMOTION_SIZE` people, before anybody
+    // asks for anything. Four is where a call stops being a chat, and it is
+    // also exactly where the mesh arithmetic turns: `CAMERA_LIMIT.mesh` is 3,
+    // so a room of four is the first size at which somebody is told no.
+    //
+    // Two and three person calls stay peer to peer, deliberately: one hop
+    // instead of two is the lowest latency path there is, it costs the media
+    // box nothing, and it still works when the box does not. Most calls are
+    // that size, which is also what keeps the box's load proportional to the
+    // calls that need it.
+    //
+    // `promotionRoomSize()` is read per join, so the threshold is tunable
+    // (and switchable off, with `0`) in one `fly secrets set`, without a
+    // deploy. Every other guard is the room-full path's, unchanged: the same
+    // gate, the same budget, the same handling of a seat that cannot follow.
+    const sizeThreshold = promotionRoomSize();
+    if (
+      sizeThreshold !== null &&
+      transport === "mesh" &&
+      resume.kind === "cold" &&
+      occupying.length + foreignOccupying + 1 >= sizeThreshold
+    ) {
+      const blocked = blockJoinPromotion({
+        channelOverride: channel.voice_transport ?? null,
+        joinerCapabilities: capabilities,
+      });
+      if (blocked) {
+        // Not a refusal of the JOIN: the room simply stays on mesh and this
+        // person is seated on it, exactly as before this trigger existed.
+        // Logged all the same, because a room that never moves when the
+        // operator expects it to is otherwise invisible.
+        logEvent("voice.transportPromotionRefused", {
+          voiceChannelId: payload.voiceChannelId,
+          userId: user.id,
+          reason: "room-size",
+          refusal: blocked,
+          roomSize: occupying.length + foreignOccupying + 1,
+          threshold: sizeThreshold,
+        });
+      } else if (
+        await promoteRoomPastMeshCap(
+          payload.voiceChannelId,
+          "room-size",
+          user.id,
+          "mesh",
+        )
+      ) {
+        transport = "livekit";
+      }
+      // The awaits may have outlived the socket, and the promotion releases
+      // seats: re-read everything below rather than trusting the counts above.
+      if (socket.readyState !== 1) {
+        if (pinnedHere) {
+          void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
+        }
+        return;
+      }
+      occupying = occupyingOf();
+    }
+
+    // THE NINTH PERSON, still the backstop. With the threshold above on and
+    // the box healthy a mesh room does not reach eight any more, but it does
+    // when the size promotion was refused (the budget, an operator's mesh
+    // override, a mesh-only joiner) or when the threshold is switched off.
+    //
+    // `MESH_VOICE_LIMIT` is eight and the number is right:
     // above it each client carries one Opus uplink per peer and quality
     // collapses. What was wrong is what happened at it. The room is on mesh
     // because of a guess about how many people would show up, and the ninth
@@ -3247,7 +3322,7 @@ export async function handleVoiceMessage(
     // ceiling, so it reaches here only when its seat is already gone, and its
     // media was built for the mesh it cannot follow anyway.
     if (meshIsFull() && resume.kind === "cold") {
-      const blocked = blockFullRoomPromotion({
+      const blocked = blockJoinPromotion({
         channelOverride: channel.voice_transport ?? null,
         joinerCapabilities: capabilities,
       });
@@ -4726,8 +4801,10 @@ onPermissionsUpdate((serverId) => {
  * WHY a room moved. Four triggers, one path.
  *
  * `cameras` and `screens` are a publication past the mesh cap (PR #366).
- * `room-full` is the ninth person at the door of a full mesh, and `stale-pin`
- * is a room whose pin no longer matches what the policy would decide today.
+ * `room-full` is the ninth person at the door of a full mesh, `room-size` is a
+ * room reaching `MESH_ROOM_PROMOTION_SIZE` so that nobody meets a mesh cap at
+ * all, and `stale-pin` is a room whose pin no longer matches what the policy
+ * would decide today.
  * The value travels to every seat in `voice-transport-changed`, where it picks
  * the sentence, and into `voice.transportPromoted`, where it is what separates
  * the triggers in production.
@@ -4736,6 +4813,7 @@ export type VoicePromotionReason =
   | "cameras"
   | "screens"
   | "room-full"
+  | "room-size"
   | "stale-pin";
 
 /**
@@ -4954,12 +5032,13 @@ async function attemptPromotion(
   // load it is not about to create.
   const known = rooms.find((room) => room.channelId === voiceChannelId);
   const gainsPublisher = reason === "cameras" || reason === "screens";
+  const gainsParticipant = reason === "room-full" || reason === "room-size";
   const candidate: SfuRoomLoad = {
     channelId: voiceChannelId,
     transport: "mesh",
     participants:
       Math.max(known?.participants ?? 0, seated.length, 1) +
-      (reason === "room-full" ? 1 : 0),
+      (gainsParticipant ? 1 : 0),
     videoPublishers:
       Math.max(known?.videoPublishers ?? 0, countVideoPublishers(seated)) +
       (gainsPublisher ? 1 : 0),
@@ -5286,7 +5365,7 @@ type VoiceSignalFrame = z.infer<typeof voiceSignalFrameSchema>;
 const voiceTransportFrameSchema = z.object({
   channelId: z.string().uuid(),
   transport: voiceRoomTransportSchema,
-  reason: z.enum(["cameras", "screens", "room-full", "stale-pin"]),
+  reason: z.enum(["cameras", "screens", "room-full", "room-size", "stale-pin"]),
 });
 type VoiceTransportFrame = z.infer<typeof voiceTransportFrameSchema>;
 
