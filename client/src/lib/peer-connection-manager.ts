@@ -440,7 +440,7 @@ export function meshCameraBitrate(
  * the unmeasured 5 Mbps constant, and slicing a constant would cap a
  * deliberate 1080p choice at a number nobody measured.
  */
-function splitShare(
+export function splitShare(
   peerCount: number,
   ownChosenBps: number,
   otherChosenBps: number,

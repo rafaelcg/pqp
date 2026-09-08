@@ -508,8 +508,7 @@ export function describeLimitation(sample: VideoSenderSample): Limitation | null
  *
  * `chosenCeilingBps` is what the user actually asked for. Null when the caller
  * cannot know (Settings outside a call, or any surface without the room's
- * size), where this
- * degrades to exactly `describeLimitation`.
+ * size), where this degrades to exactly `describeLimitation`.
  */
 export function describeLimitationAgainst(
   sample: VideoSenderSample,

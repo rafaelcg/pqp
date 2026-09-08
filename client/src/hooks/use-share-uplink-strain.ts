@@ -4,7 +4,10 @@ import {
   sampleVoiceStats,
   type VideoSenderSample,
 } from "@/lib/voice-stats-probe";
-import { chosenScreenCeilingBps } from "@/lib/peer-connection-manager";
+import {
+  chosenScreenCeilingBps,
+  splitShare,
+} from "@/lib/peer-connection-manager";
 import { DEFAULT_SCREEN_UPLOAD_BUDGET_BPS } from "@/lib/screen-upload-budget";
 import type { VideoQuality } from "@/lib/video-quality";
 import type { VoiceRoomTransport } from "@pqp/shared";
@@ -106,12 +109,17 @@ export function nextStrainStreak(
   // told its connection was the problem, on fibre, for the whole call. Found
   // in review; a ceiling the room and the camera explain is not a link fault
   // whichever branch notices it.
-  const shareOfBudget = DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, viewers);
-  const slice =
-    cameraChosenBps > 0
-      ? chosenCeilingBps / (chosenCeilingBps + cameraChosenBps)
-      : 1;
-  const expected = Math.min(chosenCeilingBps, shareOfBudget * slice);
+  // `splitShare`, not a second copy of its arithmetic. The two were written
+  // out separately at first and had already drifted: this one lacked the 1:1
+  // exemption, so a 1:1 call with a camera expected 3.08 Mbps where the
+  // manager applied 4. Harmless in that direction, but two copies of one
+  // formula is how the screen controller got four different models in a day.
+  const expected = splitShare(
+    viewers,
+    chosenCeilingBps,
+    cameraChosenBps,
+    DEFAULT_SCREEN_UPLOAD_BUDGET_BPS,
+  );
 
   // THE OBVIOUS SIGNAL, AND WHY IT IS NOT ENOUGH ON ITS OWN. "The encoder says
   // it is bandwidth-limited" is true while the link is being discovered, and

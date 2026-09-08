@@ -207,6 +207,25 @@ describe("the share uplink warning", () => {
     expect(isStrained(streak)).toBe(true);
   });
 
+  it("expects what the manager actually applies in a 1:1 call", () => {
+    // The drift the shared `splitShare` removes. This rule used to write the
+    // arithmetic out again without the 1:1 exemption, so a 1:1 call with a
+    // camera and a 1080p share expected ~3.6 Mbps where the manager applied
+    // the full 4. Harmless in that direction, but two copies of one formula
+    // is how the screen controller got four different models in a day.
+    const chosen1080p = 4_000_000;
+    const atManagersCeiling = sender({
+      limitedBy: "bandwidth",
+      ceilingKbps: chosen1080p / 1000,
+      targetKbps: (chosen1080p / 1000) * 0.98,
+    });
+    let streak = 0;
+    for (let i = 0; i < SUSTAINED_SAMPLES * 2; i += 1) {
+      streak = nextStrainStreak(streak, [atManagersCeiling], chosen1080p, 1, 1_500_000);
+    }
+    expect(isStrained(streak)).toBe(false);
+  });
+
   it("forgets the streak the moment the link recovers", () => {
     // One good sample is enough to reset. A warning that lingered after the
     // cause had gone would be the same lie in slower motion.
