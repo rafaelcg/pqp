@@ -663,12 +663,15 @@ on this stack and would not pay if it did:
   it has an empty body); LiveKit Cloud's own equivalent quota is **100** audio
   tracks, which is a guard rail rather than a loudest-N.
 - **Silence is already almost free.** Opus DTX is on for every microphone, so
-  a silent track collapses to comfort noise. Measured on the box: at **32**
-  audio subscriptions the total outgoing packet rate was 650 to 960 per
-  second, and at **74** it was 1000 to 1220. Continuous 20 ms Opus alone would
-  be 1600 and 3700. Since video can only add to that count, at most about a
-  third of audio subscriptions are transmitting at any instant, and the rest
-  are what a loudest-N cap would remove.
+  a silent track collapses to comfort noise. Measured on the box across 20
+  stable windows, the total outgoing packet rate sat between **27% and 60%**
+  (median about 45%) of what the audio subscriptions alone would need if every
+  one were carrying continuous 20 ms Opus, and video packets are inside that
+  total. Under half of audio subscriptions are transmitting at any instant,
+  and the rest, which are what a loudest-N cap would remove, are comfort noise
+  at a couple of kbit/s each. Worked example: at 32 audio subscriptions the
+  box sent 650 to 960 packets per second against the 1600 continuous audio
+  alone would need.
 
 What was **not** separated: the box's Prometheus counters give total bytes and
 packets by direction, with no split by track kind, so audio's exact share of
