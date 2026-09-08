@@ -27,10 +27,46 @@ import {
   hlsReplayHours,
   hlsRetentionMinutes,
   liveHlsStorageConfig,
-  stopActiveEgressesForRoom,
+  adoptLiveHlsSession,
+  listActiveEgresses,
+  stopEgressById,
 } from "./hls-egress.js";
 
 const SWEEP_BATCH = 25;
+
+interface StaleSession {
+  id: string;
+  channel_id: string;
+  object_prefix: string;
+  egress_id: string | null;
+  presenter_peer_id: string | null;
+  video_track_id: string | null;
+  rung: string | null;
+  still_open: boolean;
+}
+
+/**
+ * `live/<channelId>/<startedAt>-<rung>` -> startedAt, and the rung beside it.
+ *
+ * The rung suffix is why this cannot be a bare `Number(tail)` any more: with
+ * a ladder every prefix ends `-1080p30` or similar, `Number` answers NaN, and
+ * a row that cannot be parsed is treated as unadoptable and its egress
+ * STOPPED. That would kill a live watch party on every deploy, which is the
+ * exact failure this whole file was written to stop.
+ */
+function sessionFromPrefix(
+  prefix: string,
+): { startedAt: number; rung: string | null } | null {
+  const tail = prefix.split("/").pop() ?? "";
+  const dash = tail.indexOf("-");
+  const startedAtPart = dash === -1 ? tail : tail.slice(0, dash);
+  const rung = dash === -1 ? null : tail.slice(dash + 1);
+  const parsed = Number(startedAtPart);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return { startedAt: parsed, rung: rung || null };
+}
 
 interface DueSession {
   id: string;
@@ -142,44 +178,91 @@ async function deleteSessionObjects(
  * still be running for it. Only the API process may call this; a worker
  * that ran it would end the API's live sessions.
  */
-export async function reconcileStaleHlsSessions(): Promise<number> {
-  const stale = await getPool().query<{
-    id: string;
-    channel_id: string;
-    egress_id: string | null;
-  }>(
-    `SELECT id, channel_id, egress_id
-     FROM hls_sessions
-     WHERE ended_at IS NULL`,
-  );
-  if (stale.rowCount === 0) {
-    return 0;
+export async function reconcileStaleHlsSessions(): Promise<{
+  adopted: number;
+  ended: number;
+  stopped: number;
+}> {
+  const active = await listActiveEgresses();
+  if (active === null) {
+    // Could not ask the media server. Ending rows now would let the sweep
+    // delete segments out from under an egress that is still writing them,
+    // which is the exact failure this function exists to prevent. Leave
+    // everything alone; the next boot, or the health monitor, will do it.
+    logEvent("voice.hlsBootReconcileSkipped", { reason: "list-egress-failed" });
+    return { adopted: 0, ended: 0, stopped: 0 };
   }
-  const channels = new Set(stale.rows.map((row) => row.channel_id));
-  for (const channelId of channels) {
-    try {
-      const stopped = await stopActiveEgressesForRoom(channelId);
-      if (stopped.length > 0) {
+
+  const rows = await getPool().query<StaleSession>(
+    `SELECT id, channel_id, object_prefix, egress_id, presenter_peer_id,
+            video_track_id, rung, ended_at IS NULL AS still_open
+     FROM hls_sessions
+     WHERE cleaned_at IS NULL
+       AND (ended_at IS NULL OR ended_at > NOW() - INTERVAL '1 hour')`,
+  );
+  const byEgressId = new Map(
+    rows.rows.filter((row) => row.egress_id).map((row) => [row.egress_id!, row]),
+  );
+
+  let adopted = 0;
+  let stopped = 0;
+  const adoptedIds = new Set<string>();
+
+  for (const info of active) {
+    const row = byEgressId.get(info.egressId);
+    const session = row ? sessionFromPrefix(row.object_prefix) : null;
+    if (!row || session === null || !row.presenter_peer_id) {
+      // Nobody owns this transcode: no session row, or one we cannot rebuild
+      // a room from. Left running it burns a core of the media box forever.
+      const wasStopped = await stopEgressById(info.egressId, info.roomName);
+      if (wasStopped) {
+        stopped += 1;
         logEvent("voice.hlsOrphanEgressStopped", {
-          channelId,
-          egressIds: stopped,
+          channelId: info.roomName ?? null,
+          egressId: info.egressId,
+          reason: row ? "session-not-adoptable" : "no-session-row",
         });
       }
-    } catch (error) {
-      logEvent("voice.hlsOrphanEgressStopFailed", {
-        channelId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      continue;
     }
+    // Still running and still ours: take it back rather than killing a live
+    // watch party because the API happened to restart.
+    adoptLiveHlsSession({
+      channelId: row.channel_id,
+      egressId: info.egressId,
+      startedAt: session.startedAt,
+      presenterPeerId: row.presenter_peer_id,
+      videoTrackId: row.video_track_id ?? "",
+      rung: row.rung ?? session.rung,
+    });
+    adoptedIds.add(row.id);
+    adopted += 1;
   }
-  const ended = await getPool().query(
-    `UPDATE hls_sessions SET ended_at = NOW() WHERE ended_at IS NULL`,
-  );
-  logEvent("voice.hlsStaleSessionsEnded", {
-    sessions: ended.rowCount ?? 0,
-    channels: channels.size,
-  });
-  return ended.rowCount ?? 0;
+
+  // Reopen the rows we adopted (a previous process may have ended them) and
+  // end the ones with no egress behind them any more, so retention runs.
+  if (adoptedIds.size > 0) {
+    await getPool().query(
+      `UPDATE hls_sessions SET ended_at = NULL
+       WHERE id = ANY($1::uuid[]) AND ended_at IS NOT NULL`,
+      [[...adoptedIds]],
+    );
+  }
+  const toEnd = rows.rows
+    .filter((row) => row.still_open && !adoptedIds.has(row.id))
+    .map((row) => row.id);
+  let ended = 0;
+  if (toEnd.length > 0) {
+    const result = await getPool().query(
+      `UPDATE hls_sessions SET ended_at = NOW()
+       WHERE id = ANY($1::uuid[]) AND ended_at IS NULL`,
+      [toEnd],
+    );
+    ended = result.rowCount ?? 0;
+  }
+
+  logEvent("voice.hlsBootReconciled", { adopted, ended, stopped });
+  return { adopted, ended, stopped };
 }
 
 /**
@@ -195,8 +278,35 @@ export async function sweepHlsSessions(): Promise<number> {
     return 0;
   }
   const due = await dueSessions(hlsRetentionMinutes(), hlsReplayHours());
+  if (due.length === 0) {
+    return 0;
+  }
+  // ASK THE MEDIA SERVER, DO NOT TRUST THE ROW. `ended_at` says when THIS
+  // cluster stopped believing in a session, and the two can disagree: an API
+  // that restarted mid-share leaves a row ended while the egress keeps
+  // writing segments. Deleting those is not a tidy-up, it breaks a live
+  // stream in a way that looks like corruption rather than a restart. So a
+  // prefix whose egress is still running is skipped, and "cannot ask" is
+  // treated as "still running" rather than as permission to delete.
+  const active = await listActiveEgresses();
+  if (active === null) {
+    logEvent("voice.hlsSweepSkipped", {
+      reason: "list-egress-failed",
+      due: due.length,
+    });
+    return 0;
+  }
+  const activeEgressIds = new Set(active.map((info) => info.egressId));
   let cleaned = 0;
   for (const session of due) {
+    if (session.egress_id && activeEgressIds.has(session.egress_id)) {
+      logEvent("voice.hlsSweepSkippedLiveEgress", {
+        sessionId: session.id,
+        channelId: session.channel_id,
+        egressId: session.egress_id,
+      });
+      continue;
+    }
     try {
       const deletedCount = await deleteSessionObjects(
         config,

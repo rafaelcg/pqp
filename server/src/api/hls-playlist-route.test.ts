@@ -45,6 +45,12 @@ const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
 const { mintHlsViewerToken } = await import("../voice/hls-viewer-token.js");
+const { revokeHlsAccess, resetHlsRevocationsForTests } = await import(
+  "../voice/hls-revocation.js"
+);
+const { resetHlsPlaylistCacheForTests } = await import(
+  "../voice/hls-playlist-proxy.js"
+);
 
 const STARTED_AT = 1_700_000_000_000;
 const PLAYLIST_BODY = [
@@ -95,6 +101,8 @@ describeDb("hls playlist route", () => {
 
   beforeEach(async () => {
     resetApiRateLimits();
+    resetHlsPlaylistCacheForTests();
+    resetHlsRevocationsForTests();
     process.env.LIVE_HLS_PUBLIC_BASE_URL = "https://live.example.test";
     process.env.LIVE_HLS_S3_BUCKET = "pqp-live-test";
     process.env.LIVE_HLS_S3_ACCESS_KEY_ID = "ak";
@@ -212,13 +220,290 @@ describeDb("hls playlist route", () => {
     expect((await get(`${path(channelId)}?t=${t}x`, null)).status).toBe(401);
   });
 
-  it("a token still runs the channel-access check", async () => {
+  /**
+   * CONTRACT CHANGE, deliberate. This used to re-check channel access on every
+   * playlist request, so a hand-minted token for a stranger was refused here.
+   * It is now checked where the token is MINTED instead, which is once per
+   * viewer per session rather than every 2 s, so the audience no longer costs
+   * a database round trip each. Every mint path is gated: `GET /api/channels/:id/live`
+   * calls `requireChannelAccess` first, `broadcastChannelLive` mints only for
+   * users the channel audience contains, and the two `voice-stream` mints are
+   * for a peer who already holds a seat in the room. So a token for someone
+   * without access cannot be obtained, only fabricated, and fabricating one
+   * needs the signing key.
+   *
+   * What still bounds it is revocation (`voice/hls-revocation.ts`), covered
+   * below: access taken away after the mint refuses the token within about a
+   * segment.
+   */
+  it("a token is honoured on its own, because access was checked when it was minted", async () => {
     const t = mintHlsViewerToken({
       userId: stranger.id,
       channelId,
       startedAt: STARTED_AT,
     });
     const r = await get(`${path(channelId)}?t=${t}`, null);
-    expect([403, 404]).toContain(r.status);
+    expect(r.status).toBe(200);
+  });
+
+  it("a forged token is still refused: the signature is what is trusted", async () => {
+    const t = mintHlsViewerToken({
+      userId: stranger.id,
+      channelId,
+      startedAt: STARTED_AT,
+    });
+    // Same claims, one byte of the signature changed.
+    const forged = `${t!.slice(0, -1)}${t!.slice(-1) === "A" ? "B" : "A"}`;
+    expect((await get(`${path(channelId)}?t=${forged}`, null)).status).toBe(401);
+  });
+
+  /**
+   * The render cache serves one body to every viewer of a session, which is
+   * only safe while permission is decided OUTSIDE it. These are the tests
+   * that hold that line: a warm cache must not become a way in.
+   */
+  describe("the render cache never stands in for permission", () => {
+    it("a stranger is refused even when the body is already cached and warm", async () => {
+      // Warm it with someone who may watch.
+      expect((await get(path(channelId), owner)).status).toBe(200);
+      // Now the same URL, same session, cache hot, from someone who may not.
+      const denied = await get(path(channelId), stranger);
+      expect([403, 404]).toContain(denied.status);
+      // Not one byte of the cached playlist came back.
+      expect(denied.text).not.toContain("#EXTM3U");
+      expect(denied.text).not.toContain("live.example.test");
+      expect(denied.contentType).not.toBe("application/vnd.apple.mpegurl");
+    });
+
+    it("an unauthenticated request is refused against a warm cache too", async () => {
+      expect((await get(path(channelId), owner)).status).toBe(200);
+      const anon = await get(path(channelId), null);
+      expect(anon.status).toBe(401);
+      expect(anon.text).not.toContain("#EXTM3U");
+    });
+
+    it("two DIFFERENT viewers get byte-identical bodies, which is what makes one cache entry legal", async () => {
+      // The premise of caching per session rather than per viewer. Segment
+      // URLs are signed with the BUCKET's credentials (`signRequest` takes no
+      // viewer), so nothing in the body names the person who asked. Proved
+      // here with the cache off between the two reads, so this is two real
+      // renders agreeing rather than one body handed out twice.
+      const second = await upsertUser({
+        clerkId: "clerk_second_member",
+        displayName: "Second",
+        avatarUrl: null,
+      });
+      await getPool().query(
+        `INSERT INTO server_members (server_id, user_id, role)
+         SELECT server_id, $1, 'member' FROM channels WHERE id = $2
+         ON CONFLICT DO NOTHING`,
+        [second.id, channelId],
+      );
+      resetHlsPlaylistCacheForTests();
+      const a = await get(path(channelId), owner);
+      resetHlsPlaylistCacheForTests();
+      const b = await get(path(channelId), second);
+      expect(a.status).toBe(200);
+      expect(b.status).toBe(200);
+      expect(b.text).toBe(a.text);
+    });
+
+    it("the member still gets a complete, playable window from the cache", async () => {
+      const first = await get(path(channelId), owner);
+      const second = await get(path(channelId), owner);
+      expect(second.status).toBe(200);
+      expect(second.contentType).toBe("application/vnd.apple.mpegurl");
+      // A hit is the same playable window, not a stub.
+      expect(second.text).toBe(first.text);
+      expect(second.text).toContain("#EXTM3U");
+      const segment = second.text.split("\n")[3]!;
+      expect(new URL(segment).searchParams.get("X-Amz-Signature")).toBeTruthy();
+    });
+
+    it("bounds how long anything may hold the playlist, and varies on the header", async () => {
+      // Same URL for every Bearer viewer, so a shared cache that ignored the
+      // header could hand one viewer another's body: `private` + `Vary`.
+      actor = owner;
+      const response = await fetch(`${baseUrl}${path(channelId)}`, {
+        headers: { Authorization: "Bearer test" },
+      });
+      expect(response.status).toBe(200);
+      const cacheControl = response.headers.get("cache-control") ?? "";
+      expect(cacheControl).toContain("private");
+      expect(cacheControl).toMatch(/max-age=1\b/);
+      expect(response.headers.get("vary")).toContain("Authorization");
+    });
+  });
+
+  /**
+   * The reason watch mode works at all above a handful of viewers.
+   *
+   * Every viewer refetches this playlist every 2 s, and each fetch used to
+   * re-ask the database whether the caller may see the channel: two queries,
+   * per viewer, forever, drawn from the pool the rest of the app shares. A
+   * healthy database serves that in 2 to 3 ms and does not fall over, so this
+   * is not about an outage; it is about not spending a connection per viewer
+   * per two seconds on a question that was already answered.
+   *
+   * The `?t=` token is signed by us and names this user, channel and session,
+   * and is minted only after a real access check. So it IS the permission,
+   * and these requests touch the database zero times.
+   */
+  describe("a verified token is the capability, so the playlist costs no queries", () => {
+    beforeEach(() => {
+      resetHlsRevocationsForTests();
+    });
+
+    function tokenFor(userId: string, channel = channelId, at?: number) {
+      return mintHlsViewerToken({
+        userId,
+        channelId: channel,
+        startedAt: STARTED_AT,
+        now: at,
+      });
+    }
+
+    it("serves a token-only request with ZERO database queries", async () => {
+      const t = tokenFor(owner.id);
+      // Warm: the first fetch of a session still costs its one session
+      // lookup, which the render cache then holds for a second. Every viewer
+      // after that, which at 500 viewers is 250 requests a second, costs
+      // nothing at all.
+      expect((await get(`${path(channelId)}?t=${t}`, null)).status).toBe(200);
+      const spy = vi.spyOn(getPool(), "query");
+      try {
+        for (let i = 0; i < 5; i += 1) {
+          const r = await get(`${path(channelId)}?t=${t}`, null);
+          expect(r.status).toBe(200);
+          expect(r.text).toContain("#EXTM3U");
+        }
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("even a cold fetch costs ONE query for a ladder session", async () => {
+      // Was: requireChannel + canAccessChannel + the session lookup, per
+      // request, per viewer, every 2 seconds. Now the access pair is gone
+      // entirely and the lookup is shared for a second.
+      //
+      // A ladder session's cold fetch is the rung listing and nothing else:
+      // the master is built from those rows, so it does not then go and ask
+      // whether the session exists.
+      await getPool().query(
+        `INSERT INTO hls_sessions (channel_id, object_prefix, started_at, rung)
+         VALUES ($1, $2, to_timestamp($3 / 1000.0), $4)`,
+        [channelId, `live/${channelId}/${STARTED_AT}-720p30`, STARTED_AT, "720p30"],
+      );
+      resetHlsPlaylistCacheForTests();
+      const t = tokenFor(owner.id);
+      const spy = vi.spyOn(getPool(), "query");
+      try {
+        expect((await get(`${path(channelId)}?t=${t}`, null)).status).toBe(200);
+        expect(spy).toHaveBeenCalledTimes(1);
+        expect(String(spy.mock.calls[0]![0])).toContain("hls_sessions");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("a PRE-LADDER session costs two cold, then none, and says so", async () => {
+      // The one honest regression from the master playlist. A session with no
+      // rung rows is asked about twice on a cold fetch: once for its rungs
+      // (none) and once for the row itself. Both answers are cached for the
+      // same second, so it is one extra query per session per second, and
+      // only for sessions that started before the ladder shipped.
+      resetHlsPlaylistCacheForTests();
+      const t = tokenFor(owner.id);
+      const spy = vi.spyOn(getPool(), "query");
+      try {
+        expect((await get(`${path(channelId)}?t=${t}`, null)).status).toBe(200);
+        expect(spy).toHaveBeenCalledTimes(2);
+        spy.mockClear();
+        expect((await get(`${path(channelId)}?t=${t}`, null)).status).toBe(200);
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("serves hls.js (header AND token) with zero queries too", async () => {
+      // The browser path sends both. If the header won, every browser viewer
+      // would still cost an access check every 2 s, which is the whole bug.
+      const t = tokenFor(owner.id);
+      expect((await get(`${path(channelId)}?t=${t}`, owner)).status).toBe(200);
+      const spy = vi.spyOn(getPool(), "query");
+      try {
+        const r = await get(`${path(channelId)}?t=${t}`, owner);
+        expect(r.status).toBe(200);
+        expect(r.text).toContain("#EXTM3U");
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("a header-only request still pays for the access check", async () => {
+      // Not a regression: identity is not permission, so this one must ask.
+      const spy = vi.spyOn(getPool(), "query");
+      try {
+        expect((await get(path(channelId), owner)).status).toBe(200);
+        expect(spy).toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("refuses a revoked viewer within the window, even with a valid token", async () => {
+      const t = tokenFor(owner.id, channelId, Date.now() - 5_000);
+      expect((await get(`${path(channelId)}?t=${t}`, null)).status).toBe(200);
+
+      // Banned, kicked, or the role lost VIEW: whatever it was, the same
+      // eviction that drops them from the channel view revokes this.
+      revokeHlsAccess(channelId, { onlyUserIds: [owner.id] });
+
+      const denied = await get(`${path(channelId)}?t=${t}`, null);
+      expect([403, 404]).toContain(denied.status);
+      expect(denied.text).not.toContain("#EXTM3U");
+      expect(denied.text).not.toContain("live.example.test");
+    });
+
+    it("a revocation does not hold out a token minted after it (banned, then unbanned)", async () => {
+      revokeHlsAccess(channelId, { onlyUserIds: [owner.id] }, Date.now() - 1000);
+      // Re-admitted: a fresh token postdates the revocation, so it works
+      // without waiting anything out.
+      const fresh = tokenFor(owner.id);
+      expect((await get(`${path(channelId)}?t=${fresh}`, null)).status).toBe(200);
+    });
+
+    it("revoking one viewer does not cut off the rest of the audience", async () => {
+      // Minted in the past on purpose: a revocation stamped in the same
+      // millisecond as the token would be skipped as "older than the grant"
+      // and this would pass without proving anything.
+      const t = tokenFor(owner.id, channelId, Date.now() - 5_000);
+      revokeHlsAccess(channelId, { onlyUserIds: ["someone-else"] });
+      expect((await get(`${path(channelId)}?t=${t}`, null)).status).toBe(200);
+    });
+
+    it("refuses an expired token", async () => {
+      const stale = mintHlsViewerToken({
+        userId: owner.id,
+        channelId,
+        startedAt: STARTED_AT,
+        now: Date.now() - 2 * 60 * 60 * 1000,
+      });
+      expect((await get(`${path(channelId)}?t=${stale}`, null)).status).toBe(401);
+    });
+
+    it("a token naming someone else does not become the Bearer caller's capability", async () => {
+      // A member could otherwise paste somebody else's token onto their own
+      // request and skip their own access check. A mismatch falls back to the
+      // header, which is checked against the database as it always was: the
+      // stranger is not in this server, so they are refused.
+      const ownersToken = tokenFor(owner.id);
+      const r = await get(`${path(channelId)}?t=${ownersToken}`, stranger);
+      expect([403, 404]).toContain(r.status);
+    });
   });
 });

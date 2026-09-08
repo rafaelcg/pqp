@@ -37,7 +37,7 @@ test("a voice channel's chat can be slowed, and the interval sticks", async ({
   await expect(dialog.getByText("Slow mode")).toBeVisible();
   // And it says which sound it slows, so nobody reads it as slowing the talking.
   await expect(
-    dialog.getByText("Applies to this voice channel's chat", { exact: false }),
+    dialog.getByText("Applies to the chat beside the call", { exact: false }),
   ).toBeVisible();
 
   // A value that is not the one already stored, so the dialog is genuinely

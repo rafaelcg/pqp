@@ -128,6 +128,7 @@ import {
   HlsPlaylistUnavailable,
   resolveHlsPlaylistViewer,
 } from "../voice/hls-playlist-proxy.js";
+import { isHlsAccessRevoked } from "../voice/hls-revocation.js";
 import {
   HLS_VIEWER_TOKEN_PARAM,
   stampViewerStream,
@@ -1876,9 +1877,27 @@ async function hlsPlaylistResponse(
   channelId: string,
   startedAt: string,
   userId: string,
+  /**
+   * When the caller proved themselves with a `?t=` token, the instant it was
+   * minted. That token was issued only after a real access check, so it IS
+   * the permission and this request asks the database NOTHING. Null means
+   * header-only, which proves identity but not access, so that caller still
+   * pays for the check.
+   */
+  tokenIssuedAt: number | null,
+  /**
+   * Which rendition of a ladder is being asked for. Absent means the caller
+   * asked for the SESSION, which is the master playlist listing them all.
+   */
   options: { rung?: string; token?: string | null } = {},
 ): Promise<RawResponse> {
-  await requireChannelAccess(channelId, userId);
+  if (tokenIssuedAt === null) {
+    await requireChannelAccess(channelId, userId);
+  } else if (isHlsAccessRevoked(userId, channelId, tokenIssuedAt)) {
+    // A ban, a kick or a role losing VIEW since the token was minted. A
+    // memory lookup, not a query: this runs on every playlist fetch.
+    throw new NotFound("Channel not found");
+  }
   const parsedStartedAt = Number(startedAt);
   if (!Number.isFinite(parsedStartedAt)) {
     throw new NotFound("No live stream for this channel");
@@ -1895,7 +1914,8 @@ async function hlsPlaylistResponse(
       token: options.token,
     });
     if (master !== null) {
-      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Cache-Control", "private, max-age=1");
+      res.setHeader("Vary", "Authorization");
       return new RawResponse(master, "application/vnd.apple.mpegurl");
     }
   }
@@ -1910,16 +1930,26 @@ async function hlsPlaylistResponse(
     }
     throw error;
   }
-  res.setHeader("Cache-Control", "no-store");
+  // One second, never more: a playlist older than a segment sends the player
+  // to a live edge that has already moved. `private` plus `Vary` because the
+  // Bearer form of this request is the SAME URL for every viewer and only the
+  // header tells them apart, so a shared cache without both could hand one
+  // viewer a body fetched for another. The real saving is the per-session
+  // render cache in `hls-playlist-proxy.ts`; this only stops an edge or a
+  // browser from holding a stale window for longer than a segment.
+  res.setHeader("Cache-Control", "private, max-age=1");
+  res.setHeader("Vary", "Authorization");
   return new RawResponse(body, "application/vnd.apple.mpegurl");
 }
 
+/**
+ * The session URL, which is the master playlist once a ladder ran, and the
+ * one rendition a pre-ladder session had otherwise.
+ */
 router.get(
   "/api/voice/hls-playlist/:channelId/:startedAt",
   async ({ user, res, url }, { channelId, startedAt }) =>
-    hlsPlaylistResponse(res, channelId!, startedAt!, user.id, {
-      token: url.searchParams.get(HLS_VIEWER_TOKEN_PARAM),
-    }),
+    hlsPlaylistRouteResponse(res, url, user.id, channelId!, startedAt!),
 );
 
 /**
@@ -1930,11 +1960,36 @@ router.get(
 router.get(
   "/api/voice/hls-playlist/:channelId/:startedAt/:rung",
   async ({ user, res, url }, { channelId, startedAt, rung }) =>
-    hlsPlaylistResponse(res, channelId!, startedAt!, user.id, {
-      rung: rung!,
-      token: url.searchParams.get(HLS_VIEWER_TOKEN_PARAM),
-    }),
+    hlsPlaylistRouteResponse(res, url, user.id, channelId!, startedAt!, rung!),
 );
+
+function hlsPlaylistRouteResponse(
+  res: ServerResponse,
+  url: URL,
+  bearerUserId: string,
+  channelId: string,
+  startedAt: string,
+  rung?: string,
+): Promise<RawResponse> {
+  // hls.js sends BOTH the header and the token. Preferring the token here
+  // is what takes the common case off the database: without it every
+  // browser viewer still cost an access check every 2 seconds.
+  const token = url.searchParams.get(HLS_VIEWER_TOKEN_PARAM);
+  const viewer = resolveHlsPlaylistViewer({
+    bearerUserId,
+    token,
+    channelId,
+    startedAt: Number(startedAt),
+  });
+  return hlsPlaylistResponse(
+    res,
+    channelId,
+    startedAt,
+    viewer?.userId ?? bearerUserId,
+    viewer?.issuedAt ?? null,
+    { rung, token },
+  );
+}
 
 // The rung is optional: without it the path names the session (the master
 // playlist), with it one rendition. The viewer token is bound to
@@ -1956,6 +2011,7 @@ async function serveHlsPlaylistWithToken(
   channelId: string,
   startedAt: string,
   userId: string,
+  tokenIssuedAt: number,
   options: { rung?: string; token?: string | null } = {},
 ): Promise<void> {
   if (!apiLimiter.take(`user:${userId}`)) {
@@ -1969,6 +2025,7 @@ async function serveHlsPlaylistWithToken(
       channelId,
       startedAt,
       userId,
+      tokenIssuedAt,
       options,
     );
     res.writeHead(200, {
@@ -6569,6 +6626,17 @@ const WEBHOOK_EXECUTE_PATH =
  * GitHub, a CI job, or a monitoring tool never has a Clerk session to send.
  * `getWebhookForExecution` requires both halves to match, so this answers
  * the same 404 whether the id is wrong, the token is wrong, or both.
+ *
+ * Slow mode does not reach here, on purpose. This path has its own INSERT and
+ * never goes through `postChannelMessage`, and that is the right shape: a
+ * webhook is a pipe, not a resident. Its URL was configured once by somebody
+ * who held MANAGE_WEBHOOKS on the channel, what comes out of it is a build
+ * result or an alert that is useless late, and there is no person on the other
+ * end to show a countdown to. A flood from one is a webhook to revoke rather
+ * than a member to slow down. `webhookExecuteLimiter` above is its budget. A
+ * *character account* is the opposite case and is not exempt: it has a name, a
+ * face and a seat in the room, so it waits like anyone else -- see
+ * docs/BOT_SEND.md.
  */
 async function handleWebhookExecute(
   req: IncomingMessage,
@@ -6757,6 +6825,7 @@ export async function handleApi(
         hlsPlaylistMatch[1]!,
         hlsPlaylistMatch[2]!,
         viewer.userId,
+        viewer.issuedAt ?? 0,
         { rung: hlsPlaylistMatch[3], token },
       );
       return;

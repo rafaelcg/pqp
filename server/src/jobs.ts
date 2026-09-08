@@ -36,6 +36,7 @@ import { pruneAuditLog } from "./services/audit.js";
 import { pruneResolvedReports } from "./services/reports.js";
 import { pruneExpiredTimeouts } from "./services/sanctions.js";
 import { sweepMessageRetention } from "./services/retention.js";
+import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { sweepExpiredConnectionStates } from "./services/connections.js";
 import {
   deliverDueOutgoingWebhooks,
@@ -168,6 +169,10 @@ export function startColdJobs(): ColdJobs {
     // when it says it ends whether or not this timer ever fires. Disk only.
     every(DAILY_MS, "sanctions", pruneExpiredTimeouts),
     every(DAILY_MS, "retention", sweepMessageRetention),
+    // Spent slow-mode clocks. Nothing depends on this running: a stale row is
+    // inert, because enforcement compares it against the channel's current
+    // interval. Rows, not disk pages, is the point.
+    every(DAILY_MS, "slow-mode", sweepSlowModeClocks),
     every(DAILY_MS, "connections", sweepExpiredConnectionStates),
     every(PENDING_DELETION_SWEEP_INTERVAL_MS, "account", async () => {
       const finished = await sweepPendingAccountDeletions();

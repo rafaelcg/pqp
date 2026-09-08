@@ -58,9 +58,13 @@ const { upsertUser } = await import("../services/users.js");
 const { reconcileStaleHlsSessions, sweepHlsSessions } = await import(
   "./hls-cleanup.js"
 );
-const { resetLiveHlsForTests, setLiveHlsTestHooks } = await import(
-  "./hls-egress.js"
-);
+const {
+  resetLiveHlsForTests,
+  setLiveHlsTestHooks,
+  liveHlsStreamFor,
+  liveHlsRungsFor,
+} =
+  await import("./hls-egress.js");
 
 describeDb("sweepHlsSessions", () => {
   let channelA: string;
@@ -110,6 +114,9 @@ describeDb("sweepHlsSessions", () => {
     endedMinutesAgo: number | null;
     keepReplay?: boolean;
     egressId?: string;
+    presenterPeerId?: string;
+    videoTrackId?: string;
+    rung?: string;
   }): Promise<string> {
     const endedAt =
       options.endedMinutesAgo === null
@@ -117,8 +124,9 @@ describeDb("sweepHlsSessions", () => {
         : new Date(Date.now() - options.endedMinutesAgo * 60_000);
     const row = await getPool().query<{ id: string }>(
       `INSERT INTO hls_sessions
-         (channel_id, object_prefix, started_at, ended_at, keep_replay, egress_id)
-       VALUES ($1, $2, NOW(), $3, $4, $5)
+         (channel_id, object_prefix, started_at, ended_at, keep_replay,
+          egress_id, presenter_peer_id, video_track_id, rung)
+       VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7, $8)
        RETURNING id`,
       [
         options.channelId,
@@ -126,6 +134,9 @@ describeDb("sweepHlsSessions", () => {
         endedAt,
         options.keepReplay ?? false,
         options.egressId ?? null,
+        options.presenterPeerId ?? null,
+        options.videoTrackId ?? null,
+        options.rung ?? null,
       ],
     );
     return row.rows[0]!.id;
@@ -293,58 +304,243 @@ describeDb("sweepHlsSessions", () => {
     expect(bucket.objects.has(`live/${channelA}/EG_abc.json`)).toBe(false);
   });
 
+  /**
+   * A live egress does not stop because the API restarted. The first version
+   * of this ended the row and stopped the transcode, which killed a live watch
+   * party on every deploy, and when a stop did not land it left an orphan
+   * burning about a core of the media box (three were found by hand during
+   * load testing). So: adopt what is still running, stop only what nobody
+   * owns, and end only the rows with nothing behind them.
+   */
   describe("reconcileStaleHlsSessions (boot)", () => {
     afterEach(() => {
       resetLiveHlsForTests();
     });
 
-    it("ends every open row and stops the egress LiveKit still runs for it", async () => {
-      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+    /** A fake media server that reports whichever egresses the test says. */
+    function mediaServer(
+      running: { egressId: string; roomName: string }[],
+      opts: { failList?: boolean } = {},
+    ) {
       const stop = vi.fn(async () => {});
       setLiveHlsTestHooks({
         egress: {
           startTrackCompositeEgress: async () => ({ egressId: "unused" }),
           stopEgress: stop,
-          listEgress: async ({ roomName }) =>
-            roomName === channelA
-              ? [{ egressId: "EG_live", status: 1 }]
-              : [],
+          listEgress: async () => {
+            if (opts.failList) {
+              throw new Error("ListEgress: 503");
+            }
+            return running.map((r) => ({
+              egressId: r.egressId,
+              status: 1,
+              roomName: r.roomName,
+            }));
+          },
         },
       });
-      const openA = await makeSession({
+      return { stop };
+    }
+
+    it("RE-ADOPTS a session whose egress is still running, instead of ending it", async () => {
+      const id = await makeSession({
         channelId: channelA,
         prefix: `live/${channelA}/8000`,
-        endedMinutesAgo: null,
+        // Marked ended by the process that died: the row is wrong, the media
+        // box is right.
+        endedMinutesAgo: 0,
         egressId: "EG_live",
+        presenterPeerId: "peer-1",
+        videoTrackId: "TR_V",
       });
-      const openB = await makeSession({
-        channelId: channelB,
-        prefix: `live/${channelB}/8100`,
-        endedMinutesAgo: null,
-      });
-      const closed = await makeSession({
-        channelId: channelA,
-        prefix: `live/${channelA}/8200`,
-        endedMinutesAgo: 60,
-      });
+      const { stop } = mediaServer([
+        { egressId: "EG_live", roomName: channelA },
+      ]);
 
-      await expect(reconcileStaleHlsSessions()).resolves.toBe(2);
-      expect(stop).toHaveBeenCalledWith("EG_live");
-      const rows = await getPool().query<{ id: string; ended_at: Date | null }>(
-        `SELECT id, ended_at FROM hls_sessions ORDER BY started_at`,
+      const result = await reconcileStaleHlsSessions();
+      expect(result.adopted).toBe(1);
+      expect(result.stopped).toBe(0);
+      // The party keeps running: not stopped, and the room is ours again.
+      expect(stop).not.toHaveBeenCalled();
+      const stream = liveHlsStreamFor(channelA);
+      expect(stream).not.toBeNull();
+      expect(stream?.startedAt).toBe(8000);
+      expect(stream?.presenterPeerId).toBe("peer-1");
+      // And the row is open again, so retention will not come for it.
+      const row = await getPool().query<{ ended_at: Date | null }>(
+        `SELECT ended_at FROM hls_sessions WHERE id = $1`,
+        [id],
       );
-      const byId = new Map(rows.rows.map((row) => [row.id, row.ended_at]));
-      expect(byId.get(openA)).not.toBeNull();
-      expect(byId.get(openB)).not.toBeNull();
-      // The already-closed row keeps its old timestamp (an hour ago), so
-      // its retention clock is not restarted by the boot.
-      expect(byId.get(closed)!.getTime()).toBeLessThan(Date.now() - 50 * 60_000);
-      // and the freshly ended rows are not swept yet: the window starts now.
-      await expect(sweepHlsSessions()).resolves.toBe(1);
+      expect(row.rows[0]!.ended_at).toBeNull();
     });
 
-    it("is a no-op with nothing open", async () => {
-      await expect(reconcileStaleHlsSessions()).resolves.toBe(0);
+    it("adopts EVERY rung of a ladder, rather than stopping the party", async () => {
+      // The dangerous shape of this merge. A ladder's prefixes end
+      // `-1080p30`, and the boot reconcile reads `startedAt` out of the
+      // prefix: a parser that cannot see past the rung answers NaN, calls the
+      // row unadoptable, and STOPS a live egress. On every deploy, for every
+      // watch party, which is the exact failure the adoption path was written
+      // to prevent.
+      for (const rung of ["720p30", "1080p30"]) {
+        await makeSession({
+          channelId: channelA,
+          prefix: `live/${channelA}/8200-${rung}`,
+          endedMinutesAgo: 0,
+          egressId: `EG_${rung}`,
+          presenterPeerId: "peer-1",
+          videoTrackId: "TR_V",
+          rung,
+        });
+      }
+      const { stop } = mediaServer([
+        { egressId: "EG_1080p30", roomName: channelA },
+        { egressId: "EG_720p30", roomName: channelA },
+      ]);
+
+      const result = await reconcileStaleHlsSessions();
+      expect(stop).not.toHaveBeenCalled();
+      expect(result.stopped).toBe(0);
+      expect(result.adopted).toBe(2);
+      const stream = liveHlsStreamFor(channelA);
+      expect(stream?.startedAt).toBe(8200);
+      // Both rungs are in the room, not just whichever arrived last, and the
+      // top one is what the presenter is told to publish for.
+      expect(liveHlsRungsFor(channelA).map((r) => r.name)).toEqual([
+        "720p30",
+        "1080p30",
+      ]);
+      expect(stream?.topHeight).toBe(1080);
+    });
+
+    it("STOPS an egress no session row owns", async () => {
+      const { stop } = mediaServer([
+        { egressId: "EG_orphan", roomName: channelB },
+      ]);
+      const result = await reconcileStaleHlsSessions();
+      expect(stop).toHaveBeenCalledWith("EG_orphan");
+      expect(result.stopped).toBe(1);
+      expect(result.adopted).toBe(0);
+    });
+
+    it("ends an open row whose egress is gone, so retention runs", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      const id = await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/8100`,
+        endedMinutesAgo: null,
+        egressId: "EG_dead",
+        presenterPeerId: "peer-1",
+      });
+      mediaServer([]);
+      const result = await reconcileStaleHlsSessions();
+      expect(result.ended).toBe(1);
+      expect(result.adopted).toBe(0);
+      const row = await getPool().query<{ ended_at: Date | null }>(
+        `SELECT ended_at FROM hls_sessions WHERE id = $1`,
+        [id],
+      );
+      expect(row.rows[0]!.ended_at).not.toBeNull();
+    });
+
+    it("does nothing at all when the media server cannot be asked", async () => {
+      // Ending rows blind would let the sweep delete segments from under an
+      // egress that is still writing them.
+      const id = await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/8200`,
+        endedMinutesAgo: null,
+        egressId: "EG_unknown",
+        presenterPeerId: "peer-1",
+      });
+      const { stop } = mediaServer([], { failList: true });
+      const result = await reconcileStaleHlsSessions();
+      expect(result).toEqual({ adopted: 0, ended: 0, stopped: 0 });
+      expect(stop).not.toHaveBeenCalled();
+      const row = await getPool().query<{ ended_at: Date | null }>(
+        `SELECT ended_at FROM hls_sessions WHERE id = $1`,
+        [id],
+      );
+      expect(row.rows[0]!.ended_at).toBeNull();
+    });
+
+    it("is a no-op with nothing open and nothing running", async () => {
+      mediaServer([]);
+      await expect(reconcileStaleHlsSessions()).resolves.toEqual({
+        adopted: 0,
+        ended: 0,
+        stopped: 0,
+      });
+    });
+  });
+
+  describe("the sweep refuses to delete under a live egress", () => {
+    afterEach(() => {
+      resetLiveHlsForTests();
+    });
+
+    function mediaServer(
+      running: string[],
+      opts: { failList?: boolean } = {},
+    ) {
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: async () => ({ egressId: "unused" }),
+          stopEgress: async () => {},
+          listEgress: async () => {
+            if (opts.failList) {
+              throw new Error("ListEgress: 503");
+            }
+            return running.map((egressId) => ({ egressId, status: 1 }));
+          },
+        },
+      });
+    }
+
+    it("skips a due session whose egress is STILL RUNNING, however stale the row looks", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/9100`,
+        endedMinutesAgo: 60,
+        egressId: "EG_still_writing",
+      });
+      seedObjects(`live/${channelA}/9100`, 3);
+      mediaServer(["EG_still_writing"]);
+
+      await expect(sweepHlsSessions()).resolves.toBe(0);
+      // Not one segment deleted out from under a live stream.
+      expect(bucket.deleted).toHaveLength(0);
+      expect(
+        [...bucket.objects].filter((k) => k.startsWith(`live/${channelA}/9100`)),
+      ).toHaveLength(4);
+    });
+
+    it("still sweeps a due session whose egress has finished", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/9200`,
+        endedMinutesAgo: 60,
+        egressId: "EG_finished",
+      });
+      seedObjects(`live/${channelA}/9200`, 2);
+      mediaServer(["EG_somebody_else"]);
+      await expect(sweepHlsSessions()).resolves.toBe(1);
+      expect(bucket.deleted.length).toBeGreaterThan(0);
+    });
+
+    it("deletes nothing when the media server cannot be asked", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/9300`,
+        endedMinutesAgo: 60,
+        egressId: "EG_unknown",
+      });
+      seedObjects(`live/${channelA}/9300`, 2);
+      mediaServer([], { failList: true });
+      await expect(sweepHlsSessions()).resolves.toBe(0);
+      expect(bucket.deleted).toHaveLength(0);
     });
   });
 });

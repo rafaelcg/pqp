@@ -575,13 +575,26 @@ async function main() {
   // initDb just created.
   stopVoiceHeartbeat = startVoiceRegistry();
 
-  // Live HLS: sessions a previous process left open are ended (and their
-  // egress stopped) so retention can run, then the monitor watches every
-  // egress this process starts. API process only: the rooms live here.
+  // Live HLS: a restart does not stop the media box, so before anything else
+  // this process ADOPTS the egresses still running for sessions it owns (a
+  // deploy therefore does not interrupt a live watch party), stops any nobody
+  // owns, and ends only the rows with nothing behind them so retention can
+  // run. Then the monitor watches every egress from here on. API process
+  // only: the rooms live in this process.
   if (isLiveHlsEnabled()) {
-    await reconcileStaleHlsSessions().catch((error: unknown) => {
-      console.error("[hls] stale session reconcile failed:", error);
-    });
+    const reconciled = await reconcileStaleHlsSessions().catch(
+      (error: unknown) => {
+        console.error("[hls] boot reconcile failed:", error);
+        return null;
+      },
+    );
+    if (reconciled && (reconciled.adopted || reconciled.stopped)) {
+      console.log(
+        `[hls] boot: adopted ${reconciled.adopted} live session(s), ` +
+          `stopped ${reconciled.stopped} orphan egress(es), ` +
+          `ended ${reconciled.ended} stale row(s)`,
+      );
+    }
     startLiveHlsMonitor();
   }
 

@@ -7,7 +7,7 @@ import {
   internalPlaylistUrl,
   isLiveHlsFailed,
   setLiveHlsChangeListener,
-  stopActiveEgressesForRoom,
+  listActiveEgresses,
   isLiveHlsEnabled,
   isLiveHlsEnabledForServer,
   liveHlsConfig,
@@ -854,7 +854,7 @@ describe("live HLS egress", () => {
       expect(lk.start).toHaveBeenCalledTimes(2);
     });
 
-    it("stopActiveEgressesForRoom stops only the live ones", async () => {
+    it("listActiveEgresses reports only the live ones", async () => {
       enableHls();
       const lk = fakeLiveKit();
       setLiveHlsTestHooks({ egress: lk.api });
@@ -865,8 +865,18 @@ describe("live HLS egress", () => {
         videoTrackId: "y",
       });
       lk.kill("EG_1");
-      expect(await stopActiveEgressesForRoom("room")).toEqual(["EG_2"]);
-      expect(lk.stop).toHaveBeenCalledTimes(1);
+      const active = await listActiveEgresses();
+      expect(active?.map((info) => info.egressId)).toEqual(["EG_2"]);
+    });
+
+    it("listActiveEgresses answers null when the media server cannot be asked", async () => {
+      // Null is NOT "nothing running": the retention sweep must refuse to
+      // delete rather than read this as permission.
+      enableHls();
+      const lk = fakeLiveKit();
+      lk.list.mockRejectedValue(new Error("ListEgress: 503"));
+      setLiveHlsTestHooks({ egress: lk.api });
+      expect(await listActiveEgresses()).toBeNull();
     });
   });
 });
