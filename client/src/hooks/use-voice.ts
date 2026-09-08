@@ -75,6 +75,10 @@ import {
   type VideoQuality,
 } from "@/lib/video-quality";
 import {
+  hlsSourceFor,
+  readPresenterUplinkBps,
+} from "@/lib/hls-source-quality";
+import {
   createSpeakingTracker,
   createStreamAnalyser,
   parseVadThreshold,
@@ -727,6 +731,14 @@ export type VoiceSessionProvider = (
   peerId: string,
 ) => Promise<VoiceSessionInfo | null>;
 
+/**
+ * How often the presenter's uplink is re-read while a watch party is
+ * transcoding from their share. The same 2 s the mesh's upload budget uses
+ * (`SCREEN_BUDGET_SAMPLE_MS`), for the same reason: often enough to notice a
+ * link going bad, rarely enough to cost nothing.
+ */
+const HLS_SOURCE_SAMPLE_MS = 2_000;
+
 export function createVoiceController(transport: RealtimeTransport) {
   let manager: ReturnType<typeof createPeerConnectionManager> | null = null;
   let sfu: LiveKitSession | null = null;
@@ -736,6 +748,38 @@ export function createVoiceController(transport: RealtimeTransport) {
   subscribeReceiveQuality((quality) => {
     void sfu?.setReceiveQuality(quality);
   });
+  /**
+   * The presenter's own picture while a watch party is transcoding from it.
+   * Sampled rather than computed once because the uplink is the thing that
+   * decides, and it moves. The cadence matches the mesh's own upload-budget
+   * sampler, which is the reading this reuses.
+   */
+  let hlsSourceTimer: ReturnType<typeof setInterval> | null = null;
+  async function refreshHlsSource(): Promise<void> {
+    const wanted = hlsSourceFor({
+      streamTopHeight: state.liveStream?.topHeight,
+      isSharingScreen: state.isSharingScreen,
+      usingSfu: state.usingSfu,
+      uplinkBps: null,
+    });
+    if (!wanted) {
+      if (hlsSourceTimer !== null) {
+        clearInterval(hlsSourceTimer);
+        hlsSourceTimer = null;
+      }
+      await sfu?.setHlsSource(null);
+      return;
+    }
+    if (hlsSourceTimer === null) {
+      hlsSourceTimer = setInterval(() => {
+        void refreshHlsSource();
+      }, HLS_SOURCE_SAMPLE_MS);
+    }
+    await sfu?.setHlsSource({
+      ...wanted,
+      uplinkBps: await readPresenterUplinkBps(),
+    });
+  }
   let sessionProvider: VoiceSessionProvider | null = null;
   /**
    * What to assume when `welcome` carries no `transport` — i.e. the server
@@ -2783,6 +2827,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.liveStream = message.stream
           ? { ...message.stream, hlsUrl: resolveHlsUrl(message.stream.hlsUrl) }
           : null;
+        // An egress that just started (or stopped) changes what the
+        // presenter should be publishing: the ladder transcodes from their
+        // track, so a 720p share caps every viewer at 720p.
+        void refreshHlsSource();
         emit();
         break;
       case "channel-live":

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EgressStatus, EncodingOptionsPreset } from "livekit-server-sdk";
+import { EgressStatus } from "livekit-server-sdk";
 import {
   type LiveHlsEgressApi,
   HLS_MAX_RESTARTS,
@@ -11,8 +11,10 @@ import {
   isLiveHlsEnabled,
   isLiveHlsEnabledForServer,
   liveHlsConfig,
-  liveHlsPreset,
+  liveHlsLadder,
+  liveHlsRungsFor,
   liveHlsServerAllowlist,
+  setLiveHlsSfuLoadReader,
   liveHlsStreamFor,
   reconcileLiveHls,
   resetLiveHlsForTests,
@@ -37,6 +39,10 @@ function enableHls() {
   process.env.LIVE_HLS_S3_SECRET_ACCESS_KEY = "sk";
   process.env.LIVE_HLS_S3_ENDPOINT = "https://s3.example.test";
   process.env.LIVE_HLS_DELAY_SECONDS = "10";
+  // Most of this suite pins the behaviour of ONE rendition, which is still a
+  // supported deployment (`LIVE_HLS_LADDER=720p30`, and what `LIVE_HLS_PRESET`
+  // means). The ladder has its own describe block below, which sets its own.
+  process.env.LIVE_HLS_LADDER = "720p30";
 }
 
 function disableHls() {
@@ -54,6 +60,9 @@ function disableHls() {
   delete process.env.LIVE_HLS_DELAY_SECONDS;
   delete process.env.LIVE_HLS_SERVER_ALLOWLIST;
   delete process.env.LIVE_HLS_PRESET;
+  delete process.env.LIVE_HLS_LADDER;
+  delete process.env.LIVE_HLS_MAX_LADDER_MBPS;
+  delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
 }
 
 describe("live HLS egress", () => {
@@ -74,6 +83,11 @@ describe("live HLS egress", () => {
     expect(liveHlsConfig()).toEqual({
       enabled: true,
       delaySeconds: 10,
+      // The presenter's client reads the top of this to decide whether to
+      // publish past the large-room cap.
+      ladder: [
+        { name: "720p30", width: 1280, height: 720, videoKbps: 1800 },
+      ],
       allowlisted: false,
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
@@ -173,15 +187,19 @@ describe("live HLS egress", () => {
       expect.objectContaining({
         videoTrackId: "TR_V",
         audioTrackId: "TR_A",
-        encodingOptions: EncodingOptionsPreset.H264_720P_30,
+        encodingOptions: expect.objectContaining({
+          width: 1280,
+          height: 720,
+          videoBitrate: 1800,
+        }),
       }),
     );
     const output = start.mock.calls[0]![1] as {
       livePlaylistName: string;
       playlistName: string;
     };
-    expect(output.livePlaylistName).toMatch(/^\d+\.m3u8$/);
-    expect(output.playlistName).toMatch(/^\d+-index\.m3u8$/);
+    expect(output.livePlaylistName).toMatch(/^\d+-720p30\.m3u8$/);
+    expect(output.playlistName).toMatch(/^\d+-720p30-index\.m3u8$/);
 
     const again = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     expect(again).toEqual(first);
@@ -313,16 +331,19 @@ describe("live HLS egress", () => {
       expect(liveHlsConfig(SERVER)).toEqual({
         enabled: true,
         delaySeconds: 10,
+        ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
       });
       expect(liveHlsConfig(OTHER_SERVER)).toEqual({
         enabled: false,
         delaySeconds: 10,
+        ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
       });
       expect(liveHlsConfig()).toEqual({
         enabled: true,
         delaySeconds: 10,
+        ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
       });
     });
@@ -353,51 +374,201 @@ describe("live HLS egress", () => {
     });
   });
 
-  describe("LIVE_HLS_PRESET", () => {
-    async function startWith(preset: string | undefined) {
+  describe("the ladder", () => {
+    function fakeEgress(started: string[]) {
+      const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+        async (_room, _output, opts) => {
+          const options = opts.encodingOptions as { height?: number };
+          started.push(String(options?.height ?? "?"));
+          return { egressId: `EG_${started.length}` };
+        },
+      );
+      return start;
+    }
+
+    async function startLadder(ladder: string | undefined) {
       resetLiveHlsForTests();
       enableHls();
-      if (preset === undefined) {
-        delete process.env.LIVE_HLS_PRESET;
+      if (ladder === undefined) {
+        delete process.env.LIVE_HLS_LADDER;
       } else {
-        process.env.LIVE_HLS_PRESET = preset;
+        process.env.LIVE_HLS_LADDER = ladder;
       }
+      const heights: string[] = [];
+      const start = fakeEgress(heights);
+      setLiveHlsTestHooks({
+        egress: { startTrackCompositeEgress: start, stopEgress: vi.fn() },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      return { stream, heights, start };
+    }
+
+    it("defaults to 1080p30 + 720p30, started lowest rung first", async () => {
+      const { stream, heights } = await startLadder(undefined);
+      expect(stream).not.toBeNull();
+      // Lowest first: a viewer is never left with nothing while the
+      // expensive rendition is still spinning up.
+      expect(heights).toEqual(["720", "1080"]);
+      expect(liveHlsRungsFor(CHANNEL).map((rung) => rung.name)).toEqual([
+        "720p30",
+        "1080p30",
+      ]);
+    });
+
+    it("a one-entry ladder is exactly the old single-rendition behaviour", async () => {
+      const { heights } = await startLadder("720p30");
+      expect(heights).toEqual(["720"]);
+    });
+
+    it("LIVE_HLS_PRESET still names a one-rung ladder", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      delete process.env.LIVE_HLS_LADDER;
+      process.env.LIVE_HLS_PRESET = "1080p30";
+      expect(liveHlsLadder().map((rung) => rung.name)).toEqual(["1080p30"]);
+    });
+
+    it("each rung gets its own object prefix and playlists", async () => {
+      const { start } = await startLadder("480p30,1080p30");
+      const prefixes = start.mock.calls.map(
+        (call) => (call[1] as { filenamePrefix: string }).filenamePrefix,
+      );
+      expect(prefixes[0]).toMatch(/\/\d+-480p30$/);
+      expect(prefixes[1]).toMatch(/\/\d+-1080p30$/);
+      const names = start.mock.calls.map(
+        (call) => (call[1] as { livePlaylistName: string }).livePlaylistName,
+      );
+      expect(names[0]).toMatch(/^\d+-480p30\.m3u8$/);
+      expect(names[1]).toMatch(/^\d+-1080p30\.m3u8$/);
+    });
+
+    it("garbage in the list logs once and still starts a ladder", async () => {
+      logEvent.mockClear();
+      const { heights } = await startLadder("4k,720p30");
+      expect(heights).toEqual(["720"]);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsLadderInvalid",
+        expect.objectContaining({ value: "4k", using: ["720p30"] }),
+      );
+    });
+
+    it("refuses a rung over the ladder budget and logs the refusal", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      process.env.LIVE_HLS_LADDER = "1080p30,720p30";
+      // One rung's worth: the lowest starts anyway, the second is refused.
+      process.env.LIVE_HLS_MAX_LADDER_MBPS = "150";
+      logEvent.mockClear();
+      const heights: string[] = [];
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: fakeEgress(heights),
+          stopEgress: vi.fn(),
+        },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
+      expect(heights).toEqual(["720"]);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsRungRefused",
+        expect.objectContaining({
+          rung: "1080p30",
+          refusal: "ladder-budget",
+        }),
+      );
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsStarted",
+        expect.objectContaining({
+          started: ["720p30"],
+          refused: ["1080p30:ladder-budget"],
+        }),
+      );
+    });
+
+    it("the lowest rung starts even when the budget is zero", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      process.env.LIVE_HLS_LADDER = "1080p30,720p30";
+      process.env.LIVE_HLS_MAX_LADDER_MBPS = "0";
+      const heights: string[] = [];
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: fakeEgress(heights),
+          stopEgress: vi.fn(),
+        },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      expect(stream).not.toBeNull();
+      expect(heights).toEqual(["720"]);
+    });
+
+    it("the WebRTC already on the box can refuse a rung on its own", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      process.env.LIVE_HLS_LADDER = "1080p30,720p30";
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "320";
+      const heights: string[] = [];
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: fakeEgress(heights),
+          stopEgress: vi.fn(),
+        },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      // 150 (the rung about to start) + 150 (the one already counted) + 60
+      // of cameras is over 320.
+      setLiveHlsSfuLoadReader(async () => 60);
+      logEvent.mockClear();
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
+      expect(heights).toEqual(["720"]);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsRungRefused",
+        expect.objectContaining({ refusal: "box-budget" }),
+      );
+    });
+
+    it("a rung that fails to start does not take the stream down with it", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      process.env.LIVE_HLS_LADDER = "1080p30,720p30";
+      let call = 0;
       const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
-        async () => ({ egressId: "EG_1" }),
+        async () => {
+          call += 1;
+          if (call === 2) {
+            throw new Error("egress busy");
+          }
+          return { egressId: `EG_${call}` };
+        },
       );
       setLiveHlsTestHooks({
         egress: { startTrackCompositeEgress: start, stopEgress: vi.fn() },
         findTracks: async () => ({ videoTrackId: "TR_V" }),
       });
       expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
-      return (start.mock.calls[0]![2] as { encodingOptions?: unknown })
-        .encodingOptions;
-    }
-
-    it("defaults to 720p30", async () => {
-      expect(await startWith(undefined)).toBe(EncodingOptionsPreset.H264_720P_30);
-      expect(await startWith("720p30")).toBe(EncodingOptionsPreset.H264_720P_30);
+      expect(liveHlsRungsFor(CHANNEL).map((rung) => rung.name)).toEqual([
+        "720p30",
+      ]);
     });
 
-    it("1080p30 picks the 1080p preset", async () => {
-      expect(await startWith("1080p30")).toBe(
-        EncodingOptionsPreset.H264_1080P_30,
-      );
-      expect(await startWith(" 1080P30 ")).toBe(
-        EncodingOptionsPreset.H264_1080P_30,
-      );
-    });
-
-    it("garbage logs once and uses the default", async () => {
-      logEvent.mockClear();
-      expect(await startWith("4k")).toBe(EncodingOptionsPreset.H264_720P_30);
-      expect(logEvent).toHaveBeenCalledWith(
-        "voice.hlsPresetInvalid",
-        expect.objectContaining({ value: "4k", using: "720p30" }),
-      );
-      logEvent.mockClear();
-      expect(liveHlsPreset()).toBe(EncodingOptionsPreset.H264_720P_30);
-      expect(logEvent).not.toHaveBeenCalled();
+    it("stopping the share stops every rung", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      process.env.LIVE_HLS_LADDER = "1080p30,720p30";
+      const stop = vi.fn();
+      const heights: string[] = [];
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: fakeEgress(heights),
+          stopEgress: stop,
+        },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await reconcileLiveHls(CHANNEL, null, SERVER);
+      expect(stop.mock.calls.map((call) => call[0])).toEqual(["EG_1", "EG_2"]);
     });
   });
 

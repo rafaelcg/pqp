@@ -62,9 +62,11 @@ going live (streaming responsibility / no pirated content).
   `/opt/sfu/hls/egress.yaml` must be mode 0644 so the image's non-root user
   can read it (`tools/sfu/hls/docker-compose.yaml`, `egress.yaml.tmpl`).
   This is the configuration that runs on staging.
-- The egress encoding is `LIVE_HLS_PRESET` (`720p30` default, `1080p30`),
-  read per session start (`liveHlsPreset()` in `hls-egress.ts`). It is still
-  one value per deployment, not per room or server size.
+- ~~The egress encoding is `LIVE_HLS_PRESET`, one value per deployment.~~
+  Fixed: `LIVE_HLS_LADDER` (default `1080p30,720p30`) runs one egress per
+  rung and the proxy serves a master playlist, so each viewer gets what
+  their link can carry. `LIVE_HLS_PRESET` still names a one-rung ladder.
+  See "The ladder" below.
 
 ## Egress health and stalls (added 2026-09-08)
 
@@ -133,3 +135,43 @@ three reconnects it shows "A transmissão caiu" with a retry button. A fresh
 - Retention sweep: a stream ended without `keep_replay` disappears after
   `LIVE_HLS_RETENTION_MINUTES`; one with `keep_replay` survives past that and
   disappears after `LIVE_HLS_REPLAY_HOURS`.
+
+## The adaptive ladder (added 2026-09-08)
+
+One egress encodes one profile: `TrackCompositeEgressRequest` carries
+`repeated segment_outputs` but a single `options` oneof (protocol 1.50.4,
+which is what `livekit-server-sdk` ^2.17.0 and the pinned `livekit/egress
+v1.14.1` speak). Verified against the installed protocol rather than assumed.
+So a ladder is one egress per rung, each writing to its own
+`live/<channel>/<startedAt>-<rung>` prefix with its own `hls_sessions` row
+(`rung` column), plus a master playlist the API generates per request.
+
+| Var | Default | Notes |
+|---|---|---|
+| `LIVE_HLS_LADDER` | `1080p30,720p30` | Comma-separated rungs, lowest started first. `1080p30` 4500 kbit/s, `720p30` 1800, `480p30` 900, `360p30` 500; `1080p30@3500` overrides a bitrate. One entry is the old single-rendition behaviour |
+| `LIVE_HLS_PRESET` | unset | Still read, as the name of a ONE-RUNG ladder. `LIVE_HLS_LADDER` wins |
+| `LIVE_HLS_MAX_LADDER_MBPS` | `300` | What the ladder alone may claim of the box, in the promotion guard's own Mbit/s. Two rungs' worth |
+
+**Why not LiveKit's own preset bitrates.** They are 3000 for 720p30 and 4500
+for 1080p30. hls.js switches up when its estimate times `abrBandWidthUpFactor`
+(0.7) clears the next level and down when the estimate times
+`abrBandWidthFactor` (0.95) falls under the current one, so those two leave a
+band of 4286 to 4737 kbit/s: about 1.10x, which is where a viewer oscillates
+between two renditions that look nearly the same. 1800 against 4500 gives
+4737 to 6430, about 1.36x, and makes 720p a rung a phone on mobile data can
+actually hold.
+
+**What a weak mobile link gets.** With a two-rung ladder and no rung under
+1800 kbit/s, a viewer who cannot hold 720p buffers. There is no audio-only
+fallback: the egress muxes audio into every rendition and none of them is
+audio-only, so hls.js has nothing lower to fall to. The mitigation is
+configuration, not code: `LIVE_HLS_LADDER=1080p30,720p30,480p30` with
+`LIVE_HLS_MAX_LADDER_MBPS=450` for an event that expects that audience, at
+the cost of a third core on the media box.
+
+**The budget.** A rendition costs roughly one core on moving content
+(`docs/CAPACITY.md` §2) and the box is 4 vCPU, so a rung is priced at a
+quarter of `VOICE_PROMOTION_MAX_SFU_MBPS` and checked against both the ladder
+budget and the whole-box budget including the WebRTC already on it. The
+lowest rung always starts. Nothing here is measured with egress and a WebRTC
+room running at once; it is arithmetic, and it refuses rather than guesses.

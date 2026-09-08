@@ -3729,6 +3729,17 @@ CREATE INDEX IF NOT EXISTS idx_hls_sessions_cleanup
 -- egress writes beside (not under) the session prefix, `live/<channel>/<id>.json`.
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS egress_id TEXT;
 
+-- Which rung of the adaptive ladder this row is (`1080p30`, `720p30`, ...).
+-- One egress encodes one profile, so a ladder is one row per rendition, all
+-- sharing a `started_at` and differing only in the `-<rung>` suffix on
+-- `object_prefix`. NULL is a pre-ladder row: one rendition, no suffix.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS rung TEXT;
+
+-- The playlist proxy builds a session's master playlist by listing its rungs.
+CREATE INDEX IF NOT EXISTS idx_hls_sessions_channel_prefix
+  ON hls_sessions (channel_id, object_prefix)
+  WHERE cleaned_at IS NULL;
+
 -- One-time host acknowledgment sheet: "you're responsible for what you
 -- stream". Shown once per user per server the first time they start a
 -- watch-party / HLS broadcast in that server; never again once confirmed.

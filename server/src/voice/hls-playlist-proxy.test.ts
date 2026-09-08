@@ -15,7 +15,7 @@ const pool = vi.hoisted(() => ({
   rowCount: 1,
   query: vi.fn(async (_sql: string, _params?: unknown[]) => ({
     rowCount: pool.rowCount,
-    rows: [],
+    rows: [] as { rung: string }[],
   })),
 }));
 vi.mock("../db.js", () => ({ getPool: () => pool }));
@@ -48,6 +48,7 @@ function disableHls() {
 }
 
 const {
+  buildMasterPlaylistFor,
   buildSignedPlaylist,
   HlsPlaylistNotFound,
   HlsPlaylistUnavailable,
@@ -201,5 +202,121 @@ describe("buildSignedPlaylist", () => {
     await buildSignedPlaylist(CHANNEL, STARTED_AT);
     const [, params] = pool.query.mock.calls[0]!;
     expect(params).toEqual([CHANNEL, `live/${CHANNEL}/${STARTED_AT}`]);
+  });
+});
+
+describe("buildMasterPlaylistFor", () => {
+  beforeEach(() => {
+    enableHls();
+    pool.rowCount = 1;
+    pool.query.mockReset();
+  });
+
+  afterEach(() => {
+    disableHls();
+    pool.query.mockReset();
+  });
+
+  function rungRows(rungs: string[]) {
+    pool.query.mockImplementation(async () => ({
+      rowCount: rungs.length,
+      rows: rungs.map((rung) => ({ rung })),
+    }));
+  }
+
+  it("lists every rung the session recorded, lowest bitrate first", async () => {
+    rungRows(["1080p30", "720p30"]);
+    const body = await buildMasterPlaylistFor({
+      channelId: CHANNEL,
+      startedAt: STARTED_AT,
+    });
+    const lines = body!.trim().split("\n");
+    expect(lines[0]).toBe("#EXTM3U");
+    expect(lines[2]).toContain("RESOLUTION=1280x720");
+    expect(lines[3]).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/720p30`,
+    );
+    expect(lines[4]).toContain("RESOLUTION=1920x1080");
+    expect(lines[5]).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/1080p30`,
+    );
+  });
+
+  it("stamps the viewer's own token onto each variant", async () => {
+    rungRows(["1080p30", "720p30"]);
+    const body = await buildMasterPlaylistFor({
+      channelId: CHANNEL,
+      startedAt: STARTED_AT,
+      token: "tok en/+",
+    });
+    // Root-relative, and carrying its OWN query string: relative resolution
+    // drops the master's query but keeps the variant's, which is the only
+    // way a header-less player (Safari native, iOS) authorises the second
+    // request.
+    for (const line of body!.split("\n").filter((l) => l.startsWith("/api"))) {
+      expect(line).toContain("?t=tok%20en%2F%2B");
+    }
+  });
+
+  it("only looks at rows of THIS session", async () => {
+    rungRows(["720p30"]);
+    await buildMasterPlaylistFor({ channelId: CHANNEL, startedAt: STARTED_AT });
+    const params = pool.query.mock.calls[0]![1] as unknown[];
+    expect(params[0]).toBe(CHANNEL);
+    expect(params[1]).toBe(`live/${CHANNEL}/${STARTED_AT}-%`);
+  });
+
+  it("a rung this build does not know is left out rather than guessed at", async () => {
+    rungRows(["720p30", "4320p60"]);
+    const body = await buildMasterPlaylistFor({
+      channelId: CHANNEL,
+      startedAt: STARTED_AT,
+    });
+    expect(body!.match(/#EXT-X-STREAM-INF/g)).toHaveLength(1);
+    expect(body).toContain("RESOLUTION=1280x720");
+  });
+
+  it("a pre-ladder session has no rungs and gets no master", async () => {
+    rungRows([]);
+    expect(
+      await buildMasterPlaylistFor({
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("buildSignedPlaylist with a rung", () => {
+  beforeEach(() => {
+    enableHls();
+    pool.rowCount = 1;
+    pool.query.mockImplementation(async () => ({ rowCount: 1, rows: [] }));
+  });
+
+  afterEach(() => {
+    disableHls();
+    vi.unstubAllGlobals();
+    pool.query.mockReset();
+  });
+
+  it("looks up and fetches that rendition's own objects", async () => {
+    const fetched: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        fetched.push(url);
+        return new Response(PLAYLIST_BODY, { status: 200 });
+      }),
+    );
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "1080p30");
+    const params = pool.query.mock.calls[0]![1] as unknown[];
+    expect(params[1]).toBe(`live/${CHANNEL}/${STARTED_AT}-1080p30`);
+    expect(fetched[0]).toContain(
+      encodeURIComponent(`live/${CHANNEL}/${STARTED_AT}-1080p30.m3u8`).replace(
+        /%2F/g,
+        "/",
+      ),
+    );
   });
 });

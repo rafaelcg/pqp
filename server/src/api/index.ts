@@ -122,6 +122,7 @@ import {
 } from "../voice/backends.js";
 import { liveHlsConfig } from "../voice/hls-egress.js";
 import {
+  buildMasterPlaylistFor,
   buildSignedPlaylist,
   HlsPlaylistNotFound,
   HlsPlaylistUnavailable,
@@ -1875,6 +1876,7 @@ async function hlsPlaylistResponse(
   channelId: string,
   startedAt: string,
   userId: string,
+  options: { rung?: string; token?: string | null } = {},
 ): Promise<RawResponse> {
   await requireChannelAccess(channelId, userId);
   const parsedStartedAt = Number(startedAt);
@@ -1882,8 +1884,23 @@ async function hlsPlaylistResponse(
     throw new NotFound("No live stream for this channel");
   }
   let body: string;
+  // No rung named: this is the session URL a viewer was handed, which is the
+  // MASTER playlist when the session ran a ladder. A session with no rung
+  // rows predates the ladder and still has a single media playlist of its
+  // own, so it falls through to the same call it always made.
+  if (!options.rung) {
+    const master = await buildMasterPlaylistFor({
+      channelId,
+      startedAt: parsedStartedAt,
+      token: options.token,
+    });
+    if (master !== null) {
+      res.setHeader("Cache-Control", "no-store");
+      return new RawResponse(master, "application/vnd.apple.mpegurl");
+    }
+  }
   try {
-    body = await buildSignedPlaylist(channelId, parsedStartedAt);
+    body = await buildSignedPlaylist(channelId, parsedStartedAt, options.rung);
   } catch (error) {
     if (error instanceof HlsPlaylistNotFound) {
       throw new NotFound("No live stream for this channel");
@@ -1899,11 +1916,31 @@ async function hlsPlaylistResponse(
 
 router.get(
   "/api/voice/hls-playlist/:channelId/:startedAt",
-  async ({ user, res }, { channelId, startedAt }) =>
-    hlsPlaylistResponse(res, channelId!, startedAt!, user.id),
+  async ({ user, res, url }, { channelId, startedAt }) =>
+    hlsPlaylistResponse(res, channelId!, startedAt!, user.id, {
+      token: url.searchParams.get(HLS_VIEWER_TOKEN_PARAM),
+    }),
 );
 
-const HLS_PLAYLIST_PATH = /^\/api\/voice\/hls-playlist\/([^/]{1,64})\/(\d{1,20})$/;
+/**
+ * One rendition of a ladder. The master playlist above points at these, and
+ * they are what actually carry segments; a viewer's player switches between
+ * them without ever coming back through the master.
+ */
+router.get(
+  "/api/voice/hls-playlist/:channelId/:startedAt/:rung",
+  async ({ user, res, url }, { channelId, startedAt, rung }) =>
+    hlsPlaylistResponse(res, channelId!, startedAt!, user.id, {
+      rung: rung!,
+      token: url.searchParams.get(HLS_VIEWER_TOKEN_PARAM),
+    }),
+);
+
+// The rung is optional: without it the path names the session (the master
+// playlist), with it one rendition. The viewer token is bound to
+// { user, channel, startedAt } and so authorises both.
+const HLS_PLAYLIST_PATH =
+  /^\/api\/voice\/hls-playlist\/([^/]{1,64})\/(\d{1,20})(?:\/([A-Za-z0-9]{1,16}))?$/;
 
 /**
  * The header-less half of the playlist proxy. Only reached when the request
@@ -1919,6 +1956,7 @@ async function serveHlsPlaylistWithToken(
   channelId: string,
   startedAt: string,
   userId: string,
+  options: { rung?: string; token?: string | null } = {},
 ): Promise<void> {
   if (!apiLimiter.take(`user:${userId}`)) {
     res.setHeader("Retry-After", String(apiLimiter.retryAfter(`user:${userId}`)));
@@ -1926,7 +1964,13 @@ async function serveHlsPlaylistWithToken(
     return;
   }
   try {
-    const result = await hlsPlaylistResponse(res, channelId, startedAt, userId);
+    const result = await hlsPlaylistResponse(
+      res,
+      channelId,
+      startedAt,
+      userId,
+      options,
+    );
     res.writeHead(200, {
       "content-type": result.contentType,
       ...SECURITY_HEADERS,
@@ -6697,11 +6741,12 @@ export async function handleApi(
       ? HLS_PLAYLIST_PATH.exec(pathname)
       : null;
   if (hlsPlaylistMatch) {
+    const token = new URL(req.url ?? "/", "http://localhost").searchParams.get(
+      HLS_VIEWER_TOKEN_PARAM,
+    );
     const viewer = resolveHlsPlaylistViewer({
       bearerUserId: null,
-      token: new URL(req.url ?? "/", "http://localhost").searchParams.get(
-        HLS_VIEWER_TOKEN_PARAM,
-      ),
+      token,
       channelId: hlsPlaylistMatch[1]!,
       startedAt: Number(hlsPlaylistMatch[2]),
     });
@@ -6712,6 +6757,7 @@ export async function handleApi(
         hlsPlaylistMatch[1]!,
         hlsPlaylistMatch[2]!,
         viewer.userId,
+        { rung: hlsPlaylistMatch[3], token },
       );
       return;
     }

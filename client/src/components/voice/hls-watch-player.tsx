@@ -6,7 +6,15 @@ import {
   type MutableRefObject,
   type RefObject,
 } from "react";
-import { PictureInPicture2, Radio, Volume1, Volume2, VolumeX } from "lucide-react";
+import {
+  Check,
+  PictureInPicture2,
+  Radio,
+  Settings2,
+  Volume1,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { useTranslation } from "@/lib/i18n";
 import {
   chooseHlsEngine,
@@ -23,6 +31,16 @@ import {
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { resolveHlsUrl } from "@/lib/hls-playback";
 import { HlsStallWatch, channelIdFromHlsUrl } from "@/lib/hls-stall";
+import {
+  AUTO_HLS_QUALITY,
+  describeHlsLevel,
+  levelIndexFor,
+  offeredHlsLevels,
+  readHlsQuality,
+  writeHlsQuality,
+  type HlsLevelLike,
+  type HlsQualityPref,
+} from "@/lib/hls-quality";
 import {
   applyMuteToggle,
   applySliderChange,
@@ -42,6 +60,9 @@ interface HlsHandle {
   destroy: () => void;
   liveSyncPosition: number | null;
   media: HTMLMediaElement | null;
+  /** `-1` is Auto. Assigning pins the rendition; hls.js owns it otherwise. */
+  currentLevel: number;
+  levels: HlsLevelLike[];
 }
 
 /** Safari's non-standard presentation-mode video element. */
@@ -130,6 +151,32 @@ export function HlsWatchPlayer({
     writeHlsVolume(next);
   }, []);
 
+  // The ladder, and this viewer's own pick from it. `levels` is whatever the
+  // master playlist turned out to carry, so a stream that ran one rendition
+  // (a budget refusal, or a one-rung `LIVE_HLS_LADDER`) simply offers no
+  // menu rather than a menu with one row in it. The preference is held in a
+  // ref as well because the attach effect tears hls.js down and rebuilds it:
+  // picking a rung must not restart the stream.
+  const [levels, setLevels] = useState<HlsLevelLike[]>([]);
+  const [autoHeight, setAutoHeight] = useState<number | null>(null);
+  const [qualityOpen, setQualityOpen] = useState(false);
+  const [qualityPref, setQualityPref] =
+    useState<HlsQualityPref>(readHlsQuality);
+  const qualityPrefRef = useRef(qualityPref);
+  qualityPrefRef.current = qualityPref;
+
+  const pickQuality = useCallback((next: HlsQualityPref) => {
+    setQualityPref(next);
+    writeHlsQuality(next);
+    setQualityOpen(false);
+    const hls = hlsRef.current;
+    if (hls) {
+      hls.currentLevel = levelIndexFor(hls.levels, next);
+    }
+  }, []);
+
+  const offered = offeredHlsLevels(levels);
+
   useEffect(() => {
     setActiveSrc(src);
     setPhase("playing");
@@ -140,6 +187,13 @@ export function HlsWatchPlayer({
     setHasFrame(false);
     setNeedsUnmute(false);
     setHlsPlaybackStats(null);
+    // A restarted egress can come back with a different ladder (a rung
+    // refused for budget this time). Forget the old one rather than offering
+    // rows that no longer exist; the pin itself is kept and re-applied if
+    // the height is still there.
+    setLevels([]);
+    setAutoHeight(null);
+    setQualityOpen(false);
   }, [activeSrc, attempt]);
 
   const reconnect = useCallback(async () => {
@@ -500,6 +554,14 @@ export function HlsWatchPlayer({
         // non-fatal ones it retries on its own and the watchdog only notes.
         watch.onError({ fatal: Boolean(data.fatal) });
       });
+      player.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
+        // What Auto actually settled on, so the button can say
+        // "Automático (720p)" rather than leaving the viewer guessing which
+        // rendition they are paying for.
+        if (!cancelled) {
+          setAutoHeight(player.levels[data.level]?.height ?? null);
+        }
+      });
       player.on(Hls.Events.LEVEL_UPDATED, (_event, data) => {
         // The live playlist's EXT-X-MEDIA-SEQUENCE. A dead egress leaves
         // the playlist answering but never advancing; this is how the
@@ -508,7 +570,18 @@ export function HlsWatchPlayer({
       });
       player.loadSource(activeSrc);
       player.attachMedia(video);
-      player.on(Hls.Events.MANIFEST_PARSED, () => {
+      player.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+        if (!cancelled) {
+          setLevels(data.levels as HlsLevelLike[]);
+          // Re-apply the pin against THIS master playlist. A height that is
+          // not in it comes back as -1, which is hls.js's own Auto, so a
+          // viewer whose rung was refused for budget gets a working player
+          // rather than a stuck one.
+          player.currentLevel = levelIndexFor(
+            data.levels as HlsLevelLike[],
+            qualityPrefRef.current,
+          );
+        }
         void play();
       });
     }
@@ -614,6 +687,73 @@ export function HlsWatchPlayer({
           // button was visible and unclickable).
           className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/70 px-1.5 py-1"
         >
+          {offered.length > 1 ? (
+            <div className="relative">
+              <button
+                type="button"
+                data-testid="hls-quality-button"
+                aria-label={t("voice.hls.quality")}
+                aria-expanded={qualityOpen}
+                aria-haspopup="menu"
+                className="flex h-6 items-center gap-1 rounded-full px-1.5 text-[11px] font-medium text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+                onClick={() => setQualityOpen((open) => !open)}
+              >
+                <Settings2 className="h-3.5 w-3.5" />
+                {qualityPref.height === null
+                  ? autoHeight === null
+                    ? t("voice.hls.qualityAuto")
+                    : t("voice.hls.qualityAutoAt", {
+                        quality: describeHlsLevel(autoHeight),
+                      })
+                  : describeHlsLevel(qualityPref.height)}
+              </button>
+              {qualityOpen ? (
+                <div
+                  role="menu"
+                  data-testid="hls-quality-menu"
+                  className="absolute bottom-8 right-0 min-w-32 overflow-hidden rounded-lg bg-black/90 py-1 text-[12px] text-paper shadow-lg"
+                >
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={qualityPref.height === null}
+                    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-paper/15"
+                    onClick={() => pickQuality(AUTO_HLS_QUALITY)}
+                  >
+                    <Check
+                      className={cn(
+                        "h-3 w-3",
+                        qualityPref.height === null
+                          ? "opacity-100"
+                          : "opacity-0",
+                      )}
+                    />
+                    {t("voice.hls.qualityAuto")}
+                  </button>
+                  {offered.map((level) => (
+                    <button
+                      key={level.height}
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={qualityPref.height === level.height}
+                      className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-paper/15"
+                      onClick={() => pickQuality({ height: level.height })}
+                    >
+                      <Check
+                        className={cn(
+                          "h-3 w-3",
+                          qualityPref.height === level.height
+                            ? "opacity-100"
+                            : "opacity-0",
+                        )}
+                      />
+                      {describeHlsLevel(level.height)}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <button
             type="button"
             aria-pressed={silenced}

@@ -17,6 +17,15 @@ export const liveHlsStreamSchema = z.object({
   presenterPeerId: z.string().min(1),
   /** What the badge should claim, from the server that started the egress. */
   delaySeconds: z.number().int().positive().optional(),
+  /**
+   * The tallest rendition this session ACTUALLY started, in lines. The
+   * presenter's client reads it to decide whether to publish past the
+   * large-room 720p cap: the egress transcodes from the published track, so
+   * a 720p source cannot produce a 1080p rendition. Post-budget on purpose
+   * (a rung refused for load is not in it), and absent on a server that
+   * predates the ladder, where the client leaves the cap alone.
+   */
+  topHeight: z.number().int().positive().optional(),
 });
 
 export type LiveHlsStream = z.infer<typeof liveHlsStreamSchema>;

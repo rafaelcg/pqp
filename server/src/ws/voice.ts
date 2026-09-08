@@ -73,6 +73,7 @@ import {
   liveHlsStreamFor,
   reconcileLiveHls,
   setLiveHlsChangeListener,
+  setLiveHlsSfuLoadReader,
 } from "../voice/hls-egress.js";
 import {
   resolveVoiceTransport,
@@ -80,6 +81,7 @@ import {
 } from "../voice/transport-policy.js";
 import {
   decidePromotion,
+  estimateSfuLoadMbps,
   promotionBudgetMbps,
   type SfuRoomLoad,
 } from "../voice/promotion.js";
@@ -1178,6 +1180,13 @@ setLiveHlsChangeListener((channelId, reason) => {
   logEvent("voice.hlsChangeHeard", { channelId, reason });
   void pushLiveHls(channelId);
 });
+
+// The HLS ladder and the promotion guard price the same media box. This is
+// what lets a rung be refused because of the cameras already on it, rather
+// than each side spending the box independently.
+setLiveHlsSfuLoadReader(async () =>
+  estimateSfuLoadMbps(await readRoomLoads()),
+);
 
 function channelLiveFrame(
   channelId: string,

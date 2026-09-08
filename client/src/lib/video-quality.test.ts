@@ -3,11 +3,12 @@ import {
   applyCameraQuality,
   availableVideoQualities,
   coerceVideoQuality,
-  HUGE_ROOM_OR_HLS_1080P_LIMIT,
+  HUGE_ROOM_1080P_LIMIT,
   cameraBitrateFor,
   cameraConstraintsFor,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
+  hlsSourceTopHeight,
   isLargeRoomCapped,
   LARGE_ROOM_PARTICIPANTS,
   parseVideoQuality,
@@ -79,23 +80,22 @@ describe("availableVideoQualities", () => {
   it("keeps 1080p at the limit and drops it one past it", () => {
     expect(
       availableVideoQualities({
-        participantCount: HUGE_ROOM_OR_HLS_1080P_LIMIT,
+        participantCount: HUGE_ROOM_1080P_LIMIT,
         hlsLive: false,
       }),
     ).toContain("1080p");
     expect(
       availableVideoQualities({
-        participantCount: HUGE_ROOM_OR_HLS_1080P_LIMIT + 1,
+        participantCount: HUGE_ROOM_1080P_LIMIT + 1,
         hlsLive: false,
       }),
     ).not.toContain("1080p");
-    expect(HUGE_ROOM_OR_HLS_1080P_LIMIT).toBe(150);
+    expect(HUGE_ROOM_1080P_LIMIT).toBe(150);
   });
 
-  it("drops 1080p while an HLS egress is live, whatever the room size", () => {
+  it("keeps 1080p while an HLS egress is live: the egress transcodes FROM it", () => {
     const list = availableVideoQualities({ participantCount: 2, hlsLive: true });
-    expect(list).not.toContain("1080p");
-    expect(list).toEqual(VIDEO_QUALITIES.filter((q) => q !== "1080p"));
+    expect(list).toEqual(VIDEO_QUALITIES);
   });
 
   it("offers the whole ladder to a small room with no egress", () => {
@@ -107,7 +107,10 @@ describe("availableVideoQualities", () => {
 
 describe("coerceVideoQuality", () => {
   it("reads an unavailable 1080p as auto and leaves the rest alone", () => {
-    const noTop = availableVideoQualities({ participantCount: 1, hlsLive: true });
+    const noTop = availableVideoQualities({
+      participantCount: HUGE_ROOM_1080P_LIMIT + 1,
+      hlsLive: false,
+    });
     expect(coerceVideoQuality("1080p", noTop)).toBe("auto");
     expect(coerceVideoQuality("720p", noTop)).toBe("720p");
     expect(coerceVideoQuality("1080p", VIDEO_QUALITIES)).toBe("1080p");
@@ -399,5 +402,67 @@ describe("screenScaleFactor", () => {
     expect(screenScaleFactor("360p", null)).toBeCloseTo(3, 2);
     expect(screenScaleFactor("360p", undefined)).toBeCloseTo(3, 2);
     expect(screenScaleFactor("360p", 0)).toBeCloseTo(3, 2);
+  });
+});
+
+describe("the presenter as the ladder's source", () => {
+  const LIVE = { ladderTopHeight: 1080, uplinkBps: 10_000_000 };
+
+  it("raises the published top past the large-room cap", () => {
+    // Without a watch party this is the case the cap exists for.
+    expect(screenSimulcastPlan("auto", 100).topHeight).toBe(720);
+    // With one, the cap is aimed at the wrong problem: the audience is on
+    // the playlist, and a 720p source cannot produce a 1080p rendition.
+    const plan = screenSimulcastPlan("auto", 100, LIVE);
+    expect(plan.topHeight).toBe(1080);
+    expect(plan.topBitrate).toBe(4_000_000);
+    expect(plan.capped).toBe(false);
+  });
+
+  it("leaves an ordinary large call alone", () => {
+    // The rule that must not move. No egress, no raise, whatever the size.
+    for (const hls of [null, { ladderTopHeight: null, uplinkBps: 10_000_000 }]) {
+      const plan = screenSimulcastPlan("auto", 100, hls);
+      expect(plan.topHeight).toBe(720);
+      expect(plan.capped).toBe(true);
+    }
+  });
+
+  it("does not raise when the measured uplink cannot carry it", () => {
+    // 4 Mbit/s plus headroom is the bar; 3 Mbit/s is under it.
+    const plan = screenSimulcastPlan("auto", 100, {
+      ladderTopHeight: 1080,
+      uplinkBps: 3_000_000,
+    });
+    expect(plan.topHeight).toBe(720);
+    expect(plan.capped).toBe(true);
+  });
+
+  it("an unmeasured uplink allows it, like an unprobed SFU allows promotion", () => {
+    expect(
+      screenSimulcastPlan("auto", 100, {
+        ladderTopHeight: 1080,
+        uplinkBps: null,
+      }).topHeight,
+    ).toBe(1080);
+  });
+
+  it("never overrules the presenter's own smaller pick", () => {
+    expect(screenSimulcastPlan("480p", 100, LIVE).topHeight).toBe(480);
+    expect(hlsSourceTopHeight("720p", LIVE)).toBeNull();
+  });
+
+  it("a 720p-only ladder does not ask for a 1080p source", () => {
+    const plan = screenSimulcastPlan("auto", 100, {
+      ladderTopHeight: 720,
+      uplinkBps: 10_000_000,
+    });
+    expect(plan.topHeight).toBe(720);
+    expect(hlsSourceTopHeight("auto", { ladderTopHeight: 720, uplinkBps: null })).toBeNull();
+  });
+
+  it("a small room is unchanged either way", () => {
+    expect(screenSimulcastPlan("auto", 3).topHeight).toBe(1080);
+    expect(screenSimulcastPlan("auto", 3, LIVE).topHeight).toBe(1080);
   });
 });
