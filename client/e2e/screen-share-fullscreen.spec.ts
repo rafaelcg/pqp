@@ -65,7 +65,7 @@ async function ensureVoiceChannel(): Promise<void> {
 }
 
 async function joinLobby(page: Page): Promise<void> {
-  await page.getByRole("button", { name: /lobby/ }).first().click();
+  await page.getByRole("button", { name: /lobby/ }).first().dblclick();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 20_000 });
   await waitUntilVoiceConnected(page);
 }

@@ -54,7 +54,7 @@ test.describe("voice lobby", () => {
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await openApp(page);
-    await page.getByRole("button", { name: /lobby/ }).first().click();
+    await page.getByRole("button", { name: /lobby/ }).first().dblclick();
     await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
       timeout: 20_000,
     });
@@ -96,7 +96,7 @@ test.describe("voice lobby", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openApp(page);
     await page.getByRole("button", { name: "Open navigation" }).click();
-    await page.getByRole("button", { name: /lobby/ }).first().click();
+    await page.getByRole("button", { name: /lobby/ }).first().dblclick();
     await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
       timeout: 20_000,
     });
@@ -112,7 +112,7 @@ test.describe("voice lobby", () => {
       test.setTimeout(120_000);
       await page.setViewportSize({ width: 1440, height: 900 });
       await openApp(page);
-      await page.getByRole("button", { name: /lobby/ }).first().click();
+      await page.getByRole("button", { name: /lobby/ }).first().dblclick();
       await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
         timeout: 20_000,
       });
@@ -124,7 +124,7 @@ test.describe("voice lobby", () => {
         });
         const other = await context.newPage();
         await other.goto("/app");
-        await other.getByRole("button", { name: /lobby/ }).first().click();
+        await other.getByRole("button", { name: /lobby/ }).first().dblclick();
         extras.push(context);
       }
 
@@ -153,7 +153,7 @@ test.describe("voice lobby", () => {
     });
     await openApp(page);
     await page.getByRole("button", { name: "Open navigation" }).click();
-    await page.getByRole("button", { name: /lobby/ }).first().click();
+    await page.getByRole("button", { name: /lobby/ }).first().dblclick();
     await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
       timeout: 20_000,
     });

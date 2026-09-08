@@ -161,7 +161,7 @@ async function seedVoiceServer(hostSuffix: string, guestSuffix: string) {
 }
 
 async function joinVoice(page: Page): Promise<void> {
-  await page.getByRole("button", { name: /stage/ }).first().click();
+  await page.getByRole("button", { name: /stage/ }).first().dblclick();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({ timeout: 20_000 });
   await waitUntilVoiceConnected(page);
 }

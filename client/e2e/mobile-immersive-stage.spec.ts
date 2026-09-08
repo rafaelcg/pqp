@@ -195,7 +195,7 @@ async function joinLobbyFromPhone(page: Page): Promise<void> {
   if (await openNav.isVisible().catch(() => false)) {
     await openNav.click();
   }
-  await page.getByRole("button", { name: /lobby/i }).first().click();
+  await page.getByRole("button", { name: /lobby/i }).first().dblclick();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
     timeout: 20_000,
   });
