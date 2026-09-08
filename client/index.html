@@ -114,18 +114,16 @@
         const storedDisplay = localStorage.getItem("pqp-chat-display");
         if (storedDisplay) {
           const display = JSON.parse(storedDisplay);
-          const size = Math.min(24, Math.max(12, Math.round(display.fontSize)));
-          const gap = Math.min(24, Math.max(0, Math.round(display.groupSpacing)));
           const style = document.documentElement.style;
-          if (Number.isFinite(size)) {
+          // Same rules as clampInt in the store: a number or nothing.
+          if (typeof display.fontSize === "number" && Number.isFinite(display.fontSize)) {
+            const size = Math.min(24, Math.max(12, Math.round(display.fontSize)));
             style.setProperty("--chat-font-size", size + "px");
             style.setProperty("--chat-line-height", Math.round(size * 22 / 15) + "px");
           }
-          if (Number.isFinite(gap)) {
+          if (typeof display.groupSpacing === "number" && Number.isFinite(display.groupSpacing)) {
+            const gap = Math.min(24, Math.max(0, Math.round(display.groupSpacing)));
             style.setProperty("--chat-group-gap", gap + "px");
-          }
-          if (display.density === "compact") {
-            document.documentElement.dataset.density = "compact";
           }
         }
       } catch {

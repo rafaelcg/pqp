@@ -108,8 +108,10 @@ export const accentHuePreferenceSchema = z.union([
 export type AccentHuePreference = z.infer<typeof accentHuePreferenceSchema>;
 
 /**
- * How the message list is drawn. Each field is independent and optional so a
- * patch can carry the one slider that moved.
+ * How the message list is drawn. The fields are optional for the reader's
+ * sake (an old blob may lack one), but a writer must send the whole object:
+ * the server merges preferences one top-level key at a time, so a patch of
+ * `{ fontSize }` alone would wipe the other two.
  *
  * `cozy` shows avatars and a header per group; `compact` drops the avatar and
  * puts a timestamp on every line. `fontSize` is the body size in CSS pixels.

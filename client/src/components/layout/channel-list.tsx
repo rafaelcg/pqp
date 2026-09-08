@@ -99,6 +99,7 @@ import {
 } from "@/hooks/use-notifications";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { ChannelSessionHint } from "@/components/layout/channel-session-hint";
+import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
@@ -2170,8 +2171,17 @@ function ChannelRow({
     channel.name,
     joinHint,
     channel.isPrivate ? t("chrome.privateChannel") : null,
-    hasUnread && !muted ? t("chrome.unreadSr") : null,
+    mentions > 0
+      ? t("chrome.unreadMentions", { count: mentions })
+      : hasUnread && !muted
+        ? t("chrome.unreadSr")
+        : null,
     muted ? t("chrome.mutedSr") : null,
+    sessionHint
+      ? t("watchPartySchedule.sidebarHint", {
+          when: formatSessionRelativeTime(sessionHint, new Date(), "pt-BR"),
+        })
+      : null,
   ]
     .filter((part): part is string => Boolean(part))
     .join(". ");
@@ -2401,13 +2411,12 @@ function ChannelRow({
             Android use.
             Connected rows never call `onJoinVoice` at all (see `joinable`
             below), so clicking the room you are in just keeps the view. */}
-        {joinHint ? (
-          <Tooltip label={joinHint} name={rowName} side="right">
-            {rowButton}
-          </Tooltip>
-        ) : (
-          rowButton
-        )}
+        {/* Always the same element. Rendering a bare button when there is
+            no hint would swap the element type the moment `connected`
+            flips, and React would drop keyboard focus on the way. */}
+        <Tooltip label={joinHint ?? channel.name} name={rowName} side="right">
+          {rowButton}
+        </Tooltip>
         {watchParty && onJoinVoice && !connected && (
           /* The same join the row itself does, spelled out: a watch party is
              joined by people who have never been in a voice channel here and

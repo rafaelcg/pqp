@@ -314,8 +314,8 @@ The message list is the one exception, and it is the user's choice rather than
 the system's. Settings > Appearance sets three root variables that the list and
 the preview block in Settings both read: `--chat-font-size` (12 to 24px, default
 15), `--chat-line-height` (22/15 of the size) and `--chat-group-gap` (0 to 24px
-above a new group, default 8). `[data-density="compact"]` drops the avatar and
-puts a time on every line. The store is `client/src/lib/chat-display.ts`; the
+above a new group, default 8). Compact density is state, not CSS: the message
+row reads it from the store and drops the avatar for a time on every line. The store is `client/src/lib/chat-display.ts`; the
 boot script in `index.html` paints the stored values before the bundle loads,
 and the values follow the account through `preferences.chatDisplay`.
 

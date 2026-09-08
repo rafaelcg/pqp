@@ -335,7 +335,6 @@ export function MessageComposer({
     lineHeight: COMPOSER_CONTROL_PX,
     paddingY: 0,
     overflowY: "hidden" as "hidden" | "auto",
-    multiline: false,
   });
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const [isGifPickerOpen, setIsGifPickerOpen] = useState(false);
@@ -343,11 +342,6 @@ export function MessageComposer({
   const [isInsertMenuOpen, setIsInsertMenuOpen] = useState(false);
   const [isFormatBarOpen, setIsFormatBarOpen] = useState(false);
   const formatHintEnabled = useFeatureHintEnabled("composerFormat");
-  const [wideComposer] = useState(
-    () =>
-      typeof window !== "undefined" &&
-      Boolean(window.matchMedia?.("(min-width: 640px)")?.matches),
-  );
   const [gifQuery, setGifQuery] = useState("");
   const [isGifSearchEnabled, setIsGifSearchEnabled] = useState(false);
   const [attachmentLimits, setAttachmentLimits] = useState<{
@@ -634,7 +628,6 @@ export function MessageComposer({
         lineHeight: COMPOSER_CONTROL_PX,
         paddingY: 0,
         overflowY: "hidden",
-        multiline: false,
       });
       return;
     }
@@ -658,7 +651,6 @@ export function MessageComposer({
         lineHeight: COMPOSER_CONTROL_PX,
         paddingY: 0,
         overflowY: "hidden",
-        multiline: false,
       });
       return;
     }
@@ -670,7 +662,6 @@ export function MessageComposer({
       lineHeight: COMPOSER_LINE_PX,
       paddingY: COMPOSER_PAD_Y_PX,
       overflowY,
-      multiline: true,
     });
   }, [body]);
 
@@ -1352,11 +1343,7 @@ export function MessageComposer({
             id="composerFormat"
             enabled
             body={t("featureHint.composerFormat.body", {
-              control: t(
-                wideComposer
-                  ? "featureHint.composerFormat.aa"
-                  : "featureHint.composerFormat.insert",
-              ),
+              control: t("featureHint.composerFormat.aa"),
             })}
           />
         </div>
@@ -1461,7 +1448,6 @@ export function MessageComposer({
       <div
         className={cn(
           "rounded-[var(--radius-card)] border border-border bg-surface-2 transition-colors focus-within:border-border-strong",
-          (disabled || isRunningSlash) && "opacity-70",
         )}
       >
         {(replyTarget ||
@@ -1618,6 +1604,9 @@ export function MessageComposer({
           />
         </div>
         <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
+          {/* Hidden rather than empty: a self-host without attachments in a
+              panel without slash commands has nothing for the + to add. */}
+          {insertItems.length > 0 && (
           <div ref={insertMenuRef} className="relative">
             <Tooltip label={t("composer.insert")}>
               <Button
@@ -1631,6 +1620,7 @@ export function MessageComposer({
                 onClick={() => {
                   setIsPickerOpen(false);
                   setIsGifPickerOpen(false);
+                  setIsPollComposerOpen(false);
                   setIsInsertMenuOpen((open) => !open);
                 }}
                 onMouseDown={keepComposerFocused}
@@ -1649,6 +1639,7 @@ export function MessageComposer({
               />
             )}
           </div>
+          )}
           <Tooltip label={t("composer.format")}>
             <Button
               type="button"
