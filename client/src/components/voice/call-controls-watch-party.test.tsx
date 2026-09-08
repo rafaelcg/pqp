@@ -67,6 +67,7 @@ const idle: VoiceState = {
   isCameraOn: false,
   localCameraStream: null,
   callDeclinedUserIds: [],
+  liveStream: null,
 };
 
 function render(voiceState: VoiceState) {
