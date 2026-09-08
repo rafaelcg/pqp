@@ -6,9 +6,14 @@ join, `/api/voice/token`, and then a LiveKit RTC connection. A successful app
 `welcome` without a token, SFU connection, subscribed presenter tracks, and
 received frames is a failure.
 
-It refuses production and the production SFU. Hosted use is only the exact
-staging API (`https://pqp-api-staging.fly.dev`) plus an explicitly supplied,
-non-production isolated SFU host. `TEST_RUN_ID` is required and is included in
+**It refuses production and the production SFU, and that guard is not
+optional.** Hosted use is only the exact staging API
+(`https://pqp-api-staging.fly.dev`) plus an explicitly supplied,
+non-production isolated SFU host; any `*.pqp.gg` SFU host is rejected, and
+local mode is restricted to loopback. `PROD_HOSTS` and `parseTarget` in
+`src/index.ts` are where that lives. Generators are firewalled against
+`api.pqp.gg` and `sfu.pqp.gg` as well; this is the second lock, not the only
+one. `TEST_RUN_ID` is required and is included in
 synthetic account/server names and reports. Do not pass secrets on the command
 line; the runner reads only `LOAD_TEST_TOKEN` from its environment.
 
@@ -84,6 +89,10 @@ additionally drain `VideoStream` / `AudioStream` frame objects (`videoFrames`,
 `audioFrames` in the report) and are held to the decode-rate criterion below.
 Size and monitor generators for a full-width decode. Treat the SFU's host-side
 egress counters as the authority for aggregate egress and headroom.
+
+No capacity result belongs in this file. The contract below is the rig's own
+pass mark, not a measurement of pqp; measured results live in the operator's
+copy named at the top of `docs/CAPACITY.md`.
 
 The first acceptance contract is: all 500 tokened clients connect and receive
 RTP; each shard has 25 decoded samples at >=24 fps; presenter input is >=27

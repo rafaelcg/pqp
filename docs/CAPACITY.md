@@ -1,74 +1,84 @@
-# Capacity: what the voice stack carries, measured
+# Capacity: how the voice stack is measured
 
-The durable record of the load tests. One section per run, so later runs
-append rather than rewrite. Every number carries the label of the run it came
-from; a number with no label is an extrapolation and is marked as one.
+The method, the rigs and the configuration. **The measured results are not in
+this repository.** They live in the operator's copy at
+`~/.config/pqp/capacity-measured.md` (mode 600 in a 700 directory), and every
+figure this document used to carry is there in full, run tables included.
+
+That split is deliberate and it is not modesty about the numbers. This
+repository is public and so is the load harness in `tools/watch-party-load`,
+which is a working 500-client generator against the real application path.
+Publishing the exact break point of the production media server, the API's
+one-room join ceiling, the rate limiter's per-address budget and the recipe for
+lifting it alongside that harness hands someone the whole map. The methodology
+is good open source and stays; the coordinates do not.
+
+Nothing was removed from git history. Earlier revisions of this file still
+carry the figures and are readable by anyone who looks, which is fine: these
+are operational measurements, not credentials. Rewriting history was considered
+and deliberately not done.
 
 Runs to date: control A, A1, A2, A2 repeat and ladder F, all on 2026-09-07,
-plus the API-only morning runs recorded in `docs/STAGING.md`. Method and rigs
-are in section 3 and section 7; the staging runbook is
-[`docs/STAGING.md`](./STAGING.md) ("What it has measured", evening section).
+plus the API-only morning runs whose method is in
+[`docs/STAGING.md`](./STAGING.md). Results for all of them: the operator's copy.
 
 ## Timeline
 
-Three changes to the production media server (Vultr `sfu-pqp`,
-216.238.114.79), in order. Every number below is labeled with the run it came
-from; read this table first to see which config a given number describes.
+Three changes to the production media server (Vultr `sfu-pqp`, São Paulo), in
+order. This table is configuration and dates, which a self-hoster needs; read
+it first to see which config any given result in the operator's copy describes.
 
 | when | change |
 |---|---|
-| 2026-09-07, evening | Load tests below (control A, A1, A2, A2 repeat, ladder F) run on an isolated test box. Production itself, untouched by any of these runs: 2 vCPU, one UDP mux port (`vhp-2c-4gb-amd`, `rtc.udp_port: 7882`), unchanged since it was provisioned on 2026-09-06. |
+| 2026-09-07, evening | Load tests run on an isolated test box. Production itself, untouched by any of these runs: 2 vCPU, one UDP mux port (`vhp-2c-4gb-amd`, `rtc.udp_port: 7882`), unchanged since it was provisioned on 2026-09-06. |
 | 2026-09-08 07:17:17Z | Production: `rtc.udp_port: 7882-7885` (was one port), `limit: { num_tracks: -1, bytes_per_sec: -1 }`, and `/etc/sysctl.d/90-livekit.conf` (`net.core.rmem_max` / `wmem_max` 26214400) applied. Still a 2 vCPU box, so only two of the four ports bound (LiveKit binds `min(vCPUs, ports)`). |
 | 2026-09-08 09:25:54Z | Production resized from `vhp-2c-4gb-amd` (2 vCPU, 4 GB) to `vhp-4c-8gb-amd` (4 vCPU, 8 GB), about 42 s of downtime. All four ports bound after the reboot. $48/mo list, about $72/mo in São Paulo. |
 | 2026-09-08 | Redis and LiveKit Egress (for HLS) installed on the same box. The box has always run the TURN relay as well. |
 
-The test box and production match in size only after 09:25:54Z on
-2026-09-08. A number measured on the isolated 4 vCPU test box before that
-timestamp describes what a 4 vCPU LiveKit config *can* do; it is not a
-production measurement, because production itself was still 2 vCPU while
-every run in section 4 was collected. See section 3 for the full caveat.
+The test box and production match in size only after 09:25:54Z on 2026-09-08. A
+number measured on the isolated test box before that timestamp describes what
+that LiveKit configuration *can* do; it is not a production measurement,
+because production itself was a different size while every run was collected.
+See section 3 for the full caveat. That caveat survives the resize: the
+production box has still never been driven to load.
 
-## 1. Summary
+## 1. What the runs established, without the numbers
 
-**What production carried before 2026-09-08.** Until 07:17Z that day the
-production media server was a 2 vCPU box with LiveKit on **one** UDP mux
-port (unchanged since it was provisioned on 2026-09-06). On a 4 vCPU copy of
-that single-port configuration, a 500-person watch party at 720p failed on
-media: 229 of 499 viewers never decoded a frame, the rest ran at 1.2 fps with
-58% packet loss, and the box could push only 250 to 270 Mbit/s out of the
-roughly 800 the room asked for (run A1, 2026-09-07). The failure was the
-single UDP socket overflowing its receive buffer, not CPU and not the API;
-the 2 vCPU box itself was never driven to its own limit, because a
-single-port room fails before that matters. See the Timeline above and
-section 2 for what changed on 2026-09-08 and what production is today.
+**The failure at scale was the single UDP mux socket, not CPU and not the
+API.** On a copy of the production configuration of the time, a 720p watch
+party failed on media while the box's cores and the API were both idle: most
+viewers never decoded a frame, the rest ran at a fraction of the frame rate
+with heavy packet loss, and the box pushed a small share of the egress the room
+asked for. The socket's kernel receive buffer was overflowing in bursts. Same
+rig, same hour, one config line changed to spread the receive path across four
+UDP ports, and the same box delivered the full stream to every viewer at full
+frame rate with zero measured loss and zero receive-buffer drops.
 
-**What the port change buys.** With `rtc.udp_port: 7882-7885` and nothing else
-changed, the same 4 vCPU box delivered the full 720p stream to 499 of 499
-viewers at 29.5 fps median, 0.000% median loss, 880 to 935 Mbit/s, at 76% CPU
-p95 (run A2 repeat). Same rig, same hour, one config line.
+The reasoning behind that, which is the part worth keeping: **one UDP mux
+socket serialises the whole receive path onto one kernel queue and, in
+practice, one core.** Spreading it over a port per core scales with the cores
+you have. LiveKit's own guidance is at least as many mux ports as vCPUs, and
+the binary binds `min(vCPUs, ports in the range)`, so opening four ports on a
+two-core box costs nothing and means a later resize needs no firewall change.
 
-**What needs four cores.** 500 viewers at 720p (1.5 Mbit/s each) fits a 4 vCPU
-box with about a quarter of its CPU left, and that box breaks between 500 and
-600 subscribers (ladder F: 500 clean at 59% CPU, 600 at 27% loss and 81% CPU).
-**The production box is 4 vCPU since 2026-09-08 09:26Z**, so it carries the
-full ladder-F number: **about 500 viewers at 720p by ladder F**, ceiling
-between 500 and 600. Before the resize, on the 2 vCPU box with four ports,
-the extrapolated figure was about 250 to 300 viewers (half the cores of a box
-that broke between 500 and 600); that extrapolation is kept below for
-history, but it no longer describes production.
+**Cores are the lever that was measured.** Doubling vCPU on the same image
+roughly doubles what one room carries, because egress and SFU CPU both scale
+with viewers times bits per viewer. A box gives out when its CPU pins; past
+that point egress *falls* instead of rising and a large share of packets reach
+nobody, which is a cliff and not a slope.
 
-**1080p divides those numbers by about 2.7.** Above `LARGE_ROOM_PARTICIPANTS`
-(20) a share is held to 720p at 1.5 Mbit/s unless the sharer picks 1080p by
-name, which asks for 4 Mbit/s (`client/src/lib/video-quality.ts`). Egress
-scales with bits per viewer, so 500 at 720p is about 185 at 1080p on the same
-box. Not measured (condition B was not run); it is arithmetic on measured
-egress.
+**Bits per viewer is the other half of every figure.** Above
+`LARGE_ROOM_PARTICIPANTS` (20) a screen share is held to 720p at 1.5 Mbit/s
+unless the presenter picks 1080p by name, which asks for 4 Mbit/s
+(`client/src/lib/video-quality.ts`). That is a factor of about 2.7 on every
+capacity number, decided by a menu the presenter touches, not by anything pqp
+controls.
 
-**The API is not the ceiling at 500.** Across every 500 run the API answered
-`welcome` in 37 to 39 ms p50 and 65 to 69 ms p95 from socket open, pool 14 to
-18 of 40, CPU under 16% p95, zero retries, 429s or backpressure drops. Its own
-one-room join ceiling, measured without media, is about 650 to 674 in the room
-(control A), before the roster deltas of PR #344.
+**The API was not the ceiling in any media run.** Across every run it answered
+`welcome` in tens of milliseconds from socket open, with the pool under half
+its budget, CPU in the teens, and zero retries, 429s or backpressure drops. Its
+own one-room join ceiling was measured separately, without media, and sits well
+above the sizes the media runs used. The figure is in the operator's copy.
 
 ## 2. Production topology and the recommended configuration
 
@@ -85,288 +95,153 @@ Applied to production:
 
 | change | why | applied on |
 |---|---|---|
-| `rtc.udp_port: 7882-7885` in `tools/sfu/livekit.yaml.tmpl`, plus `ufw allow 7882:7885/udp` | the one attributable difference between A1 (fails at 500) and A2 (passes). LiveKit binds `min(vCPUs, ports)`, so a 2 vCPU box uses two of the four; opening all four means a resize needs no firewall change | 2026-09-08 07:17:17Z |
-| `net.core.rmem_max` / `wmem_max` raised (`tools/sfu/sysctl-livekit.conf`, 25 MB) | LiveKit asks for a 16 MB buffer per mux socket and logs `UDP receive buffer is too small for a production set-up, current 425984, suggested 5000000` on every boot, production included. Every run in this document ran with the default 212992 (`meta.json`, `sfuRmemWmem`). Bursty receive-buffer drops still appeared from 400 subscribers upward with four ports (ladder F); this is what absorbs them. Only new sockets see it: restart LiveKit after | 2026-09-08 07:17:17Z |
-| `limit.num_tracks: -1` (and `bytes_per_sec: -1`) | 1.13.6 has no default track limit. Newer releases default to 400 tracks per CPU, which would silently cap a 2 vCPU box at about 400 viewers on an image bump. Pin before any bump | 2026-09-08 07:17:17Z |
+| `rtc.udp_port: 7882-7885` in `tools/sfu/livekit.yaml.tmpl`, plus `ufw allow 7882:7885/udp` | the one attributable difference between the run that failed and the run that passed. LiveKit binds `min(vCPUs, ports)`, so a 2 vCPU box uses two of the four; opening all four means a resize needs no firewall change | 2026-09-08 07:17:17Z |
+| `net.core.rmem_max` / `wmem_max` raised (`tools/sfu/sysctl-livekit.conf`, 25 MB) | LiveKit asks for a 16 MB buffer per mux socket and logs `UDP receive buffer is too small for a production set-up, current 425984, suggested 5000000` on every boot, production included. Every run so far ran with the kernel default (`meta.json`, `sfuRmemWmem`). Bursty receive-buffer drops still appeared well before the CPU limit even with four ports; this is what absorbs them. Only new sockets see it: restart LiveKit after | 2026-09-08 07:17:17Z |
+| `limit.num_tracks: -1` (and `bytes_per_sec: -1`) | 1.13.6 has no default track limit. Newer releases default to 400 tracks per CPU, which would silently cap a small box on an image bump. Pin before any bump | 2026-09-08 07:17:17Z |
 | Resize `sfu-pqp` from `vhp-2c-4gb-amd` to `vhp-4c-8gb-amd` | the port change only pays off with four cores to bind the four ports to; gated on LiveKit participants at most 4 | 2026-09-08 09:25:54Z |
 
 Known and not fixed: **TURN over TLS is dead.** Web, iOS and Android LiveKit
 clients receive only the LiveKit server's built-in TURN. LiveKit advertises
 `turns:turn.pqp.gg:443`, but Caddy owns 443 on the box, so that candidate never
 connects; the UDP 3478 relay is what works. Measured relay share on production:
-13 of 139 joins (9.4%), all UDP, all Windows web or Electron. A viewer behind a
+about one join in ten, all UDP, all Windows web or Electron. A viewer behind a
 network that blocks UDP has no working relay today. Fix under consideration:
-hand LiveKit clients the same `/api/ice-servers` list (Cloudflare TURN) the mesh
-path already uses.
+hand LiveKit clients the same `/api/ice-servers` list (Cloudflare TURN) the
+mesh path already uses.
 
-**Co-tenancy note (reasoning, not measurement).** Redis and LiveKit Egress
-(for HLS) run on `sfu-pqp` alongside LiveKit itself, installed 2026-09-08; the
-box has always run the TURN relay too. A live HLS transcode costs roughly one
-core on moving content. No run in this document had Egress active
-concurrently with a WebRTC room, so this is arithmetic, not a result: during a
-watch party that has HLS turned on, the box is effectively three cores for
-WebRTC, not four. If watch parties running HLS become routine, the clean
-split is a separate small egress box, not a bigger SFU.
+**Co-tenancy note (reasoning, not measurement).** Redis and LiveKit Egress (for
+HLS) run on `sfu-pqp` alongside LiveKit itself, installed 2026-09-08; the box
+has always run the TURN relay too. A live HLS transcode costs roughly one core
+on moving content. No run had Egress active concurrently with a WebRTC room, so
+this is arithmetic, not a result: during a watch party that has HLS turned on,
+the box is effectively one core short for WebRTC. If watch parties running HLS
+become routine, the clean split is a separate small egress box, not a bigger
+SFU.
 
 ## 3. Methodology and its limits
 
-Two rigs, both against `pqp-api-staging` and never production. The generators
-had `api.pqp.gg` and `sfu.pqp.gg` denied in their firewall and the harness
-refuses both by name.
+Two rigs, both against `pqp-api-staging` and **never production**. The
+generators had `api.pqp.gg` and `sfu.pqp.gg` denied in their firewall and the
+harness refuses both by name (`PROD_HOSTS` in
+`tools/watch-party-load/src/index.ts`, which also pins the hosted target to the
+exact staging API and WebSocket and forbids any `*.pqp.gg` SFU host).
 
 **Rig 1, API only:** `server/scripts/load-fanout.ts --mode join`. Real HTTP
-bootstrap, app socket, `welcome`, held open. No media. Runbook and the
-morning results in `docs/STAGING.md`.
+bootstrap, app socket, `welcome`, held open. No media. Runbook in
+[`docs/STAGING.md`](./STAGING.md).
 
 **Rig 2, media:** `tools/watch-party-load` (PR #337 plus #348). Each simulated
 viewer does the whole path: cold HTTP, app socket, `welcome`,
 `POST /api/voice/token`, LiveKit connect, subscribe, decode. One presenter
 publishes a 720p30 share at the client's large-room cap of 1.5 Mbit/s.
-Presenter first, 499 receivers over 90 s (5.5/s), 600 s hold. 20% of sockets
-declare no `caps` and no `permessage-deflate`, to stand in for old clients.
-Sampled every second on the API machine (`/proc/stat`, `/proc/net/dev`,
-`/ready`, `/api/admin/metrics` every 30 s), the SFU (the same plus
-`/proc/net/snmp` UDP errors and LiveKit's `:6789/metrics`) and every generator.
+Presenter first, then receivers ramped in over 90 s, then a 600 s hold. A fifth
+of the sockets declare no `caps` and no `permessage-deflate`, to stand in for
+old clients. Sampled every second on the API machine (`/proc/stat`,
+`/proc/net/dev`, `/ready`, `/api/admin/metrics` every 30 s), the SFU (the same
+plus `/proc/net/snmp` UDP errors and LiveKit's `:6789/metrics`) and every
+generator.
 
 What a "sustained" viewer means: at least 120 decoded frames per 5 s window,
 `freezeCount` flat, height at least 720, for the whole hold.
 
-Ladder F used `lk load-test` subscribers (LiveKit's own tool, no decode)
-against our presenter, three minutes a step, because native decode would have
-needed more generators than were available above 500.
+The subscriber ladder used `lk load-test` subscribers (LiveKit's own tool, no
+decode) against our presenter, three minutes a step, because native decode
+above the largest native run would have needed more generators than were
+available.
 
-Limits, all of which matter when reading the tables:
+Limits, all of which matter when reading any result:
 
 - **Receivers are native WebRTC (`@livekit/rtc-node`), not browsers.** They
   decode real frames, so fps, loss and freezes are real, but there is no
   renderer, no tab throttling, no laptop Wi-Fi. A browser fleet would be worse
   at the edge, not better.
-- **Generators are the noisiest instrument.** Decode costs about 0.08 of a
-  core per 720p30 receiver. A generator over roughly 70% CPU starts freezing
-  its own receivers and dropping its own decoded frames, which the harness
-  then counts against "sustained". A1 ran the generators at 19 to 27%; A2 at
-  67 to 94% (over the gate); A2 repeat at 54 to 66% on the Vultr boxes and 90%
-  on one Fly box. Read the sustained figures of A2 and A2 repeat as
-  generator-limited. Delivery, fps and loss are not affected the same way and
-  are the numbers to trust.
-- **The test SFU had 4 vCPU; production had 2 at the time of every run
-  below.** Same image, same config template, same LiveKit version. No run was
-  made on the production box itself. Production has since been resized to
-  4 vCPU (2026-09-08 09:25:54Z; see Timeline and section 2) and now matches
-  the test rig's size, but that does not upgrade these numbers into
-  production measurements: every run in section 4 ran on the isolated box,
-  before the resize, and still describes what a 4 vCPU LiveKit config can do
-  in principle, not what the production box has demonstrated under load.
+- **Generators are the noisiest instrument.** Decode costs about 0.08 of a core
+  per 720p30 receiver. A generator over roughly 70% CPU starts freezing its own
+  receivers and dropping its own decoded frames, which the harness then counts
+  against "sustained". Several runs had generators over that gate, so their
+  sustained figures are generator-limited. Delivery, fps and loss are not
+  affected the same way and are the numbers to trust.
+- **The test SFU was 4 vCPU; production was 2 at the time of every run.** Same
+  image, same config template, same LiveKit version. No run was made on the
+  production box itself. Production has since been resized to match the test
+  rig's size, but that does not upgrade those numbers into production
+  measurements: every run was collected on the isolated box before the resize.
 - **Staging's database is smaller than production's** and its API machine was
-  scaled to production's size (`performance-2x`, `PG_POOL_MAX=40`) for the
-  runs only. Two address-keyed limiters (`RATE_LIMIT_ANON_*`,
-  `RATE_LIMIT_SOCKET_*`) were lifted; per-identity limiters stayed at default.
+  scaled to production's size for the runs only. The two address-keyed
+  limiters were lifted for the run; per-identity limiters stayed at default.
+  The names, the values and the exact commands are in the operator's copy, with
+  the reason a single-source harness needs them at all.
 - **`VOICE_REGISTRY=postgres` on staging meant the roster deltas were inert**
   (`registryOn() ? null : foldRoomEvents(events)` at the time). Every roster
-  update went out as a full snapshot. Control A's ceiling is therefore the
-  ceiling *before* PR #344 (deltas in registry mode), which merged after these
-  runs and is not in any number here. At 500 participants a roster snapshot
-  is 220,878 bytes and a one-join delta is 580 bytes (PR #344).
-- **Legacy sockets cost six times the bytes.** Sockets with no caps and no
-  deflate received 1810 to 1907 KB of app-WS bytes per run versus 308 to
-  320 KB for modern ones (A1, A2, A2 repeat). With deltas inert the whole
-  difference is compression. A crowd of old clients loads the API, not the SFU.
-- **Why an earlier attempt stalled at 61 viewers:** the pre-auth `anonLimiter`
-  (240 tokens, 60/s refill, keyed by client address; on Fly that is the
-  rightmost `X-Forwarded-For` entry, so forged headers are ignored and every
-  client on one generator shares one bucket). 300 requests from one box at the
-  defaults: 285 x 401 and 15 x 429; after lifting `RATE_LIMIT_ANON_*` and
-  `RATE_LIMIT_SOCKET_*`: 300 x 401. A rig artefact, not a product limit, but
-  also a reminder that 240 requests from one NAT address is a real cap for a
-  LAN party.
+  update went out as a full snapshot, so the API-only ceiling is the ceiling
+  *before* PR #344 (deltas in registry mode), which merged after these runs.
+- **Legacy sockets cost about six times the bytes.** Sockets with no caps and
+  no deflate received roughly six times the app-WS bytes of modern ones. With
+  deltas inert the whole difference is compression. A crowd of old clients
+  loads the API, not the SFU.
 
 ## 4. Results
 
-Raw data for every run: `summary.md`, `meta.json`, per-second samples, and
-the ladder's `steps.tsv`, kept under the run directory named in each heading.
+**Held privately.** Per-run tables (control A, A1, A2, A2 repeat, ladder F),
+with participant counts, decode and loss distributions, SFU egress and CPU,
+UDP error counters, welcome latencies, pool and generator telemetry, are in
+`~/.config/pqp/capacity-measured.md`, part 1.
+
+Raw data for every run (`summary.md`, `meta.json`, per-second samples,
+`steps.tsv`) is kept under the run directory named in each heading there, on
+the operator's machine. It has never been in this repository.
+
 Where a summary and the executor's report disagreed, the summary won and the
-difference is noted.
-
-### 4.1 Control A: API join ramp, no media (`controlA`, 2026-09-07 18:53Z)
-
-Rig 1 from one generator, ramp 4/s +4 every 20 s to 1200, everyone stays.
-Staging `performance-2x`, `PG_POOL_MAX=40`, image `53099a94`,
-`VOICE_REGISTRY=postgres` (deltas inert).
-
-| metric | control A |
-|---|---|
-| attempted / reached `welcome` | 1200 / 1083 |
-| time to welcome p50 / p90 / p99 / max | 1526 / 7648 / 11382 / 11970 ms |
-| joins stop fitting the client's 12 s budget at | about 650 to 674 already in the room |
-| welcome p90 at 475 to 524 in the room | 2.2 s |
-| API pool | 40/40 busy; queue peak 555 in the samples, 616 process high-water |
-| pool saturated / tight / ok | 47 s / 2 s / 140 s of 189 samples |
-| API CPU | 97% p95, 100% peak of 2 vCPU |
-| peak wire rate | 346.9 Mbit/s (5.43x compression, 1083 of 1083 sockets compressed) |
-| what the bytes were | 93% `voice-roster` keyframes at about 192 kB each |
-
-This is the API-side one-room ceiling before PR #344. It sits above 500, so
-none of the media runs below were API-bound.
-
-### 4.2 A1: single UDP mux port, production's config (`wpa1-single`, 18:56Z)
-
-Rig 2. Test SFU 4 vCPU, `udp_port: 7882`, `rmem_max` default 212992. Four
-Vultr 12 vCPU generators, 17 processes, presenter 720p at 1.5 Mbit/s.
-
-| metric | A1 |
-|---|---|
-| participants | 500 (499 receivers, 1 presenter, 100 legacy sockets) |
-| connected to LiveKit | 499 / 499 |
-| decoding within 45 s of arrival | 270 / 499 (54.1%) |
-| never decoded a frame | 229 (`first-frame-abandoned`) |
-| sustained over the hold | **0 / 499** |
-| decoded fps p5 / p50 | 0.1 / 1.2 |
-| packet loss median / p95 | 58.1% / 59.4% |
-| freezes / PLIs / NACKs | 194 receivers / 626,801 / 20,389,411 |
-| SFU egress | about 250 to 270 Mbit/s steady (report); p95 314, peak 459 (samples); 273 aggregate received at generators |
-| SFU CPU p95 / peak | 74% / 82% of 4 vCPU |
-| SFU UDP `RcvbufErrors` | 137,200, in bursts of 700 to 1100 per second |
-| welcome p50 / p95 from socket open | 39 / 66 ms |
-| first frame from arrival p50 / p95 | 765 / 1439 ms (for the 270 that got one) |
-| generators CPU p95 | 19 to 27% (clean) |
-| API pool peak / CPU p95 | 16 of 40 / 16% |
-
-The generators were idle and the API was idle. The one thing at its limit was
-the single UDP socket on the SFU.
-
-### 4.3 A2: four UDP mux ports (`wpa2-fourport`, 19:19Z)
-
-Same rig, same hour, `udp_port: 7882-7885`, nothing else changed. One
-generator process segfaulted in `rtc-node` ninety seconds in and took its 31
-receivers with it, so 468 were present.
-
-| metric | A2 |
-|---|---|
-| participants present | 469 (468 receivers) |
-| decoding within 45 s | **468 / 468 (100%)** |
-| never decoded a frame | 0 |
-| sustained over the hold | 337 / 468 (72%), generator-limited |
-| decoded fps p5 / p50 | 29.4 / 29.7 |
-| packet loss median / p95 | 0.000% / 0.001% |
-| freezes / PLIs / NACKs | 131 receivers / 0 / 1606 |
-| SFU egress | 805 to 853 Mbit/s steady (report); p95 858, peak 959 (samples) |
-| SFU CPU p95 / peak | 75% / 81% of 4 vCPU |
-| SFU UDP `RcvbufErrors` | **0** |
-| welcome p50 / p95 | 37 / 69 ms |
-| first frame from arrival p50 / p95 / p99 | 811 / 1366 / 1646 ms |
-| generators CPU p95 | 67 to 94% (three of four over the 70% gate) |
-| API pool peak / CPU p95 | 18 of 40 / 15% |
-
-105 of the 131 freezes were on the one generator at 94% CPU that also ran the
-presenter (15,243 decoder frames dropped there, none elsewhere). Report says
-CPU p95 75% ("67 to 78%" band); the sample file says p95 75%, peak 81%.
-
-### 4.4 A2 repeat: four ports, six generators (`wpa2-fourport-r2`, 20:39Z)
-
-Same SFU config. Four Vultr 12 vCPU boxes plus two Fly `performance-16x`
-machines in `gru`, 27 processes of about 19 receivers, join concurrency 8.
-
-| metric | A2 repeat |
-|---|---|
-| participants | 500 (499 receivers, 100 legacy sockets) |
-| decoding within 45 s | **499 / 499 (100%)** |
-| never decoded a frame | 0 |
-| sustained over the hold | 279 / 499 (56%), generator-limited (see below) |
-| decoded fps p5 / p50 | 27.7 / 29.5 |
-| packet loss median / p95 | 0.000% / 0.027% |
-| freezes / PLIs / NACKs | 220 receivers / 10 / 825 |
-| SFU egress | 880 to 935 Mbit/s steady (report); p95 913, peak 1011 (samples) |
-| SFU CPU p95 / peak | 76% / 82% of 4 vCPU |
-| SFU UDP `RcvbufErrors` | **0** |
-| welcome p50 / p95 | 37 / 65 ms |
-| first frame from arrival p50 / p95 / p99 | 835 / 1747 / 2402 ms |
-| presenter | 30.1 fps at 1.35 Mbit/s |
-| generators CPU p95 | Vultr 54 to 66%; Fly 65% and 90% |
-| API pool peak / CPU p95 | 14 of 40 / 14% |
-
-The 90% Fly box froze all 95 of its receivers (96,785 frames dropped by its
-own decoders). The four Vultr boxes, all under 66%, froze 55 of their 309
-receivers once each with zero dropped frames and 111 lost packets between
-them: brief jitter at the edge of the SFU's CPU, not a starved generator. Read
-A2 and its repeat together as: at 500 the four-port 4 vCPU box delivers the
-full 720p stream to everyone, and the first thing to give is smoothness, not
-delivery.
-
-### 4.5 Ladder F: 4 vCPU, 720p, four ports, `lk load-test` subscribers (`ladder4c-720`, 19:42Z)
-
-Three minutes a step, our presenter at 1.5 Mbit/s, `rmem_max` default.
-
-| subscribers | egress p50 (peak) Mbit/s | SFU CPU p50 (p95) | rcvbuf drops/s mean (peak) | loss (lk aggregate) | per subscriber |
-|---|---|---|---|---|---|
-| 200 | 343 (376) | 26% (28%) | 0 (0) | 0.00% | 1.50 Mbit/s |
-| 300 | 516 (565) | 37% (39%) | 0 (0) | 0.00% | 1.50 |
-| 400 | 687 (746) | 48% (52%) | 5 (711) | 0.00% | 1.40 |
-| 500 | 858 (951) | 59% (63%) | 3 (441) | 0.00% | 1.40 |
-| 600 | 588 (956) | 81% (84%) | 26 (1735) | 26.6% | 0.55 |
-| 700 | 549 (907) | 85% (86%) | 8 (616) | 26.9% | 0.42 |
-| 800 | 547 (911) | 84% (86%) | 15 (2313) | 27.2% | 0.35 |
-
-Between 500 and 600 the 4 vCPU box stops delivering: egress falls instead of
-rising, CPU pins in the low 80s and a quarter of the packets reach nobody.
-Bursty receive-buffer drops start at 400 with no cost to loss; that is what the
-sysctl change in section 2 targets.
+difference is noted in the private copy.
 
 ## 5. Extrapolation
 
-Everything in this table is arithmetic on the runs above. None of it has been
-measured. The assumptions: egress and SFU CPU scale linearly with viewers times
-bits per viewer (true from 200 to 500 in ladder F); a box gives out at roughly
-the CPU where the 4 vCPU box did (about 80%); 2 vCPU delivers about half of
-4 vCPU; a 1080p-by-name share costs 4 Mbit/s against 1.5.
+The extrapolation table is in the operator's copy. Its method is here, because
+the method is what makes it readable: everything in it is arithmetic on the
+runs, none of it is measured, and it assumes that egress and SFU CPU scale
+linearly with viewers times bits per viewer (which held across the measured
+part of the ladder), that a box gives out at roughly the CPU where the test box
+did, that half the cores deliver about half, and that a 1080p-by-name share
+costs 4 Mbit/s against 1.5. Linear scaling past one box's CPU is the least safe
+assumption in it.
 
-Box labels below name the production window each row would have described;
-the resize on 2026-09-08 09:25:54Z means only the third row still matches
-production today.
+Not measured, in the order they would change that table most:
 
-| box | ports | 720p at 1.5 Mbit/s | 1080p by name at 4 Mbit/s | basis |
-|---|---|---|---|---|
-| 2 vCPU, one port (production before 2026-09-08 07:17Z) | one | fails well under 500; exact point unknown | worse | A1 failed at 500 on 4 vCPU with the single socket; 2 vCPU was not run |
-| 2 vCPU, four ports (production 2026-09-08 07:17Z to 09:26Z) | four | **about 250 to 300** (extrapolation; superseded by the resize below before it was ever measured) | about 90 to 110 | half of the 4 vCPU break (500 to 600) at 80% CPU; ladder E not run |
-| 4 vCPU, four ports (production since 2026-09-08 09:26Z) | four | 500 measured clean on the isolated test box, break 500 to 600 (ladder F); not yet measured on the production box itself | about 185 to 220 | A2, A2 repeat, ladder F; divide by 2.7 for 1080p |
-| 8 vCPU (not deployed) | four or more | about 1000 to 1200 if linear; 1.5 to 1.8 Gbit/s of egress, likely the NIC or the uplink first | about 370 to 440 | not run; linear scaling past one box's CPU is the least safe assumption here |
-
-Not measured, in the order they would change the table most:
-
-1. **F on the production box itself.** Production is now the same size and
-   config as the test rig (since 09:25:54Z on 2026-09-08), but ladder F ran
-   only on the isolated box. This is the run that would turn "measured on the
-   test rig" into "measured on production." The old item here, an E ladder on
-   a 2 vCPU production-identical box, is moot now that production is 4 vCPU.
-2. **The raised receive buffer and `num_tracks` conditions**, on their own,
-   at 400 to 600, to see whether the bursty drops go away.
-3. **B, 1080p pinned at 4 Mbit/s** with receivers on the top layer.
-4. **C, 50 voices and 10 cameras** alongside the share (a real party is not
-   one track).
-5. **D, the join storm with resume** (what an API restart mid-party does to
-   the SFU).
-6. A third A2 repeat with every generator under the 70% gate, to get a
+1. **The ladder on the production box itself.** Production is now the same size
+   and configuration as the test rig, but every ladder step ran on the isolated
+   box. This is the run that would turn "measured on the test rig" into
+   "measured on production".
+2. **The raised receive buffer and the `num_tracks` pin**, on their own, around
+   the size where the bursty drops first appeared, to see whether they go away.
+3. **1080p pinned at 4 Mbit/s** with receivers on the top layer.
+4. **50 voices and 10 cameras** alongside the share (a real party is not one
+   track).
+5. **A join storm with resume** (what an API restart mid-party does to the SFU).
+6. A repeat with every generator under the 70% gate, to get a
    sustained-receipt figure that is the SFU's and not the generators'.
-7. A separate control B: the API-only ramp at the media runs' arrival shape
-   (5.5/s), so the two rigs share a baseline.
-8. 8 vCPU.
+7. An API-only ramp at the media runs' arrival shape, so the two rigs share a
+   baseline.
+8. Eight vCPU.
 
 ## 6. Levers, ranked
 
 None of these is promised. Each is one line because each deserves its own
 measurement before its own plan.
 
-1. **Cores.** The cheapest and the only one measured: 2 to 4 vCPU on the same
-   image roughly doubles the room (section 5). Resize needs a reboot; never
-   during a party.
+1. **Cores.** The cheapest and the only one measured: doubling vCPU on the same
+   image roughly doubles the room. Resize needs a reboot; never during a party.
 2. **Bits per viewer.** Egress is viewers times bitrate. The large-room cap at
-   720p / 1.5 Mbit/s is already the lever that makes 500 fit; AV1 or a lower
-   large-room cap moves it again, at a quality and CPU cost on the presenter.
-3. **TURN placement.** Relay traffic is 9.4% of joins today and doubles the
-   SFU's bytes for each of them; moving relay to Cloudflare TURN via
-   `/api/ice-servers` takes it off the box and fixes the dead TLS path at once.
-4. **HLS for passive viewers** beyond about a thousand: a watch party where
-   most people only watch does not need a WebRTC subscription per head. LiveKit
-   egress to HLS is a separate pipeline with its own latency (seconds).
+   720p / 1.5 Mbit/s is already the lever that makes the current room size fit;
+   AV1 or a lower large-room cap moves it again, at a quality and CPU cost on
+   the presenter.
+3. **TURN placement.** Relay traffic is about a tenth of joins today and
+   doubles the SFU's bytes for each of them; moving relay to Cloudflare TURN
+   via `/api/ice-servers` takes it off the box and fixes the dead TLS path at
+   once.
+4. **HLS for passive viewers** past the point where a WebRTC subscription per
+   head stops making sense: a watch party where most people only watch does not
+   need one. LiveKit egress to HLS is a separate pipeline with its own latency
+   (seconds).
 5. **A second SFU node** (LiveKit multi-node with Redis) is the last one; it
    splits rooms across boxes, not one room, unless the room is bridged.
 
@@ -374,58 +249,64 @@ measurement before its own plan.
 
 **Rig 1 (API only):** `server/scripts/load-fanout.ts`, README beside it,
 procedure in [`docs/STAGING.md`](./STAGING.md) ("Load testing staging"). One
-laptop suffices up to about 700 Mbit/s of app-WS egress; beyond that shard it.
+laptop suffices up to a few hundred Mbit/s of app-WS egress; beyond that shard
+it.
 
-**Rig 2 (media):** `tools/watch-party-load`, README in the directory
-(flags, stampede mode, generator sizing, results). What it needs:
+**Rig 2 (media):** `tools/watch-party-load`, README in the directory (flags,
+stampede mode, generator sizing, results). What it needs:
 
-- Staging scaled to production's shape: `performance-2x`, `PG_POOL_MAX=40`,
-  an edited `fly.staging.toml` with `soft_limit 1000 / hard_limit 2000`,
-  `auto_stop_machines off`, `min_machines_running 1` (never commit that
-  edit), and `RATE_LIMIT_ANON_*` / `RATE_LIMIT_SOCKET_*` lifted for the run.
-- A throwaway SFU built from `tools/sfu/install.sh` under sslip.io names with
-  a fresh key pair, `LIVEKIT_*` on staging pointed at it. Use the vCPU count
-  you want to answer a question about; production is 4 vCPU since
+- Staging scaled to production's shape (`performance-2x`, `PG_POOL_MAX=40`),
+  its `fly.staging.toml` proxy concurrency raised, `auto_stop_machines off`,
+  `min_machines_running 1` (never commit that edit), and the two address-keyed
+  rate limiters lifted for the run. The exact values and the `fly secrets set`
+  and `fly deploy` invocations are in `~/.config/pqp/capacity-measured.md`,
+  part 2, along with the matching teardown.
+- A throwaway SFU built from `tools/sfu/install.sh` under sslip.io names with a
+  fresh key pair, `LIVEKIT_*` on staging pointed at it. Use the vCPU count you
+  want to answer a question about; production is 4 vCPU since
   2026-09-08 09:25:54Z (was 2; see Timeline).
-- Generators: about 0.08 core per 720p30 receiver, keep every box under 70%.
-  A Vultr `vhp-12c-24gb-amd` holds 80 to 90 receivers; 500 needs six such
-  boxes (or four plus two Fly `performance-16x` in `gru`, bootstrapped from
-  `node:22-bookworm`). Shards of about 19 to 31 receivers per Node process,
-  the presenter in a process of its own, join concurrency 8 to 12 per process
-  (12 segfaulted `rtc-node` once in 43 process-runs).
-- Deny `api.pqp.gg` and `sfu.pqp.gg` in every generator's firewall before
-  the first run. The harness refuses both by name as well.
-- Check the `target ran <sha> for the whole run` line in every report; the
-  rig is shared and another agent's deploy mid-run has produced a wrong
-  number before.
+- Generators: about 0.08 core per 720p30 receiver, keep every box under 70%. A
+  Vultr `vhp-12c-24gb-amd` holds 80 to 90 receivers; size the fleet from that
+  and the participant count. Fly `performance-16x` machines in `gru` work as
+  extra generators, bootstrapped from `node:22-bookworm`. Shards of roughly
+  twenty to thirty receivers per Node process, the presenter in a process of
+  its own, join concurrency 8 to 12 per process (12 segfaulted `rtc-node` once
+  in 43 process-runs).
+- Deny `api.pqp.gg` and `sfu.pqp.gg` in every generator's firewall before the
+  first run. The harness refuses both by name as well; that guard is not
+  optional and must not be relaxed to "just check something quickly".
+- Check the `target ran <sha> for the whole run` line in every report; the rig
+  is shared and another agent's deploy mid-run has produced a wrong number
+  before.
 
-**Cost of the 2026-09-07 evening:** about $4.50 Vultr (SFU plus four
-generators) plus about $4 Fly for the two extra generators, under $1 of
+**Cost of one evening of this:** single-digit dollars of Vultr for the SFU and
+the generators, a few dollars of Fly for extra generators, under a dollar of
 staging. The Vultr account's monthly fee cap refused new machines mid-session
-and its API key is IP-restricted (a VPN on the laptop breaks every call).
+once, and its API key is IP-restricted (a VPN on the laptop breaks every call).
 
 **Afterwards:** tear down the SFU and the generators, scale staging back,
 `git checkout fly.staging.toml`, redeploy staging from its branch, and point
-`LIVEKIT_*` on staging back (or unset it). Then append the run here.
+`LIVEKIT_*` on staging back (or unset it). Then append the run to the
+operator's copy, and add anything methodological here.
 
 ## 8. Don't publish a capacity number
 
-Do not put a viewer-count figure for the production media server in public
-copy (marketing, release notes, the website, a pitch). Three reasons:
+Do not put a viewer-count figure for the production media server in public copy
+(marketing, release notes, the website, a pitch). This is the rule that made
+the rest of this document what it is. Three reasons:
 
 1. **The production box has never itself been driven to that load.** Every
-   500-viewer result in this document ran on an isolated test box (Timeline,
-   section 3). Production has been resized to match that box's configuration;
-   it has not been proven to carry the same load.
-2. **Ladder F (section 4.5) shows what happens between 500 and 600:** egress
-   falls instead of rising, CPU pins in the low 80s, and about a quarter of
-   packets reach nobody. A number just under the edge of a cliff is one bad
-   night from being a number just over it.
+   large result ran on an isolated test box. Production has been resized to
+   match that box's configuration; it has not been proven to carry the same
+   load.
+2. **The ladder shows a cliff, not a slope.** Past the break point egress falls
+   instead of rising, CPU pins, and a large share of packets reach nobody. A
+   number just under the edge of a cliff is one bad night from being a number
+   just over it.
 3. **A presenter choosing 1080p by name divides the figure by about 2.7**
-   (`client/src/lib/video-quality.ts`, section 1). The same headline number
-   is true or false depending on a menu choice the presenter makes, not
-   anything pqp controls.
+   (`client/src/lib/video-quality.ts`, section 1). The same headline number is
+   true or false depending on a menu choice pqp does not control.
 
-The one number that is safe to say publicly is the one that already happened
-in public: the watch party of 2026-09-05, over a hundred people, real and
-observed (`docs/voice-backends.md`).
+The one number that is safe to say publicly is the one that already happened in
+public: the watch party of 2026-09-05, over a hundred people, real and observed
+([`docs/voice-backends.md`](./voice-backends.md)).
