@@ -344,6 +344,14 @@
     display: flex; align-items: baseline; gap: 4px;
   }
   .health .h-val .u { font-size: 12px; font-weight: 500; color: var(--muted); font-family: "Instrument Sans", sans-serif; }
+  /* A component the API never measured says so in words. Deliberately not the
+     figure face: a phrase set like a number reads as a number. */
+  .health .h-val.soft {
+    font-family: "Instrument Sans", sans-serif;
+    font-size: 13px; font-weight: 600; line-height: 1.25;
+    letter-spacing: 0; color: var(--muted);
+    display: block;
+  }
   .health .h-sub { font-size: 11.5px; color: var(--faint); }
   .health .bar {
     height: 4px; border-radius: 3px; overflow: hidden;
@@ -2326,7 +2334,8 @@
           '<span class="h-name">' + esc(h.name) + '</span>' +
           '<span class="status-chip ' + stChip + '">' + dot + stLabel + '</span>' +
         '</div>' +
-        '<div class="h-val num">' + esc(h.val) + '<span class="u">' + esc(h.unit) + '</span></div>' +
+        '<div class="h-val' + (h.soft ? " soft" : " num") + '">' + esc(h.val) +
+          (h.unit ? '<span class="u">' + esc(h.unit) + '</span>' : "") + '</div>' +
         '<div class="h-sub">' + esc(h.sub) + '</div>' +
         uptimeLine;
       hg.appendChild(card);
@@ -4308,10 +4317,22 @@
     paintUpdated();
   }
 
-  var HEALTH_KEYS = { api: "api", database: "postgres", storage: "storage (r2)", voice: "voz (ws)", gifs: "gifs" };
+  var HEALTH_KEYS = { api: "api", database: "postgres", storage: "storage (r2)", voice: "voz", gifs: "gifs" };
   var HEALTH_SUB = {
     api: "resposta do /status.json", database: "SELECT 1 · pool ok", storage: "HEAD assinado no bucket",
-    voice: "sinalização webrtc no /ws", gifs: "proxy de busca"
+    voice: "sinalização /ws · sfu na última sonda", gifs: "busca real no provedor, a cada 15 min"
+  };
+  /* What a card says when the API sent no latency for it.
+     ABSENT IS NOT ZERO. `/status.json` omits `latencyMs` for a component whose
+     health is inferred rather than measured, and this page used to render that
+     absence as `0`, which draws as an impossibly fast probe and is
+     indistinguishable at a glance from a real reading. So each one says what is
+     actually known about it instead of borrowing a number it never had. See
+     server/src/services/status.ts. */
+  var HEALTH_INFERRED = {
+    api: "respondeu · sem medida própria",
+    voice: "no ar · sem sonda recente",
+    gifs: "no ar · sem sonda recente"
   };
   // Nothing to draw until /health answers; renderHealth is only ever called
   // with real tiles, so an empty list here means the skeleton stays put.
@@ -4329,10 +4350,15 @@
       var st = c.state === "operational" ? "ok" : c.state === "degraded" ? "warn" : c.state === "down" ? "bad" : "off";
       if (st === "ok") operational++;
       if (st === "off") off++;
+      var measured = typeof c.latencyMs === "number";
       tiles.push({
         name: name,
-        val: st === "off" ? "off" : String(typeof c.latencyMs === "number" ? Math.round(c.latencyMs) : 0),
-        unit: st === "off" ? "" : "ms",
+        val: st === "off" ? "off"
+          : measured ? String(Math.round(c.latencyMs))
+          : (HEALTH_INFERRED[c.key] || "no ar · sem medição"),
+        unit: st === "off" || !measured ? "" : "ms",
+        // A phrase is not a figure and must not be set in the figure face.
+        soft: st === "off" || !measured,
         sub: st === "off" ? "não configurado nesta instância" : (HEALTH_SUB[c.key] || c.label || ""),
         uptime: typeof c.uptime24h === "number" ? Math.round(c.uptime24h * 10000) / 100 : null,
         state: st

@@ -286,8 +286,10 @@ Live, from `GET https://api.pqp.gg/status.json` (proxied as `/health`): the
 component health tiles, the headline pill, database latency, and the 24h/7d
 uptime behind the infra tab.
 
-**A component with no `latencyMs` was not measured, and must never be drawn as
-`0 ms`.** `api` cannot time its own round trip from inside itself and never
+**A component with no `latencyMs` was not measured, and is never drawn as
+`0 ms`.** The card says what is known instead (`respondeu · sem medida própria`,
+`no ar · sem sonda recente`), set in the text face rather than the figure face,
+because a phrase set like a number reads as a number. `api` cannot time its own round trip from inside itself and never
 carries the field; `voice` and `gifs` carry it only once their scheduled
 reading has landed. A zero renders as an impossibly fast probe and is
 indistinguishable at a glance from a real one, which is the bug this rule
