@@ -203,6 +203,11 @@ class WireProtocolTest {
         "poll-update" to "no poll surface on the phone",
         // Watch party is a desktop feature by design (docs/ANDROID.md).
         "watch-party" to "no watch party on the phone",
+        // The watch party EVENT: its name, host, co-hosts, state and options,
+        // resolved per recipient. Same reason as the line above and as the
+        // scheduling reminder below: the phone has no watch party surface at
+        // all, so there is nothing for a party's state to change.
+        "watch-party-update" to "no watch party surface on the phone",
         // Watch party scheduling reminder ("T-10 minutes" / "now live"), sent
         // individually per subscriber. No reminders surface on the phone yet.
         "channel-session-reminder" to "no watch party scheduling surface on the phone",
