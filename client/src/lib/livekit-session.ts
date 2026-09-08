@@ -229,6 +229,43 @@ export async function connectLiveKit({
   let receiveQuality: ReceiveQuality = "auto";
 
   /**
+   * One reconcile at a time; a second request waits its turn. Declared here,
+   * ahead of the `room.on(...)` registrations below, rather than beside
+   * `reconcileScreenPlan` further down: Firefox can fire `ParticipantConnected`
+   * synchronously inside `room.connect()`, before this function has finished
+   * running past its own later statements, and that handler calls
+   * `reconcileScreenPlan`, which reads this variable. A `let` declared after
+   * that point would still be in its temporal dead zone when the handler
+   * fires, throwing `ReferenceError: can't access lexical declaration
+   * 'reconciling' before initialization` and dropping the connection.
+   * Chromium happens not to fire the event that early, so this only showed up
+   * in Firefox. See the regression test in `livekit-session.test.ts`.
+   */
+  let reconciling: Promise<void> | null = null;
+  /** Track we published, kept so we can replace/mute it later. */
+  let published: InstanceType<typeof LocalAudioTrack> | null = null;
+  /** Raw screen-share track we published, kept so we can unpublish it later. */
+  let publishedScreenTrack: MediaStreamTrack | null = null;
+  /** Raw camera track we published, kept so we can unpublish it later. */
+  let publishedCameraTrack: MediaStreamTrack | null = null;
+  /** The ceiling the next camera publish will carry. See `setCameraMaxBitrate`. */
+  let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
+  /** The ceiling the next screen publish will carry. See `setScreenMaxBitrate`. */
+  let screenMaxBitrate = DEFAULT_SCREEN_MAX_BITRATE_BPS;
+  /** The presenter's chosen quality; with the room size it makes the plan. */
+  let screenQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
+  /** The plan the share on the wire was published under. Null while not sharing. */
+  let publishedScreenPlan: ScreenSimulcastPlan | null = null;
+  /**
+   * The capture's constraints as the browser handed them over, so the plan's
+   * height can be laid over them and lifted again without losing the frame
+   * rate or width the capture was asked for.
+   */
+  let screenCaptureConstraints: MediaTrackConstraints | null = null;
+  /** The screen share's audio track, when the capture had one. Usually null. */
+  let publishedScreenAudioTrack: MediaStreamTrack | null = null;
+
+  /**
    * Pauses delivery of video nobody is drawing (no bound element, or the tab
    * hidden for a while) with `setEnabled(false)`. See `remote-video-delivery.ts`.
    *
@@ -677,31 +714,6 @@ export async function connectLiveKit({
   }
 
   const unregisterStats = registerVoiceStatsSource(sampleRoom);
-
-  /** Track we published, kept so we can replace/mute it later. */
-  let published: InstanceType<typeof LocalAudioTrack> | null = null;
-  /** Raw screen-share track we published, kept so we can unpublish it later. */
-  let publishedScreenTrack: MediaStreamTrack | null = null;
-  /** Raw camera track we published, kept so we can unpublish it later. */
-  let publishedCameraTrack: MediaStreamTrack | null = null;
-  /** The ceiling the next camera publish will carry. See `setCameraMaxBitrate`. */
-  let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
-  /** The ceiling the next screen publish will carry. See `setScreenMaxBitrate`. */
-  let screenMaxBitrate = DEFAULT_SCREEN_MAX_BITRATE_BPS;
-  /** The presenter's chosen quality; with the room size it makes the plan. */
-  let screenQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
-  /** The plan the share on the wire was published under. Null while not sharing. */
-  let publishedScreenPlan: ScreenSimulcastPlan | null = null;
-  /**
-   * The capture's constraints as the browser handed them over, so the plan's
-   * height can be laid over them and lifted again without losing the frame
-   * rate or width the capture was asked for.
-   */
-  let screenCaptureConstraints: MediaTrackConstraints | null = null;
-  /** One reconcile at a time; a second request waits its turn. */
-  let reconciling: Promise<void> | null = null;
-  /** The screen share's audio track, when the capture had one. Usually null. */
-  let publishedScreenAudioTrack: MediaStreamTrack | null = null;
 
   /**
    * Move one published source's ceiling without republishing it.
