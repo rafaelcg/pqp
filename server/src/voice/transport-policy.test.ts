@@ -110,12 +110,12 @@ describe("guardMeshAcrossInstances (M5)", () => {
     ).toEqual({ kind: "force-livekit" });
   });
 
-  it("refuses the join when a second machine is live and there is no SFU", () => {
+  it("keeps mesh when a second machine is live and there is no SFU: the relay crosses", () => {
     expect(
       guardMeshAcrossInstances({ liveKitConfigured: false, otherLiveInstances: 1 }),
-    ).toEqual({ kind: "refuse", reason: "mesh-multi-instance" });
+    ).toEqual({ kind: "keep" });
     expect(
       guardMeshAcrossInstances({ liveKitConfigured: false, otherLiveInstances: 3 }),
-    ).toEqual({ kind: "refuse", reason: "mesh-multi-instance" });
+    ).toEqual({ kind: "keep" });
   });
 });
