@@ -5,9 +5,14 @@ import {
   sampleVoiceStats,
   type Limitation,
   type VideoSenderSample,
+  type VideoSenderRole,
 } from "@/lib/voice-stats-probe";
-import { chosenScreenCeilingBps } from "@/lib/peer-connection-manager";
-import type { VideoQuality } from "@/lib/video-quality";
+import {
+  chosenScreenCeilingBps,
+  meshCameraBitrate,
+  meshScreenBitrate,
+} from "@/lib/peer-connection-manager";
+import { cameraBitrateFor, type VideoQuality } from "@/lib/video-quality";
 
 /**
  * What this machine is actually sending, in words, next to the control that
@@ -42,6 +47,64 @@ function limitKey(reason: Limitation) {
   return "settings.voice.videoQuality.limit.other" as const;
 }
 
+/**
+ * What this room may legitimately spend on one sender, which is the only
+ * honest thing to measure a live ceiling against.
+ *
+ * GETTING THIS WRONG FLIPS THE SENTENCE TO THE OPPOSITE LIE, and both
+ * directions have been shipped here in turn. Compare a live ceiling against
+ * the rung alone and a ceiling the *room* imposed reads as "your connection".
+ * Compare it against nothing and a ceiling the *link* imposed reads as "your
+ * quality setting". A mesh sends one copy per viewer and two video senders
+ * divide one share, so the expectation is the same arithmetic the manager
+ * does.
+ *
+ * THE OTHER SENDER'S TERM MUST COME FROM WHAT IS ACTUALLY BEING SENT. The
+ * third cut assumed a camera was always on when reporting the screen, which is
+ * exactly backwards: the readout prefers the camera row and only falls back to
+ * the screen when no camera row exists, so that term was wrong every single
+ * time it was used. On a 3 to 4.5 Mbps link that made the menu say "your
+ * quality setting" while the status line two clicks away said "your
+ * connection", about the same share.
+ *
+ * Null when the room's size is unknown (Settings outside a call), where
+ * `describeLimitationAgainst` degrades to the raw reading.
+ */
+export function expectedCeilingBps({
+  role,
+  quality,
+  viewers,
+  cameraOn,
+  sharingScreen,
+}: {
+  role: VideoSenderRole;
+  quality: VideoQuality | undefined;
+  viewers: number | undefined;
+  cameraOn: boolean;
+  sharingScreen: boolean;
+}): number | null {
+  if (quality === undefined || viewers === undefined) {
+    return null;
+  }
+  if (role === "screen") {
+    return meshScreenBitrate(
+      viewers,
+      quality,
+      undefined,
+      cameraOn ? cameraBitrateFor(quality) : 0,
+    );
+  }
+  if (role === "camera") {
+    return meshCameraBitrate(
+      viewers,
+      cameraBitrateFor(quality),
+      undefined,
+      sharingScreen ? chosenScreenCeilingBps(quality) : 0,
+    );
+  }
+  return null;
+}
+
 export function OutboundVideoReadout({
   /**
    * What to say when there is no camera sender to read at all.
@@ -62,12 +125,27 @@ export function OutboundVideoReadout({
    * on a weak link. Optional because Settings renders this outside any call.
    */
   quality,
+  /**
+   * How many other people are in the room. Without it this component cannot
+   * tell a ceiling the room imposed from one the link imposed, and says
+   * nothing about the limit rather than guessing.
+   */
+  viewers,
 }: {
   idleKey?: MessageKey;
   quality?: VideoQuality;
+  viewers?: number;
 } = {}) {
   const { t } = useTranslation();
   const [camera, setCamera] = useState<VideoSenderSample | null>(null);
+  /**
+   * What else this machine is sending. The picked row alone cannot say: the
+   * selection below prefers the camera and falls back to the screen, so the
+   * screen row is only ever chosen when there is no camera — and an earlier
+   * cut still handed it a camera term, which is wrong every time that branch
+   * runs. The expectation has to come from what is actually on the wire.
+   */
+  const [alsoSending, setAlsoSending] = useState({ camera: false, screen: false });
 
   useEffect(() => {
     let live = true;
@@ -91,6 +169,10 @@ export function OutboundVideoReadout({
         // Camera first when both exist: it is the smaller of the two numbers
         // and the one people misread as "the call is broken".
         const senders = snapshot.senders;
+        setAlsoSending({
+          camera: senders.some((sender) => sender.role === "camera"),
+          screen: senders.some((sender) => sender.role === "screen"),
+        });
         setCamera(
           senders.find((sender) => sender.role === "camera") ??
             senders.find((sender) => sender.role === "screen") ??
@@ -127,10 +209,14 @@ export function OutboundVideoReadout({
   // Not `limitedBy` directly: the encoder calls its own `maxBitrate` a
   // bandwidth limit, so the raw field says "your connection" to somebody on
   // fibre whose only limit is the rung they picked. See `describeLimitation`.
-  const limited = describeLimitationAgainst(
-    camera,
-    camera.role === "screen" && quality ? chosenScreenCeilingBps(quality) : null,
-  );
+  const chosen = expectedCeilingBps({
+    role: camera.role,
+    quality,
+    viewers,
+    cameraOn: alsoSending.camera,
+    sharingScreen: alsoSending.screen,
+  });
+  const limited = describeLimitationAgainst(camera, chosen);
 
   return (
     <p className="mt-1 text-xs text-paper-muted" role="status">

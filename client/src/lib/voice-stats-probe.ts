@@ -507,8 +507,8 @@ export function describeLimitation(sample: VideoSenderSample): Limitation | null
  * possible way to be wrong.
  *
  * `chosenCeilingBps` is what the user actually asked for. Null when the caller
- * cannot know (the camera path, and Settings outside a call), where this
- * degrades to exactly `describeLimitation`.
+ * cannot know (Settings outside a call, or any surface without the room's
+ * size), where this degrades to exactly `describeLimitation`.
  */
 export function describeLimitationAgainst(
   sample: VideoSenderSample,

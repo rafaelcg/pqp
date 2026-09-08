@@ -4,7 +4,10 @@ import {
   sampleVoiceStats,
   type VideoSenderSample,
 } from "@/lib/voice-stats-probe";
-import { chosenScreenCeilingBps } from "@/lib/peer-connection-manager";
+import {
+  chosenScreenCeilingBps,
+  splitShare,
+} from "@/lib/peer-connection-manager";
 import { DEFAULT_SCREEN_UPLOAD_BUDGET_BPS } from "@/lib/screen-upload-budget";
 import type { VideoQuality } from "@/lib/video-quality";
 import type { VoiceRoomTransport } from "@pqp/shared";
@@ -83,6 +86,8 @@ export function nextStrainStreak(
   screens: readonly VideoSenderSample[],
   chosenCeilingBps: number,
   viewers: number,
+  /** What a camera on the same uplink asked for, in bps. 0 when it is off. */
+  cameraChosenBps = 0,
 ): number {
   // No sender yet is the first second of a share, not a fault. It resets
   // rather than holds, so a share that stops and restarts starts counting
@@ -92,6 +97,30 @@ export function nextStrainStreak(
     return 0;
   }
 
+  // WHAT THIS ROOM MAY LEGITIMATELY SPEND ON THE SCREEN, before any link
+  // trouble. A mesh sends one copy per viewer, and a camera on the same uplink
+  // takes its own slice, so the honest expectation is neither the rung the
+  // person picked nor the whole budget.
+  //
+  // BOTH BRANCHES BELOW ARE MEASURED AGAINST IT. An earlier cut applied the
+  // camera term to the second branch only and left the first comparing against
+  // the raw chosen rung, so a five-way call on Auto sharing a film with the
+  // camera on sat pinned at a perfectly legitimate 2.67 Mbps ceiling and was
+  // told its connection was the problem, on fibre, for the whole call. Found
+  // in review; a ceiling the room and the camera explain is not a link fault
+  // whichever branch notices it.
+  // `splitShare`, not a second copy of its arithmetic. The two were written
+  // out separately at first and had already drifted: this one lacked the 1:1
+  // exemption, so a 1:1 call with a camera expected 3.08 Mbps where the
+  // manager applied 4. Harmless in that direction, but two copies of one
+  // formula is how the screen controller got four different models in a day.
+  const expected = splitShare(
+    viewers,
+    chosenCeilingBps,
+    cameraChosenBps,
+    DEFAULT_SCREEN_UPLOAD_BUDGET_BPS,
+  );
+
   // THE OBVIOUS SIGNAL, AND WHY IT IS NOT ENOUGH ON ITS OWN. "The encoder says
   // it is bandwidth-limited" is true while the link is being discovered, and
   // then stops being true: once the budget controller has cut the ceiling to
@@ -100,7 +129,7 @@ export function nextStrainStreak(
   // between `bandwidth` and `none` every few seconds, so a streak built on
   // this alone reset before it could ever be said out loud. The adaptation
   // working must not be what silences the explanation for it.
-  if (describeLimitationAgainst(screen, chosenCeilingBps) === "bandwidth") {
+  if (describeLimitationAgainst(screen, expected) === "bandwidth") {
     return streak + 1;
   }
 
@@ -122,10 +151,6 @@ export function nextStrainStreak(
   // sender row. A four-person call with one joiner stuck on ICE has a ceiling
   // of 5000/3 and only two rows to divide by, which read as a weak link and
   // fired this warning at somebody on fibre. Found in review.
-  const expected = Math.min(
-    chosenCeilingBps,
-    DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, viewers),
-  );
   const ceilingBps = (screen.ceilingKbps ?? 0) * 1000;
   const cutByBudget = ceilingBps > 0 && ceilingBps < expected * CEILING_SLACK;
   return cutByBudget ? streak + 1 : 0;
@@ -141,6 +166,8 @@ export function useShareUplinkStrain(
   quality: VideoQuality,
   viewers: number,
   transport: VoiceRoomTransport | null,
+  /** What the camera asked for, in bps, or 0 when it is off. */
+  cameraChosenBps = 0,
 ): boolean {
   const [strained, setStrained] = useState(false);
   const streak = useRef(0);
@@ -178,6 +205,7 @@ export function useShareUplinkStrain(
           screens,
           chosenScreenCeilingBps(quality),
           viewers,
+          cameraChosenBps,
         );
         setStrained(isStrained(streak.current));
       });
@@ -188,7 +216,7 @@ export function useShareUplinkStrain(
       live = false;
       clearInterval(id);
     };
-  }, [isSharing, quality, viewers, transport]);
+  }, [isSharing, quality, viewers, transport, cameraChosenBps]);
 
   return strained;
 }

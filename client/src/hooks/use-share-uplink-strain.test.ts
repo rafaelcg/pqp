@@ -168,6 +168,64 @@ describe("the share uplink warning", () => {
     ).toBe(false);
   });
 
+  it("stays quiet when a camera legitimately takes a slice of the room", () => {
+    // FOUND IN REVIEW, TWICE. A mesh sends one copy per viewer and a camera on
+    // the same uplink takes its own slice, so with both live the screen's
+    // ceiling is legitimately two thirds of the share. The first cut had no
+    // camera term at all; the second added it to one branch and left the other
+    // comparing against the raw rung, so a five-way call on Auto sharing a
+    // film with the camera on sat pinned at a perfectly reasonable ceiling and
+    // was told its connection was the problem, on fibre, for the whole call.
+    const viewers = 5;
+    const cameraChosen = 1_500_000;
+    // What such a room may spend on the screen: (5 Mbps / 5) x 2/3.
+    const legitimate = Math.round((5_000_000 / viewers) * (CHOSEN / (CHOSEN + cameraChosen)));
+    const pinned = sender({
+      limitedBy: "bandwidth",
+      ceilingKbps: Math.round(legitimate / 1000),
+      targetKbps: Math.round((legitimate / 1000) * 0.98),
+    });
+    let streak = 0;
+    for (let i = 0; i < SUSTAINED_SAMPLES * 3; i += 1) {
+      streak = nextStrainStreak(streak, [pinned], CHOSEN, viewers, cameraChosen);
+    }
+    expect(isStrained(streak)).toBe(false);
+  });
+
+  it("still speaks when the link is short and a camera is on", () => {
+    // The other half: the camera term must not silence a real problem. Same
+    // room, but the ceiling is far under even the camera-adjusted expectation.
+    const starvedWithCamera = sender({
+      limitedBy: "bandwidth",
+      ceilingKbps: 120,
+      targetKbps: 60,
+    });
+    let streak = 0;
+    for (let i = 0; i < SUSTAINED_SAMPLES; i += 1) {
+      streak = nextStrainStreak(streak, [starvedWithCamera], CHOSEN, 5, 1_500_000);
+    }
+    expect(isStrained(streak)).toBe(true);
+  });
+
+  it("expects what the manager actually applies in a 1:1 call", () => {
+    // The drift the shared `splitShare` removes. This rule used to write the
+    // arithmetic out again without the 1:1 exemption, so a 1:1 call with a
+    // camera and a 1080p share expected ~3.6 Mbps where the manager applied
+    // the full 4. Harmless in that direction, but two copies of one formula
+    // is how the screen controller got four different models in a day.
+    const chosen1080p = 4_000_000;
+    const atManagersCeiling = sender({
+      limitedBy: "bandwidth",
+      ceilingKbps: chosen1080p / 1000,
+      targetKbps: (chosen1080p / 1000) * 0.98,
+    });
+    let streak = 0;
+    for (let i = 0; i < SUSTAINED_SAMPLES * 2; i += 1) {
+      streak = nextStrainStreak(streak, [atManagersCeiling], chosen1080p, 1, 1_500_000);
+    }
+    expect(isStrained(streak)).toBe(false);
+  });
+
   it("forgets the streak the moment the link recovers", () => {
     // One good sample is enough to reset. A warning that lingered after the
     // cause had gone would be the same lie in slower motion.

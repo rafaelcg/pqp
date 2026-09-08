@@ -174,6 +174,218 @@ describe("camera sender tuning", () => {
     }
   });
 
+  it("divides the room, instead of giving every viewer a full copy", async () => {
+    // THE BUG THIS FIXES, recorded in docs/HANDOVER.md on 25 Aug and left
+    // alone since. A mesh uploads one copy per viewer and the camera divided
+    // nothing, so a four-way call permitted about 4.46 Mbps of camera off one
+    // machine. The screen has divided the room since it was written.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    for (const id of ["a", "b", "c", "d"]) {
+      manager.connectToPeer(`${id}-remote`);
+    }
+    await manager.setLocalCameraStream(fakeStream("camera"));
+    await Promise.resolve();
+
+    const live = cameraSenders().filter((sender) => sender.track !== null);
+    expect(live).toHaveLength(4);
+    const total = live.reduce(
+      (sum, sender) => sum + (lastParams(sender)?.encodings[0]?.maxBitrate ?? 0),
+      0,
+    );
+    expect(total).toBeLessThanOrEqual(DEFAULT_SCREEN_UPLOAD_BUDGET_BPS);
+    manager.dispose();
+  });
+
+  it("leaves the chosen ceiling alone when the room is small enough to afford it", async () => {
+    // Dividing must not become a second, invisible quality setting. Two
+    // viewers of a 5 Mbps budget is 2.5 Mbps a copy, so a 700 kbps choice is
+    // what the person gets.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.setCameraMaxBitrate(700_000);
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalCameraStream(fakeStream("camera"));
+    await Promise.resolve();
+
+    for (const sender of cameraSenders().filter((s) => s.track !== null)) {
+      expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBe(700_000);
+    }
+    manager.dispose();
+  });
+
+  it("splits one uplink with a share instead of both claiming all of it", async () => {
+    // `tuneCameraSender`'s own comment described the symptom before there was
+    // a fix: "the two video senders then bid against each other for one
+    // bandwidth estimate with nothing arbitrating, which is how a camera ends
+    // up at 240p while the share looks fine". They ride one uplink and
+    // `availableOutgoingBitrate` measures that whole uplink, so handing it all
+    // to the screen double-commits the link.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalCameraStream(fakeStream("camera"));
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    await Promise.resolve();
+
+    const perPeer = DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / 2;
+    const camera =
+      lastParams(cameraSenders().filter((s) => s.track !== null)[0]!)
+        ?.encodings[0]?.maxBitrate ?? 0;
+    const screen =
+      lastParams(screenSenders().filter((s) => s.track !== null)[0]!)
+        ?.encodings[0]?.maxBitrate ?? 0;
+
+    expect(camera).toBeGreaterThan(0);
+    expect(screen).toBeGreaterThan(0);
+    // Together they fit in one viewer's share, which is the whole point.
+    expect(camera + screen).toBeLessThanOrEqual(perPeer + 1);
+    // And the screen, being the more expensive picture, gets the larger slice.
+    expect(screen).toBeGreaterThan(camera);
+    manager.dispose();
+  });
+
+  it("splits the same whichever sender started first", async () => {
+    // FOUND IN REVIEW, and it was the common ordering that broke: people share
+    // first and turn the camera on afterwards. Nothing retuned the screen on
+    // that edge, so it kept the whole share and the pair asked for 133 % of
+    // it — the double-commit this change exists to remove.
+    const both = async (order: "camera" | "screen") => {
+      const manager = createPeerConnectionManager("z-local", () => {});
+      manager.connectToPeer("a-remote");
+      manager.connectToPeer("b-remote");
+      if (order === "camera") {
+        await manager.setLocalCameraStream(fakeStream("camera"));
+        await manager.setLocalScreenStream(fakeStream("screen"));
+      } else {
+        await manager.setLocalScreenStream(fakeStream("screen"));
+        await manager.setLocalCameraStream(fakeStream("camera"));
+      }
+      await Promise.resolve();
+      const pick = (id: string) =>
+        lastParams(senders.filter((x) => x.track?.id === id)[0]!)?.encodings[0]
+          ?.maxBitrate ?? 0;
+      const out = { screen: pick("screen"), camera: pick("camera") };
+      manager.dispose();
+      return out;
+    };
+    const cameraFirst = await both("camera");
+    const shareFirst = await both("screen");
+    expect(shareFirst).toEqual(cameraFirst);
+    // And together they are exactly one viewer's share, not more.
+    expect(shareFirst.screen + shareFirst.camera).toBe(
+      DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / 2,
+    );
+  });
+
+  it("hands the screen its slice back when the camera goes off", async () => {
+    // The other edge. Leaving the screen on the two-way split with no camera
+    // beside it left a third of the link idle.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    await manager.setLocalCameraStream(fakeStream("camera"));
+    await manager.setLocalCameraStream(null);
+    await Promise.resolve();
+
+    expect(
+      lastParams(senders.filter((x) => x.track?.id === "screen")[0]!)
+        ?.encodings[0]?.maxBitrate,
+    ).toBe(DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / 2);
+    manager.dispose();
+  });
+
+  it("splits in proportion to what each picture costs", async () => {
+    // Pinned as a ratio, not just "the screen gets more": an Auto screen is
+    // 3 Mbps and an Auto camera 1.5, so two thirds and one third. A 90/10
+    // split would satisfy a looser assertion and mean something else.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    await manager.setLocalCameraStream(fakeStream("camera"));
+    await Promise.resolve();
+
+    const pick = (id: string) =>
+      lastParams(senders.filter((x) => x.track?.id === id)[0]!)?.encodings[0]
+        ?.maxBitrate ?? 0;
+    expect(pick("screen") / pick("camera")).toBeCloseTo(2, 1);
+    manager.dispose();
+  });
+
+  it("splits from one pair of numbers, not two that only agree by luck", async () => {
+    // FOUND IN REVIEW. The two halves used to derive "what the camera asked
+    // for" from different places — the screen's half read the screen's rung,
+    // the camera's half read `cameraMaxBitrate` — and agreed only because one
+    // control feeds both today. A camera set apart from the screen's rung is
+    // what tells them apart: on Auto both are 1.5 Mbps and the bug is
+    // invisible, which is why the ratio test could not see it.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    manager.setScreenQuality("1080p");
+    manager.setCameraMaxBitrate(400_000);
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    await manager.setLocalCameraStream(fakeStream("camera"));
+    await Promise.resolve();
+
+    const pick = (id: string) =>
+      lastParams(senders.filter((x) => x.track?.id === id)[0]!)?.encodings[0]
+        ?.maxBitrate ?? 0;
+    // Whatever the two rungs are, the pair fits one viewer's share exactly.
+    expect(pick("screen") + pick("camera")).toBe(
+      DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / 2,
+    );
+    manager.dispose();
+  });
+
+  it("leaves a 1:1 call's senders on what the person chose", async () => {
+    // #340 established that one connection is the browser's to govern, and a
+    // 1:1 room is never sampled, so `screenBudgetBps` there is an unmeasured
+    // constant. Slicing it would cap a deliberate 1080p at a number nobody
+    // measured.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.setScreenQuality("1080p");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    await manager.setLocalCameraStream(fakeStream("camera"));
+    await Promise.resolve();
+
+    expect(
+      lastParams(senders.filter((x) => x.track?.id === "screen")[0]!)
+        ?.encodings[0]?.maxBitrate,
+    ).toBe(4_000_000);
+    expect(
+      lastParams(senders.filter((x) => x.track?.id === "camera")[0]!)
+        ?.encodings[0]?.maxBitrate,
+    ).toBe(1_500_000);
+    manager.dispose();
+  });
+
+  it("moves both senders when the rung changes", async () => {
+    // The camera's slice is derived from what the screen asked for, so a rung
+    // change that moved only the screen left the camera stale.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    await manager.setLocalCameraStream(fakeStream("camera"));
+    await Promise.resolve();
+    const before =
+      lastParams(senders.filter((x) => x.track?.id === "camera")[0]!)
+        ?.encodings[0]?.maxBitrate ?? 0;
+
+    manager.setScreenQuality("360p");
+    await Promise.resolve();
+    const after =
+      lastParams(senders.filter((x) => x.track?.id === "camera")[0]!)
+        ?.encodings[0]?.maxBitrate ?? 0;
+
+    // A cheaper screen leaves the camera a bigger slice.
+    expect(after).toBeGreaterThan(before);
+    manager.dispose();
+  });
+
   it("moves the ceiling on a live call without touching the track", async () => {
     const manager = createPeerConnectionManager("z-local", () => {});
     manager.connectToPeer("a-remote");
