@@ -58,6 +58,17 @@ export interface WatchPartyPanelProps {
   hasStream: boolean;
   /** True while this person is the one whose screen is on the stage. */
   isPresenting: boolean;
+  /**
+   * Anybody in the room has a screen up, this person or not.
+   *
+   * Separates the two states that used to share one sentence: a host who has
+   * gone live and NOT picked a window yet (nothing is coming until they act),
+   * and a host who is sharing while the transcode spins up (the picture is
+   * genuinely seconds away). The second is transient and common; the first is
+   * the one a host hits in production by cancelling the picker, and telling
+   * that room "fica aí que já aparece" is a promise nothing is keeping.
+   */
+  someoneIsSharing?: boolean;
   /** Everyone watching, seated or not, presenter excluded. */
   audienceCount: number;
   onCreate: () => void;
@@ -718,9 +729,11 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
   );
 
   // Nothing on screen yet, and the person is not in the call: say so instead
-  // of rendering nothing. The host gets the instruction, everyone else gets
-  // the reassurance.
+  // of rendering nothing. Which "nothing" it is matters: see
+  // `someoneIsSharing` above.
   if (!props.hasStream && !props.inCall) {
+    const preparing = props.someoneIsSharing === true;
+    const hostSide = runningTheShow && props.canStart;
     return (
       <div className="relative flex h-[68svh] min-h-[280px] shrink-0 flex-col overflow-hidden border-b border-ink-4/60 bg-ink">
         {bar}
@@ -729,21 +742,33 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
         {viewerHint}
         <div
           data-testid="watch-party-waiting"
+          data-watch-party-waiting={preparing ? "preparing" : "idle"}
           className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 bg-black px-6 text-center"
         >
           <Radio
-            className="h-7 w-7 text-danger motion-safe:animate-pulse"
+            className={cn(
+              "h-7 w-7 text-danger",
+              preparing && "motion-safe:animate-pulse",
+            )}
             aria-hidden
           />
           <p className="text-sm font-semibold text-paper">
-            {t("watchParty.live.waiting")}
+            {preparing
+              ? t("watchParty.live.preparing")
+              : t("watchParty.live.waiting")}
           </p>
           <p className="max-w-sm text-xs text-paper-muted">
-            {runningTheShow && props.canStart
-              ? t("watchParty.live.waitingHost")
-              : t("watchParty.live.waitingBody", {
-                  name: party.hostDisplayName,
-                })}
+            {preparing
+              ? hostSide
+                ? t("watchParty.live.preparingHost")
+                : t("watchParty.live.preparingBody", {
+                    name: party.hostDisplayName,
+                  })
+              : hostSide
+                ? t("watchParty.live.waitingHost")
+                : t("watchParty.live.waitingBody", {
+                    name: party.hostDisplayName,
+                  })}
           </p>
         </div>
       </div>

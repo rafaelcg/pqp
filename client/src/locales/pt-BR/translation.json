@@ -2775,7 +2775,7 @@
   "watchParty.live.endConfirmTitle": "Encerrar a watch party?",
   "watchParty.live.endConfirmBody": "\"{name}\" sai do ar pra todo mundo.",
   "watchParty.live.waiting": "A watch party começou",
-  "watchParty.live.waitingBody": "{name} ainda não colocou nada na tela. Fica aí que já aparece.",
+  "watchParty.live.waitingBody": "{name} ainda não colocou nada na tela.",
   "watchParty.live.waitingHost": "Ainda não tem nada na tela. Compartilha uma janela ou uma aba e a galera vê.",
   "watchParty.live.hostGone": "O host caiu",
   "watchParty.live.hostGoneBody": "Se {name} não voltar em alguns minutos, a watch party encerra sozinha.",
@@ -2815,5 +2815,9 @@
   "watchParty.stage.raised": "Mão levantada",
   "watchParty.stage.speak": "Falar",
   "watchParty.stage.speakHint": "Só agora o navegador pede o microfone.",
-  "watchParty.stage.watchingOnly": "Você está assistindo. Sem microfone, sem entrar na call."
+  "watchParty.stage.watchingOnly": "Você está assistindo. Sem microfone, sem entrar na call.",
+  "voice.hostAck.confirmSetup": "Entendi",
+  "watchParty.live.preparing": "Preparando a transmissão",
+  "watchParty.live.preparingBody": "{name} já está compartilhando. A imagem leva alguns segundos pra chegar.",
+  "watchParty.live.preparingHost": "Você está compartilhando. A galera recebe a imagem em alguns segundos."
 }

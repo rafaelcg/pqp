@@ -183,6 +183,40 @@ The QA that proves it counts `getUserMedia` calls in the viewer's page rather
 than reading a screenshot: a viewer watching, and then taking the audience
 seat, makes **zero**.
 
+### The streaming notice, and when it appears
+
+"Você é responsável pelo que transmite" is shown once per host per server. It
+used to be raised by the share start, which in a watch party meant it landed
+**after** Ir ao vivo: the party was already live and the room already told,
+and only then did the host read a notice about being responsible for what they
+broadcast. That is the one moment the notice exists for and it arrived too late
+to inform the decision.
+
+It is now raised when a host opens a `draft` setup surface, before anything can
+be sent. Confirming there starts nothing, so the button says "Entendi" rather
+than "Entendi, começar a transmitir". Dismissing it without confirming does not
+bypass it: the share gate asks again at Ir ao vivo, so the disclosure still
+stands between the host and the broadcast. By the time a host who confirmed
+presses Ir ao vivo the server already has their ack, so nobody sees it twice.
+
+The plain screen-share path outside a watch party is untouched: there a share
+IS the broadcast, so raising it at the share start is already before anything
+goes out.
+
+It appears only where a broadcast is possible at all, which means a server the
+operator has HLS configured for. On a local stack without `LIVE_HLS_*` the
+config answers `enabled: false` and the notice is correctly absent, because
+nothing can leave the machine.
+
+**One trap worth knowing**, because it cost an hour. The effect that raises it
+depends on the party map, which changes the instant the draft is created (the
+optimistic write, then the server's broadcast). The first version had the usual
+`let cancelled = false` cleanup, so the effect tore down mid-request, threw away
+the answer, and the re-run hit its own once-per-server guard and never asked
+again. The notice simply never appeared, silently. A re-render is not a reason
+to discard an answer; the only thing worth guarding is having navigated to a
+different server, which a ref answers without fighting the render cycle.
+
 ### The options
 
 Six controls at most, one of which is a sentence. In the setup surface before
@@ -301,8 +335,9 @@ do.
    Asks for one thing: the name. Optionally a time, which is the fork between
    a private draft and an announced session.
 2. **The setup surface** (`draft`). The host's own preview on the left, the
-   options on the right: name, slow mode, who can talk, reactions. Nothing is
-   broadcast. `getDisplayMedia` runs **here**, and the same `MediaStream` is
+   options on the right: name, who can talk, slow mode, reactions. Nothing is
+   broadcast, and the streaming notice is raised here, where it can still
+   change the decision. `getDisplayMedia` runs **here**, and the same `MediaStream` is
    handed to the call at go-live (`ScreenCaptureIntent.stream`), so what they
    approved and what goes out are the same capture rather than two different
    ones.

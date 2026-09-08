@@ -2775,7 +2775,7 @@
   "watchParty.live.endConfirmTitle": "End the watch party?",
   "watchParty.live.endConfirmBody": "\"{name}\" goes off air for everyone.",
   "watchParty.live.waiting": "The watch party has started",
-  "watchParty.live.waitingBody": "{name} has not put anything on screen yet. Stay here, it shows up on its own.",
+  "watchParty.live.waitingBody": "{name} has not put anything on screen yet.",
   "watchParty.live.waitingHost": "Nothing is on screen yet. Share a window or a tab and the room sees it.",
   "watchParty.live.hostGone": "The host dropped",
   "watchParty.live.hostGoneBody": "If {name} is not back in a few minutes, the watch party ends on its own.",
@@ -2815,5 +2815,9 @@
   "watchParty.stage.raised": "Hand raised",
   "watchParty.stage.speak": "Speak",
   "watchParty.stage.speakHint": "Only now does the browser ask for the microphone.",
-  "watchParty.stage.watchingOnly": "You are watching. No microphone, no call."
+  "watchParty.stage.watchingOnly": "You are watching. No microphone, no call.",
+  "voice.hostAck.confirmSetup": "Got it",
+  "watchParty.live.preparing": "Getting the broadcast ready",
+  "watchParty.live.preparingBody": "{name} is sharing. The picture takes a few seconds to reach you.",
+  "watchParty.live.preparingHost": "You are sharing. The room gets the picture in a few seconds."
 }

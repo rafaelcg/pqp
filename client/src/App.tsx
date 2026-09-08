@@ -1514,7 +1514,13 @@ function MainAppContent({
   const hlsHostAck = useHlsHostAck();
   const [pendingHlsHostAck, setHlsHostAck] = useState<{
     serverId: string;
-    request: ScreenShareStart<ScreenCaptureIntent>;
+    /**
+     * The share this person asked for before the sheet, resumed on confirm.
+     * NULL when the sheet was raised by the watch party setup surface, where
+     * confirming starts nothing: the point of moving it there is that the
+     * host reads it while nothing is being sent.
+     */
+    request: ScreenShareStart<ScreenCaptureIntent> | null;
   } | null>(null);
   // Whether this server may go out as HLS at all (the operator's per-server
   // allowlist). A server that cannot has no broadcast to acknowledge, so the
@@ -3513,6 +3519,78 @@ function MainAppContent({
   // ---------------------------------------------------- the watch party event
 
   /**
+   * THE STREAMING NOTICE, RAISED WHERE IT CAN STILL CHANGE THE DECISION.
+   *
+   * It used to be raised by the share start, which in a watch party meant it
+   * landed after "Ir ao vivo": the party was already live, the room had
+   * already been told, and only then did the host read a notice about being
+   * responsible for what they broadcast. That is the one moment the notice
+   * exists for, and it arrived too late to inform anything.
+   *
+   * So it is raised here instead: the first time a host opens a draft setup
+   * surface on a server that can go out as HLS. Nothing is being sent at that
+   * point (that is the whole meaning of `draft`), so the host can read it,
+   * and change their mind, at no cost to anybody.
+   *
+   * The share-start gate is untouched. Outside a watch party a share IS the
+   * broadcast, so raising it there is still before anything goes out; and by
+   * the time a watch party host presses Ir ao vivo the server already has
+   * their ack, so `gateScreenShareStart` starts directly and nobody sees the
+   * sheet twice.
+   *
+   * `askedRef` is per server and per session: `checkNeedsAck` is a request,
+   * and re-firing it on every render of an open setup surface would be a poll.
+   */
+  const hlsHostAckAskedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const serverId = selectedServerId;
+    const party = selectedChannelId
+      ? watchParties.byChannel[selectedChannelId]
+      : undefined;
+    const settingUp =
+      party?.state === "draft" &&
+      (party.viewerRole === "host" || party.viewerRole === "cohost");
+    if (!serverId || !settingUp) {
+      return;
+    }
+    // Only an explicit `false` means this server has no broadcast to
+    // acknowledge. Null is "not answered yet" and waits rather than skipping
+    // a disclosure by accident, which is the same rule the share gate uses.
+    if (liveHlsConfig?.enabled === false) {
+      return;
+    }
+    if (hlsHostAckAskedRef.current === serverId) {
+      return;
+    }
+    hlsHostAckAskedRef.current = serverId;
+    // NO `cancelled` FLAG AND NO CLEANUP, DELIBERATELY, AND THE OBVIOUS
+    // VERSION OF THIS WAS BROKEN BY EXACTLY THAT.
+    //
+    // The effect's deps include the party map, which changes the moment the
+    // draft is created: the optimistic write, then the server's broadcast. So
+    // the effect tore down while `checkNeedsAck` was still in flight, its
+    // cleanup set `cancelled`, the answer ("yes, they need to see it") was
+    // thrown away, and the re-run hit the `askedRef` guard and never asked
+    // again. The notice simply never appeared. `needs=true cancelled=true` in
+    // the console was the whole story.
+    //
+    // A re-render is not a reason to discard the answer. The only thing worth
+    // guarding is having navigated to a DIFFERENT server while the request was
+    // out, which the ref below answers without fighting the render cycle.
+    void hlsHostAck
+      .checkNeedsAck(serverId)
+      .then((needs) => {
+        if (needs && selectedServerIdRef.current === serverId) {
+          setHlsHostAck({ serverId, request: null });
+        }
+      })
+      .catch(() => {
+        // `checkNeedsAck` already fails open. Nothing to add.
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedServerId, selectedChannelId, watchParties.byChannel, liveHlsConfig]);
+
+  /**
    * A function rather than a `const` because these handlers are declared
    * above `selectedChannel`, and every one of them reads the party at the
    * moment it runs rather than at the moment it was defined.
@@ -5418,6 +5496,9 @@ function MainAppContent({
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.isSharingScreen
             }
+            someoneIsSharing={(
+              voiceState.occupancy[selectedChannel.id] ?? []
+            ).some((peer) => peer.sharingScreen)}
             audienceCount={watchAudienceCount(
               voiceState.channelLive[selectedChannel.id],
               voiceState.occupancy[selectedChannel.id],
@@ -6637,12 +6718,23 @@ function MainAppContent({
 
       <HlsHostAckSheet
         open={pendingHlsHostAck !== null}
+        confirmLabel={
+          pendingHlsHostAck?.request === null
+            ? t("voice.hostAck.confirmSetup")
+            : undefined
+        }
         onConfirm={() => {
           const pending = pendingHlsHostAck;
           if (!pending) {
             return;
           }
           void hlsHostAck.confirm(pending.serverId);
+          if (!pending.request) {
+            // Raised by the watch party setup surface. Nothing was waiting on
+            // it; the host goes back to setting the party up, having read the
+            // notice before a single frame could leave the machine.
+            return;
+          }
           // Same audio choice and capture intent the person asked for
           // before the sheet, through the same gate (now acknowledged).
           startScreenShareGated(pending.request.audio, pending.request.intent);
