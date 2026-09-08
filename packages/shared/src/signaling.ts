@@ -432,6 +432,15 @@ export const callDeclineMessageSchema = z.object({
 export const setCameraMessageSchema = z.object({
   type: z.literal("set-camera"),
   streamId: z.string().nullable(),
+  /**
+   * What this machine's uplink measured, in bit/s, for the mesh limit.
+   *
+   * Optional and clamped on arrival (`clampReportedUplinkBps`); every native
+   * client omits it today and gets the old constant. It is read ONLY on mesh,
+   * where the copies it pays for are the sender's own, and never on the voice
+   * server, where the cost is the box's and the box is priced from the roster.
+   */
+  uplinkBps: z.number().optional(),
 });
 
 /** Server → callee sockets: someone is calling this conversation. */
@@ -654,6 +663,8 @@ export const setSharingScreenMessageSchema = z.object({
    * share is silent, which is what most of them are.
    */
   audioStreamId: z.string().nullable().optional(),
+  /** See `setCameraMessageSchema.uplinkBps`: the mesh limit's measurement. */
+  uplinkBps: z.number().optional(),
 });
 
 // --- voice state ---

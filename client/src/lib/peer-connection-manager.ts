@@ -9,6 +9,7 @@ import {
 import type { VoiceLinkQuality } from "./voice-link-quality";
 import {
   DEFAULT_SCREEN_UPLOAD_BUDGET_BPS,
+  measuredUploadBudgetBps,
   nextScreenUploadBudget,
   readAvailableOutgoingBps,
   SCREEN_BUDGET_SAMPLE_MS,
@@ -199,6 +200,12 @@ interface ManagedPeer {
 const MAX_ICE_RESTARTS = 3;
 
 export interface PeerConnectionManager {
+  /**
+   * What this machine's uplink measures right now, in bit/s, or null when
+   * there is nothing to measure (a 1:1 call, no readable path). The mesh
+   * video limit is derived from this, on the server, from every seat's report.
+   */
+  measureUplinkBps(): Promise<number | null>;
   setLocalStream(stream: MediaStream): void;
   replaceLocalTrack(stream: MediaStream): Promise<void>;
   /**
@@ -652,6 +659,27 @@ export function createPeerConnectionManager(
    * per-sender ceiling still apply exactly as they did when the
    * budget was a constant.
    */
+  /**
+   * One `availableOutgoingBitrate` per live connection, unreadable ones
+   * included as null. Extracted from the sampler so the same reading can be
+   * taken on demand, when somebody is about to publish and the server needs to
+   * know what this link can carry.
+   */
+  async function readUplinkSamples(): Promise<UplinkSample[]> {
+    return Promise.all(
+      [...peers.values()].map(async (peer) => {
+        if (typeof peer.pc.getStats !== "function") {
+          return null;
+        }
+        try {
+          return readAvailableOutgoingBps(await peer.pc.getStats());
+        } catch {
+          return null;
+        }
+      }),
+    );
+  }
+
   async function sampleScreenBudget(): Promise<void> {
     if (!localScreenStream) {
       return;
@@ -673,18 +701,7 @@ export function createPeerConnectionManager(
       }
       return;
     }
-    const samples: UplinkSample[] = await Promise.all(
-      [...peers.values()].map(async (peer) => {
-        if (typeof peer.pc.getStats !== "function") {
-          return null;
-        }
-        try {
-          return readAvailableOutgoingBps(await peer.pc.getStats());
-        } catch {
-          return null;
-        }
-      }),
-    );
+    const samples = await readUplinkSamples();
     // The share may have ended while the reports were in flight.
     if (!localScreenStream) {
       return;
@@ -1441,6 +1458,23 @@ export function createPeerConnectionManager(
   }
 
   return {
+    /**
+     * What this machine's uplink measures right now, in bit/s, or null when
+     * there is nothing to measure (a 1:1 call, no readable path).
+     *
+     * Read on the way into a camera or a share, and sent to the server so the
+     * mesh limit is about this room's links rather than about a constant. A
+     * share that is already running has a settled budget the controller has
+     * been moving for a while, and that is the better number of the two, so it
+     * wins over a fresh reading.
+     */
+    async measureUplinkBps(): Promise<number | null> {
+      if (localScreenStream && screenBudgetBps !== SCREEN_UPLOAD_BUDGET_BPS) {
+        return screenBudgetBps;
+      }
+      return measuredUploadBudgetBps(await readUplinkSamples());
+    },
+
     setLocalStream(stream: MediaStream) {
       localStream = stream;
     },

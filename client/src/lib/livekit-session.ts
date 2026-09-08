@@ -9,11 +9,14 @@ import {
 } from "./remote-video-delivery";
 import {
   cameraBitrateFor,
+  cameraProfileFor,
+  cameraSimulcastRungs,
   DEFAULT_VIDEO_QUALITY,
   hlsSourceTopHeight,
   LARGE_ROOM_SCREEN_BITRATE,
   screenBitrateFor,
   screenSimulcastPlan,
+  type CameraLayer,
   type HlsSourceInput,
   type ScreenSimulcastPlan,
   type VideoQuality,
@@ -108,6 +111,13 @@ export interface LiveKitSession {
   unpublishScreenAudio(): Promise<void>;
   /** Publish a camera video track (conversation calls). */
   publishCamera(stream: MediaStream): Promise<void>;
+  /**
+   * Republish a live camera when its capture size moved across a rung of the
+   * simulcast ladder. A no-op when the ladder is unchanged, which is the
+   * common case; see the implementation for why a blink is only spent on a
+   * genuine change.
+   */
+  reconcileCameraLadder(): Promise<void>;
   /**
    * Change the camera's bitrate ceiling on an already-published track.
    *
@@ -256,6 +266,8 @@ export async function connectLiveKit({
   let publishedScreenTrack: MediaStreamTrack | null = null;
   /** Raw camera track we published, kept so we can unpublish it later. */
   let publishedCameraTrack: MediaStreamTrack | null = null;
+  /** The ladder the camera on the wire went up under. Null while off. */
+  let publishedCameraRungs: readonly CameraLayer[] | null = null;
   /** The ceiling the next camera publish will carry. See `setCameraMaxBitrate`. */
   let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
   /** The ceiling the next screen publish will carry. See `setScreenMaxBitrate`. */
@@ -953,6 +965,122 @@ export async function connectLiveKit({
     return next;
   }
 
+  /**
+   * What the camera's capture is producing right now, in picture lines.
+   *
+   * A track that has not settled reports nothing, and the honest guess is the
+   * size the capture was asked for, exactly as `screenScaleFactor` guesses the
+   * screen's. Guessing "no ladder" instead would publish one layer to a camera
+   * that turns out to be 720p, and nothing would ever revisit it.
+   */
+  function cameraCaptureHeight(track: MediaStreamTrack): number {
+    // Duck-typed rather than called outright. `getSettings` is on every real
+    // `MediaStreamTrack`, but this path also sees the tracks a virtual camera
+    // or a test hands over, and a camera that will not turn on because a shim
+    // is missing a method is a much worse failure than a ladder built on the
+    // size we asked for.
+    const settings =
+      typeof track.getSettings === "function" ? track.getSettings() : null;
+    const height = settings?.height;
+    return height && height > 0
+      ? height
+      : cameraProfileFor(DEFAULT_VIDEO_QUALITY).height;
+  }
+
+  function sameRungs(
+    a: readonly CameraLayer[],
+    b: readonly CameraLayer[] | null,
+  ): boolean {
+    return (
+      b !== null &&
+      a.length === b.length &&
+      a.every((rung, at) => rung.height === b[at]!.height)
+    );
+  }
+
+  /**
+   * Put a camera on the wire under the ladder its capture size calls for.
+   *
+   * THE CAMERA PUBLISHES A LADDER. It published `simulcast: false` until
+   * 2026-09-08, so there was exactly one copy of a face on the server and
+   * every viewer received it whatever size their tile was. `adaptiveStream`
+   * has been on the whole time and had nothing to choose from: it can only ask
+   * the SFU for a layer the publisher actually encodes. The rungs, and why
+   * they are these rungs, are in `video-quality.ts`.
+   *
+   * `videoEncoding`, NOT `screenShareEncoding`: `computeVideoEncodings` swaps
+   * the two by source, and this is the source the *other* one belongs to.
+   * Getting it backwards is what shipped an uncapped screen share to a hundred
+   * phones on 5 Sep 2026; the same mistake in this direction would put the
+   * camera's ceiling in a field nothing reads.
+   */
+  async function publishCameraVideo(track: MediaStreamTrack): Promise<void> {
+    const rungs = cameraSimulcastRungs(cameraCaptureHeight(track));
+    await room.localParticipant.publishTrack(track, {
+      source: Track.Source.Camera,
+      simulcast: true,
+      videoSimulcastLayers: rungs.map(
+        (layer) =>
+          new VideoPreset(
+            layer.width,
+            layer.height,
+            layer.maxBitrate,
+            layer.maxFramerate,
+          ),
+      ),
+      // The camera half of the argument the screen share has been making since
+      // it was written: without these the encoder holds resolution and spends
+      // framerate, and a face is motion. The encoding is a ceiling, not a
+      // target, so a still person still costs almost nothing.
+      degradationPreference: "maintain-framerate",
+      videoEncoding: {
+        maxBitrate: cameraMaxBitrate,
+        maxFramerate: VIDEO_MAX_FRAMERATE,
+      },
+    });
+    publishedCameraRungs = rungs;
+  }
+
+  /**
+   * Bring a live camera's ladder in line with the size its capture is now.
+   *
+   * WHY IT IS NEEDED AT ALL. `livekit-client` solves each rung's
+   * `scaleResolutionDownBy` against the capture's dimensions **at publish
+   * time** and declares the resulting sizes to the SFU, which routes a
+   * viewer's request against that declaration. Changing the quality mid-call
+   * resizes the same track in place (`applyCameraQuality`), so a camera
+   * published at 360p and moved to 1080p would keep a divisor solved for 360
+   * and hand viewers layers whose declared size is a fiction. Same argument,
+   * and the same fix, as `reconcileScreenPlan`.
+   *
+   * WHY ONLY ON A RUNG CHANGE. Republishing blinks the picture for every
+   * viewer, so it is spent only when the SET of layers actually changes: 720p
+   * to 1080p keeps all three rungs and moves nothing, 360p to 720p gains one
+   * and is worth a blink. A ceiling change alone never comes through here; it
+   * moves the top layer in place through `setCameraMaxBitrate`.
+   */
+  async function reconcileCameraLadder(): Promise<void> {
+    const track = publishedCameraTrack;
+    if (!track) {
+      return;
+    }
+    const wanted = cameraSimulcastRungs(cameraCaptureHeight(track));
+    if (sameRungs(wanted, publishedCameraRungs)) {
+      return;
+    }
+    try {
+      // `false`: the capture stays alive; it is the same track going back up.
+      await room.localParticipant.unpublishTrack(track, false);
+      if (publishedCameraTrack !== track) {
+        // The camera was turned off while this was in flight.
+        return;
+      }
+      await publishCameraVideo(track);
+    } catch (err) {
+      console.warn("[pqp] SFU camera ladder could not be applied", err);
+    }
+  }
+
   async function publish(stream: MediaStream) {
     const [audioTrack] = stream.getAudioTracks();
     if (!audioTrack) {
@@ -1067,20 +1195,10 @@ export async function connectLiveKit({
         await room.localParticipant.unpublishTrack(publishedCameraTrack);
       }
       publishedCameraTrack = videoTrack;
-      await room.localParticipant.publishTrack(videoTrack, {
-        source: Track.Source.Camera,
-        simulcast: false,
-        // The camera half of the argument the screen share has been making
-        // since it was written: without these the encoder holds resolution and
-        // spends framerate, and a face is motion. The encoding is a ceiling,
-        // not a target, so a still person still costs almost nothing.
-        degradationPreference: "maintain-framerate",
-        videoEncoding: {
-          maxBitrate: cameraMaxBitrate,
-          maxFramerate: VIDEO_MAX_FRAMERATE,
-        },
-      });
+      await publishCameraVideo(videoTrack);
     },
+
+    reconcileCameraLadder,
 
     async setCameraMaxBitrate(maxBitrate: number) {
       cameraMaxBitrate = maxBitrate;
@@ -1137,6 +1255,7 @@ export async function connectLiveKit({
       }
       await room.localParticipant.unpublishTrack(publishedCameraTrack);
       publishedCameraTrack = null;
+      publishedCameraRungs = null;
     },
 
     async disconnect() {

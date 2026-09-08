@@ -2,10 +2,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   blockJoinPromotion,
   decidePromotion,
+  decideVideoAdmission,
   estimateRoomMbps,
   estimateSfuLoadMbps,
   promotionBudgetMbps,
   promotionRoomSize,
+  screenStreamMbps,
+  CAMERA_STREAM_MBPS,
+  LARGE_ROOM_SCREEN_MBPS,
+  SCREEN_STREAM_MBPS,
   VIDEO_STREAM_MBPS,
   VOICE_PROMOTION_DEFAULT_MAX_MBPS,
   type SfuRoomLoad,
@@ -37,7 +42,8 @@ function room(partial: Partial<SfuRoomLoad>): SfuRoomLoad {
     channelId: "channel",
     transport: "livekit",
     participants: 0,
-    videoPublishers: 0,
+    cameraPublishers: 0,
+    screenPublishers: 0,
     ...partial,
   };
 }
@@ -45,7 +51,7 @@ function room(partial: Partial<SfuRoomLoad>): SfuRoomLoad {
 describe("promotion load estimate", () => {
   it("prices the capacity document's six-person, four-camera room at 36 Mbit/s", () => {
     expect(
-      estimateRoomMbps(room({ participants: 6, videoPublishers: 4 })),
+      estimateRoomMbps(room({ participants: 6, cameraPublishers: 4 })),
     ).toBeCloseTo(36);
     expect(VIDEO_STREAM_MBPS).toBe(1.5);
   });
@@ -53,23 +59,23 @@ describe("promotion load estimate", () => {
   it("charges a mesh room nothing: its media never touches the box", () => {
     expect(
       estimateRoomMbps(
-        room({ transport: "mesh", participants: 6, videoPublishers: 4 }),
+        room({ transport: "mesh", participants: 6, cameraPublishers: 4 }),
       ),
     ).toBe(0);
   });
 
   it("charges an SFU room with nobody on camera nothing", () => {
     expect(
-      estimateRoomMbps(room({ participants: 40, videoPublishers: 0 })),
+      estimateRoomMbps(room({ participants: 40, cameraPublishers: 0 })),
     ).toBe(0);
   });
 
   it("adds the rooms up and ignores the mesh ones", () => {
     expect(
       estimateSfuLoadMbps([
-        room({ participants: 6, videoPublishers: 4 }),
-        room({ transport: "mesh", participants: 8, videoPublishers: 3 }),
-        room({ participants: 10, videoPublishers: 2 }),
+        room({ participants: 6, cameraPublishers: 4 }),
+        room({ transport: "mesh", participants: 8, cameraPublishers: 3 }),
+        room({ participants: 10, cameraPublishers: 2 }),
       ]),
     ).toBeCloseTo(36 + 30);
   });
@@ -111,8 +117,13 @@ describe("the verdict", () => {
   it("promotes a small room onto a quiet box", () => {
     const verdict = decidePromotion({
       ...base,
-      rooms: [room({ participants: 10, videoPublishers: 2 })],
-      room: room({ transport: "mesh", participants: 6, videoPublishers: 4 }),
+      // Another room, by name. `loadMbps` is the box MINUS the room asking,
+      // so a fixture that reuses the default channel id is asking about
+      // itself and reads zero.
+      rooms: [
+        room({ channelId: "other", participants: 10, cameraPublishers: 2 }),
+      ],
+      room: room({ transport: "mesh", participants: 6, cameraPublishers: 4 }),
     });
 
     expect(verdict.promote).toBe(true);
@@ -124,9 +135,11 @@ describe("the verdict", () => {
   it("refuses when this room would take the box over the budget", () => {
     const verdict = decidePromotion({
       ...base,
-      // 590 already on the box.
-      rooms: [room({ participants: 590 / 1.5, videoPublishers: 1 })],
-      room: room({ transport: "mesh", participants: 6, videoPublishers: 4 }),
+      // 590 already on the box, in somebody else's room.
+      rooms: [
+        room({ channelId: "other", participants: 590 / 1.5, cameraPublishers: 1 }),
+      ],
+      room: room({ transport: "mesh", participants: 6, cameraPublishers: 4 }),
     });
 
     expect(verdict.promote).toBe(false);
@@ -138,7 +151,7 @@ describe("the verdict", () => {
       ...base,
       liveKitConfigured: false,
       rooms: [],
-      room: room({ transport: "mesh", participants: 4, videoPublishers: 4 }),
+      room: room({ transport: "mesh", participants: 4, cameraPublishers: 4 }),
     });
 
     expect(verdict.promote).toBe(false);
@@ -150,7 +163,7 @@ describe("the verdict", () => {
       ...base,
       sfuReachable: false,
       rooms: [],
-      room: room({ transport: "mesh", participants: 4, videoPublishers: 4 }),
+      room: room({ transport: "mesh", participants: 4, cameraPublishers: 4 }),
     });
 
     expect(verdict.promote).toBe(false);
@@ -165,7 +178,7 @@ describe("the verdict", () => {
       ...base,
       sfuReachable: null,
       rooms: [],
-      room: room({ transport: "mesh", participants: 4, videoPublishers: 4 }),
+      room: room({ transport: "mesh", participants: 4, cameraPublishers: 4 }),
     });
 
     expect(verdict.promote).toBe(true);
@@ -175,7 +188,7 @@ describe("the verdict", () => {
     const candidate = room({
       transport: "mesh",
       participants: 6,
-      videoPublishers: 4,
+      cameraPublishers: 4,
     });
     const verdict = decidePromotion({
       ...base,
@@ -275,5 +288,184 @@ describe("promotionRoomSize", () => {
     // Same rule as the budget: a typo must not silently reshape the night.
     process.env.VOICE_PROMOTION_ROOM_SIZE = "four";
     expect(promotionRoomSize()).toBe(MESH_ROOM_PROMOTION_SIZE);
+  });
+});
+
+/**
+ * THE SAME BUDGET, ASKED BY A ROOM THAT IS ALREADY ON THE BOX (2026-09-08).
+ *
+ * `CAMERA_LIMIT.livekit` was eight, and eight was ours rather than the box's:
+ * on an SFU the ninth camera costs its publisher exactly what the first did.
+ * What it does cost is egress, once per viewer, so the count is gone and this
+ * is what replaced it. Every number below is `docs/CAPACITY.md` arithmetic.
+ */
+describe("admitting one more camera on a room already on the SFU", () => {
+  it("admits while the box has room for what the room will cost", () => {
+    // 20 people, 3 cameras up, a fourth asking: 4 * 20 * 1.5 = 120 Mbit/s.
+    const asking = room({ participants: 20, cameraPublishers: 4 });
+    const verdict = decideVideoAdmission({
+      rooms: [room({ participants: 20, cameraPublishers: 3 })],
+      room: asking,
+      budgetMbps: 600,
+    });
+    expect(verdict.addedMbps).toBe(120);
+    expect(verdict.loadMbps).toBe(0);
+    expect(verdict.admit).toBe(true);
+  });
+
+  it("refuses when the room plus the rest of the box crosses the budget", () => {
+    const asking = room({ participants: 20, cameraPublishers: 4 });
+    const verdict = decideVideoAdmission({
+      rooms: [
+        room({ channelId: "other", participants: 40, cameraPublishers: 9 }),
+        room({ participants: 20, cameraPublishers: 3 }),
+      ],
+      room: asking,
+      budgetMbps: 600,
+    });
+    // 9 * 40 * 1.5 = 540 elsewhere, plus this room's 120.
+    expect(verdict.loadMbps).toBe(540);
+    expect(verdict.addedMbps).toBe(120);
+    expect(verdict.admit).toBe(false);
+  });
+
+  it("prices the asking room whole rather than incrementally", () => {
+    // The trap: a new camera in a twenty-person room adds twenty downstreams,
+    // not one. An estimate that forgets the multiplier reads 1.5 here.
+    const before = decideVideoAdmission({
+      rooms: [room({ participants: 20, cameraPublishers: 3 })],
+      room: room({ participants: 20, cameraPublishers: 3 }),
+      budgetMbps: 600,
+    });
+    const after = decideVideoAdmission({
+      rooms: [room({ participants: 20, cameraPublishers: 3 })],
+      room: room({ participants: 20, cameraPublishers: 4 }),
+      budgetMbps: 600,
+    });
+    expect(after.addedMbps - before.addedMbps).toBe(30);
+  });
+
+  it("never counts the asking room twice", () => {
+    // The cluster's list already holds this room at its current cost. Adding
+    // the candidate on top of it would refuse rooms that fit comfortably.
+    const current = room({ participants: 20, cameraPublishers: 8 });
+    const verdict = decideVideoAdmission({
+      rooms: [current],
+      room: room({ participants: 20, cameraPublishers: 9 }),
+      budgetMbps: 300,
+    });
+    expect(verdict.loadMbps).toBe(0);
+    expect(verdict.addedMbps).toBe(270);
+    expect(verdict.admit).toBe(true);
+  });
+
+  it("takes a budget of zero as a real value: no new video, no deploy", () => {
+    const verdict = decideVideoAdmission({
+      rooms: [],
+      room: room({ participants: 2, cameraPublishers: 1 }),
+      budgetMbps: 0,
+    });
+    expect(verdict.admit).toBe(false);
+  });
+
+  /**
+   * A CLIENT THAT LIES ABOUT ITS TILE SIZE GAINS NOTHING HERE.
+   *
+   * Simulcast and adaptive streaming are how a small tile receives a small
+   * layer, and both live on the client, so neither is a guarantee: a modified
+   * client can report a huge element, or ignore the ladder and demand the top
+   * layer for every publication in the room. The budget is what makes that
+   * harmless, and it is harmless because it never reads a number the client
+   * sent: `VIDEO_STREAM_MBPS` is the TOP of the camera ladder and every
+   * participant is charged for every publisher at that rate. A room admitted
+   * under the guard is therefore still inside the budget in the worst case
+   * where every viewer takes the top layer, which is exactly what a liar
+   * forces.
+   */
+  it("prices the worst case, so the top layer for everybody is already paid for", () => {
+    const asking = room({ participants: 20, cameraPublishers: 20 });
+    const verdict = decideVideoAdmission({
+      rooms: [],
+      room: asking,
+      budgetMbps: 600,
+    });
+    const everyViewerOnTheTopLayer =
+      asking.participants * asking.cameraPublishers * VIDEO_STREAM_MBPS;
+    expect(verdict.addedMbps).toBe(everyViewerOnTheTopLayer);
+    expect(verdict.addedMbps).toBe(600);
+    expect(verdict.admit).toBe(true);
+
+    // One more publisher in the same room is over it, and is refused.
+    expect(
+      decideVideoAdmission({
+        rooms: [],
+        room: room({ participants: 21, cameraPublishers: 21 }),
+        budgetMbps: 600,
+      }).admit,
+    ).toBe(false);
+  });
+});
+
+/**
+ * A SHARE IS NOT A CAMERA, AND CHARGING IT AS ONE UNDER-PRICED THE BOX BY
+ * NEARLY THREE (2026-09-08).
+ *
+ * `VIDEO_STREAM_MBPS` was 1.5 for everything, which is the top of the camera
+ * ladder on Auto. A screen share asks for 3 Mbit/s on Auto and 4 on an
+ * explicit 1080p, because full-frame motion with hard edges is not a still
+ * background with a moving oval in it. Removing `SCREEN_SHARE_LIMIT.livekit`
+ * without fixing this would have replaced a count that was too strict with a
+ * price that was too generous, which is worse: a count refuses one person and
+ * a wrong price takes the box down.
+ */
+describe("what each kind of publication is charged", () => {
+  it("charges a share several times what a camera costs", () => {
+    expect(SCREEN_STREAM_MBPS).toBeGreaterThan(CAMERA_STREAM_MBPS * 2);
+    expect(CAMERA_STREAM_MBPS).toBe(1.5);
+    expect(SCREEN_STREAM_MBPS).toBe(4);
+  });
+
+  it("prices a small room's share at the top rung a presenter can pick", () => {
+    // Six people, one share: 6 * 4 = 24, against 9 if it were a camera.
+    expect(
+      estimateRoomMbps(room({ participants: 6, screenPublishers: 1 })),
+    ).toBeCloseTo(24);
+    expect(
+      estimateRoomMbps(room({ participants: 6, cameraPublishers: 1 })),
+    ).toBeCloseTo(9);
+  });
+
+  it("prices a large room's share at the cap the client actually applies", () => {
+    // Above LARGE_ROOM_PARTICIPANTS the client holds the top layer to
+    // 1.5 Mbit/s (`screenSimulcastPlan`), so charging 4 there would refuse a
+    // hundred-person watch party the box carries comfortably.
+    expect(screenStreamMbps(21)).toBe(LARGE_ROOM_SCREEN_MBPS);
+    expect(screenStreamMbps(20)).toBe(SCREEN_STREAM_MBPS);
+    expect(
+      estimateRoomMbps(room({ participants: 100, screenPublishers: 1 })),
+    ).toBeCloseTo(150);
+  });
+
+  it("adds the two kinds rather than picking one", () => {
+    // One person doing both is in both counts, because they publish two
+    // tracks and the box forwards two tracks.
+    expect(
+      estimateRoomMbps(
+        room({ participants: 4, cameraPublishers: 2, screenPublishers: 1 }),
+      ),
+    ).toBeCloseTo(4 * (2 * 1.5 + 4));
+  });
+
+  it("still charges a mesh room nothing", () => {
+    expect(
+      estimateRoomMbps(
+        room({ transport: "mesh", participants: 8, screenPublishers: 3 }),
+      ),
+    ).toBe(0);
+  });
+
+  it("keeps the old name pointing at the camera rate", () => {
+    // `VIDEO_STREAM_MBPS` meant a camera everywhere it was read.
+    expect(VIDEO_STREAM_MBPS).toBe(CAMERA_STREAM_MBPS);
   });
 });

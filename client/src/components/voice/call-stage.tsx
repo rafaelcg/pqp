@@ -37,8 +37,6 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import {
-  CAMERA_LIMIT,
-  SCREEN_SHARE_LIMIT,
   MESH_VOICE_WARNING,
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
@@ -95,6 +93,8 @@ import {
   planStage,
   stageGridColumns,
   tileClickFullscreens,
+  STAGE_TILE_LIMIT_NARROW,
+  STAGE_TILE_LIMIT_WIDE,
   STRIP_LIMIT_NARROW,
   STRIP_LIMIT_WIDE,
 } from "@/components/voice/stage-layout";
@@ -115,7 +115,12 @@ import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
 import { useLiveHlsReady } from "@/hooks/use-live-hls-src";
-import { isCameraAtCap, isScreenShareAtCap } from "@/lib/screen-share-roster";
+import {
+  isCameraAtCap,
+  isScreenShareAtCap,
+  meshRoomLinkOf,
+  videoLimitOf,
+} from "@/lib/screen-share-roster";
 import {
   loadParticipantRailOpen,
   saveParticipantRailOpen,
@@ -999,8 +1004,25 @@ function ActiveCall({
     })),
     people: allPeople,
     pinnedTileId,
+    // The grid is bounded, and the bound is the device's, not the room's: a
+    // laptop draws twelve pictures and a phone six. Everything past it becomes
+    // a chip in the strip, and its stream stops arriving a second later
+    // because nothing is bound to it (`remote-video-delivery.ts`).
+    tileLimit: wide ? STAGE_TILE_LIMIT_WIDE : STAGE_TILE_LIMIT_NARROW,
+    speakingKeys: speaking,
   });
-  const listeners = listenersOf(allPeople, screenTiles, voiceState.peerId);
+  const overflowKeys = useMemo(
+    () => new Set(stage.overflowKeys),
+    // The array is rebuilt on every render; only its contents decide.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stage.overflowKeys.join("|")],
+  );
+  const listeners = listenersOf(
+    allPeople,
+    screenTiles,
+    voiceState.peerId,
+    overflowKeys,
+  );
   const gridColumns = stageGridColumns(stage.tiles.length, wide);
   const clickFullscreens = tileClickFullscreens(stage.tiles.length);
   const anyVideo = hasVideo;
@@ -1994,13 +2016,15 @@ export function CallControls({
       setShareHint(null);
     }
   }, [voiceState.isSharingScreen, voiceState.error]);
+  const meshLink = meshRoomLinkOf(voiceState);
   const shareAtCap = isScreenShareAtCap(
     voiceState.screenSharePeerIds,
     voiceState.peerId,
     voiceState.roomTransport,
     voiceState.canPromoteTransport,
+    meshLink,
   );
-  const shareLimit = SCREEN_SHARE_LIMIT[voiceState.roomTransport ?? "mesh"];
+  const shareLimit = videoLimitOf(voiceState, "screens");
   // The cap only bites somebody who is not already one of the shares.
   const shareCappedOut = shareAtCap && !voiceState.isSharingScreen;
   const cameraAtCap = isCameraAtCap(
@@ -2008,8 +2032,9 @@ export function CallControls({
     voiceState.peerId,
     voiceState.roomTransport,
     voiceState.canPromoteTransport,
+    meshLink,
   );
-  const cameraLimit = CAMERA_LIMIT[voiceState.roomTransport ?? "mesh"];
+  const cameraLimit = videoLimitOf(voiceState, "cameras");
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
   const size = collapsed ? "h-8 w-8" : "h-10 w-10";
   const iconSize = collapsed ? "h-3.5 w-3.5" : "h-4 w-4";
@@ -2180,7 +2205,7 @@ export function CallControls({
         }
         detail={
           cameraCappedOut
-            ? t("voice.control.cameraLimit", { limit: cameraLimit })
+            ? t("voice.control.cameraLimit", { limit: cameraLimit ?? 0 })
             : undefined
         }
       >
@@ -2368,7 +2393,7 @@ export function CallControls({
           }
           detail={
             shareCappedOut
-              ? t("voice.control.shareLimit", { limit: shareLimit })
+              ? t("voice.control.shareLimit", { limit: shareLimit ?? 0 })
               : undefined
           }
         >

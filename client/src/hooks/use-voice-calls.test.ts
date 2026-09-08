@@ -44,6 +44,9 @@ vi.mock("@/lib/peer-connection-manager", () => ({
     managers.push(stub);
     return {
       setLocalStream: () => {},
+      // Null is "nothing measured", which is the old constant: these
+      // fakes hold no peer connections to read an uplink from.
+      measureUplinkBps: async () => null,
       setLocalScreenStream: async () => {},
       setLocalCameraStream: async (stream: MediaStream | null) => {
         stub.localCameraStreams.push(stream);

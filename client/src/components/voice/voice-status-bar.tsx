@@ -58,8 +58,13 @@ interface VoiceStatusBarProps {
   isSharingScreen?: boolean;
   cameraCappedOut?: boolean;
   shareCappedOut?: boolean;
-  cameraLimit?: number;
-  shareLimit?: number;
+  /**
+   * `null` on the voice server for both: there is no count to name there, and
+   * on mesh the number is derived from the room's measured link rather than
+   * from a constant. See `meshVideoLimit`.
+   */
+  cameraLimit?: number | null;
+  shareLimit?: number | null;
   /**
    * Override for tests. Default is the same `getDisplayMedia` probe the stage
    * uses, so Electron still shows share when that action works there.
@@ -311,7 +316,7 @@ export function VoiceStatusBar({
               label={cameraLabel}
               detail={
                 cameraCappedOut
-                  ? t("voice.control.cameraLimit", { limit: cameraLimit })
+                  ? t("voice.control.cameraLimit", { limit: cameraLimit ?? 0 })
                   : undefined
               }
               pressed={isCameraOn}
@@ -330,7 +335,7 @@ export function VoiceStatusBar({
               label={shareLabel}
               detail={
                 shareCappedOut
-                  ? t("voice.control.shareLimit", { limit: shareLimit })
+                  ? t("voice.control.shareLimit", { limit: shareLimit ?? 0 })
                   : undefined
               }
               pressed={isSharingScreen}

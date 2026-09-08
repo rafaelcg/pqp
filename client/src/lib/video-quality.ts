@@ -18,6 +18,8 @@
  * than with no camera, and that promise is only worth making if it is pinned.
  */
 
+import { LARGE_ROOM_PARTICIPANTS } from "@pqp/shared";
+
 /** The user-facing choices. `auto` is the default and always will be. */
 export const VIDEO_QUALITIES = [
   "auto",
@@ -232,7 +234,7 @@ export function screenScaleFactor(
  * viewer. Twenty is where "a few friends" stops being a fair description of
  * the room, and it is well under the point where the bill becomes the story.
  */
-export const LARGE_ROOM_PARTICIPANTS = 20;
+export { LARGE_ROOM_PARTICIPANTS };
 
 /** What a large room's top layer is held to, unless 1080p was chosen by name. */
 export const LARGE_ROOM_SCREEN_HEIGHT = 720;
@@ -407,6 +409,86 @@ export function screenSimulcastPlan(
     // room made them do it.
     capped: capped && topHeight < chosenHeight,
   };
+}
+
+// -------------------------------------------------- SFU simulcast: the camera
+
+/**
+ * The smaller copies a camera encodes alongside the picture it captured.
+ *
+ * WHY THIS EXISTS, AND WHY IT IS THE WHOLE FEATURE. The camera published with
+ * `simulcast: false` until now, so there was exactly one copy of a face on the
+ * server and every viewer received it whatever size their tile was. In a
+ * two-person call that is invisible. In a room of twenty with twenty cameras
+ * it is twenty full-size streams into every phone, which is roughly 30 Mbit/s
+ * down and twenty simultaneous decodes, and that is the reason the product had
+ * a headcount cap instead of a room. `adaptiveStream` has been on the whole
+ * time and had nothing to choose from: it can only ask the SFU for a smaller
+ * layer that the publisher actually encodes. These are those layers.
+ *
+ * THE NUMBERS ARE THIS FILE'S OWN. The mid rung is `PROFILES["360p"]`
+ * unchanged (640x360, 400 kbps), because "360p" has to mean the same picture
+ * whether it was chosen in the menu or picked by a viewer's tile size. The low
+ * rung is 320x180, which is not on the menu and does not need to be: it is a
+ * thumbnail in a grid of twenty, and the menu's job is to name what you send,
+ * not every size the server may forward.
+ *
+ * FRAME RATE FALLS WITH SIZE ON THE BOTTOM RUNG ONLY. 20 fps at 180 lines
+ * rather than 30 because motion is the expensive half of a face and a
+ * thumbnail is the one place nobody can see the difference; the mid rung keeps
+ * 30 because a 360p tile in a six-person grid is a picture somebody is
+ * actually watching. `livekit-client` takes the smaller of the rung's frame
+ * rate and the top layer's, so these are ceilings like everything else here.
+ *
+ * WHAT IT COSTS THE PUBLISHER. Three encodes instead of one, which is real on
+ * a phone and roughly 20% of one encode each for the two small ones. Dynacast
+ * (`livekit-session.ts`) is what makes that acceptable: the server tells the
+ * publisher to stop encoding a layer nobody is asking for, so a call where
+ * everybody has a large tile pays for one layer, and the ladder only costs
+ * what it is being used for.
+ */
+export type CameraLayer = ScreenLayer;
+
+export const CAMERA_SIMULCAST_RUNGS: readonly CameraLayer[] = [
+  { width: 320, height: 180, maxBitrate: 160_000, maxFramerate: 20 },
+  { width: 640, height: 360, maxBitrate: 400_000, maxFramerate: 30 },
+];
+
+/**
+ * The rungs strictly below a camera's captured height, smallest first.
+ *
+ * WHAT `livekit-client` 2.21.0 DOES WITH THEM (`computeVideoEncodings`, and
+ * `livekit-session-quality.test.ts` says this out loud so a library bump that
+ * changes it fails rather than quietly publishes one layer again): the list is
+ * handed over as `videoSimulcastLayers`, the library sorts it, takes the
+ * lowest as `q` and the second as `h`, and puts the capture itself on top as
+ * `f`. It only builds three layers when the capture's LONGER side is at least
+ * 960 px, and only two above 480 px, so a 720p camera gets all three, a 480p
+ * webcam gets two, and a 320x240 virtual camera gets one. Filtering here as
+ * well is belt and braces: a rung at or above the capture would be an upscale,
+ * which spends bitrate inventing pixels exactly as `screenScaleFactor` refuses
+ * to.
+ */
+export function cameraSimulcastRungs(
+  captureHeight: number,
+): readonly CameraLayer[] {
+  return CAMERA_SIMULCAST_RUNGS.filter((rung) => rung.height < captureHeight);
+}
+
+/**
+ * The rungs for a chosen quality, before the camera has reported its size.
+ *
+ * The capture is asked for `cameraProfileFor(quality).height` and a webcam
+ * that cannot manage it hands back something smaller, so this is the plan for
+ * the size we asked for. It does not need to be re-derived when the real size
+ * arrives: an extra rung that the capture turns out to sit below is dropped by
+ * the library's own size rule above, and a rung that is genuinely too large is
+ * the only case this filter exists for.
+ */
+export function cameraSimulcastRungsFor(
+  quality: VideoQuality,
+): readonly CameraLayer[] {
+  return cameraSimulcastRungs(cameraProfileFor(quality).height);
 }
 
 /**

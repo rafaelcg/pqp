@@ -245,6 +245,67 @@ measurement before its own plan.
 5. **A second SFU node** (LiveKit multi-node with Redis) is the last one; it
    splits rooms across boxes, not one room, unless the room is bridged.
 
+## 6b. What binds first, and the measurement that would settle it
+
+Two findings from the 2026-09-08 question "should every room go on the media
+server". Recorded here rather than in a PR body because both outlive the answer
+they came from.
+
+### The monthly transfer allowance binds before the box does
+
+Every lever in section 6 is about how much the box can *carry at once*. That is
+not what runs out first. Priced against the day's own traffic, and expressed as
+ratios because the coordinates do not belong in this repository:
+
+- At **ten times** the day's usage, with today's routing, the estimated peak is
+  still around a **tenth** of the box's measured clean throughput. Cores and the
+  mux ports are nowhere near being the constraint at that multiple.
+- The **monthly transfer allowance** is. With today's routing it is reached at
+  roughly **3.7x** the day's usage. With every room moved onto the box it is
+  reached at roughly **1.6 to 2.1x**, because moving the peer-to-peer half onto
+  the box roughly **doubles** its bytes (two independent estimates, 1.8x and
+  2.3x; see below for why that is a range).
+
+So the decision "route more rooms to the media server" is a decision about the
+transfer bill, not about capacity, and the two have opposite shapes: capacity is
+a cliff you must stay well clear of, transfer is a slope you pay down. Read
+section 6 for the first and this for the second.
+
+**The allowance figure itself is not settled, which is why everything above is a
+ratio.** The plan table says one number (6 TB) and Vultr's own API reports a
+much smaller figure for the current billing period (612 GB), and until somebody
+reconciles those two, an absolute "we have N TB left" sentence would be a guess
+wearing a number. The ratios hold whichever it turns out to be; only the
+multiple at which the wall arrives moves. Settle this before quoting a headroom
+figure to anybody.
+
+### Nothing records video publishers per room over time
+
+The estimate above is a **range** rather than a number for one avoidable reason:
+no table in this product has ever recorded how many cameras and screen shares
+were up in a room, over time.
+
+What exists, and why none of it answers the question:
+
+| source | what it holds | why it is not enough |
+|---|---|---|
+| `voice_rooms` / `voice_peers` | live state only; rows go with the last peer | one instant, whenever you happen to look |
+| `voice_occupancy_samples` | participants and rooms per sample, by transport | **no video counts at all** |
+| Loki `voice.join` | room size at the moment of a join | says nothing about what the room then did |
+| `call_ratings` | "was somebody sharing", self-selected | a boolean, on the calls people chose to rate |
+
+Box cost is `participants x publishers x bitrate` per room, so a series with no
+publisher term cannot price a room. Every figure above had to be built by taking
+one live snapshot's room shapes and weighting them by the sampler's
+participant counts, which is where the factor-of-two band comes from.
+
+**The fix is small and it is already in the right place.** The occupancy sampler
+that shipped on 2026-09-08 walks the rooms it already holds; counting
+`sharingScreen` and `cameraStreamId` per room while it is there, split by
+transport, costs nothing extra and turns the next version of this question from
+an estimate into a measurement. Do that before the next routing decision, not
+during it.
+
 ## 7. How to rerun
 
 **Rig 1 (API only):** `server/scripts/load-fanout.ts`, README beside it,

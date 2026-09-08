@@ -1010,7 +1010,7 @@
   "voice.capacity.title": "This call grew",
   "voice.capacity.body": "More people fit now: up to {screens} screens and {cameras} cameras at once.",
   "voice.capacity.bodyCameras": "More people fit now: up to {screens} screens at once, and camera for everyone.",
-  "voice.capacity.bodyOpen": "More people fit now, with more screens and more cameras at once.",
+  "voice.capacity.bodyOpen": "More people fit now: screen and camera for everyone, at the same time.",
   "voice.control.listenOnlyLocked": "Listening only. You do not have permission to speak in this channel.",
   "voice.bar.listenOnly": "Listen only",
   "voice.quality.relayed": "Relayed",

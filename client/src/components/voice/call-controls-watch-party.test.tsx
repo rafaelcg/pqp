@@ -33,6 +33,7 @@ const idle: VoiceState = {
   status: "connected",
   peerId: "peer-me",
   remotePeers: [],
+  uplinkBps: null,
   isMuted: false,
   isDeafened: false,
   canSpeak: true,

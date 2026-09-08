@@ -51,6 +51,9 @@ vi.mock("@/lib/peer-connection-manager", () => ({
     managers.push(stub);
     return {
       setLocalStream: () => {},
+      // Null is "nothing measured", which is the old constant: these
+      // fakes hold no peer connections to read an uplink from.
+      measureUplinkBps: async () => null,
       setLocalScreenStream: async () => {},
       setLocalCameraStream: async (stream: MediaStream | null) => {
         stub.localCameraStreams.push(stream);
@@ -486,15 +489,18 @@ describe("the local camera and share caps defer to a room that can move", () => 
     // No SFU on this deployment: the cap is the whole truth and the button
     // should be dead rather than refused a round trip later.
     expect(isCameraAtCap(["a", "b", "c"], PEER, "mesh", false)).toBe(true);
-    // And on a room already at the SFU's own ceiling.
+  });
+
+  it("never refuses locally on a voice-server room, however many are on", () => {
+    // The SFU's own ceiling used to be eight and is now the box's budget,
+    // which only the server can price (`server/src/voice/promotion.ts`). So
+    // the button stays live and a refusal arrives as `camera-denied` in
+    // words. Greying it here would be the client inventing a number.
+    const eight = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    expect(isCameraAtCap(eight, PEER, "livekit", true)).toBe(false);
     expect(
-      isCameraAtCap(
-        ["a", "b", "c", "d", "e", "f", "g", "h"],
-        PEER,
-        "livekit",
-        true,
-      ),
-    ).toBe(true);
+      isCameraAtCap([...eight, ...eight, ...eight], PEER, "livekit", false),
+    ).toBe(false);
   });
 
   it("reports no promotion available when this build has no SFU provider", async () => {
