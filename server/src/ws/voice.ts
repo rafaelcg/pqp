@@ -5321,3 +5321,38 @@ subscribeToCluster(VOICE_WATCH_TOPIC, (data) => {
 });
 
 // --- end the cluster bus ------------------------------------------------------
+
+/**
+ * What a voice channel is set to, what a call in it would open on, and what
+ * the call in it right now is actually using.
+ *
+ * Three different facts, and conflating the first two is the mistake this
+ * exists to prevent: "Automático" is a *configuration*, not an answer, and the
+ * answer it produces depends on the size of the server, whether the server has
+ * a public address, and whether the deployment has a media server at all. The
+ * live half is a fourth thing again. A room's path is pinned when the first
+ * person joins and does not change while anybody is in it, so a call that
+ * started before the setting was touched keeps the old path until it empties.
+ *
+ * Read by `GET /api/channels/:channelId/voice-transport`, once, when somebody
+ * opens the channel's settings. Nothing on the hot path calls it.
+ */
+export async function describeChannelVoiceTransport(
+  channel: ChannelRow,
+): Promise<{
+  configured: VoiceRoomTransport | null;
+  resolved: VoiceTransportDecision;
+  live: { transport: VoiceRoomTransport; participants: number } | null;
+}> {
+  const [resolved, room] = await Promise.all([
+    decideRoomTransport(channel),
+    readClusterRoom(channel.id),
+  ]);
+  return {
+    configured: channel.voice_transport ?? null,
+    resolved,
+    live: room
+      ? { transport: room.transport, participants: room.participants.length }
+      : null,
+  };
+}

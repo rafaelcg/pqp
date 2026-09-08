@@ -916,6 +916,28 @@ export const updateChannel = (
   },
 ) => patch<{ channel: Channel }>(`/api/channels/${channelId}`, body);
 
+/**
+ * What a voice channel is set to, and what its call is actually on.
+ *
+ * `configured` is the per-channel column, null when it is automatic.
+ * `resolved` is what a *new* call would open on, with the reason the server
+ * picked it. `live` is the call happening right now, and it can disagree:
+ * a room's transport is pinned from its first join until it empties, so a
+ * call that started before the setting moved keeps the old one.
+ *
+ * Needs MANAGE_CHANNELS, and 404s on anything that is not a voice channel.
+ */
+export interface ChannelVoiceTransport {
+  configured: VoiceRoomTransport | null;
+  resolved: { transport: VoiceRoomTransport; reason: string };
+  live: { transport: VoiceRoomTransport; participants: number } | null;
+}
+
+export const fetchChannelVoiceTransport = (channelId: string) =>
+  apiFetch<ChannelVoiceTransport>(
+    `/api/channels/${channelId}/voice-transport`,
+  );
+
 export const deleteChannel = (channelId: string) =>
   del<{ ok: boolean }>(`/api/channels/${channelId}`);
 

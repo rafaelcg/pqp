@@ -36,6 +36,17 @@ vi.mock("./services/outgoing-webhooks.js", () => ({
 vi.mock("./services/channel-sessions.js", () => ({
   sendDueChannelSessionReminders: vi.fn(async () => undefined),
 }));
+vi.mock("./services/voice-occupancy.js", () => ({
+  OCCUPANCY_SAMPLE_INTERVAL_MS: 60_000,
+  recordVoiceOccupancySample: vi.fn(async () => ({
+    source: "local" as const,
+    written: true,
+  })),
+  rollUpAndPruneVoiceOccupancy: vi.fn(async () => ({
+    daysRolledUp: 0,
+    minutesPruned: 0,
+  })),
+}));
 
 import {
   sweepOrphanedAttachments,
@@ -48,6 +59,10 @@ import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
+import {
+  OCCUPANCY_SAMPLE_INTERVAL_MS,
+  recordVoiceOccupancySample,
+} from "./services/voice-occupancy.js";
 import {
   ATTACHMENT_SWEEP_INTERVAL_MS,
   CHANNEL_SESSION_REMINDER_INTERVAL_MS,
@@ -92,10 +107,19 @@ describe("cold jobs", () => {
 
   it("fires each job on its own cadence", async () => {
     jobs = startColdJobs();
-    expect(jobs.count).toBe(13);
+    expect(jobs.count).toBe(15);
 
     await vi.advanceTimersByTimeAsync(OUTGOING_WEBHOOK_TICK_MS);
     expect(deliverDueOutgoingWebhooks).toHaveBeenCalledTimes(1);
+
+    // One occupancy row a minute, and not one at boot: an extra sample at t=0
+    // would land in the same minute bucket as the first tick anyway, so the
+    // boot sweeps deliberately do not include it.
+    expect(recordVoiceOccupancySample).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(OCCUPANCY_SAMPLE_INTERVAL_MS);
+    expect(recordVoiceOccupancySample).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(OCCUPANCY_SAMPLE_INTERVAL_MS * 3);
+    expect(recordVoiceOccupancySample).toHaveBeenCalledTimes(4);
 
     await vi.advanceTimersByTimeAsync(PENDING_DELETION_SWEEP_INTERVAL_MS);
     expect(sweepPendingAccountDeletions).toHaveBeenCalledTimes(1);

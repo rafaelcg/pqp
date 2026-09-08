@@ -1,12 +1,16 @@
-import { type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
-import type { Channel } from "@pqp/shared";
+import type { Channel, VoiceRoomTransport } from "@pqp/shared";
 import {
   isVoiceRoomChannelType,
   SLOWMODE_SECONDS_PRESETS,
 } from "@pqp/shared";
 import { Input } from "@/components/ui/input";
 import { ChannelIcon } from "@/components/layout/channel-icon";
+import {
+  fetchChannelVoiceTransport,
+  type ChannelVoiceTransport,
+} from "@/lib/api";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   CHANNEL_ICON_PRESETS,
@@ -40,6 +44,38 @@ const VOICE_ROOM_SIZE_KEYS: Record<VoiceRoomSizeOption, MessageKey> = {
 
 function slowModeOptionKey(seconds: number): MessageKey {
   return SLOWMODE_PRESET_KEYS[seconds] ?? "channelMeta.slowMode.custom";
+}
+
+const VOICE_ROUTE_NAME_KEYS: Record<VoiceRoomTransport, MessageKey> = {
+  mesh: "channelMeta.voiceRoute.mesh",
+  livekit: "channelMeta.voiceRoute.livekit",
+};
+
+const VOICE_ROUTE_HINT_KEYS: Record<VoiceRoomTransport, MessageKey> = {
+  mesh: "channelMeta.voiceRoute.mesh.hint",
+  livekit: "channelMeta.voiceRoute.livekit.hint",
+};
+
+// A Map, not an object literal, because the lookup key arrives off the wire:
+// `reasons["constructor"]` on a literal answers with something truthy.
+const VOICE_ROUTE_REASON_KEYS = new Map<string, MessageKey>([
+  ["unconfigured", "channelMeta.voiceRoute.reason.unconfigured"],
+  ["dm", "channelMeta.voiceRoute.reason.dm"],
+  ["small", "channelMeta.voiceRoute.reason.small"],
+  ["large", "channelMeta.voiceRoute.reason.large"],
+  ["community", "channelMeta.voiceRoute.reason.community"],
+  ["override", "channelMeta.voiceRoute.reason.override"],
+  ["hls", "channelMeta.voiceRoute.reason.hls"],
+  ["default", "channelMeta.voiceRoute.reason.default"],
+]);
+
+/**
+ * The reason string comes off the wire, so a server newer than this build can
+ * send one this catalogue has never heard of. That returns null and the line
+ * is dropped, rather than printing a raw key at a moderator.
+ */
+export function voiceRouteReasonKey(reason: string): MessageKey | null {
+  return VOICE_ROUTE_REASON_KEYS.get(reason) ?? null;
 }
 
 const fieldClass =
@@ -127,6 +163,34 @@ export function ChannelOverviewSection({
     channel.kind === "server" &&
     (channel.type === "text" || isVoiceRoomChannelType(channel.type));
   const showVoice = showsVoiceRoomSize(channel);
+  // Read-only, one call when the sheet opens, never polled. It is decoration
+  // under the size control: if it fails, or has not landed yet, the block is
+  // simply absent. Nothing here is worth an error toast on a settings sheet.
+  const [voiceRoute, setVoiceRoute] = useState<ChannelVoiceTransport | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!showVoice) {
+      setVoiceRoute(null);
+      return;
+    }
+    let current = true;
+    setVoiceRoute(null);
+    void fetchChannelVoiceTransport(channel.id)
+      .then((route) => {
+        if (current) {
+          setVoiceRoute(route);
+        }
+      })
+      .catch(() => {
+        // Silent on purpose. See above.
+      });
+    return () => {
+      current = false;
+    };
+  }, [channel.id, showVoice]);
+
   const preview = {
     ...channel,
     name: draft.name.trim() || channel.name,
@@ -149,6 +213,10 @@ export function ChannelOverviewSection({
               roles: joinRoleNames(recipeRoleNames, locale),
             })
           : t("channelSettings.recipe.roles");
+
+  const resolvedReasonKey = voiceRoute
+    ? voiceRouteReasonKey(voiceRoute.resolved.reason)
+    : null;
 
   return (
     <div className="space-y-3.5">
@@ -299,6 +367,47 @@ export function ChannelOverviewSection({
         </SettingsGroup>
       )}
 
+      {showVoice && voiceRoute && (
+        <SettingsGroup title={t("channelMeta.voiceRoute")}>
+          <div className="space-y-3">
+            <div>
+              <VoiceRouteRow
+                label={t("channelMeta.voiceRoute.idleLabel")}
+                value={t(
+                  VOICE_ROUTE_NAME_KEYS[voiceRoute.resolved.transport],
+                )}
+              />
+              <p className="mt-0.5 text-[13px] leading-snug text-paper-muted">
+                {t(VOICE_ROUTE_HINT_KEYS[voiceRoute.resolved.transport])}
+                {resolvedReasonKey && (
+                  <span className="block">{t(resolvedReasonKey)}</span>
+                )}
+              </p>
+            </div>
+            {voiceRoute.live ? (
+              <div>
+                <VoiceRouteRow
+                  label={t("channelMeta.voiceRoute.liveLabel", {
+                    count: voiceRoute.live.participants,
+                  })}
+                  value={t(VOICE_ROUTE_NAME_KEYS[voiceRoute.live.transport])}
+                />
+                {voiceRoute.live.transport !==
+                  voiceRoute.resolved.transport && (
+                  <p className="mt-0.5 text-[13px] leading-snug text-paper-muted">
+                    {t("channelMeta.voiceRoute.pinned")}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p className="text-[13px] leading-snug text-paper-muted">
+                {t("channelMeta.voiceRoute.empty")}
+              </p>
+            )}
+          </div>
+        </SettingsGroup>
+      )}
+
       {(showPrivateBridge || showRecipeBridge) && (
         <div className="overflow-hidden rounded-2xl bg-ink-3/70">
           {showPrivateBridge && (
@@ -323,6 +432,21 @@ export function ChannelOverviewSection({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * One fact, stated. Same shape as `BridgeRow` without the affordance: this
+ * block reports, it does not lead anywhere.
+ */
+function VoiceRouteRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="min-w-0 flex-1 text-[13px] text-paper-muted">
+        {label}
+      </span>
+      <span className="text-[13px] font-medium text-paper">{value}</span>
     </div>
   );
 }
