@@ -6,7 +6,11 @@ name: CI
 # The two lists are duplicated: GitHub does not expand YAML anchors (an
 # alias here becomes an empty filter and the workflow runs on everything).
 # Do not add tools/support-bot or scripts/monitor — those have tests here.
+# Do not add tools/admin-dashboard or tools/ambient — root `eslint .` lints them.
 # Do not add **/*.md — blog/What's New markdown lives under client/.
+# If branch protection later requires `checks` / `e2e`, a skipped paths-ignore
+# run is treated as pending forever. Do not require those checks without a
+# filter that still reports success.
 on:
   push:
     branches: [main]
@@ -27,9 +31,7 @@ on:
       - ".github/workflows/provision-turn.yml"
       - "tools/db-backup/**"
       - "tools/sfu/**"
-      - "tools/admin-dashboard/**"
       - "tools/log-shipper/**"
-      - "tools/ambient/**"
   pull_request:
     branches: [main]
     paths-ignore:
@@ -49,9 +51,7 @@ on:
       - ".github/workflows/provision-turn.yml"
       - "tools/db-backup/**"
       - "tools/sfu/**"
-      - "tools/admin-dashboard/**"
       - "tools/log-shipper/**"
-      - "tools/ambient/**"
   workflow_dispatch:
 
 concurrency:
@@ -195,6 +195,7 @@ jobs:
   # the client via `vite dev` (see client/playwright.config.ts webServer), so
   # only @pqp/shared needs a build here.
   e2e:
+    name: e2e (${{ matrix.suite }} ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -290,7 +291,7 @@ jobs:
         run: pnpm --filter @pqp/client exec playwright install-deps chromium
 
       - name: E2E (${{ matrix.suite }} ${{ matrix.shard }}/${{ matrix.shards }})
-        run: pnpm --filter @pqp/client e2e -- ${{ matrix.projects }} --shard=${{ matrix.shard }}/${{ matrix.shards }}
+        run: pnpm --filter @pqp/client e2e ${{ matrix.projects }} --shard=${{ matrix.shard }}/${{ matrix.shards }}
         env:
           E2E_DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
 

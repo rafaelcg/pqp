@@ -7,6 +7,10 @@
  * Filename prefixes, not test titles: --project filters files, and a title
  * grep would still boot every spec. mobile-immersive-stage stays out — it
  * has its own project.
+ *
+ * Playwright matches testMatch / testIgnore against the absolute path, so
+ * the prefix is `[/\\]e2e[/\\]` rather than `(?:^|/)`. A worktree under
+ * `/tmp/screen-share-fix/` must not flip every spec into the media project.
  */
 export const MEDIA_SPEC =
-  /(?:^|\/)(?:voice-|video-quality|viewer-video-quality|share-cursor|screen-|push-to-talk|outbound-readout|camera-stage|call-stage-strip|call-split-layout|dm-call|profile-popover-call)/;
+  /[/\\]e2e[/\\](?:voice-|video-quality|viewer-video-quality|share-cursor|screen-|push-to-talk|outbound-readout|camera-stage|call-stage-strip|call-split-layout|dm-call|profile-popover-call)/;
