@@ -5,7 +5,7 @@ import {
   evaluateAutomod,
   findBlockedKeyword,
   findInviteLink,
-  keywordToPatternSource,
+  parseKeyword,
   normalizeForAutomod,
   type AutomodRuleInput,
 } from "./automod.js";
@@ -42,13 +42,15 @@ describe("normalizeForAutomod", () => {
     expect(normalizeForAutomod("s̶c̶a̶m̶")).toBe("scam");
   });
 
-  it("maps Cyrillic and Greek lookalikes", () => {
+  it("maps Cyrillic and Greek lookalikes, uppercase included", () => {
     expect(normalizeForAutomod("sсаm")).toBe("scam");
     expect(normalizeForAutomod("ροrn")).toBe("porn");
+    expect(normalizeForAutomod("SCАM")).toBe("scam");
+    expect(normalizeForAutomod("РORN")).toBe("porn");
   });
 });
 
-describe("keywordToPatternSource", () => {
+describe("keywords", () => {
   it("no wildcard means whole word", () => {
     expect(hit("a scam here", ["scam"])).toBe("scam");
     expect(hit("scammer", ["scam"])).toBeNull();
@@ -87,22 +89,46 @@ describe("keywordToPatternSource", () => {
   });
 
   it("drops an entry that is only wildcards or punctuation", () => {
-    expect(keywordToPatternSource("*")).toBeNull();
-    expect(keywordToPatternSource("***")).toBeNull();
-    expect(keywordToPatternSource("!!!")).toBeNull();
-    expect(compileKeywords(["*", ""]).pattern).toBeNull();
+    expect(parseKeyword("*")).toBeNull();
+    expect(parseKeyword("***")).toBeNull();
+    expect(parseKeyword("!!!")).toBeNull();
+    expect(compileKeywords(["*", ""]).isEmpty).toBe(true);
   });
 
   it("treats regex metacharacters as literals", () => {
-    expect(hit("what (lol)", ["(lol)"])).toBe("(lol)");
+    expect(hit("what (lol)", ["(lol)"])).toBe("lol");
     expect(hit("a.b", ["a.b"])).toBe("a.b");
     expect(hit("axb", ["a.b"])).toBeNull();
+    expect(hit("aaaa", ["a+"])).toBeNull();
+  });
+
+  it("owner input can never stall the matcher", () => {
+    // The three shapes a review measured at 46 s, 23 s and 7 s against the
+    // regex version. Each must stay in the low milliseconds.
+    const longWord = "a".repeat(4000);
+    const cases: Array<[string[], string]> = [
+      [["a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*a*b"], "a".repeat(40)],
+      [Array.from({ length: 1000 }, (_, i) => `*zz${i}`), longWord],
+      [Array.from({ length: 1000 }, (_, i) => `a*b*c*d*e*f*g*h*i*j*k*l*m*n*o*p*q*r*s*t*u*v*w*x*y*z${i}`), longWord],
+    ];
+    for (const [words, body] of cases) {
+      const compiled = compileKeywords(words);
+      const start = performance.now();
+      expect(findBlockedKeyword(body, compiled)).toBeNull();
+      expect(performance.now() - start).toBeLessThan(250);
+    }
+  });
+
+  it("an interior wildcard stays inside one word, in order", () => {
+    expect(hit("scxxam", ["s*a*m"])).toBe("scxxam");
+    expect(hit("samsc", ["s*a*m"])).toBeNull();
+    expect(hit("xsamx", ["*s*m*"])).toBe("xsamx");
   });
 });
 
 describe("evasion", () => {
   it("catches case, zero-width, fullwidth and Cyrillic variants", () => {
-    for (const body of ["SCAM", "sc​am", "ｓｃａｍ", "sсаm"]) {
+    for (const body of ["SCAM", "sc​am", "ｓｃａｍ", "sсаm", "SCАM", "𝐒𝐂𝐀𝐌"]) {
       expect(hit(body, ["scam"])).toBe("scam");
     }
   });
@@ -139,6 +165,8 @@ describe("findInviteLink", () => {
       "DISCORD.GG/AbC",
       "dsc.gg/short",
       "disc​ord.gg/abc",
+      "ｄiscord.gg/abc",
+      "discоrd.gg/abc",
     ]) {
       expect(findInviteLink(body)).not.toBeNull();
     }

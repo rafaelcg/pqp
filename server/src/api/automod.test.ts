@@ -259,6 +259,50 @@ describeDb("automod", () => {
     expect((await send(member, channelId, "golpe")).status).toBe(201);
   });
 
+  it("an edit is a send: the new body is checked too", async () => {
+    const { serverId, channelId } = await makeServer();
+    await call(owner, "POST", rulesPath(serverId), {
+      kind: "keywords",
+      keywords: ["golpe"],
+      customMessage: "Nem editando.",
+    });
+    const author = await getUserById(member.id);
+    const posted = await postChannelMessage({ author: author!, channelId, body: "oi" });
+    expect(posted.ok).toBe(true);
+    const messageId = posted.ok ? posted.message.id : "";
+
+    const edited = await call<{ error?: string }>(
+      member,
+      "PATCH",
+      `/api/messages/${messageId}`,
+      { body: "oi golpe" },
+    );
+    expect(edited.status).toBe(422);
+    expect(edited.body.error).toBe("Nem editando.");
+
+    const kept = await getPool().query<{ body: string }>(
+      `SELECT body FROM messages WHERE id = $1`,
+      [messageId],
+    );
+    expect(kept.rows[0]!.body).toBe("oi");
+
+    const clean = await call(member, "PATCH", `/api/messages/${messageId}`, {
+      body: "oi de novo",
+    });
+    expect(clean.status).toBe(200);
+
+    // The owner walks through on an edit exactly as on a send.
+    const ownerPost = await postChannelMessage({
+      author: (await getUserById(owner.id))!,
+      channelId,
+      body: "mod",
+    });
+    const ownerId = ownerPost.ok ? ownerPost.message.id : "";
+    expect(
+      (await call(owner, "PATCH", `/api/messages/${ownerId}`, { body: "golpe" })).status,
+    ).toBe(200);
+  });
+
   it("an exempt channel skips the rule", async () => {
     const { serverId, channelId } = await makeServer();
     await call(owner, "POST", rulesPath(serverId), {

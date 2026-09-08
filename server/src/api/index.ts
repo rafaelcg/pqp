@@ -231,10 +231,12 @@ import {
 } from "../services/account.js";
 import { listAuditLog, logAudit } from "../services/audit.js";
 import {
+  checkAutomod,
   createAutomodRule,
   deleteAutomodRule,
   getAutomodRule,
   listAutomodRules,
+  recordAutomodHit,
   updateAutomodRule,
 } from "../services/automod.js";
 import {
@@ -5001,6 +5003,33 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
   const schema =
     existing.attachments.length > 0 ? captionEditSchema : updateMessageSchema;
   const body = schema.parse(await readJsonBody(req));
+
+  // Same reasoning as the block guard above: an edit is a send. Without this
+  // a member posts "hi", edits it into the blocked word, and AutoMod never
+  // saw it. The check reads the same rules with the same exemptions as
+  // `postChannelMessage`, and a hit is recorded the same way.
+  if (existing.server_id) {
+    const automodInput = {
+      serverId: existing.server_id,
+      channelId: existing.channel_id,
+      authorId: user.id,
+      memberPerms: await computeMemberPermissions(
+        existing.server_id,
+        user.id,
+        existing.channel_id,
+      ),
+      body: body.body,
+    };
+    const verdict = await checkAutomod(automodInput);
+    if (verdict) {
+      void recordAutomodHit(automodInput, verdict);
+      throw new HttpError(
+        422,
+        verdict.customMessage ?? "This message was blocked by AutoMod",
+      );
+    }
+  }
+
   const updated = await updateMessageBody(messageId!, body.body);
   if (!updated) {
     throw new NotFound("Message not found");

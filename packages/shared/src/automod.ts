@@ -172,7 +172,7 @@ const CONFUSABLE_RE = new RegExp(
  *
  * Order matters: NFKC first so compatibility characters become their ASCII
  * base, then NFD so every accent is a separate combining mark, strip those
- * marks, drop the invisibles, map the handful of homoglyphs, lowercase, and
+ * marks, drop the invisibles, lowercase, map the handful of homoglyphs, and
  * collapse whitespace. Accents are stripped on purpose: the alternative is a
  * blocked word that `é` walks past, and a Brazilian hall's blocked list is
  * mostly words people type both ways.
@@ -183,8 +183,10 @@ export function normalizeForAutomod(text: string): string {
     .normalize("NFD")
     .replace(COMBINING_RE, "")
     .replace(INVISIBLE_RE, "")
-    .replace(CONFUSABLE_RE, (ch) => CONFUSABLES[ch] ?? ch)
+    // Lowercase before the homoglyph map: the map lists lowercase letters,
+    // and an uppercase Cyrillic А would otherwise survive as-is.
     .toLowerCase()
+    .replace(CONFUSABLE_RE, (ch) => CONFUSABLES[ch] ?? ch)
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -193,25 +195,62 @@ export function normalizeForAutomod(text: string): string {
 // Keywords
 // ---------------------------------------------------------------------------
 
-/** `\b` is ASCII-only; these are the unicode-aware edges of a word. */
-const WORD_START = "(?<![\\p{L}\\p{N}_])";
-const WORD_END = "(?![\\p{L}\\p{N}_])";
-const WORD_CHARS = "[\\p{L}\\p{N}_]*";
+/**
+ * The matcher is a token scan, not a regular expression built from the
+ * owner's list. The first version compiled every keyword into one big
+ * alternation with unbounded `[\p{L}\p{N}_]*` runs for the wildcards, and a
+ * review measured a single hostile keyword (`a*a*a*...*b`) stalling the API
+ * process for 46 seconds on a 40-character word. Owner input must never
+ * become a pattern. Everything below is `startsWith`, `endsWith`, `indexOf`
+ * and equality over words, so the cost is linear in body length times list
+ * length, whatever the list says.
+ */
 
-function escapeRegex(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** A body split into words, each with its span in the normalised text. */
+interface Token {
+  text: string;
+  start: number;
+  end: number;
+}
+
+const WORD_CHAR_RE = /[\p{L}\p{N}_]/u;
+
+function tokenize(text: string): Token[] {
+  const tokens: Token[] = [];
+  let start = -1;
+  for (let i = 0; i <= text.length; i++) {
+    const isWord = i < text.length && WORD_CHAR_RE.test(text[i]!);
+    if (isWord && start < 0) {
+      start = i;
+    } else if (!isWord && start >= 0) {
+      tokens.push({ text: text.slice(start, i), start, end: i });
+      start = -1;
+    }
+  }
+  return tokens;
 }
 
 /**
- * One keyword to one pattern source. Exported for the settings preview,
- * which shows what a wildcard expands to.
- *
- * `*` at either end removes that edge's word boundary; `*` in the middle
- * matches any run of word characters. Spaces in a phrase match any
- * whitespace. Everything else is literal. An entry of only wildcards is
- * dropped, because it would match every message.
+ * One keyword, parsed. `leading` and `trailing` are the edge wildcards;
+ * `words` is the phrase split on whitespace, each word split again on any
+ * interior `*` into literal parts (`s*m` is `["s", "m"]`).
  */
-export function keywordToPatternSource(keyword: string): string | null {
+export interface ParsedKeyword {
+  source: string;
+  leading: boolean;
+  trailing: boolean;
+  words: string[][];
+}
+
+/**
+ * Parse one keyword. Exported for tests. Returns null for an entry that is
+ * only wildcards or punctuation, which would otherwise match every message.
+ *
+ * `*` at either end removes that edge's word boundary; `*` inside a word
+ * matches any run of word characters within that same word. Spaces in a
+ * phrase match any run of non-word characters. Everything else is literal.
+ */
+export function parseKeyword(keyword: string): ParsedKeyword | null {
   const normalized = normalizeForAutomod(keyword);
   const leading = normalized.startsWith("*");
   const trailing = normalized.endsWith("*") && normalized.length > 1;
@@ -219,65 +258,165 @@ export function keywordToPatternSource(keyword: string): string | null {
   if (!core || !/[\p{L}\p{N}]/u.test(core)) {
     return null;
   }
-  const body = core
-    .split(/\*+/)
-    .map((part) => escapeRegex(part).replace(/ /g, "\\s+"))
-    .join(WORD_CHARS);
-  // A wildcard edge still swallows the rest of the word, so the verdict
-  // reports `scammer`, not the `scam` fragment that tripped it.
-  return `${leading ? WORD_CHARS : WORD_START}${body}${trailing ? WORD_CHARS : WORD_END}`;
-}
-
-export interface CompiledKeywords {
-  /** Null when no entry survived compilation: nothing to match. */
-  pattern: RegExp | null;
-  /** Allow-list entries, compiled the same way. Null when empty. */
-  allow: RegExp | null;
+  // Punctuation inside a keyword is dropped the way `tokenize` drops it from
+  // a body, so `a.b` matches the body `a.b` (tokens `a`, `b`) and `(lol)`
+  // matches `(lol)`.
+  const words = core
+    .split(/[^\p{L}\p{N}_*]+/u)
+    .filter((word) => word.length > 0)
+    .map((word) => word.split(/\*+/).filter((part) => part.length > 0));
+  if (words.length === 0 || words.some((parts) => parts.length === 0)) {
+    return null;
+  }
+  return { source: keyword, leading, trailing, words };
 }
 
 /**
- * Compile a keyword list once per rule. The result is one alternation, so a
- * thousand keywords are one pass over the body. `allow` spans are blanked
- * out of the body before `pattern` runs, which is what makes "claim your
- * role" on the allow list rescue a message that "claim your" would block.
+ * Does `token` match a word made of literal `parts` with wildcard runs
+ * between them? `open` at either end means that edge is unanchored.
+ * Greedy leftmost placement of every part but the last is enough to decide
+ * existence, and it is linear in the token's length.
+ */
+function matchParts(
+  token: string,
+  parts: string[],
+  openStart: boolean,
+  openEnd: boolean,
+): boolean {
+  if (parts.length === 1) {
+    const [part] = parts as [string];
+    if (!openStart && !openEnd) return token === part;
+    if (!openStart) return token.startsWith(part);
+    if (!openEnd) return token.endsWith(part);
+    return token.includes(part);
+  }
+  const first = parts[0]!;
+  let pos: number;
+  if (openStart) {
+    pos = token.indexOf(first);
+    if (pos < 0) return false;
+    pos += first.length;
+  } else {
+    if (!token.startsWith(first)) return false;
+    pos = first.length;
+  }
+  for (let i = 1; i < parts.length - 1; i++) {
+    const found = token.indexOf(parts[i]!, pos);
+    if (found < 0) return false;
+    pos = found + parts[i]!.length;
+  }
+  const last = parts[parts.length - 1]!;
+  if (openEnd) {
+    return token.indexOf(last, pos) >= 0;
+  }
+  return token.endsWith(last) && token.length - last.length >= pos;
+}
+
+/**
+ * Every span of `tokens` that `keyword` matches, as [first token index, last
+ * token index]. A single-word keyword is tested against each token; a phrase
+ * is a sliding window where only the first and last words honour the edge
+ * wildcards.
+ */
+function matchSpans(tokens: Token[], keyword: ParsedKeyword): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  const n = keyword.words.length;
+  for (let i = 0; i + n <= tokens.length; i++) {
+    let ok = true;
+    for (let j = 0; j < n && ok; j++) {
+      const openStart = j === 0 && keyword.leading;
+      const openEnd = j === n - 1 && keyword.trailing;
+      ok = matchParts(tokens[i + j]!.text, keyword.words[j]!, openStart, openEnd);
+    }
+    if (ok) {
+      spans.push([i, i + n - 1]);
+    }
+  }
+  return spans;
+}
+
+export interface CompiledKeywords {
+  /** Exact single words, for an O(1) lookup per token. */
+  exact: Set<string>;
+  /** Everything else: wildcards and phrases. */
+  scan: ParsedKeyword[];
+  allow: ParsedKeyword[];
+  /** True when no entry survived parsing: nothing to match. */
+  isEmpty: boolean;
+}
+
+/**
+ * Parse a keyword list once per rule. Exact single words go in a set so a
+ * thousand of them cost one lookup per token; only wildcards and phrases
+ * are scanned.
  */
 export function compileKeywords(
   keywords: readonly string[],
   allowList: readonly string[] = [],
 ): CompiledKeywords {
-  const toRegExp = (entries: readonly string[]): RegExp | null => {
-    const sources = entries
-      .map(keywordToPatternSource)
-      .filter((source): source is string => source !== null);
-    if (sources.length === 0) {
-      return null;
+  const exact = new Set<string>();
+  const scan: ParsedKeyword[] = [];
+  for (const raw of keywords) {
+    const parsed = parseKeyword(raw);
+    if (!parsed) continue;
+    const single = parsed.words.length === 1 && parsed.words[0]!.length === 1;
+    if (single && !parsed.leading && !parsed.trailing) {
+      exact.add(parsed.words[0]![0]!);
+    } else {
+      scan.push(parsed);
     }
-    // Longest first so a phrase wins over a word it contains.
-    sources.sort((a, b) => b.length - a.length);
-    return new RegExp(sources.map((s) => `(?:${s})`).join("|"), "giu");
-  };
-  return { pattern: toRegExp(keywords), allow: toRegExp(allowList) };
+  }
+  // Longer phrases first so a phrase wins over a word it contains.
+  scan.sort((a, b) => b.words.length - a.words.length);
+  const allow = allowList
+    .map(parseKeyword)
+    .filter((entry): entry is ParsedKeyword => entry !== null);
+  return { exact, scan, allow, isEmpty: exact.size === 0 && scan.length === 0 };
 }
 
 /**
- * The first blocked keyword in `body`, as it appeared after normalisation,
- * or null when the body is clean.
+ * The first blocked keyword in `body`, as the matched words appear in the
+ * normalised text, or null when the body is clean. Allow-list spans are
+ * removed from consideration first: every token an allowed phrase covers is
+ * dropped, so "claim your role" on the allow list rescues a body that
+ * "claim your" would block, and nothing is glued together by the removal
+ * because tokens never merge.
  */
 export function findBlockedKeyword(
   body: string,
   compiled: CompiledKeywords,
 ): string | null {
-  if (!compiled.pattern) {
+  if (compiled.isEmpty) {
     return null;
   }
-  let text = normalizeForAutomod(body);
-  if (compiled.allow) {
-    // Blank, never remove: removing would glue neighbours into a new word.
-    text = text.replace(compiled.allow, (hit) => " ".repeat(hit.length));
+  const text = normalizeForAutomod(body);
+  let tokens = tokenize(text);
+  if (compiled.allow.length > 0) {
+    const drop = new Set<number>();
+    for (const entry of compiled.allow) {
+      for (const [from, to] of matchSpans(tokens, entry)) {
+        for (let i = from; i <= to; i++) drop.add(i);
+      }
+    }
+    if (drop.size > 0) {
+      tokens = tokens.filter((_, i) => !drop.has(i));
+    }
   }
-  compiled.pattern.lastIndex = 0;
-  const match = compiled.pattern.exec(text);
-  return match ? match[0] : null;
+  if (compiled.exact.size > 0) {
+    for (const token of tokens) {
+      if (compiled.exact.has(token.text)) {
+        return token.text;
+      }
+    }
+  }
+  for (const entry of compiled.scan) {
+    const spans = matchSpans(tokens, entry);
+    if (spans.length > 0) {
+      const [from, to] = spans[0]!;
+      return text.slice(tokens[from]!.start, tokens[to]!.end);
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -287,13 +426,15 @@ export function findBlockedKeyword(
 /**
  * Discord invite in any of its spellings. `discord.gg/x`, `discord.com/invite/x`,
  * `discordapp.com/invite/x`, with or without a scheme, and the `dsc.gg`
- * shortener people use to dodge the plain form.
+ * shortener people use to dodge the plain form. Runs on the normalised body
+ * so a fullwidth or Cyrillic letter in the host does not walk past it; the
+ * quantifiers are bounded, so this is the one pattern the module keeps.
  */
 const DISCORD_INVITE_RE =
-  /(?:https?:\/\/)?(?:www\.)?(?:discord(?:app)?\.com\/invite|discord\.gg|dsc\.gg)\/[\w-]{2,}/i;
+  /(?:https?:\/\/)?(?:www\.)?(?:discord(?:app)?\.com\/invite|discord\.gg|dsc\.gg)\/[\p{L}\p{N}_-]{2,64}/iu;
 
 export function findInviteLink(body: string): string | null {
-  const match = DISCORD_INVITE_RE.exec(body.replace(INVISIBLE_RE, ""));
+  const match = DISCORD_INVITE_RE.exec(normalizeForAutomod(body));
   return match ? match[0] : null;
 }
 
