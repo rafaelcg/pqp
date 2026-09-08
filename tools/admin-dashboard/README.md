@@ -218,9 +218,14 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
   `server/src/voice/sfu-stats.ts`, not the 30-second one, and concurrent
   callers share one probe: the API asks the SFU at most six times a minute no
   matter how many dashboards are open
-- voice: rooms open now (with names and who is screen-sharing), people in them,
-  the largest room now against the practical mesh limit (amber past 6), and the
-  largest room today (process-local; it resets on deploy and at São Paulo
+- voice: rooms open now (with names, who is screen-sharing, which media path
+  each one is pinned to, and — cluster-wide, when `VOICE_REGISTRY=postgres`
+  supplies `voice_rooms.created_at` — how long it has been open; the
+  in-process fallback knows the path but not the open time, and the field is
+  additive so the previous dashboard build keeps working against it), people
+  in them, the largest room now against the practical mesh limit (amber past
+  6), and the largest room today (process-local; it resets on deploy and at
+  São Paulo
   midnight)
 - **call quality, last 7 days**: the full 1-to-5 distribution as bars, the
   average, the share that gave 4 or 5, the split by transport (mesh vs the

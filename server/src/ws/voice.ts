@@ -1039,6 +1039,16 @@ export interface VoiceActivitySnapshot {
     participants: number;
     /** Peers in this room with a screen capture live right now. */
     sharingScreen: number;
+    /** The room's pinned media path. */
+    transport: VoiceRoomTransport;
+    /**
+     * When the room's pin was written, ISO, or null when this process
+     * cannot answer that cheaply. The registry knows it (`voice_rooms.created_at`,
+     * one join, `listVoiceRoomOccupancy` below); the in-process fallback does
+     * not track a room's open time and is not worth a new map just to answer
+     * it, so it reports null rather than guessing.
+     */
+    openedAt: string | null;
   }[];
 }
 
@@ -1056,7 +1066,12 @@ function localRoomOccupancy(): VoiceActivitySnapshot["rooms"] {
     }
   }
   return [...sizes.entries()]
-    .map(([voiceChannelId, room]) => ({ voiceChannelId, ...room }))
+    .map(([voiceChannelId, room]) => ({
+      voiceChannelId,
+      ...room,
+      transport: getRoomTransport(voiceChannelId),
+      openedAt: null,
+    }))
     .sort((a, b) => b.participants - a.participants);
 }
 
