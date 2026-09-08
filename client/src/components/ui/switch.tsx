@@ -2,9 +2,9 @@ import { cn } from "@/lib/utils";
 
 /**
  * Independent on/off control. Chips are for one-of-many; this is for a list of
- * independent bits. Tokens match Button/Input: ink track, signal when on,
- * ring-signal on focus. The whole row is the hit target so a 20-item list does
- * not demand a 16px native tick.
+ * independent bits. Tokens match Button/Input: a surface track, the accent
+ * when on, the focus ring on focus. The whole row is the hit target so a
+ * 20-item list does not demand a 16px native tick.
  */
 export function Switch({
   checked,
@@ -31,20 +31,20 @@ export function Switch({
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        "flex w-full justify-between gap-4 rounded-md px-2 py-2 text-left",
+        "flex w-full justify-between gap-4 rounded-[var(--radius-control)] px-2 py-2 text-left",
         description ? "items-start" : "items-center",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
-        disabled ? "cursor-not-allowed" : "hover:bg-ink-3",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
+        disabled ? "cursor-not-allowed" : "hover:bg-surface-2",
         className,
       )}
     >
       <span className="min-w-0">
-        <span className="block text-sm text-paper">{label}</span>
+        <span className="block text-sm text-text">{label}</span>
         {title && !description ? (
           <span className="sr-only">{title}</span>
         ) : null}
         {description ? (
-          <span className="mt-0.5 block text-xs text-paper-muted">
+          <span className="mt-0.5 block text-xs text-text-tertiary">
             {description}
           </span>
         ) : null}
@@ -52,16 +52,16 @@ export function Switch({
       <span
         aria-hidden
         className={cn(
-          "relative h-5 w-9 shrink-0 rounded-full transition-colors duration-150",
+          "relative h-5 w-9 shrink-0 rounded-full transition-colors duration-[var(--duration-fast)]",
           description && "mt-0.5",
-          checked ? "bg-signal" : "bg-ink-3 ring-1 ring-inset ring-ink-4",
+          checked ? "bg-accent" : "bg-surface-2 ring-1 ring-inset ring-border",
           disabled && "opacity-50",
         )}
       >
         <span
           className={cn(
-            "absolute top-0.5 left-0.5 h-4 w-4 rounded-full transition-transform duration-150",
-            checked ? "translate-x-4 bg-ink" : "bg-paper-muted",
+            "absolute top-0.5 left-0.5 h-4 w-4 rounded-full transition-transform duration-[var(--duration-fast)]",
+            checked ? "translate-x-4 bg-on-accent" : "bg-text-tertiary",
           )}
         />
       </span>

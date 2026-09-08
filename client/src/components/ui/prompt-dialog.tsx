@@ -120,7 +120,7 @@ export function PromptDialog({
         className="space-y-3 px-5 py-4"
       >
         <label className="block">
-          <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+          <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary">
             {label}
           </span>
           <Input
@@ -135,7 +135,7 @@ export function PromptDialog({
         {secondaryPlaceholder !== undefined && (
           <label className="block">
             {secondaryLabel && (
-              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+              <span className="mb-1 block text-xs uppercase tracking-wide text-text-tertiary">
                 {secondaryLabel}
               </span>
             )}
@@ -157,7 +157,7 @@ export function PromptDialog({
               type="checkbox"
               checked={checked}
               onChange={(e) => setChecked(e.target.checked)}
-              className="h-4 w-4 accent-[var(--color-signal)]"
+              className="h-4 w-4 accent-[var(--color-accent)]"
             />
             <span className="text-sm">{checkboxLabel}</span>
           </label>

@@ -95,6 +95,9 @@ const DesktopLoginPage = lazy(() =>
     default: m.DesktopLoginPage,
   })),
 );
+const UiTokensPage = lazy(() =>
+  import("./pages/ui-tokens-page").then((m) => ({ default: m.UiTokensPage })),
+);
 
 /**
  * `.env.example` ships a placeholder that is truthy, so a copied env would
@@ -234,6 +237,15 @@ function AppRoutes({ devBypass = false }: { devBypass?: boolean }) {
           <Route path="/:handleSegment" element={<PublicProfileRoute />} />
         </Route>
         <Route path="/app/*" element={<App devBypass={devBypass} />} />
+        {/* The design system's token sheet. A sibling of `/app/*` rather than a
+            path inside it: `/app` has no react-router children (it parses its
+            own path in `lib/app-route.ts`), and the sheet must render without
+            an account, a socket or a bootstrapped shell. Two segments, so it
+            cannot collide with `/:handleSegment` above. Outside `DarkRoutes`
+            on purpose, because switching brightness is half of what the page
+            is for. `UiTokensPage` gates itself on the dev auth bypass and
+            otherwise redirects the way the catch-all below does. */}
+        <Route path="/qa/ui" element={<UiTokensPage />} />
         <Route
           path="*"
           element={<Navigate to={isDesktopApp() ? "/app" : "/"} replace />}

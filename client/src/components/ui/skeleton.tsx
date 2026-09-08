@@ -9,7 +9,7 @@ export function Skeleton({ className }: SkeletonProps) {
   return (
     <div
       className={cn(
-        "animate-pulse rounded-md bg-ink-4/50",
+        "animate-pulse rounded-[var(--radius-control)] bg-surface-3/50",
         className,
       )}
       aria-hidden
@@ -45,7 +45,7 @@ export function MessageListSkeleton() {
       {Array.from({ length: 6 }).map((_, i) => (
         <div key={i} className="flex items-start px-5">
           <div className="flex w-14 shrink-0 justify-end pr-2">
-            <Skeleton className="h-9 w-9 shrink-0 rounded-lg" />
+            <Skeleton className="h-9 w-9 shrink-0 rounded-[var(--radius-card)]" />
           </div>
           <div className="min-w-0 flex-1 space-y-2">
             <div className="flex items-baseline gap-2">
@@ -65,7 +65,7 @@ export function ServerRailSkeleton() {
   return (
     <div className="flex flex-col items-center gap-2 py-3" aria-hidden>
       {Array.from({ length: 4 }).map((_, i) => (
-        <Skeleton key={i} className="h-12 w-12 rounded-2xl" />
+        <Skeleton key={i} className="h-12 w-12 rounded-[var(--radius-panel)]" />
       ))}
     </div>
   );

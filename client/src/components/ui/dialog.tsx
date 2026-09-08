@@ -301,7 +301,7 @@ export function Dialog({
           layer below owns the dismiss gesture. */}
       <div
         aria-hidden="true"
-        className="fixed inset-0 z-[60] bg-ink/80 backdrop-blur-[2px]"
+        className="fixed inset-0 z-[60] bg-surface-0/80 backdrop-blur-[2px]"
       />
       <div
         data-dialog-layer=""
@@ -324,15 +324,15 @@ export function Dialog({
           className={cn(
             // Heights are a percentage of the layer, which is the visible
             // rectangle — never `vh`, which no browser shrinks for a keyboard.
-            "animate-rise flex max-h-[calc(100%-1.5rem)] w-full max-w-full flex-col overflow-hidden rounded-t-2xl border border-ink-4 bg-ink-2 shadow-2xl outline-none sm:max-h-full sm:rounded-2xl",
+            "animate-rise elevation-3 flex max-h-[calc(100%-1.5rem)] w-full max-w-full flex-col overflow-hidden rounded-t-[var(--radius-panel)] outline-none sm:max-h-full sm:rounded-[var(--radius-panel)]",
             fill && "h-[calc(100%-1.5rem)] sm:h-full",
             width,
           )}
         >
-          <div className="flex items-start justify-between gap-3 border-b border-ink-4 px-5 py-4">
+          <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
             <div className="min-w-0">
               {eyebrow && (
-                <p className="text-xs uppercase tracking-[0.18em] text-signal">
+                <p className="text-xs uppercase tracking-[0.18em] text-accent">
                   {eyebrow}
                 </p>
               )}
@@ -347,7 +347,7 @@ export function Dialog({
                 )}
               </h2>
               {description && (
-                <p id={descriptionId} className="mt-1 text-sm text-paper-muted">
+                <p id={descriptionId} className="mt-1 text-sm text-text-tertiary">
                   {description}
                 </p>
               )}
@@ -356,7 +356,7 @@ export function Dialog({
               <button
                 type="button"
                 aria-label={t("a11y.closeDialog")}
-                className="shrink-0 rounded-md p-1.5 text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper"
+                className="shrink-0 rounded-[var(--radius-control)] p-1.5 text-text-tertiary transition-colors hover:bg-surface-2 hover:text-text"
                 onClick={onClose}
               >
                 <X className="h-4 w-4" />
@@ -374,7 +374,7 @@ export function Dialog({
           </div>
 
           {footer && (
-            <div className="safe-pb flex shrink-0 flex-wrap justify-end gap-2 border-t border-ink-4 px-5 py-4">
+            <div className="safe-pb flex shrink-0 flex-wrap justify-end gap-2 border-t border-border px-5 py-4">
               {footer}
             </div>
           )}

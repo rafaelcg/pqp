@@ -276,10 +276,10 @@ export function Tooltip({
             // tallest things a tooltipped button can sit next to, and matching
             // the reaction tip in `message-list.tsx` so the two read as one
             // object rather than two house styles.
-            "z-[140] max-w-64 select-none text-paper shadow-[var(--shadow-popover)] animate-fade-in",
+            "z-[140] max-w-64 select-none text-text animate-fade-in",
             rail
-              ? "rounded-lg border border-ink-3 bg-ink px-2.5 py-1.5 text-[13px] font-semibold leading-snug"
-              : "rounded-md border border-ink-4 bg-ink-2 px-2 py-1 text-xs leading-snug",
+              ? "rounded-[var(--radius-card)] border border-surface-2 bg-surface-0 shadow-[var(--shadow-popover)] px-2.5 py-1.5 text-[13px] font-semibold leading-snug"
+              : "elevation-3 rounded-[var(--radius-control)] px-2 py-1 text-xs leading-snug",
             // Never intercept a click aimed at what is underneath. The bubble
             // is placed over the stage, and a swallowed click on a call
             // control is a worse bug than a missing label.
@@ -288,7 +288,7 @@ export function Tooltip({
         >
           {label}
           {detail && (
-            <span className="mt-1 block text-[11px] text-paper-muted">
+            <span className="mt-1 block text-[11px] text-text-tertiary">
               {detail}
             </span>
           )}

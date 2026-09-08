@@ -87,3 +87,6 @@ local.properties
 *.jks
 *.keystore
 *.p12
+
+# Local run config for the desktop app browser pane (per machine)
+.claude/launch.json
