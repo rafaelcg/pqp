@@ -2757,7 +2757,7 @@
   "watchParty.setup.noSource": "Nada escolhido ainda",
   "watchParty.setup.pickError": "Não deu pra abrir o seletor. Tenta de novo.",
   "watchParty.setup.goLive": "Ir ao vivo",
-  "watchParty.setup.goLiveHint": "Na hora que você clicar, todo mundo que enxerga {channel} vê a watch party no topo da barra e pode assistir.",
+  "watchParty.setup.goLiveHint": "Na hora que você clicar, a watch party aparece no topo da barra pra galera daqui e todo mundo pode assistir.",
   "watchParty.setup.discard": "Descartar",
   "watchParty.setup.discardConfirmTitle": "Descartar a watch party?",
   "watchParty.setup.discardConfirmBody": "\"{name}\" some. Ninguém chegou a ver.",

@@ -1226,3 +1226,57 @@ async function revokeMemberSpeak(
   }
   await reevaluateVoiceSpeak(serverId);
 }
+
+// ------------------------------------------------- the server's party room
+
+/**
+ * THE HIDDEN CHANNEL EVERY PARTY RUNS IN, found or made.
+ *
+ * A watch party is no longer something you create a channel for. The channel
+ * still exists, because it is the party's voice room, the key the HLS egress
+ * and `channel_sessions` are hung on, and the home of the chat during the
+ * show. It is just never listed in the sidebar (`channel-list.tsx` filters the
+ * type out), so nobody makes one, names one, or drags one about.
+ *
+ * ONE PER SERVER, REUSED. Making a fresh channel per party would leak a
+ * channel row, a set of overwrites and a chat history every time somebody
+ * pressed the button, and after a month of film nights the server's channel
+ * table would be mostly ghosts. Reusing one also gives the cardinality Rafael
+ * described ("the top container", singular): the partial unique index already
+ * allows one active party per channel, so one channel per server means one
+ * live party per server, which is what the sidebar block assumes.
+ *
+ * AN EXISTING `watch_party` CHANNEL IS ADOPTED, not replaced. The type is
+ * merged and on main, so a server may already have one (or several) from
+ * before this change. The oldest by position then id wins, deterministically,
+ * so two people pressing the button at the same moment land in the same room
+ * rather than racing to make two. The others keep existing, unlisted and
+ * unused, with their history intact; nothing is deleted.
+ *
+ * THE NAME IS NEVER SHOWN, so it is a constant rather than something derived
+ * from the party. It still appears in the audit log and the API, which is why
+ * it is a sensible word and not a uuid.
+ */
+export const WATCH_PARTY_ROOM_NAME = "watch-party";
+
+export async function findOrCreateWatchPartyRoom(
+  serverId: string,
+): Promise<string> {
+  const existing = await getPool().query<{ id: string }>(
+    `SELECT id FROM channels
+      WHERE server_id = $1 AND type = 'watch_party'
+      ORDER BY position ASC, id ASC
+      LIMIT 1`,
+    [serverId],
+  );
+  if (existing.rows[0]) {
+    return existing.rows[0].id;
+  }
+  const { createChannel } = await import("./servers.js");
+  const created = await createChannel(
+    serverId,
+    WATCH_PARTY_ROOM_NAME,
+    "watch_party",
+  );
+  return created.id;
+}

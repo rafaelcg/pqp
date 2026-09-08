@@ -289,6 +289,7 @@ import {
   applyWatchPartyOptions,
   authoriseWatchParty,
   createWatchParty,
+  findOrCreateWatchPartyRoom,
   getActiveWatchPartyRow,
   getWatchPartyRow,
   listActiveWatchPartiesForServer,
@@ -4376,6 +4377,57 @@ async function requireWatchParty(
     mapWatchPartyError(error);
   }
 }
+
+/**
+ * START A WATCH PARTY, without first making a channel for it.
+ *
+ * The action Rafael asked for: one control for people who hold
+ * START_WATCH_PARTY, no channel type to pick, no room to name. This finds or
+ * makes the server's hidden party room and opens a draft in it, so the client
+ * needs one call rather than a create-channel followed by a create-party.
+ *
+ * ASKED OF THE SERVER, NOT A CHANNEL, because there may be no channel yet. A
+ * per-channel deny on the room that already exists is still honoured: the
+ * draft is created through the same service the per-channel route uses, and
+ * everything after this point (going live, the stage, the egress) re-resolves
+ * the bit against the actual channel.
+ */
+router.post(
+  "/api/servers/:serverId/watch-parties",
+  async ({ req, user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.START_WATCH_PARTY);
+    const body = createWatchPartySchema.parse(await readJsonBody(req));
+    if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
+      throw new HttpError(400, "startsAt must be in the future");
+    }
+    const channelId = await findOrCreateWatchPartyRoom(serverId!);
+    const channel = await requireServerChannel(channelId);
+    // The room may have just been created, so the client has never seen it.
+    // Handing it back whole lets the caller put it in its channel list and
+    // select it in one go, the same way the create-channel route does; a bare
+    // id would select a channel the client cannot resolve, which is a blank
+    // "Escolha um canal" pane on the very click that starts the party.
+    const room = mapChannel(channel);
+    try {
+      const row = await createWatchParty({
+        channelId,
+        serverId: channel.server_id,
+        name: body.name,
+        description: body.description ?? null,
+        startsAt: body.startsAt ?? null,
+        options: body.options ?? {},
+        hostUserId: user.id,
+      });
+      const actor = await watchPartyActor(channel, user.id);
+      const party = await presentWatchParty(row, actor);
+      void broadcastWatchParty(row.id);
+      return { party, channel: room };
+    } catch (error) {
+      mapWatchPartyError(error);
+    }
+  },
+);
 
 router.post(
   "/api/channels/:channelId/watch-parties",

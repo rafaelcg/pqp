@@ -2757,7 +2757,7 @@
   "watchParty.setup.noSource": "Nothing picked yet",
   "watchParty.setup.pickError": "Could not open the picker. Try again.",
   "watchParty.setup.goLive": "Go live",
-  "watchParty.setup.goLiveHint": "The moment you press it, everyone who can see {channel} gets the watch party at the top of their sidebar and can watch.",
+  "watchParty.setup.goLiveHint": "The moment you press it, the watch party appears at the top of the sidebar for everyone here, and they can watch.",
   "watchParty.setup.discard": "Discard",
   "watchParty.setup.discardConfirmTitle": "Discard the watch party?",
   "watchParty.setup.discardConfirmBody": "\"{name}\" disappears. Nobody ever saw it.",

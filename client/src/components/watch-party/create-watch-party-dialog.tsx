@@ -28,12 +28,10 @@ import { useTranslation } from "@/lib/i18n";
  */
 export function CreateWatchPartyDialog({
   open,
-  channelName,
   onClose,
   onSubmit,
 }: {
   open: boolean;
-  channelName: string;
   onClose: () => void;
   onSubmit: (input: {
     name: string;
@@ -149,7 +147,7 @@ export function CreateWatchPartyDialog({
           </label>
         )}
         <p className="text-[11px] text-paper-muted">
-          {t("watchParty.setup.goLiveHint", { channel: `#${channelName}` })}
+          {t("watchParty.setup.goLiveHint")}
         </p>
         {error && <p className="text-xs text-danger">{error}</p>}
       </DialogBody>

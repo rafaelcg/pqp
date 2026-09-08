@@ -395,9 +395,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
 
       <div className="flex shrink-0 flex-col gap-2 border-t border-ink-4/60 px-3 py-2.5 sm:flex-row sm:items-center">
         <p className="min-w-0 flex-1 text-[11px] text-paper-muted">
-          {t("watchParty.setup.goLiveHint", {
-            channel: `#${props.channelName}`,
-          })}
+          {t("watchParty.setup.goLiveHint")}
         </p>
         <div className="flex shrink-0 items-center gap-2">
           <Button

@@ -117,7 +117,6 @@ const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
 const PINNED_ZONE = "__pinned__";
 const TEXT_ZONE = "__text__";
 const VOICE_ZONE = "__voice__";
-const WATCH_PARTY_ZONE = "__watch_party__";
 
 /** Apple keyboards label the same chord differently, and the hint is the point. */
 const SEARCH_SHORTCUT_HINT =
@@ -184,6 +183,14 @@ interface ChannelListProps {
   liveParties?: readonly WatchParty[];
   /** One click: select the channel, which is what starts watching. */
   onWatchLiveParty?: (channelId: string) => void;
+  /**
+   * Whether this person holds `START_WATCH_PARTY` anywhere in this server.
+   * Server-level rather than per channel, because the control creates the
+   * channel it will run in, so there is no channel to ask about yet.
+   */
+  canStartWatchParty?: boolean;
+  /** Opens the setup flow. Absent for anyone who may not start one. */
+  onCreateWatchParty?: () => void;
   /** The signed-in account, for self-drag and "mute for me". */
   currentUserId?: string | null;
   /** Seats with a move in flight: no second drag. */
@@ -301,6 +308,8 @@ export function ChannelList({
   onJoinVoice,
   liveParties,
   onWatchLiveParty,
+  canStartWatchParty,
+  onCreateWatchParty,
   currentUserId = null,
   pendingMoveUserIds = [],
   peerVolumes = {},
@@ -348,37 +357,45 @@ export function ChannelList({
     commitWidth: commitSidebarWidth,
   } = useChannelSidebarWidth();
   const channelPinHintEnabled = useFeatureHintEnabled("channelPin");
-  const visibleFavs = visibleFavoriteChannels(channels, favoriteChannelIds);
+  const watchPartyOn = isWatchPartyChannelsEnabled();
+  /**
+   * A WATCH PARTY IS NOT A CHANNEL IN THE LIST, AND THIS IS WHERE THAT IS
+   * ENFORCED.
+   *
+   * The first version gave watch parties a section of their own under Voice,
+   * which is exactly the treatment they were supposed to escape: a live party
+   * then appeared twice, once as the block at the top and again as a row with
+   * its own occupant list, so one event had two representations and the second
+   * one made it look like a voice channel with a badge.
+   *
+   * The channel still exists. It is the party's voice room, the key the HLS
+   * egress and `channel_sessions` are hung on, and the home of the chat during
+   * the show. It is simply never listed: filtering `channels` once, here,
+   * keeps it out of the top-level groups, the categories, the pinned row and
+   * the icons-only rail without four separate filters that could disagree.
+   *
+   * With the flag off nothing is hidden and a `watch_party` channel is still
+   * an ordinary voice row, so a production build that has not flipped the flag
+   * behaves exactly as it did before any of this.
+   */
+  const listed = watchPartyOn
+    ? channels.filter((c) => !isWatchPartyChannelType(c.type))
+    : channels;
+  const visibleFavs = visibleFavoriteChannels(listed, favoriteChannelIds);
   const favoriteIdSet = new Set(visibleFavs.map((c) => c.id));
   const topLevelText = sortByPosition(
-    channels.filter(
+    listed.filter(
       (c) => c.type === "text" && !c.parentId && !favoriteIdSet.has(c.id),
     ),
   );
-  // With the flag off a watch_party channel is just another voice row, so
-  // production sees nothing new until the build says so. With it on, those
-  // channels move to a section of their own under Voice.
-  const watchPartyOn = isWatchPartyChannelsEnabled();
   const topLevelVoice = sortByPosition(
-    channels.filter(
+    listed.filter(
       (c) =>
-        (watchPartyOn
-          ? c.type === "voice"
-          : isVoiceRoomChannelType(c.type)) &&
+        isVoiceRoomChannelType(c.type) &&
         !c.parentId &&
         !favoriteIdSet.has(c.id),
     ),
   );
-  const topLevelWatchParty = watchPartyOn
-    ? sortByPosition(
-        channels.filter(
-          (c) =>
-            isWatchPartyChannelType(c.type) &&
-            !c.parentId &&
-            !favoriteIdSet.has(c.id),
-        ),
-      )
-    : [];
   /**
    * Live state per watch party room: the server's `channel-live` when it has
    * said anything about the channel, the roster otherwise (see @pqp/shared).
@@ -393,7 +410,7 @@ export function ChannelList({
     );
   }
   const categories = sortByPosition(
-    channels.filter((c) => c.type === "category"),
+    listed.filter((c) => c.type === "category"),
   );
   const categoryOptions = categories.map((c) => ({ id: c.id, name: c.name }));
   const childrenByCategory = new Map<string, Channel[]>();
@@ -401,7 +418,7 @@ export function ChannelList({
     childrenByCategory.set(
       category.id,
       sortByPosition(
-        channels.filter(
+        listed.filter(
           (c) => c.parentId === category.id && !favoriteIdSet.has(c.id),
         ),
       ),
@@ -459,7 +476,6 @@ export function ChannelList({
       favorites: visibleFavs,
       text: topLevelText,
       voice: topLevelVoice,
-      watchParty: topLevelWatchParty,
       categories,
       childrenByCategory,
     });
@@ -988,11 +1004,9 @@ export function ChannelList({
               categoryId,
               categoryId
                 ? (childrenByCategory.get(categoryId)?.length ?? 0)
-                : topLevelWatchParty.some((c) => c.id === channel.id)
-                  ? topLevelWatchParty.length
-                  : isVoiceRoomChannelType(channel.type)
-                    ? topLevelVoice.length
-                    : topLevelText.length,
+                : isVoiceRoomChannelType(channel.type)
+                  ? topLevelVoice.length
+                  : topLevelText.length,
             )
           }
           onMoveUp={
@@ -1317,17 +1331,29 @@ export function ChannelList({
               </PinnedChannelsSection>
             )}
 
-            {/* Above the categories, above the pins, above everything: a
-                live watch party is an event and it goes at the top of the
-                room. It disappears the moment the party ends. */}
+            {/* THE ONLY PLACE A WATCH PARTY APPEARS IN THIS LIST.
+                Above the categories, above the pins, above everything: a live
+                party is an event and it goes at the top of the room. When
+                none is running this is the button that starts one, for the
+                people who may, and nothing at all for everybody else. There
+                is no section, no row and no empty state. */}
             {watchPartyOn && onWatchLiveParty && (
               <LivePartyBlock
                 parties={liveParties ?? []}
                 selectedChannelId={selectedChannelId}
+                canStart={canStartWatchParty === true}
                 onWatch={(channelId) => {
                   onWatchLiveParty(channelId);
                   onMobileClose?.();
                 }}
+                onCreate={
+                  onCreateWatchParty
+                    ? () => {
+                        onCreateWatchParty();
+                        onMobileClose?.();
+                      }
+                    : undefined
+                }
               />
             )}
 
@@ -1450,43 +1476,6 @@ export function ChannelList({
                 renderRow(channel, topLevelVoice),
               )}
             </ChannelSection>
-
-            {watchPartyOn && (
-              <ChannelSection
-                label={t("chrome.watchParty")}
-                canManage={canManage}
-                onAdd={() => onCreateChannel("watch_party", false)}
-                onAddPrivate={() => onCreateChannel("watch_party", true)}
-                isDragOver={
-                  dragOverId === WATCH_PARTY_ZONE && !draggedOccupant
-                }
-                onDragOver={(event) => {
-                  if (draggedOccupant) {
-                    event.dataTransfer.dropEffect = "none";
-                    return;
-                  }
-                  if (draggedId) {
-                    setDragOverId(WATCH_PARTY_ZONE);
-                  }
-                }}
-                onDrop={() => {
-                  if (draggedOccupant) {
-                    clearDrag();
-                    return;
-                  }
-                  const dragged = draggedChannel();
-                  if (dragged && favoriteIdSet.has(dragged.id)) {
-                    handleUnfavoriteDragged();
-                  } else {
-                    clearDrag();
-                  }
-                }}
-              >
-                {topLevelWatchParty.map((channel) =>
-                  renderRow(channel, topLevelWatchParty),
-                )}
-              </ChannelSection>
-            )}
 
             {(categories.length > 0 || canManage) && (
               <div className="mb-4">

@@ -538,4 +538,89 @@ describeDb("watch party ownership", () => {
     const afterEnd = await create(host);
     expect(afterEnd.status).toBe(200);
   });
+
+  // -------------------------------------------- starting one without a channel
+
+  /**
+   * A watch party stopped being "make a channel of this type" and became an
+   * action: one control in the sidebar for people holding START_WATCH_PARTY.
+   * The room still exists, because it is the voice room, the chat and the key
+   * the egress hangs on; it is simply found or made for you and never listed.
+   */
+  describe("POST /api/servers/:id/watch-parties", () => {
+    const startOnServer = (as: User, body: Record<string, unknown> = {}) =>
+      call<{
+        party: { id: string; state: string; hostUserId: string };
+        channel: { id: string; type: string; name: string };
+      }>(as, "POST", `/api/servers/${serverId}/watch-parties`, {
+        name: "Cinemoon",
+        ...body,
+      });
+
+    it("refuses somebody without the bit, and lets the bit holder start one", async () => {
+      const refused = await startOnServer(member);
+      expect(refused.status).toBe(403);
+
+      const allowed = await startOnServer(host);
+      expect(allowed.status).toBe(200);
+      expect(allowed.body.party.state).toBe("draft");
+      expect(allowed.body.party.hostUserId).toBe(host.id);
+    });
+
+    it("adopts the server's existing watch party channel rather than making another", async () => {
+      // `beforeEach` already made one, which stands in for the channels that
+      // exist on main from before this change.
+      const before = await getPool().query(
+        `SELECT id FROM channels WHERE server_id = $1 AND type = 'watch_party'`,
+        [serverId],
+      );
+      expect(before.rowCount).toBe(1);
+
+      const started = await startOnServer(host);
+      expect(started.status).toBe(200);
+      expect(started.body.channel.id).toBe(channelId);
+
+      const after = await getPool().query(
+        `SELECT id FROM channels WHERE server_id = $1 AND type = 'watch_party'`,
+        [serverId],
+      );
+      expect(after.rowCount).toBe(1);
+    });
+
+    it("makes the room on demand for a server that has none", async () => {
+      await getPool().query(`DELETE FROM channels WHERE id = $1`, [channelId]);
+
+      const started = await startOnServer(host);
+      expect(started.status).toBe(200);
+      expect(started.body.channel.type).toBe("watch_party");
+      // Handed back whole, because the client has never seen it and has to put
+      // it in its own list before it can select it.
+      expect(typeof started.body.channel.name).toBe("string");
+    });
+
+    it("reuses the same room for a second party, so rooms do not accumulate", async () => {
+      const first = await startOnServer(host);
+      expect(first.status).toBe(200);
+      expect(
+        (await setState(host, first.body.party.id, "cancelled")).status,
+      ).toBe(200);
+
+      const second = await startOnServer(host);
+      expect(second.status).toBe(200);
+      expect(second.body.channel.id).toBe(first.body.channel.id);
+
+      const rooms = await getPool().query(
+        `SELECT id FROM channels WHERE server_id = $1 AND type = 'watch_party'`,
+        [serverId],
+      );
+      expect(rooms.rowCount).toBe(1);
+    });
+
+    it("refuses a second party while one is already running in that room", async () => {
+      expect((await startOnServer(host)).status).toBe(200);
+      // One room per server plus one active party per room is one live party
+      // per server, which is the cardinality the sidebar block assumes.
+      expect((await startOnServer(host)).status).toBe(409);
+    });
+  });
 });

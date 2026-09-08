@@ -156,7 +156,7 @@ import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
 import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
-  createWatchParty as apiCreateWatchParty,
+  createServerWatchParty as apiCreateServerWatchParty,
   setWatchPartyStage,
   setWatchPartyState as apiSetWatchPartyState,
   updateWatchParty as apiUpdateWatchParty,
@@ -3634,14 +3634,24 @@ function MainAppContent({
       : null;
   }
 
+  /**
+   * Start a party from the sidebar's one control.
+   *
+   * No channel is picked, named, or created by hand: the server finds or makes
+   * the hidden room and opens the draft in it, and the client then selects
+   * that room so the host lands straight on the setup surface. That is the
+   * whole journey the old "make a watch_party channel, then find it in a
+   * section, then press create" flow was hiding.
+   */
   async function handleCreateWatchParty(input: {
     name: string;
     startsAt: string | null;
   }) {
-    if (!selectedChannelId) {
+    const serverId = selectedServerId;
+    if (!serverId) {
       return;
     }
-    const { party } = await apiCreateWatchParty(selectedChannelId, {
+    const { party, channel } = await apiCreateServerWatchParty(serverId, {
       name: input.name,
       startsAt: input.startsAt,
     });
@@ -3651,6 +3661,16 @@ function MainAppContent({
       // makes the setup surface appear on the same click.
       watchParties.put(party);
     }
+    // The room may have just been created, so it has to go into the channel
+    // list before it can be selected, even though the sidebar will not draw
+    // it. Selecting a channel the client cannot resolve is a blank pane on
+    // the very click that starts the party.
+    if (!channels.some((existing) => existing.id === channel.id)) {
+      setChannels(
+        [...channels, channel].sort((a, b) => a.position - b.position),
+      );
+    }
+    await selectChannel(channel.id);
   }
 
   /**
@@ -3820,8 +3840,26 @@ function MainAppContent({
    * microphone prompt and without a second click. Joining the call is a
    * separate button on the stage.
    */
-  function handleWatchLiveParty(channelId: string) {
-    selectChannel(channelId);
+  async function handleWatchLiveParty(channelId: string) {
+    // THE ROOM MAY BE ONE THIS CLIENT HAS NEVER HEARD OF. It is created on
+    // demand by whoever starts the party and it is never listed, so a viewer
+    // who loaded the app before the party existed has no such channel in
+    // `channels` and selecting it lands on "Escolha um canal". One refetch
+    // fixes it for everybody arriving mid-party, which is most of an
+    // audience.
+    if (!channels.some((existing) => existing.id === channelId)) {
+      const serverId = selectedServerId;
+      if (serverId) {
+        try {
+          const { channels: list } = await fetchChannels(serverId);
+          setChannels(list);
+        } catch {
+          // Nothing to add: the select below will simply do nothing, which is
+          // the same as the click not having landed.
+        }
+      }
+    }
+    await selectChannel(channelId);
   }
 
   /** Sidebar: open the channel and join, unless already in it. */
@@ -6052,16 +6090,16 @@ function MainAppContent({
         </>
       )}
 
-      {selectedChannel &&
-        selectedChannel.kind === "server" &&
-        isWatchPartyChannelType(selectedChannel.type) && (
-          <CreateWatchPartyDialog
-            open={createWatchPartyOpen}
-            channelName={selectedChannel.name}
-            onClose={() => setCreateWatchPartyOpen(false)}
-            onSubmit={handleCreateWatchParty}
-          />
-        )}
+      {/* No longer gated on standing in a watch party channel: the control
+          is in the sidebar and there may be no such channel yet. The name in
+          the copy is the server's, because that is the room being opened. */}
+      {selection.kind === "server" && (
+        <CreateWatchPartyDialog
+          open={createWatchPartyOpen}
+          onClose={() => setCreateWatchPartyOpen(false)}
+          onSubmit={handleCreateWatchParty}
+        />
+      )}
 
       {/* Also at the root: a call rings you wherever you are in the app. */}
       <IncomingCallOverlay
@@ -6210,7 +6248,9 @@ function MainAppContent({
           onSelectChannel={(id) => void selectChannel(id)}
           onJoinVoice={handleJoinVoiceFromList}
           liveParties={watchParties.live}
-          onWatchLiveParty={handleWatchLiveParty}
+          onWatchLiveParty={(channelId) => void handleWatchLiveParty(channelId)}
+          canStartWatchParty={perms.can(Permission.START_WATCH_PARTY)}
+          onCreateWatchParty={() => setCreateWatchPartyOpen(true)}
           currentUserId={user?.id ?? null}
           pendingMoveUserIds={pendingVoiceMoves}
           peerVolumes={voiceState.peerVolumes}

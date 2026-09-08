@@ -1,3 +1,4 @@
+import { Clapperboard } from "lucide-react";
 import type { WatchParty } from "@pqp/shared";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
@@ -36,16 +37,45 @@ import { cn } from "@/lib/utils";
 export function LivePartyBlock({
   parties,
   selectedChannelId,
+  canStart = false,
   onWatch,
+  onCreate,
 }: {
   /** Live parties in this server, newest first. Usually exactly one. */
   parties: readonly WatchParty[];
   selectedChannelId: string | null;
+  /** This person holds `START_WATCH_PARTY` somewhere in this server. */
+  canStart?: boolean;
   onWatch: (channelId: string) => void;
+  onCreate?: () => void;
 }) {
   const { t } = useTranslation();
   if (parties.length === 0) {
-    return null;
+    /**
+     * NOTHING, OR ONE BUTTON. A member with no permission and no party
+     * running sees no heading, no empty section and no placeholder: watch
+     * parties simply are not part of their sidebar until one exists. A person
+     * who may start one gets a single control, and it reads as an action
+     * rather than as a channel type, which is the whole point of the change.
+     */
+    if (!canStart || !onCreate) {
+      return null;
+    }
+    return (
+      <div className="mb-3 px-1" data-testid="live-party-create">
+        <button
+          type="button"
+          data-live-party-create
+          className="flex w-full items-center gap-2 rounded-lg border border-dashed border-ink-4/70 px-2.5 py-2 text-left text-paper-muted transition-colors hover:border-danger/40 hover:bg-ink-3 hover:text-paper"
+          onClick={onCreate}
+        >
+          <Clapperboard className="h-4 w-4 shrink-0" aria-hidden />
+          <span className="truncate text-sm font-medium">
+            {t("watchParty.create.button")}
+          </span>
+        </button>
+      </div>
+    );
   }
   return (
     <div className="mb-3 px-1" data-testid="live-party-block">
@@ -99,7 +129,14 @@ export function LivePartyBlock({
                       className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-ink-2 bg-danger motion-safe:animate-pulse"
                     />
                   </span>
-                  <span className="truncate text-sm font-semibold text-paper">
+                  {/* WRAPS TO TWO LINES RATHER THAN TRUNCATING, because the
+                      name is the content. "Cinemoon: sessão coruja" rendered
+                      as "Cinemoon: sessão cor..." on a real rail, which is
+                      most of a name people chose and the one thing this block
+                      exists to say. Two lines of 14px in a block that is
+                      already two rows costs nothing; a third would, so the
+                      clamp is still there behind them. */}
+                  <span className="line-clamp-2 break-words text-sm font-semibold leading-snug text-paper">
                     {party.name}
                   </span>
                 </span>

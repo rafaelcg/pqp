@@ -1,4 +1,5 @@
 import type {
+  Channel,
   CreateWatchPartyInput,
   UpdateWatchPartyInput,
   WatchParty,
@@ -112,6 +113,24 @@ export function setWatchPartyStage(
     | { action: "raise" | "lower" },
 ): Promise<{ party: WatchParty | null }> {
   return apiFetch(`/api/watch-parties/${partyId}/stage`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * Start one without naming a channel first.
+ *
+ * The server finds or makes the hidden room and opens the draft in it, so the
+ * sidebar's single control is one request rather than a create-channel
+ * followed by a create-party with a window in between where a half-made
+ * channel exists and no party does.
+ */
+export function createServerWatchParty(
+  serverId: string,
+  input: CreateWatchPartyInput,
+): Promise<{ party: WatchParty | null; channel: Channel }> {
+  return apiFetch(`/api/servers/${serverId}/watch-parties`, {
     method: "POST",
     body: JSON.stringify(input),
   });

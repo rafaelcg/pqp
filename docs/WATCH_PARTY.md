@@ -329,10 +329,73 @@ A socket that authenticates mid-show gets every party it may see
 (`catchUpWatchParties`), the same catch-up rosters and `channel-live` already
 do.
 
+### A watch party is not a channel in the list
+
+The first version gave watch parties a section of their own under Voice, and
+the result was one event with two representations: the block at the top AND a
+row further down with its own occupant list, which is exactly the voice-channel
+treatment the block existed to escape. The section is gone.
+
+**The channel still exists, and is never listed.** It is the party's voice
+room, the home of the chat during the show, and the key `channel_sessions`, the
+HLS egress, the overwrites and the permissions all hang on. Removing it would
+be a rewrite of every one of those. `channel-list.tsx` filters the type out of
+`channels` **once**, at the top of the component, so it disappears from the
+top-level groups, the categories, the pinned row and the icons-only rail
+together rather than through four filters that could disagree.
+
+**Starting one is an action, not a channel type.** One control in the sidebar,
+in the same slot the live block occupies, visible only to holders of
+START_WATCH_PARTY. It is there rather than in the server header menu because
+that is where the party will appear: create and result share a place, so the
+button teaches what it does. `POST /api/servers/:id/watch-parties` finds or
+makes the room and opens the draft in one request, so there is never a window
+where a half-made channel exists and no party does.
+
+**One room per server, reused.** A fresh channel per party would leak a channel
+row, its overwrites and a chat history every time somebody pressed the button.
+Reusing one also gives the cardinality Rafael described ("the top container",
+singular): one room per server, and the partial unique index already allows one
+active party per room, so one live party per server, which is what the block
+assumes.
+
+**An existing `watch_party` channel is adopted, not replaced.** The type is
+merged and on main, so a server may already have one, or several. The oldest by
+position then id wins, deterministically, so two people pressing the button at
+the same moment land in the same room instead of racing to make two. Any others
+keep existing, unlisted and unused, with their history intact. Nothing is
+deleted, and nothing needs a migration.
+
+**The client has to be told about a room it has never seen.** It is created on
+demand and never listed, so a viewer who loaded the app before the party existed
+has no such channel and selecting it would land on "Escolha um canal". The
+create call hands the channel back whole for the host, and a viewer clicking the
+block refetches the server's channels once when the id is unknown. That covers
+everybody arriving mid-party, which is most of an audience.
+
+**Where the chat lives, and what is left afterwards.** During the party, the
+room's own chat: clicking the block selects the room, and the transcript is
+beside the picture like any channel. When the party ends the block disappears
+and the room goes back to being unlisted, so the conversation is no longer
+reachable from the sidebar. The messages are not deleted and remain searchable.
+
+Nothing is posted anywhere on end. That is a decision rather than an oversight,
+and it is the weakest part of this: a recap card ("Cinemoon, 47 minutes, 32
+people") in a text channel is the obvious follow-up, and it needs a
+system-message kind first, which this repo does not have (see the note about
+announcing an options change, which ran into the same wall). Posting from the
+host's account would be a message they did not write. **This is the thing to
+revisit first** if the ended conversation turns out to matter, and it should be
+designed with the replay work rather than bolted on before it.
+
+**A member with no permission and no party running sees nothing at all.** No
+heading, no empty section, no placeholder. Watch parties are simply not part of
+their sidebar until one exists.
+
 ### The journey, screen by screen
 
-1. **Criar watch party**, from the empty stage of a watch party channel.
-   Asks for one thing: the name. Optionally a time, which is the fork between
+1. **Criar watch party**, the one control at the top of the sidebar, for
+   people holding START_WATCH_PARTY. Asks for one thing: the name. Optionally a time, which is the fork between
    a private draft and an announced session.
 2. **The setup surface** (`draft`). The host's own preview on the left, the
    options on the right: name, who can talk, slow mode, reactions. Nothing is
