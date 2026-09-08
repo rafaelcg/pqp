@@ -650,6 +650,11 @@ fly secrets set --app pqp-worker --stage \
   S3_ACCESS_KEY_ID='<...>' S3_SECRET_ACCESS_KEY='<...>' \
   S3_FORCE_PATH_STYLE='false' S3_PUBLIC_BASE_URL='<...>'
 
+#    Voice registry on? The occupancy sampler reads `voice_peers`, and this
+#    machine has no sockets to read instead. Without it the sampler records
+#    nothing and logs `voice.occupancy.blind` hourly. Match pqp-api:
+#      fly secrets set --app pqp-worker --stage VOICE_REGISTRY='postgres'
+
 #    External Postgres with TLS only (not Fly MPG over 6PN):
 #      fly secrets set --app pqp-worker --stage DATABASE_SSL='true'
 
@@ -665,7 +670,7 @@ fly deploy --config fly.worker.toml --app pqp-worker \
 fly ssh console --app pqp-worker -C "wget -qO- http://localhost:3001/health"
 # {"ok":true,"role":"worker","version":"<sha>"}
 fly logs --app pqp-worker --no-tail | grep "pqp worker"
-# pqp worker: 10 job(s) scheduled, /health on http://localhost:3001
+# pqp worker: 15 job(s) scheduled, /health on http://localhost:3001
 
 # 5. Only now: tell the API to stop running the jobs. This restarts pqp-api
 #    (every /ws reconnects), so do it in a quiet hour.

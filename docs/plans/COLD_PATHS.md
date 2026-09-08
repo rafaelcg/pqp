@@ -87,9 +87,30 @@ safe: every job claims its rows in SQL (grace windows, `SKIP LOCKED`,
 Secrets shared with `pqp-api`, by name (values never in git):
 `DATABASE_URL` (the same Fly Postgres, over 6PN), `CLERK_SECRET_KEY` (the
 pending-deletion sweep deletes the Clerk user first), `S3_*` (attachment and
-Community Home media sweeps; skipped when unset), `DATABASE_SSL` if the API
-has it. It does not need TURN, LiveKit, Clerk authorized parties, CORS,
-provider keys or `ADMIN_METRICS_TOKEN`.
+Community Home media sweeps; skipped when unset), `VOICE_REGISTRY` **whenever
+`pqp-api` has it**, and `DATABASE_SSL` if the API has it. It does not need
+TURN, LiveKit, Clerk authorized parties, CORS, provider keys or
+`ADMIN_METRICS_TOKEN`.
+
+`VOICE_REGISTRY` is the one that does not announce itself. The occupancy
+sampler is the only job here that reads live state, and the worker holds no
+sockets, so `voice_peers` is the only place it can read from. Without the flag
+it records nothing at all rather than a row of zeros, and says so once an hour
+as `voice.occupancy.blind`. Nothing else on the worker changes: `worker.ts`
+never calls `startVoiceRegistry`, so the flag buys the sampler its read and no
+heartbeat, no reconcile and no writes.
+
+**The worker does not redeploy with the API.** CI skips it when
+`FLY_API_TOKEN_WORKER` is unset, and a merged cold job then sits on `main`
+looking shipped while `pqp-worker` runs whatever image it was last given.
+Check before believing a job is live:
+
+```bash
+fly status --app pqp-worker | grep Image     # against api.pqp.gg/health
+sha=$(curl -fsS https://api.pqp.gg/health | jq -r .version)
+fly deploy --config fly.worker.toml --app pqp-worker \
+  --image "registry.fly.io/pqp-api:$sha" --ha=false --yes
+```
 
 Sized `shared-cpu-1x`, 512 MB, `PG_POOL_MAX=4`, no public service, one
 machine. Its `/health` is reachable over the private network for the Fly
