@@ -348,7 +348,7 @@ describe("live HLS reaches the channel", () => {
         channelId: CINEMA,
         startedAt: stream.startedAt,
       }),
-    ).toEqual({ userId: "ana" });
+    ).toEqual({ userId: "ana", issuedAt: expect.any(Number) });
     // Ana never took a seat: nothing on the room-only path.
     expect(frames(ana, "voice-stream")).toHaveLength(0);
     // The host, in the room, hears both, each stamped for the host.
@@ -357,7 +357,7 @@ describe("live HLS reaches the channel", () => {
         tokenOf((lastFrame(host, "voice-stream")!.stream as LiveHlsStream).hlsUrl),
         { channelId: CINEMA, startedAt: stream.startedAt },
       ),
-    ).toEqual({ userId: "host" });
+    ).toEqual({ userId: "host", issuedAt: expect.any(Number) });
     expect(frames(host, "channel-live")).toHaveLength(1);
   });
 
@@ -404,7 +404,7 @@ describe("live HLS reaches the channel", () => {
         tokenOf((reply.stream as LiveHlsStream).hlsUrl),
         { channelId: CINEMA, startedAt: egress.streams.get(CINEMA)!.startedAt },
       ),
-    ).toEqual({ userId: "ana" });
+    ).toEqual({ userId: "ana", issuedAt: expect.any(Number) });
     // Nobody else heard about it: no frame per subscribe.
     expect(frames(bia, "channel-live")).toHaveLength(1);
     expect(frames(host, "channel-live")).toHaveLength(1);
@@ -423,7 +423,7 @@ describe("live HLS reaches the channel", () => {
         tokenOf((lastFrame(bia, "channel-live")!.stream as LiveHlsStream).hlsUrl),
         { channelId: CINEMA, startedAt: egress.streams.get(CINEMA)!.startedAt },
       ),
-    ).toEqual({ userId: "bia" });
+    ).toEqual({ userId: "bia", issuedAt: expect.any(Number) });
     expect(lastFrame(host, "channel-live")!.watching).toBe(1);
 
     await watchLive(ana, "ana", false);
@@ -483,7 +483,7 @@ describe("live HLS reaches the channel", () => {
         tokenOf((joined.stream as LiveHlsStream).hlsUrl),
         { channelId: CINEMA, startedAt: stream.startedAt },
       ),
-    ).toEqual({ userId: "late" });
+    ).toEqual({ userId: "late", issuedAt: expect.any(Number) });
 
     // A fresh socket, authenticating mid-stream, learns about it with the
     // rosters, and only for channels it may view.
@@ -496,7 +496,7 @@ describe("live HLS reaches the channel", () => {
         tokenOf((pushed.stream as LiveHlsStream).hlsUrl),
         { channelId: CINEMA, startedAt: stream.startedAt },
       ),
-    ).toEqual({ userId: "fresh" });
+    ).toEqual({ userId: "fresh", issuedAt: expect.any(Number) });
 
     access.denied.add(access.key(CINEMA, "banned"));
     const banned = viewer("banned");

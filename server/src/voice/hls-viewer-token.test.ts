@@ -29,7 +29,7 @@ describe("HLS viewer token", () => {
     expect(token).not.toBeNull();
     expect(
       verifyHlsViewerToken(token, { channelId: CHANNEL, startedAt: STARTED_AT }),
-    ).toEqual({ userId: USER });
+    ).toEqual({ userId: USER, issuedAt: expect.any(Number) });
   });
 
   it("is bound to the channel and the session, and expires", () => {
@@ -88,7 +88,7 @@ describe("HLS viewer token", () => {
         channelId: CHANNEL,
         startedAt: STARTED_AT,
       }),
-    ).toEqual({ userId: USER });
+    ).toEqual({ userId: USER, issuedAt: expect.any(Number) });
 
     const publicStream = { ...stream, hlsUrl: "https://live.example.test/x.m3u8" };
     expect(stampViewerStream(publicStream, USER)).toEqual(publicStream);

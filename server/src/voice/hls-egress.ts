@@ -69,6 +69,8 @@ export interface EgressListing {
   egressId: string;
   status: EgressStatus | number;
   error?: string;
+  /** The LiveKit room, which for us is the voice channel id. */
+  roomName?: string;
 }
 
 export interface LiveHlsScreenTracks {
@@ -95,6 +97,7 @@ export interface LiveHlsEgressApi {
   listEgress?: (opts: {
     roomName?: string;
     egressId?: string;
+    active?: boolean;
   }) => Promise<EgressListing[]>;
 }
 
@@ -269,13 +272,24 @@ async function recordSessionStarted(
   channelId: string,
   startedAt: number,
   egressId: string,
+  presenterPeerId: string,
+  videoTrackId: string,
 ): Promise<void> {
   try {
     await getPool().query(
-      `INSERT INTO hls_sessions (channel_id, object_prefix, started_at, egress_id)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4)
+      `INSERT INTO hls_sessions
+         (channel_id, object_prefix, started_at, egress_id,
+          presenter_peer_id, video_track_id)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6)
        ON CONFLICT (object_prefix) DO NOTHING`,
-      [channelId, hlsObjectPrefix(channelId, startedAt), startedAt, egressId],
+      [
+        channelId,
+        hlsObjectPrefix(channelId, startedAt),
+        startedAt,
+        egressId,
+        presenterPeerId,
+        videoTrackId,
+      ],
     );
   } catch (error) {
     logEvent("voice.hlsSessionRecordFailed", {
@@ -762,42 +776,106 @@ function getEgress(): LiveHlsEgressApi | null {
         egressId: info.egressId,
         status: info.status,
         error: info.error || undefined,
+        roomName: info.roomName,
       }));
     },
   };
 }
 
 /**
- * Stop every egress LiveKit still runs for a room. Boot uses it for the
- * sessions a previous process left behind: their rows are ended so retention
- * runs, and the transcode itself must not keep burning the box's CPU into a
- * prefix nobody will ever be handed again.
+ * Every egress the media server is running right now, across all rooms. Null
+ * means "could not ask", which callers must not confuse with "none": the
+ * retention sweep in particular has to refuse to delete when it cannot tell.
  */
-export async function stopActiveEgressesForRoom(
-  roomName: string,
-): Promise<string[]> {
+export async function listActiveEgresses(): Promise<EgressListing[] | null> {
   const egress = getEgress();
-  if (!egress?.listEgress) {
+  if (!egress) {
+    // No LiveKit configured at all: there is genuinely nothing running.
     return [];
   }
-  const stopped: string[] = [];
-  const listing = await egress.listEgress({ roomName });
-  for (const info of listing) {
-    if (healthFromListing(info.egressId, listing) !== "alive") {
-      continue;
-    }
-    try {
-      await egress.stopEgress(info.egressId);
-      stopped.push(info.egressId);
-    } catch (error) {
-      logEvent("voice.hlsStopFailed", {
-        channelId: roomName,
-        egressId: info.egressId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+  if (!egress.listEgress) {
+    return null;
   }
-  return stopped;
+  try {
+    const listing = await egress.listEgress({ active: true });
+    return listing.filter(
+      (info) => healthFromListing(info.egressId, listing) === "alive",
+    );
+  } catch (error) {
+    logEvent("voice.hlsListEgressFailed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/** Stop one egress by id, for an orphan nobody owns. */
+export async function stopEgressById(
+  egressId: string,
+  channelId?: string,
+): Promise<boolean> {
+  const egress = getEgress();
+  if (!egress) {
+    return false;
+  }
+  try {
+    await egress.stopEgress(egressId);
+    return true;
+  } catch (error) {
+    logEvent("voice.hlsStopFailed", {
+      channelId: channelId ?? null,
+      egressId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/**
+ * Take ownership of an egress that outlived the process which started it.
+ *
+ * WHY ADOPT RATHER THAN STOP. An API restart does not stop the media box: the
+ * transcode keeps running and keeps writing segments. The first version of the
+ * boot reconcile ended the row and stopped the egress, which killed a live
+ * watch party on every deploy, and if the stop did not land it left an orphan
+ * burning about a core of a four-core box that is also carrying voice. Adopting
+ * is both kinder and safer: the party does not notice the deploy, which is the
+ * same promise the voice resume machinery already makes.
+ *
+ * The room entry is rebuilt from the session row, which is why
+ * `presenter_peer_id` and `video_track_id` are stored: `reconcileLiveHls`
+ * compares both, and a presenter's client keeps its peer id across a restart,
+ * so a resumed presenter matches and the egress is left alone.
+ */
+export function adoptLiveHlsSession(input: {
+  channelId: string;
+  egressId: string;
+  startedAt: number;
+  presenterPeerId: string;
+  videoTrackId: string;
+}): LiveHlsStream {
+  const stream: LiveHlsStream = {
+    hlsUrl: viewerPlaylistUrl(input.channelId, input.startedAt),
+    startedAt: input.startedAt,
+    presenterPeerId: input.presenterPeerId,
+    delaySeconds: delaySeconds(),
+  };
+  rooms.set(input.channelId, {
+    egressId: input.egressId,
+    stream,
+    videoTrackId: input.videoTrackId,
+    // Counts as freshly started for the health monitor's grace period: the
+    // playlist's progress has not been sampled by THIS process yet.
+    startedAtMs: Date.now(),
+    progress: null,
+  });
+  logEvent("voice.hlsSessionAdopted", {
+    channelId: input.channelId,
+    egressId: input.egressId,
+    startedAt: input.startedAt,
+    presenterPeerId: input.presenterPeerId,
+  });
+  return stream;
 }
 
 function isTrackSource(source: unknown, wanted: TrackSource): boolean {
@@ -1071,7 +1149,13 @@ async function startRoom(
       progress: null,
     };
     rooms.set(channelId, room);
-    await recordSessionStarted(channelId, startedAt, started.egressId);
+    await recordSessionStarted(
+      channelId,
+      startedAt,
+      started.egressId,
+      presenterPeerId,
+      tracks.videoTrackId,
+    );
     // The readiness probe reads the bucket itself (presigned, endpoint
     // form), never the viewer-facing URL: a viewer may get the signed proxy
     // path, which this same process cannot usefully fetch from here.

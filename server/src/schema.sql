@@ -3729,6 +3729,19 @@ CREATE INDEX IF NOT EXISTS idx_hls_sessions_cleanup
 -- egress writes beside (not under) the session prefix, `live/<channel>/<id>.json`.
 ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS egress_id TEXT;
 
+-- Enough to ADOPT a session back after the API restarts, rather than ending it
+-- and stopping a transcode the media box is still happily running. The peer id
+-- is what `reconcileLiveHls` compares against when the presenter's client
+-- resumes (it keeps its peer id across a restart), and the track sid is what it
+-- compares to decide the egress is bound to a dead track.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS presenter_peer_id TEXT;
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS video_track_id TEXT;
+
+-- The boot reconcile looks a session up by the egress the media server reports.
+CREATE INDEX IF NOT EXISTS idx_hls_sessions_egress
+  ON hls_sessions (egress_id)
+  WHERE egress_id IS NOT NULL AND cleaned_at IS NULL;
+
 -- One-time host acknowledgment sheet: "you're responsible for what you
 -- stream". Shown once per user per server the first time they start a
 -- watch-party / HLS broadcast in that server; never again once confirmed.

@@ -59,6 +59,10 @@ import {
 import { getThreadInfo } from "../services/threads.js";
 import { canAccessChannel } from "../services/users.js";
 import {
+  revokeHlsAccess,
+  revokeHlsAccessForUser,
+} from "../voice/hls-revocation.js";
+import {
   countAuthenticatedSockets,
   forEachAuthenticatedSocket,
   SOCKET_CAPS,
@@ -1013,6 +1017,14 @@ function evictChannelViewersLocally(
   channelId: string,
   scope?: EvictionScope,
 ): void {
+  // The live stream is a view of this channel like any other, so losing the
+  // channel loses the stream. Recorded here rather than at each caller for
+  // two reasons: this function is already reached from every seam that takes
+  // access away (ban, kick, a channel going private, a role losing VIEW),
+  // and the `chat.evict` bus handler calls it on every OTHER instance too, so
+  // revocation crosses machines with no second topic to keep in step.
+  // See `voice/hls-revocation.ts`.
+  revokeHlsAccess(channelId, scope);
   const matches = scopePredicate(scope);
   for (const conn of connections.values()) {
     if (!matches(conn.user.id)) {
@@ -1048,6 +1060,9 @@ function evictUserFromChannelsLocally(
   userId: string,
   channelIds: Set<string>,
 ): void {
+  // Same reasoning as `evictChannelViewersLocally`: this person just lost
+  // these channels, so their playlist tokens for them stop working now.
+  revokeHlsAccessForUser(userId, channelIds);
   for (const conn of connections.values()) {
     if (conn.user.id !== userId) {
       continue;
