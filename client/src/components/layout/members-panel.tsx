@@ -1,9 +1,23 @@
 import {
   ArrowRightLeft,
+  AtSign,
+  Ban,
   ChevronDown,
   ChevronRight,
+  ExternalLink,
+  Flag,
+  Gavel,
+  Mic,
+  MicOff,
   MoreHorizontal,
+  PhoneOff,
   Search,
+  ShieldCheck,
+  TimerOff,
+  TimerReset,
+  UserMinus,
+  UserPen,
+  type LucideIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -109,6 +123,8 @@ interface RowAction {
   label: string;
   onSelect: () => void;
   danger?: boolean;
+  /** Left of the label in the context menu. */
+  icon?: LucideIcon;
 }
 
 function menuFromActions(
@@ -125,6 +141,7 @@ function menuFromActions(
     items.push({
       id: action.id,
       label: action.label,
+      icon: action.icon,
       onSelect: action.onSelect,
       danger: action.danger,
       disabled: busy,
@@ -900,6 +917,7 @@ export function MembersPanel({
       actions.push({
         id: "public-profile",
         label: t("profile.viewPublic"),
+        icon: ExternalLink,
         onSelect: () => {
           window.open(publicHref, "_blank", "noopener,noreferrer");
         },
@@ -910,6 +928,7 @@ export function MembersPanel({
       actions.push({
         id: "mention",
         label: t("member.mention"),
+        icon: AtSign,
         onSelect: () => onMention(username),
       });
     }
@@ -920,6 +939,7 @@ export function MembersPanel({
       actions.push({
         id: "nickname",
         label: t("member.nickname"),
+        icon: UserPen,
         onSelect: () => void changeNickname(member),
       });
     }
@@ -944,6 +964,7 @@ export function MembersPanel({
           actions.push({
             id: `cargo-${roleId}`,
             label: on ? `✓ ${label}` : label,
+            icon: ShieldCheck,
             onSelect: () => void toggleCargo(member, roleId, !on),
           });
         }
@@ -959,11 +980,13 @@ export function MembersPanel({
           ? {
               id: "unblock",
               label: t("member.unblock"),
+              icon: Ban,
               onSelect: () => onUnblockUser(member.id),
             }
           : {
               id: "block",
               label: t("member.block"),
+              icon: Ban,
               onSelect: () => onBlockUser(member.id),
               danger: true,
             },
@@ -977,6 +1000,7 @@ export function MembersPanel({
       actions.push({
         id: "report",
         label: t("member.report"),
+        icon: Flag,
         onSelect: () => onReportUser(member),
         danger: true,
       });
@@ -988,6 +1012,7 @@ export function MembersPanel({
           active
             ? {
                 id: "untimeout",
+                icon: TimerReset,
                 label: t("timeout.end", {
                   remaining: timeRemaining(active.expiresAt),
                 }),
@@ -996,6 +1021,7 @@ export function MembersPanel({
             : {
                 id: "timeout",
                 label: t("timeout.action"),
+                icon: TimerOff,
                 onSelect: () =>
                   setPendingTimeout({
                     member,
@@ -1011,6 +1037,7 @@ export function MembersPanel({
           actions.push({
             id: "voice-move",
             label: t("member.moveVoice"),
+            icon: ArrowRightLeft,
             onSelect: () =>
               setPendingMove({ member, fromChannelId: voice.channelId }),
           });
@@ -1018,6 +1045,7 @@ export function MembersPanel({
         if (canMuteIn(voice.channelId)) {
           actions.push({
             id: "voice-mute",
+            icon: voice.serverMuted ? Mic : MicOff,
             label: voice.serverMuted
               ? t("member.serverUnmute")
               : t("member.serverMute"),
@@ -1028,6 +1056,7 @@ export function MembersPanel({
           actions.push({
             id: "voice-disconnect",
             label: t("member.disconnectVoice", { channel: voice.channelName }),
+            icon: PhoneOff,
             onSelect: () => void disconnectVoice(member),
             danger: true,
           });
@@ -1037,6 +1066,7 @@ export function MembersPanel({
         actions.push({
           id: "kick",
           label: t("member.remove"),
+          icon: UserMinus,
           onSelect: () => setPending({ member, ban: false }),
           danger: true,
         });
@@ -1045,6 +1075,7 @@ export function MembersPanel({
         actions.push({
           id: "ban",
           label: t("member.ban"),
+          icon: Gavel,
           onSelect: () => setPending({ member, ban: true }),
           danger: true,
         });

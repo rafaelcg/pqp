@@ -5,21 +5,29 @@ import {
   ChevronRight,
   Copy,
   Eraser,
+  ExternalLink,
   FolderInput,
   FolderMinus,
   FolderPlus,
   Lock,
+  Mic,
+  MicOff,
   PanelLeftOpen,
   Pencil,
   Phone,
+  PhoneOff,
   Pin,
   PinOff,
   Plus,
   Search,
   Settings,
   Trash2,
+  UserMinus,
   UserPlus,
+  UserRound,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import {
@@ -681,6 +689,7 @@ export function ChannelList({
         profile.push({
           id: "profile",
           label: t("voice.occupant.profile"),
+          icon: UserRound,
           onSelect: () => {
             const anchor = document.querySelector(
               `[data-voice-occupant="${person.userId}"]`,
@@ -707,6 +716,7 @@ export function ChannelList({
           profile.push({
             id: "public-profile",
             label: t("profile.publicUrl", { handle: member.handle }),
+            icon: ExternalLink,
             onSelect: () => {
               window.open(publicHref, "_blank", "noopener,noreferrer");
             },
@@ -716,30 +726,35 @@ export function ChannelList({
         personal.push({
           id: "mute-for-me",
           label: t("voice.occupant.muteForMe"),
+          icon: VolumeX,
           onSelect: () => onSetPeerVolume?.(person.userId, 0),
         });
       } else if (action === "unmuteForMe") {
         personal.push({
           id: "unmute-for-me",
           label: t("voice.occupant.unmuteForMe"),
+          icon: Volume2,
           onSelect: () => onSetPeerVolume?.(person.userId, 1),
         });
       } else if (action === "serverMute") {
         personal.push({
           id: "server-mute",
           label: t("voice.occupant.serverMute"),
+          icon: MicOff,
           onSelect: () => onServerMuteOccupant?.(person.userId, true),
         });
       } else if (action === "serverUnmute") {
         personal.push({
           id: "server-unmute",
           label: t("voice.occupant.serverUnmute"),
+          icon: Mic,
           onSelect: () => onServerMuteOccupant?.(person.userId, false),
         });
       } else if (action === "disconnect") {
         mod.push({
           id: "disconnect",
           label: t("voice.occupant.disconnect"),
+          icon: PhoneOff,
           danger: true,
           onSelect: () => onDisconnectVoiceOccupant?.(person.userId),
         });
@@ -747,6 +762,7 @@ export function ChannelList({
         mod.push({
           id: "kick",
           label: t("voice.occupant.kick"),
+          icon: UserMinus,
           danger: true,
           onSelect: () => onKickOccupant?.(person.userId, person.displayName),
         });
@@ -754,6 +770,7 @@ export function ChannelList({
         copy.push({
           id: "copy-name",
           label: t("voice.occupant.copyName"),
+          icon: Copy,
           onSelect: () => void navigator.clipboard.writeText(person.displayName),
         });
       }

@@ -9,15 +9,28 @@ import {
   AlertCircle,
   ArrowDown,
   Check,
+  Copy,
   CornerUpLeft,
+  Flag,
+  Forward,
+  Hash,
   ImagePlay,
+  Link,
+  ListChecks,
   Loader2,
+  Mail,
+  MailOpen,
+  MessageSquarePlus,
+  MessageSquareText,
   MoreHorizontal,
   Pencil,
   Pin,
+  PinOff,
   Play,
   Reply,
   SmilePlus,
+  Trash2,
+  type LucideIcon,
 } from "lucide-react";
 import {
   memo,
@@ -1815,15 +1828,30 @@ const MessageRow = memo(function MessageRow({
   // handlers were not passed (the thread panel itself, conversations).
   const threadAction =
     isReal && message.thread && onOpenThread
-      ? { id: "open-thread", label: t("thread.open"), onSelect: onOpenThread }
+      ? {
+          id: "open-thread",
+          label: t("thread.open"),
+          icon: MessageSquareText,
+          onSelect: onOpenThread,
+        }
       : isReal && !message.thread && onStartThread
-        ? { id: "start-thread", label: t("thread.start"), onSelect: onStartThread }
+        ? {
+            id: "start-thread",
+            label: t("thread.start"),
+            icon: MessageSquarePlus,
+            onSelect: onStartThread,
+          }
         : null;
 
   const items: ContextMenuItemDef[] = [
     ...(canReply
       ? [
-          { id: "reply", label: t("chat.reply"), onSelect: selectAndClose(onReply, false) },
+          {
+            id: "reply",
+            label: t("chat.reply"),
+            icon: Reply,
+            onSelect: selectAndClose(onReply, false),
+          },
         ]
       : []),
     ...(threadAction
@@ -1831,6 +1859,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: threadAction.id,
             label: threadAction.label,
+            icon: threadAction.icon,
             // Focus moves into the panel the action opens, so no refocus.
             onSelect: selectAndClose(threadAction.onSelect, false),
           },
@@ -1842,6 +1871,7 @@ const MessageRow = memo(function MessageRow({
     {
       id: "copy-text",
       label: t("chat.copyText"),
+      icon: Copy,
       onSelect: selectAndClose(
         () => void navigator.clipboard.writeText(message.body),
         true,
@@ -1850,6 +1880,7 @@ const MessageRow = memo(function MessageRow({
     {
       id: "copy-id",
       label: t("chat.copyId"),
+      icon: Hash,
       onSelect: selectAndClose(
         () => void navigator.clipboard.writeText(message.id),
         true,
@@ -1860,6 +1891,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "copy-link",
             label: t("chat.copyLink"),
+            icon: Link,
             onSelect: selectAndClose(() => {
               const link = `${window.location.origin}${messageRoutePath(
                 serverId,
@@ -1876,6 +1908,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "forward",
             label: t("chat.forward"),
+            icon: Forward,
             onSelect: selectAndClose(onForward, false),
           },
         ]
@@ -1885,6 +1918,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: unreadHeld ? "mark-read" : "mark-unread",
             label: unreadHeld ? t("chat.markRead") : t("chat.markUnread"),
+            icon: unreadHeld ? MailOpen : Mail,
             onSelect: selectAndClose(
               unreadHeld ? onMarkRead : onMarkUnread,
               true,
@@ -1898,6 +1932,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "edit",
             label: t("chat.edit"),
+            icon: Pencil,
             onSelect: selectAndClose(onStartEdit, false),
           },
         ]
@@ -1907,6 +1942,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "pin",
             label: isMessagePinned ? t("chat.unpin") : t("chat.pin"),
+            icon: isMessagePinned ? PinOff : Pin,
             onSelect: selectAndClose(
               isMessagePinned ? onUnpin : onPin,
               true,
@@ -1919,6 +1955,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "delete",
             label: t("chat.delete"),
+            icon: Trash2,
             danger: true,
             onSelect: selectAndClose(confirmDelete, true),
           },
@@ -1931,6 +1968,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "select",
             label: t("chat.bulk.select"),
+            icon: ListChecks,
             onSelect: selectAndClose(onStartSelect, false),
           },
         ]
@@ -1942,6 +1980,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "report",
             label: t("chat.report"),
+            icon: Flag,
             danger: true,
             onSelect: selectAndClose(onReport, false),
           },
@@ -2382,6 +2421,7 @@ const MessageRow = memo(function MessageRow({
                   >
                     {canPin && (
                       <MoreMenuItem
+                        icon={isMessagePinned ? PinOff : Pin}
                         onSelect={() => {
                           (isMessagePinned ? onUnpin : onPin)?.();
                           setMoreOpen(false);
@@ -2391,6 +2431,7 @@ const MessageRow = memo(function MessageRow({
                       </MoreMenuItem>
                     )}
                     <MoreMenuItem
+                        icon={Link}
                       onSelect={() => {
                         const link = `${window.location.origin}${messageRoutePath(
                           serverId,
@@ -2405,6 +2446,7 @@ const MessageRow = memo(function MessageRow({
                     </MoreMenuItem>
                     {onForward && (
                       <MoreMenuItem
+                        icon={Forward}
                         onSelect={() => {
                           onForward();
                           setMoreOpen(false);
@@ -2415,6 +2457,7 @@ const MessageRow = memo(function MessageRow({
                     )}
                     {(unreadHeld ? onMarkRead : onMarkUnread) && (
                       <MoreMenuItem
+                        icon={unreadHeld ? MailOpen : Mail}
                         onSelect={() => {
                           (unreadHeld ? onMarkRead : onMarkUnread)?.();
                           setMoreOpen(false);
@@ -2425,6 +2468,7 @@ const MessageRow = memo(function MessageRow({
                     )}
                     {canReport && (
                       <MoreMenuItem
+                        icon={Flag}
                         danger
                         onSelect={() => {
                           onReport?.();
@@ -2436,6 +2480,7 @@ const MessageRow = memo(function MessageRow({
                     )}
                     {onStartThread && !message.thread && (
                       <MoreMenuItem
+                        icon={MessageSquarePlus}
                         onSelect={() => {
                           onStartThread();
                           setMoreOpen(false);
@@ -2446,6 +2491,7 @@ const MessageRow = memo(function MessageRow({
                     )}
                     {canDelete && (
                       <MoreMenuItem
+                        icon={Trash2}
                         danger
                         onSelect={() => {
                           setMoreOpen(false);
@@ -2461,6 +2507,7 @@ const MessageRow = memo(function MessageRow({
                         action a moderator has to find under pressure. */}
                     {isReal && onStartSelect && (
                       <MoreMenuItem
+                        icon={ListChecks}
                         onSelect={() => {
                           setMoreOpen(false);
                           onStartSelect();
@@ -2603,22 +2650,28 @@ function MoreMenuItem({
   children,
   onSelect,
   danger = false,
+  icon: Icon,
 }: {
   children: ReactNode;
   onSelect: () => void;
   danger?: boolean;
+  /** Left of the label, the same glyph the right-click menu draws for it. */
+  icon?: LucideIcon;
 }) {
   return (
     <button
       type="button"
       role="menuitem"
       className={cn(
-        "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
+        "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
         danger ? "text-danger" : "text-paper",
       )}
       onClick={onSelect}
     >
-      {children}
+      {Icon ? (
+        <Icon className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
+      ) : null}
+      <span className="min-w-0 flex-1">{children}</span>
     </button>
   );
 }
