@@ -49,8 +49,11 @@ going live (streaming responsibility / no pirated content).
   (`hls-viewer-token.ts`, minted per recipient when the stream frame is
   sent). The header-less branch lives in `handleApi` ahead of the Bearer
   resolution and runs the same channel-access check.
-- Four secondary screen-share call sites are not gated by the host
-  acknowledgment sheet, only the primary one.
+- ~~Four secondary screen-share call sites are not gated by the host
+  acknowledgment sheet, only the primary one.~~ Fixed: every start in
+  `App.tsx` goes through `gateScreenShareStart` (`client/src/lib/screen-share-gate.ts`),
+  and `screen-share-gate.test.ts` scans `App.tsx` so a fifth direct call
+  fails the suite.
 - The call stage unmounts on channel change, which kills an active
   Picture-in-Picture session rather than handing it off.
 - A viewer only learns a stream is live after joining the room; there's no
@@ -62,6 +65,44 @@ going live (streaming responsibility / no pirated content).
 - The egress encoding is `LIVE_HLS_PRESET` (`720p30` default, `1080p30`),
   read per session start (`liveHlsPreset()` in `hls-egress.ts`). It is still
   one value per deployment, not per room or server size.
+
+## Egress health and stalls (added 2026-09-08)
+
+A local-stack QA pass found that killing the egress mid-share froze every
+viewer on the last frame, with no copy and no recovery, and left a
+`playlistReady=false` room entry forever. Both halves are handled now.
+
+Server (`hls-egress.ts`): a monitor polls every 10 s. `ListEgress` by id
+answers the clean cases; **it is not enough on its own**, because a killed
+egress node never writes a final status and LiveKit keeps reporting that id
+`EGRESS_ACTIVE` indefinitely (v1.13.6 / egress v1.14.1, verified). So the
+monitor also reads the live playlist and treats 20 s without a moving
+`EXT-X-MEDIA-SEQUENCE` (or segment count) as dead. A death, a `StartEgress`
+that throws, and a session whose playlist never went live all go through one
+restart path: backoff 2 s, 4 s, 8 s (capped at 15 s), at most three restarts
+per channel in five minutes, then the channel is marked failed, viewers get
+`stream: null` and no egress starts for it until the share stops. Stopping
+the share clears the budget. `reconcileLiveHls` is serialised per channel,
+since the monitor and the room can now both drive it.
+
+Client (`lib/hls-stall.ts` + `hls-watch-player.tsx`): a watchdog on hls.js
+`ERROR` (fatal and non-fatal), `waiting`/`stalled` longer than 8 s, and
+`EXT-X-MEDIA-SEQUENCE` unchanged for 15 s. A reconnect refetches the source
+from `GET /api/channels/:id/live`, because a restarted egress has a new
+playlist URL; the overlay says "A transmissão travou, reconectando". After
+three reconnects it shows "A transmissão caiu" with a retry button. A fresh
+`voice-stream` frame heals the player without a click.
+
+## Retention leftovers (added 2026-09-08)
+
+- The egress writes its manifest at `live/<channel>/<egressId>.json`, beside
+  the session prefix rather than under it, so a prefix listing never saw it
+  and one JSON per session leaked forever. `hls_sessions.egress_id` records
+  the id and the sweep deletes the manifest by name.
+- A session live when the API died kept `ended_at NULL` forever, so
+  retention never ran on it. `reconcileStaleHlsSessions()` runs at boot (API
+  process only): it stops any egress LiveKit still runs for those channels
+  and ends every open row.
 
 ## Findings
 

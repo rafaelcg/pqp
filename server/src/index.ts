@@ -53,6 +53,12 @@ import {
 } from "./services/community-home.js";
 import { sweepChannelAudiences } from "./services/servers.js";
 import { startColdJobs, type ColdJobs } from "./jobs.js";
+import { reconcileStaleHlsSessions } from "./voice/hls-cleanup.js";
+import {
+  isLiveHlsEnabled,
+  startLiveHlsMonitor,
+  stopLiveHlsMonitor,
+} from "./voice/hls-egress.js";
 import { processRole, runsColdJobs } from "./lib/process-role.js";
 import { checkReadiness, READINESS_PATH } from "./services/readiness.js";
 import {
@@ -569,6 +575,16 @@ async function main() {
   // initDb just created.
   stopVoiceHeartbeat = startVoiceRegistry();
 
+  // Live HLS: sessions a previous process left open are ended (and their
+  // egress stopped) so retention can run, then the monitor watches every
+  // egress this process starts. API process only: the rooms live here.
+  if (isLiveHlsEnabled()) {
+    await reconcileStaleHlsSessions().catch((error: unknown) => {
+      console.error("[hls] stale session reconcile failed:", error);
+    });
+    startLiveHlsMonitor();
+  }
+
   // The cold paths (attachment sweeps, prunes, retention, the webhook outbox:
   // jobs.ts) run here unless a separate worker owns them. After initDb so
   // nothing races schema creation. `WORKER_MODE=api` is the only value that
@@ -644,6 +660,7 @@ async function shutdown(signal: string) {
   // rows are left in place on purpose: they are what a client resuming onto
   // the other machine is matched against. A clean shutdown is therefore
   // never read as a crash for the next 45 s.
+  stopLiveHlsMonitor();
   await stopVoiceHeartbeat?.();
   // Let the check turn red before the first client is sent away. With the
   // check at 10 s the proxy is at worst one interval behind, and a reconnect

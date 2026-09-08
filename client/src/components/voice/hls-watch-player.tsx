@@ -20,8 +20,14 @@ import {
   isBehindLive,
   isPipAvailable,
 } from "@/lib/hls-live-edge";
-import { getAuthToken } from "@/lib/api";
+import { fetchChannelLive, getAuthToken } from "@/lib/api";
+import { resolveHlsUrl } from "@/lib/hls-playback";
+import { HlsStallWatch, channelIdFromHlsUrl } from "@/lib/hls-stall";
 import { cn } from "@/lib/utils";
+
+const STALL_TICK_MS = 1_000;
+
+type StreamPhase = "playing" | "reconnecting" | "dead";
 
 /** hls.js instance shape this file actually touches. */
 interface HlsHandle {
@@ -76,12 +82,52 @@ export function HlsWatchPlayer({
   const [pipAvailable, setPipAvailable] = useState(false);
   const [isPip, setIsPip] = useState(false);
   const [behindLive, setBehindLive] = useState(false);
+  // Stall handling (`lib/hls-stall.ts`). `activeSrc` is what is actually
+  // attached: the prop until a reconnect fetches a fresher URL from
+  // `GET /api/channels/:id/live` (a restarted egress has a new playlist),
+  // `attempt` re-runs the attach effect for a same-URL reconnect. `phase`
+  // is the copy on the overlay.
+  const [activeSrc, setActiveSrc] = useState(src);
+  const [attempt, setAttempt] = useState(0);
+  const [phase, setPhase] = useState<StreamPhase>("playing");
+  const watchRef = useRef<HlsStallWatch>(new HlsStallWatch());
+
+  useEffect(() => {
+    setActiveSrc(src);
+    setPhase("playing");
+    watchRef.current.reset(Date.now());
+  }, [src]);
 
   useEffect(() => {
     setHasFrame(false);
     setNeedsUnmute(false);
     setHlsPlaybackStats(null);
-  }, [src]);
+  }, [activeSrc, attempt]);
+
+  const reconnect = useCallback(async () => {
+    setPhase("reconnecting");
+    const channelId = channelIdFromHlsUrl(activeSrc);
+    let next: string | null = null;
+    if (channelId) {
+      try {
+        const live = await fetchChannelLive(channelId);
+        next = live.stream ? resolveHlsUrl(live.stream.hlsUrl) : null;
+      } catch {
+        // The API is the thing that is down, or we lost access: retry the
+        // URL we have, the watchdog will call it dead if that fails too.
+      }
+    }
+    if (next && next !== activeSrc) {
+      setActiveSrc(next);
+    } else {
+      setAttempt((n) => n + 1);
+    }
+  }, [activeSrc]);
+
+  const retryFromDead = useCallback(() => {
+    watchRef.current.reset(Date.now());
+    void reconnect();
+  }, [reconnect]);
 
   const getVideo = useCallback(
     () => videoRef?.current ?? innerRef.current,
@@ -269,14 +315,44 @@ export function HlsWatchPlayer({
         height: video.videoHeight,
       });
     };
+    const watch = watchRef.current;
+    watch.onSourceChanged(Date.now());
     const onPlaying = () => {
       if (!cancelled) {
         setHasFrame(true);
+        setPhase("playing");
+        watch.onPlaying();
         reportSize();
       }
     };
+    const onWaiting = () => {
+      watch.onWaiting(Date.now());
+    };
+    const onMediaError = () => {
+      // Native player (no hls.js): a decode or network failure on the
+      // element itself. Same policy as a fatal hls.js error.
+      watch.onError({ fatal: true });
+    };
     video.addEventListener("playing", onPlaying);
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("stalled", onWaiting);
+    video.addEventListener("error", onMediaError);
     video.addEventListener("loadedmetadata", reportSize);
+    const stallTimer = window.setInterval(() => {
+      if (cancelled) {
+        return;
+      }
+      const decision = watch.tick(Date.now());
+      if (decision === "none") {
+        return;
+      }
+      if (decision === "dead") {
+        setPhase("dead");
+        return;
+      }
+      console.warn(`[hls] stream stalled (${watch.lastReason}), reconnecting`);
+      void reconnect();
+    }, STALL_TICK_MS);
 
     // A refused play() is a paused element behind the "loading" overlay
     // forever, not an error event. Retry muted so the picture at least
@@ -312,7 +388,7 @@ export function HlsWatchPlayer({
         mseSupported: Hls.isSupported(),
       });
       if (engine === "native") {
-        video.src = src;
+        video.src = activeSrc;
         void play();
         return;
       }
@@ -348,7 +424,18 @@ export function HlsWatchPlayer({
       });
       hls = player as unknown as HlsHandle;
       hlsRef.current = hls;
-      player.loadSource(src);
+      player.on(Hls.Events.ERROR, (_event, data) => {
+        // Fatal network/media errors: hls.js has given up on this source;
+        // non-fatal ones it retries on its own and the watchdog only notes.
+        watch.onError({ fatal: Boolean(data.fatal) });
+      });
+      player.on(Hls.Events.LEVEL_UPDATED, (_event, data) => {
+        // The live playlist's EXT-X-MEDIA-SEQUENCE. A dead egress leaves
+        // the playlist answering but never advancing; this is how the
+        // watchdog tells that apart from a slow network.
+        watch.onMediaSequence(data.details.startSN, Date.now());
+      });
+      player.loadSource(activeSrc);
       player.attachMedia(video);
       player.on(Hls.Events.MANIFEST_PARSED, () => {
         void play();
@@ -359,7 +446,11 @@ export function HlsWatchPlayer({
     return () => {
       cancelled = true;
       window.clearInterval(authTokenTimer);
+      window.clearInterval(stallTimer);
       video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("stalled", onWaiting);
+      video.removeEventListener("error", onMediaError);
       video.removeEventListener("loadedmetadata", reportSize);
       hls?.destroy();
       hlsRef.current = null;
@@ -367,7 +458,7 @@ export function HlsWatchPlayer({
       video.load();
       setHlsPlaybackStats(null);
     };
-  }, [src, videoRef]);
+  }, [activeSrc, attempt, videoRef, reconnect]);
 
   return (
     <div className={cn("relative h-full w-full bg-black", className)}>
@@ -415,9 +506,30 @@ export function HlsWatchPlayer({
           <PictureInPicture2 className="h-3.5 w-3.5" />
         </button>
       ) : null}
-      {!hasFrame ? (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40 text-sm text-paper-muted">
-          {t("voice.hls.buffering")}
+      {phase === "dead" ? (
+        <div
+          data-testid="hls-dead"
+          className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 text-sm text-paper"
+        >
+          <span>{t("voice.hls.dead")}</span>
+          <button
+            type="button"
+            className="rounded-full bg-paper/15 px-3 py-1.5 font-medium text-paper hover:bg-paper/25"
+            onClick={retryFromDead}
+          >
+            {t("voice.hls.retry")}
+          </button>
+        </div>
+      ) : phase === "reconnecting" || !hasFrame ? (
+        <div
+          data-testid={
+            phase === "reconnecting" ? "hls-reconnecting" : "hls-buffering"
+          }
+          className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40 text-sm text-paper-muted"
+        >
+          {phase === "reconnecting"
+            ? t("voice.hls.stalled")
+            : t("voice.hls.buffering")}
         </div>
       ) : null}
       {hasFrame && needsUnmute ? (

@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EncodingOptionsPreset } from "livekit-server-sdk";
+import { EgressStatus, EncodingOptionsPreset } from "livekit-server-sdk";
 import {
   type LiveHlsEgressApi,
+  HLS_MAX_RESTARTS,
+  checkLiveHlsHealth,
   internalPlaylistUrl,
+  isLiveHlsFailed,
+  setLiveHlsChangeListener,
+  stopActiveEgressesForRoom,
   isLiveHlsEnabled,
   isLiveHlsEnabledForServer,
   liveHlsConfig,
@@ -393,6 +398,272 @@ describe("live HLS egress", () => {
       logEvent.mockClear();
       expect(liveHlsPreset()).toBe(EncodingOptionsPreset.H264_720P_30);
       expect(logEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("egress health monitor", () => {
+    /**
+     * A fake LiveKit whose `ListEgress` answer the test flips: every egress
+     * this fake started is `active` until the test marks it dead, which is
+     * exactly what `docker stop lk-egress` looked like from the API in the
+     * 2026-09-07 QA (status FAILED, or the id gone after an SFU restart).
+     */
+    function fakeLiveKit() {
+      let n = 0;
+      const statuses = new Map<string, EgressStatus>();
+      const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+        async () => {
+          const egressId = `EG_${(n += 1)}`;
+          statuses.set(egressId, EgressStatus.EGRESS_ACTIVE);
+          return { egressId };
+        },
+      );
+      const stop = vi.fn(async (egressId: string) => {
+        statuses.set(egressId, EgressStatus.EGRESS_COMPLETE);
+      });
+      const list = vi.fn(async (opts: { egressId?: string; roomName?: string }) =>
+        [...statuses.entries()]
+          .filter(([id]) => !opts.egressId || id === opts.egressId)
+          .map(([egressId, status]) => ({ egressId, status })),
+      );
+      return {
+        api: {
+          startTrackCompositeEgress: start,
+          stopEgress: stop,
+          listEgress: list,
+        } satisfies LiveHlsEgressApi,
+        start,
+        stop,
+        list,
+        kill(egressId: string, how: "failed" | "forgotten" = "failed") {
+          if (how === "forgotten") {
+            statuses.delete(egressId);
+          } else {
+            statuses.set(egressId, EgressStatus.EGRESS_FAILED);
+          }
+        },
+      };
+    }
+
+    /** What `ws/voice.ts` does when told: reconcile again, presenter still sharing. */
+    function listenerThatReconciles(presenter: string | null = "peer-1") {
+      const calls: string[] = [];
+      setLiveHlsChangeListener((channelId, reason) => {
+        calls.push(reason);
+        void reconcileLiveHls(channelId, presenter, SERVER);
+      });
+      return calls;
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-08T20:00:00Z"));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("restarts an egress that ended abnormally, once, with a new playlist URL", async () => {
+      enableHls();
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      const heard = listenerThatReconciles();
+
+      const first = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      expect(first).not.toBeNull();
+
+      // Inside the grace period nothing is held against a fresh egress.
+      lk.kill("EG_1");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await checkLiveHlsHealth()).toEqual([]);
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await checkLiveHlsHealth()).toEqual([
+        { channelId: CHANNEL, outcome: "scheduled" },
+      ]);
+      // The room is gone right away (viewers must not be handed the dead
+      // URL), the restart itself waits for the backoff.
+      expect(liveHlsStreamFor(CHANNEL)).toBeNull();
+      expect(heard).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(heard).toEqual(["egress-ended"]);
+      await vi.advanceTimersByTimeAsync(1);
+
+      const second = liveHlsStreamFor(CHANNEL);
+      expect(second).not.toBeNull();
+      expect(second?.hlsUrl).not.toBe(first?.hlsUrl);
+      expect(lk.start).toHaveBeenCalledTimes(2);
+      // The dead one is not "stopped" again: it is already gone.
+      expect(lk.stop).not.toHaveBeenCalled();
+
+      // Healthy again: a further pass does nothing.
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await checkLiveHlsHealth()).toEqual([]);
+      expect(lk.start).toHaveBeenCalledTimes(2);
+    });
+
+    it("restarts when the playlist stops moving even though LiveKit still says active", async () => {
+      // `docker stop lk-egress`: ListEgress keeps answering ACTIVE for the
+      // dead id (1.13.6 / egress 1.14.1 verified 2026-09-08), so only the
+      // playlist can tell. Twenty seconds of the same sequence is dead.
+      enableHls();
+      const lk = fakeLiveKit();
+      let sequence = 1;
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+        playlistProbe: () =>
+          `#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:${sequence}\n#EXTINF:2,\nseg_${sequence}.ts\n`,
+      });
+      const heard = listenerThatReconciles();
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+      // Moving: two passes, sequence advancing, nothing happens.
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await checkLiveHlsHealth()).toEqual([]);
+      sequence += 1;
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await checkLiveHlsHealth()).toEqual([]);
+
+      // Frozen: the same shape for 20 s.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await checkLiveHlsHealth()).toEqual([]);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await checkLiveHlsHealth()).toEqual([
+        { channelId: CHANNEL, outcome: "scheduled" },
+      ]);
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(heard).toEqual(["egress-ended"]);
+      expect(lk.start).toHaveBeenCalledTimes(2);
+    });
+
+    it("retries a StartEgress that threw, with backoff, under the same cap", async () => {
+      enableHls();
+      const lk = fakeLiveKit();
+      lk.start.mockRejectedValueOnce(new Error("twirp: request timed out"));
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      const heard = listenerThatReconciles();
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
+      expect(heard).toEqual([]);
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(heard).toEqual(["start-failed"]);
+      expect(lk.start).toHaveBeenCalledTimes(2);
+      expect(liveHlsStreamFor(CHANNEL)).not.toBeNull();
+    });
+
+    it("treats an egress LiveKit no longer lists as ended", async () => {
+      enableHls();
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      listenerThatReconciles();
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      lk.kill("EG_1", "forgotten");
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await checkLiveHlsHealth()).toEqual([
+        { channelId: CHANNEL, outcome: "scheduled" },
+      ]);
+    });
+
+    it("leaves the egress alone when LiveKit cannot be asked", async () => {
+      enableHls();
+      const lk = fakeLiveKit();
+      lk.list.mockRejectedValue(new Error("ListEgress: 503"));
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      const first = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await checkLiveHlsHealth()).toEqual([]);
+      expect(liveHlsStreamFor(CHANNEL)).toEqual(first);
+    });
+
+    it("gives up after the cap, tells the listener, and refuses to start until the share stops", async () => {
+      enableHls();
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      const heard = listenerThatReconciles();
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+      for (let round = 1; round <= HLS_MAX_RESTARTS; round += 1) {
+        lk.kill(`EG_${round}`);
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(await checkLiveHlsHealth()).toEqual([
+          { channelId: CHANNEL, outcome: "scheduled" },
+        ]);
+        // Backoff grows (2 s, 4 s, 8 s) and stays under the 15 s cap.
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(lk.start).toHaveBeenCalledTimes(round + 1);
+      }
+      expect(heard).toEqual(["egress-ended", "egress-ended", "egress-ended"]);
+
+      // The fourth death inside five minutes is the end of the road.
+      lk.kill(`EG_${HLS_MAX_RESTARTS + 1}`);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(await checkLiveHlsHealth()).toEqual([
+        { channelId: CHANNEL, outcome: "failed" },
+      ]);
+      expect(heard.at(-1)).toBe("failed");
+      expect(isLiveHlsFailed(CHANNEL)).toBe(true);
+      // The listener's reconcile ran and was refused: no fifth egress, and
+      // viewers get null.
+      await vi.advanceTimersByTimeAsync(1);
+      expect(lk.start).toHaveBeenCalledTimes(HLS_MAX_RESTARTS + 1);
+      expect(liveHlsStreamFor(CHANNEL)).toBeNull();
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
+      expect(lk.start).toHaveBeenCalledTimes(HLS_MAX_RESTARTS + 1);
+
+      // Stopping the share resets the budget; the next share starts clean.
+      await reconcileLiveHls(CHANNEL, null, SERVER);
+      expect(isLiveHlsFailed(CHANNEL)).toBe(false);
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
+      expect(lk.start).toHaveBeenCalledTimes(HLS_MAX_RESTARTS + 2);
+    });
+
+    it("tears down an egress whose playlist never went live instead of handing out its URL", async () => {
+      enableHls();
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({
+        egress: lk.api,
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+        playlistReady: false,
+      });
+      const heard = listenerThatReconciles();
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
+      expect(liveHlsStreamFor(CHANNEL)).toBeNull();
+      expect(lk.stop).toHaveBeenCalledWith("EG_1");
+      // and a retry is on the clock, under the same cap
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(heard).toEqual(["playlist-not-ready"]);
+      expect(lk.start).toHaveBeenCalledTimes(2);
+    });
+
+    it("stopActiveEgressesForRoom stops only the live ones", async () => {
+      enableHls();
+      const lk = fakeLiveKit();
+      setLiveHlsTestHooks({ egress: lk.api });
+      await lk.api.startTrackCompositeEgress("room", {} as never, {
+        videoTrackId: "x",
+      });
+      await lk.api.startTrackCompositeEgress("room", {} as never, {
+        videoTrackId: "y",
+      });
+      lk.kill("EG_1");
+      expect(await stopActiveEgressesForRoom("room")).toEqual(["EG_2"]);
+      expect(lk.stop).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -107,6 +107,7 @@ const egress = vi.hoisted(() => ({
 }));
 
 vi.mock("../voice/hls-egress.js", () => ({
+  setLiveHlsChangeListener: () => {},
   isLiveHlsEnabled: () => true,
   isLiveHlsEnabledForServer: () => true,
   liveHlsStreamFor: (channelId: string) =>

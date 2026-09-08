@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * The Live HLS retention sweep (`sweepHlsSessions`). Real Postgres so the
@@ -55,7 +55,12 @@ process.env.LIVE_HLS_S3_ENDPOINT = "https://s3.example.test";
 
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
-const { sweepHlsSessions } = await import("./hls-cleanup.js");
+const { reconcileStaleHlsSessions, sweepHlsSessions } = await import(
+  "./hls-cleanup.js"
+);
+const { resetLiveHlsForTests, setLiveHlsTestHooks } = await import(
+  "./hls-egress.js"
+);
 
 describeDb("sweepHlsSessions", () => {
   let channelA: string;
@@ -104,6 +109,7 @@ describeDb("sweepHlsSessions", () => {
     prefix: string;
     endedMinutesAgo: number | null;
     keepReplay?: boolean;
+    egressId?: string;
   }): Promise<string> {
     const endedAt =
       options.endedMinutesAgo === null
@@ -111,10 +117,16 @@ describeDb("sweepHlsSessions", () => {
         : new Date(Date.now() - options.endedMinutesAgo * 60_000);
     const row = await getPool().query<{ id: string }>(
       `INSERT INTO hls_sessions
-         (channel_id, object_prefix, started_at, ended_at, keep_replay)
-       VALUES ($1, $2, NOW(), $3, $4)
+         (channel_id, object_prefix, started_at, ended_at, keep_replay, egress_id)
+       VALUES ($1, $2, NOW(), $3, $4, $5)
        RETURNING id`,
-      [options.channelId, options.prefix, endedAt, options.keepReplay ?? false],
+      [
+        options.channelId,
+        options.prefix,
+        endedAt,
+        options.keepReplay ?? false,
+        options.egressId ?? null,
+      ],
     );
     return row.rows[0]!.id;
   }
@@ -261,5 +273,78 @@ describeDb("sweepHlsSessions", () => {
     } finally {
       process.env.LIVE_HLS_S3_BUCKET = bucketEnv;
     }
+  });
+
+  it("deletes the egress manifest that sits beside the prefix, not under it", async () => {
+    process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+    await makeSession({
+      channelId: channelA,
+      prefix: `live/${channelA}/7000`,
+      endedMinutesAgo: 20,
+      egressId: "EG_abc",
+    });
+    seedObjects(`live/${channelA}/7000`, 1);
+    // The manifest the egress writes on finish. A prefix listing of
+    // `live/<a>/7000` never returns it, which is the leftover the QA found.
+    bucket.objects.add(`live/${channelA}/EG_abc.json`);
+
+    await expect(sweepHlsSessions()).resolves.toBe(1);
+    expect(bucket.deleted).toContain(`live/${channelA}/EG_abc.json`);
+    expect(bucket.objects.has(`live/${channelA}/EG_abc.json`)).toBe(false);
+  });
+
+  describe("reconcileStaleHlsSessions (boot)", () => {
+    afterEach(() => {
+      resetLiveHlsForTests();
+    });
+
+    it("ends every open row and stops the egress LiveKit still runs for it", async () => {
+      process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+      const stop = vi.fn(async () => {});
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: async () => ({ egressId: "unused" }),
+          stopEgress: stop,
+          listEgress: async ({ roomName }) =>
+            roomName === channelA
+              ? [{ egressId: "EG_live", status: 1 }]
+              : [],
+        },
+      });
+      const openA = await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/8000`,
+        endedMinutesAgo: null,
+        egressId: "EG_live",
+      });
+      const openB = await makeSession({
+        channelId: channelB,
+        prefix: `live/${channelB}/8100`,
+        endedMinutesAgo: null,
+      });
+      const closed = await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/8200`,
+        endedMinutesAgo: 60,
+      });
+
+      await expect(reconcileStaleHlsSessions()).resolves.toBe(2);
+      expect(stop).toHaveBeenCalledWith("EG_live");
+      const rows = await getPool().query<{ id: string; ended_at: Date | null }>(
+        `SELECT id, ended_at FROM hls_sessions ORDER BY started_at`,
+      );
+      const byId = new Map(rows.rows.map((row) => [row.id, row.ended_at]));
+      expect(byId.get(openA)).not.toBeNull();
+      expect(byId.get(openB)).not.toBeNull();
+      // The already-closed row keeps its old timestamp (an hour ago), so
+      // its retention clock is not restarted by the boot.
+      expect(byId.get(closed)!.getTime()).toBeLessThan(Date.now() - 50 * 60_000);
+      // and the freshly ended rows are not swept yet: the window starts now.
+      await expect(sweepHlsSessions()).resolves.toBe(1);
+    });
+
+    it("is a no-op with nothing open", async () => {
+      await expect(reconcileStaleHlsSessions()).resolves.toBe(0);
+    });
   });
 });
