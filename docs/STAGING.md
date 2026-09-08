@@ -45,6 +45,18 @@ gh workflow run deploy-staging.yml --ref my-feature-branch
 
 A deploy to staging never restarts production: the workflow only talks to `pqp-api-staging` and to the `staging` branch alias of the Pages project.
 
+## Feature flags staging builds with
+
+`deploy-staging.yml` turns on any `VITE_` build flag that is still gated off in production, so newly merged work is visible for review without a manual step. Each one reads a repo variable and defaults to `"true"` when that variable is unset, e.g. `VITE_WATCH_PARTY_CHANNELS: ${{ vars.STAGING_WATCH_PARTY_CHANNELS || 'true' }}`. `deploy-web.yml` (production) is untouched, so production stays dark until a flag is deliberately turned on there.
+
+| Client flag | Repo variable | What it gates |
+|---|---|---|
+| `VITE_WATCH_PARTY_CHANNELS` | `STAGING_WATCH_PARTY_CHANNELS` | The `watch_party` channel type: sidebar "Watch party" section, create button, live pill and viewer count |
+| `VITE_WATCH_PARTY_SCHEDULE` | `STAGING_WATCH_PARTY_SCHEDULE` | The "Agendar sessão" scheduling sheet, the upcoming-session card, the "Lembrar" reminder toggle |
+| `VITE_LIVE_REACTIONS` | `STAGING_LIVE_REACTIONS` | The floating live-reactions overlay and reaction bar during a watch party |
+
+To turn one off on staging without editing the workflow: `gh variable set STAGING_WATCH_PARTY_CHANNELS --body false -R rafaelcg/pqp` (same pattern for the others), then redeploy. Remember a Cloudflare Pages deploy also registers a service worker, so verify a flag change with a hard refresh or an incognito tab, not a plain reload.
+
 ## Resetting the staging database
 
 Wipe the contents of `pqp_staging` in place; the next boot recreates the whole schema from `server/src/schema.sql`. `pqp-db-staging-lite` is unmanaged Postgres and the connection uses the `postgres` superuser, so this is the ordinary drop-and-recreate, not the Managed Postgres workaround an earlier version of this doc needed:
