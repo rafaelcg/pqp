@@ -30,6 +30,17 @@ final class VoiceModel {
     }
     private(set) var channelId: String?
     private(set) var channelName: String?
+    /// The room this session is in or joining, for the stage that is presented
+    /// from the app root. Nil once left. Distinct from `intendedChannel`, which
+    /// is cleared on eviction while the screen is still up.
+    private(set) var channel: Channel?
+    /// "Tuck the call away and read": the stage is dismissed but the session
+    /// stays up. Set by the swipe-down path and the collapse control, cleared
+    /// by Join or by tapping the banner. Same shape as `CallModel.isCollapsed`.
+    var isCollapsed = false
+    /// Whether there is a session worth a surface: joining, connected, or a
+    /// failure that has not been dismissed yet.
+    var isLive: Bool { status != .idle }
     private(set) var peers: [VoicePeerState] = [] {
         didSet { noteCallProgress() }
     }
@@ -388,9 +399,17 @@ final class VoiceModel {
     }
 
     func join(channel: Channel, session: SessionStore, ratings: CallRatingModel? = nil) async {
+        // One session per app, so a join from another room is a move, and the
+        // room being left must hear about it before this one is entered. The
+        // same room is a no-op: the stage was reopened, not rejoined.
+        if status != .idle {
+            if channelId == channel.id { return }
+            await leave()
+        }
         self.session = session
         self.ratings = ratings
         configureScreenShare()
+        self.channel = channel
         channelId = channel.id
         channelName = channel.name
         intendedChannel = channel
@@ -506,6 +525,8 @@ final class VoiceModel {
         transport = nil
         resumeClaim = nil
         status = .idle
+        channel = nil
+        isCollapsed = false
         channelId = nil
         channelName = nil
         peers = []
