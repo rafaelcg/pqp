@@ -646,22 +646,43 @@ that stopped sending would have to renegotiate to start again.
 
 **Loudest-N audio was investigated and deliberately not built.** The obvious
 next step, capping each subscriber to the few loudest speakers, does not work
-on this stack and would not pay if it did:
+on this stack and would not pay if it did. Read against the pinned versions,
+livekit-server **v1.13.6** and client-sdk-js **v2.21.0**; `master` has drifted
+from all of this.
 
-- **The SDK cannot see it coming.** livekit-client's `RoomEvent.ActiveSpeakersChanged`
-  is documented in the typedoc as *"Speaker updates are sent only to the
-  publishing participant and their subscribers"*, which matches the server's
-  own `force=false` filter. A client that has unsubscribed somebody's audio
-  never learns that they started speaking, so it can never subscribe them
-  back. (The prose docs page omits that caveat and reads as though it works.
-  It does not.)
-- **The server's own knob is a resource cap, not a swap.**
-  `limit.subscription_limit_audio` exists in LiveKit 1.13.6 and is
-  first-come-first-served: when the cap is reached, further subscriptions are
-  refused, and nothing swaps a quiet track out for a new speaker. It is
-  undocumented (zero hits across the whole docs corpus, and the PR that added
-  it has an empty body); LiveKit Cloud's own equivalent quota is **100** audio
-  tracks, which is a guard rail rather than a loudest-N.
+- **It is a deadlock, not merely a lossy trade.** livekit-client's
+  `RoomEvent.ActiveSpeakersChanged` is documented in the typedoc
+  (`src/room/events.ts`) as *"Speaker updates are sent only to the publishing
+  participant and their subscribers"*, and the server's
+  `ParticipantImpl.SendSpeakerUpdate` (`pkg/rtc/participant_signal.go`) filters
+  the list to `p.IsSubscribedTo(...)` on the `force=false` path the periodic
+  broadcast uses. A client that has dropped **every** one of somebody's tracks
+  therefore never learns that they started speaking, so it can never subscribe
+  them back. Worse, on unsubscribe the server pushes a `force=true` update with
+  `Level: 0, Active: false` (`pkg/rtc/room.go`), which is indistinguishable
+  from that person genuinely being quiet. You cannot discover who is loud
+  without already being subscribed to them. (The prose docs page omits the
+  caveat and reads as though it works. The typedoc and the source are right.)
+- **The server's own knob is a queue, not a swap.**
+  `limit.subscription_limit_audio` exists in LiveKit 1.13.6
+  (`pkg/config/config.go`) and is first-come-first-served:
+  `SubscriptionManager.hasCapacityForSubscription`
+  (`pkg/rtc/subscriptionmanager.go`) returns false past the cap, the caller
+  answers `ErrSubscriptionLimitExceeded`, and `reconcileSubscription` retries
+  every 3 s **forever** rather than evicting anybody. Upstream's own comment
+  says so: *"wait for the other subscription to be unsubscribed"*. The only
+  thing that frees a slot is somebody else unsubscribing.
+- **And the refusal is silent.** The limit branch never reaches
+  `sendSubscriptionResponse`, and the protocol cannot express it anyway
+  (`SubscriptionError` has only `UNKNOWN`, `CODEC_UNSUPPORTED`,
+  `TRACK_NOTFOUND`), so `RoomEvent.TrackSubscriptionFailed` never fires and
+  the publication sits at `SubscriptionStatus.Desired` with no client-side
+  timeout. Setting this knob buys a permanently silent participant with no
+  error anywhere, which is the exact failure shape `docs/WORKING-NOTES.md`
+  warns about. It is undocumented (zero hits across LiveKit's whole docs
+  corpus, and the PR that added it has an empty body); LiveKit Cloud's
+  equivalent quota is **100** audio tracks, which is a guard rail rather than
+  a loudest-N.
 - **Silence is already almost free.** Opus DTX is on for every microphone, so
   a silent track collapses to comfort noise. Measured on the box across 20
   stable windows, the total outgoing packet rate sat between **27% and 60%**
