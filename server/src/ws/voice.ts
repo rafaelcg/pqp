@@ -4662,15 +4662,19 @@ function applyPromotionLocally(
   // follower gets the same list.
   const participants = seated.map(toParticipant);
   const released: VoicePeer[] = [];
+  let moved = 0;
+  let orphaned = 0;
   for (const peer of seated) {
     // An orphan is a refresh in flight: its socket is gone, so it can neither
     // be told nor be asked to follow, and its resume re-runs the join, which
     // reads the new pin and cold-joins onto the SFU. Releasing it here would
     // turn a refresh into a dropped call.
     if (peer.orphanedAt !== undefined) {
+      orphaned += 1;
       continue;
     }
     if (socketHasCap(peer.socket, SOCKET_CAPS.voiceTransportChanged)) {
+      moved += 1;
       send(peer.socket, {
         type: "voice-transport-changed",
         voiceChannelId,
@@ -4693,12 +4697,16 @@ function applyPromotionLocally(
     });
     removePeer(peer.id);
   }
+  // Counted, not derived: an orphan is neither moved nor released, and a
+  // counter that quietly folds it into "moved" is the kind of number that
+  // makes a mechanism look like it is working when it is not.
   logEvent("voice.transportPromotionApplied", {
     voiceChannelId,
     transport,
     reason,
-    moved: seated.length - released.length,
+    moved,
     released: released.length,
+    orphaned,
   });
 }
 

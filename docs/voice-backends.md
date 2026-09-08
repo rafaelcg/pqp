@@ -276,7 +276,7 @@ deploy.
 `loadMbps`, `addedMbps`, `budgetMbps`), `voice.transportPromotionRefused` (the
 same plus `refusal`: `unconfigured` / `unreachable` / `budget`), and
 `voice.transportPromotionApplied` (per instance: how many seats moved, how many
-were released).
+were released, how many were orphans left alone).
 
 **The client half.** Web and Electron declare the capability in `WIRE_CAPS`
 (`client/src/lib/realtime.ts`) and handle the frame in `hooks/use-voice.ts`.
