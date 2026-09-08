@@ -1749,7 +1749,7 @@ export function ChannelRailItem({
         live
           ? `${channel.name} ${t("chrome.watchPartyLive")}`
           : joinable
-            ? `${channel.name} — ${t("voice.doubleClickToJoin")}`
+            ? `${channel.name}: ${t("voice.doubleClickToJoin")}`
             : channel.name
       }
       side="right"
@@ -2128,9 +2128,9 @@ function ChannelRow({
         {/* A voice row opens its view the way a text row opens its channel:
             one click selects it and shows the chat and the stage, without
             joining. A double click joins, the same shortcut Android and iOS
-            picked up in #339. The `selected` branch on plain click covers
+            picked up in PR 339. The `selected` branch on plain click covers
             touch, where a second tap on the row you are already looking at
-            reads as "no, really, join" — there is no dblclick on a phone
+            reads as "no, really, join": there is no dblclick on a phone
             unless the click landed fast enough for the browser to have
             synthesized one itself. Connected rows never call `onJoinVoice`
             at all (see `joinable` below), so clicking the room you are in
