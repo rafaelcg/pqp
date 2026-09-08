@@ -9,7 +9,6 @@ import {
   Permission,
   permissionsUpdateSchema,
   profileUpdateSchema,
-  SLOWMODE_SECONDS_MAX,
   type ChanceRequest,
   type ChatServerMessage,
   type FriendActivity,
@@ -55,6 +54,7 @@ import {
   computeMemberPermissions,
   listServerMemberIds,
 } from "../services/permissions.js";
+import { chargeSlowMode, refundSlowMode } from "../services/slow-mode.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
 import { canAccessChannel } from "../services/users.js";
@@ -115,19 +115,6 @@ const reactionLimiter = createRateLimiter({ capacity: 20, refillPerSecond: 5 });
  * the same cadence.
  */
 const typingLimiter = createRateLimiter({ capacity: 2, refillPerSecond: 0.5 });
-const slowModeLimiters = new Map<number, ReturnType<typeof createRateLimiter>>();
-
-function slowModeLimiterFor(seconds: number) {
-  let limiter = slowModeLimiters.get(seconds);
-  if (!limiter) {
-    limiter = createRateLimiter({
-      capacity: 1,
-      refillPerSecond: 1 / seconds,
-    });
-    slowModeLimiters.set(seconds, limiter);
-  }
-  return limiter;
-}
 
 /**
  * One send budget per user, whichever door the message comes through. The
@@ -149,9 +136,6 @@ export function resetChatRateLimits(): void {
   messageLimiter.reset();
   reactionLimiter.reset();
   typingLimiter.reset();
-  for (const limiter of slowModeLimiters.values()) {
-    limiter.reset();
-  }
 }
 
 /**
@@ -1315,30 +1299,23 @@ export async function postChannelMessage(
   // watching two hundred people in a Lobby had the one tool for a flood
   // greyed out on the only surface that was flooding. `category` is the sole
   // exclusion, because nothing is ever posted into one.
-  if (
+  //
+  // MANAGE_MESSAGES *or* MANAGE_CHANNELS walks through, which is the
+  // convention people arrive with: the person who can delete the flood and
+  // the person who set the interval are both there to work the room, and
+  // making the second one wait behind their own setting is a surprise every
+  // time.
+  const slowModeSeconds =
     channel &&
     channel.kind === "server" &&
     (channel.type === "text" ||
       channel.type === "thread" ||
       channel.type === "voice" ||
-      channel.type === "watch_party")
-  ) {
-    const seconds = channel.slowmode_seconds ?? 0;
-    if (
-      seconds > 0 &&
-      !hasPermission(memberPerms, Permission.MANAGE_MESSAGES)
-    ) {
-      const limiter = slowModeLimiterFor(seconds);
-      const key = `${channel.server_id ?? channel.kind}:${channel.id}:${input.author.id}`;
-      if (!limiter.take(key)) {
-        const retryAfterMs = Math.min(
-          limiter.retryAfter(key) * 1000,
-          SLOWMODE_SECONDS_MAX * 1000,
-        );
-        return { ok: false, reason: "slow-mode", retryAfterMs };
-      }
-    }
-  }
+      channel.type === "watch_party") &&
+    !hasPermission(memberPerms, Permission.MANAGE_MESSAGES) &&
+    !hasPermission(memberPerms, Permission.MANAGE_CHANNELS)
+      ? (channel.slowmode_seconds ?? 0)
+      : 0;
 
   await input.beforeCreate?.();
 
@@ -1355,6 +1332,26 @@ export async function postChannelMessage(
     hereUserIds = (hereAudience?.userIds ?? []).filter(
       (id) => id !== input.author.id && isPresentForHere(id),
     );
+  }
+
+  // Charged here, as late as it can be: every other refusal above -- no
+  // access, no SEND_MESSAGES, a blocked DM, a reply pointing at another
+  // channel -- is already decided, so a message that fails for one of those
+  // reasons does not also cost the sender their turn. The clock starts on an
+  // accepted message, never on a rejected one.
+  if (slowModeSeconds > 0) {
+    const charge = await chargeSlowMode(
+      input.channelId,
+      input.author.id,
+      slowModeSeconds,
+    );
+    if (!charge.ok) {
+      return {
+        ok: false,
+        reason: "slow-mode",
+        retryAfterMs: charge.retryAfterMs,
+      };
+    }
   }
 
   const dbMessage = await createMessage(
@@ -1374,6 +1371,11 @@ export async function postChannelMessage(
       : undefined,
   );
   if (!dbMessage) {
+    // Charged a turn for a message that never landed. Hand it back: the
+    // sender posted nothing, so they owe nothing.
+    if (slowModeSeconds > 0) {
+      await refundSlowMode(input.channelId, input.author.id);
+    }
     return { ok: false, reason: "empty" };
   }
 

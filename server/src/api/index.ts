@@ -6571,6 +6571,17 @@ const WEBHOOK_EXECUTE_PATH =
  * GitHub, a CI job, or a monitoring tool never has a Clerk session to send.
  * `getWebhookForExecution` requires both halves to match, so this answers
  * the same 404 whether the id is wrong, the token is wrong, or both.
+ *
+ * Slow mode does not reach here, on purpose. This path has its own INSERT and
+ * never goes through `postChannelMessage`, and that is the right shape: a
+ * webhook is a pipe, not a resident. Its URL was configured once by somebody
+ * who held MANAGE_WEBHOOKS on the channel, what comes out of it is a build
+ * result or an alert that is useless late, and there is no person on the other
+ * end to show a countdown to. A flood from one is a webhook to revoke rather
+ * than a member to slow down. `webhookExecuteLimiter` above is its budget. A
+ * *character account* is the opposite case and is not exempt: it has a name, a
+ * face and a seat in the room, so it waits like anyone else -- see
+ * docs/BOT_SEND.md.
  */
 async function handleWebhookExecute(
   req: IncomingMessage,

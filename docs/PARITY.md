@@ -58,7 +58,7 @@ Paths are relative to the repo root. `ios/` means
 | Forward | full (`client/src/components/chat/forward-dialog.tsx`) | same | missing | missing |
 | Polls, `/draw` chance card, slash commands | full (`client/src/lib/slash-commands.ts`, `client/src/components/chat/poll-card.tsx`) | same | missing (renders nothing special) | partial: chance card renders (`android/ui/chat/ChanceCard.kt`), no polls, no commands |
 | Mentions: autocomplete and rendering | full (`client/src/lib/mention-autocomplete.ts`, `client/src/lib/remark-mentions.ts`) | same | partial: mention counts and badges, no `@` autocomplete, no pills (`ios/Home/HomeView.swift:263`, `ios/Chat/ChatView.swift`) | partial: `@` autocomplete and mention runs in the body, no coloured pill for the reader (`android/ui/chat/MentionAutocomplete.kt`, `android/ui/chat/ChatMarkdown.kt`) |
-| Slow mode | full (`client/src/components/chat/message-composer.tsx`) | same | full, with `retryAfterMs` draft restore (`ios/Chat/ChatModel.swift:319`) | missing: no `slowMode` anywhere; `message-rejected` is handled since PR #218 but no countdown (`android/core/RealtimeClient.kt`) |
+| Slow mode | full (`client/src/components/chat/message-composer.tsx`) | same | full, with `retryAfterMs` draft restore (`ios/Chat/ChatModel.swift:319`). Bypass is approximated from the `owner` / `admin` rank, which is the harmless direction to be wrong (`ios/Chat/ChatView.swift:256`) | missing: `slowmodeSeconds` parses (`android/core/Models.kt:157`) but nothing reads it; `message-rejected` is handled since PR #218, so a slow-mode refusal is silent rather than a countdown (`android/core/RealtimeClient.kt`) |
 | Edit and delete own message, Arrow Up edits last | full (`client/src/lib/edit-last-message.ts`) | same | full (`ios/Chat/MessageActionsOverlay.swift`) | partial: edit and delete rows in the sheet, no Arrow-Up-edits-last (`android/ui/chat/MessageActions.kt`, `android/ui/screens/ChatViewModel.kt:215`) |
 | Pins | full (`client/src/components/chat/pinned-messages-panel.tsx`) | same | full (`ios/Home/ServerToolsView.swift` `PinnedMessagesView`) | full: pin / unpin row, pinned sheet, `MANAGE_MESSAGES` gate (`android/ui/chat/MessageActions.kt`, `android/ui/screens/ChatScreen.kt` `PinnedSheet`) |
 | Message search | full (`client/src/components/search/search-dialog.tsx`) | same | partial: server-wide, no `from:` / `has:` filters (`ios/Home/ServerToolsView.swift` `SearchView`) | missing (people search only, `android/social/ui/PeopleSearch.kt`) |
@@ -329,6 +329,28 @@ On the current code the top of the list is item 2, Android push.
    modelled anywhere on the client, so a rejected send has no countdown, and a
    mention renders as a run rather than a coloured pill. Size **S**. Start at
    `android/core/RealtimeClient.kt` and `android/ui/chat/ChatMarkdown.kt`.
+
+   What the countdown needs, exactly, now that enforcement is server-side and
+   shared across machines. Nothing on the wire changed, so this is client work
+   only:
+
+   - Read `slowmodeSeconds` off the channel. Android already parses it
+     (`Models.kt:157`, default `0`); a build that predates the field ignores
+     it and behaves as it does today, because the server never requires a
+     client to know about slow mode.
+   - Hold after a **successful** send for `slowmodeSeconds`, and on a
+     `message-rejected` whose `reason` is `slow-mode` use its `retryAfterMs`
+     instead, which is the server's own remaining wait and the authority.
+   - Tick a countdown down on the send control and leave the field alone. The
+     draft must survive the refusal: iOS restores it from the rejected row
+     (`ChatModel.swift:319`), the web keeps the pending message and retries
+     the same body. Clearing the composer on a refusal is the one outcome
+     nobody forgives.
+   - Skip the hold for a viewer with `MANAGE_MESSAGES` **or**
+     `MANAGE_CHANNELS` on that channel, which is what the server exempts. iOS
+     approximates this with the `owner` / `admin` rank; erring toward showing
+     a countdown the server would not have enforced is the safe direction,
+     since the send still goes through.
 
 10. **No update prompt on iOS or Android, and Electron's updater is silent
     on unsigned macOS.** The web reloads itself; a phone on build 12 with the

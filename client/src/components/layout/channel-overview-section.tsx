@@ -1,7 +1,10 @@
 import { type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import type { Channel } from "@pqp/shared";
-import { SLOWMODE_SECONDS_PRESETS } from "@pqp/shared";
+import {
+  isVoiceRoomChannelType,
+  SLOWMODE_SECONDS_PRESETS,
+} from "@pqp/shared";
 import { Input } from "@/components/ui/input";
 import { ChannelIcon } from "@/components/layout/channel-icon";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
@@ -116,10 +119,13 @@ export function ChannelOverviewSection({
   const { t, locale } = useTranslation();
   // A voice channel has a chat of its own, beside the call, and during a busy
   // call that chat is exactly where the flooding happens. Only a category is
-  // excluded, because nothing is ever posted into one.
+  // excluded, because nothing is ever posted into one. A watch party is a
+  // voice room with a screen on it, and the server has always enforced the
+  // wait there -- it just had no control, so the one channel type built for
+  // an audience of hundreds was the one you could not slow down.
   const showSlowMode =
     channel.kind === "server" &&
-    (channel.type === "text" || channel.type === "voice");
+    (channel.type === "text" || isVoiceRoomChannelType(channel.type));
   const showVoice = showsVoiceRoomSize(channel);
   const preview = {
     ...channel,
@@ -238,7 +244,7 @@ export function ChannelOverviewSection({
         <SettingsGroup
           title={t("channelMeta.slowMode")}
           hint={
-            channel.type === "voice"
+            isVoiceRoomChannelType(channel.type)
               ? t("channelMeta.slowMode.hintVoice")
               : t("channelMeta.slowMode.hint")
           }

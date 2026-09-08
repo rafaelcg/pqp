@@ -65,6 +65,17 @@ WebSocket charges (burst 10, 2/s, `RATE_LIMIT_WS_MESSAGE_*`). One account has
 one send budget whichever door it uses. Slow mode on the channel applies too.
 A server timeout on the character blocks the send like any other write.
 
+Slow mode applying to a character is deliberate. A character is a resident: it
+has a name, a face and a seat in the room, people answer it, and the wait is
+there to make a busy channel readable for whoever is reading. A resident that
+posts through the wait is exactly the flood a moderator turned slow mode on to
+stop. An **incoming webhook** (`POST /api/webhooks/:id/:token`) is exempt for
+the mirror-image reason: it is a pipe, not a resident, its URL is configured
+once by someone who already held MANAGE_WEBHOOKS on the channel, and what
+comes out of it is a build result or an alert that is useless late. It carries
+its own per-webhook budget instead (burst 20, 1/s) and never touches
+`postChannelMessage`, which is where slow mode is decided.
+
 ## Response
 
 `201`:

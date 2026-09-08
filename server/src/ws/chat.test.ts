@@ -63,7 +63,7 @@ vi.mock("../services/embeds.js", () => ({
 }));
 
 vi.mock("../services/messages.js", () => ({
-  createMessage: async () => ({ id: "message-1" }),
+  createMessage: vi.fn(async () => ({ id: "message-1" })),
   getReplyParent: vi.fn(async () => null),
   mapMessage: (row: { id: string }) => ({ id: row.id, body: "hi" }),
 }));
@@ -95,6 +95,38 @@ vi.mock("../services/threads.js", () => ({
   getThreadInfo: async () => null,
 }));
 
+/**
+ * Slow mode's clock lives in Postgres now (`channel_slowmode_sends`), and this
+ * suite deliberately runs without one. Faked here with the same contract so
+ * the tests below keep proving what they are actually about: which channel
+ * types are covered, which permissions walk through, and that a refusal for
+ * another reason never spends a turn. That the *storage* is correct -- one
+ * budget per person per channel, shared across machines, one winner under a
+ * race -- is proved against a real database in api/slow-mode.test.ts, which
+ * is the only place it can be proved.
+ */
+const slowModeClock = new Map<string, { at: number; seconds: number }>();
+
+vi.mock("../services/slow-mode.js", () => ({
+  chargeSlowMode: async (channelId: string, userId: string, seconds: number) => {
+    const key = `${channelId}:${userId}`;
+    const previous = slowModeClock.get(key);
+    const now = Date.now();
+    if (previous && now - previous.at < seconds * 1000) {
+      // Flat interval rather than the true remainder: a stub that subtracts
+      // wall-clock elapsed makes every assertion below a millisecond race.
+      // What the real remainder is gets asserted where a real clock runs.
+      return { ok: false as const, retryAfterMs: seconds * 1000 };
+    }
+    slowModeClock.set(key, { at: now, seconds });
+    return { ok: true as const };
+  },
+  refundSlowMode: async (channelId: string, userId: string) => {
+    slowModeClock.delete(`${channelId}:${userId}`);
+  },
+  sweepSlowModeClocks: async () => 0,
+}));
+
 const {
   broadcastToChannel,
   deliverPermissionsUpdate,
@@ -112,7 +144,9 @@ const { isDmSendBlocked, restoreDmParticipants } = await import(
 );
 const { getChannel } = await import("../services/servers.js");
 const { computeMemberPermissions } = await import("../services/permissions.js");
-const { getReplyParent } = await import("../services/messages.js");
+const { createMessage, getReplyParent } = await import(
+  "../services/messages.js"
+);
 
 interface Recorder {
   socket: WebSocket;
@@ -472,6 +506,10 @@ describe("message-rejected", () => {
     vi.mocked(computeMemberPermissions).mockResolvedValue(0n);
     vi.mocked(getReplyParent).mockReset();
     vi.mocked(getReplyParent).mockResolvedValue(null);
+    vi.mocked(createMessage).mockReset();
+    vi.mocked(createMessage).mockResolvedValue({
+      id: "message-1",
+    } as Awaited<ReturnType<typeof createMessage>>);
   });
 
   async function post(
@@ -689,6 +727,100 @@ describe("message-rejected", () => {
     expect(framesOfType(sender.received, "message-broadcast").length).toBeGreaterThanOrEqual(
       2,
     );
+  });
+
+  /**
+   * The write is the last thing that can fail, and it charges before it runs
+   * because the alternative -- charge after -- lets a burst through. So the
+   * one case where a turn is spent on nothing has to hand it back: no
+   * message landed, so nothing is owed.
+   */
+  it("hands the turn back when the write produces nothing", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+      type: "text",
+      slowmode_seconds: 5,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES,
+    );
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+
+    vi.mocked(createMessage).mockResolvedValueOnce(
+      null as Awaited<ReturnType<typeof createMessage>>,
+    );
+    await post(sender, "user-a", channelId, { nonce: "swallowed" });
+    expect(framesOfType(sender.received, "message-broadcast")).toHaveLength(0);
+
+    // The next send is not held: the failed one cost nothing.
+    await post(sender, "user-a", channelId, { nonce: "real" });
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+    expect(
+      framesOfType(sender.received, "message-broadcast").length,
+    ).toBeGreaterThanOrEqual(1);
+  });
+
+  /**
+   * MANAGE_CHANNELS is the other half of the convention. The person who set
+   * the interval is in the room to work it, and making them wait behind their
+   * own number is a surprise every time -- Discord exempts both bits and so
+   * does the composer, which reads the same pair to decide whether to hold.
+   */
+  it("lets MANAGE_CHANNELS bypass slow mode", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+      type: "text",
+      slowmode_seconds: 5,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL |
+        Permission.SEND_MESSAGES |
+        Permission.MANAGE_CHANNELS,
+    );
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+
+    await post(sender, "user-a", channelId, { nonce: "first" });
+    await post(sender, "user-a", channelId, { nonce: "second" });
+
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+    expect(
+      framesOfType(sender.received, "message-broadcast").length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  /**
+   * One person's wait is their own. A channel-wide bucket would have looked
+   * identical in every single-sender test above and turned a busy room into
+   * one message every N seconds between everybody, which is not slow mode.
+   */
+  it("holds the sender who spoke, not the next person to speak", async () => {
+    const serverId = "33333333-3333-4333-8333-333333333333";
+    vi.mocked(getChannel).mockResolvedValue({
+      kind: "server",
+      server_id: serverId,
+      type: "text",
+      slowmode_seconds: 5,
+    } as Awaited<ReturnType<typeof getChannel>>);
+    vi.mocked(computeMemberPermissions).mockResolvedValue(
+      Permission.VIEW_CHANNEL | Permission.SEND_MESSAGES,
+    );
+    const channelId = nextChannelId();
+    const first = recordingSocket();
+    const second = recordingSocket();
+
+    await post(first, "user-a", channelId, { nonce: "a1" });
+    await post(second, "user-b", channelId, { nonce: "b1" });
+    expect(framesOfType(first.received, "message-rejected")).toHaveLength(0);
+    expect(framesOfType(second.received, "message-rejected")).toHaveLength(0);
+
+    await post(first, "user-a", channelId, { nonce: "a2" });
+    expect(framesOfType(first.received, "message-rejected")).toHaveLength(1);
   });
 
   /**

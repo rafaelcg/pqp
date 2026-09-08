@@ -23,6 +23,9 @@ vi.mock("./services/sanctions.js", () => ({
 vi.mock("./services/retention.js", () => ({
   sweepMessageRetention: vi.fn(async () => 0),
 }));
+vi.mock("./services/slow-mode.js", () => ({
+  sweepSlowModeClocks: vi.fn(async () => 0),
+}));
 vi.mock("./services/connections.js", () => ({
   sweepExpiredConnectionStates: vi.fn(async () => 0),
 }));
@@ -42,6 +45,7 @@ import { sweepOrphanedCommunityHomeMedia } from "./services/community-home.js";
 import { sweepPendingAccountDeletions } from "./services/account.js";
 import { pruneAuditLog } from "./services/audit.js";
 import { sweepMessageRetention } from "./services/retention.js";
+import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import {
@@ -88,7 +92,7 @@ describe("cold jobs", () => {
 
   it("fires each job on its own cadence", async () => {
     jobs = startColdJobs();
-    expect(jobs.count).toBe(12);
+    expect(jobs.count).toBe(13);
 
     await vi.advanceTimersByTimeAsync(OUTGOING_WEBHOOK_TICK_MS);
     expect(deliverDueOutgoingWebhooks).toHaveBeenCalledTimes(1);
@@ -104,6 +108,7 @@ describe("cold jobs", () => {
     await vi.advanceTimersByTimeAsync(DAILY_MS);
     expect(pruneAuditLog).toHaveBeenCalledTimes(1);
     expect(sweepMessageRetention).toHaveBeenCalledTimes(1);
+    expect(sweepSlowModeClocks).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(CHANNEL_SESSION_REMINDER_INTERVAL_MS);
     expect(sendDueChannelSessionReminders).toHaveBeenCalled();
