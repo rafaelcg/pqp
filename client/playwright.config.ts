@@ -1,4 +1,5 @@
 import { defineConfig, devices } from "@playwright/test";
+import { MEDIA_SPEC } from "./e2e/media-spec";
 
 /**
  * E2E runs against the real client and server with the dev auth bypass on, so
@@ -58,7 +59,12 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
-      testIgnore: /mobile-immersive-stage/,
+      testIgnore: [/mobile-immersive-stage/, MEDIA_SPEC],
+    },
+    {
+      name: "chromium-media",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: MEDIA_SPEC,
     },
     // Phone emulation, for the one spec that is about phones. An iPhone is
     // WebKit with no element fullscreen and Safari's own user agent; a Pixel is
