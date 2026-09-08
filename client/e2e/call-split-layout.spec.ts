@@ -75,7 +75,7 @@ async function ensureVoiceChannel(): Promise<void> {
 }
 
 async function joinLobbyWithCamera(page: Page): Promise<void> {
-  await page.getByRole("button", { name: /lobby/ }).first().click();
+  await page.getByRole("button", { name: /lobby/ }).first().dblclick();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
     timeout: 20_000,
   });
@@ -355,7 +355,7 @@ test("the channel list collapses to icons while somebody else presents, and come
   await ensureVoiceChannel();
   await page.setViewportSize({ width: 1440, height: 900 });
   await openApp(page);
-  await page.getByRole("button", { name: /lobby/ }).first().click();
+  await page.getByRole("button", { name: /lobby/ }).first().dblclick();
   await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
     timeout: 20_000,
   });
@@ -378,7 +378,7 @@ test("the channel list collapses to icons while somebody else presents, and come
   const presenter = await context.newPage();
   try {
     await presenter.goto("/app");
-    await presenter.getByRole("button", { name: /lobby/ }).first().click();
+    await presenter.getByRole("button", { name: /lobby/ }).first().dblclick();
     await waitUntilVoiceConnected(presenter);
     await presenter.getByRole("button", { name: "Share your screen" }).click();
     await expect(page.getByText(/is presenting/)).toBeVisible({

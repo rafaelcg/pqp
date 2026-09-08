@@ -214,7 +214,7 @@ test("a room bigger than the strip: four faces, a +2, and everyone one tap away"
   const sockets: ListenerSocket[] = [];
   try {
     await openApp(page);
-    await page.getByRole("button", { name: /lobby/i }).first().click();
+    await page.getByRole("button", { name: /lobby/i }).first().dblclick();
     await expect(page.getByTestId("call-stage-collapsed")).toBeVisible({
       timeout: 20_000,
     });

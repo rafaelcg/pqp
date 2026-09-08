@@ -36,6 +36,11 @@ import {
 } from "@pqp/shared";
 import { SearchDialog } from "@/components/search/search-dialog";
 import { ChannelIcon } from "@/components/layout/channel-icon";
+import {
+  resolveVoiceRowClick,
+  resolveVoiceRowDoubleClick,
+  resolveVoiceRowKey,
+} from "@/lib/voice-row-interaction";
 import { ServerBanner, ServerIcon } from "@/components/layout/server-identity";
 import {
   ContextMenu,
@@ -1737,12 +1742,15 @@ export function ChannelRailItem({
   const hasUnread = !selected && unread.count > 0 && !muted;
   const mentions = selected || muted ? 0 : unread.mentions;
   const live = liveState?.live === true;
+  const joinable = onJoinVoice && !connected;
   return (
     <Tooltip
       label={
         live
           ? `${channel.name} ${t("chrome.watchPartyLive")}`
-          : channel.name
+          : joinable
+            ? `${channel.name} — ${t("voice.doubleClickToJoin")}`
+            : channel.name
       }
       side="right"
     >
@@ -1761,7 +1769,42 @@ export function ChannelRailItem({
           hasUnread && !selected && !connected && "text-paper",
           muted && !selected && !connected && "opacity-50",
         )}
-        onClick={onJoinVoice && !connected ? onJoinVoice : onSelect}
+        onClick={() => {
+          // A tap that lands on an already-selected row is the closest thing
+          // touch has to a second click: nothing else distinguishes "select
+          // again" from "I mean it, join" on a phone. `onDoubleClick` below
+          // catches the mouse case even when this click's own `onSelect` has
+          // not yet round-tripped through state by the time the second click
+          // lands.
+          const action = resolveVoiceRowClick({ selected, joinable: !!joinable });
+          if (action === "join") {
+            onJoinVoice?.();
+          } else {
+            onSelect();
+          }
+        }}
+        onDoubleClick={() => {
+          if (
+            resolveVoiceRowDoubleClick({ selected, joinable: !!joinable }) ===
+            "join"
+          ) {
+            onJoinVoice?.();
+          }
+        }}
+        onKeyDown={(event) => {
+          const action = resolveVoiceRowKey(event.key, {
+            joinable: !!joinable,
+          });
+          if (action === null) {
+            return;
+          }
+          event.preventDefault();
+          if (action === "join") {
+            onJoinVoice?.();
+          } else {
+            onSelect();
+          }
+        }}
       >
         <ChannelIcon channel={channel} className="h-4 w-4" />
         {live && (
@@ -2082,15 +2125,53 @@ function ChannelRow({
             className="absolute -left-1 top-1/2 h-4 w-1 -translate-y-1/2 rounded-r-full bg-paper"
           />
         )}
-        {/* A voice row is the call: one click joins it, the way a text row
-            opens its channel. The old phone tile and double-click were two
-            more ways to do the same thing, and the tile read as a state
-            ("someone is calling") rather than an action. Connected rows
-            fall back to plain selection, so clicking the room you are in
-            just shows it. */}
+        {/* A voice row opens its view the way a text row opens its channel:
+            one click selects it and shows the chat and the stage, without
+            joining. A double click joins, the same shortcut Android and iOS
+            picked up in #339. The `selected` branch on plain click covers
+            touch, where a second tap on the row you are already looking at
+            reads as "no, really, join" — there is no dblclick on a phone
+            unless the click landed fast enough for the browser to have
+            synthesized one itself. Connected rows never call `onJoinVoice`
+            at all (see `joinable` below), so clicking the room you are in
+            just keeps the view. */}
         <button
           type="button"
-          onClick={onJoinVoice && !connected ? onJoinVoice : onSelect}
+          onClick={() => {
+            const action = resolveVoiceRowClick({
+              selected,
+              joinable: !!onJoinVoice && !connected,
+            });
+            if (action === "join") {
+              onJoinVoice?.();
+            } else {
+              onSelect();
+            }
+          }}
+          onDoubleClick={() => {
+            if (
+              resolveVoiceRowDoubleClick({
+                selected,
+                joinable: !!onJoinVoice && !connected,
+              }) === "join"
+            ) {
+              onJoinVoice?.();
+            }
+          }}
+          onKeyDown={(event) => {
+            const action = resolveVoiceRowKey(event.key, {
+              joinable: !!onJoinVoice && !connected,
+            });
+            if (action === null) {
+              return;
+            }
+            event.preventDefault();
+            if (action === "join") {
+              onJoinVoice?.();
+            } else {
+              onSelect();
+            }
+          }}
           aria-current={announceCurrent ? "page" : undefined}
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
@@ -2135,6 +2216,18 @@ function ChannelRow({
           {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
           {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
           <span className="ml-auto flex shrink-0 items-center gap-1">
+            {/* The discoverable cue for the shortcut this row just gained:
+                shown only on hover/focus so an unselected row stays quiet,
+                and never for a watch party, which already spells the same
+                thing out with its own Entrar button. */}
+            {!watchParty && onJoinVoice && !connected && (
+              <span
+                aria-hidden="true"
+                className="hidden shrink-0 truncate text-[9px] font-medium uppercase tracking-wider text-paper-muted opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none sm:block"
+              >
+                {t("voice.doubleClickToJoin")}
+              </span>
+            )}
             {live && (
               /* The pulse is on the dot, never on the text, and only under
                  `motion-safe`: with reduced motion the pill just sits there
