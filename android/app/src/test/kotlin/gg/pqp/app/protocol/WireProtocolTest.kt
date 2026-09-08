@@ -209,6 +209,18 @@ class WireProtocolTest {
         // Coalesced emoji burst counts for a channel's live reactions. No
         // reaction-overlay surface on the phone yet.
         "live-reactions" to "no live reactions surface on the phone",
+        // A mesh room moved onto the voice server mid-call so a fourth camera
+        // would fit. Following it means tearing the mesh down and bringing a
+        // LiveKit session up against the SAME peer id, which this client has
+        // no path for: its own reconnect story is "rebuild, never resume"
+        // (VoiceController.followConnection). The server knows: it only sends
+        // this frame to sockets that declared SOCKET_CAPS.voiceTransportChanged
+        // at auth, which this client does not, and it releases the seats that
+        // did not with `voice-transport-unsupported` instead. So the branch is
+        // missing on purpose and the phone is told, rather than left building
+        // a mesh whose signaling the server has stopped relaying.
+        "voice-transport-changed" to
+            "Android cannot move media mid-call; the server releases its seat with voice-transport-unsupported instead",
     )
 
     /**

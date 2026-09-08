@@ -55,12 +55,27 @@ export function audibleScreenPeerIds(
   return ids.slice(0, 1);
 }
 
-/** True when someone else already fills every slot, so we must not open the picker. */
+/**
+ * True when someone else already fills every slot, so we must not open the
+ * picker.
+ *
+ * `canPromote` is `VoiceState.canPromoteTransport`: a mesh room on a
+ * deployment that has a voice server to move it to. On such a room the caps
+ * here are not the answer, because hitting them is what asks the server to
+ * move the room (see the promotion section in `server/src/ws/voice.ts`).
+ * Refusing locally is what made the mesh cap feel like a wall: the claim never
+ * reached the server, so the server never got the chance to lift it. The
+ * server still refuses when it cannot promote, and the client still says so.
+ */
 export function isScreenShareAtCap(
   sharingPeerIds: readonly string[],
   localPeerId: string | null,
   transport: VoiceRoomTransport | null,
+  canPromote = false,
 ): boolean {
+  if (canPromote && (transport ?? "mesh") === "mesh") {
+    return false;
+  }
   const others = sharingPeerIds.filter((id) => id !== localPeerId).length;
   return others >= SCREEN_SHARE_LIMIT[transport ?? "mesh"];
 }
@@ -70,7 +85,11 @@ export function isCameraAtCap(
   cameraPeerIds: readonly string[],
   localPeerId: string | null,
   transport: VoiceRoomTransport | null,
+  canPromote = false,
 ): boolean {
+  if (canPromote && (transport ?? "mesh") === "mesh") {
+    return false;
+  }
   const others = cameraPeerIds.filter((id) => id !== localPeerId).length;
   return others >= CAMERA_LIMIT[transport ?? "mesh"];
 }

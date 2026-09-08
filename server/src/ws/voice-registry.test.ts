@@ -95,6 +95,8 @@ const {
   INSTANCE_TTL_MS,
   listLiveVoiceInstances,
   pinVoiceRoom,
+  promoteVoiceRoomTransport,
+  readVoiceRoomTransport,
   settleVoiceRegistryWrites,
   startVoiceInstanceHeartbeat,
   withdrawVoiceInstance,
@@ -371,6 +373,81 @@ describeDb("voice registry", () => {
         transport: "livekit",
       });
       expect(frame(phone, "welcome")).toBeUndefined();
+    });
+  });
+
+  /**
+   * PROMOTION. The one time a pinned room changes transport, so the one time
+   * the pin is rewritten rather than inserted. It has to be a conditional
+   * UPDATE: two people clicking a camera in the same second, on one machine
+   * or two, must produce one promotion and therefore one announcement. A
+   * read-then-write here would announce it twice, and the second frame would
+   * tear down a LiveKit session that had just come up.
+   */
+  describe("promoting a pinned room", () => {
+    it("moves a mesh room to the SFU and says it won", async () => {
+      const channel = randomUUID();
+      await pinVoiceRoom(channel, "mesh");
+
+      const result = await promoteVoiceRoomTransport(channel, "mesh", "livekit");
+
+      expect(result).toEqual({ transport: "livekit", promoted: true });
+      expect(await readVoiceRoomTransport(channel)).toBe("livekit");
+    });
+
+    /**
+     * The atomicity is a property of ONE statement, and a test cannot force
+     * two connections to interleave inside it, so this asserts the shape
+     * instead: the winning path is a single round trip. A read-then-write
+     * would be two, and two is what lets both callers read `mesh`, both
+     * write, and both announce a promotion, the second one tearing
+     * down a LiveKit session that had just come up.
+     */
+    it("wins in one statement, which is what makes two callers safe", async () => {
+      const channel = randomUUID();
+      await pinVoiceRoom(channel, "mesh");
+      const pool = getPool();
+      const query = vi.spyOn(pool, "query");
+
+      const result = await promoteVoiceRoomTransport(channel, "mesh", "livekit");
+
+      expect(result.promoted).toBe(true);
+      expect(query).toHaveBeenCalledTimes(1);
+      expect(String(query.mock.calls[0]?.[0])).toContain("AND transport =");
+      query.mockRestore();
+    });
+
+    it("both callers are told where the room actually is", async () => {
+      const channel = randomUUID();
+      await pinVoiceRoom(channel, "mesh");
+
+      const results = await Promise.all([
+        promoteVoiceRoomTransport(channel, "mesh", "livekit"),
+        promoteVoiceRoomTransport(channel, "mesh", "livekit"),
+      ]);
+
+      // The loser gets the stored transport without a second read of its own,
+      // so it can move its own seats whether it won or not.
+      expect(results.every((r) => r.transport === "livekit")).toBe(true);
+    });
+
+    it("a second promotion of an already promoted room wins nothing", async () => {
+      const channel = randomUUID();
+      await pinVoiceRoom(channel, "mesh");
+      await promoteVoiceRoomTransport(channel, "mesh", "livekit");
+
+      const again = await promoteVoiceRoomTransport(channel, "mesh", "livekit");
+
+      expect(again).toEqual({ transport: "livekit", promoted: false });
+    });
+
+    it("a room that has emptied is not resurrected", async () => {
+      const channel = randomUUID();
+
+      const result = await promoteVoiceRoomTransport(channel, "mesh", "livekit");
+
+      expect(result).toEqual({ transport: null, promoted: false });
+      expect(await readVoiceRoomTransport(channel)).toBeNull();
     });
   });
 

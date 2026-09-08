@@ -276,6 +276,64 @@ export const voiceTransportUnsupportedMessageSchema = z.object({
   type: z.literal("voice-transport-unsupported"),
   voiceChannelId: z.string(),
   transport: voiceRoomTransportSchema,
+  /**
+   * Why the room runs a transport this client is not on.
+   *
+   * Absent is the original case: the join was refused up front because the
+   * client declared it cannot run the room's transport. `promoted` is the
+   * one case where the frame reaches a client that *was* seated: the room
+   * moved to the SFU under it (see `voiceTransportChangedMessageSchema`) and
+   * this socket never negotiated the frame that would have moved it in
+   * place, so its seat was released. Both mean the same thing to a client
+   * that ignores the field, which is why it is optional: leave the call and
+   * say so. Only the sentence differs.
+   */
+  reason: z.literal("promoted").optional(),
+});
+
+/**
+ * THE ROOM'S TRANSPORT CHANGED UNDER THE PEOPLE IN IT.
+ *
+ * The rule used to be absolute: a room keeps the transport it opened on until
+ * it empties. It still is, with exactly one exception, and this frame is that
+ * exception announced.
+ *
+ * WHY. A mesh camera is a full uplink copy per peer, so `CAMERA_LIMIT.mesh` is
+ * three and the fourth camera in a small server's call used to be refused
+ * outright ("essa call já chegou no máximo de câmeras"). The room was on mesh
+ * only because the server has fewer than `LARGE_SERVER_MEMBER_THRESHOLD`
+ * members, which is a guess about crowd size and says nothing about how many
+ * cameras five friends want on. Where LiveKit is configured the SFU can carry
+ * them, so the server moves the whole room there rather than refusing the
+ * camera.
+ *
+ * WHAT MAKES IT SAFE. The half-move is what the one-transport rule exists to
+ * prevent, so this frame moves the *room*: the server rewrites the pin first
+ * (atomically, so two people clicking at once promote once), then tells every
+ * seat, on this instance and across the bus. A seat that never negotiated
+ * `SOCKET_CAPS.voiceTransportChanged` is not left building a mesh nobody else
+ * is on: it is released and told, with `voice-transport-unsupported`'s
+ * `promoted` reason, so it leaves the call and can rejoin onto the SFU.
+ *
+ * `participants` is the room as the server holds it at the moment of the
+ * promotion, so the receiver can build its SFU session without waiting for a
+ * roster to arrive. It is the same shape `welcome.peers` carries and includes
+ * the receiver's own seat.
+ */
+export const voiceTransportChangedMessageSchema = z.object({
+  type: z.literal("voice-transport-changed"),
+  voiceChannelId: z.string(),
+  /**
+   * The transport the room runs on from now on. Only `livekit` is ever sent
+   * today (a promotion is one-way: nothing demotes a live room). A receiver
+   * that does not know what to do with the value must ignore the frame and
+   * stay where it is rather than guess.
+   */
+  transport: voiceRoomTransportSchema,
+  /** What asked for the room: a camera past the mesh cap, or a screen share. */
+  reason: z.enum(["cameras", "screens"]),
+  /** The room at the moment of the promotion, self included. */
+  participants: z.array(voiceParticipantSchema),
 });
 
 /**
@@ -466,6 +524,7 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   voiceRosterDeltaMessageSchema,
   voiceRoomFullMessageSchema,
   voiceTransportUnsupportedMessageSchema,
+  voiceTransportChangedMessageSchema,
   voiceJoinRefusedMessageSchema,
   screenShareDeniedMessageSchema,
   cameraDeniedMessageSchema,
@@ -492,6 +551,9 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
 export type VoiceParticipant = z.infer<typeof voiceParticipantSchema>;
 export type VoiceTransportUnsupportedMessage = z.infer<
   typeof voiceTransportUnsupportedMessageSchema
+>;
+export type VoiceTransportChangedMessage = z.infer<
+  typeof voiceTransportChangedMessageSchema
 >;
 export type VoiceJoinRefusedMessage = z.infer<
   typeof voiceJoinRefusedMessageSchema

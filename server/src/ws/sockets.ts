@@ -32,6 +32,15 @@ export const SOCKET_CAPS = {
    * every client did before.
    */
   presenceDelta: "presence-delta",
+  /**
+   * This socket understands `voice-transport-changed` and can move its own
+   * media from a mesh to the SFU without rejoining. Without it a promotion
+   * (see `voiceTransportChangedMessageSchema` in `@pqp/shared`) releases the
+   * seat and tells the client to come back, because the one thing that must
+   * never happen is a client left building a peer mesh in a room whose media
+   * has moved: that is silence nobody can see.
+   */
+  voiceTransportChanged: "voice-transport-changed",
 } as const;
 
 export interface AuthenticatedSocket {

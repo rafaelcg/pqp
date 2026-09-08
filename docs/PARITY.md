@@ -347,6 +347,17 @@ On the current code the top of the list is item 2, Android push.
 13. iOS: game connections (Steam, Twitch, Battle.net) so a Twitch-linked profile shows on the phone.
 14. Android: members list, kick, ban, timeout; then roles.
 14b. Android: camera **send** (receive shipped; `CAMERA_LIMIT` allows eight on a media-server room).
+14c. iOS and Android: **follow a room promotion** (`voice-transport-changed`). A
+    mesh room whose fourth camera moves it to the SFU releases every seat that
+    did not declare `SOCKET_CAPS.voiceTransportChanged` at `auth`; both native
+    clients are in that group, so a phone in such a call is dropped with
+    `voice-transport-unsupported { reason: "promoted" }` and has to rejoin.
+    Both already run LiveKit rooms, so the missing piece is only the mid-call
+    swap: declare the cap, then on the frame tear the mesh engine down and
+    bring the LiveKit engine up **against the same peer id**, keeping mute,
+    camera and share intent. Android's `WireProtocolTest.deliberatelyIgnored`
+    holds the entry to delete when it lands. See `docs/voice-backends.md`
+    "The one time a live room changes transport".
 15. iOS and Android: roles and permission bits beyond owner / admin / member.
 16. iOS: group DMs (API takes nine, picker takes one).
 17. Android: presence in servers and a self status picker.

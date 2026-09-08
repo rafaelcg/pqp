@@ -173,6 +173,41 @@ export async function claimVoiceRoomTransport(
   return stored ? { transport: stored, won: false } : { transport: wanted, won: true };
 }
 
+/**
+ * Move a pinned room from one transport to another, atomically and exactly
+ * once.
+ *
+ * The pin is authoritative and a room normally keeps it for its whole life
+ * (`ws/voice.ts`, "A VOICE ROOM HAS ONE TRANSPORT"). Promotion is the one
+ * exception, and it is a conditional UPDATE rather than a read-then-write for
+ * the reason the insert above is an `ON CONFLICT`: two people clicking their
+ * camera in the same second, on one machine or two, must produce one
+ * promotion. The `WHERE transport = $2` is what makes the loser's statement
+ * touch nothing, so it reports `promoted: false` and the room's audience is
+ * told once.
+ *
+ * A room row that has gone (everybody left while the click was in flight) is
+ * also `promoted: false` with a null transport: there is no room to move.
+ */
+export async function promoteVoiceRoomTransport(
+  channelId: string,
+  from: VoiceRoomTransport,
+  to: VoiceRoomTransport,
+): Promise<{ transport: VoiceRoomTransport | null; promoted: boolean }> {
+  const pool = getPool();
+  const updated = await pool.query<{ transport: VoiceRoomTransport }>(
+    `UPDATE voice_rooms
+        SET transport = $3
+      WHERE channel_id = $1 AND transport = $2
+      RETURNING transport`,
+    [channelId, from, to],
+  );
+  if (updated.rows[0]) {
+    return { transport: updated.rows[0].transport, promoted: true };
+  }
+  return { transport: await readVoiceRoomTransport(channelId), promoted: false };
+}
+
 export async function readVoiceRoomTransport(
   channelId: string,
 ): Promise<VoiceRoomTransport | null> {

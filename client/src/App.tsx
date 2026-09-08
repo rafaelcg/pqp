@@ -4683,6 +4683,7 @@ function MainAppContent({
               voiceState.cameraPeerIds,
               voiceState.peerId,
               voiceState.roomTransport,
+              voiceState.canPromoteTransport,
             ) && !voiceState.isCameraOn
           }
           shareCappedOut={
@@ -4690,6 +4691,7 @@ function MainAppContent({
               voiceState.screenSharePeerIds,
               voiceState.peerId,
               voiceState.roomTransport,
+              voiceState.canPromoteTransport,
             ) && !voiceState.isSharingScreen
           }
           cameraLimit={CAMERA_LIMIT[voiceState.roomTransport ?? "mesh"]}
