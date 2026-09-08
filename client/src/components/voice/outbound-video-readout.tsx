@@ -6,7 +6,11 @@ import {
   type Limitation,
   type VideoSenderSample,
 } from "@/lib/voice-stats-probe";
-import { chosenScreenCeilingBps } from "@/lib/peer-connection-manager";
+import {
+  chosenScreenCeilingBps,
+  meshCameraBitrate,
+  meshScreenBitrate,
+} from "@/lib/peer-connection-manager";
 import { cameraBitrateFor, type VideoQuality } from "@/lib/video-quality";
 
 /**
@@ -62,9 +66,16 @@ export function OutboundVideoReadout({
    * on a weak link. Optional because Settings renders this outside any call.
    */
   quality,
+  /**
+   * How many other people are in the room. Without it this component cannot
+   * tell a ceiling the room imposed from one the link imposed, and says
+   * nothing about the limit rather than guessing.
+   */
+  viewers,
 }: {
   idleKey?: MessageKey;
   quality?: VideoQuality;
+  viewers?: number;
 } = {}) {
   const { t } = useTranslation();
   const [camera, setCamera] = useState<VideoSenderSample | null>(null);
@@ -127,17 +138,30 @@ export function OutboundVideoReadout({
   // Not `limitedBy` directly: the encoder calls its own `maxBitrate` a
   // bandwidth limit, so the raw field says "your connection" to somebody on
   // fibre whose only limit is the rung they picked. See `describeLimitation`.
-  // Each role against the ceiling its own user chose. The camera's is divided
-  // by the room and shared with a screen now (`meshCameraBitrate`), so without
-  // its own term a room-imposed ceiling reads as "your quality setting" —
-  // the same misattribution that was fixed for the screen.
+  // Each role against what this room may legitimately spend on it, not against
+  // the rung alone.
+  //
+  // THE ROOM TERM IS THE POINT, and getting it wrong flips the sentence to the
+  // opposite lie. Comparing against the rung alone says "your connection" for a
+  // ceiling the room imposed; comparing against nothing at all says "your
+  // quality setting" for a ceiling the link imposed. Both were shipped in turn
+  // here. A mesh sends one copy per viewer and both video senders divide one
+  // share, so the honest expectation is the same arithmetic the manager does
+  // (`meshScreenBitrate` / `meshCameraBitrate`), which is why `viewers` has to
+  // reach this component. Without it, leave it null and say nothing rather
+  // than guess: an unqualified accusation is worse than no diagnosis.
   const chosen =
-    quality === undefined
+    quality === undefined || viewers === undefined
       ? null
       : camera.role === "screen"
-        ? chosenScreenCeilingBps(quality)
+        ? meshScreenBitrate(viewers, quality, undefined, cameraBitrateFor(quality))
         : camera.role === "camera"
-          ? cameraBitrateFor(quality)
+          ? meshCameraBitrate(
+              viewers,
+              cameraBitrateFor(quality),
+              undefined,
+              chosenScreenCeilingBps(quality),
+            )
           : null;
   const limited = describeLimitationAgainst(camera, chosen);
 

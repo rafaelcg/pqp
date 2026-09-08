@@ -313,6 +313,32 @@ describe("camera sender tuning", () => {
     manager.dispose();
   });
 
+  it("splits from one pair of numbers, not two that only agree by luck", async () => {
+    // FOUND IN REVIEW. The two halves used to derive "what the camera asked
+    // for" from different places — the screen's half read the screen's rung,
+    // the camera's half read `cameraMaxBitrate` — and agreed only because one
+    // control feeds both today. A camera set apart from the screen's rung is
+    // what tells them apart: on Auto both are 1.5 Mbps and the bug is
+    // invisible, which is why the ratio test could not see it.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    manager.setScreenQuality("1080p");
+    manager.setCameraMaxBitrate(400_000);
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    await manager.setLocalCameraStream(fakeStream("camera"));
+    await Promise.resolve();
+
+    const pick = (id: string) =>
+      lastParams(senders.filter((x) => x.track?.id === id)[0]!)?.encodings[0]
+        ?.maxBitrate ?? 0;
+    // Whatever the two rungs are, the pair fits one viewer's share exactly.
+    expect(pick("screen") + pick("camera")).toBe(
+      DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / 2,
+    );
+    manager.dispose();
+  });
+
   it("leaves a 1:1 call's senders on what the person chose", async () => {
     // #340 established that one connection is the browser's to govern, and a
     // 1:1 room is never sampled, so `screenBudgetBps` there is an unmeasured
@@ -329,6 +355,10 @@ describe("camera sender tuning", () => {
       lastParams(senders.filter((x) => x.track?.id === "screen")[0]!)
         ?.encodings[0]?.maxBitrate,
     ).toBe(4_000_000);
+    expect(
+      lastParams(senders.filter((x) => x.track?.id === "camera")[0]!)
+        ?.encodings[0]?.maxBitrate,
+    ).toBe(1_500_000);
     manager.dispose();
   });
 

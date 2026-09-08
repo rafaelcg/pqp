@@ -435,7 +435,7 @@ export function meshCameraBitrate(
  * 1080p screen left 29 % of the share unspent, and a 2.5 Mbps camera beside a
  * 360p screen over-committed by 5 %. Found in review.
  *
- * A 1:1 CALL IS NOT SPLIT. #340 established that a room with one connection is
+ * A 1:1 CALL IS NOT SPLIT. PR 340 established that a room with one connection is
  * the browser's to govern — nothing is sampled there, so `budgetBps` is still
  * the unmeasured 5 Mbps constant, and slicing a constant would cap a
  * deliberate 1080p choice at a number nobody measured.
@@ -561,7 +561,7 @@ async function tuneScreenSender(
   peerCount: number,
   quality: VideoQuality,
   budgetBps: number = SCREEN_UPLOAD_BUDGET_BPS,
-  /** Whether a camera is riding the same uplink and needs its own slice. */
+  /** What a camera on the same uplink asked for, in bps. 0 when it is off. */
   cameraChosenBps = 0,
 ): Promise<void> {
   if (!sender) {

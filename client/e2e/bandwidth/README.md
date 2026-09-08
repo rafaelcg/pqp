@@ -42,10 +42,24 @@ share ran unshaped for 9 seconds, then the sharer's container was capped to
 screen only  (SHARE_RATE=3mbit) : ceiling -> 1494 kbps a copy, paths [1729,1608]
 screen only  (SHARE_RATE=1mbit) : ceiling ->  500 kbps a copy, paths [536,413]
 
-WITH_CAMERA=true 3mbit CAMERA_ORDER=before : screen 1019.. + camera .. a copy
-WITH_CAMERA=true 3mbit CAMERA_ORDER=after  : screen 1064 + camera 532 = 1596  (x2 = 3192)
-WITH_CAMERA=true 1mbit                     : screen  369 + camera 185 =  554  (x2 = 1108)
+WITH_CAMERA=true 3mbit CAMERA_ORDER=before : screen 987 a copy
+WITH_CAMERA=true 3mbit CAMERA_ORDER=after  : screen 783 + camera 391 = 1174 a copy
 ```
+
+`WITH_CAMERA=true` turns the sharer's camera on, before the share by default or
+after it with `CAMERA_ORDER=after`. **Run both.** The ordering that broke in
+review was camera-on-during-a-share: nothing retuned the screen on that edge, so
+it kept the whole share and the pair asked for 133 % of it, and the camera-first
+run is the one ordering that cannot show it.
+
+The two orderings do not land on identical numbers, and should not be expected
+to: the budget is measured live off a noisy link and the AIMD ladder settles
+wherever that run's readings take it. What must hold, and does, is the shape —
+the screen-to-camera ratio is 2:1 (783 / 391 = 2.00), the proportion of their
+chosen ladders, and the pair times the viewer count fits inside the shaped link
+rather than exceeding it. Before `meshCameraBitrate` the camera took its full
+chosen ceiling per viewer regardless of the room, so the same 3 Mbit run would
+have asked for about 2994 kbps a copy, nearly double the link.
 
 `WITH_CAMERA=true` turns the sharer's camera on, before the share by default or
 after it with `CAMERA_ORDER=after`. **Run both.** The ordering that broke in

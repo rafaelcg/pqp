@@ -94,6 +94,25 @@ export function nextStrainStreak(
     return 0;
   }
 
+  // WHAT THIS ROOM MAY LEGITIMATELY SPEND ON THE SCREEN, before any link
+  // trouble. A mesh sends one copy per viewer, and a camera on the same uplink
+  // takes its own slice, so the honest expectation is neither the rung the
+  // person picked nor the whole budget.
+  //
+  // BOTH BRANCHES BELOW ARE MEASURED AGAINST IT. An earlier cut applied the
+  // camera term to the second branch only and left the first comparing against
+  // the raw chosen rung, so a five-way call on Auto sharing a film with the
+  // camera on sat pinned at a perfectly legitimate 2.67 Mbps ceiling and was
+  // told its connection was the problem, on fibre, for the whole call. Found
+  // in review; a ceiling the room and the camera explain is not a link fault
+  // whichever branch notices it.
+  const shareOfBudget = DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, viewers);
+  const slice =
+    cameraChosenBps > 0
+      ? chosenCeilingBps / (chosenCeilingBps + cameraChosenBps)
+      : 1;
+  const expected = Math.min(chosenCeilingBps, shareOfBudget * slice);
+
   // THE OBVIOUS SIGNAL, AND WHY IT IS NOT ENOUGH ON ITS OWN. "The encoder says
   // it is bandwidth-limited" is true while the link is being discovered, and
   // then stops being true: once the budget controller has cut the ceiling to
@@ -102,7 +121,7 @@ export function nextStrainStreak(
   // between `bandwidth` and `none` every few seconds, so a streak built on
   // this alone reset before it could ever be said out loud. The adaptation
   // working must not be what silences the explanation for it.
-  if (describeLimitationAgainst(screen, chosenCeilingBps) === "bandwidth") {
+  if (describeLimitationAgainst(screen, expected) === "bandwidth") {
     return streak + 1;
   }
 
@@ -124,17 +143,6 @@ export function nextStrainStreak(
   // sender row. A four-person call with one joiner stuck on ICE has a ceiling
   // of 5000/3 and only two rows to divide by, which read as a weak link and
   // fired this warning at somebody on fibre. Found in review.
-  // The camera's slice is part of what the room legitimately costs. Without
-  // this term the screen's ceiling is two thirds of the share whenever a
-  // camera is on, which reads as a weak link and told every mesh room of three
-  // or more on Auto that their connection was the problem, on fibre. Found in
-  // review, and it is the same false positive this whole rule exists to avoid.
-  const shareOfBudget = DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, viewers);
-  const slice =
-    cameraChosenBps > 0
-      ? chosenCeilingBps / (chosenCeilingBps + cameraChosenBps)
-      : 1;
-  const expected = Math.min(chosenCeilingBps, shareOfBudget * slice);
   const ceilingBps = (screen.ceilingKbps ?? 0) * 1000;
   const cutByBudget = ceilingBps > 0 && ceilingBps < expected * CEILING_SLACK;
   return cutByBudget ? streak + 1 : 0;
