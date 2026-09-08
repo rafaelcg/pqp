@@ -12,6 +12,8 @@ import { CallStage } from "@/components/voice/call-stage";
 export function VoiceChannelStage({
   channelId,
   channelName,
+  serverName = null,
+  serverIconUrl = null,
   currentUser,
   voiceState,
   videoQuality,
@@ -40,6 +42,8 @@ export function VoiceChannelStage({
 }: {
   channelId: string;
   channelName: string;
+  serverName?: string | null;
+  serverIconUrl?: string | null;
   currentUser: {
     id: string;
     displayName: string;
@@ -83,6 +87,8 @@ export function VoiceChannelStage({
     <CallStage
       channelId={channelId}
       title={channelName}
+      serverName={serverName}
+      serverIconUrl={serverIconUrl}
       currentUser={currentUser}
       voiceState={voiceState}
       videoQuality={videoQuality}

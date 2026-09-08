@@ -517,6 +517,10 @@ export interface CallStagePerson {
 export interface CallStageProps {
   channelId: string;
   title: string;
+  /** Server or community name, for the watch player's lock-screen metadata. */
+  serverName?: string | null;
+  /** Server icon, used as lock-screen artwork when a watch stream is live. */
+  serverIconUrl?: string | null;
   currentUser: {
     id: string;
     displayName: string;
@@ -582,6 +586,8 @@ export interface CallStageProps {
 export function CallStage({
   channelId,
   title,
+  serverName = null,
+  serverIconUrl = null,
   currentUser,
   voiceState,
   videoQuality,
@@ -632,6 +638,8 @@ export function CallStage({
     <ActiveCall
       channelId={channelId}
       title={title}
+      serverName={serverName}
+      serverIconUrl={serverIconUrl}
       currentUser={currentUser}
       voiceState={voiceState}
       videoQuality={videoQuality}
@@ -674,6 +682,8 @@ export function CallStage({
 function ActiveCall({
   channelId,
   title,
+  serverName = null,
+  serverIconUrl = null,
   currentUser,
   voiceState,
   videoQuality,
@@ -709,6 +719,8 @@ function ActiveCall({
 }: {
   channelId: string;
   title: string;
+  serverName?: string | null;
+  serverIconUrl?: string | null;
   currentUser: CallStageProps["currentUser"];
   voiceState: VoiceState;
   videoQuality: VideoQuality;
@@ -1350,6 +1362,9 @@ function ActiveCall({
               audio={shareAudioControl(soloTile)}
               dismissed={shareDismissControl(soloTile)}
               className="h-full w-full bg-black"
+              mediaTitle={title}
+              communityName={serverName}
+              coverUrl={serverIconUrl}
             />
           ) : stage.tiles.length > 0 ? (
             <ul
@@ -1416,6 +1431,9 @@ function ActiveCall({
                         audio={shareAudioControl(screenTile)}
                         dismissed={shareDismissControl(screenTile)}
                         className="h-full w-full"
+                        mediaTitle={title}
+                        communityName={serverName}
+                        coverUrl={serverIconUrl}
                       />
                     </li>
                   );
@@ -3154,6 +3172,9 @@ export function ScreenTileFrame({
   audio,
   dismissed,
   className,
+  mediaTitle,
+  communityName,
+  coverUrl,
 }: {
   tile: ScreenShareTile;
   videoRef?: RefObject<WebkitFullscreenVideo | null>;
@@ -3182,6 +3203,12 @@ export function ScreenTileFrame({
    */
   dismissed?: { active: boolean; onToggle: () => void };
   className?: string;
+  /** Party/presenter title for the watch player's lock-screen metadata. */
+  mediaTitle?: string;
+  /** Server or community name, shown as the lock screen's subtitle. */
+  communityName?: string | null;
+  /** Server icon, used as lock-screen artwork. */
+  coverUrl?: string | null;
 }) {
   const { t } = useTranslation();
   const menu = usePeerAudioMenu();
@@ -3230,6 +3257,9 @@ export function ScreenTileFrame({
           videoRef={videoRef}
           onDoubleClick={clickToFullscreen ? undefined : onToggleFullscreen}
           className={cn("h-full w-full", videoFitClass(fit.fit))}
+          mediaTitle={mediaTitle ?? tile.presenterName}
+          communityName={communityName}
+          coverUrl={coverUrl}
         />
       ) : (
         <StageVideo
