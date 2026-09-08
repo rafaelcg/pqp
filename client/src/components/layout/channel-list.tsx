@@ -1089,6 +1089,13 @@ export function ChannelList({
   return (
     <aside
       data-immersive-hide=""
+      // `md:relative md:left-auto`, and both halves matter. The handle is
+      // absolutely positioned and needs a positioned ancestor, which `static`
+      // is not. But turning this relative also switches ON the `left-[72px]`
+      // that the drawer layout sets and `static` was ignoring, and as a
+      // relative OFFSET that slid the whole column 72px to the right, over the
+      // composer. `left-auto` puts it back.
+      //
       // `--channel-sidebar-width` rather than an inline `width`: below `md`
       // this is a drawer pinned to `min(100%-72px,16rem)` and an inline width
       // would win there too. The variable is only consumed by the `md:` class,
@@ -1096,7 +1103,7 @@ export function ChannelList({
       style={
         { "--channel-sidebar-width": `${sidebarWidth}px` } as CSSProperties
       }
-      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative md:z-auto md:w-[var(--channel-sidebar-width)] md:translate-x-0 ${
+      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative md:left-auto md:z-auto md:w-[var(--channel-sidebar-width)] md:translate-x-0 ${
         mobileOpen
           ? "translate-x-0"
           : "-translate-x-[calc(100%+72px)] md:translate-x-0"
