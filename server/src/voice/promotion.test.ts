@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   blockJoinPromotion,
   decidePromotion,
+  decideVideoAdmission,
   estimateRoomMbps,
   estimateSfuLoadMbps,
   promotionBudgetMbps,
@@ -111,7 +112,12 @@ describe("the verdict", () => {
   it("promotes a small room onto a quiet box", () => {
     const verdict = decidePromotion({
       ...base,
-      rooms: [room({ participants: 10, videoPublishers: 2 })],
+      // Another room, by name. `loadMbps` is the box MINUS the room asking,
+      // so a fixture that reuses the default channel id is asking about
+      // itself and reads zero.
+      rooms: [
+        room({ channelId: "other", participants: 10, videoPublishers: 2 }),
+      ],
       room: room({ transport: "mesh", participants: 6, videoPublishers: 4 }),
     });
 
@@ -124,8 +130,10 @@ describe("the verdict", () => {
   it("refuses when this room would take the box over the budget", () => {
     const verdict = decidePromotion({
       ...base,
-      // 590 already on the box.
-      rooms: [room({ participants: 590 / 1.5, videoPublishers: 1 })],
+      // 590 already on the box, in somebody else's room.
+      rooms: [
+        room({ channelId: "other", participants: 590 / 1.5, videoPublishers: 1 }),
+      ],
       room: room({ transport: "mesh", participants: 6, videoPublishers: 4 }),
     });
 
@@ -275,5 +283,120 @@ describe("promotionRoomSize", () => {
     // Same rule as the budget: a typo must not silently reshape the night.
     process.env.VOICE_PROMOTION_ROOM_SIZE = "four";
     expect(promotionRoomSize()).toBe(MESH_ROOM_PROMOTION_SIZE);
+  });
+});
+
+/**
+ * THE SAME BUDGET, ASKED BY A ROOM THAT IS ALREADY ON THE BOX (2026-09-08).
+ *
+ * `CAMERA_LIMIT.livekit` was eight, and eight was ours rather than the box's:
+ * on an SFU the ninth camera costs its publisher exactly what the first did.
+ * What it does cost is egress, once per viewer, so the count is gone and this
+ * is what replaced it. Every number below is `docs/CAPACITY.md` arithmetic.
+ */
+describe("admitting one more camera on a room already on the SFU", () => {
+  it("admits while the box has room for what the room will cost", () => {
+    // 20 people, 3 cameras up, a fourth asking: 4 * 20 * 1.5 = 120 Mbit/s.
+    const asking = room({ participants: 20, videoPublishers: 4 });
+    const verdict = decideVideoAdmission({
+      rooms: [room({ participants: 20, videoPublishers: 3 })],
+      room: asking,
+      budgetMbps: 600,
+    });
+    expect(verdict.addedMbps).toBe(120);
+    expect(verdict.loadMbps).toBe(0);
+    expect(verdict.admit).toBe(true);
+  });
+
+  it("refuses when the room plus the rest of the box crosses the budget", () => {
+    const asking = room({ participants: 20, videoPublishers: 4 });
+    const verdict = decideVideoAdmission({
+      rooms: [
+        room({ channelId: "other", participants: 40, videoPublishers: 9 }),
+        room({ participants: 20, videoPublishers: 3 }),
+      ],
+      room: asking,
+      budgetMbps: 600,
+    });
+    // 9 * 40 * 1.5 = 540 elsewhere, plus this room's 120.
+    expect(verdict.loadMbps).toBe(540);
+    expect(verdict.addedMbps).toBe(120);
+    expect(verdict.admit).toBe(false);
+  });
+
+  it("prices the asking room whole rather than incrementally", () => {
+    // The trap: a new camera in a twenty-person room adds twenty downstreams,
+    // not one. An estimate that forgets the multiplier reads 1.5 here.
+    const before = decideVideoAdmission({
+      rooms: [room({ participants: 20, videoPublishers: 3 })],
+      room: room({ participants: 20, videoPublishers: 3 }),
+      budgetMbps: 600,
+    });
+    const after = decideVideoAdmission({
+      rooms: [room({ participants: 20, videoPublishers: 3 })],
+      room: room({ participants: 20, videoPublishers: 4 }),
+      budgetMbps: 600,
+    });
+    expect(after.addedMbps - before.addedMbps).toBe(30);
+  });
+
+  it("never counts the asking room twice", () => {
+    // The cluster's list already holds this room at its current cost. Adding
+    // the candidate on top of it would refuse rooms that fit comfortably.
+    const current = room({ participants: 20, videoPublishers: 8 });
+    const verdict = decideVideoAdmission({
+      rooms: [current],
+      room: room({ participants: 20, videoPublishers: 9 }),
+      budgetMbps: 300,
+    });
+    expect(verdict.loadMbps).toBe(0);
+    expect(verdict.addedMbps).toBe(270);
+    expect(verdict.admit).toBe(true);
+  });
+
+  it("takes a budget of zero as a real value: no new video, no deploy", () => {
+    const verdict = decideVideoAdmission({
+      rooms: [],
+      room: room({ participants: 2, videoPublishers: 1 }),
+      budgetMbps: 0,
+    });
+    expect(verdict.admit).toBe(false);
+  });
+
+  /**
+   * A CLIENT THAT LIES ABOUT ITS TILE SIZE GAINS NOTHING HERE.
+   *
+   * Simulcast and adaptive streaming are how a small tile receives a small
+   * layer, and both live on the client, so neither is a guarantee: a modified
+   * client can report a huge element, or ignore the ladder and demand the top
+   * layer for every publication in the room. The budget is what makes that
+   * harmless, and it is harmless because it never reads a number the client
+   * sent: `VIDEO_STREAM_MBPS` is the TOP of the camera ladder and every
+   * participant is charged for every publisher at that rate. A room admitted
+   * under the guard is therefore still inside the budget in the worst case
+   * where every viewer takes the top layer, which is exactly what a liar
+   * forces.
+   */
+  it("prices the worst case, so the top layer for everybody is already paid for", () => {
+    const asking = room({ participants: 20, videoPublishers: 20 });
+    const verdict = decideVideoAdmission({
+      rooms: [],
+      room: asking,
+      budgetMbps: 600,
+    });
+    const everyViewerOnTheTopLayer =
+      asking.participants * asking.videoPublishers * VIDEO_STREAM_MBPS;
+    expect(verdict.addedMbps).toBe(everyViewerOnTheTopLayer);
+    expect(verdict.addedMbps).toBe(600);
+    expect(verdict.admit).toBe(true);
+
+    // One more publisher in the same room is over it, and is refused.
+    expect(
+      decideVideoAdmission({
+        rooms: [],
+        room: room({ participants: 21, videoPublishers: 21 }),
+        budgetMbps: 600,
+      }).admit,
+    ).toBe(false);
   });
 });

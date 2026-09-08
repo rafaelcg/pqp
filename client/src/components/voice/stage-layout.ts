@@ -59,6 +59,16 @@ export interface StagePlan {
    * layout worth keeping now that everything else is a grid.
    */
   featured: boolean;
+  /**
+   * Publishers the bounded grid did not draw, by person key.
+   *
+   * They are not dropped from the call: `listenersOf` takes this list and puts
+   * them in the strip as chips, so a camera the grid could not fit is still a
+   * face with a name and a mute indicator, and the strip's own "+43" counts
+   * them like anybody else. Empty whenever the grid drew everything, which is
+   * every call that is not large.
+   */
+  overflowKeys: string[];
 }
 
 export interface StageScreenInput {
@@ -86,6 +96,13 @@ export function planStage(input: {
   people: readonly StagePersonInput[];
   /** The pinned tile id, when the user asked for one. */
   pinnedTileId?: string | null;
+  /**
+   * The most tiles this stage will draw. Omitted means no bound, which is what
+   * every test that predates the bound expects and what a one-tile call wants.
+   */
+  tileLimit?: number;
+  /** Person keys (a camera tile's `key`) that are speaking right now. */
+  speakingKeys?: ReadonlySet<string>;
 }): StagePlan {
   const screens: StageTile[] = input.screens.map((screen) => ({
     id: screen.peerId,
@@ -120,16 +137,146 @@ export function planStage(input: {
   // screen at a quarter of the stage, which is not what a room gathered to
   // watch it looks like. One screen only — two presenters is a comparison, and
   // the grid is right for that — and a pin always outranks it.
+  const slots = stageTileSlots(
+    ordered,
+    input.tileLimit ?? Number.POSITIVE_INFINITY,
+    input.speakingKeys ?? EMPTY_KEYS,
+  );
+  const shown = slots.shown;
   const watchParty =
     pinned === undefined &&
     screens.length === 1 &&
-    ordered.length >= 4 &&
-    ordered[0]?.kind === "screen";
+    shown.length >= 4 &&
+    shown[0]?.kind === "screen";
   return {
-    tiles: ordered,
+    tiles: shown,
     selfPreview,
-    featured: (pinned !== undefined || watchParty) && ordered.length > 1,
+    featured: (pinned !== undefined || watchParty) && shown.length > 1,
+    overflowKeys: slots.overflow.map((tile) => tile.key),
   };
+}
+
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
+
+/**
+ * HOW MANY PICTURES A STAGE DRAWS AT ONCE, AND WHY THERE IS A NUMBER AT ALL.
+ *
+ * The grid rendered every publisher until 2026-09-08, which was correct while
+ * the camera cap was eight. It is not correct in a room of twenty with twenty
+ * cameras: that is twenty subscriptions, twenty decoders and twenty tiles the
+ * size of a stamp, and the phone gives out long before the box does. Nothing
+ * about that is fixed by a smaller layer. A 180p stream is cheap; twenty of
+ * them still cost twenty decodes.
+ *
+ * So the grid is bounded, and the tiles it does not draw are not drawn at all
+ * rather than drawn small: an unmounted `<video>` unbinds from its track, and
+ * `remote-video-delivery.ts` then tells the server to stop forwarding it a
+ * second later. The bound is therefore a bandwidth control as much as a layout
+ * one, which is why it lives here beside the column count and not in CSS.
+ *
+ * TWELVE AND SIX, AND HOW THEY WERE PICKED. Both are the shape
+ * `stageGridColumns` already tops out at (four columns wide, three narrow)
+ * carried down to a whole number of rows. What decided the row count is what
+ * a tile that size actually costs a viewer, measured against a local LiveKit
+ * with this ladder published:
+ *
+ * | video element | layer received | per stream | decode per frame |
+ * |---|---|---|---|
+ * | 424x490 | 1280x720 | 703 kbps | 0.75 ms |
+ * | 424x360 | 640x360  | 317 kbps | 0.26 ms |
+ * | 350x197 | 320x180  | 145 kbps | 0.10 ms |
+ * | 160x90  | 320x180  | 149 kbps | 0.10 ms |
+ *
+ * A 1440px window gives the grid about 860 px, so four columns is a tile
+ * around 210 px wide and three on a phone is around 120 px. Both land on the
+ * bottom rung, which is about 150 kbps and a tenth of a millisecond of decode
+ * each: twelve of them is roughly 1.8 Mbit/s and six is under 1. Bandwidth is
+ * therefore NOT what sets these numbers, and saying otherwise would be the
+ * comfortable lie. What sets them is that a tile of a face below about 200 px
+ * has stopped being a picture of a person, and that a phone is holding six
+ * decoders plus a compositor plus the app. Twelve is where the grid stops
+ * being legible; the bandwidth is a rounding error by then, and that is only
+ * true because the ladder above exists.
+ */
+export const STAGE_TILE_LIMIT_WIDE = 12;
+export const STAGE_TILE_LIMIT_NARROW = 6;
+
+export interface StageTileSlots {
+  /** The tiles the grid draws, in stage order. */
+  shown: StageTile[];
+  /** Publishers the grid could not fit. They become chips in the strip. */
+  overflow: StageTile[];
+}
+
+/**
+ * Which pictures survive the bound, and in what order they are drawn.
+ *
+ * Deliberately the same shape as `listenerStripSlots`, because it is the same
+ * problem one size up, and the rules are its rules:
+ *
+ *  1. Every share. A room gathers around a screen; there are at most four of
+ *     them (`SCREEN_SHARE_LIMIT`) and cutting one would hide the thing people
+ *     came for to make space for a face.
+ *  2. The first tile, which is the pin when there is one. Somebody who asked
+ *     for a picture keeps it.
+ *  3. Our own camera. Same reason our own chip is always in the strip: a
+ *     person who cannot see their own picture concludes it is not going out.
+ *  4. Anybody speaking. This is the only rule that makes a bounded grid better
+ *     than the first twelve people in roster order, and it is the whole answer
+ *     to "the person talking is on page two".
+ *  5. Everyone else in stage order, until the bound.
+ *
+ * The chosen set is then drawn in STAGE order, not in priority order, so a
+ * person who says "yeah" does not jump to the front and shove eleven tiles
+ * sideways. Membership changes; position does not.
+ *
+ * And, exactly as in the strip: with one publisher over the bound the last
+ * slot goes to them rather than to a "+1", because "+1" is never worth a face.
+ */
+export function stageTileSlots(
+  tiles: readonly StageTile[],
+  limit: number,
+  speakingKeys: ReadonlySet<string>,
+): StageTileSlots {
+  if (limit <= 0) {
+    return { shown: [], overflow: [...tiles] };
+  }
+  if (tiles.length <= limit + 1) {
+    return { shown: [...tiles], overflow: [] };
+  }
+  const index = new Map(tiles.map((tile, at) => [tile.id, at]));
+  const picked = new Map<string, StageTile>();
+  const take = (tile: StageTile) => {
+    if (picked.size < limit) {
+      picked.set(tile.id, tile);
+    }
+  };
+  for (const tile of tiles) {
+    if (tile.kind === "screen") {
+      take(tile);
+    }
+  }
+  if (tiles[0]) {
+    take(tiles[0]);
+  }
+  for (const tile of tiles) {
+    if (tile.isSelf) {
+      take(tile);
+    }
+  }
+  for (const tile of tiles) {
+    if (speakingKeys.has(tile.key)) {
+      take(tile);
+    }
+  }
+  for (const tile of tiles) {
+    take(tile);
+  }
+  const byOrder = (a: StageTile, b: StageTile) =>
+    (index.get(a.id) ?? 0) - (index.get(b.id) ?? 0);
+  const shown = [...picked.values()].sort(byOrder);
+  const overflow = tiles.filter((tile) => !picked.has(tile.id));
+  return { shown, overflow };
 }
 
 /**
@@ -145,10 +292,19 @@ export function listenersOf<T extends StagePersonInput>(
   screens: readonly StageScreenInput[],
   /** Our own peer id, which is how our own share is spelled in `screens`. */
   localPeerId: string | null,
+  /**
+   * People whose camera the bounded grid could not draw (`StagePlan.overflowKeys`).
+   *
+   * They publish, so the rule above would send them to the stage, and the
+   * stage has already said no. A chip is what is left, and it is the right
+   * thing: the alternative is a person who is in the call, with their camera
+   * on, appearing nowhere on the screen at all.
+   */
+  demoted: ReadonlySet<string> = EMPTY_KEYS,
 ): T[] {
   const presenting = new Set(screens.map((screen) => screen.peerId));
   return people.filter((person) => {
-    if (person.stream != null) {
+    if (person.stream != null && !demoted.has(person.key)) {
       return false;
     }
     const peerId = person.isSelf ? localPeerId : person.key;

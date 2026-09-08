@@ -878,3 +878,124 @@ describe("promoting a mesh room so more cameras fit", () => {
     });
   });
 });
+
+/**
+ * THE NINTH CAMERA (2026-09-08).
+ *
+ * `CAMERA_LIMIT.livekit` was 8, and 8 was a number lying around (the mesh room
+ * size) rather than anything about the box. On the voice server a publisher
+ * uploads once whatever the room size, so a count refuses people for no reason
+ * anybody can point at. What one more camera does cost is egress, once per
+ * viewer, and that is the budget the promotion guard already prices. These
+ * cases are the count's replacement.
+ */
+describe("more cameras on a room already on the SFU", () => {
+  let channel: string;
+
+  beforeEach(() => {
+    for (const socket of openSockets) {
+      deleteAuthenticatedSocket(socket);
+    }
+    openSockets.length = 0;
+    resetVoicePeers();
+    resetVoiceRateLimits();
+    resetVoiceRoomTransports();
+    resetVoicePromotions();
+    backend.configured = "livekit";
+    // Ten or more members pins the room to the voice server on the first join,
+    // so nothing here is a promotion.
+    rows.memberCount = 40;
+    channel = randomUUID();
+    delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_BUDGET === undefined) {
+      delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+    } else {
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = ORIGINAL_BUDGET;
+    }
+  });
+
+  async function roomOf(size: number): Promise<Seat[]> {
+    const people: Seat[] = [];
+    for (let at = 0; at < size; at += 1) {
+      people.push(await seat(channel));
+    }
+    expect(getRoomTransport(channel)).toBe("livekit");
+    return people;
+  }
+
+  it("lets a twelfth camera on, where the old count refused the ninth", async () => {
+    const people = await roomOf(12);
+
+    for (const person of people) {
+      await cameraOn(person, channel);
+    }
+
+    for (const person of people) {
+      expect(typesOf(person)).not.toContain("camera-denied");
+    }
+    expect(camerasOn(people[0]!)).toBe(12);
+    // The constant that used to answer this question no longer has an answer.
+    expect(CAMERA_LIMIT.livekit).toBeNull();
+  });
+
+  it("refuses the camera that would take the box over its budget", async () => {
+    // Six people; the fourth camera prices the room at 4 * 6 * 1.5 = 36.
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "30";
+    const people = await roomOf(6);
+
+    for (const person of people.slice(0, 3)) {
+      await cameraOn(person, channel);
+    }
+    expect(camerasOn(people[0]!)).toBe(3);
+
+    await cameraOn(people[3]!, channel);
+
+    expect(typesOf(people[3]!)).toContain("camera-denied");
+    expect(camerasOn(people[0]!)).toBe(3);
+  });
+
+  it("admits the same camera once the budget covers it", async () => {
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "36";
+    const people = await roomOf(6);
+
+    for (const person of people.slice(0, 4)) {
+      await cameraOn(person, channel);
+    }
+
+    expect(typesOf(people[3]!)).not.toContain("camera-denied");
+    expect(camerasOn(people[0]!)).toBe(4);
+  });
+
+  it("never prices a camera that is only re-declaring itself", async () => {
+    // A webcam switch mints a new stream id for a publication that is already
+    // up. It adds nothing to the box, so a budget that is exactly full must
+    // not take somebody's live camera away for changing device.
+    const people = await roomOf(6);
+    for (const person of people.slice(0, 4)) {
+      await cameraOn(person, channel);
+    }
+    expect(camerasOn(people[0]!)).toBe(4);
+
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "1";
+    await handleVoiceMessage(
+      { socket: people[0]!.socket, user: people[0]!.user },
+      { type: "set-camera", streamId: "a-different-webcam" },
+    );
+
+    expect(typesOf(people[0]!)).not.toContain("camera-denied");
+    expect(camerasOn(people[0]!)).toBe(4);
+  });
+
+  it("always lets a camera turn off, whatever the budget says", async () => {
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "0";
+    const people = await roomOf(3);
+    await handleVoiceMessage(
+      { socket: people[0]!.socket, user: people[0]!.user },
+      { type: "set-camera", streamId: null },
+    );
+    expect(typesOf(people[0]!)).not.toContain("camera-denied");
+  });
+});

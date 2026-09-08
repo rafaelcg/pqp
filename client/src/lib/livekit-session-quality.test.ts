@@ -53,6 +53,7 @@ interface PublishedTrack {
     videoEncoding?: { maxBitrate?: number; maxFramerate?: number };
     screenShareEncoding?: { maxBitrate?: number; maxFramerate?: number };
     screenShareSimulcastLayers?: FakePreset[];
+    videoSimulcastLayers?: FakePreset[];
     degradationPreference?: string;
   };
 }
@@ -159,9 +160,16 @@ class FakeRoom {
     ) => {
       published.push({ track, options });
       if (options.source) {
-        const layers = options.simulcast
-          ? (options.screenShareSimulcastLayers?.length ?? 0) + 1
-          : 1;
+        // Per source, exactly as `computeVideoEncodings` reads it: a camera's
+        // rungs are `videoSimulcastLayers` and a screen's are
+        // `screenShareSimulcastLayers`. Counting the wrong one here would give
+        // the camera a one-encoding sender and quietly stop the "only the top
+        // layer moves" rule from being tested at all.
+        const rungs =
+          options.source === Track.Source.ScreenShare
+            ? options.screenShareSimulcastLayers
+            : options.videoSimulcastLayers;
+        const layers = options.simulcast ? (rungs?.length ?? 0) + 1 : 1;
         publications.set(options.source, {
           track: { sender: fakeSender(options.source, layers) },
         });
@@ -269,11 +277,17 @@ vi.stubGlobal(
 
 const { connectLiveKit } = await import("./livekit-session");
 
-function fakeTrack(kind: "audio" | "video", id: string) {
+function fakeTrack(kind: "audio" | "video", id: string, height = 720) {
+  const settings = { width: Math.round((height * 16) / 9), height };
   return {
     kind,
     id,
     contentHint: "",
+    // The camera's ladder is solved against the capture's real size, so a
+    // fake that reports none would publish the ladder for the size we asked
+    // for and never exercise the rule that drops a rung.
+    __settings: settings,
+    getSettings: () => settings,
     getConstraints: () => ({
       frameRate: { ideal: 30, max: 30 },
       height: { max: 1080 },
@@ -287,8 +301,12 @@ function fakeTrack(kind: "audio" | "video", id: string) {
   } as unknown as MediaStreamTrack;
 }
 
-function fakeStream(kind: "audio" | "video", id: string): MediaStream {
-  const track = fakeTrack(kind, id);
+function fakeStream(
+  kind: "audio" | "video",
+  id: string,
+  height = 720,
+): MediaStream {
+  const track = fakeTrack(kind, id, height);
   return {
     id: `stream-${id}`,
     getTracks: () => [track],
@@ -343,6 +361,28 @@ beforeEach(() => {
 
 function encodingFor(source: string) {
   return published.find((entry) => entry.options.source === source)?.options;
+}
+
+function lastPublish(source: string) {
+  return [...published].reverse().find((entry) => entry.options.source === source)
+    ?.options;
+}
+
+function publishCalls(source: string) {
+  return published.filter((entry) => entry.options.source === source).length;
+}
+
+/** A live capture resized in place, which is what a quality change does. */
+function resizeCamera(height: number) {
+  const entry = [...published]
+    .reverse()
+    .find((e) => e.options.source === Track.Source.Camera);
+  const settings = (entry?.track as { __settings?: { width: number; height: number } })
+    ?.__settings;
+  if (settings) {
+    settings.height = height;
+    settings.width = Math.round((height * 16) / 9);
+  }
 }
 
 function lastScreenPublish() {
@@ -507,10 +547,66 @@ describe("the screen goes up as simulcast layers", () => {
     expect(constrained).toEqual([1080]);
   });
 
-  it("keeps the camera as a single layer", async () => {
+  // THE CAMERA IS THE OTHER HALF OF THE SAME ARGUMENT, and it was `false`
+  // here until 2026-09-08: one copy of a face on the server and every viewer
+  // receiving it whatever size their tile was. `adaptiveStream` cannot ask for
+  // a layer nobody encodes, so a room of twenty cameras was twenty full-size
+  // streams into every phone. These pin the ladder that fixed it.
+  it("publishes the camera as a ladder, not as one layer", async () => {
     const sfu = await session();
     await sfu.publishCamera(fakeStream("video", "cam"));
-    expect(encodingFor(Track.Source.Camera)?.simulcast).toBe(false);
+
+    const options = encodingFor(Track.Source.Camera);
+    expect(options?.simulcast).toBe(true);
+    expect(options?.videoSimulcastLayers?.map((l) => l.height)).toEqual([
+      180, 360,
+    ]);
+    // `videoEncoding`, not `screenShareEncoding`: the library reads a
+    // different field per source and the camera's is this one.
+    expect(options?.videoEncoding?.maxBitrate).toBe(1_500_000);
+  });
+
+  it("drops a rung the capture is not big enough for", async () => {
+    const sfu = await session();
+    await sfu.publishCamera(fakeStream("video", "cam", 360));
+
+    expect(
+      encodingFor(Track.Source.Camera)?.videoSimulcastLayers?.map(
+        (l) => l.height,
+      ),
+    ).toEqual([180]);
+  });
+
+  it("republishes a live camera when its capture crosses a rung", async () => {
+    const sfu = await session();
+    await sfu.publishCamera(fakeStream("video", "cam", 360));
+    expect(
+      encodingFor(Track.Source.Camera)?.videoSimulcastLayers?.map(
+        (l) => l.height,
+      ),
+    ).toEqual([180]);
+
+    // The same track, resized in place by a quality change. Nothing
+    // republishes on its own; `use-voice.ts` asks after `applyCameraQuality`.
+    resizeCamera(1080);
+    await sfu.reconcileCameraLadder();
+
+    expect(
+      lastPublish(Track.Source.Camera)?.videoSimulcastLayers?.map(
+        (l) => l.height,
+      ),
+    ).toEqual([180, 360]);
+  });
+
+  it("does not republish when the ladder is unchanged", async () => {
+    const sfu = await session();
+    await sfu.publishCamera(fakeStream("video", "cam", 720));
+    const before = publishCalls(Track.Source.Camera);
+
+    resizeCamera(1080);
+    await sfu.reconcileCameraLadder();
+
+    expect(publishCalls(Track.Source.Camera)).toBe(before);
   });
 
   it("turns adaptive streaming on for the room", async () => {

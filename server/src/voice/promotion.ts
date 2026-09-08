@@ -227,11 +227,14 @@ export interface PromotionInput {
  * one), so it is not double counted.
  */
 export function decidePromotion(input: PromotionInput): PromotionVerdict {
-  const loadMbps = estimateSfuLoadMbps(input.rooms);
-  const addedMbps = estimateRoomMbps({ ...input.room, transport: "livekit" });
+  const budget = decideVideoAdmission({
+    rooms: input.rooms,
+    room: input.room,
+    budgetMbps: input.budgetMbps,
+  });
   const base = {
-    loadMbps,
-    addedMbps,
+    loadMbps: budget.loadMbps,
+    addedMbps: budget.addedMbps,
     budgetMbps: input.budgetMbps,
   };
   if (!input.liveKitConfigured) {
@@ -240,8 +243,76 @@ export function decidePromotion(input: PromotionInput): PromotionVerdict {
   if (input.sfuReachable === false) {
     return { ...base, promote: false, refusal: "unreachable" };
   }
-  if (loadMbps + addedMbps > input.budgetMbps) {
+  if (!budget.admit) {
     return { ...base, promote: false, refusal: "budget" };
   }
   return { ...base, promote: true, refusal: null };
+}
+
+// --------------------------------------------------- admission on a live room
+
+/**
+ * THE SAME BUDGET, ASKED BY A ROOM THAT IS ALREADY ON THE BOX.
+ *
+ * `CAMERA_LIMIT.livekit` used to be eight. Eight was ours: it matched the mesh
+ * room size because that number was lying around, and it described nothing
+ * about the box. The SFU forwards, so the ninth camera costs its publisher one
+ * uplink exactly like the first, and refusing it bought nobody anything. What
+ * the ninth camera does cost is egress, once per viewer, and egress is what
+ * this module already prices for a promotion. So the count is gone and the
+ * price is the rule in both places.
+ *
+ * WHY THE ROOM IS PRICED WHOLE RATHER THAN INCREMENTALLY. The room asking is
+ * removed from the box's total and added back at what it will cost with the
+ * new publication, because `estimateRoomMbps` is `publishers x participants`:
+ * a new camera in a twenty-person room adds twenty downstreams, not one, and
+ * an increment that forgets the multiplier is the kind of arithmetic that
+ * looks right until the room is large.
+ *
+ * WHY A LIAR GAINS NOTHING. `VIDEO_STREAM_MBPS` is the top of the camera
+ * ladder (`cameraBitrateFor("auto")` is 1.5 Mbit/s), and the estimate charges
+ * every participant for every publisher at that rate. A viewer whose client
+ * reports a huge tile, or which ignores the ladder entirely and demands the
+ * top layer for all of them, is therefore already paid for: the budget prices
+ * the worst case, and simulcast and adaptive streaming only ever spend less
+ * than it. Nothing here trusts a number the client sent.
+ */
+export interface VideoAdmissionInput {
+  /** Every room the cluster can see, this one included, as it stands now. */
+  rooms: readonly SfuRoomLoad[];
+  /** The room asking, priced as it WILL be once the publication lands. */
+  room: SfuRoomLoad;
+  budgetMbps: number;
+}
+
+export interface VideoAdmissionVerdict {
+  admit: boolean;
+  /** Estimated Mbit/s on the box excluding the asking room, for the log line. */
+  loadMbps: number;
+  /** What the asking room will cost once the publication lands. */
+  addedMbps: number;
+  budgetMbps: number;
+}
+
+/**
+ * May one more camera (or share) go up in this room?
+ *
+ * A budget of zero closes the box, which is the documented way to stop new
+ * video without a deploy; a negative or unreadable env value never reaches
+ * here (`promotionBudgetMbps` turns it back into the default).
+ */
+export function decideVideoAdmission(
+  input: VideoAdmissionInput,
+): VideoAdmissionVerdict {
+  const others = input.rooms.filter(
+    (room) => room.channelId !== input.room.channelId,
+  );
+  const loadMbps = estimateSfuLoadMbps(others);
+  const addedMbps = estimateRoomMbps({ ...input.room, transport: "livekit" });
+  return {
+    admit: loadMbps + addedMbps <= input.budgetMbps,
+    loadMbps,
+    addedMbps,
+    budgetMbps: input.budgetMbps,
+  };
 }

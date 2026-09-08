@@ -95,6 +95,8 @@ import {
   planStage,
   stageGridColumns,
   tileClickFullscreens,
+  STAGE_TILE_LIMIT_NARROW,
+  STAGE_TILE_LIMIT_WIDE,
   STRIP_LIMIT_NARROW,
   STRIP_LIMIT_WIDE,
 } from "@/components/voice/stage-layout";
@@ -999,8 +1001,25 @@ function ActiveCall({
     })),
     people: allPeople,
     pinnedTileId,
+    // The grid is bounded, and the bound is the device's, not the room's: a
+    // laptop draws twelve pictures and a phone six. Everything past it becomes
+    // a chip in the strip, and its stream stops arriving a second later
+    // because nothing is bound to it (`remote-video-delivery.ts`).
+    tileLimit: wide ? STAGE_TILE_LIMIT_WIDE : STAGE_TILE_LIMIT_NARROW,
+    speakingKeys: speaking,
   });
-  const listeners = listenersOf(allPeople, screenTiles, voiceState.peerId);
+  const overflowKeys = useMemo(
+    () => new Set(stage.overflowKeys),
+    // The array is rebuilt on every render; only its contents decide.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stage.overflowKeys.join("|")],
+  );
+  const listeners = listenersOf(
+    allPeople,
+    screenTiles,
+    voiceState.peerId,
+    overflowKeys,
+  );
   const gridColumns = stageGridColumns(stage.tiles.length, wide);
   const clickFullscreens = tileClickFullscreens(stage.tiles.length);
   const anyVideo = hasVideo;
@@ -2180,7 +2199,7 @@ export function CallControls({
         }
         detail={
           cameraCappedOut
-            ? t("voice.control.cameraLimit", { limit: cameraLimit })
+            ? t("voice.control.cameraLimit", { limit: cameraLimit ?? 0 })
             : undefined
         }
       >

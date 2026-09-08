@@ -6,6 +6,10 @@ import {
   HUGE_ROOM_1080P_LIMIT,
   cameraBitrateFor,
   cameraConstraintsFor,
+  cameraProfileFor,
+  cameraSimulcastRungs,
+  cameraSimulcastRungsFor,
+  CAMERA_SIMULCAST_RUNGS,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
   hlsSourceTopHeight,
@@ -464,5 +468,62 @@ describe("the presenter as the ladder's source", () => {
   it("a small room is unchanged either way", () => {
     expect(screenSimulcastPlan("auto", 3).topHeight).toBe(1080);
     expect(screenSimulcastPlan("auto", 3, LIVE).topHeight).toBe(1080);
+  });
+});
+
+/**
+ * THE CAMERA'S LADDER (2026-09-08).
+ *
+ * The camera published one layer, so `adaptiveStream` had nothing to choose
+ * from and every viewer received the full picture into whatever size tile they
+ * had. In a room of twenty cameras that is twenty full streams into every
+ * phone, which is why the product had a headcount cap instead of a room.
+ */
+describe("the camera's simulcast rungs", () => {
+  it("is the same 360p picture the menu names, so a label means one thing", () => {
+    const mid = CAMERA_SIMULCAST_RUNGS.find((rung) => rung.height === 360);
+    const menu = cameraProfileFor("360p");
+    expect(mid?.width).toBe(menu.width);
+    expect(mid?.maxBitrate).toBe(menu.maxBitrate);
+  });
+
+  it("gives a 720p capture both rungs under it", () => {
+    expect(cameraSimulcastRungs(720).map((rung) => rung.height)).toEqual([
+      180, 360,
+    ]);
+  });
+
+  it("never publishes a rung at or above the capture: that is an upscale", () => {
+    expect(cameraSimulcastRungs(360).map((rung) => rung.height)).toEqual([180]);
+    expect(cameraSimulcastRungs(180)).toEqual([]);
+    expect(cameraSimulcastRungs(120)).toEqual([]);
+  });
+
+  it("keeps every rung under a 1080p capture", () => {
+    expect(cameraSimulcastRungs(1080).map((rung) => rung.height)).toEqual([
+      180, 360,
+    ]);
+  });
+
+  it("plans from the size a quality asks the camera for", () => {
+    expect(cameraSimulcastRungsFor("auto").map((r) => r.height)).toEqual([
+      180, 360,
+    ]);
+    expect(cameraSimulcastRungsFor("360p").map((r) => r.height)).toEqual([180]);
+  });
+
+  it("is ordered smallest first, which is the order the library wants", () => {
+    const heights = CAMERA_SIMULCAST_RUNGS.map((rung) => rung.height);
+    expect([...heights].sort((a, b) => a - b)).toEqual(heights);
+  });
+
+  it("costs less on every rung than the rung above it", () => {
+    const rates = [
+      ...CAMERA_SIMULCAST_RUNGS.map((rung) => rung.maxBitrate),
+      cameraBitrateFor("auto"),
+    ];
+    for (let at = 1; at < rates.length; at += 1) {
+      expect(rates[at]!).toBeGreaterThan(rates[at - 1]!);
+    }
   });
 });
