@@ -5088,6 +5088,8 @@ function MainAppContent({
             onShapeChange={handleStageShape}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
+            serverName={selectedServer?.name ?? null}
+            serverIconUrl={selectedServer?.iconUrl ?? null}
             currentUser={{
               id: user.id,
               displayName: user.displayName,
