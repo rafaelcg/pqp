@@ -44,6 +44,7 @@ import {
   isWatchPartyChannelType,
   liveStateFromRoster,
   liveStateFromStream,
+  type WatchParty,
   type Channel,
   type ChannelLiveState,
   type ChannelType,
@@ -51,6 +52,7 @@ import {
   type VoiceParticipant,
 } from "@pqp/shared";
 import type { ChannelLive } from "@/hooks/use-voice";
+import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { SearchDialog } from "@/components/search/search-dialog";
 import {
   ChannelIcon,
@@ -174,6 +176,14 @@ interface ChannelListProps {
    * open the channel and then hit Join. Single click still just selects.
    */
   onJoinVoice?: (channelId: string) => void;
+  /**
+   * Live watch parties in this server, for the block above the categories.
+   * Empty (or absent) draws nothing at all. See
+   * `components/watch-party/live-party-block.tsx`.
+   */
+  liveParties?: readonly WatchParty[];
+  /** One click: select the channel, which is what starts watching. */
+  onWatchLiveParty?: (channelId: string) => void;
   /** The signed-in account, for self-drag and "mute for me". */
   currentUserId?: string | null;
   /** Seats with a move in flight: no second drag. */
@@ -289,6 +299,8 @@ export function ChannelList({
   unread,
   onSelectChannel,
   onJoinVoice,
+  liveParties,
+  onWatchLiveParty,
   currentUserId = null,
   pendingMoveUserIds = [],
   peerVolumes = {},
@@ -1303,6 +1315,20 @@ export function ChannelList({
                   renderRow(channel, visibleFavs, true),
                 )}
               </PinnedChannelsSection>
+            )}
+
+            {/* Above the categories, above the pins, above everything: a
+                live watch party is an event and it goes at the top of the
+                room. It disappears the moment the party ends. */}
+            {watchPartyOn && onWatchLiveParty && (
+              <LivePartyBlock
+                parties={liveParties ?? []}
+                selectedChannelId={selectedChannelId}
+                onWatch={(channelId) => {
+                  onWatchLiveParty(channelId);
+                  onMobileClose?.();
+                }}
+              />
             )}
 
             {communityHomeEnabled && server && onSelectCommunityHome && (
@@ -2426,6 +2452,7 @@ function ChannelRow({
           <button
             type="button"
             data-channel-join=""
+            data-channel-watch={live ? "" : undefined}
             draggable={false}
             className={cn(
               "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold",
@@ -2433,13 +2460,18 @@ function ChannelRow({
                 ? "bg-danger/15 text-danger hover:bg-danger/25"
                 : "bg-ink-4/70 text-paper-muted hover:bg-ink-4 hover:text-paper",
             )}
+            title={live ? t("watchParty.live.watchHint") : undefined}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              onJoinVoice();
+              if (live) {
+                onSelect();
+                return;
+              }
+              onJoinVoice?.();
             }}
           >
-            {t("chrome.watchPartyJoin")}
+            {live ? t("watchParty.live.watch") : t("chrome.watchPartyJoin")}
           </button>
         )}
         {onToggleFavorite && (

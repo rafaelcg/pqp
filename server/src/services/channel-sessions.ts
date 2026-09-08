@@ -29,11 +29,13 @@ import { forEachAuthenticatedSocket } from "../ws/sockets.js";
 interface ChannelSessionRow {
   id: string;
   channel_id: string;
+  /** The event's owner. See services/watch-parties.ts and docs/WATCH_PARTY.md. */
+  host_user_id: string;
   server_id: string | null;
   title: string;
   description: string | null;
   cover_image_key: string | null;
-  starts_at: Date;
+  starts_at: Date | null;
   status: ChannelSessionStatus;
   created_by: string;
   created_at: Date;
@@ -53,7 +55,10 @@ function mapSession(
     // Cover image upload is not wired yet (see the PR notes); the column
     // exists so it can be added without another migration.
     coverImageUrl: null,
-    startsAt: row.starts_at.toISOString(),
+    // Only a `draft` (the watch party setup state) has no time, and no
+    // legacy list query returns one, so this fallback is never the answer a
+    // schedule surface sees. It exists because the column became nullable.
+    startsAt: row.starts_at ? row.starts_at.toISOString() : "",
     status: row.status,
     createdBy: row.created_by,
     createdAt: row.created_at.toISOString(),
@@ -63,7 +68,7 @@ function mapSession(
 }
 
 const SESSION_COLUMNS =
-  "id, channel_id, server_id, title, description, cover_image_key, starts_at, status, created_by, created_at, updated_at";
+  "id, channel_id, server_id, title, description, cover_image_key, starts_at, status, created_by, host_user_id, created_at, updated_at";
 
 export class ChannelSessionError extends Error {
   constructor(
@@ -96,8 +101,8 @@ export async function createChannelSession(input: {
   try {
     const result = await getPool().query<ChannelSessionRow>(
       `INSERT INTO channel_sessions
-         (channel_id, server_id, title, description, starts_at, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (channel_id, server_id, title, description, starts_at, created_by, host_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $6)
        RETURNING ${SESSION_COLUMNS}`,
       [
         input.channelId,
@@ -110,7 +115,7 @@ export async function createChannelSession(input: {
     );
     return mapSession(result.rows[0], false);
   } catch (error) {
-    // The partial unique index (`status IN ('scheduled', 'live')`) is what
+    // The partial unique index (`status IN ('draft', 'scheduled', 'live')`) is what
     // throws here; translate it into the same error shape as everything
     // else in this file rather than leaking a raw pg constraint name.
     if (
@@ -268,12 +273,22 @@ export async function setChannelSessionReminder(
  * The seam a stream start calls. Idempotent: a session already live or past
  * scheduling is left alone, so a second screen-share in the same room is a
  * no-op rather than a re-fire of the live reminder.
+ *
+ * THIS IS THE SECOND WAY A SESSION GOES LIVE, and it is deliberately weaker
+ * than the first. The watch party journey has one deliberate act, "Ir ao
+ * vivo" (`POST /api/watch-parties/:id/state`), which is what a host uses. A
+ * bare screen share still flips a `scheduled` session live, because PR #352
+ * attaches a session to ANY channel and on a plain voice channel a share is
+ * the only signal there is. It never touches a `draft`: a draft is somebody
+ * setting up, and nothing they do to their own preview may broadcast it.
  */
 export async function markChannelSessionLive(
   channelId: string,
 ): Promise<string | null> {
   const result = await getPool().query<{ id: string }>(
-    `UPDATE channel_sessions SET status = 'live', updated_at = NOW()
+    `UPDATE channel_sessions
+        SET status = 'live', went_live_at = NOW(),
+            host_disconnected_at = NULL, updated_at = NOW()
       WHERE channel_id = $1 AND status = 'scheduled'
       RETURNING id`,
     [channelId],
@@ -286,7 +301,9 @@ export async function markChannelSessionEnded(
   channelId: string,
 ): Promise<void> {
   await getPool().query(
-    `UPDATE channel_sessions SET status = 'ended', updated_at = NOW()
+    `UPDATE channel_sessions
+        SET status = 'ended', ended_at = NOW(),
+            host_disconnected_at = NULL, updated_at = NOW()
       WHERE channel_id = $1 AND status = 'live'`,
     [channelId],
   );

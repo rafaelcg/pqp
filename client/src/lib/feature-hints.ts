@@ -16,6 +16,8 @@ import {
  */
 
 export const FEATURE_HINT_IDS = [
+  "watchPartyHost",
+  "watchPartyViewer",
   "watchParty",
   "composerFormat",
   "channelPin",
@@ -25,6 +27,8 @@ export const FEATURE_HINT_IDS = [
 export type FeatureHintId = (typeof FEATURE_HINT_IDS)[number];
 
 export const FEATURE_HINT_STORAGE_KEYS = {
+  watchPartyHost: "pqp:feature-hint-watch-party-host-2026-09",
+  watchPartyViewer: "pqp:feature-hint-watch-party-viewer-2026-09",
   watchParty: "pqp:feature-hint-watch-party-2026-09",
   composerFormat: "pqp:feature-hint-composer-format-2026-09",
   channelPin: "pqp:feature-hint-channel-pin-2026-09",
@@ -33,6 +37,12 @@ export const FEATURE_HINT_STORAGE_KEYS = {
 
 /** Attached to a control, not the corner. First match mounts. */
 export const ATTACHED_FEATURE_HINT_ORDER = [
+  // The two watch party hints come first and are the most specific: a person
+  // setting a show up, and a person who has just landed in one. Both are
+  // moments, not states, so they must not queue behind the standing "share is
+  // on the call bar" tip that fires for anyone in any call.
+  "watchPartyHost",
+  "watchPartyViewer",
   "watchParty",
   "composerFormat",
   "channelPin",
@@ -81,6 +91,34 @@ export function shouldOfferWatchPartyHint(input: {
     input.canStream &&
     input.canShare
   );
+}
+
+/**
+ * A host on the setup surface for the first time. The one sentence they need
+ * is that nothing is going out yet, which is the whole difference between
+ * this feature and what it replaced.
+ */
+export function shouldOfferWatchPartyHostHint(input: {
+  seen: boolean;
+  automated: boolean;
+  /** The draft setup surface is on screen and this person is running it. */
+  settingUp: boolean;
+}): boolean {
+  return !input.seen && !input.automated && input.settingUp;
+}
+
+/**
+ * A viewer watching a live party for the first time. Two facts, and both are
+ * things people get wrong: they are NOT in the call, and the picture is
+ * behind the chat.
+ */
+export function shouldOfferWatchPartyViewerHint(input: {
+  seen: boolean;
+  automated: boolean;
+  /** A live party's picture is on screen and this person has no seat. */
+  watching: boolean;
+}): boolean {
+  return !input.seen && !input.automated && input.watching;
 }
 
 export function shouldOfferComposerFormatHint(input: {

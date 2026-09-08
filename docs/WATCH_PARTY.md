@@ -1,8 +1,289 @@
-# Watch party channels
+# Watch party
 
-A watch party used to be a button on any voice channel. It is now also a
-channel of its own: created with a name like `cinemoon`, joined by everyone
-as audience, with a stage only some people may take.
+A watch party used to be a button on any voice channel. It is now three
+things, and this document is in that order:
+
+1. **The event** (below): a party with a name, a host, co-hosts, options and a
+   state machine. This is what a person creates, sets up, and takes live.
+2. **The channel type** (`channels.type = 'watch_party'`): the room the event
+   runs in, with a stage only some people may take.
+3. **The stream**: LiveKit egress turning the presenter's screen into an HLS
+   playlist that an audience watches without a seat.
+
+They are deliberately separable. A party is live because somebody pressed Ir
+ao vivo; a picture exists because somebody is sharing. Conflating those two
+was the bug that made a viewer stare at a blank pane and conclude nothing
+worked.
+
+## The event
+
+### One row, not two
+
+There is no `watch_parties` table. **A party IS a `channel_sessions` row**,
+extended with `host_user_id`, `options`, `went_live_at`, `ended_at`,
+`host_disconnected_at` and a `channel_session_cohosts` side table.
+
+That was a decision, not an accident. `channel_sessions` (PR #352) already
+carried the title, the channel, the creator and the reminder subscriptions,
+and its partial unique index already said "one active per channel", which is
+exactly the cardinality a party wants. A scheduled session that goes live does
+not become a different object: it changes state. So "the thing I set a
+reminder for" and "the thing that is on air" have one id and one history, and
+the reminder machinery, the no-show sweep and the sidebar hint all keep
+working untouched.
+
+The cost is a table whose name no longer says what it holds. That is the
+lesser evil against two tables that have to agree about which one is real.
+
+### The state machine
+
+`packages/shared/src/watch-party-session.ts` is the only place the legal moves
+are written down, and both sides import it. The client renders a button
+because this module says the action is allowed; the server allows the request
+for the same reason.
+
+```
+                +-------------+
+   create ----> |    draft    |  private to the host and co-hosts
+                +------+------+
+                  |    |    \
+        add a time |    |     \  Ir ao vivo
+                  v    |      v
+             +---------+--+  +--------+
+             | scheduled  |->|  live  |
+             +-----+---+--+  +---+----+
+                   |    \        |
+       cancel      |     \ no-show, or the host never came back
+                   v      v      v
+              +-----------+   +-------+
+              | cancelled |   | ended |
+              +-----------+   +-------+
+```
+
+Every move and only these: `draft -> scheduled | live | cancelled`,
+`scheduled -> draft | live | ended | cancelled`, `live -> ended`. `ended` and
+`cancelled` are terminal and nothing leaves them, including a move to
+themselves.
+
+Two of those are worth stating out loud:
+
+- **`live -> cancelled` is not a move.** A show that happened is `ended`. You
+  cannot un-happen it.
+- **`draft -> ended` is not a move either.** A draft nobody ever saw is
+  `cancelled`. `ended` is what the reminders and the sidebar treat as "it
+  took place", and a draft never took place.
+
+`draft` is the state that makes this a journey. A host who presses Criar
+watch party gets an object that exists, has a name, has options and is
+invisible to everybody else. Nothing is broadcast until one deliberate act.
+
+### The roles, and who may do what
+
+Four roles, in descending authority. Only the first two are stored.
+
+| Role | Who | Stored |
+|---|---|---|
+| `host` | whoever created the party, until they hand it over or a co-host claims it | `channel_sessions.host_user_id` |
+| `cohost` | a list the host keeps | `channel_session_cohosts` |
+| `manager` | anyone with MANAGE_CHANNELS on the channel | derived |
+| `viewer` | everybody else | derived |
+
+| Action | host | co-host | manager | viewer |
+|---|---|---|---|---|
+| see a `draft` | yes | yes | **no** | no |
+| see any other state | yes | yes | yes | yes |
+| rename, retime, change options | yes | yes | yes | no |
+| publish a draft (give it a time) | yes | yes | no | no |
+| **Ir ao vivo** | yes | yes | **no** | no |
+| **Encerrar** a live party | yes | yes | yes | no |
+| cancel a party that never went live | yes | yes | yes | no |
+| promote / demote a co-host | yes | **no** | no | no |
+| hand the host role over | yes | **no** | no | no |
+| claim the host role | no | **yes**, and only in the grace window | no | no |
+
+The three cells worth arguing about, argued:
+
+**A co-host runs the party but not the roster.** They rename it, take it live
+and end it, because a co-host exists so the show does not depend on one
+person's laptop. They cannot promote, demote or transfer, because the moment
+they can, a co-host can demote the host and there is no chain of authority
+left. Succession runs through `claimHost`, which is gated on the host actually
+being gone.
+
+**A manager stops a party, it does not start one.** MANAGE_CHANNELS ends and
+edits a live party, which is moderation and is the point of having it. It does
+not press Ir ao vivo on somebody else's draft, and it does not see that draft
+at all: a draft is a person thinking, not channel configuration.
+
+**A Moderador is not a manager here.** The seeded Moderador cargo holds
+START_WATCH_PARTY and *not* MANAGE_CHANNELS, so a mod may run their own party
+and has no authority over anyone else's. If that ever changes, the test that
+says so is in `packages/shared/src/watch-party-session.test.ts`.
+
+**A draft answers 404, never 403.** A 403 tells the asker something is there,
+which is exactly what an invisible object must not do.
+
+### The host disconnect, and the takeover
+
+`WATCH_PARTY_HOST_GRACE_MS` is **five minutes**.
+
+- The host's **last** socket closes: `host_disconnected_at` is stamped, but
+  only on a party that is `live`. The "last socket" check is why this lives in
+  `server/src/ws/watch-party-events.ts` and not in the service: a person with
+  a laptop and a phone closes one of them constantly, and only the transition
+  to zero sockets is a host leaving.
+- While the clock runs, the party **stays live**. The audience is watching
+  either way, and cutting them off to make a point about ownership helps
+  nobody. What the clock changes is that a co-host now sees **Assumir**.
+- The host comes back: the stamp is cleared, the button goes away.
+- The clock expires with nobody having claimed it: the minute tick
+  (`sweepWatchPartyHosts`, beside the reminder job) ends the party.
+
+Five minutes is a product number. Under a minute would end parties over a
+browser reload, which reconnects in seconds. Much longer leaves a room "live"
+with nobody running it, which is worse than ending it, because the sidebar
+keeps promising a show.
+
+**This clock is not the stream.** The egress dies when the presenter's share
+stops, which is a separate event with its own monitor and its own recovery
+(`hls-egress.ts`), and a host can perfectly well drop while a co-host is
+presenting.
+
+**The recording, if there is one, stays with the host who ran the show.** A
+takeover does not transfer it. There is no foreign key from `hls_sessions` to
+the party on purpose (that file is being changed by other work); the binding
+is channel plus the `went_live_at`..`ended_at` window, which is exact because
+only one party per channel can be live.
+
+### What going live does to the channel, and what ending puts back
+
+The setup surface asks the host to decide the things that matter before an
+audience arrives. Two of them are real channel state, and both are
+**restored** when the party ends, never reset:
+
+| Option | What Ir ao vivo does | What Encerrar does |
+|---|---|---|
+| `slowModeSeconds` | writes `channels.slowmode_seconds`, recording the old value in `restore_slowmode_seconds` | writes the old value back |
+| `stageMode: hosts_only` | denies SPEAK to @everyone with an ordinary channel overwrite, records `stage_speak_applied` | removes that one bit, and deletes the overwrite if the party is the only reason it existed |
+| `reactionsEnabled` | carried on the party, read by the client | nothing to undo |
+
+A channel that already had slow mode on keeps it. A channel where @everyone
+was already denied SPEAK is left alone, and ending the party does not hand the
+room a microphone it never had.
+
+`restoreChannelAfterParty` reads and clears in one statement, through a CTE,
+because `UPDATE ... RETURNING` hands back the *new* values. The obvious
+version of that function returned the nulls it had just written and restored
+nothing, silently. It was caught by driving the real routes on a local stack,
+which is the only thing that catches this class of bug here.
+
+### The routes
+
+| Method | Path | Who |
+|---|---|---|
+| POST | `/api/channels/:id/watch-parties` | START_WATCH_PARTY on the channel |
+| GET | `/api/channels/:id/watch-party` | VIEW; a draft comes back as `null` |
+| GET | `/api/servers/:id/watch-parties` | member; VIEW re-checked per channel |
+| PATCH | `/api/watch-parties/:id` | `edit` |
+| POST | `/api/watch-parties/:id/state` | derived from the target state |
+| POST | `/api/watch-parties/:id/cohosts` | `promoteCohost` / `demoteCohost` |
+| POST | `/api/watch-parties/:id/host` | `transferHost`, or `claimHost` with `{ claim: true }` |
+
+One `state` route rather than four verbs: the transition table already says
+which moves exist and the role table already says who may make them, so four
+routes would be four places to forget one of the two checks.
+
+`POST /api/channels/:id/sessions` (the schedule card from PR #352) now asks
+for **START_WATCH_PARTY** instead of MANAGE_CHANNELS, which is the
+`REPLACE-WHEN-READY` that PR left behind. Its PATCH and cancel also accept the
+session's own host, so a mod who scheduled something can fix it.
+
+### The frame
+
+`watch-party-update { channelId, party | null }`, resolved **per recipient**
+and sent to every socket that may see the party in its current state. It is
+not in `CHAT_SERVER_MESSAGE_TYPES`, for the same reason
+`channel-session-reminder` is not: whether a person may see a draft depends on
+their role in it, so one encoded copy through the channel relay would hand a
+draft to the room. A socket that may not see this state is sent nothing at
+all, not a redacted version.
+
+`party: null` means "there is nothing here for you any more": an end, a
+cancel, or the party leaving the states you may see. It is how the sidebar
+block disappears.
+
+A socket that authenticates mid-show gets every party it may see
+(`catchUpWatchParties`), the same catch-up rosters and `channel-live` already
+do.
+
+### The journey, screen by screen
+
+1. **Criar watch party**, from the empty stage of a watch party channel.
+   Asks for one thing: the name. Optionally a time, which is the fork between
+   a private draft and an announced session.
+2. **The setup surface** (`draft`). The host's own preview on the left, the
+   options on the right: name, slow mode, who can talk, reactions. Nothing is
+   broadcast. `getDisplayMedia` runs **here**, and the same `MediaStream` is
+   handed to the call at go-live (`ScreenCaptureIntent.stream`), so what they
+   approved and what goes out are the same capture rather than two different
+   ones.
+3. **Ir ao vivo**, one button, and three things in this order: the party's
+   state changes, the host takes a seat in the room, the capture goes on the
+   stage. State first on purpose: if the share fails, the party is live with
+   nothing on screen and the panel says so in words. The other order would
+   broadcast a picture from a party nobody has been told about.
+4. **The sidebar block**, above the categories: the party's name (not the
+   channel's), the host's face, a live pill, and Assistir.
+5. **The viewer**: one click on that block selects the channel, the watch
+   stage mounts, the HLS plays. No microphone, no seat, no second click.
+   Joining the call is a separate button on the stage.
+6. **Encerrar**, or the host's grace window expiring.
+
+### Why the viewer entry changed
+
+Rafael reported that a second browser could not get in as a viewer. Reading
+the code found three things stacked, all of which had the same symptom:
+
+1. **Nothing live was rendered as nothing at all.** `WatchChannelStage`
+   returns `null` when there is no stream, and its "the stream ended" copy
+   only fires for someone who had previously seen one. A viewer who arrived
+   before the host started sharing, or into an environment where the egress
+   could not start, got a blank pane with no words on it. The panel now says
+   "A watch party começou" and what to expect, and says something different to
+   the host ("compartilha uma janela").
+2. **The only prominent button on the row joined the call.** Watching looked
+   like it required a call, and the double-click-to-join rule (#360, #363)
+   made it look like it required two clicks. The row's button is now
+   **Assistir** while a party is live, and it *selects* the channel, which is
+   what mounts the watch stage. Joining the call is separate and deliberate.
+   The button reverts to Entrar when nothing is live, because then the reason
+   to be in the room is to talk.
+3. **The dev bypass signs every browser in as the same account** unless
+   `pqp:dev-user-suffix` is set. Two windows are one person, and a two-person
+   feature looks broken rather than untested. This one is a testing trap, not
+   a product bug, and it is already in CLAUDE.md.
+
+The likeliest single cause of what he saw is (1) compounded by his local
+environment: with `LIVEKIT_URL` empty and no `LIVE_HLS_*`, no egress can start
+at all, so there is never a stream and the old code drew nothing. The change
+here does not conjure a picture out of a mesh room, but it does stop the
+silence.
+
+### Deliberately not done
+
+- **`stageMode` is enforced through the ordinary SPEAK overwrite**, not
+  through a new mechanism. A separate piece of work owns per-channel SPEAK
+  policy; this rides on it rather than growing a second one.
+- **Slow mode is the general chat feature** (`channels.slowmode_seconds`).
+  The party only carries the value the host picked so one press applies it.
+- **No link from `hls_sessions` to the party row.** Other work is actively
+  changing `hls-egress.ts`; the schema comment at the `hls_sessions` block
+  still names `channel_session_id` as the eventual join.
+- **Native apps are unchanged.** iOS and Android decode `type` as a string and
+  see a voice room; they get no create surface, no sidebar block and no setup
+  screen. Listed in the per-app to-do at the end of this file.
+
+## The type
 
 ## The type
 

@@ -3552,6 +3552,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       const askedForAudio = options.audio !== false;
 
       let stream: MediaStream;
+      // A stream the caller already opened (the watch party preview) is
+      // published as it is. The picker has already run, the host has already
+      // looked at the result, and asking again here would broadcast a
+      // different capture from the one they approved.
+      if (intent.stream) {
+        stream = intent.stream;
+      } else {
       try {
         stream = await navigator.mediaDevices.getDisplayMedia(options);
       } catch (err) {
@@ -3587,6 +3594,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           emit();
           return;
         }
+      }
       }
       const track = stream.getVideoTracks()[0];
       if (!track) {

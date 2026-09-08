@@ -110,6 +110,23 @@ export function deleteAuthenticatedSocket(socket: WebSocket): void {
 }
 
 /**
+ * Whether this account still has any authenticated socket.
+ *
+ * Asked on close, by the watch party host clock: a person with the app on a
+ * laptop and a phone closes one tab all the time, and only the last one going
+ * away means the host has left. Called after `deleteAuthenticatedSocket`, so
+ * the socket that just closed is already out of the map.
+ */
+export function userHasAuthenticatedSocket(userId: string): boolean {
+  for (const entry of sockets.values()) {
+    if (entry.user.id === userId) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * How many sockets are authenticated, and how many of them negotiated a given
  * capability. Exists for the operator dashboard: a wire feature that clients
  * are not actually asking for is the failure mode that looks exactly like
