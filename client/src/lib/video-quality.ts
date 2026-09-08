@@ -312,19 +312,90 @@ export function isLargeRoomCapped(
  * lines climbs back to 1080 the moment the constraint is relaxed, because the
  * source is the screen, not a smaller camera mode.
  */
+export interface HlsSourceInput {
+  /**
+   * The tallest rendition the server's ladder encodes, when a live HLS
+   * egress is running on THIS channel. Null in every other case, including a
+   * large room with no watch party, which is the case whose cap must not
+   * move.
+   */
+  ladderTopHeight: number | null;
+  /**
+   * The presenter's own measured uplink in bit/s, from the candidate pair
+   * (`voice-stats-probe.ts`), or null when it has not been read yet. Null
+   * allows the raise, the same convention `decidePromotion` uses for an
+   * SFU it has not probed: an unmeasured link is not a bad one.
+   */
+  uplinkBps: number | null;
+}
+
+/**
+ * Headroom over the rung's own ceiling before a measured uplink counts as
+ * able to carry it. A link measured at exactly the bitrate has none, and a
+ * screen share that saturates the uplink is what makes a call stutter.
+ */
+const HLS_SOURCE_UPLINK_HEADROOM = 1.25;
+
+/**
+ * Whether the presenter should publish at the ladder's top rather than at
+ * the large-room cap.
+ *
+ * WHY THE CAP IS WRONG HERE, and it is worth being precise because the cap
+ * itself is right everywhere else. `LARGE_ROOM_PARTICIPANTS` exists because
+ * the SFU fans the top layer out once per viewer, so an expensive top layer
+ * in a big room is multiplied by the audience. With HLS carrying the
+ * audience that multiplication does not happen: the SFU carries the
+ * presenter and the speakers, everyone else is on the playlist, and the
+ * egress encodes from the published track. A 720p published track cannot
+ * produce a 1080p rendition however the ladder is configured, so the cap
+ * does not save bandwidth any more, it just makes the ladder's top rung a
+ * 720p upscale.
+ *
+ * It stays off for an ordinary large mesh or SFU call with no HLS stream.
+ * That is the whole point of asking for `ladderTopHeight` rather than for a
+ * boolean: it is null unless an egress is actually running.
+ */
+export function hlsSourceTopHeight(
+  quality: VideoQuality,
+  hls: HlsSourceInput | null,
+): number | null {
+  if (!hls || hls.ladderTopHeight === null) {
+    return null;
+  }
+  const chosenHeight =
+    quality === "auto" ? SCREEN_CAPTURE_HEIGHT : SCREEN_HEIGHTS[quality];
+  // Never raise past what the presenter asked for. Someone who picked 480p
+  // picked 480p, and a watch party is not a reason to overrule them.
+  const wanted = Math.min(hls.ladderTopHeight, chosenHeight);
+  if (wanted <= LARGE_ROOM_SCREEN_HEIGHT) {
+    return null;
+  }
+  const needed = SCREEN_BITRATES["1080p"] * HLS_SOURCE_UPLINK_HEADROOM;
+  if (hls.uplinkBps !== null && hls.uplinkBps < needed) {
+    return null;
+  }
+  return wanted;
+}
+
 export function screenSimulcastPlan(
   quality: VideoQuality,
   participantCount: number,
+  hls: HlsSourceInput | null = null,
 ): ScreenSimulcastPlan {
   const chosenHeight =
     quality === "auto" ? SCREEN_CAPTURE_HEIGHT : SCREEN_HEIGHTS[quality];
-  const capped = isLargeRoomCapped(quality, participantCount);
+  const hlsTop = hlsSourceTopHeight(quality, hls);
+  const capped = hlsTop === null && isLargeRoomCapped(quality, participantCount);
   const topHeight = capped
     ? Math.min(chosenHeight, LARGE_ROOM_SCREEN_HEIGHT)
     : chosenHeight;
   const topBitrate = capped
     ? Math.min(screenBitrateFor(quality), LARGE_ROOM_SCREEN_BITRATE)
-    : screenBitrateFor(quality);
+    : hlsTop !== null
+      ? // The share is now the ladder's source, so it gets the rung's own
+        // ceiling rather than Auto's compromise 3 Mbit/s.
+        Math.max(screenBitrateFor(quality), SCREEN_BITRATES["1080p"])
+      : screenBitrateFor(quality);
   return {
     topHeight,
     topBitrate,
@@ -393,16 +464,28 @@ export function cameraBitrateFor(quality: VideoQuality): number {
  * `coerceVideoQuality` is what it shows for a stored rung that is not on
  * offer right now.
  */
-export const HUGE_ROOM_OR_HLS_1080P_LIMIT = 150;
+export const HUGE_ROOM_1080P_LIMIT = 150;
 
-/** The rungs the call's menu may offer, given the room and the egress. */
+/**
+ * The rungs the call's menu may offer, given the room and the egress.
+ *
+ * A live egress used to remove 1080p here, on the reasoning that playlist
+ * viewers get the egress's single preset and never the WebRTC layer, so a
+ * 1080p share was pure cost. That reasoning died with the single preset: the
+ * ladder's top rung is transcoded FROM the published track, so a share held
+ * to 720p caps every viewer at 720p no matter what the ladder says. 1080p
+ * with a live egress is now the case the whole feature is for, and
+ * `screenSimulcastPlan` raises the published top to match it.
+ *
+ * The size rule stays. Past a hundred and fifty people the room is a
+ * broadcast, and whatever the transport, that is not a size at which one
+ * presenter's menu should be able to spend the box.
+ */
 export function availableVideoQualities(input: {
   participantCount: number;
   hlsLive: boolean;
 }): readonly VideoQuality[] {
-  const drop1080 =
-    input.hlsLive || input.participantCount > HUGE_ROOM_OR_HLS_1080P_LIMIT;
-  return drop1080
+  return input.participantCount > HUGE_ROOM_1080P_LIMIT
     ? VIDEO_QUALITIES.filter((quality) => quality !== "1080p")
     : VIDEO_QUALITIES;
 }

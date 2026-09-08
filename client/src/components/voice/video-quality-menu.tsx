@@ -67,9 +67,12 @@ import { cn } from "@/lib/utils";
  * that acts silently reads as a broken setting, so while it is in effect the
  * sending half says so, and says how to override it.
  *
- * NO 1080P AT ALL past `HUGE_ROOM_OR_HLS_1080P_LIMIT` people or while an HLS
- * egress is live (`availableVideoQualities`). A stored 1080p reads as Auto in
- * here for as long as that holds; the preference itself is kept.
+ * NO 1080P AT ALL past `HUGE_ROOM_1080P_LIMIT` people
+ * (`availableVideoQualities`). A stored 1080p reads as Auto in here for as
+ * long as that holds; the preference itself is kept. A live HLS egress used
+ * to remove the rung too; it no longer does, because the ladder's top
+ * rendition is transcoded from the published track and a 720p share caps
+ * every viewer at 720p.
  */
 const LABELS: Record<VideoQuality, MessageKey> = {
   auto: "settings.voice.videoQuality.auto",

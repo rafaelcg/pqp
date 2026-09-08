@@ -58,7 +58,12 @@ const { upsertUser } = await import("../services/users.js");
 const { reconcileStaleHlsSessions, sweepHlsSessions } = await import(
   "./hls-cleanup.js"
 );
-const { resetLiveHlsForTests, setLiveHlsTestHooks, liveHlsStreamFor } =
+const {
+  resetLiveHlsForTests,
+  setLiveHlsTestHooks,
+  liveHlsStreamFor,
+  liveHlsRungsFor,
+} =
   await import("./hls-egress.js");
 
 describeDb("sweepHlsSessions", () => {
@@ -111,6 +116,7 @@ describeDb("sweepHlsSessions", () => {
     egressId?: string;
     presenterPeerId?: string;
     videoTrackId?: string;
+    rung?: string;
   }): Promise<string> {
     const endedAt =
       options.endedMinutesAgo === null
@@ -119,8 +125,8 @@ describeDb("sweepHlsSessions", () => {
     const row = await getPool().query<{ id: string }>(
       `INSERT INTO hls_sessions
          (channel_id, object_prefix, started_at, ended_at, keep_replay,
-          egress_id, presenter_peer_id, video_track_id)
-       VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7)
+          egress_id, presenter_peer_id, video_track_id, rung)
+       VALUES ($1, $2, NOW(), $3, $4, $5, $6, $7, $8)
        RETURNING id`,
       [
         options.channelId,
@@ -130,6 +136,7 @@ describeDb("sweepHlsSessions", () => {
         options.egressId ?? null,
         options.presenterPeerId ?? null,
         options.videoTrackId ?? null,
+        options.rung ?? null,
       ],
     );
     return row.rows[0]!.id;
@@ -365,6 +372,44 @@ describeDb("sweepHlsSessions", () => {
         [id],
       );
       expect(row.rows[0]!.ended_at).toBeNull();
+    });
+
+    it("adopts EVERY rung of a ladder, rather than stopping the party", async () => {
+      // The dangerous shape of this merge. A ladder's prefixes end
+      // `-1080p30`, and the boot reconcile reads `startedAt` out of the
+      // prefix: a parser that cannot see past the rung answers NaN, calls the
+      // row unadoptable, and STOPS a live egress. On every deploy, for every
+      // watch party, which is the exact failure the adoption path was written
+      // to prevent.
+      for (const rung of ["720p30", "1080p30"]) {
+        await makeSession({
+          channelId: channelA,
+          prefix: `live/${channelA}/8200-${rung}`,
+          endedMinutesAgo: 0,
+          egressId: `EG_${rung}`,
+          presenterPeerId: "peer-1",
+          videoTrackId: "TR_V",
+          rung,
+        });
+      }
+      const { stop } = mediaServer([
+        { egressId: "EG_1080p30", roomName: channelA },
+        { egressId: "EG_720p30", roomName: channelA },
+      ]);
+
+      const result = await reconcileStaleHlsSessions();
+      expect(stop).not.toHaveBeenCalled();
+      expect(result.stopped).toBe(0);
+      expect(result.adopted).toBe(2);
+      const stream = liveHlsStreamFor(channelA);
+      expect(stream?.startedAt).toBe(8200);
+      // Both rungs are in the room, not just whichever arrived last, and the
+      // top one is what the presenter is told to publish for.
+      expect(liveHlsRungsFor(channelA).map((r) => r.name)).toEqual([
+        "720p30",
+        "1080p30",
+      ]);
+      expect(stream?.topHeight).toBe(1080);
     });
 
     it("STOPS an egress no session row owns", async () => {

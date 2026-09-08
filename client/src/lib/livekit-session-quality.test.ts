@@ -628,6 +628,69 @@ describe("the large-room cap", () => {
   });
 });
 
+describe("the presenter as a live ladder's source", () => {
+  it("raises the published top past the cap when the ladder needs 1080p", async () => {
+    const sfu = await session();
+    fillRoom(50);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    // The cap, as it stands for any large room.
+    expect(constrained).toEqual([720]);
+
+    // An egress starts on this channel and its top rung is 1080p. The
+    // egress transcodes from THIS track, so a 720p publish would cap every
+    // playlist viewer at 720p too.
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+
+    expect(constrained).toEqual([720, 1080]);
+    expect(lastScreenPublish()?.screenShareEncoding?.maxBitrate).toBe(
+      4_000_000,
+    );
+  });
+
+  it("puts the cap back when the stream stops", async () => {
+    const sfu = await session();
+    fillRoom(50);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    expect(constrained).toEqual([720, 1080]);
+
+    await sfu.setHlsSource(null);
+
+    expect(constrained).toEqual([720, 1080, 720]);
+    expect(lastScreenPublish()?.screenShareEncoding?.maxBitrate).toBe(
+      1_500_000,
+    );
+  });
+
+  it("does not raise on an uplink that cannot carry it", async () => {
+    const sfu = await session();
+    fillRoom(50);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    const publishesBefore = published.length;
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 2_000_000 });
+
+    expect(constrained).toEqual([720]);
+    expect(published).toHaveLength(publishesBefore);
+  });
+
+  it("does not blink the share for a 720p-only ladder", async () => {
+    const sfu = await session();
+    fillRoom(50);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    const publishesBefore = published.length;
+
+    await sfu.setHlsSource({ ladderTopHeight: 720, uplinkBps: 9_000_000 });
+
+    expect(published).toHaveLength(publishesBefore);
+    expect(unpublished).toHaveLength(0);
+  });
+});
+
 describe("ConnectionQualityChanged becomes the same three bars", () => {
   it("attaches Excellent / Good / Poor to the remote peer", async () => {
     const seen: { peerId: string; bars?: number }[][] = [];

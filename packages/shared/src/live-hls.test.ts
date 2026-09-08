@@ -64,6 +64,20 @@ describe("playlistLooksLive", () => {
     ).toBe(true);
   });
 
+  it("accepts a MASTER playlist, which has no #EXTINF at all", () => {
+    // The failure this exists for: a master is a list of variants and
+    // nothing else, so an #EXTINF-only test says "not live" about every
+    // ladder stream forever and the stage keeps WebRTC while re-polling
+    // once a second. Seen on the local stack, not in a unit test.
+    expect(
+      playlistLooksLive(
+        "#EXTM3U\n#EXT-X-VERSION:3\n" +
+          '#EXT-X-STREAM-INF:BANDWIDTH=2217200,RESOLUTION=1280x720,CODECS="avc1.4d001f,mp4a.40.2"\n' +
+          "/api/voice/hls-playlist/c/1/720p30\n",
+      ),
+    ).toBe(true);
+  });
+
   it("rejects a finished share and an empty file", () => {
     expect(
       playlistLooksLive(
@@ -71,5 +85,7 @@ describe("playlistLooksLive", () => {
       ),
     ).toBe(false);
     expect(playlistLooksLive("#EXTM3U\n")).toBe(false);
+    // A master with no variants in it is not a stream either.
+    expect(playlistLooksLive("#EXTM3U\n#EXT-X-VERSION:3\n")).toBe(false);
   });
 });

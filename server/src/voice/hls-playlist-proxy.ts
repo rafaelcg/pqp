@@ -6,7 +6,14 @@ import {
   hlsUrlTtlSeconds,
   liveHlsStorageConfig,
   internalPlaylistUrl,
+  sessionPrefixPattern,
 } from "./hls-egress.js";
+import {
+  buildMasterPlaylist,
+  LADDER_RUNGS,
+  type MasterVariant,
+} from "./hls-ladder.js";
+import { HLS_VIEWER_TOKEN_PARAM } from "./hls-viewer-token.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 
@@ -51,13 +58,22 @@ interface CachedPlaylist {
 
 const playlistCache = new Map<string, CachedPlaylist>();
 
-/** Session identity, and deliberately nothing about the viewer. */
-function cacheKey(channelId: string, startedAt: number): string {
-  return `${channelId}/${startedAt}`;
+/**
+ * RENDITION identity, and deliberately nothing about the viewer.
+ *
+ * The rung is part of the key and must stay that way. A ladder's renditions
+ * share a channel and a `startedAt` and differ only in the rung, so a key
+ * without it would hand a viewer on 720p the 1080p segment list: the same
+ * cache that makes an audience cheap would quietly serve everyone the wrong
+ * bitrate.
+ */
+function cacheKey(channelId: string, startedAt: number, rung?: string): string {
+  return `${channelId}/${startedAt}/${rung ?? ""}`;
 }
 
 export function resetHlsPlaylistCacheForTests(): void {
   playlistCache.clear();
+  rungCache.clear();
 }
 
 /**
@@ -130,9 +146,10 @@ export class HlsPlaylistUnavailable extends Error {}
 export async function buildSignedPlaylist(
   channelId: string,
   startedAt: number,
+  rung?: string,
   now = Date.now(),
 ): Promise<string> {
-  const key = cacheKey(channelId, startedAt);
+  const key = cacheKey(channelId, startedAt, rung);
   const cached = playlistCache.get(key);
   if (cached) {
     if (cached.body !== undefined && now - cached.at < HLS_PLAYLIST_CACHE_TTL_MS) {
@@ -145,7 +162,7 @@ export async function buildSignedPlaylist(
       return cached.inflight;
     }
   }
-  const inflight = renderSignedPlaylist(channelId, startedAt)
+  const inflight = renderSignedPlaylist(channelId, startedAt, rung)
     .then((body) => {
       // Stamped with the caller's clock, not a fresh read, so a test (and a
       // slow render) measure the TTL from the same instant the caller did.
@@ -165,13 +182,14 @@ export async function buildSignedPlaylist(
 async function renderSignedPlaylist(
   channelId: string,
   startedAt: number,
+  rung?: string,
 ): Promise<string> {
   const config = liveHlsStorageConfig();
   if (!config) {
     throw new HlsPlaylistUnavailable("Live HLS storage is not configured");
   }
 
-  const objectPrefix = hlsObjectPrefix(channelId, startedAt);
+  const objectPrefix = hlsObjectPrefix(channelId, startedAt, rung);
   const session = await getPool().query(
     `SELECT 1 FROM hls_sessions
      WHERE channel_id = $1 AND object_prefix = $2 AND cleaned_at IS NULL`,
@@ -184,7 +202,7 @@ async function renderSignedPlaylist(
   }
   // A presigned endpoint-form GET: the bucket can be fully private and no
   // public base is needed (production runs that way).
-  const playlistUrl = internalPlaylistUrl(channelId, startedAt);
+  const playlistUrl = internalPlaylistUrl(channelId, startedAt, rung);
 
   let response: Response;
   try {
@@ -229,4 +247,97 @@ async function renderSignedPlaylist(
     .join("\n");
 
   return rewritten;
+}
+
+/**
+ * A session's rungs, cached on the same terms and for the same reason as the
+ * rendered playlists above: a master is refetched far less often than a media
+ * playlist, but a room joining at once still asks for it at once, and the
+ * answer is identical for every one of them.
+ *
+ * The rung LIST is cached, not the master body, because the body carries each
+ * viewer's own token and is therefore not shared. Building the string from a
+ * cached list costs nothing.
+ */
+const rungCache = new Map<string, { rungs: string[]; at: number }>();
+
+/**
+ * The rungs one session is serving right now, lowest bitrate first, read from
+ * the rows the egress writer recorded. The database rather than the
+ * in-process room map on purpose: a request that lands while the room is
+ * being reconciled still answers, and a session adopted back after a restart
+ * is in the rows before it is in memory.
+ *
+ * A row whose `rung` names nothing this build knows (an operator downgraded
+ * mid-stream) is dropped rather than guessed at: the master lists what it can
+ * describe truthfully, and a viewer plays the rest.
+ */
+async function sessionRungs(
+  channelId: string,
+  startedAt: number,
+  now: number,
+): Promise<string[]> {
+  const key = cacheKey(channelId, startedAt, "master");
+  const cached = rungCache.get(key);
+  if (cached && now - cached.at < HLS_PLAYLIST_CACHE_TTL_MS) {
+    return cached.rungs;
+  }
+  const rows = await getPool().query<{ rung: string | null }>(
+    `SELECT rung FROM hls_sessions
+     WHERE channel_id = $1
+       AND object_prefix LIKE $2
+       AND rung IS NOT NULL
+       AND cleaned_at IS NULL
+     ORDER BY started_at ASC`,
+    [channelId, sessionPrefixPattern(channelId, startedAt)],
+  );
+  const rungs = rows.rows
+    .map((row) => row.rung)
+    .filter((rung): rung is string => Boolean(rung && LADDER_RUNGS[rung]));
+  rungCache.set(key, { rungs, at: now });
+  return rungs;
+}
+
+/**
+ * The master playlist a viewer is handed: one variant per rendition that
+ * actually started, so hls.js and native players pick per viewer and switch
+ * as the link changes.
+ *
+ * VARIANT URIs ARE ROOT-RELATIVE AND CARRY THE VIEWER'S OWN TOKEN. Both
+ * halves matter. Relative resolution against the master's URL drops the
+ * MASTER's query string but keeps the variant's, which is the only way a
+ * header-less player (Safari's native HLS, iOS) can authorise the second
+ * request; and staying on this API's own origin is what makes hls.js attach
+ * the Bearer header through `isOwnHlsPlaylistProxyUrl`. An absolute bucket
+ * URL here would do neither.
+ *
+ * A session with no rung rows at all is a pre-ladder session: its single
+ * media playlist is served directly, so an in-flight viewer from before this
+ * deploy is not handed a master listing nothing.
+ */
+export async function buildMasterPlaylistFor(input: {
+  channelId: string;
+  startedAt: number;
+  /** The `?t=` the request arrived with, stamped onto each variant. */
+  token?: string | null;
+  now?: number;
+}): Promise<string | null> {
+  const rungs = await sessionRungs(
+    input.channelId,
+    input.startedAt,
+    input.now ?? Date.now(),
+  );
+  if (rungs.length === 0) {
+    return null;
+  }
+  const query = input.token
+    ? `?${HLS_VIEWER_TOKEN_PARAM}=${encodeURIComponent(input.token)}`
+    : "";
+  const variants: MasterVariant[] = rungs.map((rung) => ({
+    rung: LADDER_RUNGS[rung]!,
+    uri:
+      `/api/voice/hls-playlist/${encodeURIComponent(input.channelId)}` +
+      `/${input.startedAt}/${encodeURIComponent(rung)}${query}`,
+  }));
+  return buildMasterPlaylist(variants);
 }

@@ -17,6 +17,15 @@ export const liveHlsStreamSchema = z.object({
   presenterPeerId: z.string().min(1),
   /** What the badge should claim, from the server that started the egress. */
   delaySeconds: z.number().int().positive().optional(),
+  /**
+   * The tallest rendition this session ACTUALLY started, in lines. The
+   * presenter's client reads it to decide whether to publish past the
+   * large-room 720p cap: the egress transcodes from the published track, so
+   * a 720p source cannot produce a 1080p rendition. Post-budget on purpose
+   * (a rung refused for load is not in it), and absent on a server that
+   * predates the ladder, where the client leaves the cap alone.
+   */
+  topHeight: z.number().int().positive().optional(),
 });
 
 export type LiveHlsStream = z.infer<typeof liveHlsStreamSchema>;
@@ -79,7 +88,25 @@ export type ChannelLiveMessage = z.infer<typeof channelLiveMessageSchema>;
  * LiveKit writes it when egress stops, and a reused `live.m3u8` stays that
  * finished VOD until the next share overwrites it. Playing that is a black
  * frame, not a live watch party.
+ *
+ * TWO SHAPES, and missing the second one is a silent, total failure. A media
+ * playlist proves itself with `#EXTINF`. A MASTER playlist has no `#EXTINF`
+ * at all, by definition: it is a list of `#EXT-X-STREAM-INF` variants and
+ * nothing else. Testing only for `#EXTINF` therefore says "not live" about
+ * every ladder stream forever, and the caller
+ * (`client/src/hooks/use-live-hls-src.ts`) answers that by keeping WebRTC and
+ * re-polling once a second, which looks exactly like a slow egress and never
+ * stops. Caught on the local stack, not by a unit test, which is why there is
+ * now a test that runs a real generated master through this function.
+ *
+ * A master is enough on its own: the server does not hand a viewer the
+ * session URL until the lowest rung's live playlist has actually appeared
+ * (`waitForLivePlaylist` in `hls-egress.ts`), so a master that parses means a
+ * rung behind it is already writing segments.
  */
 export function playlistLooksLive(body: string): boolean {
-  return body.includes("#EXTINF") && !body.includes("#EXT-X-ENDLIST");
+  if (body.includes("#EXT-X-ENDLIST")) {
+    return false;
+  }
+  return body.includes("#EXTINF") || body.includes("#EXT-X-STREAM-INF");
 }

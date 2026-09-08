@@ -41,14 +41,31 @@ interface StaleSession {
   egress_id: string | null;
   presenter_peer_id: string | null;
   video_track_id: string | null;
+  rung: string | null;
   still_open: boolean;
 }
 
-/** `live/<channelId>/<startedAt>` -> startedAt. */
-function startedAtFromPrefix(prefix: string): number | null {
-  const tail = prefix.split("/").pop();
-  const parsed = Number(tail);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+/**
+ * `live/<channelId>/<startedAt>-<rung>` -> startedAt, and the rung beside it.
+ *
+ * The rung suffix is why this cannot be a bare `Number(tail)` any more: with
+ * a ladder every prefix ends `-1080p30` or similar, `Number` answers NaN, and
+ * a row that cannot be parsed is treated as unadoptable and its egress
+ * STOPPED. That would kill a live watch party on every deploy, which is the
+ * exact failure this whole file was written to stop.
+ */
+function sessionFromPrefix(
+  prefix: string,
+): { startedAt: number; rung: string | null } | null {
+  const tail = prefix.split("/").pop() ?? "";
+  const dash = tail.indexOf("-");
+  const startedAtPart = dash === -1 ? tail : tail.slice(0, dash);
+  const rung = dash === -1 ? null : tail.slice(dash + 1);
+  const parsed = Number(startedAtPart);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return { startedAt: parsed, rung: rung || null };
 }
 
 interface DueSession {
@@ -178,7 +195,7 @@ export async function reconcileStaleHlsSessions(): Promise<{
 
   const rows = await getPool().query<StaleSession>(
     `SELECT id, channel_id, object_prefix, egress_id, presenter_peer_id,
-            video_track_id, ended_at IS NULL AS still_open
+            video_track_id, rung, ended_at IS NULL AS still_open
      FROM hls_sessions
      WHERE cleaned_at IS NULL
        AND (ended_at IS NULL OR ended_at > NOW() - INTERVAL '1 hour')`,
@@ -193,8 +210,8 @@ export async function reconcileStaleHlsSessions(): Promise<{
 
   for (const info of active) {
     const row = byEgressId.get(info.egressId);
-    const startedAt = row ? startedAtFromPrefix(row.object_prefix) : null;
-    if (!row || startedAt === null || !row.presenter_peer_id) {
+    const session = row ? sessionFromPrefix(row.object_prefix) : null;
+    if (!row || session === null || !row.presenter_peer_id) {
       // Nobody owns this transcode: no session row, or one we cannot rebuild
       // a room from. Left running it burns a core of the media box forever.
       const wasStopped = await stopEgressById(info.egressId, info.roomName);
@@ -213,9 +230,10 @@ export async function reconcileStaleHlsSessions(): Promise<{
     adoptLiveHlsSession({
       channelId: row.channel_id,
       egressId: info.egressId,
-      startedAt,
+      startedAt: session.startedAt,
       presenterPeerId: row.presenter_peer_id,
       videoTrackId: row.video_track_id ?? "",
+      rung: row.rung ?? session.rung,
     });
     adoptedIds.add(row.id);
     adopted += 1;

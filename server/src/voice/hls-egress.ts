@@ -1,7 +1,7 @@
 import {
   EgressClient,
   EgressStatus,
-  EncodingOptionsPreset,
+  type EncodingOptions,
   RoomServiceClient,
   S3Upload,
   SegmentedFileOutput,
@@ -9,6 +9,15 @@ import {
 } from "livekit-server-sdk";
 import { playlistLooksLive, type LiveHlsStream } from "@pqp/shared";
 import { isLiveKitConfigured } from "./backends.js";
+import { promotionBudgetMbps } from "./promotion.js";
+import {
+  decideLadder,
+  LADDER_RUNGS,
+  ladderBudgetMbps,
+  parseLadder,
+  rungEncodingOptions,
+  type LadderRung,
+} from "./hls-ladder.js";
 import { logEvent } from "../lib/log.js";
 import { getPool } from "../db.js";
 import {
@@ -85,7 +94,7 @@ export interface LiveHlsEgressApi {
     opts: {
       audioTrackId?: string;
       videoTrackId: string;
-      encodingOptions?: EncodingOptionsPreset;
+      encodingOptions?: EncodingOptions;
     },
   ) => Promise<{ egressId: string }>;
   stopEgress: (egressId: string) => Promise<void>;
@@ -116,8 +125,34 @@ export type LiveHlsTrackFinder = (
   roomName: string,
 ) => Promise<LiveHlsScreenTracks | null>;
 
-interface RoomHls {
+/**
+ * What the WebRTC side of the media box already costs, in the Mbit/s
+ * `promotion.ts` prices rooms in. `ws/voice.ts` registers the real reader
+ * (the same `readRoomLoads()` the promotion guard uses); without one the
+ * ladder guard treats the box as unmeasured and refuses only on its own
+ * budget, the same way `decidePromotion` treats an unprobed SFU as
+ * promotable rather than as a failure.
+ */
+export type LiveHlsSfuLoadReader = () => Promise<number>;
+
+/** One rendition of a live session: its own egress, its own playlist. */
+interface RunningRung {
+  rung: LadderRung;
   egressId: string;
+  /** Wall clock when this egress was requested, for the health grace period. */
+  startedAtMs: number;
+  /** Last playlist shape the monitor saw (`sequence:segments`) and when it changed. */
+  progress: { key: string; at: number } | null;
+}
+
+interface RoomHls {
+  /**
+   * Every rendition running for this session, LOWEST BITRATE FIRST. The
+   * first entry is the primary: it is what the readiness probe waited for,
+   * and the session lives and dies with it. A secondary rung that dies is
+   * dropped from the master playlist and the rest keeps playing.
+   */
+  rungs: RunningRung[];
   stream: LiveHlsStream;
   /**
    * The screen track sid the egress was started on. A Track Composite egress
@@ -129,10 +164,8 @@ interface RoomHls {
    * stop. So a same-presenter reconcile compares this to what the SFU has.
    */
   videoTrackId: string;
-  /** Wall clock when the egress was requested, for the health grace period. */
+  /** Wall clock when the session was requested. */
   startedAtMs: number;
-  /** Last playlist shape the monitor saw (`sequence:segments`) and when it changed. */
-  progress: { key: string; at: number } | null;
 }
 
 const rooms = new Map<string, RoomHls>();
@@ -144,6 +177,7 @@ const pendingRestarts = new Map<string, ReturnType<typeof setTimeout>>();
 /** Per-channel serialisation of `reconcileLiveHls`: the monitor and the room can race. */
 const reconcileQueue = new Map<string, Promise<unknown>>();
 let changeListener: LiveHlsChangeListener | null = null;
+let sfuLoadReader: LiveHlsSfuLoadReader | null = null;
 let monitorTimer: ReturnType<typeof setInterval> | null = null;
 
 let injectedEgress: LiveHlsEgressApi | null = null;
@@ -151,8 +185,9 @@ let injectedFinder: LiveHlsTrackFinder | null = null;
 /** What the (skipped) readiness probe answers under a fake egress. */
 let injectedPlaylistReady = true;
 /** The monitor's playlist read under a fake egress; null skips that check. */
-let injectedPlaylistProbe: ((channelId: string) => string | null) | null =
-  null;
+let injectedPlaylistProbe:
+  | ((channelId: string, rung: string) => string | null)
+  | null = null;
 
 function truthyEnabled(): boolean {
   return process.env.LIVE_HLS_ENABLED === "true";
@@ -173,38 +208,35 @@ function delaySeconds(): number {
     : DEFAULT_DELAY_SECONDS;
 }
 
-const DEFAULT_PRESET = "720p30";
-const PRESETS: Record<string, EncodingOptionsPreset> = {
-  "720p30": EncodingOptionsPreset.H264_720P_30,
-  "1080p30": EncodingOptionsPreset.H264_1080P_30,
-};
-let warnedPreset: string | null = null;
+let warnedLadder: string | null = null;
 
 /**
- * `LIVE_HLS_PRESET`: the egress encoding. `720p30` (default) or `1080p30`.
- * Anything else logs `voice.hlsPresetInvalid` once per distinct value and
- * uses the default. 720p is the box's safe ceiling: the transcode runs on
- * the same CPU as the SFU, and a share the presenter already sends at 720p
- * (the large-room cap) gains nothing from a 1080p encode.
+ * `LIVE_HLS_LADDER`: the renditions this deployment encodes, lowest first.
+ * A comma-separated list of rung names (`1080p30,720p30`, the default), each
+ * optionally carrying a bitrate override (`1080p30@3500`). `LIVE_HLS_PRESET`
+ * is still read as the name of a ONE-RUNG ladder, so a deployment that
+ * already sets it keeps exactly the behaviour it has.
+ *
+ * Entries that name nothing log `voice.hlsLadderInvalid` once per distinct
+ * value; a list with no valid entry at all falls back to the default rather
+ * than leaving a watch party with no rendition.
  */
-export function liveHlsPreset(): EncodingOptionsPreset {
-  const raw = process.env.LIVE_HLS_PRESET?.trim();
-  if (!raw) {
-    return PRESETS[DEFAULT_PRESET]!;
+export function liveHlsLadder(): LadderRung[] {
+  const raw = process.env.LIVE_HLS_LADDER;
+  const preset = process.env.LIVE_HLS_PRESET;
+  const parsed = parseLadder({ ladder: raw, preset });
+  if (parsed.invalid.length > 0) {
+    const key = parsed.invalid.join(",");
+    if (warnedLadder !== key) {
+      warnedLadder = key;
+      logEvent("voice.hlsLadderInvalid", {
+        value: key,
+        accepted: Object.keys(LADDER_RUNGS),
+        using: parsed.rungs.map((rung) => rung.name),
+      });
+    }
   }
-  const preset = PRESETS[raw.toLowerCase()];
-  if (preset !== undefined) {
-    return preset;
-  }
-  if (warnedPreset !== raw) {
-    warnedPreset = raw;
-    logEvent("voice.hlsPresetInvalid", {
-      value: raw,
-      accepted: Object.keys(PRESETS),
-      using: DEFAULT_PRESET,
-    });
-  }
-  return PRESETS[DEFAULT_PRESET]!;
+  return parsed.rungs;
 }
 
 const DEFAULT_RETENTION_MINUTES = 10;
@@ -257,36 +289,62 @@ export function liveHlsStorageConfig(): StorageConfig | null {
 }
 
 /**
- * The exact string every object a session writes starts with: the segments
- * (`filenamePrefix`) and both playlist names all derive from
- * `live/{channelId}/{startedAt}`, per `playlistUrl` / `segmentOutput` below.
- * The retention sweep deletes only objects under this prefix, so this
- * function is the single source of truth both `hls-egress.ts` and
- * `hls-cleanup.ts` call, rather than each re-deriving the string.
+ * The exact string every object ONE RENDITION writes starts with: the
+ * segments (`filenamePrefix`) and both playlist names all derive from
+ * `live/{channelId}/{startedAt}-{rung}`, per `segmentOutput` below. The
+ * retention sweep deletes only objects under this prefix, so this function
+ * is the single source of truth both `hls-egress.ts` and `hls-cleanup.ts`
+ * call, rather than each re-deriving the string.
+ *
+ * The rung is part of the prefix because a ladder runs one egress per
+ * rendition and each needs its own segments, its own media playlist and its
+ * own retention row. Omitting it names the session as a whole, which is what
+ * `sessionPrefixPattern` matches on and what a pre-ladder session's single
+ * row still looks like.
  */
-export function hlsObjectPrefix(channelId: string, startedAt: number): string {
-  return `live/${channelId}/${startedAt}`;
+export function hlsObjectPrefix(
+  channelId: string,
+  startedAt: number,
+  rung?: string,
+): string {
+  const base = `live/${channelId}/${startedAt}`;
+  return rung ? `${base}-${rung}` : base;
 }
 
+/**
+ * A `LIKE` pattern matching every rung of one session. Safe as a literal:
+ * the channel id is a UUID and `startedAt` is digits, so neither can carry
+ * `%` or `_`.
+ */
+export function sessionPrefixPattern(
+  channelId: string,
+  startedAt: number,
+): string {
+  return `${hlsObjectPrefix(channelId, startedAt)}-%`;
+}
+
+/** One row per rendition: each has its own objects, egress and retention. */
 async function recordSessionStarted(
   channelId: string,
   startedAt: number,
   egressId: string,
+  rung: string,
   presenterPeerId: string,
   videoTrackId: string,
 ): Promise<void> {
   try {
     await getPool().query(
       `INSERT INTO hls_sessions
-         (channel_id, object_prefix, started_at, egress_id,
+         (channel_id, object_prefix, started_at, egress_id, rung,
           presenter_peer_id, video_track_id)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4, $5, $6, $7)
        ON CONFLICT (object_prefix) DO NOTHING`,
       [
         channelId,
-        hlsObjectPrefix(channelId, startedAt),
+        hlsObjectPrefix(channelId, startedAt, rung),
         startedAt,
         egressId,
+        rung,
         presenterPeerId,
         videoTrackId,
       ],
@@ -295,25 +353,47 @@ async function recordSessionStarted(
     logEvent("voice.hlsSessionRecordFailed", {
       channelId,
       startedAt,
+      rung,
       error: error instanceof Error ? error.message : String(error),
     });
   }
 }
 
+/**
+ * End one rung's row, or (no rung) every rung of the session. Ending a
+ * single rung is what drops a dead secondary rendition out of the master
+ * playlist while the rest of the ladder keeps playing.
+ */
 async function recordSessionEnded(
   channelId: string,
   startedAt: number,
+  rung?: string,
 ): Promise<void> {
   try {
+    if (rung) {
+      await getPool().query(
+        `UPDATE hls_sessions SET ended_at = NOW()
+         WHERE object_prefix = $1 AND ended_at IS NULL`,
+        [hlsObjectPrefix(channelId, startedAt, rung)],
+      );
+      return;
+    }
     await getPool().query(
       `UPDATE hls_sessions SET ended_at = NOW()
-       WHERE object_prefix = $1 AND ended_at IS NULL`,
-      [hlsObjectPrefix(channelId, startedAt)],
+       WHERE channel_id = $1
+         AND (object_prefix = $2 OR object_prefix LIKE $3)
+         AND ended_at IS NULL`,
+      [
+        channelId,
+        hlsObjectPrefix(channelId, startedAt),
+        sessionPrefixPattern(channelId, startedAt),
+      ],
     );
   } catch (error) {
     logEvent("voice.hlsSessionEndFailed", {
       channelId,
       startedAt,
+      rung: rung ?? null,
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -399,6 +479,15 @@ export interface LiveHlsConfig {
   delaySeconds: number;
   /** Whether an allowlist exists at all; the client may say why it is off. */
   allowlisted: boolean;
+  /**
+   * The renditions this deployment encodes, lowest first. The presenter's
+   * client reads the TOP of it: the egress transcodes from the published
+   * WebRTC track, so a 720p source cannot produce a 1080p rendition however
+   * the ladder is configured. Sending it here rather than hard-coding 1080
+   * in the client means an operator who runs a 720p-only ladder does not get
+   * a presenter uploading 4 Mbit/s for nothing.
+   */
+  ladder: { name: string; width: number; height: number; videoKbps: number }[];
 }
 
 export function liveHlsConfig(serverId?: string | null): LiveHlsConfig {
@@ -410,6 +499,12 @@ export function liveHlsConfig(serverId?: string | null): LiveHlsConfig {
         : isLiveHlsEnabledForServer(serverId),
     delaySeconds: delaySeconds(),
     allowlisted: allowlist !== null,
+    ladder: liveHlsLadder().map((rung) => ({
+      name: rung.name,
+      width: rung.width,
+      height: rung.height,
+      videoKbps: rung.videoKbps,
+    })),
   };
 }
 
@@ -422,8 +517,8 @@ export function setLiveHlsTestHooks(hooks: {
   egress?: LiveHlsEgressApi | null;
   findTracks?: LiveHlsTrackFinder | null;
   playlistReady?: boolean;
-  /** Body the monitor reads for a channel's live playlist (fake stack). */
-  playlistProbe?: ((channelId: string) => string | null) | null;
+  /** Body the monitor reads for one rung's live playlist (fake stack). */
+  playlistProbe?: ((channelId: string, rung: string) => string | null) | null;
 }): void {
   if ("playlistProbe" in hooks) {
     injectedPlaylistProbe = hooks.playlistProbe ?? null;
@@ -449,8 +544,9 @@ export function resetLiveHlsForTests(): void {
   pendingRestarts.clear();
   reconcileQueue.clear();
   changeListener = null;
+  sfuLoadReader = null;
   stopLiveHlsMonitor();
-  warnedPreset = null;
+  warnedLadder = null;
   injectedEgress = null;
   injectedFinder = null;
   injectedPlaylistReady = true;
@@ -461,6 +557,31 @@ export function setLiveHlsChangeListener(
   listener: LiveHlsChangeListener | null,
 ): void {
   changeListener = listener;
+}
+
+export function setLiveHlsSfuLoadReader(
+  reader: LiveHlsSfuLoadReader | null,
+): void {
+  sfuLoadReader = reader;
+}
+
+/** Renditions this process has running, across every channel. */
+export function runningRungCount(): number {
+  let total = 0;
+  for (const room of rooms.values()) {
+    total += room.rungs.length;
+  }
+  return total;
+}
+
+/**
+ * The rungs a live session is actually serving, lowest first. The playlist
+ * proxy builds the master from the database rather than from this, so that a
+ * request mid-restart still answers; this is for the room, the tests and the
+ * config endpoint.
+ */
+export function liveHlsRungsFor(channelId: string): LadderRung[] {
+  return (rooms.get(channelId)?.rungs ?? []).map((entry) => entry.rung);
 }
 
 function notifyChanged(channelId: string, reason: string): void {
@@ -606,19 +727,25 @@ export function playlistProgressKey(body: string): string {
   return `${sequence}:${segments}`;
 }
 
-/** The live playlist body, or null when it cannot be read right now. */
+/** The live playlist body for one rendition, or null when unreadable now. */
 async function probePlaylist(
   channelId: string,
   startedAt: number,
+  rung: string,
 ): Promise<string | null> {
   if (injectedEgress) {
-    return injectedPlaylistProbe ? injectedPlaylistProbe(channelId) : null;
+    return injectedPlaylistProbe
+      ? injectedPlaylistProbe(channelId, rung)
+      : null;
   }
   try {
-    const response = await fetch(internalPlaylistUrl(channelId, startedAt), {
-      cache: "no-store",
-      signal: AbortSignal.timeout(5_000),
-    });
+    const response = await fetch(
+      internalPlaylistUrl(channelId, startedAt, rung),
+      {
+        cache: "no-store",
+        signal: AbortSignal.timeout(5_000),
+      },
+    );
     if (!response.ok) {
       return null;
     }
@@ -629,24 +756,60 @@ async function probePlaylist(
 }
 
 /**
- * Whether the playlist has stopped moving. Records the shape it sees on
- * the room so the next pass can compare; `unknown` when it could not read.
+ * Whether one rendition's playlist has stopped moving. Records the shape it
+ * sees on the rung so the next pass can compare; `unknown` when it could not
+ * read.
  */
 async function playlistHealth(
   channelId: string,
-  room: RoomHls,
+  startedAt: number,
+  entry: RunningRung,
   now: number,
 ): Promise<EgressHealth> {
-  const body = await probePlaylist(channelId, room.stream.startedAt);
+  const body = await probePlaylist(channelId, startedAt, entry.rung.name);
   if (body === null) {
     return "unknown";
   }
   const key = playlistProgressKey(body);
-  if (!room.progress || room.progress.key !== key) {
-    room.progress = { key, at: now };
+  if (!entry.progress || entry.progress.key !== key) {
+    entry.progress = { key, at: now };
     return "alive";
   }
-  return now - room.progress.at >= PLAYLIST_STUCK_MS ? "ended" : "alive";
+  return now - entry.progress.at >= PLAYLIST_STUCK_MS ? "ended" : "alive";
+}
+
+/** Status plus playlist movement, for one rendition. */
+async function rungHealth(
+  egress: LiveHlsEgressApi,
+  channelId: string,
+  startedAt: number,
+  entry: RunningRung,
+  now: number,
+): Promise<{ health: EgressHealth; detail?: string }> {
+  let health: EgressHealth = "unknown";
+  let detail: string | undefined;
+  if (egress.listEgress) {
+    try {
+      const listing = await egress.listEgress({ egressId: entry.egressId });
+      health = healthFromListing(entry.egressId, listing);
+      detail = listing.find((item) => item.egressId === entry.egressId)?.error;
+    } catch (error) {
+      logEvent("voice.hlsHealthCheckFailed", {
+        channelId,
+        egressId: entry.egressId,
+        rung: entry.rung.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  if (health !== "ended") {
+    const playlist = await playlistHealth(channelId, startedAt, entry, now);
+    if (playlist === "ended") {
+      health = "ended";
+      detail = detail ?? `playlist stuck for ${PLAYLIST_STUCK_MS} ms`;
+    }
+  }
+  return { health, detail };
 }
 
 /**
@@ -671,29 +834,50 @@ export async function checkLiveHlsHealth(
     if (now - room.startedAtMs < HEALTH_GRACE_MS) {
       continue;
     }
-    let health: EgressHealth = "unknown";
-    let detail: string | undefined;
-    if (egress.listEgress) {
-      try {
-        const listing = await egress.listEgress({ egressId: room.egressId });
-        health = healthFromListing(room.egressId, listing);
-        detail = listing.find((item) => item.egressId === room.egressId)
-          ?.error;
-      } catch (error) {
-        logEvent("voice.hlsHealthCheckFailed", {
-          channelId,
-          egressId: room.egressId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+    const startedAt = room.stream.startedAt;
+    const primary = room.rungs[0];
+    if (!primary) {
+      continue;
     }
-    if (health !== "ended") {
-      const playlist = await playlistHealth(channelId, room, now);
-      if (playlist === "ended") {
-        health = "ended";
-        detail = detail ?? `playlist stuck for ${PLAYLIST_STUCK_MS} ms`;
+    // Secondary rungs first, and one at a time: a dead extra rendition is
+    // dropped from the ladder and the viewers on it fall to the primary,
+    // which is what a master playlist is for. Only the primary dying is a
+    // dead stream, because it is the one every viewer can always reach.
+    for (const entry of [...room.rungs.slice(1)]) {
+      const { health, detail } = await rungHealth(
+        egress,
+        channelId,
+        startedAt,
+        entry,
+        now,
+      );
+      if (health !== "ended" || rooms.get(channelId) !== room) {
+        continue;
       }
+      room.rungs = room.rungs.filter((item) => item !== entry);
+      await recordSessionEnded(channelId, startedAt, entry.rung.name);
+      logEvent("voice.hlsRungDied", {
+        channelId,
+        egressId: entry.egressId,
+        rung: entry.rung.name,
+        remaining: room.rungs.map((item) => item.rung.name),
+        error: detail ?? null,
+      });
+      // The master playlist is built per request from the rows, so it
+      // already lists one variant fewer. Tell the room anyway: a viewer
+      // pinned to this rung needs a fresh source, not a stalled one.
+      notifyChanged(channelId, "rung-ended");
     }
+    if (rooms.get(channelId) !== room) {
+      continue;
+    }
+    const { health, detail } = await rungHealth(
+      egress,
+      channelId,
+      startedAt,
+      primary,
+      now,
+    );
     if (health !== "ended") {
       continue;
     }
@@ -702,10 +886,12 @@ export async function checkLiveHlsHealth(
       continue;
     }
     rooms.delete(channelId);
-    await recordSessionEnded(channelId, room.stream.startedAt);
+    await stopRungs(channelId, room.rungs.slice(1));
+    await recordSessionEnded(channelId, startedAt);
     logEvent("voice.hlsEgressDied", {
       channelId,
-      egressId: room.egressId,
+      egressId: primary.egressId,
+      rung: primary.rung.name,
       error: detail ?? null,
     });
     outcomes.push({
@@ -853,27 +1039,51 @@ export function adoptLiveHlsSession(input: {
   startedAt: number;
   presenterPeerId: string;
   videoTrackId: string;
+  /** Which rendition this egress is. Null is a pre-ladder single-rung row. */
+  rung: string | null;
 }): LiveHlsStream {
+  const rung =
+    (input.rung ? LADDER_RUNGS[input.rung] : undefined) ?? LADDER_RUNGS["720p30"]!;
+  const entry: RunningRung = {
+    rung,
+    egressId: input.egressId,
+    // Counts as freshly started for the health monitor's grace period: the
+    // playlist's progress has not been sampled by THIS process yet.
+    startedAtMs: Date.now(),
+    progress: null,
+  };
+  // ADOPTION IS PER EGRESS AND A LADDER HAS SEVERAL. The boot reconcile walks
+  // what the media server is running, one egress at a time, so the rungs of
+  // one session arrive here separately and in no particular order. Replacing
+  // the room each time would leave it holding whichever rung happened to come
+  // last, and the master playlist would then be built from rows the room does
+  // not know it owns.
+  const existing = rooms.get(input.channelId);
+  const rungs =
+    existing && existing.stream.startedAt === input.startedAt
+      ? [...existing.rungs.filter((r) => r.egressId !== input.egressId), entry]
+      : [entry];
+  rungs.sort((a, b) => a.rung.videoKbps - b.rung.videoKbps);
   const stream: LiveHlsStream = {
     hlsUrl: viewerPlaylistUrl(input.channelId, input.startedAt),
     startedAt: input.startedAt,
     presenterPeerId: input.presenterPeerId,
     delaySeconds: delaySeconds(),
+    topHeight: Math.max(...rungs.map((r) => r.rung.height)),
   };
   rooms.set(input.channelId, {
-    egressId: input.egressId,
+    rungs,
     stream,
     videoTrackId: input.videoTrackId,
-    // Counts as freshly started for the health monitor's grace period: the
-    // playlist's progress has not been sampled by THIS process yet.
     startedAtMs: Date.now(),
-    progress: null,
   });
   logEvent("voice.hlsSessionAdopted", {
     channelId: input.channelId,
     egressId: input.egressId,
     startedAt: input.startedAt,
     presenterPeerId: input.presenterPeerId,
+    rung: rung.name,
+    rungs: rungs.map((r) => r.rung.name),
   });
   return stream;
 }
@@ -1014,14 +1224,15 @@ const INTERNAL_PLAYLIST_TTL_SECONDS = 60;
 export function internalPlaylistUrl(
   channelId: string,
   startedAt: number,
+  rung?: string,
 ): string {
   const config = liveHlsStorageConfig();
   if (!config) {
-    return rawPlaylistUrl(channelId, startedAt);
+    return rawPlaylistUrl(channelId, startedAt, rung);
   }
   return signRequest({
     method: "GET",
-    key: `${hlsObjectPrefix(channelId, startedAt)}.m3u8`,
+    key: `${hlsObjectPrefix(channelId, startedAt, rung)}.m3u8`,
     ttlSeconds: INTERNAL_PLAYLIST_TTL_SECONDS,
     forRead: false,
     config,
@@ -1039,8 +1250,12 @@ export function internalPlaylistUrl(
  * previous share's #EXT-X-ENDLIST until overwrite, so each share gets its
  * own playlist name.
  */
-export function rawPlaylistUrl(channelId: string, startedAt: number): string {
-  return `${publicBaseUrl()}/${hlsObjectPrefix(channelId, startedAt)}.m3u8`;
+export function rawPlaylistUrl(
+  channelId: string,
+  startedAt: number,
+  rung?: string,
+): string {
+  return `${publicBaseUrl()}/${hlsObjectPrefix(channelId, startedAt, rung)}.m3u8`;
 }
 
 /**
@@ -1062,12 +1277,19 @@ function viewerPlaylistUrl(channelId: string, startedAt: number): string {
   return `/api/voice/hls-playlist/${channelId}/${startedAt}`;
 }
 
-function segmentOutput(prefix: string, startedAt: number): SegmentedFileOutput {
+function segmentOutput(
+  prefix: string,
+  startedAt: number,
+  rung: string,
+): SegmentedFileOutput {
   const storage = liveHlsStorage()!;
+  // LiveKit resolves both playlist names against the DIRECTORY of
+  // `filenamePrefix`, so the rung has to be repeated in the names or every
+  // rendition would overwrite the same two playlist objects.
   return new SegmentedFileOutput({
     filenamePrefix: prefix,
-    playlistName: `${startedAt}-index.m3u8`,
-    livePlaylistName: `${startedAt}.m3u8`,
+    playlistName: `${startedAt}-${rung}-index.m3u8`,
+    livePlaylistName: `${startedAt}-${rung}.m3u8`,
     segmentDuration: 2,
     output: {
       case: "s3",
@@ -1083,6 +1305,29 @@ function segmentOutput(prefix: string, startedAt: number): SegmentedFileOutput {
   });
 }
 
+/** Stop these renditions' egresses, tolerating one that is already gone. */
+async function stopRungs(
+  channelId: string,
+  entries: readonly RunningRung[],
+): Promise<void> {
+  const egress = getEgress();
+  if (!egress) {
+    return;
+  }
+  for (const entry of entries) {
+    try {
+      await egress.stopEgress(entry.egressId);
+    } catch (error) {
+      logEvent("voice.hlsStopFailed", {
+        channelId,
+        egressId: entry.egressId,
+        rung: entry.rung.name,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+}
+
 async function stopRoom(channelId: string): Promise<void> {
   const current = rooms.get(channelId);
   if (!current) {
@@ -1090,18 +1335,70 @@ async function stopRoom(channelId: string): Promise<void> {
   }
   rooms.delete(channelId);
   await recordSessionEnded(channelId, current.stream.startedAt);
-  const egress = getEgress();
-  if (!egress) {
-    return;
-  }
+  await stopRungs(channelId, current.rungs);
+}
+
+/**
+ * Ask LiveKit for one rendition. Returns the egress id, or null when the
+ * request itself failed (the caller decides whether that is fatal: it is for
+ * the primary rung, and merely a shorter ladder for the rest).
+ */
+async function startRung(
+  egress: LiveHlsEgressApi,
+  channelId: string,
+  startedAt: number,
+  tracks: LiveHlsScreenTracks,
+  rung: LadderRung,
+): Promise<string | null> {
   try {
-    await egress.stopEgress(current.egressId);
-  } catch (error) {
-    logEvent("voice.hlsStopFailed", {
+    const started = await egress.startTrackCompositeEgress(
       channelId,
-      egressId: current.egressId,
+      segmentOutput(
+        hlsObjectPrefix(channelId, startedAt, rung.name),
+        startedAt,
+        rung.name,
+      ),
+      {
+        videoTrackId: tracks.videoTrackId,
+        audioTrackId: tracks.audioTrackId,
+        encodingOptions: rungEncodingOptions(rung),
+      },
+    );
+    return started.egressId;
+  } catch (error) {
+    logEvent("voice.hlsRungStartFailed", {
+      channelId,
+      rung: rung.name,
       error: error instanceof Error ? error.message : String(error),
     });
+    return null;
+  }
+}
+
+/**
+ * What the WebRTC side already costs, or 0 when nothing can tell us.
+ *
+ * Returns a NUMBER rather than a promise when there is no reader, so the
+ * common path (and every test with no load registered) adds no await to the
+ * restart chain. Awaiting a resolved promise is free at runtime and is not
+ * free for a suite that drives this with fake timers.
+ */
+function currentSfuLoadMbps(): number | Promise<number> {
+  const reader = sfuLoadReader;
+  if (!reader) {
+    return 0;
+  }
+  return readSfuLoad(reader);
+}
+
+async function readSfuLoad(reader: LiveHlsSfuLoadReader): Promise<number> {
+  try {
+    return await reader();
+  } catch (error) {
+    logEvent("voice.hlsLoadReadFailed", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return 0;
   }
 }
 
@@ -1123,76 +1420,121 @@ async function startRoom(
     logEvent("voice.hlsNoScreenTrack", { channelId, presenterPeerId });
     return null;
   }
+  const ladder = liveHlsLadder();
+  const decisions = decideLadder({
+    rungs: ladder,
+    runningRungs: runningRungCount(),
+    sfuLoadMbps: await currentSfuLoadMbps(),
+    ladderBudgetMbps: ladderBudgetMbps(),
+    boxBudgetMbps: promotionBudgetMbps(),
+  });
   const startedAt = Date.now();
-  const prefix = hlsObjectPrefix(channelId, startedAt);
-  try {
-    const started = await egress.startTrackCompositeEgress(
+  const running: RunningRung[] = [];
+  for (const decision of decisions) {
+    if (!decision.start) {
+      logEvent("voice.hlsRungRefused", {
+        channelId,
+        rung: decision.rung.name,
+        refusal: decision.refusal,
+        ladderMbps: Math.round(decision.ladderMbps),
+        boxMbps: Math.round(decision.boxMbps),
+        ladderBudgetMbps: ladderBudgetMbps(),
+        boxBudgetMbps: promotionBudgetMbps(),
+      });
+      continue;
+    }
+    const egressId = await startRung(
+      egress,
       channelId,
-      segmentOutput(prefix, startedAt),
-      {
-        videoTrackId: tracks.videoTrackId,
-        audioTrackId: tracks.audioTrackId,
-        encodingOptions: liveHlsPreset(),
-      },
-    );
-    const stream: LiveHlsStream = {
-      hlsUrl: viewerPlaylistUrl(channelId, startedAt),
       startedAt,
-      presenterPeerId,
-      delaySeconds: delaySeconds(),
-    };
-    const room: RoomHls = {
-      egressId: started.egressId,
-      stream,
-      videoTrackId: tracks.videoTrackId,
+      tracks,
+      decision.rung,
+    );
+    if (!egressId) {
+      if (running.length === 0) {
+        // The lowest rung is the stream. Nothing above it is worth starting
+        // if a viewer would have no rendition to fall back to.
+        scheduleRestart(channelId, "start-failed");
+        return null;
+      }
+      continue;
+    }
+    running.push({
+      rung: decision.rung,
+      egressId,
       startedAtMs: startedAt,
       progress: null,
-    };
-    rooms.set(channelId, room);
-    await recordSessionStarted(
-      channelId,
-      startedAt,
-      started.egressId,
-      presenterPeerId,
-      tracks.videoTrackId,
-    );
-    // The readiness probe reads the bucket itself (presigned, endpoint
-    // form), never the viewer-facing URL: a viewer may get the signed proxy
-    // path, which this same process cannot usefully fetch from here.
-    const ready = await waitForLivePlaylist(
-      internalPlaylistUrl(channelId, startedAt),
-    );
-    logEvent("voice.hlsStarted", {
-      channelId,
-      egressId: started.egressId,
-      presenterPeerId,
-      playlistReady: ready,
     });
-    if (!ready) {
-      // Twenty seconds and no live playlist: this egress is not going to
-      // produce one. Handing the URL out anyway parks every viewer on
-      // "loading" for the whole share (the pre-fix behaviour). Tear it
-      // down and let the restart path try again, under the same cap.
-      if (rooms.get(channelId) === room) {
-        await stopRoom(channelId);
-        scheduleRestart(channelId, "playlist-not-ready");
-      }
-      return null;
-    }
-    return stream;
-  } catch (error) {
-    logEvent("voice.hlsStartFailed", {
-      channelId,
-      presenterPeerId,
-      error: error instanceof Error ? error.message : String(error),
-    });
-    // StartEgress itself failed (the egress service is down or restarting:
-    // a twirp timeout on the local stack while `lk-egress` was stopped).
-    // Nothing else would ever try again while the share is still up, so
-    // this goes through the same backoff and cap as a death mid-stream.
+  }
+  const primary = running[0];
+  if (!primary) {
     scheduleRestart(channelId, "start-failed");
     return null;
   }
+  const stream: LiveHlsStream = {
+    hlsUrl: viewerPlaylistUrl(channelId, startedAt),
+    startedAt,
+    presenterPeerId,
+    delaySeconds: delaySeconds(),
+    // What actually started, not what was configured: a rung refused for
+    // budget must not tell the presenter to upload for it.
+    topHeight: Math.max(...running.map((entry) => entry.rung.height)),
+  };
+  const room: RoomHls = {
+    rungs: running,
+    stream,
+    videoTrackId: tracks.videoTrackId,
+    startedAtMs: startedAt,
+  };
+  rooms.set(channelId, room);
+  // The rows AFTER the room is published, not before. They are what the
+  // playlist proxy checks and what retention sweeps, so they have to exist
+  // before the URL goes out (which is below, past the readiness probe), but
+  // nothing in memory may wait on Postgres to become true: putting a real
+  // round trip in front of `rooms.set` is what made the health-monitor tests
+  // flake on the CI runner and would delay a restart in production for
+  // exactly as long as the database felt like taking.
+  await Promise.all(
+    running.map((entry) =>
+      recordSessionStarted(
+        channelId,
+        startedAt,
+        entry.egressId,
+        entry.rung.name,
+        presenterPeerId,
+        tracks.videoTrackId,
+      ),
+    ),
+  );
+  // The readiness probe reads the bucket itself (presigned, endpoint form),
+  // never the viewer-facing URL: a viewer gets the signed master path, which
+  // this same process cannot usefully fetch from here. It waits on the
+  // PRIMARY rung, because that is the one a viewer is guaranteed to land on.
+  const ready = await waitForLivePlaylist(
+    internalPlaylistUrl(channelId, startedAt, primary.rung.name),
+  );
+  logEvent("voice.hlsStarted", {
+    channelId,
+    presenterPeerId,
+    playlistReady: ready,
+    started: running.map((entry) => entry.rung.name),
+    refused: decisions
+      .filter((decision) => !decision.start)
+      .map((decision) => `${decision.rung.name}:${decision.refusal}`),
+    egressIds: running.map((entry) => entry.egressId),
+  });
+  if (!ready) {
+    // Twenty seconds and no live playlist: this egress is not going to
+    // produce one. Handing the URL out anyway parks every viewer on
+    // "loading" for the whole share (the pre-fix behaviour). Tear it
+    // down and let the restart path try again, under the same cap.
+    if (rooms.get(channelId) === room) {
+      await stopRoom(channelId);
+      scheduleRestart(channelId, "playlist-not-ready");
+    }
+    return null;
+  }
+  return stream;
 }
 
 /**
@@ -1252,7 +1594,7 @@ async function reconcileLiveHlsNow(
     }
     logEvent("voice.hlsTrackReplaced", {
       channelId,
-      egressId: current.egressId,
+      egressIds: current.rungs.map((entry) => entry.egressId),
       from: current.videoTrackId,
       to: tracks.videoTrackId,
     });

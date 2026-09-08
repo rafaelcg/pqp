@@ -122,6 +122,7 @@ import {
 } from "../voice/backends.js";
 import { liveHlsConfig } from "../voice/hls-egress.js";
 import {
+  buildMasterPlaylistFor,
   buildSignedPlaylist,
   HlsPlaylistNotFound,
   HlsPlaylistUnavailable,
@@ -1923,6 +1924,11 @@ async function hlsPlaylistResponse(
    * pays for the check.
    */
   tokenIssuedAt: number | null,
+  /**
+   * Which rendition of a ladder is being asked for. Absent means the caller
+   * asked for the SESSION, which is the master playlist listing them all.
+   */
+  options: { rung?: string; token?: string | null } = {},
 ): Promise<RawResponse> {
   if (tokenIssuedAt === null) {
     await requireChannelAccess(channelId, userId);
@@ -1936,8 +1942,24 @@ async function hlsPlaylistResponse(
     throw new NotFound("No live stream for this channel");
   }
   let body: string;
+  // No rung named: this is the session URL a viewer was handed, which is the
+  // MASTER playlist when the session ran a ladder. A session with no rung
+  // rows predates the ladder and still has a single media playlist of its
+  // own, so it falls through to the same call it always made.
+  if (!options.rung) {
+    const master = await buildMasterPlaylistFor({
+      channelId,
+      startedAt: parsedStartedAt,
+      token: options.token,
+    });
+    if (master !== null) {
+      res.setHeader("Cache-Control", "private, max-age=1");
+      res.setHeader("Vary", "Authorization");
+      return new RawResponse(master, "application/vnd.apple.mpegurl");
+    }
+  }
   try {
-    body = await buildSignedPlaylist(channelId, parsedStartedAt);
+    body = await buildSignedPlaylist(channelId, parsedStartedAt, options.rung);
   } catch (error) {
     if (error instanceof HlsPlaylistNotFound) {
       throw new NotFound("No live stream for this channel");
@@ -1959,29 +1981,60 @@ async function hlsPlaylistResponse(
   return new RawResponse(body, "application/vnd.apple.mpegurl");
 }
 
+/**
+ * The session URL, which is the master playlist once a ladder ran, and the
+ * one rendition a pre-ladder session had otherwise.
+ */
 router.get(
   "/api/voice/hls-playlist/:channelId/:startedAt",
-  async ({ user, res, url }, { channelId, startedAt }) => {
-    // hls.js sends BOTH the header and the token. Preferring the token here
-    // is what takes the common case off the database: without it every
-    // browser viewer still cost an access check every 2 seconds.
-    const viewer = resolveHlsPlaylistViewer({
-      bearerUserId: user.id,
-      token: url.searchParams.get(HLS_VIEWER_TOKEN_PARAM),
-      channelId: channelId!,
-      startedAt: Number(startedAt),
-    });
-    return hlsPlaylistResponse(
-      res,
-      channelId!,
-      startedAt!,
-      viewer?.userId ?? user.id,
-      viewer?.issuedAt ?? null,
-    );
-  },
+  async ({ user, res, url }, { channelId, startedAt }) =>
+    hlsPlaylistRouteResponse(res, url, user.id, channelId!, startedAt!),
 );
 
-const HLS_PLAYLIST_PATH = /^\/api\/voice\/hls-playlist\/([^/]{1,64})\/(\d{1,20})$/;
+/**
+ * One rendition of a ladder. The master playlist above points at these, and
+ * they are what actually carry segments; a viewer's player switches between
+ * them without ever coming back through the master.
+ */
+router.get(
+  "/api/voice/hls-playlist/:channelId/:startedAt/:rung",
+  async ({ user, res, url }, { channelId, startedAt, rung }) =>
+    hlsPlaylistRouteResponse(res, url, user.id, channelId!, startedAt!, rung!),
+);
+
+function hlsPlaylistRouteResponse(
+  res: ServerResponse,
+  url: URL,
+  bearerUserId: string,
+  channelId: string,
+  startedAt: string,
+  rung?: string,
+): Promise<RawResponse> {
+  // hls.js sends BOTH the header and the token. Preferring the token here
+  // is what takes the common case off the database: without it every
+  // browser viewer still cost an access check every 2 seconds.
+  const token = url.searchParams.get(HLS_VIEWER_TOKEN_PARAM);
+  const viewer = resolveHlsPlaylistViewer({
+    bearerUserId,
+    token,
+    channelId,
+    startedAt: Number(startedAt),
+  });
+  return hlsPlaylistResponse(
+    res,
+    channelId,
+    startedAt,
+    viewer?.userId ?? bearerUserId,
+    viewer?.issuedAt ?? null,
+    { rung, token },
+  );
+}
+
+// The rung is optional: without it the path names the session (the master
+// playlist), with it one rendition. The viewer token is bound to
+// { user, channel, startedAt } and so authorises both.
+const HLS_PLAYLIST_PATH =
+  /^\/api\/voice\/hls-playlist\/([^/]{1,64})\/(\d{1,20})(?:\/([A-Za-z0-9]{1,16}))?$/;
 
 /**
  * The header-less half of the playlist proxy. Only reached when the request
@@ -1998,6 +2051,7 @@ async function serveHlsPlaylistWithToken(
   startedAt: string,
   userId: string,
   tokenIssuedAt: number,
+  options: { rung?: string; token?: string | null } = {},
 ): Promise<void> {
   if (!apiLimiter.take(`user:${userId}`)) {
     res.setHeader("Retry-After", String(apiLimiter.retryAfter(`user:${userId}`)));
@@ -2011,6 +2065,7 @@ async function serveHlsPlaylistWithToken(
       startedAt,
       userId,
       tokenIssuedAt,
+      options,
     );
     res.writeHead(200, {
       "content-type": result.contentType,
@@ -6816,11 +6871,12 @@ export async function handleApi(
       ? HLS_PLAYLIST_PATH.exec(pathname)
       : null;
   if (hlsPlaylistMatch) {
+    const token = new URL(req.url ?? "/", "http://localhost").searchParams.get(
+      HLS_VIEWER_TOKEN_PARAM,
+    );
     const viewer = resolveHlsPlaylistViewer({
       bearerUserId: null,
-      token: new URL(req.url ?? "/", "http://localhost").searchParams.get(
-        HLS_VIEWER_TOKEN_PARAM,
-      ),
+      token,
       channelId: hlsPlaylistMatch[1]!,
       startedAt: Number(hlsPlaylistMatch[2]),
     });
@@ -6832,6 +6888,7 @@ export async function handleApi(
         hlsPlaylistMatch[2]!,
         viewer.userId,
         viewer.issuedAt ?? 0,
+        { rung: hlsPlaylistMatch[3], token },
       );
       return;
     }

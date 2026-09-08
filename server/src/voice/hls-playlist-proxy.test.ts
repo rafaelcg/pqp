@@ -16,7 +16,7 @@ const pool = vi.hoisted(() => ({
   rowCount: 1,
   query: vi.fn(async (_sql: string, _params?: unknown[]) => ({
     rowCount: pool.rowCount,
-    rows: [],
+    rows: [] as { rung: string }[],
   })),
 }));
 vi.mock("../db.js", () => ({ getPool: () => pool }));
@@ -49,6 +49,7 @@ function disableHls() {
 }
 
 const {
+  buildMasterPlaylistFor,
   buildSignedPlaylist,
   HlsPlaylistNotFound,
   HlsPlaylistUnavailable,
@@ -57,6 +58,7 @@ const {
   resetHlsPlaylistCacheForTests,
 } = await import("./hls-playlist-proxy.js");
 const { mintHlsViewerToken } = await import("./hls-viewer-token.js");
+const { playlistLooksLive } = await import("@pqp/shared");
 
 describe("resolveHlsPlaylistViewer", () => {
   const USER = "00000000-0000-4000-8000-0000000000u1";
@@ -299,15 +301,15 @@ describe("playlist render cache", () => {
 
   it("a viewer inside the TTL is served the cached body, one after it is not", async () => {
     const now = 1_800_000_000_000;
-    await buildSignedPlaylist(CHANNEL, STARTED_AT, now);
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     // Still fresh.
-    await buildSignedPlaylist(CHANNEL, STARTED_AT, now + HLS_PLAYLIST_CACHE_TTL_MS - 1);
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + HLS_PLAYLIST_CACHE_TTL_MS - 1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     // Past the TTL: rendered again, so the live window keeps moving.
-    await buildSignedPlaylist(CHANNEL, STARTED_AT, now + HLS_PLAYLIST_CACHE_TTL_MS + 1);
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, undefined, now + HLS_PLAYLIST_CACHE_TTL_MS + 1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -347,16 +349,174 @@ describe("playlist render cache", () => {
     // The guard this file exists for. `buildSignedPlaylist` is reachable only
     // behind `requireChannelAccess`, and it takes no viewer at all, so there
     // is no argument a caller could pass that turns one person's body into
-    // another person's hit. Asserted structurally: two required parameters,
-    // the channel and the session, and nothing that names a person.
-    // (`Function.length` stops counting at the first default, so the
-    // optional `now` is not included.)
-    expect(buildSignedPlaylist.length).toBe(2);
+    // another person's hit. Asserted structurally: three parameters, the
+    // channel, the session and which RENDITION of it, and nothing that names
+    // a person. (`Function.length` stops counting at the first default, so
+    // the optional `now` is not included.)
+    expect(buildSignedPlaylist.length).toBe(3);
     const a = await buildSignedPlaylist(CHANNEL, STARTED_AT);
     resetHlsPlaylistCacheForTests();
     const b = await buildSignedPlaylist(CHANNEL, STARTED_AT);
     // Two independent renders of the same session agree, which is the
     // premise that makes sharing one body between viewers correct.
     expect(a).toBe(b);
+  });
+});
+
+describe("buildMasterPlaylistFor", () => {
+  let clock = 5_000_000;
+
+  beforeEach(() => {
+    enableHls();
+    resetHlsPlaylistCacheForTests();
+    pool.rowCount = 1;
+    pool.query.mockReset();
+    clock += 10_000;
+  });
+
+  afterEach(() => {
+    disableHls();
+    resetHlsPlaylistCacheForTests();
+    pool.query.mockReset();
+  });
+
+  function rungRows(rungs: string[]) {
+    pool.query.mockImplementation(async () => ({
+      rowCount: rungs.length,
+      rows: rungs.map((rung) => ({ rung })),
+    }));
+  }
+
+  function master(token?: string, now = clock) {
+    return buildMasterPlaylistFor({
+      channelId: CHANNEL,
+      startedAt: STARTED_AT,
+      token,
+      now,
+    });
+  }
+
+  it("lists every rung the session recorded, lowest bitrate first", async () => {
+    rungRows(["1080p30", "720p30"]);
+    const lines = (await master())!.trim().split("\n");
+    expect(lines[0]).toBe("#EXTM3U");
+    expect(lines[2]).toContain("RESOLUTION=1280x720");
+    expect(lines[3]).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/720p30`,
+    );
+    expect(lines[4]).toContain("RESOLUTION=1920x1080");
+    expect(lines[5]).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${STARTED_AT}/1080p30`,
+    );
+  });
+
+  it("stamps the viewer's own token onto each variant", async () => {
+    rungRows(["1080p30", "720p30"]);
+    const body = await master("tok en/+");
+    // Root-relative, and carrying its OWN query string: relative resolution
+    // drops the master's query but keeps the variant's, which is the only
+    // way a header-less player (Safari native, iOS) authorises the second
+    // request.
+    for (const line of body!.split("\n").filter((l) => l.startsWith("/api"))) {
+      expect(line).toContain("?t=tok%20en%2F%2B");
+    }
+  });
+
+  it("only looks at rows of THIS session", async () => {
+    rungRows(["720p30"]);
+    await master();
+    const params = pool.query.mock.calls[0]![1] as unknown[];
+    expect(params[0]).toBe(CHANNEL);
+    expect(params[1]).toBe(`live/${CHANNEL}/${STARTED_AT}-%`);
+  });
+
+  it("a rung this build does not know is left out rather than guessed at", async () => {
+    rungRows(["720p30", "4320p60"]);
+    const body = await master();
+    expect(body!.match(/#EXT-X-STREAM-INF/g)).toHaveLength(1);
+    expect(body).toContain("RESOLUTION=1280x720");
+  });
+
+  it("the master it generates reads as live to the client's own gate", async () => {
+    // THE SEAM THIS PR BROKE ONCE. `useLiveHlsReady` will not attach a
+    // playlist until `playlistLooksLive` says go, and a master has no
+    // `#EXTINF`, so the stage sat on WebRTC forever and re-polled at 1 Hz
+    // with every fetch returning a perfectly good master. Two correct
+    // halves, one dead feature. Assert the actual generated body against
+    // the actual gate rather than each side against its own idea.
+    rungRows(["1080p30", "720p30"]);
+    expect(playlistLooksLive((await master())!)).toBe(true);
+  });
+
+  it("a pre-ladder session has no rungs and gets no master", async () => {
+    rungRows([]);
+    expect(await master()).toBeNull();
+  });
+
+  it("reuses the rung list for a room that joins at once, then re-reads it", async () => {
+    rungRows(["1080p30", "720p30"]);
+    await master(undefined, clock);
+    await master(undefined, clock + HLS_PLAYLIST_CACHE_TTL_MS - 1);
+    expect(pool.query).toHaveBeenCalledTimes(1);
+    await master(undefined, clock + HLS_PLAYLIST_CACHE_TTL_MS + 1);
+    expect(pool.query).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("buildSignedPlaylist with a rung", () => {
+  beforeEach(() => {
+    enableHls();
+    resetHlsPlaylistCacheForTests();
+    pool.rowCount = 1;
+    pool.query.mockImplementation(async () => ({ rowCount: 1, rows: [] }));
+  });
+
+  afterEach(() => {
+    disableHls();
+    resetHlsPlaylistCacheForTests();
+    vi.unstubAllGlobals();
+    pool.query.mockReset();
+  });
+
+  it("looks up and fetches that rendition's own objects", async () => {
+    const fetched: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        fetched.push(url);
+        return new Response(PLAYLIST_BODY, { status: 200 });
+      }),
+    );
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "1080p30");
+    const params = pool.query.mock.calls[0]![1] as unknown[];
+    expect(params[1]).toBe(`live/${CHANNEL}/${STARTED_AT}-1080p30`);
+    expect(fetched[0]).toContain(
+      encodeURIComponent(`live/${CHANNEL}/${STARTED_AT}-1080p30.m3u8`).replace(
+        /%2F/g,
+        "/",
+      ),
+    );
+  });
+
+  it("caches per RENDITION, not per session", async () => {
+    // The rungs of one ladder share a channel and a startedAt and differ
+    // only here. A key without the rung would hand a viewer on 720p the
+    // 1080p segment list: the cache that makes an audience cheap would
+    // quietly serve everyone the wrong bitrate.
+    const fetched: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        fetched.push(url);
+        return new Response(PLAYLIST_BODY, { status: 200 });
+      }),
+    );
+    const now = 9_000_000;
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "1080p30", now);
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "720p30", now);
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, "1080p30", now);
+    expect(fetched).toHaveLength(2);
+    expect(fetched[0]).toContain("1080p30.m3u8");
+    expect(fetched[1]).toContain("720p30.m3u8");
   });
 });

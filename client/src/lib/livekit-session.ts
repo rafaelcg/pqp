@@ -10,9 +10,11 @@ import {
 import {
   cameraBitrateFor,
   DEFAULT_VIDEO_QUALITY,
+  hlsSourceTopHeight,
   LARGE_ROOM_SCREEN_BITRATE,
   screenBitrateFor,
   screenSimulcastPlan,
+  type HlsSourceInput,
   type ScreenSimulcastPlan,
   type VideoQuality,
 } from "./video-quality";
@@ -140,6 +142,12 @@ export interface LiveKitSession {
    */
   setScreenQuality(quality: VideoQuality): Promise<void>;
   /**
+   * The live HLS ladder transcoding from this share, or null. Raises the
+   * published top layer past the large-room cap when the ladder's top rung
+   * needs a bigger source than 720p and the measured uplink can feed it.
+   */
+  setHlsSource(next: HlsSourceInput | null): Promise<void>;
+  /**
    * The largest layer this viewer accepts from every remote video publication,
    * applied to what is subscribed now and to whatever arrives later.
    */
@@ -254,6 +262,12 @@ export async function connectLiveKit({
   let screenMaxBitrate = DEFAULT_SCREEN_MAX_BITRATE_BPS;
   /** The presenter's chosen quality; with the room size it makes the plan. */
   let screenQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
+  /**
+   * The live HLS ladder transcoding from this presenter's share, and the
+   * uplink measurement that says whether it can be fed at the ladder's top.
+   * Null unless an egress is actually running on this channel.
+   */
+  let hlsSource: HlsSourceInput | null = null;
   /** The plan the share on the wire was published under. Null while not sharing. */
   let publishedScreenPlan: ScreenSimulcastPlan | null = null;
   /**
@@ -772,7 +786,24 @@ export async function connectLiveKit({
    * thing set. The cap still binds it.
    */
   function currentScreenPlan(): ScreenSimulcastPlan {
-    const plan = screenSimulcastPlan(screenQuality, participantCount());
+    const plan = screenSimulcastPlan(
+      screenQuality,
+      participantCount(),
+      hlsSource,
+    );
+    if (hlsSourceTopHeight(screenQuality, hlsSource) !== null) {
+      // The share is the ladder's source: the egress transcodes from this
+      // track, so holding it at the large-room ceiling would cap every
+      // playlist viewer too. `screenSimulcastPlan` already decided the
+      // height; the ceiling has to follow, or a `screenMaxBitrate` set
+      // directly while the cap DID apply would silently keep it at
+      // 1.5 Mbit/s. Only this branch: everywhere else `screenMaxBitrate`
+      // stays exactly what a caller set, which is what it promises.
+      return {
+        ...plan,
+        topBitrate: Math.max(plan.topBitrate, screenMaxBitrate),
+      };
+    }
     return {
       ...plan,
       topBitrate: plan.capped
@@ -1071,6 +1102,21 @@ export async function connectLiveKit({
     async setScreenQuality(quality: VideoQuality) {
       screenQuality = quality;
       screenMaxBitrate = screenBitrateFor(quality);
+      await reconcileScreenPlan();
+    },
+
+    /**
+     * "A live HLS ladder is transcoding from my screen share, and this is
+     * what my uplink can carry." Null when no egress is running on this
+     * channel, which is every ordinary call and the case whose large-room
+     * cap must not move.
+     *
+     * Idempotent on purpose: `use-voice.ts` calls it whenever the stream
+     * frame or the uplink sample changes, and only a plan that actually
+     * differs reaches `reconcileScreenPlan`'s republish.
+     */
+    async setHlsSource(next: HlsSourceInput | null) {
+      hlsSource = next;
       await reconcileScreenPlan();
     },
 

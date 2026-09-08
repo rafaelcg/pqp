@@ -383,10 +383,19 @@ describeDb("hls playlist route", () => {
       }
     });
 
-    it("even a cold fetch costs ONE query, not the three it used to", async () => {
+    it("even a cold fetch costs ONE query for a ladder session", async () => {
       // Was: requireChannel + canAccessChannel + the session lookup, per
       // request, per viewer, every 2 seconds. Now the access pair is gone
-      // entirely and the session lookup is shared for a second.
+      // entirely and the lookup is shared for a second.
+      //
+      // A ladder session's cold fetch is the rung listing and nothing else:
+      // the master is built from those rows, so it does not then go and ask
+      // whether the session exists.
+      await getPool().query(
+        `INSERT INTO hls_sessions (channel_id, object_prefix, started_at, rung)
+         VALUES ($1, $2, to_timestamp($3 / 1000.0), $4)`,
+        [channelId, `live/${channelId}/${STARTED_AT}-720p30`, STARTED_AT, "720p30"],
+      );
       resetHlsPlaylistCacheForTests();
       const t = tokenFor(owner.id);
       const spy = vi.spyOn(getPool(), "query");
@@ -394,6 +403,26 @@ describeDb("hls playlist route", () => {
         expect((await get(`${path(channelId)}?t=${t}`, null)).status).toBe(200);
         expect(spy).toHaveBeenCalledTimes(1);
         expect(String(spy.mock.calls[0]![0])).toContain("hls_sessions");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("a PRE-LADDER session costs two cold, then none, and says so", async () => {
+      // The one honest regression from the master playlist. A session with no
+      // rung rows is asked about twice on a cold fetch: once for its rungs
+      // (none) and once for the row itself. Both answers are cached for the
+      // same second, so it is one extra query per session per second, and
+      // only for sessions that started before the ladder shipped.
+      resetHlsPlaylistCacheForTests();
+      const t = tokenFor(owner.id);
+      const spy = vi.spyOn(getPool(), "query");
+      try {
+        expect((await get(`${path(channelId)}?t=${t}`, null)).status).toBe(200);
+        expect(spy).toHaveBeenCalledTimes(2);
+        spy.mockClear();
+        expect((await get(`${path(channelId)}?t=${t}`, null)).status).toBe(200);
+        expect(spy).not.toHaveBeenCalled();
       } finally {
         spy.mockRestore();
       }
