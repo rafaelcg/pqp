@@ -37,7 +37,10 @@ import {
 } from "@pqp/shared";
 import type { ChannelLive } from "@/hooks/use-voice";
 import { SearchDialog } from "@/components/search/search-dialog";
-import { ChannelIcon } from "@/components/layout/channel-icon";
+import {
+  ChannelIcon,
+  channelIconIsPrivateLock,
+} from "@/components/layout/channel-icon";
 import {
   resolveVoiceRowClick,
   resolveVoiceRowDoubleClick,
@@ -1783,6 +1786,9 @@ export function ChannelRailItem({
             ? `${channel.name}: ${t("voice.doubleClickToJoin")}`
             : channel.name
       }
+      // The strip has no room to write it, and the padlock glyph is the only
+      // thing distinguishing a private channel there.
+      detail={channel.isPrivate ? t("chrome.privateChannel") : undefined}
       side="right"
     >
       <button
@@ -2214,7 +2220,38 @@ function ChannelRow({
           }
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
-          {icon}
+          {/* Private is the glyph, not a word. The pill that used to sit at
+              the end of this row was about 50px of a 256px column, which is
+              what pushed "broder-do-role" down to "broder…" while the pill
+              itself had room to spare, and on a row whose icon was already
+              the padlock it said the same thing twice. The padlock stays, the
+              tooltip and the screen reader say it in words, and the name gets
+              the pixels back. */}
+          {channel.isPrivate ? (
+            <Tooltip label={t("chrome.privateChannel")}>
+              {/* `aria-hidden` because the words are already in the row, in
+                  the `sr-only` below. Without it the tooltip's own
+                  `aria-label` on this wrapper is a second announcement of the
+                  same fact, which is the bug the pill had. */}
+              <span
+                aria-hidden="true"
+                className="flex shrink-0 items-center gap-1"
+              >
+                {icon}
+                {/* Only when the channel carries its own picture or emoji, in
+                    which case `ChannelIcon` drew that instead of the padlock
+                    and nothing else in the row would say private. */}
+                {!channelIconIsPrivateLock(channel) && (
+                  <Lock
+                    aria-hidden="true"
+                    className="h-3 w-3 shrink-0 text-warning"
+                  />
+                )}
+              </span>
+            </Tooltip>
+          ) : (
+            icon
+          )}
           {watchParty ? (
             <span className="flex min-w-0 flex-1 flex-col">
               <span
@@ -2252,6 +2289,9 @@ function ChannelRow({
           {!watchParty && sessionHint && (
             <ChannelSessionHint startsAt={sessionHint} now={new Date()} />
           )}
+          {channel.isPrivate && (
+            <span className="sr-only">{t("chrome.privateChannel")}</span>
+          )}
           {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
           {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
           <span className="ml-auto flex shrink-0 items-center gap-1">
@@ -2282,11 +2322,6 @@ function ChannelRow({
                 />
                 <span className="sr-only">{t("chrome.connected")}</span>
               </>
-            )}
-            {channel.isPrivate && (
-              <span className="rounded bg-warning/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
-                {t("chrome.private")}
-              </span>
             )}
             {mentions > 0 && (
               <span
