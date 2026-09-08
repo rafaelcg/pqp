@@ -3724,6 +3724,11 @@ CREATE INDEX IF NOT EXISTS idx_hls_sessions_cleanup
   ON hls_sessions (ended_at)
   WHERE cleaned_at IS NULL AND ended_at IS NOT NULL;
 
+-- The LiveKit egress id behind the session: the boot reconcile stops it when
+-- a previous process died mid-share, and the sweep deletes the manifest the
+-- egress writes beside (not under) the session prefix, `live/<channel>/<id>.json`.
+ALTER TABLE hls_sessions ADD COLUMN IF NOT EXISTS egress_id TEXT;
+
 -- One-time host acknowledgment sheet: "you're responsible for what you
 -- stream". Shown once per user per server the first time they start a
 -- watch-party / HLS broadcast in that server; never again once confirmed.

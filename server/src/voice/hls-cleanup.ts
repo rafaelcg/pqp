@@ -27,6 +27,7 @@ import {
   hlsReplayHours,
   hlsRetentionMinutes,
   liveHlsStorageConfig,
+  stopActiveEgressesForRoom,
 } from "./hls-egress.js";
 
 const SWEEP_BATCH = 25;
@@ -35,6 +36,22 @@ interface DueSession {
   id: string;
   channel_id: string;
   object_prefix: string;
+  egress_id: string | null;
+}
+
+/**
+ * The manifest LiveKit egress writes when it finishes: `<dir>/<egressId>.json`
+ * beside the segments, where `<dir>` is the directory part of
+ * `filenamePrefix`. It is NOT under the session's own prefix (which is a
+ * file prefix, `live/<channel>/<startedAt>`), so the prefix listing never
+ * sees it and a sweep that only listed would leave one JSON per session
+ * behind forever. Known from the local-stack QA of 2026-09-07.
+ */
+export function hlsManifestKey(
+  channelId: string,
+  egressId: string,
+): string {
+  return `live/${channelId}/${egressId}.json`;
 }
 
 /**
@@ -48,7 +65,7 @@ async function dueSessions(
   replayHours: number,
 ): Promise<DueSession[]> {
   const result = await getPool().query<DueSession>(
-    `SELECT id, channel_id, object_prefix
+    `SELECT id, channel_id, object_prefix, egress_id
      FROM hls_sessions
      WHERE cleaned_at IS NULL
        AND ended_at IS NOT NULL
@@ -75,6 +92,7 @@ async function deleteSessionObjects(
   config: StorageConfig,
   channelId: string,
   objectPrefix: string,
+  egressId: string | null,
 ): Promise<number> {
   const expectedDir = `live/${channelId}/`;
   if (!objectPrefix.startsWith(expectedDir)) {
@@ -104,7 +122,64 @@ async function deleteSessionObjects(
   for (const key of keys) {
     await deleteObject(key, config);
   }
+  if (egressId) {
+    // The manifest lives beside the prefix, so it is deleted by name. The
+    // key is built from the same channel id the guard above vetted, and
+    // S3 DELETE on a key that was never written is a no-op, not an error.
+    await deleteObject(hlsManifestKey(channelId, egressId), config);
+    return keys.length + 1;
+  }
   return keys.length;
+}
+
+/**
+ * Boot-time reconcile. A session row is opened when an egress starts and
+ * closed by the same process when the share ends; a process that died
+ * mid-share (a deploy, a crash) leaves `ended_at NULL` forever, the sweep
+ * never picks it up and its objects sit in the bucket for good. This
+ * process owns no session at boot, so every open row is stale by
+ * definition: end it now so retention runs, and stop the egress LiveKit may
+ * still be running for it. Only the API process may call this; a worker
+ * that ran it would end the API's live sessions.
+ */
+export async function reconcileStaleHlsSessions(): Promise<number> {
+  const stale = await getPool().query<{
+    id: string;
+    channel_id: string;
+    egress_id: string | null;
+  }>(
+    `SELECT id, channel_id, egress_id
+     FROM hls_sessions
+     WHERE ended_at IS NULL`,
+  );
+  if (stale.rowCount === 0) {
+    return 0;
+  }
+  const channels = new Set(stale.rows.map((row) => row.channel_id));
+  for (const channelId of channels) {
+    try {
+      const stopped = await stopActiveEgressesForRoom(channelId);
+      if (stopped.length > 0) {
+        logEvent("voice.hlsOrphanEgressStopped", {
+          channelId,
+          egressIds: stopped,
+        });
+      }
+    } catch (error) {
+      logEvent("voice.hlsOrphanEgressStopFailed", {
+        channelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  const ended = await getPool().query(
+    `UPDATE hls_sessions SET ended_at = NOW() WHERE ended_at IS NULL`,
+  );
+  logEvent("voice.hlsStaleSessionsEnded", {
+    sessions: ended.rowCount ?? 0,
+    channels: channels.size,
+  });
+  return ended.rowCount ?? 0;
 }
 
 /**
@@ -127,6 +202,7 @@ export async function sweepHlsSessions(): Promise<number> {
         config,
         session.channel_id,
         session.object_prefix,
+        session.egress_id,
       );
       await getPool().query(
         `UPDATE hls_sessions SET cleaned_at = NOW() WHERE id = $1`,

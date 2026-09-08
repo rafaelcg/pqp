@@ -71,6 +71,7 @@ import {
   isLiveHlsEnabledForServer,
   liveHlsStreamFor,
   reconcileLiveHls,
+  setLiveHlsChangeListener,
 } from "../voice/hls-egress.js";
 import {
   resolveVoiceTransport,
@@ -1160,6 +1161,14 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
     });
   }
 }
+
+// The egress monitor (`hls-egress.ts`) found a dead egress, or gave up on
+// one: reconcile again so a still-live share gets a fresh session and every
+// viewer gets the new URL (or `null` after the cap).
+setLiveHlsChangeListener((channelId, reason) => {
+  logEvent("voice.hlsChangeHeard", { channelId, reason });
+  void pushLiveHls(channelId);
+});
 
 function channelLiveFrame(
   channelId: string,

@@ -1,5 +1,6 @@
 import {
   EgressClient,
+  EgressStatus,
   EncodingOptionsPreset,
   RoomServiceClient,
   S3Upload,
@@ -35,6 +36,41 @@ const DEFAULT_DELAY_SECONDS = 10;
 const PLAYLIST_WAIT_ATTEMPTS = 20;
 const PLAYLIST_WAIT_GAP_MS = 1000;
 
+/** How often the monitor asks LiveKit whether each egress is still alive. */
+export const HLS_HEALTH_CHECK_INTERVAL_MS = 10_000;
+/** A fresh egress gets this long before its status is held against it. */
+const HEALTH_GRACE_MS = 15_000;
+/**
+ * The live playlist not moving for this long is a dead egress, whatever
+ * LiveKit's bookkeeping says. Verified on the local stack 2026-09-08: a
+ * `docker stop lk-egress` mid-share leaves `ListEgress` answering ACTIVE
+ * for that id indefinitely (v1.13.6, egress v1.14.1: the killed node never
+ * writes a final status and nothing expires it), so the status alone
+ * would never notice. Ten segments of 2 s: long enough for a presenter
+ * pause, short enough that the client's own 15 s watchdog and this one
+ * land in the same minute.
+ */
+const PLAYLIST_STUCK_MS = 20_000;
+/** Restarts allowed per channel inside `RESTART_WINDOW_MS` before giving up. */
+export const HLS_MAX_RESTARTS = 3;
+export const HLS_RESTART_WINDOW_MS = 5 * 60 * 1000;
+/** After the cap: no new egress for this channel until the share is stopped or this passes. */
+const FAILED_COOLDOWN_MS = 5 * 60 * 1000;
+const RESTART_BACKOFF_BASE_MS = 2_000;
+const RESTART_BACKOFF_MAX_MS = 15_000;
+
+/**
+ * What LiveKit says about one egress, reduced to the three answers the
+ * monitor acts on. `unknown` is "could not ask" and never triggers a restart.
+ */
+export type EgressHealth = "alive" | "ended" | "unknown";
+
+export interface EgressListing {
+  egressId: string;
+  status: EgressStatus | number;
+  error?: string;
+}
+
 export interface LiveHlsScreenTracks {
   videoTrackId: string;
   audioTrackId?: string;
@@ -51,7 +87,27 @@ export interface LiveHlsEgressApi {
     },
   ) => Promise<{ egressId: string }>;
   stopEgress: (egressId: string) => Promise<void>;
+  /**
+   * `ListEgress`, by room or by id. Optional so the older fakes still
+   * compile; without it the monitor has nothing to ask and does nothing,
+   * which is the pre-monitor behaviour, not a crash.
+   */
+  listEgress?: (opts: {
+    roomName?: string;
+    egressId?: string;
+  }) => Promise<EgressListing[]>;
 }
+
+/**
+ * Who hears that a channel's stream changed underneath the room. `ws/voice.ts`
+ * registers its reconcile-and-rebroadcast here; the monitor calls it after
+ * an egress died (so a new one is started and the new playlist URL goes out)
+ * and after the cap is hit (so viewers are told the stream is gone).
+ */
+export type LiveHlsChangeListener = (
+  channelId: string,
+  reason: string,
+) => void;
 
 export type LiveHlsTrackFinder = (
   roomName: string,
@@ -70,12 +126,30 @@ interface RoomHls {
    * stop. So a same-presenter reconcile compares this to what the SFU has.
    */
   videoTrackId: string;
+  /** Wall clock when the egress was requested, for the health grace period. */
+  startedAtMs: number;
+  /** Last playlist shape the monitor saw (`sequence:segments`) and when it changed. */
+  progress: { key: string; at: number } | null;
 }
 
 const rooms = new Map<string, RoomHls>();
+/** Restart timestamps per channel, pruned to `HLS_RESTART_WINDOW_MS`. */
+const restartHistory = new Map<string, number[]>();
+/** Channels that hit the cap: no egress until this instant, or the share stops. */
+const failedUntil = new Map<string, number>();
+const pendingRestarts = new Map<string, ReturnType<typeof setTimeout>>();
+/** Per-channel serialisation of `reconcileLiveHls`: the monitor and the room can race. */
+const reconcileQueue = new Map<string, Promise<unknown>>();
+let changeListener: LiveHlsChangeListener | null = null;
+let monitorTimer: ReturnType<typeof setInterval> | null = null;
 
 let injectedEgress: LiveHlsEgressApi | null = null;
 let injectedFinder: LiveHlsTrackFinder | null = null;
+/** What the (skipped) readiness probe answers under a fake egress. */
+let injectedPlaylistReady = true;
+/** The monitor's playlist read under a fake egress; null skips that check. */
+let injectedPlaylistProbe: ((channelId: string) => string | null) | null =
+  null;
 
 function truthyEnabled(): boolean {
   return process.env.LIVE_HLS_ENABLED === "true";
@@ -194,13 +268,14 @@ export function hlsObjectPrefix(channelId: string, startedAt: number): string {
 async function recordSessionStarted(
   channelId: string,
   startedAt: number,
+  egressId: string,
 ): Promise<void> {
   try {
     await getPool().query(
-      `INSERT INTO hls_sessions (channel_id, object_prefix, started_at)
-       VALUES ($1, $2, to_timestamp($3 / 1000.0))
+      `INSERT INTO hls_sessions (channel_id, object_prefix, started_at, egress_id)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0), $4)
        ON CONFLICT (object_prefix) DO NOTHING`,
-      [channelId, hlsObjectPrefix(channelId, startedAt), startedAt],
+      [channelId, hlsObjectPrefix(channelId, startedAt), startedAt, egressId],
     );
   } catch (error) {
     logEvent("voice.hlsSessionRecordFailed", {
@@ -332,20 +407,320 @@ export function liveHlsStreamFor(channelId: string): LiveHlsStream | null {
 export function setLiveHlsTestHooks(hooks: {
   egress?: LiveHlsEgressApi | null;
   findTracks?: LiveHlsTrackFinder | null;
+  playlistReady?: boolean;
+  /** Body the monitor reads for a channel's live playlist (fake stack). */
+  playlistProbe?: ((channelId: string) => string | null) | null;
 }): void {
+  if ("playlistProbe" in hooks) {
+    injectedPlaylistProbe = hooks.playlistProbe ?? null;
+  }
   if ("egress" in hooks) {
     injectedEgress = hooks.egress ?? null;
   }
   if ("findTracks" in hooks) {
     injectedFinder = hooks.findTracks ?? null;
   }
+  if (hooks.playlistReady !== undefined) {
+    injectedPlaylistReady = hooks.playlistReady;
+  }
 }
 
 export function resetLiveHlsForTests(): void {
   rooms.clear();
+  restartHistory.clear();
+  failedUntil.clear();
+  for (const timer of pendingRestarts.values()) {
+    clearTimeout(timer);
+  }
+  pendingRestarts.clear();
+  reconcileQueue.clear();
+  changeListener = null;
+  stopLiveHlsMonitor();
   warnedPreset = null;
   injectedEgress = null;
   injectedFinder = null;
+  injectedPlaylistReady = true;
+  injectedPlaylistProbe = null;
+}
+
+export function setLiveHlsChangeListener(
+  listener: LiveHlsChangeListener | null,
+): void {
+  changeListener = listener;
+}
+
+function notifyChanged(channelId: string, reason: string): void {
+  if (!changeListener) {
+    return;
+  }
+  try {
+    changeListener(channelId, reason);
+  } catch (error) {
+    logEvent("voice.hlsChangeListenerFailed", {
+      channelId,
+      reason,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/** Timestamps inside the window, oldest first. */
+function recentRestarts(channelId: string, now: number): number[] {
+  const kept = (restartHistory.get(channelId) ?? []).filter(
+    (at) => now - at < HLS_RESTART_WINDOW_MS,
+  );
+  if (kept.length === 0) {
+    restartHistory.delete(channelId);
+  } else {
+    restartHistory.set(channelId, kept);
+  }
+  return kept;
+}
+
+/**
+ * An egress for this channel is gone while the share may still be live.
+ * Counts the attempt; under the cap, asks the listener to reconcile after
+ * a backoff (2 s, 4 s, 8 s, capped at 15 s), which starts a new session
+ * and hands viewers the new playlist URL. Over the cap, the channel is
+ * marked failed for `FAILED_COOLDOWN_MS` (or until the share stops) and the
+ * listener is asked once more so viewers get `stream: null` instead of a
+ * frozen last frame.
+ */
+function scheduleRestart(
+  channelId: string,
+  reason: string,
+  now = Date.now(),
+): "scheduled" | "failed" {
+  const history = recentRestarts(channelId, now);
+  if (history.length >= HLS_MAX_RESTARTS) {
+    failedUntil.set(channelId, now + FAILED_COOLDOWN_MS);
+    restartHistory.delete(channelId);
+    logEvent("voice.hlsFailed", {
+      channelId,
+      reason,
+      restarts: history.length,
+      windowMs: HLS_RESTART_WINDOW_MS,
+    });
+    notifyChanged(channelId, "failed");
+    return "failed";
+  }
+  history.push(now);
+  restartHistory.set(channelId, history);
+  const attempt = history.length;
+  const backoff = Math.min(
+    RESTART_BACKOFF_BASE_MS * 2 ** (attempt - 1),
+    RESTART_BACKOFF_MAX_MS,
+  );
+  logEvent("voice.hlsRestartScheduled", {
+    channelId,
+    reason,
+    attempt,
+    backoffMs: backoff,
+  });
+  const existing = pendingRestarts.get(channelId);
+  if (existing) {
+    clearTimeout(existing);
+  }
+  pendingRestarts.set(
+    channelId,
+    setTimeout(() => {
+      pendingRestarts.delete(channelId);
+      notifyChanged(channelId, reason);
+    }, backoff),
+  );
+  return "scheduled";
+}
+
+function isFailed(channelId: string, now = Date.now()): boolean {
+  const until = failedUntil.get(channelId);
+  if (until === undefined) {
+    return false;
+  }
+  if (until <= now) {
+    failedUntil.delete(channelId);
+    return false;
+  }
+  return true;
+}
+
+/** Whether the channel is in its post-cap cooldown (for the room and tests). */
+export function isLiveHlsFailed(channelId: string): boolean {
+  return isFailed(channelId);
+}
+
+function clearFailure(channelId: string): void {
+  failedUntil.delete(channelId);
+  restartHistory.delete(channelId);
+  const pending = pendingRestarts.get(channelId);
+  if (pending) {
+    clearTimeout(pending);
+    pendingRestarts.delete(channelId);
+  }
+}
+
+function healthFromListing(
+  egressId: string,
+  listing: EgressListing[],
+): EgressHealth {
+  const info = listing.find((item) => item.egressId === egressId);
+  if (!info) {
+    // LiveKit forgot it (a restart of the SFU, or Redis wiped). Egress
+    // cannot be running in a room LiveKit does not know about.
+    return "ended";
+  }
+  return info.status === EgressStatus.EGRESS_STARTING ||
+    info.status === EgressStatus.EGRESS_ACTIVE
+    ? "alive"
+    : "ended";
+}
+
+/**
+ * `EXT-X-MEDIA-SEQUENCE` plus the segment count: the two numbers that move
+ * while an egress is writing. Either one changing is progress.
+ */
+export function playlistProgressKey(body: string): string {
+  let sequence = "";
+  let segments = 0;
+  for (const raw of body.split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("#EXT-X-MEDIA-SEQUENCE:")) {
+      sequence = line.slice("#EXT-X-MEDIA-SEQUENCE:".length);
+    } else if (line !== "" && !line.startsWith("#")) {
+      segments += 1;
+    }
+  }
+  return `${sequence}:${segments}`;
+}
+
+/** The live playlist body, or null when it cannot be read right now. */
+async function probePlaylist(
+  channelId: string,
+  startedAt: number,
+): Promise<string | null> {
+  if (injectedEgress) {
+    return injectedPlaylistProbe ? injectedPlaylistProbe(channelId) : null;
+  }
+  try {
+    const response = await fetch(internalPlaylistUrl(channelId, startedAt), {
+      cache: "no-store",
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return await response.text();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the playlist has stopped moving. Records the shape it sees on
+ * the room so the next pass can compare; `unknown` when it could not read.
+ */
+async function playlistHealth(
+  channelId: string,
+  room: RoomHls,
+  now: number,
+): Promise<EgressHealth> {
+  const body = await probePlaylist(channelId, room.stream.startedAt);
+  if (body === null) {
+    return "unknown";
+  }
+  const key = playlistProgressKey(body);
+  if (!room.progress || room.progress.key !== key) {
+    room.progress = { key, at: now };
+    return "alive";
+  }
+  return now - room.progress.at >= PLAYLIST_STUCK_MS ? "ended" : "alive";
+}
+
+/**
+ * One monitor pass: every room's egress is looked up by id, and its live
+ * playlist is read to see whether it still moves. Either saying "ended" is
+ * enough; the status check catches a clean failure fast, the playlist
+ * check catches the killed node LiveKit never hears about. Exported so the
+ * test can drive it with a fake clock; `startLiveHlsMonitor` runs it on an
+ * interval. Returns the channels it restarted or failed, for the log and
+ * the test.
+ */
+export async function checkLiveHlsHealth(
+  now = Date.now(),
+): Promise<{ channelId: string; outcome: "scheduled" | "failed" }[]> {
+  const egress = getEgress();
+  if (!egress) {
+    return [];
+  }
+  const outcomes: { channelId: string; outcome: "scheduled" | "failed" }[] =
+    [];
+  for (const [channelId, room] of [...rooms.entries()]) {
+    if (now - room.startedAtMs < HEALTH_GRACE_MS) {
+      continue;
+    }
+    let health: EgressHealth = "unknown";
+    let detail: string | undefined;
+    if (egress.listEgress) {
+      try {
+        const listing = await egress.listEgress({ egressId: room.egressId });
+        health = healthFromListing(room.egressId, listing);
+        detail = listing.find((item) => item.egressId === room.egressId)
+          ?.error;
+      } catch (error) {
+        logEvent("voice.hlsHealthCheckFailed", {
+          channelId,
+          egressId: room.egressId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (health !== "ended") {
+      const playlist = await playlistHealth(channelId, room, now);
+      if (playlist === "ended") {
+        health = "ended";
+        detail = detail ?? `playlist stuck for ${PLAYLIST_STUCK_MS} ms`;
+      }
+    }
+    if (health !== "ended") {
+      continue;
+    }
+    // Still the same session? A reconcile may have replaced it meanwhile.
+    if (rooms.get(channelId) !== room) {
+      continue;
+    }
+    rooms.delete(channelId);
+    await recordSessionEnded(channelId, room.stream.startedAt);
+    logEvent("voice.hlsEgressDied", {
+      channelId,
+      egressId: room.egressId,
+      error: detail ?? null,
+    });
+    outcomes.push({
+      channelId,
+      outcome: scheduleRestart(channelId, "egress-ended", now),
+    });
+  }
+  return outcomes;
+}
+
+export function startLiveHlsMonitor(): void {
+  if (monitorTimer) {
+    return;
+  }
+  monitorTimer = setInterval(() => {
+    void checkLiveHlsHealth().catch((error: unknown) => {
+      logEvent("voice.hlsMonitorFailed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, HLS_HEALTH_CHECK_INTERVAL_MS);
+  monitorTimer.unref?.();
+}
+
+export function stopLiveHlsMonitor(): void {
+  if (monitorTimer) {
+    clearInterval(monitorTimer);
+    monitorTimer = null;
+  }
 }
 
 function liveKitHttpUrl(): string {
@@ -381,7 +756,48 @@ function getEgress(): LiveHlsEgressApi | null {
     stopEgress: async (egressId) => {
       await client.stopEgress(egressId);
     },
+    listEgress: async (opts) => {
+      const infos = await client.listEgress(opts);
+      return infos.map((info) => ({
+        egressId: info.egressId,
+        status: info.status,
+        error: info.error || undefined,
+      }));
+    },
   };
+}
+
+/**
+ * Stop every egress LiveKit still runs for a room. Boot uses it for the
+ * sessions a previous process left behind: their rows are ended so retention
+ * runs, and the transcode itself must not keep burning the box's CPU into a
+ * prefix nobody will ever be handed again.
+ */
+export async function stopActiveEgressesForRoom(
+  roomName: string,
+): Promise<string[]> {
+  const egress = getEgress();
+  if (!egress?.listEgress) {
+    return [];
+  }
+  const stopped: string[] = [];
+  const listing = await egress.listEgress({ roomName });
+  for (const info of listing) {
+    if (healthFromListing(info.egressId, listing) !== "alive") {
+      continue;
+    }
+    try {
+      await egress.stopEgress(info.egressId);
+      stopped.push(info.egressId);
+    } catch (error) {
+      logEvent("voice.hlsStopFailed", {
+        channelId: roomName,
+        egressId: info.egressId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  return stopped;
 }
 
 function isTrackSource(source: unknown, wanted: TrackSource): boolean {
@@ -437,7 +853,7 @@ function sleep(ms: number): Promise<void> {
 /** Tests skip the public GET; production waits so joiners are not handed a 404. */
 async function waitForLivePlaylist(url: string): Promise<boolean> {
   if (injectedEgress) {
-    return true;
+    return injectedPlaylistReady;
   }
   for (let attempt = 0; attempt < PLAYLIST_WAIT_ATTEMPTS; attempt += 1) {
     try {
@@ -620,6 +1036,10 @@ async function startRoom(
   if (!egress || !isLiveHlsEnabled()) {
     return null;
   }
+  if (isFailed(channelId)) {
+    logEvent("voice.hlsStartSuppressed", { channelId, presenterPeerId });
+    return null;
+  }
   const tracks = knownTracks ?? (await findScreenTracks(channelId));
   if (!tracks) {
     logEvent("voice.hlsNoScreenTrack", { channelId, presenterPeerId });
@@ -643,12 +1063,15 @@ async function startRoom(
       presenterPeerId,
       delaySeconds: delaySeconds(),
     };
-    rooms.set(channelId, {
+    const room: RoomHls = {
       egressId: started.egressId,
       stream,
       videoTrackId: tracks.videoTrackId,
-    });
-    await recordSessionStarted(channelId, startedAt);
+      startedAtMs: startedAt,
+      progress: null,
+    };
+    rooms.set(channelId, room);
+    await recordSessionStarted(channelId, startedAt, started.egressId);
     // The readiness probe reads the bucket itself (presigned, endpoint
     // form), never the viewer-facing URL: a viewer may get the signed proxy
     // path, which this same process cannot usefully fetch from here.
@@ -661,6 +1084,17 @@ async function startRoom(
       presenterPeerId,
       playlistReady: ready,
     });
+    if (!ready) {
+      // Twenty seconds and no live playlist: this egress is not going to
+      // produce one. Handing the URL out anyway parks every viewer on
+      // "loading" for the whole share (the pre-fix behaviour). Tear it
+      // down and let the restart path try again, under the same cap.
+      if (rooms.get(channelId) === room) {
+        await stopRoom(channelId);
+        scheduleRestart(channelId, "playlist-not-ready");
+      }
+      return null;
+    }
     return stream;
   } catch (error) {
     logEvent("voice.hlsStartFailed", {
@@ -668,6 +1102,11 @@ async function startRoom(
       presenterPeerId,
       error: error instanceof Error ? error.message : String(error),
     });
+    // StartEgress itself failed (the egress service is down or restarting:
+    // a twirp timeout on the local stack while `lk-egress` was stopped).
+    // Nothing else would ever try again while the share is still up, so
+    // this goes through the same backoff and cap as a death mid-stream.
+    scheduleRestart(channelId, "start-failed");
     return null;
   }
 }
@@ -682,7 +1121,25 @@ async function startRoom(
  * `LIVE_HLS_SERVER_ALLOWLIST` (or a conversation, null) never starts an
  * egress, and one already running for it is stopped.
  */
-export async function reconcileLiveHls(
+export function reconcileLiveHls(
+  channelId: string,
+  presenterPeerId: string | null,
+  serverId: string | null,
+): Promise<LiveHlsStream | null> {
+  const previous = reconcileQueue.get(channelId) ?? Promise.resolve();
+  const run = previous
+    .catch(() => undefined)
+    .then(() => reconcileLiveHlsNow(channelId, presenterPeerId, serverId));
+  reconcileQueue.set(channelId, run);
+  void run.finally(() => {
+    if (reconcileQueue.get(channelId) === run) {
+      reconcileQueue.delete(channelId);
+    }
+  });
+  return run;
+}
+
+async function reconcileLiveHlsNow(
   channelId: string,
   presenterPeerId: string | null,
   serverId: string | null,
@@ -695,6 +1152,9 @@ export async function reconcileLiveHls(
   }
   const current = rooms.get(channelId);
   if (!presenterPeerId) {
+    // A share that stopped resets the restart budget: the next one starts
+    // clean rather than inheriting the last one's failures.
+    clearFailure(channelId);
     if (current) {
       await stopRoom(channelId);
       logEvent("voice.hlsStopped", { channelId, reason: "no-share" });

@@ -363,6 +363,11 @@ import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
 import { WatchChannelStage } from "@/components/voice/watch-stage";
 import { HlsHostAckSheet } from "@/components/voice/hls-host-ack-sheet";
+import type { ScreenCaptureIntent } from "@/lib/screen-capture-audio";
+import {
+  gateScreenShareStart,
+  type ScreenShareStart,
+} from "@/lib/screen-share-gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -1473,9 +1478,10 @@ function MainAppContent({
   // One-time "you're responsible for what you stream" sheet, gating the
   // first watch-party / HLS broadcast start per user per server.
   const hlsHostAck = useHlsHostAck();
-  const [hlsHostAckServerId, setHlsHostAckServerId] = useState<string | null>(
-    null,
-  );
+  const [pendingHlsHostAck, setHlsHostAck] = useState<{
+    serverId: string;
+    request: ScreenShareStart<ScreenCaptureIntent>;
+  } | null>(null);
   // Whether this server may go out as HLS at all (the operator's per-server
   // allowlist). A server that cannot has no broadcast to acknowledge, so the
   // sheet is neither fetched nor shown there. Null is "not answered yet",
@@ -1484,23 +1490,21 @@ function MainAppContent({
   const liveHlsConfigRef = useRef(liveHlsConfig);
   liveHlsConfigRef.current = liveHlsConfig;
   const startScreenShareGated = useCallback(
-    (audio: boolean) => {
-      const serverId = selectedServerIdRef.current;
-      if (!serverId) {
-        // DM / conversation voice: no server, nothing to gate.
-        void voice.startScreenShare(audio);
-        return;
-      }
-      if (liveHlsConfigRef.current?.enabled === false) {
-        void voice.startScreenShare(audio);
-        return;
-      }
-      void hlsHostAck.checkNeedsAck(serverId).then((needsAck) => {
-        if (needsAck) {
-          setHlsHostAckServerId(serverId);
-          return;
-        }
-        void voice.startScreenShare(audio);
+    (audio: boolean, intent?: ScreenCaptureIntent) => {
+      // Every share start in this file goes through here: the sidebar
+      // button, the call stage, the "share without sound" retry, and the DM
+      // stage. `screen-share-gate.test.ts` scans this file to keep it so.
+      void gateScreenShareStart<ScreenCaptureIntent>({
+        request: { audio, intent },
+        serverId: selectedServerIdRef.current,
+        hlsEnabled: liveHlsConfigRef.current?.enabled ?? null,
+        checkNeedsAck: (serverId) => hlsHostAck.checkNeedsAck(serverId),
+        start: (request) => {
+          void voice.startScreenShare(request.audio, request.intent);
+        },
+        ask: (serverId, request) => {
+          setHlsHostAck({ serverId, request });
+        },
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -5167,7 +5171,7 @@ function MainAppContent({
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
             onStartScreenShare={(intent) =>
-              voice.startScreenShare(
+              startScreenShareGated(
                 intent?.preferBrowserTab ? false : shareSystemAudio,
                 intent,
               )
@@ -5176,7 +5180,7 @@ function MainAppContent({
               // Disarm the opt-in too: it is what failed, and the next share
               // this person starts on their own should not repeat it.
               setShareSystemAudio(false);
-              void voice.startScreenShare(false);
+              startScreenShareGated(false);
             }}
             onStopScreenShare={() => void voice.stopScreenShare()}
             shareSystemAudio={shareSystemAudio}
@@ -5224,14 +5228,14 @@ function MainAppContent({
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
           onStartScreenShare={(intent) =>
-            voice.startScreenShare(
+            startScreenShareGated(
               intent?.preferBrowserTab ? false : shareSystemAudio,
               intent,
             )
           }
           onShareWithoutSound={() => {
             setShareSystemAudio(false);
-            void voice.startScreenShare(false);
+            startScreenShareGated(false);
           }}
           onStopScreenShare={() => void voice.stopScreenShare()}
           shareSystemAudio={shareSystemAudio}
@@ -6289,16 +6293,18 @@ function MainAppContent({
       />
 
       <HlsHostAckSheet
-        open={hlsHostAckServerId !== null}
+        open={pendingHlsHostAck !== null}
         onConfirm={() => {
-          const serverId = hlsHostAckServerId;
-          if (!serverId) {
+          const pending = pendingHlsHostAck;
+          if (!pending) {
             return;
           }
-          void hlsHostAck.confirm(serverId);
-          void voice.startScreenShare(shareSystemAudio);
+          void hlsHostAck.confirm(pending.serverId);
+          // Same audio choice and capture intent the person asked for
+          // before the sheet, through the same gate (now acknowledged).
+          startScreenShareGated(pending.request.audio, pending.request.intent);
         }}
-        onClose={() => setHlsHostAckServerId(null)}
+        onClose={() => setHlsHostAck(null)}
       />
 
       <ConfirmDialog
