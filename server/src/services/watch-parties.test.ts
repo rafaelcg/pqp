@@ -473,9 +473,10 @@ describeDb("watch party ownership", () => {
     expect((await readChannelParty(member)).body.party?.state).toBe("live");
   });
 
-  it("applies the host's slow mode on go live, and does NOT put it back on end", async () => {
+  it("applies the host's slow mode on go live and puts the old value back on end", async () => {
     // The channel already throttles chat, so a restore that works and a
-    // restore that resets to zero look different.
+    // restore that resets to zero look different. A watch party borrows the
+    // channel for the length of the show; it does not get to redecorate it.
     await getPool().query(`UPDATE channels SET slowmode_seconds = 5 WHERE id = $1`, [
       channelId,
     ]);
@@ -486,32 +487,32 @@ describeDb("watch party ownership", () => {
 
     expect((await setState(host, party.id, "live")).status).toBe(200);
     expect(await slowMode()).toBe(30);
-    // Go live records what it is replacing, which is the half that works.
+    // Go live records what it is replacing. Without this the end path has
+    // nothing to put back and would have to guess at zero.
     expect(await restoreSlowMode(party.id)).toBe(5);
 
     expect((await setState(host, party.id, "ended")).status).toBe(200);
 
     /**
-     * THIS ASSERTION PINS A BUG, DELIBERATELY, AND IT SHOULD FAIL WHEN THE
-     * BUG IS FIXED.
+     * FIVE, NOT ZERO, AND NOT THIRTY.
      *
-     * `restoreChannelAfterParty` clears `restore_slowmode_seconds` and reads
-     * it back in one statement, with `UPDATE ... SET restore_slowmode_seconds
-     * = NULL ... RETURNING restore_slowmode_seconds`, and its comment says
-     * that is what makes a double end idempotent. Postgres `RETURNING` on an
-     * UPDATE yields the NEW row, not the old one, so the value read back is
-     * always NULL and the restore branch never runs. The channel keeps the
-     * party's slow mode for ever after one film night. `stage_speak_applied`
-     * is read the same way in the same statement, so the SPEAK denial a
-     * `hosts_only` party applies is never lifted either.
+     * Thirty was the bug: `restoreChannelAfterParty` used to clear
+     * `restore_slowmode_seconds` and read it back in one
+     * `UPDATE ... RETURNING`, which in Postgres yields the NEW row, so the
+     * value read back was always NULL and the restore branch never ran. A
+     * channel kept the party's slow mode for ever after one film night, and
+     * a `hosts_only` party's SPEAK denial on @everyone was never lifted
+     * either, since it is read the same way in the same statement. Nothing
+     * about it was visible from the outside: the end succeeded, the party
+     * ended, and the room stayed throttled.
      *
-     * Reality is asserted here rather than the intent, per the brief. Fixing
-     * it means reading the old values before clearing them (a SELECT ... FOR
-     * UPDATE inside a transaction, or `UPDATE ... FROM (SELECT ...) old`),
-     * after which this expectation becomes `toBe(5)`.
+     * Zero would be the other bug: resetting rather than restoring, which
+     * would quietly turn off a slow mode the channel had before anyone
+     * started a party.
      */
-    expect(await slowMode()).toBe(30);
-    // The flag is cleared, so the end path is at least idempotent about it.
+    expect(await slowMode()).toBe(5);
+    // Cleared, so a second end (a host pressing Encerrar as the host sweep
+    // fires) puts the channel back exactly once.
     expect(await restoreSlowMode(party.id)).toBeNull();
   });
 

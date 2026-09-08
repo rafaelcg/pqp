@@ -59,41 +59,55 @@ export function LivePartyBlock({
                 title={t("watchParty.live.watchHint")}
                 onClick={() => onWatch(party.channelId)}
                 className={cn(
-                  "flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors",
+                  "flex w-full flex-col gap-1 rounded-lg border px-2.5 py-2 text-left transition-colors",
                   selected
                     ? "border-danger/50 bg-danger/10"
                     : "border-ink-4/70 bg-ink-2 hover:border-danger/40 hover:bg-ink-3",
                 )}
               >
-                <span className="relative shrink-0">
-                  <UserAvatar
-                    name={party.hostDisplayName}
-                    avatarUrl={party.hostAvatarUrl}
-                    rounded="full"
-                    className="h-8 w-8"
-                  />
-                  <span
-                    aria-hidden="true"
-                    className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-ink-2 bg-danger motion-safe:animate-pulse"
-                  />
+                {/* TWO ROWS, AND THAT IS WHAT MAKES IT A CARD RATHER THAN A
+                    ROW WITH THINGS BOLTED ON.
+
+                    The first attempt put the name, the AO VIVO pill and the
+                    Assistir chip on one line beside a 32px avatar. On a real
+                    256px rail that left about 60px for the name, so
+                    "Cinemoon: sessão coruja" rendered as "Cin…": the block
+                    announced that something was live without saying what,
+                    which is the one job it has. Splitting it gives the name
+                    the whole first line, with only the avatar beside it. AO
+                    VIVO and the host drop to the second line, where the thing
+                    that truncates is a name people already know rather than
+                    the title of the show. Same lesson as the PRIVADO pill on the channel
+                    row (#368): the pixels belong to the name. */}
+                <span className="flex min-w-0 items-center gap-2.5">
+                  <span className="relative shrink-0">
+                    <UserAvatar
+                      name={party.hostDisplayName}
+                      avatarUrl={party.hostAvatarUrl}
+                      rounded="full"
+                      className="h-7 w-7"
+                    />
+                    <span
+                      aria-hidden="true"
+                      className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-ink-2 bg-danger motion-safe:animate-pulse"
+                    />
+                  </span>
+                  <span className="truncate text-sm font-semibold text-paper">
+                    {party.name}
+                  </span>
                 </span>
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span className="truncate text-sm font-semibold text-paper">
-                      {party.name}
-                    </span>
-                    <span className="shrink-0 rounded-full bg-danger/15 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-danger">
-                      {t("watchParty.live.badge")}
-                    </span>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="shrink-0 rounded-full bg-danger/15 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-danger">
+                    {t("watchParty.live.badge")}
                   </span>
                   <span className="truncate text-[11px] text-paper-muted">
                     {t("watchParty.live.hostedBy", {
                       name: party.hostDisplayName,
                     })}
                   </span>
-                </span>
-                <span className="shrink-0 rounded-md bg-danger/15 px-2 py-1 text-[11px] font-semibold text-danger">
-                  {t("watchParty.live.watch")}
+                  <span className="ml-auto shrink-0 rounded-md bg-danger/15 px-2 py-0.5 text-[11px] font-semibold text-danger">
+                    {t("watchParty.live.watch")}
+                  </span>
                 </span>
               </button>
             </li>
