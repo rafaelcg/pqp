@@ -108,12 +108,57 @@ Paths are relative to the repo root. `ios/` means
 | Camera: send | full (`client/src/hooks/use-voice.ts`) | same, macOS permission prompt (`electron/main.js:501`) | full, channels and DM calls (`ios/Voice/VoiceModel.swift` `toggleCamera`) | missing, either transport |
 | Video quality ladder, send and receive readouts | full (`client/src/components/voice/video-quality-menu.tsx`) | same | full for mesh (`ios/Voice/VideoQuality.swift`) | missing |
 | Watch party / cinema mode | full: immersive stage, idle chrome (`client/src/hooks/use-immersive-stage.ts`); tab-share-with-sound control in open PR #258 | same, minus tab share (see send row) | missing (no hits in `ios/`) | missing (no hits in `android/`) |
+| Live reactions over a share | full, behind `VITE_LIVE_REACTIONS` (off by default): a six-emoji bar on the stage, floating particles for the room, static counter chip under `prefers-reduced-motion` (`client/src/components/voice/live-reactions-overlay.tsx`, `live-reactions-bar.tsx`) | same | missing | missing |
 | Stop watching one share, share volume separate from voice | full (PRs #214, #215, `client/src/components/voice/screen-stage.tsx`) | same | partial: watch or not per share; no separate share volume | missing |
 | Connection quality bars, relayed badge | open PR #261 | same | missing | partial: "Silent" detection only (`android/voice/VoiceStats.kt`) |
 | Connection doctor | full (`client/src/lib/connection-doctor.ts`) | same | missing | open PR #217 |
 | Call rating prompt | full (`client/src/components/voice/call-rating-prompt.tsx`) | same | full (`ios/Voice/CallRating.swift`) | missing |
 | DM calls, ringing, incoming banner | full (`client/src/components/dm/incoming-call-overlay.tsx`) | same | full (`ios/Voice/CallModel.swift`, `ios/Voice/CallStageView.swift`) | full while the app is open: ring frames, a ringtone that respects DND, incoming banner, accept and decline (`android/voice/CallMachine.kt`, `android/voice/Ringer.kt`, `android/ui/components/IncomingCallBanner.kt`); a ring to a closed app still needs the push server leg |
 | Background audio while the app is hidden | n/a | n/a | partial: `audio` + `voip` background modes, no CallKit or PushKit (`ios/pqp/Info.plist:70`) | full: foreground service with Hang up (`android/voice/VoiceService.kt`) |
+
+#### The `live-reaction` frames, for whoever picks this up on a phone
+
+Two frames on the voice signalling socket, defined in
+`packages/shared/src/live-reactions.ts` and handled in `server/src/ws/voice.ts`
+and `server/src/ws/live-reactions.ts`.
+
+Client to server, one tap:
+
+```json
+{ "type": "live-reaction", "channelId": "<voice channel uuid>", "emoji": "🔥" }
+```
+
+Server to the room, coalesced over 250 ms:
+
+```json
+{
+  "type": "live-reactions",
+  "channelId": "<voice channel uuid>",
+  "items": [{ "emoji": "🔥", "count": 12 }, { "emoji": "😂", "count": 3 }],
+  "seq": 41
+}
+```
+
+What a native client needs, and nothing more:
+
+- Send `live-reaction` only while it holds a peer in that room. The server
+  drops it otherwise, silently, and it also drops anything past five per second
+  per socket. A refusal is never announced, so do not build a retry on the
+  absence of an echo.
+- The emoji must be one of the six in `LIVE_REACTION_EMOJIS`. It is a closed
+  set on the server too, so a seventh is a dropped frame, not a rendered one.
+- On `live-reactions`, spawn `count` particles per emoji rather than one per
+  frame. This is the part that is easy to get wrong: the frame is counts, not
+  taps, and treating it as one tap makes a room of two hundred look like a room
+  of four.
+- Burst past `LIVE_REACTION_BURST_THRESHOLD` (10) reactions in one window. The
+  constant is shared so the three platforms burst at the same crowd size.
+- Echo the local tap immediately. A round trip plus the coalescing window is
+  long enough to read as a dead button.
+- Honour the platform's reduced-motion setting by drawing a static counter
+  instead of particles, the way the web does. Not slower particles: none.
+- Nothing is stored anywhere. A window that arrives while the app is
+  backgrounded is correctly lost, and there is no history to fetch on join.
 
 ### Notifications and arrival
 

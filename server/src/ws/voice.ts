@@ -15,6 +15,7 @@ import {
   voiceModerationMessageSchema,
   voiceParticipantSchema,
   watchPartyStateSchema,
+  liveReactionCountSchema,
   type VoiceParticipant,
   type VoiceRoomTransport,
   type VoiceSignalingMessage,
@@ -105,6 +106,12 @@ import {
   getWatchPartyState,
   resetWatchPartyLimits,
 } from "./watch-party.js";
+import {
+  offerLiveReaction,
+  resetLiveReactionLimits,
+  resetLiveReactions,
+  setLiveReactionSink,
+} from "./live-reactions.js";
 import {
   mintVoiceResumeToken,
   verifyVoiceResumeToken,
@@ -723,6 +730,8 @@ export function resetVoiceRateLimits(): void {
   roomLimiter.reset();
   stateLimiter.reset();
   resetWatchPartyLimits();
+  resetLiveReactionLimits();
+  resetLiveReactions();
 }
 
 function getRoomPeers(voiceChannelId: string): VoicePeer[] {
@@ -3185,6 +3194,43 @@ export async function handleVoiceMessage(
     return;
   }
 
+  // --- live reactions ---
+  //
+  // The audience is the ROOM, for the same reason the watch party's is: a
+  // reaction floats over a shared screen, and only the people inside the call
+  // are looking at one. Membership of `peers` IS that audience lookup: it is
+  // what `peer-joined`, `peer-left` and the watch party all fan out to, and it
+  // was granted by the join above, where channel access, permissions, blocks
+  // and timeouts were checked and where every eviction path removes a peer the
+  // moment one of those changes. So there is no second membership check here
+  // and there must not be one: a check written separately from the room is a
+  // check that eventually disagrees with it.
+  //
+  // `channelId` on the frame is a statement of intent, not an address. It is
+  // compared against the room the sender actually holds and the frame is
+  // dropped when they differ, so a client that raced a channel switch cannot
+  // spray confetti into the room it just left.
+  //
+  // The sender is NOT excluded from the fan-out, but the client does not wait
+  // for it either: the bar echoes the tap locally the instant it is pressed.
+  // The window that comes back is drawn on top of that echo, which for
+  // particles nobody counts is invisible, and the alternative of suppressing
+  // the sender's own window would make one person's screen quieter than
+  // everybody else's during a burst.
+  if (payload.type === "live-reaction") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer || peer.voiceChannelId !== payload.channelId) {
+      return;
+    }
+    // The answer is deliberately unused. A refused tap is silence: see
+    // `offerLiveReaction`.
+    offerLiveReaction(peer.voiceChannelId, payload.emoji, existingPeerId);
+    return;
+  }
+
   // Conversation-call frames — the logic lives in the bannered section below.
   // `call-decline` is deliberately dispatched before the peer requirement:
   // a decliner is by definition NOT in the room and holds no voice peer.
@@ -4096,6 +4142,7 @@ export const VOICE_IDENTITY_TOPIC = "voice.identity";
 export const VOICE_WATCH_TOPIC = "voice.watch";
 export const VOICE_CALL_TOPIC = "voice.call";
 export const VOICE_MODERATION_TOPIC = "voice.moderation";
+export const VOICE_REACTIONS_TOPIC = "voice.reactions";
 
 const voiceRoomFrameSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -4129,6 +4176,22 @@ const voiceIdentityFrameSchema = z.object({
   avatarUrl: z.string().nullable(),
 });
 type VoiceIdentityFrame = z.infer<typeof voiceIdentityFrameSchema>;
+
+/**
+ * `voice.reactions`. Unlike every other voice topic this one does NOT check
+ * `registryOn()`, and the difference is not an oversight. The registry gate
+ * exists because those frames are hints about ROWS, and without rows to
+ * re-read a hint is a rumour that could plant a ghost. A window of counts
+ * refers to nothing stored, corrects itself in 250ms by being replaced, and
+ * cannot leave a room in a wrong state even if it is entirely fabricated. It
+ * needs the bus and nothing else, exactly like `chat.typing`.
+ */
+const voiceReactionsFrameSchema = z.object({
+  channelId: z.string().uuid(),
+  items: z.array(liveReactionCountSchema).min(1),
+  seq: z.number().int().nonnegative(),
+});
+type VoiceReactionsFrame = z.infer<typeof voiceReactionsFrameSchema>;
 
 const voiceWatchFrameSchema = z.object({
   channelId: z.string().uuid(),
@@ -4219,6 +4282,38 @@ const voiceModerationFrameSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 type VoiceModerationFrame = z.infer<typeof voiceModerationFrameSchema>;
+
+subscribeToCluster(VOICE_REACTIONS_TOPIC, (data) => {
+  const parsed = voiceReactionsFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { channelId, items, seq } = parsed.data;
+  // Only rooms somebody here is in. A `broadcastToRoom` for an empty room is
+  // already a no-op; the early return keeps it obvious that a window addressed
+  // elsewhere costs this instance a parse and nothing more.
+  if (getRoomPeers(channelId).length === 0) {
+    return;
+  }
+  broadcastToRoom(channelId, { type: "live-reactions", channelId, items, seq });
+});
+
+/**
+ * Where a coalesced window goes once the 250ms is up: this instance's half of
+ * the room, then the bus. Registered here rather than imported the other way
+ * round so `live-reactions.ts` stays free of the socket layer and can be
+ * tested without one.
+ */
+setLiveReactionSink((channelId, items, seq) => {
+  broadcastToRoom(channelId, { type: "live-reactions", channelId, items, seq });
+  if (clusterOn()) {
+    publishToCluster(VOICE_REACTIONS_TOPIC, {
+      channelId,
+      items,
+      seq,
+    } satisfies VoiceReactionsFrame);
+  }
+});
 
 subscribeToCluster(VOICE_CALL_TOPIC, (data) => {
   if (!registryOn()) {
