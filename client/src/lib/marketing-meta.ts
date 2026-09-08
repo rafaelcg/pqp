@@ -261,6 +261,11 @@ export const LANDING_FAQ: Record<
 > = {
   "pt-BR": [
     {
+      question: "É seguro criar conta?",
+      answer:
+        "É um site. Não precisa instalar nada. Os servidores ficam em São Paulo. Você apaga a conta de dentro do app. O código é público se um dia você quiser olhar. Não precisa ler pra usar.",
+    },
+    {
       question: "O pqp é de graça mesmo?",
       answer:
         "É. Código aberto sob AGPL, sem plano pago e sem limite artificial de sala. Dá pra apoiar o projeto com uma doação, e doar não desbloqueia nada.",
@@ -287,6 +292,11 @@ export const LANDING_FAQ: Record<
     },
   ],
   en: [
+    {
+      question: "Is it safe to create an account?",
+      answer:
+        "It's a website. You don't have to install anything. The servers are in São Paulo. You can delete the account from inside the app. The code is public if you ever want to look. You don't have to read it to use the site.",
+    },
     {
       question: "Is pqp really free?",
       answer:

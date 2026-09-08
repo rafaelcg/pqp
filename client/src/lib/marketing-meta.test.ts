@@ -176,7 +176,7 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
   it("every homepage FAQ pair matches its landing.faq.* twin, both locales", () => {
     // Same rule: the page renders LANDING_FAQ_IDS in this order and the
     // JSON-LD must be the same list.
-    const ids = ["free", "install", "capacity", "import", "data"] as const;
+    const ids = ["safe", "free", "install", "capacity", "import", "data"] as const;
     expect(LANDING_FAQ.en).toHaveLength(ids.length);
     expect(LANDING_FAQ["pt-BR"]).toHaveLength(ids.length);
     ids.forEach((id, index) => {

@@ -21,6 +21,7 @@ import { MarketingNav } from "@/components/marketing/marketing-nav";
 import {
   ChatFrame,
   HeroFrame,
+  ImportFrame,
   RolesFrame,
   ScreenFrame,
   VoiceFrame,
@@ -72,6 +73,7 @@ const DISCORD_CARDS: {
     title: "landing.discord.import.title",
     body: "landing.discord.import.body",
     hint: "landing.discord.import.hint",
+    link: { key: "landing.discord.import.link", to: "/#import" },
   },
   {
     icon: Code2,
@@ -82,9 +84,9 @@ const DISCORD_CARDS: {
 ];
 
 /**
- * The four pillars, each with a drawn frame of the feature. Only things that
- * ship today and are on at pqp.gg; the comment on `product-frames.tsx` says
- * what happens when one stops being true.
+ * The pillars, each with a screenshot of the running app. Only things
+ * that ship today and are on at pqp.gg; the comment on `product-frames.tsx`
+ * says what happens when one stops being true.
  */
 const PILLARS: {
   id: string;
@@ -106,6 +108,13 @@ const PILLARS: {
     body: "landing.screen.body",
     points: ["landing.screen.point1", "landing.screen.point2", "landing.screen.point3"],
     frame: <ScreenFrame />,
+  },
+  {
+    id: "import",
+    title: "landing.import.title",
+    body: "landing.import.body",
+    points: ["landing.import.point1", "landing.import.point2", "landing.import.point3"],
+    frame: <ImportFrame />,
   },
   {
     id: "chat",
@@ -167,7 +176,7 @@ const COMMUNITY_POINTS = [
  * two copies together in this order, so a question added here without its
  * edge twin fails the suite rather than silently drifting.
  */
-export const LANDING_FAQ_IDS = ["free", "install", "capacity", "import", "data"] as const;
+export const LANDING_FAQ_IDS = ["safe", "free", "install", "capacity", "import", "data"] as const;
 
 const SECTION = "scroll-mt-20 px-5 py-20 sm:px-8 sm:py-28";
 const H2 = "font-display text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl";
@@ -222,9 +231,9 @@ export function LandingPage() {
       </div>
 
       {/* Hero. The painting stays as the backdrop, but the product now sits in
-          front of it: a visitor should know what the app looks like before
-          they read a word. The scrim is heavier than before for the same
-          reason, so the frame reads as the subject and the painting as mood. */}
+          front of it: a real screenshot of the app, so a visitor knows what
+          it looks like before they read a word. The scrim is heavier than
+          before for the same reason. */}
       <section ref={heroRef} className="relative -mt-16 overflow-hidden">
         <div className="hero-parallax pointer-events-none absolute inset-0" aria-hidden>
           <img
@@ -367,7 +376,7 @@ export function LandingPage() {
         </div>
       </section>
 
-      {/* The four pillars, alternating text and frame. */}
+      {/* The pillars, alternating text and frame. */}
       <section id="features" className={cn(SECTION, "border-b border-ink-4/40")}>
         <div className="mx-auto max-w-6xl">
           <div className="mx-auto max-w-2xl text-center">
