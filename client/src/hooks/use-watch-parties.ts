@@ -73,32 +73,7 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
   }, [serverId, reloadToken]);
 
   const apply = useCallback((channelId: string, party: WatchParty | null) => {
-    setByChannel((prev) => {
-      if (!party) {
-        if (!(channelId in prev)) {
-          return prev;
-        }
-        const next = { ...prev };
-        delete next[channelId];
-        return next;
-      }
-      const held = prev[channelId];
-      if (
-        held &&
-        held.id === party.id &&
-        held.state === party.state &&
-        held.name === party.name &&
-        held.hostUserId === party.hostUserId &&
-        held.hostDisconnectedAt === party.hostDisconnectedAt &&
-        held.cohosts.length === party.cohosts.length &&
-        held.viewerRole === party.viewerRole
-      ) {
-        // Same party, same everything the UI reads. Returning the held object
-        // keeps the sidebar from re-rendering on every keyframe.
-        return prev;
-      }
-      return { ...prev, [channelId]: party };
-    });
+    setByChannel((prev) => applyWatchPartyFrame(prev, channelId, party));
   }, []);
 
   const put = useCallback(
@@ -108,13 +83,51 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
-  const live = useMemo(
-    () =>
-      Object.values(byChannel)
-        .filter((party) => party.state === "live")
-        .sort((a, b) => (b.wentLiveAt ?? "").localeCompare(a.wentLiveAt ?? "")),
-    [byChannel],
-  );
+  const live = useMemo(() => liveWatchParties(byChannel), [byChannel]);
 
   return { byChannel, live, apply, put, refresh };
+}
+
+
+/**
+ * Apply one `watch-party-update` frame to the map.
+ *
+ * A pure function, and not folded back into the hook, for the same reason
+ * `formatSessionRelativeTime` is one: it is the only interesting logic here
+ * and this repo has no hook-testing library, so the choice is a pure function
+ * with a real test or a `setState` callback with none.
+ *
+ * IT NEVER SECOND-GUESSES THE FRAME. The first version short-circuited when
+ * the id, state, name, host, co-host count and viewer role all matched, to
+ * save a re-render. Options and the stage are none of those, so it silently
+ * dropped every options-only change: a host switching "quem pode falar"
+ * mid-show updated the database, rewrote the channel's SPEAK overwrites, and
+ * reached every viewer's socket, and not one viewer's screen changed. The
+ * saving was imaginary anyway, because this frame is not on a keyframe
+ * cadence like `channel-live`: the server sends it when a human changes
+ * something, which is exactly when a re-render is the point.
+ */
+export function applyWatchPartyFrame(
+  prev: Record<string, WatchParty>,
+  channelId: string,
+  party: WatchParty | null,
+): Record<string, WatchParty> {
+  if (!party) {
+    if (!(channelId in prev)) {
+      return prev;
+    }
+    const next = { ...prev };
+    delete next[channelId];
+    return next;
+  }
+  return { ...prev, [channelId]: party };
+}
+
+/** The live ones, newest first. What the sidebar block draws. */
+export function liveWatchParties(
+  byChannel: Record<string, WatchParty>,
+): WatchParty[] {
+  return Object.values(byChannel)
+    .filter((party) => party.state === "live")
+    .sort((a, b) => (b.wentLiveAt ?? "").localeCompare(a.wentLiveAt ?? ""));
 }

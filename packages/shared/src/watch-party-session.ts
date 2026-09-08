@@ -5,8 +5,8 @@ import { hasPermission, Permission } from "./permissions.js";
  * A watch party as an EVENT WITH A HOST, not a channel with a flag.
  *
  * WHY THIS FILE EXISTS. What shipped on 2026-09-08 was plumbing: a
- * `watch_party` channel kind (PR #354), a `channel_sessions` row that
- * announces a time (PR #352), and an HLS egress that turns a screen share
+ * `watch_party` channel kind (PR 354), a `channel_sessions` row that
+ * announces a time (PR 352), and an HLS egress that turns a screen share
  * into a playlist. Nothing tied them together, so nobody owned a party,
  * nothing had a name of its own, and the only way to start one was to walk
  * into a voice room and press Share. This module is the missing object: who
@@ -276,7 +276,7 @@ export function canPerformWatchPartyAction(
  *
  * Five minutes, and the number is a product decision rather than a technical
  * one. A host whose wifi drops or whose browser reloads is back in seconds
- * (the media session already resumes across an API restart, see #162), so
+ * (the media session already resumes across an API restart, see PR 162), so
  * anything shorter than a minute would end parties over nothing. Anything
  * much longer leaves a room "live" with nobody running it, which is worse
  * than ending it, because the sidebar keeps promising a show.
@@ -337,41 +337,133 @@ export function resolveWatchPartyHost(input: {
 // --------------------------------------------------------------- the options
 
 /**
- * The settings a host wants decided BEFORE an audience arrives, which is the
- * whole reason the draft state exists. Slow mode is a general chat feature
- * owned elsewhere (`channels.slow_mode_seconds`); this only carries the
- * value the host chose in the setup sheet so one "Ir ao vivo" can apply it,
- * rather than making them go to channel settings first.
+ * WHO MAY SPEAK, and it is the option that matters most because it is the one
+ * that decides whether anybody is asked for a microphone at all.
+ *
+ * `hosts_only` IS THE DEFAULT, and the reason is the failure mode rather than
+ * a preference: a party of two hundred people with open microphones is not a
+ * watch party, it is a riot, and the 2026-09-05 spike showed how quickly a
+ * room here gets to two hundred. Watching is the thing almost everyone came
+ * to do, and it needs no device permission whatsoever.
+ *
+ * `invited` is the same closed stage plus a door: the host puts one person up
+ * at a time, and only that person is ever asked for a microphone.
+ *
+ * `everyone` is the old behaviour, kept because a film night among six friends
+ * genuinely wants it, and warned about in the copy for a large room.
+ */
+export const WATCH_PARTY_STAGE_MODES = [
+  "hosts_only",
+  "invited",
+  "everyone",
+] as const;
+
+export type WatchPartyStageMode = (typeof WATCH_PARTY_STAGE_MODES)[number];
+
+/** Whether this mode closes the stage to @everyone at the channel level. */
+export function stageModeClosesTheFloor(mode: WatchPartyStageMode): boolean {
+  return mode !== "everyone";
+}
+
+/**
+ * The settings a host decides BEFORE an audience arrives, which is the whole
+ * reason the draft state exists, and may change again while the party runs.
+ *
+ * SIX CONTROLS AT MOST, AND ONE OF THEM IS A SENTENCE. Who can WATCH is
+ * deliberately not here: that is the channel's own permissions, and a second
+ * permission system layered over them would be two places to get a private
+ * party wrong. The panel says so in words instead of offering a control.
+ *
+ * QUALITY IS NOT HERE YET, ON PURPOSE. The HLS quality ladder is a separate
+ * branch and owns what a host may choose; when it lands it adds one key here
+ * (`quality`, defaulting to automatic) rather than growing a parallel control.
+ * A dead dropdown that changes nothing would be worse than its absence.
  */
 export const watchPartyOptionsSchema = z.object({
-  /** Seconds between messages, 0 for off. Applied to the channel on go-live. */
-  slowModeSeconds: z.number().int().min(0).max(21600).default(0),
-  /** Whether the floating live reactions are on for this party. */
-  reactionsEnabled: z.boolean().default(true),
+  stageMode: z.enum(WATCH_PARTY_STAGE_MODES).default("hosts_only"),
   /**
-   * Who may talk on the stage.
-   *
-   * `open` leaves the channel's own SPEAK rules alone, which is what a small
-   * server watching a film together wants. `hosts_only` is the stage model:
-   * the host and co-hosts talk, everyone else watches, and the channel gets
-   * a SPEAK denial for @everyone while the party is live. It is undone when
-   * the party ends, so a watch party does not silently reconfigure a channel
-   * forever.
+   * A viewer may ask to come up. Meaningless when everyone may already speak,
+   * and pointless when only the hosts ever will, so the panel shows it only
+   * for `invited`, where it defaults on.
    */
-  stageMode: z.enum(["open", "hosts_only"]).default("open"),
+  raiseHand: z.boolean().default(true),
+  /**
+   * Seconds between messages, 0 for off. THE CHANNEL'S OWN SLOW MODE
+   * (`channels.slowmode_seconds`, enforced in `ws/chat.ts` against
+   * `services/slow-mode.ts`), not a party-specific copy: the party carries the
+   * value the host picked so that one press of Ir ao vivo applies it, and
+   * ending the party puts the channel's old value back.
+   */
+  slowModeSeconds: z.number().int().min(0).max(21600).default(0),
+  /** The floating live reactions. */
+  reactionsEnabled: z.boolean().default(true),
 });
 
 export type WatchPartyOptions = z.infer<typeof watchPartyOptionsSchema>;
 
 export const WATCH_PARTY_DEFAULT_OPTIONS: WatchPartyOptions = Object.freeze({
+  stageMode: "hosts_only",
+  raiseHand: true,
   slowModeSeconds: 0,
   reactionsEnabled: true,
-  stageMode: "open",
 });
+
+/**
+ * Whether this person may take the microphone in a party with these options,
+ * given what the server already says about their SPEAK bit.
+ *
+ * `canSpeak` is the authority and this is not a second one: the server denies
+ * SPEAK to @everyone for a closed stage and grants it back per member, so
+ * `canSpeak` alone is already correct. This exists so the client can show the
+ * right AFFORDANCE (a Falar button, a Pedir pra falar button, or neither)
+ * without each surface re-deriving the rule.
+ */
+export function watchPartySpeakAffordance(input: {
+  options: WatchPartyOptions;
+  role: WatchPartyRole;
+  /** `welcome.canSpeak` for this room, as the server resolved it. */
+  canSpeak: boolean;
+}): "speak" | "raiseHand" | "none" {
+  if (input.canSpeak) {
+    return "speak";
+  }
+  if (input.role === "host" || input.role === "cohost") {
+    // Running the party and denied SPEAK means the grant has not arrived yet
+    // (a permissions version still propagating). Offering the button is right:
+    // the server refuses it if it is genuinely wrong.
+    return "speak";
+  }
+  if (input.options.stageMode === "invited" && input.options.raiseHand) {
+    return "raiseHand";
+  }
+  return "none";
+}
 
 // ------------------------------------------------------------- the wire shape
 
 const nameField = z.string().trim().min(1).max(120);
+
+export const watchPartyStagePersonSchema = z.object({
+  userId: z.string().uuid(),
+  displayName: z.string(),
+  avatarUrl: z.string().nullable(),
+});
+
+/**
+ * Who is up and who is asking, sent alongside the party.
+ *
+ * Only the people running the party are told about the hands: a queue is a
+ * moderation surface, and an audience that can see who asked and was passed
+ * over is a queue that makes the room worse.
+ */
+export const watchPartyStageSchema = z.object({
+  invited: z.array(watchPartyStagePersonSchema),
+  hands: z.array(watchPartyStagePersonSchema),
+  /** Whether this person's own hand is up. Everyone is told their own. */
+  handRaised: z.boolean(),
+});
+
+export type WatchPartyStage = z.infer<typeof watchPartyStageSchema>;
 
 export const watchPartyCohostSchema = z.object({
   userId: z.string().uuid(),
@@ -408,6 +500,8 @@ export const watchPartySchema = z.object({
   options: watchPartyOptionsSchema,
   /** The requesting user's role, resolved server side. */
   viewerRole: z.enum(WATCH_PARTY_ROLES),
+  /** Who is on the stage and who is asking. Hands are host-side only. */
+  stage: watchPartyStageSchema,
   /** Whether the requesting user has a reminder for this party. */
   reminding: z.boolean(),
 });
@@ -487,3 +581,111 @@ export const watchPartyHostRequestSchema = z.object({
 });
 
 export type WatchPartyHostRequest = z.infer<typeof watchPartyHostRequestSchema>;
+
+// ------------------------------------------------------------- the surfaces
+
+/**
+ * WHICH ONE THING A WATCH PARTY CHANNEL SHOWS.
+ *
+ * This function exists because of a bug Rafael photographed: the channel
+ * rendered "Nenhuma watch party rolando aqui" with a Criar watch party button,
+ * and DIRECTLY UNDERNEATH IT the live stage, playing, with the party's name
+ * and "2 na chamada". Two surfaces mounted at once, each confidently telling
+ * the room something the other contradicted.
+ *
+ * THE CAUSE WAS TWO SOURCES OF TRUTH, not a rendering mistake. The empty state
+ * asked the party object ("is there a `channel_sessions` row?") and the stage
+ * asked the room ("is there a stream?"). Those disagree all the time and both
+ * answers are correct:
+ *
+ *  - somebody joined the call and pressed Share without ever creating a party,
+ *    which is the pre-existing way this worked and still works;
+ *  - a party ended while the presenter kept sharing;
+ *  - a draft is invisible to a viewer, so `party` is null for them while the
+ *    channel is unmistakably live.
+ *
+ * So neither one gets to decide alone. This function is the decision, it is
+ * pure, both the empty state and the live surface are derived from its single
+ * answer, and `watch-party-session.test.ts` walks the whole cross product so
+ * that no combination of inputs can ever produce two surfaces again.
+ */
+export const WATCH_PARTY_SURFACES = [
+  /** Nothing to draw. Someone else's surface owns this space. */
+  "none",
+  /** No party, nothing live, and this person could start one. */
+  "empty",
+  /** A draft, being set up by the person looking at it. */
+  "setup",
+  /** Announced, not started. */
+  "scheduled",
+  /** A party, on air. */
+  "live",
+  /**
+   * The channel is live with no party object: a bare screen share, or a party
+   * this person may not see. It gets the live surface, named after the
+   * channel rather than a party, and NEVER the create button.
+   */
+  "liveUntitled",
+] as const;
+
+export type WatchPartySurface = (typeof WATCH_PARTY_SURFACES)[number];
+
+export function watchPartySurface(input: {
+  /** The party as this person may see it, or null. */
+  state: WatchPartyPhase | null;
+  /** A playable stream exists for this channel. */
+  hasStream: boolean;
+  /** This person holds a seat in this channel's voice room. */
+  inCall: boolean;
+  /** This person may start a party here (START_WATCH_PARTY). */
+  canStart: boolean;
+}): WatchPartySurface {
+  // In the call, the call stage owns the space. The party bar is drawn by the
+  // live surfaces below only when this person is NOT in it; otherwise two
+  // components fight over the same pixels, which is this bug's other half.
+  if (input.state === "live") {
+    return "live";
+  }
+  if (input.state === "draft") {
+    return "setup";
+  }
+  if (input.state === "scheduled") {
+    // A stream on a channel whose party has not started is still a channel
+    // that is live. Drawing a countdown over a moving picture is the same
+    // contradiction wearing a different hat.
+    return input.hasStream ? "live" : "scheduled";
+  }
+  // No party this person can see.
+  if (input.hasStream) {
+    return "liveUntitled";
+  }
+  if (input.inCall) {
+    // A quiet room they are sitting in. The call stage is already there and
+    // an invitation to create a party on top of it is noise.
+    return "none";
+  }
+  return input.canStart ? "empty" : "none";
+}
+
+/** Whether this surface is one of the two that mean "something is on air". */
+export function isLiveWatchPartySurface(surface: WatchPartySurface): boolean {
+  return surface === "live" || surface === "liveUntitled";
+}
+
+/**
+ * `POST /api/watch-parties/:id/stage`. The host puts somebody up, or takes
+ * them down. `raise` is the viewer's own hand, which is why it needs no
+ * `userId`: nobody raises a hand on anyone else's behalf.
+ */
+export const watchPartyStageRequestSchema = z.union([
+  z.object({
+    action: z.enum(["invite", "remove"]),
+    userId: z.string().uuid(),
+  }),
+  z.object({
+    action: z.enum(["raise", "lower"]),
+  }),
+]);
+
+export type WatchPartyStageRequest = z.infer<typeof watchPartyStageRequestSchema>;
+

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  isLiveWatchPartySurface,
+  watchPartySurface,
+  WATCH_PARTY_SURFACES,
   canPerformWatchPartyAction,
   canTransitionWatchParty,
   isWatchPartyHostGraceOpen,
@@ -13,9 +16,12 @@ import {
   WATCH_PARTY_ACTIONS,
   WATCH_PARTY_HOST_GRACE_MS,
   WATCH_PARTY_PHASES,
+  stageModeClosesTheFloor,
   watchPartyOptionsSchema,
   watchPartyRole,
+  watchPartySpeakAffordance,
   type WatchPartyAction,
+  type WatchPartyOptions,
   type WatchPartyRole,
   type WatchPartyPhase,
 } from "./index.js";
@@ -354,12 +360,19 @@ describe("the host disconnect", () => {
 });
 
 describe("the options", () => {
-  it("defaults to open, reactions on, slow mode off", () => {
+  it("closes the stage by default, because two hundred open microphones is the failure mode", () => {
     expect(watchPartyOptionsSchema.parse({})).toEqual({
+      stageMode: "hosts_only",
+      raiseHand: true,
       slowModeSeconds: 0,
       reactionsEnabled: true,
-      stageMode: "open",
     });
+  });
+
+  it("knows which modes close the floor to everyone", () => {
+    expect(stageModeClosesTheFloor("hosts_only")).toBe(true);
+    expect(stageModeClosesTheFloor("invited")).toBe(true);
+    expect(stageModeClosesTheFloor("everyone")).toBe(false);
   });
 
   it("refuses a slow mode longer than six hours, the channel settings ceiling", () => {
@@ -372,7 +385,165 @@ describe("the options", () => {
   });
 
   it("refuses a stage mode it does not know", () => {
-    expect(watchPartyOptionsSchema.safeParse({ stageMode: "invite" }).success)
+    expect(watchPartyOptionsSchema.safeParse({ stageMode: "open" }).success)
       .toBe(false);
+  });
+});
+
+describe("which control a person is offered for speaking", () => {
+  const opts = (over: Partial<WatchPartyOptions> = {}) =>
+    watchPartyOptionsSchema.parse(over);
+
+  it("offers Falar to anyone the server already lets speak", () => {
+    for (const role of ["host", "cohost", "manager", "viewer"] as const) {
+      expect(
+        watchPartySpeakAffordance({ options: opts(), role, canSpeak: true }),
+      ).toBe("speak");
+    }
+  });
+
+  it("offers nothing to a viewer on a hosts-only stage", () => {
+    // The whole point: no button, therefore no microphone prompt, therefore
+    // none of the "you joined without a microphone" copy Rafael was shown.
+    expect(
+      watchPartySpeakAffordance({
+        options: opts({ stageMode: "hosts_only" }),
+        role: "viewer",
+        canSpeak: false,
+      }),
+    ).toBe("none");
+  });
+
+  it("offers a raised hand only when the stage takes invitations and hands are on", () => {
+    expect(
+      watchPartySpeakAffordance({
+        options: opts({ stageMode: "invited", raiseHand: true }),
+        role: "viewer",
+        canSpeak: false,
+      }),
+    ).toBe("raiseHand");
+    expect(
+      watchPartySpeakAffordance({
+        options: opts({ stageMode: "invited", raiseHand: false }),
+        role: "viewer",
+        canSpeak: false,
+      }),
+    ).toBe("none");
+    expect(
+      watchPartySpeakAffordance({
+        options: opts({ stageMode: "everyone", raiseHand: true }),
+        role: "viewer",
+        canSpeak: false,
+      }),
+    ).toBe("none");
+  });
+
+  it("always offers the host and co-hosts the microphone, grant lag or not", () => {
+    for (const role of ["host", "cohost"] as const) {
+      expect(
+        watchPartySpeakAffordance({
+          options: opts({ stageMode: "hosts_only" }),
+          role,
+          canSpeak: false,
+        }),
+      ).toBe("speak");
+    }
+    // A manager is not running the show and gets no shortcut onto the stage.
+    expect(
+      watchPartySpeakAffordance({
+        options: opts({ stageMode: "hosts_only" }),
+        role: "manager",
+        canSpeak: false,
+      }),
+    ).toBe("none");
+  });
+});
+
+describe("which surface a watch party channel shows", () => {
+  const surface = (
+    state: WatchPartyPhase | null,
+    hasStream: boolean,
+    inCall = false,
+    canStart = true,
+  ) => watchPartySurface({ state, hasStream, inCall, canStart });
+
+  /**
+   * THE BUG THIS WHOLE BLOCK EXISTS FOR. Rafael photographed a channel showing
+   * "Nenhuma watch party rolando aqui" with a Criar watch party button, and
+   * the live stage playing directly underneath it. The empty state asked the
+   * party object and the stage asked the room, and both were right.
+   */
+  it("never offers to create a party while the channel is live", () => {
+    for (const state of [null, "scheduled", "ended", "cancelled"] as const) {
+      for (const inCall of [false, true]) {
+        for (const canStart of [false, true]) {
+          const answer = watchPartySurface({
+            state,
+            hasStream: true,
+            inCall,
+            canStart,
+          });
+          expect([state, inCall, canStart, answer]).toEqual([
+            state,
+            inCall,
+            canStart,
+            state === "scheduled" ? "live" : "liveUntitled",
+          ]);
+        }
+      }
+    }
+  });
+
+  it("never shows a live surface when nothing is live and no party is running", () => {
+    for (const state of [null, "ended", "cancelled"] as const) {
+      expect(isLiveWatchPartySurface(surface(state, false))).toBe(false);
+    }
+  });
+
+  it("gives exactly one answer for every combination of inputs", () => {
+    // A total function over the cross product is the property that makes two
+    // surfaces impossible: the panel renders `surface` and nothing else.
+    const states: (WatchPartyPhase | null)[] = [null, ...WATCH_PARTY_PHASES];
+    for (const state of states) {
+      for (const hasStream of [false, true]) {
+        for (const inCall of [false, true]) {
+          for (const canStart of [false, true]) {
+            const answer = watchPartySurface({
+              state,
+              hasStream,
+              inCall,
+              canStart,
+            });
+            expect(WATCH_PARTY_SURFACES).toContain(answer);
+          }
+        }
+      }
+    }
+  });
+
+  it("shows the empty state only to someone who could actually start one", () => {
+    expect(surface(null, false, false, true)).toBe("empty");
+    expect(surface(null, false, false, false)).toBe("none");
+  });
+
+  it("does not offer to create a party over a quiet room you are sitting in", () => {
+    expect(surface(null, false, true, true)).toBe("none");
+  });
+
+  it("keeps the setup surface for the host whatever the room is doing", () => {
+    expect(surface("draft", false)).toBe("setup");
+    expect(surface("draft", true)).toBe("setup");
+  });
+
+  it("does not draw a countdown over a moving picture", () => {
+    expect(surface("scheduled", false)).toBe("scheduled");
+    expect(surface("scheduled", true)).toBe("live");
+  });
+
+  it("treats a finished party with a stream still running as live, not empty", () => {
+    // The reverse case: the party ended and the presenter kept sharing. The
+    // stale answer would have been the create button over a live picture.
+    expect(surface("ended", true)).toBe("liveUntitled");
+    expect(surface("ended", false, false, true)).toBe("empty");
   });
 });

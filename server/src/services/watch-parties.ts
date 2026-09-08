@@ -2,6 +2,7 @@ import {
   hasPermission,
   parsePermissions,
   Permission,
+  stageModeClosesTheFloor,
   canPerformWatchPartyAction,
   canTransitionWatchParty,
   resolveWatchPartyHost,
@@ -13,6 +14,7 @@ import {
   type WatchPartyOptions,
   type WatchPartyRole,
   type WatchPartyPhase,
+  type WatchPartyStage,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { getEveryoneRoleId } from "./permissions.js";
@@ -175,6 +177,7 @@ export function mapWatchParty(
   cohosts: readonly WatchPartyCohostRow[],
   viewerRole: WatchPartyRole,
   reminding: boolean,
+  stage: WatchPartyStage = { invited: [], hands: [], handRaised: false },
 ): WatchParty {
   return {
     id: row.id,
@@ -200,6 +203,7 @@ export function mapWatchParty(
     options: parseOptions(row.options),
     viewerRole,
     reminding,
+    stage,
   };
 }
 
@@ -276,7 +280,37 @@ export async function presentWatchParty(
     list,
     role,
     await isReminding(row.id, viewer.userId),
+    await presentStage(row.id, role, viewer.userId),
   );
+}
+
+/**
+ * The stage, as this person may see it.
+ *
+ * WHO IS UP is public: they are about to be audible, and a viewer wondering
+ * why a stranger is talking deserves the answer. WHO IS ASKING is not: a
+ * queue an audience can read is a queue where being passed over happens in
+ * public, and that makes the room worse rather than better. Everyone is told
+ * about their OWN hand, because a raise button that cannot show its own state
+ * is a button people press twice.
+ */
+async function presentStage(
+  sessionId: string,
+  role: WatchPartyRole,
+  userId: string,
+): Promise<WatchPartyStage> {
+  const { invited, hands } = await loadWatchPartyStage(sessionId);
+  const runsTheParty = role === "host" || role === "cohost";
+  const person = (r: { user_id: string; display_name: string; avatar_url: string | null }) => ({
+    userId: r.user_id,
+    displayName: r.display_name,
+    avatarUrl: r.avatar_url,
+  });
+  return {
+    invited: invited.map(person),
+    hands: runsTheParty ? hands.map(person) : [],
+    handRaised: hands.some((h) => h.user_id === userId),
+  };
 }
 
 /**
@@ -735,26 +769,34 @@ export async function sweepWatchPartyHosts(
 // -------------------------------------------------- the options, applied
 
 /**
- * WHAT GOING LIVE DOES TO THE CHANNEL, AND WHAT ENDING PUTS BACK.
+ * MAKE THE CHANNEL MATCH THE PARTY, whatever the party currently says.
  *
- * The setup sheet asks the host to decide slow mode and who may speak before
- * an audience arrives, which is the entire reason `draft` exists. Both of
- * those are channel-level facts owned by other features (slow mode is
- * `channels.slowmode_seconds`, enforced in `ws/chat.ts`; speaking is
- * `Permission.SPEAK` through the ordinary overwrite resolver). This function
- * is the only place a party writes to either.
+ * One reconciler rather than an apply-on-go-live and an undo-on-end, because
+ * the options are editable WHILE the party runs and a host changing "quem pode
+ * falar" from `everyone` to `hosts_only` mid-show has to take effect for the
+ * two hundred people already in the room. Two half-functions would have needed
+ * a third for that case, and the third is where they drift.
  *
- * IT RESTORES, IT DOES NOT RESET. `restore_slowmode_seconds` and
- * `stage_speak_applied` record what the party changed, so ending it returns
- * the channel to what it was rather than to zero. A channel that already had
- * slow mode on keeps it; a channel where @everyone was already denied SPEAK
- * is left alone, and ending the party does not hand the room a microphone it
- * never had.
+ * It is idempotent. Call it after go-live, after any options edit, and after
+ * the end; it computes what the channel should look like now and moves it
+ * there. A call that changes nothing writes nothing, which matters because
+ * every overwrite write bumps `permissions_version` and re-resolves every
+ * seat in the room.
  *
- * IT IS BEST EFFORT AND SAYS SO. A failure here must not stop a host going
- * live or, worse, leave a party stuck live because the end path threw. The
- * caller logs and carries on; the party's own state is the truth about the
- * show, and this is decoration on the room.
+ * WHAT IT OWNS, precisely, so it never clobbers anything else:
+ *  - `channels.slowmode_seconds`, remembering the previous value in
+ *    `restore_slowmode_seconds`;
+ *  - the SPEAK bit of the @everyone overwrite, and only when it was the one
+ *    that set it (`stage_speak_applied`);
+ *  - the SPEAK allow bit of a member overwrite for the host, the co-hosts and
+ *    anyone invited to the stage.
+ *
+ * It never touches any other bit of any of those overwrites, and it deletes an
+ * overwrite row only when the party is the sole reason it existed.
+ *
+ * BEST EFFORT, AND IT SAYS SO. A failure here must not stop a host going live
+ * or, worse, leave a party stuck live because the end path threw. The party's
+ * own state is the truth about the show; this is the room around it.
  */
 export async function applyWatchPartyOptions(
   row: WatchPartyRow,
@@ -767,6 +809,37 @@ export async function applyWatchPartyOptions(
   if (to === "ended" || to === "cancelled") {
     await restoreChannelAfterParty(row.id);
   }
+}
+
+/**
+ * The seam an options edit on a LIVE party calls. Re-reads the row, so a
+ * caller does not have to hand it a fresh one, and does nothing at all for a
+ * party that is not on air: a draft's options are a plan, not a rule.
+ */
+export async function reconcileLiveWatchPartyOptions(
+  sessionId: string,
+): Promise<void> {
+  const row = await getWatchPartyRow(sessionId);
+  if (!row || row.status !== "live") {
+    return;
+  }
+  await applyGoLiveOptions(row);
+}
+
+/** Everyone whose microphone this party is holding open. */
+async function stageMemberIds(row: WatchPartyRow): Promise<string[]> {
+  const cohosts = await listCohostIds(row.id);
+  const invited = await getPool().query<{ user_id: string }>(
+    `SELECT user_id FROM channel_session_stage_invites WHERE session_id = $1`,
+    [row.id],
+  );
+  return [
+    ...new Set([
+      row.host_user_id,
+      ...cohosts,
+      ...invited.rows.map((r) => r.user_id),
+    ]),
+  ];
 }
 
 async function applyGoLiveOptions(row: WatchPartyRow): Promise<void> {
@@ -786,17 +859,32 @@ async function applyGoLiveOptions(row: WatchPartyRow): Promise<void> {
     options.slowModeSeconds > 0 &&
     options.slowModeSeconds !== (current.slowmode_seconds ?? 0)
   ) {
+    const remembered = await getPool().query<{
+      restore_slowmode_seconds: number | null;
+    }>(
+      `SELECT restore_slowmode_seconds FROM channel_sessions WHERE id = $1`,
+      [row.id],
+    );
     await getPool().query(
       `UPDATE channels SET slowmode_seconds = $2 WHERE id = $1`,
       [row.channel_id, options.slowModeSeconds],
     );
-    await getPool().query(
-      `UPDATE channel_sessions SET restore_slowmode_seconds = $2 WHERE id = $1`,
-      [row.id, current.slowmode_seconds ?? 0],
-    );
+    // Only the FIRST change records what to restore. A host who moves slow
+    // mode from 30s to 60s mid-show must still get the channel's original
+    // value back at the end, not the 30 they picked an hour ago.
+    if (remembered.rows[0]?.restore_slowmode_seconds === null) {
+      await getPool().query(
+        `UPDATE channel_sessions SET restore_slowmode_seconds = $2 WHERE id = $1`,
+        [row.id, current.slowmode_seconds ?? 0],
+      );
+    }
   }
 
-  if (options.stageMode === "hosts_only" && current.server_id) {
+  if (!current.server_id) {
+    return;
+  }
+
+  if (stageModeClosesTheFloor(options.stageMode)) {
     const applied = await denyEveryoneSpeak(row.channel_id, current.server_id);
     if (applied) {
       await getPool().query(
@@ -804,10 +892,21 @@ async function applyGoLiveOptions(row: WatchPartyRow): Promise<void> {
         [row.id],
       );
     }
+    // Closing the floor must never silence the people running the party. A
+    // host who is not the server owner has no short circuit through
+    // `computePermissions`, so without this the very act of protecting the
+    // room takes the host's own microphone away.
+    for (const userId of await stageMemberIds(row)) {
+      await grantMemberSpeak(row.channel_id, current.server_id, userId);
+    }
+  } else {
+    // The floor is open again. Undo ours and nothing else.
+    await openTheFloor(row, current.server_id);
   }
 }
 
 async function restoreChannelAfterParty(sessionId: string): Promise<void> {
+  const row = await getWatchPartyRow(sessionId);
   // A CTE, and it has to be one. `UPDATE ... RETURNING` hands back the NEW
   // values, so the obvious version of this returned the nulls it had just
   // written and restored nothing: slow mode stayed on after the party ended,
@@ -838,26 +937,152 @@ async function restoreChannelAfterParty(sessionId: string): Promise<void> {
        FROM previous`,
     [sessionId],
   );
-  const row = result.rows[0];
-  if (!row) {
+  const claimed = result.rows[0];
+  if (!claimed) {
     return;
   }
-  if (row.restore_slowmode_seconds !== null) {
+  if (claimed.restore_slowmode_seconds !== null) {
     await getPool().query(
       `UPDATE channels SET slowmode_seconds = $2 WHERE id = $1`,
-      [row.channel_id, row.restore_slowmode_seconds],
+      [claimed.channel_id, claimed.restore_slowmode_seconds],
     );
   }
-  if (row.stage_speak_applied) {
-    const channel = await getPool().query<{ server_id: string | null }>(
-      `SELECT server_id FROM channels WHERE id = $1`,
-      [row.channel_id],
-    );
-    const serverId = channel.rows[0]?.server_id;
-    if (serverId) {
-      await allowEveryoneSpeak(row.channel_id, serverId);
-    }
+  const channel = await getPool().query<{ server_id: string | null }>(
+    `SELECT server_id FROM channels WHERE id = $1`,
+    [claimed.channel_id],
+  );
+  const serverId = channel.rows[0]?.server_id;
+  if (!serverId || !row) {
+    return;
   }
+  if (claimed.stage_speak_applied) {
+    await allowEveryoneSpeak(claimed.channel_id, serverId);
+  }
+  // The member grants go whether or not the floor was closed: an invitation
+  // to speak is for the length of one show.
+  for (const userId of await stageMemberIds(row)) {
+    await revokeMemberSpeak(claimed.channel_id, serverId, userId);
+  }
+  await getPool().query(
+    `DELETE FROM channel_session_stage_invites WHERE session_id = $1`,
+    [sessionId],
+  );
+  await getPool().query(
+    `DELETE FROM channel_session_raised_hands WHERE session_id = $1`,
+    [sessionId],
+  );
+}
+
+/** The floor was closed and now is not. Lift ours, leave everything else. */
+async function openTheFloor(
+  row: WatchPartyRow,
+  serverId: string,
+): Promise<void> {
+  const held = await getPool().query<{ stage_speak_applied: boolean }>(
+    `SELECT stage_speak_applied FROM channel_sessions WHERE id = $1`,
+    [row.id],
+  );
+  if (held.rows[0]?.stage_speak_applied) {
+    await allowEveryoneSpeak(row.channel_id, serverId);
+    await getPool().query(
+      `UPDATE channel_sessions SET stage_speak_applied = FALSE WHERE id = $1`,
+      [row.id],
+    );
+  }
+  for (const userId of await stageMemberIds(row)) {
+    await revokeMemberSpeak(row.channel_id, serverId, userId);
+  }
+}
+
+// ------------------------------------------------------------- the stage
+
+/** Put one person on the stage of a party whose floor is closed. */
+export async function inviteToWatchPartyStage(
+  row: WatchPartyRow,
+  userId: string,
+  invitedBy: string,
+): Promise<void> {
+  await getPool().query(
+    `INSERT INTO channel_session_stage_invites (session_id, user_id, invited_by)
+     VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
+    [row.id, userId, invitedBy],
+  );
+  await getPool().query(
+    `DELETE FROM channel_session_raised_hands WHERE session_id = $1 AND user_id = $2`,
+    [row.id, userId],
+  );
+  if (row.server_id && row.status === "live") {
+    await grantMemberSpeak(row.channel_id, row.server_id, userId);
+  }
+}
+
+/** Take one person back off the stage. */
+export async function removeFromWatchPartyStage(
+  row: WatchPartyRow,
+  userId: string,
+): Promise<void> {
+  await getPool().query(
+    `DELETE FROM channel_session_stage_invites WHERE session_id = $1 AND user_id = $2`,
+    [row.id, userId],
+  );
+  // The host and the co-hosts are on the stage by role, not by invitation,
+  // and taking one of them off would be a demotion wearing the wrong button.
+  const byRole = await stageMemberIds(row);
+  if (byRole.includes(userId)) {
+    return;
+  }
+  if (row.server_id) {
+    await revokeMemberSpeak(row.channel_id, row.server_id, userId);
+  }
+}
+
+export async function setWatchPartyRaisedHand(
+  sessionId: string,
+  userId: string,
+  raised: boolean,
+): Promise<void> {
+  if (raised) {
+    await getPool().query(
+      `INSERT INTO channel_session_raised_hands (session_id, user_id)
+       VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+      [sessionId, userId],
+    );
+  } else {
+    await getPool().query(
+      `DELETE FROM channel_session_raised_hands WHERE session_id = $1 AND user_id = $2`,
+      [sessionId, userId],
+    );
+  }
+}
+
+export interface WatchPartyStageRow {
+  user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+}
+
+/** The queue, oldest hand first, and who is currently up. */
+export async function loadWatchPartyStage(sessionId: string): Promise<{
+  invited: WatchPartyStageRow[];
+  hands: WatchPartyStageRow[];
+}> {
+  const invited = await getPool().query<WatchPartyStageRow>(
+    `SELECT i.user_id, u.display_name, u.avatar_url
+       FROM channel_session_stage_invites i
+       JOIN users u ON u.id = i.user_id
+      WHERE i.session_id = $1
+      ORDER BY i.invited_at ASC`,
+    [sessionId],
+  );
+  const hands = await getPool().query<WatchPartyStageRow>(
+    `SELECT h.user_id, u.display_name, u.avatar_url
+       FROM channel_session_raised_hands h
+       JOIN users u ON u.id = h.user_id
+      WHERE h.session_id = $1
+      ORDER BY h.raised_at ASC`,
+    [sessionId],
+  );
+  return { invited: invited.rows, hands: hands.rows };
 }
 
 /**
@@ -927,6 +1152,74 @@ async function allowEveryoneSpeak(
       serverId,
       "role",
       everyoneId,
+      allow,
+      deny,
+    );
+  }
+  await reevaluateVoiceSpeak(serverId);
+}
+
+
+/**
+ * Give one member the SPEAK bit back on this channel, on top of whatever else
+ * their overwrite already says.
+ *
+ * Only the one bit is touched, and an overwrite that already allowed SPEAK is
+ * left exactly as it was, so the revoke below cannot take away something the
+ * server granted for its own reasons.
+ */
+async function grantMemberSpeak(
+  channelId: string,
+  serverId: string,
+  userId: string,
+): Promise<void> {
+  const existing = await getPool().query<{ allow: string; deny: string }>(
+    `SELECT allow, deny FROM channel_overwrites
+      WHERE channel_id = $1 AND target_type = 'member' AND target_id = $2`,
+    [channelId, userId],
+  );
+  const allow = parsePermissions(existing.rows[0]?.allow ?? "0");
+  const deny = parsePermissions(existing.rows[0]?.deny ?? "0");
+  if (hasPermission(allow, Permission.SPEAK) && !hasPermission(deny, Permission.SPEAK)) {
+    return;
+  }
+  await upsertChannelOverwrite(
+    channelId,
+    serverId,
+    "member",
+    userId,
+    allow | Permission.SPEAK,
+    deny & ~Permission.SPEAK,
+  );
+  await reevaluateVoiceSpeak(serverId);
+}
+
+async function revokeMemberSpeak(
+  channelId: string,
+  serverId: string,
+  userId: string,
+): Promise<void> {
+  const existing = await getPool().query<{ allow: string; deny: string }>(
+    `SELECT allow, deny FROM channel_overwrites
+      WHERE channel_id = $1 AND target_type = 'member' AND target_id = $2`,
+    [channelId, userId],
+  );
+  if (existing.rows.length === 0) {
+    return;
+  }
+  const allow = parsePermissions(existing.rows[0].allow) & ~Permission.SPEAK;
+  const deny = parsePermissions(existing.rows[0].deny);
+  if (allow === 0n && deny === 0n) {
+    // The party is the only reason this overwrite existed. Leaving an empty
+    // row behind would show a member as "has overwrites" in the channel
+    // settings for ever after one film night.
+    await deleteChannelOverwrite(channelId, serverId, "member", userId);
+  } else {
+    await upsertChannelOverwrite(
+      channelId,
+      serverId,
+      "member",
+      userId,
       allow,
       deny,
     );

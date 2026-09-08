@@ -7,6 +7,7 @@ import {
   updateWatchPartySchema,
   watchPartyCohostRequestSchema,
   watchPartyHostRequestSchema,
+  watchPartyStageRequestSchema,
   watchPartyStateRequestSchema,
   type WatchPartyAction,
   updateChannelSessionSchema,
@@ -292,7 +293,11 @@ import {
   getWatchPartyRow,
   listActiveWatchPartiesForServer,
   presentWatchParty,
+  inviteToWatchPartyStage,
+  reconcileLiveWatchPartyOptions,
+  removeFromWatchPartyStage,
   removeWatchPartyCohost,
+  setWatchPartyRaisedHand,
   transferWatchPartyHost,
   transitionWatchParty,
   updateWatchParty,
@@ -4258,6 +4263,54 @@ router.delete(
 
 
 // ------------------------------------------------------- watch parties (event)
+/**
+ * The stage: the host putting somebody up or taking them down, and a viewer
+ * raising or lowering their own hand.
+ *
+ * TWO DIFFERENT AUTHORISATIONS IN ONE ROUTE, which is why the body is a union
+ * rather than one shape with an optional field. `invite` and `remove` are the
+ * host's, and go through `promoteCohost`'s rule because putting somebody on
+ * the stage is the same kind of act as promoting them, one show long.
+ * `raise` and `lower` are the viewer's own and need nothing but the ability
+ * to see the party, because a hand is a request and not a permission.
+ */
+router.post(
+  "/api/watch-parties/:sessionId/stage",
+  async ({ req, user }, { sessionId }) => {
+    const body = watchPartyStageRequestSchema.parse(await readJsonBody(req));
+    const hostSide = body.action === "invite" || body.action === "remove";
+    const { row, actor } = await requireWatchParty(
+      sessionId!,
+      user.id,
+      hostSide ? "promoteCohost" : "view",
+    );
+    if (hostSide) {
+      if (body.action === "invite") {
+        if (!(await canAccessChannel(row.channel_id, body.userId))) {
+          throw new HttpError(400, "That person cannot see this channel");
+        }
+        await inviteToWatchPartyStage(row, body.userId, user.id);
+      } else {
+        await removeFromWatchPartyStage(row, body.userId);
+      }
+    } else {
+      // A hand is only meaningful while a show is running.
+      if (row.status !== "live") {
+        throw new HttpError(409, "This watch party is not live");
+      }
+      await setWatchPartyRaisedHand(
+        sessionId!,
+        user.id,
+        body.action === "raise",
+      );
+    }
+    void broadcastWatchParty(sessionId!);
+    const updated = await getWatchPartyRow(sessionId!);
+    return { party: updated ? await presentWatchParty(updated, actor) : null };
+  },
+);
+
+
 
 /**
  * The watch party journey. `docs/WATCH_PARTY.md` has the ownership rules; the
@@ -4428,6 +4481,15 @@ router.patch("/api/watch-parties/:sessionId", async ({ req, user }, { sessionId 
       startsAt: body.startsAt,
       options: body.options,
     });
+    // The options are editable WHILE the party runs, and a host moving "quem
+    // pode falar" from `everyone` to `hosts_only` mid-show has to take effect
+    // for the people already in the room. The reconciler is idempotent, so
+    // calling it for a rename costs one read and writes nothing.
+    if (body.options) {
+      await reconcileLiveWatchPartyOptions(sessionId!).catch((error) => {
+        console.error("[watch-party] option reconcile failed:", error);
+      });
+    }
     void broadcastWatchParty(row.id);
     return { party: await presentWatchParty(updated, actor) };
   } catch (error) {

@@ -3927,3 +3927,27 @@ ALTER TABLE channel_sessions
   ADD COLUMN IF NOT EXISTS restore_slowmode_seconds INTEGER;
 ALTER TABLE channel_sessions
   ADD COLUMN IF NOT EXISTS stage_speak_applied BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Who the host has personally put on the stage of a party whose floor is
+-- closed (`stageMode = 'invited'`). One row per person per party; the row is
+-- what makes the SPEAK allow overwrite on the channel removable again when
+-- the party ends, without having to guess which overwrites were ours.
+CREATE TABLE IF NOT EXISTS channel_session_stage_invites (
+  session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  invited_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (session_id, user_id)
+);
+
+-- A viewer asking to come up. Deleted when the hand is lowered, when they are
+-- put on the stage, and with the party.
+CREATE TABLE IF NOT EXISTS channel_session_raised_hands (
+  session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  raised_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (session_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_session_raised_hands_queue
+  ON channel_session_raised_hands (session_id, raised_at);

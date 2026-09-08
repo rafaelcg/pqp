@@ -157,6 +157,7 @@ import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
   createWatchParty as apiCreateWatchParty,
+  setWatchPartyStage,
   setWatchPartyState as apiSetWatchPartyState,
   updateWatchParty as apiUpdateWatchParty,
 } from "@/lib/watch-parties-api";
@@ -3650,6 +3651,45 @@ function MainAppContent({
     }
   }
 
+  /**
+   * Take a seat in a watch party's room WITHOUT a microphone.
+   *
+   * The default for anybody who is not running the show. `audienceOnly` opens
+   * no `getUserMedia` at all, so there is no prompt, no device and no "entrou
+   * sem microfone" banner: nothing was asked for, so nothing was refused.
+   * `voice.takeTheMicrophone()` is the deliberate second act.
+   */
+  async function handleWatchPartyJoinAsAudience(channelId: string) {
+    voiceServerIdRef.current = selectedServerId;
+    await voice.join(channelId, {
+      inputDeviceId: localSettings.inputDeviceId,
+      inputVolume: localSettings.inputVolume,
+      inputMode: localSettings.inputMode,
+      vadThreshold: localSettings.vadThreshold,
+      processing: localSettings.micProcessing,
+      audienceOnly: true,
+    });
+  }
+
+  async function handleWatchPartyStage(
+    action: "invite" | "remove" | "raise" | "lower",
+    userId?: string,
+  ) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await setWatchPartyStage(
+      party.id,
+      action === "invite" || action === "remove"
+        ? { action, userId: userId! }
+        : { action },
+    );
+    if (answer.party) {
+      watchParties.put(answer.party);
+    }
+  }
+
   async function handleWatchPartyClaimHost() {
     const party = currentWatchParty();
     if (!party) {
@@ -5406,7 +5446,16 @@ function MainAppContent({
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
             onClaimHost={handleWatchPartyClaimHost}
-            onJoinCall={() => void handleJoinVoice(selectedChannel.id)}
+            onJoinCall={() =>
+              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+            }
+            onWatchAsAudience={() =>
+              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+            }
+            onTakeTheMicrophone={() => void voice.takeTheMicrophone()}
+            onStageAction={handleWatchPartyStage}
+            canSpeak={voiceState.canSpeak}
+            isAudienceSeat={voiceState.isAudienceSeat}
             onShapeChange={handleStageShape}
           />
         )}

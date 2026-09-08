@@ -99,3 +99,20 @@ export function claimWatchPartyHost(
     body: JSON.stringify({ claim: true }),
   });
 }
+
+/**
+ * The stage: the host bringing somebody up or taking them down, and a viewer
+ * raising or lowering their own hand. One route, two authorisations, which is
+ * why the body is a union rather than one shape with an optional field.
+ */
+export function setWatchPartyStage(
+  partyId: string,
+  input:
+    | { action: "invite" | "remove"; userId: string }
+    | { action: "raise" | "lower" },
+): Promise<{ party: WatchParty | null }> {
+  return apiFetch(`/api/watch-parties/${partyId}/stage`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}

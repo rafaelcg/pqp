@@ -2,24 +2,29 @@ import { useEffect, useRef, useState } from "react";
 import {
   Clapperboard,
   Crown,
+  Hand,
+  Mic,
   MonitorPlay,
   Phone,
   Radio,
+  SlidersHorizontal,
   Square,
   Undo2,
 } from "lucide-react";
 import {
   canPerformWatchPartyAction,
-  SLOWMODE_SECONDS_PRESETS,
+  watchPartySpeakAffordance,
+  watchPartySurface,
   type WatchParty,
   type WatchPartyOptions,
 } from "@pqp/shared";
+import { WatchPartyOptionsPanel } from "@/components/watch-party/watch-party-options";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { FeatureHint } from "@/components/layout/feature-hint";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
-import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 /**
@@ -40,25 +45,6 @@ import { cn } from "@/lib/utils";
  * gap that made a second browser look broken: the old code rendered `null`
  * and a viewer got a blank pane with no explanation.
  */
-
-const SLOWMODE_KEYS: Record<number, MessageKey> = {
-  0: "channelMeta.slowMode.off",
-  5: "channelMeta.slowMode.5s",
-  10: "channelMeta.slowMode.10s",
-  15: "channelMeta.slowMode.15s",
-  30: "channelMeta.slowMode.30s",
-  60: "channelMeta.slowMode.1m",
-  120: "channelMeta.slowMode.2m",
-  300: "channelMeta.slowMode.5m",
-  600: "channelMeta.slowMode.10m",
-  900: "channelMeta.slowMode.15m",
-  3600: "channelMeta.slowMode.1h",
-  21600: "channelMeta.slowMode.6h",
-};
-
-function slowModeKey(seconds: number): MessageKey {
-  return SLOWMODE_KEYS[seconds] ?? "channelMeta.slowMode.custom";
-}
 
 export interface WatchPartyPanelProps {
   party: WatchParty | null;
@@ -82,6 +68,19 @@ export interface WatchPartyPanelProps {
   onRename: (name: string) => Promise<void>;
   onClaimHost: () => Promise<void>;
   onJoinCall: () => void;
+  /** Watch this party without a seat, or take the audience seat with no mic. */
+  onWatchAsAudience?: () => void;
+  /** Go from watching to talking. The ONLY place a microphone is requested. */
+  onTakeTheMicrophone?: () => void;
+  /** The host bringing somebody up, or taking them down. */
+  onStageAction?: (
+    action: "invite" | "remove" | "raise" | "lower",
+    userId?: string,
+  ) => Promise<void>;
+  /** `welcome.canSpeak` for this room, as the server resolved it. */
+  canSpeak?: boolean;
+  /** This seat was taken as audience: no microphone was ever asked for. */
+  isAudienceSeat?: boolean;
   onShapeChange?: (shape: "expanded" | "none") => void;
   /** First time this host has reached a setup surface. */
   showHostHint?: boolean;
@@ -91,17 +90,31 @@ export interface WatchPartyPanelProps {
 
 export function WatchPartyPanel(props: WatchPartyPanelProps) {
   const { party } = props;
-  const state = party?.state ?? null;
+  // ONE DECISION, MADE IN ONE PLACE, and it is not made here. `watchPartySurface`
+  // is pure, shared and exhaustively tested, and it exists because the empty
+  // state and the live stage used to answer to different masters: the empty
+  // state asked "is there a party row" and the stage asked "is there a
+  // stream", so a bare screen share rendered BOTH, the create button sitting
+  // on top of a live picture. Nothing in this component may consult those two
+  // facts separately again.
+  const surface = watchPartySurface({
+    state: party?.state ?? null,
+    hasStream: props.hasStream,
+    inCall: props.inCall,
+    canStart: props.canStart,
+  });
 
-  // Only the surfaces that fill the stage declare a shape. The live bar is
+  // Only the surfaces that fill the pane declare a shape. The live bar is
   // furniture above whatever `WatchChannelStage` is doing and must not fight
   // it for the split, the same rule `WatchChannelStage` follows about
   // `CallStage`.
   const fills =
-    state === "draft" ||
-    state === "scheduled" ||
-    (state === "live" && !props.hasStream && !props.inCall) ||
-    (state === null && props.canStart);
+    surface === "setup" ||
+    surface === "scheduled" ||
+    surface === "empty" ||
+    ((surface === "live" || surface === "liveUntitled") &&
+      !props.hasStream &&
+      !props.inCall);
   const wasFilling = useRef(false);
   const { onShapeChange } = props;
   useEffect(() => {
@@ -125,19 +138,23 @@ export function WatchPartyPanel(props: WatchPartyPanelProps) {
     [onShapeChange],
   );
 
-  if (!party) {
-    return props.canStart ? <EmptyStage {...props} /> : null;
+  switch (surface) {
+    case "empty":
+      return <EmptyStage {...props} />;
+    case "setup":
+      return party ? <SetupStage {...props} party={party} /> : null;
+    case "scheduled":
+      return party ? <ScheduledStage {...props} party={party} /> : null;
+    case "live":
+      return party ? <LiveSurface {...props} party={party} /> : null;
+    case "liveUntitled":
+      // The channel is live with no party this person can see: a bare screen
+      // share, or somebody else's draft. They get the picture (drawn by
+      // `WatchChannelStage`) and never the create button.
+      return null;
+    case "none":
+      return null;
   }
-  if (party.state === "draft") {
-    return <SetupStage {...props} party={party} />;
-  }
-  if (party.state === "scheduled") {
-    return <ScheduledStage {...props} party={party} />;
-  }
-  if (party.state === "live") {
-    return <LiveSurface {...props} party={party} />;
-  }
-  return null;
 }
 
 // ------------------------------------------------------------- no party yet
@@ -324,67 +341,14 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           </label>
 
           <p className="mt-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-            {t("watchParty.setup.optionsTitle")}
+            {t("watchParty.options.title")}
           </p>
-
-          <label className="block text-xs text-paper-muted">
-            <span className="mb-1 block">{t("watchParty.setup.slowMode")}</span>
-            <select
-              className="w-full rounded-md border border-ink-4 bg-ink-3 px-2 py-1.5 text-sm text-paper"
-              value={String(party.options.slowModeSeconds)}
-              onChange={(event) =>
-                void props.onOptionsChange({
-                  slowModeSeconds: Number(event.target.value),
-                })
-              }
-              data-watch-party-slow-mode
-            >
-              {SLOWMODE_SECONDS_PRESETS.map((seconds) => (
-                <option key={seconds} value={seconds}>
-                  {t(slowModeKey(seconds), { seconds })}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="block text-xs text-paper-muted">
-            <span className="mb-1 block">{t("watchParty.setup.stageMode")}</span>
-            <select
-              className="w-full rounded-md border border-ink-4 bg-ink-3 px-2 py-1.5 text-sm text-paper"
-              value={party.options.stageMode}
-              onChange={(event) =>
-                void props.onOptionsChange({
-                  stageMode:
-                    event.target.value === "hosts_only" ? "hosts_only" : "open",
-                })
-              }
-              data-watch-party-stage-mode
-            >
-              <option value="open">{t("watchParty.setup.stageOpen")}</option>
-              <option value="hosts_only">
-                {t("watchParty.setup.stageHosts")}
-              </option>
-            </select>
-          </label>
-
-          <label className="flex items-center gap-2 text-xs text-paper-muted">
-            <input
-              type="checkbox"
-              className="h-3.5 w-3.5 accent-signal"
-              checked={party.options.reactionsEnabled}
-              onChange={(event) =>
-                void props.onOptionsChange({
-                  reactionsEnabled: event.target.checked,
-                })
-              }
-              data-watch-party-reactions
-            />
-            {t("watchParty.setup.reactions")}
-          </label>
-
-          <p className="text-[11px] text-paper-muted">
-            {t("watchParty.setup.stageHint")}
-          </p>
+          <WatchPartyOptionsPanel
+            options={party.options}
+            live={false}
+            audienceCount={props.audienceCount}
+            onChange={(patch) => void props.onOptionsChange(patch)}
+          />
         </aside>
       </div>
 
@@ -494,6 +458,7 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
   const { t } = useTranslation();
   const { party } = props;
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const canEnd = canPerformWatchPartyAction({
     action: "end",
     role: party.viewerRole,
@@ -522,6 +487,14 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
     </div>
   );
 
+  const runsTheShow =
+    party.viewerRole === "host" || party.viewerRole === "cohost";
+  const affordance = watchPartySpeakAffordance({
+    options: party.options,
+    role: party.viewerRole,
+    canSpeak: props.canSpeak ?? false,
+  });
+
   const bar = (
     <div
       data-testid="watch-party-bar"
@@ -535,6 +508,44 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
         >
           {t("watchParty.live.viewers", { count: props.audienceCount })}
         </span>
+        {/* THE MICROPHONE IS ASKED FOR HERE AND NOWHERE ELSE.
+            An audience seat opens no `getUserMedia` at all (see
+            `VoiceAudioOptions.audienceOnly`), so nobody watching is ever
+            prompted, and the "entrou sem microfone" banner that Rafael was
+            shown cannot happen: no permission was requested, so none was
+            refused. Falar is the deliberate second act, and it is offered
+            only when the host's stage rules allow it. */}
+        {affordance === "speak" && props.isAudienceSeat && (
+          <Button
+            type="button"
+            size="sm"
+            title={t("watchParty.stage.speakHint")}
+            onClick={() => props.onTakeTheMicrophone?.()}
+            data-watch-party-speak
+          >
+            <Mic className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.stage.speak")}
+          </Button>
+        )}
+        {affordance === "raiseHand" && (
+          <Button
+            type="button"
+            variant={party.stage.handRaised ? "default" : "secondary"}
+            size="sm"
+            aria-pressed={party.stage.handRaised}
+            onClick={() =>
+              void props.onStageAction?.(
+                party.stage.handRaised ? "lower" : "raise",
+              )
+            }
+            data-watch-party-raise
+          >
+            <Hand className="mr-1.5 h-3 w-3" aria-hidden />
+            {party.stage.handRaised
+              ? t("watchParty.stage.lower")
+              : t("watchParty.stage.raise")}
+          </Button>
+        )}
         {!props.inCall && (
           <Button
             type="button"
@@ -546,6 +557,19 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
           >
             <Phone className="mr-1.5 h-3 w-3" aria-hidden />
             {t("watchParty.live.joinCall")}
+          </Button>
+        )}
+        {runsTheShow && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-expanded={optionsOpen}
+            onClick={() => setOptionsOpen((open) => !open)}
+            data-watch-party-options-toggle
+          >
+            <SlidersHorizontal className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.options.title")}
           </Button>
         )}
         {canClaim && (
@@ -583,6 +607,104 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
     </div>
   );
 
+  /**
+   * The same panel the setup surface showed, reopened mid-show. A host who
+   * learned it before going live does not learn a second one at minute forty,
+   * and every change lands immediately for the people already watching (the
+   * server re-reconciles the channel on every edit).
+   */
+  const optionsDrawer = runsTheShow && optionsOpen && (
+    <div
+      data-testid="watch-party-options-drawer"
+      className="shrink-0 border-b border-ink-4/60 bg-ink-2 px-3 py-3"
+    >
+      <WatchPartyOptionsPanel
+        options={party.options}
+        live
+        audienceCount={props.audienceCount}
+        onChange={(patch) => void props.onOptionsChange(patch)}
+      />
+      {/* The queue is a moderation surface and only the people running the
+          party see it: an audience that can watch who asked and was passed
+          over is an audience having a worse time. */}
+      {party.options.stageMode === "invited" && (
+        <div className="mt-3 border-t border-ink-4/60 pt-3">
+          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+            {t("watchParty.stage.hands")}
+          </p>
+          {party.stage.hands.length === 0 ? (
+            <p className="text-[11px] text-paper-muted">
+              {t("watchParty.stage.noHands")}
+            </p>
+          ) : (
+            <ul className="flex flex-col gap-1">
+              {party.stage.hands.map((person) => (
+                <li
+                  key={person.userId}
+                  className="flex items-center gap-2"
+                  data-watch-party-hand
+                >
+                  <UserAvatar
+                    name={person.displayName}
+                    avatarUrl={person.avatarUrl}
+                    rounded="full"
+                    className="h-6 w-6 shrink-0"
+                  />
+                  <span className="min-w-0 flex-1 truncate text-xs text-paper">
+                    {person.displayName}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() =>
+                      void props.onStageAction?.("invite", person.userId)
+                    }
+                    data-watch-party-invite
+                  >
+                    {t("watchParty.stage.invite")}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {party.stage.invited.length > 0 && (
+            <>
+              <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                {t("watchParty.stage.title")}
+              </p>
+              <ul className="flex flex-col gap-1">
+                {party.stage.invited.map((person) => (
+                  <li key={person.userId} className="flex items-center gap-2">
+                    <UserAvatar
+                      name={person.displayName}
+                      avatarUrl={person.avatarUrl}
+                      rounded="full"
+                      className="h-6 w-6 shrink-0"
+                    />
+                    <span className="min-w-0 flex-1 truncate text-xs text-paper">
+                      {person.displayName}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        void props.onStageAction?.("remove", person.userId)
+                      }
+                      data-watch-party-stage-remove
+                    >
+                      {t("watchParty.stage.remove")}
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
   const hostGone = party.hostDisconnectedAt !== null && (
     <div
       data-testid="watch-party-host-gone"
@@ -602,6 +724,7 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
     return (
       <div className="relative flex h-[68svh] min-h-[280px] shrink-0 flex-col overflow-hidden border-b border-ink-4/60 bg-ink">
         {bar}
+        {optionsDrawer}
         {hostGone}
         {viewerHint}
         <div
@@ -630,6 +753,7 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
   return (
     <div className="relative shrink-0">
       {bar}
+      {optionsDrawer}
       {hostGone}
       {viewerHint}
     </div>

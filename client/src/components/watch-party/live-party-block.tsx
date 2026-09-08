@@ -78,7 +78,7 @@ export function LivePartyBlock({
                     VIVO and the host drop to the second line, where the thing
                     that truncates is a name people already know rather than
                     the title of the show. Same lesson as the PRIVADO pill on the channel
-                    row (#368): the pixels belong to the name. */}
+                    row (PR 368): the pixels belong to the name. */}
                 <span className="flex min-w-0 items-center gap-2.5">
                   <span className="relative shrink-0">
                     <UserAvatar

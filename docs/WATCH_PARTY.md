@@ -155,6 +155,77 @@ the party on purpose (that file is being changed by other work); the binding
 is channel plus the `went_live_at`..`ended_at` window, which is exact because
 only one party per channel can be live.
 
+### Nobody watching is ever asked for a microphone
+
+This is the rule, and it is a product decision before it is a technical one.
+
+**Watching is the default and needs no device permission at all.** An audience
+seat opens no `getUserMedia`: no prompt, no device, no notice, and no
+permission failure to report because none was possible. That is
+`VoiceAudioOptions.audienceOnly`, and it is NOT the same thing as the
+listen-only fallback beside it, which asks, fails, and explains itself. For
+somebody who only wants to watch, every word of that explanation is noise
+about a permission they should never have been asked for, and it frames
+watching as a broken call. Rafael was shown exactly that banner and it is why
+this exists.
+
+**Speaking is a deliberate second act**, `voice.takeTheMicrophone()`, and the
+only place in a watch party where a permission prompt is honest: somebody has
+decided to speak, so a refusal is worth a sentence. It leaves and rejoins the
+room rather than adding a track to a seat that has none, because the join path
+already negotiates correctly on mesh and on the SFU and a third negotiation
+path is how those two drift apart.
+
+**Whether an audience member may speak is the host's decision, not the
+browser's**, which is what `stageMode` below is for.
+
+The QA that proves it counts `getUserMedia` calls in the viewer's page rather
+than reading a screenshot: a viewer watching, and then taking the audience
+seat, makes **zero**.
+
+### The options
+
+Six controls at most, one of which is a sentence. In the setup surface before
+going live, and again in an "Opções" panel while the party runs; the same
+component, because a host who learned it at minute zero should not learn a
+second one at minute forty. Every change is applied by the server on the spot
+(`reconcileLiveWatchPartyOptions`), so it lands for the people already
+watching.
+
+| Option | Default | What the server does |
+|---|---|---|
+| **Quem pode falar** (`stageMode`) | `hosts_only` | closes the floor: denies SPEAK to @everyone, and grants it back to the host and co-hosts |
+| **Pedir pra falar** (`raiseHand`) | on, and shown only for `invited` | nothing by itself; it is what makes the queue exist |
+| **Chat lento** (`slowModeSeconds`) | 0 | writes `channels.slowmode_seconds`, the channel's own slow mode, and puts the old value back at the end |
+| **Reações** (`reactionsEnabled`) | on | carried on the party, read by the client |
+| **Quem pode ver** | not a control | the channel's own permissions. A sentence, not a switch |
+| **Qualidade** | not here yet | the HLS ladder branch owns it and adds one key when it lands |
+
+`hosts_only` is the default because of the failure mode rather than a
+preference: a party of two hundred people with open microphones is not a watch
+party, and the 2026-09-05 spike showed how fast a room here gets to two
+hundred. `invited` is the same closed floor plus a door, one person at a time.
+`everyone` is the old behaviour, kept because six friends watching a film
+genuinely want it, and warned about in the copy once the room is busy.
+
+**Closing the floor must never silence the people running the party.** A host
+who is not the server owner has no short circuit through `computePermissions`,
+so without the member grant the very act of protecting the room takes the
+host's own microphone away. `watch-party-options.test.ts` breaks that grant on
+purpose and catches it.
+
+**Two things about who may change them, both arguable.** `edit` allows a
+manager, so **MANAGE_CHANNELS can open a floor somebody else closed**. That is
+deliberate (the stage mode is the lever moderation needs) and it is the kind
+of thing to overrule if it reads wrong. A co-host may also change them, for
+the same reason a co-host may end the party.
+
+**Announcing a change.** The audience is not told in the channel's chat: this
+repo has no system-message kind, and posting from the host's account would be
+a message they did not write. The party bar and the options panel show the
+current values instead, and they update on the same frame that changed them.
+If a written notice is wanted, it needs a system-message type first.
+
 ### What going live does to the channel, and what ending puts back
 
 The setup surface asks the host to decide the things that matter before an
@@ -163,13 +234,21 @@ audience arrives. Two of them are real channel state, and both are
 
 | Option | What Ir ao vivo does | What Encerrar does |
 |---|---|---|
-| `slowModeSeconds` | writes `channels.slowmode_seconds`, recording the old value in `restore_slowmode_seconds` | writes the old value back |
-| `stageMode: hosts_only` | denies SPEAK to @everyone with an ordinary channel overwrite, records `stage_speak_applied` | removes that one bit, and deletes the overwrite if the party is the only reason it existed |
+| `slowModeSeconds` | writes `channels.slowmode_seconds`, recording the old value in `restore_slowmode_seconds` (only the FIRST change records it, so a host who moves 30s to 60s mid-show still gets the channel's original value back) | writes the old value back |
+| a closed `stageMode` | denies SPEAK to @everyone with an ordinary channel overwrite, records `stage_speak_applied`, and grants a member SPEAK allow to the host, the co-hosts and anyone invited up | removes those bits, and deletes an overwrite row only when the party is the sole reason it existed |
 | `reactionsEnabled` | carried on the party, read by the client | nothing to undo |
 
 A channel that already had slow mode on keeps it. A channel where @everyone
 was already denied SPEAK is left alone, and ending the party does not hand the
 room a microphone it never had.
+
+One reconciler does all of it, rather than an apply and an undo, because the
+options are editable while the party runs: a host switching from `everyone` to
+`hosts_only` mid-show has to take effect for the people already in the room,
+and two half-functions would have needed a third for that case, which is where
+they drift. It is idempotent, so a call that changes nothing writes nothing,
+which matters because every overwrite write bumps `permissions_version` and
+re-resolves every seat.
 
 `restoreChannelAfterParty` reads and clears in one statement, through a CTE,
 because `UPDATE ... RETURNING` hands back the *new* values. The obvious
@@ -274,6 +353,10 @@ silence.
 - **`stageMode` is enforced through the ordinary SPEAK overwrite**, not
   through a new mechanism. A separate piece of work owns per-channel SPEAK
   policy; this rides on it rather than growing a second one.
+- **No quality control yet.** The HLS ladder branch owns what a host may pick;
+  when it lands it adds one key to `watchPartyOptionsSchema` and one control to
+  `WatchPartyOptionsPanel`. A dropdown that changes nothing would be worse.
+- **A change to the options is not written into the chat.** See above.
 - **Slow mode is the general chat feature** (`channels.slowmode_seconds`).
   The party only carries the value the host picked so one press applies it.
 - **No link from `hls_sessions` to the party row.** Other work is actively
