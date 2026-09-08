@@ -80,7 +80,17 @@ export function isScreenShareAtCap(
   return others >= SCREEN_SHARE_LIMIT[transport ?? "mesh"];
 }
 
-/** Same shape as the screen-share cap, for cameras. */
+/**
+ * Same shape as the screen-share cap, for cameras, with one difference that
+ * is the whole point of it.
+ *
+ * `CAMERA_LIMIT.livekit` is `null`: on the voice server there is no headcount
+ * to be at. Whether one more camera fits is a question about the box's egress
+ * and only the server can answer it (`server/src/voice/promotion.ts`), so the
+ * client never greys the button there. A refusal comes back as
+ * `camera-denied` and is said in words, which is the same shape as the mesh
+ * room that could not be promoted.
+ */
 export function isCameraAtCap(
   cameraPeerIds: readonly string[],
   localPeerId: string | null,
@@ -90,6 +100,10 @@ export function isCameraAtCap(
   if (canPromote && (transport ?? "mesh") === "mesh") {
     return false;
   }
+  const limit = CAMERA_LIMIT[transport ?? "mesh"];
+  if (limit === null) {
+    return false;
+  }
   const others = cameraPeerIds.filter((id) => id !== localPeerId).length;
-  return others >= CAMERA_LIMIT[transport ?? "mesh"];
+  return others >= limit;
 }

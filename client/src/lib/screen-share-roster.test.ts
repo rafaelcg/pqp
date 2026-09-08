@@ -53,9 +53,21 @@ describe("isCameraAtCap", () => {
     expect(isCameraAtCap(["a", "b", "c"], "me", "mesh")).toBe(true);
   });
 
-  it("uses the LiveKit cap of eight", () => {
-    const seven = ["a", "b", "c", "d", "e", "f", "g"];
-    expect(isCameraAtCap(seven, "me", "livekit")).toBe(false);
-    expect(isCameraAtCap([...seven, "h"], "me", "livekit")).toBe(true);
+  // THE VOICE SERVER HAS NO COUNT. It had eight until 2026-09-08, and eight
+  // was ours rather than the box's. On the SFU one more camera costs its
+  // publisher nothing extra and costs the box egress, so the question is the
+  // box's budget and only the server can answer it: the client never greys the
+  // button and never invents a number, and a refusal arrives as
+  // `camera-denied` with words rather than a count.
+  it("never caps a voice-server room, however many cameras are on", () => {
+    const many = Array.from({ length: 40 }, (_, at) => `p${at}`);
+    expect(isCameraAtCap(many, "me", "livekit")).toBe(false);
+    expect(isCameraAtCap(many.slice(0, 8), "me", "livekit")).toBe(false);
+  });
+
+  it("still caps mesh at three, which is physics and does not move", () => {
+    expect(isCameraAtCap(["a", "b"], "me", "mesh")).toBe(false);
+    expect(isCameraAtCap(["a", "b", "c"], "me", "mesh")).toBe(true);
+    expect(isCameraAtCap(["a", "b", "c", "d"], "me", "mesh")).toBe(true);
   });
 });

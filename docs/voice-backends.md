@@ -243,8 +243,11 @@ nothing about how many of the five who turned up want their faces on.
 
 **What happens now.** When a `set-camera` (or `set-sharing-screen`) would cross
 the mesh cap and LiveKit is configured, the server moves the whole room to the
-SFU and the camera turns on. `CAMERA_LIMIT.livekit` is 8 and
-`SCREEN_SHARE_LIMIT.livekit` is 4, so the cap after the move is the SFU's.
+SFU and the camera turns on. `SCREEN_SHARE_LIMIT.livekit` is 4, so that is the
+share cap after the move. **`CAMERA_LIMIT.livekit` is `null` since
+2026-09-08**: there is no camera count on the voice server at all, only the
+box's budget. See "Cameras: the ladder, the bounded grid and the end of the
+count" below.
 
 **Four triggers, one path (2026-09-08).** The same machinery answers three more
 questions, and the `reason` on every log line and every frame says which:
@@ -560,6 +563,99 @@ Why: a 100-viewer watch party on 5 Sep 2026 consumed 323 GB of SFU downstream in
 `degradationPreference: "maintain-framerate"` and 30 fps stay. The top layer is the **capture size** on purpose: livekit-client declares each layer's dimensions to the SFU and routes a viewer's size request against that declaration, so the session asks the capture for the plan's height with `applyConstraints({ height: { max } })` rather than scaling the top layer behind the library's back. A display capture climbs back to 1080 when the limit is lifted.
 
 **Large-room cap.** Above `LARGE_ROOM_PARTICIPANTS` (20, counted off `room.remoteParticipants` plus self) the top is held at **720p / 1.5 Mbps** unless the presenter picked **1080p by name** in the send menu, which steps around the cap. The menu says so while it acts ("Large room: your screen goes out at 720p to keep it smooth for everyone. Pick 1080p to send it anyway."). A change of top *height* on a live share (crossing 20 people, or choosing 1080p mid-share) republishes the same track with `unpublishTrack(track, false)` so the capture survives; viewers see one blink at that moment. A change of *ceiling* at the same height moves the sender in place, no blink, as before.
+
+### Cameras: the ladder, the bounded grid and the end of the count (2026-09-08)
+
+The screen share got simulcast on 2026-09-06. The camera did not, and kept
+`simulcast: false`, so there was exactly **one** copy of a face on the voice
+server and every viewer received it whatever size their tile was.
+`adaptiveStream` has been on the whole time and had nothing to choose from: it
+can only ask the SFU for a layer the publisher actually encodes. That is why
+`CAMERA_LIMIT.livekit` was 8. The 8 was ours, not the box's.
+
+**Camera ladder** (`CAMERA_SIMULCAST_RUNGS` / `cameraSimulcastRungs` in
+`client/src/lib/video-quality.ts`, published by `publishCameraVideo` in
+`livekit-session.ts` with `simulcast: true` and `videoSimulcastLayers`):
+
+| Layer | Size | Ceiling | fps |
+|---|---|---|---|
+| top | the capture (720p on auto) | the chosen ceiling: 1.5 Mbps auto | 30 |
+| mid | 640x360 | 400 kbps, the menu's own 360p rung | 30 |
+| low | 320x180 | 160 kbps | 20 |
+
+`videoEncoding` carries the top, not `screenShareEncoding`: livekit-client
+swaps the field by source. A rung at or above the capture is dropped, because
+it would be an upscale. A quality change resizes the capture in place, so
+`reconcileCameraLadder` republishes when (and only when) the SET of rungs
+changes; `livekit-client` solves each rung's `scaleResolutionDownBy` against
+the capture's size at publish time and declares the result to the SFU, so a
+stale divisor would hand viewers layers whose declared size is a fiction.
+
+**Bounded grid** (`stageTileSlots` in `client/src/components/voice/stage-layout.ts`).
+The stage drew every publisher, which was fine at 8 cameras and is not fine at
+24: twenty-four subscriptions, twenty-four decoders, and tiles the size of a
+stamp. The grid now draws at most **12** tiles on a laptop and **6** on a
+phone (`STAGE_TILE_LIMIT_WIDE` / `_NARROW`, chosen off the tile-size table in
+that file). Shares are never cut, the pin and our own camera are always kept,
+and anybody speaking is promoted out of the overflow, exactly as
+`listenerStripSlots` already does for chips. The chosen set is drawn in stage
+order so nothing jumps sideways. A publisher the grid could not fit becomes a
+chip in the listener strip rather than disappearing (`listenersOf` takes the
+overflow keys), and because no `<video>` mounts for them,
+`remote-video-delivery.ts` tells the server to stop forwarding that
+publication a second later. **The bound is a bandwidth control, not only a
+layout one.**
+
+**No count on the voice server.** `CAMERA_LIMIT.livekit` is now `null`: the
+question "does one more camera fit" is about the box's egress, and only the
+server can answer it. `decideVideoAdmission` in `server/src/voice/promotion.ts`
+is the same budget the promotion guard already used, asked by a room that is
+already on the SFU: the asking room is taken out of the box's total and added
+back at what it will cost with the new publication
+(`publishers x participants x 1.5 Mbit/s`), and over
+`VOICE_PROMOTION_MAX_SFU_MBPS` (600) the camera is refused with `camera-denied`
+and `voice.videoAdmissionRefused` in the log. **`CAMERA_LIMIT.mesh` is still 3
+and does not move**: a mesh camera is a full uplink copy per peer, and the
+fourth one still promotes the room. A camera that is only re-declaring itself
+(a webcam switch mints a new stream id) is never priced, and turning a camera
+off is never refused.
+
+The estimate is the **worst case** on purpose: it charges every participant
+for every publisher at the top of the ladder, so a modified client that reports
+a huge tile, or ignores the ladder and demands the top layer for everything,
+is already paid for. Nothing in the guard reads a number the client sent. The
+cost of that honesty is that the guard refuses conservatively: with the
+bounded grid a 20-person, 20-camera room really costs about 38 Mbit/s and is
+priced at 600. `VOICE_PROMOTION_MAX_SFU_MBPS` is the lever if that proves
+tight.
+
+**Measured** against a local LiveKit 1.13.6 with this ladder, two publishers
+and one viewer (one viewer's received stream, per tile size):
+
+| video element | simulcast off | simulcast on |
+|---|---|---|
+| 424x490 | 1280x720, 665 kbps, 0.86 ms/frame | 1280x720, 703 kbps, 0.75 ms/frame |
+| 424x360 | 1280x720, 673 kbps, 0.91 ms/frame | 640x360, 317 kbps, 0.26 ms/frame |
+| 160x90 | 1280x720, 675 kbps, 0.81 ms/frame | 320x180, 149 kbps, 0.10 ms/frame |
+| hidden tab | (not measured) | 0 kbps |
+
+And one viewer's total in a grid drawing every tile (`lk load-test`, LiveKit's
+own ladder, which is the same three rungs):
+
+| cameras | simulcast off | simulcast on |
+|---|---|---|
+| 4 | 7.5 Mbit/s | 1.2 Mbit/s |
+| 8 | 14.5 Mbit/s | 2.1 Mbit/s |
+| 16 | 30.2 Mbit/s | 4.2 Mbit/s |
+| 24 | 45.8 Mbit/s | 6.0 Mbit/s |
+
+Verification status: unit-tested
+(`video-quality.test.ts`, `livekit-session-quality.test.ts`,
+`stage-layout.test.ts`, `remote-video-delivery.test.ts`,
+`server/src/voice/promotion.test.ts`, `server/src/ws/voice-promotion.test.ts`),
+and every one of those was broken on purpose and confirmed to fail. The
+numbers above are a laptop and a local SFU, not the production box, and no
+real phone was in any of them.
 
 **Viewer side.** The room is created with `adaptiveStream: true`, and every remote video stream carries a binding (`client/src/lib/remote-video-binding.ts`) so the three `<video>` sites introduce their element to the track via `RemoteVideoTrack.attach`; without that the library measures nothing and, after the first tab switch, tells the server the track is invisible. "Video you receive" gains a selector on the SFU path: **Auto, 1080p, 720p, 360p**, applied with `RemoteTrackPublication.setVideoQuality(VideoQuality.HIGH | MEDIUM | LOW)` to every subscribed video publication (share and camera tiles) and to any that subscribes later. Auto sends `HIGH`, which under adaptive stream means "the element decides".
 

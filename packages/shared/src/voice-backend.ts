@@ -30,16 +30,39 @@ export const SCREEN_SHARE_LIMIT: Record<VoiceRoomTransport, number> = {
 /**
  * How many people may publish a camera in one call at the same time.
  *
- * A mesh camera is another full-size video uplink per peer, so three is the
- * ceiling that still fits a small friend call. LiveKit forwards and already
- * runs dynacast, so eight matches the mesh room size rather than inventing a
- * second, larger number. The server and the client both key this map off the
- * room's stated transport.
+ * MESH IS THREE AND IT IS PHYSICS. A mesh camera is another full-size video
+ * uplink per peer, so the fourth camera in a six-person room asks each
+ * publisher for roughly 7.5 Mbit/s of upload, which a home connection does not
+ * have. That number is not ours to move, and the answer at it is the
+ * promotion in `server/src/ws/voice.ts`: the room goes to the voice server and
+ * the camera turns on.
+ *
+ * LIVEKIT IS `null`, MEANING "NOT A HEADCOUNT". It used to be eight, and eight
+ * was ours rather than the box's: it matched the mesh room size because that
+ * was a number lying around, not because a ninth camera costs anything a
+ * publisher cannot pay. On the voice server a publisher uploads once whatever
+ * the room size, so the only real ceilings are the box's egress, each viewer's
+ * downlink and each viewer's decode, and none of those is a count of
+ * publishers. The first is priced per room by `server/src/voice/promotion.ts`
+ * and refused there. The second and third are the client's, and they are
+ * answered by publishing a simulcast ladder
+ * (`client/src/lib/video-quality.ts`) and by bounding how many tiles a grid
+ * draws (`client/src/components/voice/stage-layout.ts`), not by telling the
+ * ninth person their face is not welcome.
+ *
+ * `null` is deliberately not a very large number. A consumer has to say what
+ * it does without a count, and every one of them has a different honest
+ * answer: the server prices the box, and the client stops drawing a limit it
+ * cannot state.
  */
-export const CAMERA_LIMIT: Record<VoiceRoomTransport, number> = {
+export const CAMERA_LIMIT = {
   mesh: 3,
-  livekit: 8,
-};
+  livekit: null,
+  // `satisfies` rather than an annotation, so `CAMERA_LIMIT.mesh` stays a
+  // number for the callers that only ever mean mesh, while the exhaustiveness
+  // over `VoiceRoomTransport` that an annotation buys is kept: a third
+  // transport still has to answer this question.
+} as const satisfies Record<VoiceRoomTransport, number | null>;
 
 export function getDefaultVoiceBackend(
   deployment: "hosted" | "selfhost",

@@ -5,6 +5,9 @@ import {
   planStage,
   stageGridColumns,
   tileClickFullscreens,
+  stageTileSlots,
+  STAGE_TILE_LIMIT_NARROW,
+  STAGE_TILE_LIMIT_WIDE,
   STRIP_LIMIT_NARROW,
   STRIP_LIMIT_WIDE,
 } from "./stage-layout";
@@ -329,5 +332,159 @@ describe("listenerStripSlots", () => {
   it("hides everybody behind the chip when there is no room at all", () => {
     const people = [listener("a"), listener("b")];
     expect(listenerStripSlots(people, 0)).toEqual({ shown: [], overflow: 2 });
+  });
+});
+
+/**
+ * THE BOUNDED GRID (2026-09-08).
+ *
+ * The stage drew every publisher, which was fine while the camera cap was
+ * eight and is not fine now that a voice-server room has no cap at all. A
+ * tile the grid does not draw is a `<video>` that never mounts, and
+ * `remote-video-delivery.ts` stops the server forwarding that publication a
+ * second later, so these cases are about bandwidth and decode as much as
+ * about layout.
+ */
+function tile(
+  id: string,
+  overrides: {
+    kind?: "screen" | "camera";
+    key?: string;
+    isSelf?: boolean;
+  } = {},
+) {
+  return {
+    id,
+    kind: overrides.kind ?? ("camera" as const),
+    key: overrides.key ?? id,
+    isSelf: overrides.isSelf ?? false,
+  };
+}
+
+const NOBODY: ReadonlySet<string> = new Set();
+
+describe("stageTileSlots", () => {
+  it("draws everything when the room fits, which is almost every call", () => {
+    const tiles = [tile("a"), tile("b"), tile("c")];
+    const slots = stageTileSlots(tiles, STAGE_TILE_LIMIT_WIDE, NOBODY);
+    expect(slots.shown).toHaveLength(3);
+    expect(slots.overflow).toHaveLength(0);
+  });
+
+  it("bounds a twenty-camera room at the device's limit", () => {
+    const tiles = Array.from({ length: 20 }, (_, at) => tile(`p${at}`));
+    const wide = stageTileSlots(tiles, STAGE_TILE_LIMIT_WIDE, NOBODY);
+    const narrow = stageTileSlots(tiles, STAGE_TILE_LIMIT_NARROW, NOBODY);
+    expect(wide.shown).toHaveLength(STAGE_TILE_LIMIT_WIDE);
+    expect(wide.overflow).toHaveLength(20 - STAGE_TILE_LIMIT_WIDE);
+    expect(narrow.shown).toHaveLength(STAGE_TILE_LIMIT_NARROW);
+    expect(narrow.overflow).toHaveLength(20 - STAGE_TILE_LIMIT_NARROW);
+  });
+
+  it("never cuts a share to make room for a face", () => {
+    const tiles = [
+      tile("s1", { kind: "screen" }),
+      tile("s2", { kind: "screen" }),
+      ...Array.from({ length: 20 }, (_, at) => tile(`p${at}`)),
+    ];
+    const slots = stageTileSlots(tiles, STAGE_TILE_LIMIT_NARROW, NOBODY);
+    expect(slots.shown.map((t) => t.id)).toContain("s1");
+    expect(slots.shown.map((t) => t.id)).toContain("s2");
+  });
+
+  it("promotes whoever is speaking out of the overflow", () => {
+    const tiles = [
+      ...Array.from({ length: 20 }, (_, at) => tile(`p${at}`)),
+      tile("late-talker"),
+    ];
+    const slots = stageTileSlots(
+      tiles,
+      STAGE_TILE_LIMIT_WIDE,
+      new Set(["late-talker"]),
+    );
+    expect(slots.shown.map((t) => t.id)).toContain("late-talker");
+    expect(slots.overflow.map((t) => t.id)).not.toContain("late-talker");
+  });
+
+  it("keeps our own picture whatever the room size", () => {
+    const tiles = [
+      ...Array.from({ length: 20 }, (_, at) => tile(`p${at}`)),
+      tile("me", { key: "self", isSelf: true }),
+    ];
+    const slots = stageTileSlots(tiles, STAGE_TILE_LIMIT_NARROW, NOBODY);
+    expect(slots.shown.map((t) => t.id)).toContain("me");
+  });
+
+  it("keeps the first tile, which is the pin when there is one", () => {
+    const tiles = [
+      tile("pinned"),
+      ...Array.from({ length: 20 }, (_, at) => tile(`p${at}`)),
+    ];
+    const slots = stageTileSlots(tiles, STAGE_TILE_LIMIT_NARROW, NOBODY);
+    expect(slots.shown[0]?.id).toBe("pinned");
+  });
+
+  it("draws the chosen tiles in stage order, so nothing jumps sideways", () => {
+    const tiles = [tile("a"), tile("b"), tile("c"), tile("d"), tile("e")];
+    const slots = stageTileSlots(tiles, 3, new Set(["e"]));
+    // "e" earns a slot by speaking, and is still drawn last.
+    expect(slots.shown.map((t) => t.id)).toEqual(["a", "b", "e"]);
+  });
+
+  it("gives the last slot to the one extra person rather than to a +1", () => {
+    const tiles = Array.from({ length: 13 }, (_, at) => tile(`p${at}`));
+    const slots = stageTileSlots(tiles, STAGE_TILE_LIMIT_WIDE, NOBODY);
+    expect(slots.shown).toHaveLength(13);
+    expect(slots.overflow).toHaveLength(0);
+  });
+});
+
+describe("planStage under a bound", () => {
+  const twentyCameras = Array.from({ length: 20 }, (_, at) =>
+    person(`p${at}`, { stream: {} }),
+  );
+
+  it("hands the cameras it cannot draw to the strip as chips", () => {
+    const plan = planStage({
+      screens: [],
+      people: twentyCameras,
+      tileLimit: STAGE_TILE_LIMIT_WIDE,
+    });
+    expect(plan.tiles).toHaveLength(STAGE_TILE_LIMIT_WIDE);
+    expect(plan.overflowKeys).toHaveLength(20 - STAGE_TILE_LIMIT_WIDE);
+
+    // A publisher the grid could not fit is still a face with a name, rather
+    // than a person who is in the call and appears nowhere on the screen.
+    const listeners = listenersOf(
+      twentyCameras,
+      [],
+      null,
+      new Set(plan.overflowKeys),
+    );
+    expect(listeners.map((p) => p.key)).toEqual(plan.overflowKeys);
+  });
+
+  it("is unbounded when no limit is given, which is what a small call wants", () => {
+    const plan = planStage({ screens: [], people: twentyCameras });
+    expect(plan.tiles).toHaveLength(20);
+    expect(plan.overflowKeys).toEqual([]);
+  });
+
+  it("keeps a camera on the stage when it is not in the overflow", () => {
+    const plan = planStage({
+      screens: [],
+      people: twentyCameras,
+      tileLimit: STAGE_TILE_LIMIT_WIDE,
+    });
+    const shownKeys = new Set(plan.tiles.map((t) => t.key));
+    const listeners = listenersOf(
+      twentyCameras,
+      [],
+      null,
+      new Set(plan.overflowKeys),
+    );
+    for (const listener of listeners) {
+      expect(shownKeys.has(listener.key)).toBe(false);
+    }
   });
 });

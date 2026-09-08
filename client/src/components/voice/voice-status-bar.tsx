@@ -58,7 +58,8 @@ interface VoiceStatusBarProps {
   isSharingScreen?: boolean;
   cameraCappedOut?: boolean;
   shareCappedOut?: boolean;
-  cameraLimit?: number;
+  /** `null` on the voice server: there is no count to name. See CAMERA_LIMIT. */
+  cameraLimit?: number | null;
   shareLimit?: number;
   /**
    * Override for tests. Default is the same `getDisplayMedia` probe the stage
@@ -311,7 +312,7 @@ export function VoiceStatusBar({
               label={cameraLabel}
               detail={
                 cameraCappedOut
-                  ? t("voice.control.cameraLimit", { limit: cameraLimit })
+                  ? t("voice.control.cameraLimit", { limit: cameraLimit ?? 0 })
                   : undefined
               }
               pressed={isCameraOn}

@@ -644,6 +644,27 @@ function stopMicPipeline(pipeline: MicPipeline | null) {
   closeMicContext(pipeline);
 }
 
+/**
+ * Why the camera was refused, in the words that are true for this room.
+ *
+ * Three shapes, and only one of them names a number. A mesh room with a count
+ * to state says the count. A mesh room that has a voice server to move to and
+ * was refused anyway was refused on the box's budget, not on a count. A room
+ * already on the voice server has no count at all (`CAMERA_LIMIT.livekit` is
+ * `null`), so it gets the same sentence: "no room for more cameras right now",
+ * which is a fact about the moment rather than a number that is about to
+ * change.
+ */
+function cameraLimitMessage(
+  limit: number | null,
+  canPromote: boolean,
+): string {
+  if (limit === null || canPromote) {
+    return translateMessage("voice.error.cameraLimitBusy");
+  }
+  return translateMessage("voice.error.cameraLimit", { limit });
+}
+
 function micErrorMessage(err: unknown): string {
   if (!(err instanceof Error)) {
     return translateMessage("voice.error.micFailed");
@@ -2379,11 +2400,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
         void stopCameraInternal();
-        state.error = canPromoteTransport()
-          ? translateMessage("voice.error.cameraLimitBusy")
-          : translateMessage("voice.error.cameraLimit", {
-              limit: CAMERA_LIMIT[state.roomTransport ?? "mesh"],
-            });
+        state.error = cameraLimitMessage(
+          CAMERA_LIMIT[state.roomTransport ?? "mesh"],
+          canPromoteTransport(),
+        );
         emit();
         break;
       case "voice-room-full": {
@@ -3627,9 +3647,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           canPromoteTransport(),
         )
       ) {
-        state.error = translateMessage("voice.error.cameraLimit", {
-          limit: CAMERA_LIMIT[state.roomTransport ?? "mesh"],
-        });
+        state.error = cameraLimitMessage(
+          CAMERA_LIMIT[state.roomTransport ?? "mesh"],
+          canPromoteTransport(),
+        );
         emit();
         return;
       }
@@ -3730,6 +3751,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       const track = cameraCaptureStream?.getVideoTracks()[0];
       if (track) {
         await applyCameraQuality(track, next);
+        // The capture is a different size now, and on the SFU the simulcast
+        // ladder was solved against the size it used to be. This republishes
+        // only when the set of rungs actually changed; see the session.
+        await sfu?.reconcileCameraLadder();
       }
     },
 

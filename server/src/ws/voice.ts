@@ -82,6 +82,7 @@ import {
 import {
   blockFullRoomPromotion,
   decidePromotion,
+  decideVideoAdmission,
   estimateSfuLoadMbps,
   promotionBudgetMbps,
   type SfuRoomLoad,
@@ -3761,7 +3762,9 @@ export async function handleVoiceMessage(
         getRoomPeers(peer.voiceChannelId).filter(
           (p) => p.id !== peer.id && p.cameraStreamId,
         ).length;
-      if (othersOn() >= CAMERA_LIMIT[getRoomTransport(peer.voiceChannelId)]) {
+      const meshCap = () => CAMERA_LIMIT[getRoomTransport(peer.voiceChannelId)];
+      const cap = meshCap();
+      if (cap !== null && othersOn() >= cap) {
         // THE FOURTH CAMERA. Three is the mesh ceiling because a mesh camera
         // is a full uplink copy per peer; it is not a ceiling on how many
         // friends want to be seen. Move the room to the SFU and let the
@@ -3771,7 +3774,30 @@ export async function handleVoiceMessage(
         if (socket.readyState !== 1 || peers.get(existingPeerId) !== peer) {
           return;
         }
-        if (othersOn() >= CAMERA_LIMIT[getRoomTransport(peer.voiceChannelId)]) {
+        const after = meshCap();
+        if (after !== null && othersOn() >= after) {
+          send(peer.socket, {
+            type: "camera-denied",
+            voiceChannelId: peer.voiceChannelId,
+          });
+          return;
+        }
+      }
+      // THE NINTH CAMERA. On the voice server there is no count to hit: the
+      // box has a budget instead (see `admitVideoOnSfu`). A camera already up
+      // that is only re-declaring (a device switch mints a new stream id) is
+      // not a new publication and is never priced, so a device change cannot
+      // be refused for the seat it already holds.
+      if (meshCap() === null && !peer.cameraStreamId) {
+        const admitted = await admitVideoOnSfu(
+          peer.voiceChannelId,
+          "cameras",
+          user.id,
+        );
+        if (socket.readyState !== 1 || peers.get(existingPeerId) !== peer) {
+          return;
+        }
+        if (!admitted) {
           send(peer.socket, {
             type: "camera-denied",
             voiceChannelId: peer.voiceChannelId,
@@ -4810,6 +4836,72 @@ async function readRoomLoads(): Promise<SfuRoomLoad[]> {
     }
   }
   return [...byRoom.values()];
+}
+
+/**
+ * May one more camera or share go up in a room that is ALREADY on the SFU?
+ *
+ * The other half of the promotion guard. A room on mesh asks
+ * `promoteRoomPastMeshCap`, which prices the box and moves the room; a room on
+ * the SFU has nowhere to move, so it asks the same price and gets a yes or a
+ * no. There is no count in either answer.
+ *
+ * A read that fails is a yes. The alternative is a database blip turning into
+ * "nobody's camera works" for everybody on the box, which is a worse failure
+ * than an estimate that is a little low: `readRoomLoads` already falls back to
+ * this instance's own peers, so a throw here is the rarer case where even that
+ * failed.
+ *
+ * NOT CACHED, DELIBERATELY. This runs once per camera anybody turns on in a
+ * voice-server room rather than once per promotion, so a cache was the obvious
+ * next thought. It is not worth its staleness: the frame this sits on already
+ * writes the peer row and fans a roster update out to the whole room, so one
+ * indexed read beside those is proportionate, and a cache window is exactly
+ * the window in which a burst of clicks is admitted against a total that has
+ * not seen the first of them.
+ */
+async function admitVideoOnSfu(
+  voiceChannelId: string,
+  reason: VoicePromotionReason,
+  userId: string,
+): Promise<boolean> {
+  const budgetMbps = promotionBudgetMbps();
+  let rooms: SfuRoomLoad[];
+  try {
+    rooms = await readRoomLoads();
+  } catch (error) {
+    logEvent("voice.videoAdmissionLoadFailed", {
+      voiceChannelId,
+      reason,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return true;
+  }
+  const seated = getRoomPeers(voiceChannelId);
+  const known = rooms.find((room) => room.channelId === voiceChannelId);
+  const candidate: SfuRoomLoad = {
+    channelId: voiceChannelId,
+    transport: "livekit",
+    participants: Math.max(known?.participants ?? 0, seated.length, 1),
+    videoPublishers:
+      Math.max(known?.videoPublishers ?? 0, countVideoPublishers(seated)) + 1,
+  };
+  const verdict = decideVideoAdmission({ rooms, room: candidate, budgetMbps });
+  if (!verdict.admit) {
+    // The counter that proves the mechanism runs. Without it a budget that is
+    // wrong looks exactly like a room where nobody wanted their camera on.
+    logEvent("voice.videoAdmissionRefused", {
+      voiceChannelId,
+      userId,
+      reason,
+      loadMbps: Math.round(verdict.loadMbps),
+      addedMbps: Math.round(verdict.addedMbps),
+      budgetMbps: verdict.budgetMbps,
+      roomSize: candidate.participants,
+      videoPublishers: candidate.videoPublishers,
+    });
+  }
+  return verdict.admit;
 }
 
 /**
