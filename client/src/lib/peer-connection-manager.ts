@@ -558,7 +558,7 @@ export function createPeerConnectionManager(
    *
    * Only the budget's *movement* is decided here; what a new budget means for
    * each sender is still `meshScreenBitrate`, so the chosen quality, the
-   * per-sender ceiling and the floor all apply exactly as they did when the
+   * per-sender ceiling still applies exactly as it did when the
    * budget was a constant.
    */
   async function sampleScreenBudget(): Promise<void> {

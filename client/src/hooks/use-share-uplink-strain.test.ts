@@ -72,11 +72,13 @@ function runOf(
   sample: VideoSenderSample | undefined,
   chosen = CHOSEN,
   viewers = 2,
+  /** Rows can lag the room; see the stuck-joiner test. */
+  rows = viewers,
 ): number {
-  const screens = sample ? Array.from({ length: viewers }, () => sample) : [];
+  const screens = sample ? Array.from({ length: rows }, () => sample) : [];
   let streak = 0;
   for (let i = 0; i < count; i += 1) {
-    streak = nextStrainStreak(streak, screens, chosen);
+    streak = nextStrainStreak(streak, screens, chosen, viewers);
   }
   return streak;
 }
@@ -150,12 +152,28 @@ describe("the share uplink warning", () => {
     expect(isStrained(runOf(SUSTAINED_SAMPLES * 3, adapted))).toBe(true);
   });
 
+  it("counts the room's viewers, not the sender rows it can see", () => {
+    // FOUND IN REVIEW. The manager splits the budget by `peers.size`, which
+    // includes a peer still negotiating or sitting in `failed`; those produce
+    // no sender row. Dividing by rows instead of viewers made a four-person
+    // call with one stuck joiner (ceiling 5000/3, two rows) look like a weak
+    // link and fired this warning at somebody on fibre.
+    const stuckJoiner = sender({
+      ceilingKbps: Math.round(5_000_000 / 3 / 1000),
+      targetKbps: 1600,
+      limitedBy: "none",
+    });
+    expect(
+      isStrained(runOf(SUSTAINED_SAMPLES * 2, stuckJoiner, CHOSEN, 3, 2)),
+    ).toBe(false);
+  });
+
   it("forgets the streak the moment the link recovers", () => {
     // One good sample is enough to reset. A warning that lingered after the
     // cause had gone would be the same lie in slower motion.
     let streak = runOf(SUSTAINED_SAMPLES, starved);
     expect(isStrained(streak)).toBe(true);
-    streak = nextStrainStreak(streak, [atCeiling, atCeiling], CHOSEN);
+    streak = nextStrainStreak(streak, [atCeiling, atCeiling], CHOSEN, 2);
     expect(isStrained(streak)).toBe(false);
     expect(streak).toBe(0);
   });
@@ -165,7 +183,7 @@ describe("the share uplink warning", () => {
   });
 
   it("does not carry a previous share's grievance into the next one", () => {
-    const carried = nextStrainStreak(runOf(SUSTAINED_SAMPLES, starved), [], CHOSEN);
+    const carried = nextStrainStreak(runOf(SUSTAINED_SAMPLES, starved), [], CHOSEN, 2);
     expect(carried).toBe(0);
   });
 });

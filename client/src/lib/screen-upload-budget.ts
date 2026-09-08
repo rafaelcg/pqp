@@ -30,19 +30,37 @@
  * WHY NOT JUST USE THE ESTIMATE. Two reasons, and they set the shape of the
  * controller below.
  *
- *  1. Each connection estimates only its own flow. On a saturated link the
- *     estimates split the capacity between them, so their sum is a fair
- *     reading of the whole pipe. On an unsaturated link each estimator only
- *     probes a little above what it is currently sending (measured on 25 Aug:
- *     3.3 Mbps of "headroom" against a 1.5 Mbps ceiling on a loopback link
- *     with no real limit at all), so the sum *under*-reports and cannot be
- *     trusted to say how far up is safe. The estimate is therefore read
- *     asymmetrically: a shortfall is believed at once, and headroom is only a
- *     licence to try a little more.
- *  2. A sample can be missing or momentarily wrong (an ICE restart, a pair
+ *  1. `availableOutgoingBitrate` IS NOT THIS MACHINE'S UPLINK. It is a
+ *     per-path estimate, and a path is throttled by whichever end is
+ *     narrowest: our uplink, that one viewer's downlink, or a relay carrying
+ *     that pair. Summing the paths therefore cannot tell "my uplink is small"
+ *     from "one viewer is on hotel wifi", and an earlier version of this file
+ *     did exactly that, in a comment that claimed the sum was "a fair reading
+ *     of the whole pipe". It was not. With two viewers, one of them on a
+ *     50 kbps path, the sum dragged the budget to its floor in three ticks and
+ *     could never raise again, so the *healthy* viewer went from 2500 kbps to
+ *     500 kbps because somebody else's wifi was bad. Found in review before it
+ *     shipped.
+ *
+ *     What separates the two cases is the SHAPE of the readings, not their
+ *     total. Our own uplink is shared by every path, so when it is the
+ *     bottleneck every path is squeezed together and they all read low. One
+ *     bad path leaves the others untouched. So the room is budgeted from the
+ *     BEST path: the widest estimate is what this uplink has actually been
+ *     observed to push down one connection, and a narrower path than that is
+ *     that path's own problem — one which the browser's per-connection
+ *     congestion control already handles on its own, below whatever ceiling we
+ *     set, without any help from us.
+ *  2. On an unsaturated link each estimator only probes a little above what it
+ *     is currently sending (measured on 25 Aug: 3.3 Mbps of "headroom" against
+ *     a 1.5 Mbps ceiling on a loopback link with no real limit at all), so
+ *     even the best path *under*-reports and cannot be trusted to say how far
+ *     up is safe. The estimate is therefore read asymmetrically: a shortfall
+ *     is believed at once, and headroom is only a licence to try a little
+ *     more.
+ *  3. A sample can be missing or momentarily wrong (an ICE restart, a pair
  *     that just changed, Firefox omitting the field). The controller never
- *     moves on the strength of a peer it could not read, and never raises
- *     unless it could read everyone.
+ *     raises unless it could read everyone.
  *
  * So: cut immediately to what was measured, raise geometrically while every
  * estimator still reports room above the budget, and stop at a hard cap. It is
@@ -73,11 +91,11 @@ export const MAX_SCREEN_UPLOAD_BUDGET_BPS = 16_000_000;
 /**
  * The least the controller will ever cut to.
  *
- * Below this the per-sender floor in `meshScreenBitrate` (600 kbps) is what
- * governs anyway, so a lower number would only change which constant a
- * collapsing link runs into. It also keeps a single wildly low sample (one
- * peer mid-ICE-restart reporting 50 kbps) from throwing the whole room to
- * nothing for a tick.
+ * This is the only floor left: the per-copy one that used to sit in
+ * `meshScreenBitrate` is gone, because against a measured budget it asked a
+ * 1 Mbps link for up to 4.2 Mbps. A floor on the room is the right shape for
+ * one. It also keeps a single wildly low sample (one peer mid-ICE-restart
+ * reporting 50 kbps) from throwing the whole room to nothing for a tick.
  */
 export const MIN_SCREEN_UPLOAD_BUDGET_BPS = 1_000_000;
 
@@ -160,11 +178,19 @@ export function nextScreenUploadBudget(
     return current;
   }
 
-  // A peer that could not be read is assumed to have exactly its share, no
-  // more and no less: it can neither pull the room down nor lift it.
+  // The widest path, not the sum. See point 1 in the header: the sum cannot
+  // tell a small uplink from one bad viewer, and reading it as the uplink
+  // punished every other viewer for that one path. The best path is the
+  // strongest evidence available of what this uplink can push down a single
+  // connection, and the room needs one such copy per viewer.
+  //
+  // A peer that could not be read contributes no evidence, which is the
+  // honest thing for a missing reading to do: it neither proves the link is
+  // wide nor that it is narrow. It still counts in `peers`, because a copy is
+  // still being sent to it.
   const perPeer = current / peers;
-  const measured =
-    readable.reduce((sum, s) => sum + s, 0) + (peers - readable.length) * perPeer;
+  const bestPath = Math.max(...readable);
+  const measured = bestPath * peers;
 
   if (measured < current * CUT_BELOW) {
     const cut = Math.max(MIN_SCREEN_UPLOAD_BUDGET_BPS, Math.round(measured));
@@ -182,6 +208,13 @@ export function nextScreenUploadBudget(
     MAX_SCREEN_UPLOAD_BUDGET_BPS,
     Math.round(current * RAISE_FACTOR),
   );
+  // The cap is always worth taking, even when the last step up to it is
+  // smaller than the delta. Without this a budget anywhere in the last 10 %
+  // below the cap could never reach it: 12.0 Mbps raises to 15.6, and 16 is
+  // not more than 15.6 x 1.1, so it would sit there for the rest of the call.
+  if (raised === MAX_SCREEN_UPLOAD_BUDGET_BPS && raised > current) {
+    return raised;
+  }
   return raised > current * (1 + APPLY_DELTA) ? raised : current;
 }
 

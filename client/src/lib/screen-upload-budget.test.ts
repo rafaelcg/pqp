@@ -78,10 +78,41 @@ describe("the screen upload budget follows the measured uplink", () => {
     expect(nextScreenUploadBudget(current, [10 * M, 1 * M])).toBe(current);
   });
 
-  it("lets the readable peers cut the room while an unreadable one holds its share", () => {
-    // Two peers, one unreadable. The unreadable one is assumed to have
-    // exactly its 2.5 Mbps share; the readable one says 1 Mbps. 3.5 Mbps.
-    expect(nextScreenUploadBudget(5 * M, [1 * M, null])).toBe(3.5 * M);
+  it("budgets from the readable peers when one cannot be read", () => {
+    // Two peers, one unreadable. A missing reading is no evidence either way,
+    // so the widest path that *was* read stands for what a copy can carry,
+    // and the room still needs one copy per peer: 1 Mbps x 2.
+    expect(nextScreenUploadBudget(5 * M, [1 * M, null])).toBe(2 * M);
+  });
+
+  it("does not punish the whole room for one bad path", () => {
+    // THE REGRESSION THIS MODEL EXISTS TO AVOID, found in review. Sharer on
+    // fibre, two viewers, one of them on a 50 kbps path. Reading the SUM as
+    // the uplink walked the budget to its floor in three ticks and could
+    // never raise again, so the healthy viewer dropped from 2500 to 500 kbps
+    // because somebody else's wifi was bad. The best path is the evidence
+    // about *this* uplink; the bad path is the browser's problem to throttle
+    // on its own connection.
+    let budget = 5 * M;
+    for (let i = 0; i < 6; i += 1) {
+      budget = nextScreenUploadBudget(budget, [50_000, 2.75 * M]);
+    }
+    expect(budget).toBeGreaterThanOrEqual(5 * M);
+  });
+
+  it("still cuts when every path is squeezed, which is what a small uplink looks like", () => {
+    // The shape that actually means "my uplink is small": our own link is
+    // shared by every path, so when it is the bottleneck they all read low
+    // together. 3 Mbps split two ways.
+    expect(nextScreenUploadBudget(5 * M, [1.5 * M, 1.5 * M])).toBe(3 * M);
+  });
+
+  it("takes the cap even when the last step to it is under the delta", () => {
+    // Found in review: a budget in the last 10 % below the cap could never
+    // reach it, because 16 Mbps is not more than 15.6 x 1.1.
+    expect(nextScreenUploadBudget(14.6 * M, [20 * M, 20 * M])).toBe(
+      MAX_SCREEN_UPLOAD_BUDGET_BPS,
+    );
   });
 
   it("leaves a 1:1 call alone, however bad its reading", () => {

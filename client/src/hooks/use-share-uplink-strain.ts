@@ -7,6 +7,7 @@ import {
 import { chosenScreenCeilingBps } from "@/lib/peer-connection-manager";
 import { DEFAULT_SCREEN_UPLOAD_BUDGET_BPS } from "@/lib/screen-upload-budget";
 import type { VideoQuality } from "@/lib/video-quality";
+import type { VoiceRoomTransport } from "@pqp/shared";
 
 /**
  * Is this machine's own screen share being held back by its own uplink, for
@@ -81,6 +82,7 @@ export function nextStrainStreak(
   streak: number,
   screens: readonly VideoSenderSample[],
   chosenCeilingBps: number,
+  viewers: number,
 ): number {
   // No sender yet is the first second of a share, not a fault. It resets
   // rather than holds, so a share that stops and restarts starts counting
@@ -113,9 +115,16 @@ export function nextStrainStreak(
   // the budget, and calling that "your connection" would accuse the healthiest
   // link in the room. Only a ceiling below what the *starting* budget would
   // have allowed for this many viewers counts.
+  // `viewers` is the room's own count, not `screens.length`. The two look
+  // interchangeable and are not: the manager splits the budget by `peers.size`,
+  // which counts a peer still negotiating, one sitting in `failed` waiting for
+  // its ICE restart, and one whose `getStats()` threw — none of which produce a
+  // sender row. A four-person call with one joiner stuck on ICE has a ceiling
+  // of 5000/3 and only two rows to divide by, which read as a weak link and
+  // fired this warning at somebody on fibre. Found in review.
   const expected = Math.min(
     chosenCeilingBps,
-    DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, screens.length),
+    DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, viewers),
   );
   const ceilingBps = (screen.ceilingKbps ?? 0) * 1000;
   const cutByBudget = ceilingBps > 0 && ceilingBps < expected * CEILING_SLACK;
@@ -130,12 +139,22 @@ export function isStrained(streak: number): boolean {
 export function useShareUplinkStrain(
   isSharing: boolean,
   quality: VideoQuality,
+  viewers: number,
+  transport: VoiceRoomTransport | null,
 ): boolean {
   const [strained, setStrained] = useState(false);
   const streak = useRef(0);
 
   useEffect(() => {
-    if (!isSharing) {
+    // MESH ONLY. On the SFU the numbers this reads mean something else: above
+    // `LARGE_ROOM_PARTICIPANTS` the published top layer is capped at
+    // `LARGE_ROOM_SCREEN_BITRATE`, while the stats row still reports the
+    // uncapped rung as its ceiling, so the encoder sits far under a ceiling it
+    // was never allowed to reach and every tick reads as "bandwidth". That
+    // would have told the presenter of a 100-person watch party on fibre that
+    // their connection was the problem, every time. Found in review. The whole
+    // budget controller this warning explains is mesh-only anyway.
+    if (!isSharing || transport === "livekit") {
       streak.current = 0;
       setStrained(false);
       return;
@@ -158,6 +177,7 @@ export function useShareUplinkStrain(
           streak.current,
           screens,
           chosenScreenCeilingBps(quality),
+          viewers,
         );
         setStrained(isStrained(streak.current));
       });
@@ -168,7 +188,7 @@ export function useShareUplinkStrain(
       live = false;
       clearInterval(id);
     };
-  }, [isSharing, quality]);
+  }, [isSharing, quality, viewers, transport]);
 
   return strained;
 }

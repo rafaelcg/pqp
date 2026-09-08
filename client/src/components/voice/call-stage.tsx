@@ -782,6 +782,8 @@ function ActiveCall({
   const uplinkStrained = useShareUplinkStrain(
     voiceState.isSharingScreen,
     videoQuality,
+    voiceState.remotePeers.length,
+    voiceState.roomTransport,
   );
 
   const speaking = new Set(voiceState.speakingPeerIds);
