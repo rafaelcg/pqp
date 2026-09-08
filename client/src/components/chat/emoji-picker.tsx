@@ -102,7 +102,7 @@ export function EmojiPickerPanel({
         visibility: placement ? "visible" : "hidden",
       }}
       className={cn(
-        "emoji-mart-shell z-[120] overflow-hidden rounded-lg border border-ink-4 shadow-[var(--shadow-popover)] animate-fade-in",
+        "emoji-mart-shell elevation-3 z-[120] overflow-hidden rounded-[var(--radius-card)] animate-fade-in",
         className,
       )}
     >

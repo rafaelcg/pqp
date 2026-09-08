@@ -163,9 +163,14 @@
    */
   --radius-tick: 0.1875rem;
   --radius-control: 0.375rem;
+
   --radius-card: 0.5rem;
   --radius-panel: 1rem;
   --radius-pill: 999px;
+  /* Message list drawing. Overridden on the root by src/lib/chat-display.ts. */
+  --chat-font-size: 15px;
+  --chat-line-height: 22px;
+  --chat-group-gap: 8px;
 
   /*
    * ELEVATION. Three levels, lowest first. Level 1 lifts a resting card off
@@ -1172,6 +1177,12 @@ h2,
 
 .markdown-body p + p {
   margin-top: 0.25em;
+}
+
+/* A blank line in a message: half a line, not a full one. */
+.markdown-body .chat-blank {
+  display: block;
+  height: 0.5em;
 }
 
 .markdown-body code {

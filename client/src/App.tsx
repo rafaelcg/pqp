@@ -353,6 +353,7 @@ import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
 import { adoptAppearancePreference, getAppearance } from "@/lib/appearance";
 import { adoptContrastPreference } from "@/lib/contrast";
+import { adoptChatDisplay } from "@/lib/chat-display";
 import { adoptThemePreference, themeToAdopt } from "@/lib/theme";
 import { isMeshForced } from "@/lib/voice-backend";
 import type { VideoQuality } from "@/lib/video-quality";
@@ -2351,6 +2352,9 @@ function MainAppContent({
         }
         if (me.preferences?.accentHue !== undefined) {
           adoptAccentHuePreference(me.preferences.accentHue);
+        }
+        if (me.preferences?.chatDisplay) {
+          adoptChatDisplay(me.preferences.chatDisplay);
         }
         const merged = applyRemotePreferences(
           loadLocalSettings(),

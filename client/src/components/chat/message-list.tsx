@@ -9,15 +9,28 @@ import {
   AlertCircle,
   ArrowDown,
   Check,
+  Copy,
   CornerUpLeft,
+  Flag,
+  Forward,
+  Hash,
   ImagePlay,
+  Link,
+  ListChecks,
   Loader2,
+  Mail,
+  MailOpen,
+  MessageSquarePlus,
+  MessageSquareText,
   MoreHorizontal,
   Pencil,
   Pin,
+  PinOff,
   Play,
   Reply,
   SmilePlus,
+  Trash2,
+  type LucideIcon,
 } from "lucide-react";
 import {
   memo,
@@ -34,6 +47,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { useChatDisplay } from "@/hooks/use-chat-display";
 import { RankMarks } from "@/components/user/rank-marks";
 import { StatusDot } from "@/components/user/status-dot";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
@@ -1688,6 +1702,7 @@ const MessageRow = memo(function MessageRow({
 }: MessageRowProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
+  const compact = useChatDisplay().display.density === "compact";
   const { message, startsGroup, dayLabel } = row;
   const authorInfo = authors.get(message.authorId);
   const mentionsYou = messageMentionsYou(
@@ -1813,15 +1828,30 @@ const MessageRow = memo(function MessageRow({
   // handlers were not passed (the thread panel itself, conversations).
   const threadAction =
     isReal && message.thread && onOpenThread
-      ? { id: "open-thread", label: t("thread.open"), onSelect: onOpenThread }
+      ? {
+          id: "open-thread",
+          label: t("thread.open"),
+          icon: MessageSquareText,
+          onSelect: onOpenThread,
+        }
       : isReal && !message.thread && onStartThread
-        ? { id: "start-thread", label: t("thread.start"), onSelect: onStartThread }
+        ? {
+            id: "start-thread",
+            label: t("thread.start"),
+            icon: MessageSquarePlus,
+            onSelect: onStartThread,
+          }
         : null;
 
   const items: ContextMenuItemDef[] = [
     ...(canReply
       ? [
-          { id: "reply", label: t("chat.reply"), onSelect: selectAndClose(onReply, false) },
+          {
+            id: "reply",
+            label: t("chat.reply"),
+            icon: Reply,
+            onSelect: selectAndClose(onReply, false),
+          },
         ]
       : []),
     ...(threadAction
@@ -1829,6 +1859,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: threadAction.id,
             label: threadAction.label,
+            icon: threadAction.icon,
             // Focus moves into the panel the action opens, so no refocus.
             onSelect: selectAndClose(threadAction.onSelect, false),
           },
@@ -1840,6 +1871,7 @@ const MessageRow = memo(function MessageRow({
     {
       id: "copy-text",
       label: t("chat.copyText"),
+      icon: Copy,
       onSelect: selectAndClose(
         () => void navigator.clipboard.writeText(message.body),
         true,
@@ -1848,6 +1880,7 @@ const MessageRow = memo(function MessageRow({
     {
       id: "copy-id",
       label: t("chat.copyId"),
+      icon: Hash,
       onSelect: selectAndClose(
         () => void navigator.clipboard.writeText(message.id),
         true,
@@ -1858,6 +1891,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "copy-link",
             label: t("chat.copyLink"),
+            icon: Link,
             onSelect: selectAndClose(() => {
               const link = `${window.location.origin}${messageRoutePath(
                 serverId,
@@ -1874,6 +1908,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "forward",
             label: t("chat.forward"),
+            icon: Forward,
             onSelect: selectAndClose(onForward, false),
           },
         ]
@@ -1883,6 +1918,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: unreadHeld ? "mark-read" : "mark-unread",
             label: unreadHeld ? t("chat.markRead") : t("chat.markUnread"),
+            icon: unreadHeld ? MailOpen : Mail,
             onSelect: selectAndClose(
               unreadHeld ? onMarkRead : onMarkUnread,
               true,
@@ -1896,6 +1932,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "edit",
             label: t("chat.edit"),
+            icon: Pencil,
             onSelect: selectAndClose(onStartEdit, false),
           },
         ]
@@ -1905,6 +1942,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "pin",
             label: isMessagePinned ? t("chat.unpin") : t("chat.pin"),
+            icon: isMessagePinned ? PinOff : Pin,
             onSelect: selectAndClose(
               isMessagePinned ? onUnpin : onPin,
               true,
@@ -1917,6 +1955,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "delete",
             label: t("chat.delete"),
+            icon: Trash2,
             danger: true,
             onSelect: selectAndClose(confirmDelete, true),
           },
@@ -1929,6 +1968,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "select",
             label: t("chat.bulk.select"),
+            icon: ListChecks,
             onSelect: selectAndClose(onStartSelect, false),
           },
         ]
@@ -1940,6 +1980,7 @@ const MessageRow = memo(function MessageRow({
           {
             id: "report",
             label: t("chat.report"),
+            icon: Flag,
             danger: true,
             onSelect: selectAndClose(onReport, false),
           },
@@ -2016,7 +2057,7 @@ const MessageRow = memo(function MessageRow({
           onContextMenu={onMenuOpenRow}
           className={cn(
             "group relative flex items-start gap-0 px-5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
-            startsGroup ? "mt-2 pt-1" : "pt-px",
+            startsGroup ? "mt-[var(--chat-group-gap)] pt-1" : "pt-px",
             mentionJoinTop ? "pt-0" : null,
             mentionJoinBottom ? "pb-0" : startsGroup ? "pb-1" : "pb-px",
             mentionsYou && !isFlashing
@@ -2058,7 +2099,7 @@ const MessageRow = memo(function MessageRow({
               </span>
             </button>
           )}
-          {startsGroup ? (
+          {startsGroup && !compact ? (
             <div className="flex w-14 shrink-0 items-start justify-end pr-2">
               <div className="relative h-9 w-9 shrink-0">
                 <AuthorButton
@@ -2087,7 +2128,10 @@ const MessageRow = memo(function MessageRow({
             </div>
           ) : (
             <time
-              className="w-14 shrink-0 pr-2 text-right text-[12px] leading-[22px] whitespace-nowrap tabular-nums text-paper-muted opacity-0 group-hover:opacity-100"
+              className={cn(
+                "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
+                compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
+              )}
               dateTime={message.createdAt}
               title={formatFullTimestamp(message.createdAt)}
             >
@@ -2112,7 +2156,7 @@ const MessageRow = memo(function MessageRow({
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
                     className={cn(
-                      "rounded text-[15px] font-bold leading-[22px]",
+                      "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
                       !roleColor && (isMine ? "text-signal" : "text-paper"),
                     )}
                     style={roleColor ? { color: roleColor } : undefined}
@@ -2139,16 +2183,18 @@ const MessageRow = memo(function MessageRow({
                     Webhook
                   </span>
                 )}
-                <time
-                  className="whitespace-nowrap text-[12px] leading-[22px] text-paper-muted"
-                  dateTime={message.createdAt}
-                  title={formatFullTimestamp(message.createdAt)}
-                >
-                  {formatTime(message.createdAt)}
-                </time>
+                {!compact && (
+                  <time
+                    className="whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted"
+                    dateTime={message.createdAt}
+                    title={formatFullTimestamp(message.createdAt)}
+                  >
+                    {formatTime(message.createdAt)}
+                  </time>
+                )}
                 {isMessagePinned && (
                   <span
-                    className="inline-flex items-center gap-0.5 text-[12px] leading-[22px] text-signal"
+                    className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal"
                     title={
                       message.pinnedBy
                         ? t("chat.pinnedBy", {
@@ -2190,7 +2236,7 @@ const MessageRow = memo(function MessageRow({
                     onClose={() => onClosePoll?.(message.id)}
                   />
                 ) : message.body ? (
-                  <div className="markdown-body text-[15px] leading-[22px] text-paper/90">
+                  <div className="markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90">
                     <MessageBody
                       body={message.body}
                       currentUsername={currentUsername}
@@ -2217,7 +2263,7 @@ const MessageRow = memo(function MessageRow({
                 {!message.body &&
                   attachments.length === 0 &&
                   message.webhookEmbeds.length === 0 && (
-                    <p className="text-[15px] italic leading-relaxed text-paper-muted">
+                    <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted">
                       {t("chat.attachmentUnavailable")}
                     </p>
                   )}
@@ -2375,6 +2421,7 @@ const MessageRow = memo(function MessageRow({
                   >
                     {canPin && (
                       <MoreMenuItem
+                        icon={isMessagePinned ? PinOff : Pin}
                         onSelect={() => {
                           (isMessagePinned ? onUnpin : onPin)?.();
                           setMoreOpen(false);
@@ -2384,6 +2431,7 @@ const MessageRow = memo(function MessageRow({
                       </MoreMenuItem>
                     )}
                     <MoreMenuItem
+                        icon={Link}
                       onSelect={() => {
                         const link = `${window.location.origin}${messageRoutePath(
                           serverId,
@@ -2398,6 +2446,7 @@ const MessageRow = memo(function MessageRow({
                     </MoreMenuItem>
                     {onForward && (
                       <MoreMenuItem
+                        icon={Forward}
                         onSelect={() => {
                           onForward();
                           setMoreOpen(false);
@@ -2408,6 +2457,7 @@ const MessageRow = memo(function MessageRow({
                     )}
                     {(unreadHeld ? onMarkRead : onMarkUnread) && (
                       <MoreMenuItem
+                        icon={unreadHeld ? MailOpen : Mail}
                         onSelect={() => {
                           (unreadHeld ? onMarkRead : onMarkUnread)?.();
                           setMoreOpen(false);
@@ -2418,6 +2468,7 @@ const MessageRow = memo(function MessageRow({
                     )}
                     {canReport && (
                       <MoreMenuItem
+                        icon={Flag}
                         danger
                         onSelect={() => {
                           onReport?.();
@@ -2429,6 +2480,7 @@ const MessageRow = memo(function MessageRow({
                     )}
                     {onStartThread && !message.thread && (
                       <MoreMenuItem
+                        icon={MessageSquarePlus}
                         onSelect={() => {
                           onStartThread();
                           setMoreOpen(false);
@@ -2439,6 +2491,7 @@ const MessageRow = memo(function MessageRow({
                     )}
                     {canDelete && (
                       <MoreMenuItem
+                        icon={Trash2}
                         danger
                         onSelect={() => {
                           setMoreOpen(false);
@@ -2454,6 +2507,7 @@ const MessageRow = memo(function MessageRow({
                         action a moderator has to find under pressure. */}
                     {isReal && onStartSelect && (
                       <MoreMenuItem
+                        icon={ListChecks}
                         onSelect={() => {
                           setMoreOpen(false);
                           onStartSelect();
@@ -2596,22 +2650,28 @@ function MoreMenuItem({
   children,
   onSelect,
   danger = false,
+  icon: Icon,
 }: {
   children: ReactNode;
   onSelect: () => void;
   danger?: boolean;
+  /** Left of the label, the same glyph the right-click menu draws for it. */
+  icon?: LucideIcon;
 }) {
   return (
     <button
       type="button"
       role="menuitem"
       className={cn(
-        "flex w-full items-center rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
+        "flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-sm outline-none hover:bg-ink-3 focus-visible:bg-ink-3",
         danger ? "text-danger" : "text-paper",
       )}
       onClick={onSelect}
     >
-      {children}
+      {Icon ? (
+        <Icon className="h-3.5 w-3.5 shrink-0 opacity-80" aria-hidden />
+      ) : null}
+      <span className="min-w-0 flex-1">{children}</span>
     </button>
   );
 }
@@ -2955,7 +3015,7 @@ function EditComposer({
             void submit();
           }
         }}
-        className="w-full resize-none rounded-md border border-ink-4 bg-ink-3 px-2.5 py-1.5 text-[15px] text-paper outline-none focus:border-signal/60"
+        className="w-full resize-none rounded-md border border-ink-4 bg-ink-3 px-2.5 py-1.5 text-[length:var(--chat-font-size)] text-paper outline-none focus:border-signal/60"
       />
       <p className="mt-1 text-[11px] text-paper-muted">
         Enter to save · Escape to cancel

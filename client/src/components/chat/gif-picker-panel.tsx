@@ -155,7 +155,7 @@ export function GifPickerPanel({
     <div
       ref={panelRef}
       className={cn(
-        "animate-rise z-50 flex h-[22rem] w-[21rem] flex-col overflow-hidden rounded-lg border border-border bg-surface-1 shadow-[var(--shadow-popover)]",
+        "elevation-3 animate-rise z-50 flex h-[22rem] w-[21rem] flex-col overflow-hidden rounded-[var(--radius-card)]",
         className,
       )}
     >
