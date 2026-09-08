@@ -1,3 +1,4 @@
+import { type CSSProperties } from "react";
 import { Link } from "react-router-dom";
 import {
   ChannelListSkeleton,
@@ -7,6 +8,9 @@ import {
 } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
+import {
+  loadChannelSidebarWidth,
+} from "@/lib/channel-sidebar-width";
 
 interface AppLoadingShellProps {
   /** Already translated by the caller — this is a label, not a key. */
@@ -28,7 +32,19 @@ export function AppLoadingShell({ label }: AppLoadingShellProps) {
         <ServerRailSkeleton />
       </nav>
 
-      <aside className="hidden h-full w-64 shrink-0 flex-col border-r border-ink-4/60 bg-channel md:flex">
+      {/* The same stored width the real column uses, so the first paint is
+          already the width it is about to become. Read here rather than in an
+          effect: an effect would paint 256 and then jump. */}
+      <aside
+        style={
+          {
+            "--channel-sidebar-width": `${loadChannelSidebarWidth(
+              typeof window === "undefined" ? 0 : window.innerWidth,
+            )}px`,
+          } as CSSProperties
+        }
+        className="hidden h-full w-[var(--channel-sidebar-width)] shrink-0 flex-col border-r border-ink-4/60 bg-channel md:flex"
+      >
         <div className="flex h-14 items-center border-b border-ink-4/60 px-4">
           <Skeleton className="h-5 w-28" />
         </div>

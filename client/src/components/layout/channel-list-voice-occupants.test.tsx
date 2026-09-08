@@ -165,6 +165,35 @@ describe("ChannelList voice occupants", () => {
     );
   });
 
+  /**
+   * The follow-up. Clicking worked; nothing on the row said clicking would do
+   * anything, and the same community asked for per-person volume again with
+   * "acho que deve ter porém não achei".
+   */
+  it("puts a speaker glyph on the row so the sound panel is findable", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        currentUserId={andre.userId}
+        peerVolumes={{ [rafa.userId]: 1 }}
+        onSetPeerVolume={() => {}}
+      />,
+    );
+    expect(html).toContain('data-voice-occupant-audio="hover"');
+  });
+
+  it("keeps the glyph on somebody you have turned down, since that is state", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        currentUserId={andre.userId}
+        peerVolumes={{ [rafa.userId]: 0 }}
+        onSetPeerVolume={() => {}}
+      />,
+    );
+    expect(html).toContain('data-voice-occupant-audio="always"');
+  });
+
   it("offers no volume on our own seat, which has no knob behind it", () => {
     const html = renderList(
       <ChannelList
@@ -176,6 +205,14 @@ describe("ChannelList voice occupants", () => {
     expect(html).not.toMatch(
       new RegExp(
         `aria-haspopup="dialog"[^>]*data-voice-occupant="${andre.userId}"`,
+      ),
+    );
+    // And no glyph promising one. Rafa's row still has both, so counting is
+    // what pins "ours has none" rather than "the feature is off".
+    expect(html.split("data-voice-occupant-audio").length - 1).toBe(1);
+    expect(html).toMatch(
+      new RegExp(
+        `data-voice-occupant="${rafa.userId}"[\\s\\S]*?data-voice-occupant-audio`,
       ),
     );
   });

@@ -22,7 +22,14 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type DragEvent,
+  type ReactNode,
+} from "react";
 import {
   FAVORITE_CHANNELS_PER_SERVER_MAX,
   isVoiceRoomChannelType,
@@ -37,7 +44,12 @@ import {
 } from "@pqp/shared";
 import type { ChannelLive } from "@/hooks/use-voice";
 import { SearchDialog } from "@/components/search/search-dialog";
-import { ChannelIcon } from "@/components/layout/channel-icon";
+import {
+  ChannelIcon,
+  channelIconIsPrivateLock,
+} from "@/components/layout/channel-icon";
+import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
+import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
 import {
   resolveVoiceRowClick,
   resolveVoiceRowDoubleClick,
@@ -308,6 +320,12 @@ export function ChannelList({
   upcomingSessionStartsAtByChannel = {},
 }: ChannelListProps) {
   const { t } = useTranslation();
+  const {
+    width: sidebarWidth,
+    maxWidth: sidebarMaxWidth,
+    setWidth: setSidebarWidth,
+    commitWidth: commitSidebarWidth,
+  } = useChannelSidebarWidth();
   const channelPinHintEnabled = useFeatureHintEnabled("channelPin");
   const visibleFavs = visibleFavoriteChannels(channels, favoriteChannelIds);
   const favoriteIdSet = new Set(visibleFavs.map((c) => c.id));
@@ -1071,12 +1089,25 @@ export function ChannelList({
   return (
     <aside
       data-immersive-hide=""
-      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:static md:z-auto md:w-64 md:translate-x-0 ${
+      // `--channel-sidebar-width` rather than an inline `width`: below `md`
+      // this is a drawer pinned to `min(100%-72px,16rem)` and an inline width
+      // would win there too. The variable is only consumed by the `md:` class,
+      // so the drawer keeps the width it has always had.
+      style={
+        { "--channel-sidebar-width": `${sidebarWidth}px` } as CSSProperties
+      }
+      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative md:z-auto md:w-[var(--channel-sidebar-width)] md:translate-x-0 ${
         mobileOpen
           ? "translate-x-0"
           : "-translate-x-[calc(100%+72px)] md:translate-x-0"
       }`}
     >
+      <SidebarResizeHandle
+        width={sidebarWidth}
+        maxWidth={sidebarMaxWidth}
+        onWidthChange={setSidebarWidth}
+        onCommit={commitSidebarWidth}
+      />
       {/* Above the header, and only when there is one. See `ServerBanner`: a
           server without a banner keeps exactly the column it has always had. */}
       {server && <ServerBanner name={server.name} bannerUrl={server.bannerUrl} />}
@@ -1110,8 +1141,11 @@ export function ChannelList({
                   </span>
                 )}
               </div>
+              {/* `truncate`: without it the rank sits outside its own column
+                  and runs under the three buttons to its right, which is what
+                  a narrowed sidebar shows first. */}
               {server?.role && (
-                <p className="mt-0.5 text-[11px] uppercase tracking-wider text-paper-muted">
+                <p className="mt-0.5 truncate text-[11px] uppercase tracking-wider text-paper-muted">
                   {server.role}
                 </p>
               )}
@@ -1783,6 +1817,9 @@ export function ChannelRailItem({
             ? `${channel.name}: ${t("voice.doubleClickToJoin")}`
             : channel.name
       }
+      // The strip has no room to write it, and the padlock glyph is the only
+      // thing distinguishing a private channel there.
+      detail={channel.isPrivate ? t("chrome.privateChannel") : undefined}
       side="right"
     >
       <button
@@ -1791,7 +1828,9 @@ export function ChannelRailItem({
         data-channel-type={channel.type}
         aria-current={selected ? "page" : undefined}
         className={cn(
-          "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors",
+          // `touch-manipulation` for the same reason the wide row has it: the
+          // double tap is the only pointer gesture that joins.
+          "relative flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center rounded-lg transition-colors",
           selected
             ? "bg-ink-3 text-paper"
             : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
@@ -1801,12 +1840,9 @@ export function ChannelRailItem({
           muted && !selected && !connected && "opacity-50",
         )}
         onClick={() => {
-          // A tap that lands on an already-selected row is the closest thing
-          // touch has to a second click: nothing else distinguishes "select
-          // again" from "I mean it, join" on a phone. `onDoubleClick` below
-          // catches the mouse case even when this click's own `onSelect` has
-          // not yet round-tripped through state by the time the second click
-          // lands.
+          // Always a select. Joining a call is never one press, on any
+          // input: the double click below is the pointer path, and the
+          // channel header's call button is the one a phone reaches for.
           const action = resolveVoiceRowClick({ selected, joinable: !!joinable });
           if (action === "join") {
             onJoinVoice?.();
@@ -1815,10 +1851,7 @@ export function ChannelRailItem({
           }
         }}
         onDoubleClick={() => {
-          if (
-            resolveVoiceRowDoubleClick({ selected, joinable: !!joinable }) ===
-            "join"
-          ) {
+          if (resolveVoiceRowDoubleClick({ joinable: !!joinable }) === "join") {
             onJoinVoice?.();
           }
         }}
@@ -2157,15 +2190,19 @@ function ChannelRow({
           />
         )}
         {/* A voice row opens its view the way a text row opens its channel:
-            one click selects it and shows the chat and the stage, without
-            joining. A double click joins, the same shortcut Android and iOS
-            picked up in PR 339. The `selected` branch on plain click covers
-            touch, where a second tap on the row you are already looking at
-            reads as "no, really, join": there is no dblclick on a phone
-            unless the click landed fast enough for the browser to have
-            synthesized one itself. Connected rows never call `onJoinVoice`
-            at all (see `joinable` below), so clicking the room you are in
-            just keeps the view. */}
+            a click selects it and shows the chat and the stage, without
+            joining, and it does that however many times it lands. Only a
+            double click joins. The "second tap on the selected row joins"
+            fallback PR 360 shipped is gone: in practice it meant one click plus
+            one more click entered a call by accident, which is the one thing
+            this row must not do.
+            `touch-manipulation` is what makes the double tap work on a phone:
+            without it mobile Safari and Chrome hold the second tap back for
+            double-tap-to-zoom and never synthesize `dblclick`. The header's
+            call button is the other phone path, and it is the one iOS and
+            Android use.
+            Connected rows never call `onJoinVoice` at all (see `joinable`
+            below), so clicking the room you are in just keeps the view. */}
         <button
           type="button"
           onClick={() => {
@@ -2182,7 +2219,6 @@ function ChannelRow({
           onDoubleClick={() => {
             if (
               resolveVoiceRowDoubleClick({
-                selected,
                 joinable: !!onJoinVoice && !connected,
               }) === "join"
             ) {
@@ -2212,9 +2248,40 @@ function ChannelRow({
               ? `${channel.name}: ${t("voice.doubleClickToJoin")}`
               : undefined
           }
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          className="flex min-w-0 flex-1 touch-manipulation items-center gap-1.5 text-left"
         >
-          {icon}
+          {/* Private is the glyph, not a word. The pill that used to sit at
+              the end of this row was about 50px of a 256px column, which is
+              what pushed "broder-do-role" down to "broder…" while the pill
+              itself had room to spare, and on a row whose icon was already
+              the padlock it said the same thing twice. The padlock stays, the
+              tooltip and the screen reader say it in words, and the name gets
+              the pixels back. */}
+          {channel.isPrivate ? (
+            <Tooltip label={t("chrome.privateChannel")}>
+              {/* `aria-hidden` because the words are already in the row, in
+                  the `sr-only` below. Without it the tooltip's own
+                  `aria-label` on this wrapper is a second announcement of the
+                  same fact, which is the bug the pill had. */}
+              <span
+                aria-hidden="true"
+                className="flex shrink-0 items-center gap-1"
+              >
+                {icon}
+                {/* Only when the channel carries its own picture or emoji, in
+                    which case `ChannelIcon` drew that instead of the padlock
+                    and nothing else in the row would say private. */}
+                {!channelIconIsPrivateLock(channel) && (
+                  <Lock
+                    aria-hidden="true"
+                    className="h-3 w-3 shrink-0 text-warning"
+                  />
+                )}
+              </span>
+            </Tooltip>
+          ) : (
+            icon
+          )}
           {watchParty ? (
             <span className="flex min-w-0 flex-1 flex-col">
               <span
@@ -2252,6 +2319,9 @@ function ChannelRow({
           {!watchParty && sessionHint && (
             <ChannelSessionHint startsAt={sessionHint} now={new Date()} />
           )}
+          {channel.isPrivate && (
+            <span className="sr-only">{t("chrome.privateChannel")}</span>
+          )}
           {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
           {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
           <span className="ml-auto flex shrink-0 items-center gap-1">
@@ -2282,11 +2352,6 @@ function ChannelRow({
                 />
                 <span className="sr-only">{t("chrome.connected")}</span>
               </>
-            )}
-            {channel.isPrivate && (
-              <span className="rounded bg-warning/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-warning">
-                {t("chrome.private")}
-              </span>
             )}
             {mentions > 0 && (
               <span

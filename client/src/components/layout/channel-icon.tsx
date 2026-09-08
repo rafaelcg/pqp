@@ -19,6 +19,24 @@ export function isChannelImageUrl(value: string): boolean {
 }
 
 /**
+ * Whether `ChannelIcon` will draw the amber padlock for this channel, rather
+ * than its own image or emoji.
+ *
+ * A private channel with no picture already says "private" with its glyph, and
+ * the sidebar row leans on that instead of spending 50px of a 256px column on
+ * a text pill. A private channel that DOES carry a picture keeps the picture,
+ * so the row has to draw the padlock itself; this is the one question it needs
+ * answered to know which.
+ *
+ * The image-that-fails-to-load case falls back to the padlock inside
+ * `ChannelIcon` and is not modelled here: the failure is only known after a
+ * round trip, and the worst it costs is one redundant padlock beside another.
+ */
+export function channelIconIsPrivateLock(channel: Channel): boolean {
+  return channel.isPrivate === true && !channel.imageUrl;
+}
+
+/**
  * The glyph next to a channel's name — its image, its emoji icon, or one of
  * the defaults (lock / clapperboard / mic / hash) when it has neither. Most channels
  * hit the default path, so that path is drawn deliberately rather than left

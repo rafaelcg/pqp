@@ -1,6 +1,6 @@
 import type { DmSummary, PublicUser } from "@pqp/shared";
 import { Ban, Copy, Phone, Pin, PinOff, Plus, UserRound, Users, X } from "lucide-react";
-import { useRef, type ReactNode } from "react";
+import { useRef, type CSSProperties, type ReactNode } from "react";
 import {
   formatBadgeCount,
   type UnreadState,
@@ -18,6 +18,8 @@ import {
   useChannelNotificationLevel,
 } from "@/hooks/use-notifications";
 import { useTranslation } from "@/lib/i18n";
+import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
+import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
 import { conversationTitle } from "@/lib/conversations";
 import { cn, formatFullTimestamp, formatRecency } from "@/lib/utils";
 
@@ -93,15 +95,34 @@ export function DmList({
   onMobileClose,
 }: DmListProps) {
   const { t } = useTranslation();
+  const {
+    width: sidebarWidth,
+    maxWidth: sidebarMaxWidth,
+    setWidth: setSidebarWidth,
+    commitWidth: commitSidebarWidth,
+  } = useChannelSidebarWidth();
   return (
     <aside
       data-immersive-hide=""
-      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:static md:z-auto md:w-64 md:translate-x-0 ${
+      // `--channel-sidebar-width` rather than an inline `width`: below `md`
+      // this is a drawer pinned to `min(100%-72px,16rem)` and an inline width
+      // would win there too. The variable is only consumed by the `md:` class,
+      // so the drawer keeps the width it has always had.
+      style={
+        { "--channel-sidebar-width": `${sidebarWidth}px` } as CSSProperties
+      }
+      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative md:z-auto md:w-[var(--channel-sidebar-width)] md:translate-x-0 ${
         mobileOpen
           ? "translate-x-0"
           : "-translate-x-[calc(100%+72px)] md:translate-x-0"
       }`}
     >
+      <SidebarResizeHandle
+        width={sidebarWidth}
+        maxWidth={sidebarMaxWidth}
+        onWidthChange={setSidebarWidth}
+        onCommit={commitSidebarWidth}
+      />
       <div className="flex h-14 items-center justify-between gap-2 border-b border-ink-4/60 px-4">
         <p className="truncate font-display text-base font-bold">{t("dm.title")}</p>
         <div className="flex items-center gap-1">
