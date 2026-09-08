@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const CHANNEL = "00000000-0000-4000-8000-0000000000aa";
 const STARTED_AT = 1_700_000_000_000;
+const OTHER_CHANNEL = "00000000-0000-4000-8000-0000000000bb";
 
 const pool = vi.hoisted(() => ({
   rowCount: 1,
@@ -52,6 +53,8 @@ const {
   HlsPlaylistNotFound,
   HlsPlaylistUnavailable,
   resolveHlsPlaylistViewer,
+  HLS_PLAYLIST_CACHE_TTL_MS,
+  resetHlsPlaylistCacheForTests,
 } = await import("./hls-playlist-proxy.js");
 const { mintHlsViewerToken } = await import("./hls-viewer-token.js");
 
@@ -72,7 +75,7 @@ describe("resolveHlsPlaylistViewer", () => {
         channelId: CHANNEL,
         startedAt: STARTED_AT,
       }),
-    ).toEqual({ userId: USER });
+    ).toEqual({ userId: USER, issuedAt: expect.any(Number) });
   });
 
   it("a token for another channel or another session is refused", () => {
@@ -118,7 +121,31 @@ describe("resolveHlsPlaylistViewer", () => {
     ).toBeNull();
   });
 
-  it("the Bearer user wins over any token", () => {
+  /**
+   * PRECEDENCE INVERTED, deliberately. The Bearer header used to win, which
+   * meant hls.js (which sends both) still paid a per-request database access
+   * check every 2 seconds per viewer. The token is the capability now, so a
+   * valid one for THIS caller wins and the request touches no database.
+   */
+  it("a token naming the Bearer caller wins, and carries when it was minted", () => {
+    const token = mintHlsViewerToken({
+      userId: USER,
+      channelId: CHANNEL,
+      startedAt: STARTED_AT,
+    });
+    expect(
+      resolveHlsPlaylistViewer({
+        bearerUserId: USER,
+        token,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      }),
+    ).toEqual({ userId: USER, issuedAt: expect.any(Number) });
+  });
+
+  it("a token naming someone else falls back to the Bearer user, with no capability", () => {
+    // `issuedAt: null` is what tells the route to run the access check: a
+    // header proves who you are, never what you may watch.
     const token = mintHlsViewerToken({
       userId: USER,
       channelId: CHANNEL,
@@ -131,7 +158,18 @@ describe("resolveHlsPlaylistViewer", () => {
         channelId: CHANNEL,
         startedAt: STARTED_AT,
       }),
-    ).toEqual({ userId: "bearer-user" });
+    ).toEqual({ userId: "bearer-user", issuedAt: null });
+  });
+
+  it("a Bearer caller with no token gets no capability either", () => {
+    expect(
+      resolveHlsPlaylistViewer({
+        bearerUserId: "bearer-user",
+        token: null,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      }),
+    ).toEqual({ userId: "bearer-user", issuedAt: null });
   });
 });
 
@@ -139,6 +177,7 @@ describe("buildSignedPlaylist", () => {
   beforeEach(() => {
     disableHls();
     enableHls();
+    resetHlsPlaylistCacheForTests();
     pool.rowCount = 1;
     pool.query.mockClear();
     vi.stubGlobal(
@@ -201,5 +240,123 @@ describe("buildSignedPlaylist", () => {
     await buildSignedPlaylist(CHANNEL, STARTED_AT);
     const [, params] = pool.query.mock.calls[0]!;
     expect(params).toEqual([CHANNEL, `live/${CHANNEL}/${STARTED_AT}`]);
+  });
+});
+
+/**
+ * The playlist render cache. Every viewer refetches this route every 2 s, so
+ * before this the audience cost landed on our own CPU: a Postgres lookup, an
+ * upstream GET from R2 and a signature per segment line, PER VIEWER. The body
+ * is identical for everyone watching one session (it carries no viewer
+ * identity; segments are signed with the bucket's own credentials), so it is
+ * rendered once per session per second instead.
+ *
+ * The property that matters most here is the one that is NOT cached:
+ * permission. The cache key is the session and nothing else, and the route
+ * runs `requireChannelAccess` before ever calling this, so a cached body can
+ * never reach someone who could not have rendered it themselves. The
+ * "BROKEN KEY" test below proves the key carries no viewer identity that
+ * could be spoofed into a hit.
+ */
+describe("playlist render cache", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    disableHls();
+    enableHls();
+    resetHlsPlaylistCacheForTests();
+    pool.rowCount = 1;
+    pool.query.mockClear();
+    fetchMock = vi.fn(async () => new Response(PLAYLIST_BODY, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    disableHls();
+    resetHlsPlaylistCacheForTests();
+    vi.unstubAllGlobals();
+  });
+
+  it("two concurrent viewers of one session cost a single upstream fetch", async () => {
+    const [a, b] = await Promise.all([
+      buildSignedPlaylist(CHANNEL, STARTED_AT),
+      buildSignedPlaylist(CHANNEL, STARTED_AT),
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // Byte-identical: this is why one body may serve both.
+    expect(a).toBe(b);
+    // And the DB lookup was not repeated either.
+    expect(pool.query).toHaveBeenCalledTimes(1);
+  });
+
+  it("a whole room joining at once still costs one fetch", async () => {
+    const bodies = await Promise.all(
+      Array.from({ length: 50 }, () => buildSignedPlaylist(CHANNEL, STARTED_AT)),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(new Set(bodies).size).toBe(1);
+  });
+
+  it("a viewer inside the TTL is served the cached body, one after it is not", async () => {
+    const now = 1_800_000_000_000;
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, now);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Still fresh.
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, now + HLS_PLAYLIST_CACHE_TTL_MS - 1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Past the TTL: rendered again, so the live window keeps moving.
+    await buildSignedPlaylist(CHANNEL, STARTED_AT, now + HLS_PLAYLIST_CACHE_TTL_MS + 1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not serve one session's playlist for another", async () => {
+    await buildSignedPlaylist(CHANNEL, STARTED_AT);
+    await buildSignedPlaylist(CHANNEL, STARTED_AT + 1);
+    await buildSignedPlaylist(OTHER_CHANNEL, STARTED_AT);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not cache a failure: the next viewer retries rather than inheriting a 404", async () => {
+    pool.rowCount = 0;
+    await expect(buildSignedPlaylist(CHANNEL, STARTED_AT)).rejects.toThrow(
+      HlsPlaylistNotFound,
+    );
+    pool.rowCount = 1;
+    await expect(
+      buildSignedPlaylist(CHANNEL, STARTED_AT),
+    ).resolves.toContain("#EXTM3U");
+  });
+
+  it("the cached body still carries segment URLs that work for the viewer who gets it", async () => {
+    process.env.LIVE_HLS_URL_TTL_SECONDS = "120";
+    const first = await buildSignedPlaylist(CHANNEL, STARTED_AT);
+    const second = await buildSignedPlaylist(CHANNEL, STARTED_AT);
+    expect(second).toBe(first);
+    // A cache hit is a complete, playable window, not a stub: same segments,
+    // still absolute, still presigned with the configured expiry.
+    const segment = second.split("\n")[4]!;
+    const url = new URL(segment);
+    expect(url.searchParams.get("X-Amz-Expires")).toBe("120");
+    expect(url.searchParams.get("X-Amz-Signature")).toBeTruthy();
+    expect(segment).toContain(`${STARTED_AT}_00000.ts`);
+  });
+
+  it("BROKEN KEY: the cache key is the session, so it carries nothing a viewer could vary", async () => {
+    // The guard this file exists for. `buildSignedPlaylist` is reachable only
+    // behind `requireChannelAccess`, and it takes no viewer at all, so there
+    // is no argument a caller could pass that turns one person's body into
+    // another person's hit. Asserted structurally: two required parameters,
+    // the channel and the session, and nothing that names a person.
+    // (`Function.length` stops counting at the first default, so the
+    // optional `now` is not included.)
+    expect(buildSignedPlaylist.length).toBe(2);
+    const a = await buildSignedPlaylist(CHANNEL, STARTED_AT);
+    resetHlsPlaylistCacheForTests();
+    const b = await buildSignedPlaylist(CHANNEL, STARTED_AT);
+    // Two independent renders of the same session agree, which is the
+    // premise that makes sharing one body between viewers correct.
+    expect(a).toBe(b);
   });
 });

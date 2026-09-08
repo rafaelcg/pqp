@@ -15,16 +15,33 @@ import type { LiveHlsStream } from "@pqp/shared";
  * user may view the channel on every request, so a ban mid-stream cuts the
  * stream on the next playlist refresh (2 s) rather than at token expiry.
  *
- * TTL is long on purpose: the native player refetches the SAME URL for the
- * whole watch, and cannot be handed a fresh one mid-play. The token does
- * not name objects; the per-request presigned segment URLs the proxy writes
- * are what expire quickly (`LIVE_HLS_URL_TTL_SECONDS`).
+ * TTL, and why it is not 60 seconds. Since the proxy serves a verified token
+ * without a database round trip, the token is a capability, so how long it
+ * lives is a real question. Two different risks, bounded by two different
+ * things:
+ *
+ *  - Someone who LOSES access (banned, kicked, a role losing VIEW) is bounded
+ *    by `hls-revocation.ts`, not by this: the eviction that removes them
+ *    records it, and the proxy refuses their next playlist fetch. Worst case
+ *    is one segment, about 2 seconds, whatever the TTL says.
+ *  - Someone who SHARES their URL is bounded by this TTL, and only by it.
+ *
+ * So the TTL is set as short as it can go without interrupting anybody. It
+ * cannot go to a minute: the native player (iOS Safari, and any browser
+ * without MSE) refetches the SAME URL for the whole watch and cannot be
+ * handed a fresh one without restarting the element, so a one-minute TTL
+ * would re-buffer every viewer on that path once a minute, all party long.
+ * An hour is longer than the sharing window wants and shorter than a party,
+ * and it also bounds how long the revocation set has to remember anything.
+ *
+ * The token names no objects; the presigned segment URLs the proxy writes
+ * expire on their own (`LIVE_HLS_URL_TTL_SECONDS`).
  *
  * The key is derived from `CLERK_SECRET_KEY` (purpose-bound, same reasoning
  * as `voice-resume-token.ts`), so production needs no new secret.
  */
 
-export const HLS_VIEWER_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+export const HLS_VIEWER_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 /** Query parameter name on the proxy URL. */
 export const HLS_VIEWER_TOKEN_PARAM = "t";
@@ -35,6 +52,14 @@ interface ViewerClaims {
   c: string;
   s: number;
   e: number;
+  /**
+   * Issued-at. The revocation set (`hls-revocation.ts`) compares this against
+   * when access was taken away, so a viewer who was banned and then unbanned
+   * is not held out by the old entry: their NEW token postdates it. Older
+   * tokens without this claim fall back to `e - TTL`, which is the same
+   * number for every token this code has ever minted.
+   */
+  i?: number;
 }
 
 function viewerSecret(): string | null {
@@ -72,12 +97,14 @@ export function mintHlsViewerToken(input: {
   if (!secret) {
     return null;
   }
+  const issuedAt = input.now ?? Date.now();
   const claims: ViewerClaims = {
     v: 1,
     u: input.userId,
     c: input.channelId,
     s: input.startedAt,
-    e: (input.now ?? Date.now()) + HLS_VIEWER_TOKEN_TTL_MS,
+    e: issuedAt + HLS_VIEWER_TOKEN_TTL_MS,
+    i: issuedAt,
   };
   const payload = Buffer.from(JSON.stringify(claims), "utf8").toString(
     "base64url",
@@ -86,15 +113,19 @@ export function mintHlsViewerToken(input: {
 }
 
 /**
- * The user id the token was issued to, or null. Bound to the exact channel
- * and session: a token for last night's stream, or another channel's, is
- * not a token at all.
+ * The user id the token was issued to, and when, or null. Bound to the exact
+ * channel and session: a token for last night's stream, or another channel's,
+ * is not a token at all.
+ *
+ * `issuedAt` is what makes this a capability rather than just an identity:
+ * the playlist proxy serves a verified token with NO database round trip, and
+ * asks only whether access was revoked after this instant.
  */
 export function verifyHlsViewerToken(
   token: string | null | undefined,
   expected: { channelId: string; startedAt: number },
   now = Date.now(),
-): { userId: string } | null {
+): { userId: string; issuedAt: number } | null {
   if (!token) {
     return null;
   }
@@ -131,7 +162,13 @@ export function verifyHlsViewerToken(
   ) {
     return null;
   }
-  return { userId: claims.u };
+  return {
+    userId: claims.u,
+    issuedAt:
+      typeof claims.i === "number"
+        ? claims.i
+        : claims.e - HLS_VIEWER_TOKEN_TTL_MS,
+  };
 }
 
 /**

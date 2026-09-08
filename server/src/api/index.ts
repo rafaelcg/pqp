@@ -127,6 +127,7 @@ import {
   HlsPlaylistUnavailable,
   resolveHlsPlaylistViewer,
 } from "../voice/hls-playlist-proxy.js";
+import { isHlsAccessRevoked } from "../voice/hls-revocation.js";
 import {
   HLS_VIEWER_TOKEN_PARAM,
   stampViewerStream,
@@ -1875,8 +1876,22 @@ async function hlsPlaylistResponse(
   channelId: string,
   startedAt: string,
   userId: string,
+  /**
+   * When the caller proved themselves with a `?t=` token, the instant it was
+   * minted. That token was issued only after a real access check, so it IS
+   * the permission and this request asks the database NOTHING. Null means
+   * header-only, which proves identity but not access, so that caller still
+   * pays for the check.
+   */
+  tokenIssuedAt: number | null,
 ): Promise<RawResponse> {
-  await requireChannelAccess(channelId, userId);
+  if (tokenIssuedAt === null) {
+    await requireChannelAccess(channelId, userId);
+  } else if (isHlsAccessRevoked(userId, channelId, tokenIssuedAt)) {
+    // A ban, a kick or a role losing VIEW since the token was minted. A
+    // memory lookup, not a query: this runs on every playlist fetch.
+    throw new NotFound("Channel not found");
+  }
   const parsedStartedAt = Number(startedAt);
   if (!Number.isFinite(parsedStartedAt)) {
     throw new NotFound("No live stream for this channel");
@@ -1893,14 +1908,38 @@ async function hlsPlaylistResponse(
     }
     throw error;
   }
-  res.setHeader("Cache-Control", "no-store");
+  // One second, never more: a playlist older than a segment sends the player
+  // to a live edge that has already moved. `private` plus `Vary` because the
+  // Bearer form of this request is the SAME URL for every viewer and only the
+  // header tells them apart, so a shared cache without both could hand one
+  // viewer a body fetched for another. The real saving is the per-session
+  // render cache in `hls-playlist-proxy.ts`; this only stops an edge or a
+  // browser from holding a stale window for longer than a segment.
+  res.setHeader("Cache-Control", "private, max-age=1");
+  res.setHeader("Vary", "Authorization");
   return new RawResponse(body, "application/vnd.apple.mpegurl");
 }
 
 router.get(
   "/api/voice/hls-playlist/:channelId/:startedAt",
-  async ({ user, res }, { channelId, startedAt }) =>
-    hlsPlaylistResponse(res, channelId!, startedAt!, user.id),
+  async ({ user, res, url }, { channelId, startedAt }) => {
+    // hls.js sends BOTH the header and the token. Preferring the token here
+    // is what takes the common case off the database: without it every
+    // browser viewer still cost an access check every 2 seconds.
+    const viewer = resolveHlsPlaylistViewer({
+      bearerUserId: user.id,
+      token: url.searchParams.get(HLS_VIEWER_TOKEN_PARAM),
+      channelId: channelId!,
+      startedAt: Number(startedAt),
+    });
+    return hlsPlaylistResponse(
+      res,
+      channelId!,
+      startedAt!,
+      viewer?.userId ?? user.id,
+      viewer?.issuedAt ?? null,
+    );
+  },
 );
 
 const HLS_PLAYLIST_PATH = /^\/api\/voice\/hls-playlist\/([^/]{1,64})\/(\d{1,20})$/;
@@ -1919,6 +1958,7 @@ async function serveHlsPlaylistWithToken(
   channelId: string,
   startedAt: string,
   userId: string,
+  tokenIssuedAt: number,
 ): Promise<void> {
   if (!apiLimiter.take(`user:${userId}`)) {
     res.setHeader("Retry-After", String(apiLimiter.retryAfter(`user:${userId}`)));
@@ -1926,7 +1966,13 @@ async function serveHlsPlaylistWithToken(
     return;
   }
   try {
-    const result = await hlsPlaylistResponse(res, channelId, startedAt, userId);
+    const result = await hlsPlaylistResponse(
+      res,
+      channelId,
+      startedAt,
+      userId,
+      tokenIssuedAt,
+    );
     res.writeHead(200, {
       "content-type": result.contentType,
       ...SECURITY_HEADERS,
@@ -6712,6 +6758,7 @@ export async function handleApi(
         hlsPlaylistMatch[1]!,
         hlsPlaylistMatch[2]!,
         viewer.userId,
+        viewer.issuedAt ?? 0,
       );
       return;
     }
