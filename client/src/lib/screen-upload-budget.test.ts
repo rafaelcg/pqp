@@ -84,6 +84,25 @@ describe("the screen upload budget follows the measured uplink", () => {
     expect(nextScreenUploadBudget(5 * M, [1 * M, null])).toBe(3.5 * M);
   });
 
+  it("leaves a 1:1 call alone, however bad its reading", () => {
+    // FOUND IN REVIEW. The header claimed this case was untouched and the
+    // code did not make it true, so a 1:1 call had its ceiling clamped to a
+    // measurement and could then only climb back at 1.3x per tick. One
+    // connection is the browser's own job: it probes continuously and
+    // re-opens the moment the link does, which no 2-second poll can match.
+    const current = 5 * M;
+    expect(nextScreenUploadBudget(current, [1.8 * M])).toBe(current);
+    expect(nextScreenUploadBudget(current, [50_000])).toBe(current);
+    expect(nextScreenUploadBudget(current, [50 * M])).toBe(current);
+    expect(nextScreenUploadBudget(current, [null])).toBe(current);
+  });
+
+  it("starts managing the moment a second viewer makes it a mesh", () => {
+    // The other side of the same line: two connections do have to be divided,
+    // because neither can see the other.
+    expect(nextScreenUploadBudget(5 * M, [1.5 * M, 1.5 * M])).toBe(3 * M);
+  });
+
   it("holds still with nothing to go on", () => {
     const current = 5 * M;
     expect(nextScreenUploadBudget(current, [])).toBe(current);

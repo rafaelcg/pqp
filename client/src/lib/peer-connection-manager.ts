@@ -562,7 +562,24 @@ export function createPeerConnectionManager(
    * budget was a constant.
    */
   async function sampleScreenBudget(): Promise<void> {
-    if (!localScreenStream || peers.size === 0) {
+    if (!localScreenStream) {
+      return;
+    }
+    // A 1:1 call is one connection, which is exactly what the browser's own
+    // congestion control is for; this controller exists to divide a link
+    // between connections that cannot see each other. Skipping the sampling
+    // outright rather than relying on `nextScreenUploadBudget` to decline
+    // also spares a `getStats()` per tick that could never change anything.
+    //
+    // The release matters as much as the skip: a room that was crowded and is
+    // now down to one viewer would otherwise keep whatever ceiling the crowd
+    // needed, on a link that is no longer being asked to carry copies of
+    // anything.
+    if (peers.size < 2) {
+      if (screenBudgetBps !== SCREEN_UPLOAD_BUDGET_BPS) {
+        screenBudgetBps = SCREEN_UPLOAD_BUDGET_BPS;
+        retuneAllScreenSenders();
+      }
       return;
     }
     const samples: UplinkSample[] = await Promise.all(

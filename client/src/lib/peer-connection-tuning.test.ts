@@ -676,6 +676,50 @@ describe("the screen budget follows what the connections measure", () => {
     manager.dispose();
   });
 
+  it("does not touch a 1:1 call's ceiling, whatever the link reports", async () => {
+    // FOUND IN REVIEW, and it is the most common call shape there is. The
+    // budget controller has nothing to coordinate with one connection, and
+    // clamping the ceiling to a measured dip would leave the browser unable
+    // to re-open the flow at its own pace.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    const before = lastParams(screenSenders()[0]!)?.encodings[0]?.maxBitrate;
+
+    uplinkBps = 400_000;
+    await tick();
+    await tick();
+    await tick();
+
+    expect(lastParams(screenSenders()[0]!)?.encodings[0]?.maxBitrate).toBe(before);
+    manager.dispose();
+  });
+
+  it("releases the clamp when a crowded room empties back down to one viewer", async () => {
+    // A ceiling the crowd needed, left on a link that is no longer carrying
+    // copies of anything, would be the same over-correction in reverse.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    uplinkBps = 700_000;
+    await tick();
+    const clamped = lastParams(screenSenders()[0]!)?.encodings[0]?.maxBitrate ?? 0;
+    expect(clamped).toBeLessThan(
+      meshScreenBitrate(2, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+    );
+
+    manager.removePeer("b-remote");
+    await tick();
+
+    const survivor = screenSenders().filter((s) => s.track !== null)[0]!;
+    expect(lastParams(survivor)?.encodings[0]?.maxBitrate).toBe(
+      meshScreenBitrate(1, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+    );
+    manager.dispose();
+  });
+
   it("stops sampling on dispose", async () => {
     const manager = createPeerConnectionManager("z-local", () => {});
     manager.connectToPeer("a-remote");

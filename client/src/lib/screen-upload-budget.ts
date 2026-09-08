@@ -136,7 +136,21 @@ export function nextScreenUploadBudget(
   samples: readonly UplinkSample[],
 ): number {
   const peers = samples.length;
-  if (peers === 0) {
+  // FEWER THAN TWO CONNECTIONS IS NOT THIS CONTROLLER'S BUSINESS, and the
+  // guard is here rather than only at the call site because the invariant is
+  // the reason the module exists. Everything above is built on one premise:
+  // several connections from one machine cannot see each other, so something
+  // above them has to divide the link. A 1:1 call has exactly one, and Chrome's
+  // own congestion control governs one flow with far better information than a
+  // 2-second poll — it probes continuously and re-opens the moment the link
+  // does. Clamping the ceiling to a measurement there subtracts from that: a
+  // transient dip would pin the ceiling low and then let it back only at 1.3x
+  // per tick, so a hiccup that Chrome would have recovered from in a second
+  // takes the ladder several to undo.
+  //
+  // Caught in review, after the module's own header had claimed this case was
+  // untouched and the wiring had never made it true.
+  if (peers < 2) {
     return current;
   }
   const readable = samples.filter(
