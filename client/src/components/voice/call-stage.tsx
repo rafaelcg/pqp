@@ -127,6 +127,7 @@ import {
 } from "@/components/voice/peer-audio-menu";
 import { VoiceQualityMeter } from "@/components/voice/voice-quality-meter";
 import { useVoiceLinkQuality } from "@/hooks/use-voice-link-quality";
+import { useShareUplinkStrain } from "@/hooks/use-share-uplink-strain";
 import type { VoiceLinkQuality } from "@/lib/voice-link-quality";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
 import {
@@ -776,6 +777,12 @@ function ActiveCall({
   const roster = voiceState.occupancy[channelId] ?? [];
   const rosterByPeerId = new Map(roster.map((p) => [p.peerId, p]));
   const meshQuality = useVoiceLinkQuality(voiceState.status !== "idle");
+  // Only while this machine is the one presenting: the reading it acts on
+  // is a *sender* limitation, which no viewer has.
+  const uplinkStrained = useShareUplinkStrain(
+    voiceState.isSharingScreen,
+    videoQuality,
+  );
 
   const speaking = new Set(voiceState.speakingPeerIds);
   const serverMuted = new Set(voiceState.serverMutedPeerIds);
@@ -1655,6 +1662,18 @@ function ActiveCall({
                 {focusedIsLocal && voiceState.isShareCursorVisible && (
                   <span className="ml-1 block text-warning">
                     {t("voice.share.cursorLive", desktopContext())}
+                  </span>
+                )}
+                {/* The answer to "a qualidade tá péssima", said to the one
+                    person who can act on it and only when it is true. Not
+                    `limitedBy` directly: the encoder calls our own maxBitrate
+                    a bandwidth limit, so this would otherwise accuse the
+                    connection of everybody who simply picked 480p. See
+                    `useShareUplinkStrain` for the streak that keeps it off a
+                    share that is merely ramping up. */}
+                {focusedIsLocal && uplinkStrained && (
+                  <span className="ml-1 block text-warning">
+                    {t("voice.share.uplinkStrained")}
                   </span>
                 )}
               </span>

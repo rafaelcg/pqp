@@ -907,6 +907,7 @@
   "voice.share.systemAudioOff": "Som do computador desligado. Uma guia do Chrome ainda manda o som dela.",
   "voice.share.systemAudioLive": "Você está mandando o som do computador. Todo mundo na chamada se ouve de volta.",
   "voice.share.cursorLive": "O mouse vai junto numa tela ou janela. Compartilhe uma guia do Chrome pra ele sumir.",
+  "voice.share.uplinkStrained": "Sua conexão está segurando esta transmissão. Menos gente na chamada ou uma qualidade menor ajuda.",
   "voice.share.cursorLive_desktop": "O mouse vai junto numa tela ou janela. Só uma guia do navegador não leva ele.",
   "voice.share.fullscreenBlocked": "O navegador não abriu a tela cheia.",
   "voice.screenShareUnsupported": "Este navegador não faz compartilhamento de tela.",

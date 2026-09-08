@@ -424,6 +424,7 @@ async function agentMain(role) {
     }
 
     console.log(`[${role}] sampling for ~45s...`);
+    let shot = false;
     for (let i = 0; i < 15; i += 1) {
       await new Promise((r) => setTimeout(r, 3000));
       const snap = await page.evaluate(() => window.pqpVoiceStats.report());
@@ -432,6 +433,27 @@ async function agentMain(role) {
           ? snap.senders.find((s) => s.role === "screen") ?? null
           : snap.receivers.find((r) => r.role === "screen") ?? null;
       appendFileSync(`${coord}${role}-stats.jsonl`, `${JSON.stringify({ sample })}\n`);
+      // Photograph the warning the first tick it is genuinely on screen,
+      // rather than at the end of the run: the reading oscillates, and a
+      // sample that happens to read "limited by none" resets the streak and
+      // takes the line down with it. Two things have to be true at once for
+      // this to capture anything, and both are the point: the strain has to
+      // be real, and the stage chrome has to be awake (it auto-hides after a
+      // few idle seconds, and a headless browser never moves its mouse).
+      if (role === "sharer" && !shot) {
+        await page.mouse.move(640, 300);
+        const warning = page.getByText(/holding this share back/i);
+        if (await warning.isVisible().catch(() => false)) {
+          await page.evaluate(() => {
+            for (const canvas of document.querySelectorAll("canvas")) {
+              if (canvas.style.zIndex === "2147483647") canvas.remove();
+            }
+          });
+          await page.screenshot({ path: `${coord}${role}-screenshot.png` });
+          shot = true;
+          console.log(`[${role}] captured the warning on screen at sample ${i + 1}`);
+        }
+      }
     }
     console.log(`[${role}] done.`);
   } finally {

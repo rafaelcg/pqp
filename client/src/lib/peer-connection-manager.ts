@@ -364,6 +364,20 @@ const SCREEN_MAX_FRAMERATE = 30;
  * per-copy answer is genuinely too small, the answer is the SFU
  * (`transport-policy.ts`), not a number that lies about the link.
  */
+/**
+ * What the user asked for, before the room or the link had a say.
+ *
+ * Exported because the readout has to be able to tell a ceiling the *person*
+ * chose from one the budget controller imposed, and comparing against the
+ * wrong number is how "your connection is struggling" turns into "your
+ * quality setting is the limit". See `describeLimitationAgainst`.
+ */
+export function chosenScreenCeilingBps(
+  quality: VideoQuality = DEFAULT_VIDEO_QUALITY,
+): number {
+  return Math.min(screenBitrateFor(quality), SCREEN_MAX_BITRATE_BPS);
+}
+
 export function meshScreenBitrate(
   peerCount: number,
   quality: VideoQuality = DEFAULT_VIDEO_QUALITY,
