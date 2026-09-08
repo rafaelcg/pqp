@@ -10,16 +10,23 @@ import { playlistLooksLive, type LiveHlsStream } from "@pqp/shared";
 import { isLiveKitConfigured } from "./backends.js";
 import { logEvent } from "../lib/log.js";
 import { getPool } from "../db.js";
-import { buildStorageConfig, type StorageConfig } from "../lib/s3.js";
+import {
+  buildStorageConfig,
+  signRequest,
+  type StorageConfig,
+} from "../lib/s3.js";
 
 /**
  * Live HLS for a watch-party screen share: LiveKit Track Composite egress
  * writes 2 s segments to a dedicated R2 bucket, and the playlist URL rides
  * the existing `/ws` as `voice-stream`.
  *
- * Off unless `LIVE_HLS_ENABLED=true` and the public URL plus a *separate*
- * S3 set (`LIVE_HLS_S3_*`) are present. Attachment `S3_*` is deliberately
- * not reused: that bucket is private.
+ * Off unless `LIVE_HLS_ENABLED=true` and a *separate* S3 set
+ * (`LIVE_HLS_S3_*`) is present. Attachment `S3_*` is deliberately not
+ * reused: that bucket is private. `LIVE_HLS_PUBLIC_BASE_URL` is only needed
+ * when `LIVE_HLS_SIGNED_URLS=false`: in signed mode (the default, and what
+ * production runs) the bucket stays private and everything a viewer or this
+ * process reads goes through presigned URLs, so there is no public base.
  */
 
 const TRACK_FIND_ATTEMPTS = 16;
@@ -248,12 +255,16 @@ function liveHlsStorage(): {
   };
 }
 
-/** Flag plus every secret the egress request needs. Read per call. */
+/**
+ * Flag plus every secret the egress request needs. Read per call. The
+ * public base is part of "configured" only in unsigned mode, where it is the
+ * URL a viewer is handed; signed mode never reads it (see the file header).
+ */
 export function isLiveHlsEnabled(): boolean {
   return (
     truthyEnabled() &&
     isLiveKitConfigured() &&
-    publicBaseUrl() !== null &&
+    (hlsSignedUrlsEnabled() || publicBaseUrl() !== null) &&
     liveHlsStorage() !== null
   );
 }
@@ -496,10 +507,38 @@ async function probeScreenTracks(
   }
 }
 
+/** How long this process's own presigned read of the playlist is valid. */
+const INTERNAL_PLAYLIST_TTL_SECONDS = 60;
+
 /**
- * The raw bucket URL, used internally (readiness probe, the playlist proxy's
- * own fetch) regardless of what a viewer is handed. Never sent to a client
- * directly once `LIVE_HLS_SIGNED_URLS` is on.
+ * The URL THIS PROCESS fetches the live playlist from: the readiness probe
+ * after egress starts, and the playlist proxy's own read. Always a presigned
+ * GET in endpoint form (never the custom domain), so it works against a
+ * fully private bucket and needs no `LIVE_HLS_PUBLIC_BASE_URL`. Production
+ * runs exactly that: signed mode, `pqp-live` private, no public base.
+ */
+export function internalPlaylistUrl(
+  channelId: string,
+  startedAt: number,
+): string {
+  const config = liveHlsStorageConfig();
+  if (!config) {
+    return rawPlaylistUrl(channelId, startedAt);
+  }
+  return signRequest({
+    method: "GET",
+    key: `${hlsObjectPrefix(channelId, startedAt)}.m3u8`,
+    ttlSeconds: INTERNAL_PLAYLIST_TTL_SECONDS,
+    forRead: false,
+    config,
+  }).url;
+}
+
+/**
+ * The raw public bucket URL. Only meaningful with `LIVE_HLS_SIGNED_URLS=false`
+ * and a public base, where it is what a viewer is handed. Nothing internal
+ * reads it any more (`internalPlaylistUrl` does that), so with the default
+ * signed mode this is never called.
  *
  * LiveKit treats filenamePrefix as a file prefix, not a directory. Segments
  * land at live/{channel}/{startedAt}_00000.ts; a reused live.m3u8 keeps the
@@ -610,11 +649,12 @@ async function startRoom(
       videoTrackId: tracks.videoTrackId,
     });
     await recordSessionStarted(channelId, startedAt);
-    // The readiness probe always checks the raw bucket URL, never the
-    // viewer-facing one: a viewer might get the signed proxy path, which
-    // this same process cannot usefully fetch from here before the DB row
-    // and the egress are both in place.
-    const ready = await waitForLivePlaylist(rawPlaylistUrl(channelId, startedAt));
+    // The readiness probe reads the bucket itself (presigned, endpoint
+    // form), never the viewer-facing URL: a viewer may get the signed proxy
+    // path, which this same process cannot usefully fetch from here.
+    const ready = await waitForLivePlaylist(
+      internalPlaylistUrl(channelId, startedAt),
+    );
     logEvent("voice.hlsStarted", {
       channelId,
       egressId: started.egressId,

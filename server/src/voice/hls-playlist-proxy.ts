@@ -5,7 +5,7 @@ import {
   hlsObjectPrefix,
   hlsUrlTtlSeconds,
   liveHlsStorageConfig,
-  rawPlaylistUrl,
+  internalPlaylistUrl,
 } from "./hls-egress.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -82,7 +82,9 @@ export async function buildSignedPlaylist(
       `No live HLS session ${objectPrefix} for channel ${channelId}`,
     );
   }
-  const playlistUrl = rawPlaylistUrl(channelId, startedAt);
+  // A presigned endpoint-form GET: the bucket can be fully private and no
+  // public base is needed (production runs that way).
+  const playlistUrl = internalPlaylistUrl(channelId, startedAt);
 
   let response: Response;
   try {

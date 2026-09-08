@@ -39,7 +39,7 @@ going live (streaming responsibility / no pirated content).
 | `LIVE_HLS_URL_TTL_SECONDS` | `900` | TTL for presigned segment URLs and playlist-proxy access |
 | `LIVE_HLS_SIGNED_URLS` | `true` | Set `false` to hand viewers the raw public bucket URL instead of a signed/proxied one |
 | `LIVE_HLS_DELAY_SECONDS` | `10` | Broadcast delay baked into the player |
-| `LIVE_HLS_PUBLIC_BASE_URL` | none | Public base URL for the HLS bucket |
+| `LIVE_HLS_PUBLIC_BASE_URL` | none | Public base URL for the HLS bucket. Only required with `LIVE_HLS_SIGNED_URLS=false`; signed mode (production) reads the private bucket through presigned URLs and never needs it |
 | `LIVE_HLS_S3_BUCKET` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_ENDPOINT` / `_REGION` / `_FORCE_PATH_STYLE` | none | Separate bucket from attachment `S3_*`, deliberately not reused |
 
 ## Known gaps (as reported by the agents who built these branches)

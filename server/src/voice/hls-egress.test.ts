@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EncodingOptionsPreset } from "livekit-server-sdk";
 import {
   type LiveHlsEgressApi,
+  internalPlaylistUrl,
   isLiveHlsEnabled,
   isLiveHlsEnabledForServer,
   liveHlsConfig,
@@ -72,6 +73,41 @@ describe("live HLS egress", () => {
     });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
+  });
+
+  it("needs no public base in signed mode, and still hands out working viewer URLs", async () => {
+    enableHls();
+    delete process.env.LIVE_HLS_PUBLIC_BASE_URL;
+    // Signed mode is the default: the private bucket is read through
+    // presigned URLs only, which is how production runs.
+    expect(isLiveHlsEnabled()).toBe(true);
+    setLiveHlsTestHooks({
+      egress: {
+        startTrackCompositeEgress: vi.fn(async () => ({ egressId: "EG_1" })),
+        stopEgress: vi.fn(),
+      },
+      findTracks: async () => ({ videoTrackId: "TR_V" }),
+    });
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(stream?.hlsUrl).toBe(
+      `/api/voice/hls-playlist/${CHANNEL}/${stream?.startedAt}`,
+    );
+    // What this process itself reads is a presigned, endpoint-form GET on
+    // the bucket, never the (absent) public base.
+    const internal = new URL(internalPlaylistUrl(CHANNEL, stream!.startedAt));
+    expect(internal.host).toBe("pqp-live-test.s3.example.test");
+    expect(internal.pathname).toBe(`/live/${CHANNEL}/${stream!.startedAt}.m3u8`);
+    expect(internal.searchParams.get("X-Amz-Signature")).toBeTruthy();
+  });
+
+  it("is off without a public base only when LIVE_HLS_SIGNED_URLS=false", () => {
+    enableHls();
+    delete process.env.LIVE_HLS_PUBLIC_BASE_URL;
+    process.env.LIVE_HLS_SIGNED_URLS = "false";
+    expect(isLiveHlsEnabled()).toBe(false);
+    process.env.LIVE_HLS_PUBLIC_BASE_URL = "https://live.example.test";
+    expect(isLiveHlsEnabled()).toBe(true);
+    delete process.env.LIVE_HLS_SIGNED_URLS;
   });
 
   it("falls back to the raw public bucket URL when LIVE_HLS_SIGNED_URLS=false", async () => {
