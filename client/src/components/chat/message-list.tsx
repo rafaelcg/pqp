@@ -34,6 +34,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { useChatDisplay } from "@/hooks/use-chat-display";
 import { RankMarks } from "@/components/user/rank-marks";
 import { StatusDot } from "@/components/user/status-dot";
 import { AttachmentGrid } from "@/components/chat/attachment-grid";
@@ -1688,6 +1689,7 @@ const MessageRow = memo(function MessageRow({
 }: MessageRowProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
+  const compact = useChatDisplay().display.density === "compact";
   const { message, startsGroup, dayLabel } = row;
   const authorInfo = authors.get(message.authorId);
   const mentionsYou = messageMentionsYou(
@@ -2016,7 +2018,7 @@ const MessageRow = memo(function MessageRow({
           onContextMenu={onMenuOpenRow}
           className={cn(
             "group relative flex items-start gap-0 px-5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
-            startsGroup ? "mt-2 pt-1" : "pt-px",
+            startsGroup ? "mt-[var(--chat-group-gap)] pt-1" : "pt-px",
             mentionJoinTop ? "pt-0" : null,
             mentionJoinBottom ? "pb-0" : startsGroup ? "pb-1" : "pb-px",
             mentionsYou && !isFlashing
@@ -2058,7 +2060,7 @@ const MessageRow = memo(function MessageRow({
               </span>
             </button>
           )}
-          {startsGroup ? (
+          {startsGroup && !compact ? (
             <div className="flex w-14 shrink-0 items-start justify-end pr-2">
               <div className="relative h-9 w-9 shrink-0">
                 <AuthorButton
@@ -2087,7 +2089,10 @@ const MessageRow = memo(function MessageRow({
             </div>
           ) : (
             <time
-              className="w-14 shrink-0 pr-2 text-right text-[12px] leading-[22px] whitespace-nowrap tabular-nums text-paper-muted opacity-0 group-hover:opacity-100"
+              className={cn(
+                "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
+                compact ? "opacity-70" : "opacity-0 group-hover:opacity-100",
+              )}
               dateTime={message.createdAt}
               title={formatFullTimestamp(message.createdAt)}
             >
@@ -2112,7 +2117,7 @@ const MessageRow = memo(function MessageRow({
                     tabIndex={controlTabIndex}
                     onOpenProfile={openProfile}
                     className={cn(
-                      "rounded text-[15px] font-bold leading-[22px]",
+                      "rounded text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
                       !roleColor && (isMine ? "text-signal" : "text-paper"),
                     )}
                     style={roleColor ? { color: roleColor } : undefined}
@@ -2139,16 +2144,18 @@ const MessageRow = memo(function MessageRow({
                     Webhook
                   </span>
                 )}
-                <time
-                  className="whitespace-nowrap text-[12px] leading-[22px] text-paper-muted"
-                  dateTime={message.createdAt}
-                  title={formatFullTimestamp(message.createdAt)}
-                >
-                  {formatTime(message.createdAt)}
-                </time>
+                {!compact && (
+                  <time
+                    className="whitespace-nowrap text-[12px] leading-[var(--chat-line-height)] text-paper-muted"
+                    dateTime={message.createdAt}
+                    title={formatFullTimestamp(message.createdAt)}
+                  >
+                    {formatTime(message.createdAt)}
+                  </time>
+                )}
                 {isMessagePinned && (
                   <span
-                    className="inline-flex items-center gap-0.5 text-[12px] leading-[22px] text-signal"
+                    className="inline-flex items-center gap-0.5 text-[12px] leading-[var(--chat-line-height)] text-signal"
                     title={
                       message.pinnedBy
                         ? t("chat.pinnedBy", {
@@ -2190,7 +2197,7 @@ const MessageRow = memo(function MessageRow({
                     onClose={() => onClosePoll?.(message.id)}
                   />
                 ) : message.body ? (
-                  <div className="markdown-body text-[15px] leading-[22px] text-paper/90">
+                  <div className="markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90">
                     <MessageBody
                       body={message.body}
                       currentUsername={currentUsername}
@@ -2217,7 +2224,7 @@ const MessageRow = memo(function MessageRow({
                 {!message.body &&
                   attachments.length === 0 &&
                   message.webhookEmbeds.length === 0 && (
-                    <p className="text-[15px] italic leading-relaxed text-paper-muted">
+                    <p className="text-[length:var(--chat-font-size)] italic leading-relaxed text-paper-muted">
                       {t("chat.attachmentUnavailable")}
                     </p>
                   )}
@@ -2955,7 +2962,7 @@ function EditComposer({
             void submit();
           }
         }}
-        className="w-full resize-none rounded-md border border-ink-4 bg-ink-3 px-2.5 py-1.5 text-[15px] text-paper outline-none focus:border-signal/60"
+        className="w-full resize-none rounded-md border border-ink-4 bg-ink-3 px-2.5 py-1.5 text-[length:var(--chat-font-size)] text-paper outline-none focus:border-signal/60"
       />
       <p className="mt-1 text-[11px] text-paper-muted">
         Enter to save · Escape to cancel

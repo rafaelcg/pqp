@@ -110,6 +110,24 @@
         if (contrast === "more") {
           document.documentElement.dataset.contrast = "more";
         }
+        // Mirrors applyChatDisplay in src/lib/chat-display.ts.
+        const storedDisplay = localStorage.getItem("pqp-chat-display");
+        if (storedDisplay) {
+          const display = JSON.parse(storedDisplay);
+          const size = Math.min(24, Math.max(12, Math.round(display.fontSize)));
+          const gap = Math.min(24, Math.max(0, Math.round(display.groupSpacing)));
+          const style = document.documentElement.style;
+          if (Number.isFinite(size)) {
+            style.setProperty("--chat-font-size", size + "px");
+            style.setProperty("--chat-line-height", Math.round(size * 22 / 15) + "px");
+          }
+          if (Number.isFinite(gap)) {
+            style.setProperty("--chat-group-gap", gap + "px");
+          }
+          if (display.density === "compact") {
+            document.documentElement.dataset.density = "compact";
+          }
+        }
       } catch {
         // Storage or matchMedia blocked, the stylesheet defaults to dark.
       }

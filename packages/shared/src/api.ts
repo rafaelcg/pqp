@@ -107,6 +107,23 @@ export const accentHuePreferenceSchema = z.union([
 ]);
 export type AccentHuePreference = z.infer<typeof accentHuePreferenceSchema>;
 
+/**
+ * How the message list is drawn. Each field is independent and optional so a
+ * patch can carry the one slider that moved.
+ *
+ * `cozy` shows avatars and a header per group; `compact` drops the avatar and
+ * puts a timestamp on every line. `fontSize` is the body size in CSS pixels.
+ * `groupSpacing` is the gap above a new group, in pixels, 0 to 24.
+ */
+export const chatDisplayPreferencesSchema = z.object({
+  density: z.enum(["cozy", "compact"]).optional(),
+  fontSize: z.number().int().min(12).max(24).optional(),
+  groupSpacing: z.number().int().min(0).max(24).optional(),
+});
+export type ChatDisplayPreferences = z.infer<
+  typeof chatDisplayPreferencesSchema
+>;
+
 export const notificationLevelSchema = z.enum(["all", "mentions", "none"]);
 export type NotificationLevel = z.infer<typeof notificationLevelSchema>;
 
@@ -234,6 +251,7 @@ export const userPreferencesSchema = z.object({
   appearance: appearancePreferenceSchema.optional(),
   contrast: contrastPreferenceSchema.optional(),
   accentHue: accentHuePreferenceSchema.optional(),
+  chatDisplay: chatDisplayPreferencesSchema.optional(),
   muteOnJoin: z.boolean().optional(),
   compactPeers: z.boolean().optional(),
   /** Mic gain, where 1 is unity and 2 is the boost ceiling the UI exposes. */
