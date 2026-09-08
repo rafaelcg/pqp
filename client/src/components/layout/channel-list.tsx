@@ -2204,6 +2204,14 @@ function ChannelRow({
             }
           }}
           aria-current={announceCurrent ? "page" : undefined}
+          /* The shortcut is discoverable through the native tooltip rather
+             than inline text: the sidebar is narrow and a label rendered in
+             the row ate the channel name on a real rail. */
+          title={
+            !watchParty && onJoinVoice && !connected
+              ? `${channel.name}: ${t("voice.doubleClickToJoin")}`
+              : undefined
+          }
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           {icon}
@@ -2247,18 +2255,10 @@ function ChannelRow({
           {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
           {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
           <span className="ml-auto flex shrink-0 items-center gap-1">
-            {/* The discoverable cue for the shortcut this row just gained:
-                shown only on hover/focus so an unselected row stays quiet,
-                and never for a watch party, which already spells the same
-                thing out with its own Entrar button. */}
-            {!watchParty && onJoinVoice && !connected && (
-              <span
-                aria-hidden="true"
-                className="hidden shrink-0 truncate text-[9px] font-medium uppercase tracking-wider text-paper-muted opacity-0 transition-opacity duration-150 ease-out group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none sm:block"
-              >
-                {t("voice.doubleClickToJoin")}
-              </span>
-            )}
+            {/* The shortcut is announced through the row's `title` and its
+                accessible name (see the label built above), never as inline
+                text: the sidebar is narrow, and a `shrink-0` label here ate
+                the channel name on a real 320px rail. */}
             {live && (
               /* The pulse is on the dot, never on the text, and only under
                  `motion-safe`: with reduced motion the pill just sits there
