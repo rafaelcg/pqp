@@ -91,3 +91,13 @@ describe("isAutoplayRefusal", () => {
     expect(isAutoplayRefusal(null)).toBe(false);
   });
 });
+
+describe("isOwnHlsPlaylistProxyUrl with the viewer token", () => {
+  it("still matches once the playlist URL carries its own ?t= token", () => {
+    const own = resolveHlsUrl(
+      "/api/voice/hls-playlist/c1/1700000000000?t=viewer-token",
+    );
+    expect(isOwnHlsPlaylistProxyUrl(own)).toBe(true);
+    expect(isOwnHlsPlaylistProxyUrl(`${own}&x=1`)).toBe(true);
+  });
+});

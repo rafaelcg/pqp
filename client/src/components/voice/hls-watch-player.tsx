@@ -330,10 +330,16 @@ export function HlsWatchPlayer({
         // Every segment/media URL hls.js loads is already an absolute,
         // presigned bucket URL (the signed playlist proxy rewrites them
         // that way) -- only the playlist request itself is our own API,
-        // and only that one needs a Bearer header. Attaching it to every
+        // and only that one gets a Bearer header. Attaching it to every
         // request would leak the token to R2. hls.js calls this
         // synchronously per XHR; the token is read from the in-memory
         // Clerk-backed cache `getAuthToken` keeps, not fetched fresh here.
+        //
+        // The header is belt and braces now: the playlist URL carries its
+        // own per-viewer token (`?t=`, see `hls-viewer-token.ts` on the
+        // server) which authorizes the request on its own. That is what
+        // lets the native `<video src>` path below and `useLiveHlsReady`'s
+        // plain `fetch` work, since neither can set a header.
         xhrSetup: (xhr, url) => {
           if (isOwnHlsPlaylistProxyUrl(url) && authToken) {
             xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
