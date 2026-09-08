@@ -495,7 +495,7 @@ These are printed at the end of every `limits` run as well.
 | **Errors the server never logs** | — | The error heartbeat reads stdout. A route that 500s without a `console.error`, or anything that fails in the browser, is invisible to it. It measures what the server says about itself, which is not what users experience. | n/a |
 | **Scheduled workflows still enabled** | — | **GitHub disables scheduled workflows after 60 days with no repository activity.** A repo that goes quiet loses its monitoring silently. | Monthly: confirm `Monitor (uptime)` has run recently in the Actions tab |
 | **GitHub Actions minutes** | Unlimited | rafaelcg/pqp is a **public** repository and Actions minutes are free and unmetered for public repos. There is no quota to hit, so no alert was built — one would never fire. This becomes real only if the repo is ever made private. | Never, unless the repo goes private |
-| **LiveKit usage (minutes and egress)** | 5 TB/month of transfer on the Vultr plan | **Closed 2026-09-07.** Grafana Alloy on the box exports vnstat's monthly egress and alerts at 60% and 80% of the allowance, alongside CPU, memory, disk, load, room and participant counts, and container state. See "The SFU box" below. | automated |
+| **LiveKit usage (minutes and egress)** | 6 TB/month of transfer on the Vultr plan | **Closed 2026-09-07.** Grafana Alloy on the box exports vnstat's monthly egress and alerts at 60% and 80% of the allowance, alongside CPU, memory, disk, load, room and participant counts, and container state. See "The SFU box" below. | automated |
 
 ---
 
@@ -682,8 +682,8 @@ the synthetic HTTP check on `sfu.pqp.gg` (id 6261), which answers "the port is
 open" and nothing else. It could not see a saturated CPU, a full disk, a
 container that exited, or the number that actually costs money: **transfer**.
 
-The plan includes **5 TB of transfer a month**. Organic use measures about
-4 GB a day, so a normal month is roughly 2% of it. One large watch party can
+The plan includes **6 TB of transfer a month** on `vhp-4c-8gb-amd`. Organic
+use measures about 4 GB a day, so a normal month is roughly 2% of it. One large watch party can
 cost several hundred GB, and a load test costs that in minutes. Overage is
 about a cent per GB, so this is not a cliff, it is a bill: the point of the
 alerts is that nobody has to open a dashboard and do arithmetic to find out
@@ -731,7 +731,7 @@ list, so the port is local only. Nothing had to be restarted to turn this on.
 **pqp SFU box**, folder `pqp`, uid `pqp-sfu-box`:
 https://smallkestrel237.grafana.net/d/pqp-sfu-box
 
-Allowance used and egress against the 5 TB line, network throughput, CPU,
+Allowance used and egress against the plan allowance, network throughput, CPU,
 memory, load, disk, LiveKit rooms and participants, packet loss, and the two
 containers' up/down.
 
@@ -742,12 +742,12 @@ contact point `rafael-email`.
 
 | Rule | Fires when | For |
 |---|---|---|
-| egress past 60% of the monthly allowance | 3.0 TB out in the last 30 days | 15m |
-| egress past 80% of the monthly allowance | 4.0 TB out in the last 30 days | 15m |
-| CPU above 85% | 2 vCPU, so this is a room the box cannot serve | 10m |
+| egress past 60% of the monthly allowance | 3.6 TB out in the last 30 days | 15m |
+| egress past 80% of the monthly allowance | 4.8 TB out in the last 30 days | 15m |
+| CPU above 85% | averaged across the 4 vCPU, so this is a load the box cannot serve | 10m |
 | less than 10% memory available | LiveKit gets OOM-killed rather than degrading | 10m |
 | root filesystem above 85% | usually journald or docker images | 15m |
-| load average above 4 | `node_load5` on 2 vCPU: things are queueing | 10m |
+| load average above 6 | `node_load5` on 4 vCPU: past full, so work is queueing. Rescale this with the plan, it is the one rule that counts cores | 10m |
 | **no metrics for 10m** | the box is down, or Alloy on it is. `noDataState = Alerting`, deliberately: silence is the alert | 10m |
 | a docker container is not running | per container, by name | 3m |
 | a docker container restarted | `changes(pqp_sfu_container_started_seconds[10m]) > 0`; catches a policy restart *and* a `docker compose up` recreation, which resets `RestartCount` to 0 | 0s |
@@ -773,9 +773,16 @@ The allowance is a metric, not a threshold, so the alerts stay at 60% and 80%
 whatever the plan is:
 
 1. Edit `PQP_EGRESS_ALLOWANCE_BYTES` in
-   `tools/sfu-monitoring/pqp-box-metrics.py` (default `5_000_000_000_000`,
-   5 TB read as 10^12 bytes, the smaller of the two readings of "TB", so the
+   `tools/sfu-monitoring/pqp-box-metrics.py` (default `6_000_000_000_000`,
+   6 TB read as 10^12 bytes, the smaller of the two readings of "TB", so the
    percentage errs high).
+
+   Resizing the instance changes the included transfer and nothing notices on
+   its own, so this is part of a resize, not an afterthought. Read the true
+   figure from `GET /v2/plans` (`bandwidth`, the full month in GB) rather than
+   the pricing page. `allowed_bandwidth` on the instance is the prorated amount
+   accrued so far this billing period, which is what an overage is measured
+   against and is the stricter number early in a month.
 2. Re-run the installer (below). The next minute's scrape carries the new
    `pqp_sfu_egress_allowance_bytes` and every panel and rule follows.
 

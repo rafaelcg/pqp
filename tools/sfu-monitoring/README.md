@@ -44,3 +44,22 @@ https://smallkestrel237.grafana.net/d/pqp-sfu-box
 
 `PQP_EGRESS_ALLOWANCE_BYTES` in `pqp-box-metrics.py`, then reinstall. The
 alerts are percentages of whatever that gauge says, so they need no edit.
+
+**Resizing the box changes the allowance and nothing here notices.** The plan
+includes the transfer, so moving between plans silently invalidates this
+number, in the unsafe direction if the new plan is smaller. Read the real
+figure from the Vultr API rather than the pricing page:
+
+```
+curl -s -H "Authorization: Bearer $VULTR_API_KEY" \
+  https://api.vultr.com/v2/plans?per_page=500 | jq '.plans[] | select(.id=="vhp-4c-8gb-amd")'
+```
+
+`bandwidth` there is the full month in GB. `allowed_bandwidth` on the instance
+itself is the prorated amount accrued so far this billing period, which is what
+Vultr actually measures an overage against, so it is the lower and stricter of
+the two early in a month.
+
+The dashboard's load-average thresholds also assume a core count. They are set
+for the 4 vCPU plan: orange at 4 means fully busy, red at 6 means work is
+queueing. Halve them on a 2-core box.
