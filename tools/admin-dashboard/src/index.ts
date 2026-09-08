@@ -17,8 +17,11 @@
  *     token and only the `days` and `day` parameters forwarded; `/health`
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
- *  3. Serve. `/` is the static page from the assets binding. Anything else is
- *     a 404, so the Worker cannot be used as an open proxy or an asset lister.
+ *  3. Serve. `/` is the static page from the assets binding, and
+ *     `/insights.js` the one script it loads (the three verdicts on "agora",
+ *     kept in their own file so they can be unit tested). Both sit behind the
+ *     gate. Anything else is a 404 from an allowlist, not a passthrough, so
+ *     the Worker cannot be used as an open proxy or an asset lister.
  *
  * Every response carries `Cache-Control: no-store` and `Referrer-Policy:
  * no-referrer`; `/robots.txt` disallows everything and is the one path served
@@ -331,10 +334,20 @@ export default {
       return proxyJson(`${origin}/status.json`, {});
     }
 
-    if (path === "/" || path === "/index.html") {
-      // The page itself, from the assets binding. The Authorization header is
-      // stripped first: the asset store has no use for it.
-      const assetRequest = new Request(new URL("/", url).toString(), {
+    // The page and the one script it loads. An allowlist rather than a
+    // passthrough to the assets binding: this Worker must not be usable as an
+    // asset lister or an open proxy, so a path that is not one of these two is
+    // a 404 whatever happens to be in the bucket.
+    const ASSETS: Record<string, string> = {
+      "/": "/",
+      "/index.html": "/",
+      "/insights.js": "/insights.js",
+    };
+    const asset = ASSETS[path];
+    if (asset) {
+      // The Authorization header is stripped first: the asset store has no
+      // use for it.
+      const assetRequest = new Request(new URL(asset, url).toString(), {
         method: request.method,
       });
       return withBaseHeaders(await env.ASSETS.fetch(assetRequest));

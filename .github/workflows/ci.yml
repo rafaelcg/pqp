@@ -104,6 +104,16 @@ jobs:
       - name: Test support bot
         run: node --test tools/support-bot/test/*.test.js
 
+      # `tools/admin-dashboard` is outside the workspace as well. Almost all of
+      # it is markup and rendering, which CI cannot judge — except the three
+      # verdicts on the "agora" screen, which are sentences an operator acts on
+      # ("storage está a 3x o normal dele") and cannot check by looking at
+      # them. A wrong figure elsewhere on that page is visible; a wrong verdict
+      # is believed. So the arithmetic behind them lives in one file with no
+      # DOM and no fetch, and this runs it.
+      - name: Test dashboard insights
+        run: node --test tools/admin-dashboard/test/*.test.js
+
       # Colour-contrast floors and the count of colour literals living outside
       # the token layer. Both are ratchets: they only move the right way.
       - name: Benchmark theme tokens
