@@ -12,7 +12,9 @@
  *     nothing else; the read of that counter still needs the password.
  *  2. Proxy. `/metrics` is `${API_ORIGIN}/api/admin/metrics` called with the
  *     machine token, then merged with the Android distribution block this
- *     Worker owns (button clicks in KV, GitHub `download_count`); `/health`
+ *     Worker owns (button clicks in KV, GitHub `download_count`);
+ *     `/occupancy` is `${API_ORIGIN}/api/admin/voice-occupancy` with the same
+ *     token and only the `days` and `day` parameters forwarded; `/health`
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
  *  3. Serve. `/` is the static page from the assets binding. Anything else is
@@ -300,6 +302,26 @@ export default {
         { Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}` },
         env,
       );
+    }
+
+    // The voice-occupancy history behind the voz tab. Same token, same
+    // timeout, same headers as /metrics; a separate route because it is a
+    // separate read on a much slower cadence, and because the page asks for a
+    // single day at minute resolution when somebody drills into one. Only
+    // `days` and `day` are forwarded: the upstream ignores anything else and
+    // an open query passthrough is a proxy nobody asked for.
+    if (path === "/occupancy") {
+      if (!origin || !env.ADMIN_METRICS_TOKEN) {
+        return json(503, { error: "occupancy not configured" });
+      }
+      const upstream = new URL(`${origin}/api/admin/voice-occupancy`);
+      const days = url.searchParams.get("days");
+      const day = url.searchParams.get("day");
+      if (days) upstream.searchParams.set("days", days);
+      if (day) upstream.searchParams.set("day", day);
+      return proxyJson(upstream.toString(), {
+        Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}`,
+      });
     }
 
     if (path === "/health") {

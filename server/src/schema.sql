@@ -3782,3 +3782,47 @@ CREATE TABLE IF NOT EXISTS channel_slowmode_sends (
 -- The sweep's claim query: everything older than the longest possible wait.
 CREATE INDEX IF NOT EXISTS idx_channel_slowmode_sends_stale
   ON channel_slowmode_sends (last_sent_at);
+-- Voice occupancy history: how many people were in calls, minute by minute,
+-- split by the media path the room was running on.
+--
+-- WHY A TABLE AT ALL. `GET /api/admin/metrics` answers "right now", its
+-- counters are per process, and every deploy resets them. So the one question
+-- an operator actually asks after a spike ("how many people were on a call at
+-- the peak last Saturday, and did the SFU carry them?") had no answer
+-- anywhere. This is that answer, written by one sampler in the cold-job
+-- process (`services/voice-occupancy.ts`).
+--
+-- `bucket_at` is the sample minute, truncated, and it is the PRIMARY KEY on
+-- purpose: two processes running the sampler during a worker rollout write
+-- the same minute, and the upsert keeps the larger reading instead of two
+-- rows. Idempotence is the double-write guard; there is no lock.
+CREATE TABLE IF NOT EXISTS voice_occupancy_samples (
+  bucket_at            TIMESTAMPTZ PRIMARY KEY,
+  participants         INTEGER NOT NULL,
+  mesh_participants    INTEGER NOT NULL,
+  livekit_participants INTEGER NOT NULL,
+  rooms                INTEGER NOT NULL,
+  mesh_rooms           INTEGER NOT NULL,
+  livekit_rooms        INTEGER NOT NULL,
+  largest_room         INTEGER NOT NULL
+);
+
+-- One row per reporting day, the peak of each series over that day.
+--
+-- Kept forever (365 rows a year), because it is what the daily chart reads and
+-- it is the half that must outlive the minute rows. Maintained incrementally
+-- by the sampler (a GREATEST upsert per tick, no scan) and reconciled from the
+-- minute rows daily, so a process that was down for an hour heals itself.
+--
+-- The peaks are independent maxima: `peak_participants` is not necessarily
+-- `peak_mesh + peak_livekit`, because the busiest minute for one path is
+-- rarely the busiest minute overall. The dashboard says so.
+CREATE TABLE IF NOT EXISTS voice_occupancy_daily (
+  day               DATE PRIMARY KEY,
+  peak_participants INTEGER NOT NULL,
+  peak_mesh         INTEGER NOT NULL,
+  peak_livekit      INTEGER NOT NULL,
+  peak_rooms        INTEGER NOT NULL,
+  peak_largest_room INTEGER NOT NULL,
+  samples           INTEGER NOT NULL DEFAULT 0
+);

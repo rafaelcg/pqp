@@ -591,6 +591,41 @@
   .chart-note { margin: 10px 0 0; }
   .chart-note .hint { margin: 8px 0 0; font-size: 11px; color: var(--faint); }
 
+  /* ---------- voice occupancy over time ---------- */
+  .occ-head {
+    display: flex; flex-wrap: wrap; align-items: flex-start;
+    justify-content: space-between; gap: 10px 16px; margin-bottom: 12px;
+  }
+  .occ-head .occ-titles { min-width: 0; }
+  .occ-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .occ-controls label { font-size: 11.5px; color: var(--faint); }
+  .occ-select {
+    appearance: none;
+    font: inherit;
+    font-size: 12px;
+    padding: 6px 11px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--muted);
+    cursor: pointer;
+    max-width: 210px;
+  }
+  .occ-select:hover { background: var(--surface-2); color: var(--text); }
+  .occ-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* The invisible full-height column that carries a point's tooltip and, on
+     the 30-day view, the click that drills into that day. */
+  .occ-slot { cursor: pointer; }
+  .occ-slot:hover { fill: var(--hover); }
+  .occ-slot.flat { cursor: default; }
+  .occ-slot.flat:hover { fill: var(--hover); }
+  .occ-warn { color: var(--warning); font-weight: 600; }
+
+  @media (max-width: 620px) {
+    .occ-head { flex-direction: column; align-items: stretch; }
+    .occ-select { max-width: none; flex: 1 1 auto; }
+  }
+
   /* ---------- call ratings ---------- */
   .rating-head {
     display: flex; flex-wrap: wrap; align-items: flex-start;
@@ -1586,6 +1621,45 @@
     </div>
   </section>
 
+  <!-- ============ VOICE OCCUPANCY OVER TIME ============
+       Everything else on this page is "agora" or "últimas 24 h". This is the
+       one block with a memory: a sampler on the api writes one row a minute,
+       rolls it up into a daily peak, and this reads it back. Separate endpoint
+       (/occupancy), separate cadence, so a chart nobody is looking at never
+       slows down the 30 s poll that the incident numbers ride on. -->
+  <section id="secOccupancy" aria-label="ocupação de voz ao longo do tempo">
+    <div class="sec-head">
+      <h2>quantas pessoas em chamada</h2>
+      <span class="rule"></span>
+      <span class="note" id="occNote">carregando</span>
+    </div>
+    <div class="grid g-1">
+      <div class="card pad">
+        <div class="occ-head">
+          <div class="occ-titles">
+            <p class="subtle-title" id="occTitle" style="margin-bottom:4px">pico diário de pessoas em chamada</p>
+            <p class="m-note" id="occSub" style="font-size:11.5px;color:var(--faint);margin:0">carregando</p>
+          </div>
+          <div class="occ-controls">
+            <label for="occDay">ver um dia</label>
+            <select class="occ-select" id="occDay" aria-label="ver um dia minuto a minuto" disabled>
+              <option value="">escolha um dia</option>
+            </select>
+            <button type="button" class="refresh-btn" id="occBack" hidden>voltar aos 30 dias</button>
+          </div>
+        </div>
+        <div class="chart-scroll" id="occChart"><!-- injected --></div>
+        <div class="legend" id="occLegend"><!-- injected --></div>
+        <p class="m-note" id="occCaveat" style="font-size:11.5px;color:var(--muted);margin:12px 0 0">
+          carregando
+        </p>
+        <p class="m-note" id="occFoot" style="font-size:11.5px;color:var(--faint);margin:8px 0 0">
+          carregando
+        </p>
+      </div>
+    </div>
+  </section>
+
   </div>
 
   <div class="pane" id="pane-moderacao" role="tabpanel" aria-labelledby="tab-moderacao" hidden>
@@ -1881,6 +1955,28 @@
       return "";
     }
   }
+  /* The occupancy endpoint sends a reporting day as a bare `YYYY-MM-DD`, and
+     that string must never go through `new Date()`: it parses as UTC midnight,
+     which in São Paulo is nine in the evening of the day before, so every
+     label would be off by one. Split the digits instead. */
+  var WEEKDAY_PT = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+  function dayParts(day) {
+    return /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day == null ? "" : day));
+  }
+  /** "07/09" */
+  function fmtDayShort(day) {
+    var m = dayParts(day);
+    return m ? m[3] + "/" + m[2] : String(day == null ? "" : day);
+  }
+  /** "sáb 06/09". The weekday is why a Saturday spike reads as a Saturday. */
+  function fmtDayNamed(day) {
+    var m = dayParts(day);
+    if (!m) return String(day == null ? "" : day);
+    var d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+    var wd = WEEKDAY_PT[d.getUTCDay()];
+    return (wd ? wd + " " : "") + m[3] + "/" + m[2];
+  }
+
   /** "há 2 h", for note timestamps. Empty string for anything unparseable. */
   function fmtRelative(iso) {
     var t = Date.parse(iso);
@@ -2000,6 +2096,161 @@
     });
     peak.textContent = "pico " + fmt(max) + "/h · última barra é a hora em curso";
     svg.appendChild(peak);
+
+    return svg;
+  }
+
+  /**
+   * Two or more series on one pair of axes: grouped columns (the default) or
+   * overlaid lines (`mode: "lines"`).
+   *
+   * NEVER STACKED, and that is the whole reason this is not `barChart` with an
+   * extra argument. On the 30-day view the three series are independent maxima
+   * over the same day: the busiest minute for the sfu is almost never the
+   * busiest minute overall, so stacking them would draw a total nobody ever
+   * measured. On the minute view they are instantaneous, and stacking would
+   * count the same people twice, once in the total and once in their path.
+   *
+   * Same 720-wide viewBox, same padding and the same grid as `barChart` above,
+   * so the two line up when they share a column.
+   *
+   * `series`: [{ label, color, values }]
+   * `opts`:
+   *   mode      "bars" (default) | "lines"
+   *   label     aria-label for the whole chart
+   *   caption   the small line above the plot, where barChart writes its peak
+   *   ticks     [[index, text], ...] for the x axis
+   *   hitTitle  fn(from, to) -> tooltip for the invisible full-height column
+   *   onPick    fn(from) -> click on that column. Bars view only.
+   */
+  function seriesChart(series, opts) {
+    opts = opts || {};
+    var W = 720, H = 240, padL = 34, padR = 10, padT = 22, padB = 26;
+    var lines = opts.mode === "lines";
+    var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, role: "img" });
+    svg.setAttribute("aria-label", opts.label || "gráfico de séries");
+
+    var n = 0, max = 0;
+    series.forEach(function (s) {
+      n = Math.max(n, s.values.length);
+      for (var i = 0; i < s.values.length; i++) max = Math.max(max, s.values[i] || 0);
+    });
+    if (!n) return svg;
+
+    var scaleMax = max || 1;
+    var innerW = W - padL - padR, innerH = H - padT - padB;
+    var baseY = padT + innerH;
+    var slot = innerW / n;
+    function yOf(v) { return baseY - ((v || 0) / scaleMax) * innerH; }
+    function xMid(i) { return padL + slot * i + slot / 2; }
+
+    // grid: zero, half, peak. The peak line is labelled, same as barChart.
+    [0, 0.5, 1].forEach(function (frac) {
+      var gy = baseY - innerH * frac;
+      svg.appendChild(svgEl("line", {
+        x1: padL, x2: W - padR, y1: gy, y2: gy,
+        stroke: "var(--border)", "stroke-width": "1",
+        "stroke-dasharray": frac === 0 ? "0" : "3 5",
+        opacity: frac === 0 ? "0.9" : "0.55"
+      }));
+      var lbl = svgEl("text", {
+        x: padL - 7, y: gy + 3.5, "text-anchor": "end", fill: "var(--faint)",
+        "font-size": "10", "font-family": "Instrument Sans, sans-serif"
+      });
+      lbl.textContent = frac === 0 ? "0" : fmt(Math.round(scaleMax * frac));
+      svg.appendChild(lbl);
+    });
+
+    if (lines) {
+      /* Straight segments between samples, not the spline `smoothPath` draws.
+         A curve through two adjacent minutes invents a reading between them,
+         and on a count of people in a call it can arc above a peak that never
+         happened or dip below zero on a 0, 0, 41 run. Same reason barChart
+         stopped being an area chart. */
+      series.forEach(function (s) {
+        var d = "", peakI = 0, peakV = -1;
+        for (var i = 0; i < s.values.length; i++) {
+          var v = s.values[i] || 0;
+          d += (i ? " L " : "M ") + xMid(i).toFixed(1) + " " + yOf(v).toFixed(1);
+          if (v > peakV) { peakV = v; peakI = i; }
+        }
+        svg.appendChild(svgEl("path", {
+          d: d, fill: "none", stroke: s.color, "stroke-width": "1.8",
+          "stroke-linecap": "round", "stroke-linejoin": "round", opacity: "0.95"
+        }));
+        if (peakV > 0) {
+          svg.appendChild(svgEl("circle", {
+            cx: xMid(peakI).toFixed(1), cy: yOf(peakV).toFixed(1), r: "2.6", fill: s.color
+          }));
+        }
+      });
+    } else {
+      var groupW = slot * 0.74;
+      var bw = Math.max(2, groupW / series.length - 1);
+      series.forEach(function (s, si) {
+        for (var i = 0; i < n; i++) {
+          var v = s.values[i] || 0;
+          var h = (v / scaleMax) * innerH;
+          if (v > 0) h = Math.max(h, 2);
+          var x = padL + slot * i + (slot - groupW) / 2 + si * (groupW / series.length);
+          svg.appendChild(svgEl("rect", {
+            x: x.toFixed(1), width: bw.toFixed(1),
+            y: (baseY - h).toFixed(1), height: h.toFixed(1),
+            rx: Math.min(2, bw / 2).toFixed(1),
+            fill: s.color, opacity: "0.92"
+          }));
+        }
+      });
+    }
+
+    /* One invisible full-height column per point (or per bucket of points, so
+       a 1440-sample day still has columns wide enough to hover). It carries
+       the tooltip for every series at once, which is the reading anybody
+       actually wants, and on the 30-day view it is also the click target.
+       Appended last so it sits above the marks. */
+    var hits = lines ? Math.min(n, 48) : n;
+    function pick(from) {
+      return function () { opts.onPick(from); };
+    }
+    for (var k = 0; k < hits; k++) {
+      var a = Math.floor((k * n) / hits);
+      var b = Math.floor(((k + 1) * n) / hits) - 1;
+      if (b < a) b = a;
+      var hx = padL + (a / n) * innerW;
+      var hw = Math.max(((b + 1 - a) / n) * innerW, 1);
+      var hit = svgEl("rect", {
+        x: hx.toFixed(1), y: padT, width: hw.toFixed(1), height: innerH,
+        fill: "transparent", "class": opts.onPick ? "occ-slot" : "occ-slot flat"
+      });
+      if (opts.hitTitle) {
+        var t = svgEl("title", {});
+        t.textContent = opts.hitTitle(a, b);
+        hit.appendChild(t);
+      }
+      if (opts.onPick) hit.addEventListener("click", pick(a));
+      svg.appendChild(hit);
+    }
+
+    (opts.ticks || []).forEach(function (pair) {
+      var i = pair[0];
+      if (i < 0 || i >= n) return;
+      var t = svgEl("text", {
+        x: xMid(i).toFixed(1), y: (baseY + 15).toFixed(1),
+        "text-anchor": i === 0 ? "start" : i === n - 1 ? "end" : "middle",
+        fill: "var(--faint)", "font-size": "10", "font-family": "Instrument Sans, sans-serif"
+      });
+      t.textContent = pair[1];
+      svg.appendChild(t);
+    });
+
+    if (opts.caption) {
+      var cap = svgEl("text", {
+        x: padL, y: padT - 7, fill: "var(--muted)",
+        "font-size": "10.5", "font-family": "Instrument Sans, sans-serif"
+      });
+      cap.textContent = opts.caption;
+      svg.appendChild(cap);
+    }
 
     return svg;
   }
@@ -3003,6 +3254,328 @@
     return true;
   }
 
+  /* ---------------- voice occupancy over time ----------------
+     The only block on this page with a history. It reads /occupancy on this
+     worker, which is the api's /api/admin/voice-occupancy: a sampler there
+     writes one row a minute and rolls the day up into peaks.
+
+     CADENCE. Deliberately not the 30 s /metrics poll. The first read happens
+     the first time the voz tab is shown (a dashboard parked on visão geral
+     never asks for it at all), and after that it re-reads at most every five
+     minutes, and only while the voz pane is the visible one. A daily peak
+     cannot change more than once a minute and is mostly settled history; a
+     30 s poll of it would be traffic with nothing on the other end of it. The
+     "atualizar" button in the header forces a read past that window. The
+     request is fired and forgotten from `refresh`, never awaited: a slow
+     occupancy read must not hold up the numbers an incident is read from. */
+  var OCC_DAYS = 30;
+  var OCC_REFRESH_MS = 300000;
+  /** How old lastSampleAt may get before the sampler is called stopped. */
+  var OCC_STALE_MS = 5 * 60 * 1000;
+  var OCC_SERIES = [
+    { key: "participants", label: "total", color: "var(--accent)" },
+    { key: "livekit", label: "servidor de mídia", color: "var(--series-2)" },
+    { key: "mesh", label: "ponto a ponto", color: "var(--warning)" }
+  ];
+
+  var occ = {
+    mode: "days",     // "days" | "day"
+    day: null,        // the day being drilled into
+    report: null,     // the 30-day report
+    loadedAt: 0,
+    inflight: false,
+    asked: false      // has the voz tab ever been shown
+  };
+
+  function occSeries(points) {
+    return OCC_SERIES.map(function (s) {
+      return {
+        label: s.label,
+        color: s.color,
+        values: points.map(function (p) { return Number(p[s.key]) || 0; })
+      };
+    });
+  }
+
+  function occLegend() {
+    var box = $("occLegend");
+    if (!box) return;
+    box.innerHTML = OCC_SERIES.map(function (s) {
+      return '<span><i class="swatch" style="background:' + s.color + '"></i>' + esc(s.label) + '</span>';
+    }).join("");
+  }
+
+  /** The tooltip on one column: every series at once, plus the room counts. */
+  function occTitleFor(points, when, a, b) {
+    var head = when;
+    var out = [];
+    OCC_SERIES.forEach(function (s) {
+      var top = 0;
+      for (var i = a; i <= b && i < points.length; i++) top = Math.max(top, Number(points[i][s.key]) || 0);
+      out.push(s.label + " " + fmt(top));
+    });
+    var rooms = 0, largest = 0;
+    for (var j = a; j <= b && j < points.length; j++) {
+      rooms = Math.max(rooms, Number(points[j].rooms) || 0);
+      largest = Math.max(largest, Number(points[j].largestRoom) || 0);
+    }
+    return head + "\n" + out.join(" · ") + "\nsalas " + fmt(rooms) + " · maior sala " + fmt(largest);
+  }
+
+  function occEmpty(report) {
+    var box = $("occChart");
+    if (!box) return;
+    var every = report && report.sampleIntervalSeconds
+      ? Math.round(report.sampleIntervalSeconds) + " s"
+      : "60 s";
+    box.innerHTML =
+      '<div class="emptybox">' +
+        '<b>sem dados ainda</b>' +
+        'o amostrador grava uma linha a cada ' + esc(every) + ' com quantas pessoas estavam em chamada; ' +
+        'esta janela ainda não tem nenhuma.' +
+      '</div>';
+    var lg = $("occLegend");
+    if (lg) lg.innerHTML = "";
+  }
+
+  /** lastSampleAt is the proof the sampler is alive. Without it a flat chart
+      and a dead sampler look exactly the same, which is the failure this
+      dashboard exists to avoid. */
+  function occFooter(report) {
+    var box = $("occFoot");
+    if (!box) return;
+    var at = report && report.lastSampleAt ? Date.parse(report.lastSampleAt) : NaN;
+    var retention = report && report.minuteRetentionDays ? fmt(report.minuteRetentionDays) : "21";
+    if (!isFinite(at)) {
+      box.innerHTML = '<b class="occ-warn">amostrador parado</b> · a api nunca gravou uma amostra. ' +
+        'o que estiver no gráfico é histórico antigo, não o agora.';
+      return;
+    }
+    if (Date.now() - at > OCC_STALE_MS) {
+      box.innerHTML = '<b class="occ-warn">amostrador parado</b> · a última amostra é de ' +
+        esc(fmtRelative(report.lastSampleAt)) + ' e o intervalo é de um minuto. ' +
+        'nada aqui está sendo atualizado; uma linha reta agora não quer dizer que ninguém está em chamada.';
+      return;
+    }
+    box.textContent = "última amostra " + fmtRelative(report.lastSampleAt) +
+      " · uma linha por minuto · minuto a minuto por " + retention +
+      " dias, os picos diários ficam para sempre";
+  }
+
+  function occFillDaySelect(points) {
+    var sel = $("occDay");
+    if (!sel) return;
+    var out = '<option value="">escolha um dia</option>';
+    for (var i = points.length - 1; i >= 0; i--) {
+      var p = points[i];
+      out += '<option value="' + esc(p.at) + '">' + esc(fmtDayNamed(p.at)) +
+        " · pico " + fmt(Number(p.participants) || 0) + '</option>';
+    }
+    sel.innerHTML = out;
+    sel.disabled = points.length === 0;
+    sel.value = occ.mode === "day" && occ.day ? occ.day : "";
+  }
+
+  function occRenderDays(report) {
+    var points = report.points || [];
+    setText("occTitle", "pico diário de pessoas em chamada" +
+      (points.length ? " · " + fmt(points.length) + " dias" : ""));
+    var back = $("occBack");
+    if (back) back.hidden = true;
+    var sel = $("occDay");
+    if (sel) sel.value = "";
+
+    setText("occCaveat",
+      "as três séries são picos independentes do mesmo dia e não somam: o minuto mais cheio do total " +
+      "quase nunca é o minuto mais cheio de cada caminho.");
+    occFooter(report);
+
+    if (!points.length) {
+      setText("occSub", "nenhum dia com amostra na janela");
+      occEmpty(report);
+      return;
+    }
+
+    var peak = 0, peakDay = "";
+    points.forEach(function (p) {
+      var v = Number(p.participants) || 0;
+      if (v > peak) { peak = v; peakDay = p.at; }
+    });
+    setText("occSub", peak > 0
+      ? "maior pico da janela: " + fmt(peak) + " pessoas em " + fmtDayNamed(peakDay) +
+        " · clique numa coluna para abrir o dia minuto a minuto"
+      : "ninguém entrou em chamada em nenhum dia desta janela");
+    occLegend();
+
+    // A tick a week, counted back from the newest day, plus the oldest one.
+    // The oldest is skipped when the walk already landed next to it, or the
+    // two labels overlap into an unreadable smear.
+    var n = points.length;
+    var ticks = [];
+    for (var i = n - 1; i >= 0; i -= 7) ticks.push([i, fmtDayShort(points[i].at)]);
+    if (ticks.length && ticks[ticks.length - 1][0] > 2) ticks.push([0, fmtDayShort(points[0].at)]);
+
+    var box = $("occChart");
+    if (!box) return;
+    box.innerHTML = "";
+    box.appendChild(seriesChart(occSeries(points), {
+      mode: "bars",
+      label: "pico diário de pessoas em chamada, por caminho de mídia",
+      caption: "pico de " + fmt(peak) + " · picos por dia, fuso são paulo",
+      ticks: ticks,
+      hitTitle: function (a, b) { return occTitleFor(points, fmtDayNamed(points[a].at), a, b); },
+      onPick: function (a) { occLoadDay(points[a].at); }
+    }));
+  }
+
+  function occRenderDay(report, day) {
+    var points = report.points || [];
+    setText("occTitle", "minuto a minuto · " + fmtDayNamed(day));
+    var back = $("occBack");
+    if (back) back.hidden = false;
+    var sel = $("occDay");
+    if (sel) sel.value = day;
+
+    setText("occCaveat",
+      "aqui cada ponto é uma amostra do minuto, não um pico: neste modo o total é a soma dos dois caminhos.");
+    occFooter(report);
+
+    if (!points.length) {
+      setText("occSub", "nenhuma amostra neste dia");
+      occEmpty(report);
+      return;
+    }
+
+    var peak = 0, peakAt = "";
+    points.forEach(function (p) {
+      var v = Number(p.participants) || 0;
+      if (v > peak) { peak = v; peakAt = p.at; }
+    });
+    setText("occSub", peak > 0
+      ? "pico do dia: " + fmt(peak) + " pessoas às " + fmtTime(peakAt) + " · " +
+        fmt(points.length) + " amostras"
+      : "ninguém entrou em chamada neste dia · " + fmt(points.length) + " amostras");
+    occLegend();
+
+    var n = points.length;
+    var ticks = [];
+    [0, 0.25, 0.5, 0.75, 1].forEach(function (frac) {
+      var i = Math.min(n - 1, Math.round(frac * (n - 1)));
+      ticks.push([i, fmtTime(points[i].at)]);
+    });
+
+    var box = $("occChart");
+    if (!box) return;
+    box.innerHTML = "";
+    box.appendChild(seriesChart(occSeries(points), {
+      mode: "lines",
+      label: "pessoas em chamada minuto a minuto em " + fmtDayNamed(day),
+      caption: "pico de " + fmt(peak) + " · amostras de um minuto, fuso são paulo",
+      ticks: ticks,
+      hitTitle: function (a, b) {
+        var when = a === b
+          ? fmtTime(points[a].at)
+          : fmtTime(points[a].at) + " a " + fmtTime(points[b].at) + " · maior amostra";
+        return occTitleFor(points, when, a, b);
+      }
+    }));
+  }
+
+  function occSkeleton() {
+    fillSkel("occChart", skel("skel-chart"));
+  }
+
+  /* An api older than this page answers 404 here, which is the same answer it
+     gives a route that does not exist. That is a missing block, not a broken
+     one, and it gets the same treatment as every other section: hide, say so,
+     come back by itself on a later read. */
+  function occFail(e) {
+    var reason = (e && e.message) ? e.message : "erro desconhecido";
+    if (reason.indexOf("404") !== -1) {
+      setText("occNote", "esta api ainda não tem o histórico");
+      sectionUnavailable("secOccupancy", "o histórico de ocupação de voz");
+      return;
+    }
+    setText("occNote", "a leitura falhou · " + reason);
+  }
+
+  function occLoadDays(force) {
+    if (occ.inflight) return;
+    if (!force && occ.report && (Date.now() - occ.loadedAt) < OCC_REFRESH_MS) return;
+    occ.inflight = true;
+    setText("occNote", occ.report ? "atualizando" : "carregando");
+    if (!occ.report) occSkeleton();
+    fetchJson("/occupancy?days=" + OCC_DAYS).then(function (r) {
+      occ.inflight = false;
+      if (!r || !Array.isArray(r.points)) { occFail(new Error("payload inesperado")); return; }
+      sectionRestore("secOccupancy");
+      occ.report = r;
+      occ.loadedAt = Date.now();
+      setText("occNote", "pico por dia · fuso são paulo");
+      occFillDaySelect(r.points);
+      // A background refresh must not yank a drill-in out from under a reader.
+      if (occ.mode === "days") occRenderDays(r);
+    }).catch(function (e) {
+      occ.inflight = false;
+      occFail(e);
+    });
+  }
+
+  function occLoadDay(day) {
+    if (!day) return;
+    occ.mode = "day";
+    occ.day = day;
+    setText("occNote", "lendo " + fmtDayNamed(day));
+    occSkeleton();
+    fetchJson("/occupancy?day=" + encodeURIComponent(day)).then(function (r) {
+      // The reader may have gone back, or picked another day, while this ran.
+      if (occ.mode !== "day" || occ.day !== day) return;
+      if (!r || !Array.isArray(r.points)) { occFail(new Error("payload inesperado")); return; }
+      sectionRestore("secOccupancy");
+      setText("occNote", "amostras de um minuto · fuso são paulo");
+      occRenderDay(r, day);
+    }).catch(occFail);
+  }
+
+  function occBackToDays() {
+    occ.mode = "days";
+    occ.day = null;
+    if (occ.report) {
+      setText("occNote", "pico por dia · fuso são paulo");
+      occRenderDays(occ.report);
+    } else {
+      occLoadDays(true);
+    }
+  }
+
+  /** Called on every /metrics tick. Cheap, and usually does nothing. */
+  function occTick(force) {
+    var pane = $("pane-voz");
+    if (!pane || pane.hidden) return;
+    if (occ.mode === "day" && !force) return;
+    if (force && occ.mode === "day") { occLoadDay(occ.day); return; }
+    occLoadDays(!!force);
+  }
+
+  /** First show of the voz tab is the first read. */
+  function occOnVozShown() {
+    if (occ.asked) { occTick(false); return; }
+    occ.asked = true;
+    occLoadDays(true);
+  }
+
+  (function wireOccupancy() {
+    var sel = $("occDay");
+    if (sel) {
+      sel.addEventListener("change", function () {
+        if (sel.value) occLoadDay(sel.value);
+        else occBackToDays();
+      });
+    }
+    var back = $("occBack");
+    if (back) back.addEventListener("click", occBackToDays);
+  })();
+
   /* ---------------- render: user detail ---------------- */
   function renderUserDetail(d) {
     if (!d.userDetail) return sectionUnavailable("secUserDetail", "o perfil da base de usuários");
@@ -3398,6 +3971,9 @@
       }
       if (pane) pane.hidden = !on;
     });
+    // The occupancy history is the one block that is not in the /metrics
+    // payload, so it is read the first time somebody actually opens this tab.
+    if (name === "voz") occOnVozShown();
     if (!opts || !opts.silent) {
       try {
         if (window.history && history.replaceState) {
@@ -3482,7 +4058,7 @@
     }
     fillSkel("healthGrid", health);
 
-    ["chartUsers", "chartMsgs", "chartSignups"].forEach(function (id) {
+    ["chartUsers", "chartMsgs", "chartSignups", "occChart"].forEach(function (id) {
       fillSkel(id, skel("skel-chart"));
     });
     ["ratingDist", "connDist", "adoptionDist", "commCatDist", "uptimeDist", "ratingTransport"].forEach(function (id) {
@@ -3795,6 +4371,9 @@
 
   function refresh() {
     var lastReason = "";
+    // Fired, never awaited, and never part of the promise below: a slow
+    // occupancy read must not delay the numbers an incident is read from.
+    occTick(false);
     var metricsReq = fetchJson("/metrics").then(function (d) {
       if (!d || typeof d !== "object" || !d.users) throw new Error("payload inesperado");
       applyMetrics(d);
@@ -3839,7 +4418,7 @@
   if (typeof fetch === "function") {
     setText("refreshEvery", "atualiza a cada " + (REFRESH_MS / 1000) + " s · fuso são paulo (brt)");
     if (refreshBtn) {
-      refreshBtn.addEventListener("click", function () { refreshOnce(); });
+      refreshBtn.addEventListener("click", function () { occTick(true); refreshOnce(); });
     }
     refreshOnce();
     setInterval(function () {

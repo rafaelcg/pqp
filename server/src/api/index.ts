@@ -166,6 +166,7 @@ import {
   notifyVoiceModeration,
   setVoiceUserServerMuted,
   refreshVoiceIdentity,
+  describeChannelVoiceTransport,
 } from "../ws/voice.js";
 import { verifyVoiceResumeToken } from "../ws/voice-resume-token.js";
 // --- voice moderation ---
@@ -440,6 +441,12 @@ import {
   acquisitionReport,
   recordAcquisition,
 } from "../services/acquisition.js";
+import {
+  ADMIN_VOICE_OCCUPANCY_PATH,
+  clampOccupancyDays,
+  parseOccupancyDay,
+  voiceOccupancyReport,
+} from "../services/voice-occupancy.js";
 import {
   ADMIN_METRICS_PATH,
   getAdminMetrics,
@@ -1652,6 +1659,38 @@ router.get("/api/admin/acquisition", async ({ url, user }) => {
     throw new NotFound("Not found");
   }
   return acquisitionReport(clampLimit(url.searchParams.get("days"), 30, 90));
+});
+
+/**
+ * The two shapes of the occupancy history, from one query string.
+ *
+ * `?day=YYYY-MM-DD` wins over `?days=`: asking for one day and a range at the
+ * same time is a mistake, and the narrower request is the one somebody typed
+ * on purpose. A malformed `day` is dropped rather than 400'd, so a bookmarked
+ * link with a stale parameter falls back to the default range instead of an
+ * error page on a dashboard.
+ */
+export function occupancyQuery(params: URLSearchParams): {
+  days: number;
+  day: string | null;
+} {
+  return {
+    days: clampOccupancyDays(params.get("days")),
+    day: parseOccupancyDay(params.get("day")),
+  };
+}
+
+/**
+ * Daily peak occupancy, split by media path. The dashboard's chart.
+ *
+ * Same two ways in as `/api/admin/metrics`: an instance moderator's session
+ * here, and the machine token in `handleApi` ahead of Clerk resolution.
+ */
+router.get(ADMIN_VOICE_OCCUPANCY_PATH, async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return voiceOccupancyReport(occupancyQuery(url.searchParams));
 });
 
 /**
@@ -3746,6 +3785,29 @@ router.post(
       changes: [{ key: "name", old: null, new: channel.name }],
     });
     return created({ channel: mapChannel(channel) });
+  },
+);
+
+/**
+ * What this voice channel is set to, and what it is actually doing.
+ *
+ * MANAGE_CHANNELS, because the only reader is the channel settings sheet and
+ * that sheet already needs it: this adds no surface a member could not
+ * already see. One call when the sheet opens, never polled.
+ */
+router.get(
+  "/api/channels/:channelId/voice-transport",
+  async ({ user }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+    );
+    if (channel.type !== "voice") {
+      throw new NotFound("Not found");
+    }
+    return describeChannelVoiceTransport(channel);
   },
 );
 
@@ -6775,14 +6837,27 @@ export async function handleApi(
     }
   }
 
-  // The operator dashboard's machine token, for exactly one GET and nothing
+  // The operator dashboard's machine token, for exactly two GETs and nothing
   // else. Checked before Clerk resolution because the caller (a Cloudflare
   // Worker) has no session to present; a header that does not match falls
   // through to the normal resolution, so a moderator's JWT still works and an
   // unauthenticated probe still ends in the same 404 as a non-moderator.
+  //
+  // The second one is the voice occupancy history. It is on the same token
+  // deliberately: it is the same reader, the same dashboard and the same
+  // sensitivity (aggregate counts, no id, no name), and a second secret to
+  // rotate would be a second secret to forget.
   const isAdminMetricsRequest =
     req.method === "GET" && pathname === ADMIN_METRICS_PATH;
-  if (isAdminMetricsRequest && isAdminMetricsTokenValid(req.headers.authorization)) {
+  const isAdminOccupancyRequest =
+    req.method === "GET" && pathname === ADMIN_VOICE_OCCUPANCY_PATH;
+  const isAdminMachineRequest = isAdminMetricsRequest || isAdminOccupancyRequest;
+  if (isAdminMachineRequest && isAdminMetricsTokenValid(req.headers.authorization)) {
+    if (isAdminOccupancyRequest) {
+      const query = new URL(req.url ?? "/", "http://localhost").searchParams;
+      sendJson(res, 200, await voiceOccupancyReport(occupancyQuery(query)), req);
+      return;
+    }
     sendJson(res, 200, await getAdminMetrics(), req);
     return;
   }
@@ -6800,7 +6875,7 @@ export async function handleApi(
     // The metrics route answers 404 to everybody it refuses, whether that is a
     // wrong token, no token, or a signed-in non-moderator. A 401 here would
     // tell a probe that the route exists and only the credential was wrong.
-    if (isAdminMetricsRequest) {
+    if (isAdminMachineRequest) {
       sendError(res, 404, "Not found", req);
     } else {
       sendError(res, 401, "Unauthorized", req);

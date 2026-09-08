@@ -480,6 +480,36 @@ export async function listVoiceRoomOccupancy(): Promise<
   }));
 }
 
+/**
+ * Every occupied room in the cluster with the transport it is pinned to.
+ *
+ * The occupancy sampler's cluster-wide read (`services/voice-occupancy.ts`).
+ * `listVoiceRoomOccupancy` above cannot answer this: it groups `voice_peers`
+ * alone, and the media path lives on the room row. One row per occupied room,
+ * so the caller does the arithmetic and the same aggregation is shared with
+ * the single-process fallback.
+ */
+export async function listVoiceRoomsByTransport(): Promise<
+  { voiceChannelId: string; transport: VoiceRoomTransport; participants: number }[]
+> {
+  const result = await getPool().query<{
+    channel_id: string;
+    transport: VoiceRoomTransport;
+    participants: string;
+  }>(
+    `SELECT r.channel_id, r.transport, COUNT(p.peer_id)::text AS participants
+       FROM voice_rooms r
+       JOIN voice_peers p ON p.channel_id = r.channel_id
+      GROUP BY r.channel_id, r.transport
+      ORDER BY COUNT(p.peer_id) DESC, r.channel_id`,
+  );
+  return result.rows.map((row) => ({
+    voiceChannelId: row.channel_id,
+    transport: row.transport,
+    participants: Number(row.participants),
+  }));
+}
+
 // --- rosters ----------------------------------------------------------------
 //
 // What `broadcastRoster` and `sendAllVoiceRosters` read with the flag on.

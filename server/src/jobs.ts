@@ -42,6 +42,11 @@ import {
   deliverDueOutgoingWebhooks,
   pruneDeliveredOutgoingWebhooks,
 } from "./services/outgoing-webhooks.js";
+import {
+  OCCUPANCY_SAMPLE_INTERVAL_MS,
+  recordVoiceOccupancySample,
+  rollUpAndPruneVoiceOccupancy,
+} from "./services/voice-occupancy.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 import { sweepHlsSessions } from "./voice/hls-cleanup.js";
 
@@ -197,6 +202,20 @@ export function startColdJobs(): ColdJobs {
       sendDueChannelSessionReminders,
     ),
     every(HLS_SESSION_SWEEP_INTERVAL_MS, "hls-sessions", sweepHlsSessions),
+    // Voice occupancy: the one job here that reads live state rather than
+    // rows. It is here rather than next to the WS heartbeat because with
+    // `VOICE_REGISTRY=postgres` the truth is in `voice_peers`, which the
+    // worker can read as well as the API can, better in fact, since it sees
+    // the whole cluster instead of one machine's map. With the registry off it
+    // falls back to the local map, which is exact in the single process that
+    // both serves traffic and runs these jobs, and refuses to invent zeros in
+    // a dedicated worker. See services/voice-occupancy.ts.
+    every(
+      OCCUPANCY_SAMPLE_INTERVAL_MS,
+      "voice-occupancy",
+      recordVoiceOccupancySample,
+    ),
+    every(DAILY_MS, "voice-occupancy", rollUpAndPruneVoiceOccupancy),
   ];
 
   void sweepAttachments();

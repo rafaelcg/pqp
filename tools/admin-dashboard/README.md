@@ -30,7 +30,7 @@ between them.
 | **usuários** | signups per day over 14 days, who is actually active (24h and 7d), the returning-writer share, accepted friendships and open friend requests, what people filled in (handle / avatar / banner / game account / age check), plus first-touch acquisition and game connections |
 | **canais** | text-vs-voice composition, the eight busiest text channels of the last 24h, and the shape of the instance: direct and group conversations, private channels, channels that have never received a message |
 | **comunidades** | the directory: listed, suspended, addressed, by category, and the communities themselves. Off by default, and it says so (see below) |
-| **voz e chamadas** | **voz / sfu** (the media server, see below), the rooms open *right now* with who is sharing a screen, the voice summary against the mesh limit, and the full call-quality distribution with notes |
+| **voz e chamadas** | **voz / sfu** (the media server, see below), the rooms open *right now* with who is sharing a screen, the voice summary against the mesh limit, the full call-quality distribution with notes, and **quantas pessoas em chamada**, the one chart on this page with a memory (see below) |
 | **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the feedback queue with the last eight entries. The tab carries a count badge when anything is open |
 | **infra** | **capacity right now** (open WebSockets and the Postgres pool, see below), then the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
 
@@ -111,6 +111,41 @@ The peak queue is observed at checkout (there is no event for *joining* the pool
 queue), so it can sit slightly below the true instantaneous peak and can never
 exceed it. Both peaks reset on deploy and at São Paulo midnight, and the card
 says which by naming the time it has been counting from.
+
+### The occupancy chart is the only thing here with a history
+
+Everything else on this page is "agora" or "last 24 h", and the voice peak in
+`/metrics` is a counter this process keeps in memory that every deploy resets.
+So the evening after a spike there was nothing left to look at. **quantas
+pessoas em chamada** is the persistence: a sampler on the API writes one row a
+minute with how many people were in calls and which media path carried them,
+rolls each reporting day up into peaks, and this card reads it back.
+
+Three series, drawn as grouped columns and **never stacked**: `total`,
+`servidor de mídia` (the LiveKit SFU) and `ponto a ponto` (mesh).
+
+**On the 30-day view the three numbers do not add up, and the card says so.**
+They are three independent maxima over the same day: the busiest minute for the
+SFU is almost never the busiest minute overall, so `mesh + livekit` is not
+`participants` and a stacked chart would draw a total nobody ever measured. The
+daily rollup also has no per-path room split, so the room counts are only ever
+reported for the day as a whole.
+
+Clicking a column (or picking from the **ver um dia** select, which is the
+keyboard way in) re-reads that one day at minute resolution and swaps the card
+for three lines, with **voltar aos 30 dias** to come back. Minute points are
+instantaneous samples rather than peaks, so on that view the total *is* the sum
+of the two paths, and the note under the chart changes to say it.
+
+Retention is asymmetric on purpose: **minute rows are kept 21 days**, which is
+long enough to look back at the last few weekends, and the **daily peaks are
+kept indefinitely** (365 rows a year).
+
+The footer line is the part that matters when something is wrong. It renders
+`lastSampleAt` as a relative time, and when that is null or older than five
+minutes it says **amostrador parado** instead. A dead sampler and a quiet night
+draw the same flat line, and this dashboard's whole rule is that working and
+silently-not-working must not look identical.
 
 ### How often it reads, and how it says the reading is old
 
@@ -216,6 +251,27 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
   attachments (total and last 24h), invites created in 24h plus cumulative
   invite uses, and push subscriptions by platform (`web` / `apns`)
 
+Live, from `GET https://api.pqp.gg/api/admin/voice-occupancy` (proxied as
+`/occupancy`, same machine token, same 8 s timeout):
+
+- **voice occupancy over time**, which is the one historical block on this
+  page. `?days=30` gives one point per reporting day, each the **peak** of that
+  day; `?day=YYYY-MM-DD` gives one point per minute of that day, **as sampled**.
+  Every point carries `participants` / `mesh` / `livekit`, plus `rooms` and
+  `largestRoom`. On daily points the three participant numbers are independent
+  maxima and do not sum, and `meshRooms` / `livekitRooms` are always 0 (the
+  rollup has no per-path room split), so the card does not draw them
+- `lastSampleAt` rides along as proof the sampler is running. Null or older
+  than five minutes and the card says the sampler looks stopped rather than
+  drawing a flat line that reads as an empty night
+- Read on a slower cadence than everything else: the first time the **voz** tab
+  is shown, then at most every five minutes and only while that tab is the
+  visible one. **atualizar** in the header forces it. It is fired and never
+  awaited, so a slow occupancy read cannot delay the numbers an incident is
+  read from
+- Server side: `server/src/services/voice-occupancy.ts`, retention 21 days at
+  minute resolution and forever for the daily peaks
+
 Live, from this Worker (merged onto `/metrics`, never stored on the API):
 
 - **Android APK button clicks**: `POST /apk-click` from the hosted `/android`
@@ -253,7 +309,7 @@ The repo is open source and a `workers.dev` hostname is guessable. The page is
 aggregate counts and holds no id, handle or email, but it is not *only* counts:
 the "most active" tables carry the **names of private servers and channels**,
 and the call-rating notes and feedback entries are **free text people wrote**.
-All of that is more than the public status page is ever allowed to say. So the Worker gates the page, `/metrics` and `/health` behind HTTP Basic Auth, compared in constant time, and refuses to
+All of that is more than the public status page is ever allowed to say. So the Worker gates the page, `/metrics`, `/occupancy` and `/health` behind HTTP Basic Auth, compared in constant time, and refuses to
 serve anything at all (503) while the password is unset. The one public path is
 `POST /apk-click`: it increments a counter and cannot read one. Every response is
 `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag:
@@ -274,7 +330,7 @@ Nothing secret lives in this directory, in `wrangler.jsonc`, or in the HTML.
 |---|---|---|---|
 | Worker | `ADMIN_DASH_PASSWORD` | secret | Basic Auth password. Unset: the Worker serves nothing. |
 | Worker | `ADMIN_DASH_USER` | var (in `wrangler.jsonc`) | Basic Auth username, default `operador`. |
-| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`. Never reaches the page. |
+| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics` and `/occupancy`. Never reaches the page. |
 | Worker | `API_ORIGIN` | var (in `wrangler.jsonc`) | `https://api.pqp.gg` |
 | Worker | `APK_CLICKS` | KV | Click counter for `POST /apk-click`. Binding in `wrangler.jsonc`. |
 | Worker | `GITHUB_REPO` | var | `rafaelcg/pqp` — release looked up for the APK download count. |
@@ -314,13 +370,14 @@ incident, which is the only time it has to be good.
    half-dozen figures an operator actually opens during an outage, above the
    tab bar) would end the tab hunt. Everything is in one payload already, so
    this is layout, not data.
-2. **Nothing on this page has any history.** Every figure is "now" or "last
-   24 h", so an operator cannot tell a pool queue that has been climbing for
-   ten minutes from one that appeared this second, which is exactly the
-   question during the 2026-09-05 Postgres event. The page polls every 30 s
-   and could keep its own in-memory ring of the last hour of `runtime` and
-   `sfu` readings and draw a sparkline under each, with no API change and no
-   storage. It resets on reload, which is honest and still enough.
+2. **Only voice has any history.** The occupancy card above is the one block
+   with a memory; every other figure is "now" or "last 24 h", so an operator
+   cannot tell a pool queue that has been climbing for ten minutes from one
+   that appeared this second, which is exactly the question during the
+   2026-09-05 Postgres event. The page polls every 30 s and could keep its own
+   in-memory ring of the last hour of `runtime` and `sfu` readings and draw a
+   sparkline under each, with no API change and no storage. It resets on
+   reload, which is honest and still enough.
 3. **No alerting anywhere.** Somebody has to be looking at the page. A red
    pill could at least become the tab title and the favicon (`(!) pqp admin`),
    so a dashboard left open in a background tab is worth something.
@@ -362,6 +419,7 @@ Test the API side directly, with the token:
 
 ```bash
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" https://api.pqp.gg/api/admin/metrics | jq .
+curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/voice-occupancy?days=30" | jq .
 # without it: 404
 ```
 
