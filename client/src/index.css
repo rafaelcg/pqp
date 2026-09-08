@@ -20,9 +20,16 @@
   --color-border: oklch(0.3 0.018 250);
   --color-border-strong: oklch(0.38 0.02 250);
 
+  /*
+   * TEXT LADDER, loudest first, on Apple's naming: primary, secondary,
+   * tertiary. The pair this replaced was `subtle` (11.1:1) and `muted`
+   * (7.8:1), which read backwards — `subtle` was the LOUDER of the two.
+   * Both names survive in the alias block below, pointing here, so no call
+   * site outside `ui/` had to move.
+   */
   --color-text: oklch(0.93 0.015 95);
-  --color-text-muted: oklch(0.72 0.02 95);
-  --color-text-subtle: oklch(0.82 0.015 95);
+  --color-text-secondary: oklch(0.82 0.015 95);
+  --color-text-tertiary: oklch(0.72 0.02 95);
 
   --color-accent: oklch(0.88 0.19 125);
   --color-accent-hover: oklch(0.75 0.14 125);
@@ -34,12 +41,44 @@
   --color-warning: oklch(0.8 0.14 85);
   --color-success: oklch(0.72 0.14 150);
 
+  /*
+   * SOFT SURFACES. A tinted fill for a badge, a toast, a banner or the danger
+   * button, with the foreground that belongs on it. `bg-danger/20
+   * text-danger` was improvised in three places and passed nothing: an alpha
+   * wash over an unknown backdrop has no measurable ratio, so nobody could
+   * say whether the label was readable. Each on/soft pair is a real colour
+   * and clears 4.5:1 in every theme, and the bench measures it.
+   *
+   * `--color-danger-soft-hover` exists because the danger button is the one
+   * soft surface a pointer lands on. The other three are not interactive; add
+   * a hover only when something needs one.
+   */
+  --color-accent-soft: oklch(0.32 0.06 125);
+  --color-on-accent-soft: oklch(0.9 0.16 125);
+  --color-danger-soft: oklch(0.3 0.07 25);
+  --color-on-danger-soft: oklch(0.82 0.12 25);
+  --color-danger-soft-hover: oklch(0.36 0.08 25);
+  --color-warning-soft: oklch(0.3 0.06 85);
+  --color-on-warning-soft: oklch(0.86 0.12 85);
+  --color-success-soft: oklch(0.3 0.06 150);
+  --color-on-success-soft: oklch(0.84 0.13 150);
+
   /* Code sits BELOW the message list in dark and would be the page itself in
      light, so it is a role rather than an alias for a surface. */
   --color-code-bg: oklch(0.16 0.012 250);
   --color-code-text: oklch(0.88 0.19 125);
 
   --color-focus-ring: oklch(0.88 0.19 125 / 0.6);
+  /*
+   * The band painted between a control's edge and its focus ring, so the two
+   * cannot fuse into one thick border. It is PAINTED, not a gap, so it has to
+   * name a surface: the panel, which is what a field, a row control or a
+   * button sits on nearly everywhere. It follows `--color-surface-1` in every
+   * theme rather than being restated in each block, so a retint cannot leave
+   * it behind. A control on a different backdrop overrides the one class
+   * (`focus-visible:ring-offset-surface-0`) rather than the token.
+   */
+  --color-ring-offset: var(--color-surface-1);
   --color-selection: oklch(0.88 0.19 125 / 0.35);
   --color-indicator: oklch(0.93 0.015 95);
 
@@ -53,12 +92,15 @@
   --color-ink-3: var(--color-surface-2);
   --color-ink-4: var(--color-border);
   --color-paper: var(--color-text);
-  --color-paper-muted: var(--color-text-muted);
+  --color-paper-muted: var(--color-text-tertiary);
   --color-signal: var(--color-accent);
   --color-signal-dim: var(--color-accent-hover);
   --color-background: var(--color-surface-0);
   --color-foreground: var(--color-text);
-  --color-muted: var(--color-text-muted);
+  --color-muted: var(--color-text-tertiary);
+  /* Renamed 2026-09-08, kept so the ~200 call sites outside ui/ still work. */
+  --color-text-muted: var(--color-text-tertiary);
+  --color-text-subtle: var(--color-text-secondary);
   --color-panel: var(--color-surface-1);
   --color-panel-hover: var(--color-surface-2);
   --color-channel: var(--color-surface-1);
@@ -109,8 +151,122 @@
 :root {
   color-scheme: dark;
 
+  /*
+   * SHAPE. Radius by role, not by size, for the same reason the colours are
+   * roles: a card and a button can share a value today and stop sharing it
+   * tomorrow without either class name becoming a lie.
+   *
+   * The names deliberately avoid `--radius-sm`, `--radius-md` and
+   * `--radius-lg`. Tailwind emits those itself and `rounded-md` reads them, so
+   * redefining one here would silently reshape every `rounded-md` in the app.
+   * Consume these as `rounded-[var(--radius-control)]` instead.
+   */
+  --radius-tick: 0.1875rem;
+  --radius-control: 0.375rem;
+  --radius-card: 0.5rem;
+  --radius-panel: 1rem;
+  --radius-pill: 999px;
+
+  /*
+   * ELEVATION. Three levels, lowest first. Level 1 lifts a resting card off
+   * the page, level 2 is anything that floats over the app (menu, tooltip,
+   * popover), level 3 is a modal.
+   *
+   * `--shadow-popover` is kept as a name because component files across the app
+   * already spell it, and now points at level 2 — so a theme sets the level once
+   * and every consumer follows.
+   */
+  --shadow-1: 0 1px 2px oklch(0.1 0.02 250 / 0.35);
+  --shadow-2: 0 12px 40px oklch(0.1 0.02 250 / 0.55);
+  --shadow-3: 0 25px 50px -12px oklch(0 0 0 / 0.25);
+  --shadow-popover: var(--shadow-2);
+
+  /*
+   * ELEVATION AS A TRIPLE. A shadow alone does almost nothing on a dark page:
+   * black on near-black is invisible, which is why dark UI states elevation in
+   * SURFACE LIGHTNESS plus a hairline border and keeps the shadow for things
+   * that genuinely float. So a level is three values, not one, and a component
+   * names the level rather than the parts — see the `@utility` blocks below.
+   *
+   *   1  a resting card lifted off the page      surface-1 + border, no shadow
+   *   2  a raised block inside a panel           surface-2 + border-strong + shadow-2
+   *   3  something floating over the app         surface-2 + shadow-2, border per theme
+   *
+   * These are `var()` references, not values: retint a surface and every level
+   * follows. A theme that wants no edge at a level sets the border to
+   * `transparent` rather than removing it, so the 1px of geometry is identical
+   * in every theme and nothing reflows when the brightness changes.
+   *
+   * Not in `@theme`: they compose colour tokens, and a `bg-elevation-3-surface`
+   * utility is exactly the call site this replaces.
+   */
+  --elevation-1-surface: var(--color-surface-1);
+  --elevation-1-border: var(--color-border);
+  --elevation-1-shadow: none;
+  --elevation-2-surface: var(--color-surface-2);
+  --elevation-2-border: var(--color-border-strong);
+  --elevation-2-shadow: var(--shadow-2);
+  --elevation-3-surface: var(--color-surface-2);
+  --elevation-3-border: var(--color-border);
+  /* Level 3 shares level 2's shadow on purpose. `--shadow-popover` is what the
+     menus, tooltips and popovers of this app have always drawn, it is
+     `--shadow-2`, and the levels exist to name what is already there rather
+     than to restyle it. The two levels differ in their edge, not their cast.
+     `--shadow-3` is the deepest rung of the ladder and is currently unused,
+     the same way `--shadow-1` is; both stay defined so a theme can move them. */
+  --elevation-3-shadow: var(--shadow-2);
+
+  /*
+   * MOTION. Three durations and two curves. `fast` is a state change on a
+   * control the pointer is already on, `base` is something appearing or
+   * leaving, `slow` is a whole panel moving. Anything longer than that is an
+   * animation with its own keyframes, not a transition.
+   *
+   * `--ease-in`, `--ease-out` and `--ease-in-out` are Tailwind's own names, so
+   * these two are named for what they do rather than for their shape.
+   * `emphasized` is the overshoot-free decelerating curve every entrance
+   * animation further down this file already uses.
+   */
+  --duration-fast: 150ms;
+  --duration-base: 200ms;
+  --duration-slow: 300ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /*
+   * TYPE RAMP. Five roles. Every size matches a Tailwind utility the
+   * components already use, so a primitive may keep writing `text-sm`; these
+   * exist so plain CSS, and any surface that cannot use a utility, can name
+   * the role instead of the number.
+   *
+   *   display  24px  dialog titles, drawn in --font-display
+   *   title    18px  section headings inside a panel
+   *   body     14px  the app default, and every control's own label
+   *   label    12px  a compact control, an eyebrow, a tooltip
+   *   caption  11px  the second, quieter line under a label
+   */
+  --type-display-size: 1.5rem;
+  --type-display-leading: 1.2;
+  --type-title-size: 1.125rem;
+  --type-title-leading: 1.3;
+  --type-body-size: 0.875rem;
+  --type-body-leading: 1.25rem;
+  --type-label-size: 0.75rem;
+  --type-label-leading: 1rem;
+  --type-caption-size: 0.6875rem;
+  --type-caption-leading: 1rem;
+
+  /*
+   * CONTROL HEIGHTS. The three the ui/ primitives already draw: h-8 for a
+   * compact button, h-9 for the default and icon button, h-10 for a text
+   * field. Spacing itself is Tailwind's 4px scale (`--spacing`) and is
+   * deliberately NOT redefined here; see docs/DESIGN.md.
+   */
+  --control-sm: 2rem;
+  --control-md: 2.25rem;
+  --control-lg: 2.5rem;
+
   --overlay: oklch(0.1 0.02 250 / 0.8);
-  --shadow-popover: 0 12px 40px oklch(0.1 0.02 250 / 0.55);
   --shadow-speaking: 0 0 10px oklch(0.88 0.19 125 / 0.45);
   --glow-accent: oklch(0.35 0.12 125 / 0.25);
   --glow-danger: oklch(0.35 0.12 25 / 0.2);
@@ -258,8 +414,8 @@
   --color-border-strong: oklch(0.74 0.012 95);
 
   --color-text: oklch(0.25 0.015 250);
-  --color-text-muted: oklch(0.45 0.02 250);
-  --color-text-subtle: oklch(0.38 0.018 250);
+  --color-text-secondary: oklch(0.38 0.018 250);
+  --color-text-tertiary: oklch(0.45 0.02 250);
 
   /* The dark chartreuse is near-white in luminance and fails on a white page. */
   --color-accent: oklch(0.52 0.16 135);
@@ -270,6 +426,17 @@
   --color-warning: oklch(0.52 0.13 75);
   --color-success: oklch(0.48 0.13 150);
 
+  /* Soft surfaces invert: a pale tint of the status hue, dark ink on top. */
+  --color-accent-soft: oklch(0.94 0.05 135);
+  --color-on-accent-soft: oklch(0.38 0.13 135);
+  --color-danger-soft: oklch(0.94 0.04 25);
+  --color-on-danger-soft: oklch(0.44 0.18 25);
+  --color-danger-soft-hover: oklch(0.9 0.06 25);
+  --color-warning-soft: oklch(0.94 0.05 85);
+  --color-on-warning-soft: oklch(0.42 0.11 75);
+  --color-success-soft: oklch(0.94 0.04 150);
+  --color-on-success-soft: oklch(0.4 0.12 150);
+
   --color-code-bg: oklch(0.94 0.006 95);
   --color-code-text: oklch(0.42 0.14 135);
 
@@ -277,7 +444,16 @@
   --color-selection: oklch(0.52 0.16 135 / 0.25);
   --color-indicator: oklch(0.25 0.015 250);
 
-  --shadow-popover: 0 12px 40px oklch(0.4 0.02 250 / 0.18);
+  /* Only the elevation ladder changes with brightness. Radius, motion, the
+     type ramp and the control heights are shape, not colour, and are the same
+     in every theme. A black shadow on a white page reads as dirt, so these
+     are the surface colour darkened rather than black. */
+  --shadow-1: 0 1px 2px oklch(0.4 0.02 250 / 0.08);
+  --shadow-2: 0 12px 40px oklch(0.4 0.02 250 / 0.18);
+  --shadow-3: 0 25px 50px -12px oklch(0.4 0.02 250 / 0.24);
+  /* Level 3 drops its edge here. The shadow already separates a floating panel
+     from a white page, and a hairline on top of it reads as a box in a box. */
+  --elevation-3-border: transparent;
   /* A soft glow reads as a smudge on a light panel, so the ring goes solid. */
   --shadow-speaking: 0 0 0 3px oklch(0.52 0.16 135 / 0.4);
   --glow-accent: oklch(0.75 0.12 135 / 0.18);
@@ -327,12 +503,14 @@
   --color-border-strong: oklch(0.44 0.026 265);
 
   --color-text: oklch(0.94 0.012 265);
-  --color-text-muted: oklch(0.74 0.018 265);
-  --color-text-subtle: oklch(0.84 0.014 265);
+  --color-text-secondary: oklch(0.84 0.014 265);
+  --color-text-tertiary: oklch(0.74 0.018 265);
 
   --color-accent: oklch(0.78 0.14 255);
   --color-accent-hover: oklch(0.68 0.13 255);
   --color-on-accent: oklch(0.16 0.018 265);
+  --color-accent-soft: oklch(0.32 0.06 255);
+  --color-on-accent-soft: oklch(0.84 0.12 255);
 
   --color-code-bg: oklch(0.16 0.018 265);
   --color-code-text: oklch(0.78 0.14 255);
@@ -366,12 +544,14 @@
   --color-border-strong: oklch(0.7 0.016 265);
 
   --color-text: oklch(0.24 0.02 265);
-  --color-text-muted: oklch(0.42 0.022 265);
-  --color-text-subtle: oklch(0.36 0.02 265);
+  --color-text-secondary: oklch(0.36 0.02 265);
+  --color-text-tertiary: oklch(0.42 0.022 265);
 
   --color-accent: oklch(0.48 0.16 255);
   --color-accent-hover: oklch(0.42 0.15 255);
   --color-on-accent: oklch(0.99 0 0);
+  --color-accent-soft: oklch(0.94 0.03 255);
+  --color-on-accent-soft: oklch(0.4 0.14 255);
 
   --color-code-bg: oklch(0.93 0.01 265);
   --color-code-text: oklch(0.4 0.14 255);
@@ -405,12 +585,14 @@
   --color-border-strong: oklch(0.46 0.018 80);
 
   --color-text: oklch(0.93 0.012 80);
-  --color-text-muted: oklch(0.73 0.016 80);
-  --color-text-subtle: oklch(0.83 0.012 80);
+  --color-text-secondary: oklch(0.83 0.012 80);
+  --color-text-tertiary: oklch(0.73 0.016 80);
 
   --color-accent: oklch(0.72 0.12 200);
   --color-accent-hover: oklch(0.62 0.11 200);
   --color-on-accent: oklch(0.16 0.01 80);
+  --color-accent-soft: oklch(0.32 0.05 200);
+  --color-on-accent-soft: oklch(0.85 0.1 200);
 
   --color-code-bg: oklch(0.17 0.01 80);
   --color-code-text: oklch(0.72 0.12 200);
@@ -444,12 +626,14 @@
   --color-border-strong: oklch(0.72 0.012 95);
 
   --color-text: oklch(0.26 0.015 80);
-  --color-text-muted: oklch(0.44 0.018 80);
-  --color-text-subtle: oklch(0.36 0.016 80);
+  --color-text-secondary: oklch(0.36 0.016 80);
+  --color-text-tertiary: oklch(0.44 0.018 80);
 
   --color-accent: oklch(0.46 0.11 200);
   --color-accent-hover: oklch(0.4 0.1 200);
   --color-on-accent: oklch(0.99 0 0);
+  --color-accent-soft: oklch(0.94 0.03 200);
+  --color-on-accent-soft: oklch(0.4 0.09 200);
 
   --color-code-bg: oklch(0.95 0.006 95);
   --color-code-text: oklch(0.4 0.1 200);
@@ -483,12 +667,14 @@
   --color-border-strong: oklch(0.4 0.014 250);
 
   --color-text: oklch(0.95 0.012 95);
-  --color-text-muted: oklch(0.76 0.016 95);
-  --color-text-subtle: oklch(0.86 0.012 95);
+  --color-text-secondary: oklch(0.86 0.012 95);
+  --color-text-tertiary: oklch(0.76 0.016 95);
 
   --color-accent: oklch(0.88 0.19 125);
   --color-accent-hover: oklch(0.75 0.14 125);
   --color-on-accent: oklch(0.16 0.012 250);
+  --color-accent-soft: oklch(0.28 0.06 125);
+  --color-on-accent-soft: oklch(0.9 0.16 125);
 
   --color-code-bg: oklch(0.1 0.006 250);
   --color-code-text: oklch(0.88 0.19 125);
@@ -522,12 +708,14 @@
   --color-border-strong: oklch(0.68 0.01 250);
 
   --color-text: oklch(0.14 0.012 250);
-  --color-text-muted: oklch(0.36 0.014 250);
-  --color-text-subtle: oklch(0.26 0.012 250);
+  --color-text-secondary: oklch(0.26 0.012 250);
+  --color-text-tertiary: oklch(0.36 0.014 250);
 
   --color-accent: oklch(0.48 0.15 135);
   --color-accent-hover: oklch(0.42 0.14 135);
   --color-on-accent: oklch(0.99 0 0);
+  --color-accent-soft: oklch(0.94 0.05 135);
+  --color-on-accent-soft: oklch(0.36 0.12 135);
 
   --color-code-bg: oklch(0.94 0.004 250);
   --color-code-text: oklch(0.4 0.13 135);
@@ -558,17 +746,20 @@
  */
 :root[data-contrast="more"] {
   --color-text: oklch(0.99 0.01 95);
-  --color-text-muted: oklch(0.88 0.015 95);
-  --color-text-subtle: oklch(0.94 0.012 95);
+  --color-text-secondary: oklch(0.94 0.012 95);
+  --color-text-tertiary: oklch(0.88 0.015 95);
   --color-border: oklch(0.52 0.02 250);
   --color-border-strong: oklch(0.7 0.022 250);
   --color-indicator: oklch(0.99 0.01 95);
+  /* Level 3 keeps an edge here in both brightnesses: this block is one
+     attribute, so it also outranks the light block's `transparent`. */
+  --elevation-3-border: var(--color-border-strong);
 }
 
 :root[data-theme="light"][data-contrast="more"] {
   --color-text: oklch(0.12 0.02 250);
-  --color-text-muted: oklch(0.28 0.02 250);
-  --color-text-subtle: oklch(0.2 0.018 250);
+  --color-text-secondary: oklch(0.2 0.018 250);
+  --color-text-tertiary: oklch(0.28 0.02 250);
   --color-border: oklch(0.52 0.015 95);
   --color-border-strong: oklch(0.34 0.016 95);
   --color-indicator: oklch(0.12 0.02 250);
@@ -582,6 +773,11 @@
   --color-accent: oklch(0.76 0.14 var(--accent-hue));
   --color-accent-hover: oklch(0.68 0.13 var(--accent-hue));
   --color-on-accent: oklch(0.16 0.02 var(--accent-hue));
+  /* Deliberately lower chroma than the fixed skins: a soft/on-soft pair at one
+     lightness is not luminance-stable across the wheel, and the hue here is
+     whatever the user dragged the slider to. */
+  --color-accent-soft: oklch(0.3 0.05 var(--accent-hue));
+  --color-on-accent-soft: oklch(0.88 0.1 var(--accent-hue));
   --color-code-text: oklch(0.76 0.14 var(--accent-hue));
   --color-focus-ring: oklch(0.76 0.14 var(--accent-hue) / 0.6);
   --color-selection: oklch(0.76 0.14 var(--accent-hue) / 0.32);
@@ -594,12 +790,60 @@
   --color-accent: oklch(0.4 0.13 var(--accent-hue));
   --color-accent-hover: oklch(0.34 0.12 var(--accent-hue));
   --color-on-accent: oklch(0.99 0 0);
+  --color-accent-soft: oklch(0.94 0.03 var(--accent-hue));
+  --color-on-accent-soft: oklch(0.38 0.1 var(--accent-hue));
   --color-code-text: oklch(0.36 0.12 var(--accent-hue));
   --color-focus-ring: oklch(0.4 0.13 var(--accent-hue) / 0.6);
   --color-selection: oklch(0.4 0.13 var(--accent-hue) / 0.22);
   --shadow-speaking: 0 0 0 3px oklch(0.4 0.13 var(--accent-hue) / 0.4);
   --glow-accent: oklch(0.48 0.1 var(--accent-hue) / 0.14);
   --glow-accent-soft: oklch(0.4 0.13 var(--accent-hue) / 0.06);
+}
+
+/*
+ * THE ELEVATION LEVELS. Three utilities, one per level, each writing the whole
+ * triple: surface, edge and shadow.
+ *
+ * WHY UTILITIES AND NOT THREE DOCUMENTED TRIPLETS. The point of the change is
+ * that a component names the LEVEL, not the parts. A triplet still leaves the
+ * caller writing `bg-[var(--elevation-3-surface)]
+ * border-[var(--elevation-3-border)] shadow-[var(--elevation-3-shadow)]`, which
+ * is three chances to take two of the three, and that is how a menu with a
+ * shadow but no edge shipped in the first place. Tailwind v4's `@utility` is
+ * the one seam that emits a real utility class, so `elevation-3` composes with
+ * variants and is merged by `cn` like any other class.
+ *
+ * These write no colour of their own; the values are the tokens above, and a
+ * theme moves the level by moving the token.
+ *
+ * A caller that needs a different BACKGROUND or SHADOW at the same level
+ * overrides that one property after the class (`elevation-3 bg-surface-1`) and
+ * keeps the rest; `cn` cannot know these are related, so source order decides
+ * and the later class wins.
+ *
+ * THE BORDER COLOUR IS NOT OVERRIDABLE THIS WAY. Tailwind v4 orders the emitted
+ * rules by property rather than by the order the classes are written, and these
+ * utilities set the `border` shorthand, which lands after the `border-color`
+ * that `border-danger` emits. So `elevation-3 border-danger` keeps the level's
+ * edge and silently drops the danger colour. A different edge means a wrapper:
+ * the level on the outer element, the coloured border on an inner one.
+ */
+@utility elevation-1 {
+  background-color: var(--elevation-1-surface);
+  border: 1px solid var(--elevation-1-border);
+  box-shadow: var(--elevation-1-shadow);
+}
+
+@utility elevation-2 {
+  background-color: var(--elevation-2-surface);
+  border: 1px solid var(--elevation-2-border);
+  box-shadow: var(--elevation-2-shadow);
+}
+
+@utility elevation-3 {
+  background-color: var(--elevation-3-surface);
+  border: 1px solid var(--elevation-3-border);
+  box-shadow: var(--elevation-3-shadow);
 }
 
 /*
@@ -620,13 +864,13 @@
 
 .accent-hue-slider::-webkit-slider-runnable-track {
   height: 0.55rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent-track);
 }
 
 .accent-hue-slider::-moz-range-track {
   height: 0.55rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent-track);
 }
 
@@ -637,7 +881,7 @@
   margin-top: -0.225rem;
   width: 1rem;
   height: 1rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--color-accent);
   border: 2px solid var(--color-on-accent);
   box-shadow: var(--shadow-popover);
@@ -646,7 +890,7 @@
 .accent-hue-slider::-moz-range-thumb {
   width: 1rem;
   height: 1rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--color-accent);
   border: 2px solid var(--color-on-accent);
   box-shadow: var(--shadow-popover);
@@ -665,13 +909,13 @@
 
 .role-hue-slider::-webkit-slider-runnable-track {
   height: 0.55rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--role-hue-track);
 }
 
 .role-hue-slider::-moz-range-track {
   height: 0.55rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--role-hue-track);
 }
 
@@ -681,7 +925,7 @@
   margin-top: -0.225rem;
   width: 1rem;
   height: 1rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--role-hue-thumb);
   border: 2px solid var(--color-paper);
   box-shadow: var(--shadow-popover);
@@ -690,7 +934,7 @@
 .role-hue-slider::-moz-range-thumb {
   width: 1rem;
   height: 1rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--role-hue-thumb);
   border: 2px solid var(--color-paper);
   box-shadow: var(--shadow-popover);
@@ -734,7 +978,7 @@
   content: "";
   width: 0.45rem;
   height: 0.45rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
 }
 
 .appearance-preview-rail::before {
@@ -756,7 +1000,7 @@
 
 .appearance-preview-channel {
   height: 0.28rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: color-mix(in oklch, var(--swatch-ink) 40%, transparent);
 }
 
@@ -780,7 +1024,7 @@
 
 .appearance-preview-message {
   height: 0.28rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: color-mix(in oklch, var(--swatch-ink) 45%, transparent);
 }
 
@@ -800,7 +1044,7 @@
   position: relative;
   margin-top: auto;
   height: 0.5rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: color-mix(in oklch, var(--swatch-ink) 16%, var(--preview-surface));
 }
 
@@ -811,7 +1055,7 @@
   right: 0.09rem;
   bottom: 0.09rem;
   width: 1.1rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--preview-accent);
 }
 
@@ -1033,7 +1277,7 @@ h2,
 
 .animate-rise {
   --stagger: 0;
-  animation: rise-in 0.65s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: rise-in 0.65s var(--ease-emphasized) both;
   animation-delay: calc(var(--stagger) * 70ms);
 }
 
@@ -1051,7 +1295,7 @@ h2,
 
 .cta-lift {
   transition:
-    transform 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.22s var(--ease-emphasized),
     background-color 0.22s ease,
     box-shadow 0.22s ease,
     color 0.22s ease;
@@ -1113,7 +1357,7 @@ h2,
 }
 
 .animate-toast-in {
-  animation: toast-in 0.26s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: toast-in 0.26s var(--ease-emphasized) both;
 }
 
 .animate-toast-out {
@@ -1121,7 +1365,7 @@ h2,
 }
 
 .animate-badge-pop {
-  animation: badge-pop 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: badge-pop 0.32s var(--ease-emphasized) both;
 }
 
 /* Corner cards and steps inside a dialog: one entrance, one exit. */
@@ -1159,7 +1403,7 @@ h2,
 }
 
 .animate-pop-in {
-  animation: pop-in 0.32s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: pop-in 0.32s var(--ease-emphasized) both;
 }
 
 .animate-pop-out {
@@ -1167,7 +1411,7 @@ h2,
 }
 
 .animate-step-in {
-  animation: step-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: step-in 0.3s var(--ease-emphasized) both;
 }
 
 /*

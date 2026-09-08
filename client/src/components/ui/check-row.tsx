@@ -33,9 +33,9 @@ export function CheckRow({
       disabled={disabled}
       onClick={() => onCheckedChange(!checked)}
       className={cn(
-        "flex w-full items-center justify-between gap-4 rounded-md px-2 py-2 text-left",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
-        disabled ? "cursor-not-allowed" : "hover:bg-ink-3",
+        "flex w-full items-center justify-between gap-4 rounded-[var(--radius-control)] px-2 py-2 text-left",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring",
+        disabled ? "cursor-not-allowed" : "hover:bg-surface-2",
         className,
       )}
     >
@@ -47,17 +47,17 @@ export function CheckRow({
             aria-hidden
           />
         ) : null}
-        <span className="break-words text-sm text-paper">{label}</span>
+        <span className="break-words text-sm text-text">{label}</span>
       </span>
       <span
         aria-hidden
         className={cn(
-          "flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] transition-colors duration-150",
-          checked ? "bg-signal" : "bg-ink-3 ring-1 ring-inset ring-ink-4",
+          "flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-tick)] transition-colors duration-[var(--duration-fast)]",
+          checked ? "bg-accent" : "bg-surface-2 ring-1 ring-inset ring-border",
           disabled && !checked && "opacity-50",
         )}
       >
-        {checked ? <Check className="h-3 w-3 text-ink" strokeWidth={3} /> : null}
+        {checked ? <Check className="h-3 w-3 text-on-accent" strokeWidth={3} /> : null}
       </span>
     </button>
   );

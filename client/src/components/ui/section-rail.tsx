@@ -74,7 +74,7 @@ export function SectionRail<Id extends string>({
       aria-label={label}
       onKeyDown={handleKeyDown}
       className={cn(
-        "flex shrink-0 gap-1 overflow-x-auto border-b border-ink-4 px-3 py-2",
+        "flex shrink-0 gap-1 overflow-x-auto border-b border-border px-3 py-2",
         "sm:w-56 sm:flex-col sm:overflow-x-hidden sm:overflow-y-auto sm:border-b-0 sm:border-r sm:px-3 sm:py-4",
       )}
     >
@@ -92,10 +92,10 @@ export function SectionRail<Id extends string>({
             tabIndex={selected ? 0 : -1}
             onClick={() => onSelect(section.id)}
             className={cn(
-              "flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 sm:w-full",
+              "flex shrink-0 items-center gap-2 rounded-[var(--radius-control)] px-3 py-2 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring sm:w-full",
               selected
-                ? "bg-signal/12 font-medium text-paper"
-                : "text-paper-muted hover:bg-ink-3 hover:text-paper",
+                ? "bg-accent/12 font-medium text-text"
+                : "text-text-tertiary hover:bg-surface-2 hover:text-text",
               section.danger && !selected && "text-danger/80",
             )}
           >
@@ -103,7 +103,7 @@ export function SectionRail<Id extends string>({
             <span className="min-w-0">{section.label}</span>
             {section.dirty ? (
               <span
-                className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-signal"
+                className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-accent"
                 aria-hidden
               />
             ) : null}

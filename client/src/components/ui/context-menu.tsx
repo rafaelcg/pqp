@@ -143,7 +143,7 @@ export function ContextMenu({
           // `translateY(14px)` over 650ms, so the menu spends half a second
           // visibly detached from the point it is anchored to.
           className={cn(
-            "z-[100] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto overscroll-contain rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in",
+            "elevation-3 z-[100] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto overscroll-contain rounded-[var(--radius-card)] p-1 animate-fade-in",
             // The strip sets the width: it is a fixed number of equal cells
             // laid out in a row, and a menu narrower than their natural width
             // would wrap them back into the column this exists to kill.
@@ -170,8 +170,8 @@ export function ContextMenu({
                     onSelect={reaction.onSelect}
                     data-quick-reaction=""
                     className={cn(
-                      "flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-md text-base leading-none outline-none data-[highlighted]:bg-ink-3",
-                      reaction.active && "bg-signal/15 ring-1 ring-signal/40",
+                      "flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-[var(--radius-control)] text-base leading-none outline-none data-[highlighted]:bg-surface-2",
+                      reaction.active && "bg-accent/15 ring-1 ring-accent/40",
                     )}
                   >
                     {reaction.emoji}
@@ -182,20 +182,20 @@ export function ContextMenu({
                     aria-label={moreReactionsLabel}
                     onSelect={onMoreReactions}
                     data-quick-reaction-more=""
-                    className="flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-md border border-dashed border-ink-4 text-sm leading-none text-paper-muted outline-none data-[highlighted]:bg-ink-3 data-[highlighted]:text-paper"
+                    className="flex h-8 flex-1 cursor-default select-none items-center justify-center rounded-[var(--radius-control)] border border-dashed border-border text-sm leading-none text-text-tertiary outline-none data-[highlighted]:bg-surface-2 data-[highlighted]:text-text"
                   >
                     <span aria-hidden="true">+</span>
                   </ContextMenuPrimitive.Item>
                 )}
               </div>
-              {items.length > 0 && <div className="mb-1 h-px bg-ink-4" />}
+              {items.length > 0 && <div className="mb-1 h-px bg-border" />}
             </>
           )}
           {items.map((item) =>
             item.separator ? (
               <ContextMenuPrimitive.Separator
                 key={item.id}
-                className="my-1 h-px bg-ink-4"
+                className="my-1 h-px bg-border"
               />
             ) : (
               <ContextMenuPrimitive.Item
@@ -205,10 +205,10 @@ export function ContextMenu({
                 aria-checked={item.checked}
                 data-menu-item={item.id}
                 className={cn(
-                  "flex w-full cursor-default select-none items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-ink-3",
+                  "flex w-full cursor-default select-none items-center gap-2 whitespace-nowrap rounded-[var(--radius-control)] px-2.5 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:opacity-40 data-[highlighted]:bg-surface-2",
                   item.danger
                     ? "text-danger data-[highlighted]:bg-danger/15"
-                    : "text-paper",
+                    : "text-text",
                 )}
               >
                 {reserveIcon && (
