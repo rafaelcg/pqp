@@ -191,7 +191,8 @@ function readLines(path) {
 
 function fmtSender(s) {
   if (!s) return "no sender";
-  return `${s.kbps ?? "?"} kbps actual, ${s.targetKbps ?? "?"} target, ceiling ${s.ceilingKbps ?? "?"}, limited by ${s.limitedBy ?? "?"}`;
+  const paths = s.paths ? ` paths[${s.paths.join(",")}]` : "";
+  return `${s.kbps ?? "?"} kbps actual, ${s.targetKbps ?? "?"} target, ceiling ${s.ceilingKbps ?? "?"}, limited by ${s.limitedBy ?? "?"}${paths}`;
 }
 
 function fmtReceiver(r) {
@@ -432,6 +433,13 @@ async function agentMain(role) {
         role === "sharer"
           ? snap.senders.find((s) => s.role === "screen") ?? null
           : snap.receivers.find((r) => r.role === "screen") ?? null;
+      // The per-path estimates the budget controller actually reads. Without
+      // these the table shows the ceiling it chose and gives no way to check
+      // WHY, which is exactly the question two rejected models turned on: is a
+      // low ceiling a small link, or one path being dropped as an outlier?
+      if (sample && role === "sharer") {
+        sample.paths = snap.paths.map((path) => path.availableOutgoingKbps);
+      }
       appendFileSync(`${coord}${role}-stats.jsonl`, `${JSON.stringify({ sample })}\n`);
       // Photograph the warning the first tick it is genuinely on screen,
       // rather than at the end of the run: the reading oscillates, and a

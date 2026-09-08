@@ -42,7 +42,7 @@
  *     500 kbps because somebody else's wifi was bad. Found in review before it
  *     shipped.
  *
-     What separates them is that a shared bottleneck squeezes every path at
+ *     What separates them is that a shared bottleneck squeezes every path at
  *     once, while one bad path leaves the others alone. So a path far narrower
  *     than the widest is treated as independently bottlenecked and dropped,
  *     and the rest are read as genuinely dividing this uplink. Two models were
@@ -194,17 +194,6 @@ export function nextScreenUploadBudget(
 
   const perPeer = current / peers;
 
-  // Did ANYBODY fill the share we gave them? An estimator reports roughly
-  // what its path is carrying, so a reading at the ceiling is a statement
-  // about the ceiling and not about the link. While one path manages that,
-  // this uplink has not been shown to be the constraint, and a low reading on
-  // some *other* path is that path's own bottleneck — which the browser
-  // throttles on that connection by itself, under whatever ceiling we set.
-  //
-  // Reading the estimate as headroom rather than as a limit is safe here
-  // because an unconstrained estimator probes ABOVE what it is sending
-  // (measured 25 Aug: 3.3 Mbps against a 1.5 Mbps ceiling), so a healthy path
-  // clears its share comfortably rather than sitting exactly on it.
   // ONE BAD PATH IS NOT A SMALL UPLINK, and separating them is the whole
   // difficulty. A path far narrower than the widest one is bottlenecked
   // somewhere that is not shared — that viewer's own downlink, or a relay
@@ -239,10 +228,18 @@ export function nextScreenUploadBudget(
     return cut < current * (1 - APPLY_DELTA) ? cut : current;
   }
 
-  // A raise needs everyone's word, not the sum's: one peer on a wide-open
-  // path must not be allowed to speak for another that is already struggling.
+  // A raise needs the word of everyone who is sharing this link, and the SAME
+  // set the cut reads. Asking the unfiltered set was a one-way door: the cut
+  // dismisses a 50 kbps path as somebody else's bottleneck, but the raise then
+  // let that identical path veto every recovery, so a single dip tick — a wifi
+  // hiccup, or the estimators still ramping in the first seconds of a share —
+  // pinned a fibre room at the floor for the rest of the call, which is the
+  // exact outcome dropping outliers was meant to prevent. Found in review.
+  //
+  // Every peer must still be READABLE. A room half of whose paths cannot be
+  // measured has not earned more bitrate, whatever the measurable half says.
   const everyoneHasRoom =
-    readable.length === peers && readable.every((s) => s > perPeer * RAISE_ABOVE);
+    readable.length === peers && sharing.every((s) => s > perPeer * RAISE_ABOVE);
   if (!everyoneHasRoom) {
     return current;
   }

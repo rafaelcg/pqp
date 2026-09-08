@@ -71,11 +71,19 @@ describe("the screen upload budget follows the measured uplink", () => {
     expect(nextScreenUploadBudget(current, [10 * M, null])).toBe(current);
   });
 
-  it("will not raise when one peer is short even if the sum is generous", () => {
-    // A sum of 11 Mbps hides a peer that only has 1 Mbps. The raise reads
-    // every estimator, and this is why.
+  it("will not raise when a peer that is genuinely sharing is short", () => {
+    // 2.5 Mbps beside 6 is the same order, so it counts as a share of this
+    // link, and it has not cleared its own share by the margin a raise wants.
+    // Nobody gets more while somebody who is really on this uplink is short.
     const current = 5 * M;
-    expect(nextScreenUploadBudget(current, [10 * M, 1 * M])).toBe(current);
+    expect(nextScreenUploadBudget(current, [6 * M, 2.5 * M])).toBe(current);
+  });
+
+  it("does raise past a path that is an outlier rather than a share", () => {
+    // The counterpart, and the same judgement the cut makes: 1 Mbps beside 10
+    // is somebody else's bottleneck, and it neither drags the room down nor
+    // gets to veto it going up.
+    expect(nextScreenUploadBudget(5 * M, [10 * M, 1 * M])).toBe(6.5 * M);
   });
 
   it("assumes an unreadable peer looks like the ones it can read", () => {
@@ -112,12 +120,37 @@ describe("the screen upload budget follows the measured uplink", () => {
     expect(nextScreenUploadBudget(5 * M, [2.1 * M, 0.9 * M])).toBe(3 * M);
   });
 
-  it("keeps its hands off while somebody is still filling their share", () => {
-    // The other half of the same rule, and the reason one bad path cannot
-    // drag the room: a path reading at or above what we allowed it says
-    // something about our ceiling, not about the link underneath.
+  it("drops a path an order of magnitude under the widest, and keeps a poor one", () => {
+    // 50 kbps beside 2.5 Mbps is not a share of anything the two are
+    // dividing, so it is ignored and the room is left alone. A path that is
+    // merely poor is a share, and counts.
     expect(nextScreenUploadBudget(5 * M, [50_000, 2.5 * M])).toBe(5 * M);
-    expect(nextScreenUploadBudget(5 * M, [50_000, 2.75 * M])).toBe(5 * M);
+    // Just above a third of the widest: kept, so the mean of 0.9 and 2.5
+    // times two peers is 3.4 Mbps, which is a cut.
+    expect(nextScreenUploadBudget(5 * M, [0.9 * M, 2.5 * M])).toBe(3.4 * M);
+  });
+
+  it("will not call the majority of the room outliers", () => {
+    // A 1 Mbps link split 40/10/10/10/10/10/10 is one link divided unevenly,
+    // not six bad paths and one good one. Without the minority guard the six
+    // were dropped and the room budgeted 2.8 Mbps from the seventh reading.
+    const uneven = [400_000, ...Array.from({ length: 6 }, () => 100_000)];
+    expect(nextScreenUploadBudget(5 * M, uneven)).toBe(1 * M);
+  });
+
+  it("lets a room recover after a dip, even with a bad path still in it", () => {
+    // FOUND IN REVIEW, and it reopened the very regression the outlier filter
+    // exists to close. The cut dismisses a 50 kbps path as somebody else's
+    // bottleneck, but the raise used to consult the unfiltered set, so that
+    // same path vetoed every recovery. One dip tick — a wifi hiccup, or the
+    // estimators still ramping in the first seconds — pinned a fibre room at
+    // the floor for the rest of the call.
+    let budget = nextScreenUploadBudget(5 * M, [400_000, 400_000]);
+    expect(budget).toBe(1 * M);
+    for (let i = 0; i < 4; i += 1) {
+      budget = nextScreenUploadBudget(budget, [(budget / 2) * 1.5, 50_000]);
+    }
+    expect(budget).toBeGreaterThan(2 * M);
   });
 
   it("takes the cap even when the last step to it is under the delta", () => {
