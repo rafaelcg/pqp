@@ -42,7 +42,7 @@ share ran unshaped for 9 seconds, then the sharer's container was capped to
 screen only  (SHARE_RATE=3mbit) : ceiling -> 1494 kbps a copy, paths [1729,1608]
 screen only  (SHARE_RATE=1mbit) : ceiling ->  500 kbps a copy, paths [536,413]
 
-WITH_CAMERA=true 3mbit CAMERA_ORDER=before : screen 987 a copy
+WITH_CAMERA=true 3mbit CAMERA_ORDER=before : screen 987 a copy (camera figure not recorded)
 WITH_CAMERA=true 3mbit CAMERA_ORDER=after  : screen 783 + camera 391 = 1174 a copy
 ```
 
@@ -60,37 +60,6 @@ chosen ladders, and the pair times the viewer count fits inside the shaped link
 rather than exceeding it. Before `meshCameraBitrate` the camera took its full
 chosen ceiling per viewer regardless of the room, so the same 3 Mbit run would
 have asked for about 2994 kbps a copy, nearly double the link.
-
-`WITH_CAMERA=true` turns the sharer's camera on, before the share by default or
-after it with `CAMERA_ORDER=after`. **Run both.** The ordering that broke in
-review was camera-on-during-a-share: nothing retuned the screen on that edge, so
-it kept the whole share and the pair asked for 133 % of it, and the
-camera-first run is the one ordering that does not show it. So
-the run exercises two video senders dividing one uplink instead of one sender
-owning it. The two ceilings come out at the 2:1 ratio of their chosen ladders
-(an Auto screen is 3 Mbps, an Auto camera 1.5), and their sum times the viewer
-count is the shaped link. Before `meshCameraBitrate` existed the camera took
-its full chosen ceiling per viewer no matter the room, so the same 3 Mbit run
-would have asked for about 2994 kbps a copy, nearly double the link.
-
-Two copies of each ceiling is 2988 and 1000 kbps, which is the shaped link in
-both cases. The `paths[...]` figures are the per-path `availableOutgoingBitrate`
-the controller reads: they are the same order as each other here, so both count
-as sharing one link rather than one being dropped as an outlier. That column
-exists because the ceiling alone cannot say *why* the controller chose it, and
-that is the question two rejected models turned on.
-
-Run this before changing the controller. Both rejected models passed their unit
-tests and failed here. That is the
-whole design working end to end on a link no test double produced: the
-asymmetric AIMD controller, the real `availableOutgoingBitrate` reading, and
-the resample-every-2s loop in `peer-connection-manager.ts`.
-
-The starting ceiling of 3000 rather than the un-shaped default's 2500 is not
-a bug: the controller had already raised once in the few seconds before
-shaping, because a Docker bridge network genuinely has more than 5 Mbps of
-headroom to offer — which is itself a small confirmation that the raise path
-also fires on a real link, not only in the unit tests.
 
 ## Two Chromium gotchas this harness exists to not rediscover
 
