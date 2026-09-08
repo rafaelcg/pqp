@@ -6,7 +6,7 @@ import {
   type MutableRefObject,
   type RefObject,
 } from "react";
-import { PictureInPicture2, Radio } from "lucide-react";
+import { PictureInPicture2, Radio, Volume1, Volume2, VolumeX } from "lucide-react";
 import { useTranslation } from "@/lib/i18n";
 import {
   chooseHlsEngine,
@@ -23,6 +23,14 @@ import {
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { resolveHlsUrl } from "@/lib/hls-playback";
 import { HlsStallWatch, channelIdFromHlsUrl } from "@/lib/hls-stall";
+import {
+  applyMuteToggle,
+  applySliderChange,
+  effectiveMuted,
+  readHlsVolume,
+  writeHlsVolume,
+  type HlsVolumePref,
+} from "@/lib/hls-volume";
 import { cn } from "@/lib/utils";
 
 const STALL_TICK_MS = 1_000;
@@ -41,6 +49,17 @@ interface SafariPipVideo extends HTMLVideoElement {
   webkitSupportsPresentationMode?: (mode: string) => boolean;
   webkitSetPresentationMode?: (mode: "inline" | "picture-in-picture") => void;
   webkitPresentationMode?: "inline" | "picture-in-picture" | "fullscreen";
+}
+
+/** The glyph says the level, so a turned-down stream reads at a glance. */
+function VolumeGlyph({ volume, muted }: { volume: number; muted: boolean }) {
+  if (muted || volume === 0) {
+    return <VolumeX className="h-3.5 w-3.5" />;
+  }
+  if (volume < 0.5) {
+    return <Volume1 className="h-3.5 w-3.5" />;
+  }
+  return <Volume2 className="h-3.5 w-3.5" />;
 }
 
 /**
@@ -91,6 +110,25 @@ export function HlsWatchPlayer({
   const [attempt, setAttempt] = useState(0);
   const [phase, setPhase] = useState<StreamPhase>("playing");
   const watchRef = useRef<HlsStallWatch>(new HlsStallWatch());
+  // The viewer's own level for the broadcast, remembered per browser. Read
+  // once, then held in a ref as well so the attach effect can apply it to a
+  // fresh element without listing it as a dependency: that effect tears down
+  // and rebuilds hls.js, and nudging the slider must not restart the stream.
+  const [volumePref, setVolumePref] = useState<HlsVolumePref>(readHlsVolume);
+  const volumePrefRef = useRef(volumePref);
+  volumePrefRef.current = volumePref;
+  // Where the mute button comes back to.
+  const restoreRef = useRef(volumePref.volume || 1);
+  useEffect(() => {
+    if (volumePref.volume > 0) {
+      restoreRef.current = volumePref.volume;
+    }
+  }, [volumePref.volume]);
+
+  const updateVolume = useCallback((next: HlsVolumePref) => {
+    setVolumePref(next);
+    writeHlsVolume(next);
+  }, []);
 
   useEffect(() => {
     setActiveSrc(src);
@@ -133,6 +171,35 @@ export function HlsWatchPlayer({
     () => videoRef?.current ?? innerRef.current,
     [videoRef],
   );
+
+  // The element follows the preference, plus the browser's own refusal.
+  // `needsUnmute` is the temporary half: it is never written to storage, and
+  // either unmute affordance clears it, so the two cannot fight.
+  useEffect(() => {
+    const video = getVideo();
+    if (!video) {
+      return;
+    }
+    video.volume = volumePref.volume;
+    video.muted = effectiveMuted({
+      pref: volumePref,
+      autoplayMuted: needsUnmute,
+    });
+  }, [getVideo, volumePref, needsUnmute, activeSrc, attempt, hasFrame]);
+
+  /** Both unmute affordances: the person asked for sound, so give them sound. */
+  const silenced = effectiveMuted({
+    pref: volumePref,
+    autoplayMuted: needsUnmute,
+  });
+
+  const restoreSound = useCallback(() => {
+    setNeedsUnmute(false);
+    updateVolume({
+      volume: volumePrefRef.current.volume || restoreRef.current || 1,
+      muted: false,
+    });
+  }, [updateVolume]);
 
   const jumpToLive = useCallback(() => {
     const video = getVideo();
@@ -317,6 +384,10 @@ export function HlsWatchPlayer({
     };
     const watch = watchRef.current;
     watch.onSourceChanged(Date.now());
+    // Before the first frame, so a viewer who muted the last watch party does
+    // not get one loud second of this one.
+    video.volume = volumePrefRef.current.volume;
+    video.muted = volumePrefRef.current.muted;
     const onPlaying = () => {
       if (!cancelled) {
         setHasFrame(true);
@@ -532,17 +603,63 @@ export function HlsWatchPlayer({
             : t("voice.hls.buffering")}
         </div>
       ) : null}
+      {hasFrame ? (
+        <div
+          data-testid="hls-volume"
+          // Bottom RIGHT on purpose. Every other corner is taken: the live and
+          // delay badges are top-left, Picture-in-Picture is top-right, the
+          // "Toca pra ligar o som" button is bottom-centre, and the cinema
+          // stage draws its own presence strip at bottom-left, which sat on
+          // top of this control and swallowed the click (caught in QA, the
+          // button was visible and unclickable).
+          className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/70 px-1.5 py-1"
+        >
+          <button
+            type="button"
+            aria-pressed={silenced}
+            aria-label={
+              silenced ? t("voice.hls.unmuteControl") : t("voice.hls.mute")
+            }
+            className="flex h-6 w-6 items-center justify-center rounded-full text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+            onClick={() => {
+              if (silenced) {
+                restoreSound();
+                return;
+              }
+              updateVolume(applyMuteToggle(volumePref, restoreRef.current));
+            }}
+          >
+            <VolumeGlyph volume={volumePref.volume} muted={silenced} />
+          </button>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={silenced ? 0 : volumePref.volume}
+            aria-label={t("voice.hls.volume")}
+            aria-valuetext={t("voice.tile.volumePercent", {
+              percent: Math.round((silenced ? 0 : volumePref.volume) * 100),
+            })}
+            onChange={(event) => {
+              const next = applySliderChange(Number(event.target.value));
+              // Dragging up off zero is itself a request for sound, so it
+              // clears the autoplay refusal too rather than moving a slider
+              // that stays silent.
+              if (!next.muted) {
+                setNeedsUnmute(false);
+              }
+              updateVolume(next);
+            }}
+            className="h-1 w-20 cursor-pointer accent-signal"
+          />
+        </div>
+      ) : null}
       {hasFrame && needsUnmute ? (
         <button
           type="button"
           className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1.5 text-sm font-medium text-paper hover:bg-black/90"
-          onClick={() => {
-            const el = videoRef?.current ?? innerRef.current;
-            if (el) {
-              el.muted = false;
-            }
-            setNeedsUnmute(false);
-          }}
+          onClick={restoreSound}
         >
           {t("voice.hls.unmute")}
         </button>
