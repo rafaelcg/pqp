@@ -46,14 +46,7 @@ import { useContrast } from "@/hooks/use-contrast";
 import { useTheme } from "@/hooks/use-theme";
 import { ACTION_LABEL, GROUP_LABEL } from "@/components/layout/shortcut-overlay";
 import { KeyBindingField } from "@/components/voice/key-binding-field";
-import {
-  CHAT_FONT_SIZE_MAX,
-  CHAT_FONT_SIZE_MIN,
-  CHAT_GROUP_SPACING_MAX,
-  CHAT_GROUP_SPACING_MIN,
-  DEFAULT_CHAT_DISPLAY,
-  type ChatDensity,
-} from "@/lib/chat-display";
+import { DEFAULT_CHAT_DISPLAY, type ChatDensity } from "@/lib/chat-display";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import {
   findBindingConflict,
@@ -1744,34 +1737,121 @@ function AppearanceSection({
       <ContrastPicker />
       <div className="space-y-6 border-t border-border pt-6">
         <LanguagePicker />
-        <ChatDisplayPicker />
-        <SettingBlock label={t("settings.appearance.chat")}>
-          <label className="flex cursor-pointer items-center gap-3 text-sm">
-            <input
-              type="checkbox"
-              checked={showLinkEmbeds}
-              onChange={(e) => onShowLinkEmbeds(e.target.checked)}
-              className="h-4 w-4 accent-[var(--color-accent)]"
-            />
-            <span>{t("settings.appearance.linkPreviews")}</span>
-          </label>
-        </SettingBlock>
+        <ChatDisplayPicker
+          showLinkEmbeds={showLinkEmbeds}
+          onShowLinkEmbeds={onShowLinkEmbeds}
+        />
       </div>
     </div>
   );
 }
+
+/**
+ * Preset ladders for the two numeric axes. The store is numeric (a synced
+ * value from an older client may sit between rungs), so a rung is "selected"
+ * when it is the nearest one.
+ */
+const FONT_SIZE_PRESETS: { value: number; label: MessageKey }[] = [
+  { value: 13, label: "settings.appearance.textSize.small" },
+  { value: 15, label: "settings.appearance.textSize.default" },
+  { value: 17, label: "settings.appearance.textSize.large" },
+  { value: 20, label: "settings.appearance.textSize.larger" },
+];
+
+const GROUP_SPACING_PRESETS: { value: number; label: MessageKey }[] = [
+  { value: 0, label: "settings.appearance.spacing.tight" },
+  { value: 8, label: "settings.appearance.spacing.default" },
+  { value: 16, label: "settings.appearance.spacing.roomy" },
+];
 
 const DENSITY_OPTIONS: { value: ChatDensity; label: MessageKey }[] = [
   { value: "cozy", label: "settings.appearance.density.cozy" },
   { value: "compact", label: "settings.appearance.density.compact" },
 ];
 
-/** A plain slider on the accent slider's chrome, with a flat track. */
-const PLAIN_TRACK = {
-  "--accent-track": "var(--color-surface-3)",
-} as CSSProperties;
+function nearest(presets: { value: number }[], value: number): number {
+  let best = presets[0].value;
+  for (const preset of presets) {
+    if (Math.abs(preset.value - value) < Math.abs(best - value)) {
+      best = preset.value;
+    }
+  }
+  return best;
+}
 
-function ChatDisplayPicker() {
+/**
+ * One labelled row: the name on the left, a segmented control on the right,
+ * stacked on a narrow dialog. Arrow keys move within the group.
+ */
+function ChatOptionRow<T extends string | number>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: { value: T; label: MessageKey }[];
+  value: T;
+  onChange: (next: T) => void;
+}) {
+  const { t } = useTranslation();
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const step =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (step === 0) {
+      return;
+    }
+    event.preventDefault();
+    const current = options.findIndex((option) => option.value === value);
+    const nextIndex = (current + step + options.length) % options.length;
+    onChange(options[nextIndex].value);
+    const radios =
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    radios[nextIndex]?.focus();
+  }
+
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <span className="text-sm text-text">{label}</span>
+      <div
+        role="radiogroup"
+        aria-label={label}
+        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5 sm:w-auto sm:min-w-[16rem]"
+        onKeyDown={handleKeyDown}
+      >
+        {options.map((option) => {
+          const selected = option.value === value;
+          return (
+            <button
+              key={String(option.value)}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => onChange(option.value)}
+              className={cn(segmentClass(selected), "h-8 px-2.5 text-xs")}
+            >
+              {t(option.label)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ChatDisplayPicker({
+  showLinkEmbeds,
+  onShowLinkEmbeds,
+}: {
+  showLinkEmbeds: boolean;
+  onShowLinkEmbeds: (next: boolean) => void;
+}) {
   const { t } = useTranslation();
   const { display, setDisplay } = useChatDisplay();
   const isDefault =
@@ -1779,116 +1859,59 @@ function ChatDisplayPicker() {
     display.fontSize === DEFAULT_CHAT_DISPLAY.fontSize &&
     display.groupSpacing === DEFAULT_CHAT_DISPLAY.groupSpacing;
 
-  function handleDensityKeys(event: KeyboardEvent<HTMLDivElement>) {
-    if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(event.key)) {
-      return;
-    }
-    event.preventDefault();
-    const next: ChatDensity = display.density === "cozy" ? "compact" : "cozy";
-    setDisplay({ density: next }, { immediate: true });
-    const radios =
-      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
-    radios[next === "cozy" ? 0 : 1]?.focus();
-  }
-
   return (
-    <div className="space-y-6">
-      <SettingBlock
-        label={t("settings.appearance.density")}
-        hint={t("settings.appearance.densityHint")}
-      >
-        <div
-          role="radiogroup"
-          aria-label={t("settings.appearance.density")}
-          className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
-          onKeyDown={handleDensityKeys}
-        >
-          {DENSITY_OPTIONS.map((option) => {
-            const selected = option.value === display.density;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                tabIndex={selected ? 0 : -1}
-                onClick={() =>
-                  setDisplay({ density: option.value }, { immediate: true })
-                }
-                className={segmentClass(selected)}
-              >
-                {t(option.label)}
-              </button>
-            );
-          })}
-        </div>
-      </SettingBlock>
-
-      <SettingBlock label={t("settings.appearance.fontSize")}>
-        <div className="flex items-center gap-3">
-          <input
-            type="range"
-            min={CHAT_FONT_SIZE_MIN}
-            max={CHAT_FONT_SIZE_MAX}
-            step={1}
-            value={display.fontSize}
-            aria-label={t("settings.appearance.fontSize")}
-            aria-valuetext={t("settings.appearance.fontSizeValue", {
-              size: display.fontSize,
-            })}
-            onChange={(event) =>
-              setDisplay({ fontSize: Number(event.target.value) })
-            }
-            className="accent-hue-slider"
-            style={PLAIN_TRACK}
-          />
-          <span className="w-12 shrink-0 text-right text-xs tabular-nums text-text-muted">
-            {t("settings.appearance.fontSizeValue", { size: display.fontSize })}
-          </span>
-        </div>
-      </SettingBlock>
-
-      <SettingBlock label={t("settings.appearance.groupSpacing")}>
-        <div className="flex items-center gap-3">
-          <input
-            type="range"
-            min={CHAT_GROUP_SPACING_MIN}
-            max={CHAT_GROUP_SPACING_MAX}
-            step={1}
-            value={display.groupSpacing}
-            aria-label={t("settings.appearance.groupSpacing")}
-            aria-valuetext={t("settings.appearance.groupSpacingValue", {
-              size: display.groupSpacing,
-            })}
-            onChange={(event) =>
-              setDisplay({ groupSpacing: Number(event.target.value) })
-            }
-            className="accent-hue-slider"
-            style={PLAIN_TRACK}
-          />
-          <span className="w-12 shrink-0 text-right text-xs tabular-nums text-text-muted">
-            {t("settings.appearance.groupSpacingValue", {
-              size: display.groupSpacing,
-            })}
-          </span>
-        </div>
-      </SettingBlock>
-
-      <SettingBlock
-        label={t("settings.appearance.chatPreview")}
-        hint={t("settings.appearance.chatPreviewHint")}
-      >
+    <SettingBlock
+      label={t("settings.appearance.chat")}
+      hint={t("settings.appearance.chatHint")}
+    >
+      <div className="overflow-hidden rounded-lg border border-border">
         <ChatDisplayPreview compact={display.density === "compact"} />
-        <button
-          type="button"
-          onClick={() => setDisplay(DEFAULT_CHAT_DISPLAY, { immediate: true })}
-          disabled={isDefault}
-          className="text-xs text-text-muted underline-offset-2 hover:text-text hover:underline disabled:cursor-default disabled:no-underline disabled:opacity-40"
-        >
-          {t("settings.appearance.chatReset")}
-        </button>
-      </SettingBlock>
-    </div>
+        <div className="space-y-4 border-t border-border bg-surface-1 p-4">
+          <ChatOptionRow
+            label={t("settings.appearance.density")}
+            options={DENSITY_OPTIONS}
+            value={display.density}
+            onChange={(density) => setDisplay({ density }, { immediate: true })}
+          />
+          <ChatOptionRow
+            label={t("settings.appearance.textSize")}
+            options={FONT_SIZE_PRESETS}
+            value={nearest(FONT_SIZE_PRESETS, display.fontSize)}
+            onChange={(fontSize) => setDisplay({ fontSize }, { immediate: true })}
+          />
+          <ChatOptionRow
+            label={t("settings.appearance.spacing")}
+            options={GROUP_SPACING_PRESETS}
+            value={nearest(GROUP_SPACING_PRESETS, display.groupSpacing)}
+            onChange={(groupSpacing) =>
+              setDisplay({ groupSpacing }, { immediate: true })
+            }
+          />
+          <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <label className="flex cursor-pointer items-center gap-3 text-sm">
+              <input
+                type="checkbox"
+                checked={showLinkEmbeds}
+                onChange={(e) => onShowLinkEmbeds(e.target.checked)}
+                className="h-4 w-4 accent-[var(--color-accent)]"
+              />
+              <span>{t("settings.appearance.linkPreviews")}</span>
+            </label>
+            {!isDefault && (
+              <button
+                type="button"
+                onClick={() =>
+                  setDisplay(DEFAULT_CHAT_DISPLAY, { immediate: true })
+                }
+                className="-my-1 py-1 text-left text-xs text-text-muted underline-offset-2 hover:text-text hover:underline"
+              >
+                {t("settings.appearance.chatReset")}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </SettingBlock>
   );
 }
 
@@ -1927,7 +1950,7 @@ function ChatDisplayPreview({ compact }: { compact: boolean }) {
   return (
     <div
       aria-hidden
-      className="overflow-hidden rounded-lg border border-border bg-channel py-2"
+      className="bg-channel py-3"
     >
       {rows.map((row, index) => (
         <div
