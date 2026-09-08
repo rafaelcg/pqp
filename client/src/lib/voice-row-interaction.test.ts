@@ -12,9 +12,12 @@ describe("resolveVoiceRowClick", () => {
     ).toBe("select");
   });
 
-  it("joins on a second click of an already-selected row (touch's second tap)", () => {
+  it("selects an already-selected joinable row too: a click never joins", () => {
+    // The rule Rafael asked for after #360 shipped: one click is always just
+    // "show me this channel", however many times it lands. Joining is the
+    // double click, the Entrar button, the context menu or Enter.
     expect(resolveVoiceRowClick({ selected: true, joinable: true })).toBe(
-      "join",
+      "select",
     );
   });
 
@@ -37,24 +40,27 @@ describe("resolveVoiceRowClick", () => {
 });
 
 describe("resolveVoiceRowDoubleClick", () => {
-  it("joins an unselected, joinable row", () => {
-    expect(
-      resolveVoiceRowDoubleClick({ selected: false, joinable: true }),
-    ).toBe("join");
-  });
-
-  it("does nothing when the row was already selected before the double click", () => {
-    // The click handler's second click already joined in this case; firing
-    // again here would double-invoke the join.
-    expect(
-      resolveVoiceRowDoubleClick({ selected: true, joinable: true }),
-    ).toBeNull();
+  it("joins a joinable row, selected or not", () => {
+    // Selection stopped mattering when the click branch stopped joining:
+    // there is no longer a join to double up on, so a double click on the row
+    // you are already looking at has to work like any other.
+    expect(resolveVoiceRowDoubleClick({ joinable: true })).toBe("join");
   });
 
   it("does nothing for a channel that cannot be joined", () => {
-    expect(
-      resolveVoiceRowDoubleClick({ selected: false, joinable: false }),
-    ).toBeNull();
+    expect(resolveVoiceRowDoubleClick({ joinable: false })).toBeNull();
+  });
+
+  it("is the only pointer path that joins", () => {
+    // Together with the click cases above: two deliberate presses, and the
+    // first one on its own can never start a call.
+    expect(resolveVoiceRowClick({ selected: false, joinable: true })).toBe(
+      "select",
+    );
+    expect(resolveVoiceRowClick({ selected: true, joinable: true })).toBe(
+      "select",
+    );
+    expect(resolveVoiceRowDoubleClick({ joinable: true })).toBe("join");
   });
 });
 

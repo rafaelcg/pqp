@@ -1825,7 +1825,9 @@ export function ChannelRailItem({
         data-channel-type={channel.type}
         aria-current={selected ? "page" : undefined}
         className={cn(
-          "relative flex h-10 w-10 shrink-0 items-center justify-center rounded-lg transition-colors",
+          // `touch-manipulation` for the same reason the wide row has it: the
+          // double tap is the only pointer gesture that joins.
+          "relative flex h-10 w-10 shrink-0 touch-manipulation items-center justify-center rounded-lg transition-colors",
           selected
             ? "bg-ink-3 text-paper"
             : "text-paper-muted hover:bg-ink-3/70 hover:text-paper",
@@ -1835,12 +1837,9 @@ export function ChannelRailItem({
           muted && !selected && !connected && "opacity-50",
         )}
         onClick={() => {
-          // A tap that lands on an already-selected row is the closest thing
-          // touch has to a second click: nothing else distinguishes "select
-          // again" from "I mean it, join" on a phone. `onDoubleClick` below
-          // catches the mouse case even when this click's own `onSelect` has
-          // not yet round-tripped through state by the time the second click
-          // lands.
+          // Always a select. Joining a call is never one press, on any
+          // input: the double click below is the pointer path, and the
+          // channel header's call button is the one a phone reaches for.
           const action = resolveVoiceRowClick({ selected, joinable: !!joinable });
           if (action === "join") {
             onJoinVoice?.();
@@ -1849,10 +1848,7 @@ export function ChannelRailItem({
           }
         }}
         onDoubleClick={() => {
-          if (
-            resolveVoiceRowDoubleClick({ selected, joinable: !!joinable }) ===
-            "join"
-          ) {
+          if (resolveVoiceRowDoubleClick({ joinable: !!joinable }) === "join") {
             onJoinVoice?.();
           }
         }}
@@ -2191,15 +2187,19 @@ function ChannelRow({
           />
         )}
         {/* A voice row opens its view the way a text row opens its channel:
-            one click selects it and shows the chat and the stage, without
-            joining. A double click joins, the same shortcut Android and iOS
-            picked up in PR 339. The `selected` branch on plain click covers
-            touch, where a second tap on the row you are already looking at
-            reads as "no, really, join": there is no dblclick on a phone
-            unless the click landed fast enough for the browser to have
-            synthesized one itself. Connected rows never call `onJoinVoice`
-            at all (see `joinable` below), so clicking the room you are in
-            just keeps the view. */}
+            a click selects it and shows the chat and the stage, without
+            joining, and it does that however many times it lands. Only a
+            double click joins. The "second tap on the selected row joins"
+            fallback PR 360 shipped is gone: in practice it meant one click plus
+            one more click entered a call by accident, which is the one thing
+            this row must not do.
+            `touch-manipulation` is what makes the double tap work on a phone:
+            without it mobile Safari and Chrome hold the second tap back for
+            double-tap-to-zoom and never synthesize `dblclick`. The header's
+            call button is the other phone path, and it is the one iOS and
+            Android use.
+            Connected rows never call `onJoinVoice` at all (see `joinable`
+            below), so clicking the room you are in just keeps the view. */}
         <button
           type="button"
           onClick={() => {
@@ -2216,7 +2216,6 @@ function ChannelRow({
           onDoubleClick={() => {
             if (
               resolveVoiceRowDoubleClick({
-                selected,
                 joinable: !!onJoinVoice && !connected,
               }) === "join"
             ) {
@@ -2246,7 +2245,7 @@ function ChannelRow({
               ? `${channel.name}: ${t("voice.doubleClickToJoin")}`
               : undefined
           }
-          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+          className="flex min-w-0 flex-1 touch-manipulation items-center gap-1.5 text-left"
         >
           {/* Private is the glyph, not a word. The pill that used to sit at
               the end of this row was about 50px of a 256px column, which is
