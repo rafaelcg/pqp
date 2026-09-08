@@ -161,6 +161,42 @@ export function isStrained(streak: number): boolean {
   return streak >= SUSTAINED_SAMPLES;
 }
 
+/**
+ * Whether there is anything here worth measuring at all.
+ *
+ * A rule rather than a condition inline in the effect, because it is the seam
+ * between this warning and room promotion (`docs/voice-backends.md`, "The one
+ * time a live room changes transport") and a seam nobody can see is a seam
+ * somebody deletes.
+ *
+ * MESH ONLY, and `livekit` is not a hypothetical here. A room's transport used
+ * to be fixed for the room's life, so "this is a mesh room" was settled before
+ * the first sample. It is not any more: any of the promotion triggers moves a
+ * live room onto the SFU under everybody in it, and the common one is simply
+ * the room reaching `MESH_ROOM_PROMOTION_SIZE` people. A share in progress
+ * when the fourth person walks in is promoted under the presenter, and this
+ * hook is then mid-streak on a peer mesh being torn down in the same tick.
+ *
+ * Two independent things then have to be true, and both are:
+ *
+ *  - the numbers stop meaning what this rule reads them as. On the SFU, above
+ *    `LARGE_ROOM_PARTICIPANTS` the published top layer is capped while the
+ *    stats row still reports the uncapped rung as its ceiling, so every tick
+ *    would read as "bandwidth" and tell the presenter of a large room on fibre
+ *    that their connection is the problem, forever.
+ *  - there is nothing left to sample. `PeerConnectionManager.dispose()`
+ *    unregisters every connection from the stats probe, so the sampler would
+ *    find no screen rows and the streak would reset anyway. That is a second
+ *    line of defence, not the reason: a reading that is *absent* is luck, and
+ *    this rule is the part that does not depend on it.
+ */
+export function shouldMeasureUplink(
+  isSharing: boolean,
+  transport: VoiceRoomTransport | null,
+): boolean {
+  return isSharing && transport !== "livekit";
+}
+
 export function useShareUplinkStrain(
   isSharing: boolean,
   quality: VideoQuality,
@@ -173,15 +209,10 @@ export function useShareUplinkStrain(
   const streak = useRef(0);
 
   useEffect(() => {
-    // MESH ONLY. On the SFU the numbers this reads mean something else: above
-    // `LARGE_ROOM_PARTICIPANTS` the published top layer is capped at
-    // `LARGE_ROOM_SCREEN_BITRATE`, while the stats row still reports the
-    // uncapped rung as its ceiling, so the encoder sits far under a ceiling it
-    // was never allowed to reach and every tick reads as "bandwidth". That
-    // would have told the presenter of a 100-person watch party on fibre that
-    // their connection was the problem, every time. Found in review. The whole
-    // budget controller this warning explains is mesh-only anyway.
-    if (!isSharing || transport === "livekit") {
+    // The rule, and why it is a rule, is on `shouldMeasureUplink`. A room
+    // promoted to the SFU mid-share lands here, so this must clear the streak
+    // and stop the timer rather than merely stop counting up.
+    if (!shouldMeasureUplink(isSharing, transport)) {
       streak.current = 0;
       setStrained(false);
       return;

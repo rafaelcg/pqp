@@ -360,6 +360,40 @@ could move (`VoiceState.canPromoteTransport`, `isCameraAtCap`'s fourth
 argument): refusing locally is what made the mesh cap a wall, because the
 click never reached the server and the server never got to move the room.
 
+**The seam with the uplink strain warning.** `useShareUplinkStrain`
+(`client/src/hooks/use-share-uplink-strain.ts`) says "sua conexão está
+segurando esta transmissão" on the share's own status line when the mesh
+upload budget has measured this link and found it short. Promotion removes the
+same pressure a different way, by removing the copies: on the voice server a
+publisher uploads once instead of once per viewer.
+
+They meet at one rule, `shouldMeasureUplink`, and it stops the strain sampler
+the moment the room's transport becomes `livekit`. That rule reads as
+defensive and is not: a room now reaches the voice server at
+`MESH_ROOM_PROMOTION_SIZE` (four), so a share in progress when the fourth person
+walks in is promoted under the presenter, and the hook is then mid-streak on a
+mesh being torn down in the same tick. Left running it would keep reading a
+mesh `PeerConnectionManager.dispose()` has already unregistered, and then read
+the SFU's rows, where a top layer capped at `LARGE_ROOM_SCREEN_BITRATE` under
+an uncapped reported ceiling makes every tick look like `bandwidth`. The
+presenter of a promoted call on fibre would be told their connection was the
+problem, permanently, with nothing on screen to say why. Pinned by the last
+`describe` in `use-share-uplink-strain.test.ts`.
+
+**The uplink measurement itself did become a promotion input.** An earlier
+draft of this section argued it could not: the reading is taken on the client,
+it was not on the wire, and a frame carrying it would let any client spend the
+media box's budget by claiming a bad link. That objection was answered rather
+than avoided. `set-camera` and `set-sharing-screen` now carry `uplinkBps`,
+`clampReportedUplinkBps` believes it only inside the window the budget
+controller itself runs in, the server takes the **narrowest** report in the
+room (so an inflated number buys nothing, because it cannot lower a minimum
+somebody else set), and on the voice server no client number is read at all.
+`meshVideoLimit` derives the mesh camera and share limits from that reading
+and the room size, and reaching the derived limit is one of the promotion
+triggers above. So the same measurement that makes the warning honest also
+makes the limit honest.
+
 **iOS and Android do not follow it yet.** Both support LiveKit rooms, so both
 work perfectly well *in* a promoted room; what neither can do is move an
 in-progress call from a mesh to the SFU without rejoining. Until they can, a
