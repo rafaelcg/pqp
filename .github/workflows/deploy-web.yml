@@ -137,8 +137,13 @@ jobs:
           TMP="$(mktemp -d)"
           (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --no-fund --no-audit)
           cd "$GITHUB_WORKSPACE/client"
+          # `--branch=main` is what makes this a PRODUCTION deploy. Wrangler
+          # otherwise reads the branch off the checkout, and a workflow_run
+          # checkout pinned to a SHA is a detached HEAD, which it reports as
+          # "head": every deploy after #385 went to the head.pqp-3yr.pages.dev
+          # preview and production sat on the last push-triggered build.
           "$TMP/node_modules/.bin/wrangler" pages deploy dist \
-            --project-name=pqp --commit-dirty=true
+            --project-name=pqp --branch=main --commit-dirty=true
 
       # The middleware is only useful if it is actually in the bundle. A grep is
       # a poor test and a fine tripwire: it fails the deploy on the one mistake
