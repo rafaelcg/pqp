@@ -104,7 +104,12 @@ describeDb("hls playlist route", () => {
       "fetch",
       vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
         const url = String(input instanceof Request ? input.url : input);
-        if (url.startsWith("https://live.example.test/")) {
+        // The proxy's own read is a presigned endpoint-form GET (no public
+        // base needed); the old public-base form is kept for the fallback.
+        if (
+          url.startsWith("https://live.example.test/") ||
+          url.includes("s3.example.test/")
+        ) {
           return new Response(PLAYLIST_BODY, { status: 200 });
         }
         return realFetch(input, init);
