@@ -1,0 +1,22 @@
+# A standalone Chromium, launched and driven from *inside* this container by
+# `run.mjs` itself (not attached to over the network). The first version of
+# this harness tried to drive three Chromiums from one host-side script over
+# CDP; Chrome's remote-debugging socket binds to its own loopback regardless
+# of `--remote-debugging-address`, so nothing outside the container — another
+# container, or the host through a published port — could ever reach it. See
+# README.md. Each container now runs its own Node script and its own local
+# `chromium.launch()`, and the three containers coordinate through a bind-
+# mounted directory instead of a network protocol.
+FROM mcr.microsoft.com/playwright:v1.62.1-jammy
+
+# `tc` (traffic control) is what actually caps this container's own egress —
+# only used on the `sharer` service, but harmless to install everywhere.
+RUN apt-get update && apt-get install -y --no-install-recommends iproute2 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /harness
+# playwright-core only: the driver, not a second copy of the browsers (the
+# base image already has the exact Chromium this version expects).
+RUN npm install --no-save playwright-core@1.62.1
+
+CMD ["node", "/harness/run.mjs"]
