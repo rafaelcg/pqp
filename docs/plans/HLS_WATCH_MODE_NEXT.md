@@ -56,9 +56,9 @@ going live (streaming responsibility / no pirated content).
 - The egress compose overlay's `user: "0:0"` makes egress exit silently on a
   fresh box (reported by the egress branch's author; not exercised by this
   merge's test run).
-- `server/src/voice/hls-egress.ts` hardcodes `EncodingOptionsPreset.H264_1080P_30`
-  (see the comment at the `startTrackCompositeEgress` call site); it is not
-  configurable per room or server size yet.
+- The egress encoding is `LIVE_HLS_PRESET` (`720p30` default, `1080p30`),
+  read per session start (`liveHlsPreset()` in `hls-egress.ts`). It is still
+  one value per deployment, not per room or server size.
 
 ## Device QA list
 

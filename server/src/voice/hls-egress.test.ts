@@ -5,12 +5,16 @@ import {
   isLiveHlsEnabled,
   isLiveHlsEnabledForServer,
   liveHlsConfig,
+  liveHlsPreset,
   liveHlsServerAllowlist,
   liveHlsStreamFor,
   reconcileLiveHls,
   resetLiveHlsForTests,
   setLiveHlsTestHooks,
 } from "./hls-egress.js";
+
+const logEvent = vi.hoisted(() => vi.fn());
+vi.mock("../lib/log.js", () => ({ logEvent }));
 
 const CHANNEL = "00000000-0000-4000-8000-0000000000aa";
 const SERVER = "00000000-0000-4000-8000-0000000000ee";
@@ -43,6 +47,7 @@ function disableHls() {
   delete process.env.LIVE_HLS_S3_FORCE_PATH_STYLE;
   delete process.env.LIVE_HLS_DELAY_SECONDS;
   delete process.env.LIVE_HLS_SERVER_ALLOWLIST;
+  delete process.env.LIVE_HLS_PRESET;
 }
 
 describe("live HLS egress", () => {
@@ -127,7 +132,7 @@ describe("live HLS egress", () => {
       expect.objectContaining({
         videoTrackId: "TR_V",
         audioTrackId: "TR_A",
-        encodingOptions: EncodingOptionsPreset.H264_1080P_30,
+        encodingOptions: EncodingOptionsPreset.H264_720P_30,
       }),
     );
     const output = start.mock.calls[0]![1] as {
@@ -304,6 +309,54 @@ describe("live HLS egress", () => {
       expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
       expect(stop).toHaveBeenCalledWith("EG_1");
       expect(liveHlsStreamFor(CHANNEL)).toBeNull();
+    });
+  });
+
+  describe("LIVE_HLS_PRESET", () => {
+    async function startWith(preset: string | undefined) {
+      resetLiveHlsForTests();
+      enableHls();
+      if (preset === undefined) {
+        delete process.env.LIVE_HLS_PRESET;
+      } else {
+        process.env.LIVE_HLS_PRESET = preset;
+      }
+      const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+        async () => ({ egressId: "EG_1" }),
+      );
+      setLiveHlsTestHooks({
+        egress: { startTrackCompositeEgress: start, stopEgress: vi.fn() },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
+      return (start.mock.calls[0]![2] as { encodingOptions?: unknown })
+        .encodingOptions;
+    }
+
+    it("defaults to 720p30", async () => {
+      expect(await startWith(undefined)).toBe(EncodingOptionsPreset.H264_720P_30);
+      expect(await startWith("720p30")).toBe(EncodingOptionsPreset.H264_720P_30);
+    });
+
+    it("1080p30 picks the 1080p preset", async () => {
+      expect(await startWith("1080p30")).toBe(
+        EncodingOptionsPreset.H264_1080P_30,
+      );
+      expect(await startWith(" 1080P30 ")).toBe(
+        EncodingOptionsPreset.H264_1080P_30,
+      );
+    });
+
+    it("garbage logs once and uses the default", async () => {
+      logEvent.mockClear();
+      expect(await startWith("4k")).toBe(EncodingOptionsPreset.H264_720P_30);
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsPresetInvalid",
+        expect.objectContaining({ value: "4k", using: "720p30" }),
+      );
+      logEvent.mockClear();
+      expect(liveHlsPreset()).toBe(EncodingOptionsPreset.H264_720P_30);
+      expect(logEvent).not.toHaveBeenCalled();
     });
   });
 });

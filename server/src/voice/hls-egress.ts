@@ -89,6 +89,40 @@ function delaySeconds(): number {
     : DEFAULT_DELAY_SECONDS;
 }
 
+const DEFAULT_PRESET = "720p30";
+const PRESETS: Record<string, EncodingOptionsPreset> = {
+  "720p30": EncodingOptionsPreset.H264_720P_30,
+  "1080p30": EncodingOptionsPreset.H264_1080P_30,
+};
+let warnedPreset: string | null = null;
+
+/**
+ * `LIVE_HLS_PRESET`: the egress encoding. `720p30` (default) or `1080p30`.
+ * Anything else logs `voice.hlsPresetInvalid` once per distinct value and
+ * uses the default. 720p is the box's safe ceiling: the transcode runs on
+ * the same CPU as the SFU, and a share the presenter already sends at 720p
+ * (the large-room cap) gains nothing from a 1080p encode.
+ */
+export function liveHlsPreset(): EncodingOptionsPreset {
+  const raw = process.env.LIVE_HLS_PRESET?.trim();
+  if (!raw) {
+    return PRESETS[DEFAULT_PRESET]!;
+  }
+  const preset = PRESETS[raw.toLowerCase()];
+  if (preset !== undefined) {
+    return preset;
+  }
+  if (warnedPreset !== raw) {
+    warnedPreset = raw;
+    logEvent("voice.hlsPresetInvalid", {
+      value: raw,
+      accepted: Object.keys(PRESETS),
+      using: DEFAULT_PRESET,
+    });
+  }
+  return PRESETS[DEFAULT_PRESET]!;
+}
+
 const DEFAULT_RETENTION_MINUTES = 10;
 const DEFAULT_REPLAY_HOURS = 24;
 const DEFAULT_URL_TTL_SECONDS = 900;
@@ -298,6 +332,7 @@ export function setLiveHlsTestHooks(hooks: {
 
 export function resetLiveHlsForTests(): void {
   rooms.clear();
+  warnedPreset = null;
   injectedEgress = null;
   injectedFinder = null;
 }
@@ -560,8 +595,7 @@ async function startRoom(
       {
         videoTrackId: tracks.videoTrackId,
         audioTrackId: tracks.audioTrackId,
-        // Default preset is H264_720P_30. A 1080 share would be crushed.
-        encodingOptions: EncodingOptionsPreset.H264_1080P_30,
+        encodingOptions: liveHlsPreset(),
       },
     );
     const stream: LiveHlsStream = {
