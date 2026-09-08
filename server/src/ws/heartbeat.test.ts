@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import {
@@ -151,6 +153,31 @@ describe("startHeartbeat", () => {
 
     expect(dead.terminated).toBe(1);
     expect(live.terminated).toBe(0);
+  });
+
+  /**
+   * THE TEST THAT WOULD HAVE CAUGHT THE REAL BUG, which was never in this
+   * function: it was that nothing called it.
+   *
+   * `server/src/index.ts` carried its own inline copy of the reap loop, with a
+   * one-strike rule, and that copy is what production ran. Everything above
+   * this line, the two-strike fix included, was dead code from the day it
+   * merged. Same shape as pitfalls 9 and 12 in CLAUDE.md: the tested path and
+   * the live path were not the same path, and nothing said so.
+   *
+   * Reading the entry point is a blunt instrument. It is also the only thing
+   * that can tell "the reaper is correct" from "the reaper is reachable".
+   */
+  it("is the reaper the entry point actually runs", () => {
+    const entry = readFileSync(
+      fileURLToPath(new URL("../index.ts", import.meta.url)),
+      "utf8",
+    );
+
+    expect(entry).toContain("startHeartbeat(");
+    // And no second implementation beside it: a `terminate()` inside a loop
+    // over `wss.clients` is what the inline copy looked like.
+    expect(entry).not.toMatch(/for \(const \w+ of wss\.clients\)[\s\S]{0,400}terminate\(\)/);
   });
 
   it("stops pinging once the returned stop function runs", () => {

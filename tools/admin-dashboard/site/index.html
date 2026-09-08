@@ -4642,6 +4642,23 @@
     var msgsHourly = Array.isArray(msgs.byHour) && msgs.byHour.length ? msgs.byHour : [0, 0];
     var msgDelta = (msgs.last24h || 0) - (msgs.previous24h || 0);
     var peakSince = voice.peakTrackedSince ? fmtTime(voice.peakTrackedSince) : "";
+    // `seats` é null quando VOICE_REGISTRY está desligado: sem linhas, sem
+    // leitura, e um zero aqui seria um "tudo certo" que a instância não pode dar.
+    var seats = voice.seats || null;
+    var seatDelta = !seats
+      ? "registro desligado"
+      : seats.ghostsSwept
+        ? fmt(seats.ghostsSwept) + " fantasma" + (seats.ghostsSwept === 1 ? "" : "s") + " varrido" + (seats.ghostsSwept === 1 ? "" : "s")
+        : "nenhum fantasma";
+    var seatNote = "sem leitura";
+    if (seats) {
+      var oldest = seats.oldestIdleMinutes;
+      seatNote = oldest
+        ? "o mais parado está há " + (oldest >= 60
+            ? Math.floor(oldest / 60) + "h" + (oldest % 60 ? " " + (oldest % 60) + "min" : "")
+            : oldest + "min")
+        : "ninguém parado há mais de 1h";
+    }
 
     renderMetrics([
       { label: "usuários", val: fmt(users.total || 0),
@@ -4660,7 +4677,13 @@
         note: "pico hoje: " + fmt(voice.peakRoomSizeToday || 0) + " pessoas", spark: null },
       { label: "pico de sala · hoje", val: fmt(voice.peakRoomSizeToday || 0),
         delta: voice.backend === "livekit" ? "livekit" : "mesh", flat: true,
-        note: peakSince ? "contado desde " + peakSince + " (zera no deploy)" : "zera no deploy", spark: null }
+        note: peakSince ? "contado desde " + peakSince + " (zera no deploy)" : "zera no deploy", spark: null },
+      // Assentos parados: quem está numa call sem escrever nada há mais de uma
+      // hora. Em 08/09/2026 dez salas tinham exatamente uma pessoa assim, a
+      // mais velha com quinze horas, e nenhum número aqui dizia isso.
+      { label: "assentos parados", val: fmt(seats ? seats.idleOverAnHour : 0),
+        delta: seatDelta, flat: !seats || !seats.idleOverAnHour,
+        note: seatNote, spark: null }
     ]);
 
     renderCharts(usersHourly, msgsHourly);

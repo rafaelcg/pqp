@@ -94,6 +94,7 @@ import { readSfuStats } from "../voice/sfu-stats.js";
 import {
   adoptVoicePeer,
   clearWatchPartyIfEmpty,
+  countIdleVoiceSeats,
   deleteVoicePeer,
   getVoicePeerRow,
   isVoicePeerRetired,
@@ -112,6 +113,8 @@ import {
   reconcileVoiceRegistry,
   retireVoicePeerId,
   setVoiceServerMute,
+  sweepOwnStaleVoicePeers,
+  trackPendingRegistryWork,
   unpinVoiceRoomIfEmpty,
   upsertVoicePeer,
   type VoicePeerRow,
@@ -312,23 +315,67 @@ function clusterOn(): boolean {
 }
 
 /**
- * Registry writes in flight, per channel. The handler never waits for a row
- * (a database blip must not hold up a frame), but a roster built from the
- * rows must not run ahead of the write it is reporting, or the joiner's own
- * audience would see a roster without them. `broadcastRoster` awaits this
- * before reading, which is also what puts the bus hint after the commit.
+ * THE COUNTERS THE SEAT LEAK DID NOT HAVE, both since boot, both on
+ * `GET /api/admin/metrics`.
+ *
+ * `staleRowWritesRefused` is `writePeerRow` catching a handler about to
+ * resurrect a deleted seat; `ghostSeatsSwept` is `sweepOwnStaleVoicePeers`
+ * finding one that got through anyway. Zero and zero is the healthy reading.
+ * A climbing first number with a flat second is the guard doing its job; a
+ * climbing second one is a path the guard does not cover, which is exactly
+ * the thing that was invisible for months. Neither is derivable from the
+ * rows after the fact, which is why they are counted rather than queried.
+ */
+/**
+ * How long a seat may go unwritten before the dashboard counts it. An hour,
+ * because a call where nobody mutes, unmutes, shares or rejoins for an hour
+ * is rare enough to be worth a look and common enough not to be an alarm.
+ */
+const SEAT_IDLE_ALARM_MS = 60 * 60_000;
+
+let staleRowWritesRefused = 0;
+let ghostSeatsSwept = 0;
+
+/**
+ * Registry writes for a channel, ONE AT A TIME AND IN THE ORDER THEY WERE
+ * ASKED FOR. The handler never waits for a row (a database blip must not hold
+ * up a frame), but a roster built from the rows must not run ahead of the
+ * write it is reporting, or the joiner's own audience would see a roster
+ * without them. `broadcastRoster` awaits this before reading, which is also
+ * what puts the bus hint after the commit.
+ *
+ * IT TAKES A THUNK, AND THAT IS THE WHOLE POINT. This used to take a promise
+ * and join it with `Promise.all`, which waits for both and orders neither: the
+ * query had already been issued by the caller, so two writes for the same peer
+ * went out on two pooled connections and Postgres was free to run them in
+ * either order. On 2026-09-08 a client sent `set-voice-state` and
+ * `leave-voice-room` back to back; the mute's UPSERT was issued first, the
+ * hangup's DELETE second, and the database ran them the other way round. The
+ * row came back six milliseconds after it was deleted, with `orphaned_at`
+ * NULL and this instance stamped on it, and nothing in the cluster is allowed
+ * to sweep a live instance's rows. That seat sat in a call nobody was in.
+ *
+ * Starting the write from inside the chain is what makes "later frame, later
+ * row" true rather than merely likely.
  */
 const pendingRowWrites = new Map<string, Promise<void>>();
 
-function trackRowWrite(channelId: string, write: Promise<unknown>): void {
+function trackRowWrite(channelId: string, start: () => Promise<unknown>): void {
   const previous = pendingRowWrites.get(channelId) ?? Promise.resolve();
-  // Registry promises never reject (`track` swallows into a log), so this
-  // chain cannot break; `catch` is belt and braces against a future caller.
-  const next = Promise.all([previous, write]).then(
-    () => undefined,
-    () => undefined,
-  );
+  // Registry promises never reject (`track` swallows into a log), so the
+  // chain cannot break; the `catch` is belt and braces against a future
+  // caller, and it must not be able to skip `start`.
+  const next = previous
+    .catch(() => undefined)
+    .then(start)
+    .then(
+      () => undefined,
+      () => undefined,
+    );
   pendingRowWrites.set(channelId, next);
+  // The chain, not the query: a write still queued behind another has not
+  // been issued and would otherwise be invisible to `settleVoiceRegistryWrites`.
+  trackPendingRegistryWork(next);
   void next.then(() => {
     if (pendingRowWrites.get(channelId) === next) {
       pendingRowWrites.delete(channelId);
@@ -350,8 +397,28 @@ function writePeerRow(peer: VoicePeer): void {
   if (!registryOn()) {
     return;
   }
-  trackRowWrite(
-    peer.voiceChannelId,
+  // THE SEAT MAY BE GONE. Every frame runs as its own promise
+  // (`ws/index.ts` fires `void onMessage(...)` with no per-socket
+  // serialisation), so a handler that awaited anything can arrive here
+  // holding a `VoicePeer` that `removePeer` has already dropped from the
+  // map and deleted the row for. Writing it would INSERT that row back with
+  // `orphaned_at` NULL and this, living, instance stamped on it: a seat no
+  // socket close can orphan, no orphan timer can release, and
+  // `reconcileVoiceRegistry` will not touch because it belongs to an
+  // instance that is alive. Immortal, and on the roster.
+  //
+  // Identity, not `peers.has`: a reconstructed peer reuses the id, and the
+  // stale object must not be allowed to write over the new seat's row.
+  if (peers.get(peer.id) !== peer) {
+    staleRowWritesRefused += 1;
+    logEvent("voice.staleRowWrite", {
+      peerId: peer.id,
+      userId: peer.userId,
+      voiceChannelId: peer.voiceChannelId,
+    });
+    return;
+  }
+  trackRowWrite(peer.voiceChannelId, () =>
     upsertVoicePeer({
       peerId: peer.id,
       channelId: peer.voiceChannelId,
@@ -822,7 +889,7 @@ function retirePeerId(peerId: string, voiceChannelId: string): void {
     // Tracked on the channel so a resume for this id that arrives right
     // behind the hangup waits for the row before it asks whether the id is
     // retired (`settledRowWrites` in the join handler).
-    trackRowWrite(voiceChannelId, retireVoicePeerId(peerId));
+    trackRowWrite(voiceChannelId, () => retireVoicePeerId(peerId));
     return;
   }
   const existing = retiredPeerIds.get(peerId);
@@ -1010,6 +1077,30 @@ export interface VoiceActivitySnapshot {
     framesReceived: number;
   };
   /**
+   * WHETHER ANYONE IS SITTING IN A CALL THEY LEFT.
+   *
+   * `idleOverAnHour` and `oldestIdleMinutes` read the rows: a seat is written
+   * on join, on every state change and on resume, so a row nobody has
+   * touched in an hour is either a person who has genuinely sat silent that
+   * long or a seat with nobody behind it. On 2026-09-08 ten of nineteen rooms
+   * held exactly one such person, the oldest for fifteen hours, and no number
+   * anywhere said so.
+   *
+   * `staleRowWritesRefused` and `ghostsSwept` are this process since boot, and
+   * they are the mechanism rather than the symptom: the first is a write that
+   * would have resurrected a deleted seat, the second is one that got through
+   * and had to be swept. Both should sit at zero.
+   *
+   * Null when the registry is off: with no rows there is nothing to read, and
+   * a zero would claim an all-clear this deployment cannot give.
+   */
+  seats: {
+    idleOverAnHour: number;
+    oldestIdleMinutes: number | null;
+    staleRowWritesRefused: number;
+    ghostsSwept: number;
+  } | null;
+  /**
    * What the roster fan-out is actually doing, since boot.
    *
    * `deltas` versus `snapshots` says whether rooms are being described
@@ -1108,6 +1199,23 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
       largestRoomNow = room.participants;
     }
   }
+  let seats: VoiceActivitySnapshot["seats"] = null;
+  if (registryOn()) {
+    try {
+      const idle = await countIdleVoiceSeats(SEAT_IDLE_ALARM_MS);
+      seats = {
+        idleOverAnHour: idle.seats,
+        oldestIdleMinutes: idle.oldestIdleMinutes,
+        staleRowWritesRefused,
+        ghostsSwept: ghostSeatsSwept,
+      };
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "idleSeats",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   return {
     activeRooms: rooms.length,
     participants,
@@ -1119,6 +1227,7 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
       framesRelayed: clusterFrames.relayed,
       framesReceived: clusterFrames.received,
     },
+    seats,
     roster: {
       deltas: rosterFramesSent.deltas,
       snapshots: rosterFramesSent.snapshots,
@@ -2002,8 +2111,7 @@ function removePeer(peerId: string) {
     // One statement: the row goes, and the room row with it if this was the
     // last peer anywhere in the cluster (not only on this instance). Then the
     // party, for the one race that can leave a room row behind.
-    trackRowWrite(
-      voiceChannelId,
+    trackRowWrite(voiceChannelId, () =>
       deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(voiceChannelId)),
     );
   }
@@ -2285,8 +2393,7 @@ export async function leaveVoiceByResumeToken(
  */
 function releaseForeignPeer(row: VoicePeerRow, reason: string): void {
   const { peerId, channelId } = row;
-  trackRowWrite(
-    channelId,
+  trackRowWrite(channelId, () =>
     deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(channelId)),
   );
   retirePeerId(peerId, channelId);
@@ -2352,16 +2459,31 @@ export async function runVoiceReconcile(): Promise<{
   orphaned: number;
   removed: number;
   roomsSwept: number;
+  /** Rows this instance owned with no peer behind them. Should be zero. */
+  ghosts: number;
 }> {
   if (!registryOn()) {
-    return { orphaned: 0, removed: 0, roomsSwept: 0 };
+    return { orphaned: 0, removed: 0, roomsSwept: 0, ghosts: 0 };
   }
   const result = await reconcileVoiceRegistry();
   // The SFU re-sweep claims ride on the same beat (plan section 5.4): every
   // instance ticks, and only the rows this tick won are swept.
   await tickSfuResweeps();
+  // And this instance's own rows that this instance's map does not hold.
+  // `reconcileVoiceRegistry` cannot do it (it skips its own rows on purpose,
+  // and must, because another instance's live seat is none of its business),
+  // so the owner has to. The peer ids are read from the map here rather than
+  // in the registry, which is the only place they exist.
+  const ghosts = await sweepOwnStaleVoicePeers([...peers.keys()]);
+  if (ghosts.length > 0) {
+    ghostSeatsSwept += ghosts.length;
+    logEvent("voice.ghostSeatsSwept", {
+      count: ghosts.length,
+      peerIds: ghosts.map((ghost) => ghost.peerId).join(","),
+    });
+  }
   const touched = new Set<string>();
-  for (const { peerId, channelId } of result.removed) {
+  for (const { peerId, channelId } of [...result.removed, ...ghosts]) {
     broadcastToRoom(channelId, { type: "peer-left", peerId });
     void broadcastRoster(channelId, { kind: "left", peerId });
     touched.add(channelId);
@@ -2391,6 +2513,7 @@ export async function runVoiceReconcile(): Promise<{
     orphaned: result.orphaned.length,
     removed: result.removed.length,
     roomsSwept: result.roomsSwept,
+    ghosts: ghosts.length,
   };
 }
 
@@ -2427,9 +2550,8 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
     }
   }, VOICE_RESUME_TTL_MS);
   if (registryOn()) {
-    trackRowWrite(
-      peer.voiceChannelId,
-      markVoicePeerOrphaned(peerId, new Date(peer.orphanedAt)),
+    trackRowWrite(peer.voiceChannelId, () =>
+      markVoicePeerOrphaned(peerId, new Date(peer.orphanedAt as number)),
     );
   }
   onLiveRoomMaybeEmpty(peer.voiceChannelId, socket);
