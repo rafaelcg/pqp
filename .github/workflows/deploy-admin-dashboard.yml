@@ -1,0 +1,75 @@
+name: Deploy Admin Dashboard
+
+# The operator dashboard (tools/admin-dashboard) is its own Cloudflare Worker
+# (`pqp-admin`), outside the pnpm workspace and outside ci.yml's coverage
+# (ci.yml paths-ignores this directory on purpose — see its comment). Before
+# this file, it was deployed by hand with `npx wrangler deploy`, and it went
+# two weeks without anyone running that command while PRs merged against it:
+# the repo had the voz tab and the occupancy chart, the live Worker did not,
+# and nothing said so. This workflow is what makes a merge here ship itself,
+# the same way deploy-web.yml does for the client.
+#
+# Push + paths, not workflow_run off CI: CI does not build or test this
+# directory (see README.md "Not in the pnpm workspace"), so there is no CI
+# run to hang a workflow_run trigger off. android.yml and electron.yml are
+# the precedent for a push-triggered, path-filtered deploy that runs
+# independently of ci.yml.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tools/admin-dashboard/**"
+      - ".github/workflows/deploy-admin-dashboard.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-admin-dashboard
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Cloudflare Worker (pqp-admin)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Own package.json, own lockfile, outside the pnpm workspace (see
+      # README.md "Not in the pnpm workspace"). npm ci, not npm install, to
+      # match what package-lock.json actually pins.
+      - name: Install dependencies
+        working-directory: tools/admin-dashboard
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: tools/admin-dashboard
+        run: npm run check
+
+      # Secrets (ADMIN_DASH_PASSWORD, ADMIN_METRICS_TOKEN) are set once with
+      # `wrangler secret put` and are not touched here — `wrangler deploy`
+      # only overwrites the `vars` block in wrangler.jsonc. See README.md
+      # "Secrets and variables".
+      - name: Deploy to Cloudflare Workers
+        working-directory: tools/admin-dashboard
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Missing secret CLOUDFLARE_API_TOKEN. Same token deploy-web.yml uses; run: gh secret set CLOUDFLARE_API_TOKEN"
+            exit 1
+          fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::Missing secret CLOUDFLARE_ACCOUNT_ID"
+            exit 1
+          fi
+          npx wrangler deploy
