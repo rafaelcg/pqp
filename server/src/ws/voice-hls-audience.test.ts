@@ -54,6 +54,13 @@ vi.mock("../services/users.js", () => ({
     !access.denied.has(access.key(channelId, userId)),
 }));
 
+// The scheduling seam writes the session flip to Postgres; not this file's
+// concern and this suite runs without a database.
+vi.mock("../services/channel-sessions.js", () => ({
+  markChannelSessionLive: async () => {},
+  markChannelSessionEnded: async () => {},
+}));
+
 vi.mock("../services/sanctions.js", () => ({
   findTimeoutForChannel: async () => null,
   timeoutMessage: () => "",
@@ -131,11 +138,21 @@ vi.mock("../voice/hls-egress.js", () => ({
 }));
 
 const {
+  getChannelLiveState,
   handleVoiceMessage,
+  removeVoicePeerBySocket,
   resetVoicePeers,
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
+  ROSTER_AUDIENCE_KEYFRAME_MS,
+  sendAllVoiceRosters,
 } = await import("./voice.js");
+const { setAuthenticatedSocket, deleteAuthenticatedSocket } = await import(
+  "./sockets.js"
+);
+const { verifyHlsViewerToken, HLS_VIEWER_TOKEN_PARAM } = await import(
+  "../voice/hls-viewer-token.js"
+);
 const { pickHlsSharer } = await import("./hls-audience.js");
 const { PERMISSION_ALL, PERMISSION_DEFAULT_EVERYONE } = await import(
   "@pqp/shared"
@@ -248,5 +265,242 @@ describe("HLS start reads the stage gate", () => {
       egress.calls.filter(([, presenter]) => presenter !== null),
     ).toEqual([]);
     expect(egress.streams.has(CINEMA)).toBe(false);
+  });
+});
+
+/** The `?t=` token on a stamped playlist URL, or null. */
+function tokenOf(url: unknown): string | null {
+  if (typeof url !== "string") {
+    return null;
+  }
+  const query = url.split("?")[1];
+  if (!query) {
+    return null;
+  }
+  return new URLSearchParams(query).get(HLS_VIEWER_TOKEN_PARAM);
+}
+
+async function watchLive(rec: Recorder, userId: string, watching: boolean) {
+  await handleVoiceMessage(
+    { socket: rec.socket, user: asUser(userId) },
+    { type: "watch-live", channelId: CINEMA, watching },
+  );
+}
+
+describe("live HLS reaches the channel", () => {
+  const registered: Recorder[] = [];
+
+  /** An authenticated socket in the sidebar: never joins the room. */
+  function viewer(userId: string): Recorder {
+    const rec = recorder();
+    setAuthenticatedSocket(rec.socket, asUser(userId));
+    registered.push(rec);
+    return rec;
+  }
+
+  async function goLive() {
+    bits.byUser.set("host", PERMISSION_ALL);
+    const host = viewer("host");
+    await join(host, "host", CINEMA);
+    await claimStage(host, "host");
+    await settle();
+    return host;
+  }
+
+  beforeEach(() => {
+    resetVoicePeers();
+    resetVoiceRateLimits();
+    resetVoiceRoomTransports();
+    bits.byUser.clear();
+    access.denied.clear();
+    egress.streams.clear();
+    egress.calls.length = 0;
+    egress.refuse = false;
+    backend.configured = "livekit";
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    for (const rec of registered) {
+      deleteAuthenticatedSocket(rec.socket);
+    }
+    registered.length = 0;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("a viewer with VIEW who never joins hears channel-live with a token of their own", async () => {
+    const ana = viewer("ana");
+    const host = await goLive();
+    const stream = egress.streams.get(CINEMA)!;
+
+    const live = frames(ana, "channel-live");
+    expect(live).toHaveLength(1);
+    expect(live[0]!.channelId).toBe(CINEMA);
+    expect(live[0]!.watching).toBe(0);
+    const url = (live[0]!.stream as LiveHlsStream).hlsUrl;
+    expect(url.startsWith(`${stream.hlsUrl}?`)).toBe(true);
+    const token = tokenOf(url);
+    expect(token).not.toBeNull();
+    expect(
+      verifyHlsViewerToken(token, {
+        channelId: CINEMA,
+        startedAt: stream.startedAt,
+      }),
+    ).toEqual({ userId: "ana" });
+    // Ana never took a seat: nothing on the room-only path.
+    expect(frames(ana, "voice-stream")).toHaveLength(0);
+    // The host, in the room, hears both, each stamped for the host.
+    expect(
+      verifyHlsViewerToken(
+        tokenOf((lastFrame(host, "voice-stream")!.stream as LiveHlsStream).hlsUrl),
+        { channelId: CINEMA, startedAt: stream.startedAt },
+      ),
+    ).toEqual({ userId: "host" });
+    expect(frames(host, "channel-live")).toHaveLength(1);
+  });
+
+  it("the stop reaches the channel as stream: null", async () => {
+    const ana = viewer("ana");
+    const host = await goLive();
+    await handleVoiceMessage(
+      { socket: host.socket, user: asUser("host") },
+      { type: "set-sharing-screen", sharing: false },
+    );
+    await settle();
+    const live = frames(ana, "channel-live");
+    expect(live).toHaveLength(2);
+    expect(live[1]!.stream).toBeNull();
+    expect(lastFrame(host, "voice-stream")!.stream).toBeNull();
+  });
+
+  it("a user without VIEW hears nothing, and their watch-live is ignored", async () => {
+    access.denied.add(access.key(CINEMA, "outsider"));
+    const outsider = viewer("outsider");
+    const ana = viewer("ana");
+    await goLive();
+    expect(frames(outsider, "channel-live")).toHaveLength(0);
+    expect(frames(ana, "channel-live")).toHaveLength(1);
+
+    await watchLive(outsider, "outsider", true);
+    expect(outsider.frames).toHaveLength(0);
+    expect(getChannelLiveState(CINEMA).watching).toBe(0);
+  });
+
+  it("watch-live counts a socket without a seat, answers it alone, and the audience hears the count on the keyframe", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const ana = viewer("ana");
+    const bia = viewer("bia");
+    const host = await goLive();
+    expect(frames(bia, "channel-live")).toHaveLength(1);
+
+    await watchLive(ana, "ana", true);
+    // Ana alone gets the reply, with her own token and the new count.
+    const reply = lastFrame(ana, "channel-live")!;
+    expect(reply.watching).toBe(1);
+    expect(
+      verifyHlsViewerToken(
+        tokenOf((reply.stream as LiveHlsStream).hlsUrl),
+        { channelId: CINEMA, startedAt: egress.streams.get(CINEMA)!.startedAt },
+      ),
+    ).toEqual({ userId: "ana" });
+    // Nobody else heard about it: no frame per subscribe.
+    expect(frames(bia, "channel-live")).toHaveLength(1);
+    expect(frames(host, "channel-live")).toHaveLength(1);
+    expect(getChannelLiveState(CINEMA)).toMatchObject({
+      watching: 1,
+      participants: 1,
+    });
+
+    // The keyframe carries the count to the whole audience, stamped each.
+    await vi.advanceTimersByTimeAsync(ROSTER_AUDIENCE_KEYFRAME_MS);
+    await settle();
+    expect(frames(bia, "channel-live")).toHaveLength(2);
+    expect(lastFrame(bia, "channel-live")!.watching).toBe(1);
+    expect(
+      verifyHlsViewerToken(
+        tokenOf((lastFrame(bia, "channel-live")!.stream as LiveHlsStream).hlsUrl),
+        { channelId: CINEMA, startedAt: egress.streams.get(CINEMA)!.startedAt },
+      ),
+    ).toEqual({ userId: "bia" });
+    expect(lastFrame(host, "channel-live")!.watching).toBe(1);
+
+    await watchLive(ana, "ana", false);
+    expect(lastFrame(ana, "channel-live")!.watching).toBe(0);
+    expect(frames(bia, "channel-live")).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(ROSTER_AUDIENCE_KEYFRAME_MS);
+    await settle();
+    expect(lastFrame(bia, "channel-live")!.watching).toBe(0);
+  });
+
+  it("the clock stops when the stream is gone and nobody is watching", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const ana = viewer("ana");
+    const host = await goLive();
+    await handleVoiceMessage(
+      { socket: host.socket, user: asUser("host") },
+      { type: "set-sharing-screen", sharing: false },
+    );
+    await settle();
+    const before = frames(ana, "channel-live").length;
+    await vi.advanceTimersByTimeAsync(ROSTER_AUDIENCE_KEYFRAME_MS * 3);
+    await settle();
+    expect(frames(ana, "channel-live")).toHaveLength(before);
+  });
+
+  it("a close and a seat both leave the count", async () => {
+    const ana = viewer("ana");
+    const bia = viewer("bia");
+    await goLive();
+    await watchLive(ana, "ana", true);
+    await watchLive(bia, "bia", true);
+    expect(getChannelLiveState(CINEMA).watching).toBe(2);
+
+    // Ana's tab closed: the ws close path, which runs for sockets without a peer.
+    removeVoicePeerBySocket(ana.socket);
+    expect(getChannelLiveState(CINEMA).watching).toBe(1);
+
+    // Bia pressed Entrar: the roster counts her now.
+    await join(bia, "bia", CINEMA);
+    expect(getChannelLiveState(CINEMA)).toMatchObject({
+      watching: 0,
+      participants: 2,
+    });
+    // A seat that sends watch-live is not double counted.
+    await watchLive(bia, "bia", true);
+    expect(getChannelLiveState(CINEMA).watching).toBe(0);
+  });
+
+  it("the join-time voice-stream and the socket-auth push are stamped for the recipient", async () => {
+    await goLive();
+    const stream = egress.streams.get(CINEMA)!;
+    const late = viewer("late");
+    await join(late, "late", CINEMA);
+    const joined = lastFrame(late, "voice-stream")!;
+    expect(
+      verifyHlsViewerToken(
+        tokenOf((joined.stream as LiveHlsStream).hlsUrl),
+        { channelId: CINEMA, startedAt: stream.startedAt },
+      ),
+    ).toEqual({ userId: "late" });
+
+    // A fresh socket, authenticating mid-stream, learns about it with the
+    // rosters, and only for channels it may view.
+    const fresh = viewer("fresh");
+    await sendAllVoiceRosters(fresh.socket, asUser("fresh"));
+    const pushed = lastFrame(fresh, "channel-live")!;
+    expect(pushed.channelId).toBe(CINEMA);
+    expect(
+      verifyHlsViewerToken(
+        tokenOf((pushed.stream as LiveHlsStream).hlsUrl),
+        { channelId: CINEMA, startedAt: stream.startedAt },
+      ),
+    ).toEqual({ userId: "fresh" });
+
+    access.denied.add(access.key(CINEMA, "banned"));
+    const banned = viewer("banned");
+    await sendAllVoiceRosters(banned.socket, asUser("banned"));
+    expect(frames(banned, "channel-live")).toHaveLength(0);
+    expect(frames(banned, "voice-roster")).toHaveLength(0);
   });
 });

@@ -25,6 +25,7 @@ import {
   liveReactionCountSchema,
   type VoiceParticipant,
   type VoiceRoomTransport,
+  type LiveHlsStream,
   type VoiceSignalingMessage,
 } from "@pqp/shared";
 import type { DbUser } from "../db.js";
@@ -112,7 +113,8 @@ import {
   sendEncoded,
   sendEncodedDroppable,
 } from "./fanout.js";
-import { pickHlsSharer } from "./hls-audience.js";
+import { createHlsAudience, pickHlsSharer } from "./hls-audience.js";
+import { stampViewerStream } from "../voice/hls-viewer-token.js";
 import {
   adoptWatchPartyState,
   applyWatchPartyWrite,
@@ -957,6 +959,15 @@ export interface VoiceActivitySnapshot {
     sockets: number;
     socketsOnDeltas: number;
   };
+  /** The channel-level live HLS path (`channel-live` / `watch-live`). */
+  liveHls: {
+    /** `channel-live` frames written since boot, per socket. */
+    audienceFrames: number;
+    /** Watch-mode viewers without a seat, every channel, right now. */
+    watching: number;
+    /** Channels with a live stream this instance last announced. */
+    liveChannels: number;
+  };
   /**
    * One entry per room that has somebody in it, largest first.
    *
@@ -1038,6 +1049,13 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
       audienceSnapshots: rosterFramesSent.audienceSnapshots,
       sockets: rosterSocketCensus.sockets,
       socketsOnDeltas: rosterSocketCensus.withCap,
+    },
+    liveHls: {
+      audienceFrames: hlsAudienceFramesSent.frames,
+      watching: hlsAudience
+        .liveChannels()
+        .reduce((sum, id) => sum + hlsAudience.count(id), 0),
+      liveChannels: hlsAudience.liveChannels().length,
     },
     rooms,
   };
@@ -1124,17 +1142,83 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
     if (!changed) {
       return;
     }
-    broadcastToRoom(voiceChannelId, {
-      type: "voice-stream",
-      channelId: voiceChannelId,
-      stream: next,
-    });
+    // Per peer rather than `broadcastToRoom`: the playlist URL carries a
+    // token bound to the recipient, so there is no one frame for the room.
+    for (const peer of getRoomPeers(voiceChannelId)) {
+      send(peer.socket, {
+        type: "voice-stream",
+        channelId: voiceChannelId,
+        stream: next ? stampViewerStream(next, peer.userId) : null,
+      });
+    }
+    hlsAudience.setStream(voiceChannelId, next);
+    await broadcastChannelLive(voiceChannelId);
   } catch (error) {
     logEvent("voice.hlsReconcileFailed", {
       channelId: voiceChannelId,
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+function channelLiveFrame(
+  channelId: string,
+  userId: string,
+): VoiceSignalingMessage {
+  const stream = liveHlsStreamFor(channelId);
+  return {
+    type: "channel-live",
+    channelId,
+    stream: stream ? stampViewerStream(stream, userId) : null,
+    watching: hlsAudience.count(channelId),
+  };
+}
+
+/**
+ * The stream and the count to every authenticated socket of every user who
+ * may view the channel. Encoded per socket: the token in `hlsUrl` names the
+ * recipient. A socket in the room gets it too, so a tab that is both in the
+ * call and drawing the sidebar needs no second source for the pill.
+ */
+async function broadcastChannelLive(channelId: string): Promise<void> {
+  const audience = await getChannelAudience(channelId).catch(
+    (error: unknown) => {
+      console.error("[voice] failed to load audience for channel-live:", error);
+      return null;
+    },
+  );
+  if (!audience) {
+    return;
+  }
+  forEachAuthenticatedSocket((socket, user) => {
+    if (!audience.has(user.id)) {
+      return;
+    }
+    send(socket, channelLiveFrame(channelId, user.id));
+    hlsAudienceFramesSent.frames += 1;
+  });
+}
+
+/**
+ * What `GET /api/channels/:channelId/live` answers: the unstamped stream (the
+ * route stamps it for the caller), watchers without a seat, and seats. For a
+ * client that opened the channel before its socket was up.
+ */
+export function getChannelLiveState(channelId: string): {
+  stream: LiveHlsStream | null;
+  watching: number;
+  participants: number;
+} {
+  return {
+    stream: liveHlsStreamFor(channelId),
+    watching: hlsAudience.count(channelId),
+    participants: getRoomPeers(channelId).length,
+  };
+}
+
+/** Test hook: forget every watcher and stream, stop every keyframe clock. */
+export function resetHlsAudience(): void {
+  hlsAudience.reset();
 }
 
 /**
@@ -1295,6 +1379,29 @@ export const ROSTER_AUDIENCE_KEYFRAME_MS = 30_000;
 const rosterFramesSent = { deltas: 0, snapshots: 0, audienceSnapshots: 0 };
 
 /**
+ * `channel-live` frames written since boot, per socket. The number that says
+ * the channel-level path is carrying the watch party rather than the roster:
+ * a viewer outside the room costs one of these every keyframe instead of one
+ * roster per change.
+ */
+const hlsAudienceFramesSent = { frames: 0 };
+
+/**
+ * Watch mode without a seat. `voice-stream` only reaches the room, so until
+ * this path a viewer learned a stream was live by joining, and the sidebar
+ * pill saw nothing but the roster. `channel-live` goes to everyone who may
+ * view the channel (the same audience as the roster), when the stream
+ * changes and on the audience keyframe cadence while it is live or watched.
+ * Never per subscribe: see `createHlsAudience`.
+ */
+const hlsAudience = createHlsAudience({
+  keyframeMs: ROSTER_AUDIENCE_KEYFRAME_MS,
+  broadcast: (channelId) => {
+    void broadcastChannelLive(channelId);
+  },
+});
+
+/**
  * What the cluster bus is carrying for voice, since boot, on this instance.
  *
  * `relayed` is every voice frame this instance published for sockets held
@@ -1348,6 +1455,7 @@ export function resetRosterSequences(): void {
   rosterFramesSent.deltas = 0;
   rosterFramesSent.snapshots = 0;
   rosterFramesSent.audienceSnapshots = 0;
+  hlsAudienceFramesSent.frames = 0;
   clusterFrames.relayed = 0;
   clusterFrames.received = 0;
 }
@@ -2202,6 +2310,9 @@ export async function runVoiceReconcile(): Promise<{
  * is removed now. Intentional hangup is `leave-voice-room`.
  */
 export function removeVoicePeerBySocket(socket: WebSocket) {
+  // Before the peer lookup: a watcher never had a peer, and its close must
+  // still leave the count.
+  hlsAudience.dropSocket(socket);
   const peerId = socketToPeerId.get(socket);
   if (!peerId) {
     return;
@@ -2241,6 +2352,7 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
 /** Test hook: drop every peer, orphan timer, and retired-id window. */
 export function resetVoicePeers(): void {
   resetRosterSequences();
+  hlsAudience.reset();
   for (const peer of peers.values()) {
     cancelOrphan(peer);
   }
@@ -2332,6 +2444,25 @@ export async function sendAllVoiceRosters(socket: WebSocket, user: DbUser) {
         // statement about one peer.
         seq: currentRosterSeq(voiceChannelId),
       });
+    }),
+  );
+
+  // Every live stream this user may view, so the sidebar pill and a viewer
+  // opening a channel without a seat know before anything changes. The
+  // access check is the same one the roster above ran; a room with a stream
+  // always has a roster, so this is usually a repeat of a query just made.
+  await Promise.all(
+    hlsAudience.liveChannels().map(async (channelId) => {
+      try {
+        if (!(await canAccessChannel(channelId, user.id))) {
+          return;
+        }
+      } catch (error) {
+        console.error("[voice] channel-live membership check failed:", error);
+        return;
+      }
+      send(socket, channelLiveFrame(channelId, user.id));
+      hlsAudienceFramesSent.frames += 1;
     }),
   );
 }
@@ -2488,7 +2619,7 @@ async function welcomeVoicePeer(
     send(peer.socket, {
       type: "voice-stream",
       channelId: peer.voiceChannelId,
-      stream: liveStream,
+      stream: stampViewerStream(liveStream, peer.userId),
     });
   }
 
@@ -2520,6 +2651,7 @@ async function reattachVoicePeer(
   cancelOrphan(peer);
   peer.socket = socket;
   socketToPeerId.set(socket, peer.id);
+  hlsAudience.dropSocket(socket);
   const channel = await getChannel(peer.voiceChannelId);
   peer.displayName = await resolveMemberName(
     channel?.kind === "server" ? (channel.server_id ?? null) : null,
@@ -3091,6 +3223,9 @@ export async function handleVoiceMessage(
     }
     peers.set(peerId, peer);
     socketToPeerId.set(socket, peerId);
+    // A seat replaces the watch subscription: the roster counts this socket
+    // now, and counting it twice would inflate the pill.
+    hlsAudience.dropSocket(socket);
     noteRoomSizeForPeak(getRoomPeers(payload.voiceChannelId).length);
     if (!canSpeak) {
       // Once per join, so an operator can see a stage working (or a member
@@ -3445,6 +3580,33 @@ export async function handleVoiceMessage(
 
   if (payload.type === "call-decline") {
     handleCallDecline(user, payload.conversationId);
+    return;
+  }
+
+  // --- live HLS watch mode (no seat) ---
+  if (payload.type === "watch-live") {
+    // The join limiter, because this is the same shape: one access query
+    // per frame from a socket that has no peer yet.
+    if (!roomLimiter.take(user.id)) {
+      return;
+    }
+    // A socket without VIEW is ignored, not answered: an error frame would
+    // confirm the channel exists to somebody who cannot see it.
+    if (!(await canAccessChannel(payload.channelId, user.id))) {
+      return;
+    }
+    if (socket.readyState !== 1) {
+      return;
+    }
+    if (payload.watching && !socketIsInRoom(socket, payload.channelId)) {
+      hlsAudience.subscribe(payload.channelId, socket);
+    } else {
+      hlsAudience.unsubscribe(payload.channelId, socket);
+    }
+    // This socket alone, right away. The audience hears the new count on the
+    // keyframe, never per subscribe.
+    send(socket, channelLiveFrame(payload.channelId, user.id));
+    hlsAudienceFramesSent.frames += 1;
     return;
   }
 

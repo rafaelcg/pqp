@@ -127,7 +127,10 @@ import {
   HlsPlaylistUnavailable,
   resolveHlsPlaylistViewer,
 } from "../voice/hls-playlist-proxy.js";
-import { HLS_VIEWER_TOKEN_PARAM } from "../voice/hls-viewer-token.js";
+import {
+  HLS_VIEWER_TOKEN_PARAM,
+  stampViewerStream,
+} from "../voice/hls-viewer-token.js";
 import {
   acknowledgeHlsHost,
   hasAcknowledgedHlsHost,
@@ -154,6 +157,7 @@ import {
   disconnectVoiceUser,
   findVoiceChannelForUser,
   findVoicePeerIdentities,
+  getChannelLiveState,
   getRoomTransport,
   getVoicePeer,
   isRoomPinnedLocally,
@@ -3949,6 +3953,22 @@ router.post(
     }
   },
 );
+
+/**
+ * The channel-level live state for a client that opened the channel before
+ * its socket was up (or lost the `channel-live` frame): the stream stamped
+ * for this caller, watchers without a seat, and seats. The socket path is
+ * the live one; this is belt and braces, and the same VIEW check.
+ */
+router.get("/api/channels/:channelId/live", async ({ user }, { channelId }) => {
+  await requireChannelAccess(channelId!, user.id);
+  const state = getChannelLiveState(channelId!);
+  return {
+    stream: state.stream ? stampViewerStream(state.stream, user.id) : null,
+    watching: state.watching,
+    participants: state.participants,
+  };
+});
 
 router.get(
   "/api/channels/:channelId/sessions/upcoming",
