@@ -3,7 +3,9 @@ import { EncodingOptionsPreset } from "livekit-server-sdk";
 import {
   type LiveHlsEgressApi,
   isLiveHlsEnabled,
+  isLiveHlsEnabledForServer,
   liveHlsConfig,
+  liveHlsServerAllowlist,
   liveHlsStreamFor,
   reconcileLiveHls,
   resetLiveHlsForTests,
@@ -11,6 +13,8 @@ import {
 } from "./hls-egress.js";
 
 const CHANNEL = "00000000-0000-4000-8000-0000000000aa";
+const SERVER = "00000000-0000-4000-8000-0000000000ee";
+const OTHER_SERVER = "00000000-0000-4000-8000-0000000000ff";
 
 function enableHls() {
   process.env.LIVE_HLS_ENABLED = "true";
@@ -38,6 +42,7 @@ function disableHls() {
   delete process.env.LIVE_HLS_S3_REGION;
   delete process.env.LIVE_HLS_S3_FORCE_PATH_STYLE;
   delete process.env.LIVE_HLS_DELAY_SECONDS;
+  delete process.env.LIVE_HLS_SERVER_ALLOWLIST;
 }
 
 describe("live HLS egress", () => {
@@ -55,7 +60,11 @@ describe("live HLS egress", () => {
     expect(isLiveHlsEnabled()).toBe(false);
     enableHls();
     expect(isLiveHlsEnabled()).toBe(true);
-    expect(liveHlsConfig()).toEqual({ enabled: true, delaySeconds: 10 });
+    expect(liveHlsConfig()).toEqual({
+      enabled: true,
+      delaySeconds: 10,
+      allowlisted: false,
+    });
     delete process.env.LIVE_HLS_S3_BUCKET;
     expect(isLiveHlsEnabled()).toBe(false);
   });
@@ -70,7 +79,7 @@ describe("live HLS egress", () => {
       },
       findTracks: async () => ({ videoTrackId: "TR_V" }),
     });
-    const stream = await reconcileLiveHls(CHANNEL, "peer-1");
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     expect(stream?.hlsUrl).toMatch(
       /^https:\/\/live\.example\.test\/live\/00000000-0000-4000-8000-0000000000aa\/\d+\.m3u8$/,
     );
@@ -86,7 +95,7 @@ describe("live HLS egress", () => {
       },
       findTracks: async () => ({ videoTrackId: "TR_V" }),
     });
-    expect(await reconcileLiveHls(CHANNEL, "peer-1")).toBeNull();
+    expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
     expect(start).not.toHaveBeenCalled();
   });
 
@@ -104,7 +113,7 @@ describe("live HLS egress", () => {
       }),
     });
 
-    const first = await reconcileLiveHls(CHANNEL, "peer-1");
+    const first = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     expect(first?.presenterPeerId).toBe("peer-1");
     // Signed by default (LIVE_HLS_SIGNED_URLS unset): an API-relative path
     // to the playlist proxy, not the raw bucket URL. See
@@ -128,7 +137,7 @@ describe("live HLS egress", () => {
     expect(output.livePlaylistName).toMatch(/^\d+\.m3u8$/);
     expect(output.playlistName).toMatch(/^\d+-index\.m3u8$/);
 
-    const again = await reconcileLiveHls(CHANNEL, "peer-1");
+    const again = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     expect(again).toEqual(first);
     expect(start).toHaveBeenCalledTimes(1);
     expect(stop).not.toHaveBeenCalled();
@@ -147,13 +156,13 @@ describe("live HLS egress", () => {
       findTracks: async () => ({ videoTrackId, audioTrackId: "TR_A" }),
     });
 
-    const first = await reconcileLiveHls(CHANNEL, "peer-1");
+    const first = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     expect(first).not.toBeNull();
     // The presenter republished: a quality pick that changed the top layer,
     // or the room crossing the large-room line. Same peer, new sid.
     videoTrackId = "TR_V2";
     await new Promise((resolve) => setTimeout(resolve, 2));
-    const second = await reconcileLiveHls(CHANNEL, "peer-1");
+    const second = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     expect(stop).toHaveBeenCalledTimes(1);
     expect(stop).toHaveBeenCalledWith("EG_1");
     expect(start).toHaveBeenCalledTimes(2);
@@ -165,7 +174,7 @@ describe("live HLS egress", () => {
     expect(liveHlsStreamFor(CHANNEL)).toEqual(second);
 
     // Same sid again: nothing moves.
-    const third = await reconcileLiveHls(CHANNEL, "peer-1");
+    const third = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     expect(third).toEqual(second);
     expect(start).toHaveBeenCalledTimes(2);
     expect(stop).toHaveBeenCalledTimes(1);
@@ -189,8 +198,8 @@ describe("live HLS egress", () => {
       },
     });
 
-    const first = await reconcileLiveHls(CHANNEL, "peer-1");
-    const again = await reconcileLiveHls(CHANNEL, "peer-1");
+    const first = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    const again = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
     expect(again).toEqual(first);
     expect(stop).not.toHaveBeenCalled();
     expect(start).toHaveBeenCalledTimes(1);
@@ -206,8 +215,8 @@ describe("live HLS egress", () => {
       },
       findTracks: async () => ({ videoTrackId: "TR_V" }),
     });
-    await reconcileLiveHls(CHANNEL, "peer-1");
-    expect(await reconcileLiveHls(CHANNEL, null)).toBeNull();
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(await reconcileLiveHls(CHANNEL, null, SERVER)).toBeNull();
     expect(stop).toHaveBeenCalledWith("EG_1");
     expect(liveHlsStreamFor(CHANNEL)).toBeNull();
   });
@@ -222,7 +231,79 @@ describe("live HLS egress", () => {
       },
       findTracks: async () => null,
     });
-    expect(await reconcileLiveHls(CHANNEL, "peer-1")).toBeNull();
+    expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
     expect(start).not.toHaveBeenCalled();
+  });
+
+  describe("LIVE_HLS_SERVER_ALLOWLIST", () => {
+    it("unset or empty means every server, but never a conversation", () => {
+      enableHls();
+      expect(isLiveHlsEnabledForServer(SERVER)).toBe(true);
+      expect(isLiveHlsEnabledForServer(OTHER_SERVER)).toBe(true);
+      expect(isLiveHlsEnabledForServer(null)).toBe(true);
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = " , ";
+      expect(liveHlsServerAllowlist()).toBeNull();
+      expect(isLiveHlsEnabledForServer(OTHER_SERVER)).toBe(true);
+    });
+
+    it("set means only the listed ids, trimmed", () => {
+      enableHls();
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = ` ${SERVER} , other-id`;
+      expect(liveHlsServerAllowlist()).toEqual(new Set([SERVER, "other-id"]));
+      expect(isLiveHlsEnabledForServer(SERVER)).toBe(true);
+      expect(isLiveHlsEnabledForServer(OTHER_SERVER)).toBe(false);
+      expect(isLiveHlsEnabledForServer(null)).toBe(false);
+      expect(isLiveHlsEnabledForServer(undefined)).toBe(false);
+    });
+
+    it("is never on when the global flag is off", () => {
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
+      expect(isLiveHlsEnabledForServer(SERVER)).toBe(false);
+    });
+
+    it("liveHlsConfig(serverId) reflects the list; without one it is the global flag", () => {
+      enableHls();
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
+      expect(liveHlsConfig(SERVER)).toEqual({
+        enabled: true,
+        delaySeconds: 10,
+        allowlisted: true,
+      });
+      expect(liveHlsConfig(OTHER_SERVER)).toEqual({
+        enabled: false,
+        delaySeconds: 10,
+        allowlisted: true,
+      });
+      expect(liveHlsConfig()).toEqual({
+        enabled: true,
+        delaySeconds: 10,
+        allowlisted: true,
+      });
+    });
+
+    it("reconcile does not start an egress for an unlisted server, and stops one that was running", async () => {
+      enableHls();
+      const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+        async () => ({ egressId: "EG_1" }),
+      );
+      const stop = vi.fn();
+      setLiveHlsTestHooks({
+        egress: { startTrackCompositeEgress: start, stopEgress: stop },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", OTHER_SERVER)).toBeNull();
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", null)).toBeNull();
+      expect(start).not.toHaveBeenCalled();
+
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      // The operator narrows the list mid-stream: the next reconcile stops it.
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = OTHER_SERVER;
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
+      expect(stop).toHaveBeenCalledWith("EG_1");
+      expect(liveHlsStreamFor(CHANNEL)).toBeNull();
+    });
   });
 });

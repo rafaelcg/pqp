@@ -67,7 +67,7 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import {
-  isLiveHlsEnabled,
+  isLiveHlsEnabledForServer,
   liveHlsStreamFor,
   reconcileLiveHls,
 } from "../voice/hls-egress.js";
@@ -496,7 +496,7 @@ async function decideRoomTransport(
   channel: ChannelRow,
 ): Promise<VoiceTransportDecision> {
   const liveKitConfigured = configuredTransport() === "livekit";
-  const liveHlsEnabled = isLiveHlsEnabled();
+  const liveHlsEnabled = isLiveHlsEnabledForServer(channel.server_id);
   const voiceTransport = channel.voice_transport ?? null;
   let server: { isCommunity: boolean; memberCount: number } | null = null;
   if (

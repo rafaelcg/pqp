@@ -224,8 +224,59 @@ export function isLiveHlsEnabled(): boolean {
   );
 }
 
-export function liveHlsConfig(): { enabled: boolean; delaySeconds: number } {
-  return { enabled: isLiveHlsEnabled(), delaySeconds: delaySeconds() };
+/**
+ * `LIVE_HLS_SERVER_ALLOWLIST`: comma-separated server ids that may run live
+ * HLS. Unset or empty means every server (null). Read per call, like the
+ * flag, so an operator can widen the list without a deploy.
+ */
+export function liveHlsServerAllowlist(): Set<string> | null {
+  const raw = process.env.LIVE_HLS_SERVER_ALLOWLIST;
+  if (!raw) {
+    return null;
+  }
+  const ids = raw
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  return ids.length > 0 ? new Set(ids) : null;
+}
+
+/**
+ * The per-server answer: the global flag, and the server is on the allowlist
+ * (or there is no allowlist). A conversation has no server id and is never
+ * HLS, whatever the list says.
+ */
+export function isLiveHlsEnabledForServer(
+  serverId: string | null | undefined,
+): boolean {
+  if (!isLiveHlsEnabled()) {
+    return false;
+  }
+  const allowlist = liveHlsServerAllowlist();
+  if (allowlist === null) {
+    return true;
+  }
+  return Boolean(serverId) && allowlist.has(serverId!);
+}
+
+export interface LiveHlsConfig {
+  /** Per-server when a `serverId` is given, the global flag otherwise. */
+  enabled: boolean;
+  delaySeconds: number;
+  /** Whether an allowlist exists at all; the client may say why it is off. */
+  allowlisted: boolean;
+}
+
+export function liveHlsConfig(serverId?: string | null): LiveHlsConfig {
+  const allowlist = liveHlsServerAllowlist();
+  return {
+    enabled:
+      serverId === undefined || serverId === null
+        ? isLiveHlsEnabled()
+        : isLiveHlsEnabledForServer(serverId),
+    delaySeconds: delaySeconds(),
+    allowlisted: allowlist !== null,
+  };
 }
 
 export function liveHlsStreamFor(channelId: string): LiveHlsStream | null {
@@ -553,12 +604,16 @@ async function startRoom(
  * same presenter re-declaring is a no-op unless their screen track is a new
  * sid, in which case the egress is bound to a dead track and is restarted
  * (new playlist URL, so the caller broadcasts it and viewers reload).
+ * `serverId` is the channel's server: a server outside
+ * `LIVE_HLS_SERVER_ALLOWLIST` (or a conversation, null) never starts an
+ * egress, and one already running for it is stopped.
  */
 export async function reconcileLiveHls(
   channelId: string,
   presenterPeerId: string | null,
+  serverId: string | null,
 ): Promise<LiveHlsStream | null> {
-  if (!isLiveHlsEnabled()) {
+  if (!isLiveHlsEnabledForServer(serverId)) {
     if (rooms.has(channelId)) {
       await stopRoom(channelId);
     }

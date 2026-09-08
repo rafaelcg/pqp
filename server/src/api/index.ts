@@ -1846,7 +1846,11 @@ router.get("/api/voice/backend", async () => {
   };
 });
 
-router.get("/api/live-hls/config", async () => liveHlsConfig());
+// `?serverId=` answers for that server (the allowlist applies); without it,
+// the global flag, which is what a client asks before it knows the server.
+router.get("/api/live-hls/config", async ({ url }) =>
+  liveHlsConfig(url.searchParams.get("serverId")),
+);
 
 /**
  * The signed playlist proxy (`hls-playlist-proxy.ts`): rewrites the live
