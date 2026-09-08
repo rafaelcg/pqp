@@ -5488,6 +5488,87 @@ function MainAppContent({
           change, which is what keeps an SFU camera delivered
           (`lib/remote-video-delivery.ts`). With no call, or a call collapsed to
           the slim bar, `CallSplit` draws no divider and sizes nothing. */}
+      {/* THE PARTY'S CHROME, ABOVE THE SPLIT AND OUTSIDE BOTH PANES.
+          The bar with the party's name, the options drawer and the host's
+          transmission readout. It lives here rather than in the stage slot
+          because collapsing the video must not take Encerrar with it: a host
+          who hides the picture to read the chat still has to be able to end
+          their own party. */}
+      {selectedChannel.kind === "server" &&
+        isWatchPartyChannelType(selectedChannel.type) &&
+        isWatchPartyChannelsEnabled() &&
+        user && (
+          <WatchPartyPanel
+            party={watchParties.byChannel[selectedChannel.id] ?? null}
+            channelId={selectedChannel.id}
+            channelName={selectedChannel.name}
+            canStart={perms.can(
+              Permission.START_WATCH_PARTY,
+              selectedChannel.id,
+            )}
+            inCall={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.status !== "idle"
+            }
+            hasStream={
+              voiceState.channelLive[selectedChannel.id]?.stream != null
+            }
+            isPresenting={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.isSharingScreen
+            }
+            someoneIsSharing={(
+              voiceState.occupancy[selectedChannel.id] ?? []
+            ).some((peer) => peer.sharingScreen)}
+            audienceCount={watchAudienceCount(
+              voiceState.channelLive[selectedChannel.id],
+              voiceState.occupancy[selectedChannel.id],
+            )}
+            showHostHint={shouldOfferWatchPartyHostHint({
+              seen: false,
+              automated: false,
+              settingUp:
+                watchParties.byChannel[selectedChannel.id]?.state === "draft",
+            })}
+            showViewerHint={shouldOfferWatchPartyViewerHint({
+              seen: false,
+              automated: false,
+              watching:
+                watchParties.byChannel[selectedChannel.id]?.state === "live" &&
+                voiceState.channelLive[selectedChannel.id]?.stream != null &&
+                !(
+                  voiceState.voiceChannelId === selectedChannel.id &&
+                  voiceState.status !== "idle"
+                ),
+            })}
+            onCreate={() => setCreateWatchPartyOpen(true)}
+            onGoLive={handleWatchPartyGoLive}
+            onEnd={handleWatchPartyEnd}
+            onDiscard={handleWatchPartyDiscard}
+            onOptionsChange={handleWatchPartyOptions}
+            onRename={handleWatchPartyRename}
+            onClaimHost={handleWatchPartyClaimHost}
+            onJoinCall={() =>
+              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+            }
+            onWatchAsAudience={() =>
+              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+            }
+            onTakeTheMicrophone={() => void voice.takeTheMicrophone()}
+            onStageAction={handleWatchPartyStage}
+            canSpeak={voiceState.canSpeak}
+            isAudienceSeat={voiceState.isAudienceSeat}
+            liveStream={
+              voiceState.channelLive[selectedChannel.id]?.stream ?? null
+            }
+            videoQuality={localSettings.videoQuality}
+            roomViewers={
+              (voiceState.occupancy[selectedChannel.id] ?? []).length
+            }
+            transport={voiceState.roomTransport}
+            slot="chrome"
+          />
+        )}
       <CallSplit
         shape={stageShape}
         preference={callSplit}
@@ -5570,6 +5651,15 @@ function MainAppContent({
             onStageAction={handleWatchPartyStage}
             canSpeak={voiceState.canSpeak}
             isAudienceSeat={voiceState.isAudienceSeat}
+            liveStream={
+              voiceState.channelLive[selectedChannel.id]?.stream ?? null
+            }
+            videoQuality={localSettings.videoQuality}
+            roomViewers={
+              (voiceState.occupancy[selectedChannel.id] ?? []).length
+            }
+            transport={voiceState.roomTransport}
+            slot="surface"
             onShapeChange={handleWatchPartyShape}
           />
         )}

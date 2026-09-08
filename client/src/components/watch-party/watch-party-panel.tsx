@@ -11,6 +11,8 @@ import {
   Square,
   Undo2,
 } from "lucide-react";
+import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
+import type { VideoQuality } from "@/lib/video-quality";
 import {
   canPerformWatchPartyAction,
   watchPartySpeakAffordance,
@@ -23,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { FeatureHint } from "@/components/layout/feature-hint";
+import { WatchPartyTransmission } from "@/components/watch-party/watch-party-transmission";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -90,9 +93,30 @@ export interface WatchPartyPanelProps {
   ) => Promise<void>;
   /** `welcome.canSpeak` for this room, as the server resolved it. */
   canSpeak?: boolean;
+  /** The channel's live HLS stream, for the host's transmission readout. */
+  liveStream?: LiveHlsStream | null;
+  /** The host's chosen rung, and the room size, for the outbound readout. */
+  videoQuality?: VideoQuality;
+  roomViewers?: number;
+  transport?: VoiceRoomTransport | null;
   /** This seat was taken as audience: no microphone was ever asked for. */
   isAudienceSeat?: boolean;
   onShapeChange?: (shape: "expanded" | "none") => void;
+  /**
+   * WHICH HALF OF THE PANEL TO DRAW, and it is rendered twice.
+   *
+   * `chrome` is the party's own controls: the bar with its name, the options
+   * drawer, the transmission readout, the host-gone strip. It is rendered
+   * ABOVE the split, outside the collapsible panes, because hiding the video
+   * must not take Encerrar with it. A host who collapses the picture to read
+   * the chat still has to be able to end their own party, and the first cut
+   * put the only control for that inside the pane it hides.
+   *
+   * `surface` is everything that fills the pane: the empty stage, the setup
+   * preview, the scheduled card, the waiting placeholder. That belongs in the
+   * split, and it is the only half that reports a shape.
+   */
+  slot?: "chrome" | "surface";
   /** First time this host has reached a setup surface. */
   showHostHint?: boolean;
   /** First time this person has watched a live party. */
@@ -119,13 +143,15 @@ export function WatchPartyPanel(props: WatchPartyPanelProps) {
   // furniture above whatever `WatchChannelStage` is doing and must not fight
   // it for the split, the same rule `WatchChannelStage` follows about
   // `CallStage`.
+  const slot = props.slot ?? "surface";
   const fills =
-    surface === "setup" ||
-    surface === "scheduled" ||
-    surface === "empty" ||
-    ((surface === "live" || surface === "liveUntitled") &&
-      !props.hasStream &&
-      !props.inCall);
+    slot === "surface" &&
+    (surface === "setup" ||
+      surface === "scheduled" ||
+      surface === "empty" ||
+      ((surface === "live" || surface === "liveUntitled") &&
+        !props.hasStream &&
+        !props.inCall));
   const wasFilling = useRef(false);
   const { onShapeChange } = props;
   useEffect(() => {
@@ -151,13 +177,17 @@ export function WatchPartyPanel(props: WatchPartyPanelProps) {
 
   switch (surface) {
     case "empty":
-      return <EmptyStage {...props} />;
+      return slot === "surface" ? <EmptyStage {...props} /> : null;
     case "setup":
-      return party ? <SetupStage {...props} party={party} /> : null;
+      return slot === "surface" && party ? (
+        <SetupStage {...props} party={party} />
+      ) : null;
     case "scheduled":
-      return party ? <ScheduledStage {...props} party={party} /> : null;
+      return slot === "surface" && party ? (
+        <ScheduledStage {...props} party={party} />
+      ) : null;
     case "live":
-      return party ? <LiveSurface {...props} party={party} /> : null;
+      return party ? <LiveSurface {...props} party={party} slot={slot} /> : null;
     case "liveUntitled":
       // The channel is live with no party this person can see: a bare screen
       // share, or somebody else's draft. They get the picture (drawn by
@@ -465,7 +495,9 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
  * arrived before the host started sharing saw an empty pane with no words on
  * it and concluded the feature was broken. That was Rafael's second browser.
  */
-function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
+function LiveSurface(
+  props: WatchPartyPanelProps & { party: WatchParty; slot: "chrome" | "surface" },
+) {
   const { t } = useTranslation();
   const { party } = props;
   const [confirmEnd, setConfirmEnd] = useState(false);
@@ -640,6 +672,23 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
    * and every change lands immediately for the people already watching (the
    * server re-reconciles the channel on every edit).
    */
+  /* HOST SIDE ONLY, and `runsTheShow` is the gate rather than `canStart`: a
+     co-host running the show wants this too, and a moderator who merely holds
+     MANAGE_CHANNELS is not transmitting anything. A viewer has no use for the
+     presenter's encoder. */
+  const transmission = runsTheShow && (
+    <WatchPartyTransmission
+      stream={props.liveStream ?? null}
+      wentLiveAt={party.wentLiveAt}
+      audienceCount={props.audienceCount}
+      isPresenting={props.isPresenting}
+      quality={props.videoQuality ?? "auto"}
+      roomViewers={props.roomViewers ?? 0}
+      transport={props.transport ?? null}
+      now={new Date()}
+    />
+  );
+
   const optionsDrawer = runsTheShow && optionsOpen && (
     <div
       data-testid="watch-party-options-drawer"
@@ -744,6 +793,20 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
     </div>
   );
 
+  // THE CHROME HALF: the party's controls, drawn above the split so that
+  // collapsing the video cannot take Encerrar with it.
+  if (props.slot === "chrome") {
+    return (
+      <div className="relative shrink-0">
+        {bar}
+        {transmission}
+        {optionsDrawer}
+        {hostGone}
+        {viewerHint}
+      </div>
+    );
+  }
+
   // Nothing on screen yet, and the person is not in the call: say so instead
   // of rendering nothing. Which "nothing" it is matters: see
   // `someoneIsSharing` above.
@@ -752,10 +815,6 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
     const hostSide = runningTheShow && props.canStart;
     return (
       <div className="relative flex h-[68svh] min-h-[280px] shrink-0 flex-col overflow-hidden border-b border-ink-4/60 bg-ink">
-        {bar}
-        {optionsDrawer}
-        {hostGone}
-        {viewerHint}
         <div
           data-testid="watch-party-waiting"
           data-watch-party-waiting={preparing ? "preparing" : "idle"}
@@ -791,14 +850,9 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
     );
   }
 
-  return (
-    <div className="relative shrink-0">
-      {bar}
-      {optionsDrawer}
-      {hostGone}
-      {viewerHint}
-    </div>
-  );
+  // A live party WITH a picture: `WatchChannelStage` draws it, and the chrome
+  // above the split has already drawn the controls. Nothing left for this half.
+  return null;
 }
 
 // -------------------------------------------------------------- the identity

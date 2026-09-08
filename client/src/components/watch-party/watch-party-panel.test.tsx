@@ -60,6 +60,7 @@ function render(over: Partial<Parameters<typeof WatchPartyPanel>[0]> = {}) {
       onRename={async () => {}}
       onClaimHost={async () => {}}
       onJoinCall={() => {}}
+      slot="surface"
       {...over}
     />,
   );
@@ -109,5 +110,112 @@ describe("the surface never contradicts itself", () => {
   it("offers to create one only when nothing is live", () => {
     const html = render({ party: null, hasStream: false, canStart: true });
     expect(html).toContain("watch-party-empty");
+  });
+});
+
+describe("the host's transmission readout", () => {
+  const STREAM = {
+    hlsUrl: "/api/voice/hls-playlist/x/1",
+    startedAt: 1_757_000_000_000,
+    presenterPeerId: "p1",
+    delaySeconds: 8,
+    topHeight: 720,
+  };
+
+  it("is not shown to a viewer, whose business it is not", () => {
+    const html = render({
+      slot: "chrome",
+      hasStream: true,
+      inCall: true,
+      liveStream: STREAM,
+    });
+    expect(html).not.toContain("watch-party-transmission");
+  });
+
+  it("is shown to the host and to a co-host", () => {
+    for (const role of ["host", "cohost"] as const) {
+      const html = render({
+        slot: "chrome",
+        hasStream: true,
+        inCall: true,
+        liveStream: STREAM,
+        party: { ...PARTY, viewerRole: role },
+      });
+      expect([role, html.includes("watch-party-transmission")]).toEqual([
+        role,
+        true,
+      ]);
+    }
+  });
+
+  it("is not shown to a manager, who is not transmitting anything", () => {
+    const html = render({
+      slot: "chrome",
+      hasStream: true,
+      inCall: true,
+      liveStream: STREAM,
+      party: { ...PARTY, viewerRole: "manager" },
+    });
+    expect(html).not.toContain("watch-party-transmission");
+  });
+
+  it("starts collapsed, and the one line is what the room is getting", () => {
+    const html = render({
+      slot: "chrome",
+      hasStream: true,
+      inCall: true,
+      liveStream: STREAM,
+      audienceCount: 12,
+      party: { ...PARTY, viewerRole: "host" },
+    });
+    expect(html).toContain("720p to 12 watching");
+    // Collapsed means the detail list is not rendered at all, not merely
+    // hidden: assert on the labels only the expanded panel draws, or the test
+    // passes with the panel open.
+    expect(html).not.toContain("You are sending");
+    expect(html).not.toContain("On air");
+    expect(html).toContain('aria-expanded="false"');
+  });
+
+  it("says it is preparing while the ladder has not reported a rung", () => {
+    const html = render({
+      slot: "chrome",
+      hasStream: true,
+      inCall: true,
+      isPresenting: true,
+      liveStream: { ...STREAM, topHeight: undefined },
+      party: { ...PARTY, viewerRole: "host" },
+    });
+    expect(html).toContain("Preparing the broadcast");
+  });
+});
+
+
+describe("the chrome survives a collapsed video", () => {
+  it("draws the host's controls in the chrome slot, not the surface one", () => {
+    // The bug this pins: the bar carrying Encerrar used to live inside the
+    // stage pane, so hiding the video took the only way to end the party with
+    // it. The chrome is rendered above the split and cannot be collapsed.
+    const chrome = render({
+      slot: "chrome",
+      hasStream: true,
+      inCall: true,
+      party: { ...PARTY, viewerRole: "host" },
+    });
+    expect(chrome).toContain("watch-party-bar");
+    expect(chrome).toContain("watch-party-end");
+
+    const surface = render({
+      slot: "surface",
+      hasStream: true,
+      inCall: true,
+      party: { ...PARTY, viewerRole: "host" },
+    });
+    expect(surface).not.toContain("watch-party-bar");
+  });
+
+  it("still fills the pane from the surface slot when nothing is on screen", () => {
+    const surface = render({ slot: "surface", hasStream: false });
+    expect(surface).toContain("watch-party-waiting");
   });
 });

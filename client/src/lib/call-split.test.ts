@@ -30,6 +30,7 @@ const {
   saveCallSplit,
   splitAvailable,
   splitBounds,
+  resolveCollapsed,
   splitFraction,
   strongestStageShape,
 } = await import("./call-split");
@@ -345,5 +346,70 @@ describe("strongestStageShape", () => {
 
   it("keeps compact above none, so a slim bar still reports itself", () => {
     expect(strongestStageShape(["none", "compact"])).toBe("compact");
+  });
+});
+
+
+describe("collapsing a pane", () => {
+  it("starts with neither pane put away", () => {
+    expect(CALL_SPLIT_DEFAULT.collapsed).toBe("none");
+  });
+
+  it("survives a reload, and is shared by both orientations", () => {
+    // "Put the chat away" is a wish about what somebody wants to look at, not
+    // about whether the panes are stacked. Rotating the layout must not read
+    // as the app forgetting.
+    saveCallSplit({
+      orientation: "stacked",
+      stacked: 0.5,
+      side: 0.6,
+      collapsed: "chat",
+    });
+    expect(loadCallSplit().collapsed).toBe("chat");
+  });
+
+  it("reads an unknown value as neither, rather than hiding a pane", () => {
+    // Failing towards "both panes visible" is the only safe direction: the
+    // opposite is a person staring at a layout with no way back that they
+    // never asked for.
+    store.set(
+      "pqp:call-split",
+      JSON.stringify({ orientation: "stacked", collapsed: "everything" }),
+    );
+    expect(loadCallSplit().collapsed).toBe("none");
+  });
+
+  it("is only honoured where there are two panes to arrange", () => {
+    // Same rule as the orientation: stored is what they asked for, this is
+    // what the pane can honour now. Putting the chat away to make room for a
+    // slim call bar is not a thing anybody means.
+    expect(resolveCollapsed("chat", "expanded")).toBe("chat");
+    expect(resolveCollapsed("stage", "expanded")).toBe("stage");
+    for (const shape of ["none", "compact", "fullscreen"] as const) {
+      expect([shape, resolveCollapsed("chat", shape)]).toEqual([shape, "none"]);
+    }
+  });
+
+  it("does not write, so the collapse comes back when a picture does", () => {
+    // `resolveCollapsed` is pure. The stored value is untouched by a stage
+    // that happens to be empty right now.
+    saveCallSplit({ ...CALL_SPLIT_DEFAULT, collapsed: "chat" });
+    expect(resolveCollapsed("chat", "none")).toBe("none");
+    expect(loadCallSplit().collapsed).toBe("chat");
+  });
+});
+
+describe("collapsing does not undo itself", () => {
+  it("keeps honouring a collapsed stage while the stage still reports expanded", () => {
+    // THE LOOP THIS PINS. The first cut UNMOUNTED the collapsed pane, which
+    // took its `onShapeChange` reporter with it, so the pane's shape fell to
+    // "none", `resolveCollapsed` stopped honouring the collapse, and the stage
+    // came straight back: a click that undid itself. The component hides the
+    // pane instead, so the shape stays `expanded` and this stays "stage".
+    expect(resolveCollapsed("stage", "expanded")).toBe("stage");
+    // And the failure mode, written down: if the shape ever did fall away,
+    // the collapse is dropped rather than leaving somebody with two hidden
+    // panes and no divider to restore from.
+    expect(resolveCollapsed("stage", "none")).toBe("none");
   });
 });

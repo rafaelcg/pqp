@@ -383,6 +383,66 @@ identity line where it is information rather than an action, and the identity
 carries a real minimum width so the actions wrap to their own row instead of
 the party's name truncating away to nothing.
 
+### Three controls the host and the viewer asked for
+
+**Fit or fill, on the player.** The app already had both behaviours and a
+documented reason for the difference: a camera is a face and is better cropped
+(`object-cover`), a shared screen is content and is better whole
+(`object-contain`). The watch stage is the case where neither default is
+obviously right, because the pane's shape almost never matches the source's: a
+16:9 film on whatever is left after the chat, the roster and the split is
+letterboxed more often than not. So the player carries a toggle, beside the
+quality menu and the volume in the one control cluster it already has.
+
+It is a THIRD kind in `lib/video-fit.ts` (`watch`), not a reuse of `screen`.
+The question is the same but the context is not: a `screen` tile sits in a grid
+where a crop eats a toolbar, and the watch stage owns a pane where somebody may
+quite reasonably want the bars gone. Sharing one value would make a choice in
+one place silently change the other, which is the mistake the two existing
+kinds were split to avoid. It defaults to `contain`, so nothing about a first
+render moved, and ordinary call tiles are untouched.
+
+**Hiding a pane.** "The host can choose if they want to see their cam or chat
+or not" is the same preference as the ratio, taken to its end, so it lives on
+`CallSplitPreference` as `collapsed: "none" | "stage" | "chat"` beside the
+orientation and the fractions. It is a general property of the split, not a
+watch party special case, so a plain call gets it too.
+
+It is deliberately NOT a fraction of 0 or 1, which is the obvious cheaper
+design. `clampSplit` forces every fraction inside the pixel minimums, on
+purpose, so that a drag can never strand somebody with a sliver; a collapse is
+exactly what those minimums forbid, so it has to be said in a different word
+rather than smuggled through as a number the clamp would undo. The minimums
+still bound the visible pane, which by definition gets the whole container.
+
+The affordances live at the boundary, because that is where the mental model
+is: two small chevrons on the divider collapse either way, and a collapsed pane
+leaves a full-edge strip in its place that restores it. The strip is a whole
+edge rather than a corner button because a collapsed pane is the one state
+somebody can be stuck in. Both are real buttons, so the keyboard reaches them,
+and `resolveCollapsed` honours the preference only where the divider exists
+(`shape === "expanded"`), without writing, so it returns on its own when a
+picture does.
+
+**What the host is transmitting.** `components/watch-party/watch-party-transmission.tsx`,
+host and co-hosts only, never viewers. Assembled from what already existed
+rather than recomputed: `OutboundVideoReadout` for what leaves the machine
+(it already knows how to tell a ceiling the ROOM imposed from one the LINK
+imposed), `LiveHlsStream.topHeight` for the tallest rung the ladder actually
+started (PR 376) and `delaySeconds` for the lag, `useShareUplinkStrain` from
+PRs 340 and 370 for whether the uplink is losing, and the party's own audience
+count and `wentLiveAt`.
+
+Collapsed by default. The one line is what the ROOM is getting and how many
+people that is, because the question a host glances at this to answer is "is
+what I am sending arriving". The detail is one press away for when the answer
+is no.
+
+One honest gap, stated rather than stubbed: `useShareUplinkStrain` is mesh-only
+by design, because on the SFU the stats it reads mean something else and it
+would blame a healthy uplink, which is the bug PR 370 fixed. A watch party big
+enough to matter is on LiveKit, so the strain line will not appear there.
+
 ### Why the viewer entry changed
 
 Rafael reported that a second browser could not get in as a viewer. Reading

@@ -8,8 +8,10 @@ import {
 } from "react";
 import {
   Check,
+  Crop,
   PictureInPicture2,
   Radio,
+  Scan,
   Settings2,
   Volume1,
   Volume2,
@@ -30,6 +32,9 @@ import {
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { resolveHlsUrl } from "@/lib/hls-playback";
+import { Tooltip } from "@/components/ui/tooltip";
+import { useVideoFit } from "@/hooks/use-video-fit";
+import { videoFitClass } from "@/lib/video-fit";
 import { HlsStallWatch, channelIdFromHlsUrl } from "@/lib/hls-stall";
 import {
   AUTO_HLS_QUALITY,
@@ -113,6 +118,8 @@ export function HlsWatchPlayer({
   coverUrl?: string | null;
 }) {
   const { t } = useTranslation();
+  const fit = useVideoFit("watch");
+  const whole = fit.fit === "contain";
   const innerRef = useRef<HTMLVideoElement | null>(null);
   const hlsRef = useRef<HlsHandle | null>(null);
   const [hasFrame, setHasFrame] = useState(false);
@@ -614,7 +621,14 @@ export function HlsWatchPlayer({
               node;
           }
         }}
-        className="h-full w-full"
+        /* THE PANE'S SHAPE ALMOST NEVER MATCHES THE SOURCE'S here, which is
+           why this is the one player with its own answer. A grid tile is
+           roughly the shape of a screen; a watch stage is whatever is left
+           after the chat, the roster and the split, so a 16:9 film on it is
+           letterboxed more often than not. Fit stays the default (a crop can
+           eat a subtitle), and the button below is the way out.
+           `lib/video-fit.ts` has the argument for the third kind. */
+        className={cn("h-full w-full", videoFitClass(fit.fit))}
         autoPlay
         playsInline
         onDoubleClick={onDoubleClick}
@@ -687,6 +701,33 @@ export function HlsWatchPlayer({
           // button was visible and unclickable).
           className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/70 px-1.5 py-1"
         >
+          {/* Beside the quality menu and the volume, in the one cluster this
+              player already has: the wish ("I want the bars gone") happens
+              while looking at the picture, not in a settings page. */}
+          <Tooltip
+            label={whole ? t("call.fit.fill") : t("call.fit.whole")}
+            detail={t("voice.hls.fitHint")}
+            side="top"
+            align="end"
+          >
+            <button
+              type="button"
+              data-testid="hls-fit"
+              data-hls-fit={fit.fit}
+              aria-pressed={whole}
+              className={cn(
+                "flex h-6 w-6 items-center justify-center rounded-full text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal",
+                whole && "text-signal",
+              )}
+              onClick={fit.toggle}
+            >
+              {whole ? (
+                <Crop className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <Scan className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+            </button>
+          </Tooltip>
           {offered.length > 1 ? (
             <div className="relative">
               <button
