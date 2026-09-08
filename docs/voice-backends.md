@@ -605,6 +605,79 @@ Why: a 100-viewer watch party on 5 Sep 2026 consumed 323 GB of SFU downstream in
 
 Verification status: unit-tested (`livekit-session-quality.test.ts`, `video-quality.test.ts`, `receive-quality.test.ts`, `remote-video-delivery.test.ts`). The cellular rule and the pause were not observed against a live LiveKit or a real phone on mobile data; the `setEnabled` semantics are pinned on a fake publication shaped after the library's. See the PRs for what was and was not observed.
 
+### Bandwidth: audio nobody is listening to (2026-09-08)
+
+Everything above is video. This is its twin for sound, and the arithmetic is
+why it exists: **audio fans out as the square of the room** while video fans
+out as viewers times publishers. A sample taken off the production box on
+8 Sep 2026 held 3 rooms, 11 published microphones and **58 audio
+subscriptions** against 3 published videos and 14 video subscriptions. In a
+room of twenty every microphone is forwarded nineteen times and the box pays
+for all 380 copies.
+
+**What is stopped, and only this** (`client/src/lib/remote-audio-delivery.ts`,
+wired through `LiveKitSession.setAudioDelivery` and pushed from `use-voice`'s
+`emit`). A remote audio publication is paused with
+`RemoteTrackPublication.setEnabled(false)` when the listener is **deafened**,
+when they have turned that **person's voice to zero**, when a **moderator
+muted** that person for everyone (`resolvePeerPlaybackVolume` already returns
+zero there), or when a **share's sound** is at zero or is not being played at
+all. In every one of those the `<audio>` element in `voice-audio-sinks.tsx`
+was already playing silence, so nothing anybody can hear changes; the bytes
+simply stop leaving Sao Paulo. `remote-audio-delivery.test.ts` asserts the
+plan against the sink's own `resolvePeerPlaybackVolume` rather than a copy of
+it, so a change to one that does not reach the other fails.
+
+`setEnabled` rather than `setSubscribed`, for the reason the video rule gives.
+Verified against livekit-client 2.21.0: `setEnabled` is not gated on track
+kind, `emitTrackUpdate` sends `disabled` for an audio publication the same way
+it does for video, and its only guard is `isDesired`, so an unsubscribed
+publication is a no-op rather than a throw. Silencing waits **750 ms** so a
+volume slider dragged through zero and back does not spend two signalling
+messages; resuming is immediate, because undeafening is the one moment a
+delay would be audible. The rule is a **deny list** throughout: a peer the
+plan has never heard of keeps flowing, because the failure mode of an allow
+list is a room where nobody hears anybody. The push is wrapped in a
+`try`/`catch` for the same reason: it runs inside `emit`, and a bandwidth
+saving must never be able to end a call.
+
+Mesh rooms are untouched. There is no server to stop, and a peer connection
+that stopped sending would have to renegotiate to start again.
+
+**Loudest-N audio was investigated and deliberately not built.** The obvious
+next step, capping each subscriber to the few loudest speakers, does not work
+on this stack and would not pay if it did:
+
+- **The SDK cannot see it coming.** livekit-client's `RoomEvent.ActiveSpeakersChanged`
+  is documented in the typedoc as *"Speaker updates are sent only to the
+  publishing participant and their subscribers"*, which matches the server's
+  own `force=false` filter. A client that has unsubscribed somebody's audio
+  never learns that they started speaking, so it can never subscribe them
+  back. (The prose docs page omits that caveat and reads as though it works.
+  It does not.)
+- **The server's own knob is a resource cap, not a swap.**
+  `limit.subscription_limit_audio` exists in LiveKit 1.13.6 and is
+  first-come-first-served: when the cap is reached, further subscriptions are
+  refused, and nothing swaps a quiet track out for a new speaker. It is
+  undocumented (zero hits across the whole docs corpus, and the PR that added
+  it has an empty body); LiveKit Cloud's own equivalent quota is **100** audio
+  tracks, which is a guard rail rather than a loudest-N.
+- **Silence is already almost free.** Opus DTX is on for every microphone, so
+  a silent track collapses to comfort noise. Measured on the box: at **32**
+  audio subscriptions the total outgoing packet rate was 650 to 960 per
+  second, and at **74** it was 1000 to 1220. Continuous 20 ms Opus alone would
+  be 1600 and 3700. Since video can only add to that count, at most about a
+  third of audio subscriptions are transmitting at any instant, and the rest
+  are what a loudest-N cap would remove.
+
+What was **not** separated: the box's Prometheus counters give total bytes and
+packets by direction, with no split by track kind, so audio's exact share of
+egress could not be measured. Two attempts to solve for it from stable
+windows disagreed (the same room shape varied by a factor of two between
+windows as the share's content changed), and the fitted numbers are not
+reported here for that reason. The packet-rate bound above needs no such
+model and is the one figure to trust.
+
 ## Cloudflare Realtime SFU — still a stub
 
 **Status:** `createCloudflareSfuSession()` throws; deployments fall back to mesh.

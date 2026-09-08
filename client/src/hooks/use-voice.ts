@@ -62,6 +62,11 @@ import {
 } from "@/lib/peer-connection-manager";
 import type { RealtimeTransport } from "@/lib/realtime";
 import {
+  remoteAudioPlan,
+  sameAudioPlan,
+  type RemoteAudioPlan,
+} from "@/lib/remote-audio-delivery";
+import {
   getReceiveQuality,
   subscribeReceiveQuality,
 } from "@/lib/receive-quality";
@@ -1202,7 +1207,58 @@ export function createVoiceController(transport: RealtimeTransport) {
     };
   }
 
+  /**
+   * The last plan handed to the SFU, so an unchanged one is not pushed again.
+   *
+   * `emit` runs on every state change, which in a busy room is every speaking
+   * ring; the plan changes only when somebody deafens, moves a volume slider
+   * to or off zero, is server-muted, or a share's sound starts or stops.
+   * Null while there is no SFU session, so the first plan after a connect (or
+   * a reconnect, which builds a new session with nothing registered) is
+   * always pushed.
+   */
+  let pushedAudioPlan: RemoteAudioPlan | null = null;
+
+  /**
+   * Tell the SFU which remote sounds this listener wants at all.
+   *
+   * Mesh rooms skip it: there is no server to stop, and a peer connection
+   * that stopped sending would have to renegotiate to start again. On the SFU
+   * it is one signalling message and the bytes stop leaving Sao Paulo. See
+   * `remote-audio-delivery.ts`.
+   */
+  function pushAudioDelivery() {
+    if (!sfu) {
+      pushedAudioPlan = null;
+      return;
+    }
+    const plan = remoteAudioPlan({
+      peers: state.remotePeers,
+      isDeafened: state.isDeafened,
+      peerVolumes: state.peerVolumes,
+      screenVolumes: state.screenVolumes,
+      serverMutedPeerIds: state.serverMutedPeerIds,
+      audibleScreenPeerIds: state.audibleScreenPeerIds,
+    });
+    if (pushedAudioPlan && sameAudioPlan(pushedAudioPlan, plan)) {
+      return;
+    }
+    try {
+      sfu.setAudioDelivery(plan);
+      pushedAudioPlan = plan;
+    } catch (err) {
+      // A BANDWIDTH SAVING MUST NEVER BE ABLE TO END A CALL, and this runs
+      // inside `emit`, which is on the path of every state change there is.
+      // A throw here propagated out of `emit` and took the whole SFU session
+      // down with it, which is a hundred times the cost of the bytes it was
+      // trying to save. The plan is deliberately not recorded as pushed, so
+      // the next emit tries again.
+      console.warn("[pqp] could not push the remote audio plan", err);
+    }
+  }
+
   function emit() {
+    pushAudioDelivery();
     listener?.(snapshot());
   }
 
@@ -1976,6 +2032,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         identities.set(peer.peerId, toIdentity(peer));
       }
 
+      // A fresh session has nothing registered, so the plan it was last told
+      // about applies to no publication. Forgetting it makes the next emit
+      // push the current one, whatever it is.
+      pushedAudioPlan = null;
       sfu = await connectLiveKit({
         session,
         // The list this tab already holds for the mesh, read now so a refresh
