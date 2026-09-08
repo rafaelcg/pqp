@@ -19,20 +19,98 @@ Under it, one line of provenance: which account kinds the numbers exclude, the
 server's cache window (and that the capacity card sits outside it), and the
 page's own refresh interval.
 
-Under that, **seven tabs**. The whole payload arrives in one read, so switching
-a tab is a pane toggle and never a request; the choice lives in the URL hash, so
-a reload or a link to yourself opens where you left off, and arrow keys move
-between them.
+Then a **rail** on the left with five sections. The whole payload still arrives
+in one read, so choosing a section is a pane toggle and never a request; the
+choice lives in the URL hash, so a reload or a link to yourself opens where you
+left off, and arrow keys move between them.
 
-| Tab | What is on it |
+### Why a rail and five sections, and not seven tabs
+
+The page used to have seven tabs across the top, and during an incident the
+three things worth looking at lived on three different ones: capacity in
+*infra*, the SFU in *voz*, the report queue in *moderação*. The fix was not a
+better tab bar. It was to group by **the order the questions arrive** rather
+than by which table the data came from, and to put the whole first question on
+one screen.
+
+| Section | The question it answers |
 |---|---|
-| **visão geral** | health tiles, the six headline metrics with sparklines, **apps e produto** (Android APK clicks + GitHub downloads, friendships, attachments, invites, push), the two 24-hour charts, the five most active servers |
-| **usuários** | signups per day over 14 days, who is actually active (24h and 7d), the returning-writer share, accepted friendships and open friend requests, what people filled in (handle / avatar / banner / game account / age check), plus first-touch acquisition and game connections |
-| **canais** | text-vs-voice composition, the eight busiest text channels of the last 24h, and the shape of the instance: direct and group conversations, private channels, channels that have never received a message |
-| **comunidades** | the directory: listed, suspended, addressed, by category, and the communities themselves. Off by default, and it says so (see below) |
-| **voz e chamadas** | **voz / sfu** (the media server, see below), the rooms open *right now* with who is sharing a screen, the voice summary against the mesh limit, the full call-quality distribution with notes, and **quantas pessoas em chamada**, the one chart on this page with a memory (see below) |
-| **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the feedback queue with the last eight entries. The tab carries a count badge when anything is open |
-| **infra** | **capacity right now** (open WebSockets and the Postgres pool, see below), then the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
+| **agora** | Is something on fire, and what is happening this minute |
+| **ao longo do tempo** | What has been changing (the only part of the page with a memory) |
+| **pessoas e conteúdo** | Who showed up, who came back, what they wrote |
+| **moderação** | What is queued |
+| **infra** | What is deployed, where, and how available it has been |
+
+The trade is deliberate and it is real: a browser now has to pick a section,
+and wandering is one click slower than a tab bar was. In exchange, an incident
+never needs a second click. **agora** carries, in this order: the three
+verdicts, the health table with 24 h of latency, capacity right now, the SFU,
+and the rooms that are open with the media path each one is using. If a change
+would push one of those out of **agora**, it is the wrong change.
+
+### The three verdicts
+
+At the top of **agora**, three sentences with the figures that produced them.
+Not more pills: a pill says *that* something is off, and every one of these
+says *what to conclude*, which is the part an operator otherwise assembles by
+hand from three cards.
+
+| Verdict | What it decides |
+|---|---|
+| **the pool** | A burst absorbed, or the ceiling. A queue on its own is normal after every deploy (pg queues whenever it cannot hand over a connection in the same tick); a queue **with the pool full** is the wall, and only that is red. |
+| **latency** | Each component against **its own** median, from `statusHistory`. 241 ms means nothing beside a database at 7 ms and everything beside storage's own p50 of 236 ms, so the usual reading is the reassuring one: the slowest thing on the page is slow on purpose. 1,4x its own median warns; 2x is bad. |
+| **voice** | Today's peak against the last seven days, and what the media server's own peak was. It never adds the three daily numbers: they are independent maxima over the same day, so `mesh + livekit` is not `participants`, and the sentence says so out loud. |
+
+They live in **fixed slots** and there are always three. A slot with no honest
+verdict renders dashed and muted and says what is missing (no history yet, no
+`runtime` block, fewer than two days of samples) rather than reaching for a
+weaker claim.
+
+The arithmetic is in `site/insights.js`: pure functions, no DOM, no fetch, and
+`test/insights.test.js` runs against them in CI. That file exists because this
+is the one part of the page where being wrong is *believed* rather than seen. A
+wrong figure next to a label is visible; "storage está a 3x o normal dele" is
+acted on. Each rule was broken on purpose and restored while the tests were
+written, including the two claims these functions are forbidden from making: a
+pool queue meaning exhaustion, and the three daily voice maxima being a split
+of one another.
+
+Under them, in a dashed box, **what stays raw and why**. There is no cost
+reading anywhere on this page: no billing source, no R2 byte count, no SFU
+minute count, so any number would be invented and would outlive every caveat
+around it. What can honestly be said is headroom, and that is the capacity card
+directly below. Retention is raw for the same reason: messages are the only
+per-user activity this schema records, so somebody who reads without posting
+counts as inactive.
+
+### The health table
+
+One row per component: what is probed, 24 h of latency, the reading now, that
+component's own p50, and uptime. It replaced seven cards that said "nothing is
+wrong" in the most expensive way a screen can say it, and that had nowhere to
+put the shape over time.
+
+Each row's sparkline is on **its own** scale, with that component's p50 as a
+dashed baseline. A shared axis would flatten four rows into a line at the
+bottom (7 ms next to 241 ms); the comparison that matters is each component
+against its own past. A bucket with no samples is drawn as a gap, because a
+stopped sampler and a steady latency must not draw the same picture. A bucket
+with a failed probe gets a red tick, so an outage that healed inside the window
+is not smoothed away by the mean of the good samples.
+
+`/ready` and the host moved into the table's footer. Neither is a component
+with a latency curve, and giving them tiles the same size as one made the row
+read as nine equals.
+
+### What is on each section
+
+| Section | What is on it |
+|---|---|
+| **agora** | the three verdicts and the raw-numbers note, the health table (24 h latency per component, its own p50, uptime, with `/ready` and the host in the footer), **capacity right now** (open WebSockets and the Postgres pool, see below), **voz / sfu** (the media server, see below), and the rooms open *right now* with each one's media path, who is sharing a screen, and how long it has been open |
+| **ao longo do tempo** | the six headline metrics with sparklines, the two 24-hour charts, and **quantas pessoas em chamada**, the one chart on this page with a memory (see below) |
+| **pessoas e conteúdo** | who is actually active (24h and 7d), the returning-writer share, what people filled in (handle / avatar / banner / game account / age check), first-touch acquisition, game connections, text-vs-voice composition, the busiest text channels, the shape of the instance (direct and group conversations, private channels, channels that never received a message), the community directory (off by default, and it says so), the five most active servers, the full call-quality distribution with notes, and **apps e produto** (Android APK clicks + GitHub downloads, friendships, attachments, invites, push) |
+| **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the feedback queue with the last eight entries. The rail carries a count badge when anything is open |
+| **infra** | the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
 
 ### The SFU card names the host, because a rollback is invisible otherwise
 
@@ -64,7 +142,7 @@ count. When they disagree the card says so (`api diz 2 salas`), which is the
 symptom of somebody being in a call on one side and not the other.
 
 The same host rides on `/ready`'s `livekit` check (`{ ok, ms, host }`), so an
-external monitor sees the rollback too, and on the `/ready` health tile.
+external monitor sees the rollback too, and in the health table's footer.
 Hostname only, ever: never the API key or the secret. Every voice client is
 already handed that host in its session token, so it is not a secret; it is
 just not repeated anywhere it does not earn its place.
@@ -218,7 +296,8 @@ Live, from `GET https://api.pqp.gg/api/admin/metrics` (proxied as `/metrics`):
   `server/src/voice/sfu-stats.ts`, not the 30-second one, and concurrent
   callers share one probe: the API asks the SFU at most six times a minute no
   matter how many dashboards are open
-- voice: rooms open now (with names and who is screen-sharing), people in them,
+- voice: rooms open now (with names, **which media path each is on**, how long
+  it has been open, and who is screen-sharing), people in them,
   the largest room now against the practical mesh limit (amber past 6), and the
   largest room today (process-local; it resets on deploy and at São Paulo
   midnight)
@@ -264,9 +343,12 @@ Live, from `GET https://api.pqp.gg/api/admin/voice-occupancy` (proxied as
 - `lastSampleAt` rides along as proof the sampler is running. Null or older
   than five minutes and the card says the sampler looks stopped rather than
   drawing a flat line that reads as an empty night
-- Read on a slower cadence than everything else: the first time the **voz** tab
-  is shown, then at most every five minutes and only while that tab is the
-  visible one. **atualizar** in the header forces it. It is fired and never
+- Read on a slower cadence than everything else: **once on load**, then at most
+  every five minutes, whichever section is showing. It is read on load rather
+  than on first sight of the chart because **agora** states today's peak
+  against the last seven days, and that verdict has to be there before anybody
+  clicks anything; it is the same endpoint the page already called, at the same
+  once-per-five-minutes ceiling. **atualizar** in the header forces it. It is fired and never
   awaited, so a slow occupancy read cannot delay the numbers an incident is
   read from
 - Server side: `server/src/services/voice-occupancy.ts`, retention 21 days at
@@ -283,11 +365,11 @@ Live, from this Worker (merged onto `/metrics`, never stored on the API):
   leaving GitHub, so it can be lower or higher than clicks.
 
 Live, from `GET https://api.pqp.gg/status.json` (proxied as `/health`): the
-component health tiles, the headline pill, database latency, and the 24h/7d
-uptime behind the infra tab.
+component health rows, the headline pill, database latency, and the 24h/7d
+uptime behind the infra section.
 
 **A component with no `latencyMs` was not measured, and is never drawn as
-`0 ms`.** The card says what is known instead (`respondeu · sem medida própria`,
+`0 ms`.** The row says what is known instead (`respondeu · sem medida própria`,
 `no ar · sem sonda recente`), set in the text face rather than the figure face,
 because a phrase set like a number reads as a number. `api` cannot time its own round trip from inside itself and never
 carries the field; `voice` and `gifs` carry it only once their scheduled
@@ -296,16 +378,17 @@ indistinguishable at a glance from a real one, which is the bug this rule
 exists to prevent. Say what is actually known instead.
 
 Also on `/metrics`, and only there: **`statusHistory`**, 24 hours of latency per
-component in 30-minute buckets plus that component's own p50 and p95. It is
+component in 30-minute buckets plus that component's own p50 and p95. It draws
+the sparkline on each health row and decides the latency verdict, and it is
 what makes a number readable — 241 ms means nothing beside a database at 7 ms
 and everything beside storage's own p50 of 236 ms. Deliberately not on
 `/status.json`: a latency curve is a load curve, and the public page is allowed
 to say only "up" and "how often".
 
-One more tile in that strip, `/ready`, comes from the `ready` block of
+`/ready` comes from the `ready` block of
 `/metrics`: it is the verdict `GET https://api.pqp.gg/ready` gives UptimeRobot
 (200 or 503), with the failing check named, the pool's in-use / max / queued
-counts, and the SFU host and its probe latency. It can be red while every `/status.json` tile is green, because
+counts, and the SFU host and its probe latency. It can be red while every `/status.json` row is green, because
 it also watches the pool over time (queued for more than 10 s, full for more
 than 30 s), which is what the 2026-09-05 Postgres outage looked like from the
 inside. See `docs/MONITORING.md`.
@@ -379,43 +462,36 @@ accident. The live values themselves come from `server/src/lib/runtime.ts`
 Not done, in the order worth doing. The list is about this page during an
 incident, which is the only time it has to be good.
 
-1. **A first screen that survives an incident with no scrolling.** The signals
-   strip answers "is anything wrong" but the fix always needs the numbers
-   behind two or three different tabs (capacity in *infra*, the SFU in *voz*,
-   the report queue in *moderação*). An incident view (the pills plus the
-   half-dozen figures an operator actually opens during an outage, above the
-   tab bar) would end the tab hunt. Everything is in one payload already, so
-   this is layout, not data.
-2. **Only voice has any history.** The occupancy card above is the one block
-   with a memory; every other figure is "now" or "last 24 h", so an operator
-   cannot tell a pool queue that has been climbing for ten minutes from one
-   that appeared this second, which is exactly the question during the
-   2026-09-05 Postgres event. The page polls every 30 s and could keep its own
-   in-memory ring of the last hour of `runtime` and `sfu` readings and draw a
-   sparkline under each, with no API change and no storage. It resets on
-   reload, which is honest and still enough.
-3. **No alerting anywhere.** Somebody has to be looking at the page. A red
-   pill could at least become the tab title and the favicon (`(!) pqp admin`),
-   so a dashboard left open in a background tab is worth something.
-4. **The mobile layout still assumes a desk.** The phone pass here fixed the
-   worst of it (single-column metrics, a header that wraps, denser health
-   tiles), but the wide tables (busiest channels, communities, acquisition)
-   are still horizontal scrollers on a phone, which is a bad way to read a
-   ranking. Under ~620 px they should stack into rows instead of scrolling.
-5. **The strip cannot be scanned in a fixed order.** Pills appear and vanish
-   with the data behind them (`elenco da casa` and `apk` hide themselves when
-   empty), so the SFU pill is not always in the same place, and a scan has to
-   read rather than glance. Fixed slots with an explicit "sem dados" state
-   would make the position itself meaningful.
-6. **Colour is the only channel for state.** Green, amber and red carry every
+1. **Only voice has any history.** The occupancy card is the one block with a
+   memory, and the health table now carries 24 h of latency per component. Two
+   things still have none: `runtime` and `sfu`. An operator cannot tell a pool
+   queue that has been climbing for ten minutes from one that appeared this
+   second, which is exactly the question during the 2026-09-05 Postgres event.
+   The page polls every 30 s and could keep its own in-memory ring of the last
+   hour of both and draw a sparkline under each, with no API change and no
+   storage. It resets on reload, which is honest and still enough.
+2. **No alerting anywhere.** Somebody has to be looking at the page. A red
+   verdict could at least become the tab title and the favicon (`(!) pqp
+   admin`), so a dashboard left open in a background tab is worth something.
+3. **The mobile layout still assumes a desk.** The rail collapses to a
+   scrolling strip and the health table drops its chart column, but the wide
+   tables (busiest channels, communities, acquisition) are still horizontal
+   scrollers on a phone, which is a bad way to read a ranking. Under ~620 px
+   they should stack into rows instead of scrolling.
+4. **Colour is the only channel for state.** Green, amber and red carry every
    verdict on the page, with no icon or shape behind them. Adding a glyph to
    the amber and red states (and checking the palette against a deuteranopia
    simulator) costs nothing and would not need to be revisited.
-7. **`aria-live` on nothing.** Numbers change under a screen reader with no
-   announcement; the signals strip is the one region that should be polite-live.
-8. **No visible tie to the runbook.** `docs/MONITORING.md` says what to do
-   when `na fila` is climbing or the SFU is unreachable, and the page that
-   shows those states does not link to it.
+5. **`aria-live` on nothing.** Numbers change under a screen reader with no
+   announcement; the signals strip and the three verdicts are the regions that
+   should be polite-live.
+6. **The signals strip cannot be scanned in a fixed order.** Pills appear and
+   vanish with the data behind them (`elenco da casa` and `apk` hide themselves
+   when empty), so the SFU pill is not always in the same place. The three
+   verdicts already have fixed slots; the strip above them does not.
+7. **No visible tie to the runbook.** `docs/MONITORING.md` says what to do when
+   `na fila` is climbing or the SFU is unreachable, and the page that shows
+   those states does not link to it.
 
 ## Deploy
 
@@ -443,4 +519,16 @@ curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/
 
 Like `tools/ambient`, this directory has its own `package.json` and its own
 `npm install`. The repo's root lint covers the TypeScript here; the repo's
-typecheck and tests do not, which is what `npm run check` is for.
+typecheck and `pnpm test` do not, which is what `npm run check` is for.
+
+The one exception is `site/insights.js`, whose tests **do** run in CI:
+
+```bash
+node --test tools/admin-dashboard/test/*.test.js
+```
+
+No dependencies and no runner: the module is a plain IIFE that assigns
+`globalThis.PQPInsights`, so the page loads it with a `<script>` tag and the
+test imports it for its side effect. Everything else on this page is markup and
+rendering, which CI cannot judge; the verdicts are arithmetic that produces a
+sentence somebody acts on, which it can.
