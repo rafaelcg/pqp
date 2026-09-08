@@ -10,25 +10,31 @@
 # ----------------------------------------------
 # This server keeps WebSocket connection state, presence, voice-room membership
 # and rate-limit buckets in process memory (server/src/ws/,
-# server/src/lib/rate-limit.ts). It can run on more than one machine ONLY
-# with the whole of docs/plans/MULTI_INSTANCE_VOICE.md in force:
+# server/src/lib/rate-limit.ts) and shares what has to be shared through
+# Postgres (docs/plans/MULTI_INSTANCE_VOICE.md). More than one machine needs
+# all of these, and all of them are set on pqp-api today (2026-09-07):
 #   * CLUSTER_BUS=postgres      chat, presence and voice hints cross instances
+#                               over LISTEN/NOTIFY; the boot self-echo proves it
 #   * VOICE_REGISTRY=postgres   rooms, seats and transport pins live in Postgres
 #   * LIVEKIT_* set             a mesh room is relayed by one process and cannot
 #                               span two; with two live instances the server
-#                               sends new rooms to the SFU, and REFUSES mesh
-#                               joins when there is no SFU (the M5 guard).
+#                               sends new rooms to the SFU, and REFUSES a mesh
+#                               join into a room pinned on the other process,
+#                               or any mesh join with no SFU (the M5 guard)
 #   * DATABASE_URL session-mode (LISTEN never delivers through a transaction
 #                               pooler; the boot self-echo check says so loudly)
-# With any of those missing, two machines are two disjoint chat servers behind
-# one hostname. Nobody gets an error; people just stop seeing each other.
+# Unset the bus or the registry with two machines up and you have two chat
+# servers behind one hostname. That is a misconfiguration to avoid, not what
+# happened on 2026-09-07: that window ran two machines with all four in
+# force, chat and LiveKit rooms crossed machines fine, and what bit was the
+# guard hanging up peer-to-peer joins. See `min_machines_running` below.
 #
 # The invariant CI asserts after every deploy (deploy-api-fly.yml): the number
 # of started machines equals `min_machines_running` below (or the repo variable
-# PQP_API_MACHINES, which overrides it during the flip), all in gru. Machine
-# count itself is NOT expressible here; it is `fly scale count N --region gru`,
-# a deliberate manual step recorded in docs/deploy-fly.md. Deploys pass
-# --ha=false so they never add a machine on their own.
+# PQP_API_MACHINES, which overrides it while a flip is in progress), all in
+# gru. Machine count itself is NOT expressible here; it is `fly scale count N
+# --region gru`, a deliberate manual step recorded in docs/deploy-fly.md.
+# Deploys pass --ha=false so they never add a machine on their own.
 #
 # AN AUTO-STOPPED MACHINE DROPS EVERY LIVE WEBSOCKET at once, which client-side
 # looks exactly like the "Realtime connection closed" incident this codebase
@@ -112,37 +118,56 @@ kill_timeout = 30
   # you investigate rather than a latency spike you never notice.
   auto_start_machines = false
 
-  # The intended machine count (M5 of docs/plans/MULTI_INSTANCE_VOICE.md).
+  # ONE machine, by choice, for now. Not a limit of the code: the bus, the
+  # registry and LiveKit are live (banner above), and on 2026-09-07 production
+  # ran two machines from 13:20Z to 15:59Z with chat, presence and six
+  # LiveKit rooms crossing them for up to 80 minutes, one cross-machine
+  # resume adopted, zero app-level errors and zero user reports. What did not
+  # survive it: the mesh guard refused a peer-to-peer join when the room's
+  # pin lived on the other process (four times, each one a hung-up call, one
+  # of them ending a two-person call), fixed 2026-09-08 (the pin is adopted
+  # and mesh signaling crosses the bus); and two proxy-side 1001 close bursts
+  # are still unexplained. The runbook, what the window showed and what is
+  # left before two machines again (a staging rehearsal with LIVEKIT_* set):
+  # docs/deploy-fly.md 6a-bis.
+  #
   # With auto-stop off this is not a lever Fly pulls; it is the number CI
-  # asserts after a deploy, and the number `fly scale count` has to be set to
-  # by hand, in gru. Two, so a rolling deploy always has one machine up and
-  # the sockets of the one being replaced ramp over to it. Until the flip
-  # (M6) production is still one machine: set the repo variable
-  # PQP_API_MACHINES=1 so the CI assertion matches reality, and remove it
-  # once `fly scale count 2` has been run. Never raise this without
-  # CLUSTER_BUS, VOICE_REGISTRY and LIVEKIT_* all set (banner above).
-  min_machines_running = 2
+  # asserts after a deploy (or PQP_API_MACHINES while a flip is in progress)
+  # and the number `fly scale count` has to match, in gru. Raising it here
+  # and merging is one step of the flip; `fly scale count 2` is the other.
+  min_machines_running = 1
 
   processes = ["app"]
 
   [http_service.concurrency]
     # `connections`, NOT `requests`. Every signed-in client holds one WebSocket
-    # open for its whole session, so connection count — not request rate — is
+    # open for its whole session, so connection count, not request rate, is
     # what this app is actually bounded by.
     #
     # THE DEFAULTS ARE A TRAP FOR A WEBSOCKET APP: soft_limit 20 / hard_limit 25.
     # hard_limit is the point at which fly-proxy STOPS SENDING TRAFFIC to the
     # machine, and with a single machine there is nowhere else to send it, so
-    # user number 26 gets a 503 on an app that is completely idle. These numbers
-    # are raised to something a mesh-voice chat server can plausibly hold.
+    # the next client gets a 503 on an app that may be completely idle. In the
+    # proxy log that is "could not find a good candidate ... at load
+    # balancing", which reads exactly like a dead API and is not; the 600 that
+    # used to be here was crossed during the 2026-09-07 load tests, and a
+    # 500-person watch party on one machine crosses it too. Fly's docs say no
+    # hard_limit is enforced when the field is unset; it is set here as a
+    # memory backstop, not as capacity.
     #
-    # Ceiling to know about: Fly enforces ~2048 concurrent connections per edge
-    # per app, above the values below. Long before either number matters you
-    # will hit the real limit, which is that mesh voice tops out at ~5-8 peers
-    # per channel and there is only one machine.
+    # Sized from measurements (server/scripts/README.md, "What compression
+    # was worth"): with compression on, peak RSS was 365 MB at 400 sockets
+    # and 609 MB at 800, under 1 MB a socket, so 2000 sockets is under 2 GB
+    # of this 4 GB machine with room left for the heap and for a reconnect
+    # storm, when a closing socket and its replacement both count for a few
+    # seconds. A 500-person watch party plus an ordinary evening (a few
+    # hundred sockets) is about 1000, the soft limit, which with one machine
+    # is only a marker. Outbound bandwidth gives out first anyway (measured
+    # floor 350 in one room, projected 650 to 700 after the presence deltas),
+    # so the proxy is never the first to say no.
     type = "connections"
-    soft_limit = 400
-    hard_limit = 600
+    soft_limit = 1000
+    hard_limit = 2000
 
   # Health check. `/health` is the only unauthenticated route (every /api/*
   # route resolves a Bearer token before routing, so anything else answers 401)

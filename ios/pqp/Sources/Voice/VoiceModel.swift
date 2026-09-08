@@ -30,6 +30,17 @@ final class VoiceModel {
     }
     private(set) var channelId: String?
     private(set) var channelName: String?
+    /// The room this session is in or joining, for the stage that is presented
+    /// from the app root. Nil once left. Distinct from `intendedChannel`, which
+    /// is cleared on eviction while the screen is still up.
+    private(set) var channel: Channel?
+    /// "Tuck the call away and read": the stage is dismissed but the session
+    /// stays up. Set by the swipe-down path and the collapse control, cleared
+    /// by Join or by tapping the banner. Same shape as `CallModel.isCollapsed`.
+    var isCollapsed = false
+    /// Whether there is a session worth a surface: joining, connected, or a
+    /// failure that has not been dismissed yet.
+    var isLive: Bool { status != .idle }
     private(set) var peers: [VoicePeerState] = [] {
         didSet { noteCallProgress() }
     }
@@ -165,6 +176,10 @@ final class VoiceModel {
     /// handler that needs it is not async. Kept in step by `startSfuSession`
     /// and by `leave`.
     private var sfuIsConnected = false
+    /// The `/api/ice-servers` list fetched for the current join, kept so an
+    /// SFU room built later in the same join gets the same list the mesh
+    /// would, with no second fetch.
+    private var iceServers: [IceServerConfig] = []
     /// Whether this deployment mints LiveKit rooms, read once per join from
     /// `GET /api/voice/backend`. Decides `join-voice-room.resume`.
     private var declaresResume = false
@@ -388,9 +403,17 @@ final class VoiceModel {
     }
 
     func join(channel: Channel, session: SessionStore, ratings: CallRatingModel? = nil) async {
+        // One session per app, so a join from another room is a move, and the
+        // room being left must hear about it before this one is entered. The
+        // same room is a no-op: the stage was reopened, not rejoined.
+        if status != .idle {
+            if channelId == channel.id { return }
+            await leave()
+        }
         self.session = session
         self.ratings = ratings
         configureScreenShare()
+        self.channel = channel
         channelId = channel.id
         channelName = channel.name
         intendedChannel = channel
@@ -410,6 +433,7 @@ final class VoiceModel {
 
         do {
             let ice: IceServersResponse = try await session.api.get("/api/ice-servers")
+            iceServers = ice.iceServers
             // Advisory, never binding: `welcome` says what the room runs on.
             // This only decides whether to ask the server to hold our seat
             // across a socket drop, which is right for a LiveKit room and a
@@ -506,6 +530,8 @@ final class VoiceModel {
         transport = nil
         resumeClaim = nil
         status = .idle
+        channel = nil
+        isCollapsed = false
         channelId = nil
         channelName = nil
         peers = []
@@ -1040,7 +1066,8 @@ final class VoiceModel {
         }
         try Task.checkCancellation()
         try await sfu.connect(
-            info, muted: isMuted || isDeafened, speaker: isSpeakerOn, publishMicrophone: canSpeak
+            info, muted: isMuted || isDeafened, speaker: isSpeakerOn, publishMicrophone: canSpeak,
+            iceServers: iceServers
         )
         if isDeafened { await sfu.setDeafened(true) }
     }

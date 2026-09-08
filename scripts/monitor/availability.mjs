@@ -146,14 +146,14 @@ async function checkWebsocket() {
 /**
  * Exactly one machine, started, in gru.
  *
- * This is not a capacity check, it is a correctness check. The server keeps
- * WebSocket state, presence, voice-room membership and rate-limit buckets in
- * process memory with no pub/sub layer, so two machines behind one hostname
- * are two disjoint chat servers. Nobody gets an error; people just stop seeing
- * each other. fly.toml documents the invariant and the deploy workflow asserts
- * it at release time — this asserts it continuously, because a stray
- * `fly scale count 2` or a machine Fly recreates after a host failure does not
- * go through the deploy workflow.
+ * The machine count is a decision, not a side effect: fly.toml's
+ * min_machines_running says what it is (1 today, by choice) and the comment
+ * on it plus docs/deploy-fly.md 6a-bis say why. The deploy workflow asserts
+ * the number at release time; this asserts it between deploys, because a
+ * stray `fly scale count 2` or a machine Fly recreates after a host failure
+ * does not go through the deploy workflow. The expected count is hardcoded
+ * here on purpose so drift fails loudly: when fly.toml moves to 2, move this
+ * in the same PR.
  */
 async function checkFlyMachines() {
   if (!process.env.FLY_API_TOKEN && !process.env.MONITOR_FLY_LOCAL) {
@@ -189,7 +189,7 @@ async function checkFlyMachines() {
       : `Expected exactly one started machine in gru, found: ${result.note.replace(/\s+/g, " ").trim()}`,
     detail: trail(result.tries),
     runbook: [
-      "More than one machine SILENTLY SPLITS THE USERBASE — the server holds WebSocket, presence and voice state in process memory with no pub/sub. There is no error anywhere; users just stop seeing each other.",
+      "More than one machine is a machine nobody decided to run. The bus and the registry share chat, presence and rooms across machines, but the mesh guard hangs up peer-to-peer joins whose room is pinned on the other one (voice.meshRefusedMultiInstance), which is why the count is one today (docs/deploy-fly.md 6a-bis).",
       "Fix: `fly scale count 1 --region gru --app pqp-api`, then confirm with `fly machines list -a pqp-api`.",
       "Zero machines, or one that is `stopped`: `fly machine start <id>` (auto_start_machines is off on purpose, so nothing will do it for you).",
       "See the header of fly.toml before changing anything about machine count.",

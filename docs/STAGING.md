@@ -14,11 +14,18 @@ A full staging environment: real Clerk auth, real Postgres, real Fly and Pages, 
 ## What staging is (and is not)
 
 - **Separate users.** Auth is a Clerk DEVELOPMENT instance (`pk_test` / `sk_test`). Accounts, sessions and origins are fully disjoint from production Clerk. Your prod account does not exist here; sign up again.
-- **Separate database on its own cluster.** Database `pqp-staging` (hyphen: Fly Managed Postgres rejects underscores in database names) on cluster **`pqp-db-staging`, id `dzx6qo65q9n0jpv5`**, region `gru`, Basic plan (shared x2 / 1 GB / 10 GB disk, $38 a month). The schema self-applies at boot via `server/src/schema.sql` (`initDb()` in `server/src/db.ts`); there is no migration step and nothing to run by hand.
+- **Separate database, on its own unmanaged Fly Postgres app, not Managed Postgres.** Database `pqp_staging` on Fly app **`pqp-db-staging-lite`**, region `gru`: one `shared-cpu-1x` machine, 256 MB RAM, 1 GB volume, `postgres-flex` image, `max_connections` 300 out of the box. Cost is roughly $2 to $3 a month, versus the $38 a month the prior Managed Postgres cluster (`pqp-db-staging`, Basic plan, shared x2 / 1 GB / 10 GB disk) cost for a database staging mostly leaves idle. Moved 2026-09-08 for that reason alone: staging data is disposable, so paying managed-cluster money for it was never buying anything staging needed. The schema self-applies at boot via `server/src/schema.sql` (`initDb()` in `server/src/db.ts`); there is no migration step and nothing to run by hand.
 
-  It used to live on production's cluster, and moving it off (2026-09-07) was a **safety** change, not a tidiness one: one cluster means one `max_connections` of 100, so a load test that exhausted connections on staging would have starved `pqp-api` and taken pqp.gg down. Isolation is what makes it legitimate to push staging to failure. Production is `pqp-db-2`, id `9g6y30wdxzmrv5ml`, database `fly-db`; nothing in this document should ever touch it.
+  `DATABASE_URL` on `pqp-api-staging` points at the app's Flycast address, `postgres://postgres:<password>@pqp-db-staging-lite.flycast:5432/pqp_staging`, private 6PN networking, the same as Managed Postgres, just without the pooler and without Fly operating it for you: this is unmanaged Postgres, so there is no automatic failover, no point-in-time restore, and no `fly mpg` tooling. That trade is fine for staging (see the safety rule below) and would not be fine for production. `DATABASE_SSL` is unset, matching how `pqp-api-staging` was already configured before the move; the connection is unencrypted but confined to Fly's private network.
 
-  Two things about that move that `fly mpg list` will make you doubt. **`pqp-db-staging` lists no attached apps**, because `DATABASE_URL` was set by hand at the `direct.<cluster>.flympg.net` host, which is how production is configured and is not what `fly mpg attach` writes; the attachment record is a label, the secret is the connection, and `/ready` is the thing that answers whether it works. And **the old `pqp-staging` database still exists on `pqp-db-2`**, holding the copy that was dumped out of it, unreferenced by anything. It is a rollback, not a live database. Delete it when nobody wants that rollback any more, remembering whose cluster it is on.
+  To connect by hand: `fly proxy 15433:5432 -a pqp-db-staging-lite`, then `psql -h 127.0.0.1 -p 15433 -U postgres -d pqp_staging` with the password from `fly ssh console -a pqp-api-staging -C "printenv DATABASE_URL"`. There is no `fly mpg proxy` for this instance; it is a plain `fly proxy`.
+
+  **A load test above roughly 100 concurrent connections needs `max_connections` raised on `pqp-db-staging-lite` (300 today is headroom, not a guarantee once `PG_POOL_MAX` is pushed past what the load-testing runbook below normally sets) or, for one run, a temporary Managed Postgres cluster stood up and torn down for it.** Do not assume this instance scales the way the old managed cluster did; it is deliberately the cheapest thing that keeps ordinary staging traffic working.
+
+  **The old Managed Postgres cluster, `pqp-db-staging` (id `dzx6qo65q9n0jpv5`), is destroyed** (2026-09-08). `fly mpg list` now shows only `pqp-db-2` (production). A `pg_dump` of the old cluster taken immediately before the switch lives at `~/.config/pqp/staging-db-dump-20260908.sql.gz` on the operator's machine (0600, never committed) as the rollback if anything looked wrong.
+
+  The GitHub repo variable `MONITOR_MPG_CLUSTER` points at production (`pqp-db-2`) and was never affected by any of this; it never pointed at staging.
+
 - **Object storage is its own R2 bucket, `pqp-attachments-staging`** (created 2026-09-01, private, CORS for `https://staging.pqp-3yr.pages.dev` and `http://localhost:5173`). `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION=auto` and `S3_FORCE_PATH_STYLE=false` are set on `pqp-api-staging`; the two credentials come from an R2 API token scoped to that bucket (Dashboard → R2 → Manage R2 API Tokens → Object Read & Write). `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are set from the account token `pqp-staging` (Object Read & Write, that bucket only), verified with a signed PUT / HEAD / DELETE round trip on 2026-09-01. Attachments and Baú media both work on staging. Never point staging at the production bucket; to rotate, create a new token in the dashboard, `fly secrets set` the pair, then delete the old token.
 - **No TURN.** Cross-NAT voice may fail on staging; same-network voice works. This is the known STUN-only limitation (CLAUDE.md pitfall 1), accepted here to keep staging cheap.
 - **No analytics or ads tags.** The build omits Umami, Google Ads and the APK click beacon on purpose; staging traffic must not pollute production numbers.
@@ -40,18 +47,15 @@ A deploy to staging never restarts production: the workflow only talks to `pqp-a
 
 ## Resetting the staging database
 
-Wipe the contents of `pqp-staging` in place; the next boot recreates the whole schema from `server/src/schema.sql`. Dropping the database itself is not an option on Managed Postgres: the `schema_admin` role owns neither the database nor the `public` schema (both belong to `postgres`, and there is no `fly mpg databases delete`), so `DROP DATABASE` and `DROP SCHEMA public` are both refused. What the role can drop is everything it created, which is exactly the app's tables and the `pgcrypto` extension (the app's `fly-user` login resolves to `schema_admin` on this cluster).
-
-**`fly mpg connect` cannot do this on the new cluster.** It authenticates as an MPG system role there, and `DROP OWNED BY current_user` comes back `ERROR: MPG system roles cannot be modified`. The app's own `fly-user` login is the one that owns the tables, so go in through the proxy with its password (the one in `DATABASE_URL`):
+Wipe the contents of `pqp_staging` in place; the next boot recreates the whole schema from `server/src/schema.sql`. `pqp-db-staging-lite` is unmanaged Postgres and the connection uses the `postgres` superuser, so this is the ordinary drop-and-recreate, not the Managed Postgres workaround an earlier version of this doc needed:
 
 ```bash
-fly machine stop <machine id> -a pqp-api-staging   # nothing holding connections or recreating tables mid-wipe
-fly mpg proxy dzx6qo65q9n0jpv5 -p 16394 &          # STAGING cluster; production is 9g6y30wdxzmrv5ml
-psql -h 127.0.0.1 -p 16394 -U fly-user -d pqp-staging -c 'DROP OWNED BY current_user;'
-fly machine start <machine id> -a pqp-api-staging  # boot reapplies schema.sql, including CREATE EXTENSION pgcrypto
+fly machine stop <machine id> -a pqp-api-staging     # nothing holding connections mid-wipe
+fly proxy 15433:5432 -a pqp-db-staging-lite &        # not `fly mpg proxy`; this instance is unmanaged
+psql -h 127.0.0.1 -p 15433 -U postgres -d postgres -c 'DROP DATABASE pqp_staging;'
+psql -h 127.0.0.1 -p 15433 -U postgres -d postgres -c 'CREATE DATABASE pqp_staging;'
+fly machine start <machine id> -a pqp-api-staging    # boot reapplies schema.sql, including CREATE EXTENSION pgcrypto
 ```
-
-Read that cluster id before pressing enter, every time.
 
 **After a load test you usually want the smaller version**, which keeps the staging accounts you signed up by hand and removes only what the run created. Verified on 2026-09-07, when it took the database from 5 638 users back to 3:
 
@@ -69,7 +73,7 @@ Every load-test identity carries the `load_test_user` prefix (`LOAD_TEST_CLERK_I
 | GitHub Actions secret | `FLY_API_TOKEN_STAGING` | Deploy token scoped to `pqp-api-staging` |
 | GitHub Actions secrets | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Shared with the production web deploy |
 | GitHub repo variable | `STAGING_CLERK_PUBLISHABLE_KEY` | Clerk dev `pk_test`; public by definition, so a variable, not a secret |
-| Fly secrets on `pqp-api-staging` | `DATABASE_URL` | Points at `pqp-staging` on `pqp-db-staging` (`dzx6qo65q9n0jpv5`), via its `direct.<cluster>.flympg.net` host, the way production is configured |
+| Fly secrets on `pqp-api-staging` | `DATABASE_URL` | Points at `pqp_staging` on `pqp-db-staging-lite`, an unmanaged Fly Postgres app, via its `.flycast` address |
 | Fly secrets on `pqp-api-staging` | `CLERK_SECRET_KEY` | The dev instance `sk_test`, never the prod key |
 | Fly secrets on `pqp-api-staging` | `CORS_ALLOWED_ORIGINS`, `CLERK_AUTHORIZED_PARTIES` | The staging Pages origin |
 | Fly secrets on `pqp-api-staging` | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | R2 API token scoped to `pqp-attachments-staging` only |
@@ -86,7 +90,7 @@ Capacity is a measured number or it is a guess, and a guess gets discovered duri
 Read these before the commands, because the commands are easy and two of these mistakes are not recoverable.
 
 1. **Never point a load test at production.** `pqp.gg` and `api.pqp.gg` are out of bounds, full stop. `load-fanout.ts` refuses a `--url` on that domain, but the refusal is a backstop, not permission to try.
-2. **Never load test a deployment whose database cluster is shared with production.** This is the rule that made the September 2026 rig possible at all: staging and production shared one Fly Managed Postgres cluster with one `max_connections` of 100, and exhausting connections on staging would have starved `pqp-api`. Staging now has its own cluster (`pqp-db-staging`, `dzx6qo65q9n0jpv5`). If you ever repoint staging back onto `pqp-db-2`, load testing stops being allowed until you undo that.
+2. **Never load test a deployment whose database is shared with production.** This is the rule that made the September 2026 rig possible at all: staging and production originally shared one Fly Managed Postgres cluster with one `max_connections` of 100, and exhausting connections on staging would have starved `pqp-api`. Staging now has its own database, first on a dedicated Managed Postgres cluster (`pqp-db-staging`, since destroyed) and now on the unmanaged `pqp-db-staging-lite` (`max_connections` 300). If you ever repoint staging's `DATABASE_URL` back onto `pqp-db-2`, load testing stops being allowed until you undo that.
 3. **The harness writes.** It creates users, a server, channels, invites and messages, and it leaves them there. That is fine on staging and is why the database reset above exists.
 4. **`LOAD_TEST_TOKEN` belongs on `pqp-api-staging` and nowhere else.** The server refuses it on any Fly app not named `-staging`, but do not lean on that: the secret is the boundary, the app-name check is the second lock.
 5. **Put staging back when you are done.** A `performance-2x` machine left running is real money for an environment that is idle most of the week.
@@ -216,42 +220,217 @@ Three caveats, all of which make the number **conservative rather than optimisti
 - **A capability the harness does not declare is an optimisation the run cannot see.** The first comparison against the roster deltas measured no improvement at all, because `voice-roster-delta` is opt-in per socket (`caps` on the `auth` frame, `SOCKET_CAPS` in `server/src/ws/sockets.ts`) and the harness was silent. `--caps` is how you choose; `--caps 0` deliberately measures an old client. Worth knowing for production too: a client that does not negotiate keeps paying the whole roster.
 - **The rig is shared, and a run that cannot say which build it measured is not a measurement.** On 2026-09-07 another agent deployed their branch to `pqp-api-staging` between two runs, and the second run quietly measured their code: different wire volume, CPU pegged where it had been idle, a ceiling a bucket higher, and nothing in the output to say the binary had changed. The report now prints `target ran <sha> for the whole run`, or shouts when that moves. Check that line before believing any number, and redeploy the build you meant before every run.
 
+### What it has measured (2026-09-07, evening): 500 in one room with real media
+
+The morning runs above drove the app WebSocket only. This rig put 500 real
+media subscribers through the whole path: cold HTTP, app socket, `welcome`,
+`POST /api/voice/token`, LiveKit connect, and a 720p30 share decoded by every
+receiver, from four Vultr boxes in São Paulo against `pqp-api-staging` and an
+isolated test SFU built from `tools/sfu/install.sh`. Harness:
+`tools/watch-party-load` (PR #337 plus the stampede-mode additions described
+in its README). Nothing here touched production; the generators had
+`api.pqp.gg` and `sfu.pqp.gg` denied in their firewall and the harness refuses
+both by name.
+
+**The rig.** Staging on `performance-2x` / 4 GB, `PG_POOL_MAX=40`, image
+`53099a94`, a config deploy of an edited `fly.staging.toml` with
+`soft_limit 1000 / hard_limit 2000`, `auto_stop_machines off`,
+`min_machines_running 1` (never committed; the next CI deploy reverts it), and
+the two address-keyed limiters lifted (`RATE_LIMIT_ANON_*`,
+`RATE_LIMIT_SOCKET_*`); the per-identity API and write limiters stayed at
+their defaults. Test SFU: Vultr `vhp-4c-8gb-amd` (4 vCPU, twice production's
+2), LiveKit 1.13.6 from the committed template under sslip.io names, fresh key
+pair, `LIVEKIT_*` on staging pointed at it. Generators: four
+`vhp-12c-24gb-amd`, four Node processes each of about 31 receivers plus the
+presenter in a process of its own on the first box; links measured at 23 Gbit/s
+between boxes and to the SFU. Arrival: presenter live first, 499 receivers
+over 90 s (5.5/s), 20% of them with no `caps` and no `permessage-deflate`,
+then a 600 s hold. Sampled every second on the API machine (`/proc/stat`,
+`/proc/net/dev`, `/ready` for the pool, `/api/admin/metrics` every 30 s), the
+SFU (the same plus `/proc/net/snmp` UDP errors and LiveKit's `:6789/metrics`)
+and every generator (CPU split incl. steal, ingress, UDP errors).
+
+**Why the previous attempt stalled at 61.** The pre-auth `anonLimiter`
+(240 tokens, 60/s refill, keyed by client address) charges every `/api`
+request, and on Fly the address is the rightmost `X-Forwarded-For` entry, the
+one fly-proxy appends, so a harness's forged header is ignored and every
+client on one generator shares one bucket. Confirmed without load: 300
+concurrent requests from one box with 300 distinct forged addresses at the
+default limits answered 285 x 401 and 15 x 429 (the bucket plus what refilled
+during the burst); after lifting the two pairs, 300 x 401. At roughly four
+pre-socket requests per client, 240 tokens is about 60 clients, then 429s:
+the 61.
+
+**Control, API only** (`load-fanout --mode join`, ramp 4/s +4 every 20 s to
+1200 from one box): joins stop fitting the client's 12 s budget at roughly
+650 to 674 people already in the room; at 475 to 524 occupants welcome p90 was
+2.2 s. The machine was at 100% CPU and the pool at 40/40 with a queue of 616
+from about 545 occupants at a 20/s arrival rate, and 93% of the 347 Mbit/s of
+egress was `voice-roster` keyframes at 192 kB each, because with
+`VOICE_REGISTRY=postgres` the roster deltas do not run (`server/src/ws/voice.ts`,
+`registryOn() ? null : foldRoomEvents(events)`). That is the join path's own
+ceiling and it sits above 500.
+
+**Generators.** One Node process for 95 receivers is itself a ceiling (event
+loop lag 4.3 s, presenter capture at 21 fps, decoded 12 fps median, rtc-node
+handle errors on the last arrivals, with the SFU at 17% CPU). Split across
+processes of about 31 receivers with the presenter in its own process it is
+clean, and the cost is decode: about 0.08 of a core per receiver of 720p30,
+paid by every subscriber whether or not a `VideoStream` drains it. A 12 vCPU
+box therefore holds 80 to 90 receivers under the 70% gate; 500 needs six such
+boxes, and four ran at 87 to 94% during A2, which is why A2's receiver-side
+sustained figure is labelled generator-limited below. Details and the numbers
+are in `tools/watch-party-load/README.md`.
+
+**Run A1, single UDP mux port (production's `livekit.yaml`).** 499 of 499 joined
+(welcome p95 66 ms from socket open, 778 ms with the cold HTTP; API pool 16 of
+40, CPU 16% p95). Then the media path collapsed: 229 receivers never decoded a
+frame within 45 s, the 270 that did decoded 1.2 fps median for the rest of the
+hold with 58% packet loss, 194 froze, 627 k PLIs and 20 M NACKs went up to the
+SFU and it retransmitted 812 packets. The SFU sat at 66 to 77% CPU (LiveKit at
+236% of 400%) pushing only 250 to 270 Mbit/s against about 800 expected, and its
+one UDP socket dropped 137,200 inbound packets on its 416 kB receive buffer in
+bursts of 700 to 1100 a second. LiveKit says so itself on every boot, on
+production too: `UDP receive buffer is too small for a production set-up,
+current 425984, suggested 5000000`.
+
+**Run A2, four UDP mux ports (`rtc.udp_port: 7882-7885`, nothing else changed).**
+468 receivers present (one generator process died in native libwebrtc ninety
+seconds in and took 31 with it). **468 of 468 decoded within 45 s** (p50 811 ms,
+p95 1.4 s, p99 1.6 s from their own arrival), decoded 29.7 fps median and 29.4
+at p5 at 720 lines, packet loss 0.000% median and 0.001% p95, zero PLIs. The
+SFU carried **805 to 853 Mbit/s at 67 to 78% CPU of 4 vCPU with zero
+receive-buffer drops for the whole run**; the API pool peaked at 18 of 40 with
+CPU at 15% p95. 131 receivers recorded at least one freeze, 105 of them on the
+one generator that was at 94% CPU and also ran the presenter (15,243 decoder
+frames dropped there, none elsewhere), so the sustained-receipt figure of 72%
+is the generators' number, not the SFU's. No receive-buffer drops means the
+raised-buffer condition was not triggered; the one attributable change between
+A1 and A2 is the port count.
+
+**Ladder F, the 4 vCPU test box, 720p / 1.5 Mbit/s, four ports, `lk load-test`
+subscribers (no decode) against our own presenter, three minutes a step.**
+
+| subscribers | egress, steady p50 (peak) | SFU CPU p50 (p95) | receive-buffer drops per s, mean (peak) | loss (lk aggregate) | per subscriber |
+|---|---|---|---|---|---|
+| 200 | 343 (376) Mbit/s | 26% (28%) | 0 (0) | 0.00% | 1.50 Mbit/s |
+| 300 | 516 (565) | 37% (39%) | 0 (0) | 0.00% | 1.50 |
+| 400 | 687 (746) | 48% (52%) | 5 (711) | 0.00% | 1.40 |
+| 500 | 858 (951) | 59% (63%) | 3 (441) | 0.00% | 1.40 |
+| 600 | 588 (956) | 81% (84%) | 26 (1735) | 26.6% | 0.55 |
+| 700 | 549 (907) | 85% (86%) | 8 (616) | 26.9% | 0.42 |
+| 800 | 547 (911) | 84% (86%) | 15 (2313) | 27.2% | 0.35 |
+
+Between 500 and 600 subscribers the 4 vCPU box stops delivering: egress falls
+rather than rises, CPU pins in the low 80s and a quarter of the packets never
+reach anyone. Bursty receive-buffer drops start at 400 at no cost to loss; the
+buffer condition is what the raised-buffer follow-up is for.
+
+**Run A2 repeated on six generators (four Vultr 12 vCPU plus two Fly
+performance-16x, 26 receiver processes of 19), four ports, same everything.**
+500 present, **499 of 499 decoded within 45 s** (p50 835 ms, p95 1.7 s, p99
+2.4 s from arrival), welcome p95 65 ms from socket open (801 ms with the cold
+HTTP), decoded fps median 29.5 and p5 27.7, loss median 0.000% and p95 0.027%,
+10 PLIs in ten minutes, presenter 30.1 fps at 1.35 Mbit/s. **SFU: 880 to 935
+Mbit/s steady (p95 913, peak 1011), CPU 63 to 81% (p95 76%, peak 82%) of 4 vCPU,
+zero receive-buffer drops.** API pool 14 of 40, CPU 14% p95. Sustained receipt
+56%: one Fly box ran at 90% CPU and froze all 95 of its receivers (96,785 frames
+dropped by its own decoders); the four Vultr boxes, all under 66% CPU, froze 55
+of their 309 receivers once each with zero dropped frames and 111 lost packets
+between them, which is the shape of brief jitter at the edge of the box's CPU
+rather than a starved generator. Read A2 as: at 500 the four-port 4 vCPU box
+delivers the full 720p stream to everyone with roughly a quarter of its CPU
+left, and the first thing to give at 500 is smoothness, not delivery.
+
+**What the numbers say.**
+
+| condition | outcome at 500 |
+|---|---|
+| single mux port (production's config), 4 vCPU | fails: 54% ever decode, 58% loss, 250 to 270 Mbit/s out of the box, receive-buffer overflow on the one socket |
+| four mux ports, nothing else changed, 4 vCPU | passes delivery: 100% decode within 45 s (p95 1.4 to 1.7 s), 0.000% loss, 880 to 935 Mbit/s at 76% CPU p95 |
+| four ports, lk subscribers, 4 vCPU (ladder F) | fine to 500, collapses between 500 and 600 |
+| join path alone (control A) | fits the 12 s budget to about 650 in the room |
+
+**The one change to make on production before next weekend is
+`rtc.udp_port: 7882-7885` (plus `ufw allow 7883:7885/udp`) in
+`tools/sfu/livekit.yaml.tmpl`.** On the test box it was the difference between a
+party that fails at 500 and one that passes. Two caveats that decide whether
+500 fits on the box production runs today: production is 2 vCPU, not 4, and the
+2 vCPU ladder (condition E) was not run because the rig was torn down first; the
+4 vCPU box broke between 500 and 600, so on 2 vCPU expect the break well under
+500 unless a ladder says otherwise. And the LiveKit boot warning about the UDP
+receive buffer (`current 425984, suggested 5000000`) is real: raise
+`net.core.rmem_max` / `wmem_max` on the box the next quiet hour, as its own
+change, and watch `RcvbufErrors` in `/proc/net/snmp`.
+
+**Not run tonight** (the rig was destroyed while the session was down): the
+third repeat of A2; B (explicit 1080p at 4 Mbit/s with receivers pinned to the
+top layer); C (50 voices and 10 cameras); D (join storm with resume); E (the 2
+vCPU ladder and the confirmation at its found count); the raised-buffer and
+`limit` conditions. The harness flags for B, C and D exist and were smoke-tested
+at small scale; the ladder scripts are in this run's scratch directory.
+
+**Operational lessons.** The Vultr account's monthly fee cap refused new
+machines mid-session; Fly performance-16x machines in `gru` work as generators
+(bootstrapped from `node:22-bookworm`, production addresses dropped with
+`iptables`) and cost about $0.70 an hour each. The Vultr API key is
+IP-restricted, so a VPN on the laptop makes every Vultr call fail with
+`Unauthorized IP address` until it drops. `pkill -f <pattern>` from an ssh
+command whose own command line contains the pattern kills the session.
+rtc-node under 12 concurrent connects per process segfaulted once in 43
+process-runs; there is no catching that, only smaller shards.
+
+**Cost.** About five hours of Vultr at $0.86 an hour plus two Fly machines for
+about three hours, under $12 for the compute, and the staging cluster's
+performance-2x hours.
+
 ## Known caveats
 
 - **Canonical URLs point at production.** Marketing and blog routes pin their canonical tag to https://pqp.gg (`client/src/lib/marketing-meta.ts`, `client/src/lib/blog-meta.ts`), so staging pages carry prod canonicals. Harmless for testing; it only means staging marketing pages are not independently indexable, which is a feature.
 - **Game connections do not work.** Steam, Battle.net and Twitch OAuth apps are registered for the production origin only; the staging origin has no provider registrations, so those linking flows will fail or stay hidden.
 - **First request after idle is slow.** A parked machine takes a few seconds to wake. If a probe or test suite hits a timeout, retry once before suspecting the deploy.
 - **Voice on staging is signalling only unless LiveKit is configured.** There is no TURN and no SFU by default, so a load test that needs one room bigger than `MESH_VOICE_LIMIT` has to set `LIVEKIT_*` first. See the load-test runbook below.
+- **A stale `APP_VERSION` secret fails the deploy gate.** `deploy-staging.yml` passes `-e APP_VERSION=<sha>` and then polls `/health` until `version` equals that sha. A Fly *secret* named `APP_VERSION` shadows the `-e` flag, so `/health` keeps reporting the old sha and the "Verify the deployed commit" step times out after ten minutes even though the new image is serving. It happened on 2026-09-08; the secret is unset now (`fly secrets list -a pqp-api-staging` must not show it). Never set `APP_VERSION` as a secret on either app; it is a per-deploy env flag.
 
-## Rehearsing two machines (M5 of `docs/plans/MULTI_INSTANCE_VOICE.md`)
+## Rehearsing two machines (step 4 of `docs/deploy-fly.md` 6a-bis)
 
-Before production is ever scaled to two (`docs/deploy-fly.md` 6a-bis), run the whole thing here once. Staging has no LiveKit, so this rehearses the bus, the registry, the drain and the mesh guard's *refusal* path; the SFU path is what production will take and can only be watched there.
+Before production is ever scaled to two again, run this once here, **with `LIVEKIT_*` set** (production's posture; a pass with them unset, which is what the 2026-09-08 run first got, does not count, because the point is that small rooms stay mesh and large rooms go to LiveKit while two machines are live). Written as a checklist an agent can execute: every step has a command, what it must show, and what to do if it does not. Do not touch `pqp-api` (production) at any point; every command below names `pqp-api-staging`. Everything here is temporary and the last section undoes it.
 
-**Set up (all temporary, undo at the end):**
+Prerequisites: `fly` and `gh` authenticated (`fly auth whoami`, `gh auth status`), the three `LIVEKIT_*` values from the operator (never from a doc or a commit; a second LiveKit Cloud project is ideal, the production one is acceptable because room names are channel UUIDs from a different database and cannot collide), and two browser profiles signed up on the staging Clerk dev instance (`localStorage` suffixes do not exist on staging).
+
+**Set up:**
 
 ```bash
-# 1. The two flags. `fly secrets set` restarts the machine.
-fly secrets set CLUSTER_BUS=postgres VOICE_REGISTRY=postgres -a pqp-api-staging
+# 1. The flags and the SFU. `fly secrets set` restarts the machine.
+fly secrets set CLUSTER_BUS=postgres VOICE_REGISTRY=postgres \
+  LIVEKIT_URL=<wss://...> LIVEKIT_API_KEY=<...> LIVEKIT_API_SECRET=<...> \
+  -a pqp-api-staging
+curl -s https://pqp-api-staging.fly.dev/ready | jq .checks.livekit   # {"ok":true,...}; staging may already carry LIVEKIT_* (it did on 2026-09-08), then skip the three
 
 # 2. Auto-stop off for the rehearsal. fly.staging.toml says "stop" / min 0;
 #    a parked machine would count as one instance that stopped answering.
 #    Edit fly.staging.toml locally (auto_stop_machines = "off",
-#    min_machines_running = 2) and deploy it; do not commit that edit.
-gh workflow run deploy-staging.yml --ref <your-branch>   # or fly deploy -c fly.staging.toml -a pqp-api-staging --ha=false
+#    min_machines_running = 2) and deploy it from a branch; do not merge that edit.
+gh workflow run deploy-staging.yml --ref <your-branch>
+gh run watch                                                    # green before going on
 
 # 3. Two machines, same region.
 fly scale count 2 --region gru -a pqp-api-staging
 fly machines list -a pqp-api-staging      # two rows, both "started", both gru
 ```
 
-**Verify, in this order:**
+**Verify, in this order. Each step is pass or stop; on a stop, scale back (below) and report the step and the log lines.**
 
-1. `fly logs -a pqp-api-staging` shows `voice.registryEnabled` from both instance ids, then `bus.selfEcho` from both (never `bus.selfEchoMissing`: that means `DATABASE_URL` is a transaction-mode pooler and LISTEN is not delivering, stop here). No `voice.configDrift`.
-2. `voice.meshClusterUnsafe` appears once from each instance within 15 s (no LiveKit on staging: that is the guard saying so).
-3. Two browsers (`localStorage.setItem("pqp:dev-user-suffix", "bob")` is not available here; sign up twice on the Clerk dev instance). Send a message in a text channel from one and confirm it appears in the other without a refresh; open the same server in both and confirm presence agrees. Reload each a few times: every `fly logs` line is prefixed with the machine id, so the `ws.*` lines for your two users tell you which machine each socket landed on, and you want to see both ids across reloads.
-4. Voice, the refusal path: join a voice channel in browser A. In browser B, join the same channel. If B is on the other machine, it must show the call as not connected within a second, with `voice-join-refused` (`reason: mesh-multi-instance`) in the WS frames and `voice.meshRefusedMultiInstance` in the logs, and A must **not** see B in the room. If B landed on the same machine it simply joins; reload B until it lands on the other one. Nobody may ever appear in a room they cannot hear.
-5. The drain. With both browsers connected and A still in voice, `fly machine restart <id of the machine A is on> -a pqp-api-staging`. In the logs: `[shutdown] SIGTERM`, then `ws.drainBatch` lines, then `ws.drained`, all inside a few seconds. In the browsers: at most a brief "reconnecting", no "Realtime connection closed" banner that stays, and both land on the surviving machine (the machine id prefix on their `ws.*` log lines). A's voice seat resumes with the same peer id (`voice.resumeAdopted` in the logs, `resumed: true` in the `welcome` frame). `curl -s -o /dev/null -w '%{http_code}' https://pqp-api-staging.fly.dev/health` during the drain answers 503 once the draining machine is the one hit, and `/up` stays 200 throughout.
-6. Once the restarted machine is back, repeat step 5 on the other one. Then a real deploy (`gh workflow run deploy-staging.yml --ref <branch>`): the rolling strategy does step 5 to each machine in turn, and the deploy-staging job's own checks pass.
+1. **Bus and registry alive on both.** `fly logs -a pqp-api-staging` shows `voice.registryEnabled` from both machine ids, then `bus.selfEcho` from both. Stop on `bus.selfEchoMissing` (that is `DATABASE_URL` through a transaction-mode pooler; LISTEN is not delivering) or on `voice.configDrift` (the two machines have different LiveKit config; a secrets change landed on one).
+2. **Two sockets on two machines.** Open `/app` in both browsers. Every `fly logs` line is prefixed with the machine id, so the `ws.*` lines for your two users say which machine each socket landed on. Reload one browser until the two users are on different machines; if ten reloads never split them, stop (the proxy is pinning connections, which the whole rehearsal assumes it does not).
+3. **Chat and presence cross.** Send a message from A; it appears in B without a refresh. Both open the same server; the member list's online state agrees. Fail: stop.
+4. **A LiveKit room spans the machines.** In a community, or a server with ten or more members (make one with the load-test seeder if staging has none; a small server is mesh by policy and belongs to step 6), A joins a voice channel; B joins the same one. B's `welcome` frame (DevTools, WS) says `transport: "livekit"` and lists A's peer; both tiles appear on both screens, both hear each other, `fly logs` shows `voice.join` from each machine id for that channel and `voice.transportPinned` with `reason: "community"` or `"large"` from the machine that opened it. `voice-join-refused` must not appear anywhere, and neither may `voice.meshGuardForcedSfu` (it no longer exists; seeing it means the image predates 2026-09-08). Fail: stop.
+5. **The counters climb.** `curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" https://pqp-api-staging.fly.dev/api/admin/metrics | jq .voice.cluster`, several times: it answers from whichever machine takes the request, and within a minute of step 4 both `framesRelayed` and `framesReceived` are above zero on both (keep calling until both machine ids have answered; `fly logs` says which one served each request). Zero after a minute on a machine that has a peer in the room: stop, the bus is not delivering.
+6. **A small room stays mesh across the machines, with LiveKit set.** Twice: a DM call between the two users (a conversation call is mesh whatever the SFU), and a voice channel in a server with fewer than ten members, both joined by A first and B second, with the users on different machines. The `welcome` on B says `transport: "mesh"` both times, `fly logs` shows `voice.transportPinned` with `reason: "dm"` and then `"small"` from A's machine and `voice.meshPinAdopted` from B's, both hear each other, and the WS frames on B show an `offer` arriving from A's peer id and an `answer` going back. A `welcome` saying `livekit` for either room is the guard that was deleted on 2026-09-08 coming back, and is a fail: on production every small room of the night would land on the media box. Fail (no audio, `voice-join-refused`, or the wrong transport): stop.
+7. **A moderator mute holds across machines.** On a staging server both belong to, with A as owner: in the voice channel from step 4, A opens B's member card and mutes B for everyone. B's tile shows the server-mute badge on both screens, B's own client refuses to unmute (the mic button snaps back), and `fly logs` shows `voice.serverMute` on the bus if B's socket is on the other machine. A unmutes B; B can talk again. Then B leaves and rejoins while muted (repeat the mute first): B comes back muted. Fail: stop.
+8. **A resume crosses.** With A in the voice channel, `fly machine restart <id of the machine A is on> -a pqp-api-staging`. Logs: `[shutdown] SIGTERM`, `ws.drainBatch` lines, `ws.drained`, all inside a few seconds. Browsers: at most a brief "reconnecting", no "Realtime connection closed" banner that stays, and A's socket lands on the survivor (machine id prefix). A's seat resumes with the same peer id (`voice.resumeAdopted` in the logs, `resumed: true` in the `welcome` frame) and A keeps hearing B. `curl -s -o /dev/null -w '%{http_code}' https://pqp-api-staging.fly.dev/health` during the drain answers 503 once the draining machine is the one hit; `/up` stays 200 throughout. Fail: stop.
+9. **The other machine too.** Once the restarted machine is back (`fly machines list`), repeat step 8 on the other one.
+10. **A real deploy.** `gh workflow run deploy-staging.yml --ref <your-branch>` and `gh run watch`: the rolling strategy does step 8 to each machine in turn, both browsers stay connected, the job's own checks pass, and afterwards `fly machines list` shows two started machines on the new image.
 
 **Scale back (do not leave staging on two machines; it doubles the bill and parks nothing):**
 
@@ -259,8 +438,8 @@ fly machines list -a pqp-api-staging      # two rows, both "started", both gru
 fly scale count 1 --region gru -a pqp-api-staging
 git checkout fly.staging.toml                       # auto-stop "stop", min 0 again
 gh workflow run deploy-staging.yml --ref staging    # redeploys the committed file
-fly secrets unset CLUSTER_BUS VOICE_REGISTRY -a pqp-api-staging   # optional; harmless to leave on one machine
+fly secrets unset LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET -a pqp-api-staging   # unless staging is meant to keep an SFU
 fly machines list -a pqp-api-staging                # one row
 ```
 
-Record the date and the outcome in the M5 line of the plan's status header when it has been done.
+`CLUSTER_BUS` and `VOICE_REGISTRY` are harmless to leave on one machine (production runs them on one). Record the date, the step reached and the outcome in the M6 line of the plan's status header; a full pass is what unblocks step 5 of `docs/deploy-fly.md` 6a-bis.

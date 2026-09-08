@@ -191,6 +191,9 @@ class WireProtocolTest {
         "camera-denied" to "Android has no camera publishing, so nothing here can be denied",
         // Who is online in the channel. Android draws no member list yet.
         "presence-update" to "no roster surface on the phone to render it in",
+        // The incremental form of the same list, and opt-in: the server sends
+        // it only to a client that negotiated deltas, which Android does not.
+        "presence-delta" to "never negotiated, and the same missing roster surface as presence-update",
         // Threads exist on the web only; the phone has no thread view.
         "thread-update" to "no thread surface on the phone",
         // Permissions are enforced server-side and this client draws no

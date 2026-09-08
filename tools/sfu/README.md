@@ -22,6 +22,7 @@ The rebuild procedure is section 7 of that file.
 | `Caddyfile.tmpl` | Caddy: TLS for both hostnames, reverse proxy to LiveKit's 7880. | `/opt/livekit/Caddyfile` |
 | `docker-compose.yaml` | The two containers, pinned. `network_mode: host` because UDP mux and TURN want the real interface. | `/opt/livekit/docker-compose.yaml` |
 | `sync-turn-cert.sh.tmpl` | Copies the TURN certificate out of Caddy's volume into a path LiveKit can read, and restarts LiveKit only when the hash changed. | `/opt/livekit/sync-turn-cert.sh` (0700) |
+| `sysctl-livekit.conf` | `net.core.rmem_max` / `wmem_max` at 25 MB, so LiveKit's 16 MB per-socket buffer request is not clamped (it warns on every boot otherwise). | `/etc/sysctl.d/90-livekit.conf` |
 | `livekit-docker.service` | systemd wrapper around `docker compose up -d` in `/opt/livekit`. | `/etc/systemd/system/` |
 | `sshd-hardening.conf` | Turns SSH password authentication off. Sorts ahead of Ubuntu's `50-cloud-init.conf`, which turns it back on. | `/etc/ssh/sshd_config.d/01-pqp-hardening.conf` (0600) |
 | `fail2ban-jail-sshd.conf` | The SSH jail. Reads the journal, with the `journalmatch` corrected for Ubuntu. | `/etc/fail2ban/jail.d/pqp-sshd.local` |
@@ -40,7 +41,7 @@ box rather than written up to it.
 ```
 :443  tcp  Caddy ──reverse_proxy──► 127.0.0.1:7880  LiveKit signal + RoomService
 :80   tcp  Caddy   (ACME only)
-:7882 udp  LiveKit   all media, single UDP mux port
+:7882-7885 udp  LiveKit   all media, UDP mux; binds min(vCPUs, 4) of them, so 7882 and 7883 on the 2 vCPU box
 :7881 tcp  LiveKit   ICE over TCP fallback
 :5349 tcp  LiveKit   TURN/TLS, cert copied in by the daily timer
 :3478 udp  LiveKit   TURN/UDP
@@ -140,7 +141,7 @@ Five things worth knowing that the plan document did not say:
    and the metrics endpoint. Do not turn `ufw` off to debug something.
 3. **`ufw` allows `30000:40000/udp`, and it is load-bearing.** An earlier
    version of this file called it stale, left over from before
-   `rtc.udp_port: 7882` was pinned, and said nothing listened there. That was
+   `rtc.udp_port` was pinned, and said nothing listened there. That was
    wrong, and the mistake is worth understanding because the evidence for it
    looks convincing. `30000:40000` is LiveKit's **TURN relay allocation
    range**, `turn.relay_range_start` / `turn.relay_range_end`, which default to

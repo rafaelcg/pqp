@@ -13,6 +13,14 @@ interface ImportMetaEnv {
   readonly VITE_TURN_USERNAME?: string;
   readonly VITE_TURN_CREDENTIAL?: string;
   readonly VITE_VOICE_BACKEND?: "mesh" | "cloudflare-sfu" | "livekit";
+  /**
+   * Live reactions over a shared screen: the floating emoji and the bar that
+   * sends them. `"true"` turns them on; anything else, including unset, leaves
+   * the client with no bar, no overlay and no frame on the wire. Read through
+   * `isLiveReactionsEnabled()` in `client/src/lib/live-reactions.ts`, never
+   * inline.
+   */
+  readonly VITE_LIVE_REACTIONS?: string;
   readonly VITE_DEV_AUTH_BYPASS?: string;
   /**
    * Public TestFlight join URL. Optional; a default lives in `lib/testflight.ts`.

@@ -72,8 +72,14 @@ class CallFramesTest {
 
     @Test
     fun `every ring-cancelled reason the server can send is understood`() {
+        // Anchored on the schema by name. An unanchored `reason: z.enum([`
+        // matched whichever schema came first in the file, which since
+        // `voiceJoinRefusedMessageSchema` gained a reason is not this one.
+        val source = RepoSources.stripComments(RepoSources.read(signaling))
+        val block = source.substringAfter("callRingCancelledMessageSchema = z.object({", "")
+            .substringBefore("});")
         val reasons = Regex("""reason:\s*z\.enum\(\[([^\]]*)]""")
-            .find(RepoSources.stripComments(RepoSources.read(signaling)))
+            .find(block)
             ?.groupValues
             ?.get(1)
             ?.let { Regex(""""([^"]+)"""").findAll(it).map { m -> m.groupValues[1] }.toList() }

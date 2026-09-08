@@ -56,6 +56,12 @@ final class LiveKitJoinUITests: XCTestCase {
         XCTAssertTrue(lobby.waitForExistence(timeout: 10), "Seeded server has no voice channel")
         lobby.tap()
 
+        // Tapping the row opens the transcript. Joining media is the header's
+        // explicit action, so the test takes it the way a person would.
+        let join = app.buttons["chat.joinVoice"]
+        XCTAssertTrue(join.waitForExistence(timeout: 10), "Opening a voice channel should show its chat first")
+        join.tap()
+
         let mute = app.buttons["voice.mute"]
         XCTAssertTrue(mute.waitForExistence(timeout: 20), "Never reached the voice room")
         // `.joining` keeps the toolbar disabled. On LiveKit that state lasts
@@ -105,6 +111,9 @@ final class LiveKitJoinUITests: XCTestCase {
         let lobby = app.staticTexts["Lobby"]
         XCTAssertTrue(lobby.waitForExistence(timeout: 10))
         lobby.tap()
+        let join = app.buttons["chat.joinVoice"]
+        XCTAssertTrue(join.waitForExistence(timeout: 10))
+        join.tap()
         let mute = app.buttons["voice.mute"]
         XCTAssertTrue(mute.waitForExistence(timeout: 20))
         let connected = XCTNSPredicateExpectation(

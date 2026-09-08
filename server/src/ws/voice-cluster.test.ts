@@ -48,6 +48,17 @@ import { createMemoryHub, type BusFrame } from "../lib/bus.js";
  * the row, announce the departure once, and run the SFU half exactly once,
  * on A. Rings are in `voice-calls.test.ts`.
  *
+ * The two-machine prerequisites (the "mesh across instances" and
+ * "moderator mutes across instances" groups): a mesh room pinned on A
+ * seats and resumes on B with offer, answer and ICE crossing on
+ * `voice.signal`, never a `voice-join-refused`; a fresh room gets the
+ * policy's transport with two live and an SFU configured (small stays mesh,
+ * a community or a ten-member server goes to LiveKit) and a mesh pin beats
+ * the joiner's own policy; a frame never crosses into another room; the
+ * ceiling counts both machines; the operator counters climb; a moderator's
+ * mute set on A holds on B, survives a resume and a rejoin through a third
+ * process, and dies with the room.
+ *
  * Skips without a database, like `voice-registry.test.ts`.
  */
 
@@ -62,9 +73,8 @@ const naming = vi.hoisted(() => ({ shown: new Map<string, string>() }));
 
 /**
  * Mesh by default, so the M2 and M4 groups run the transport they were
- * written against. The M3 group runs on LiveKit, because after M5 a mesh
- * seat cannot move machines (the "mesh guard" group pins exactly that), and
- * the guard group flips this per test.
+ * written against. The M3 group runs on LiveKit, production's transport;
+ * the two-machine groups flip this per test.
  */
 const backend = vi.hoisted(() => ({
   configured: "mesh" as "mesh" | "livekit",
@@ -247,6 +257,29 @@ async function join(
   };
 }
 
+/** The same audience socket, having negotiated `voice-roster-delta` at auth. */
+function deltaWatcher(instance: Instance): Recorder {
+  const rec = recorder();
+  instance.sockets.setAuthenticatedSocket(rec.socket, asUser(randomUUID()), [
+    instance.sockets.SOCKET_CAPS.voiceRosterDelta,
+  ]);
+  return rec;
+}
+
+interface DeltaFrame {
+  seq: number;
+  size: number;
+  joined?: { peerId: string }[];
+  updated?: { peerId: string; muted: boolean }[];
+  left?: string[];
+}
+
+function deltas(rec: Recorder, channel: string): DeltaFrame[] {
+  return frames(rec, "voice-roster-delta").filter(
+    (f) => f.voiceChannelId === channel,
+  ) as unknown as DeltaFrame[];
+}
+
 async function settle(): Promise<void> {
   for (const instance of booted) {
     await instance.registry.settleVoiceRegistryWrites();
@@ -342,7 +375,7 @@ describeDb("voice across two instances", () => {
     const db = pools[0]!;
     await db
       .getPool()
-      .query(`TRUNCATE voice_rooms, voice_peers, voice_retired_peers, voice_instances`);
+      .query(`TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_retired_peers, voice_instances`);
   });
 
   afterEach(async () => {
@@ -396,6 +429,59 @@ describeDb("voice across two instances", () => {
           (p) => p.peerId,
         ),
       ).toEqual([inRoomOnB.peerId]);
+    });
+
+    it("a join, a toggle and a leave on A reach a B watcher that asked for deltas as deltas", async () => {
+      // The registry path used to send no deltas at all: the local event
+      // queue could not describe a change made on the other machine, so
+      // every change went to every audience socket as a whole roster. Now
+      // the rows are diffed against what B last sent, and A's peer is in the
+      // rows and not in that memory, which is exactly a `joined`.
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnB = deltaWatcher(b);
+      await join(b, randomUUID(), channel);
+      await waitFor(
+        () => lastRoster(sidebarOnB, channel)?.participants.length === 1,
+        "B's own roster on B",
+      );
+
+      const userA = randomUUID();
+      const joiner = await join(a, userA, channel);
+      await waitFor(() => deltas(sidebarOnB, channel).length === 1, "joined delta on B");
+      expect(deltas(sidebarOnB, channel)[0]).toMatchObject({
+        seq: 2,
+        size: 2,
+        joined: [{ peerId: joiner.peerId }],
+      });
+      expect(deltas(sidebarOnB, channel)[0]?.left).toBeUndefined();
+
+      await a.voice.handleVoiceMessage(
+        { socket: joiner.socket, user: asUser(userA) },
+        { type: "set-voice-state", muted: true, deafened: false },
+      );
+      await waitFor(() => deltas(sidebarOnB, channel).length === 2, "updated delta on B");
+      expect(deltas(sidebarOnB, channel)[1]).toMatchObject({
+        seq: 3,
+        size: 2,
+        updated: [{ peerId: joiner.peerId, muted: true }],
+      });
+
+      await a.voice.handleVoiceMessage(
+        { socket: joiner.socket, user: asUser(userA) },
+        { type: "leave-voice-room" },
+      );
+      await waitFor(() => deltas(sidebarOnB, channel).length === 3, "left delta on B");
+      expect(deltas(sidebarOnB, channel)[2]).toMatchObject({
+        seq: 4,
+        size: 1,
+        left: [joiner.peerId],
+      });
+      // Three changes on A, one whole roster on B: the one that opened the room.
+      expect(
+        frames(sidebarOnB, "voice-roster").filter((f) => f.voiceChannelId === channel),
+      ).toHaveLength(1);
     });
 
     it("a leave on A removes the peer on B", async () => {
@@ -651,9 +737,9 @@ describeDb("voice across two instances", () => {
   });
 
   describe("resume across instances", () => {
-    // On the SFU: with two live leases a mesh seat cannot move machines
-    // (the "mesh guard" group below), and multi-instance mode requires
-    // LiveKit. The resume mechanics are the same on either transport.
+    // On the SFU, which is what production runs; a mesh seat moving
+    // machines is pinned by the "mesh across instances" group below. The
+    // resume mechanics are the same on either transport.
     beforeEach(() => {
       backend.configured = "livekit";
     });
@@ -699,13 +785,16 @@ describeDb("voice across two instances", () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(frames(bystanderOnA, "peer-left")).toHaveLength(0);
       expect(frames(bystanderOnB, "peer-left")).toHaveLength(0);
-      // Both rosters still count three, once each.
-      await waitFor(
-        () => lastRoster(bystanderOnA, channel)?.participants.length === 3,
-        "roster on A",
-      );
+      // A's room still counts three, once each. Read through a fresh socket
+      // rather than waited for on the wire: the seat changing hands changes
+      // nothing about who is in the room, so A's roster run finds the rows
+      // saying what its last frame said and, since the deltas, writes
+      // nothing rather than restating the room to everyone.
+      const probeOnA = recorder();
+      await a.voice.sendAllVoiceRosters(probeOnA.socket, asUser(randomUUID()));
+      expect(lastRoster(probeOnA, channel)?.participants).toHaveLength(3);
       expect(
-        lastRoster(bystanderOnA, channel)?.participants.filter(
+        lastRoster(probeOnA, channel)?.participants.filter(
           (p) => p.peerId === seat.peerId,
         ),
       ).toHaveLength(1);
@@ -1126,22 +1215,12 @@ describeDb("voice across two instances", () => {
     });
   });
 
-  describe("mesh guard (M5)", () => {
+  describe("mesh across instances", () => {
+    // What the 2026-09-07 window paid for: a mesh room pinned on one machine
+    // hung up every resume that landed on the other. Now the pin is adopted
+    // and the signaling crosses on `voice.signal`, and a fresh room gets the
+    // policy's transport whether one machine is live or two.
     const small = { isCommunity: false, memberCount: 3 };
-
-    async function tryJoin(
-      instance: Instance,
-      userId: string,
-      channel: string,
-    ): Promise<Recorder> {
-      const rec = recorder();
-      instance.sockets.setAuthenticatedSocket(rec.socket, asUser(userId));
-      await instance.voice.handleVoiceMessage(
-        { socket: rec.socket, user: asUser(userId) },
-        { type: "join-voice-room", voiceChannelId: channel, resume: true },
-      );
-      return rec;
-    }
 
     async function roomRow(channel: string): Promise<string | undefined> {
       const result = await pools[0]!.getPool().query<{ transport: string }>(
@@ -1151,124 +1230,403 @@ describeDb("voice across two instances", () => {
       return result.rows[0]?.transport;
     }
 
-    it("two live instances, no SFU: a mesh join is refused everywhere but the holder", async () => {
-      const channel = randomUUID();
-      const a = await bootInstance();
-      await a.registry.heartbeatVoiceInstance();
-      // Alone, A opens the room on mesh as it always did.
-      const first = await join(a, randomUUID(), channel);
-      expect(frames(first, "welcome")[0]?.transport).toBe("mesh");
-
-      const b = await bootInstance();
-      await b.registry.heartbeatVoiceInstance();
-      onTheWire.length = 0;
-      // B cannot relay to A's peers: refused, with a reason, and no seat.
-      const onB = await tryJoin(b, randomUUID(), channel);
-      expect(frames(onB, "welcome")).toHaveLength(0);
-      expect(frames(onB, "voice-join-refused")[0]).toMatchObject({
-        voiceChannelId: channel,
-        reason: "mesh-multi-instance",
-      });
-      // A brand-new room is refused too: nothing may open on mesh now.
-      const fresh = randomUUID();
-      const onBFresh = await tryJoin(b, randomUUID(), fresh);
-      expect(frames(onBFresh, "voice-join-refused")).toHaveLength(1);
-      await settle();
-      expect(await roomRow(fresh)).toBeUndefined();
-      expect(
-        onTheWire.filter((f) => f.topic === "voice.room"),
-      ).toHaveLength(0);
-      // The holder still seats people: every peer of that room is on A.
-      const second = await join(a, randomUUID(), channel);
-      expect(frames(second, "welcome")[0]?.transport).toBe("mesh");
-      await settle();
-      const rows = await pools[0]!.getPool().query(
-        `SELECT 1 FROM voice_peers WHERE channel_id = $1`,
-        [channel],
+    async function signal(
+      instance: Instance,
+      from: Recorder & { peerId: string },
+      frame: Frame,
+    ): Promise<void> {
+      await instance.voice.handleVoiceMessage(
+        { socket: from.socket, user: asUser(randomUUID()) },
+        { ...frame, from: from.peerId } as never,
       );
-      expect(rows.rowCount).toBe(2);
-    });
+    }
 
-    it("two live instances with an SFU: a room that would open on mesh opens on LiveKit instead", async () => {
-      backend.configured = "livekit";
-      backend.profile = small;
+    it("two live instances, no SFU: a mesh room opened on A seats a joiner on B, and the offer, answer and ICE cross", async () => {
       const channel = randomUUID();
       const a = await bootInstance();
       await a.registry.heartbeatVoiceInstance();
-      // Control: alone, a three-member server is a mesh room.
-      const alone = await join(a, randomUUID(), randomUUID());
-      expect(frames(alone, "welcome")[0]?.transport).toBe("mesh");
-
-      const b = await bootInstance();
-      await b.registry.heartbeatVoiceInstance();
-      const onA = await join(a, randomUUID(), channel);
-      expect(frames(onA, "welcome")[0]?.transport).toBe("livekit");
-      await settle();
-      expect(await roomRow(channel)).toBe("livekit");
-      // And B seats into the same room, on the same transport.
-      const onB = await join(b, randomUUID(), channel);
-      expect(frames(onB, "welcome")[0]?.transport).toBe("livekit");
-    });
-
-    it("a room opened on mesh before the second instance came up stays with its holder", async () => {
-      backend.configured = "livekit";
-      backend.profile = small;
-      const channel = randomUUID();
-      const a = await bootInstance();
-      await a.registry.heartbeatVoiceInstance();
-      const holder = await join(a, randomUUID(), channel);
-      expect(frames(holder, "welcome")[0]?.transport).toBe("mesh");
-      await settle();
-
-      const b = await bootInstance();
-      await b.registry.heartbeatVoiceInstance();
-      // The row says mesh and the peers are on A: B is refused after the
-      // pin, SFU or not, and the row is left alone.
-      const onB = await tryJoin(b, randomUUID(), channel);
-      expect(frames(onB, "welcome")).toHaveLength(0);
-      expect(frames(onB, "voice-join-refused")[0]?.reason).toBe(
-        "mesh-multi-instance",
-      );
-      expect(await roomRow(channel)).toBe("mesh");
-      // A holds the pin, so A keeps seating on mesh.
       const onA = await join(a, randomUUID(), channel);
       expect(frames(onA, "welcome")[0]?.transport).toBe("mesh");
+      await settle();
+
+      const b = await bootInstance();
+      await b.registry.heartbeatVoiceInstance();
+      const onB = await join(b, randomUUID(), channel);
+      // Seated, on the room's transport, told about A's peer, never refused.
+      const welcome = frames(onB, "welcome")[0];
+      expect(welcome?.transport).toBe("mesh");
+      expect(
+        (welcome?.peers as { peerId: string }[]).map((p) => p.peerId),
+      ).toEqual([onA.peerId]);
+      expect(frames(onB, "voice-join-refused")).toHaveLength(0);
+      expect(await roomRow(channel)).toBe("mesh");
+      await waitFor(
+        () => frames(onA, "peer-joined").length === 1,
+        "A's peer to hear about B's",
+      );
+
+      // The joiner offers to the peer it was told about, on the other machine.
+      await signal(b, onB, { type: "offer", to: onA.peerId, sdp: "v=0 offer" });
+      await waitFor(() => frames(onA, "offer").length === 1, "the offer on A");
+      expect(frames(onA, "offer")[0]).toMatchObject({
+        from: onB.peerId,
+        to: onA.peerId,
+        sdp: "v=0 offer",
+      });
+      await signal(a, onA, { type: "answer", to: onB.peerId, sdp: "v=0 answer" });
+      await waitFor(() => frames(onB, "answer").length === 1, "the answer on B");
+      expect(frames(onB, "answer")[0]).toMatchObject({ from: onA.peerId });
+      await signal(a, onA, {
+        type: "ice-candidate",
+        to: onB.peerId,
+        candidate: { candidate: "candidate:1 1 udp 1 10.0.0.1 1 typ host" },
+      });
+      await waitFor(() => frames(onB, "ice-candidate").length === 1, "ICE on B");
+
+      // A frame for a peer held here never touches the bus.
+      onTheWire.length = 0;
+      const secondOnA = await join(a, randomUUID(), channel);
+      await signal(a, secondOnA, { type: "offer", to: onA.peerId, sdp: "local" });
+      expect(frames(onA, "offer").filter((f) => f.sdp === "local")).toHaveLength(1);
+      expect(onTheWire.filter((f) => f.topic === "voice.signal")).toHaveLength(0);
     });
 
-    it("an instance that drained is not counted from the moment it withdrew", async () => {
+    it("a mesh resume on B for a seat A holds adopts the pin, keeps the seat and talks to A's peers", async () => {
+      // An SFU is configured, so the old guard would have forced LiveKit and
+      // turned the resume cold; the room is pinned mesh and stays so.
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
+      const a = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      const bystanderOnA = await join(a, randomUUID(), channel);
+      const userId = randomUUID();
+      const seat = await join(a, userId, channel);
+      expect(frames(seat, "welcome")[0]?.transport).toBe("mesh");
+      await settle();
+
+      const b = await bootInstance();
+      await b.registry.heartbeatVoiceInstance();
+      const again = await resume(b, userId, channel, seat.peerId, seat.resumeToken);
+      const welcome = frames(again, "welcome")[0];
+      expect(frames(again, "voice-join-refused")).toHaveLength(0);
+      expect(welcome?.resumed).toBe(true);
+      expect(welcome?.peerId).toBe(seat.peerId);
+      expect(welcome?.transport).toBe("mesh");
+      expect(await roomRow(channel)).toBe("mesh");
+      await settle();
+      expect((await peerRow(seat.peerId))?.instance_id).toBe(b.bus.INSTANCE_ID);
+      await waitFor(() => a.voice.getVoicePeer(seat.peerId) === null, "A drops the seat");
+
+      // The resumed client re-offers to the bystander it still hears.
+      const resumed = { ...again, peerId: seat.peerId };
+      await signal(b, resumed, { type: "offer", to: bystanderOnA.peerId, sdp: "again" });
+      await waitFor(
+        () => frames(bystanderOnA, "offer").some((f) => f.sdp === "again"),
+        "the re-offer on A",
+      );
+      await signal(a, bystanderOnA, { type: "answer", to: seat.peerId, sdp: "back" });
+      await waitFor(() => frames(again, "answer").length === 1, "the answer on B");
+    });
+
+    it("two live instances, SFU configured: a small server room is mesh on both, and the offer crosses", async () => {
+      // Production's posture at the flip. Until 2026-09-08 the guard sent
+      // this room to the SFU because a second machine was up; now the
+      // policy alone decides, so a night's forty small rooms stay off the
+      // media box.
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
       const a = await bootInstance();
       const b = await bootInstance();
       await a.registry.heartbeatVoiceInstance();
       await b.registry.heartbeatVoiceInstance();
-      const refused = await tryJoin(a, randomUUID(), randomUUID());
-      expect(frames(refused, "voice-join-refused")).toHaveLength(1);
 
-      // B's shutdown withdraws its lease ahead of closing its sockets.
-      await b.registry.withdrawVoiceInstance();
-      const seated = await join(a, randomUUID(), randomUUID());
-      expect(frames(seated, "welcome")[0]?.transport).toBe("mesh");
+      const onA = await join(a, randomUUID(), channel);
+      expect(frames(onA, "welcome")[0]?.transport).toBe("mesh");
+      await settle();
+      expect(await roomRow(channel)).toBe("mesh");
+
+      const onB = await join(b, randomUUID(), channel);
+      const welcome = frames(onB, "welcome")[0];
+      expect(welcome?.transport).toBe("mesh");
+      expect(
+        (welcome?.peers as { peerId: string }[]).map((p) => p.peerId),
+      ).toEqual([onA.peerId]);
+      expect(frames(onB, "voice-join-refused")).toHaveLength(0);
+
+      await signal(b, onB, { type: "offer", to: onA.peerId, sdp: "v=0 sfu-up" });
+      await waitFor(() => frames(onA, "offer").length === 1, "the offer on A");
+      expect(frames(onA, "offer")[0]).toMatchObject({ from: onB.peerId });
+      await signal(a, onA, { type: "answer", to: onB.peerId, sdp: "v=0 back" });
+      await waitFor(() => frames(onB, "answer").length === 1, "the answer on B");
     });
 
-    it("warns once per episode when two are live without an SFU", async () => {
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    it("two live instances, SFU configured: a community and a ten-member server still open on LiveKit", async () => {
+      backend.configured = "livekit";
       const a = await bootInstance();
-      await a.registry.heartbeatVoiceInstance();
-      await a.voice.runVoiceReconcile();
-      expect(warn).not.toHaveBeenCalled();
-
       const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
       await b.registry.heartbeatVoiceInstance();
-      await a.voice.runVoiceReconcile();
-      await a.voice.runVoiceReconcile();
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]?.[0]).toContain("LIVEKIT_* is unset");
 
-      // Back to one, then two again: it says so again.
-      await b.registry.withdrawVoiceInstance();
-      await a.voice.runVoiceReconcile();
+      backend.profile = { isCommunity: true, memberCount: 3 };
+      const community = randomUUID();
+      const onA = await join(a, randomUUID(), community);
+      expect(frames(onA, "welcome")[0]?.transport).toBe("livekit");
+      await settle();
+      expect(await roomRow(community)).toBe("livekit");
+      const onB = await join(b, randomUUID(), community);
+      expect(frames(onB, "welcome")[0]?.transport).toBe("livekit");
+
+      backend.profile = { isCommunity: false, memberCount: 10 };
+      const large = randomUUID();
+      const largeOnB = await join(b, randomUUID(), large);
+      expect(frames(largeOnB, "welcome")[0]?.transport).toBe("livekit");
+      await settle();
+      expect(await roomRow(large)).toBe("livekit");
+      const largeOnA = await join(a, randomUUID(), large);
+      expect(frames(largeOnA, "welcome")[0]?.transport).toBe("livekit");
+
+      // And the same second machine does not push a small room over.
+      backend.profile = small;
+      const smallRoom = await join(a, randomUUID(), randomUUID());
+      expect(frames(smallRoom, "welcome")[0]?.transport).toBe("mesh");
+    });
+
+    it("a mesh pin on A is adopted by a cold join on B even when B's own policy would say LiveKit", async () => {
+      // The server crossed the member threshold while the call was on: A's
+      // room is pinned mesh, B's policy now answers LiveKit for the same
+      // channel, and the pin wins, so nobody is split off the call.
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
       await b.registry.heartbeatVoiceInstance();
-      await a.voice.runVoiceReconcile();
-      expect(warn).toHaveBeenCalledTimes(2);
+      const onA = await join(a, randomUUID(), channel);
+      expect(frames(onA, "welcome")[0]?.transport).toBe("mesh");
+      await settle();
+
+      backend.profile = { isCommunity: false, memberCount: 10 };
+      const onB = await join(b, randomUUID(), channel);
+      const welcome = frames(onB, "welcome")[0];
+      expect(welcome?.transport).toBe("mesh");
+      expect(frames(onB, "voice-join-refused")).toHaveLength(0);
+      expect(
+        (welcome?.peers as { peerId: string }[]).map((p) => p.peerId),
+      ).toEqual([onA.peerId]);
+      expect(await roomRow(channel)).toBe("mesh");
+      await signal(b, onB, { type: "offer", to: onA.peerId, sdp: "adopted" });
+      await waitFor(() => frames(onA, "offer").length === 1, "the offer on A");
+    });
+
+    it("a signaling frame never crosses into another room", async () => {
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      const victimOnA = await join(a, randomUUID(), randomUUID());
+      const attackerOnB = await join(b, randomUUID(), randomUUID());
+      await settle();
+
+      await signal(b, attackerOnB, { type: "offer", to: victimOnA.peerId, sdp: "x" });
+      // The frame did cross (B cannot know the room of an id it does not
+      // hold); A dropped it against its own map.
+      await waitFor(
+        () => onTheWire.some((f) => f.topic === "voice.signal"),
+        "the frame on the wire",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(frames(victimOnA, "offer")).toHaveLength(0);
+    });
+
+    it("the mesh ceiling counts the seats on both machines", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      for (let i = 0; i < 4; i += 1) {
+        await join(a, randomUUID(), channel);
+        await join(b, randomUUID(), channel);
+      }
+      await settle();
+      const rec = recorder();
+      const ninth = randomUUID();
+      b.sockets.setAuthenticatedSocket(rec.socket, asUser(ninth));
+      await b.voice.handleVoiceMessage(
+        { socket: rec.socket, user: asUser(ninth) },
+        { type: "join-voice-room", voiceChannelId: channel, resume: true },
+      );
+      expect(frames(rec, "welcome")).toHaveLength(0);
+      expect(frames(rec, "voice-room-full")[0]).toMatchObject({
+        voiceChannelId: channel,
+        limit: 8,
+      });
+    });
+
+    it("the operator counters say what crossed", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      // Alone, nothing is counted: a hint published with nobody to receive
+      // it is still a frame relayed, so only the receipt is checked here.
+      const onA = await join(a, randomUUID(), channel);
+      expect((await b.voice.getVoiceActivitySnapshot()).cluster.framesReceived).toBe(0);
+
+      const onB = await join(b, randomUUID(), channel);
+      await waitFor(() => frames(onA, "peer-joined").length === 1, "B's join on A");
+      await signal(b, onB, { type: "offer", to: onA.peerId, sdp: "v=0" });
+      await waitFor(() => frames(onA, "offer").length === 1, "the offer on A");
+
+      const fromB = (await b.voice.getVoiceActivitySnapshot()).cluster;
+      const onAside = (await a.voice.getVoiceActivitySnapshot()).cluster;
+      // B published its join hint and the offer; A applied both to sockets it holds.
+      expect(fromB.framesRelayed).toBeGreaterThanOrEqual(2);
+      expect(onAside.framesReceived).toBeGreaterThanOrEqual(2);
+      // And the other way: A's join hint reached nobody on B (B had no peer
+      // in the room yet), so B's receipts are only what arrived since.
+      expect(onAside.framesRelayed).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe("moderator mutes across instances", () => {
+    interface MutedRoster {
+      participants: { peerId: string; muted: boolean; serverMuted: boolean }[];
+    }
+    function rosterOn(rec: Recorder, channel: string): MutedRoster | undefined {
+      return lastRoster(rec, channel) as unknown as MutedRoster | undefined;
+    }
+
+    it("a mute on A of a person seated on B lands on B's seat, every roster, and B refuses the unmute", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnA = watcher(a);
+      const bystanderOnA = await join(a, randomUUID(), channel);
+      const target = randomUUID();
+      const targetOnB = await join(b, target, channel);
+      await waitFor(
+        () => rosterOn(sidebarOnA, channel)?.participants.length === 2,
+        "both on A's roster",
+      );
+      await settle();
+
+      await a.voice.setVoiceUserServerMuted(channel, target, true);
+
+      await waitFor(
+        () => b.voice.getVoicePeer(targetOnB.peerId)?.muted === true,
+        "B's seat to be muted",
+      );
+      expect(b.voice.isVoiceUserServerMuted(channel, target)).toBe(true);
+      await waitFor(
+        () =>
+          rosterOn(sidebarOnA, channel)?.participants.find(
+            (p) => p.peerId === targetOnB.peerId,
+          )?.serverMuted === true,
+        "the flag on A's roster",
+      );
+      await waitFor(
+        () =>
+          rosterOn(bystanderOnA, channel)?.participants.find(
+            (p) => p.peerId === targetOnB.peerId,
+          )?.muted === true,
+        "the forced mute on A's room roster",
+      );
+      // The row is the cluster's copy.
+      const rows = await pools[0]!.getPool().query(
+        `SELECT 1 FROM voice_server_mutes WHERE channel_id = $1 AND user_id = $2`,
+        [channel, target],
+      );
+      expect(rows.rowCount).toBe(1);
+
+      // B enforces it: the target's own unmute is refused where the socket is.
+      await b.voice.handleVoiceMessage(
+        { socket: targetOnB.socket, user: asUser(target) },
+        { type: "set-voice-state", muted: false, deafened: false },
+      );
+      expect(b.voice.getVoicePeer(targetOnB.peerId)?.muted).toBe(true);
+
+      // Cleared on A, the target may unmute on B.
+      await a.voice.setVoiceUserServerMuted(channel, target, false);
+      await waitFor(
+        () => !b.voice.isVoiceUserServerMuted(channel, target),
+        "B to forget the mute",
+      );
+      await b.voice.handleVoiceMessage(
+        { socket: targetOnB.socket, user: asUser(target) },
+        { type: "set-voice-state", muted: false, deafened: false },
+      );
+      expect(b.voice.getVoicePeer(targetOnB.peerId)?.muted).toBe(false);
+    });
+
+    it("the mute outlives the seat and the process: a resume and a rejoin elsewhere come back muted", async () => {
+      backend.configured = "livekit";
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+      await join(a, randomUUID(), channel);
+      const target = randomUUID();
+      const seat = await join(b, target, channel);
+      await settle();
+      await a.voice.setVoiceUserServerMuted(channel, target, true);
+      await waitFor(() => b.voice.isVoiceUserServerMuted(channel, target), "on B");
+
+      // The seat moves to A by resume: still muted, still flagged.
+      const again = await resume(a, target, channel, seat.peerId, seat.resumeToken);
+      const welcome = frames(again, "welcome")[0] as unknown as
+        | { resumed?: boolean; self: { muted: boolean; serverMuted: boolean } }
+        | undefined;
+      expect(welcome?.resumed).toBe(true);
+      expect(welcome?.self).toMatchObject({ muted: true, serverMuted: true });
+      expect(a.voice.isVoiceUserServerMuted(channel, target)).toBe(true);
+
+      // Hang up and come back through a process that never saw the mute.
+      a.voice.removeVoicePeerBySocket(again.socket);
+      await a.voice.leaveVoiceByResumeToken(seat.peerId, seat.resumeToken);
+      await settle();
+      const c = await bootInstance();
+      await c.registry.heartbeatVoiceInstance();
+      const fresh = await join(c, target, channel);
+      const freshWelcome = frames(fresh, "welcome")[0] as unknown as
+        | { self: { muted: boolean; serverMuted: boolean } }
+        | undefined;
+      expect(freshWelcome?.self).toMatchObject({ muted: true, serverMuted: true });
+      await c.voice.handleVoiceMessage(
+        { socket: fresh.socket, user: asUser(target) },
+        { type: "set-voice-state", muted: false, deafened: false },
+      );
+      expect(c.voice.getVoicePeer(fresh.peerId)?.muted).toBe(true);
+    });
+
+    it("an emptied room forgets the mute everywhere", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const target = randomUUID();
+      const seat = await join(b, target, channel);
+      await settle();
+      await a.voice.setVoiceUserServerMuted(channel, target, true);
+      await waitFor(() => b.voice.isVoiceUserServerMuted(channel, target), "on B");
+
+      b.voice.removeVoicePeerBySocket(seat.socket);
+      await b.voice.leaveVoiceByResumeToken(seat.peerId, seat.resumeToken);
+      await settle();
+      const rows = await pools[0]!.getPool().query(
+        `SELECT 1 FROM voice_server_mutes WHERE channel_id = $1`,
+        [channel],
+      );
+      expect(rows.rowCount).toBe(0);
+      const back = await join(a, target, channel);
+      const welcome = frames(back, "welcome")[0] as unknown as
+        | { self: { muted: boolean; serverMuted: boolean } }
+        | undefined;
+      expect(welcome?.self).toMatchObject({ muted: false, serverMuted: false });
     });
   });
 

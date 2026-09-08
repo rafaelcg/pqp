@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  guardMeshAcrossInstances,
   LARGE_SERVER_MEMBER_THRESHOLD,
   resolveVoiceTransport,
   type VoiceTransportPolicyInput,
@@ -91,31 +90,5 @@ describe("resolveVoiceTransport", () => {
       transport: "livekit",
       reason: "default",
     });
-  });
-});
-
-describe("guardMeshAcrossInstances (M5)", () => {
-  it("keeps out of the way on one machine, SFU or not", () => {
-    expect(
-      guardMeshAcrossInstances({ liveKitConfigured: true, otherLiveInstances: 0 }),
-    ).toEqual({ kind: "keep" });
-    expect(
-      guardMeshAcrossInstances({ liveKitConfigured: false, otherLiveInstances: 0 }),
-    ).toEqual({ kind: "keep" });
-  });
-
-  it("sends the room to the SFU when a second machine is live", () => {
-    expect(
-      guardMeshAcrossInstances({ liveKitConfigured: true, otherLiveInstances: 1 }),
-    ).toEqual({ kind: "force-livekit" });
-  });
-
-  it("refuses the join when a second machine is live and there is no SFU", () => {
-    expect(
-      guardMeshAcrossInstances({ liveKitConfigured: false, otherLiveInstances: 1 }),
-    ).toEqual({ kind: "refuse", reason: "mesh-multi-instance" });
-    expect(
-      guardMeshAcrossInstances({ liveKitConfigured: false, otherLiveInstances: 3 }),
-    ).toEqual({ kind: "refuse", reason: "mesh-multi-instance" });
   });
 });

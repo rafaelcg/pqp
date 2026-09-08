@@ -141,10 +141,11 @@ jobs:
       # --ha=false IS LOAD-BEARING, not a cost tweak. Without it Fly happily
       # brings up an extra machine on its own. The machine count is a
       # deliberate manual step (`fly scale count N --region gru`, N being
-      # fly.toml's min_machines_running), because this server can only run on
-      # more than one machine with every invariant in the header of fly.toml
-      # in force; the assertion after the deploy checks the number, never
-      # the deploy itself.
+      # fly.toml's min_machines_running, 1 today), because a machine nobody
+      # decided to run has consequences the deploy log never shows (the
+      # min_machines_running comment in fly.toml, docs/deploy-fly.md 6a-bis);
+      # the assertion after the deploy checks the number, never the deploy
+      # itself.
       #
       # --remote-only builds on Fly's builder so the runner does not need to
       # push a multi-hundred-MB image over the wire.
@@ -171,14 +172,15 @@ jobs:
             -e APP_VERSION="${{ steps.commit.outputs.sha }}"
 
       # The machine-count invariant, asserted rather than assumed. The
-      # expected count is `min_machines_running` in fly.toml (2 since M5 of
-      # docs/plans/MULTI_INSTANCE_VOICE.md), or the repo variable
-      # PQP_API_MACHINES while production is still being flipped (set it to 1
-      # until `fly scale count 2` has been run, then delete it). It can be
-      # broken by a stray `fly scale count`, by someone dropping --ha, or by a
-      # bluegreen strategy leaving a machine behind, all of which look fine in
-      # the deploy log. Too few means a deploy has no sibling to drain to; too
-      # many means a machine the cluster invariants were never checked on.
+      # expected count is `min_machines_running` in fly.toml (1 today, by
+      # choice; docs/deploy-fly.md 6a-bis is the flip), or the repo variable
+      # PQP_API_MACHINES while a flip is in progress and the file and the app
+      # briefly disagree (set it, flip, delete it). It can be broken by a
+      # stray `fly scale count`, by someone dropping --ha, or by a bluegreen
+      # strategy leaving a machine behind, all of which look fine in the
+      # deploy log. Too few means the only machine is gone; too many means a
+      # machine nobody decided to run, and while rooms open on mesh that
+      # machine hangs up peer-to-peer joins pinned on the other one.
       # Every counted machine must be *started*: a stopped one is a machine
       # the proxy cannot route to, and a rolling deploy that left one behind
       # is exactly what this is for. Cheap check, expensive failure.
@@ -209,7 +211,7 @@ jobs:
           echo "machines: $live live, $started started (expected $expected), regions: $regions"
           echo "images on started machines: $images"
           if [ "$started" != "$expected" ] || [ "$live" != "$expected" ]; then
-            echo "::error::Expected exactly $expected started machine(s), found $started started of $live live. This server keeps WebSocket/presence/voice state in process memory and needs every one of docs/plans/MULTI_INSTANCE_VOICE.md's invariants to run on more than one. Fix with: fly scale count $expected --region gru --app $FLY_APP (and set vars.PQP_API_MACHINES if the count is intentional)."
+            echo "::error::Expected exactly $expected started machine(s), found $started started of $live live. The count is a decision, not a side effect (fly.toml min_machines_running, docs/deploy-fly.md 6a-bis). Fix with: fly scale count $expected --region gru --app $FLY_APP (and set vars.PQP_API_MACHINES if the count is intentional)."
             exit 1
           fi
           if [ "$regions" != "gru" ]; then

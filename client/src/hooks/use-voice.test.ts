@@ -734,6 +734,28 @@ describe("screen share audio", () => {
     expect(managers[0]?.screenStreams.at(-1)).not.toBeNull();
   });
 
+  it("hands the ICE servers this tab already holds to the SFU connection", async () => {
+    // Read at connect time: a list refreshed before the join is what the new
+    // connection gets, and there is no second fetch anywhere on this path.
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    const relay = {
+      urls: "turn:turn.cloudflare.com:3478?transport=udp",
+      username: "u",
+      credential: "c",
+    };
+    voice.setIceServers([relay]);
+    voice.setSessionProvider(async () => sfuSession());
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("livekit"));
+    await settle();
+
+    expect(connectLiveKit).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(connectLiveKit).mock.calls[0]?.[0]?.iceServers).toEqual([
+      relay,
+    ]);
+  });
+
   it("hands the whole capture to the SFU, audio included", async () => {
     displayMedia = async () => fakeCapture("cap-6", true);
     const { transport } = createTransport();

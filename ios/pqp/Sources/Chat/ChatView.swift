@@ -15,6 +15,8 @@ struct OpenedConversation: Identifiable, Hashable {
 struct ChatView: View {
     @Environment(SessionStore.self) private var session
     @Environment(CallModel.self) private var call
+    @Environment(VoiceModel.self) private var voice
+    @Environment(CallRatingModel.self) private var ratings
     let channelId: String
     let title: String
     /// Set only for a conversation (a channel with no server). Calls are a DM
@@ -48,6 +50,9 @@ struct ChatView: View {
     /// down from it after each send instead of learning about the rule from a
     /// refusal.
     var slowmodeSeconds: Int = 0
+    /// A server voice channel's transcript. The link is intentionally here,
+    /// rather than on the list row, so opening messages never joins media.
+    var voiceChannel: Channel? = nil
 
     @State private var model = ChatModel()
     /// Applied once. Without the guard, coming back to this screen from a thread
@@ -137,6 +142,28 @@ struct ChatView: View {
         .animation(Motion.standard, value: model.editing?.id)
         .animation(Motion.standard, value: model.error)
         .toolbar {
+            if let voiceChannel {
+                ToolbarItem(placement: .topBarTrailing) {
+                    // A button, not a link to the stage: the stage is presented
+                    // from the root while the session is live, so this only
+                    // has to start the session. Hidden once this room is the
+                    // call: the root's banner then owns "back to it".
+                    if !voice.isLive || voice.channelId != voiceChannel.id {
+                        Button {
+                            voice.isCollapsed = false
+                            Task {
+                                await voice.join(
+                                    channel: voiceChannel, session: session, ratings: ratings
+                                )
+                            }
+                        } label: {
+                            Label("Join", systemImage: "phone.fill")
+                        }
+                        .tint(Palette.signal)
+                        .accessibilityIdentifier("chat.joinVoice")
+                    }
+                }
+            }
             if let conversation {
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Button {

@@ -39,8 +39,8 @@ export function MarketingFooter() {
             <Link to={DOWNLOAD_PAGE_PATH} className={FOOTER_LINK}>
               {t("footer.desktop")}
             </Link>
-            <a href="/#how" className={FOOTER_LINK}>
-              {t("nav.howItWorks")}
+            <a href="/#features" className={FOOTER_LINK}>
+              {t("nav.features")}
             </a>
             <a href="/#communities" className={FOOTER_LINK}>
               {t("nav.communities")}

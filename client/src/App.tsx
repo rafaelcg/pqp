@@ -6,6 +6,7 @@ import {
   useUser,
 } from "@clerk/clerk-react";
 import {
+  CalendarClock,
   Columns2,
   Lock,
   Menu,
@@ -36,6 +37,7 @@ import type {
   BlockedUser,
   Channel,
   ChannelKind,
+  ChannelSession,
   DmSummary,
   MemberRole,
   SanctionNotice,
@@ -143,6 +145,20 @@ import { UserPanel } from "@/components/layout/user-panel";
 import { ConnectionCallbackOverlay } from "@/components/connections/connection-callback";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
+import { ScheduleSessionSheet } from "@/components/voice/schedule-session-sheet";
+import { UpcomingSessionCard } from "@/components/voice/upcoming-session-card";
+import { ChannelSessionToasts } from "@/components/voice/channel-session-toasts";
+import {
+  cancelChannelSession,
+  createChannelSession,
+  listUpcomingChannelSessionsForServer,
+  setChannelSessionReminder,
+  updateChannelSession,
+} from "@/lib/channel-sessions-api";
+import {
+  emitChannelSessionReminderToast,
+  isChannelSessionScheduleEnabled,
+} from "@/lib/channel-session-schedule";
 import { CallSplit, type CallSplitState } from "@/components/layout/call-split";
 import {
   CALL_SPLIT_DEFAULT,
@@ -1093,6 +1109,101 @@ function MainAppContent({
   // One dialog for both subjects — the target says which. Null means closed.
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [pinsOpen, setPinsOpen] = useState(false);
+  // Watch party scheduling: the one upcoming/live session for the selected
+  // voice channel and every voice channel's sidebar hint, both derived from
+  // one server-wide fetch: the card needs the selected channel's session,
+  // the sidebar hint needs every other one, and a session can only change
+  // through this app's own actions or the minute-tick job, so refetching the
+  // whole server on channel-list load is simpler than N per-channel
+  // requests and correct either way. Flag-gated at the one place each part
+  // is read.
+  const [sessionsByChannel, setSessionsByChannel] = useState<
+    Record<string, ChannelSession>
+  >({});
+  const [scheduleSheetOpen, setScheduleSheetOpen] = useState(false);
+  const [scheduleClock, setScheduleClock] = useState(() => new Date());
+  const upcomingSession =
+    selectedChannelId ? sessionsByChannel[selectedChannelId] ?? null : null;
+  useEffect(() => {
+    if (!isChannelSessionScheduleEnabled()) {
+      return;
+    }
+    const timer = window.setInterval(() => setScheduleClock(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (!isChannelSessionScheduleEnabled() || selection.kind !== "server") {
+      setSessionsByChannel({});
+      return;
+    }
+    const serverId = selectionServerId(selection);
+    if (!serverId) {
+      setSessionsByChannel({});
+      return;
+    }
+    let cancelled = false;
+    void listUpcomingChannelSessionsForServer(serverId)
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+        const map: Record<string, ChannelSession> = {};
+        for (const session of result.sessions) {
+          map[session.channelId] = session;
+        }
+        setSessionsByChannel(map);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setSessionsByChannel({});
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+    // `channels.length` re-runs this after a session is created/edited/
+    // cancelled elsewhere invalidates nothing here directly; those handlers
+    // below patch `sessionsByChannel` in place instead of waiting on a refetch.
+  }, [selection]);
+  const handleScheduleSessionSubmit = async (input: {
+    title: string;
+    startsAt: string;
+    description: string | null;
+  }) => {
+    if (!selectedChannelId) {
+      return;
+    }
+    if (upcomingSession && upcomingSession.status === "scheduled") {
+      const { session } = await updateChannelSession(upcomingSession.id, input);
+      setSessionsByChannel((previous) => ({
+        ...previous,
+        [session.channelId]: session,
+      }));
+      return;
+    }
+    const { session } = await createChannelSession(selectedChannelId, input);
+    setSessionsByChannel((previous) => ({
+      ...previous,
+      [session.channelId]: session,
+    }));
+  };
+  const handleToggleSessionReminder = async (wants: boolean) => {
+    if (!upcomingSession) {
+      return;
+    }
+    await setChannelSessionReminder(upcomingSession.id, wants);
+  };
+  const handleCancelSession = async () => {
+    if (!upcomingSession) {
+      return;
+    }
+    await cancelChannelSession(upcomingSession.id);
+    setSessionsByChannel((previous) => {
+      const next = { ...previous };
+      delete next[upcomingSession.channelId];
+      return next;
+    });
+  };
   const [channelSettings, setChannelSettings] = useState<{
     channelId: string;
     section: ChannelSettingsSectionId;
@@ -2304,6 +2415,16 @@ function MainAppContent({
         setBootstrapReady(true);
 
         transport.onMessage((message) => {
+          if (message.type === "channel-session-reminder") {
+            emitChannelSessionReminderToast({
+              sessionId: message.sessionId,
+              channelId: message.channelId,
+              title: message.title,
+              startsAt: message.startsAt,
+              kind: message.kind,
+            });
+            return;
+          }
           if (message.type === "channel-activity") {
             const activity = message as {
               channelId: string;
@@ -4824,6 +4945,22 @@ function MainAppContent({
               </button>
             </Tooltip>
           )}
+          {isChannelSessionScheduleEnabled() &&
+            canManageChannels &&
+            selectedChannel.kind === "server" &&
+            selectedChannel.type === "voice" && (
+            <Tooltip label={t("watchPartySchedule.header.schedule")}>
+              <button
+                type="button"
+                className={HEADER_ACTION_TILE}
+                data-schedule-session-button
+                aria-label={t("watchPartySchedule.header.schedule")}
+                onClick={() => setScheduleSheetOpen(true)}
+              >
+                <CalendarClock className="h-4 w-4" />
+              </button>
+            </Tooltip>
+          )}
           <Tooltip label={t("chrome.pins")}>
             <button
               type="button"
@@ -4891,6 +5028,21 @@ function MainAppContent({
       {/* Straight under the header, above everything a message could push
           around: an invited stranger's first screen otherwise says "Start the
           thread" over a markdown cheatsheet and nothing else. */}
+      {isChannelSessionScheduleEnabled() &&
+        selectedChannel.kind === "server" &&
+        selectedChannel.type === "voice" &&
+        upcomingSession && (
+          <UpcomingSessionCard
+            session={upcomingSession}
+            now={scheduleClock}
+            canManage={canManageChannels}
+            onToggleReminder={handleToggleSessionReminder}
+            onCancel={handleCancelSession}
+            onEdit={
+              canManageChannels ? () => setScheduleSheetOpen(true) : undefined
+            }
+          />
+        )}
       {arrivalServerId &&
         arrivalServerId === selectedServerId &&
         selectedServer && (
@@ -5269,6 +5421,25 @@ function MainAppContent({
         onOpen={(channelId) => void selectConversation(channelId)}
       />
 
+      {isChannelSessionScheduleEnabled() && (
+        <>
+          {/* Also at the root: a session reminder finds you wherever you are. */}
+          <ChannelSessionToasts
+            onOpen={(channelId) => setSelectedChannelId(channelId)}
+          />
+          <ScheduleSessionSheet
+            open={scheduleSheetOpen}
+            existing={
+              upcomingSession && upcomingSession.status === "scheduled"
+                ? upcomingSession
+                : null
+            }
+            onClose={() => setScheduleSheetOpen(false)}
+            onSubmit={handleScheduleSessionSubmit}
+          />
+        </>
+      )}
+
       {/* Also at the root: a call rings you wherever you are in the app. */}
       <IncomingCallOverlay
         calls={voiceState.incomingCalls}
@@ -5401,6 +5572,15 @@ function MainAppContent({
           speakingPeerIds={voiceState.speakingPeerIds}
           activeVoiceChannelId={voiceState.voiceChannelId}
           unread={unread}
+          upcomingSessionStartsAtByChannel={
+            isChannelSessionScheduleEnabled()
+              ? Object.fromEntries(
+                  Object.values(sessionsByChannel)
+                    .filter((s) => s.status === "scheduled" || s.status === "live")
+                    .map((s) => [s.channelId, s.startsAt]),
+                )
+              : undefined
+          }
           mobileOpen={mobileNavOpen}
           onMobileClose={() => setMobileNavOpen(false)}
           onSelectChannel={(id) => void selectChannel(id)}

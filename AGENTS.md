@@ -15,6 +15,20 @@ Delegate aggressively when work can proceed independently: repository exploratio
 - State whether an agent may merge or deploy and which gate applies. One agent owns a shared deployment or staging environment at a time.
 - The lead agent owns integration and final review. Model preferences here guide delegation; the main model is selected in the app or CLI.
 
+## Subagent orchestration
+
+Delegation does not transfer responsibility for completion. The lead owns every dispatched task through verification and handoff.
+
+1. Track every agent: objective, model, owned files/environment, current state, dependencies, and expected output. Check live status before reporting how many agents are running.
+2. Work on independent tasks while an agent runs. Do not duplicate its assigned work or mutate its owned files/environment. Reassign ownership explicitly before taking over.
+3. Read every completed result promptly. Integrate its findings, verify its evidence, and report meaningful results or blockers to the user without waiting to be asked. Send a concise progress update at least every 60 seconds during active work.
+4. Distinguish preparation, execution, and verification. Report an action as started only after its tool/process has started; report success only with checked evidence. A stopped agent waiting for a dependency is not running.
+5. When a dependency clears, explicitly resume the waiting agent and verify it is active. A message to a stopped agent is not a restart. If delegation fails or hits a limit, take ownership of the remaining work or report the genuine blocker.
+6. Do not finish the work turn while any required subagent is still running or its result remains uncollected. Use the wait mechanism, integrate every required terminal result, and verify the combined outcome before the completion reply. Answer interim user questions promptly without abandoning the active task.
+7. An agent finishing is not the task finishing. Collect artifacts, perform integration/final review, and account for tests, delivery, cleanup, and any remaining work. Only abandon an agent after explicit failure or when its work is no longer needed; record why and who owns any remainder.
+8. Reuse authority already granted for the same scope and budget. Ask again only for a materially new action, increased risk/cost, or a genuinely missing decision.
+9. For long-running tests and paid resources, keep an explicit owner, budget/deadline, result location, and cleanup plan. Before a session handoff, verify what survives the session and transfer ownership; never imply live agents migrate with conversation history.
+
 ## i18n
 
 Read [`docs/I18N.md`](./docs/I18N.md) before adding copy.
