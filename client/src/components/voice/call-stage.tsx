@@ -82,6 +82,8 @@ import {
   type ScreenFullscreenTransition,
 } from "@/components/voice/screen-fullscreen";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
+import { CinemaStage } from "@/components/voice/cinema-stage";
+import { shouldShowCinema } from "@/lib/cinema-layout";
 import {
   collectScreenTiles,
   type ScreenShareTile,
@@ -928,6 +930,33 @@ function ActiveCall({
   const [pinnedTileId, setPinnedTileId] = useState(() =>
     stagePinnedKey(channelId),
   );
+  // Cinema is the landing view for a watch party: full-bleed picture, no
+  // roster or mic controls, until this person explicitly asks to join the
+  // call. Resets to audience whenever a stream goes live again, so leaving
+  // one party and walking into the next does not carry the choice over.
+  const [audienceMode, setAudienceMode] = useState(watchingHls);
+  useEffect(() => {
+    if (watchingHls) {
+      setAudienceMode(true);
+    }
+  }, [watchingHls]);
+  const cinemaTile = screenTiles.find((tile) => Boolean(tile.hlsUrl));
+  const showCinema = shouldShowCinema({
+    live: Boolean(cinemaTile),
+    audience: audienceMode,
+  });
+  const presenterPeerId = voiceState.liveStream?.presenterPeerId ?? null;
+  const cinemaStagePeople = allPeople.map((person) => ({
+    key: person.key,
+    name: person.name,
+    avatarUrl: person.avatarUrl,
+    speaking: person.speaking,
+    isHost:
+      presenterPeerId != null &&
+      (person.isSelf
+        ? voiceState.peerId === presenterPeerId
+        : person.key === presenterPeerId),
+  }));
   // Whether the listener row is showing. Per device, and never reset by a
   // presenter change or a new share: see the preference module. It keeps the
   // storage key the rail used, because it is the same choice ("give the
@@ -1230,6 +1259,35 @@ function ActiveCall({
       onPushToTalk={onPushToTalk}
     />
   );
+
+  if (showCinema && cinemaTile?.hlsUrl) {
+    return (
+      <div
+        data-testid="call-stage-cinema"
+        className={cn(
+          "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink",
+          fill ? "h-full min-h-0" : "h-[68svh] min-h-[280px]",
+        )}
+      >
+        <CinemaStage
+          hlsUrl={cinemaTile.hlsUrl}
+          delaySeconds={cinemaTile.delaySeconds ?? voiceState.liveStream?.delaySeconds}
+          mediaTitle={title}
+          communityName={serverName}
+          coverUrl={serverIconUrl}
+          viewerCount={allPeople.length}
+          audience={allPeople.map((person) => ({
+            key: person.key,
+            name: person.name,
+            avatarUrl: person.avatarUrl,
+          }))}
+          stagePeople={cinemaStagePeople}
+          canJoin
+          onJoin={() => setAudienceMode(false)}
+        />
+      </div>
+    );
+  }
 
   if (collapsed) {
     return (
