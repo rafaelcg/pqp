@@ -3577,3 +3577,62 @@ CREATE INDEX IF NOT EXISTS idx_community_home_media_unclaimed
 -- The rollout flag above only decides whether a client may offer Baú at all.
 -- Each server opts in separately, and existing servers stay off.
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Watch party scheduling: an admin/mod announces the next session on a
+-- channel ("Cinemoon, sexta 21h, filme X"), members opt into a reminder, and
+-- the session flips live/ended on its own (see markChannelSessionLive /
+-- markChannelSessionEnded in services/channel-sessions.ts). Attached to any
+-- channel id, not only a future `watch_party` channel kind, so scheduling
+-- ships independently of that channel-type work.
+CREATE TABLE IF NOT EXISTS channel_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  channel_id UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  cover_image_key TEXT,
+  starts_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL DEFAULT 'scheduled',
+  created_by UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+DO $$
+BEGIN
+  ALTER TABLE channel_sessions DROP CONSTRAINT IF EXISTS channel_sessions_status_check;
+  ALTER TABLE channel_sessions
+    ADD CONSTRAINT channel_sessions_status_check
+    CHECK (status IN ('scheduled', 'live', 'ended', 'cancelled'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- One upcoming/live session per channel is the product shape (the card at
+-- the top of the channel only ever shows one), enforced here rather than
+-- trusted to the API layer.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_sessions_one_active_per_channel
+  ON channel_sessions (channel_id)
+  WHERE status IN ('scheduled', 'live');
+
+CREATE INDEX IF NOT EXISTS idx_channel_sessions_due
+  ON channel_sessions (status, starts_at);
+
+CREATE INDEX IF NOT EXISTS idx_channel_sessions_server
+  ON channel_sessions (server_id, status);
+
+-- Who asked to be reminded. `notified_before_at` fires at T-10 minutes,
+-- `notified_live_at` fires when the session flips live; each is a one-shot
+-- timestamp so the minute-tick job never double-sends either reminder.
+CREATE TABLE IF NOT EXISTS channel_session_reminders (
+  session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  notified_before_at TIMESTAMPTZ,
+  notified_live_at TIMESTAMPTZ,
+  PRIMARY KEY (session_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_session_reminders_due
+  ON channel_session_reminders (session_id)
+  WHERE notified_before_at IS NULL OR notified_live_at IS NULL;

@@ -2,6 +2,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   addChannelMemberSchema,
   ageDeclarationSchema,
+  createChannelSessionSchema,
+  updateChannelSessionSchema,
   AUDIT_LOG_PAGE_MAX,
   AUDIT_LOG_PAGE_SIZE,
   auditActionSchema,
@@ -245,6 +247,16 @@ import {
   unpublishCommunityHomePost,
   updateCommunityHomePost,
 } from "../services/community-home.js";
+import {
+  cancelChannelSession,
+  ChannelSessionError,
+  createChannelSession,
+  getChannelSession,
+  listUpcomingChannelSessions,
+  listUpcomingChannelSessionsForServer,
+  setChannelSessionReminder,
+  updateChannelSession,
+} from "../services/channel-sessions.js";
 import { buildServerExport } from "../services/export.js";
 import {
   CommunityListingForbiddenError,
@@ -3766,6 +3778,133 @@ router.post("/api/channels/:channelId/read", async ({ req, user }, { channelId }
     lastReadAt: result.lastReadAt.toISOString(),
   };
 });
+
+// ----------------------------------------------------- watch party sessions
+
+function mapChannelSessionError(error: unknown): never {
+  if (error instanceof ChannelSessionError) {
+    if (error.code === "not_found") {
+      throw new NotFound(error.message);
+    }
+    throw new HttpError(409, error.message);
+  }
+  throw error;
+}
+
+router.post(
+  "/api/channels/:channelId/sessions",
+  async ({ req, user }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    // REPLACE-WHEN-READY: swap for START_WATCH_PARTY once
+    // `feat/watch-party-channel` lands that permission bit.
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+    );
+    const body = createChannelSessionSchema.parse(await readJsonBody(req));
+    if (new Date(body.startsAt).getTime() <= Date.now()) {
+      throw new HttpError(400, "startsAt must be in the future");
+    }
+    try {
+      const session = await createChannelSession({
+        channelId: channelId!,
+        serverId: channel.server_id,
+        title: body.title,
+        description: body.description ?? null,
+        startsAt: body.startsAt,
+        createdBy: user.id,
+      });
+      return { session };
+    } catch (error) {
+      mapChannelSessionError(error);
+    }
+  },
+);
+
+router.get(
+  "/api/channels/:channelId/sessions/upcoming",
+  async ({ user }, { channelId }) => {
+    await requireChannelAccess(channelId!, user.id);
+    return { sessions: await listUpcomingChannelSessions(channelId!, user.id) };
+  },
+);
+
+router.get(
+  "/api/servers/:serverId/sessions/upcoming",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    return {
+      sessions: await listUpcomingChannelSessionsForServer(serverId!, user.id),
+    };
+  },
+);
+
+router.patch("/api/sessions/:sessionId", async ({ req, user }, { sessionId }) => {
+  const existing = await getChannelSession(sessionId!);
+  if (!existing) {
+    throw new NotFound("Session not found");
+  }
+  const channel = await requireServerChannel(existing.channel_id);
+  await requirePermission(channel.server_id, user.id, Permission.MANAGE_CHANNELS);
+  const body = updateChannelSessionSchema.parse(await readJsonBody(req));
+  if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
+    throw new HttpError(400, "startsAt must be in the future");
+  }
+  try {
+    return { session: await updateChannelSession(sessionId!, user.id, body) };
+  } catch (error) {
+    mapChannelSessionError(error);
+  }
+});
+
+router.post(
+  "/api/sessions/:sessionId/cancel",
+  async ({ user }, { sessionId }) => {
+    const existing = await getChannelSession(sessionId!);
+    if (!existing) {
+      throw new NotFound("Session not found");
+    }
+    const channel = await requireServerChannel(existing.channel_id);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+    );
+    try {
+      await cancelChannelSession(sessionId!);
+    } catch (error) {
+      mapChannelSessionError(error);
+    }
+    return { ok: true as const };
+  },
+);
+
+router.post(
+  "/api/sessions/:sessionId/remind",
+  async ({ user }, { sessionId }) => {
+    const existing = await getChannelSession(sessionId!);
+    if (!existing) {
+      throw new NotFound("Session not found");
+    }
+    await requireChannelAccess(existing.channel_id, user.id);
+    await setChannelSessionReminder(sessionId!, user.id, true);
+    return { ok: true as const, reminding: true as const };
+  },
+);
+
+router.delete(
+  "/api/sessions/:sessionId/remind",
+  async ({ user }, { sessionId }) => {
+    const existing = await getChannelSession(sessionId!);
+    if (!existing) {
+      throw new NotFound("Session not found");
+    }
+    await requireChannelAccess(existing.channel_id, user.id);
+    await setChannelSessionReminder(sessionId!, user.id, false);
+    return { ok: true as const, reminding: false as const };
+  },
+);
 
 // -------------------------------------------------------------- webhooks
 
