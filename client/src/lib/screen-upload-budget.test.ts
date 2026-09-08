@@ -16,9 +16,9 @@ describe("the screen upload budget follows the measured uplink", () => {
 
   it("cuts to what a short link reports, at once", () => {
     // Three in the call, two viewers, one 3 Mbps uplink. The constant granted
-    // 2 x 2.5 Mbps, both estimators backed off and fought. Two connections on
-    // a saturated 3 Mbps pipe report roughly 1.5 Mbps each; their sum is the
-    // pipe.
+    // 2 x 2.5 Mbps, both estimators backed off and fought. Neither path fills
+    // its 2.5 Mbps share, which is what a shared bottleneck looks like, so the
+    // sum is believed: 1.5 + 1.5.
     expect(nextScreenUploadBudget(5 * M, [1.5 * M, 1.5 * M])).toBe(3 * M);
   });
 
@@ -73,15 +73,16 @@ describe("the screen upload budget follows the measured uplink", () => {
 
   it("will not raise when one peer is short even if the sum is generous", () => {
     // A sum of 11 Mbps hides a peer that only has 1 Mbps. The raise reads
-    // each estimator, the cut reads the sum, and this is why.
+    // every estimator, and this is why.
     const current = 5 * M;
     expect(nextScreenUploadBudget(current, [10 * M, 1 * M])).toBe(current);
   });
 
-  it("budgets from the readable peers when one cannot be read", () => {
-    // Two peers, one unreadable. A missing reading is no evidence either way,
-    // so the widest path that *was* read stands for what a copy can carry,
-    // and the room still needs one copy per peer: 1 Mbps x 2.
+  it("assumes an unreadable peer looks like the ones it can read", () => {
+    // Two peers, one unreadable. The readable one is carrying 1 Mbps, so a
+    // copy costs about that, and there are two copies. A missing reading is
+    // not evidence of health, and treating it as a full share would let a
+    // silent peer prop up a budget the link cannot carry.
     expect(nextScreenUploadBudget(5 * M, [1 * M, null])).toBe(2 * M);
   });
 
@@ -95,16 +96,28 @@ describe("the screen upload budget follows the measured uplink", () => {
     // on its own connection.
     let budget = 5 * M;
     for (let i = 0; i < 6; i += 1) {
-      budget = nextScreenUploadBudget(budget, [50_000, 2.75 * M]);
+      // The healthy path keeps filling whatever share it is given.
+      budget = nextScreenUploadBudget(budget, [50_000, (budget / 2) * 1.1]);
     }
     expect(budget).toBeGreaterThanOrEqual(5 * M);
   });
 
-  it("still cuts when every path is squeezed, which is what a small uplink looks like", () => {
-    // The shape that actually means "my uplink is small": our own link is
-    // shared by every path, so when it is the bottleneck they all read low
-    // together. 3 Mbps split two ways.
-    expect(nextScreenUploadBudget(5 * M, [1.5 * M, 1.5 * M])).toBe(3 * M);
+  it("cuts on an unevenly divided uplink, where the maximum would not have", () => {
+    // A shared 3 Mbps that GCC has split 70/30 rather than evenly. Nobody
+    // reaches their 2.5 Mbps share, so the link is the suspect and the sum is
+    // the reading. Budgeting from the widest path instead gave 2.1 x 2 = 4.2
+    // Mbps here and then held there for the rest of the call, because every
+    // reading is bounded by the ceiling we set and the budget ended up
+    // tracking its own past output.
+    expect(nextScreenUploadBudget(5 * M, [2.1 * M, 0.9 * M])).toBe(3 * M);
+  });
+
+  it("keeps its hands off while somebody is still filling their share", () => {
+    // The other half of the same rule, and the reason one bad path cannot
+    // drag the room: a path reading at or above what we allowed it says
+    // something about our ceiling, not about the link underneath.
+    expect(nextScreenUploadBudget(5 * M, [50_000, 2.5 * M])).toBe(5 * M);
+    expect(nextScreenUploadBudget(5 * M, [50_000, 2.75 * M])).toBe(5 * M);
   });
 
   it("takes the cap even when the last step to it is under the delta", () => {

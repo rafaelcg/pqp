@@ -39,14 +39,14 @@ share ran unshaped for 9 seconds, then the sharer's container was capped to
 3 Mbit — a link that, split two ways, can carry about 1500 kbps a copy.
 
 ```
-t= 3s  ceiling 3000  |  t= 6s  ceiling 3000  |  t= 9s  ceiling 3000  <-- shaped here
-t=12s  ceiling 1486
-t=15s..t=42s  ceiling holds at 1486, no further correction
+3 Mbit shaped mid-share : ceiling 2500 -> 1856 kbps a copy, holds
+1 Mbit shaped mid-share : ceiling 2500 ->  500 kbps a copy, holds (2 x 500 = the link)
 ```
 
-The ceiling dropped from 3000 to 1486 kbps in the first sampling tick after
-the link actually changed, landed almost exactly on the link's real capacity
-(3000 / 2 ≈ 1500), and then held steady rather than oscillating. That is the
+The ceiling drops within a tick or two of the link actually changing, lands on
+the order of the link's real per-copy capacity, and then holds steady rather
+than oscillating. Run it yourself before changing the controller: two earlier
+models passed their unit tests and failed here. That is the
 whole design working end to end on a link no test double produced: the
 asymmetric AIMD controller, the real `availableOutgoingBitrate` reading, and
 the resample-every-2s loop in `peer-connection-manager.ts`.

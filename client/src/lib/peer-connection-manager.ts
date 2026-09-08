@@ -553,8 +553,8 @@ export function createPeerConnectionManager(
    * One `getStats()` per peer per tick, which is cheap: the stats probe's
    * console tool samples the same way at the same rate. A peer whose report
    * cannot be read (an old fake in a test, a browser that omits the field, a
-   * connection mid-restart) counts as "unknown" rather than as zero, and the
-   * controller treats unknown as "exactly its share".
+   * connection mid-restart) counts as "unknown" rather than as zero. What the
+   * controller does with that is `nextScreenUploadBudget`'s business.
    *
    * Only the budget's *movement* is decided here; what a new budget means for
    * each sender is still `meshScreenBitrate`, so the chosen quality, the
