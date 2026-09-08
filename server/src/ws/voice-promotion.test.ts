@@ -889,6 +889,87 @@ describe("promoting a mesh room so more cameras fit", () => {
  * viewer, and that is the budget the promotion guard already prices. These
  * cases are the count's replacement.
  */
+/**
+ * THE TWO GUARDS COMPOSE (2026-09-08).
+ *
+ * Two things landed on the same day and the same files: the promotion
+ * triggers (a fourth camera, a full mesh room, a stale pin) and the removal of
+ * the camera count on the voice server. Both price the same box with the same
+ * arithmetic, and the failure mode of a bad merge between them is silent: one
+ * would keep working and the other would quietly stop being consulted. These
+ * two cases are the seam, so a rebase that drops half of it fails here rather
+ * than in a call.
+ */
+describe("a room that reached the SFU by being full", () => {
+  let channel: string;
+
+  beforeEach(() => {
+    for (const socket of openSockets) {
+      deleteAuthenticatedSocket(socket);
+    }
+    openSockets.length = 0;
+    resetVoicePeers();
+    resetVoiceRateLimits();
+    resetVoiceRoomTransports();
+    resetVoicePromotions();
+    backend.configured = "livekit";
+    rows.memberCount = 5;
+    channel = randomUUID();
+    delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_BUDGET === undefined) {
+      delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+    } else {
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = ORIGINAL_BUDGET;
+    }
+  });
+
+  /** Eight on mesh, then a ninth at the door: the `room-full` trigger. */
+  async function promotedByRoomFull(): Promise<Seat[]> {
+    const people: Seat[] = [];
+    for (let i = 0; i < MESH_VOICE_LIMIT; i += 1) {
+      people.push(await seat(channel));
+    }
+    expect(getRoomTransport(channel)).toBe("mesh");
+    const ninth = await seat(channel);
+    expect(getRoomTransport(channel)).toBe("livekit");
+    return [...people, ninth];
+  }
+
+  it("has no camera count once it is there, only the budget", async () => {
+    const people = await promotedByRoomFull();
+
+    for (const person of people) {
+      await cameraOn(person, channel);
+    }
+
+    for (const person of people) {
+      expect(typesOf(person)).not.toContain("camera-denied");
+    }
+    // Nine, where the old `CAMERA_LIMIT.livekit` of 8 refused the ninth.
+    expect(camerasOn(people[0]!)).toBe(9);
+  });
+
+  it("still prices its cameras against the same box the promotion did", async () => {
+    // The room is 9 people, so the fourth camera prices it at
+    // 4 * 9 * 1.5 = 54 Mbit/s. A budget under that refuses, using exactly the
+    // arithmetic the promotion above used to decide it could move at all.
+    const people = await promotedByRoomFull();
+    for (const person of people.slice(0, 3)) {
+      await cameraOn(person, channel);
+    }
+    expect(camerasOn(people[0]!)).toBe(3);
+
+    process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "50";
+    await cameraOn(people[3]!, channel);
+
+    expect(typesOf(people[3]!)).toContain("camera-denied");
+    expect(camerasOn(people[0]!)).toBe(3);
+  });
+});
+
 describe("more cameras on a room already on the SFU", () => {
   let channel: string;
 
