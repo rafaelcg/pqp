@@ -119,12 +119,20 @@ muted; the SFU forwards only what is published, and dynacast pauses layers nobod
   = 150k pkt/s, about one sixth of the audio benchmark.
 - Memory is not the constraint; LiveKit is a Go process that sits in the low hundreds of MB here.
 
-Recommendation: **start on Vultr High Performance AMD 2 vCPU / 4 GB ($36/mo in São Paulo)**. This is what was provisioned on 2026-09-06 as `sfu-pqp`, 216.238.114.79. The High Frequency line had no 4 GB plan in São Paulo that night. and gate the
+Recommendation (as of 2026-09-06, the night of the switch): **start on Vultr High Performance AMD 2 vCPU / 4 GB ($36/mo in São Paulo)**. This is what was provisioned on 2026-09-06 as `sfu-pqp`, 216.238.114.79. The High Frequency line had no 4 GB plan in São Paulo that night. and gate the
 production switch on the load test in section 5. If the load test shows sustained CPU above 60% or
 packet loss, move to **4 vCPU / 8 GB (verify price)**; a Vultr resize is a reboot, and the box is
 stateless. Choose High Frequency over Regular because packet forwarding is latency-sensitive
 single-thread work and benefits from the faster cores. Verify the plan's network port speed: 450 Mbps
 sustained needs a 1 Gbps port, not a shared 100 Mbps one.
+
+**What actually happened:** the box stayed 2 vCPU until a much larger question came
+up on 2026-09-07, a 500-viewer watch party, not the 100-to-150-viewer parties this
+section sized for (see "5b. Results so far" below and `docs/CAPACITY.md`). That load
+test found the single UDP mux port failed at 500 viewers regardless of CPU; the port
+change and the resize to 4 vCPU / 8 GB both landed on 2026-09-08, at $48/mo list,
+about $72/mo in São Paulo (price now confirmed, not "verify", see "Resize the box"
+below). Production is 4 vCPU today.
 
 ### TLS and hostnames
 
@@ -587,16 +595,25 @@ response, so the client needs no rebuild).
 - Load test on the box itself (loopback, `ws://127.0.0.1:7880`): 1 publisher at 1080p, **150
   subscribers, 120 s. 150/150 connected, 0 errors, 0% packet loss, 191 Mbps total**. LiveKit sat at
   about 70% of one core (35% of the box) mid-run while the tester itself shared the same two cores, so
-  the real headroom is better than that number. Memory 350 MB. The 2 vCPU / 4 GB plan is enough for the
-  100 to 150 viewer parties we have seen; no resize needed before the production switch.
+  the real headroom is better than that number. Memory 350 MB. The 2 vCPU / 4 GB plan was enough for the
+  100 to 150 viewer parties seen as of this date; no resize needed before the production switch. That
+  held until the 500-viewer watch-party load test on 2026-09-07 found the single UDP mux port, not the
+  CPU, failing first at that scale; the box was resized to 4 vCPU / 8 GB on 2026-09-08 alongside the
+  port change (`docs/CAPACITY.md`, "Resize the box" below).
 - Not yet done: a phone on mobile data across NAT, and the UDP-blocked TURN path. The switch itself
   has happened; `sfu.pqp.gg` serves and `GET https://api.pqp.gg/ready` reports LiveKit healthy.
 
 ## 6. Cost summary and timeline
 
-Monthly, steady state, from section 1: $36 for the VM plus $0 egress for up to 8 parties
-under the Vultr pool and plan allowance, plus a reserved IP for TURN if you take that route (verify).
-Against Ship at $140 (4 parties) or $260 (8 parties). The Cloud project stays on the free tier at $0.
+Monthly, at the original 2 vCPU sizing from section 1: $36 for the VM plus $0 egress for up to
+8 parties under the Vultr pool and plan allowance, plus a reserved IP for TURN if you take that
+route (verify). Against Ship at $140 (4 parties) or $260 (8 parties). The Cloud project stays on
+the free tier at $0.
+
+**Actual, since the 2026-09-08 resize to 4 vCPU / 8 GB:** about $72/mo for the VM in São Paulo
+(section 4, "Resize the box"), still under Ship at any party count above one. Redis and LiveKit
+Egress run on the same box as of 2026-09-08 too; no separate line item yet, see the co-tenancy
+note in `docs/CAPACITY.md` section 2 for what that costs in headroom rather than dollars.
 
 | Milestone | Steps | Hours |
 |---|---|---|

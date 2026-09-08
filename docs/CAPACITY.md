@@ -9,16 +9,38 @@ plus the API-only morning runs recorded in `docs/STAGING.md`. Method and rigs
 are in section 3 and section 7; the staging runbook is
 [`docs/STAGING.md`](./STAGING.md) ("What it has measured", evening section).
 
+## Timeline
+
+Three changes to the production media server (Vultr `sfu-pqp`,
+216.238.114.79), in order. Every number below is labeled with the run it came
+from; read this table first to see which config a given number describes.
+
+| when | change |
+|---|---|
+| 2026-09-07, evening | Load tests below (control A, A1, A2, A2 repeat, ladder F) run on an isolated test box. Production itself, untouched by any of these runs: 2 vCPU, one UDP mux port (`vhp-2c-4gb-amd`, `rtc.udp_port: 7882`), unchanged since it was provisioned on 2026-09-06. |
+| 2026-09-08 07:17:17Z | Production: `rtc.udp_port: 7882-7885` (was one port), `limit: { num_tracks: -1, bytes_per_sec: -1 }`, and `/etc/sysctl.d/90-livekit.conf` (`net.core.rmem_max` / `wmem_max` 26214400) applied. Still a 2 vCPU box, so only two of the four ports bound (LiveKit binds `min(vCPUs, ports)`). |
+| 2026-09-08 09:25:54Z | Production resized from `vhp-2c-4gb-amd` (2 vCPU, 4 GB) to `vhp-4c-8gb-amd` (4 vCPU, 8 GB), about 42 s of downtime. All four ports bound after the reboot. $48/mo list, about $72/mo in São Paulo. |
+| 2026-09-08 | Redis and LiveKit Egress (for HLS) installed on the same box. The box has always run the TURN relay as well. |
+
+The test box and production match in size only after 09:25:54Z on
+2026-09-08. A number measured on the isolated 4 vCPU test box before that
+timestamp describes what a 4 vCPU LiveKit config *can* do; it is not a
+production measurement, because production itself was still 2 vCPU while
+every run in section 4 was collected. See section 3 for the full caveat.
+
 ## 1. Summary
 
-**What production carries today.** The production media server is a 2 vCPU
-box with LiveKit on **one** UDP mux port. On a 4 vCPU copy of that
-configuration, a 500-person watch party at 720p failed on media: 229 of 499
-viewers never decoded a frame, the rest ran at 1.2 fps with 58% packet loss,
-and the box could push only 250 to 270 Mbit/s out of the roughly 800 the room
-asked for (run A1). The failure is the single UDP socket overflowing its
-receive buffer, not CPU and not the API. The 2 vCPU box has not been driven to
-its own limit; a single-port room fails before that matters.
+**What production carried before 2026-09-08.** Until 07:17Z that day the
+production media server was a 2 vCPU box with LiveKit on **one** UDP mux
+port (unchanged since it was provisioned on 2026-09-06). On a 4 vCPU copy of
+that single-port configuration, a 500-person watch party at 720p failed on
+media: 229 of 499 viewers never decoded a frame, the rest ran at 1.2 fps with
+58% packet loss, and the box could push only 250 to 270 Mbit/s out of the
+roughly 800 the room asked for (run A1, 2026-09-07). The failure was the
+single UDP socket overflowing its receive buffer, not CPU and not the API;
+the 2 vCPU box itself was never driven to its own limit, because a
+single-port room fails before that matters. See the Timeline above and
+section 2 for what changed on 2026-09-08 and what production is today.
 
 **What the port change buys.** With `rtc.udp_port: 7882-7885` and nothing else
 changed, the same 4 vCPU box delivered the full 720p stream to 499 of 499
@@ -77,6 +99,15 @@ network that blocks UDP has no working relay today. Fix under consideration:
 hand LiveKit clients the same `/api/ice-servers` list (Cloudflare TURN) the mesh
 path already uses.
 
+**Co-tenancy note (reasoning, not measurement).** Redis and LiveKit Egress
+(for HLS) run on `sfu-pqp` alongside LiveKit itself, installed 2026-09-08; the
+box has always run the TURN relay too. A live HLS transcode costs roughly one
+core on moving content. No run in this document had Egress active
+concurrently with a WebRTC room, so this is arithmetic, not a result: during a
+watch party that has HLS turned on, the box is effectively three cores for
+WebRTC, not four. If watch parties running HLS become routine, the clean
+split is a separate small egress box, not a bigger SFU.
+
 ## 3. Methodology and its limits
 
 Two rigs, both against `pqp-api-staging` and never production. The generators
@@ -118,8 +149,14 @@ Limits, all of which matter when reading the tables:
   on one Fly box. Read the sustained figures of A2 and A2 repeat as
   generator-limited. Delivery, fps and loss are not affected the same way and
   are the numbers to trust.
-- **The test SFU had 4 vCPU; production has 2.** Same image, same config
-  template, same LiveKit version. No run was made on a 2 vCPU box.
+- **The test SFU had 4 vCPU; production had 2 at the time of every run
+  below.** Same image, same config template, same LiveKit version. No run was
+  made on the production box itself. Production has since been resized to
+  4 vCPU (2026-09-08 09:25:54Z; see Timeline and section 2) and now matches
+  the test rig's size, but that does not upgrade these numbers into
+  production measurements: every run in section 4 ran on the isolated box,
+  before the resize, and still describes what a 4 vCPU LiveKit config can do
+  in principle, not what the production box has demonstrated under load.
 - **Staging's database is smaller than production's** and its API machine was
   scaled to production's size (`performance-2x`, `PG_POOL_MAX=40`) for the
   runs only. Two address-keyed limiters (`RATE_LIMIT_ANON_*`,
@@ -282,17 +319,24 @@ bits per viewer (true from 200 to 500 in ladder F); a box gives out at roughly
 the CPU where the 4 vCPU box did (about 80%); 2 vCPU delivers about half of
 4 vCPU; a 1080p-by-name share costs 4 Mbit/s against 1.5.
 
+Box labels below name the production window each row would have described;
+the resize on 2026-09-08 09:25:54Z means only the third row still matches
+production today.
+
 | box | ports | 720p at 1.5 Mbit/s | 1080p by name at 4 Mbit/s | basis |
 |---|---|---|---|---|
-| 2 vCPU (production today) | one | fails well under 500; exact point unknown | worse | A1 failed at 500 on 4 vCPU with the single socket; 2 vCPU was not run |
-| 2 vCPU (production) | four | **about 250 to 300** | about 90 to 110 | half of the 4 vCPU break (500 to 600) at 80% CPU; ladder E not run |
-| 4 vCPU | four | 500 measured clean, break 500 to 600 | about 185 to 220 | A2, A2 repeat, ladder F; divide by 2.7 for 1080p |
-| 8 vCPU | four or more | about 1000 to 1200 if linear; 1.5 to 1.8 Gbit/s of egress, likely the NIC or the uplink first | about 370 to 440 | not run; linear scaling past one box's CPU is the least safe assumption here |
+| 2 vCPU, one port (production before 2026-09-08 07:17Z) | one | fails well under 500; exact point unknown | worse | A1 failed at 500 on 4 vCPU with the single socket; 2 vCPU was not run |
+| 2 vCPU, four ports (production 2026-09-08 07:17Z to 09:26Z) | four | **about 250 to 300** (extrapolation; superseded by the resize below before it was ever measured) | about 90 to 110 | half of the 4 vCPU break (500 to 600) at 80% CPU; ladder E not run |
+| 4 vCPU, four ports (production since 2026-09-08 09:26Z) | four | 500 measured clean on the isolated test box, break 500 to 600 (ladder F); not yet measured on the production box itself | about 185 to 220 | A2, A2 repeat, ladder F; divide by 2.7 for 1080p |
+| 8 vCPU (not deployed) | four or more | about 1000 to 1200 if linear; 1.5 to 1.8 Gbit/s of egress, likely the NIC or the uplink first | about 370 to 440 | not run; linear scaling past one box's CPU is the least safe assumption here |
 
 Not measured, in the order they would change the table most:
 
-1. **E, the 2 vCPU production-identical ladder.** The only run that would turn
-   the "250 to 300" into a number.
+1. **F on the production box itself.** Production is now the same size and
+   config as the test rig (since 09:25:54Z on 2026-09-08), but ladder F ran
+   only on the isolated box. This is the run that would turn "measured on the
+   test rig" into "measured on production." The old item here, an E ladder on
+   a 2 vCPU production-identical box, is moot now that production is 4 vCPU.
 2. **The raised receive buffer and `num_tracks` conditions**, on their own,
    at 400 to 600, to see whether the bursty drops go away.
 3. **B, 1080p pinned at 4 Mbit/s** with receivers on the top layer.
@@ -341,7 +385,8 @@ laptop suffices up to about 700 Mbit/s of app-WS egress; beyond that shard it.
   edit), and `RATE_LIMIT_ANON_*` / `RATE_LIMIT_SOCKET_*` lifted for the run.
 - A throwaway SFU built from `tools/sfu/install.sh` under sslip.io names with
   a fresh key pair, `LIVEKIT_*` on staging pointed at it. Use the vCPU count
-  you want to answer a question about; production is 2.
+  you want to answer a question about; production is 4 vCPU since
+  2026-09-08 09:25:54Z (was 2; see Timeline).
 - Generators: about 0.08 core per 720p30 receiver, keep every box under 70%.
   A Vultr `vhp-12c-24gb-amd` holds 80 to 90 receivers; 500 needs six such
   boxes (or four plus two Fly `performance-16x` in `gru`, bootstrapped from
@@ -362,3 +407,25 @@ and its API key is IP-restricted (a VPN on the laptop breaks every call).
 **Afterwards:** tear down the SFU and the generators, scale staging back,
 `git checkout fly.staging.toml`, redeploy staging from its branch, and point
 `LIVEKIT_*` on staging back (or unset it). Then append the run here.
+
+## 8. Don't publish a capacity number
+
+Do not put a viewer-count figure for the production media server in public
+copy (marketing, release notes, the website, a pitch). Three reasons:
+
+1. **The production box has never itself been driven to that load.** Every
+   500-viewer result in this document ran on an isolated test box (Timeline,
+   section 3). Production has been resized to match that box's configuration;
+   it has not been proven to carry the same load.
+2. **Ladder F (section 4.5) shows what happens between 500 and 600:** egress
+   falls instead of rising, CPU pins in the low 80s, and about a quarter of
+   packets reach nobody. A number just under the edge of a cliff is one bad
+   night from being a number just over it.
+3. **A presenter choosing 1080p by name divides the figure by about 2.7**
+   (`client/src/lib/video-quality.ts`, section 1). The same headline number
+   is true or false depending on a menu choice the presenter makes, not
+   anything pqp controls.
+
+The one number that is safe to say publicly is the one that already happened
+in public: the watch party of 2026-09-05, over a hundred people, real and
+observed (`docs/voice-backends.md`).
