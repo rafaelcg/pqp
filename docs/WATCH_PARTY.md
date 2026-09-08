@@ -63,27 +63,63 @@ through the WS join and `set-sharing-screen`), and a case in
 
 ## The seam for the HLS branch
 
-`fix/hls-watch-mode-loading` keeps live state in `hls-egress.ts` as
-`LiveHlsStream { hlsUrl, startedAt, presenterPeerId, delaySeconds }` and
-pushes it on a `voice-stream` message. `ChannelLiveState` uses the same field
-names on purpose:
+Live state lives in `server/src/voice/hls-egress.ts` as
+`LiveHlsStream { hlsUrl, startedAt, presenterPeerId, delaySeconds }`.
+`ChannelLiveState` uses the same field names on purpose:
 
 ```ts
 { live, presenterPeerId, viewerCount, startedAt, hlsUrl }
 ```
 
-On main it is derived from the roster (`liveStateFromRoster`: the peer with
-`sharingScreen` is the presenter, `viewerCount` is everyone else,
-`startedAt` and `hlsUrl` stay null). When that branch lands:
+What landed on the server side (`server/src/ws/voice.ts`,
+`server/src/ws/hls-audience.ts`, contract in
+`packages/shared/src/live-hls.ts`):
 
-1. `reconcileLiveHls` / the HLS start must read `peer.canStream` (or call
-   `canStartWatchPartyStream` with the same resolved bits). Do not add a
-   second check keyed on `type`.
-2. Build `ChannelLiveState` from the stream (`live: stream !== null`, copy
-   `presenterPeerId`, `startedAt`, `hlsUrl`) and prefer it over the roster
-   derivation. The `TODO(hls)` in `watch-party-channel.ts` marks the spot.
-3. Nothing else changes: the type, the bit, the sidebar and the create flow
-   are transport-agnostic.
+**The stage gate on the egress start.** `pushLiveHls` picks the sharer
+through `pickHlsSharer`: `sharingScreen && canStream`. In a watch party
+`canStream` is START_WATCH_PARTY (`canStartWatchPartyStream`), so the
+transcode reads the same bit `set-sharing-screen` refuses on; there is no
+second check keyed on `type`. It also hands `reconcileLiveHls` the channel's
+server id (from the audience cache, no extra query) for the
+`LIVE_HLS_SERVER_ALLOWLIST` refusal.
+
+**Two frames, one per audience.**
+
+- `voice-stream { channelId, stream | null }`: the room only, as before.
+- `channel-live { channelId, stream | null, watching }`: everyone who may
+  view the channel, seat or no seat (the roster's `getChannelAudience`),
+  when the egress starts, stops or changes URL, and at socket auth for every
+  live channel the user can see. This is what the sidebar pill and a viewer
+  outside the room build `ChannelLiveState` from; prefer it over the roster
+  derivation (`liveStateFromRoster` stays the fallback when no frame has
+  arrived). `watching` is viewers without a seat; seats are on the roster.
+
+**Watch mode without a seat.** A client that opened a live channel and did
+not press Entrar sends `watch-live { channelId, watching: true }`, and
+`false` when it leaves. The server checks `canAccessChannel` (no VIEW: the
+frame is ignored, no error), counts the socket and answers that socket alone
+with a `channel-live`. The audience hears the new count on the
+`ROSTER_AUDIENCE_KEYFRAME_MS` clock (30 s) while the channel is live or
+watched, never per subscribe: a wave of arrivals costs the server one frame
+per viewer per keyframe, not one frame to the whole server per arrival. The
+socket leaves the count on `watch-live false`, on close, and the moment it
+takes a seat.
+
+**The token.** Every `hlsUrl` that leaves the server is
+`stampViewerStream(stream, userId)`: the playlist proxy path with `?t=`, a
+signed token bound to the recipient, the channel and the session
+(`server/src/voice/hls-viewer-token.ts`). So both frames are encoded per
+socket, never once per room, and a URL copied from one viewer plays for
+nobody else. Safari's native player and the iOS app need this; hls.js may
+still send the Bearer header instead.
+
+**Belt and braces.** `GET /api/channels/:channelId/live` answers
+`{ stream, watching, participants }` after the same VIEW check, for a client
+that opens a channel before its socket is up. `stream` is stamped for the
+caller.
+
+Tests: `server/src/ws/voice-hls-audience.test.ts` (the gate, the audience,
+the count cadence, the token on every path).
 
 Scheduling (built in parallel) attaches to the channel; the sidebar row has a
 `TODO(schedule)` where the next session time goes in the idle state.
