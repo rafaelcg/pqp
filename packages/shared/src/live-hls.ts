@@ -8,7 +8,11 @@ import { z } from "zod";
  * Absent / null means there is no live transcode for this room.
  */
 export const liveHlsStreamSchema = z.object({
-  hlsUrl: z.string().url(),
+  // Either a full public URL (LIVE_HLS_SIGNED_URLS=false, or the direct
+  // bucket URL) or an API-relative path (the default: a viewer requests it
+  // through the signed playlist proxy, `GET /api/voice/hls-playlist/...`,
+  // and the client prefixes it with its own API base URL).
+  hlsUrl: z.string().min(1),
   startedAt: z.number().int().nonnegative(),
   presenterPeerId: z.string().min(1),
   /** What the badge should claim, from the server that started the egress. */

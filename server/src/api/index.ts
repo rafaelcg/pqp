@@ -119,6 +119,15 @@ import {
 } from "../voice/backends.js";
 import { liveHlsConfig } from "../voice/hls-egress.js";
 import {
+  buildSignedPlaylist,
+  HlsPlaylistNotFound,
+  HlsPlaylistUnavailable,
+} from "../voice/hls-playlist-proxy.js";
+import {
+  acknowledgeHlsHost,
+  hasAcknowledgedHlsHost,
+} from "../services/hls-host-ack.js";
+import {
   applyManualStatus,
   broadcastProfileUpdate,
   broadcastToChannel,
@@ -1825,6 +1834,61 @@ router.get("/api/voice/backend", async () => {
 });
 
 router.get("/api/live-hls/config", async () => liveHlsConfig());
+
+/**
+ * The signed playlist proxy (`hls-playlist-proxy.ts`): rewrites the live
+ * playlist's segment lines into absolute presigned URLs on every request, so
+ * the bucket can stay fully private. Auth is the normal Bearer flow (CLAUDE.md
+ * pitfall #8) plus the same channel-access check every other voice route
+ * uses -- a viewer who cannot see the channel cannot watch its stream either.
+ */
+router.get(
+  "/api/voice/hls-playlist/:channelId/:startedAt",
+  async ({ user, res }, { channelId, startedAt }) => {
+    await requireChannelAccess(channelId!, user.id);
+    const parsedStartedAt = Number(startedAt);
+    if (!Number.isFinite(parsedStartedAt)) {
+      throw new NotFound("No live stream for this channel");
+    }
+    let body: string;
+    try {
+      body = await buildSignedPlaylist(channelId!, parsedStartedAt);
+    } catch (error) {
+      if (error instanceof HlsPlaylistNotFound) {
+        throw new NotFound("No live stream for this channel");
+      }
+      if (error instanceof HlsPlaylistUnavailable) {
+        throw new HttpError(503, "Live HLS storage unavailable");
+      }
+      throw error;
+    }
+    res.setHeader("Cache-Control", "no-store");
+    return new RawResponse(body, "application/vnd.apple.mpegurl");
+  },
+);
+
+/**
+ * Host acknowledgment sheet: "you are responsible for what you stream".
+ * `GET` tells the client whether to show it before the presenter starts
+ * sharing; `POST` records the confirm so it never shows again for that
+ * user+server pair.
+ */
+router.get(
+  "/api/voice/hls-host-ack/:serverId",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    return { acknowledged: await hasAcknowledgedHlsHost(user.id, serverId!) };
+  },
+);
+
+router.post(
+  "/api/voice/hls-host-ack/:serverId",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    await acknowledgeHlsHost(user.id, serverId!);
+    return { acknowledged: true };
+  },
+);
 
 router.post("/api/voice/token", async ({ req, user }) => {
   if (!isLiveKitConfigured()) {

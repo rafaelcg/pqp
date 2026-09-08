@@ -60,6 +60,23 @@ describe("live HLS egress", () => {
     expect(isLiveHlsEnabled()).toBe(false);
   });
 
+  it("falls back to the raw public bucket URL when LIVE_HLS_SIGNED_URLS=false", async () => {
+    enableHls();
+    process.env.LIVE_HLS_SIGNED_URLS = "false";
+    setLiveHlsTestHooks({
+      egress: {
+        startTrackCompositeEgress: vi.fn(async () => ({ egressId: "EG_1" })),
+        stopEgress: vi.fn(),
+      },
+      findTracks: async () => ({ videoTrackId: "TR_V" }),
+    });
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1");
+    expect(stream?.hlsUrl).toMatch(
+      /^https:\/\/live\.example\.test\/live\/00000000-0000-4000-8000-0000000000aa\/\d+\.m3u8$/,
+    );
+    delete process.env.LIVE_HLS_SIGNED_URLS;
+  });
+
   it("does not start when the flag is off, even if a presenter is sharing", async () => {
     const start = vi.fn();
     setLiveHlsTestHooks({
@@ -89,8 +106,11 @@ describe("live HLS egress", () => {
 
     const first = await reconcileLiveHls(CHANNEL, "peer-1");
     expect(first?.presenterPeerId).toBe("peer-1");
+    // Signed by default (LIVE_HLS_SIGNED_URLS unset): an API-relative path
+    // to the playlist proxy, not the raw bucket URL. See
+    // `hls-playlist-proxy.test.ts` for what that proxy actually returns.
     expect(first?.hlsUrl).toMatch(
-      /^https:\/\/live\.example\.test\/live\/00000000-0000-4000-8000-0000000000aa\/\d+\.m3u8$/,
+      /^\/api\/voice\/hls-playlist\/00000000-0000-4000-8000-0000000000aa\/\d+$/,
     );
     expect(liveHlsStreamFor(CHANNEL)).toEqual(first);
     expect(start).toHaveBeenCalledTimes(1);

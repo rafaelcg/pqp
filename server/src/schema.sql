@@ -3577,3 +3577,45 @@ CREATE INDEX IF NOT EXISTS idx_community_home_media_unclaimed
 -- The rollout flag above only decides whether a client may offer Baú at all.
 -- Each server opts in separately, and existing servers stay off.
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS community_home_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- ---------------------------------------------------------------------------
+-- Live HLS retention (docs/voice-backends.md). One row per egress run
+-- (`reconcileLiveHls` in `server/src/voice/hls-egress.ts` starting/stopping a
+-- Track Composite egress). `object_prefix` is the exact string every object
+-- written by that run starts with (`live/<channelId>/<startedAt>`, both the
+-- segments and the two playlist objects share it because LiveKit's
+-- `filenamePrefix` and the `startedAt`-named playlists are all built from the
+-- same string in `hls-egress.ts`) -- the cleanup sweep in
+-- `server/src/voice/hls-cleanup.ts` deletes only objects under this prefix
+-- and nothing else, which is the whole safety property of that sweep.
+--
+-- NOTE for a future merge with `origin/feat/watch-party-schedule`: that
+-- branch, as of this writing, defines its own `channel_sessions` table for
+-- scheduled watch parties. This table is deliberately named `hls_sessions`
+-- and scoped to one egress run rather than one scheduled event, so the two
+-- do not collide; reconciling them (e.g. `hls_sessions.channel_session_id`
+-- referencing `channel_sessions.id`) is future work, not done here.
+CREATE TABLE IF NOT EXISTS hls_sessions (
+  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  channel_id    UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  object_prefix TEXT NOT NULL UNIQUE,
+  started_at    TIMESTAMPTZ NOT NULL,
+  ended_at      TIMESTAMPTZ,
+  keep_replay   BOOLEAN NOT NULL DEFAULT FALSE,
+  cleaned_at    TIMESTAMPTZ
+);
+
+-- The cleanup sweep's claim query: rows not yet cleaned, ended a while ago.
+CREATE INDEX IF NOT EXISTS idx_hls_sessions_cleanup
+  ON hls_sessions (ended_at)
+  WHERE cleaned_at IS NULL AND ended_at IS NOT NULL;
+
+-- One-time host acknowledgment sheet: "you're responsible for what you
+-- stream". Shown once per user per server the first time they start a
+-- watch-party / HLS broadcast in that server; never again once confirmed.
+CREATE TABLE IF NOT EXISTS hls_host_acks (
+  user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  server_id         UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  acknowledged_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, server_id)
+);

@@ -64,6 +64,7 @@ import {
   subscribeReceiveQuality,
 } from "@/lib/receive-quality";
 import { beaconVoiceLeave } from "@/lib/voice-leave-beacon";
+import { resolveHlsUrl } from "@/lib/hls-playback";
 import {
   applyCameraQuality,
   cameraBitrateFor,
@@ -2590,7 +2591,12 @@ export function createVoiceController(transport: RealtimeTransport) {
         if (message.channelId !== state.voiceChannelId) {
           return;
         }
-        state.liveStream = message.stream;
+        // `hlsUrl` may be API-relative (the signed playlist proxy) rather
+        // than a full URL, when `LIVE_HLS_SIGNED_URLS` is on. See
+        // `resolveHlsUrl`.
+        state.liveStream = message.stream
+          ? { ...message.stream, hlsUrl: resolveHlsUrl(message.stream.hlsUrl) }
+          : null;
         emit();
         break;
     }

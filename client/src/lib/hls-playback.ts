@@ -1,4 +1,32 @@
 import { useEffect, useState } from "react";
+import { getApiBaseUrl } from "@/lib/utils";
+
+const HLS_PLAYLIST_PROXY_PATH = "/api/voice/hls-playlist/";
+
+/**
+ * `LiveHlsStream.hlsUrl` from the server is either a full public URL
+ * (`LIVE_HLS_SIGNED_URLS=false`, or the raw bucket base) or an API-relative
+ * path to the signed playlist proxy. This turns the latter into something a
+ * player can actually fetch.
+ */
+export function resolveHlsUrl(hlsUrl: string): string {
+  if (hlsUrl.startsWith("http://") || hlsUrl.startsWith("https://")) {
+    return hlsUrl;
+  }
+  return `${getApiBaseUrl()}${hlsUrl}`;
+}
+
+/**
+ * Whether a URL hls.js is about to fetch is our own signed playlist proxy --
+ * the one request in the whole HLS pipeline that needs a Bearer header. Every
+ * segment/media URL the proxy hands back is already an absolute, presigned
+ * bucket URL and must NOT get our Authorization header attached: that would
+ * leak a user's Clerk-derived token to a third-party origin (R2) and, for a
+ * SigV4-signed request, would not even be the right kind of credential.
+ */
+export function isOwnHlsPlaylistProxyUrl(url: string): boolean {
+  return url.startsWith(`${getApiBaseUrl()}${HLS_PLAYLIST_PROXY_PATH}`);
+}
 
 export interface HlsPlaybackStats {
   width: number;
