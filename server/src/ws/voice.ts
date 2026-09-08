@@ -112,6 +112,7 @@ import {
   sendEncoded,
   sendEncodedDroppable,
 } from "./fanout.js";
+import { pickHlsSharer } from "./hls-audience.js";
 import {
   adoptWatchPartyState,
   applyWatchPartyWrite,
@@ -1079,18 +1080,44 @@ function broadcastToRoom(
 }
 
 /**
+ * The server a voice channel belongs to, for the egress allowlist. The
+ * audience cache already holds it for every channel with a roster, so this
+ * is a map read on the hot path; the row is only fetched when the cache has
+ * nothing (a channel deleted mid-share), and never at all for a stop.
+ */
+async function hlsServerIdFor(voiceChannelId: string): Promise<string | null> {
+  const audience = await getChannelAudience(voiceChannelId).catch(() => null);
+  if (audience) {
+    return audience.serverId;
+  }
+  const channel = await getChannel(voiceChannelId).catch(() => null);
+  return channel?.kind === "server" ? (channel.server_id ?? null) : null;
+}
+
+/**
  * First sharer in the room gets a Track Composite HLS egress. Nobody
- * sharing stops it. Failures stay in the log — a missed transcode must
+ * sharing stops it. Failures stay in the log: a missed transcode must
  * not refuse the share itself.
+ *
+ * The sharer is read through `pickHlsSharer`, so only a peer that holds the
+ * stage bit (`canStream`, which in a watch party is START_WATCH_PARTY) can
+ * feed the egress. `set-sharing-screen` refuses the claim without it and
+ * `reevaluateVoiceSpeak` clears the share when it is revoked; this is the
+ * same gate read at the one place a transcode actually starts.
  */
 async function pushLiveHls(voiceChannelId: string): Promise<void> {
   if (getRoomTransport(voiceChannelId) !== "livekit") {
     return;
   }
-  const sharer = getRoomPeers(voiceChannelId).find((peer) => peer.sharingScreen);
+  const sharer = pickHlsSharer(getRoomPeers(voiceChannelId));
   const prev = liveHlsStreamFor(voiceChannelId);
   try {
-    const next = await reconcileLiveHls(voiceChannelId, sharer?.id ?? null);
+    const serverId = sharer ? await hlsServerIdFor(voiceChannelId) : null;
+    const next = await reconcileLiveHls(
+      voiceChannelId,
+      sharer?.id ?? null,
+      serverId,
+    );
     const changed =
       (prev?.hlsUrl ?? null) !== (next?.hlsUrl ?? null) ||
       (prev?.presenterPeerId ?? null) !== (next?.presenterPeerId ?? null);
