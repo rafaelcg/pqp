@@ -6,7 +6,8 @@ name: CI
 # The two lists are duplicated: GitHub does not expand YAML anchors (an
 # alias here becomes an empty filter and the workflow runs on everything).
 # Do not add tools/support-bot or scripts/monitor — those have tests here.
-# Do not add tools/admin-dashboard or tools/ambient — root `eslint .` lints them.
+# Do not add tools/admin-dashboard or tools/ambient — root `eslint .` lints both,
+# and admin-dashboard has a `node --test` step of its own below.
 # Do not add **/*.md — blog/What's New markdown lives under client/.
 # If branch protection later requires `checks` / `e2e`, a skipped paths-ignore
 # run is treated as pending forever. Do not require those checks without a
