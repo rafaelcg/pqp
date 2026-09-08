@@ -2535,6 +2535,8 @@
   "chrome.create": "Criar",
   "chrome.creating": "Criando…",
   "chrome.privateChannel": "Canal privado",
+  "chrome.resizeChannelList": "Ajustar a largura da lista de canais",
+  "chrome.resizeChannelListReset": "Clique duas vezes pra voltar ao padrão",
   "chrome.channelNamePlaceholder": "nome-do-canal",
   "chrome.devBypass": "Bypass de auth de desenvolvimento",
   "chrome.fallbackServer": "Servidor",

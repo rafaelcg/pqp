@@ -22,7 +22,14 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type DragEvent,
+  type ReactNode,
+} from "react";
 import {
   FAVORITE_CHANNELS_PER_SERVER_MAX,
   isVoiceRoomChannelType,
@@ -41,6 +48,8 @@ import {
   ChannelIcon,
   channelIconIsPrivateLock,
 } from "@/components/layout/channel-icon";
+import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
+import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
 import {
   resolveVoiceRowClick,
   resolveVoiceRowDoubleClick,
@@ -311,6 +320,12 @@ export function ChannelList({
   upcomingSessionStartsAtByChannel = {},
 }: ChannelListProps) {
   const { t } = useTranslation();
+  const {
+    width: sidebarWidth,
+    maxWidth: sidebarMaxWidth,
+    setWidth: setSidebarWidth,
+    commitWidth: commitSidebarWidth,
+  } = useChannelSidebarWidth();
   const channelPinHintEnabled = useFeatureHintEnabled("channelPin");
   const visibleFavs = visibleFavoriteChannels(channels, favoriteChannelIds);
   const favoriteIdSet = new Set(visibleFavs.map((c) => c.id));
@@ -1074,12 +1089,25 @@ export function ChannelList({
   return (
     <aside
       data-immersive-hide=""
-      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:static md:z-auto md:w-64 md:translate-x-0 ${
+      // `--channel-sidebar-width` rather than an inline `width`: below `md`
+      // this is a drawer pinned to `min(100%-72px,16rem)` and an inline width
+      // would win there too. The variable is only consumed by the `md:` class,
+      // so the drawer keeps the width it has always had.
+      style={
+        { "--channel-sidebar-width": `${sidebarWidth}px` } as CSSProperties
+      }
+      className={`fixed inset-y-0 left-[72px] z-30 flex w-[min(100%-72px,16rem)] flex-col border-r border-ink-4/60 bg-channel transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] md:relative md:z-auto md:w-[var(--channel-sidebar-width)] md:translate-x-0 ${
         mobileOpen
           ? "translate-x-0"
           : "-translate-x-[calc(100%+72px)] md:translate-x-0"
       }`}
     >
+      <SidebarResizeHandle
+        width={sidebarWidth}
+        maxWidth={sidebarMaxWidth}
+        onWidthChange={setSidebarWidth}
+        onCommit={commitSidebarWidth}
+      />
       {/* Above the header, and only when there is one. See `ServerBanner`: a
           server without a banner keeps exactly the column it has always had. */}
       {server && <ServerBanner name={server.name} bannerUrl={server.bannerUrl} />}
