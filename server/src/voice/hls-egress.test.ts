@@ -24,6 +24,19 @@ import {
 const logEvent = vi.hoisted(() => vi.fn());
 vi.mock("../lib/log.js", () => ({ logEvent }));
 
+/**
+ * No real Postgres on this suite's path.
+ *
+ * `recordSessionStarted` / `recordSessionEnded` write the retention rows, and
+ * this file drives the restart machinery on a fake clock. A real query is
+ * neither a timer nor a microtask, so `advanceTimersByTimeAsync` cannot wait
+ * for it: the suite passed here and failed on the CI runner purely on how
+ * fast the database answered. What the rows contain is `hls-cleanup.test.ts`
+ * and `hls-playlist-proxy.test.ts`'s job; this file is about the egress.
+ */
+const query = vi.hoisted(() => vi.fn(async () => ({ rowCount: 0, rows: [] })));
+vi.mock("../db.js", () => ({ getPool: () => ({ query }) }));
+
 const CHANNEL = "00000000-0000-4000-8000-0000000000aa";
 const SERVER = "00000000-0000-4000-8000-0000000000ee";
 const OTHER_SERVER = "00000000-0000-4000-8000-0000000000ff";

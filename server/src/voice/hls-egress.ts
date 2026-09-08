@@ -1368,12 +1368,6 @@ async function startRoom(
       startedAtMs: startedAt,
       progress: null,
     });
-    await recordSessionStarted(
-      channelId,
-      startedAt,
-      egressId,
-      decision.rung.name,
-    );
   }
   const primary = running[0];
   if (!primary) {
@@ -1396,6 +1390,18 @@ async function startRoom(
     startedAtMs: startedAt,
   };
   rooms.set(channelId, room);
+  // The rows AFTER the room is published, not before. They are what the
+  // playlist proxy checks and what retention sweeps, so they have to exist
+  // before the URL goes out (which is below, past the readiness probe), but
+  // nothing in memory may wait on Postgres to become true: putting a real
+  // round trip in front of `rooms.set` is what made the health-monitor tests
+  // flake on the CI runner and would delay a restart in production for
+  // exactly as long as the database felt like taking.
+  await Promise.all(
+    running.map((entry) =>
+      recordSessionStarted(channelId, startedAt, entry.egressId, entry.rung.name),
+    ),
+  );
   // The readiness probe reads the bucket itself (presigned, endpoint form),
   // never the viewer-facing URL: a viewer gets the signed master path, which
   // this same process cannot usefully fetch from here. It waits on the
