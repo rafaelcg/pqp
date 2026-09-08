@@ -28,10 +28,12 @@ p95 (run A2 repeat). Same rig, same hour, one config line.
 **What needs four cores.** 500 viewers at 720p (1.5 Mbit/s each) fits a 4 vCPU
 box with about a quarter of its CPU left, and that box breaks between 500 and
 600 subscribers (ladder F: 500 clean at 59% CPU, 600 at 27% loss and 81% CPU).
-On the 2 vCPU production box with four ports, expect **about 250 to 300 viewers
-at 720p**. That figure is an extrapolation (half the cores of a box that broke
-between 500 and 600); the 2 vCPU ladder was not run. Measure it before quoting
-it to anyone.
+**The production box is 4 vCPU since 2026-09-08 09:26Z**, so it carries the
+full ladder-F number: **about 500 viewers at 720p by ladder F**, ceiling
+between 500 and 600. Before the resize, on the 2 vCPU box with four ports,
+the extrapolated figure was about 250 to 300 viewers (half the cores of a box
+that broke between 500 and 600); that extrapolation is kept below for
+history, but it no longer describes production.
 
 **1080p divides those numbers by about 2.7.** Above `LARGE_ROOM_PARTICIPANTS`
 (20) a share is held to 720p at 1.5 Mbit/s unless the sharer picks 1080p by
@@ -50,21 +52,21 @@ one-room join ceiling, measured without media, is about 650 to 674 in the room
 
 | piece | today |
 |---|---|
-| Media server | Vultr `sfu-pqp`, `vhp-2c-4gb-amd` (2 vCPU, 4 GB), São Paulo, LiveKit 1.13.6 in Docker, built from `tools/sfu/install.sh` |
-| Media ports | one UDP mux port, `rtc.udp_port: 7882`; ICE over TCP on 7881 |
+| Media server | Vultr `sfu-pqp`, `vhp-4c-8gb-amd` (4 vCPU, 8 GB) since 2026-09-08 09:26Z (was `vhp-2c-4gb-amd`, 2 vCPU, 4 GB), São Paulo, LiveKit 1.13.6 in Docker, built from `tools/sfu/install.sh` |
+| Media ports | four UDP mux ports, `rtc.udp_port: 7882-7885` since 2026-09-08 07:17Z (was one, `7882`); ICE over TCP on 7881 |
 | TURN | LiveKit's built-in TURN on the same box, UDP 3478, relay range 30000 to 40000 |
 | Signalling | `wss://sfu.pqp.gg` through Caddy on 443 to LiveKit 7880 |
 | API | Fly `pqp-api`, `performance-2x` (2 vCPU, 4 GB), `PG_POOL_MAX=40`, one machine by choice (#341) |
 | Client ladder | auto 3 Mbit/s, 720p 2 Mbit/s, 1080p 4 Mbit/s; above 20 participants a share is held to 720p at 1.5 Mbit/s unless 1080p is chosen by name |
 
-Recommended, being applied to production (another agent is applying it; fill
-in the date when it lands):
+Applied to production:
 
 | change | why | applied on |
 |---|---|---|
-| `rtc.udp_port: 7882-7885` in `tools/sfu/livekit.yaml.tmpl`, plus `ufw allow 7882:7885/udp` | the one attributable difference between A1 (fails at 500) and A2 (passes). LiveKit binds `min(vCPUs, ports)`, so a 2 vCPU box uses two of the four; opening all four means a resize needs no firewall change | _pending_ |
-| `net.core.rmem_max` / `wmem_max` raised (`tools/sfu/sysctl-livekit.conf`, 25 MB) | LiveKit asks for a 16 MB buffer per mux socket and logs `UDP receive buffer is too small for a production set-up, current 425984, suggested 5000000` on every boot, production included. Every run in this document ran with the default 212992 (`meta.json`, `sfuRmemWmem`). Bursty receive-buffer drops still appeared from 400 subscribers upward with four ports (ladder F); this is what absorbs them. Only new sockets see it: restart LiveKit after | _pending_ |
-| `limit.num_tracks: -1` (and `bytes_per_sec: -1`) | 1.13.6 has no default track limit. Newer releases default to 400 tracks per CPU, which would silently cap a 2 vCPU box at about 400 viewers on an image bump. Pin before any bump | _pending_ |
+| `rtc.udp_port: 7882-7885` in `tools/sfu/livekit.yaml.tmpl`, plus `ufw allow 7882:7885/udp` | the one attributable difference between A1 (fails at 500) and A2 (passes). LiveKit binds `min(vCPUs, ports)`, so a 2 vCPU box uses two of the four; opening all four means a resize needs no firewall change | 2026-09-08 07:17:17Z |
+| `net.core.rmem_max` / `wmem_max` raised (`tools/sfu/sysctl-livekit.conf`, 25 MB) | LiveKit asks for a 16 MB buffer per mux socket and logs `UDP receive buffer is too small for a production set-up, current 425984, suggested 5000000` on every boot, production included. Every run in this document ran with the default 212992 (`meta.json`, `sfuRmemWmem`). Bursty receive-buffer drops still appeared from 400 subscribers upward with four ports (ladder F); this is what absorbs them. Only new sockets see it: restart LiveKit after | 2026-09-08 07:17:17Z |
+| `limit.num_tracks: -1` (and `bytes_per_sec: -1`) | 1.13.6 has no default track limit. Newer releases default to 400 tracks per CPU, which would silently cap a 2 vCPU box at about 400 viewers on an image bump. Pin before any bump | 2026-09-08 07:17:17Z |
+| Resize `sfu-pqp` from `vhp-2c-4gb-amd` to `vhp-4c-8gb-amd` | the port change only pays off with four cores to bind the four ports to; gated on LiveKit participants at most 4 | 2026-09-08 09:25:54Z |
 
 Known and not fixed: **TURN over TLS is dead.** Web, iOS and Android LiveKit
 clients receive only the LiveKit server's built-in TURN. LiveKit advertises

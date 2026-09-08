@@ -448,6 +448,46 @@ Rollback: `cp /opt/livekit/livekit.yaml.bak-<stamp> /opt/livekit/livekit.yaml`, 
 the same way, and the boot line shows `"End":0` again. The extra firewall rule and the sysctl are
 harmless to leave in place.
 
+**Applied to production, 2026-09-08 07:17:17Z.** `rtc.udp_port: 7882-7885`,
+`limit: { num_tracks: -1, bytes_per_sec: -1 }`, `ufw allow 7882:7885/udp`, and
+`/etc/sysctl.d/90-livekit.conf` (`net.core.rmem_max` / `wmem_max` 26214400, `sysctl --system` run
+before the restart) all went in together. Restart command that matches how the box actually runs
+(the systemd unit above is enabled but has never been started):
+`docker compose --project-directory /opt/livekit restart livekit`. Occupancy at restart time: 4
+rooms, largest 2, 2 screen shares, 3 LiveKit participants; users reconnected within about a minute.
+Backups: `/opt/livekit/livekit.yaml.bak-20260907T2311Z`, `/root/ufw-before.txt`. Verified: boot log
+showed `"rtc.portUDP":{"Start":7882,"End":7885}`, zero "receive buffer is too small" lines,
+`ss -lnup` showed two ports bound (7882, 7883, matching `min(vCPUs, ports)` on the then-2-vCPU box),
+`/proc/net/udp` drops stayed at zero over 30 seconds and again 10 minutes later, Caddy and TURN were
+untouched, and `https://api.pqp.gg/ready` still reported LiveKit ok.
+
+### Resize the box
+
+Once the port change is in and holding, resizing from 2 vCPU to 4 is the other half of the A1/A2
+gap: LiveKit binds `min(vCPUs, ports)`, so the four ports opened above only pay off once there are
+four cores to bind them to.
+
+Gate the resize the same way as the port restart: low occupancy. `voice-occupancy.sh` on the Mac
+plus `curl -s localhost:6789/metrics | grep livekit_participant_total` on the box, both low; the
+call above used "LiveKit participants at most 4" as the go/no-go.
+
+1. Back up `/opt/livekit` (`cp -r /opt/livekit /root/opt-livekit-before-resize-<stamp>`).
+2. Resize through the Vultr API: `PATCH /v2/instances/{id}` with `plan` set to the target plan ID
+   (`vhp-4c-8gb-amd`). Vultr reboots the instance to apply it; there is no in-place CPU hot-add.
+3. Wait through the reboot and verify: `nproc`, free memory, and that `docker compose` came back on
+   its own (`restart: unless-stopped`, no manual start needed). Check all four ports are bound
+   without re-running the restart from the previous section, and that ufw and the sysctl file
+   survived the reboot (they are on disk, so they do).
+
+**Applied to production, 2026-09-08 09:25:54Z.** Resized `sfu-pqp` from `vhp-2c-4gb-amd` to
+`vhp-4c-8gb-amd` via the Vultr API, gated on LiveKit participants at most 4 (actual reading: 1;
+occupancy 3 rooms, largest 1, 1 screen share). Vultr rebooted the box; downtime was about 42
+seconds (last log line 09:25:48Z, first `participant active` after reboot 09:26:30Z). After the
+reboot: `nproc` reported 4, 7.9 GB RAM, the compose stack came back on its own, all four ports 7882
+to 7885 were bound with no manual restart, the sysctl values were applied at boot, the ufw rules
+were intact, and disk grew on its own from 94 GB to 169 GB. Cost: $48 list, about $72/month in São
+Paulo. Backup: `/root/opt-livekit-before-resize-20260908T0925Z`.
+
 ### Metrics and one alert
 
 `prometheus_port: 6789` exposes `/metrics` (config-sample.yaml). Two low-effort options:
