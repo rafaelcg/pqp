@@ -1,7 +1,12 @@
 # pqp production SFU. Single node, no Redis, no webhooks. See docs/plans/SELF_HOSTED_LIVEKIT.md in the pqp repo.
 port: 7880
 rtc:
-  udp_port: 7882
+  # Four mux ports, not one. Measured 2026-09-07 on a 4 vCPU copy of this box, one 720p share at 1.5 Mbps, 499 viewers:
+  #   one port  (A1): egress stuck at 250 to 270 Mbit/s, 137,200 receive-buffer drops on the socket, 58% loss at viewers, 1.2 fps median
+  #   7882-7885 (A2): 805 to 901 Mbit/s at the same CPU, zero drops, 499 of 499 decoding
+  # LiveKit binds min(vCPUs, ports in the range), so a 2 vCPU box uses 7882 and 7883 and the log still prints the whole range.
+  # The firewall opens all four so a resize picks the rest up without another change. Keep this at or above the vCPU count.
+  udp_port: 7882-7885
   tcp_port: 7881
   use_external_ip: true
 turn:
@@ -14,6 +19,11 @@ turn:
   key_file: /opt/livekit/certs/__TURN_DOMAIN__.key
 keys:
   __LIVEKIT_API_KEY__: __LIVEKIT_API_SECRET__
+# 1.13.6 has no default num_tracks; newer releases default to 400 tracks per CPU, which would silently cap a 2 vCPU box
+# at about 400 viewers on an image bump. -1 pins both to unlimited (the check is "> 0", so 0 or -1 both mean off).
+limit:
+  num_tracks: -1
+  bytes_per_sec: -1
 room:
   auto_create: true
   empty_timeout: 300

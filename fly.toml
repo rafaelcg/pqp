@@ -123,11 +123,12 @@ kill_timeout = 30
   # ran two machines from 13:20Z to 15:59Z with chat, presence and six
   # LiveKit rooms crossing them for up to 80 minutes, one cross-machine
   # resume adopted, zero app-level errors and zero user reports. What did not
-  # survive it: the mesh guard refuses a peer-to-peer join when the room's
-  # pin lives on the other process (voice.meshRefusedMultiInstance, four
-  # times, each one a hung-up call, one of them ending a two-person call),
-  # and two proxy-side 1001 close bursts are still unexplained. The runbook,
-  # what the window showed and what has to land before two machines again:
+  # survive it: the mesh guard refused a peer-to-peer join when the room's
+  # pin lived on the other process (four times, each one a hung-up call, one
+  # of them ending a two-person call), fixed 2026-09-08 (the pin is adopted
+  # and mesh signaling crosses the bus); and two proxy-side 1001 close bursts
+  # are still unexplained. The runbook, what the window showed and what is
+  # left before two machines again (a staging rehearsal with LIVEKIT_* set):
   # docs/deploy-fly.md 6a-bis.
   #
   # With auto-stop off this is not a lever Fly pulls; it is the number CI

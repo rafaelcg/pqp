@@ -638,8 +638,9 @@ async function shutdown(signal: string) {
   coldJobs?.stop();
   stopPresenceRefresh?.();
   // Withdraw this instance's liveness row EARLY, ahead of the socket closes:
-  // the other machine's mesh guard stops counting this one the moment the
-  // row is gone, and a resume landing there adopts the seat on sight. Peer
+  // the other machine stops counting this one among the live leases the
+  // moment the row is gone, and a resume landing there adopts the seat on
+  // sight. Peer
   // rows are left in place on purpose: they are what a client resuming onto
   // the other machine is matched against. A clean shutdown is therefore
   // never read as a crash for the next 45 s.

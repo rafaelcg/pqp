@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  liveReactionMessageSchema,
+  liveReactionsMessageSchema,
+} from "./live-reactions.js";
+import {
   setWatchPartyMessageSchema,
   watchPartyMessageSchema,
 } from "./watch-party.js";
@@ -472,6 +476,9 @@ export const voiceSignalingMessageSchema = z.discriminatedUnion("type", [
   voiceSpeakChangedMessageSchema,
   // --- watch party ---
   watchPartyMessageSchema,
+  // --- live reactions --- see packages/shared/src/live-reactions.ts. Coalesced
+  // counts for the room, never per person and never stored.
+  liveReactionsMessageSchema,
 ]);
 
 export type VoiceParticipant = z.infer<typeof voiceParticipantSchema>;
@@ -599,6 +606,8 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   setVoiceStateMessageSchema,
   // --- watch party ---
   setWatchPartyMessageSchema,
+  // --- live reactions ---
+  liveReactionMessageSchema,
 ]);
 
 export type VoiceClientMessage = z.infer<typeof voiceClientMessageSchema>;

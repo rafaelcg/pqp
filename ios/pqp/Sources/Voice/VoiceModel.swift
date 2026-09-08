@@ -165,6 +165,10 @@ final class VoiceModel {
     /// handler that needs it is not async. Kept in step by `startSfuSession`
     /// and by `leave`.
     private var sfuIsConnected = false
+    /// The `/api/ice-servers` list fetched for the current join, kept so an
+    /// SFU room built later in the same join gets the same list the mesh
+    /// would, with no second fetch.
+    private var iceServers: [IceServerConfig] = []
     /// Whether this deployment mints LiveKit rooms, read once per join from
     /// `GET /api/voice/backend`. Decides `join-voice-room.resume`.
     private var declaresResume = false
@@ -410,6 +414,7 @@ final class VoiceModel {
 
         do {
             let ice: IceServersResponse = try await session.api.get("/api/ice-servers")
+            iceServers = ice.iceServers
             // Advisory, never binding: `welcome` says what the room runs on.
             // This only decides whether to ask the server to hold our seat
             // across a socket drop, which is right for a LiveKit room and a
@@ -1040,7 +1045,8 @@ final class VoiceModel {
         }
         try Task.checkCancellation()
         try await sfu.connect(
-            info, muted: isMuted || isDeafened, speaker: isSpeakerOn, publishMicrophone: canSpeak
+            info, muted: isMuted || isDeafened, speaker: isSpeakerOn, publishMicrophone: canSpeak,
+            iceServers: iceServers
         )
         if isDeafened { await sfu.setDeafened(true) }
     }

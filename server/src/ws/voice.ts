@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
+import {
+  markChannelSessionEnded,
+  markChannelSessionLive,
+} from "../services/channel-sessions.js";
 import { z } from "zod";
 import {
+  clientRelayMessageSchema,
   isClientRelayMessage,
   CAMERA_LIMIT,
   MESH_VOICE_LIMIT,
@@ -15,6 +20,7 @@ import {
   voiceModerationMessageSchema,
   voiceParticipantSchema,
   watchPartyStateSchema,
+  liveReactionCountSchema,
   type VoiceParticipant,
   type VoiceRoomTransport,
   type VoiceSignalingMessage,
@@ -59,7 +65,6 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import {
-  guardMeshAcrossInstances,
   resolveVoiceTransport,
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
@@ -70,7 +75,7 @@ import {
   getVoicePeerRow,
   isVoicePeerRetired,
   isVoiceRegistryEnabled,
-  listLiveVoiceInstances,
+  isVoiceServerMuted as isVoiceServerMutedInRegistry,
   listVoicePeersForUser,
   listVoicePeersInRoom,
   listVoiceRoomOccupancy,
@@ -78,13 +83,15 @@ import {
   listVoiceRosters,
   markVoicePeerOrphaned,
   persistWatchParty,
-  pinVoiceRoom,
+  claimVoiceRoomTransport,
   readWatchParty,
   reconcileVoiceRegistry,
   retireVoicePeerId,
+  setVoiceServerMute,
   unpinVoiceRoomIfEmpty,
   upsertVoicePeer,
   type VoicePeerRow,
+  type VoiceRosterPeerRow,
 } from "../voice/registry.js";
 import {
   countAuthenticatedSockets,
@@ -105,6 +112,12 @@ import {
   getWatchPartyState,
   resetWatchPartyLimits,
 } from "./watch-party.js";
+import {
+  offerLiveReaction,
+  resetLiveReactionLimits,
+  resetLiveReactions,
+  setLiveReactionSink,
+} from "./live-reactions.js";
 import {
   mintVoiceResumeToken,
   verifyVoiceResumeToken,
@@ -224,11 +237,23 @@ interface VoicePeer {
  * local) and only its fan-out crosses (`voice.call`), and a moderation
  * action publishes `voice.moderation` so the instance holding the target's
  * socket says the notice and drops the peer before the row goes; the SFU
- * re-sweeps are `voice_resweeps` rows claimed by whoever ticks. The mesh
- * ceiling across instances is M5. With the flag off (the default)
- * `registryOn()` is false on
- * every path below and this file behaves exactly as it did before the
- * registry.
+ * re-sweeps are `voice_resweeps` rows claimed by whoever ticks. M5 added
+ * a guard that refused a mesh join while a second instance was live, then
+ * one that sent a fresh mesh room to the SFU instead; on 2026-09-07 the
+ * refusal hung up four resumes in one afternoon, and the SFU detour would
+ * have put every small room on one media box, so both are gone and mesh
+ * crosses like everything else (the transport is the policy's, pinned once):
+ * offer, answer and ICE for a peer this instance does not hold ride
+ * `voice.signal` to the instance that does (point 1 above), the joiner's
+ * peer list and the `peer-*` frames already come from the rows and the bus
+ * (point 2), the ceiling counts the rows (point 3, with the documented
+ * read-then-write window between two simultaneous joins), and `peer-left`
+ * is a hint over a row (point 4). A moderator's mute is a `voice_server_
+ * mutes` row and a `voice.serverMute` frame. Every frame a voice topic
+ * publishes or applies here is counted (`clusterFrames`, in the operator
+ * snapshot), so "the bus carries voice" is a number, not a log line. With
+ * the flag off (the default) `registryOn()` is false on every path below
+ * and this file behaves exactly as it did before the registry.
  */
 const peers = new Map<string, VoicePeer>();
 
@@ -308,7 +333,7 @@ function writePeerRow(peer: VoicePeer): void {
 }
 
 /** A registry row as the wire shape: what a roster carries for a peer held elsewhere. */
-function rowToParticipant(row: VoicePeerRow): VoiceParticipant {
+function rowToParticipant(row: VoiceRosterPeerRow): VoiceParticipant {
   return {
     peerId: row.peerId,
     userId: row.userId,
@@ -320,9 +345,10 @@ function rowToParticipant(row: VoicePeerRow): VoiceParticipant {
     muted: row.muted,
     deafened: row.deafened,
     canSpeak: row.canSpeak,
-    // The sanction is per-process (see `roomServerMutes`); a row held by
-    // another instance carries no flag, so this reads false there.
-    serverMuted: isVoiceUserServerMuted(row.channelId, row.userId),
+    // The row's flag is the cluster's (`voice_server_mutes`); the map is
+    // this process's copy and may be a write ahead of it.
+    serverMuted:
+      row.serverMuted || isVoiceUserServerMuted(row.channelId, row.userId),
     canStream: row.canStream,
   };
 }
@@ -526,81 +552,6 @@ function forgetTransportDecision(voiceChannelId: string): void {
   pendingTransportDecisions.delete(voiceChannelId);
 }
 
-/**
- * Live instances other than this one, from the leases. A failed read counts
- * as none: the guard then behaves as the flag-off path, which is what this
- * instance did before the registry existed, and the failure is logged.
- */
-async function countOtherLiveVoiceInstances(): Promise<number> {
-  try {
-    const live = await listLiveVoiceInstances();
-    return live.filter((row) => row.instanceId !== INSTANCE_ID).length;
-  } catch (error) {
-    logEvent("voice.registryReadFailed", {
-      op: "instances",
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return 0;
-  }
-}
-
-function refuseMeshAcrossInstances(
-  socket: WebSocket,
-  userId: string,
-  voiceChannelId: string,
-  detail: { otherInstances: number; reason: "mesh-multi-instance" },
-): void {
-  logEvent("voice.meshRefusedMultiInstance", {
-    userId,
-    voiceChannelId,
-    otherInstances: detail.otherInstances,
-    liveKitConfigured: configuredTransport() === "livekit",
-  });
-  // `voice-join-refused` is what makes a holding client hang up rather than
-  // sit on live media outside the room; a cold joiner sees the same frame
-  // and shows the call as not connected. The reason is for the log line the
-  // client writes; older clients ignore the field.
-  send(socket, {
-    type: "voice-join-refused",
-    voiceChannelId,
-    reason: detail.reason,
-  });
-}
-
-let meshClusterWarned = false;
-
-/**
- * The boot (and every beat after) warning: two live instances and no SFU
- * means every mesh join that is not already held here is refused by the
- * guard above. Loud once per episode, quiet again once the cluster is back
- * to one instance or LiveKit is configured. Flag off: never runs.
- */
-async function warnIfMeshAcrossInstances(): Promise<void> {
-  if (configuredTransport() === "livekit") {
-    meshClusterWarned = false;
-    return;
-  }
-  const others = await countOtherLiveVoiceInstances();
-  if (others === 0) {
-    meshClusterWarned = false;
-    return;
-  }
-  if (meshClusterWarned) {
-    return;
-  }
-  meshClusterWarned = true;
-  console.warn(
-    `[voice] ${others + 1} live instances and LIVEKIT_* is unset: every mesh ` +
-      `join that this instance does not already hold will be refused. ` +
-      `Configure LiveKit or scale back to one machine ` +
-      `(docs/plans/MULTI_INSTANCE_VOICE.md, M5).`,
-  );
-  logEvent("voice.meshClusterUnsafe", {
-    instance: INSTANCE_ID,
-    otherInstances: others,
-  });
-}
-
 /** Test hook: forget every pinned room transport. */
 export function resetVoiceRoomTransports(): void {
   roomTransports.clear();
@@ -657,13 +608,47 @@ export function isVoiceUserServerMuted(
  * `muted` still draws the right badge). Clearing does NOT unmute them: the
  * person decides when their mic comes back, the same as after any self-mute.
  */
-export function setVoiceUserServerMuted(
+export async function setVoiceUserServerMuted(
+  voiceChannelId: string,
+  userId: string,
+  muted: boolean,
+): Promise<void> {
+  // The row first, then the wire, then the local half: an instance that
+  // re-reads the roster on the hint below must find the flag already there,
+  // and a seat minted on any instance after this reads the row on its way in.
+  if (registryOn()) {
+    await setVoiceServerMute(voiceChannelId, userId, muted);
+  }
+  if (clusterOn()) {
+    publishVoice(VOICE_SERVER_MUTE_TOPIC, {
+      channelId: voiceChannelId,
+      userId,
+      muted,
+    } satisfies VoiceServerMuteFrame);
+  }
+  return applyServerMuteLocally(voiceChannelId, userId, muted);
+}
+
+/**
+ * The per-process half of a moderator's mute: the map, this instance's own
+ * seats for the person (forced `muted`, row rewritten), and the fan-out.
+ * Run by the instance the request landed on and by every instance that
+ * receives the `voice.serverMute` frame, each for the sockets it holds.
+ */
+function applyServerMuteLocally(
   voiceChannelId: string,
   userId: string,
   muted: boolean,
 ): Promise<void> {
   let set = roomServerMutes.get(voiceChannelId);
-  if (muted) {
+  // The map's lifetime is the LOCAL room's (cleared when this process's
+  // last peer leaves), so a process with nobody in the room must not cache
+  // the sanction: nothing here would ever clear it, and with the registry
+  // on the rows answer for that process anyway (a join reads them on its
+  // way in, a roster reads them per row). With the registry off the mute
+  // route only reaches a room this process holds.
+  const holdsRoom = getRoomPeers(voiceChannelId).length > 0;
+  if (muted && (holdsRoom || !registryOn())) {
     if (!set) {
       set = new Set();
       roomServerMutes.set(voiceChannelId, set);
@@ -723,6 +708,8 @@ export function resetVoiceRateLimits(): void {
   roomLimiter.reset();
   stateLimiter.reset();
   resetWatchPartyLimits();
+  resetLiveReactionLimits();
+  resetLiveReactions();
 }
 
 function getRoomPeers(voiceChannelId: string): VoicePeer[] {
@@ -819,7 +806,7 @@ export async function refreshVoiceIdentity(
   // local half so the other instance's re-read is not waiting on this one's
   // name resolution; its own rows are its own to write.
   if (clusterOn()) {
-    publishToCluster(VOICE_IDENTITY_TOPIC, {
+    publishVoice(VOICE_IDENTITY_TOPIC, {
       userId,
       displayName: profile.display_name,
       avatarUrl: profile.avatar_url,
@@ -925,6 +912,15 @@ export interface VoiceActivitySnapshot {
   /** The transport the deployment can run. Small rooms may still open on mesh (voice/transport-policy.ts). */
   backend: VoiceRoomTransport;
   /**
+   * Voice frames over the cluster bus since boot, this instance: published
+   * for sockets held elsewhere, and received from the bus for sockets held
+   * here. Zero and zero on one machine. See `clusterFrames`.
+   */
+  cluster: {
+    framesRelayed: number;
+    framesReceived: number;
+  };
+  /**
    * What the roster fan-out is actually doing, since boot.
    *
    * `deltas` versus `snapshots` says whether rooms are being described
@@ -1021,6 +1017,10 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
     peakRoomSizeToday: Math.max(peakRoomSizeToday, largestRoomNow),
     peakTrackedSince,
     backend: configuredTransport(),
+    cluster: {
+      framesRelayed: clusterFrames.relayed,
+      framesReceived: clusterFrames.received,
+    },
     roster: {
       deltas: rosterFramesSent.deltas,
       snapshots: rosterFramesSent.snapshots,
@@ -1226,6 +1226,29 @@ export const ROSTER_AUDIENCE_KEYFRAME_MS = 30_000;
 const rosterFramesSent = { deltas: 0, snapshots: 0, audienceSnapshots: 0 };
 
 /**
+ * What the cluster bus is carrying for voice, since boot, on this instance.
+ *
+ * `relayed` is every voice frame this instance published for sockets held
+ * elsewhere (room hints, a mesh offer for a peer on the other machine, a
+ * ring, a moderation notice, a mute). `received` is every voice frame from
+ * the bus this instance applied to a socket it holds. Both zero on one
+ * machine, both non-zero within a minute of two machines sharing a room; a
+ * flip where they stay at zero is a bus that is not delivering, which is
+ * what the 2026-09-07 window could only tell from the logs.
+ */
+const clusterFrames = { relayed: 0, received: 0 };
+
+function publishVoice(topic: string, frame: unknown): void {
+  clusterFrames.relayed += 1;
+  publishToCluster(topic, frame);
+}
+
+/** A frame from the bus reached a socket this instance holds. */
+function noteClusterFrameReceived(): void {
+  clusterFrames.received += 1;
+}
+
+/**
  * Whether this socket is IN the call it is about to be told about, as opposed
  * to merely allowed to see the channel.
  *
@@ -1256,6 +1279,8 @@ export function resetRosterSequences(): void {
   rosterFramesSent.deltas = 0;
   rosterFramesSent.snapshots = 0;
   rosterFramesSent.audienceSnapshots = 0;
+  clusterFrames.relayed = 0;
+  clusterFrames.received = 0;
 }
 
 /** The sequence a socket should adopt from a full roster of this channel. */
@@ -1589,7 +1614,7 @@ async function sendRoster(voiceChannelId: string): Promise<void> {
   // never crossed is the ghost the banner warns about.
   if (events.length > 0 && clusterOn()) {
     for (const event of events) {
-      publishToCluster(VOICE_ROOM_TOPIC, {
+      publishVoice(VOICE_ROOM_TOPIC, {
         channelId: voiceChannelId,
         ...event,
       } satisfies VoiceRoomFrame);
@@ -1868,7 +1893,7 @@ async function evictForeign(
   knownIdentities: Map<string, string> = new Map(),
 ): Promise<void> {
   if (clusterOn()) {
-    publishToCluster(VOICE_MODERATION_TOPIC, frame);
+    publishVoice(VOICE_MODERATION_TOPIC, frame);
   }
   try {
     for (const row of await rows) {
@@ -1895,9 +1920,12 @@ async function evictForeign(
  * Look up a live voice peer. Used by the SFU token endpoint to prove the
  * requested peer id really belongs to the requesting user and channel.
  */
-export function getVoicePeer(
-  peerId: string,
-): { userId: string; voiceChannelId: string; displayName: string } | null {
+export function getVoicePeer(peerId: string): {
+  userId: string;
+  voiceChannelId: string;
+  displayName: string;
+  muted: boolean;
+} | null {
   const peer = peers.get(peerId);
   if (!peer) {
     return null;
@@ -1906,6 +1934,7 @@ export function getVoicePeer(
     userId: peer.userId,
     voiceChannelId: peer.voiceChannelId,
     displayName: peer.displayName,
+    muted: peer.muted,
   };
 }
 
@@ -2001,7 +2030,7 @@ function releaseForeignPeer(row: VoicePeerRow, reason: string): void {
     reason,
   });
   if (clusterOn()) {
-    publishToCluster(VOICE_ROOM_TOPIC, {
+    publishVoice(VOICE_ROOM_TOPIC, {
       channelId,
       kind: "adopted",
       peerId,
@@ -2062,9 +2091,6 @@ export async function runVoiceReconcile(): Promise<{
   // The SFU re-sweep claims ride on the same beat (plan section 5.4): every
   // instance ticks, and only the rows this tick won are swept.
   await tickSfuResweeps();
-  // And the mesh guard's warning (M5), on the first beat after boot and on
-  // every beat after: a sibling that appeared while LiveKit is unset.
-  await warnIfMeshAcrossInstances();
   const touched = new Set<string>();
   for (const { peerId, channelId } of result.removed) {
     broadcastToRoom(channelId, { type: "peer-left", peerId });
@@ -2631,48 +2657,21 @@ export async function handleVoiceMessage(
         ? resume.transport
         : (opening?.transport ?? configuredTransport()));
 
-    // THE MESH GUARD (M5). A mesh room lives in the process that relays its
-    // offers, so with a second live instance a mesh join can only be safe
-    // when this instance already holds the room (every peer is here, and
-    // the local pin says so). Otherwise the room goes to the SFU when the
-    // deployment has one, and is refused when it does not: a call that is
-    // refused is a call the person can retry; a call split across two
-    // machines is one where the sidebar shows people who cannot hear each
-    // other, with no error anywhere. Counted from the leases (`voice_
-    // instances`), so a machine that drained is not counted from the moment
-    // it withdrew. Flag off: never consulted, exactly as before.
-    let otherInstances = 0;
-    if (
-      registryOn() &&
-      transport === "mesh" &&
-      !roomTransports.has(payload.voiceChannelId)
-    ) {
-      otherInstances = await countOtherLiveVoiceInstances();
-      if (socket.readyState !== 1) {
-        return;
-      }
-      const guard = guardMeshAcrossInstances({
-        liveKitConfigured: configuredTransport() === "livekit",
-        otherLiveInstances: otherInstances,
-      });
-      if (guard.kind === "force-livekit") {
-        logEvent("voice.meshGuardForcedSfu", {
-          userId: user.id,
-          voiceChannelId: payload.voiceChannelId,
-          otherInstances,
-        });
-        transport = "livekit";
-        if (resume.kind === "reconstruct" || resume.kind === "adopt") {
-          resume = { kind: "cold" };
-        }
-      } else if (guard.kind === "refuse") {
-        refuseMeshAcrossInstances(socket, user.id, payload.voiceChannelId, {
-          otherInstances,
-          reason: guard.reason,
-        });
-        return;
-      }
-    }
+    // NO MESH GUARD ANY MORE. Until 2026-09-08 a second live instance made
+    // a room that would open on mesh open on the SFU instead (and, before
+    // that, refused the join outright: four hung-up calls in the 2026-09-07
+    // window). Both were a stand-in for the mesh not crossing machines. It
+    // does now: the joiner's peer list comes from the rows, `peer-*` frames
+    // cross on `voice.room`, a signaling frame for a peer held elsewhere
+    // crosses on `voice.signal` (`relayToTarget` and its subscriber), and
+    // the ceiling counts the rows. So the transport a room opens on is the
+    // policy's answer (`transport-policy.ts`: DMs and small servers mesh,
+    // communities and large servers the SFU, the per-channel override
+    // first) on one machine and on two alike; the only cluster step is the
+    // atomic pin below, which makes two machines opening the same channel in
+    // the same second agree. Sending every small room to the SFU because a
+    // second machine was up would have put a night's forty mesh rooms on a
+    // two-core media box that cannot carry them.
 
     // THE ATOMIC PIN. With the registry on, an unpinned room's decision goes
     // through `voice_rooms` before it is applied here: whoever inserts first
@@ -2686,7 +2685,11 @@ export async function handleVoiceMessage(
       registryOn() && !roomTransports.has(payload.voiceChannelId);
     if (pinnedHere) {
       try {
-        const stored = await pinVoiceRoom(payload.voiceChannelId, transport);
+        const claim = await claimVoiceRoomTransport(
+          payload.voiceChannelId,
+          transport,
+        );
+        const stored = claim.transport;
         if (stored !== transport) {
           logEvent("voice.transportAdopted", {
             channelId: payload.voiceChannelId,
@@ -2694,27 +2697,29 @@ export async function handleVoiceMessage(
             stored,
           });
           transport = stored;
-          if (resume.kind === "reconstruct" || resume.kind === "adopt") {
-            resume = { kind: "cold" };
-          }
+        } else if (!claim.won && stored === "mesh") {
+          // Pinned mesh by another process and adopted here: the number
+          // that used to be a refusal, kept in the log for the flip.
+          logEvent("voice.meshPinAdopted", {
+            userId: user.id,
+            voiceChannelId: payload.voiceChannelId,
+            resumed: resume.kind !== "cold",
+          });
+        }
+        // A resume is only kept on the transport its token remembers: the
+        // media it is holding was built for that one. What matters is the
+        // room's answer against the token's.
+        if (
+          (resume.kind === "reconstruct" || resume.kind === "adopt") &&
+          resume.transport !== stored
+        ) {
+          resume = { kind: "cold" };
         }
       } catch (error) {
         logEvent("voice.registryPinFailed", {
           channelId: payload.voiceChannelId,
           error: error instanceof Error ? error.message : String(error),
         });
-      }
-      // The guard again, after the pin: a room another instance opened on
-      // mesh (before the second machine came up, or on a mesh-only
-      // deployment) keeps its transport, and its peers are over there. This
-      // instance cannot relay to them, so the join is refused rather than
-      // seated in a room it cannot hear. Nothing to unpin: the row is theirs.
-      if (otherInstances > 0 && transport === "mesh") {
-        refuseMeshAcrossInstances(socket, user.id, payload.voiceChannelId, {
-          otherInstances,
-          reason: "mesh-multi-instance",
-        });
-        return;
       }
       // Same reason as the readiness check above: the await may have outlived
       // the socket, and a pinned room nobody joined must not stay pinned.
@@ -2752,7 +2757,7 @@ export async function handleVoiceMessage(
             orphaned: adoption.previousOrphanedAt !== null,
           });
           if (clusterOn()) {
-            publishToCluster(VOICE_ROOM_TOPIC, {
+            publishVoice(VOICE_ROOM_TOPIC, {
               channelId: payload.voiceChannelId,
               kind: "adopted",
               peerId: resume.peerId,
@@ -2829,9 +2834,42 @@ export async function handleVoiceMessage(
     // 90s is cosmetic; a rebuilt call is not. When the ghosts *are* the cap
     // (e2e leftover Dev Users, a client that never sent the token) sweep so
     // the next join is not refused as full.
+    // Seats held on the other instance count against the ceiling too, now
+    // that a mesh room spans machines: the rows, minus what this map already
+    // counts and minus the seat this resume is reclaiming. Read once, after
+    // this channel's pending writes. Two joins landing on two machines in the
+    // same instant can each read seven and both seat an eighth, the
+    // read-then-write window the file banner names; a room of nine for the
+    // rest of that call is a quality cost, not a split, and the ceiling is
+    // exact again from the next join.
+    let foreignOccupying = 0;
+    if (registryOn() && transport === "mesh") {
+      try {
+        await settledRowWrites(payload.voiceChannelId);
+        const rows = await listVoicePeersInRoom(payload.voiceChannelId);
+        foreignOccupying = rows.filter(
+          (row) =>
+            row.instanceId !== INSTANCE_ID &&
+            !peers.has(row.peerId) &&
+            row.peerId !== resumePeerId,
+        ).length;
+      } catch (error) {
+        logEvent("voice.registryReadFailed", {
+          op: "meshCeiling",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (socket.readyState !== 1) {
+        if (pinnedHere) {
+          void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
+        }
+        return;
+      }
+    }
     let occupying = occupyingOf();
     const meshIsFull = () =>
-      transport === "mesh" && occupying.length >= MESH_VOICE_LIMIT;
+      transport === "mesh" &&
+      occupying.length + foreignOccupying >= MESH_VOICE_LIMIT;
     if (resume.kind === "cold" && meshIsFull()) {
       for (const ghost of getRoomPeers(payload.voiceChannelId)) {
         if (ghost.userId === user.id && ghost.orphanedAt !== undefined) {
@@ -2860,6 +2898,39 @@ export async function handleVoiceMessage(
         void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
       }
       return;
+    }
+
+    // A moderator's mute on this person in this room, as the cluster has
+    // it: set on another instance, or on this one before a restart emptied
+    // the map. Seeded into the map so the seat below, `set-voice-state` and
+    // every roster read it the same way a mute set here would be read.
+    if (
+      registryOn() &&
+      !isVoiceUserServerMuted(payload.voiceChannelId, user.id)
+    ) {
+      try {
+        if (
+          await isVoiceServerMutedInRegistry(payload.voiceChannelId, user.id)
+        ) {
+          let set = roomServerMutes.get(payload.voiceChannelId);
+          if (!set) {
+            set = new Set();
+            roomServerMutes.set(payload.voiceChannelId, set);
+          }
+          set.add(user.id);
+        }
+      } catch (error) {
+        logEvent("voice.registryReadFailed", {
+          op: "serverMute",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (socket.readyState !== 1) {
+        if (pinnedHere) {
+          void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
+        }
+        return;
+      }
     }
 
     if (resume.kind === "reattach") {
@@ -3051,6 +3122,21 @@ export async function handleVoiceMessage(
       ? (payload.audioStreamId ?? null)
       : null;
     writePeerRow(peer);
+    // Watch party scheduling seam: a scheduled session on this channel flips
+    // live the moment anyone starts sharing here, and ends when the last
+    // screen-share in the room stops. Fire-and-forget: a missed flip costs a
+    // stale card, never a broken stream.
+    if (payload.sharing) {
+      void markChannelSessionLive(peer.voiceChannelId).catch((error) => {
+        console.error("[channel-sessions] markLive failed:", error);
+      });
+    } else if (
+      !getRoomPeers(peer.voiceChannelId).some((p) => p.sharingScreen)
+    ) {
+      void markChannelSessionEnded(peer.voiceChannelId).catch((error) => {
+        console.error("[channel-sessions] markEnded failed:", error);
+      });
+    }
     await broadcastRoster(peer.voiceChannelId, {
       kind: "updated",
       peer: toParticipant(peer),
@@ -3177,11 +3263,48 @@ export async function handleVoiceMessage(
       state: write.state,
     });
     if (clusterOn()) {
-      publishToCluster(VOICE_WATCH_TOPIC, {
+      publishVoice(VOICE_WATCH_TOPIC, {
         channelId: peer.voiceChannelId,
         state: write.state,
       } satisfies VoiceWatchFrame);
     }
+    return;
+  }
+
+  // --- live reactions ---
+  //
+  // The audience is the ROOM, for the same reason the watch party's is: a
+  // reaction floats over a shared screen, and only the people inside the call
+  // are looking at one. Membership of `peers` IS that audience lookup: it is
+  // what `peer-joined`, `peer-left` and the watch party all fan out to, and it
+  // was granted by the join above, where channel access, permissions, blocks
+  // and timeouts were checked and where every eviction path removes a peer the
+  // moment one of those changes. So there is no second membership check here
+  // and there must not be one: a check written separately from the room is a
+  // check that eventually disagrees with it.
+  //
+  // `channelId` on the frame is a statement of intent, not an address. It is
+  // compared against the room the sender actually holds and the frame is
+  // dropped when they differ, so a client that raced a channel switch cannot
+  // spray confetti into the room it just left.
+  //
+  // The sender is NOT excluded from the fan-out, but the client does not wait
+  // for it either: the bar echoes the tap locally the instant it is pressed.
+  // The window that comes back is drawn on top of that echo, which for
+  // particles nobody counts is invisible, and the alternative of suppressing
+  // the sender's own window would make one person's screen quieter than
+  // everybody else's during a burst.
+  if (payload.type === "live-reaction") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer || peer.voiceChannelId !== payload.channelId) {
+      return;
+    }
+    // The answer is deliberately unused. A refused tap is silence: see
+    // `offerLiveReaction`.
+    offerLiveReaction(peer.voiceChannelId, payload.emoji, existingPeerId);
     return;
   }
 
@@ -3252,18 +3375,6 @@ export async function handleVoiceMessage(
     return;
   }
 
-  const toPeer = peers.get(payload.to);
-  if (!toPeer) {
-    return;
-  }
-
-  // Only relay signaling between peers in the same voice room. Without this a
-  // member of one room could open a WebRTC connection to a peer in another
-  // room/server and pull their microphone audio.
-  if (fromPeer.voiceChannelId !== toPeer.voiceChannelId) {
-    return;
-  }
-
   // Mesh signaling inside an SFU room means the sender built a peer mesh in a
   // room that is not running one. The target has no peer-connection manager and
   // drops the frame anyway; refusing it here makes the mistake visible in the
@@ -3274,6 +3385,30 @@ export async function handleVoiceMessage(
       voiceChannelId: fromPeer.voiceChannelId,
       messageType: payload.type,
     });
+    return;
+  }
+
+  const toPeer = peers.get(payload.to);
+  if (!toPeer) {
+    // Not held here. With the cluster on, the peer may be seated on the
+    // other instance (a mesh room spans machines since the guard adopts
+    // the pin): the frame crosses on `voice.signal`, stamped with the
+    // sender's room, and the instance holding the target enforces the
+    // same-room rule below against ITS map. An id nobody holds is dropped
+    // by every receiver, so the sender learns nothing from the attempt.
+    if (clusterOn()) {
+      publishVoice(VOICE_SIGNAL_TOPIC, {
+        channelId: fromPeer.voiceChannelId,
+        frame: payload,
+      } satisfies VoiceSignalFrame);
+    }
+    return;
+  }
+
+  // Only relay signaling between peers in the same voice room. Without this a
+  // member of one room could open a WebRTC connection to a peer in another
+  // room/server and pull their microphone audio.
+  if (fromPeer.voiceChannelId !== toPeer.voiceChannelId) {
     return;
   }
 
@@ -3350,16 +3485,23 @@ export function isConversationRinging(conversationId: string): boolean {
   return conversationRings.has(conversationId);
 }
 
-function sendToUserSockets(userIds: ReadonlySet<string>, frame: VoiceSignalingMessage) {
+/** Returns how many sockets were sent the frame. */
+function sendToUserSockets(
+  userIds: ReadonlySet<string>,
+  frame: VoiceSignalingMessage,
+): number {
   if (userIds.size === 0) {
-    return;
+    return 0;
   }
   const encoded = JSON.stringify(frame);
+  let sent = 0;
   forEachAuthenticatedSocket((socket, user) => {
     if (socket.readyState === 1 && userIds.has(user.id)) {
       socket.send(encoded);
+      sent += 1;
     }
   });
+  return sent;
 }
 
 /**
@@ -3374,7 +3516,7 @@ function fanToUserSockets(
 ): void {
   sendToUserSockets(userIds, frame);
   if (userIds.size > 0 && clusterOn()) {
-    publishToCluster(VOICE_CALL_TOPIC, {
+    publishVoice(VOICE_CALL_TOPIC, {
       kind: "deliver",
       userIds: [...userIds],
       frame,
@@ -3518,7 +3660,7 @@ function noteConversationCallJoin(conversationId: string, userId: string) {
   // ringing is dropped there. Every join costs one small frame for this,
   // which is cheaper than knowing the channel's kind on this path.
   if (clusterOn()) {
-    publishToCluster(VOICE_CALL_TOPIC, {
+    publishVoice(VOICE_CALL_TOPIC, {
       kind: "answered",
       conversationId,
       userId,
@@ -3561,7 +3703,7 @@ function handleCallDecline(user: DbUser, conversationId: string) {
   // checks `pending`, so a decline for a call the sender was never rung
   // for is dropped there exactly as it is dropped here.
   if (clusterOn()) {
-    publishToCluster(VOICE_CALL_TOPIC, {
+    publishVoice(VOICE_CALL_TOPIC, {
       kind: "decline",
       conversationId,
       userId: user.id,
@@ -3593,7 +3735,7 @@ function declineRing(conversationId: string, userId: string): boolean {
   };
   broadcastToRoom(conversationId, declined);
   if (clusterOn()) {
-    publishToCluster(VOICE_CALL_TOPIC, {
+    publishVoice(VOICE_CALL_TOPIC, {
       kind: "room",
       channelId: conversationId,
       frame: declined,
@@ -3867,7 +4009,7 @@ export function notifyVoiceModeration(
 ): void {
   notifyLocalVoiceModeration(userId, voiceChannelId, notice);
   if (clusterOn()) {
-    publishToCluster(VOICE_MODERATION_TOPIC, {
+    publishVoice(VOICE_MODERATION_TOPIC, {
       kind: "notify",
       userId,
       channelId: voiceChannelId,
@@ -3876,11 +4018,13 @@ export function notifyVoiceModeration(
   }
 }
 
+/** Returns how many seats of this person were told. */
 function notifyLocalVoiceModeration(
   userId: string,
   voiceChannelId: string,
   notice: VoiceModerationNotice,
-): void {
+): number {
+  let told = 0;
   for (const peer of getRoomPeers(voiceChannelId)) {
     if (peer.userId !== userId) {
       continue;
@@ -3894,7 +4038,9 @@ function notifyLocalVoiceModeration(
         : {}),
       message: notice.message,
     });
+    told += 1;
   }
+  return told;
 }
 
 /**
@@ -4096,6 +4242,9 @@ export const VOICE_IDENTITY_TOPIC = "voice.identity";
 export const VOICE_WATCH_TOPIC = "voice.watch";
 export const VOICE_CALL_TOPIC = "voice.call";
 export const VOICE_MODERATION_TOPIC = "voice.moderation";
+export const VOICE_REACTIONS_TOPIC = "voice.reactions";
+export const VOICE_SERVER_MUTE_TOPIC = "voice.serverMute";
+export const VOICE_SIGNAL_TOPIC = "voice.signal";
 
 const voiceRoomFrameSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -4129,6 +4278,22 @@ const voiceIdentityFrameSchema = z.object({
   avatarUrl: z.string().nullable(),
 });
 type VoiceIdentityFrame = z.infer<typeof voiceIdentityFrameSchema>;
+
+/**
+ * `voice.reactions`. Unlike every other voice topic this one does NOT check
+ * `registryOn()`, and the difference is not an oversight. The registry gate
+ * exists because those frames are hints about ROWS, and without rows to
+ * re-read a hint is a rumour that could plant a ghost. A window of counts
+ * refers to nothing stored, corrects itself in 250ms by being replaced, and
+ * cannot leave a room in a wrong state even if it is entirely fabricated. It
+ * needs the bus and nothing else, exactly like `chat.typing`.
+ */
+const voiceReactionsFrameSchema = z.object({
+  channelId: z.string().uuid(),
+  items: z.array(liveReactionCountSchema).min(1),
+  seq: z.number().int().nonnegative(),
+});
+type VoiceReactionsFrame = z.infer<typeof voiceReactionsFrameSchema>;
 
 const voiceWatchFrameSchema = z.object({
   channelId: z.string().uuid(),
@@ -4220,6 +4385,103 @@ const voiceModerationFrameSchema = z.discriminatedUnion("kind", [
 ]);
 type VoiceModerationFrame = z.infer<typeof voiceModerationFrameSchema>;
 
+subscribeToCluster(VOICE_REACTIONS_TOPIC, (data) => {
+  const parsed = voiceReactionsFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { channelId, items, seq } = parsed.data;
+  // Only rooms somebody here is in. A `broadcastToRoom` for an empty room is
+  // already a no-op; the early return keeps it obvious that a window addressed
+  // elsewhere costs this instance a parse and nothing more.
+  if (getRoomPeers(channelId).length === 0) {
+    return;
+  }
+  noteClusterFrameReceived();
+  broadcastToRoom(channelId, { type: "live-reactions", channelId, items, seq });
+});
+
+/**
+ * Where a coalesced window goes once the 250ms is up: this instance's half of
+ * the room, then the bus. Registered here rather than imported the other way
+ * round so `live-reactions.ts` stays free of the socket layer and can be
+ * tested without one.
+ */
+setLiveReactionSink((channelId, items, seq) => {
+  broadcastToRoom(channelId, { type: "live-reactions", channelId, items, seq });
+  if (clusterOn()) {
+    publishVoice(VOICE_REACTIONS_TOPIC, {
+      channelId,
+      items,
+      seq,
+    } satisfies VoiceReactionsFrame);
+  }
+});
+
+/**
+ * `voice.serverMute`: a moderator's mute or unmute, published by the
+ * instance the request landed on after it wrote `voice_server_mutes`. The
+ * receiver runs the local half for the seats it holds: the map, the forced
+ * `muted` on its own peers (their rows are its to write), and the fan-out.
+ * The row is what a join or a roster reads; the frame is what makes the
+ * target's tile change now rather than on the next roster.
+ */
+const voiceServerMuteFrameSchema = z.object({
+  channelId: z.string().uuid(),
+  userId: z.string().min(1),
+  muted: z.boolean(),
+});
+type VoiceServerMuteFrame = z.infer<typeof voiceServerMuteFrameSchema>;
+
+/**
+ * `voice.signal`: an offer, answer or ICE candidate whose target this
+ * instance does not hold. `channelId` is the SENDER's room as the publishing
+ * instance verified it; the receiver applies the same-room rule against its
+ * own map, so a frame can never reach a peer in another room through the
+ * bus any more than it can through the local relay.
+ */
+const voiceSignalFrameSchema = z.object({
+  channelId: z.string().uuid(),
+  frame: clientRelayMessageSchema,
+});
+type VoiceSignalFrame = z.infer<typeof voiceSignalFrameSchema>;
+
+subscribeToCluster(VOICE_SIGNAL_TOPIC, (data) => {
+  if (!registryOn()) {
+    return;
+  }
+  const parsed = voiceSignalFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { channelId, frame } = parsed.data;
+  const target = peers.get(frame.to);
+  if (!target || target.voiceChannelId !== channelId) {
+    return;
+  }
+  noteClusterFrameReceived();
+  send(target.socket, frame);
+});
+
+subscribeToCluster(VOICE_SERVER_MUTE_TOPIC, (data) => {
+  if (!registryOn()) {
+    return;
+  }
+  const parsed = voiceServerMuteFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { channelId, userId, muted } = parsed.data;
+  if (getRoomPeers(channelId).some((peer) => peer.userId === userId)) {
+    noteClusterFrameReceived();
+  }
+  void applyServerMuteLocally(channelId, userId, muted).catch(
+    (error: unknown) => {
+      console.error("[voice] server mute frame failed:", error);
+    },
+  );
+});
+
 subscribeToCluster(VOICE_CALL_TOPIC, (data) => {
   if (!registryOn()) {
     return;
@@ -4231,9 +4493,14 @@ subscribeToCluster(VOICE_CALL_TOPIC, (data) => {
   const frame = parsed.data;
   switch (frame.kind) {
     case "deliver":
-      sendToUserSockets(new Set(frame.userIds), frame.frame);
+      if (sendToUserSockets(new Set(frame.userIds), frame.frame) > 0) {
+        noteClusterFrameReceived();
+      }
       return;
     case "room":
+      if (getRoomPeers(frame.channelId).length > 0) {
+        noteClusterFrameReceived();
+      }
       broadcastToRoom(frame.channelId, frame.frame);
       return;
     case "decline":
@@ -4255,7 +4522,9 @@ subscribeToCluster(VOICE_MODERATION_TOPIC, (data) => {
   }
   const frame = parsed.data;
   if (frame.kind === "notify") {
-    notifyLocalVoiceModeration(frame.userId, frame.channelId, frame.notice);
+    if (notifyLocalVoiceModeration(frame.userId, frame.channelId, frame.notice) > 0) {
+      noteClusterFrameReceived();
+    }
     return;
   }
   const selected = [...peers.values()].filter((peer) => {
@@ -4275,6 +4544,9 @@ subscribeToCluster(VOICE_MODERATION_TOPIC, (data) => {
         );
     }
   });
+  if (selected.length > 0) {
+    noteClusterFrameReceived();
+  }
   for (const peer of selected) {
     if (frame.kind === "user" && frame.notice) {
       send(peer.socket, {
@@ -4314,8 +4586,14 @@ subscribeToCluster(VOICE_ROOM_TOPIC, (data) => {
   // the roster rebuild below refreshes the entry or drops it.
   remoteTransports.delete(frame.channelId);
   if (frame.kind === "adopted") {
+    if (peers.has(frame.peerId)) {
+      noteClusterFrameReceived();
+    }
     dropVoicePeerSilently(frame.peerId);
     return;
+  }
+  if (getRoomPeers(frame.channelId).length > 0) {
+    noteClusterFrameReceived();
   }
   // The room frame, to the peers this instance holds. A peer we hold
   // ourselves is never announced to us by somebody else: that would be a
@@ -4345,6 +4623,9 @@ subscribeToCluster(VOICE_IDENTITY_TOPIC, (data) => {
     return;
   }
   const { userId, displayName, avatarUrl } = parsed.data;
+  if ([...peers.values()].some((peer) => peer.userId === userId)) {
+    noteClusterFrameReceived();
+  }
   // The local half only: this instance's own peers for the user, their rows
   // (which are this instance's to write), their rooms and rosters.
   void applyVoiceIdentity(userId, {
@@ -4370,6 +4651,7 @@ subscribeToCluster(VOICE_WATCH_TOPIC, (data) => {
   if (getRoomPeers(channelId).length === 0) {
     return;
   }
+  noteClusterFrameReceived();
   if (!adoptWatchPartyState(channelId, state)) {
     // Older than what is held (a straggler behind a frame that already
     // landed, or behind the row a joiner just read). The room has the

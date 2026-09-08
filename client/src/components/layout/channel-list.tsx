@@ -66,6 +66,7 @@ import {
   useChannelNotificationLevel,
 } from "@/hooks/use-notifications";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
+import { ChannelSessionHint } from "@/components/layout/channel-session-hint";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -107,6 +108,8 @@ function sortByPosition(list: Channel[]): Channel[] {
 
 interface ChannelListProps {
   server: Server | null;
+  /** channelId -> upcoming/live session start time, for the sidebar's "próxima: sex 21h" hint. Behind VITE_WATCH_PARTY_SCHEDULE upstream. */
+  upcomingSessionStartsAtByChannel?: Record<string, string>;
   channels: Channel[];
   selectedChannelId: string | null;
   canManage: boolean;
@@ -265,6 +268,7 @@ export function ChannelList({
   members = [],
   iconsOnly = false,
   onExpand,
+  upcomingSessionStartsAtByChannel = {},
 }: ChannelListProps) {
   const { t } = useTranslation();
   const channelPinHintEnabled = useFeatureHintEnabled("channelPin");
@@ -817,6 +821,7 @@ export function ChannelList({
           canManage={canManage}
           canManageRoles={canManageRoles}
           icon={<ChannelIcon channel={channel} />}
+          sessionHint={upcomingSessionStartsAtByChannel[channel.id]}
           isDragging={draggedId === channel.id}
           isDragOver={dragOverId === channel.id}
           occupantDragActive={Boolean(draggedOccupant)}
@@ -1728,6 +1733,7 @@ function ChannelRow({
   onDragEnd,
   onDragOverRow,
   onDrop,
+  sessionHint,
 }: {
   channel: Channel;
   selected: boolean;
@@ -1761,6 +1767,8 @@ function ChannelRow({
   onDragEnd: () => void;
   onDragOverRow: (event: DragEvent) => void;
   onDrop: () => void;
+  /** Upcoming/live session start time for a voice channel's sidebar hint (VITE_WATCH_PARTY_SCHEDULE only). */
+  sessionHint?: string;
 }) {
   const { t } = useTranslation();
   const notifications = useChannelNotificationLevel(channel);
@@ -1980,6 +1988,9 @@ function ChannelRow({
           <span className={cn("truncate", hasUnread && !muted && "font-semibold")}>
             {channel.name}
           </span>
+          {sessionHint && (
+            <ChannelSessionHint startsAt={sessionHint} now={new Date()} />
+          )}
           {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
           {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
           <span className="ml-auto flex shrink-0 items-center gap-1">

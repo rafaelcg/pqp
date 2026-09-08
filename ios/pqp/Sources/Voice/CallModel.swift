@@ -123,6 +123,10 @@ final class CallModel {
     private let sfu = LiveKitVoiceClient()
     private var sfuJoin: Task<Void, Never>?
     private var sfuIsConnected = false
+    /// The `/api/ice-servers` list fetched for the current join, kept so an
+    /// SFU room built later in the same join gets the same list the mesh
+    /// would, with no second fetch.
+    private var iceServers: [IceServerConfig] = []
     private var declaresResume = false
     private var resumeClaim: VoiceResumeClaim?
     private var session: SessionStore?
@@ -426,6 +430,7 @@ final class CallModel {
         }
         do {
             let ice: IceServersResponse = try await session.api.get("/api/ice-servers")
+            iceServers = ice.iceServers
             // Advisory only; see `VoiceModel.join` for what it decides.
             let backend: VoiceBackendInfo? = try? await session.api.get("/api/voice/backend")
             declaresResume = backend?.declaresResume ?? false
@@ -887,7 +892,7 @@ final class CallModel {
             throw SfuJoinError.token((error as? APIError)?.errorDescription ?? error.localizedDescription)
         }
         try Task.checkCancellation()
-        try await sfu.connect(info, muted: isMuted, speaker: isSpeakerOn)
+        try await sfu.connect(info, muted: isMuted, speaker: isSpeakerOn, iceServers: iceServers)
     }
 
     /// The caller's own 45s clock.

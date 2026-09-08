@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import type { LiveReactionEmoji } from "@pqp/shared";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
 import { ScreenShareView } from "@/components/voice/screen-share-view";
 import { useLgUp } from "@/hooks/use-lg-up";
 import { useTranslation } from "@/lib/i18n";
+import { isLiveReactionsEnabled } from "@/lib/live-reactions";
+import { LiveReactionsBar } from "./live-reactions-bar";
+import { LiveReactionsOverlay } from "./live-reactions-overlay";
 import { bindRemoteVideo } from "@/lib/remote-video-binding";
 import { cn } from "@/lib/utils";
 
@@ -101,6 +105,17 @@ interface ScreenStageProps {
   focusedPeerId: string | null;
   onFocus: (peerId: string) => void;
   onStopSharing?: () => void;
+  /**
+   * The voice channel this stage belongs to, and the one live reactions are
+   * addressed to. Optional so a caller that predates the feature, or one that
+   * has no channel to name, simply gets no overlay.
+   */
+  channelId?: string;
+  /**
+   * Sends one live reaction. Absent means the stage renders no bar, which is
+   * also what a build with `VITE_LIVE_REACTIONS` unset gets.
+   */
+  onLiveReaction?: (emoji: LiveReactionEmoji) => void;
 }
 
 /**
@@ -115,6 +130,8 @@ export function ScreenStage({
   focusedPeerId,
   onFocus,
   onStopSharing,
+  channelId,
+  onLiveReaction,
 }: ScreenStageProps) {
   const { t } = useTranslation();
   const wide = useLgUp();
@@ -143,9 +160,19 @@ export function ScreenStage({
   const focused =
     tiles.find((tile) => tile.peerId === focusedPeerId) ?? tiles[0]!;
   const splitTwo = screenShareStageLayout(tiles.length, wide) === "split";
+  // Reactions belong to the room, not to a tile, so they are drawn over the
+  // whole stage rather than per share: with two shares up, the room is still
+  // one room and the confetti is still one crowd's. The three conditions are
+  // deliberately separate (the build flag, a channel to address, and a way to
+  // send) so a caller that supplies only some of them gets nothing rather
+  // than half a feature.
+  const liveReactions =
+    isLiveReactionsEnabled() && channelId !== undefined && onLiveReaction
+      ? { channelId, onReact: onLiveReaction }
+      : null;
 
   return (
-    <div className="flex max-h-[45%] min-h-[160px] shrink-0 flex-col border-b border-panel-hover bg-ink">
+    <div className="relative flex max-h-[45%] min-h-[160px] shrink-0 flex-col border-b border-panel-hover bg-ink">
       {splitTwo ? (
         <div className="grid min-h-0 flex-1 grid-cols-2">
           {tiles.map((tile) => (
@@ -172,6 +199,15 @@ export function ScreenStage({
           />
         </div>
       )}
+      {liveReactions ? (
+        <>
+          <LiveReactionsOverlay channelId={liveReactions.channelId} />
+          <LiveReactionsBar
+            channelId={liveReactions.channelId}
+            onReact={liveReactions.onReact}
+          />
+        </>
+      ) : null}
       {!splitTwo && tiles.length > 1 && (
         <div className="flex shrink-0 gap-1 overflow-x-auto border-t border-panel-hover p-1">
           {tiles.map((tile) => {

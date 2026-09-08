@@ -2,6 +2,7 @@ import type { VoiceSessionInfo } from "@pqp/shared";
 import type { PeerConnectionState, RemotePeer } from "./peer-connection-manager";
 import type { ReceiveQuality } from "./receive-quality";
 import { registerRemoteVideoBinding } from "./remote-video-binding";
+import { sfuIceServers } from "./sfu-ice-servers";
 import {
   createRemoteVideoDelivery,
   type DeliveryPublication,
@@ -162,6 +163,12 @@ interface ConnectOptions {
   lookupIdentity: (peerId: string) => LiveKitIdentity | undefined;
   onPeersChanged: (peers: RemotePeer[]) => void;
   onError: (message: string) => void;
+  /**
+   * The list `/api/ice-servers` gave this tab, as stored for the mesh path.
+   * Forwarded to both of the SDK's peer connections when it carries a relay;
+   * see `sfuIceServers` for why a list without one is not forwarded at all.
+   */
+  iceServers?: readonly RTCIceServer[];
 }
 
 function connectionStateFor(subscribed: boolean): PeerConnectionState {
@@ -173,6 +180,7 @@ export async function connectLiveKit({
   lookupIdentity,
   onPeersChanged,
   onError,
+  iceServers,
 }: ConnectOptions): Promise<LiveKitSession> {
   const {
     Room,
@@ -464,7 +472,24 @@ export async function connectLiveKit({
       onError(err.message);
     });
 
-  await room.connect(session.url, session.token);
+  /**
+   * OUR RELAYS, NOT THE MEDIA BOX'S. `rtcConfig` is a connect option in
+   * livekit-client 2.21.0 (`RoomConnectOptions.rtcConfig`, copied onto the
+   * engine in `Room.connect` and handed to the `PCTransportManager`, so the
+   * publisher and the subscriber peer connection both get it). When
+   * `rtcConfig.iceServers` is set the SDK skips the join response's list
+   * (`RTCEngine.makeRTCConfiguration`), which is the point: the hosted
+   * LiveKit advertises its own box as the relay, and its TLS relay is dead.
+   * The list is read here, at connect time, so a rotated credential reaches
+   * the next call and never disturbs this one. `iceTransportPolicy` is left
+   * at its default; the SDK still flips it to `relay` if the server asks.
+   */
+  const relays = sfuIceServers(iceServers);
+  await room.connect(
+    session.url,
+    session.token,
+    relays ? { rtcConfig: { iceServers: relays } } : undefined,
+  );
 
   /**
    * The peer id this participant joined under. Sender rows need one, and on

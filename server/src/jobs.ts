@@ -41,12 +41,19 @@ import {
   deliverDueOutgoingWebhooks,
   pruneDeliveredOutgoingWebhooks,
 } from "./services/outgoing-webhooks.js";
+import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
 
 /**
  * Hourly, because the grace period is an hour: running more often only finds
  * rows it is not yet allowed to touch.
  */
 export const ATTACHMENT_SWEEP_INTERVAL_MS = 60 * 60_000;
+
+/**
+ * Every minute: sessions are scheduled in minutes, not hours, so this is the
+ * coarsest tick that never misses the T-10 window it exists to catch.
+ */
+export const CHANNEL_SESSION_REMINDER_INTERVAL_MS = 60_000;
 
 /** Daily is plenty for a 90-day retention window; a failure here costs
  * nothing but disk, and resolves on the next run. */
@@ -171,6 +178,11 @@ export function startColdJobs(): ColdJobs {
       OUTGOING_WEBHOOK_PRUNE_INTERVAL_MS,
       "outgoing-webhooks",
       pruneDeliveredOutgoingWebhooks,
+    ),
+    every(
+      CHANNEL_SESSION_REMINDER_INTERVAL_MS,
+      "channel-sessions",
+      sendDueChannelSessionReminders,
     ),
   ];
 

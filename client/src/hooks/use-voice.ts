@@ -7,7 +7,9 @@ import {
   type VoiceRoomTransport,
   type VoiceSessionInfo,
   type VoiceSignalingMessage,
+  type LiveReactionEmoji,
 } from "@pqp/shared";
+import { publishLiveReactions } from "@/lib/live-reactions";
 import {
   audibleScreenPeerIds,
   isCameraAtCap,
@@ -1826,6 +1828,9 @@ export function createVoiceController(transport: RealtimeTransport) {
 
       sfu = await connectLiveKit({
         session,
+        // The list this tab already holds for the mesh, read now so a refresh
+        // between calls reaches the next connection and this one is left be.
+        iceServers,
         lookupIdentity: (id) => identities.get(id),
         onPeersChanged: (remote) => {
           state.remotePeers = remote;
@@ -2558,6 +2563,18 @@ export function createVoiceController(transport: RealtimeTransport) {
           emit();
         }
         break;
+      // --- live reactions ---
+      // Straight out to whoever is drawing, without touching `state`. A
+      // coalesced window is an event with a 1.5 second lifetime, not room
+      // state, and putting it in the snapshot would re-render the whole call
+      // stage four times a second during a burst. See `lib/live-reactions.ts`.
+      case "live-reactions":
+        publishLiveReactions({
+          channelId: message.channelId,
+          items: message.items,
+          seq: message.seq,
+        });
+        break;
       case "call-declined":
         if (message.conversationId !== state.voiceChannelId) {
           return;
@@ -2603,6 +2620,21 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     handleSignaling,
+
+    /**
+     * One tap. Silent when there is no room: a reaction is a thing said inside
+     * a call, and the server drops it on the same rule.
+     */
+    sendLiveReaction(emoji: LiveReactionEmoji) {
+      if (!state.voiceChannelId || state.status !== "connected") {
+        return;
+      }
+      transport.sendVoice({
+        type: "live-reaction",
+        channelId: state.voiceChannelId,
+        emoji,
+      });
+    },
 
     /**
      * Declare that this client can obtain SFU sessions. Pass `null` for a build

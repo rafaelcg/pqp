@@ -1170,6 +1170,58 @@ h2,
   animation: step-in 0.3s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/*
+ * Live reactions over a shared screen. One keyframe for every particle: the
+ * per-particle variation (duration, delay, sideways drift, size) is handed in
+ * as inline properties by `live-reactions-overlay.tsx`, so a hundred particles
+ * still compile to one animation the compositor can run off the main thread.
+ * Nothing here reads layout and nothing here runs per frame.
+ *
+ * The overlay refuses to build particles at all under `prefers-reduced-motion`
+ * and renders a static counter chip instead, so the rule in the block below is
+ * a second line of defence rather than the mechanism.
+ */
+@keyframes live-reaction-float {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0.5rem, 0) scale(0.7);
+  }
+  12% {
+    opacity: 1;
+    transform: translate3d(calc(var(--live-reaction-drift, 0px) * 0.15), -1rem, 0)
+      scale(1);
+  }
+  70% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(var(--live-reaction-drift, 0px), -11rem, 0) scale(1.1);
+  }
+}
+
+.animate-live-reaction-float {
+  animation: live-reaction-float 1.8s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  will-change: transform, opacity;
+}
+
+/* The burst: a brief swell of the whole overlay when a window is crowded. */
+@keyframes live-reaction-burst {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.035);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.animate-live-reaction-burst {
+  animation: live-reaction-burst 0.42s ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-toast-in,
   .animate-toast-out,
@@ -1177,6 +1229,8 @@ h2,
   .animate-pop-in,
   .animate-pop-out,
   .animate-step-in,
+  .animate-live-reaction-float,
+  .animate-live-reaction-burst,
   .animate-rise,
   .animate-fade-in,
   .hero-parallax {

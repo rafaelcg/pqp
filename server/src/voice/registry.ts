@@ -125,6 +125,21 @@ export async function pinVoiceRoom(
   channelId: string,
   wanted: VoiceRoomTransport,
 ): Promise<VoiceRoomTransport> {
+  return (await claimVoiceRoomTransport(channelId, wanted)).transport;
+}
+
+/**
+ * `pinVoiceRoom` with the outcome attached: `won` is true when this call
+ * inserted the row, false when the room was already pinned (by another
+ * instance, or by a row the sweep has not reached yet) and the stored
+ * transport is what came back. The join path logs an adopted mesh pin from
+ * it, so the number that used to be a refusal has a line in the log without
+ * a second read.
+ */
+export async function claimVoiceRoomTransport(
+  channelId: string,
+  wanted: VoiceRoomTransport,
+): Promise<{ transport: VoiceRoomTransport; won: boolean }> {
   const pool = getPool();
   const inserted = await pool.query<{ transport: VoiceRoomTransport }>(
     `INSERT INTO voice_rooms (channel_id, transport)
@@ -135,11 +150,11 @@ export async function pinVoiceRoom(
   );
   const won = inserted.rows[0]?.transport;
   if (won) {
-    return won;
+    return { transport: won, won: true };
   }
   const existing = await readVoiceRoomTransport(channelId);
   if (existing) {
-    return existing;
+    return { transport: existing, won: false };
   }
   // The row was deleted between the two statements (the room's last peer
   // left at the same moment). Rare; one more attempt is enough, because a
@@ -151,7 +166,11 @@ export async function pinVoiceRoom(
      RETURNING transport`,
     [channelId, wanted],
   );
-  return retry.rows[0]?.transport ?? (await readVoiceRoomTransport(channelId)) ?? wanted;
+  if (retry.rows[0]) {
+    return { transport: retry.rows[0].transport, won: true };
+  }
+  const stored = await readVoiceRoomTransport(channelId);
+  return stored ? { transport: stored, won: false } : { transport: wanted, won: true };
 }
 
 export async function readVoiceRoomTransport(
@@ -433,21 +452,32 @@ export async function listVoiceRoomOccupancy(): Promise<
 // roster states the transport the room is pinned to even when this instance
 // never pinned it.
 
+/** A peer row as a roster reads it: with the moderator's mute on the person. */
+export type VoiceRosterPeerRow = VoicePeerRow & {
+  /** `voice_server_mutes` has a row for this (room, user): see `setVoiceServerMute`. */
+  serverMuted: boolean;
+};
+
 export interface VoiceRoomRoster {
   channelId: string;
   transport: VoiceRoomTransport;
-  peers: VoicePeerRow[];
+  peers: VoiceRosterPeerRow[];
 }
 
 interface RosterDbRow extends VoicePeerDbRow {
   room_channel_id: string;
   transport: VoiceRoomTransport;
+  server_muted: boolean;
 }
 
 const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport,
        p.peer_id, p.channel_id, p.user_id, p.instance_id, p.display_name,
        p.avatar_url, p.muted, p.deafened, p.sharing_screen, p.camera_stream_id,
-       p.screen_audio_stream_id, p.can_speak, p.can_stream, p.can_resume, p.orphaned_at
+       p.screen_audio_stream_id, p.can_speak, p.can_stream, p.can_resume, p.orphaned_at,
+       EXISTS (
+         SELECT 1 FROM voice_server_mutes m
+          WHERE m.channel_id = p.channel_id AND m.user_id = p.user_id
+       ) AS server_muted
   FROM voice_rooms r
   LEFT JOIN voice_peers p ON p.channel_id = r.channel_id`;
 
@@ -465,7 +495,7 @@ function groupRosters(rows: RosterDbRow[]): VoiceRoomRoster[] {
     }
     // A room row with no peers (the LEFT JOIN's null side) is still a room.
     if (row.peer_id) {
-      room.peers.push(mapRow(row));
+      room.peers.push({ ...mapRow(row), serverMuted: row.server_muted });
     }
   }
   return [...byRoom.values()];
@@ -488,6 +518,59 @@ export async function listVoiceRosters(): Promise<VoiceRoomRoster[]> {
     `${ROSTER_SELECT} ORDER BY r.channel_id, p.joined_at`,
   );
   return groupRosters(result.rows).filter((room) => room.peers.length > 0);
+}
+
+// --- moderator mutes --------------------------------------------------------
+//
+// The cluster's copy of `roomServerMutes` (ws/voice.ts): one row per (room,
+// user) a moderator has muted for everyone. Written by the instance the
+// moderation request landed on before it publishes `voice.serverMute`, read
+// by a join (so a seat minted on any instance, or after a restart, comes back
+// muted) and by every roster (`server_muted` above). The row cascades away
+// with the room row, which is the in-process map's lifetime too.
+
+/**
+ * Set or clear the moderator's mute on one person in one room. Idempotent.
+ * A room that has no row any more (everybody left while the request was in
+ * flight) has nothing to mute: the insert fails its foreign key and is
+ * treated as done, since the sanction's lifetime was the room's anyway.
+ */
+export function setVoiceServerMute(
+  channelId: string,
+  userId: string,
+  muted: boolean,
+): Promise<unknown> {
+  const pool = getPool();
+  const work = muted
+    ? pool
+        .query(
+          `INSERT INTO voice_server_mutes (channel_id, user_id) VALUES ($1, $2)
+           ON CONFLICT (channel_id, user_id) DO NOTHING`,
+          [channelId, userId],
+        )
+        .catch((error: unknown) => {
+          if ((error as { code?: string }).code === "23503") {
+            return;
+          }
+          throw error;
+        })
+    : pool.query(
+        `DELETE FROM voice_server_mutes WHERE channel_id = $1 AND user_id = $2`,
+        [channelId, userId],
+      );
+  return track(work, "serverMute");
+}
+
+/** Whether a moderator's mute stands on this person in this room, per the rows. */
+export async function isVoiceServerMuted(
+  channelId: string,
+  userId: string,
+): Promise<boolean> {
+  const result = await getPool().query(
+    `SELECT 1 FROM voice_server_mutes WHERE channel_id = $1 AND user_id = $2`,
+    [channelId, userId],
+  );
+  return (result.rowCount ?? 0) > 0;
 }
 
 // --- watch party ------------------------------------------------------------
