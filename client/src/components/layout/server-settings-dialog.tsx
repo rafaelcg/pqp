@@ -15,6 +15,7 @@ import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { SectionRail } from "@/components/ui/section-rail";
 import { ReportsSection } from "@/components/layout/reports-section";
+import { AutomodSettingsSection } from "@/components/layout/automod-settings-section";
 import { ServerIdentitySection } from "@/components/layout/server-identity-section";
 import { CommunityHomeSettingsSection } from "@/components/community-home/community-home-settings-section";
 import { CommunitySettingsSection } from "@/components/communities/community-settings-section";
@@ -895,6 +896,10 @@ export function ServerSettingsDialog({
           {active.id === "moderation" && (
             <>
               {serverId && <ReportsSection serverId={serverId} />}
+
+              {serverId && (isOwner || canManageServer) && (
+                <AutomodSettingsSection serverId={serverId} />
+              )}
 
               {isOwner && (
                 <Block title={t("serverSettings.retention.title")}>

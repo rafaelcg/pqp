@@ -1388,7 +1388,7 @@ function FailedSendFooter({
     <div className="mt-1.5">
       <p className="flex items-start gap-2 text-xs text-danger">
         <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span>{t(copy.key, copy.vars)}</span>
+        <span>{copy.text ?? t(copy.key, copy.vars)}</span>
       </p>
       <div
         className={cn(

@@ -270,6 +270,20 @@ describe("optimistic sending", () => {
     expect(copy.vars).toEqual({ seconds: 12 });
   });
 
+  it("names an AutoMod rejection and prefers the owner's own copy", () => {
+    expect(failedSendKey("automod")).toBe("chat.reject.automod");
+    expect(failedSendCopy({ rejectReason: "automod" })).toEqual({
+      key: "chat.reject.automod",
+    });
+    expect(
+      failedSendCopy({ rejectReason: "automod", automodMessage: "Aqui não." }),
+    ).toEqual({ key: "chat.reject.automod", text: "Aqui não." });
+  });
+
+  it("does not offer retry on an AutoMod refusal", () => {
+    expect(messageCanRetry({ failed: true, rejectReason: "automod" })).toBe(false);
+  });
+
   it("does not offer retry on a permanent refusal", () => {
     for (const reason of ["no-access", "cannot-send", "undeliverable"] as const) {
       expect(messageCanRetry({ failed: true, rejectReason: reason })).toBe(

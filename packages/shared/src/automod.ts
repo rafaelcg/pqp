@@ -11,7 +11,7 @@ import { z } from "zod";
  *   works the way Discord's does: `scam*` matches `scammer`, `*hole` matches
  *   `loophole`, `*cat*` matches anywhere, and no wildcard means a whole word
  *   or phrase. Case-insensitive, unicode-aware, and normalised first (see
- *   `normalizeForAutomod`) so `sc​am` and fullwidth letters do not walk
+ *   `normalizeForAutomod`) so `sc<zero-width>am` and fullwidth letters do not walk
  *   past it. Every rule has an allow list that wins over a hit.
  * - `invite_links`: a Discord invite in the body. Opt-in.
  * - `mention_spam`: more than N distinct mentions in one message. Opt-in.
@@ -125,9 +125,11 @@ export interface AutomodVerdict {
 /**
  * Characters that are invisible in a bubble and only ever appear inside a
  * word to split it: zero-width space, joiner, non-joiner, word joiner, BOM,
+ * (the combining grapheme joiner is a mark and goes with `COMBINING_RE`),
  * soft hyphen, and the invisible operators.
  */
-const INVISIBLE_RE = /[­͏؜᠎​-‏⁠-⁤﻿]/g;
+const INVISIBLE_RE =
+  /[\u00AD\u061C\u180E\u200B-\u200F\u2060-\u2064\uFEFF]/g;
 
 /** Combining marks: `s̶c̶a̶m̶` and `ẹ́` both become their base letters. */
 const COMBINING_RE = /\p{M}+/gu;
