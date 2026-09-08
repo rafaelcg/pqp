@@ -6,8 +6,13 @@ import { CapacityNotice } from "./capacity-notice";
 
 const REAL_SCREENS = SCREEN_SHARE_LIMIT.livekit;
 
+/** `as const` makes the entry readonly to the checker, never at runtime. */
+function setScreens(limit: number | null): void {
+  (SCREEN_SHARE_LIMIT as Record<string, number | null>).livekit = limit;
+}
+
 afterEach(() => {
-  SCREEN_SHARE_LIMIT.livekit = REAL_SCREENS;
+  setScreens(REAL_SCREENS);
   setActiveCatalogue(undefined);
 });
 
@@ -32,15 +37,18 @@ function render(props: Partial<Parameters<typeof CapacityNotice>[0]> = {}) {
 }
 
 describe("CapacityNotice", () => {
-  it("says the room grew, with the numbers the shared map holds", () => {
+  it("says the room grew, and promises both when there is no count", () => {
+    // The voice server has no share count and no camera count, so the card
+    // renders the words rather than a number, and above all never "null".
     const markup = render();
     expect(markup).toContain("This call grew");
-    expect(markup).toContain(String(SCREEN_SHARE_LIMIT.livekit));
+    expect(markup).toContain("screen and camera for everyone");
+    expect(markup).not.toContain("null");
     expect(markup).toContain('data-corner-card="voice-capacity"');
   });
 
   it("takes its numbers from the map rather than from the copy", () => {
-    SCREEN_SHARE_LIMIT.livekit = 9;
+    setScreens(9);
     expect(render()).toContain("up to 9 screens");
   });
 

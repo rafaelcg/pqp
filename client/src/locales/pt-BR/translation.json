@@ -1010,7 +1010,7 @@
   "voice.capacity.title": "A call cresceu",
   "voice.capacity.body": "Agora cabe mais gente: até {screens} telas e {cameras} câmeras ao mesmo tempo.",
   "voice.capacity.bodyCameras": "Agora cabe mais gente: até {screens} telas ao mesmo tempo e câmera pra todo mundo.",
-  "voice.capacity.bodyOpen": "Agora cabe mais gente, mais telas e mais câmeras ao mesmo tempo.",
+  "voice.capacity.bodyOpen": "Agora cabe mais gente: tela e câmera pra todo mundo ao mesmo tempo.",
   "voice.control.listenOnlyLocked": "Só ouvindo. Você não tem permissão para falar neste canal.",
   "voice.bar.listenOnly": "Só ouvindo",
   "voice.quality.relayed": "Relayed",

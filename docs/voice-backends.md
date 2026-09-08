@@ -659,6 +659,16 @@ number is not a wall, it is when the room moves. That makes a limit that falls
 on a weak link the better outcome rather than the worse one: on the box that
 camera costs its publisher one uplink instead of four copies.
 
+**What it therefore governs, after the room-size trigger.** A room moves at
+`MESH_ROOM_PROMOTION_SIZE` (4) people on its own, before anybody claims
+anything, so on the hosted deployment the measured mesh limit is only ever
+consulted for **two and three person calls**, which are the ones that stay peer
+to peer deliberately. That is where it earns its keep: three people on fibre can
+all share, where the constant allowed two, and a three-way call on a weak link
+is moved rather than left to fall apart. On a self-host with no voice server it
+governs every room at every size, because there is nowhere to promote to. Both
+scopes are pinned in `voice-promotion.test.ts`.
+
 **What a client cannot gain by lying.** A report is clamped to
 `[MESH_UPLINK_MIN_BPS, MESH_UPLINK_MAX_BPS]` (1 to 16 Mbit/s, the window the
 budget controller itself runs in), so the largest possible lie is what an

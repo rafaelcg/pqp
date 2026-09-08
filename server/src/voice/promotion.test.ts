@@ -6,14 +6,11 @@ import {
   estimateRoomMbps,
   estimateSfuLoadMbps,
   promotionBudgetMbps,
-<<<<<<< HEAD
   promotionRoomSize,
-=======
   screenStreamMbps,
   CAMERA_STREAM_MBPS,
   LARGE_ROOM_SCREEN_MBPS,
   SCREEN_STREAM_MBPS,
->>>>>>> dfccc56e (Unlimited screens on the voice server, and a mesh limit that is measured)
   VIDEO_STREAM_MBPS,
   VOICE_PROMOTION_DEFAULT_MAX_MBPS,
   type SfuRoomLoad,

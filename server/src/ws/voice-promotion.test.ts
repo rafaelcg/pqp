@@ -929,6 +929,11 @@ describe("a room that reached the SFU by being full", () => {
     rows.memberCount = 5;
     channel = randomUUID();
     delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+    // This whole block is about the room-FULL trigger, so the room-SIZE one
+    // has to be out of the way: with it on, a room of four moves long before
+    // it can reach eight, and `promotedByRoomFull` would be measuring the
+    // wrong promotion. Same reason the caps block above turns it off.
+    process.env.VOICE_PROMOTION_ROOM_SIZE = "0";
   });
 
   afterEach(() => {
@@ -936,6 +941,11 @@ describe("a room that reached the SFU by being full", () => {
       delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
     } else {
       process.env.VOICE_PROMOTION_MAX_SFU_MBPS = ORIGINAL_BUDGET;
+    }
+    if (ORIGINAL_ROOM_SIZE === undefined) {
+      delete process.env.VOICE_PROMOTION_ROOM_SIZE;
+    } else {
+      process.env.VOICE_PROMOTION_ROOM_SIZE = ORIGINAL_ROOM_SIZE;
     }
   });
 
@@ -1130,6 +1140,14 @@ describe("screens and the measured mesh limit", () => {
     rows.memberCount = 5;
     channel = randomUUID();
     delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+    // The room-SIZE trigger is off here for the same reason as in the caps
+    // block: it moves a room of four before anybody claims anything, and the
+    // mesh cases below are about what the measured LIMIT does when it is
+    // reached. On the hosted deployment the size trigger fires first for a
+    // room of four or more, so what these mesh cases really pin is the two and
+    // three person calls that stay peer to peer, plus every room on a
+    // self-host with no voice server at all (`backend.configured = "mesh"`).
+    process.env.VOICE_PROMOTION_ROOM_SIZE = "0";
   });
 
   afterEach(() => {
@@ -1137,6 +1155,11 @@ describe("screens and the measured mesh limit", () => {
       delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
     } else {
       process.env.VOICE_PROMOTION_MAX_SFU_MBPS = ORIGINAL_BUDGET;
+    }
+    if (ORIGINAL_ROOM_SIZE === undefined) {
+      delete process.env.VOICE_PROMOTION_ROOM_SIZE;
+    } else {
+      process.env.VOICE_PROMOTION_ROOM_SIZE = ORIGINAL_ROOM_SIZE;
     }
   });
 
@@ -1343,6 +1366,87 @@ describe("screens and the measured mesh limit", () => {
       expect(typesOf(people[4]!)).toContain("screen-share-denied");
       expect(MESH_VIDEO_HARD_LIMIT.screens).toBe(4);
       expect(MESH_VIDEO_HARD_LIMIT.cameras).toBe(6);
+    });
+
+    /**
+     * WHAT THE MEASURED MESH LIMIT ACTUALLY GOVERNS ON THE HOSTED DEPLOYMENT.
+     *
+     * The room-size trigger moves a room at four people, before anybody claims
+     * anything, so on a deployment with a voice server the mesh limit is only
+     * ever consulted for calls of two and three. That is not a smaller feature
+     * than it looks, it is a more honest description of it: three people on
+     * fibre can now all share, where the constant allowed two, and those are
+     * the calls that stay peer to peer on purpose. Every room on a self-host
+     * with no voice server is still governed by it at any size, which the
+     * `backend.configured = "mesh"` cases above cover.
+     */
+    /**
+     * A SILENT ROOM IS NOT CHARGED FOR A CAMERA NOBODY TURNED ON.
+     *
+     * `withOneMore` adds a publication for `cameras` and `screens`, and a
+     * participant for `room-full` and `room-size`. Getting that wrong for the
+     * size trigger is the quiet failure: it fires on every ordinary call, and
+     * charging each one a phantom camera would refuse to promote big silent
+     * rooms on a box that is nowhere near full. Six people, nobody publishing,
+     * a budget of 4 Mbit/s: the honest price is zero, and a phantom camera
+     * would be at least 5 x 1.5 = 7.5 (the trigger fires on the join, before
+     * that seat is in the room) and refuse.
+     */
+    it("prices a size promotion as a seat, not as a camera", async () => {
+      process.env.VOICE_PROMOTION_ROOM_SIZE = "6";
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "4";
+      const people: Seat[] = [];
+      for (let at = 0; at < 6; at += 1) {
+        people.push(await seat(channel));
+      }
+
+      expect(getRoomTransport(channel)).toBe("livekit");
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("voice-transport-unsupported");
+      }
+    });
+
+    it("never gets asked in a room of four, because the size trigger moved it", async () => {
+      process.env.VOICE_PROMOTION_ROOM_SIZE = String(MESH_ROOM_PROMOTION_SIZE);
+      const people = [
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+      ];
+      expect(getRoomTransport(channel)).toBe("mesh");
+
+      people.push(await seat(channel));
+
+      expect(getRoomTransport(channel)).toBe("livekit");
+      // And now there is no count at all, so the fourth and fifth cameras go
+      // up without anybody meeting a limit of any kind.
+      for (const person of people) {
+        await cameraOn(person, channel);
+      }
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("camera-denied");
+      }
+      expect(camerasOn(people[0]!)).toBe(4);
+    });
+
+    it("still governs a three-person call, which stays peer to peer", async () => {
+      process.env.VOICE_PROMOTION_ROOM_SIZE = String(MESH_ROOM_PROMOTION_SIZE);
+      const people = [
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+      ];
+      expect(getRoomTransport(channel)).toBe("mesh");
+
+      // Fibre: two viewers each, so three shares fit where the constant said
+      // two, and the room is still peer to peer at the end of it.
+      for (const person of people) {
+        await shareOn(person, 16_000_000);
+      }
+
+      expect(getRoomTransport(channel)).toBe("mesh");
+      expect(sharesOn(people[0]!)).toBe(3);
+      expect(SCREEN_SHARE_LIMIT.mesh).toBe(2);
     });
 
     it("behaves exactly as before for a client that reports nothing", async () => {

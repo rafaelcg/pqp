@@ -1,11 +1,8 @@
-<<<<<<< HEAD
 import {
+  LARGE_ROOM_PARTICIPANTS,
   MESH_ROOM_PROMOTION_SIZE,
   type VoiceRoomTransport,
 } from "@pqp/shared";
-=======
-import { LARGE_ROOM_PARTICIPANTS, type VoiceRoomTransport } from "@pqp/shared";
->>>>>>> dfccc56e (Unlimited screens on the voice server, and a mesh limit that is measured)
 
 /**
  * WHEN A MESH ROOM MAY BE MOVED TO THE SFU, AND WHAT THAT COSTS THE BOX.

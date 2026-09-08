@@ -15,13 +15,27 @@ import {
 /**
  * The maps are module state shared with the running app, so a test that
  * changes one and does not put it back decides what every later test reads.
+ *
+ * Both are `as const` now (the voice server has no count for either, so both
+ * `livekit` entries are the literal `null`), which makes the entries readonly
+ * to a type checker and still perfectly writable at runtime. The cast is what
+ * lets a test move a limit to prove the copy follows the code.
  */
+type MutableLimits = Record<string, number | null>;
 const REAL_SCREENS = SCREEN_SHARE_LIMIT.livekit;
 const REAL_CAMERAS = CAMERA_LIMIT.livekit;
 
+function setScreens(limit: number | null): void {
+  (SCREEN_SHARE_LIMIT as MutableLimits).livekit = limit;
+}
+
+function setCameras(limit: number | null): void {
+  (CAMERA_LIMIT as MutableLimits).livekit = limit;
+}
+
 afterEach(() => {
-  SCREEN_SHARE_LIMIT.livekit = REAL_SCREENS;
-  (CAMERA_LIMIT as Record<string, number | null>).livekit = REAL_CAMERAS;
+  setScreens(REAL_SCREENS);
+  setCameras(REAL_CAMERAS);
   setActiveCatalogue(undefined);
 });
 
@@ -76,24 +90,45 @@ describe("capacityRiseBetween", () => {
 
 describe("capacityNoticeMessage", () => {
   it("names the numbers the shared maps hold, not numbers of its own", () => {
+    // A room that HAS a screen count, which the voice server no longer does;
+    // the numbers are still read out of the map for any transport that names
+    // one, and this is the proof that the copy follows the code.
+    setScreens(7);
+    setCameras(5);
     const before = capacityNoticeMessage(roomCapacity("livekit"));
-    expect(before).toContain(String(SCREEN_SHARE_LIMIT.livekit));
+    expect(before).toContain("7");
 
-    // The proof that the copy follows the code: move the map, and the
-    // sentence moves with it.
-    SCREEN_SHARE_LIMIT.livekit = 7;
+    setScreens(9);
     const after = capacityNoticeMessage(roomCapacity("livekit"));
-    expect(after).toContain("7");
+    expect(after).toContain("9");
     expect(after).not.toBe(before);
   });
 
   it("says cameras in words when the room has no camera count to name", () => {
-    (CAMERA_LIMIT as Record<string, number | null>).livekit = null;
+    setScreens(7);
+    setCameras(null);
     const message = capacityNoticeMessage(roomCapacity("livekit"));
-    expect(message).toContain(String(SCREEN_SHARE_LIMIT.livekit));
+    expect(message).toContain("7");
     expect(message).toContain("camera for everyone");
     // The bug this shape exists to prevent: a null limit rendered into a slot.
     expect(message).not.toContain("null");
+  });
+
+  /**
+   * WHAT THE VOICE SERVER ACTUALLY SAYS TODAY (2026-09-08).
+   *
+   * Both limits are `null` there now: `CAMERA_LIMIT.livekit` went first, and
+   * `SCREEN_SHARE_LIMIT.livekit` followed when the share count was replaced by
+   * the box's budget. So the branch this room really takes is the one with no
+   * numbers in it at all, and it must read as a promise rather than as a gap.
+   */
+  it("promises both in words when the room has no count for either", () => {
+    expect(SCREEN_SHARE_LIMIT.livekit).toBeNull();
+    expect(CAMERA_LIMIT.livekit).toBeNull();
+    const message = capacityNoticeMessage(roomCapacity("livekit"));
+    expect(message).toContain("screen and camera for everyone");
+    expect(message).not.toContain("null");
+    expect(message).not.toContain("undefined");
   });
 
   it("speaks Portuguese when the catalogue is Portuguese", async () => {
@@ -102,7 +137,13 @@ describe("capacityNoticeMessage", () => {
       expect(capacityNoticeMessage(roomCapacity("livekit"))).toContain(
         "Agora cabe mais gente",
       );
-      (CAMERA_LIMIT as Record<string, number | null>).livekit = null;
+      // The room as it really is: no count for either, so the sentence has to
+      // carry the promise instead of a number.
+      expect(capacityNoticeMessage(roomCapacity("livekit"))).toContain(
+        "tela e câmera pra todo mundo",
+      );
+      setScreens(7);
+      setCameras(null);
       expect(capacityNoticeMessage(roomCapacity("livekit"))).toContain(
         "câmera pra todo mundo",
       );
@@ -112,7 +153,15 @@ describe("capacityNoticeMessage", () => {
   });
 
   it("reads an uncapped camera as a rise over any camera count", () => {
-    (CAMERA_LIMIT as Record<string, number | null>).livekit = null;
+    setCameras(null);
+    expect(capacityRiseBetween("mesh", "livekit")).not.toBeNull();
+  });
+
+  it("reads an uncapped screen count as a rise over the mesh number", () => {
+    // The mesh side still names a number (its own measured limit falls back to
+    // `SCREEN_SHARE_LIMIT.mesh`), and going from a number to "no number" is
+    // the biggest rise there is.
+    expect(SCREEN_SHARE_LIMIT.mesh).toBeGreaterThan(0);
     expect(capacityRiseBetween("mesh", "livekit")).not.toBeNull();
   });
 });
