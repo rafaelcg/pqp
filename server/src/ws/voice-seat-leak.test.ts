@@ -142,7 +142,9 @@ const {
 const { MAX_MISSED_PONGS, startHeartbeat, trackSocketLiveness } = await import(
   "./index.js"
 );
-const { VOICE_RESUME_TTL_MS } = await import("./voice-resume-token.js");
+const { mintVoiceResumeToken, VOICE_RESUME_TTL_MS } = await import(
+  "./voice-resume-token.js"
+);
 const { INSTANCE_ID } = await import("../lib/bus.js");
 
 interface Frame {
@@ -270,6 +272,22 @@ async function peerRow(peerId: string) {
     | undefined;
 }
 
+/**
+ * Bounded poll for a row to disappear. Used where the room has a write held
+ * open on purpose, so the ordinary settle seams would wait on the very thing
+ * the test is holding.
+ */
+async function waitForRowGone(peerId: string, timeoutMs = 4_000) {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    if (!(await peerRow(peerId))) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return false;
+}
+
 async function count(table: string, where = "TRUE", params: unknown[] = []) {
   const result = await getPool().query<{ n: string }>(
     `SELECT COUNT(*)::text AS n FROM ${table} WHERE ${where}`,
@@ -287,10 +305,13 @@ async function count(table: string, where = "TRUE", params: unknown[] = []) {
 async function plantGhost(options: {
   channelId?: string;
   instanceId?: string;
+  userId?: string;
   ageMs?: number;
-} = {}): Promise<{ peerId: string; channelId: string }> {
+  orphaned?: boolean;
+} = {}): Promise<{ peerId: string; channelId: string; userId: string }> {
   const peerId = randomUUID();
   const channelId = options.channelId ?? randomUUID();
+  const userId = options.userId ?? randomUUID();
   const ageMs = options.ageMs ?? VOICE_OWN_ROW_GRACE_MS * 2;
   await getPool().query(
     `INSERT INTO voice_rooms (channel_id, transport)
@@ -300,13 +321,23 @@ async function plantGhost(options: {
   await getPool().query(
     `INSERT INTO voice_peers
        (peer_id, channel_id, user_id, instance_id, display_name,
-        can_resume, joined_at, updated_at)
+        can_resume, orphaned_at, joined_at, updated_at)
      VALUES ($1, $2, $3, $4, 'Ghost', TRUE,
+             CASE WHEN $6::boolean
+                  THEN NOW() - ($5::bigint * INTERVAL '1 millisecond')
+                  ELSE NULL END,
              NOW() - ($5::bigint * INTERVAL '1 millisecond'),
              NOW() - ($5::bigint * INTERVAL '1 millisecond'))`,
-    [peerId, channelId, randomUUID(), options.instanceId ?? INSTANCE_ID, ageMs],
+    [
+      peerId,
+      channelId,
+      userId,
+      options.instanceId ?? INSTANCE_ID,
+      ageMs,
+      options.orphaned === true,
+    ],
   );
-  return { peerId, channelId };
+  return { peerId, channelId, userId };
 }
 
 const previousFlag = process.env.VOICE_REGISTRY;
@@ -399,6 +430,104 @@ describeDb("voice seats that outlive the person", () => {
       expect(await count("voice_retired_peers", "peer_id = $1", [peerId])).toBe(
         1,
       );
+    });
+
+    /**
+     * And the fix must not become the bug. Ordering is per PEER: two people
+     * in one room write different rows and never race, so one person's slow
+     * statement must not stand in front of anybody else's, and above all not
+     * in front of their hangup. A room-wide queue would leave a seat occupied
+     * while its leave waited behind a backlog, which is this whole ticket.
+     */
+    it("lets one peer's leave land while another peer's write is still stuck", async () => {
+      const channel = randomUUID();
+      const slowUser = randomUUID();
+      const quickUser = randomUUID();
+      const slowSocket = new FakeSocket();
+      const quickSocket = new FakeSocket();
+      const slowPeer = await join(slowSocket, slowUser, channel);
+      const quickPeer = await join(quickSocket, quickUser, channel);
+
+      // Hold the slow peer's next UPSERT open until this test releases it.
+      let release = () => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const pool = getPool();
+      const passThrough = pool.query.bind(pool) as (
+        text: unknown,
+        params?: unknown,
+      ) => Promise<unknown>;
+      vi.spyOn(pool, "query").mockImplementation((async (
+        text: unknown,
+        params?: unknown,
+      ) => {
+        if (
+          typeof text === "string" &&
+          text.includes("INSERT INTO voice_peers") &&
+          Array.isArray(params) &&
+          params[0] === slowPeer
+        ) {
+          await held;
+        }
+        return passThrough(text, params);
+      }) as never);
+
+      // The slow peer mutes; its row write is now stuck in the pool.
+      const stuck = handleVoiceMessage(
+        { socket: asSocket(slowSocket), user: asUser(slowUser) },
+        { type: "set-voice-state", muted: true, deafened: false },
+      );
+      // The other person hangs up while it is stuck. Deliberately NOT
+      // `settleRows`: the room still has a write in flight on purpose, so
+      // anything that drains the room would wait for the thing being held.
+      // Polling the row is the honest question, "did the delete get out?".
+      await handleVoiceMessage(
+        { socket: asSocket(quickSocket), user: asUser(quickUser) },
+        { type: "leave-voice-room" },
+      );
+      const gone = await waitForRowGone(quickPeer);
+
+      release();
+      await stuck;
+      await settleRows();
+
+      // Their seat went while the room was blocked; the slow write still lands.
+      expect(gone).toBe(true);
+      expect((await peerRow(slowPeer))?.muted).toBe(true);
+    });
+
+    /**
+     * The room row has to go with the last seat even when the last two seats
+     * leave together. `deleteVoicePeer` used to do both halves in one CTE, on
+     * one snapshot, so two simultaneous last-leaves each saw the other still
+     * seated and neither cleared the room. Harmless while a room's writes were
+     * single-file; reachable the moment they stopped being.
+     */
+    it("clears the room row when the last two seats leave at once", async () => {
+      const channel = randomUUID();
+      const one = randomUUID();
+      const two = randomUUID();
+      const socketOne = new FakeSocket();
+      const socketTwo = new FakeSocket();
+      await join(socketOne, one, channel);
+      await join(socketTwo, two, channel);
+      expect(await count("voice_rooms", "channel_id = $1", [channel])).toBe(1);
+
+      await Promise.all([
+        handleVoiceMessage(
+          { socket: asSocket(socketOne), user: asUser(one) },
+          { type: "leave-voice-room" },
+        ),
+        handleVoiceMessage(
+          { socket: asSocket(socketTwo), user: asUser(two) },
+          { type: "leave-voice-room" },
+        ),
+      ]);
+      await settleRows();
+
+      expect(await count("voice_peers", "channel_id = $1", [channel])).toBe(0);
+      expect(await count("voice_rooms", "channel_id = $1", [channel])).toBe(0);
     });
   });
 
@@ -495,6 +624,55 @@ describeDb("voice seats that outlive the person", () => {
       expect(await peerRow(ghost.peerId)).toBeUndefined();
       expect(await peerRow(held)).toBeDefined();
       expect(await count("voice_rooms", "channel_id = $1", [channel])).toBe(1);
+    });
+
+    /**
+     * THE REGRESSION THIS SWEEP COULD HAVE CAUSED, and the reason the query
+     * says `orphaned_at IS NULL`.
+     *
+     * A closed socket's seat is deliberately held for `VOICE_RESUME_TTL_MS`
+     * (90s) so a refresh mid-call keeps its place. The sweep's grace is 60s
+     * on a 15s beat, so the two windows overlap: a sweep that only asked
+     * "is this row old and unheld?" would delete and retire a resumable seat
+     * somewhere between sixty and ninety seconds in, and the person coming
+     * back would find their place gone. That is the behaviour this codebase
+     * has worked hardest to protect, and it must not be the price of the fix.
+     */
+    it("leaves an orphan inside its resume window alone, and it is still resumable", async () => {
+      const channel = randomUUID();
+      const orphan = await plantGhost({
+        channelId: channel,
+        ageMs: 75_000,
+        orphaned: true,
+      });
+      expect(75_000).toBeGreaterThan(VOICE_OWN_ROW_GRACE_MS);
+      expect(75_000).toBeLessThan(VOICE_RESUME_TTL_MS);
+
+      // Both the direct sweep and the beat that runs it in production.
+      expect(await sweepOwnStaleVoicePeers([])).toEqual([]);
+      expect((await runVoiceReconcile()).ghosts).toBe(0);
+
+      expect(await peerRow(orphan.peerId)).toBeDefined();
+      expect(
+        await count("voice_retired_peers", "peer_id = $1", [orphan.peerId]),
+      ).toBe(0);
+
+      // And the seat still does what it is held for: the person comes back.
+      const token = mintVoiceResumeToken({
+        userId: orphan.userId,
+        peerId: orphan.peerId,
+        voiceChannelId: channel,
+        transport: "mesh",
+      });
+      const back = new FakeSocket();
+      const resumed = await join(back, orphan.userId, channel, {
+        resumePeerId: orphan.peerId,
+        resumeToken: token as string,
+      });
+
+      expect(resumed).toBe(orphan.peerId);
+      expect(back.frame("welcome")).toMatchObject({ resumed: true });
+      expect((await peerRow(orphan.peerId))?.orphaned_at).toBeNull();
     });
 
     it("runs on the reconcile beat and counts what it found", async () => {

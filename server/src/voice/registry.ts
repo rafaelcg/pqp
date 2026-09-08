@@ -398,29 +398,47 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
 }
 
 /**
- * Remove a peer and, if it was the room's last, the room row with it, in one
- * statement. The CTE's delete is not visible to the `NOT EXISTS` (every part
- * of a data-modifying statement runs on the same snapshot), hence the explicit
- * `peer_id <> $1`. Two *exactly* concurrent last-leaves can each still see the
- * other's row and leave the room row behind; the M3 reconcile sweeps rooms
- * with no peers, and until then `pinVoiceRoom` treats such a row as a pin the
- * next joiner adopts, which is the same transport the room just had.
+ * Remove a peer and, if it was the room's last, the room row with it.
+ *
+ * TWO STATEMENTS, NOT ONE, AND THAT IS THE FIX FOR AN OLD RACE. This was a
+ * single CTE, and every part of a data-modifying statement runs on the same
+ * snapshot: the CTE's delete was invisible to its own `NOT EXISTS`, and a
+ * concurrent last-leave's delete was invisible too. Two people leaving a
+ * two-person room at the same moment therefore each saw the other still
+ * seated and neither dropped the room row. That was written down as tolerable
+ * because it was rare and the reconcile's room sweep tidied it up 30s later.
+ * It stopped being rare when `ws/voice.ts` narrowed its write chain from the
+ * channel to the peer, which is what a channel eviction needs (one slow seat
+ * must not hold up anybody else's) and which lets a room's deletes genuinely
+ * overlap.
+ *
+ * Splitting it removes the race rather than shrinking it. The room check runs
+ * after this connection's own peer delete has committed, so of two concurrent
+ * leaves the later check always sees an empty room and clears it; the delete
+ * is idempotent, so both clearing it is fine too. The window in between is a
+ * room row with no peers, which `pinVoiceRoom` already treats as a pin the
+ * next joiner adopts, at the same transport the room just had.
  */
 export function deleteVoicePeer(peerId: string): Promise<unknown> {
   return track(
-    getPool().query(
-      `WITH gone AS (
-         DELETE FROM voice_peers WHERE peer_id = $1 RETURNING channel_id
-       )
-       DELETE FROM voice_rooms r
-        USING gone
-        WHERE r.channel_id = gone.channel_id
-          AND NOT EXISTS (
-            SELECT 1 FROM voice_peers p
-             WHERE p.channel_id = gone.channel_id AND p.peer_id <> $1
-          )`,
-      [peerId],
-    ),
+    (async () => {
+      const gone = await getPool().query<{ channel_id: string }>(
+        `DELETE FROM voice_peers WHERE peer_id = $1 RETURNING channel_id`,
+        [peerId],
+      );
+      const channelId = gone.rows[0]?.channel_id;
+      if (!channelId) {
+        return;
+      }
+      await getPool().query(
+        `DELETE FROM voice_rooms r
+          WHERE r.channel_id = $1
+            AND NOT EXISTS (
+              SELECT 1 FROM voice_peers p WHERE p.channel_id = $1
+            )`,
+        [channelId],
+      );
+    })(),
     "deletePeer",
   );
 }
@@ -457,6 +475,18 @@ export const VOICE_OWN_ROW_GRACE_MS = 60_000;
  *  * a join that stamped the row (`adoptVoicePeer`) and then returned before
  *    it seated the peer.
  *
+ * `orphaned_at IS NULL` IS NOT AN OPTIMISATION, IT IS THE DEFINITION. A ghost
+ * is a row the close path never stamped: nobody marked it orphaned because
+ * nobody had a peer to lose. An orphan is the opposite, and it is the one
+ * thing this codebase has worked hardest to protect: a seat deliberately held
+ * for `VOICE_RESUME_TTL_MS` so a refresh mid-call keeps its place, expired by
+ * its own timer (or, for a dead instance, by `reconcileVoiceRegistry`). Those
+ * two windows overlap, so without this clause the sweep would delete and
+ * retire a resumable seat somewhere between sixty and ninety seconds in, and
+ * the person coming back would find their place gone. Own orphans are held in
+ * `peers` and would be spared by `heldPeerIds` anyway; that is an invariant
+ * of another file, and this row is not the place to depend on it.
+ *
  * `heldPeerIds` is what the caller actually holds. An empty list is not a
  * refusal to act: an instance holding no peers legitimately owns no rows.
  * The delete retires the ids, because a resume naming one must cold-join
@@ -473,6 +503,7 @@ export async function sweepOwnStaleVoicePeers(
     `WITH gone AS (
        DELETE FROM voice_peers p
         WHERE p.instance_id = $1
+          AND p.orphaned_at IS NULL
           AND p.updated_at < NOW() - ($2::bigint * INTERVAL '1 millisecond')
           AND NOT (p.peer_id = ANY ($3::uuid[]))
         RETURNING p.peer_id, p.channel_id

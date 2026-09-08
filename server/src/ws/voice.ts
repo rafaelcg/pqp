@@ -337,31 +337,49 @@ let staleRowWritesRefused = 0;
 let ghostSeatsSwept = 0;
 
 /**
- * Registry writes for a channel, ONE AT A TIME AND IN THE ORDER THEY WERE
- * ASKED FOR. The handler never waits for a row (a database blip must not hold
- * up a frame), but a roster built from the rows must not run ahead of the
- * write it is reporting, or the joiner's own audience would see a roster
- * without them. `broadcastRoster` awaits this before reading, which is also
- * what puts the bus hint after the commit.
+ * Registry writes, under TWO keys, because the two guarantees they carry are
+ * not the same guarantee and do not want the same scope.
  *
- * IT TAKES A THUNK, AND THAT IS THE WHOLE POINT. This used to take a promise
- * and join it with `Promise.all`, which waits for both and orders neither: the
- * query had already been issued by the caller, so two writes for the same peer
- * went out on two pooled connections and Postgres was free to run them in
- * either order. On 2026-09-08 a client sent `set-voice-state` and
- * `leave-voice-room` back to back; the mute's UPSERT was issued first, the
- * hangup's DELETE second, and the database ran them the other way round. The
- * row came back six milliseconds after it was deleted, with `orphaned_at`
- * NULL and this instance stamped on it, and nothing in the cluster is allowed
- * to sweep a live instance's rows. That seat sat in a call nobody was in.
+ * ORDER IS PER PEER (`pendingPeerWrites`). A peer's own statements run one at
+ * a time, in the order they were asked for. That is the whole of the race
+ * this exists to close: on 2026-09-08 a client sent `set-voice-state` and
+ * `leave-voice-room` back to back, the mute's UPSERT was issued first and the
+ * hangup's DELETE second, and because both were already in flight on two
+ * pooled connections the database ran them the other way round. The row came
+ * back six milliseconds after it was deleted, with `orphaned_at` NULL and this
+ * instance stamped on it, and nothing in the cluster is allowed to sweep a
+ * live instance's rows. That seat sat in a call nobody was in.
  *
- * Starting the write from inside the chain is what makes "later frame, later
- * row" true rather than merely likely.
+ * It is per PEER and not per channel for a reason worth writing down: two
+ * people in one room never race each other, they write different rows. Making
+ * a room's writes single-file would put one person's slow query in front of
+ * everybody else's state changes, and, far worse, in front of their hangups,
+ * so a leave could queue behind a backlog while the seat stayed occupied.
+ * That is this very bug, rebuilt out of the fix for it. A peer's own chain is
+ * a handful of statements and is naturally short.
+ *
+ * COMPLETION IS PER CHANNEL (`pendingRowWrites`). The handler never waits for
+ * a row, but a roster built from the rows must not run ahead of the write it
+ * is reporting, or the joiner's own audience would see a roster without them;
+ * the same seam is what makes a resume racing a hangup see the retired id.
+ * So the channel map JOINS every peer chain touching the room rather than
+ * chaining them, and `settledRowWrites` still means "everything asked for in
+ * this room has landed".
+ *
+ * `start` is a thunk, not a promise, and that is the load-bearing part: a
+ * promise handed in has already issued its query, so joining it orders
+ * nothing. Starting the write from inside the chain is what makes "later
+ * frame, later row" true rather than merely likely.
  */
+const pendingPeerWrites = new Map<string, Promise<void>>();
 const pendingRowWrites = new Map<string, Promise<void>>();
 
-function trackRowWrite(channelId: string, start: () => Promise<unknown>): void {
-  const previous = pendingRowWrites.get(channelId) ?? Promise.resolve();
+function trackRowWrite(
+  channelId: string,
+  peerId: string,
+  start: () => Promise<unknown>,
+): void {
+  const previous = pendingPeerWrites.get(peerId) ?? Promise.resolve();
   // Registry promises never reject (`track` swallows into a log), so the
   // chain cannot break; the `catch` is belt and braces against a future
   // caller, and it must not be able to skip `start`.
@@ -372,15 +390,30 @@ function trackRowWrite(channelId: string, start: () => Promise<unknown>): void {
       () => undefined,
       () => undefined,
     );
-  pendingRowWrites.set(channelId, next);
-  // The chain, not the query: a write still queued behind another has not
-  // been issued and would otherwise be invisible to `settleVoiceRegistryWrites`.
-  trackPendingRegistryWork(next);
+  pendingPeerWrites.set(peerId, next);
   void next.then(() => {
-    if (pendingRowWrites.get(channelId) === next) {
+    if (pendingPeerWrites.get(peerId) === next) {
+      pendingPeerWrites.delete(peerId);
+    }
+  });
+
+  // The room's view of the same work: a join, never a chain, so one peer's
+  // slow write delays nobody else's statement and only the readers wait.
+  const roomPrevious = pendingRowWrites.get(channelId) ?? Promise.resolve();
+  const roomNext = Promise.all([roomPrevious, next]).then(
+    () => undefined,
+    () => undefined,
+  );
+  pendingRowWrites.set(channelId, roomNext);
+  void roomNext.then(() => {
+    if (pendingRowWrites.get(channelId) === roomNext) {
       pendingRowWrites.delete(channelId);
     }
   });
+
+  // The chain, not the query: a write still queued behind another has not
+  // been issued and would otherwise be invisible to `settleVoiceRegistryWrites`.
+  trackPendingRegistryWork(next);
 }
 
 function settledRowWrites(channelId: string): Promise<void> {
@@ -418,7 +451,7 @@ function writePeerRow(peer: VoicePeer): void {
     });
     return;
   }
-  trackRowWrite(peer.voiceChannelId, () =>
+  trackRowWrite(peer.voiceChannelId, peer.id, () =>
     upsertVoicePeer({
       peerId: peer.id,
       channelId: peer.voiceChannelId,
@@ -886,10 +919,11 @@ function cancelOrphan(peer: VoicePeer): void {
 
 function retirePeerId(peerId: string, voiceChannelId: string): void {
   if (registryOn()) {
-    // Tracked on the channel so a resume for this id that arrives right
-    // behind the hangup waits for the row before it asks whether the id is
-    // retired (`settledRowWrites` in the join handler).
-    trackRowWrite(voiceChannelId, () => retireVoicePeerId(peerId));
+    // Ordered behind this peer's own delete, and joined into the channel's
+    // pending writes, so a resume for this id that arrives right behind the
+    // hangup waits for the row before it asks whether the id is retired
+    // (`settledRowWrites` in the join handler).
+    trackRowWrite(voiceChannelId, peerId, () => retireVoicePeerId(peerId));
     return;
   }
   const existing = retiredPeerIds.get(peerId);
@@ -2111,7 +2145,7 @@ function removePeer(peerId: string) {
     // One statement: the row goes, and the room row with it if this was the
     // last peer anywhere in the cluster (not only on this instance). Then the
     // party, for the one race that can leave a room row behind.
-    trackRowWrite(voiceChannelId, () =>
+    trackRowWrite(voiceChannelId, peerId, () =>
       deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(voiceChannelId)),
     );
   }
@@ -2393,7 +2427,7 @@ export async function leaveVoiceByResumeToken(
  */
 function releaseForeignPeer(row: VoicePeerRow, reason: string): void {
   const { peerId, channelId } = row;
-  trackRowWrite(channelId, () =>
+  trackRowWrite(channelId, peerId, () =>
     deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(channelId)),
   );
   retirePeerId(peerId, channelId);
@@ -2550,7 +2584,7 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
     }
   }, VOICE_RESUME_TTL_MS);
   if (registryOn()) {
-    trackRowWrite(peer.voiceChannelId, () =>
+    trackRowWrite(peer.voiceChannelId, peerId, () =>
       markVoicePeerOrphaned(peerId, new Date(peer.orphanedAt as number)),
     );
   }
@@ -2577,6 +2611,7 @@ export function resetVoicePeers(): void {
   retiredPeerIds.clear();
   roomTransports.clear();
   pendingTransportDecisions.clear();
+  pendingPeerWrites.clear();
   rosterCoalescer.reset();
   pendingRoomEvents.clear();
   remoteTransports.clear();
