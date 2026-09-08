@@ -76,7 +76,12 @@ jobs:
       - name: Run availability checks
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          # worker-image-drift lists pqp-worker's machines too, which the
+          # app-scoped FLY_API_TOKEN cannot see (same asymmetry that broke the
+          # deploy workflow's own worker step). FLY_ORG_TOKEN, when set, reads
+          # both apps; every other check here only ever touches pqp-api and is
+          # unaffected by which one wins.
+          FLY_API_TOKEN: ${{ secrets.FLY_ORG_TOKEN || secrets.FLY_API_TOKEN }}
           MONITOR_REPO: ${{ github.repository }}
           # Comma-separated check keys to silence without disabling the monitor.
           # `gh variable set MONITOR_MUTED --body "r2-usage"`; empty means nothing muted.
