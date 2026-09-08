@@ -19,9 +19,12 @@ if (DATABASE_URL) {
 
 const { getPool, initDb, closePool } = await import("../db.js");
 const {
+  HISTORY_BUCKET_MINUTES,
+  HISTORY_WINDOW_HOURS,
   getStatusSummary,
   probeComponents,
   pruneStatusSamples,
+  readStatusHistory,
   recordStatusSamples,
 } = await import("./status.js");
 
@@ -30,11 +33,12 @@ async function seedSample(
   component: string,
   ok: boolean,
   hoursAgo: number,
+  latencyMs: number | null = null,
 ): Promise<void> {
   await getPool().query(
-    `INSERT INTO status_samples (component, ok, checked_at)
-     VALUES ($1, $2, NOW() - ($3 || ' hours')::interval)`,
-    [component, ok, hoursAgo],
+    `INSERT INTO status_samples (component, ok, latency_ms, checked_at)
+     VALUES ($1, $2, $3, NOW() - ($4 || ' hours')::interval)`,
+    [component, ok, latencyMs, hoursAgo],
   );
 }
 
@@ -122,6 +126,53 @@ describeDb("status page", () => {
       `SELECT COUNT(*)::text AS count FROM status_samples`,
     );
     expect(remaining.rows[0]?.count).toBe("1");
+  });
+
+  it("buckets latency oldest first and leaves gaps as gaps", async () => {
+    // Two readings an hour apart, plus one outside the window entirely.
+    await seedSample("storage", true, 0.1, 240);
+    await seedSample("storage", true, 0.2, 230);
+    await seedSample("storage", true, 3, 40);
+    await seedSample("storage", true, HISTORY_WINDOW_HOURS + 1, 9999);
+
+    const history = await readStatusHistory();
+    const storage = history.components.find((c) => c.key === "storage");
+    const buckets = (HISTORY_WINDOW_HOURS * 60) / HISTORY_BUCKET_MINUTES;
+
+    expect(storage?.points).toHaveLength(buckets);
+    // Oldest first: the most recent bucket is the last one, and it holds the
+    // mean of the two readings inside it.
+    expect(storage?.points.at(-1)).toMatchObject({ ms: 235, samples: 2 });
+    // The reading from outside the window is not in the series at all — a
+    // 24-hour chart that quietly includes yesterday is a lie about the shape.
+    const drawn = storage?.points.filter((p) => p.samples > 0) ?? [];
+    expect(drawn).toHaveLength(2);
+    // Everything between them is an empty bucket, not a closed-up gap.
+    expect(storage?.points.filter((p) => p.samples === 0)).toHaveLength(
+      buckets - 2,
+    );
+  });
+
+  it("reports each component's own p50 and p95, which is what makes a number readable", async () => {
+    for (const ms of [10, 20, 30, 40, 1000]) {
+      await seedSample("database", true, 1, ms);
+    }
+    const history = await readStatusHistory();
+    const database = history.components.find((c) => c.key === "database");
+    // 235 ms means nothing next to a database at 2 ms and everything next to
+    // this component's own normal, which is the whole reason both are here.
+    expect(database?.p50).toBe(30);
+    expect(database?.p95).toBeGreaterThan(500);
+  });
+
+  it("counts failures per bucket so a dip is drawable", async () => {
+    await seedSample("database", true, 0.1, 5);
+    await seedSample("database", false, 0.1, null);
+    const history = await readStatusHistory();
+    const database = history.components.find((c) => c.key === "database");
+    expect(database?.points.at(-1)).toMatchObject({ fails: 1, samples: 2 });
+    // A failed probe timed nothing, so it must not drag the mean down.
+    expect(database?.points.at(-1)?.ms).toBe(5);
   });
 
   it("never reports anything about who uses the instance", async () => {

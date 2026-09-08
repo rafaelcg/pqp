@@ -68,8 +68,25 @@ export interface SfuStatsReaderOptions {
   timeoutMs?: number;
 }
 
+/** The last reading this process took, and how long ago it took it. */
+export interface SfuStatsPeek {
+  stats: SfuStats;
+  ageMs: number;
+}
+
 export interface SfuStatsReader {
   read(): Promise<SfuStats>;
+  /**
+   * The last reading, without ever taking a new one. `null` when this process
+   * has never probed, or when the host changed under it and the reading
+   * belongs to the SFU we are no longer pointed at.
+   *
+   * WHY. `/status.json` is public and unauthenticated. It must not be able to
+   * make this process call a third party, and it must not be able to wait on
+   * one, so the status page reads what the last probe found instead of asking
+   * for a fresh one. The caller decides how old is too old.
+   */
+  peek(): SfuStatsPeek | null;
   /** Test hook: forget the cache. */
   reset(): void;
 }
@@ -204,6 +221,17 @@ export function createSfuStatsReader(options: SfuStatsReaderOptions): SfuStatsRe
         });
       return inFlight;
     },
+    peek(): SfuStatsPeek | null {
+      if (!cached) {
+        return null;
+      }
+      // A rollback changes the host mid-run; the old host's numbers must not
+      // be served under the new one's name, at any age.
+      if (cached.host !== options.host()) {
+        return null;
+      }
+      return { stats: cached.stats, ageMs: Math.max(0, now() - cached.at) };
+    },
     reset(): void {
       cached = null;
       inFlight = null;
@@ -230,6 +258,11 @@ const reader = createSfuStatsReader({
 
 export function readSfuStats(): Promise<SfuStats> {
   return reader.read();
+}
+
+/** The last reading, never a new one. See `SfuStatsReader.peek`. */
+export function peekSfuStats(): SfuStatsPeek | null {
+  return reader.peek();
 }
 
 /** Test hook. */
