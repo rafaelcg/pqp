@@ -397,7 +397,17 @@ describe("concurrent screen shares are capped per transport", () => {
     expect(denials(a).length).toBe(before);
   });
 
-  it("lets four people share on LiveKit and refuses a fifth", async () => {
+  /**
+   * THE FIFTH SHARE, WHICH USED TO BE REFUSED (2026-09-08).
+   *
+   * `SCREEN_SHARE_LIMIT.livekit` was 4, and 4 was Zoom's number rather than
+   * this box's. A presenter on the voice server uploads once whatever the room
+   * size, so a fifth share costs its publisher exactly what the first cost;
+   * what it costs the box is egress once per viewer, and that is priced per
+   * room by `decideVideoAdmission` instead. The budget cases are in
+   * `voice-promotion.test.ts`; this one is the count's absence.
+   */
+  it("lets a fifth person share on LiveKit, where the count refused them", async () => {
     backend.configured = "livekit";
     resetVoiceRoomTransports();
     const outside = viewer("viewer");
@@ -411,10 +421,10 @@ describe("concurrent screen shares are capped per transport", () => {
     for (const person of people) {
       await share(person.rec, person.id);
     }
-    expect(denials(people[4]!.rec)).toHaveLength(1);
+    expect(denials(people[4]!.rec)).toHaveLength(0);
     expect(
       lastRoster(outside).participants!.filter((p) => p.sharingScreen),
-    ).toHaveLength(4);
+    ).toHaveLength(5);
   });
 });
 

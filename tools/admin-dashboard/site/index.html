@@ -52,7 +52,11 @@
     --r-sm: 8px;
     --r-xs: 6px;
 
-    --maxw: 1240px;
+    /* Wider than it was, because the rail took a fixed column and the health
+       table earns every pixel it can get. Prose is capped separately
+       (`.raw-note`, and the verdicts sit in a three-column grid), so nothing
+       here turns into a 200-character line. */
+    --maxw: 1520px;
   }
 
   /* The same tokens under a light system theme. Only the palette changes:
@@ -123,11 +127,76 @@
   .num, .num * { font-variant-numeric: tabular-nums; }
   body { font-variant-numeric: tabular-nums; }
 
+  /* ---------- shell: a rail and a content column ----------
+     The rail is the trade this layout makes. Seven tabs across the top meant
+     that during an incident the three things worth looking at (capacity,
+     the SFU, the queue) lived on three different tabs; a fixed rail costs a
+     browser one click to choose a section and gives the incident every number
+     it needs on one screen. Below 900 px the rail becomes a scrolling strip
+     above the content, because a fixed column is most of a phone. */
+  .app {
+    display: grid;
+    grid-template-columns: 224px minmax(0, 1fr);
+    min-height: 100vh;
+  }
+  .rail {
+    border-right: 1px solid var(--border);
+    background: var(--surface-1);
+    padding: 18px 12px 22px;
+    display: flex; flex-direction: column; gap: 16px;
+    position: sticky; top: 0; align-self: start;
+    height: 100vh;
+  }
+  .rail-brand { display: flex; align-items: baseline; gap: 9px; padding: 0 8px; min-width: 0; }
+  .rail-brand .wordmark { font-size: 20px; }
+  .rail-env {
+    font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--faint); font-weight: 600;
+  }
+  .nav { display: flex; flex-direction: column; gap: 2px; }
+  .nav-grp {
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+    color: var(--faint); padding: 13px 8px 5px;
+  }
+  .nav-item {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    padding: 8px 9px; border-radius: var(--r-sm);
+    font: inherit; font-size: 13px; font-weight: 500; text-align: left;
+    color: var(--muted); background: transparent;
+    border: 1px solid transparent; cursor: pointer;
+  }
+  .nav-item .ico { width: 14px; text-align: center; font-size: 11px; opacity: 0.8; }
+  .nav-item:hover { background: var(--hover); color: var(--text); }
+  .nav-item[aria-selected="true"] {
+    background: var(--accent-dim); border-color: var(--accent-edge);
+    color: var(--accent); font-weight: 600;
+  }
+  .nav-item[aria-selected="true"] .ico { opacity: 1; }
+  .nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .nav-item .tcount {
+    margin-left: auto; font-size: 10.5px; font-weight: 700;
+    padding: 1px 6px; border-radius: 999px;
+    background: var(--warning-dim); color: var(--warning);
+  }
+  .rail-foot {
+    margin-top: auto; padding: 0 8px;
+    display: flex; flex-direction: column; align-items: flex-start; gap: 6px;
+    font-size: 11px; color: var(--faint);
+  }
+
   .wrap {
     max-width: var(--maxw);
-    margin: 0 auto;
     padding: 18px clamp(14px, 3vw, 32px) 56px;
+    min-width: 0;
   }
+
+  /* ---------- pane heading ---------- */
+  .pane-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin: 4px 0 16px; }
+  .pane-head h1 {
+    font-family: "Unbounded", sans-serif; font-size: 21px; font-weight: 600;
+    margin: 0; letter-spacing: -0.015em;
+  }
+  .pane-q { font-size: 12.5px; color: var(--faint); }
 
   a { color: inherit; }
 
@@ -146,8 +215,9 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
+    justify-content: flex-end;
     gap: 12px 20px;
-    padding: 4px 2px 16px;
+    padding: 4px 2px 14px;
     border-bottom: 1px solid var(--border-soft);
     margin-bottom: 16px;
   }
@@ -344,6 +414,14 @@
     display: flex; align-items: baseline; gap: 4px;
   }
   .health .h-val .u { font-size: 12px; font-weight: 500; color: var(--muted); font-family: "Instrument Sans", sans-serif; }
+  /* A component the API never measured says so in words. Deliberately not the
+     figure face: a phrase set like a number reads as a number. */
+  .health .h-val.soft {
+    font-family: "Instrument Sans", sans-serif;
+    font-size: 13px; font-weight: 600; line-height: 1.25;
+    letter-spacing: 0; color: var(--muted);
+    display: block;
+  }
   .health .h-sub { font-size: 11.5px; color: var(--faint); }
   .health .bar {
     height: 4px; border-radius: 3px; overflow: hidden;
@@ -364,6 +442,87 @@
     color: var(--muted);
   }
   .tag.accent { color: var(--accent); border-color: var(--accent-edge); background: var(--accent-dim); }
+
+  /* ---------- insights ---------- */
+  .ins { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .insight {
+    border: 1px solid var(--border); border-radius: var(--r-lg);
+    background: var(--surface-1);
+    padding: 14px 16px 13px;
+    display: flex; flex-direction: column; gap: 9px;
+  }
+  .insight.warn { border-color: var(--warning-line); background: linear-gradient(180deg, var(--warning-dim), transparent 58%), var(--surface-1); }
+  .insight.bad  { border-color: var(--danger-line);  background: linear-gradient(180deg, var(--danger-dim),  transparent 58%), var(--surface-1); }
+  /* A slot with no honest verdict is visibly a gap, not a fourth colour of
+     opinion: dashed, muted, and it says what is missing. */
+  .insight.raw { border-style: dashed; background: var(--surface-2); }
+  .insight .ih { display: flex; align-items: flex-start; gap: 9px; }
+  .insight .ih .dot { margin-top: 6px; flex: 0 0 auto; background: var(--success); }
+  .insight.warn .ih .dot { background: var(--warning); }
+  .insight.bad  .ih .dot { background: var(--danger); }
+  .insight.raw  .ih .dot { background: var(--faint); }
+  .insight h3 { margin: 0; font-size: 14px; font-weight: 600; line-height: 1.35; letter-spacing: -0.005em; }
+  .insight p { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--muted); }
+  .insight .figs { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: auto; padding-top: 5px; }
+  .insight .figs .f { display: flex; flex-direction: column; }
+  .insight .figs .f span { font-size: 9.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+  .insight .figs .f b { font-family: "Unbounded", sans-serif; font-size: 15px; font-weight: 600; }
+  .insight .src { font-size: 10.5px; color: var(--faint); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .raw-note {
+    margin: 12px 0 0; padding: 12px 15px;
+    border: 1px dashed var(--border); border-radius: var(--r-md);
+    background: var(--surface-2);
+    font-size: 12px; line-height: 1.55; color: var(--faint); max-width: 100ch;
+  }
+  .raw-note b { color: var(--muted); font-weight: 600; }
+
+  /* ---------- health table ----------
+     One row per component, all on the same time axis, so the one whose shape
+     changed is the one that looks different. */
+  .htab { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--surface-1); overflow: hidden; }
+  .htab .r {
+    display: grid; align-items: center; gap: 14px;
+    grid-template-columns: minmax(160px, 1.4fr) minmax(110px, 1.8fr) 92px 86px 88px;
+    padding: 10px 15px; border-top: 1px solid var(--border-soft);
+  }
+  .htab .r:first-child { border-top: 0; }
+  .htab .r.head {
+    padding: 8px 15px; background: var(--surface-2);
+    font-size: 9.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint);
+  }
+  .htab .r.warn { background: linear-gradient(90deg, var(--warning-dim), transparent 55%); }
+  .htab .r.bad  { background: linear-gradient(90deg, var(--danger-dim),  transparent 55%); }
+  .htab .nm { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .htab .nm b { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 7px; }
+  .htab .nm b .dot { background: var(--success); flex: 0 0 auto; }
+  .htab .r.warn .nm b .dot { background: var(--warning); }
+  .htab .r.bad  .nm b .dot { background: var(--danger); }
+  .htab .r.off  .nm b .dot { background: var(--faint); }
+  .htab .nm span { font-size: 11.5px; color: var(--faint); }
+  .htab .now { font-family: "Unbounded", sans-serif; font-weight: 700; font-size: 17px; text-align: right; }
+  .htab .now .u { font-family: "Instrument Sans", sans-serif; font-size: 10.5px; font-weight: 500; color: var(--muted); margin-left: 3px; }
+  /* Absent is not zero. A component nobody measured says so in the text face:
+     a phrase set like a figure reads as a figure. */
+  .htab .now.soft { font-family: "Instrument Sans", sans-serif; font-size: 11.5px; font-weight: 600; color: var(--faint); line-height: 1.3; }
+  .htab .col { font-size: 12px; color: var(--muted); text-align: right; }
+  .htab .foot {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+    padding: 10px 15px; border-top: 1px solid var(--border);
+    background: var(--surface-2); font-size: 11.5px; color: var(--faint);
+  }
+  .htab .foot b { color: var(--muted); font-weight: 600; }
+  .htab .foot .tag { font-size: 10px; }
+
+  /* 24 h of latency per row, on that row's own scale, with the component's
+     own p50 as a dashed baseline. A gap in the samples is drawn as a gap. */
+  .spark { display: block; width: 100%; height: 26px; }
+  .spark .ln { fill: none; stroke: var(--accent-line); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  .spark .area { fill: var(--accent-wash); stroke: none; }
+  .spark .base { stroke: var(--border); stroke-width: 1; stroke-dasharray: 2 3; vector-effect: non-scaling-stroke; }
+  .spark .fail { fill: var(--danger); }
+  .spark.warn .ln { stroke: var(--warning); }
+  .spark.bad .ln { stroke: var(--danger); }
+  .spark-none { font-size: 11.5px; color: var(--faint); }
 
   /* ---------- metric tile ---------- */
   .metric {
@@ -706,6 +865,42 @@
   .empty b { color: var(--muted); font-weight: 600; }
 
   /* ---------- responsive ---------- */
+  /* The rail earns its column down to a laptop. Below that it becomes a
+     horizontal strip that scrolls, which is what the tab bar used to be. */
+  @media (max-width: 900px) {
+    .app { grid-template-columns: minmax(0, 1fr); }
+    .rail {
+      position: static; height: auto; flex-direction: row; align-items: center;
+      gap: 10px; overflow-x: auto; padding: 10px 12px;
+      border-right: 0; border-bottom: 1px solid var(--border);
+      scrollbar-width: thin;
+    }
+    .rail-brand { padding: 0; flex: 0 0 auto; }
+    .rail-env, .rail-foot { display: none; }
+    .nav { flex-direction: row; gap: 4px; flex: 1 1 auto; }
+    .nav-grp { display: none; }
+    .nav-item { white-space: nowrap; }
+  }
+  @media (max-width: 1180px) {
+    .ins { grid-template-columns: repeat(2, minmax(0,1fr)); }
+    /* Two columns leaves an odd slot; the third verdict takes the width
+       rather than sitting half-empty next to a hole. */
+    .ins > .insight:nth-child(3) { grid-column: span 2; }
+  }
+  @media (max-width: 760px) {
+    .ins, .ins > .insight:nth-child(3) { grid-template-columns: minmax(0,1fr); grid-column: auto; }
+    /* The table keeps its rows and drops the chart column: a 24 h shape in
+       90 px of phone is a smudge, and the three figures still carry the
+       verdict. Four columns, not three — the count has to match what is left
+       after the chart is hidden, or the last cell wraps onto its own line. */
+    .htab .r { grid-template-columns: minmax(0,1fr) 72px 56px 54px; gap: 9px; padding: 10px 12px; }
+    .htab .r.head { padding: 8px 12px; font-size: 9px; letter-spacing: 0.04em; }
+    .htab .r > .chart { display: none; }
+    .htab .now { font-size: 15px; }
+    .htab .now.soft { font-size: 10.5px; }
+    .htab .col { font-size: 11px; }
+    .htab .foot { padding: 10px 12px; }
+  }
   @media (max-width: 1080px) {
     .g-health { grid-template-columns: repeat(3, minmax(0,1fr)); }
     .g-metrics { grid-template-columns: repeat(3, minmax(0,1fr)); }
@@ -903,15 +1098,37 @@
 </style>
 </head>
 <body>
-<div class="wrap">
+<div class="app">
+
+  <!-- ============ RAIL ============ -->
+  <aside class="rail">
+    <div class="rail-brand">
+      <span class="wordmark">pqp<span class="dot">.</span>gg</span>
+      <span class="rail-env">operador</span>
+    </div>
+    <nav class="nav" role="tablist" aria-orientation="vertical" id="tabs" aria-label="seções do painel">
+      <span class="nav-grp">operação</span>
+      <button class="nav-item" role="tab" id="tab-agora" aria-controls="pane-agora" aria-selected="true" data-tab="agora"><span class="ico" aria-hidden="true">◉</span>agora</button>
+      <button class="nav-item" role="tab" id="tab-tempo" aria-controls="pane-tempo" aria-selected="false" data-tab="tempo"><span class="ico" aria-hidden="true">◷</span>ao longo do tempo</button>
+      <button class="nav-item" role="tab" id="tab-moderacao" aria-controls="pane-moderacao" aria-selected="false" data-tab="moderacao"><span class="ico" aria-hidden="true">⚑</span>moderação<span class="tcount" id="tabModCount" hidden>0</span></button>
+      <span class="nav-grp">produto</span>
+      <button class="nav-item" role="tab" id="tab-pessoas" aria-controls="pane-pessoas" aria-selected="false" data-tab="pessoas"><span class="ico" aria-hidden="true">☺</span>pessoas e conteúdo</button>
+      <span class="nav-grp">plataforma</span>
+      <button class="nav-item" role="tab" id="tab-infra" aria-controls="pane-infra" aria-selected="false" data-tab="infra"><span class="ico" aria-hidden="true">⚙</span>infra</button>
+    </nav>
+    <div class="rail-foot">
+      <span class="tag accent mono" id="railVersion">—</span>
+      <span>fly.io · gru · são paulo</span>
+      <span id="railRefresh">relê a cada 30 s</span>
+    </div>
+  </aside>
+
+  <main class="wrap">
 
   <!-- ============ HEADER ============ -->
+  <!-- The rail owns the identity now, so this row is only the state of the
+       read: is the instance healthy, is this page's data current, and when. -->
   <header class="top">
-    <div class="brand">
-      <span class="wordmark">pqp<span class="dot">.</span>gg</span>
-      <span class="sub">painel do operador</span>
-    </div>
-    <span class="spacer"></span>
     <div class="top-right">
       <span class="pill" id="statusPill"><span class="dot live"></span> <span id="statusPillText">tudo operacional</span></span>
       <span class="live-chip" id="liveChip" data-state="waiting" title="fonte dos dados">
@@ -931,20 +1148,11 @@
   <div class="signals" id="signals" aria-label="resumo do estado"><!-- injected --></div>
   <p class="provenance" id="provenance"><span>o que estes números incluem: carregando</span></p>
 
-  <!-- ============ TABS ============ -->
-  <!-- The whole payload arrives in one read, so a tab is a pane toggle and
-       never a request. The choice is kept in the URL hash so a reload, or a
-       link pasted to yourself, opens where you left off. -->
-  <div class="tabs" role="tablist" id="tabs" aria-label="seções do painel">
-    <button class="tab" role="tab" id="tab-geral" aria-controls="pane-geral" aria-selected="true" data-tab="geral">visão geral</button>
-    <button class="tab" role="tab" id="tab-usuarios" aria-controls="pane-usuarios" aria-selected="false" data-tab="usuarios">usuários</button>
-    <button class="tab" role="tab" id="tab-canais" aria-controls="pane-canais" aria-selected="false" data-tab="canais">canais</button>
-    <button class="tab" role="tab" id="tab-comunidades" aria-controls="pane-comunidades" aria-selected="false" data-tab="comunidades">comunidades</button>
-    <button class="tab" role="tab" id="tab-voz" aria-controls="pane-voz" aria-selected="false" data-tab="voz">voz e chamadas</button>
-    <button class="tab" role="tab" id="tab-moderacao" aria-controls="pane-moderacao" aria-selected="false" data-tab="moderacao">moderação<span class="tcount" id="tabModCount" hidden>0</span></button>
-    <button class="tab" role="tab" id="tab-infra" aria-controls="pane-infra" aria-selected="false" data-tab="infra">infra</button>
-  </div>
-
+  <!-- The rail. Five sections, in the order the questions arrive during an
+       incident: is something on fire, what is changing, who is here, what is
+       queued, what is deployed. One payload still, so switching is a pane
+       toggle and never a request; the choice lives in the URL hash so a reload
+       or a link to yourself opens where you left off. -->
   <!-- Where a failed read is reported. Never replaced by illustrative
        numbers: an empty panel that says why is honest, a fake one is not. -->
   <div id="loadError" hidden></div>
@@ -953,17 +1161,239 @@
        for a calm system. -->
   <div id="staleBanner" hidden></div>
 
-  <div class="pane" id="pane-geral" role="tabpanel" aria-labelledby="tab-geral">
+  <div class="pane" id="pane-agora" role="tabpanel" aria-labelledby="tab-agora">
+
+  <div class="pane-head">
+    <h1>agora</h1>
+    <span class="pane-q">tem algo pegando fogo, e o que está acontecendo neste minuto</span>
+  </div>
+
+  <!-- ============ INSIGHTS ============ -->
+  <!-- Three verdicts, three fixed slots, in incident order. Fixed because a
+       strip whose pills move cannot be scanned by position, which is the only
+       thing a strip is for. The arithmetic behind them is in insights.js and
+       is tested; a wrong number here is believed rather than checked. -->
+  <section aria-label="leituras">
+    <div class="sec-head">
+      <h2>leituras</h2>
+      <span class="rule"></span>
+      <span class="note" id="insightsNote">carregando</span>
+    </div>
+    <div class="ins" id="insights"><!-- injected --></div>
+    <!-- The gap, stated. A dashboard that quietly omits a question reads as a
+         dashboard where the question does not exist. -->
+    <p class="raw-note">
+      <b>o que fica cru, e por quê.</b> não há leitura de custo aqui: este painel
+      não vê fatura, bytes no r2 nem minutos de sfu, então qualquer número de
+      custo seria inventado e sobreviveria a todas as ressalvas em volta dele. o
+      que dá para dizer honestamente é folga, e isso está logo abaixo. retenção
+      fica crua pela mesma razão: o schema só registra mensagem como atividade,
+      então quem lê e não escreve conta como inativo.
+    </p>
+  </section>
 
   <!-- ============ HEALTH ============ -->
+  <!-- A table rather than a row of tiles. Seven cards of green said "nothing
+       is wrong" in the most expensive way a screen can say it, and the shape
+       that actually answers a question — how each component's latency has
+       moved over 24 h, against its own median — had nowhere to live. Rows put
+       every component on the same axis, which is what makes one of them
+       looking different visible at a glance. -->
   <section aria-label="saúde dos serviços">
     <div class="sec-head">
       <h2>saúde dos serviços</h2>
       <span class="rule"></span>
       <span class="note" id="healthNote">carregando</span>
     </div>
-    <div class="grid g-health" id="healthGrid"><!-- injected --></div>
+    <div class="htab" id="healthTable"><!-- injected --></div>
   </section>
+
+  <!-- ============ CAPACIDADE AGORA ============
+       The only block on this page read at the instant of the request: every
+       other number here comes from the API's 30-second cache. A cached queue
+       length would read as calm during the one event it exists to report. -->
+  <section id="secRuntime" aria-label="capacidade em tempo real">
+    <div class="sec-head">
+      <h2>capacidade agora</h2>
+      <span class="rule"></span>
+      <span class="note" id="rtNote">leitura ao vivo, fora do cache</span>
+    </div>
+    <div class="grid g-2">
+      <div class="card pad">
+        <p class="subtle-title">websockets abertos</p>
+        <div class="stat-row" style="margin-bottom:10px">
+          <div class="stat-mini" id="rtSocketsTile">
+            <span class="k">agora</span>
+            <span class="v num" id="rtSockets">—</span>
+            <span class="k" style="color:var(--faint)">uma por cliente conectado</span>
+          </div>
+          <div class="stat-mini" id="rtPeakSocketsTile">
+            <span class="k">pico</span>
+            <span class="v num" id="rtPeakSockets">—</span>
+            <span class="k" style="color:var(--faint)" id="rtPeakSocketsNote">—</span>
+          </div>
+          <div class="stat-mini" id="rtCompressedTile">
+            <span class="k">comprimidas</span>
+            <span class="v num" id="rtCompressed">—</span>
+            <span class="k" style="color:var(--faint)" id="rtCompressedNote">—</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:0">
+          cada cliente logado segura uma conexão pela sessão inteira, então isto é o mais perto de "gente conectada" que o processo sabe. o pico é exato, não amostrado: ele é medido toda vez que uma conexão abre.
+        </p>
+      </div>
+
+      <div class="card pad">
+        <p class="subtle-title">pool do postgres</p>
+        <div class="slots unknown" id="rtSlots" aria-hidden="true"><!-- injected --></div>
+        <div class="stat-row" style="margin-bottom:10px">
+          <div class="stat-mini" id="rtBusyTile">
+            <span class="k">em uso</span>
+            <span class="v num" id="rtBusy">—</span>
+            <span class="k" style="color:var(--faint)" id="rtBusyNote">—</span>
+          </div>
+          <div class="stat-mini" id="rtWaitingTile">
+            <span class="k">na fila</span>
+            <span class="v num" id="rtWaiting">—</span>
+            <span class="k" style="color:var(--faint)">pedidos esperando conexão</span>
+          </div>
+          <div class="stat-mini" id="rtPeakWaitingTile">
+            <span class="k">pico na fila</span>
+            <span class="v num" id="rtPeakWaiting">—</span>
+            <span class="k" style="color:var(--faint)" id="rtPeakWaitingNote">—</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:0">
+          <b>fila acima de zero é o aviso mais cedo que este sistema consegue dar</b>: nada quebra, nada fica lento o suficiente para reclamar, e mesmo assim já tem pedido esperando conexão. mas fila sozinha não quer dizer pool esgotado — o pg enfileira sempre que não consegue entregar uma conexão no mesmo tick, inclusive enquanto ainda está abrindo as primeiras. <b>o teto de verdade é fila com o pool cheio</b>, e depois do fato quem conta isso é o pico em uso ter chegado no máximo. o pico da fila é observado na hora em que uma conexão é entregue: ele nunca exagera e pode ficar um pouco abaixo do real.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VOICE / SFU ============
+       The SFU as the SFU sees itself, from the API's RoomServiceClient
+       (cached 10 s on the API). Production moved to a self-hosted LiveKit at
+       sfu.pqp.gg on 2026-09-05; a rollback to LiveKit Cloud is a one-line
+       secret change and invisible from the app, so the host is named here and
+       badged when it is not the expected one. -->
+  <section id="secSfu" aria-label="voz / sfu">
+    <div class="sec-head">
+      <h2>voz / sfu</h2>
+      <span class="rule"></span>
+      <span class="note" id="sfuNote">carregando</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <p class="subtle-title">servidor de mídia (livekit)</p>
+        <div class="stat-row" style="margin-bottom:10px">
+          <div class="stat-mini" id="sfuHostTile" style="flex:2 1 220px">
+            <span class="k">host configurado na api</span>
+            <span class="v sfu-host" id="sfuHost">—</span>
+            <span class="meta-row" id="sfuHostBadges" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px"></span>
+          </div>
+          <div class="stat-mini" id="sfuStateTile">
+            <span class="k">estado</span>
+            <span class="v" id="sfuState" style="font-size:18px">—</span>
+            <span class="k" style="color:var(--faint)" id="sfuStateNote">—</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:0" id="sfuExplain">
+          a api pergunta ao sfu com <code style="font-size:11px">listRooms</code> e guarda a resposta por 10 s. o esperado é <code style="font-size:11px">sfu.pqp.gg</code>; qualquer outro host quer dizer que a api foi apontada de volta para o livekit cloud (ou para nada).
+        </p>
+      </div>
+      <div class="card pad">
+        <p class="subtle-title">o que o sfu está segurando agora</p>
+        <div class="stat-row" style="margin-bottom:0">
+          <div class="stat-mini" id="sfuRoomsTile">
+            <span class="k">salas</span>
+            <span class="v num" id="sfuRooms">—</span>
+            <span class="k" style="color:var(--faint)" id="sfuRoomsNote">—</span>
+          </div>
+          <div class="stat-mini" id="sfuPeopleTile">
+            <span class="k">pessoas</span>
+            <span class="v num" id="sfuPeople">—</span>
+            <span class="k" style="color:var(--faint)" id="sfuPeopleNote">—</span>
+          </div>
+          <div class="stat-mini" id="sfuLargestTile">
+            <span class="k">maior sala</span>
+            <span class="v num" id="sfuLargest">—</span>
+            <span class="k" style="color:var(--faint)" id="sfuLargestNote">sem limite de mesh</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:14px 0 0" id="sfuDrift">
+          comparar com "salas abertas agora" abaixo: aquela lista é o mapa de pares da própria api; esta é a contagem do sfu. quando divergem, alguém está em chamada num lado e não no outro.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VOICE ACTIVITY ============ -->
+  <section aria-label="atividade de voz">
+    <div class="sec-head">
+      <h2>atividade de voz</h2>
+      <span class="rule"></span>
+      <span class="note" id="voiceNote">carregando</span>
+    </div>
+    <div class="grid g-3">
+      <div class="card pad">
+        <p class="subtle-title">salas abertas agora</p>
+        <div class="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>canal</th>
+                <th>servidor</th>
+                <th>caminho de mídia</th>
+                <th class="r">pessoas</th>
+                <th class="r">tela</th>
+                <th class="r">aberta há</th>
+              </tr>
+            </thead>
+            <tbody id="voiceBody"><!-- injected --></tbody>
+          </table>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:12px 0 0">
+          estado do processo, não histórico: a lista existe enquanto a chamada existe e some quando a última pessoa sai.
+        </p>
+      </div>
+      <div class="card pad">
+        <p class="subtle-title">resumo de voz · hoje</p>
+        <div class="stat-row" style="margin-bottom:0">
+          <div class="stat-mini">
+            <span class="k">salas ativas agora</span>
+            <span class="v num" id="vActive">—</span>
+          </div>
+          <div class="stat-mini">
+            <span class="k">pico de sala</span>
+            <span class="v num" id="vPeak">—</span>
+          </div>
+        </div>
+        <div class="stat-row" style="margin-top:12px;margin-bottom:0">
+          <div class="stat-mini">
+            <span class="k">pessoas em chamada agora</span>
+            <span class="v num" id="vPeople">—</span>
+          </div>
+          <div class="stat-mini" id="vLargestTile">
+            <span class="k">maior sala agora</span>
+            <span class="v num" id="vLargest">—</span>
+            <span class="k" style="color:var(--faint)" id="vLargestNote">limite prático do mesh: 5 a 8</span>
+          </div>
+        </div>
+        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:14px 0 0" id="vMeshNote">
+          limite prático do mesh: ~5 a 8 pares por sala. com o sfu (livekit) ligado esse limite não se aplica.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  </div><!-- /pane-agora -->
+
+  <div class="pane" id="pane-tempo" role="tabpanel" aria-labelledby="tab-tempo" hidden>
+
+  <div class="pane-head">
+    <h1>ao longo do tempo</h1>
+    <span class="pane-q">o que vem mudando: a única parte do painel com memória</span>
+  </div>
 
   <!-- ============ KEY METRICS ============ -->
   <section aria-label="métricas principais">
@@ -973,75 +1403,6 @@
       <span class="note">variação comparada às 24h anteriores</span>
     </div>
     <div class="grid g-metrics" id="metricGrid"><!-- injected --></div>
-  </section>
-
-  <!-- ============ APPS + PRODUCT ============ -->
-  <!-- Android lives on this Worker (button clicks in KV, GitHub downloads),
-       not on the API. The rest of the row is the `product` block: friends,
-       attachments, invites, push. Either half can arrive without the other. -->
-  <section aria-label="apps e produto" id="secApps">
-    <div class="sec-head">
-      <h2>apps e produto</h2>
-      <span class="rule"></span>
-      <span class="note" id="appsNote">android · amigos · anexos · convites · push</span>
-    </div>
-    <div class="grid g-apps" id="appsGrid">
-      <div class="metric">
-        <span class="m-label">cliques no apk</span>
-        <span class="m-val num" id="apkClicks">—</span>
-        <div class="m-foot">
-          <span class="delta flat" id="apkClicksDelta">hoje</span>
-          <span class="m-note" id="apkClicksNote">botão em /android</span>
-        </div>
-      </div>
-      <div class="metric">
-        <span class="m-label">downloads do apk</span>
-        <span class="m-val num" id="apkDownloads">—</span>
-        <div class="m-foot">
-          <span class="delta flat">github</span>
-          <span class="m-note" id="apkDownloadsNote">asset pqp.apk · android-beta</span>
-        </div>
-      </div>
-      <div class="metric">
-        <span class="m-label">amizades</span>
-        <span class="m-val num" id="prodFriends">—</span>
-        <div class="m-foot">
-          <span class="delta flat" id="prodFriendsDelta">aceitas</span>
-          <span class="m-note" id="prodFriendsNote">pedidos em aberto à parte</span>
-        </div>
-      </div>
-      <div class="metric">
-        <span class="m-label">anexos · 24h</span>
-        <span class="m-val num" id="prodAttach">—</span>
-        <div class="m-foot">
-          <span class="delta flat" id="prodAttachDelta">total</span>
-          <span class="m-note" id="prodAttachNote">arquivos reclamados</span>
-        </div>
-      </div>
-    </div>
-    <div class="grid g-apps" style="margin-top:14px">
-      <div class="stat-mini">
-        <span class="k">convites criados · 24h</span>
-        <span class="v num" id="prodInvites24h">—</span>
-      </div>
-      <div class="stat-mini">
-        <span class="k">usos de convite · total</span>
-        <span class="v num" id="prodInviteUses">—</span>
-      </div>
-      <div class="stat-mini">
-        <span class="k">push · web</span>
-        <span class="v num" id="prodPushWeb">—</span>
-      </div>
-      <div class="stat-mini">
-        <span class="k">push · iphone</span>
-        <span class="v num" id="prodPushApns">—</span>
-      </div>
-    </div>
-    <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:12px 2px 0">
-      clique e download são coisas diferentes: o clique é o botão em pqp.gg/android;
-      o download é o <span class="mono">pqp.apk</span> saindo do github. um pode ser maior que o outro
-      (desistiu, tentou de novo, baixou com curl).
-    </p>
   </section>
 
   <!-- ============ GROWTH CHARTS ============ -->
@@ -1070,36 +1431,53 @@
     </div>
   </section>
 
-  <!-- ============ TOP SERVERS ============ -->
-  <section aria-label="servidores mais ativos">
+  <!-- ============ VOICE OCCUPANCY OVER TIME ============
+       Everything else on this page is "agora" or "últimas 24 h". This is the
+       one block with a memory: a sampler on the api writes one row a minute,
+       rolls it up into a daily peak, and this reads it back. Separate endpoint
+       (/occupancy), separate cadence, so a chart nobody is looking at never
+       slows down the 30 s poll that the incident numbers ride on. -->
+  <section id="secOccupancy" aria-label="ocupação de voz ao longo do tempo">
     <div class="sec-head">
-      <h2>servidores mais ativos</h2>
+      <h2>quantas pessoas em chamada</h2>
       <span class="rule"></span>
-      <span class="note" id="serversNote">carregando</span>
+      <span class="note" id="occNote">carregando</span>
     </div>
     <div class="grid g-1">
       <div class="card pad">
-        <p class="subtle-title">servidores mais ativos · 24h</p>
-        <div class="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>servidor</th>
-                <th class="r">canais</th>
-                <th class="r">membros</th>
-                <th class="r">msgs 24h</th>
-              </tr>
-            </thead>
-            <tbody id="serversBody"><!-- injected --></tbody>
-          </table>
+        <div class="occ-head">
+          <div class="occ-titles">
+            <p class="subtle-title" id="occTitle" style="margin-bottom:4px">pico diário de pessoas em chamada</p>
+            <p class="m-note" id="occSub" style="font-size:11.5px;color:var(--faint);margin:0">carregando</p>
+          </div>
+          <div class="occ-controls">
+            <label for="occDay">ver um dia</label>
+            <select class="occ-select" id="occDay" aria-label="ver um dia minuto a minuto" disabled>
+              <option value="">escolha um dia</option>
+            </select>
+            <button type="button" class="refresh-btn" id="occBack" hidden>voltar aos 30 dias</button>
+          </div>
         </div>
+        <div class="chart-scroll" id="occChart"><!-- injected --></div>
+        <div class="legend" id="occLegend"><!-- injected --></div>
+        <p class="m-note" id="occCaveat" style="font-size:11.5px;color:var(--muted);margin:12px 0 0">
+          carregando
+        </p>
+        <p class="m-note" id="occFoot" style="font-size:11.5px;color:var(--faint);margin:8px 0 0">
+          carregando
+        </p>
       </div>
     </div>
   </section>
 
-  </div>
+  </div><!-- /pane-tempo -->
 
-  <div class="pane" id="pane-usuarios" role="tabpanel" aria-labelledby="tab-usuarios" hidden>
+  <div class="pane" id="pane-pessoas" role="tabpanel" aria-labelledby="tab-pessoas" hidden>
+
+  <div class="pane-head">
+    <h1>pessoas e conteúdo</h1>
+    <span class="pane-q">quem apareceu, quem voltou, o que escreveram</span>
+  </div>
 
   <!-- ============ USER DETAIL ============ -->
   <section aria-label="perfil da base de usuários" id="secUserDetail">
@@ -1289,10 +1667,6 @@
     </div>
   </section>
 
-  </div>
-
-  <div class="pane" id="pane-canais" role="tabpanel" aria-labelledby="tab-canais" hidden>
-
   <!-- ============ CHANNEL COMPOSITION ============ -->
   <section aria-label="composição de canais">
     <div class="sec-head">
@@ -1404,10 +1778,6 @@
     </div>
   </section>
 
-  </div>
-
-  <div class="pane" id="pane-comunidades" role="tabpanel" aria-labelledby="tab-comunidades" hidden>
-
   <!-- ============ COMMUNITIES ============ -->
   <!-- Behind COMMUNITIES_ENABLED on the API. With the flag off every count
        here is zero because the feature is off, which is a different thing
@@ -1463,120 +1833,29 @@
     </div>
   </section>
 
-  </div>
-
-  <div class="pane" id="pane-voz" role="tabpanel" aria-labelledby="tab-voz" hidden>
-
-  <!-- ============ VOICE / SFU ============
-       The SFU as the SFU sees itself, from the API's RoomServiceClient
-       (cached 10 s on the API). Production moved to a self-hosted LiveKit at
-       sfu.pqp.gg on 2026-09-05; a rollback to LiveKit Cloud is a one-line
-       secret change and invisible from the app, so the host is named here and
-       badged when it is not the expected one. -->
-  <section id="secSfu" aria-label="voz / sfu">
+  <!-- ============ TOP SERVERS ============ -->
+  <section aria-label="servidores mais ativos">
     <div class="sec-head">
-      <h2>voz / sfu</h2>
+      <h2>servidores mais ativos</h2>
       <span class="rule"></span>
-      <span class="note" id="sfuNote">carregando</span>
+      <span class="note" id="serversNote">carregando</span>
     </div>
-    <div class="grid g-3">
+    <div class="grid g-1">
       <div class="card pad">
-        <p class="subtle-title">servidor de mídia (livekit)</p>
-        <div class="stat-row" style="margin-bottom:10px">
-          <div class="stat-mini" id="sfuHostTile" style="flex:2 1 220px">
-            <span class="k">host configurado na api</span>
-            <span class="v sfu-host" id="sfuHost">—</span>
-            <span class="meta-row" id="sfuHostBadges" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:4px"></span>
-          </div>
-          <div class="stat-mini" id="sfuStateTile">
-            <span class="k">estado</span>
-            <span class="v" id="sfuState" style="font-size:18px">—</span>
-            <span class="k" style="color:var(--faint)" id="sfuStateNote">—</span>
-          </div>
-        </div>
-        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:0" id="sfuExplain">
-          a api pergunta ao sfu com <code style="font-size:11px">listRooms</code> e guarda a resposta por 10 s. o esperado é <code style="font-size:11px">sfu.pqp.gg</code>; qualquer outro host quer dizer que a api foi apontada de volta para o livekit cloud (ou para nada).
-        </p>
-      </div>
-      <div class="card pad">
-        <p class="subtle-title">o que o sfu está segurando agora</p>
-        <div class="stat-row" style="margin-bottom:0">
-          <div class="stat-mini" id="sfuRoomsTile">
-            <span class="k">salas</span>
-            <span class="v num" id="sfuRooms">—</span>
-            <span class="k" style="color:var(--faint)" id="sfuRoomsNote">—</span>
-          </div>
-          <div class="stat-mini" id="sfuPeopleTile">
-            <span class="k">pessoas</span>
-            <span class="v num" id="sfuPeople">—</span>
-            <span class="k" style="color:var(--faint)" id="sfuPeopleNote">—</span>
-          </div>
-          <div class="stat-mini" id="sfuLargestTile">
-            <span class="k">maior sala</span>
-            <span class="v num" id="sfuLargest">—</span>
-            <span class="k" style="color:var(--faint)" id="sfuLargestNote">sem limite de mesh</span>
-          </div>
-        </div>
-        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:14px 0 0" id="sfuDrift">
-          comparar com "salas abertas agora" abaixo: aquela lista é o mapa de pares da própria api; esta é a contagem do sfu. quando divergem, alguém está em chamada num lado e não no outro.
-        </p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ VOICE ACTIVITY ============ -->
-  <section aria-label="atividade de voz">
-    <div class="sec-head">
-      <h2>atividade de voz</h2>
-      <span class="rule"></span>
-      <span class="note" id="voiceNote">carregando</span>
-    </div>
-    <div class="grid g-3">
-      <div class="card pad">
-        <p class="subtle-title">salas abertas agora</p>
+        <p class="subtle-title">servidores mais ativos · 24h</p>
         <div class="table-scroll">
           <table>
             <thead>
               <tr>
-                <th>canal</th>
                 <th>servidor</th>
-                <th class="r">pessoas</th>
-                <th class="r">tela</th>
+                <th class="r">canais</th>
+                <th class="r">membros</th>
+                <th class="r">msgs 24h</th>
               </tr>
             </thead>
-            <tbody id="voiceBody"><!-- injected --></tbody>
+            <tbody id="serversBody"><!-- injected --></tbody>
           </table>
         </div>
-        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:12px 0 0">
-          estado do processo, não histórico: a lista existe enquanto a chamada existe e some quando a última pessoa sai.
-        </p>
-      </div>
-      <div class="card pad">
-        <p class="subtle-title">resumo de voz · hoje</p>
-        <div class="stat-row" style="margin-bottom:0">
-          <div class="stat-mini">
-            <span class="k">salas ativas agora</span>
-            <span class="v num" id="vActive">—</span>
-          </div>
-          <div class="stat-mini">
-            <span class="k">pico de sala</span>
-            <span class="v num" id="vPeak">—</span>
-          </div>
-        </div>
-        <div class="stat-row" style="margin-top:12px;margin-bottom:0">
-          <div class="stat-mini">
-            <span class="k">pessoas em chamada agora</span>
-            <span class="v num" id="vPeople">—</span>
-          </div>
-          <div class="stat-mini" id="vLargestTile">
-            <span class="k">maior sala agora</span>
-            <span class="v num" id="vLargest">—</span>
-            <span class="k" style="color:var(--faint)" id="vLargestNote">limite prático do mesh: 5 a 8</span>
-          </div>
-        </div>
-        <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:14px 0 0" id="vMeshNote">
-          limite prático do mesh: ~5 a 8 pares por sala. com o sfu (livekit) ligado esse limite não se aplica.
-        </p>
       </div>
     </div>
   </section>
@@ -1621,48 +1900,83 @@
     </div>
   </section>
 
-  <!-- ============ VOICE OCCUPANCY OVER TIME ============
-       Everything else on this page is "agora" or "últimas 24 h". This is the
-       one block with a memory: a sampler on the api writes one row a minute,
-       rolls it up into a daily peak, and this reads it back. Separate endpoint
-       (/occupancy), separate cadence, so a chart nobody is looking at never
-       slows down the 30 s poll that the incident numbers ride on. -->
-  <section id="secOccupancy" aria-label="ocupação de voz ao longo do tempo">
+  <!-- ============ APPS + PRODUCT ============ -->
+  <!-- Android lives on this Worker (button clicks in KV, GitHub downloads),
+       not on the API. The rest of the row is the `product` block: friends,
+       attachments, invites, push. Either half can arrive without the other. -->
+  <section aria-label="apps e produto" id="secApps">
     <div class="sec-head">
-      <h2>quantas pessoas em chamada</h2>
+      <h2>apps e produto</h2>
       <span class="rule"></span>
-      <span class="note" id="occNote">carregando</span>
+      <span class="note" id="appsNote">android · amigos · anexos · convites · push</span>
     </div>
-    <div class="grid g-1">
-      <div class="card pad">
-        <div class="occ-head">
-          <div class="occ-titles">
-            <p class="subtle-title" id="occTitle" style="margin-bottom:4px">pico diário de pessoas em chamada</p>
-            <p class="m-note" id="occSub" style="font-size:11.5px;color:var(--faint);margin:0">carregando</p>
-          </div>
-          <div class="occ-controls">
-            <label for="occDay">ver um dia</label>
-            <select class="occ-select" id="occDay" aria-label="ver um dia minuto a minuto" disabled>
-              <option value="">escolha um dia</option>
-            </select>
-            <button type="button" class="refresh-btn" id="occBack" hidden>voltar aos 30 dias</button>
-          </div>
+    <div class="grid g-apps" id="appsGrid">
+      <div class="metric">
+        <span class="m-label">cliques no apk</span>
+        <span class="m-val num" id="apkClicks">—</span>
+        <div class="m-foot">
+          <span class="delta flat" id="apkClicksDelta">hoje</span>
+          <span class="m-note" id="apkClicksNote">botão em /android</span>
         </div>
-        <div class="chart-scroll" id="occChart"><!-- injected --></div>
-        <div class="legend" id="occLegend"><!-- injected --></div>
-        <p class="m-note" id="occCaveat" style="font-size:11.5px;color:var(--muted);margin:12px 0 0">
-          carregando
-        </p>
-        <p class="m-note" id="occFoot" style="font-size:11.5px;color:var(--faint);margin:8px 0 0">
-          carregando
-        </p>
+      </div>
+      <div class="metric">
+        <span class="m-label">downloads do apk</span>
+        <span class="m-val num" id="apkDownloads">—</span>
+        <div class="m-foot">
+          <span class="delta flat">github</span>
+          <span class="m-note" id="apkDownloadsNote">asset pqp.apk · android-beta</span>
+        </div>
+      </div>
+      <div class="metric">
+        <span class="m-label">amizades</span>
+        <span class="m-val num" id="prodFriends">—</span>
+        <div class="m-foot">
+          <span class="delta flat" id="prodFriendsDelta">aceitas</span>
+          <span class="m-note" id="prodFriendsNote">pedidos em aberto à parte</span>
+        </div>
+      </div>
+      <div class="metric">
+        <span class="m-label">anexos · 24h</span>
+        <span class="m-val num" id="prodAttach">—</span>
+        <div class="m-foot">
+          <span class="delta flat" id="prodAttachDelta">total</span>
+          <span class="m-note" id="prodAttachNote">arquivos reclamados</span>
+        </div>
       </div>
     </div>
+    <div class="grid g-apps" style="margin-top:14px">
+      <div class="stat-mini">
+        <span class="k">convites criados · 24h</span>
+        <span class="v num" id="prodInvites24h">—</span>
+      </div>
+      <div class="stat-mini">
+        <span class="k">usos de convite · total</span>
+        <span class="v num" id="prodInviteUses">—</span>
+      </div>
+      <div class="stat-mini">
+        <span class="k">push · web</span>
+        <span class="v num" id="prodPushWeb">—</span>
+      </div>
+      <div class="stat-mini">
+        <span class="k">push · iphone</span>
+        <span class="v num" id="prodPushApns">—</span>
+      </div>
+    </div>
+    <p class="m-note" style="font-size:11.5px;color:var(--faint);margin:12px 2px 0">
+      clique e download são coisas diferentes: o clique é o botão em pqp.gg/android;
+      o download é o <span class="mono">pqp.apk</span> saindo do github. um pode ser maior que o outro
+      (desistiu, tentou de novo, baixou com curl).
+    </p>
   </section>
 
-  </div>
+  </div><!-- /pane-pessoas -->
 
   <div class="pane" id="pane-moderacao" role="tabpanel" aria-labelledby="tab-moderacao" hidden>
+
+  <div class="pane-head">
+    <h1>moderação</h1>
+    <span class="pane-q">a fila</span>
+  </div>
 
   <!-- ============ SAFETY & FEEDBACK ============ -->
   <section aria-label="segurança e feedback" id="secModeration">
@@ -1732,71 +2046,14 @@
     </div>
   </section>
 
-  </div>
+  </div><!-- /pane-moderacao -->
 
   <div class="pane" id="pane-infra" role="tabpanel" aria-labelledby="tab-infra" hidden>
 
-  <!-- ============ CAPACIDADE AGORA ============
-       The only block on this page read at the instant of the request: every
-       other number here comes from the API's 30-second cache. A cached queue
-       length would read as calm during the one event it exists to report. -->
-  <section id="secRuntime" aria-label="capacidade em tempo real">
-    <div class="sec-head">
-      <h2>capacidade agora</h2>
-      <span class="rule"></span>
-      <span class="note" id="rtNote">leitura ao vivo, fora do cache</span>
-    </div>
-    <div class="grid g-2">
-      <div class="card pad">
-        <p class="subtle-title">websockets abertos</p>
-        <div class="stat-row" style="margin-bottom:10px">
-          <div class="stat-mini" id="rtSocketsTile">
-            <span class="k">agora</span>
-            <span class="v num" id="rtSockets">—</span>
-            <span class="k" style="color:var(--faint)">uma por cliente conectado</span>
-          </div>
-          <div class="stat-mini" id="rtPeakSocketsTile">
-            <span class="k">pico</span>
-            <span class="v num" id="rtPeakSockets">—</span>
-            <span class="k" style="color:var(--faint)" id="rtPeakSocketsNote">—</span>
-          </div>
-          <div class="stat-mini" id="rtCompressedTile">
-            <span class="k">comprimidas</span>
-            <span class="v num" id="rtCompressed">—</span>
-            <span class="k" style="color:var(--faint)" id="rtCompressedNote">—</span>
-          </div>
-        </div>
-        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:0">
-          cada cliente logado segura uma conexão pela sessão inteira, então isto é o mais perto de "gente conectada" que o processo sabe. o pico é exato, não amostrado: ele é medido toda vez que uma conexão abre.
-        </p>
-      </div>
-
-      <div class="card pad">
-        <p class="subtle-title">pool do postgres</p>
-        <div class="slots unknown" id="rtSlots" aria-hidden="true"><!-- injected --></div>
-        <div class="stat-row" style="margin-bottom:10px">
-          <div class="stat-mini" id="rtBusyTile">
-            <span class="k">em uso</span>
-            <span class="v num" id="rtBusy">—</span>
-            <span class="k" style="color:var(--faint)" id="rtBusyNote">—</span>
-          </div>
-          <div class="stat-mini" id="rtWaitingTile">
-            <span class="k">na fila</span>
-            <span class="v num" id="rtWaiting">—</span>
-            <span class="k" style="color:var(--faint)">pedidos esperando conexão</span>
-          </div>
-          <div class="stat-mini" id="rtPeakWaitingTile">
-            <span class="k">pico na fila</span>
-            <span class="v num" id="rtPeakWaiting">—</span>
-            <span class="k" style="color:var(--faint)" id="rtPeakWaitingNote">—</span>
-          </div>
-        </div>
-        <p class="m-note" style="font-size:11.5px;color:var(--muted);margin:0">
-          <b>fila acima de zero é o aviso mais cedo que este sistema consegue dar</b>: nada quebra, nada fica lento o suficiente para reclamar, e mesmo assim já tem pedido esperando conexão. mas fila sozinha não quer dizer pool esgotado — o pg enfileira sempre que não consegue entregar uma conexão no mesmo tick, inclusive enquanto ainda está abrindo as primeiras. <b>o teto de verdade é fila com o pool cheio</b>, e depois do fato quem conta isso é o pico em uso ter chegado no máximo. o pico da fila é observado na hora em que uma conexão é entregue: ele nunca exagera e pode ficar um pouco abaixo do real.
-        </p>
-      </div>
-    </div>
-  </section>
+  <div class="pane-head">
+    <h1>infra</h1>
+    <span class="pane-q">commit, região, host e disponibilidade por componente</span>
+  </div>
 
   <!-- ============ INFRA & DEPLOYS ============ -->
   <section aria-label="infraestrutura e deploys">
@@ -1841,7 +2098,8 @@
     </div>
   </section>
 
-  </div>
+  </div><!-- /pane-infra -->
+
 
   <!-- ============ FOOTER ============ -->
   <footer class="foot">
@@ -1849,8 +2107,13 @@
     <span class="disclaimer"><span class="dot" style="width:6px;height:6px;background:var(--faint)"></span> <span id="footDisclaimer">aguardando a api · uso apenas do operador</span></span>
   </footer>
 
+  </main>
 </div>
 
+<!-- The three verdicts on "agora", as pure functions of the payload. Its own
+     file because it is the one place on this page where being wrong is
+     believed rather than seen, so it is tested (test/insights.test.js). -->
+<script src="/insights.js"></script>
 <script>
 (function () {
   "use strict";
@@ -1989,6 +2252,24 @@
     var hours = Math.round(mins / 60);
     if (hours < 36) return "há " + hours + " h";
     return "há " + Math.round(hours / 24) + " dias";
+  }
+
+  /**
+   * "41 min", for a duration in a column whose header already says "há".
+   *
+   * Rounded to the minute below an hour and to a tenth of an hour above it: a
+   * call open for two and a half hours is not usefully "151 min", and nobody
+   * reads a room's age to the second. Empty for anything unparseable, which
+   * includes the API not sending the field at all.
+   */
+  function fmtElapsed(iso) {
+    var t = Date.parse(iso);
+    if (!isFinite(t)) return "";
+    var mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+    if (mins < 1) return "< 1 min";
+    if (mins < 60) return mins + " min";
+    var hours = mins / 60;
+    return (hours < 10 ? hours.toFixed(1).replace(".", ",") : String(Math.round(hours))) + " h";
   }
 
   // smooth (Catmull-Rom -> cubic bezier) path from points
@@ -2303,87 +2584,169 @@
     if (state) e.className += " " + state;
   }
 
-  /* ---------------- render: health ---------------- */
+  /* ---------------- latency sparkline ----------------
+     Deliberately not the `sparkline` above, which returns a DOM node for a
+     metric tile and shares a y-axis with nothing. This one returns markup and
+     draws a single component's own band.
+
+     One row's 24 h of latency, on that row's own scale, with the component's
+     own p50 as a dashed baseline. Every row is a different order of magnitude
+     (7 ms next to 241 ms), so a shared y-axis would flatten four of them into
+     one line at the bottom; the comparison that matters is each component
+     against its own past, which is exactly what the baseline draws.
+
+     A bucket with no samples is a gap, not a straight line through it: the
+     sampler stopping and the latency being steady must not draw the same. */
+  function latencySpark(points, p50, cls) {
+    var W = 100, H = 26, PAD = 2;
+    var pts = points || [];
+    var vals = [];
+    pts.forEach(function (pt) { if (pt && typeof pt.ms === "number") vals.push(pt.ms); });
+    if (vals.length < 2) return '<span class="spark-none">sem histórico ainda</span>';
+    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+    if (typeof p50 === "number") { lo = Math.min(lo, p50); hi = Math.max(hi, p50); }
+    if (hi === lo) { hi = lo + 1; }
+    var x = function (i) { return (i / Math.max(1, pts.length - 1)) * W; };
+    var y = function (v) { return PAD + (1 - (v - lo) / (hi - lo)) * (H - PAD * 2); };
+    var segs = [], cur = [];
+    pts.forEach(function (pt, i) {
+      if (!pt || typeof pt.ms !== "number") { if (cur.length > 1) segs.push(cur); cur = []; return; }
+      cur.push(x(i).toFixed(2) + "," + y(pt.ms).toFixed(2));
+    });
+    if (cur.length > 1) segs.push(cur);
+    var out = '<svg class="spark ' + (cls || "") + '" viewBox="0 0 ' + W + " " + H +
+      '" preserveAspectRatio="none" aria-hidden="true" focusable="false">';
+    if (typeof p50 === "number") {
+      out += '<line class="base" x1="0" y1="' + y(p50).toFixed(2) + '" x2="' + W + '" y2="' + y(p50).toFixed(2) + '"/>';
+    }
+    segs.forEach(function (seg) {
+      out += '<polygon class="area" points="' + seg[0].split(",")[0] + "," + H + " " +
+        seg.join(" ") + " " + seg[seg.length - 1].split(",")[0] + "," + H + '"/>';
+      out += '<polyline class="ln" points="' + seg.join(" ") + '"/>';
+    });
+    // A failed probe in a bucket is a red tick, so an outage that healed
+    // inside the window is not smoothed away by the mean of the good samples.
+    pts.forEach(function (pt, i) {
+      if (pt && pt.fails > 0) {
+        out += '<rect class="fail" x="' + (x(i) - 0.7).toFixed(2) + '" y="0" width="1.4" height="' + H + '"/>';
+      }
+    });
+    return out + "</svg>";
+  }
+
+  /* ---------------- render: insights ----------------
+     The verdicts themselves are computed in insights.js, which is tested.
+     This only paints them, and paints a "raw" one as a visible gap rather
+     than as a fourth shade of opinion. */
+  function renderInsights() {
+    var host = $("insights");
+    if (!host || !window.PQPInsights) return;
+    var list = window.PQPInsights.buildInsights({
+      runtime: lastRuntime,
+      components: lastComponents,
+      history: lastStatusHistory,
+      names: HEALTH_KEYS,
+      // `occ.report` is always the 30-day report: drilling into a single day
+      // renders from its own response and never replaces it, so the verdict
+      // cannot start comparing today against minutes of one afternoon.
+      occupancy: (occ.report && Array.isArray(occ.report.points)) ? occ.report.points : null
+    });
+    host.innerHTML = list.map(function (i) {
+      return '<div class="insight ' + i.state + '">' +
+        '<div class="ih"><span class="dot' + (i.state === "raw" ? "" : " live") + '"></span>' +
+          '<h3>' + esc(i.head) + '</h3></div>' +
+        '<p>' + esc(i.body) + '</p>' +
+        (i.figs && i.figs.length
+          ? '<div class="figs">' + i.figs.map(function (f) {
+              return '<span class="f"><span>' + esc(f[0]) + '</span><b class="num">' + esc(f[1]) + '</b></span>';
+            }).join("") + '</div>'
+          : "") +
+        '<div class="src">' + esc(i.source) + '</div>' +
+      '</div>';
+    }).join("");
+    var open = list.filter(function (i) { return i.state === "warn" || i.state === "bad"; }).length;
+    var raw = list.filter(function (i) { return i.state === "raw"; }).length;
+    setText("insightsNote",
+      (open ? fmt(open) + (open === 1 ? " leitura pedindo atenção" : " leituras pedindo atenção")
+            : "nada pedindo atenção") +
+      (raw ? " · " + fmt(raw) + (raw === 1 ? " sem veredito" : " sem veredito") : ""));
+  }
+
+  /* ---------------- render: health ----------------
+     One row per component. Name and what is probed, 24 h of latency, the
+     reading now, that component's own p50, and uptime. The two columns on the
+     right are the pair that makes a number readable: 241 ms means nothing
+     beside a database at 7 ms and everything beside storage's own 236 ms. */
   function renderHealth(health, host) {
-    var hg = $("healthGrid");
-    // Called from applyMetrics too (the version tag lives on the host tile).
+    var table = $("healthTable");
+    if (!table) return;
     // With no health read yet there is nothing to draw and the skeleton is
     // still the honest thing to leave on screen.
     if (!health || !health.length) return;
-    hg.innerHTML = "";
+    var hist = {};
+    if (lastStatusHistory && Array.isArray(lastStatusHistory.components)) {
+      lastStatusHistory.components.forEach(function (c) { hist[c.key] = c; });
+    }
+
+    var rows = '<div class="r head">' +
+      '<span>componente</span>' +
+      '<span class="chart">latência · 24 h</span>' +
+      '<span style="text-align:right">agora</span>' +
+      '<span style="text-align:right">normal (p50)</span>' +
+      '<span style="text-align:right">uptime 24 h</span>' +
+      '</div>';
+
     health.forEach(function (h) {
-      var card = el("div", "health");
-      var stChip = h.state === "warn" ? "warn" : h.state === "bad" ? "bad" : h.state === "off" ? "off" : "";
-      var stLabel = h.state === "warn" ? "atenção" : h.state === "bad" ? "instável" : h.state === "off" ? "desligado" : "operacional";
-      var dot = h.state === "off" ? '<span class="dot"></span>' : '<span class="dot live"></span>';
-      var uptimeLine = typeof h.uptime === "number"
-        ? '<div class="bar"><i style="width:' + h.uptime + '%"></i></div>' +
-          '<div class="h-sub num" style="color:var(--muted)">uptime ' + h.uptime.toFixed(2).replace(".", ",") + '%</div>'
-        : '<div class="bar"><i style="width:0%"></i></div>' +
-          '<div class="h-sub" style="color:var(--muted)">uptime sem amostras</div>';
-      card.innerHTML =
-        '<div class="h-top">' +
-          '<span class="h-name">' + esc(h.name) + '</span>' +
-          '<span class="status-chip ' + stChip + '">' + dot + stLabel + '</span>' +
-        '</div>' +
-        '<div class="h-val num">' + esc(h.val) + '<span class="u">' + esc(h.unit) + '</span></div>' +
-        '<div class="h-sub">' + esc(h.sub) + '</div>' +
-        uptimeLine;
-      hg.appendChild(card);
+      var hc = hist[h.key] || null;
+      var p50 = hc && typeof hc.p50 === "number" ? hc.p50 : null;
+      var cls = h.state === "warn" ? "warn" : h.state === "bad" ? "bad" : h.state === "off" ? "off" : "";
+      rows += '<div class="r ' + cls + '">' +
+        '<span class="nm"><b><span class="dot' + (h.state === "off" ? "" : " live") + '"></span>' +
+          esc(h.name) + '</b><span>' + esc(h.sub) + '</span></span>' +
+        '<span class="chart">' + (h.state === "off"
+          ? '<span class="spark-none">não amostrado</span>'
+          : latencySpark(hc && hc.points, p50, cls)) + '</span>' +
+        (h.soft
+          ? '<span class="now soft">' + esc(h.val) + '</span>'
+          : '<span class="now num">' + esc(h.val) +
+            (h.unit ? '<span class="u">' + esc(h.unit) + '</span>' : "") + '</span>') +
+        '<span class="col num">' + (p50 === null ? "—" : p50 + " ms") + '</span>' +
+        '<span class="col num">' + (typeof h.uptime === "number"
+          ? h.uptime.toFixed(2).replace(".", ",") + "%" : "—") + '</span>' +
+      '</div>';
     });
 
-    // /ready tile: the same verdict UptimeRobot sees, from /metrics. It is the
-    // one tile here that can be red while every /status.json tile is green,
-    // because it also watches the pool's shape over time (queued for more
-    // than 10 s, full for more than 30 s), which a SELECT 1 cannot see.
+    // The footer carries what used to be two whole cards: the /ready verdict
+    // (which can be red while every /status.json row is green, because it
+    // also watches the pool's shape over time) and the host. Neither is a
+    // component with a latency curve, and giving them tiles the same size as
+    // one made the row of cards read as nine equals.
+    var foot = [];
     if (lastReady && lastReady.checks) {
       var rc = lastReady.checks;
-      var readyTile = el("div", "health");
       var bad = [];
       if (rc.postgres && !rc.postgres.ok) bad.push("postgres");
       if (rc.pool && !rc.pool.ok) bad.push("pool");
       if (rc.livekit && !rc.livekit.ok) bad.push("livekit");
       if (rc.storage && !rc.storage.ok) bad.push("storage");
       var pool = rc.pool || {};
-      var poolLine = "pool " + (pool.inUse || 0) + "/" + (pool.max || 0) +
-        (pool.queued ? " · " + pool.queued + " na fila" : "");
-      // The SFU host rides on the livekit check so this tile can say which
-      // one is being probed, not only that something answered.
-      var lkHost = typeof rc.livekit === "object" && typeof rc.livekit.host === "string"
-        ? rc.livekit.host : "";
+      var lkHost = typeof rc.livekit === "object" && typeof rc.livekit.host === "string" ? rc.livekit.host : "";
       var lkLine = !rc.livekit ? "" : rc.livekit.skipped ? " · sfu n/a" :
-        " · sfu " + (lkHost ? lkHost + " " : "") +
-        (rc.livekit.ok ? Math.round(rc.livekit.ms) + "ms" : "falhou");
-      readyTile.innerHTML =
-        '<div class="h-top">' +
-          '<span class="h-name">/ready</span>' +
-          '<span class="status-chip ' + (lastReady.ok ? "" : "bad") + '">' +
-            '<span class="dot live"></span>' + (lastReady.ok ? "200" : "503") + '</span>' +
-        '</div>' +
-        '<div class="h-val num">' + (rc.postgres ? Math.round(rc.postgres.ms) : 0) + '<span class="u">ms</span></div>' +
-        '<div class="h-sub">' + esc(lastReady.ok ? "o que o uptimerobot vê" : "falhando: " + bad.join(", ")) + '</div>' +
-        '<div class="h-sub num" style="color:var(--muted)">' + esc(poolLine + lkLine) + '</div>';
-      hg.appendChild(readyTile);
+        " · sfu " + (lkHost ? lkHost + " " : "") + (rc.livekit.ok ? Math.round(rc.livekit.ms) + " ms" : "falhou");
+      foot.push('<span title="o mesmo veredito que o uptimerobot recebe"><b>/ready</b> ' +
+        (lastReady.ok ? "200" : "503") +
+        (lastReady.ok ? "" : " · falhando: " + esc(bad.join(", "))) +
+        ' · postgres ' + (rc.postgres ? Math.round(rc.postgres.ms) : "—") + ' ms' +
+        ' · pool ' + (pool.inUse || 0) + "/" + (pool.max || 0) +
+        (pool.queued ? " · " + pool.queued + " na fila" : "") + esc(lkLine) + '</span>');
     }
+    foot.push('<span><b>host</b> fly.io · gru · são paulo · 1/1 health checks ' +
+      (host && host.versionKnown
+        ? '<span class="tag accent mono" title="commit em produção">' + esc(host.version) + '</span>'
+        : '<span class="tag">versão desconhecida</span>') + '</span>');
+    rows += '<div class="foot">' + foot.join("") + '</div>';
 
-    // Fly host tile
-    var hostTile = el("div", "health host");
-    var versionTag = host.versionKnown
-      ? '<span class="tag accent mono" title="commit em produção">' + esc(host.version) + '</span>'
-      : '<span class="tag">versão desconhecida</span>';
-    hostTile.innerHTML =
-      '<div class="h-top">' +
-        '<span class="h-name">host · fly.io</span>' +
-        '<span class="status-chip"><span class="dot live"></span>checks ok</span>' +
-      '</div>' +
-      '<div class="h-val num" style="font-size:22px">gru<span class="u">são paulo</span></div>' +
-      '<div class="h-sub">máquina única · api + ws</div>' +
-      '<div class="meta-row">' +
-        versionTag +
-        '<span class="tag">1/1 health checks</span>' +
-        '<span class="tag">região gru</span>' +
-      '</div>';
-    hg.appendChild(hostTile);
+    table.innerHTML = rows;
   }
 
   /* ---------------- render: metrics ---------------- */
@@ -3149,11 +3512,11 @@
     if (!vb) return;
     vb.innerHTML = "";
     if (!Array.isArray(rooms)) {
-      vb.innerHTML = '<tr><td colspan="4" class="empty-cell">esta api ainda não envia a lista de salas</td></tr>';
+      vb.innerHTML = '<tr><td colspan="6" class="empty-cell">esta api ainda não envia a lista de salas</td></tr>';
       return;
     }
     if (!rooms.length) {
-      vb.innerHTML = '<tr><td colspan="4" class="empty-cell">ninguém em chamada agora</td></tr>';
+      vb.innerHTML = '<tr><td colspan="6" class="empty-cell">ninguém em chamada agora</td></tr>';
       return;
     }
     rooms.forEach(function (r) {
@@ -3166,13 +3529,28 @@
         ? '<span style="color:var(--faint)">fora de servidor</span>'
         : esc(r.server || "—");
       var screens = Number(r.sharingScreen) || 0;
+      // Which path this room's audio is actually taking, and since when.
+      // Both are additive fields: an API that predates them sends neither and
+      // the row renders exactly as it used to, with a dash, rather than
+      // guessing a transport it was never told. Which path a call is on is
+      // the first thing worth knowing when somebody says voice is broken,
+      // because the two fail in completely different ways.
+      var transport = typeof r.transport === "string" ? r.transport : null;
+      var path = transport === "livekit"
+        ? '<span class="badge accent">servidor de mídia</span>'
+        : transport === "mesh"
+          ? '<span class="badge">ponto a ponto</span>'
+          : '<span style="color:var(--faint)">—</span>';
+      var opened = r.openedAt ? fmtElapsed(r.openedAt) : null;
       tr.innerHTML =
         '<td>' + name + '</td>' +
         '<td>' + where + '</td>' +
+        '<td>' + path + '</td>' +
         '<td class="r num cell-strong">' + fmt(Number(r.participants) || 0) + '</td>' +
         '<td class="r">' + (screens
           ? '<span class="badge accent">' + fmt(screens) + '</span>'
-          : '<span style="color:var(--faint)">—</span>') + '</td>';
+          : '<span style="color:var(--faint)">—</span>') + '</td>' +
+        '<td class="r" style="color:var(--faint)">' + (opened ? esc(opened) : "—") + '</td>';
       vb.appendChild(tr);
     });
   }
@@ -3515,6 +3893,9 @@
       occFillDaySelect(r.points);
       // A background refresh must not yank a drill-in out from under a reader.
       if (occ.mode === "days") occRenderDays(r);
+      // "agora" states today's peak against the last seven days, and this is
+      // the read that verdict is computed from.
+      renderInsights();
     }).catch(function (e) {
       occ.inflight = false;
       occFail(e);
@@ -3548,20 +3929,31 @@
     }
   }
 
-  /** Called on every /metrics tick. Cheap, and usually does nothing. */
+  /**
+   * Called on every /metrics tick. Cheap, and usually does nothing.
+   *
+   * This no longer waits for a section to be visible. "agora" states today's
+   * voice peak against the last seven days, and that verdict is the whole
+   * reason the section is worth opening during an incident, so the numbers
+   * behind it have to be there before anybody clicks anything. It is still
+   * one read per session plus one every five minutes (`OCC_REFRESH_MS`),
+   * against an endpoint this page already called, and it is fired and never
+   * awaited, so a slow occupancy read cannot delay the incident numbers.
+   */
   function occTick(force) {
-    var pane = $("pane-voz");
-    if (!pane || pane.hidden) return;
     if (occ.mode === "day" && !force) return;
     if (force && occ.mode === "day") { occLoadDay(occ.day); return; }
     occLoadDays(!!force);
   }
 
-  /** First show of the voz tab is the first read. */
-  function occOnVozShown() {
-    if (occ.asked) { occTick(false); return; }
+  /**
+   * Opening the section. The read already happened on load, and a background
+   * read writes into the pane whether it is visible or not, so this only has
+   * to cover the case where that read failed or is stale.
+   */
+  function occOnShown() {
     occ.asked = true;
-    occLoadDays(true);
+    occTick(false);
   }
 
   (function wireOccupancy() {
@@ -3958,7 +4350,7 @@
      hash is the only state: it survives a reload and can be pasted to
      yourself, and an unknown one falls back to the first pane rather than
      leaving the page with nothing visible. */
-  var TABS = ["geral", "usuarios", "canais", "comunidades", "voz", "moderacao", "infra"];
+  var TABS = ["agora", "tempo", "pessoas", "moderacao", "infra"];
 
   function showTab(name, opts) {
     if (TABS.indexOf(name) === -1) name = TABS[0];
@@ -3971,9 +4363,12 @@
       }
       if (pane) pane.hidden = !on;
     });
-    // The occupancy history is the one block that is not in the /metrics
-    // payload, so it is read the first time somebody actually opens this tab.
-    if (name === "voz") occOnVozShown();
+    // The occupancy chart lives here, so opening this section is what makes
+    // the page redraw it. The *read* is not tied to the section any more:
+    // "agora" needs the same numbers for its voice verdict, so occupancy is
+    // fetched once on load (see wireOccupancy) and refreshed at most every
+    // five minutes, whichever section is showing.
+    if (name === "tempo") occOnShown();
     if (!opts || !opts.silent) {
       try {
         if (window.history && history.replaceState) {
@@ -3989,10 +4384,12 @@
     var bar = $("tabs");
     if (!bar) return;
     bar.addEventListener("click", function (ev) {
-      var btn = ev.target && ev.target.closest ? ev.target.closest(".tab") : null;
+      var btn = ev.target && ev.target.closest ? ev.target.closest(".nav-item") : null;
       if (btn && btn.getAttribute("data-tab")) showTab(btn.getAttribute("data-tab"));
     });
-    // Arrow keys move between tabs, which is what a tablist is expected to do.
+    // Arrow keys move between sections. The rail is vertical, so up and down
+    // are the expected pair; left and right still work, because the bar was
+    // horizontal for a long time and fingers remember.
     bar.addEventListener("keydown", function (ev) {
       var i = TABS.indexOf(
         (document.activeElement && document.activeElement.getAttribute)
@@ -4001,8 +4398,8 @@
       );
       if (i === -1) return;
       var next = null;
-      if (ev.key === "ArrowRight") next = TABS[(i + 1) % TABS.length];
-      else if (ev.key === "ArrowLeft") next = TABS[(i - 1 + TABS.length) % TABS.length];
+      if (ev.key === "ArrowDown" || ev.key === "ArrowRight") next = TABS[(i + 1) % TABS.length];
+      else if (ev.key === "ArrowUp" || ev.key === "ArrowLeft") next = TABS[(i - 1 + TABS.length) % TABS.length];
       else if (ev.key === "Home") next = TABS[0];
       else if (ev.key === "End") next = TABS[TABS.length - 1];
       if (!next) return;
@@ -4051,12 +4448,21 @@
     fillSkel("metricGrid", cards);
 
     var health = "";
-    for (var h = 0; h < 6; h++) {
-      health += '<div class="health">' + skel("skel-sm", "width:46%") +
-        '<div style="height:12px"></div>' + skel("skel-num", "width:40%") +
-        '<div style="height:12px"></div>' + skel("skel-line", "width:100%") + '</div>';
+    for (var h = 0; h < 5; h++) {
+      health += '<div class="r">' + skel("skel-sm", "width:60%") +
+        '<span class="chart">' + skel("skel-line", "width:100%") + '</span>' +
+        skel("skel-sm", "width:100%") + skel("skel-sm", "width:100%") + skel("skel-sm", "width:100%") + '</div>';
     }
-    fillSkel("healthGrid", health);
+    fillSkel("healthTable", health);
+
+    var ins = "";
+    for (var n = 0; n < 3; n++) {
+      ins += '<div class="insight raw">' + skel("skel-sm", "width:80%") +
+        '<div style="height:8px"></div>' + skel("skel-line", "width:100%") +
+        '<div style="height:6px"></div>' + skel("skel-line", "width:88%") +
+        '<div style="height:10px"></div>' + skel("skel-sm", "width:52%") + '</div>';
+    }
+    fillSkel("insights", ins);
 
     ["chartUsers", "chartMsgs", "chartSignups", "occChart"].forEach(function (id) {
       fillSkel(id, skel("skel-chart"));
@@ -4076,7 +4482,7 @@
     skelRows("acqLandingBody", 3, 3);
     skelRows("retBody", 3, 4);
     skelRows("connBody", 4, 3);
-    skelRows("voiceBody", 4, 2);
+    skelRows("voiceBody", 6, 2);
     fillSkel("sfuHostBadges", skel("skel-sm", "width:120px;display:inline-block"));
     skelRows("topChannelsBody", 4, 5);
     skelRows("commBody", 6, 3);
@@ -4225,6 +4631,11 @@
   }
 
   function applyMetrics(d) {
+    // Held for the verdicts on "agora". `runtime` is the live block (sampled
+    // per request, never from the 30-second cache); `statusHistory` is the
+    // 24 h of latency per component that makes a reading readable.
+    lastRuntime = d.runtime || null;
+    lastStatusHistory = d.statusHistory || null;
     var users = d.users || {}, servers = d.servers || {}, msgs = d.messages || {};
     var ch = d.channels || {}, voice = d.voice || {};
     var usersHourly = Array.isArray(users.byHour) && users.byHour.length ? users.byHour : [0, 0];
@@ -4302,16 +4713,30 @@
     setText("infraVersion", version || "desconhecida");
     lastHost = { version: version || "", versionKnown: !!version };
     lastReady = d.ready && typeof d.ready.ok === "boolean" ? d.ready : null;
+    setText("railVersion", version || "sem versão");
     renderHealth(lastHealth, lastHost);
+    renderInsights();
 
     lastLiveAt = d.generatedAt ? new Date(d.generatedAt) : new Date();
     paintUpdated();
   }
 
-  var HEALTH_KEYS = { api: "api", database: "postgres", storage: "storage (r2)", voice: "voz (ws)", gifs: "gifs" };
+  var HEALTH_KEYS = { api: "api", database: "postgres", storage: "storage (r2)", voice: "voz", gifs: "gifs" };
   var HEALTH_SUB = {
     api: "resposta do /status.json", database: "SELECT 1 · pool ok", storage: "HEAD assinado no bucket",
-    voice: "sinalização webrtc no /ws", gifs: "proxy de busca"
+    voice: "sinalização /ws · sfu na última sonda", gifs: "busca real no provedor, a cada 15 min"
+  };
+  /* What a card says when the API sent no latency for it.
+     ABSENT IS NOT ZERO. `/status.json` omits `latencyMs` for a component whose
+     health is inferred rather than measured, and this page used to render that
+     absence as `0`, which draws as an impossibly fast probe and is
+     indistinguishable at a glance from a real reading. So each one says what is
+     actually known about it instead of borrowing a number it never had. See
+     server/src/services/status.ts. */
+  var HEALTH_INFERRED = {
+    api: "respondeu · sem medida própria",
+    voice: "no ar · sem sonda recente",
+    gifs: "no ar · sem sonda recente"
   };
   // Nothing to draw until /health answers; renderHealth is only ever called
   // with real tiles, so an empty list here means the skeleton stays put.
@@ -4319,6 +4744,14 @@
   var lastHost = { version: "", versionKnown: false };
   // The `ready` block of /metrics (the /ready verdict); null until read.
   var lastReady = null;
+  /* What the verdicts on "agora" are computed from. Held rather than passed
+     because the three arrive on three different schedules: `runtime` and
+     `statusHistory` on every /metrics read, the components on every /health
+     read, and occupancy at most every five minutes. Each one repaints the
+     strip with whatever is there, and a verdict with no data says so. */
+  var lastRuntime = null;
+  var lastStatusHistory = null;
+  var lastComponents = null;
 
   function applyHealth(s) {
     var comps = Array.isArray(s.components) ? s.components : [];
@@ -4329,10 +4762,16 @@
       var st = c.state === "operational" ? "ok" : c.state === "degraded" ? "warn" : c.state === "down" ? "bad" : "off";
       if (st === "ok") operational++;
       if (st === "off") off++;
+      var measured = typeof c.latencyMs === "number";
       tiles.push({
+        key: c.key,
         name: name,
-        val: st === "off" ? "off" : String(typeof c.latencyMs === "number" ? Math.round(c.latencyMs) : 0),
-        unit: st === "off" ? "" : "ms",
+        val: st === "off" ? "off"
+          : measured ? String(Math.round(c.latencyMs))
+          : (HEALTH_INFERRED[c.key] || "no ar · sem medição"),
+        unit: st === "off" || !measured ? "" : "ms",
+        // A phrase is not a figure and must not be set in the figure face.
+        soft: st === "off" || !measured,
         sub: st === "off" ? "não configurado nesta instância" : (HEALTH_SUB[c.key] || c.label || ""),
         uptime: typeof c.uptime24h === "number" ? Math.round(c.uptime24h * 10000) / 100 : null,
         state: st
@@ -4340,7 +4779,9 @@
     });
     if (!tiles.length) throw new Error("status.json sem componentes");
     lastHealth = tiles;
+    lastComponents = comps;
     renderHealth(lastHealth, lastHost);
+    renderInsights();
 
     setText("healthNote", fmt(operational) + (operational === 1 ? " serviço operacional" : " serviços operacionais") +
       (off ? " · " + fmt(off) + " desligado" + (off === 1 ? "" : "s") : "") + " · host fly.io no gru");

@@ -2,6 +2,7 @@ import {
   CAMERA_LIMIT,
   MESH_VOICE_WARNING,
   SCREEN_SHARE_LIMIT,
+  meshVideoLimit,
   type ClientRelayMessage,
   type VoiceParticipant,
   type VoiceRoomTransport,
@@ -16,6 +17,7 @@ import {
   isCameraAtCap,
   isScreenShareAtCap,
   nextScreenShareFocus,
+  type MeshRoomLink,
 } from "@/lib/screen-share-roster";
 import {
   screenShareUnavailableMessage,
@@ -61,6 +63,11 @@ import {
   type RemotePeer,
 } from "@/lib/peer-connection-manager";
 import type { RealtimeTransport } from "@/lib/realtime";
+import {
+  remoteAudioPlan,
+  sameAudioPlan,
+  type RemoteAudioPlan,
+} from "@/lib/remote-audio-delivery";
 import {
   getReceiveQuality,
   subscribeReceiveQuality,
@@ -290,6 +297,19 @@ export interface VoiceState {
    * so the server never got to promote the room.
    */
   canPromoteTransport: boolean;
+  /**
+   * The transport this room ran on before it changed underneath us, or null.
+   *
+   * Set only from `voice-transport-changed`, which the server sends to the
+   * sockets that were already seated. That is exactly the audience for "the
+   * limits just went up": somebody who joins after the move gets `welcome`
+   * instead, never this, and is told nothing, because nothing changed for
+   * them. Cleared with the seat, so it does not follow us into the next room.
+   *
+   * Whether the change actually RAISED anything is not decided here: that is
+   * `lib/voice-capacity.ts`, off the shared limit maps.
+   */
+  capacityRoseFrom: VoiceRoomTransport | null;
   /** True when this client is the one presenting. */
   isSharingScreen: boolean;
   /** peerIds currently sharing, in roster order. */
@@ -309,6 +329,18 @@ export interface VoiceState {
   channelLive: Record<string, ChannelLive>;
   /** peerIds whose camera is on, from the roster's `cameraStreamId`. */
   cameraPeerIds: string[];
+  /**
+   * What this machine's uplink last measured, in bit/s, or null before there
+   * has been anything to measure.
+   *
+   * PREDICTION, NOT ENFORCEMENT. The buttons use it to grey themselves at the
+   * number this link can actually carry (`meshVideoLimit`), which is why it is
+   * on the state at all. The server holds every seat's report and takes the
+   * narrowest of them, so its answer can be smaller than this one, and its
+   * answer is the one that decides. Null everywhere on the voice server, where
+   * no client number is read.
+   */
+  uplinkBps: number | null;
   /**
    * Who occupies the large tile. Hook-owned so the audio sinks (mounted at
    * the app root) and both stage mounts can read the same value.
@@ -644,6 +676,44 @@ function stopMicPipeline(pipeline: MicPipeline | null) {
   closeMicContext(pipeline);
 }
 
+/**
+ * Why the camera was refused, in the words that are true for this room.
+ *
+ * Three shapes, and only one of them names a number. A mesh room with a count
+ * to state says the count. A mesh room that has a voice server to move to and
+ * was refused anyway was refused on the box's budget, not on a count. A room
+ * already on the voice server has no count at all (`CAMERA_LIMIT.livekit` is
+ * `null`), so it gets the same sentence: "no room for more cameras right now",
+ * which is a fact about the moment rather than a number that is about to
+ * change.
+ */
+function cameraLimitMessage(
+  limit: number | null,
+  canPromote: boolean,
+): string {
+  if (limit === null || canPromote) {
+    return translateMessage("voice.error.cameraLimitBusy");
+  }
+  return translateMessage("voice.error.cameraLimit", { limit });
+}
+
+/**
+ * The same three shapes for a screen share, now that the voice server has no
+ * share count either.
+ *
+ * On a mesh room that cannot move, the number is this room's own measured one
+ * and stating it is honest: it is what this call can carry. On a room that CAN
+ * move, or on the voice server, a refusal is the box being full rather than a
+ * count being reached, and "this call already has 2" would be a lie that a
+ * quieter box contradicts a minute later.
+ */
+function shareLimitMessage(limit: number | null, canPromote: boolean): string {
+  if (limit === null || canPromote) {
+    return translateMessage("voice.error.shareLimitBusy");
+  }
+  return translateMessage("voice.error.shareLimit", { limit });
+}
+
 function micErrorMessage(err: unknown): string {
   if (!(err instanceof Error)) {
     return translateMessage("voice.error.micFailed");
@@ -720,14 +790,23 @@ function screenShareErrorMessage(err: unknown): string {
 /**
  * The sentence for a room that just moved onto the voice server.
  *
- * Four triggers, two sentences: what the person watching cares about is
- * whether the call grew room for more video or for more people. `room-full`
- * and `stale-pin` are both the second one from the seat's point of view, and
- * an unknown reason from a newer server reads as that too, which is the safe
- * side: it is true of every promotion.
+ * Five triggers, two sentences. `cameras` and `screens` answer a click the
+ * person just made, so they name it. Everything else is the room having grown
+ * under them, and an unknown reason from a newer server reads as that too,
+ * which is the safe side because it is true of every promotion.
+ *
+ * `room-size` deliberately does NOT get a sentence of its own. The capacity
+ * card in `lib/voice-capacity.ts` already tells this exact person that
+ * screens and cameras just went up, with numbers read out of the limits that
+ * enforce them. A second, vaguer line saying the same thing at the same
+ * moment is noise, and it is the trigger that fires most often.
+ *
+ * (Do not write a bare PR reference like a three or four digit number after a
+ * hash anywhere under `client/src`: `bench/theme-tokens.mjs` reads it as a
+ * hex colour literal and fails the build. Name the file instead.)
  */
 function promotionNoticeKey(
-  reason: "cameras" | "screens" | "room-full" | "stale-pin",
+  reason: "cameras" | "screens" | "room-full" | "room-size" | "stale-pin",
 ): MessageKey {
   if (reason === "cameras") {
     return "voice.notice.promotedForCameras";
@@ -928,11 +1007,13 @@ export function createVoiceController(transport: RealtimeTransport) {
     transportFailure: null,
     roomTransport: null,
     canPromoteTransport: false,
+    capacityRoseFrom: null,
     isSharingScreen: false,
     screenSharePeerIds: [],
     liveStream: null,
     channelLive: {},
     cameraPeerIds: [],
+    uplinkBps: null,
     focusedScreenPeerId: null,
     dismissedSharePeerIds: [],
     audibleScreenPeerIds: [],
@@ -1179,7 +1260,58 @@ export function createVoiceController(transport: RealtimeTransport) {
     };
   }
 
+  /**
+   * The last plan handed to the SFU, so an unchanged one is not pushed again.
+   *
+   * `emit` runs on every state change, which in a busy room is every speaking
+   * ring; the plan changes only when somebody deafens, moves a volume slider
+   * to or off zero, is server-muted, or a share's sound starts or stops.
+   * Null while there is no SFU session, so the first plan after a connect (or
+   * a reconnect, which builds a new session with nothing registered) is
+   * always pushed.
+   */
+  let pushedAudioPlan: RemoteAudioPlan | null = null;
+
+  /**
+   * Tell the SFU which remote sounds this listener wants at all.
+   *
+   * Mesh rooms skip it: there is no server to stop, and a peer connection
+   * that stopped sending would have to renegotiate to start again. On the SFU
+   * it is one signalling message and the bytes stop leaving Sao Paulo. See
+   * `remote-audio-delivery.ts`.
+   */
+  function pushAudioDelivery() {
+    if (!sfu) {
+      pushedAudioPlan = null;
+      return;
+    }
+    const plan = remoteAudioPlan({
+      peers: state.remotePeers,
+      isDeafened: state.isDeafened,
+      peerVolumes: state.peerVolumes,
+      screenVolumes: state.screenVolumes,
+      serverMutedPeerIds: state.serverMutedPeerIds,
+      audibleScreenPeerIds: state.audibleScreenPeerIds,
+    });
+    if (pushedAudioPlan && sameAudioPlan(pushedAudioPlan, plan)) {
+      return;
+    }
+    try {
+      sfu.setAudioDelivery(plan);
+      pushedAudioPlan = plan;
+    } catch (err) {
+      // A BANDWIDTH SAVING MUST NEVER BE ABLE TO END A CALL, and this runs
+      // inside `emit`, which is on the path of every state change there is.
+      // A throw here propagated out of `emit` and took the whole SFU session
+      // down with it, which is a hundred times the cost of the bytes it was
+      // trying to save. The plan is deliberately not recorded as pushed, so
+      // the next emit tries again.
+      console.warn("[pqp] could not push the remote audio plan", err);
+    }
+  }
+
   function emit() {
+    pushAudioDelivery();
     listener?.(snapshot());
   }
 
@@ -1705,12 +1837,54 @@ export function createVoiceController(transport: RealtimeTransport) {
       : null;
   }
 
+  /**
+   * Take a fresh reading of this machine's uplink, for the mesh limit.
+   *
+   * Only on mesh, and only when there is a manager: on the voice server the
+   * server reads nothing a client sends about links, and a reading taken there
+   * would be a number travelling for no reason. A failed or absent reading
+   * keeps the last one rather than clearing it, because "I could not measure
+   * just now" is not "my link got smaller".
+   */
+  async function refreshUplinkMeasurement(): Promise<void> {
+    if (state.roomTransport === "livekit") {
+      return;
+    }
+    const measured = await manager?.measureUplinkBps();
+    if (measured !== null && measured !== undefined) {
+      state.uplinkBps = measured;
+    }
+  }
+
+  /** What `meshVideoLimit` needs to know about this room, from the state. */
+  function meshRoomLink(): MeshRoomLink {
+    return {
+      // Ourselves plus everyone the roster holds. `remotePeers` is the mesh's
+      // own view and is the number the server counts too.
+      roomSize: state.remotePeers.length + 1,
+      uplinkBps: state.uplinkBps,
+    };
+  }
+
+  function meshShareLimit(): number | null {
+    return state.roomTransport === "livekit"
+      ? SCREEN_SHARE_LIMIT.livekit
+      : meshVideoLimit({ kind: "screens", ...meshRoomLink() });
+  }
+
+  function meshCameraLimit(): number | null {
+    return state.roomTransport === "livekit"
+      ? CAMERA_LIMIT.livekit
+      : meshVideoLimit({ kind: "cameras", ...meshRoomLink() });
+  }
+
   /** Announce the share (and whether it has sound) to the room. */
   function announceSharing() {
     transport.sendVoice({
       type: "set-sharing-screen",
       sharing: true,
       audioStreamId: screenAudioStreamId(),
+      uplinkBps: state.uplinkBps ?? undefined,
     });
   }
 
@@ -1953,6 +2127,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         identities.set(peer.peerId, toIdentity(peer));
       }
 
+      // A fresh session has nothing registered, so the plan it was last told
+      // about applies to no publication. Forgetting it makes the next emit
+      // push the current one, whatever it is.
+      pushedAudioPlan = null;
       sfu = await connectLiveKit({
         session,
         // The list this tab already holds for the mesh, read now so a refresh
@@ -2174,7 +2352,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       usingSfu: false,
       transportFailure: null,
       roomTransport: null,
-    canPromoteTransport: false,
+      canPromoteTransport: false,
+      capacityRoseFrom: null,
       isSharingScreen: false,
       screenSharePeerIds: [],
       liveStream: null,
@@ -2182,6 +2361,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // forget which rooms are live.
       channelLive: state.channelLive,
       cameraPeerIds: [],
+    uplinkBps: null,
       focusedScreenPeerId: null,
       dismissedSharePeerIds: [],
       audibleScreenPeerIds: [],
@@ -2367,11 +2547,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
         void stopScreenShareInternal();
-        state.error = canPromoteTransport()
-          ? translateMessage("voice.error.shareLimitBusy")
-          : translateMessage("voice.error.shareLimit", {
-              limit: SCREEN_SHARE_LIMIT[state.roomTransport ?? "mesh"],
-            });
+        state.error = shareLimitMessage(
+          meshShareLimit(),
+          canPromoteTransport(),
+        );
         emit();
         break;
       case "camera-denied":
@@ -2379,11 +2558,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
         void stopCameraInternal();
-        state.error = canPromoteTransport()
-          ? translateMessage("voice.error.cameraLimitBusy")
-          : translateMessage("voice.error.cameraLimit", {
-              limit: CAMERA_LIMIT[state.roomTransport ?? "mesh"],
-            });
+        state.error = cameraLimitMessage(
+          meshCameraLimit(),
+          canPromoteTransport(),
+        );
         emit();
         break;
       case "voice-room-full": {
@@ -2467,6 +2645,10 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.peerId = message.peerId;
         state.voiceChannelId = message.voiceChannelId;
         state.transportFailure = null;
+        // A fresh seat, so there is no "before" to have grown from. This is
+        // what keeps the capacity card off the screen of somebody who walks
+        // into a room that was already promoted.
+        state.capacityRoseFrom = null;
         // Before any media is built, so a listener's SFU session never tries
         // to publish and a mesh listener's track starts disabled.
         applyPublishRules(
@@ -2632,6 +2814,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           refuseTransport({ transport: message.transport, reason: "promoted" });
           break;
         }
+        // Recorded before the new transport lands: this is the "before" the
+        // capacity card compares against (`lib/voice-capacity.ts`). Only the
+        // sockets that were seated across the move get this frame, which is
+        // exactly who should be told the room grew.
+        state.capacityRoseFrom = state.roomTransport ?? "mesh";
         state.roomTransport = message.transport;
         state.notice = translateMessage(promotionNoticeKey(message.reason));
         for (const peer of message.participants) {
@@ -3313,17 +3500,23 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
+      // Measured before the check, not after: the whole point of the reading
+      // is to decide this, and a stale one from the last room would answer for
+      // a link that may have changed since.
+      await refreshUplinkMeasurement();
       if (
         isScreenShareAtCap(
           state.screenSharePeerIds,
           state.peerId,
           state.roomTransport,
           canPromoteTransport(),
+          meshRoomLink(),
         )
       ) {
-        state.error = translateMessage("voice.error.shareLimit", {
-          limit: SCREEN_SHARE_LIMIT[state.roomTransport ?? "mesh"],
-        });
+        state.error = shareLimitMessage(
+          meshShareLimit(),
+          canPromoteTransport(),
+        );
         emit();
         return;
       }
@@ -3619,17 +3812,20 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
+      await refreshUplinkMeasurement();
       if (
         isCameraAtCap(
           state.cameraPeerIds,
           state.peerId,
           state.roomTransport,
           canPromoteTransport(),
+          meshRoomLink(),
         )
       ) {
-        state.error = translateMessage("voice.error.cameraLimit", {
-          limit: CAMERA_LIMIT[state.roomTransport ?? "mesh"],
-        });
+        state.error = cameraLimitMessage(
+          meshCameraLimit(),
+          canPromoteTransport(),
+        );
         emit();
         return;
       }
@@ -3685,7 +3881,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
       // Announced before the track is added so receivers can classify the
       // incoming video on arrival; the manager re-checks on the roster anyway.
-      transport.sendVoice({ type: "set-camera", streamId: stream.id });
+      transport.sendVoice({
+        type: "set-camera",
+        streamId: stream.id,
+        uplinkBps: state.uplinkBps ?? undefined,
+      });
       try {
         await manager?.setLocalCameraStream(stream);
         if (sfu) {
@@ -3730,6 +3930,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       const track = cameraCaptureStream?.getVideoTracks()[0];
       if (track) {
         await applyCameraQuality(track, next);
+        // The capture is a different size now, and on the SFU the simulcast
+        // ladder was solved against the size it used to be. This republishes
+        // only when the set of rungs actually changed; see the session.
+        await sfu?.reconcileCameraLadder();
       }
     },
 

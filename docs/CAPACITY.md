@@ -100,14 +100,22 @@ Applied to production:
 | `limit.num_tracks: -1` (and `bytes_per_sec: -1`) | 1.13.6 has no default track limit. Newer releases default to 400 tracks per CPU, which would silently cap a small box on an image bump. Pin before any bump | 2026-09-08 07:17:17Z |
 | Resize `sfu-pqp` from `vhp-2c-4gb-amd` to `vhp-4c-8gb-amd` | the port change only pays off with four cores to bind the four ports to; gated on LiveKit participants at most 4 | 2026-09-08 09:25:54Z |
 
-Known and not fixed: **TURN over TLS is dead.** Web, iOS and Android LiveKit
-clients receive only the LiveKit server's built-in TURN. LiveKit advertises
-`turns:turn.pqp.gg:443`, but Caddy owns 443 on the box, so that candidate never
-connects; the UDP 3478 relay is what works. Measured relay share on production:
-about one join in ten, all UDP, all Windows web or Electron. A viewer behind a
-network that blocks UDP has no working relay today. Fix under consideration:
-hand LiveKit clients the same `/api/ice-servers` list (Cloudflare TURN) the
-mesh path already uses.
+**TURN, corrected 2026-09-08.** This paragraph used to say that web, iOS and
+Android LiveKit clients receive only the media box's own built-in TURN, that
+its TLS relay is dead because Caddy owns 443, that about one join in ten
+relayed through the box, and that handing LiveKit clients the
+`/api/ice-servers` list was a fix under consideration. That fix has since
+shipped: `client/src/lib/sfu-ice-servers.ts` and its iOS and Android twins
+hand the app's own list (Cloudflare first) to the LiveKit SDK's `rtcConfig`,
+and the SDK then skips the join response's list entirely, so the box's relay
+is no longer offered to anybody.
+
+Checked on the box on 2026-09-08 with 9 to 12 participants live: **zero**
+relay allocations in the 30000 to 40000 range at three sampled instants.
+Three instants is not a proof of never, but the one-in-ten figure this
+replaces is certainly wrong now and should not be quoted. The TLS relay on
+5349 is still dead and still unused, and nothing depends on it; the reason it
+is dead (Caddy owns 443) is unchanged.
 
 **Co-tenancy note (reasoning, not measurement).** Redis and LiveKit Egress (for
 HLS) run on `sfu-pqp` alongside LiveKit itself, installed 2026-09-08; the box
@@ -244,6 +252,67 @@ measurement before its own plan.
    (seconds).
 5. **A second SFU node** (LiveKit multi-node with Redis) is the last one; it
    splits rooms across boxes, not one room, unless the room is bridged.
+
+## 6b. What binds first, and the measurement that would settle it
+
+Two findings from the 2026-09-08 question "should every room go on the media
+server". Recorded here rather than in a PR body because both outlive the answer
+they came from.
+
+### The monthly transfer allowance binds before the box does
+
+Every lever in section 6 is about how much the box can *carry at once*. That is
+not what runs out first. Priced against the day's own traffic, and expressed as
+ratios because the coordinates do not belong in this repository:
+
+- At **ten times** the day's usage, with today's routing, the estimated peak is
+  still around a **tenth** of the box's measured clean throughput. Cores and the
+  mux ports are nowhere near being the constraint at that multiple.
+- The **monthly transfer allowance** is. With today's routing it is reached at
+  roughly **3.7x** the day's usage. With every room moved onto the box it is
+  reached at roughly **1.6 to 2.1x**, because moving the peer-to-peer half onto
+  the box roughly **doubles** its bytes (two independent estimates, 1.8x and
+  2.3x; see below for why that is a range).
+
+So the decision "route more rooms to the media server" is a decision about the
+transfer bill, not about capacity, and the two have opposite shapes: capacity is
+a cliff you must stay well clear of, transfer is a slope you pay down. Read
+section 6 for the first and this for the second.
+
+**The allowance figure itself is not settled, which is why everything above is a
+ratio.** The plan table says one number (6 TB) and Vultr's own API reports a
+much smaller figure for the current billing period (612 GB), and until somebody
+reconciles those two, an absolute "we have N TB left" sentence would be a guess
+wearing a number. The ratios hold whichever it turns out to be; only the
+multiple at which the wall arrives moves. Settle this before quoting a headroom
+figure to anybody.
+
+### Nothing records video publishers per room over time
+
+The estimate above is a **range** rather than a number for one avoidable reason:
+no table in this product has ever recorded how many cameras and screen shares
+were up in a room, over time.
+
+What exists, and why none of it answers the question:
+
+| source | what it holds | why it is not enough |
+|---|---|---|
+| `voice_rooms` / `voice_peers` | live state only; rows go with the last peer | one instant, whenever you happen to look |
+| `voice_occupancy_samples` | participants and rooms per sample, by transport | **no video counts at all** |
+| Loki `voice.join` | room size at the moment of a join | says nothing about what the room then did |
+| `call_ratings` | "was somebody sharing", self-selected | a boolean, on the calls people chose to rate |
+
+Box cost is `participants x publishers x bitrate` per room, so a series with no
+publisher term cannot price a room. Every figure above had to be built by taking
+one live snapshot's room shapes and weighting them by the sampler's
+participant counts, which is where the factor-of-two band comes from.
+
+**The fix is small and it is already in the right place.** The occupancy sampler
+that shipped on 2026-09-08 walks the rooms it already holds; counting
+`sharingScreen` and `cameraStreamId` per room while it is there, split by
+transport, costs nothing extra and turns the next version of this question from
+an estimate into a measurement. Do that before the next routing decision, not
+during it.
 
 ## 7. How to rerun
 

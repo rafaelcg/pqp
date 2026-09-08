@@ -3,6 +3,7 @@ import { getPool } from "../db.js";
 import { runtimeSnapshot, type RuntimeMetrics } from "../lib/runtime.js";
 import { checkReady, type ReadyReport } from "./ready.js";
 import { readSfuStats, type SfuStats } from "../voice/sfu-stats.js";
+import { readStatusHistory, type StatusHistory } from "./status.js";
 import { getVoiceActivitySnapshot } from "../ws/voice.js";
 import { getPresenceFanoutStats } from "../ws/chat.js";
 import {
@@ -90,6 +91,16 @@ export interface AdminMetrics {
    * are meant to be compared, not confused.
    */
   sfu: SfuStats;
+  /**
+   * Per-component latency over the last 24 hours, bucketed, plus each
+   * component's own p50 and p95.
+   *
+   * Deliberately here and not on `/status.json`: a latency curve is a load
+   * curve, and the public page is allowed to say only "up" and "how often".
+   * See services/status.ts. Null when the history query failed, which must
+   * not cost the dashboard its counts.
+   */
+  statusHistory: StatusHistory | null;
   users: {
     total: number;
     last24h: number;
@@ -509,6 +520,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     recentFeedback,
     voiceRoomNames,
     productCounts,
+    statusHistory,
   ] = await Promise.all([
     pool.query<{ private_text: string; dm: string; grp: string }>(
       `SELECT COUNT(*) FILTER (
@@ -717,6 +729,9 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
          (SELECT COUNT(*) FROM push_subscriptions WHERE platform = 'web')::text AS push_web,
          (SELECT COUNT(*) FROM push_subscriptions WHERE platform = 'apns')::text AS push_apns`,
     ),
+    // A history that failed to read must not cost the dashboard its counts:
+    // the sparklines vanish, every number stays.
+    readStatusHistory().catch(() => null),
   ]);
 
   const channelCounts = { text: 0, voice: 0, category: 0, thread: 0 };
@@ -736,6 +751,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     cacheTtlSeconds: CACHE_TTL_MS / 1000,
     version: process.env.APP_VERSION?.trim() || null,
     excludedAccounts: EXCLUDED_ACCOUNTS,
+    statusHistory,
     users: {
       total: Number(users.rows[0]?.total ?? 0),
       last24h: Number(users.rows[0]?.last24h ?? 0),
