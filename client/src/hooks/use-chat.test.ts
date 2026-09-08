@@ -338,6 +338,44 @@ describe("optimistic sending", () => {
     expect(sent.length).toBe(before + 1);
   });
 
+  /**
+   * The refusal must never cost the person their sentence. The draft is
+   * already out of the field by the time the server answers, so it lives on
+   * as the pending row: it keeps its body, it is marked retryable, and the
+   * retry sends that same text rather than an empty frame.
+   */
+  it("keeps the typed text after a slow-mode refusal and resends it", () => {
+    const { chat, sent } = setup();
+    chat.setSlowMode({ seconds: 5, bypass: false });
+    chat.sendMessage("calma que ja vai");
+    const nonce = chat.getMessages()[0]!.nonce!;
+
+    chat.handleServerMessage({
+      type: "message-rejected",
+      channelId: CHANNEL,
+      nonce,
+      reason: "slow-mode",
+      retryAfterMs: 5000,
+    });
+
+    const held = chat.getMessages()[0]!;
+    expect(held.body).toBe("calma que ja vai");
+    expect(held.rejectReason).toBe("slow-mode");
+    expect(messageCanRetry(held)).toBe(true);
+
+    vi.advanceTimersByTime(5000);
+    const before = sent.length;
+    chat.retryMessage(nonce);
+    expect(sent.length).toBe(before + 1);
+    expect(sent[sent.length - 1]).toMatchObject({
+      type: "message-create",
+      body: "calma que ja vai",
+    });
+    // Still exactly one message in the list -- retry resends the row, it does
+    // not leave a corpse behind and add a second.
+    expect(chat.getMessages()).toHaveLength(1);
+  });
+
   it("starts a countdown after a successful send when slow mode is on", () => {
     const { chat, sent } = setup();
     chat.setSlowMode({ seconds: 5, bypass: false });

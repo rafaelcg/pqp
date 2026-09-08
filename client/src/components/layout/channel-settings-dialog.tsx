@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Image as ImageIcon, Shield, Webhook } from "lucide-react";
 import type { Channel } from "@pqp/shared";
+import { isVoiceRoomChannelType } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { SectionRail, type SectionRailItem } from "@/components/ui/section-rail";
@@ -318,7 +319,7 @@ export function ChannelSettingsDialog({
         topic: draft.topic.trim() || null,
         imageUrl: draft.imageUrl.trim() || null,
         ...(current.kind === "server" &&
-        (current.type === "text" || current.type === "voice")
+        (current.type === "text" || isVoiceRoomChannelType(current.type))
           ? { slowmodeSeconds: draft.slowmodeSeconds }
           : {}),
         ...(showsVoiceRoomSize(current)

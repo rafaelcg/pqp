@@ -4430,7 +4430,11 @@ function MainAppContent({
         (channel.type === "text" || isVoiceRoomChannelType(channel.type))
           ? (channel.slowmodeSeconds ?? 0)
           : 0,
-      bypass: perms.can(Permission.MANAGE_MESSAGES, selectedChannelId),
+      // Same pair the server exempts: whoever can clear the flood and
+      // whoever set the interval both work the room.
+      bypass:
+        perms.can(Permission.MANAGE_MESSAGES, selectedChannelId) ||
+        perms.can(Permission.MANAGE_CHANNELS, selectedChannelId),
     });
   }, [
     chat,
@@ -4444,10 +4448,15 @@ function MainAppContent({
   useEffect(() => {
     threadChat.setSlowMode({
       seconds: 0,
-      bypass: perms.can(
-        Permission.MANAGE_MESSAGES,
-        openThread?.thread.channelId ?? selectedChannelId,
-      ),
+      bypass:
+        perms.can(
+          Permission.MANAGE_MESSAGES,
+          openThread?.thread.channelId ?? selectedChannelId,
+        ) ||
+        perms.can(
+          Permission.MANAGE_CHANNELS,
+          openThread?.thread.channelId ?? selectedChannelId,
+        ),
     });
   }, [threadChat, perms.can, openThread?.thread.channelId, selectedChannelId]);
 

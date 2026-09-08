@@ -253,10 +253,11 @@ struct ChatView: View {
             }
         }
         .task {
-            // The server waives slow mode for MANAGE_MESSAGES. This app only
-            // knows the rank, and owner/admin are the ranks that always carry
-            // it; a custom role with the bit sees a countdown the server would
-            // not have enforced, which is the harmless direction to be wrong.
+            // The server waives slow mode for MANAGE_MESSAGES or
+            // MANAGE_CHANNELS. This app only knows the rank, and owner/admin
+            // are the ranks that always carry both; a custom cargo with either
+            // bit sees a countdown the server would not have enforced, which
+            // is the harmless direction to be wrong -- the send still goes.
             let isManager = server?.role == "owner" || server?.role == "admin"
             await model.open(
                 channelId: channelId,

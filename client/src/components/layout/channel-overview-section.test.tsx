@@ -79,13 +79,32 @@ describe("ChannelOverviewSection slow mode", () => {
     expect(html).toContain("Slow mode");
     expect(html).toContain("15 seconds");
     // And says which sound it slows, so nobody reads it as slowing the talking.
-    expect(html).toContain("Applies to this voice channel&#x27;s chat");
+    expect(html).toContain("Applies to the chat beside the call");
+  });
+
+  /**
+   * A watch party is a voice room with a screen on it, and it is the one
+   * channel type built for an audience of hundreds. The server has always
+   * enforced the wait there; for a while it was the only surface with no
+   * control to set it.
+   */
+  it("offers slow mode on a watch party too", () => {
+    const html = render(channel({ type: "watch_party", name: "Sessao" }));
+    expect(html).toContain("Slow mode");
+    expect(html).toContain("15 seconds");
+    expect(html).toContain("Applies to the chat beside the call");
   });
 
   it("keeps the plain hint on a text channel", () => {
     const html = render(channel());
-    expect(html).toContain("Members send once per interval");
-    expect(html).not.toContain("Applies to this voice channel");
+    expect(html).toContain("One message per interval, per person.");
+    expect(html).not.toContain("beside the call");
+  });
+
+  /** Both exempt bits are named, because both are what the server waives. */
+  it("names Manage Messages and Manage Channels as the way past it", () => {
+    const html = render(channel());
+    expect(html).toContain("Manage Messages or Manage Channels skips it");
   });
 
   it("shows the interval already set on a voice channel", () => {

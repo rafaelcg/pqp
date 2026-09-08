@@ -1808,8 +1808,13 @@ EXCEPTION
 END $$;
 
 -- Slow mode: seconds a member must wait between sends in this channel.
--- 0 is off. Ceiling is Discord's 6 hours. DMs stay 0 and have no control;
--- voice ignores the column; a thread reads its own row (no inherit in v1).
+-- 0 is off. Ceiling is Discord's 6 hours. DMs stay 0 and have no control.
+-- Every server channel a message can land in reads this: text, thread, voice
+-- and watch_party all carry a chat, and a voice room during a busy call is
+-- exactly where the flooding happens. A category is the only exclusion,
+-- because nothing is ever posted into one. A thread reads its own row
+-- (no inherit in v1). The clock itself is `channel_slowmode_sends`, at the
+-- end of this file.
 ALTER TABLE channels ADD COLUMN IF NOT EXISTS slowmode_seconds INTEGER NOT NULL DEFAULT 0;
 
 DO $$
@@ -3751,3 +3756,29 @@ CREATE TABLE IF NOT EXISTS hls_host_acks (
   acknowledged_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY (user_id, server_id)
 );
+
+-- Slow mode's clock. One row per (channel, sender) holding when that person
+-- last had a message accepted in that channel; `channels.slowmode_seconds` is
+-- compared against it at send time, so lowering a channel's interval frees
+-- everyone immediately instead of leaving them held under the old number.
+--
+-- This is a table rather than a `Map` in the API process on purpose: module
+-- state is per machine, `pqp-api` is heading for a second replica, and a
+-- sender whose two requests land on different machines would otherwise get
+-- two sends out of a one-send budget. The single upsert in
+-- services/slow-mode.ts takes a row lock, so two concurrent sends from the
+-- same person serialise and exactly one is charged.
+--
+-- Rows are worth nothing once the interval has passed; the retention sweep
+-- drops the stale ones (services/retention.ts) and a dropped channel or user
+-- takes its rows with it.
+CREATE TABLE IF NOT EXISTS channel_slowmode_sends (
+  channel_id    UUID NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+  user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  last_sent_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (channel_id, user_id)
+);
+
+-- The sweep's claim query: everything older than the longest possible wait.
+CREATE INDEX IF NOT EXISTS idx_channel_slowmode_sends_stale
+  ON channel_slowmode_sends (last_sent_at);
