@@ -67,6 +67,7 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 | `web-app` | `https://pqp.gg` returns 200 | The SPA on Cloudflare Pages. |
 | `websocket` | `wss://api.pqp.gg/ws` upgrades (101) and answers an invalid auth frame with close code 4401 | **The one a plain HTTP check misses.** Chat, presence and voice signalling all ride this socket; `/health` can be green while every WebSocket is dead. That is CLAUDE.md pitfall #9, verbatim. Needs no credential — an invalid token is enough to prove the upgrade, the message loop and the Clerk call all work. |
 | `fly-machines` | exactly **1** machine, `started`, in `gru` | The machine count is a decision (`fly.toml` `min_machines_running`, `docs/deploy-fly.md` 6a-bis), and this is the continuous half of asserting it: the deploy workflow checks the number at release time, this checks it between deploys, because a stray `fly scale count 2` or a machine Fly recreates after a host failure never goes through a deploy. One today by choice, until the two-machine rehearsal in `docs/STAGING.md` passes with `LIVEKIT_*` set; the code can share state (the bus and the registry are on, and mesh crosses the bus since 2026-09-08). When the flip lands, raise the count in `scripts/monitor/availability.mjs` in the same PR as `fly.toml`. |
+| `worker-image-drift` | `pqp-worker`'s started machine(s) run the same image as `pqp-api`'s | **Added 2026-09-08**, after the gap it would have caught: the deploy workflow's "Deploy the worker (same image)" step started failing silently (`FLY_API_TOKEN_WORKER` could not pull the API's image ref — an app-scoped token cannot read another app's registry), CI stayed red on a step everyone had learned to ignore, and `pqp-worker` sat on a two-day-old image while `pqp-api` redeployed two dozen times. Every job merged in that window — watch-party session reminders, the HLS retention sweep, voice occupancy sampling — was shipped and simply not running anywhere. Needs `FLY_ORG_TOKEN` to list a second app; skips (not fails) without it, and skips cleanly on a fork with no `pqp-worker`. |
 | `status-components` | no component in `/status.json` is `degraded` or `down` | Bridges the app's own probes (`server/src/services/status.ts`, sampled every minute) to a notification. Without it, the status page is something you have to remember to look at. `disabled` components are ignored — off on purpose is not broken. |
 
 > **Detection time is 10–30 minutes, not 10.** GitHub's cron minimum is 5
@@ -371,9 +372,11 @@ most natural way to write the exact claim the check exists to catch.
 
 ## Setup
 
-The uptime workflow needs **nothing new** — it uses the built-in `GITHUB_TOKEN`
-and the existing `FLY_API_TOKEN`. The limits workflow degrades gracefully: each
-unconfigured check reports `SKIP` with the exact credential it wants.
+The uptime workflow needs **nothing new** to run — it uses the built-in
+`GITHUB_TOKEN` and the existing `FLY_API_TOKEN`, and `worker-image-drift`
+degrades to `SKIP` without `FLY_ORG_TOKEN` rather than failing. The limits
+workflow degrades the same way: each unconfigured check reports `SKIP` with
+the exact credential it wants.
 
 To turn the remaining ones on:
 
@@ -392,6 +395,12 @@ gh variable set MONITOR_MPG_CLUSTER --body 9g6y30wdxzmrv5ml   # pqp-db-2, the pr
 *different app* (`pqp-support`), which the app-scoped deploy token cannot see.
 Without `FLY_ORG_TOKEN` that check `SKIP`s — visibly, with the fix in the
 message — and `api-error-rate` still runs on the deploy token.
+
+**So does `worker-image-drift`.** It lists `pqp-worker`'s machines to compare
+against `pqp-api`'s, same cross-app read as the two above. Without
+`FLY_ORG_TOKEN` it `SKIP`s rather than reporting a false pass — the whole
+point of the check is to catch the worker silently not being the app it looks
+like it can see.
 
 ### 2. R2 and Pages — check what the stored Cloudflare token can do
 
