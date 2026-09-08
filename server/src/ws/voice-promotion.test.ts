@@ -110,8 +110,12 @@ const {
 const { SOCKET_CAPS, setAuthenticatedSocket, deleteAuthenticatedSocket } =
   await import("./sockets.js");
 
-const { CAMERA_LIMIT, MESH_VOICE_LIMIT, SCREEN_SHARE_LIMIT } =
-  await import("@pqp/shared");
+const {
+  CAMERA_LIMIT,
+  MESH_ROOM_PROMOTION_SIZE,
+  MESH_VOICE_LIMIT,
+  SCREEN_SHARE_LIMIT,
+} = await import("@pqp/shared");
 
 interface Frame {
   type: string;
@@ -228,6 +232,7 @@ function camerasOn(watcher: Seat): number {
 }
 
 const ORIGINAL_BUDGET = process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+const ORIGINAL_ROOM_SIZE = process.env.VOICE_PROMOTION_ROOM_SIZE;
 
 describe("promoting a mesh room so more cameras fit", () => {
   let channel: string;
@@ -247,6 +252,11 @@ describe("promoting a mesh room so more cameras fit", () => {
     rows.voiceTransport = null;
     channel = randomUUID();
     delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+    // Off for the groups above, which are about the CAPS: a room of four
+    // would otherwise move before anybody clicked a camera, and every one of
+    // those tests would be measuring the wrong trigger. Its own group turns
+    // it back on.
+    process.env.VOICE_PROMOTION_ROOM_SIZE = "0";
   });
 
   afterEach(() => {
@@ -254,6 +264,11 @@ describe("promoting a mesh room so more cameras fit", () => {
       delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
     } else {
       process.env.VOICE_PROMOTION_MAX_SFU_MBPS = ORIGINAL_BUDGET;
+    }
+    if (ORIGINAL_ROOM_SIZE === undefined) {
+      delete process.env.VOICE_PROMOTION_ROOM_SIZE;
+    } else {
+      process.env.VOICE_PROMOTION_ROOM_SIZE = ORIGINAL_ROOM_SIZE;
     }
   });
 
@@ -666,6 +681,200 @@ describe("promoting a mesh room so more cameras fit", () => {
       expect(joiner.frames.find((f) => f.type === "welcome")?.transport).toBe(
         "mesh",
       );
+    });
+  });
+
+  /**
+   * THE FOURTH PERSON, and the caps nobody should ever meet.
+   *
+   * Every limit a small call runs into is a mesh limit: three cameras, two
+   * screen shares, eight people. The groups above move the room when somebody
+   * hits one, which works and still leaves the cap as something people MEET,
+   * mid call, as a refusal. Rafael: "a 2 or 3 person call is fine. 4 or 5
+   * becomes a proper thing. I want people to be able to share screen or use
+   * webcam."
+   *
+   * So the room moves at `MESH_ROOM_PROMOTION_SIZE`, before anybody asks for
+   * anything, and two and three person calls stay peer to peer on purpose.
+   */
+  describe("a room reaching the promotion size", () => {
+    beforeEach(() => {
+      delete process.env.VOICE_PROMOTION_ROOM_SIZE;
+    });
+
+    /** Seat `count` people, one at a time, as a real room fills. */
+    async function fill(count: number): Promise<Seat[]> {
+      const people: Seat[] = [];
+      for (let i = 0; i < count; i++) {
+        people.push(await seat(channel));
+      }
+      return people;
+    }
+
+    it("moves the room when the fourth person arrives", async () => {
+      const people = await fill(MESH_ROOM_PROMOTION_SIZE - 1);
+      expect(getRoomTransport(channel)).toBe("mesh");
+
+      const fourth = await knock(channel);
+
+      expect(fourth.peerId).not.toBeNull();
+      expect(getRoomTransport(channel)).toBe("livekit");
+      expect(fourth.frames.find((f) => f.type === "welcome")?.transport).toBe(
+        "livekit",
+      );
+      for (const person of people) {
+        const told = framesOf(person, "voice-transport-changed");
+        expect(told).toHaveLength(1);
+        expect(told[0]!.reason).toBe("room-size");
+        expect(told[0]!.transport).toBe("livekit");
+      }
+      // Moved in place: no leave, no rejoin, the same peer ids.
+      expect(framesOf(people[0]!, "peer-left")).toHaveLength(0);
+    });
+
+    it("leaves a two or three person call peer to peer", async () => {
+      const people = await fill(MESH_ROOM_PROMOTION_SIZE - 1);
+
+      expect(getRoomTransport(channel)).toBe("mesh");
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("voice-transport-changed");
+      }
+    });
+
+    it("means nobody meets the camera cap at all", async () => {
+      // The whole point. On mesh the fourth camera is a refusal that then
+      // moves the room; here the room already moved, so the click is just a
+      // click and the cap in force is the SFU's eight.
+      const people = await fill(MESH_ROOM_PROMOTION_SIZE);
+      expect(getRoomTransport(channel)).toBe("livekit");
+
+      for (const person of people) {
+        await cameraOn(person, channel);
+      }
+
+      expect(camerasOn(people[0]!)).toBe(MESH_ROOM_PROMOTION_SIZE);
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("camera-denied");
+      }
+    });
+
+    it("says room-size in the log, separably from the other triggers", async () => {
+      const lines: string[] = [];
+      const spy = vi
+        .spyOn(console, "log")
+        .mockImplementation((...args: unknown[]) => {
+          lines.push(args.join(" "));
+        });
+      try {
+        await fill(MESH_ROOM_PROMOTION_SIZE);
+      } finally {
+        spy.mockRestore();
+      }
+
+      const promoted = lines.filter((line) =>
+        line.startsWith("[pqp] voice.transportPromoted "),
+      );
+      expect(promoted).toHaveLength(1);
+      expect(promoted[0]).toContain("reason=room-size");
+      expect(promoted[0]).toContain(`voiceChannelId=${channel}`);
+    });
+
+    it("never promotes a channel an operator pinned to mesh", async () => {
+      rows.voiceTransport = "mesh";
+
+      const people = await fill(MESH_ROOM_PROMOTION_SIZE);
+
+      expect(getRoomTransport(channel)).toBe("mesh");
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("voice-transport-changed");
+      }
+    });
+
+    it("keeps the budget guard, and still seats the person", async () => {
+      // Two shares in a room of four is 2 x 4 x 1.5 = 12 Mbit/s on the box.
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "5";
+      const people = await fill(MESH_ROOM_PROMOTION_SIZE - 1);
+      await shareOn(people[0]!);
+      await shareOn(people[1]!);
+
+      const fourth = await knock(channel);
+
+      expect(getRoomTransport(channel)).toBe("mesh");
+      // The difference from the room-full trigger: the room is not full, so a
+      // refused promotion costs nobody their seat.
+      expect(fourth.peerId).not.toBeNull();
+      expect(fourth.frames.find((f) => f.type === "welcome")?.transport).toBe(
+        "mesh",
+      );
+    });
+
+    it("does not move the room for a client that could not follow it", async () => {
+      const people = await fill(MESH_ROOM_PROMOTION_SIZE - 1);
+
+      const fourth = await knock(channel, { transports: ["mesh"] });
+
+      expect(getRoomTransport(channel)).toBe("mesh");
+      // Seated, on the mesh it can actually run.
+      expect(fourth.peerId).not.toBeNull();
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("voice-transport-changed");
+      }
+    });
+
+    it("behaves exactly as before when LiveKit is not configured", async () => {
+      backend.configured = "mesh";
+
+      const people = await fill(MESH_ROOM_PROMOTION_SIZE + 1);
+
+      expect(getRoomTransport(channel)).toBe("mesh");
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("voice-transport-changed");
+      }
+    });
+
+    it("promotes once when two people arrive in the same tick", async () => {
+      const people = await fill(MESH_ROOM_PROMOTION_SIZE - 2);
+
+      const [a, b] = await Promise.all([knock(channel), knock(channel)]);
+
+      expect(a.peerId).not.toBeNull();
+      expect(b.peerId).not.toBeNull();
+      expect(getRoomTransport(channel)).toBe("livekit");
+      for (const person of people) {
+        expect(framesOf(person, "voice-transport-changed")).toHaveLength(1);
+      }
+    });
+
+    describe("the threshold is tunable without a deploy", () => {
+      it("moves the line to five when told to", async () => {
+        process.env.VOICE_PROMOTION_ROOM_SIZE = "5";
+
+        await fill(4);
+        expect(getRoomTransport(channel)).toBe("mesh");
+
+        await seat(channel);
+
+        expect(getRoomTransport(channel)).toBe("livekit");
+      });
+
+      it("is off at zero, and the mesh caps are the old caps again", async () => {
+        process.env.VOICE_PROMOTION_ROOM_SIZE = "0";
+
+        const people = await fill(6);
+
+        expect(getRoomTransport(channel)).toBe("mesh");
+        for (const person of people) {
+          expect(typesOf(person)).not.toContain("voice-transport-changed");
+        }
+      });
+
+      it("treats a typo as the default rather than as a change", async () => {
+        process.env.VOICE_PROMOTION_ROOM_SIZE = "four";
+
+        await fill(MESH_ROOM_PROMOTION_SIZE);
+
+        expect(getRoomTransport(channel)).toBe("livekit");
+      });
     });
   });
 });

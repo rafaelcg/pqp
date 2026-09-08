@@ -333,12 +333,14 @@ export const voiceTransportChangedMessageSchema = z.object({
   /**
    * What asked for the room: a camera or a screen share past the mesh cap
    * (`cameras` / `screens`), a ninth person at the door of a full mesh
-   * (`room-full`), or a pin that no longer matches the policy (`stale-pin`,
-   * a server that grew past ten members during a call that never emptied). A
+   * (`room-full`), a room reaching `MESH_ROOM_PROMOTION_SIZE` so that nobody
+   * meets a mesh cap in the first place (`room-size`), or a pin that no longer
+   * matches the policy (`stale-pin`, a server that grew past ten members
+   * during a call that never emptied). A
    * receiver that does not know the value still follows the move; only the
    * sentence on screen depends on it.
    */
-  reason: z.enum(["cameras", "screens", "room-full", "stale-pin"]),
+  reason: z.enum(["cameras", "screens", "room-full", "room-size", "stale-pin"]),
   /** The room at the moment of the promotion, self included. */
   participants: z.array(voiceParticipantSchema),
 });

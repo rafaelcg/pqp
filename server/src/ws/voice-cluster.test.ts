@@ -367,6 +367,11 @@ describeDb("voice across two instances", () => {
 
   beforeEach(async () => {
     process.env.VOICE_REGISTRY = "postgres";
+    // Off by default across this file. Almost every group here seats four or
+    // five people to test something else entirely (a camera, a ninth person, a
+    // mute, a resume), and a room that promotes itself at four would change
+    // what all of them measure. The group that owns this trigger turns it on.
+    process.env.VOICE_PROMOTION_ROOM_SIZE = "0";
     hub = createMemoryHub();
     onTheWire = [];
     hub.listeners.add((frame) => onTheWire.push(frame));
@@ -391,6 +396,7 @@ describeDb("voice across two instances", () => {
     }
     booted.length = 0;
     process.env.VOICE_REGISTRY = previousFlag;
+    delete process.env.VOICE_PROMOTION_ROOM_SIZE;
     backend.configured = "mesh";
     backend.profile = null;
     vi.restoreAllMocks();
@@ -1684,6 +1690,41 @@ describeDb("voice across two instances", () => {
       });
       expect(a.voice.getRoomTransport(channel)).toBe("livekit");
       // Nobody was hung up to seat a ninth.
+      expect(frames(onA[0]!, "peer-left")).toHaveLength(0);
+    });
+
+    it("the fourth person, arriving on B, moves the room and A's seats", async () => {
+      // The trigger fires wherever the person lands, and the seats on the
+      // other machine have to move with it or the call is split.
+      process.env.VOICE_PROMOTION_ROOM_SIZE = "4";
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+
+      const onA = [await joinFollowing(a, channel), await joinFollowing(a, channel)];
+      const onB = await joinFollowing(b, channel);
+      await settle();
+      expect(await roomRow(channel)).toBe("mesh");
+
+      const fourth = await knockFollowing(b, channel);
+
+      expect(fourth.peerId).not.toBeNull();
+      expect(await roomRow(channel)).toBe("livekit");
+      expect(frames(onB, "voice-transport-changed")).toHaveLength(1);
+      await waitFor(
+        () => onA.every((s) => frames(s, "voice-transport-changed").length === 1),
+        "the promotion on A",
+      );
+      expect(frames(onA[0]!, "voice-transport-changed")[0]).toMatchObject({
+        voiceChannelId: channel,
+        transport: "livekit",
+        reason: "room-size",
+      });
+      expect(a.voice.getRoomTransport(channel)).toBe("livekit");
       expect(frames(onA[0]!, "peer-left")).toHaveLength(0);
     });
 

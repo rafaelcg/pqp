@@ -1,14 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  blockFullRoomPromotion,
+  blockJoinPromotion,
   decidePromotion,
   estimateRoomMbps,
   estimateSfuLoadMbps,
   promotionBudgetMbps,
+  promotionRoomSize,
   VIDEO_STREAM_MBPS,
   VOICE_PROMOTION_DEFAULT_MAX_MBPS,
   type SfuRoomLoad,
 } from "./promotion.js";
+import { MESH_ROOM_PROMOTION_SIZE } from "@pqp/shared";
 
 /**
  * The budget that stands between "the fourth camera turns on" and "every call
@@ -187,13 +189,13 @@ describe("the verdict", () => {
 });
 
 /**
- * The two refusals that belong to the ROOM-FULL trigger specifically, decided
- * before the box is ever priced.
+ * The two refusals that belong to the join-triggered promotions (`room-full`
+ * and `room-size`), decided before the box is ever priced.
  */
-describe("blockFullRoomPromotion", () => {
+describe("blockJoinPromotion", () => {
   it("lets an ordinary full room through", () => {
     expect(
-      blockFullRoomPromotion({
+      blockJoinPromotion({
         channelOverride: null,
         joinerCapabilities: ["mesh", "livekit"],
       }),
@@ -204,7 +206,7 @@ describe("blockFullRoomPromotion", () => {
     // "Small, peer-to-peer" in the channel settings dialog. A guess about
     // crowd size may be corrected; a decision may not.
     expect(
-      blockFullRoomPromotion({
+      blockJoinPromotion({
         channelOverride: "mesh",
         joinerCapabilities: ["mesh", "livekit"],
       }),
@@ -213,7 +215,7 @@ describe("blockFullRoomPromotion", () => {
 
   it("treats an explicit livekit override as no obstacle at all", () => {
     expect(
-      blockFullRoomPromotion({
+      blockJoinPromotion({
         channelOverride: "livekit",
         joinerCapabilities: ["mesh", "livekit"],
       }),
@@ -224,10 +226,54 @@ describe("blockFullRoomPromotion", () => {
     // The trigger is one person's join. Spending the box, moving eight
     // people, and still turning that person away is the worst of both.
     expect(
-      blockFullRoomPromotion({
+      blockJoinPromotion({
         channelOverride: null,
         joinerCapabilities: ["mesh"],
       }),
     ).toBe("joiner-cannot-follow");
+  });
+});
+
+/**
+ * The room-size threshold, and the fact that it can be changed or switched off
+ * without a deploy. Read per call for exactly that reason.
+ */
+describe("promotionRoomSize", () => {
+  const ORIGINAL = process.env.VOICE_PROMOTION_ROOM_SIZE;
+
+  afterEach(() => {
+    if (ORIGINAL === undefined) {
+      delete process.env.VOICE_PROMOTION_ROOM_SIZE;
+    } else {
+      process.env.VOICE_PROMOTION_ROOM_SIZE = ORIGINAL;
+    }
+  });
+
+  it("is four unless told otherwise", () => {
+    delete process.env.VOICE_PROMOTION_ROOM_SIZE;
+    expect(promotionRoomSize()).toBe(MESH_ROOM_PROMOTION_SIZE);
+    expect(MESH_ROOM_PROMOTION_SIZE).toBe(4);
+  });
+
+  it("takes the number it is given", () => {
+    process.env.VOICE_PROMOTION_ROOM_SIZE = "5";
+    expect(promotionRoomSize()).toBe(5);
+  });
+
+  it("is off at zero", () => {
+    // The switch that has to exist before this ships an hour before a peak.
+    process.env.VOICE_PROMOTION_ROOM_SIZE = "0";
+    expect(promotionRoomSize()).toBeNull();
+  });
+
+  it("is off below two, because one would move every call the moment it opened", () => {
+    process.env.VOICE_PROMOTION_ROOM_SIZE = "1";
+    expect(promotionRoomSize()).toBeNull();
+  });
+
+  it("treats an unreadable value as the default, not as a change", () => {
+    // Same rule as the budget: a typo must not silently reshape the night.
+    process.env.VOICE_PROMOTION_ROOM_SIZE = "four";
+    expect(promotionRoomSize()).toBe(MESH_ROOM_PROMOTION_SIZE);
   });
 });

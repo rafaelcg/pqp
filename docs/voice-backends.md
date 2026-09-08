@@ -254,6 +254,7 @@ questions, and the `reason` on every log line and every frame says which:
 | `cameras` | a camera past `CAMERA_LIMIT.mesh` | `camera-denied` |
 | `screens` | a share past `SCREEN_SHARE_LIMIT.mesh` | `screen-share-denied` |
 | `room-full` | a ninth person at the door of a full mesh | `voice-room-full limit=8` |
+| `room-size` | a room reaching `MESH_ROOM_PROMOTION_SIZE` (4) | nothing; the caps waited to be met |
 | `stale-pin` | a join into a mesh room the policy would now open on the SFU | nothing; the pin won |
 
 `room-full` and `stale-pin` came out of one incident. At 16:13Z on 2026-09-08 a
@@ -276,6 +277,36 @@ decision, not a guess, and the policy answers `mesh` for one anyway, so the
 stale-pin trigger leaves it alone by construction), and a client that cannot
 run LiveKit does not get the room moved on its behalf, because the move would
 still not seat it. The budget applies to all four.
+
+**The threshold (`room-size`, 2026-09-08).** The four triggers above all fire
+when somebody MEETS a limit: a camera refused, a share refused, a join refused,
+a pin caught out. Rafael's framing was that meeting them at all is the problem:
+*"a 2 or 3 person call is fine. 4 or 5 becomes a proper thing. I want people to
+be able to share screen or use webcam."* So a room moves at
+`MESH_ROOM_PROMOTION_SIZE` people (**4**, in `packages/shared/src/voice-backend.ts`),
+before anybody asks for anything, and the mesh caps stop being something anybody
+runs into.
+
+Four is where the mesh arithmetic turns as well as where the social shape does:
+`CAMERA_LIMIT.mesh` is 3, so a room of four is the first size at which somebody
+is told no. **Two and three person calls stay peer to peer deliberately**: one
+hop instead of two is the lowest-latency path there is, it costs the media box
+nothing, and it still works when the box does not. Most calls are that size,
+which is also what keeps the box's load proportional to the calls that need it.
+
+`VOICE_PROMOTION_ROOM_SIZE` overrides it, read per join, so the number is
+tunable live (`fly secrets set`, no deploy); `0` switches the trigger off and
+leaves the other four exactly as they were. Anything below 2 is also off, since
+1 would move a room the moment one person opened it. A typo is the default, the
+same rule as the budget.
+
+Sized against production before it shipped: at that day's peak (40 participants,
+33 of them on mesh across 13 rooms, largest 7) roughly four rooms would have
+crossed the threshold, carrying about 21 people. At the day's observed publish
+rate (8 screen shares across 28 seats, no cameras) that is about 45 Mbit/s; with
+every promoted room at the SFU share cap about 120; with every seat publishing
+about 170. The box is measured clean at 880 to 935 (`docs/CAPACITY.md`) and the
+budget refuses past 600, so the guard, not the threshold, is what bounds it.
 
 There is **no database-only way to move a live room**, which is why this
 mechanism exists rather than an `UPDATE`: rewriting `voice_rooms.transport`
@@ -312,7 +343,8 @@ deploy.
 **Log lines:** `voice.transportPromoted` (room, user, reason, room size,
 `loadMbps`, `addedMbps`, `budgetMbps`), `voice.transportPromotionRefused` (the
 same plus `refusal`: `unconfigured` / `unreachable` / `budget` /
-`mesh-override` / `joiner-cannot-follow`), and
+`mesh-override` / `joiner-cannot-follow`; a refused `room-size` also carries
+`threshold`), and
 `voice.transportPromotionApplied` (per instance: how many seats moved, how many
 were released, how many were orphans left alone).
 
