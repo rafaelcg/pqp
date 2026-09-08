@@ -226,7 +226,7 @@ LiveKit Cloud bills participant-minutes, and a call between three friends gains 
 
 - **The override** is the channel settings dialog's "Voice room size" select (Automatic / Small, peer-to-peer / Large, voice server), `PATCH /api/channels/:id` with `voiceTransport`, Manage Channels permission. A streamer's five-member server uses it to force the SFU. Explicit `null` goes back to automatic.
 - **Cost of the decision:** one query, and only when it is needed: `getServerVoiceProfile` reads `servers.is_community` plus a correlated `COUNT(*)` over `server_members`' primary key `(server_id, user_id)`, so an index-only range scan. It is skipped for DMs, for a channel with an override, and whenever LiveKit is off. Because the result is pinned with the room, it runs once per call, never per join: a server crossing ten members mid-call does not move the call, the next call in that channel gets the SFU.
-- **Everything about the pin is unchanged.** `welcome.transport` and `voice-roster.transport` state the result; a mesh-only client (Android) joining a room that resolved to `livekit` is still refused with `voice-transport-unsupported`, never silently downgraded; a mesh room still stops at 8 with `voice-room-full`, which is acceptable because the policy only picks mesh for rooms that cannot reach 8 by construction, and an owner who expects to can set the override. `POST /api/voice/token` now answers 409 for a room pinned to mesh, so no participant-minute is ever billed for a peer-to-peer call.
+- **Everything about the pin is unchanged.** `welcome.transport` and `voice-roster.transport` state the result; a mesh-only client (Android) joining a room that resolved to `livekit` is still refused with `voice-transport-unsupported`, never silently downgraded; a mesh room still stops at 8, but the ninth person now moves the room instead of being refused (see promotion below), and only sees `voice-room-full` when the promotion is refused. `POST /api/voice/token` now answers 409 for a room pinned to mesh, so no participant-minute is ever billed for a peer-to-peer call.
 - **Log line**, one per pin: `[pqp] voice.transportPinned channelId=… transport=mesh reason=small` (`reason=resume` when a reconstructed resume re-pins what its token remembered).
 ### The one time a live room changes transport: promotion (2026-09-08)
 
@@ -245,6 +245,43 @@ nothing about how many of the five who turned up want their faces on.
 the mesh cap and LiveKit is configured, the server moves the whole room to the
 SFU and the camera turns on. `CAMERA_LIMIT.livekit` is 8 and
 `SCREEN_SHARE_LIMIT.livekit` is 4, so the cap after the move is the SFU's.
+
+**Four triggers, one path (2026-09-08).** The same machinery answers three more
+questions, and the `reason` on every log line and every frame says which:
+
+| `reason` | what asked | what used to happen |
+|---|---|---|
+| `cameras` | a camera past `CAMERA_LIMIT.mesh` | `camera-denied` |
+| `screens` | a share past `SCREEN_SHARE_LIMIT.mesh` | `screen-share-denied` |
+| `room-full` | a ninth person at the door of a full mesh | `voice-room-full limit=8` |
+| `stale-pin` | a join into a mesh room the policy would now open on the SFU | nothing; the pin won |
+
+`room-full` and `stale-pin` came out of one incident. At 16:13Z on 2026-09-08 a
+voice channel refused three people in a row with `voice.roomFull limit=8`, one
+of them 35 times in two minutes. The server had seventeen members, over
+`LARGE_SERVER_MEMBER_THRESHOLD`, so the policy would open that room on the SFU
+today. It was on mesh because it opened at 11:46 when the server was smaller,
+and it had not been empty since, so it had never re-decided. **A pin outlives
+the condition that created it**, and a room that never empties can hold the
+wrong one all day. A server crossing ten members, an override edited mid-call
+and a community being listed all have that shape.
+
+So a room pinned to mesh by an earlier join has its policy re-read on join
+(`recheckRoomTransport`; one query at most, none for a DM, for a channel with
+an override, or with no LiveKit configured, and one for a whole stampede), and
+a full mesh promotes instead of refusing the person at the door. Two extra
+guards belong to the room-full trigger and live in `blockFullRoomPromotion`:
+an explicit `mesh` in `channels.voice_transport` is never overruled (it is a
+decision, not a guess, and the policy answers `mesh` for one anyway, so the
+stale-pin trigger leaves it alone by construction), and a client that cannot
+run LiveKit does not get the room moved on its behalf, because the move would
+still not seat it. The budget applies to all four.
+
+There is **no database-only way to move a live room**, which is why this
+mechanism exists rather than an `UPDATE`: rewriting `voice_rooms.transport`
+leaves the process's `roomTransports` map and every connected mesh client
+disagreeing with the row, so new joiners land on the SFU while the incumbents
+stay peer to peer. That is a split room, which is worse than a full one.
 
 | step | what |
 |---|---|
@@ -274,7 +311,8 @@ deploy.
 
 **Log lines:** `voice.transportPromoted` (room, user, reason, room size,
 `loadMbps`, `addedMbps`, `budgetMbps`), `voice.transportPromotionRefused` (the
-same plus `refusal`: `unconfigured` / `unreachable` / `budget`), and
+same plus `refusal`: `unconfigured` / `unreachable` / `budget` /
+`mesh-override` / `joiner-cannot-follow`), and
 `voice.transportPromotionApplied` (per instance: how many seats moved, how many
 were released, how many were orphans left alone).
 
@@ -298,9 +336,11 @@ test (`WireProtocolTest.deliberatelyIgnored`) carries the entry that has to be
 deleted when it does. Tracked in `docs/PARITY.md`.
 
 Tests: `server/src/voice/promotion.test.ts` (the arithmetic against the
-capacity document), `server/src/ws/voice-promotion.test.ts` (the fourth camera,
-the race, the release, the budget, and that a deployment without LiveKit
-behaves exactly as before), `server/src/ws/voice-registry.test.ts` (the
+capacity document, and the two room-full guards), `server/src/ws/voice-promotion.test.ts`
+(the fourth camera, the ninth person, the stale pin, the race, the release, the
+budget, and that a deployment without LiveKit behaves exactly as before),
+`server/src/ws/voice-transport.test.ts` (the policy re-read),
+`server/src/ws/voice-registry.test.ts` (the
 conditional pin), `server/src/ws/voice-cluster.test.ts` (two instances),
 `client/src/hooks/use-voice-promotion.test.ts` (the client half).
 

@@ -1006,6 +1006,7 @@
   "voice.notice.streamGranted": "You can turn on camera or share a screen now.",
   "voice.notice.promotedForCameras": "This call became a large room so more cameras fit",
   "voice.notice.promotedForScreens": "This call became a large room so more screens fit",
+  "voice.notice.promotedForRoom": "This call became a large room so more people fit",
   "voice.control.listenOnlyLocked": "Listening only. You do not have permission to speak in this channel.",
   "voice.bar.listenOnly": "Listen only",
   "voice.quality.relayed": "Relayed",

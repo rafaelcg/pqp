@@ -718,6 +718,27 @@ function screenShareErrorMessage(err: unknown): string {
 }
 
 /**
+ * The sentence for a room that just moved onto the voice server.
+ *
+ * Four triggers, two sentences: what the person watching cares about is
+ * whether the call grew room for more video or for more people. `room-full`
+ * and `stale-pin` are both the second one from the seat's point of view, and
+ * an unknown reason from a newer server reads as that too, which is the safe
+ * side: it is true of every promotion.
+ */
+function promotionNoticeKey(
+  reason: "cameras" | "screens" | "room-full" | "stale-pin",
+): MessageKey {
+  if (reason === "cameras") {
+    return "voice.notice.promotedForCameras";
+  }
+  if (reason === "screens") {
+    return "voice.notice.promotedForScreens";
+  }
+  return "voice.notice.promotedForRoom";
+}
+
+/**
  * Supplies an SFU session for a voice channel.
  *
  * Registering one is a statement of **capability**, not a choice of transport:
@@ -2612,11 +2633,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           break;
         }
         state.roomTransport = message.transport;
-        state.notice = translateMessage(
-          message.reason === "screens"
-            ? "voice.notice.promotedForScreens"
-            : "voice.notice.promotedForCameras",
-        );
+        state.notice = translateMessage(promotionNoticeKey(message.reason));
         for (const peer of message.participants) {
           knownPeerIds.add(peer.peerId);
         }

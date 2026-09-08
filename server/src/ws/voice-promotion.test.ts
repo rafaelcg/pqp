@@ -65,6 +65,8 @@ vi.mock("../services/dms.js", () => ({
 /** A five-member server: mesh by policy, which is the whole point. */
 const rows = vi.hoisted(() => ({
   memberCount: 5,
+  /** `channels.voice_transport`: the operator's explicit choice, or null. */
+  voiceTransport: null as "mesh" | "livekit" | null,
 }));
 
 vi.mock("../services/servers.js", () => ({
@@ -72,7 +74,7 @@ vi.mock("../services/servers.js", () => ({
     kind: "server",
     type: "voice",
     server_id: "22222222-2222-4222-8222-222222222222",
-    voice_transport: null,
+    voice_transport: rows.voiceTransport,
   }),
   // Everybody can see the channel, so the rosters this suite counts cameras
   // from actually reach the sockets.
@@ -99,6 +101,7 @@ const {
   getRoomTransport,
   handleVoiceMessage,
   resetVoicePeers,
+  resetVoicePinRechecks,
   resetVoicePromotions,
   resetVoiceRateLimits,
   resetVoiceRoomTransports,
@@ -107,7 +110,8 @@ const {
 const { SOCKET_CAPS, setAuthenticatedSocket, deleteAuthenticatedSocket } =
   await import("./sockets.js");
 
-const { CAMERA_LIMIT, SCREEN_SHARE_LIMIT } = await import("@pqp/shared");
+const { CAMERA_LIMIT, MESH_VOICE_LIMIT, SCREEN_SHARE_LIMIT } =
+  await import("@pqp/shared");
 
 interface Frame {
   type: string;
@@ -131,15 +135,27 @@ function asUser(id: string): DbUser {
 
 const openSockets: WebSocket[] = [];
 
+interface Knock {
+  socket: WebSocket;
+  frames: Frame[];
+  user: DbUser;
+  /** The peer id the server assigned, or null when the join was refused. */
+  peerId: string | null;
+}
+
 /**
- * Seat somebody in `channel`. `follows` is whether this socket declared
- * `voice-transport-changed` at auth: the web build does, iOS and Android do
- * not.
+ * Ask to join `channel`, and report what came back whether or not it was a
+ * seat. `follows` is whether this socket declared `voice-transport-changed`
+ * at auth: the web build does, iOS and Android do not. `transports` is what
+ * the client says it can run.
  */
-async function seat(
+async function knock(
   channel: string,
-  follows = true,
-): Promise<Seat> {
+  options: {
+    follows?: boolean;
+    transports?: ("mesh" | "livekit")[];
+  } = {},
+): Promise<Knock> {
   const frames: Frame[] = [];
   const socket = {
     readyState: 1,
@@ -151,21 +167,32 @@ async function seat(
   setAuthenticatedSocket(
     socket,
     user,
-    follows ? [SOCKET_CAPS.voiceTransportChanged] : [],
+    (options.follows ?? true) ? [SOCKET_CAPS.voiceTransportChanged] : [],
   );
   await handleVoiceMessage(
     { socket, user },
     {
       type: "join-voice-room",
       voiceChannelId: channel,
-      transports: ["mesh", "livekit"],
+      transports: options.transports ?? ["mesh", "livekit"],
     },
   );
   const welcome = frames.find((f) => f.type === "welcome");
-  if (!welcome) {
-    throw new Error(`join refused: ${JSON.stringify(frames)}`);
+  return {
+    socket,
+    frames,
+    user,
+    peerId: welcome ? (welcome.peerId as string) : null,
+  };
+}
+
+/** `knock`, for a join that must succeed. */
+async function seat(channel: string, follows = true): Promise<Seat> {
+  const knocked = await knock(channel, { follows });
+  if (!knocked.peerId) {
+    throw new Error(`join refused: ${JSON.stringify(knocked.frames)}`);
   }
-  return { socket, frames, user, peerId: welcome.peerId as string };
+  return { ...knocked, peerId: knocked.peerId };
 }
 
 function cameraOn(person: Seat, channel: string): Promise<void> {
@@ -214,8 +241,10 @@ describe("promoting a mesh room so more cameras fit", () => {
     resetVoiceRateLimits();
     resetVoiceRoomTransports();
     resetVoicePromotions();
+    resetVoicePinRechecks();
     backend.configured = "livekit";
     rows.memberCount = 5;
+    rows.voiceTransport = null;
     channel = randomUUID();
     delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
   });
@@ -398,5 +427,245 @@ describe("promoting a mesh room so more cameras fit", () => {
     for (const person of people) {
       expect(typesOf(person)).not.toContain("voice-transport-changed");
     }
+  });
+
+  /**
+   * THE NINTH PERSON.
+   *
+   * 2026-09-08, 16:13Z: three people in a row were refused from one voice
+   * channel with `voice.roomFull limit=8`, and one of them retried 35 times
+   * in two minutes. The room was on mesh, the mesh holds eight, and the
+   * answer to the ninth person was "no". The mesh cap is right; refusing at
+   * it is not, when there is a media server standing there.
+   */
+  describe("a full mesh room", () => {
+    async function fullRoom(): Promise<Seat[]> {
+      const people: Seat[] = [];
+      for (let i = 0; i < MESH_VOICE_LIMIT; i++) {
+        people.push(await seat(channel));
+      }
+      expect(getRoomTransport(channel)).toBe("mesh");
+      return people;
+    }
+
+    it("moves the room and lets the ninth person in", async () => {
+      const people = await fullRoom();
+
+      const ninth = await knock(channel);
+
+      expect(ninth.peerId).not.toBeNull();
+      expect(ninth.frames.map((f) => f.type)).not.toContain("voice-room-full");
+      expect(ninth.frames.find((f) => f.type === "welcome")?.transport).toBe(
+        "livekit",
+      );
+      expect(getRoomTransport(channel)).toBe("livekit");
+      // The eight who were already talking moved in place, keeping their
+      // peer ids: nobody was hung up to make room for a ninth.
+      for (const person of people) {
+        const told = framesOf(person, "voice-transport-changed");
+        expect(told).toHaveLength(1);
+        expect(told[0]!.reason).toBe("room-full");
+        expect(told[0]!.transport).toBe("livekit");
+      }
+      expect(framesOf(people[0]!, "peer-left")).toHaveLength(0);
+    });
+
+    it("says room-full in the log, so the two triggers are separable", async () => {
+      const lines: string[] = [];
+      const spy = vi
+        .spyOn(console, "log")
+        .mockImplementation((...args: unknown[]) => {
+          lines.push(args.join(" "));
+        });
+      try {
+        await fullRoom();
+        await knock(channel);
+      } finally {
+        spy.mockRestore();
+      }
+
+      const promoted = lines.filter((line) =>
+        line.startsWith("[pqp] voice.transportPromoted "),
+      );
+      expect(promoted).toHaveLength(1);
+      expect(promoted[0]).toContain("reason=room-full");
+      expect(promoted[0]).toContain(`voiceChannelId=${channel}`);
+    });
+
+    it("refuses exactly as before when the box is over budget", async () => {
+      // A full room with a screen share running, which is what production was
+      // doing at 16:13: 2 publishers x 9 people x 1.5 = 27 Mbit/s.
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "10";
+      const people = await fullRoom();
+      await shareOn(people[0]!);
+      await shareOn(people[1]!);
+
+      const ninth = await knock(channel);
+
+      expect(ninth.peerId).toBeNull();
+      expect(ninth.frames.find((f) => f.type === "voice-room-full")).toMatchObject(
+        { voiceChannelId: channel, limit: MESH_VOICE_LIMIT },
+      );
+      expect(getRoomTransport(channel)).toBe("mesh");
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("voice-transport-changed");
+      }
+    });
+
+    it("never promotes a channel an operator pinned to mesh", async () => {
+      rows.voiceTransport = "mesh";
+      const people = await fullRoom();
+
+      const ninth = await knock(channel);
+
+      expect(ninth.peerId).toBeNull();
+      expect(ninth.frames.find((f) => f.type === "voice-room-full")).toMatchObject(
+        { limit: MESH_VOICE_LIMIT },
+      );
+      expect(getRoomTransport(channel)).toBe("mesh");
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("voice-transport-changed");
+      }
+    });
+
+    it("does not spend the box on a client that could not follow it there", async () => {
+      const people = await fullRoom();
+
+      // A build that only speaks mesh. Moving the room would evict nobody's
+      // problem but its own: it still could not be seated.
+      const ninth = await knock(channel, { transports: ["mesh"] });
+
+      expect(ninth.peerId).toBeNull();
+      expect(ninth.frames.find((f) => f.type === "voice-room-full")).toMatchObject(
+        { limit: MESH_VOICE_LIMIT },
+      );
+      expect(getRoomTransport(channel)).toBe("mesh");
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("voice-transport-changed");
+      }
+    });
+
+    it("promotes once when two ninth people knock in the same tick", async () => {
+      const people = await fullRoom();
+
+      const [a, b] = await Promise.all([knock(channel), knock(channel)]);
+
+      expect(a.peerId).not.toBeNull();
+      expect(b.peerId).not.toBeNull();
+      expect(getRoomTransport(channel)).toBe("livekit");
+      // One move, one frame each. Two would tear a live SFU session down and
+      // build it again under everybody.
+      for (const person of people) {
+        expect(framesOf(person, "voice-transport-changed")).toHaveLength(1);
+      }
+    });
+
+    it("is not attempted at all once the room is on the media server", async () => {
+      rows.memberCount = 40;
+      const people = [await seat(channel), await seat(channel)];
+      expect(getRoomTransport(channel)).toBe("livekit");
+
+      const ninth = await knock(channel);
+
+      expect(ninth.peerId).not.toBeNull();
+      for (const person of [...people, ninth]) {
+        expect(person.frames.map((f) => f.type)).not.toContain(
+          "voice-transport-changed",
+        );
+      }
+    });
+
+    it("behaves exactly as before when LiveKit is not configured", async () => {
+      backend.configured = "mesh";
+      await fullRoom();
+
+      const ninth = await knock(channel);
+
+      expect(ninth.peerId).toBeNull();
+      expect(ninth.frames.find((f) => f.type === "voice-room-full")).toMatchObject(
+        { limit: MESH_VOICE_LIMIT },
+      );
+    });
+  });
+
+  /**
+   * THE STALE PIN, which is what actually produced the incident above.
+   *
+   * The refused room was in a server of seventeen members, well over
+   * `LARGE_SERVER_MEMBER_THRESHOLD`. It was on mesh because it opened at
+   * 11:46 when the server was smaller, and it never emptied, so it never
+   * re-decided. A pin outliving its reason is the general shape; the ninth
+   * person is one symptom of it.
+   */
+  describe("a pin that no longer matches the policy", () => {
+    it("moves a live room when its server grows past the threshold", async () => {
+      const people = [await seat(channel), await seat(channel)];
+      expect(getRoomTransport(channel)).toBe("mesh");
+
+      rows.memberCount = 17;
+      const joiner = await knock(channel);
+
+      expect(getRoomTransport(channel)).toBe("livekit");
+      expect(joiner.frames.find((f) => f.type === "welcome")?.transport).toBe(
+        "livekit",
+      );
+      for (const person of people) {
+        expect(framesOf(person, "voice-transport-changed")[0]!.reason).toBe(
+          "stale-pin",
+        );
+      }
+    });
+
+    it("moves a live room when the override is switched to the SFU mid-call", async () => {
+      const people = [await seat(channel), await seat(channel)];
+
+      rows.voiceTransport = "livekit";
+      await knock(channel);
+
+      expect(getRoomTransport(channel)).toBe("livekit");
+      expect(framesOf(people[0]!, "voice-transport-changed")).toHaveLength(1);
+    });
+
+    it("leaves a room an operator pinned to mesh exactly where it is", async () => {
+      rows.voiceTransport = "mesh";
+      rows.memberCount = 500;
+      const people = [await seat(channel), await seat(channel)];
+
+      const joiner = await knock(channel);
+
+      expect(getRoomTransport(channel)).toBe("mesh");
+      expect(joiner.frames.find((f) => f.type === "welcome")?.transport).toBe(
+        "mesh",
+      );
+      expect(typesOf(people[0]!)).not.toContain("voice-transport-changed");
+    });
+
+    it("leaves a small server's room alone", async () => {
+      const people = [await seat(channel), await seat(channel)];
+
+      const joiner = await knock(channel);
+
+      expect(getRoomTransport(channel)).toBe("mesh");
+      expect(joiner.frames.find((f) => f.type === "welcome")?.transport).toBe(
+        "mesh",
+      );
+      expect(typesOf(people[0]!)).not.toContain("voice-transport-changed");
+    });
+
+    it("keeps the budget guard: over it the room stays where it is", async () => {
+      // Two shares in a room of three is 2 x 3 x 1.5 = 9 Mbit/s on the box.
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "5";
+      const people = [await seat(channel), await seat(channel), await seat(channel)];
+      await shareOn(people[0]!);
+      await shareOn(people[1]!);
+
+      rows.memberCount = 17;
+      const joiner = await knock(channel);
+
+      expect(getRoomTransport(channel)).toBe("mesh");
+      expect(joiner.frames.find((f) => f.type === "welcome")?.transport).toBe(
+        "mesh",
+      );
+    });
   });
 });

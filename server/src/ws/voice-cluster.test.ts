@@ -1393,10 +1393,14 @@ describeDb("voice across two instances", () => {
       expect(frames(smallRoom, "welcome")[0]?.transport).toBe("mesh");
     });
 
-    it("a mesh pin on A is adopted by a cold join on B even when B's own policy would say LiveKit", async () => {
+    it("a cold join on B whose policy says LiveKit moves the mesh pin on A rather than splitting the call", async () => {
       // The server crossed the member threshold while the call was on: A's
-      // room is pinned mesh, B's policy now answers LiveKit for the same
-      // channel, and the pin wins, so nobody is split off the call.
+      // room is pinned mesh and B's policy now answers LiveKit for the same
+      // channel. Until 2026-09-08 the pin simply won, which kept the call
+      // together and left it on a transport nothing would ever re-decide;
+      // a room that never empties then holds a stale pin for a whole day and
+      // starts refusing everybody past the eighth. Now the room moves, which
+      // keeps the call together the other way round.
       backend.configured = "livekit";
       backend.profile = small;
       const channel = randomUUID();
@@ -1404,21 +1408,38 @@ describeDb("voice across two instances", () => {
       const b = await bootInstance();
       await a.registry.heartbeatVoiceInstance();
       await b.registry.heartbeatVoiceInstance();
-      const onA = await join(a, randomUUID(), channel);
-      expect(frames(onA, "welcome")[0]?.transport).toBe("mesh");
+      const rec = recorder();
+      const user = asUser(randomUUID());
+      a.sockets.setAuthenticatedSocket(rec.socket, user, [
+        a.sockets.SOCKET_CAPS.voiceTransportChanged,
+      ]);
+      await a.voice.handleVoiceMessage(
+        { socket: rec.socket, user },
+        { type: "join-voice-room", voiceChannelId: channel, resume: true },
+      );
+      const onAPeerId = frames(rec, "welcome")[0]?.peerId as string;
+      expect(frames(rec, "welcome")[0]?.transport).toBe("mesh");
       await settle();
 
       backend.profile = { isCommunity: false, memberCount: 10 };
       const onB = await join(b, randomUUID(), channel);
+
       const welcome = frames(onB, "welcome")[0];
-      expect(welcome?.transport).toBe("mesh");
+      expect(welcome?.transport).toBe("livekit");
       expect(frames(onB, "voice-join-refused")).toHaveLength(0);
+      expect(await roomRow(channel)).toBe("livekit");
+      // A's seat moved in place, keeping its peer id: nobody was split off.
+      await waitFor(
+        () => frames(rec, "voice-transport-changed").length === 1,
+        "the promotion on A",
+      );
+      expect(frames(rec, "voice-transport-changed")[0]).toMatchObject({
+        transport: "livekit",
+        reason: "stale-pin",
+      });
       expect(
         (welcome?.peers as { peerId: string }[]).map((p) => p.peerId),
-      ).toEqual([onA.peerId]);
-      expect(await roomRow(channel)).toBe("mesh");
-      await signal(b, onB, { type: "offer", to: onA.peerId, sdp: "adopted" });
-      await waitFor(() => frames(onA, "offer").length === 1, "the offer on A");
+      ).toEqual([onAPeerId]);
     });
 
     it("a signaling frame never crosses into another room", async () => {
@@ -1599,6 +1620,103 @@ describeDb("voice across two instances", () => {
       // Nobody was evicted to do it.
       expect(frames(onB, "peer-left")).toHaveLength(0);
       expect(frames(onB, "voice-transport-unsupported")).toHaveLength(0);
+    });
+
+    /** Ask to join, and report what came back whether or not it was a seat. */
+    async function knockFollowing(
+      instance: Instance,
+      channel: string,
+    ): Promise<Recorder & { peerId: string | null }> {
+      const rec = recorder();
+      const user = asUser(randomUUID());
+      instance.sockets.setAuthenticatedSocket(rec.socket, user, [
+        instance.sockets.SOCKET_CAPS.voiceTransportChanged,
+      ]);
+      await instance.voice.handleVoiceMessage(
+        { socket: rec.socket, user },
+        { type: "join-voice-room", voiceChannelId: channel, resume: true },
+      );
+      const welcome = frames(rec, "welcome")[0];
+      return { ...rec, peerId: welcome ? (welcome.peerId as string) : null };
+    }
+
+    it("a ninth person knocking on B moves the room, the row and A's seats", async () => {
+      // The mesh ceiling counts both machines (see the group above), so the
+      // ninth person is refused by whichever instance they land on. Moving
+      // the room is what seats them, and it has to move the four seats on
+      // the OTHER machine too or the call is split.
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+
+      type Following = Awaited<ReturnType<typeof joinFollowing>>;
+      const onA: Following[] = [];
+      const onB: Following[] = [];
+      for (let i = 0; i < 4; i += 1) {
+        onA.push(await joinFollowing(a, channel));
+        onB.push(await joinFollowing(b, channel));
+      }
+      await settle();
+      expect(await roomRow(channel)).toBe("mesh");
+
+      const ninth = await knockFollowing(b, channel);
+
+      expect(ninth.peerId).not.toBeNull();
+      expect(frames(ninth, "voice-room-full")).toHaveLength(0);
+      expect(frames(ninth, "welcome")[0]?.transport).toBe("livekit");
+      expect(await roomRow(channel)).toBe("livekit");
+      for (const seat of onB) {
+        expect(frames(seat, "voice-transport-changed")).toHaveLength(1);
+      }
+      // The four on A move too, and only through the bus.
+      await waitFor(
+        () => onA.every((seat) => frames(seat, "voice-transport-changed").length === 1),
+        "the promotion on A",
+      );
+      expect(frames(onA[0]!, "voice-transport-changed")[0]).toMatchObject({
+        voiceChannelId: channel,
+        transport: "livekit",
+        reason: "room-full",
+      });
+      expect(a.voice.getRoomTransport(channel)).toBe("livekit");
+      // Nobody was hung up to seat a ninth.
+      expect(frames(onA[0]!, "peer-left")).toHaveLength(0);
+    });
+
+    it("a stale pin noticed on B moves the room and A's seats", async () => {
+      // The room opened when the server was small and never emptied. The
+      // server grew. Nothing about the room changed, which is the bug.
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+
+      const onA = await joinFollowing(a, channel);
+      const onB = await joinFollowing(b, channel);
+      await settle();
+      expect(await roomRow(channel)).toBe("mesh");
+
+      backend.profile = { isCommunity: false, memberCount: 17 };
+      const joiner = await knockFollowing(b, channel);
+
+      expect(frames(joiner, "welcome")[0]?.transport).toBe("livekit");
+      expect(await roomRow(channel)).toBe("livekit");
+      expect(frames(onB, "voice-transport-changed")).toHaveLength(1);
+      await waitFor(
+        () => frames(onA, "voice-transport-changed").length === 1,
+        "the promotion on A",
+      );
+      expect(frames(onA, "voice-transport-changed")[0]).toMatchObject({
+        transport: "livekit",
+        reason: "stale-pin",
+      });
     });
 
     it("releases a seat on B that cannot follow, and keeps the rest of the call", async () => {
