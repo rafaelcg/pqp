@@ -1,6 +1,7 @@
 import { Clapperboard } from "lucide-react";
 import type { WatchParty } from "@pqp/shared";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { LivePill } from "@/components/watch-party/live-pill";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -124,9 +125,12 @@ export function LivePartyBlock({
                       rounded="full"
                       className="h-7 w-7"
                     />
+                    {/* Static. `LivePill` below is the one thing that
+                        moves; two heartbeats out of step in a card this size
+                        is noise, not life. */}
                     <span
                       aria-hidden="true"
-                      className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-ink-2 bg-danger motion-safe:animate-pulse"
+                      className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-ink-2 bg-danger"
                     />
                   </span>
                   {/* WRAPS TO TWO LINES RATHER THAN TRUNCATING, because the
@@ -155,9 +159,7 @@ export function LivePartyBlock({
                     a click does. No chevron either, which would be one more
                     thing to draw and would say less than the border does. */}
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="shrink-0 rounded-full bg-danger/15 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-danger">
-                    {t("watchParty.live.badge")}
-                  </span>
+                  <LivePill />
                   <span className="min-w-0 truncate text-[11px] text-paper-muted">
                     {t("watchParty.live.hostedBy", {
                       name: party.hostDisplayName,

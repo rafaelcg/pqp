@@ -392,6 +392,47 @@ designed with the replay work rather than bolted on before it.
 heading, no empty section, no placeholder. Watch parties are simply not part of
 their sidebar until one exists.
 
+### Three decisions, settled
+
+Rafael was asked about these and said "i'll leave to you". They are written
+down so the next person inherits the reasoning instead of relitigating them.
+
+**1. The room stays unlisted and reused.** It is never in the sidebar, and one
+server has one of them, found or created on demand and adopted if it already
+exists. The alternative considered was a fresh channel per party, which reads
+more naturally ("this party, this room") and was rejected because it leaks: a
+channel row, its overwrites and a chat history per press, so a server that runs
+a film night every Friday accumulates a year of dead rooms. Reuse also gives
+the cardinality the sidebar block assumes, since the partial unique index
+allows one active party per room and therefore one live party per server.
+
+**2. The header keeps the internal room name, with the party's name beneath
+it.** The channel header and the composer say `watch-party`; the party bar
+directly under them says "Cinemoon: sessão coruja". That looks like a mismatch
+and is deliberate. Every channel in this app is a slug (`#general`,
+`#off-topic`), so `watch-party` reads as what it is: the room where watch
+parties happen, which is also true between shows when no party exists to name
+it. The alternative was renaming the channel to the party on every create,
+which means slugifying arbitrary names ("Cinemoon: sessão coruja" becomes
+`cinemoon-sessao-coruja`), mutating the channel on every show, and leaving the
+last party's name on a room that is now empty. If this is ever revisited, the
+better fix is a display override for this channel type rather than a rename.
+
+**3. Ending a party leaves nothing behind, for now.** No recap card, no message
+in a text channel. The conversation stays in the room, is not deleted and
+remains searchable; it is simply no longer reachable from the sidebar once the
+block goes.
+
+This is the weakest part of the feature and it is a scope decision rather than
+a design one. A recap ("Cinemoon, 47 minutes, 32 people") wants to be a system
+message, and this repo has no system-message kind: the only way to post one
+today is from a user's account, which would be a message they did not write.
+The same wall was hit deciding how to announce an options change mid-party.
+Inventing that kind inside this PR would be scope creep on a change that is
+already large, and the recap should be designed with the replay work
+(`keep_replay` on `hls_sessions`) rather than bolted on before it. **This is
+the first thing to revisit** if the ended conversation turns out to matter.
+
 ### The journey, screen by screen
 
 1. **Criar watch party**, the one control at the top of the sidebar, for
@@ -410,7 +451,10 @@ their sidebar until one exists.
    nothing on screen and the panel says so in words. The other order would
    broadcast a picture from a party nobody has been told about.
 4. **The sidebar block**, above the categories: the party's name (not the
-   channel's), the host's face and a live pill. The block IS the button, so
+   channel's), the host's face and a live pill (`components/watch-party/live-pill.tsx`: the
+   pulse is on the dot, never the text, and only under `motion-safe`, so
+   reduced motion leaves a badge that still reads as live). The block IS the
+   button, so
    there is no chip inside it; it had one, in red, and both halves of that were
    wrong. A button inside a button is a second target for the same action, and
    red in this app means destructive (Encerrar, Banir). The bordered card that

@@ -25,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { FeatureHint } from "@/components/layout/feature-hint";
+import { LivePill } from "@/components/watch-party/live-pill";
 import { WatchPartyTransmission } from "@/components/watch-party/watch-party-transmission";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { useTranslation } from "@/lib/i18n";
@@ -889,18 +890,7 @@ function PartyIdentity({
           >
             {party.name}
           </span>
-          {live && (
-            <span
-              data-watch-party-live-pill
-              className="flex shrink-0 items-center gap-1 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-danger"
-            >
-              <span
-                aria-hidden="true"
-                className="h-1.5 w-1.5 rounded-full bg-danger motion-safe:animate-pulse"
-              />
-              {t("watchParty.live.badge")}
-            </span>
-          )}
+          {live && <LivePill />}
         </span>
         <span
           data-testid={meta ? "watch-party-viewers" : undefined}
