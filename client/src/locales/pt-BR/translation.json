@@ -1006,6 +1006,7 @@
   "voice.notice.streamGranted": "Agora você pode ligar a câmera ou compartilhar a tela.",
   "voice.notice.promotedForCameras": "Essa call virou uma sala grande pra caber mais câmeras",
   "voice.notice.promotedForScreens": "Essa call virou uma sala grande pra caber mais telas",
+  "voice.notice.promotedForRoom": "Essa call virou uma sala grande pra caber mais gente",
   "voice.control.listenOnlyLocked": "Só ouvindo. Você não tem permissão para falar neste canal.",
   "voice.bar.listenOnly": "Só ouvindo",
   "voice.quality.relayed": "Relayed",

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  blockFullRoomPromotion,
   decidePromotion,
   estimateRoomMbps,
   estimateSfuLoadMbps,
@@ -182,5 +183,51 @@ describe("the verdict", () => {
 
     expect(verdict.loadMbps).toBe(0);
     expect(verdict.addedMbps).toBeCloseTo(36);
+  });
+});
+
+/**
+ * The two refusals that belong to the ROOM-FULL trigger specifically, decided
+ * before the box is ever priced.
+ */
+describe("blockFullRoomPromotion", () => {
+  it("lets an ordinary full room through", () => {
+    expect(
+      blockFullRoomPromotion({
+        channelOverride: null,
+        joinerCapabilities: ["mesh", "livekit"],
+      }),
+    ).toBeNull();
+  });
+
+  it("never overrules a channel an operator pinned to mesh", () => {
+    // "Small, peer-to-peer" in the channel settings dialog. A guess about
+    // crowd size may be corrected; a decision may not.
+    expect(
+      blockFullRoomPromotion({
+        channelOverride: "mesh",
+        joinerCapabilities: ["mesh", "livekit"],
+      }),
+    ).toBe("mesh-override");
+  });
+
+  it("treats an explicit livekit override as no obstacle at all", () => {
+    expect(
+      blockFullRoomPromotion({
+        channelOverride: "livekit",
+        joinerCapabilities: ["mesh", "livekit"],
+      }),
+    ).toBeNull();
+  });
+
+  it("does not move a room for somebody who could not follow it", () => {
+    // The trigger is one person's join. Spending the box, moving eight
+    // people, and still turning that person away is the worst of both.
+    expect(
+      blockFullRoomPromotion({
+        channelOverride: null,
+        joinerCapabilities: ["mesh"],
+      }),
+    ).toBe("joiner-cannot-follow");
   });
 });

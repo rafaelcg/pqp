@@ -113,7 +113,50 @@ export type PromotionRefusal =
   /** The SFU did not answer its own room listing. Do not send a call to it. */
   | "unreachable"
   /** The estimate, plus what this room would add, is over the budget. */
-  | "budget";
+  | "budget"
+  /** The channel is pinned to mesh by hand. An operator chose that. */
+  | "mesh-override"
+  /** The client at the door cannot run LiveKit, so the move would not seat it. */
+  | "joiner-cannot-follow";
+
+export interface FullRoomPromotionGate {
+  /** `channels.voice_transport`: the operator's explicit choice, or null. */
+  channelOverride: VoiceRoomTransport | null;
+  /** The transports the client at the door declared in its `join-voice-room`. */
+  joinerCapabilities: readonly VoiceRoomTransport[];
+}
+
+/**
+ * The two things that stop a FULL mesh room from being promoted before the
+ * box is ever priced. Both are about the room-full trigger specifically, so
+ * they live beside the budget rather than inside it.
+ *
+ * `mesh-override` is the important one. The transport a room opens on is
+ * usually a policy guess (server size), and a guess is exactly what a
+ * promotion is allowed to correct. `channels.voice_transport = 'mesh'` is not
+ * a guess: it is the channel settings dialog's "Small, peer-to-peer", chosen
+ * by somebody with Manage Channels, most often to keep a private call off a
+ * shared media box. A ninth person at the door does not get to overrule that;
+ * they get the same "room is full" everyone got before.
+ *
+ * `joiner-cannot-follow` is arithmetic, not policy. The trigger for this
+ * promotion is one person's join, so a promotion that cannot seat that person
+ * (a mesh-only client) spends the box, moves everybody, and still turns them
+ * away. Refusing here leaves the room where it is.
+ *
+ * Returns null when neither applies, and the ordinary budget guard decides.
+ */
+export function blockFullRoomPromotion(
+  gate: FullRoomPromotionGate,
+): PromotionRefusal | null {
+  if (gate.channelOverride === "mesh") {
+    return "mesh-override";
+  }
+  if (!gate.joinerCapabilities.includes("livekit")) {
+    return "joiner-cannot-follow";
+  }
+  return null;
+}
 
 export interface PromotionVerdict {
   promote: boolean;

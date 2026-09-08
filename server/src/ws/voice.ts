@@ -80,6 +80,7 @@ import {
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
 import {
+  blockFullRoomPromotion,
   decidePromotion,
   estimateSfuLoadMbps,
   promotionBudgetMbps,
@@ -577,12 +578,57 @@ function forgetTransportDecision(voiceChannelId: string): void {
   pendingTransportDecisions.delete(voiceChannelId);
 }
 
+/**
+ * In-flight policy re-reads for rooms that are ALREADY pinned, shared by every
+ * join racing to notice the same stale pin.
+ *
+ * Separate from `pendingTransportDecisions`, and deleted the moment it
+ * settles rather than when the room is pinned. That is the whole difference:
+ * the opening decision is cached until it is applied, because it is the
+ * answer; this one must never be cached, because the thing it is looking for
+ * is precisely a change (a server crossing ten members, an override edited, a
+ * community listed) that happened after the last read. Holding it would
+ * rebuild the bug.
+ *
+ * Sharing the in-flight promise still costs one query for a stampede, which
+ * is the shape that matters: 150 people tapping the same channel in the same
+ * second all reach this before any of them promotes it.
+ */
+const pendingPinRechecks = new Map<string, Promise<VoiceTransportDecision>>();
+
+/** Test hook: forget any in-flight policy re-read. */
+export function resetVoicePinRechecks(): void {
+  pendingPinRechecks.clear();
+}
+
+/**
+ * What the policy would decide for this channel RIGHT NOW, for a room that is
+ * already pinned. One query at most, and none at all for a DM, for a channel
+ * carrying an override, or on a deployment without LiveKit: those are the
+ * branches `decideRoomTransport` answers without touching the database.
+ */
+function recheckRoomTransport(
+  voiceChannelId: string,
+  channel: ChannelRow,
+): Promise<VoiceTransportDecision> {
+  const existing = pendingPinRechecks.get(voiceChannelId);
+  if (existing) {
+    return existing;
+  }
+  const decision = decideRoomTransport(channel).finally(() => {
+    pendingPinRechecks.delete(voiceChannelId);
+  });
+  pendingPinRechecks.set(voiceChannelId, decision);
+  return decision;
+}
+
 /** Test hook: forget every pinned room transport. */
 export function resetVoiceRoomTransports(): void {
   roomTransports.clear();
   remoteTransports.clear();
   roomServerMutes.clear();
   pendingTransportDecisions.clear();
+  pendingPinRechecks.clear();
 }
 
 /**
@@ -2927,6 +2973,13 @@ export async function handleVoiceMessage(
     // decision, which is what this instance did before the registry existed.
     const pinnedHere =
       registryOn() && !roomTransports.has(payload.voiceChannelId);
+    // Whether the transport this join is about to use was decided by an
+    // EARLIER join. True when this process already holds the pin, and true
+    // when the conditional insert below loses to a row another process (or
+    // this one, before a restart) wrote. It is what the stale-pin re-read
+    // keys off: a room this join is opening has just been decided and cannot
+    // be stale.
+    let pinPredatesThisJoin = roomTransports.has(payload.voiceChannelId);
     if (pinnedHere) {
       try {
         const claim = await claimVoiceRoomTransport(
@@ -2950,6 +3003,11 @@ export async function handleVoiceMessage(
             resumed: resume.kind !== "cold",
           });
         }
+        if (!claim.won) {
+          // The row was already there: somebody else's join decided this
+          // room, however long ago.
+          pinPredatesThisJoin = true;
+        }
         // A resume is only kept on the transport its token remembers: the
         // media it is holding was built for that one. What matters is the
         // room's answer against the token's.
@@ -2969,6 +3027,56 @@ export async function handleVoiceMessage(
       // the socket, and a pinned room nobody joined must not stay pinned.
       if (socket.readyState !== 1) {
         void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
+        return;
+      }
+    }
+
+    // THE STALE PIN. A room's transport is decided when it opens and never
+    // re-decided, which is right for a call that ends and wrong for a room
+    // that never empties. On 2026-09-08 a voice channel in a server of
+    // seventeen members was still pinned to the mesh it opened on at 11:46,
+    // when that server was small, and at 16:13 it turned three people away in
+    // a row for being the ninth. Nothing was broken: the pin had simply
+    // outlived the condition that created it, and a popular room can hold one
+    // for a whole day.
+    //
+    // So a room that was pinned to mesh by an earlier join has its policy
+    // re-read here, and if the answer is the SFU today the room moves through
+    // the same guarded path a fourth camera uses. `decideRoomTransport` is the
+    // one used to open a room, so this cannot drift from it, and it answers
+    // without a query for a DM, for a channel carrying an override, and on a
+    // deployment with no LiveKit. An explicit `mesh` override therefore keeps
+    // the room exactly where the operator put it, because the policy itself
+    // answers `mesh` for one; an explicit `livekit` override edited during a
+    // live call is a legitimate reason to move, and moves it.
+    if (transport === "mesh" && pinPredatesThisJoin && resume.kind !== "reattach") {
+      const now = await recheckRoomTransport(payload.voiceChannelId, channel);
+      if (
+        now.transport === "livekit" &&
+        (await promoteRoomPastMeshCap(
+          payload.voiceChannelId,
+          "stale-pin",
+          user.id,
+          "mesh",
+        ))
+      ) {
+        transport = "livekit";
+        // The room moved, so a resume holding mesh media is holding media for
+        // a room that no longer exists. Same rule as the pin comparison
+        // above, for the same reason.
+        if (
+          (resume.kind === "reconstruct" || resume.kind === "adopt") &&
+          resume.transport !== "livekit"
+        ) {
+          resume = { kind: "cold" };
+        }
+      }
+      // The awaits may have outlived the socket, and the promotion releases
+      // seats: nothing below may assume either survived.
+      if (socket.readyState !== 1) {
+        if (pinnedHere) {
+          void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
+        }
         return;
       }
     }
@@ -3121,6 +3229,55 @@ export async function handleVoiceMessage(
         }
       }
       occupying = occupyingOf();
+    }
+
+    // THE NINTH PERSON. `MESH_VOICE_LIMIT` is eight and the number is right:
+    // above it each client carries one Opus uplink per peer and quality
+    // collapses. What was wrong is what happened at it. The room is on mesh
+    // because of a guess about how many people would show up, and the ninth
+    // person at the door is the evidence that the guess was low; refusing
+    // them keeps the guess and loses the person. Three of them were turned
+    // away from one call on 2026-09-08.
+    //
+    // So the room moves and the join lands, through the same path a fourth
+    // camera uses: the box is priced first (`decidePromotion`), and a refusal
+    // is the old refusal, byte for byte, including the log line below.
+    //
+    // Only for a cold join. A resume does not count its own seat against the
+    // ceiling, so it reaches here only when its seat is already gone, and its
+    // media was built for the mesh it cannot follow anyway.
+    if (meshIsFull() && resume.kind === "cold") {
+      const blocked = blockFullRoomPromotion({
+        channelOverride: channel.voice_transport ?? null,
+        joinerCapabilities: capabilities,
+      });
+      if (blocked) {
+        logEvent("voice.transportPromotionRefused", {
+          voiceChannelId: payload.voiceChannelId,
+          userId: user.id,
+          reason: "room-full",
+          refusal: blocked,
+          roomSize: occupying.length + foreignOccupying,
+        });
+      } else if (
+        await promoteRoomPastMeshCap(
+          payload.voiceChannelId,
+          "room-full",
+          user.id,
+          "mesh",
+        )
+      ) {
+        // The room is on the SFU now, so the ceiling that refused this person
+        // belongs to a mesh they are no longer joining. `meshIsFull()` reads
+        // `transport`, so this one assignment reopens the door.
+        transport = "livekit";
+      }
+      if (socket.readyState !== 1) {
+        if (pinnedHere) {
+          void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
+        }
+        return;
+      }
     }
 
     // Enforce the mesh ceiling server-side. Above it, each client would carry
@@ -3360,9 +3517,9 @@ export async function handleVoiceMessage(
       ) {
         // The mesh cap is two because mesh encodes a copy per peer. Where
         // there is an SFU to move to, move the room rather than refuse the
-        // share; `promoteRoomForVideo` prices the box first and answers false
-        // when it cannot, which is exactly the old refusal.
-        await promoteRoomForVideo(peer.voiceChannelId, "screens", user.id);
+        // share; `promoteRoomPastMeshCap` prices the box first and answers
+        // false when it cannot, which is exactly the old refusal.
+        await promoteRoomPastMeshCap(peer.voiceChannelId, "screens", user.id);
         // The await above may have outlived the socket, and the promotion
         // itself releases seats: re-read everything before the write. This is
         // the "keep the check in the same tick as the write" rule restated:
@@ -3610,7 +3767,7 @@ export async function handleVoiceMessage(
         // friends want to be seen. Move the room to the SFU and let the
         // camera on. See the promotion section for what makes that safe and
         // what stops it (the box's budget).
-        await promoteRoomForVideo(peer.voiceChannelId, "cameras", user.id);
+        await promoteRoomPastMeshCap(peer.voiceChannelId, "cameras", user.id);
         if (socket.readyState !== 1 || peers.get(existingPeerId) !== peer) {
           return;
         }
@@ -4565,7 +4722,21 @@ onPermissionsUpdate((serverId) => {
 //    measured clean at 880 to 935). A refusal is the old camera limit, exactly
 //    as before this existed.
 
-export type VoicePromotionReason = "cameras" | "screens";
+/**
+ * WHY a room moved. Four triggers, one path.
+ *
+ * `cameras` and `screens` are a publication past the mesh cap (PR #366).
+ * `room-full` is the ninth person at the door of a full mesh, and `stale-pin`
+ * is a room whose pin no longer matches what the policy would decide today.
+ * The value travels to every seat in `voice-transport-changed`, where it picks
+ * the sentence, and into `voice.transportPromoted`, where it is what separates
+ * the triggers in production.
+ */
+export type VoicePromotionReason =
+  | "cameras"
+  | "screens"
+  | "room-full"
+  | "stale-pin";
 
 /**
  * In-flight promotions, keyed by room, shared by every caller racing to be
@@ -4720,20 +4891,30 @@ function applyPromotionLocally(
 }
 
 /**
- * Move a mesh room onto the SFU so a camera (or a screen share) past the mesh
- * cap can turn on. Returns whether the room is on the SFU when it resolves.
+ * Move a mesh room onto the SFU: for a camera or a screen share past the mesh
+ * cap, for a ninth person at a full mesh, or for a pin that no longer matches
+ * the policy. Returns whether the room is on the SFU when it resolves.
  *
  * `true` also covers "it was already there", so the caller can simply re-read
  * the transport and re-check the cap rather than branching on how it got
  * there. `false` is the old behaviour: the caller refuses the claim and the
- * client says the call is at its camera limit.
+ * client says the call is at its camera limit, or that the room is full.
+ *
+ * `currentTransport` is the caller's authoritative reading of the room. The
+ * join path has one and this function's own does not: `getRoomTransport` falls
+ * back to the configured ceiling for a room this process holds no seat in, so
+ * on a second instance it would answer `livekit` for a room that is live on
+ * mesh elsewhere and this would return `true` without moving anything. That is
+ * the split-brain the whole one-transport rule exists to prevent, so the
+ * caller that knows says so.
  */
-async function promoteRoomForVideo(
+async function promoteRoomPastMeshCap(
   voiceChannelId: string,
   reason: VoicePromotionReason,
   userId: string,
+  currentTransport: VoiceRoomTransport = getRoomTransport(voiceChannelId),
 ): Promise<boolean> {
-  if (getRoomTransport(voiceChannelId) !== "mesh") {
+  if (currentTransport !== "mesh") {
     return true;
   }
   const existing = pendingPromotions.get(voiceChannelId);
@@ -4760,18 +4941,28 @@ async function attemptPromotion(
     readSfuStats().catch(() => null),
     readRoomLoads(),
   ]);
-  // Priced as it will be once the claim lands: everyone in it, and one more
-  // video publisher than there is now. The cluster's row for this room is
-  // preferred over this instance's own seats, because a call legitimately
+  // Priced as it will be once the claim lands. The cluster's row for this room
+  // is preferred over this instance's own seats, because a call legitimately
   // spans machines and the box carries all of it; the local view is the
   // floor, for the registry-off case and for a row that has not settled yet.
+  //
+  // What the room GAINS depends on which trigger fired, and the difference is
+  // not cosmetic: a camera adds a publication, which the estimate multiplies
+  // by every participant, while a ninth person adds one subscriber to the
+  // publications already there. Charging a room-full promotion for a camera
+  // nobody turned on would refuse the promotion of a big, silent call for
+  // load it is not about to create.
   const known = rooms.find((room) => room.channelId === voiceChannelId);
+  const gainsPublisher = reason === "cameras" || reason === "screens";
   const candidate: SfuRoomLoad = {
     channelId: voiceChannelId,
     transport: "mesh",
-    participants: Math.max(known?.participants ?? 0, seated.length, 1),
+    participants:
+      Math.max(known?.participants ?? 0, seated.length, 1) +
+      (reason === "room-full" ? 1 : 0),
     videoPublishers:
-      Math.max(known?.videoPublishers ?? 0, countVideoPublishers(seated)) + 1,
+      Math.max(known?.videoPublishers ?? 0, countVideoPublishers(seated)) +
+      (gainsPublisher ? 1 : 0),
   };
   const verdict = decidePromotion({
     liveKitConfigured: configuredTransport() === "livekit",
@@ -5095,7 +5286,7 @@ type VoiceSignalFrame = z.infer<typeof voiceSignalFrameSchema>;
 const voiceTransportFrameSchema = z.object({
   channelId: z.string().uuid(),
   transport: voiceRoomTransportSchema,
-  reason: z.enum(["cameras", "screens"]),
+  reason: z.enum(["cameras", "screens", "room-full", "stale-pin"]),
 });
 type VoiceTransportFrame = z.infer<typeof voiceTransportFrameSchema>;
 

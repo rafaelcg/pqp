@@ -300,14 +300,31 @@ describe("voice room transport", () => {
       expect(frame(rec, "welcome")?.transport).toBe("mesh");
     });
 
-    it("keeps a small server's room on mesh at the mesh ceiling, with the usual refusal", async () => {
-      serverChannel(9);
+    /** Fill the mesh, then send one more person at it. */
+    async function ninthPerson(): Promise<Recorder> {
       for (let i = 0; i < MESH_VOICE_LIMIT; i++) {
         track(await join(recorder(), `u${i}`, channel, ["mesh", "livekit"]));
       }
-      const extra = track(
-        await join(recorder(), "extra", channel, ["mesh", "livekit"]),
-      );
+      return track(await join(recorder(), "extra", channel, ["mesh", "livekit"]));
+    }
+
+    it("moves a full mesh room to the SFU instead of refusing the ninth person", async () => {
+      serverChannel(9);
+
+      const extra = await ninthPerson();
+
+      // The one that used to be `voice-room-full limit=8`.
+      expect(typesOf(extra)).not.toContain("voice-room-full");
+      expect(frame(extra, "welcome")?.transport).toBe("livekit");
+      expect(getRoomTransport(channel)).toBe("livekit");
+    });
+
+    it("still refuses the ninth person when the channel is pinned to mesh by hand", async () => {
+      // An operator chose "Small, peer-to-peer" in the channel settings. A
+      // person at the door does not get to overrule that.
+      serverChannel(9, { override: "mesh" });
+
+      const extra = await ninthPerson();
 
       expect(frame(extra, "voice-room-full")).toMatchObject({
         limit: MESH_VOICE_LIMIT,
@@ -315,19 +332,95 @@ describe("voice room transport", () => {
       expect(getRoomTransport(channel)).toBe("mesh");
     });
 
-    it("decides once per pin: later joins do not re-read, and a live room never flips", async () => {
+    it("still refuses the ninth person with no SFU to move to", async () => {
+      backend.configured = "mesh";
       serverChannel(9);
+
+      const extra = await ninthPerson();
+
+      expect(frame(extra, "voice-room-full")).toMatchObject({
+        limit: MESH_VOICE_LIMIT,
+      });
+      expect(getRoomTransport(channel)).toBe("mesh");
+    });
+
+    it("decides once per pin for a room already on the SFU", async () => {
+      serverChannel(40);
       track(await join(recorder(), "u1", channel, ["mesh", "livekit"]));
       expect(rows.profileReads).toBe(1);
 
-      // The server crosses the threshold mid-call.
+      track(await join(recorder(), "u2", channel, ["mesh", "livekit"]));
+
+      // Nothing to re-check: the room is where the policy wants it.
+      expect(rows.profileReads).toBe(1);
+      expect(getRoomTransport(channel)).toBe("livekit");
+    });
+
+    it("moves a live mesh room when the server grows past the threshold under it", async () => {
+      // THE 2026-09-08 INCIDENT. A room pinned mesh at 11:46, when its server
+      // was small, still pinned mesh at 16:13 in a server of seventeen, and
+      // refusing everybody past the eighth. The pin outlived its reason, and
+      // a room that never empties never re-decides.
+      serverChannel(9);
+      const first = track(
+        await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+      );
+      expect(frame(first, "welcome")?.transport).toBe("mesh");
+      expect(rows.profileReads).toBe(1);
+
       rows.servers.set(serverId, { isCommunity: false, memberCount: 10 });
       const second = track(
         await join(recorder(), "u2", channel, ["mesh", "livekit"]),
       );
 
+      expect(frame(second, "welcome")?.transport).toBe("livekit");
+      expect(getRoomTransport(channel)).toBe("livekit");
+      // The room was re-read because it was pinned to mesh, which is the only
+      // state that can be stale in the direction that matters.
+      expect(rows.profileReads).toBe(2);
+      // This harness's sockets never declared `voice-transport-changed`, so
+      // the incumbent is released and told rather than left on a mesh whose
+      // signaling the server has stopped relaying.
+      expect(frame(first, "voice-transport-unsupported")).toMatchObject({
+        transport: "livekit",
+        reason: "promoted",
+      });
+    });
+
+    it("leaves a live mesh room alone when the channel is pinned to mesh by hand", async () => {
+      serverChannel(9, { override: "mesh" });
+      const first = track(
+        await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+      );
+
+      // Even a listed community with five hundred members: the override is a
+      // decision, not a guess, and nothing here overrules it.
+      rows.servers.set(serverId, { isCommunity: true, memberCount: 500 });
+      const second = track(
+        await join(recorder(), "u2", channel, ["mesh", "livekit"]),
+      );
+
       expect(frame(second, "welcome")?.transport).toBe("mesh");
-      expect(rows.profileReads).toBe(1);
+      expect(getRoomTransport(channel)).toBe("mesh");
+      expect(typesOf(first)).not.toContain("voice-transport-unsupported");
+    });
+
+    it("moves a live mesh room when the override is switched to the SFU mid-call", async () => {
+      serverChannel(9);
+      track(await join(recorder(), "u1", channel, ["mesh", "livekit"]));
+
+      rows.channels.set(channel, {
+        kind: "server",
+        type: "voice",
+        server_id: serverId,
+        voice_transport: "livekit",
+      });
+      const second = track(
+        await join(recorder(), "u2", channel, ["mesh", "livekit"]),
+      );
+
+      expect(frame(second, "welcome")?.transport).toBe("livekit");
+      expect(getRoomTransport(channel)).toBe("livekit");
     });
 
     it("reads the server row once for a whole stampede, not once per joiner", async () => {
