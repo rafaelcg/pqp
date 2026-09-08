@@ -2201,6 +2201,7 @@ export function CallControls({
           isSharingScreen={voiceState.isSharingScreen}
           usingSfu={voiceState.usingSfu}
           watchingHls={watchingHls}
+          hlsLive={voiceState.liveStream !== null}
           hlsDelaySeconds={hlsDelaySeconds}
           participantCount={voiceState.remotePeers.length + 1}
           buttonClassName={size}

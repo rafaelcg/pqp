@@ -369,6 +369,56 @@ export function cameraBitrateFor(quality: VideoQuality): number {
   return cameraProfileFor(quality).maxBitrate;
 }
 
+/**
+ * The room size above which 1080p is not offered at all, and the second rule
+ * that removes it whatever the size: a live HLS egress.
+ *
+ * WHY 150. `LARGE_ROOM_PARTICIPANTS` (20) only holds Auto to 720p and lets an
+ * explicit 1080p through, because in a room of thirty the presenter saying
+ * "spend it" is a reasonable thing to honour. Past a hundred and fifty it is
+ * not: the SFU fans the top layer out once per viewer, so a 1080p top layer
+ * in a room that size is several hundred megabits of downstream that nobody
+ * in the audience asked for and most of them, on phones, cannot even show.
+ * At that size the room is a broadcast and the honest ceiling is 720p.
+ *
+ * WHY HLS. When the egress is live it decodes the share once and encodes its
+ * own preset; every playlist viewer receives that, not the WebRTC layer. A
+ * 1080p share then costs the presenter's uplink and the egress's decode and
+ * reaches no viewer at 1080p, so the rung is pure cost. Dropped rather than
+ * capped so the menu does not offer a choice that changes nothing.
+ *
+ * IN-CALL ONLY. The settings dialog keeps the full list: there is no room
+ * there to measure, and a stored 1080p is still the right default for the
+ * next small call. The call's own menu is where the rule acts, and
+ * `coerceVideoQuality` is what it shows for a stored rung that is not on
+ * offer right now.
+ */
+export const HUGE_ROOM_OR_HLS_1080P_LIMIT = 150;
+
+/** The rungs the call's menu may offer, given the room and the egress. */
+export function availableVideoQualities(input: {
+  participantCount: number;
+  hlsLive: boolean;
+}): readonly VideoQuality[] {
+  const drop1080 =
+    input.hlsLive || input.participantCount > HUGE_ROOM_OR_HLS_1080P_LIMIT;
+  return drop1080
+    ? VIDEO_QUALITIES.filter((quality) => quality !== "1080p")
+    : VIDEO_QUALITIES;
+}
+
+/**
+ * What a stored choice reads as when the menu cannot offer it: a 1080p that
+ * is off the list is Auto, which is the rung that lets the room decide. The
+ * stored preference itself is untouched, so the next small call gets it back.
+ */
+export function coerceVideoQuality(
+  quality: VideoQuality,
+  available: readonly VideoQuality[],
+): VideoQuality {
+  return available.includes(quality) ? quality : DEFAULT_VIDEO_QUALITY;
+}
+
 /** Storage and query strings hand back `unknown`; this is the only door in. */
 export function parseVideoQuality(raw: unknown): VideoQuality {
   return VIDEO_QUALITIES.includes(raw as VideoQuality)

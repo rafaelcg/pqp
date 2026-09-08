@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyCameraQuality,
+  availableVideoQualities,
+  coerceVideoQuality,
+  HUGE_ROOM_OR_HLS_1080P_LIMIT,
   cameraBitrateFor,
   cameraConstraintsFor,
   captureCamera,
@@ -69,6 +72,45 @@ describe("cameraConstraintsFor", () => {
     const bitrates = rungs.map((rung) => cameraBitrateFor(rung));
     expect(bitrates).toEqual([...bitrates].sort((a, b) => a - b));
     expect(new Set(bitrates).size).toBe(rungs.length);
+  });
+});
+
+describe("availableVideoQualities", () => {
+  it("keeps 1080p at the limit and drops it one past it", () => {
+    expect(
+      availableVideoQualities({
+        participantCount: HUGE_ROOM_OR_HLS_1080P_LIMIT,
+        hlsLive: false,
+      }),
+    ).toContain("1080p");
+    expect(
+      availableVideoQualities({
+        participantCount: HUGE_ROOM_OR_HLS_1080P_LIMIT + 1,
+        hlsLive: false,
+      }),
+    ).not.toContain("1080p");
+    expect(HUGE_ROOM_OR_HLS_1080P_LIMIT).toBe(150);
+  });
+
+  it("drops 1080p while an HLS egress is live, whatever the room size", () => {
+    const list = availableVideoQualities({ participantCount: 2, hlsLive: true });
+    expect(list).not.toContain("1080p");
+    expect(list).toEqual(VIDEO_QUALITIES.filter((q) => q !== "1080p"));
+  });
+
+  it("offers the whole ladder to a small room with no egress", () => {
+    expect(
+      availableVideoQualities({ participantCount: 2, hlsLive: false }),
+    ).toEqual(VIDEO_QUALITIES);
+  });
+});
+
+describe("coerceVideoQuality", () => {
+  it("reads an unavailable 1080p as auto and leaves the rest alone", () => {
+    const noTop = availableVideoQualities({ participantCount: 1, hlsLive: true });
+    expect(coerceVideoQuality("1080p", noTop)).toBe("auto");
+    expect(coerceVideoQuality("720p", noTop)).toBe("720p");
+    expect(coerceVideoQuality("1080p", VIDEO_QUALITIES)).toBe("1080p");
   });
 });
 
