@@ -88,6 +88,51 @@ test("a fast component that doubled beats a slow one that did not", () => {
   assert.match(i.head, /^postgres /);
 });
 
+test("a reading inside the component's own p95 is not an alarm, however high the ratio", () => {
+  // The real first reading this card ever took against production: the SFU
+  // probe is bimodal, p50 33 ms and p95 235 ms, and 220 ms is 6,7x the median
+  // while sitting *below* the p95. Red there is a false alarm, and a strip
+  // that cries wolf on day one is worse than no strip.
+  const i = latencyInsight({
+    components: [{ key: "voice", label: "Voice", state: "operational", latencyMs: 220 }],
+    history: { components: [{ key: "voice", p50: 33, p95: 235 }] }, names: NAMES
+  });
+  assert.equal(i.state, "ok");
+  assert.match(i.head, /dentro da faixa dele/);
+  assert.match(i.body, /distribuição torta, não incidente/);
+});
+
+test("the same ratio one millisecond above p95 is an alarm", () => {
+  // The pair is the rule: a multiple of the median AND outside the whole
+  // distribution. Either one alone is not worth waking somebody for.
+  const i = latencyInsight({
+    components: [{ key: "voice", label: "Voice", state: "operational", latencyMs: 236 }],
+    history: { components: [{ key: "voice", p50: 33, p95: 235 }] }, names: NAMES
+  });
+  assert.equal(i.state, "bad");
+  assert.match(i.body, /acima de tudo que ele mostrou hoje/);
+});
+
+test("a hair above p95 but barely off the median is not an alarm either", () => {
+  // The other half of the pair. p95 is exceeded 5% of the time by
+  // definition, so crossing it alone happens several times an hour on a
+  // healthy component and means nothing without the ratio behind it.
+  const i = latencyInsight({
+    components: [{ key: "storage", label: "File attachments", state: "operational", latencyMs: 250 }],
+    history: { components: [{ key: "storage", p50: 236, p95: 240 }] }, names: NAMES
+  });
+  assert.equal(i.state, "ok");
+  assert.match(i.head, /normal dele/);
+});
+
+test("with no p95 at all the ratio decides on its own", () => {
+  const i = latencyInsight({
+    components: [{ key: "voice", label: "Voice", state: "operational", latencyMs: 220 }],
+    history: { components: [{ key: "voice", p50: 33, p95: null }] }, names: NAMES
+  });
+  assert.equal(i.state, "bad");
+});
+
 test("no history yet gives raw figures and says why, never a weaker verdict", () => {
   const i = latencyInsight({ components: components(), history: null, names: NAMES });
   assert.equal(i.state, "raw");

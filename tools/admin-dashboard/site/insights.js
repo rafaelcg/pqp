@@ -101,19 +101,50 @@
     }
 
     var worst = comparable.slice().sort(function (a, b) { return b.ratio - a.ratio; })[0];
-    // Two thresholds, both against the component's own median rather than
-    // against the other components. Doubling is unambiguous; 1,4× is the
-    // point where a curve has clearly left its own band.
-    if (worst.ratio >= 1.4) {
+    var figsFor = function (c) {
+      return [["agora", c.now + " ms"], ["p50 24 h", c.p50 + " ms"]]
+        .concat(c.p95 === null ? [] : [["p95 24 h", c.p95 + " ms"]]);
+    };
+
+    /*
+     * TWO CONDITIONS, NOT ONE, and the second was learned from the first
+     * reading this card ever took against production.
+     *
+     * The SFU probe's own p50 was 33 ms and its p95 was 235 ms, because it is
+     * a bimodal thing: mostly fast, occasionally a full cold round trip. A
+     * reading of 220 ms is 6,7x the median and would have gone red — while
+     * sitting *below* the p95, meaning the component had already spent a
+     * chunk of the day up there. That is a false alarm, and a strip that
+     * cries wolf on day one is worse than no strip.
+     *
+     * So a component is only off its band when it is both a multiple of its
+     * own median AND above its own p95. The ratio says "unusual for the
+     * middle of the distribution"; the p95 says "unusual for the whole of
+     * it", and only the pair is worth waking somebody for.
+     */
+    var overBand = worst.p95 === null || worst.now > worst.p95;
+    if (worst.ratio >= 1.4 && overBand) {
       var bad = worst.ratio >= 2;
       return {
         key: "latency", state: bad ? "bad" : "warn", source: "statusHistory",
         head: worst.name + " está respondendo a " + times(worst.ratio) + " o normal dele",
         body: worst.now + " ms agora, contra um p50 de " + worst.p50 + " ms nas últimas 24 h" +
-          (worst.p95 === null ? "" : " (p95 " + worst.p95 + " ms)") +
+          (worst.p95 === null ? "" : " e um p95 de " + worst.p95 + " ms, ou seja, acima de tudo que ele mostrou hoje") +
           ". o que importa aqui não é ele ser o mais lento do painel, é ele estar lento em relação a si mesmo.",
-        figs: [["agora", worst.now + " ms"], ["p50 24 h", worst.p50 + " ms"]]
-          .concat(worst.p95 === null ? [] : [["p95 24 h", worst.p95 + " ms"]])
+        figs: figsFor(worst)
+      };
+    }
+    // High against the middle of its own distribution and still inside the
+    // whole of it. Worth saying out loud, because the number looks alarming
+    // and the conclusion is that it is not.
+    if (worst.ratio >= 1.4) {
+      return {
+        key: "latency", state: "ok", source: "statusHistory",
+        head: worst.name + " está bem acima da mediana, mas dentro da faixa dele",
+        body: worst.now + " ms agora contra um p50 de " + worst.p50 +
+          " ms, o que parece muito. mas o p95 das últimas 24 h é " + worst.p95 +
+          " ms, então este valor está dentro da faixa que o próprio componente já mostrou hoje. uma mediana muito abaixo do p95 quer dizer distribuição torta, não incidente.",
+        figs: figsFor(worst)
       };
     }
 
@@ -128,8 +159,7 @@
         ". mas o p50 do próprio " + slowest.name + " nas últimas 24 h é " + slowest.p50 + " ms" +
         (slowest.p95 === null ? "" : " e o p95 é " + slowest.p95 + " ms") +
         ", então esse número não é sintoma de nada. o alarme é ele dobrar em relação a si mesmo, não ficar acima dos outros.",
-      figs: [["agora", slowest.now + " ms"], ["p50 24 h", slowest.p50 + " ms"]]
-        .concat(slowest.p95 === null ? [] : [["p95 24 h", slowest.p95 + " ms"]])
+      figs: figsFor(slowest)
     };
   }
 
