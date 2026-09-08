@@ -107,6 +107,11 @@ vi.mock("../services/threads.js", () => ({
  */
 const slowModeClock = new Map<string, { at: number; seconds: number }>();
 
+vi.mock("../services/automod.js", () => ({
+  checkAutomod: async () => null,
+  recordAutomodHit: async () => {},
+}));
+
 vi.mock("../services/slow-mode.js", () => ({
   chargeSlowMode: async (channelId: string, userId: string, seconds: number) => {
     const key = `${channelId}:${userId}`;

@@ -78,6 +78,29 @@ export const automodRuleSchema = z.object({
 });
 export type AutomodRule = z.infer<typeof automodRuleSchema>;
 
+/** Body of `POST /api/servers/:serverId/automod/rules`. */
+export const createAutomodRuleSchema = automodRuleSchema
+  .pick({
+    kind: true,
+    keywords: true,
+    allowList: true,
+    mentionLimit: true,
+    exemptRoleIds: true,
+    exemptChannelIds: true,
+    customMessage: true,
+    reportHits: true,
+  })
+  .partial()
+  .required({ kind: true })
+  .extend({ enabled: z.boolean().optional() });
+export type CreateAutomodRuleInput = z.infer<typeof createAutomodRuleSchema>;
+
+/** Body of `PATCH /api/servers/:serverId/automod/rules/:ruleId`. `kind` is fixed. */
+export const updateAutomodRuleSchema = createAutomodRuleSchema
+  .omit({ kind: true })
+  .refine((patch) => Object.keys(patch).length > 0, "nothing to change");
+export type UpdateAutomodRuleInput = z.infer<typeof updateAutomodRuleSchema>;
+
 /**
  * The part of a rule the matcher needs. The server hands it rows, the
  * settings preview hands it the unsaved form.

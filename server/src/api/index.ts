@@ -1,5 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  AUTOMOD_MENTION_LIMIT_DEFAULT,
+  createAutomodRuleSchema,
+  updateAutomodRuleSchema,
   addChannelMemberSchema,
   ageDeclarationSchema,
   createChannelSessionSchema,
@@ -227,6 +230,13 @@ import {
   OwnedServersBlockDeletionError,
 } from "../services/account.js";
 import { listAuditLog, logAudit } from "../services/audit.js";
+import {
+  createAutomodRule,
+  deleteAutomodRule,
+  getAutomodRule,
+  listAutomodRules,
+  updateAutomodRule,
+} from "../services/automod.js";
 import {
   avatarUrlForKey,
   createAvatarUpload,
@@ -4889,6 +4899,11 @@ router.post(
             );
           }
           throw new HttpError(429, "Slow down");
+        case "automod":
+          throw new HttpError(
+            422,
+            posted.automodMessage ?? "This message was blocked by AutoMod",
+          );
         case "bad-reply":
           throw new HttpError(400, "Reply is not in this channel");
         case "empty":
@@ -6157,6 +6172,112 @@ router.post(
 );
 
 // ----------------------------------------------------- end voice moderation
+
+// AutoMod rules. Reading needs MANAGE_MESSAGES (a moderator may see what the
+// filter does), writing needs MANAGE_SERVER (the owner's list, like the
+// server's other settings). Matching itself is in @pqp/shared and runs on
+// every send in `postChannelMessage`; the client's settings page runs the
+// same code for its preview, so there is no test endpoint.
+router.get(
+  "/api/servers/:serverId/automod/rules",
+  async ({ user }, { serverId }) => {
+    await requireAnyPermission(serverId!, user.id, [
+      Permission.MANAGE_SERVER,
+      Permission.MANAGE_MESSAGES,
+    ]);
+    return { rules: await listAutomodRules(serverId!) };
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/automod/rules",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = createAutomodRuleSchema.parse(await readJsonBody(req));
+    const rule = await createAutomodRule(serverId!, {
+      kind: body.kind,
+      enabled: body.enabled ?? true,
+      keywords: body.keywords ?? [],
+      allowList: body.allowList ?? [],
+      mentionLimit: body.mentionLimit ?? AUTOMOD_MENTION_LIMIT_DEFAULT,
+      exemptRoleIds: body.exemptRoleIds ?? [],
+      exemptChannelIds: body.exemptChannelIds ?? [],
+      customMessage: body.customMessage ?? "",
+      reportHits: body.reportHits ?? false,
+    });
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "automod.rule_create",
+      targetType: "automod_rule",
+      targetId: rule.id,
+      changes: [{ key: "kind", old: null, new: rule.kind }],
+    });
+    return created({ rule });
+  },
+);
+
+router.patch(
+  "/api/servers/:serverId/automod/rules/:ruleId",
+  async ({ req, user }, { serverId, ruleId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    if (!isUuid(ruleId)) {
+      throw new NotFound("Rule not found");
+    }
+    const body = updateAutomodRuleSchema.parse(await readJsonBody(req));
+    const before = await getAutomodRule(serverId!, ruleId);
+    if (!before) {
+      throw new NotFound("Rule not found");
+    }
+    const rule = await updateAutomodRule(serverId!, ruleId, body);
+    if (!rule) {
+      throw new NotFound("Rule not found");
+    }
+    const changes = (
+      [
+        ["enabled", before.enabled, rule.enabled],
+        ["keywords", before.keywords.length, rule.keywords.length],
+        ["allowList", before.allowList.length, rule.allowList.length],
+        ["mentionLimit", before.mentionLimit, rule.mentionLimit],
+        ["reportHits", before.reportHits, rule.reportHits],
+      ] as const
+    )
+      .filter(([, oldValue, newValue]) => oldValue !== newValue)
+      .map(([key, oldValue, newValue]) => ({ key, old: oldValue, new: newValue }));
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "automod.rule_update",
+      targetType: "automod_rule",
+      targetId: rule.id,
+      changes: [{ key: "kind", old: null, new: rule.kind }, ...changes],
+    });
+    return { rule };
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/automod/rules/:ruleId",
+  async ({ user }, { serverId, ruleId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    if (!isUuid(ruleId)) {
+      throw new NotFound("Rule not found");
+    }
+    const before = await getAutomodRule(serverId!, ruleId);
+    if (!before || !(await deleteAutomodRule(serverId!, ruleId))) {
+      throw new NotFound("Rule not found");
+    }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "automod.rule_delete",
+      targetType: "automod_rule",
+      targetId: ruleId,
+      changes: [{ key: "kind", old: before.kind, new: null }],
+    });
+    return { ok: true };
+  },
+);
 
 router.get("/api/servers/:serverId/bans", async ({ user }, { serverId }) => {
   await requirePermission(serverId!, user.id, Permission.BAN_MEMBERS);

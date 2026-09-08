@@ -94,6 +94,10 @@ const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
     "serverSettings.audit.action.channel.overwrite_update",
   "channel.overwrite_delete":
     "serverSettings.audit.action.channel.overwrite_delete",
+  "automod.rule_create": "serverSettings.audit.action.automod.rule_create",
+  "automod.rule_update": "serverSettings.audit.action.automod.rule_update",
+  "automod.rule_delete": "serverSettings.audit.action.automod.rule_delete",
+  "automod.block": "serverSettings.audit.action.automod.block",
 };
 
 /* ------------------------------------------------------------------ layout */
