@@ -72,12 +72,20 @@ jobs:
       # hosted-production-only on purpose (see CLAUDE.md, "Hosted-only tags"),
       # and staging traffic polluting prod analytics would be worse than no
       # analytics at all.
+      # Staging opts feature-flagged work in by default so it is visible for
+      # review as soon as it merges, unlike deploy-web.yml (production stays
+      # dark until each flag is deliberately turned on there). Each repo
+      # variable defaults to "true"; set it to "false" to turn a flag back off
+      # on staging without editing this workflow. See docs/STAGING.md.
       - name: Build client (staging)
         env:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.STAGING_CLERK_PUBLISHABLE_KEY }}
           VITE_API_URL: https://pqp-api-staging.fly.dev
           VITE_WS_URL: wss://pqp-api-staging.fly.dev/ws
           VITE_DEV_AUTH_BYPASS: "false"
+          VITE_WATCH_PARTY_CHANNELS: ${{ vars.STAGING_WATCH_PARTY_CHANNELS || 'true' }}
+          VITE_WATCH_PARTY_SCHEDULE: ${{ vars.STAGING_WATCH_PARTY_SCHEDULE || 'true' }}
+          VITE_LIVE_REACTIONS: ${{ vars.STAGING_LIVE_REACTIONS || 'true' }}
         run: pnpm --filter @pqp/client build
 
       # Same mktemp-wrangler pattern as deploy-web.yml, for the same reasons:
