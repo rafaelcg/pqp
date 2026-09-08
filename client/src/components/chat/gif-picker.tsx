@@ -26,7 +26,7 @@ export function GifPickerPanel(props: GifPickerPanelProps) {
       fallback={
         <div
           className={cn(
-            "z-50 h-[22rem] w-[21rem] animate-pulse rounded-lg border border-border bg-surface-1 shadow-lg",
+            "elevation-3 z-50 h-[22rem] w-[21rem] animate-pulse rounded-[var(--radius-card)]",
             props.className,
           )}
         />
