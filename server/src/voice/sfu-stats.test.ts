@@ -119,6 +119,39 @@ describe("sfu stats reader", () => {
     expect(s.failure).toBe("timeout");
   });
 
+  it("peeks at the last reading without ever taking a new one", async () => {
+    const h = harness({ rooms: [{ numParticipants: 3 }] });
+    // Nothing has been probed yet, so there is nothing to report.
+    expect(h.reader.peek()).toBeNull();
+    expect(h.calls()).toBe(0);
+
+    await h.reader.read();
+    expect(h.calls()).toBe(1);
+
+    const fresh = h.reader.peek();
+    expect(fresh?.stats.participants).toBe(3);
+    expect(fresh?.ageMs).toBe(0);
+
+    // Well past the 10 s cache: peek still answers, still without calling.
+    // This is the whole point — /status.json reads it on every request.
+    h.tick(120_000);
+    const stale = h.reader.peek();
+    expect(stale?.stats.participants).toBe(3);
+    expect(stale?.ageMs).toBe(120_000);
+    expect(h.calls()).toBe(1);
+  });
+
+  it("peeks at nothing after a rollback to another host", () => {
+    const h = harness({ rooms: [{ numParticipants: 3 }] });
+    return h.reader.read().then(() => {
+      h.setHost("pqp-abc123.livekit.cloud");
+      // The old box's numbers must never be served under the new name, at
+      // any age, and peek cannot go and fetch the new one.
+      expect(h.reader.peek()).toBeNull();
+      expect(h.calls()).toBe(1);
+    });
+  });
+
   it("does not serve one host's numbers under another host's name", async () => {
     const h = harness({ rooms: [{ numParticipants: 4 }] });
     expect((await h.reader.read()).host).toBe("sfu.pqp.gg");

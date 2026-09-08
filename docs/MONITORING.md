@@ -161,6 +161,7 @@ third-party monitor:
 |---|---|
 | `/health` | **Fly's own health check** (`fly.toml`, 30s/5s), and it gates every release. Its semantics belong to the deploy, not to us. It also returns `version` — the deployed commit — which is fine for the platform and is not something to hand an anonymous poller forever. |
 | `/status.json` | **Returns 200 while reporting components as down.** The state is in the JSON body, so a status-code monitor never fires. Our own GitHub check reads the body (`status-components` above), which is exactly why nobody noticed. |
+| `latencyMs` on `/status.json` | **Absent is not zero, and a missing field is not a fast probe.** A component whose health is inferred rather than measured omits the field entirely: the API cannot time its own round trip from inside itself, and mesh voice has no server-side media to time. A monitor that reads a missing `latencyMs` as `0` will report the fastest dependency on the instance. Read presence first. |
 
 So `/up` is a third path whose entire contract is the status code.
 
@@ -192,6 +193,18 @@ Things that are **deliberately still 200**:
   deploy.
 - **A degraded optional component** — object storage, GIF search, the SFU.
   Those are on `/status.json` and in the `status-components` check.
+
+**What is measured and what is inferred.** `database` and `storage` are timed
+on every read. `voice` reports the SFU's **last** answer and `gifs` a real
+search against the provider every fifteen minutes; both readings are taken by
+the once-a-minute sampler (`refreshSlowProbes`), never by serving
+`/status.json`, because that endpoint is public and must not be able to make
+the API call a third party or wait on one. A reading older than its window is
+dropped rather than shown, so a stopped sampler degrades to "not measured"
+instead of to an hour-old green. `api` is never measured and never will be.
+The operator dashboard additionally reads 24 hours of bucketed latency per
+component (`statusHistory` on `/api/admin/metrics`, behind the machine token):
+a latency curve is a load curve, so it stays off the public page.
 
 **It leaks nothing.** No version, no counts, no hostnames, no timings, no error
 text. An unauthenticated endpoint that says *which* dependency is unhappy is

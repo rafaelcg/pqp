@@ -286,6 +286,20 @@ Live, from `GET https://api.pqp.gg/status.json` (proxied as `/health`): the
 component health tiles, the headline pill, database latency, and the 24h/7d
 uptime behind the infra tab.
 
+**A component with no `latencyMs` was not measured, and must never be drawn as
+`0 ms`.** `api` cannot time its own round trip from inside itself and never
+carries the field; `voice` and `gifs` carry it only once their scheduled
+reading has landed. A zero renders as an impossibly fast probe and is
+indistinguishable at a glance from a real one, which is the bug this rule
+exists to prevent. Say what is actually known instead.
+
+Also on `/metrics`, and only there: **`statusHistory`**, 24 hours of latency per
+component in 30-minute buckets plus that component's own p50 and p95. It is
+what makes a number readable — 241 ms means nothing beside a database at 7 ms
+and everything beside storage's own p50 of 236 ms. Deliberately not on
+`/status.json`: a latency curve is a load curve, and the public page is allowed
+to say only "up" and "how often".
+
 One more tile in that strip, `/ready`, comes from the `ready` block of
 `/metrics`: it is the verdict `GET https://api.pqp.gg/ready` gives UptimeRobot
 (200 or 503), with the failing check named, the pool's in-use / max / queued
