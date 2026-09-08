@@ -469,7 +469,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
        SELECT s.name,
               s.community_tagline AS tagline,
               (SELECT COUNT(*) FROM channels c
-                WHERE c.server_id = s.id AND c.type IN ('text', 'voice'))::text AS channels,
+                WHERE c.server_id = s.id AND c.type IN ('text', 'voice', 'watch_party'))::text AS channels,
               (SELECT COUNT(*) FROM server_members sm
                 WHERE sm.server_id = s.id)::text AS members,
               a.messages_24h::text AS messages_24h

@@ -203,6 +203,12 @@ class WireProtocolTest {
         "poll-update" to "no poll surface on the phone",
         // Watch party is a desktop feature by design (docs/ANDROID.md).
         "watch-party" to "no watch party on the phone",
+        // Watch party scheduling reminder ("T-10 minutes" / "now live"), sent
+        // individually per subscriber. No reminders surface on the phone yet.
+        "channel-session-reminder" to "no watch party scheduling surface on the phone",
+        // Coalesced emoji burst counts for a channel's live reactions. No
+        // reaction-overlay surface on the phone yet.
+        "live-reactions" to "no live reactions surface on the phone",
     )
 
     /**
@@ -522,7 +528,7 @@ class WireProtocolTest {
     @Test
     fun `the channel enums match shared`() {
         assertEquals(
-            listOf("text", "voice", "category"),
+            listOf("text", "voice", "category", "watch_party"),
             RepoSources.enumValues(api, "channelTypeSchema"),
         )
         assertTrue(

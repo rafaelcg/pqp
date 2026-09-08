@@ -1,4 +1,8 @@
-import { Permission, type PermissionFlagKey } from "@pqp/shared";
+import {
+  isWatchPartyChannelType,
+  Permission,
+  type PermissionFlagKey,
+} from "@pqp/shared";
 
 /**
  * Bits the channel overwrite editor may flip. Matches the role editor's
@@ -23,14 +27,30 @@ export const CHANNEL_OVERWRITE_BITS_VOICE = [
   "STREAM",
 ] as const satisfies readonly PermissionFlagKey[];
 
+/**
+ * A watch party is a voice room whose stage is the point: STREAM says nothing
+ * there (`canStartWatchPartyStream` in @pqp/shared), so the editor offers the
+ * bit that does.
+ */
+export const CHANNEL_OVERWRITE_BITS_WATCH_PARTY = [
+  "VIEW_CHANNEL",
+  "CONNECT",
+  "SPEAK",
+  "START_WATCH_PARTY",
+] as const satisfies readonly PermissionFlagKey[];
+
 export type OverwriteState = "allow" | "inherit" | "deny";
 
 export type ChannelOverwriteBit = (typeof CHANNEL_OVERWRITE_BITS_TEXT)[number]
-  | (typeof CHANNEL_OVERWRITE_BITS_VOICE)[number];
+  | (typeof CHANNEL_OVERWRITE_BITS_VOICE)[number]
+  | (typeof CHANNEL_OVERWRITE_BITS_WATCH_PARTY)[number];
 
 export function overwriteBitsForChannel(
   type: string,
 ): readonly PermissionFlagKey[] {
+  if (isWatchPartyChannelType(type)) {
+    return CHANNEL_OVERWRITE_BITS_WATCH_PARTY;
+  }
   return type === "voice"
     ? CHANNEL_OVERWRITE_BITS_VOICE
     : CHANNEL_OVERWRITE_BITS_TEXT;

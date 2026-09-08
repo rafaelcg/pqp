@@ -1783,7 +1783,11 @@ function receivingVideo(voiceState: VoiceState): boolean {
   );
 }
 
-function CallControls({
+/**
+ * The control bar under the stage. Exported for the unit test that pins the
+ * audience rule below; `CallStage` is the only runtime caller.
+ */
+export function CallControls({
   voiceState,
   collapsed,
   canExpand,
@@ -1878,6 +1882,11 @@ function CallControls({
   const iconSize = collapsed ? "h-3.5 w-3.5" : "h-4 w-4";
   // SPEAK denied locks mute. STREAM denied hides camera and share. The two
   // bits are independent: a stage can let someone present without talking.
+  // In a watch_party channel the server answers `canStream` from
+  // START_WATCH_PARTY instead of STREAM (`canStartWatchPartyStream` in
+  // @pqp/shared), so the audience gets neither the share button nor the
+  // Watch party button below, and `set-sharing-screen` would be refused for
+  // them anyway. One grant, read once, hides both.
   const listenOnly = !voiceState.canSpeak;
   const noVideo = !voiceState.canStream;
 
@@ -2265,6 +2274,7 @@ function CallControls({
       )}
       {canWatchParty &&
         !listenOnly &&
+        !noVideo &&
         onStartScreenShare &&
         !voiceState.isSharingScreen && (
           <Tooltip

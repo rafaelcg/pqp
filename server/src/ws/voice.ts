@@ -11,7 +11,9 @@ import {
   CAMERA_LIMIT,
   MESH_VOICE_LIMIT,
   SCREEN_SHARE_LIMIT,
+  canStartWatchPartyStream,
   hasPermission,
+  isVoiceRoomChannelType,
   Permission,
   callDeclinedMessageSchema,
   callIncomingMessageSchema,
@@ -2525,7 +2527,7 @@ export async function handleVoiceMessage(
       refuseResume();
       return;
     }
-    if (channel.kind === "server" && channel.type !== "voice") {
+    if (channel.kind === "server" && !isVoiceRoomChannelType(channel.type)) {
       refuseResume();
       return;
     }
@@ -2586,7 +2588,14 @@ export async function handleVoiceMessage(
         return;
       }
       canSpeak = hasPermission(resolved.permissions, Permission.SPEAK);
-      canStream = hasPermission(resolved.permissions, Permission.STREAM);
+      // THE ONE GATE for the stage. A watch party asks for START_WATCH_PARTY
+      // instead of STREAM, so the audience keeps its everyday bits and still
+      // cannot present. `set-sharing-screen` reads `peer.canStream`; the HLS
+      // egress start must read the same flag (see docs/WATCH_PARTY.md).
+      canStream = canStartWatchPartyStream({
+        channelType: channel.type,
+        permissions: resolved.permissions,
+      });
       nickname = resolved.nickname;
     }
 

@@ -12,7 +12,7 @@ const EXPORT_BATCH_SIZE = 1000;
 export interface ExportChannel {
   id: string;
   name: string;
-  type: "text" | "voice" | "category";
+  type: "text" | "voice" | "category" | "watch_party";
   isPrivate: boolean;
   topic: string | null;
   parentId: string | null;
@@ -90,7 +90,7 @@ async function exportChannels(serverId: string): Promise<ExportChannel[]> {
   const result = await getPool().query<{
     id: string;
     name: string;
-    type: "text" | "voice" | "category";
+    type: "text" | "voice" | "category" | "watch_party";
     is_private: boolean;
     topic: string | null;
     parent_id: string | null;

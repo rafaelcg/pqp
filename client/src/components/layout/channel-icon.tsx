@@ -1,6 +1,6 @@
-import { Hash, Lock, Mic } from "lucide-react";
+import { Clapperboard, Hash, Lock, Mic } from "lucide-react";
 import { useState } from "react";
-import type { Channel } from "@pqp/shared";
+import { isWatchPartyChannelType, type Channel } from "@pqp/shared";
 import { cn } from "@/lib/utils";
 
 /**
@@ -20,7 +20,7 @@ export function isChannelImageUrl(value: string): boolean {
 
 /**
  * The glyph next to a channel's name — its image, its emoji icon, or one of
- * the three defaults (lock / mic / hash) when it has neither. Most channels
+ * the defaults (lock / clapperboard / mic / hash) when it has neither. Most channels
  * hit the default path, so that path is drawn deliberately rather than left
  * blank.
  *
@@ -67,6 +67,9 @@ export function ChannelIcon({
   }
   if (channel.isPrivate) {
     return <Lock className={cn("shrink-0 text-warning", className)} />;
+  }
+  if (isWatchPartyChannelType(channel.type)) {
+    return <Clapperboard className={cn("shrink-0", className)} />;
   }
   if (channel.type === "voice") {
     return <Mic className={cn("shrink-0", className)} />;

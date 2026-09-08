@@ -31,8 +31,21 @@ interface PromptDialogProps {
   initialValue?: string;
   checkboxLabel?: string;
   checkboxDefault?: boolean;
+  /**
+   * An optional second, free-text field under the name (a watch party's
+   * short description). Rendered only when a placeholder is given; its
+   * trimmed value comes back as the third argument of `onConfirm`, empty
+   * when the person left it blank. Existing callers ignore the argument.
+   */
+  secondaryLabel?: string;
+  secondaryPlaceholder?: string;
+  secondaryMaxLength?: number;
   onClose: () => void;
-  onConfirm: (value: string, checked: boolean) => void | Promise<void>;
+  onConfirm: (
+    value: string,
+    checked: boolean,
+    secondary: string,
+  ) => void | Promise<void>;
 }
 
 export function PromptDialog({
@@ -45,10 +58,14 @@ export function PromptDialog({
   initialValue = "",
   checkboxLabel,
   checkboxDefault = false,
+  secondaryLabel,
+  secondaryPlaceholder,
+  secondaryMaxLength = 200,
   onClose,
   onConfirm,
 }: PromptDialogProps) {
   const [value, setValue] = useState(initialValue);
+  const [secondary, setSecondary] = useState("");
   const [checked, setChecked] = useState(checkboxDefault);
   const [busy, setBusy] = useState(false);
   const formId = useId();
@@ -56,6 +73,7 @@ export function PromptDialog({
   useEffect(() => {
     if (open) {
       setValue(initialValue);
+      setSecondary("");
       setChecked(checkboxDefault);
       setBusy(false);
     }
@@ -71,7 +89,7 @@ export function PromptDialog({
     }
     setBusy(true);
     try {
-      await onConfirm(trimmed, checked);
+      await onConfirm(trimmed, checked, secondary.trim());
     } finally {
       setBusy(false);
     }
@@ -113,6 +131,25 @@ export function PromptDialog({
             autoFocus
           />
         </label>
+
+        {secondaryPlaceholder !== undefined && (
+          <label className="block">
+            {secondaryLabel && (
+              <span className="mb-1 block text-xs uppercase tracking-wide text-paper-muted">
+                {secondaryLabel}
+              </span>
+            )}
+            <Input
+              value={secondary}
+              onChange={(e) =>
+                setSecondary(e.target.value.slice(0, secondaryMaxLength))
+              }
+              placeholder={secondaryPlaceholder}
+              maxLength={secondaryMaxLength}
+              disabled={busy}
+            />
+          </label>
+        )}
 
         {checkboxLabel && (
           <label className="flex cursor-pointer items-center gap-3">

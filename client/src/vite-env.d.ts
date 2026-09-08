@@ -23,6 +23,12 @@ interface ImportMetaEnv {
   readonly VITE_LIVE_REACTIONS?: string;
   readonly VITE_DEV_AUTH_BYPASS?: string;
   /**
+   * Watch party channels: the sidebar section, its create button and the
+   * live row. Build-time, off unless the literal "true". See
+   * `lib/watch-party-channels.ts`.
+   */
+  readonly VITE_WATCH_PARTY_CHANNELS?: string;
+  /**
    * Public TestFlight join URL. Optional; a default lives in `lib/testflight.ts`.
    */
   readonly VITE_TESTFLIGHT_URL?: string;

@@ -95,4 +95,26 @@ describe("resolveVoicePublish", () => {
       ),
     ).resolves.toEqual({ canSpeak: false, canStream: true });
   });
+
+  it("gates a watch party stage on START_WATCH_PARTY, not Stream", async () => {
+    const stage = { kind: "server", server_id: SERVER, type: "watch_party" };
+    resolved.bits = Permission.SPEAK | Permission.STREAM;
+    await expect(
+      resolveVoicePublish(stage, CHANNEL, "user-1"),
+    ).resolves.toEqual({ canSpeak: true, canStream: false });
+
+    resolved.bits = Permission.SPEAK | Permission.START_WATCH_PARTY;
+    await expect(
+      resolveVoicePublish(stage, CHANNEL, "user-1"),
+    ).resolves.toEqual({ canSpeak: true, canStream: true });
+
+    // A plain voice room ignores the watch party bit.
+    await expect(
+      resolveVoicePublish(
+        { kind: "server", server_id: SERVER, type: "voice" },
+        CHANNEL,
+        "user-1",
+      ),
+    ).resolves.toEqual({ canSpeak: true, canStream: false });
+  });
 });

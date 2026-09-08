@@ -25,7 +25,12 @@ import {
 import { useEffect, useMemo, useState, type DragEvent, type ReactNode } from "react";
 import {
   FAVORITE_CHANNELS_PER_SERVER_MAX,
+  isVoiceRoomChannelType,
+  isWatchPartyChannelType,
+  liveStateFromRoster,
   type Channel,
+  type ChannelLiveState,
+  type ChannelType,
   type Server,
   type VoiceParticipant,
 } from "@pqp/shared";
@@ -69,6 +74,7 @@ import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-
 import { ChannelSessionHint } from "@/components/layout/channel-session-hint";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
 
 export interface UnreadState {
   count: number;
@@ -81,6 +87,7 @@ const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
 const PINNED_ZONE = "__pinned__";
 const TEXT_ZONE = "__text__";
 const VOICE_ZONE = "__voice__";
+const WATCH_PARTY_ZONE = "__watch_party__";
 
 /** Apple keyboards label the same chord differently, and the hint is the point. */
 const SEARCH_SHORTCUT_HINT =
@@ -154,10 +161,11 @@ interface ChannelListProps {
   onKickOccupant?: (userId: string, name: string) => void;
   onSetPeerVolume?: (userId: string, volume: number) => void;
   onSetScreenVolume?: (userId: string, volume: number) => void;
-  onCreateChannel: (
-    type: "text" | "voice" | "category",
-    isPrivate: boolean,
-  ) => void;
+  /**
+   * `watch_party` is only ever asked for while `isWatchPartyChannelsEnabled()`
+   * is true; with the flag off the sidebar has no button that sends it.
+   */
+  onCreateChannel: (type: ChannelType, isPrivate: boolean) => void;
   onRenameChannel: (channel: Channel) => void;
   onOpenChannelSettings: (
     channel: Channel,
@@ -279,11 +287,36 @@ export function ChannelList({
       (c) => c.type === "text" && !c.parentId && !favoriteIdSet.has(c.id),
     ),
   );
+  // With the flag off a watch_party channel is just another voice row, so
+  // production sees nothing new until the build says so. With it on, those
+  // channels move to a section of their own under Voice.
+  const watchPartyOn = isWatchPartyChannelsEnabled();
   const topLevelVoice = sortByPosition(
     channels.filter(
-      (c) => c.type === "voice" && !c.parentId && !favoriteIdSet.has(c.id),
+      (c) =>
+        (watchPartyOn
+          ? c.type === "voice"
+          : isVoiceRoomChannelType(c.type)) &&
+        !c.parentId &&
+        !favoriteIdSet.has(c.id),
     ),
   );
+  const topLevelWatchParty = watchPartyOn
+    ? sortByPosition(
+        channels.filter(
+          (c) =>
+            isWatchPartyChannelType(c.type) &&
+            !c.parentId &&
+            !favoriteIdSet.has(c.id),
+        ),
+      )
+    : [];
+  /** Live state per voice room, derived from the roster (see @pqp/shared). */
+  function liveStateFor(channel: Channel): ChannelLiveState | undefined {
+    return watchPartyOn && isWatchPartyChannelType(channel.type)
+      ? liveStateFromRoster(voiceOccupancy[channel.id])
+      : undefined;
+  }
   const categories = sortByPosition(
     channels.filter((c) => c.type === "category"),
   );
@@ -351,6 +384,7 @@ export function ChannelList({
       favorites: visibleFavs,
       text: topLevelText,
       voice: topLevelVoice,
+      watchParty: topLevelWatchParty,
       categories,
       childrenByCategory,
     });
@@ -439,13 +473,14 @@ export function ChannelList({
                   connected={activeVoiceChannelId === channel.id}
                   unread={unread[channel.id] ?? EMPTY_UNREAD}
                   occupants={
-                    channel.type === "voice"
+                    isVoiceRoomChannelType(channel.type)
                       ? (voiceOccupancy[channel.id]?.length ?? 0)
                       : 0
                   }
+                  liveState={liveStateFor(channel)}
                   onSelect={() => onSelectChannel(channel.id)}
                   onJoinVoice={
-                    channel.type === "voice" && onJoinVoice
+                    isVoiceRoomChannelType(channel.type) && onJoinVoice
                       ? () => onJoinVoice(channel.id)
                       : undefined
                   }
@@ -790,8 +825,9 @@ export function ChannelList({
 
   function renderRow(channel: Channel, group: Channel[], inFavorites = false) {
     const index = group.findIndex((c) => c.id === channel.id);
-    const occupants =
-      channel.type === "voice" ? (voiceOccupancy[channel.id] ?? []) : [];
+    const occupants = isVoiceRoomChannelType(channel.type)
+      ? (voiceOccupancy[channel.id] ?? [])
+      : [];
     const isFavorite = inFavorites || favoriteIdSet.has(channel.id);
     const occupantDropOk = occupantDropAllowed(channel);
     return (
@@ -822,6 +858,7 @@ export function ChannelList({
           canManageRoles={canManageRoles}
           icon={<ChannelIcon channel={channel} />}
           sessionHint={upcomingSessionStartsAtByChannel[channel.id]}
+          liveState={liveStateFor(channel)}
           isDragging={draggedId === channel.id}
           isDragOver={dragOverId === channel.id}
           occupantDragActive={Boolean(draggedOccupant)}
@@ -842,7 +879,7 @@ export function ChannelList({
             onMobileClose?.();
           }}
           onJoinVoice={
-            channel.type === "voice" && onJoinVoice
+            isVoiceRoomChannelType(channel.type) && onJoinVoice
               ? () => {
                   onJoinVoice(channel.id);
                   // Same as a select: on a phone the drawer must get out of
@@ -867,9 +904,11 @@ export function ChannelList({
               categoryId,
               categoryId
                 ? (childrenByCategory.get(categoryId)?.length ?? 0)
-                : (channel.type === "voice"
+                : topLevelWatchParty.some((c) => c.id === channel.id)
+                  ? topLevelWatchParty.length
+                  : isVoiceRoomChannelType(channel.type)
                     ? topLevelVoice.length
-                    : topLevelText.length),
+                    : topLevelText.length,
             )
           }
           onMoveUp={
@@ -1291,6 +1330,43 @@ export function ChannelList({
               )}
             </ChannelSection>
 
+            {watchPartyOn && (
+              <ChannelSection
+                label={t("chrome.watchParty")}
+                canManage={canManage}
+                onAdd={() => onCreateChannel("watch_party", false)}
+                onAddPrivate={() => onCreateChannel("watch_party", true)}
+                isDragOver={
+                  dragOverId === WATCH_PARTY_ZONE && !draggedOccupant
+                }
+                onDragOver={(event) => {
+                  if (draggedOccupant) {
+                    event.dataTransfer.dropEffect = "none";
+                    return;
+                  }
+                  if (draggedId) {
+                    setDragOverId(WATCH_PARTY_ZONE);
+                  }
+                }}
+                onDrop={() => {
+                  if (draggedOccupant) {
+                    clearDrag();
+                    return;
+                  }
+                  const dragged = draggedChannel();
+                  if (dragged && favoriteIdSet.has(dragged.id)) {
+                    handleUnfavoriteDragged();
+                  } else {
+                    clearDrag();
+                  }
+                }}
+              >
+                {topLevelWatchParty.map((channel) =>
+                  renderRow(channel, topLevelWatchParty),
+                )}
+              </ChannelSection>
+            )}
+
             {(categories.length > 0 || canManage) && (
               <div className="mb-4">
                 <div className="mb-1 flex items-center justify-between px-2">
@@ -1604,6 +1680,8 @@ export function channelRailGroups(input: {
   favorites: Channel[];
   text: Channel[];
   voice: Channel[];
+  /** Top-level watch party rooms; empty (or absent) while the flag is off. */
+  watchParty?: Channel[];
   categories: Channel[];
   childrenByCategory: Map<string, Channel[]>;
 }): { key: string; channels: Channel[] }[] {
@@ -1611,6 +1689,7 @@ export function channelRailGroups(input: {
     { key: "favorites", channels: input.favorites },
     { key: "text", channels: input.text },
     { key: "voice", channels: input.voice },
+    { key: "watch_party", channels: input.watchParty ?? [] },
     ...input.categories.map((category) => ({
       key: category.id,
       channels: input.childrenByCategory.get(category.id) ?? [],
@@ -1638,6 +1717,7 @@ export function ChannelRailItem({
   connected,
   unread,
   occupants,
+  liveState,
   onSelect,
   onJoinVoice,
 }: {
@@ -1646,6 +1726,8 @@ export function ChannelRailItem({
   connected: boolean;
   unread: UnreadState;
   occupants: number;
+  /** Set for a watch party room while the flag is on; see `ChannelRow`. */
+  liveState?: ChannelLiveState;
   onSelect: () => void;
   onJoinVoice?: () => void;
 }) {
@@ -1654,8 +1736,16 @@ export function ChannelRailItem({
   const muted = notifications.level === "none";
   const hasUnread = !selected && unread.count > 0 && !muted;
   const mentions = selected || muted ? 0 : unread.mentions;
+  const live = liveState?.live === true;
   return (
-    <Tooltip label={channel.name} side="right">
+    <Tooltip
+      label={
+        live
+          ? `${channel.name} ${t("chrome.watchPartyLive")}`
+          : channel.name
+      }
+      side="right"
+    >
       <button
         type="button"
         data-channel-id={channel.id}
@@ -1674,6 +1764,15 @@ export function ChannelRailItem({
         onClick={onJoinVoice && !connected ? onJoinVoice : onSelect}
       >
         <ChannelIcon channel={channel} className="h-4 w-4" />
+        {live && (
+          /* The strip has no room for words: a red dot in the corner is the
+             pill. The viewer count below it is the ordinary occupancy badge. */
+          <span
+            data-watch-party-live=""
+            aria-hidden="true"
+            className="absolute -left-1 -top-1 h-2.5 w-2.5 rounded-full bg-danger ring-2 ring-channel motion-safe:animate-pulse"
+          />
+        )}
         {hasUnread && (
           <>
             <span
@@ -1714,6 +1813,7 @@ function ChannelRow({
   canManage,
   canManageRoles = false,
   icon,
+  liveState,
   isDragging,
   isDragOver,
   occupantDragActive = false,
@@ -1744,6 +1844,13 @@ function ChannelRow({
   canManage: boolean;
   canManageRoles?: boolean;
   icon: ReactNode;
+  /**
+   * Present only for a watch party room while the flag is on. Turns the row
+   * into the watch party shape: topic under the name, the AO VIVO pill and
+   * viewer count while someone is on the stage, an Entrar button for the
+   * rest. Absent (flag off, or any other type) the row is the plain one.
+   */
+  liveState?: ChannelLiveState;
   isDragging: boolean;
   isDragOver: boolean;
   occupantDragActive?: boolean;
@@ -1917,6 +2024,9 @@ function ChannelRow({
   // A muted channel keeps counting for the read cursor, but nothing about it
   // should pull the eye — that is the whole point of muting it.
   const mentions = selected || muted ? 0 : unread.mentions;
+  const watchParty = liveState !== undefined;
+  const live = liveState?.live === true;
+  const topic = watchParty ? channel.topic?.trim() || null : null;
 
   return (
     <ContextMenu items={items}>
@@ -1985,15 +2095,61 @@ function ChannelRow({
           className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           {icon}
-          <span className={cn("truncate", hasUnread && !muted && "font-semibold")}>
-            {channel.name}
-          </span>
-          {sessionHint && (
+          {watchParty ? (
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span
+                className={cn(
+                  "truncate",
+                  hasUnread && !muted && "font-semibold",
+                )}
+              >
+                {channel.name}
+              </span>
+              {live ? (
+                <span
+                  data-watch-party-viewers=""
+                  className="truncate text-[10px] text-paper-muted"
+                >
+                  {t("chrome.watchPartyViewers", {
+                    count: liveState.viewerCount,
+                  })}
+                </span>
+              ) : sessionHint ? (
+                <ChannelSessionHint startsAt={sessionHint} now={new Date()} />
+              ) : (
+                topic && (
+                  <span className="truncate text-[10px] text-paper-muted">
+                    {topic}
+                  </span>
+                )
+              )}
+            </span>
+          ) : (
+            <span className={cn("truncate", hasUnread && !muted && "font-semibold")}>
+              {channel.name}
+            </span>
+          )}
+          {!watchParty && sessionHint && (
             <ChannelSessionHint startsAt={sessionHint} now={new Date()} />
           )}
           {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
           {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
           <span className="ml-auto flex shrink-0 items-center gap-1">
+            {live && (
+              /* The pulse is on the dot, never on the text, and only under
+                 `motion-safe`: with reduced motion the pill just sits there
+                 red, which still reads as live. */
+              <span
+                data-watch-party-live=""
+                className="flex items-center gap-1 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-danger"
+              >
+                <span
+                  aria-hidden="true"
+                  className="h-1.5 w-1.5 rounded-full bg-danger motion-safe:animate-pulse"
+                />
+                {t("chrome.watchPartyLive")}
+              </span>
+            )}
             {connected && (
               <>
                 <span
@@ -2018,6 +2174,31 @@ function ChannelRow({
             )}
           </span>
         </button>
+        {watchParty && onJoinVoice && !connected && (
+          /* The same join the row itself does, spelled out: a watch party is
+             joined by people who have never been in a voice channel here and
+             would not guess that the name is the door. Nobody gets a "start"
+             here; the presenter starts from the Watch party button in the
+             call, which the welcome grant gates. */
+          <button
+            type="button"
+            data-channel-join=""
+            draggable={false}
+            className={cn(
+              "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold",
+              live
+                ? "bg-danger/15 text-danger hover:bg-danger/25"
+                : "bg-ink-4/70 text-paper-muted hover:bg-ink-4 hover:text-paper",
+            )}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onJoinVoice();
+            }}
+          >
+            {t("chrome.watchPartyJoin")}
+          </button>
+        )}
         {onToggleFavorite && (
           <Tooltip
             label={

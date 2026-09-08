@@ -47,6 +47,14 @@ describe("ChannelIcon", () => {
     expect(html).toContain("lucide-mic");
   });
 
+  it("gives a watch party its own glyph, not the mic", () => {
+    const html = renderToStaticMarkup(
+      <ChannelIcon channel={{ ...BASE, type: "watch_party" }} />,
+    );
+    expect(html).toContain("lucide-clapperboard");
+    expect(html).not.toContain("lucide-mic");
+  });
+
   it("falls back to the lock glyph for a private channel with no image", () => {
     const html = renderToStaticMarkup(
       <ChannelIcon channel={{ ...BASE, isPrivate: true }} />,

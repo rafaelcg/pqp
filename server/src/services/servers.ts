@@ -237,8 +237,9 @@ export async function listChannels(
 export async function createChannel(
   serverId: string,
   name: string,
-  type: "text" | "voice" | "category",
+  type: "text" | "voice" | "category" | "watch_party",
   isPrivate = false,
+  topic: string | null = null,
 ): Promise<ChannelRow> {
   // Top-level text, top-level voice, and categories are three separate
   // sibling groups sharing the `parent_id IS NULL` scope — the client renders
@@ -255,10 +256,10 @@ export async function createChannel(
   const position = (positionResult.rows[0]?.max ?? -1) + 1;
 
   const result = await getPool().query<ChannelRow>(
-    `INSERT INTO channels (server_id, name, type, position, is_private)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO channels (server_id, name, type, position, is_private, topic)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING ${CHANNEL_COLUMNS}`,
-    [serverId, name, type, position, isPrivate],
+    [serverId, name, type, position, isPrivate, topic || null],
   );
   const channel = result.rows[0]!;
   if (isPrivate) {

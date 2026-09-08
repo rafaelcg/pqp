@@ -71,4 +71,14 @@ describe("overwriteBitsForChannel", () => {
     expect(overwriteBitsForChannel("text")).not.toContain("CONNECT");
     expect(overwriteBitsForChannel("text")).not.toContain("SPEAK");
   });
+
+  it("swaps STREAM for START_WATCH_PARTY on a watch party", () => {
+    const bits = overwriteBitsForChannel("watch_party");
+    expect(bits).toContain("VIEW_CHANNEL");
+    expect(bits).toContain("CONNECT");
+    expect(bits).toContain("SPEAK");
+    expect(bits).toContain("START_WATCH_PARTY");
+    expect(bits).not.toContain("STREAM");
+    expect(overwriteBitsForChannel("voice")).not.toContain("START_WATCH_PARTY");
+  });
 });

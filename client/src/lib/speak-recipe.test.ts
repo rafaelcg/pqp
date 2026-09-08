@@ -3,6 +3,7 @@ import { Permission, serializePermissions } from "@pqp/shared";
 import {
   planRecipe,
   readRecipe,
+  recipeBitsForChannel,
   roleIgnoresChannelOverwrites,
 } from "./speak-recipe";
 
@@ -192,5 +193,39 @@ describe("roleIgnoresChannelOverwrites", () => {
         permissions: "0",
       }),
     ).toBe(false);
+  });
+});
+
+describe("recipeBitsForChannel", () => {
+  it("asks about the stage bit that rules each room", () => {
+    expect(recipeBitsForChannel("text")).toEqual([Permission.SEND_MESSAGES]);
+    expect(recipeBitsForChannel("voice")).toEqual([
+      Permission.SPEAK,
+      Permission.STREAM,
+    ]);
+    expect(recipeBitsForChannel("watch_party")).toEqual([
+      Permission.SPEAK,
+      Permission.START_WATCH_PARTY,
+    ]);
+  });
+
+  it("strips the mute/move leftovers when writing the watch party recipe too", () => {
+    const writes = planRecipe(
+      [
+        row(
+          "role",
+          EVERYONE,
+          0n,
+          Permission.SPEAK | Permission.MUTE_MEMBERS,
+        ),
+      ],
+      EVERYONE,
+      recipeBitsForChannel("watch_party"),
+      "everyone",
+      [],
+    );
+    expect(writes).toEqual([
+      { op: "delete", targetType: "role", targetId: EVERYONE, allow: 0n, deny: 0n },
+    ]);
   });
 });

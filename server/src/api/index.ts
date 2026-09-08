@@ -112,6 +112,7 @@ import {
   scheduleCommunityHomePostSchema,
   updateCommunityHomePostSchema,
   updateServerCommunityHomeConfigSchema,
+  isVoiceRoomChannelType,
 } from "@pqp/shared";
 import { z } from "zod";
 import {
@@ -3555,6 +3556,7 @@ router.post(
       body.name,
       body.type,
       body.isPrivate ?? false,
+      body.topic ?? null,
     );
     if (channel.is_private) {
       await addChannelMember(channel.id, user.id);
@@ -5289,7 +5291,7 @@ router.post(
     if (destination.server_id !== serverId) {
       throw new NotFound("Channel not found");
     }
-    if (destination.type !== "voice") {
+    if (!isVoiceRoomChannelType(destination.type)) {
       throw new HttpError(400, "Members can only be moved to a voice channel");
     }
     // Both directions of visibility: the moderator must be able to see where
