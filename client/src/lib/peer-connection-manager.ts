@@ -378,14 +378,73 @@ export function chosenScreenCeilingBps(
   return Math.min(screenBitrateFor(quality), SCREEN_MAX_BITRATE_BPS);
 }
 
+/**
+ * What one camera sender is allowed, given the room, the chosen rung, and
+ * whether a screen share is running beside it.
+ *
+ * WHY THIS DID NOT EXIST UNTIL NOW, and why its absence was a real bug rather
+ * than a tidy simplification. `retuneAllCameraSenders` handed every peer the
+ * same `cameraMaxBitrate`, undivided. A mesh uploads one copy per viewer, so a
+ * four-way call permitted about 4.46 Mbps of camera off one machine, measured
+ * and recorded in `docs/HANDOVER.md` on 25 Aug and left alone since. The screen
+ * path has divided by the room since it was written and now divides a
+ * *measured* budget; the camera divided nothing.
+ *
+ * THE ARGUMENT THAT KEPT IT UNDIVIDED, and why it does not survive contact
+ * with the measurement. Dividing a chosen "720p" by room size was said to make
+ * the setting mean something different in every call. That is true of a
+ * *label*, and the label is not what is divided here: `cameraProfileFor` still
+ * pins the capture size, so 720p stays 720p and what shrinks is what the
+ * encoder may spend on it. Refusing to divide did not keep the promise either
+ * — it just moved the breakage, because four copies of a 1.5 Mbps camera do
+ * not fit down a link that can carry two, and the encoder then misses the
+ * ceiling on every one of them.
+ *
+ * SHARING WITH THE SCREEN. Both senders ride one uplink and
+ * `availableOutgoingBitrate` measures that whole uplink, so handing the entire
+ * budget to the screen and letting the camera bid separately double-commits
+ * the link. `tuneCameraSender`'s own comment already described the symptom:
+ * "the two video senders then bid against each other for one bandwidth
+ * estimate with nothing arbitrating, which is how a camera ends up at 240p
+ * while the share looks fine". The room's share is therefore split between
+ * them in proportion to what each was asked for, which keeps a 720p camera
+ * (1.5 Mbps) modest beside a screen (3 Mbps on Auto) instead of letting either
+ * pretend it owns the link.
+ */
+export function meshCameraBitrate(
+  peerCount: number,
+  /** What the person asked the camera for, in bps. The outer bound. */
+  chosenCameraBps: number,
+  budgetBps: number = SCREEN_UPLOAD_BUDGET_BPS,
+  /** The rung a share beside it is running at, or null when there is none. */
+  screenQuality: VideoQuality | null = null,
+): number {
+  const share = budgetBps / Math.max(1, peerCount);
+  // Proportional rather than a fixed slice: the two ladders already encode how
+  // expensive each picture is, and a screen costs roughly twice a talking head
+  // at the same label (see the note above `SCREEN_BITRATES`).
+  const screenChosen =
+    screenQuality === null
+      ? 0
+      : Math.min(screenBitrateFor(screenQuality), SCREEN_MAX_BITRATE_BPS);
+  const slice =
+    screenChosen === 0 ? 1 : chosenCameraBps / (chosenCameraBps + screenChosen);
+  return Math.round(Math.min(chosenCameraBps, share * slice));
+}
+
 export function meshScreenBitrate(
   peerCount: number,
   quality: VideoQuality = DEFAULT_VIDEO_QUALITY,
   budgetBps: number = SCREEN_UPLOAD_BUDGET_BPS,
+  sendingCamera = false,
 ): number {
   const share = budgetBps / Math.max(1, peerCount);
   const chosen = Math.min(screenBitrateFor(quality), SCREEN_MAX_BITRATE_BPS);
-  return Math.round(Math.min(chosen, share));
+  // The camera's half of the same split. Without this the screen took the
+  // whole measured budget and the camera bid for the link a second time.
+  const cameraChosen = cameraBitrateFor(quality);
+  const slice = sendingCamera ? chosen / (chosen + cameraChosen) : 1;
+  return Math.round(Math.min(chosen, share * slice));
 }
 
 /** The camera's own ceiling. Framerate is what the whole tuning protects. */
@@ -478,6 +537,8 @@ async function tuneScreenSender(
   peerCount: number,
   quality: VideoQuality,
   budgetBps: number = SCREEN_UPLOAD_BUDGET_BPS,
+  /** Whether a camera is riding the same uplink and needs its own slice. */
+  sendingCamera = false,
 ): Promise<void> {
   if (!sender) {
     return;
@@ -497,7 +558,12 @@ async function tuneScreenSender(
     const captureHeight = sender.track?.getSettings?.().height ?? null;
     const scale = screenScaleFactor(quality, captureHeight);
     for (const encoding of params.encodings) {
-      encoding.maxBitrate = meshScreenBitrate(peerCount, quality, budgetBps);
+      encoding.maxBitrate = meshScreenBitrate(
+        peerCount,
+        quality,
+        budgetBps,
+        sendingCamera,
+      );
       encoding.maxFramerate = SCREEN_MAX_FRAMERATE;
       // Written on every rung including 1080p, where it is 1: a divisor only
       // ever set on the way down would make the menu a one-way trip, leaving a
@@ -543,6 +609,7 @@ export function createPeerConnectionManager(
         peerCount,
         screenQuality,
         screenBudgetBps,
+        localCameraStream !== null,
       );
     }
   }
@@ -579,6 +646,7 @@ export function createPeerConnectionManager(
       if (screenBudgetBps !== SCREEN_UPLOAD_BUDGET_BPS) {
         screenBudgetBps = SCREEN_UPLOAD_BUDGET_BPS;
         retuneAllScreenSenders();
+        retuneAllCameraSenders();
       }
       return;
     }
@@ -604,6 +672,9 @@ export function createPeerConnectionManager(
     }
     screenBudgetBps = next;
     retuneAllScreenSenders();
+    // The camera spends the same measured budget, so it follows every move of
+    // it. Cheap: a no-op unless a camera is actually on.
+    retuneAllCameraSenders();
   }
 
   /**
@@ -637,13 +708,29 @@ export function createPeerConnectionManager(
    * mesh's per-peer multiplication is a real cost, and the honest answer to it
    * is the SFU, not a number that lies about what it does.
    */
-  function retuneAllCameraSenders(): void {
+  function retuneAllCameraSenders(peerCount = peers.size): void {
     if (!localCameraStream) {
       return;
     }
     for (const peer of peers.values()) {
-      void tuneCameraSender(peer.cameraSender, cameraMaxBitrate);
+      void tuneCameraSender(peer.cameraSender, cameraCeilingBps(peerCount));
     }
+  }
+
+  /**
+   * What each copy of the camera may spend right now.
+   *
+   * `cameraMaxBitrate` is what the person asked for and stays the outer bound;
+   * everything else is the room and the link having their say, exactly as the
+   * screen path does. A share running beside it takes its own slice.
+   */
+  function cameraCeilingBps(peerCount = peers.size): number {
+    return meshCameraBitrate(
+      peerCount,
+      cameraMaxBitrate,
+      screenBudgetBps,
+      localScreenStream === null ? null : screenQuality,
+    );
   }
 
   let localStream: MediaStream | null = null;
@@ -1009,6 +1096,7 @@ export function createPeerConnectionManager(
           peers.size + 1,
           screenQuality,
           screenBudgetBps,
+          localCameraStream !== null,
         );
         // `+ 1` for the same reason: this runs before the caller files the new
         // peer, and the room everyone is about to be in is the one to budget
@@ -1022,10 +1110,16 @@ export function createPeerConnectionManager(
     if (localCameraStream) {
       for (const track of localCameraStream.getTracks()) {
         managed.cameraSender = pc.addTrack(track, localCameraStream);
-        // Somebody joining mid-call gets the same ceiling as everybody who was
-        // already here. Unlike the screen budget this needs no re-split, so
-        // the existing senders are left alone.
-        void tuneCameraSender(managed.cameraSender, cameraMaxBitrate);
+        // Somebody joining mid-call gets the same ceiling as everybody who
+        // was already here, and the room just grew, so the existing senders
+        // need re-splitting too — the camera divides the room now, as the
+        // screen always did. `+ 1` because this runs before the caller files
+        // the new peer.
+        void tuneCameraSender(
+          managed.cameraSender,
+          cameraCeilingBps(peers.size + 1),
+        );
+        void retuneAllCameraSenders(peers.size + 1);
       }
     }
 
@@ -1333,6 +1427,9 @@ export function createPeerConnectionManager(
       } else {
         stopScreenBudgetSampling();
       }
+      // The camera's slice of the room depends on whether a share is running
+      // beside it, so both edges of a share move the camera's ceiling.
+      retuneAllCameraSenders();
       // Absent on Safari and Firefox, on any macOS screen or window capture,
       // and whenever the user leaves the "share audio" box unticked. None of
       // that is a failure here: the share is silent, exactly as it always was.
@@ -1351,6 +1448,7 @@ export function createPeerConnectionManager(
             peers.size,
             screenQuality,
             screenBudgetBps,
+            localCameraStream !== null,
           );
         } else if (peer.screenSender) {
           peer.pc.removeTrack(peer.screenSender);
@@ -1398,7 +1496,7 @@ export function createPeerConnectionManager(
           // After both branches: `replaceTrack` keeps the sender's parameters,
           // but a camera re-opened at a new quality is exactly when the ceiling
           // must follow it, and re-applying an unchanged one costs nothing.
-          await tuneCameraSender(peer.cameraSender, cameraMaxBitrate);
+          await tuneCameraSender(peer.cameraSender, cameraCeilingBps());
         } else if (peer.cameraSender) {
           peer.pc.removeTrack(peer.cameraSender);
           peer.cameraSender = null;
@@ -1661,8 +1759,9 @@ export function createPeerConnectionManager(
       peer.pc.close();
       peers.delete(remotePeerId);
       // The room just shrank, so whoever is left can have the departed peer's
-      // share of the upload budget.
+      // share of the upload budget. Both senders divide that room.
       retuneAllScreenSenders();
+      retuneAllCameraSenders();
       emitState();
     },
 
