@@ -136,7 +136,12 @@ function screenShareUnsupportedMessage(): string {
  */
 export interface VoiceTransportFailure {
   transport: VoiceRoomTransport;
-  reason: "unsupported" | "unreachable";
+  /**
+   * `promoted` is the one that is not this client's fault and not the
+   * network's: the room moved to a voice server mid-call so more cameras
+   * would fit, and this build could not follow it in place. Rejoining works.
+   */
+  reason: "unsupported" | "unreachable" | "promoted";
 }
 
 const TRANSPORT_FAILURE_KEY: Record<
@@ -145,6 +150,7 @@ const TRANSPORT_FAILURE_KEY: Record<
 > = {
   unsupported: "voice.error.transportUnsupported",
   unreachable: "voice.error.transportUnreachable",
+  promoted: "voice.error.transportPromoted",
 };
 
 /**
@@ -268,6 +274,18 @@ export interface VoiceState {
    * `usingSfu`, which stays false until LiveKit actually connects.
    */
   roomTransport: VoiceRoomTransport | null;
+  /**
+   * True when this room is on mesh AND this deployment has a voice server to
+   * move it to, so the camera and share caps are the server's to enforce, not
+   * this client's.
+   *
+   * The local caps exist so a button is disabled rather than a claim refused
+   * a round trip later. That is still right on a room that cannot move. On a
+   * mesh room that can, refusing locally is what made "nao da pra ter mais de
+   * 3 cameras" true for everyone: the fourth camera never reached the server,
+   * so the server never got to promote the room.
+   */
+  canPromoteTransport: boolean;
   /** True when this client is the one presenting. */
   isSharingScreen: boolean;
   /** peerIds currently sharing, in roster order. */
@@ -844,6 +862,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     usingSfu: false,
     transportFailure: null,
     roomTransport: null,
+    canPromoteTransport: false,
     isSharingScreen: false,
     screenSharePeerIds: [],
     liveStream: null,
@@ -1065,11 +1084,23 @@ export function createVoiceController(transport: RealtimeTransport) {
     emit();
   }
 
+  /**
+   * A mesh room on a deployment with a voice server behind it: the caps are
+   * the server's call, not this client's, because hitting one is what asks
+   * the server to move the room. See `isCameraAtCap`.
+   */
+  function canPromoteTransport(): boolean {
+    return state.roomTransport === "mesh" && sessionProvider !== null;
+  }
+
   function snapshot(): VoiceState {
     const self = state.self ? overlayLocalSelfVoice(state.self) : null;
     const occupancy = overlayOccupancy(state.occupancy);
     return {
       ...state,
+      // Derived, never stored: it is a fact about the room plus a fact about
+      // this build, and both are already here.
+      canPromoteTransport: canPromoteTransport(),
       remotePeers: [...state.remotePeers],
       speakingPeerIds: [...state.speakingPeerIds],
       serverMutedPeerIds: [...state.serverMutedPeerIds],
@@ -2078,6 +2109,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       usingSfu: false,
       transportFailure: null,
       roomTransport: null,
+    canPromoteTransport: false,
       isSharingScreen: false,
       screenSharePeerIds: [],
       liveStream: null,
@@ -2252,14 +2284,29 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         break;
       }
+      /**
+       * Two different refusals arrive on one frame, and they need different
+       * sentences.
+       *
+       * On a room whose transport cannot move, this is the plain cap: the
+       * call already has its four shares and the number is worth stating. On
+       * a mesh room that CAN move (`canPromoteTransport`), the client no
+       * longer refuses at the cap at all, so a refusal here means the server
+       * tried to move the room to the voice server and would not: the box is
+       * carrying too much (`VOICE_PROMOTION_MAX_SFU_MBPS`) or it is not
+       * answering. "This call already has 2" would be a lie there, because a
+       * moment later, on a quieter box, the same click works.
+       */
       case "screen-share-denied":
         if (message.voiceChannelId !== state.voiceChannelId) {
           return;
         }
         void stopScreenShareInternal();
-        state.error = translateMessage("voice.error.shareLimit", {
-          limit: SCREEN_SHARE_LIMIT[state.roomTransport ?? "mesh"],
-        });
+        state.error = canPromoteTransport()
+          ? translateMessage("voice.error.shareLimitBusy")
+          : translateMessage("voice.error.shareLimit", {
+              limit: SCREEN_SHARE_LIMIT[state.roomTransport ?? "mesh"],
+            });
         emit();
         break;
       case "camera-denied":
@@ -2267,9 +2314,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
         void stopCameraInternal();
-        state.error = translateMessage("voice.error.cameraLimit", {
-          limit: CAMERA_LIMIT[state.roomTransport ?? "mesh"],
-        });
+        state.error = canPromoteTransport()
+          ? translateMessage("voice.error.cameraLimitBusy")
+          : translateMessage("voice.error.cameraLimit", {
+              limit: CAMERA_LIMIT[state.roomTransport ?? "mesh"],
+            });
         emit();
         break;
       case "voice-room-full": {
@@ -2450,8 +2499,13 @@ export function createVoiceController(transport: RealtimeTransport) {
         break;
       }
       case "voice-transport-unsupported":
-        // The server refused before creating a peer: no roster entry of ours
-        // ever existed, so there is nothing for anyone else to clean up.
+        // Usually the server refused before creating a peer: no roster entry
+        // of ours ever existed, so there is nothing for anyone else to clean
+        // up. `reason: "promoted"` is the other case: we WERE seated and the
+        // room moved to a voice server without us, because this socket never
+        // negotiated `voice-transport-changed`. The server has already
+        // released the seat; the local teardown and the sentence are the same
+        // either way, only the sentence differs.
         if (
           state.status === "idle" ||
           message.voiceChannelId !== state.voiceChannelId
@@ -2460,9 +2514,98 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         refuseTransport({
           transport: message.transport,
-          reason: "unsupported",
+          reason: message.reason === "promoted" ? "promoted" : "unsupported",
         });
         break;
+      /**
+       * THE ROOM MOVED UNDER US, ON PURPOSE.
+       *
+       * Somebody turned on a camera the mesh could not carry, so the server
+       * promoted the whole room to the SFU (see the promotion section in
+       * `server/src/ws/voice.ts`). Our seat, our peer id, our mute, our
+       * camera and our share all survive: only the media path changes.
+       *
+       * Deliberately NOT a rejoin. A rejoin would mint a new peer id, tell
+       * everybody we left and arrived, and cost the room a join cue each; the
+       * seat is still ours and the server still holds it. So this is the
+       * media half of `welcome`'s SFU branch and nothing else, run against
+       * the peer id we already have. `startSfuSession` republishes the mic
+       * (muted if we are muted), the camera and the screen capture from the
+       * state this hook is already holding, which is what "keeping the
+       * intent" means here.
+       */
+      case "voice-transport-changed": {
+        if (
+          state.status !== "connected" ||
+          message.voiceChannelId !== state.voiceChannelId
+        ) {
+          return;
+        }
+        // One-way, and only to a transport this build can actually run.
+        // Anything else is ignored and we stay exactly where we are, which is
+        // the only safe reading of a frame from a newer server: the room may
+        // have moved somewhere we cannot go, and guessing is what produced
+        // the split-brain this whole mechanism exists to prevent.
+        if (message.transport !== "livekit") {
+          return;
+        }
+        if (state.roomTransport === message.transport) {
+          // Already there: a duplicate frame (two publishers, a bus replay)
+          // must not tear a live SFU session down and build it again.
+          return;
+        }
+        const peerId = state.peerId;
+        if (!peerId) {
+          return;
+        }
+        if (!sessionProvider) {
+          // This build cannot run the room's new transport. The server only
+          // sends this frame to sockets that declared they can follow it, so
+          // reaching here means the two disagree; leaving is the honest
+          // answer and matches what the server does to a socket that never
+          // declared it at all.
+          refuseTransport({ transport: message.transport, reason: "promoted" });
+          break;
+        }
+        state.roomTransport = message.transport;
+        state.notice = translateMessage(
+          message.reason === "screens"
+            ? "voice.notice.promotedForScreens"
+            : "voice.notice.promotedForCameras",
+        );
+        for (const peer of message.participants) {
+          knownPeerIds.add(peer.peerId);
+        }
+        // The mesh goes first and unconditionally: every peer connection in
+        // it is addressed to a room whose signaling the server no longer
+        // relays, so leaving one up is a dead connection and a stale tile.
+        manager?.dispose();
+        manager = null;
+        const others = message.participants.filter(
+          (peer) => peer.peerId !== peerId,
+        );
+        void startSfuSession(message.voiceChannelId, peerId, others).then(
+          (ok) => {
+            if (state.peerId !== peerId) {
+              return;
+            }
+            if (!ok) {
+              // Same rule as a join that cannot reach the SFU: leave and say
+              // so. Building a mesh back would put us alone in a room that
+              // has moved.
+              refuseTransport({
+                transport: "livekit",
+                reason: "unreachable",
+              });
+              return;
+            }
+            redeclareLocalMedia();
+            emit();
+          },
+        );
+        emit();
+        break;
+      }
       case "voice-join-refused":
         if (
           message.voiceChannelId !== intendedChannelId &&
@@ -3110,6 +3253,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.screenSharePeerIds,
           state.peerId,
           state.roomTransport,
+          canPromoteTransport(),
         )
       ) {
         state.error = translateMessage("voice.error.shareLimit", {
@@ -3415,6 +3559,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           state.cameraPeerIds,
           state.peerId,
           state.roomTransport,
+          canPromoteTransport(),
         )
       ) {
         state.error = translateMessage("voice.error.cameraLimit", {

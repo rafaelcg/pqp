@@ -21,6 +21,7 @@ import {
   voiceClientMessageSchema,
   voiceModerationMessageSchema,
   voiceParticipantSchema,
+  voiceRoomTransportSchema,
   watchPartyStateSchema,
   liveReactionCountSchema,
   type VoiceParticipant,
@@ -78,6 +79,12 @@ import {
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
 import {
+  decidePromotion,
+  promotionBudgetMbps,
+  type SfuRoomLoad,
+} from "../voice/promotion.js";
+import { readSfuStats } from "../voice/sfu-stats.js";
+import {
   adoptVoicePeer,
   clearWatchPartyIfEmpty,
   deleteVoicePeer,
@@ -93,6 +100,7 @@ import {
   markVoicePeerOrphaned,
   persistWatchParty,
   claimVoiceRoomTransport,
+  promoteVoiceRoomTransport,
   readWatchParty,
   reconcileVoiceRegistry,
   retireVoicePeerId,
@@ -105,6 +113,7 @@ import {
 import {
   countAuthenticatedSockets,
   forEachAuthenticatedSocket,
+  socketHasCap,
   SOCKET_CAPS,
 } from "./sockets.js";
 import {
@@ -3332,16 +3341,37 @@ export async function handleVoiceMessage(
       return;
     }
     if (payload.sharing) {
-      const limit = SCREEN_SHARE_LIMIT[getRoomTransport(peer.voiceChannelId)];
-      const othersSharing = getRoomPeers(peer.voiceChannelId).filter(
-        (p) => p.id !== peer.id && p.sharingScreen,
-      ).length;
-      if (othersSharing >= limit) {
-        send(peer.socket, {
-          type: "screen-share-denied",
-          voiceChannelId: peer.voiceChannelId,
-        });
-        return;
+      const othersSharing = () =>
+        getRoomPeers(peer.voiceChannelId).filter(
+          (p) => p.id !== peer.id && p.sharingScreen,
+        ).length;
+      if (
+        othersSharing() >=
+        SCREEN_SHARE_LIMIT[getRoomTransport(peer.voiceChannelId)]
+      ) {
+        // The mesh cap is two because mesh encodes a copy per peer. Where
+        // there is an SFU to move to, move the room rather than refuse the
+        // share; `promoteRoomForVideo` prices the box first and answers false
+        // when it cannot, which is exactly the old refusal.
+        await promoteRoomForVideo(peer.voiceChannelId, "screens", user.id);
+        // The await above may have outlived the socket, and the promotion
+        // itself releases seats: re-read everything before the write. This is
+        // the "keep the check in the same tick as the write" rule restated:
+        // the counts below are the ones that decide, and they are taken after
+        // every await on this path.
+        if (socket.readyState !== 1 || peers.get(existingPeerId) !== peer) {
+          return;
+        }
+        if (
+          othersSharing() >=
+          SCREEN_SHARE_LIMIT[getRoomTransport(peer.voiceChannelId)]
+        ) {
+          send(peer.socket, {
+            type: "screen-share-denied",
+            voiceChannelId: peer.voiceChannelId,
+          });
+          return;
+        }
       }
     }
     peer.sharingScreen = payload.sharing;
@@ -3561,16 +3591,27 @@ export async function handleVoiceMessage(
       return;
     }
     if (payload.streamId) {
-      const limit = CAMERA_LIMIT[getRoomTransport(peer.voiceChannelId)];
-      const othersOn = getRoomPeers(peer.voiceChannelId).filter(
-        (p) => p.id !== peer.id && p.cameraStreamId,
-      ).length;
-      if (othersOn >= limit) {
-        send(peer.socket, {
-          type: "camera-denied",
-          voiceChannelId: peer.voiceChannelId,
-        });
-        return;
+      const othersOn = () =>
+        getRoomPeers(peer.voiceChannelId).filter(
+          (p) => p.id !== peer.id && p.cameraStreamId,
+        ).length;
+      if (othersOn() >= CAMERA_LIMIT[getRoomTransport(peer.voiceChannelId)]) {
+        // THE FOURTH CAMERA. Three is the mesh ceiling because a mesh camera
+        // is a full uplink copy per peer; it is not a ceiling on how many
+        // friends want to be seen. Move the room to the SFU and let the
+        // camera on. See the promotion section for what makes that safe and
+        // what stops it (the box's budget).
+        await promoteRoomForVideo(peer.voiceChannelId, "cameras", user.id);
+        if (socket.readyState !== 1 || peers.get(existingPeerId) !== peer) {
+          return;
+        }
+        if (othersOn() >= CAMERA_LIMIT[getRoomTransport(peer.voiceChannelId)]) {
+          send(peer.socket, {
+            type: "camera-denied",
+            voiceChannelId: peer.voiceChannelId,
+          });
+          return;
+        }
       }
     }
     peer.cameraStreamId = payload.streamId;
@@ -4478,6 +4519,333 @@ onPermissionsUpdate((serverId) => {
 
 // --- end speak permission -----------------------------------------------------
 
+// --- promotion: the one time a live room changes transport ---------------------
+//
+// Read the banner over `roomTransports` first. The rule there is absolute and
+// it stays absolute in the direction that matters: nothing moves a call from
+// the SFU back to a mesh, and nothing moves a room while half of it is left
+// behind.
+//
+// WHAT CHANGED. `CAMERA_LIMIT.mesh` is three, and it is three for a real
+// reason: a mesh camera is a full uplink copy per peer, so the fourth camera
+// in a six-person mesh room asks each publisher for about 7.5 Mbit/s of
+// upload. The complaint that produced this ("não dá pra ter mais de 3 câmeras
+// ligadas nessa porra") was not about the number. It was about the answer: the
+// camera was refused, and the room was on mesh only because the server has
+// fewer than `LARGE_SERVER_MEMBER_THRESHOLD` members, which is a guess about
+// how many people might show up and predicts nothing about how many of the
+// five who did want their faces on. Where LiveKit is configured the SFU can
+// carry those cameras, so the room goes there and the camera turns on.
+//
+// THE FOUR THINGS THAT MAKE IT SAFE:
+//
+// 1. The pin is rewritten before anybody is told. With the registry on that is
+//    one conditional UPDATE (`promoteVoiceRoomTransport`), so two people
+//    clicking their camera in the same second, on one machine or on two,
+//    produce one promotion and one announcement.
+// 2. Every seat is told, here and on the other instances, over `voice.transport`.
+// 3. A seat whose socket never negotiated `SOCKET_CAPS.voiceTransportChanged`
+//    is NOT left building a mesh in a room whose media has moved. That is the
+//    original split-brain bug and it is invisible on every screen. It is
+//    released instead, and told, so it can rejoin onto the SFU. iOS and
+//    Android are in that group today (see `docs/PARITY.md`).
+// 4. The box has a budget. Every promoted room is egress on one media server
+//    (`docs/CAPACITY.md`), and the click that spends it is a user's, so
+//    `voice/promotion.ts` prices the room and refuses over
+//    `VOICE_PROMOTION_MAX_SFU_MBPS` (600 Mbit/s by default, against a box
+//    measured clean at 880 to 935). A refusal is the old camera limit, exactly
+//    as before this existed.
+
+export type VoicePromotionReason = "cameras" | "screens";
+
+/**
+ * In-flight promotions, keyed by room, shared by every caller racing to be
+ * the one that moves it.
+ *
+ * The same shape as `pendingTransportDecisions` above and for the same
+ * reason: the work behind a promotion is asynchronous (the SFU probe, the
+ * cluster's room list, the conditional UPDATE), and the whole point of the
+ * feature is that it fires when several people turn cameras on at once. Two
+ * `set-camera` frames that both cross the mesh cap in the same tick must cost
+ * one probe, one UPDATE and one announcement.
+ */
+const pendingPromotions = new Map<string, Promise<boolean>>();
+
+/** Test hook: forget any in-flight promotion. */
+export function resetVoicePromotions(): void {
+  pendingPromotions.clear();
+}
+
+/** How many seats in a room are publishing video right now. */
+function countVideoPublishers(
+  people: readonly { sharingScreen: boolean; cameraStreamId: string | null }[],
+): number {
+  return people.filter(
+    (person) => person.sharingScreen || person.cameraStreamId,
+  ).length;
+}
+
+/**
+ * Every room the process can see, priced for the budget guard.
+ *
+ * With the registry on this is the cluster's rooms, which is the number that
+ * matters: the media box is shared by every instance. With it off there is
+ * only one instance, so its own map is the whole truth.
+ */
+async function readRoomLoads(): Promise<SfuRoomLoad[]> {
+  if (registryOn()) {
+    try {
+      const rooms = await listVoiceRosters();
+      return rooms.map((room) => ({
+        channelId: room.channelId,
+        transport: room.transport,
+        participants: room.peers.length,
+        videoPublishers: countVideoPublishers(room.peers),
+      }));
+    } catch (error) {
+      logEvent("voice.registryReadFailed", {
+        op: "promotionLoad",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      // Fall through to the local view rather than refusing: this instance's
+      // own rooms are still a floor, and a database blip must not be a
+      // silent, permanent "no more cameras" for everybody.
+    }
+  }
+  const byRoom = new Map<string, SfuRoomLoad>();
+  for (const peer of peers.values()) {
+    let room = byRoom.get(peer.voiceChannelId);
+    if (!room) {
+      room = {
+        channelId: peer.voiceChannelId,
+        transport: getRoomTransport(peer.voiceChannelId),
+        participants: 0,
+        videoPublishers: 0,
+      };
+      byRoom.set(peer.voiceChannelId, room);
+    }
+    room.participants += 1;
+    if (peer.sharingScreen || peer.cameraStreamId) {
+      room.videoPublishers += 1;
+    }
+  }
+  return [...byRoom.values()];
+}
+
+/**
+ * Apply a promotion to the seats THIS instance holds: the pin, the frame for
+ * everyone who can follow it, and the release of everyone who cannot.
+ *
+ * Runs on the instance that decided the promotion and, through
+ * `voice.transport`, on every other instance holding seats in the room. It
+ * never publishes anything itself (the same rule as every other bus
+ * subscriber) and it is safe to run twice: setting the pin to a value it
+ * already holds changes nothing, and a released seat is gone the first time.
+ */
+function applyPromotionLocally(
+  voiceChannelId: string,
+  transport: VoiceRoomTransport,
+  reason: VoicePromotionReason,
+): void {
+  const seated = getRoomPeers(voiceChannelId);
+  if (seated.length > 0) {
+    roomTransports.set(voiceChannelId, transport);
+  } else {
+    noteRemoteTransport(voiceChannelId, transport);
+  }
+  forgetTransportDecision(voiceChannelId);
+  if (seated.length === 0) {
+    return;
+  }
+  // The room as it stands, so a client can build its SFU session without
+  // waiting for a roster. Computed once, before anyone is released, so every
+  // follower gets the same list.
+  const participants = seated.map(toParticipant);
+  const released: VoicePeer[] = [];
+  let moved = 0;
+  let orphaned = 0;
+  for (const peer of seated) {
+    // An orphan is a refresh in flight: its socket is gone, so it can neither
+    // be told nor be asked to follow, and its resume re-runs the join, which
+    // reads the new pin and cold-joins onto the SFU. Releasing it here would
+    // turn a refresh into a dropped call.
+    if (peer.orphanedAt !== undefined) {
+      orphaned += 1;
+      continue;
+    }
+    if (socketHasCap(peer.socket, SOCKET_CAPS.voiceTransportChanged)) {
+      moved += 1;
+      send(peer.socket, {
+        type: "voice-transport-changed",
+        voiceChannelId,
+        transport,
+        reason,
+        participants,
+      });
+      continue;
+    }
+    released.push(peer);
+  }
+  for (const peer of released) {
+    // The notice first: `removePeer` is what ends the seat, and a frame sent
+    // after it races the roster the client is about to rebuild.
+    send(peer.socket, {
+      type: "voice-transport-unsupported",
+      voiceChannelId,
+      transport,
+      reason: "promoted",
+    });
+    removePeer(peer.id);
+  }
+  // Counted, not derived: an orphan is neither moved nor released, and a
+  // counter that quietly folds it into "moved" is the kind of number that
+  // makes a mechanism look like it is working when it is not.
+  logEvent("voice.transportPromotionApplied", {
+    voiceChannelId,
+    transport,
+    reason,
+    moved,
+    released: released.length,
+    orphaned,
+  });
+}
+
+/**
+ * Move a mesh room onto the SFU so a camera (or a screen share) past the mesh
+ * cap can turn on. Returns whether the room is on the SFU when it resolves.
+ *
+ * `true` also covers "it was already there", so the caller can simply re-read
+ * the transport and re-check the cap rather than branching on how it got
+ * there. `false` is the old behaviour: the caller refuses the claim and the
+ * client says the call is at its camera limit.
+ */
+async function promoteRoomForVideo(
+  voiceChannelId: string,
+  reason: VoicePromotionReason,
+  userId: string,
+): Promise<boolean> {
+  if (getRoomTransport(voiceChannelId) !== "mesh") {
+    return true;
+  }
+  const existing = pendingPromotions.get(voiceChannelId);
+  if (existing) {
+    return existing;
+  }
+  const attempt = attemptPromotion(voiceChannelId, reason, userId).finally(
+    () => {
+      pendingPromotions.delete(voiceChannelId);
+    },
+  );
+  pendingPromotions.set(voiceChannelId, attempt);
+  return attempt;
+}
+
+async function attemptPromotion(
+  voiceChannelId: string,
+  reason: VoicePromotionReason,
+  userId: string,
+): Promise<boolean> {
+  const seated = getRoomPeers(voiceChannelId);
+  const budgetMbps = promotionBudgetMbps();
+  const [stats, rooms] = await Promise.all([
+    readSfuStats().catch(() => null),
+    readRoomLoads(),
+  ]);
+  // Priced as it will be once the claim lands: everyone in it, and one more
+  // video publisher than there is now. The cluster's row for this room is
+  // preferred over this instance's own seats, because a call legitimately
+  // spans machines and the box carries all of it; the local view is the
+  // floor, for the registry-off case and for a row that has not settled yet.
+  const known = rooms.find((room) => room.channelId === voiceChannelId);
+  const candidate: SfuRoomLoad = {
+    channelId: voiceChannelId,
+    transport: "mesh",
+    participants: Math.max(known?.participants ?? 0, seated.length, 1),
+    videoPublishers:
+      Math.max(known?.videoPublishers ?? 0, countVideoPublishers(seated)) + 1,
+  };
+  const verdict = decidePromotion({
+    liveKitConfigured: configuredTransport() === "livekit",
+    sfuReachable: stats?.reachable ?? null,
+    rooms,
+    room: candidate,
+    budgetMbps,
+  });
+  if (!verdict.promote) {
+    logEvent("voice.transportPromotionRefused", {
+      voiceChannelId,
+      userId,
+      reason,
+      refusal: verdict.refusal,
+      loadMbps: Math.round(verdict.loadMbps),
+      addedMbps: Math.round(verdict.addedMbps),
+      budgetMbps: verdict.budgetMbps,
+      roomSize: seated.length,
+      sfuReachable: stats?.reachable ?? null,
+    });
+    return false;
+  }
+  if (registryOn()) {
+    let stored: VoiceRoomTransport | null = null;
+    let won = false;
+    try {
+      const result = await promoteVoiceRoomTransport(
+        voiceChannelId,
+        "mesh",
+        "livekit",
+      );
+      stored = result.transport;
+      won = result.promoted;
+    } catch (error) {
+      logEvent("voice.registryPinFailed", {
+        channelId: voiceChannelId,
+        op: "promote",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+    if (stored !== "livekit") {
+      // The room row went (everybody left mid-click) or somebody pinned it
+      // back to mesh. Either way there is nothing to move.
+      return false;
+    }
+    applyPromotionLocally(voiceChannelId, "livekit", reason);
+    if (won) {
+      // The winner is the only one that tells the rest of the cluster, and
+      // the only one that logs the promotion, so the count in the log is
+      // rooms promoted rather than instances that noticed.
+      publishVoice(VOICE_TRANSPORT_TOPIC, {
+        channelId: voiceChannelId,
+        transport: "livekit",
+        reason,
+      } satisfies VoiceTransportFrame);
+      logEvent("voice.transportPromoted", {
+        voiceChannelId,
+        userId,
+        reason,
+        roomSize: seated.length,
+        loadMbps: Math.round(verdict.loadMbps),
+        addedMbps: Math.round(verdict.addedMbps),
+        budgetMbps: verdict.budgetMbps,
+      });
+    }
+    return true;
+  }
+  applyPromotionLocally(voiceChannelId, "livekit", reason);
+  logEvent("voice.transportPromoted", {
+    voiceChannelId,
+    userId,
+    reason,
+    roomSize: seated.length,
+    loadMbps: Math.round(verdict.loadMbps),
+    addedMbps: Math.round(verdict.addedMbps),
+    budgetMbps: verdict.budgetMbps,
+  });
+  return true;
+}
+
+// --- end promotion ------------------------------------------------------------
+
 // --- the cluster bus ----------------------------------------------------------
 //
 // Milestone M2 of `docs/plans/MULTI_INSTANCE_VOICE.md`. Three topics, one
@@ -4502,6 +4870,7 @@ export const VOICE_MODERATION_TOPIC = "voice.moderation";
 export const VOICE_REACTIONS_TOPIC = "voice.reactions";
 export const VOICE_SERVER_MUTE_TOPIC = "voice.serverMute";
 export const VOICE_SIGNAL_TOPIC = "voice.signal";
+export const VOICE_TRANSPORT_TOPIC = "voice.transport";
 
 const voiceRoomFrameSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -4702,6 +5071,39 @@ const voiceSignalFrameSchema = z.object({
   frame: clientRelayMessageSchema,
 });
 type VoiceSignalFrame = z.infer<typeof voiceSignalFrameSchema>;
+
+/**
+ * `voice.transport`: a room this cluster holds has been promoted from mesh to
+ * the SFU (see the promotion section above). Published exactly once, by the
+ * instance whose conditional UPDATE won, and never republished by a receiver.
+ *
+ * The frame is a hint about a row, like `voice.room`: the pin it announces is
+ * already in `voice_rooms`, so an instance that misses this frame still reads
+ * the promoted transport on its next join or roster. What the frame buys is
+ * that the seats it holds move NOW instead of staying on a mesh whose signaling
+ * the room no longer relays.
+ */
+const voiceTransportFrameSchema = z.object({
+  channelId: z.string().uuid(),
+  transport: voiceRoomTransportSchema,
+  reason: z.enum(["cameras", "screens"]),
+});
+type VoiceTransportFrame = z.infer<typeof voiceTransportFrameSchema>;
+
+subscribeToCluster(VOICE_TRANSPORT_TOPIC, (data) => {
+  if (!registryOn()) {
+    return;
+  }
+  const parsed = voiceTransportFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { channelId, transport, reason } = parsed.data;
+  if (getRoomPeers(channelId).length > 0) {
+    noteClusterFrameReceived();
+  }
+  applyPromotionLocally(channelId, transport, reason);
+});
 
 subscribeToCluster(VOICE_SIGNAL_TOPIC, (data) => {
   if (!registryOn()) {

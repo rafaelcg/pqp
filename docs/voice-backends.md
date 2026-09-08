@@ -228,6 +228,82 @@ LiveKit Cloud bills participant-minutes, and a call between three friends gains 
 - **Cost of the decision:** one query, and only when it is needed: `getServerVoiceProfile` reads `servers.is_community` plus a correlated `COUNT(*)` over `server_members`' primary key `(server_id, user_id)`, so an index-only range scan. It is skipped for DMs, for a channel with an override, and whenever LiveKit is off. Because the result is pinned with the room, it runs once per call, never per join: a server crossing ten members mid-call does not move the call, the next call in that channel gets the SFU.
 - **Everything about the pin is unchanged.** `welcome.transport` and `voice-roster.transport` state the result; a mesh-only client (Android) joining a room that resolved to `livekit` is still refused with `voice-transport-unsupported`, never silently downgraded; a mesh room still stops at 8 with `voice-room-full`, which is acceptable because the policy only picks mesh for rooms that cannot reach 8 by construction, and an owner who expects to can set the override. `POST /api/voice/token` now answers 409 for a room pinned to mesh, so no participant-minute is ever billed for a peer-to-peer call.
 - **Log line**, one per pin: `[pqp] voice.transportPinned channelId=… transport=mesh reason=small` (`reason=resume` when a reconstructed resume re-pins what its token remembered).
+### The one time a live room changes transport: promotion (2026-09-08)
+
+Rule 4 above says a live room never changes transport. It has exactly one
+exception now, in one direction, and this is it.
+
+**The complaint.** "não dá pra ter mais de 3 câmeras ligadas nessa porra", from
+a member of a five-person server. `CAMERA_LIMIT.mesh` is 3, and it is 3 for a
+real reason: a mesh camera is a full uplink copy per peer, so the fourth camera
+in a six-person mesh room asks each publisher for about 7.5 Mbit/s of upload.
+The number is right. The answer was not: the room was on mesh because the
+server has fewer than ten members, which is a guess about crowd size and says
+nothing about how many of the five who turned up want their faces on.
+
+**What happens now.** When a `set-camera` (or `set-sharing-screen`) would cross
+the mesh cap and LiveKit is configured, the server moves the whole room to the
+SFU and the camera turns on. `CAMERA_LIMIT.livekit` is 8 and
+`SCREEN_SHARE_LIMIT.livekit` is 4, so the cap after the move is the SFU's.
+
+| step | what |
+|---|---|
+| decide | `voice/promotion.ts` prices the box (below). Refused means the old `camera-denied` / `screen-share-denied`, unchanged. |
+| pin | with the registry on, one conditional `UPDATE voice_rooms SET transport='livekit' WHERE channel_id=$1 AND transport='mesh' RETURNING transport`. Two people clicking at once produce one promotion; only the winner publishes and logs. |
+| announce | `voice.transport` on the bus, so seats on the other machine move too. A receiver never republishes. |
+| move | every seat whose socket declared `SOCKET_CAPS.voiceTransportChanged` gets `voice-transport-changed { transport, reason, participants }`: it tears its mesh down, mints a token for the peer id it already holds, connects to LiveKit and republishes its mic (muted if muted), camera and share. **The peer id does not change**, so nobody sees a leave and a join. |
+| release | a seat that did **not** declare it is released, with `voice-transport-unsupported { reason: "promoted" }`, and removed from the room. It leaves the call and is told, rather than being left building a peer mesh whose signaling the server has stopped relaying, which is silence nobody can see. Rejoining lands on the SFU. |
+
+An orphaned seat (a refresh in flight) is left alone: its resume re-runs the
+join, reads the new pin, and cold-joins onto the SFU.
+
+**The budget.** Every promoted room is egress on one media box, and the click
+that spends it is a user's. `VOICE_PROMOTION_MAX_SFU_MBPS` (default **600**) is
+the ceiling; over it the promotion is refused and the client says "Não dá pra
+ligar mais câmeras agora, a sala está cheia" rather than naming a number that
+is about to change. The estimate is `publishers x participants x 1.5 Mbit/s`
+per LiveKit room, summed over every room the cluster can see (the rows with
+`VOICE_REGISTRY=postgres`, this process's peers without it); a mesh room counts
+zero. That is the same arithmetic `docs/CAPACITY.md` uses: a six-person room
+with four 720p cameras is 36 Mbit/s. 600 against a box measured clean at 880 to
+935 Mbit/s is deliberate margin, because the estimate counts video only and
+because ladder F shows the box does not degrade gracefully past its limit.
+Promotion is also refused when `readSfuStats().reachable` is `false`, and set
+`VOICE_PROMOTION_MAX_SFU_MBPS=0` to turn the whole feature off without a
+deploy.
+
+**Log lines:** `voice.transportPromoted` (room, user, reason, room size,
+`loadMbps`, `addedMbps`, `budgetMbps`), `voice.transportPromotionRefused` (the
+same plus `refusal`: `unconfigured` / `unreachable` / `budget`), and
+`voice.transportPromotionApplied` (per instance: how many seats moved, how many
+were released, how many were orphans left alone).
+
+**The client half.** Web and Electron declare the capability in `WIRE_CAPS`
+(`client/src/lib/realtime.ts`) and handle the frame in `hooks/use-voice.ts`.
+The local camera and share caps now defer to the server on a mesh room that
+could move (`VoiceState.canPromoteTransport`, `isCameraAtCap`'s fourth
+argument): refusing locally is what made the mesh cap a wall, because the
+click never reached the server and the server never got to move the room.
+
+**iOS and Android do not follow it yet.** Both support LiveKit rooms, so both
+work perfectly well *in* a promoted room; what neither can do is move an
+in-progress call from a mesh to the SFU without rejoining. Until they can, a
+native seat in a room somebody promotes is released with the frame above and
+has to rejoin. What each needs, exactly: declare
+`"voice-transport-changed"` in its `auth` caps, handle the frame by tearing the
+mesh engine down and bringing the LiveKit engine up **against the same peer
+id** (Android already has the two engines and the token mint; iOS likewise),
+and keep mute, camera and share intent across the swap. Android's contract
+test (`WireProtocolTest.deliberatelyIgnored`) carries the entry that has to be
+deleted when it does. Tracked in `docs/PARITY.md`.
+
+Tests: `server/src/voice/promotion.test.ts` (the arithmetic against the
+capacity document), `server/src/ws/voice-promotion.test.ts` (the fourth camera,
+the race, the release, the budget, and that a deployment without LiveKit
+behaves exactly as before), `server/src/ws/voice-registry.test.ts` (the
+conditional pin), `server/src/ws/voice-cluster.test.ts` (two instances),
+`client/src/hooks/use-voice-promotion.test.ts` (the client half).
+
 ### Live HLS (`LIVE_HLS_ENABLED`, staging)
 
 A watch-party screen share can also go out as HLS: a LiveKit Track Composite egress (`server/src/voice/hls-egress.ts`) writes 2 s segments to the dedicated `LIVE_HLS_S3_*` bucket and viewers get the playlist through the signed proxy (`GET /api/voice/hls-playlist/:channelId/:startedAt`, `server/src/voice/hls-playlist-proxy.ts`). The transcode only exists on LiveKit, so a channel with live HLS on is pinned to `livekit` (`reason=hls`) even in a two-person server, ahead of the member-count rows above; the channel override still wins.

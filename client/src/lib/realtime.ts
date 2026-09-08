@@ -39,8 +39,17 @@ export type RealtimeStatus =
  * `presence-delta`: send who arrived and who left a channel instead of every
  * viewer of it. Handled in `hooks/use-chat.ts`, under the same convergence
  * rule, written out on `presenceDeltaSchema` in `@pqp/shared`.
+ *
+ * `voice-transport-changed`: this build can move its own media from a peer
+ * mesh onto the voice server, mid-call, without rejoining. Handled in
+ * `hooks/use-voice.ts`. A socket that does not declare it is released from a
+ * promoted room instead of being left on a mesh nobody else is on.
  */
-const WIRE_CAPS = ["voice-roster-delta", "presence-delta"] as const;
+const WIRE_CAPS = [
+  "voice-roster-delta",
+  "presence-delta",
+  "voice-transport-changed",
+] as const;
 
 const PING_INTERVAL_MS = 20_000;
 const MAX_MISSED_PONGS = 2;

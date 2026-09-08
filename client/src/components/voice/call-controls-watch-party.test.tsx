@@ -52,6 +52,7 @@ const idle: VoiceState = {
   usingSfu: false,
   transportFailure: null,
   roomTransport: "mesh",
+  canPromoteTransport: false,
   isSharingScreen: false,
   screenSharePeerIds: [],
   cameraPeerIds: [],

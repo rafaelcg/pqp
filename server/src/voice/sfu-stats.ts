@@ -1,5 +1,4 @@
 import { isLiveKitConfigured } from "./backends.js";
-import { listSfuRooms } from "./admin.js";
 
 /**
  * What the SFU is doing right now, for the operator dashboard.
@@ -219,7 +218,14 @@ export function createSfuStatsReader(options: SfuStatsReaderOptions): SfuStatsRe
  */
 const reader = createSfuStatsReader({
   host: sfuHost,
-  listRooms: listSfuRooms,
+  // Imported at call time, not at module load. `admin.js` reaches for the
+  // LiveKit SDK and a `RoomServiceClient`, and this module is now on the
+  // voice-room path (the promotion guard in `ws/voice.ts` asks whether the
+  // SFU is answering before it moves a call onto it), so a static import
+  // would drag that whole graph into every process and every test that only
+  // wants the peer bookkeeping. A probe is at most six a minute; one dynamic
+  // import, cached by the loader after the first, is not the cost here.
+  listRooms: async () => (await import("./admin.js")).listSfuRooms(),
 });
 
 export function readSfuStats(): Promise<SfuStats> {

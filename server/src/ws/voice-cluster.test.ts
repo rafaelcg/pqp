@@ -1493,6 +1493,158 @@ describeDb("voice across two instances", () => {
     });
   });
 
+  /**
+   * PROMOTION ACROSS INSTANCES.
+   *
+   * The one time a live room changes transport (see the promotion section in
+   * `voice.ts`). The pin is a row, so the move has to be one conditional
+   * UPDATE and one announcement whichever machine the fourth camera lands on,
+   * and the seats the OTHER machine holds have to move with it, or they are
+   * left building a mesh in a room whose signaling nobody relays any more,
+   * which is the split-brain the one-transport rule exists to prevent and is
+   * invisible on every screen.
+   */
+  describe("promotion across instances", () => {
+    const small = { isCommunity: false, memberCount: 4 };
+
+    async function roomRow(channel: string): Promise<string | undefined> {
+      const result = await pools[0]!.getPool().query<{ transport: string }>(
+        `SELECT transport FROM voice_rooms WHERE channel_id = $1`,
+        [channel],
+      );
+      return result.rows[0]?.transport;
+    }
+
+    /** A seat whose socket declared it can follow a promotion (the web build). */
+    async function joinFollowing(
+      instance: Instance,
+      channel: string,
+    ): Promise<Recorder & { peerId: string; user: DbUser }> {
+      const rec = recorder();
+      const user = asUser(randomUUID());
+      instance.sockets.setAuthenticatedSocket(rec.socket, user, [
+        instance.sockets.SOCKET_CAPS.voiceTransportChanged,
+      ]);
+      await instance.voice.handleVoiceMessage(
+        { socket: rec.socket, user },
+        { type: "join-voice-room", voiceChannelId: channel, resume: true },
+      );
+      const welcome = frames(rec, "welcome")[0];
+      if (!welcome) {
+        throw new Error(`join was refused: ${JSON.stringify(rec.frames)}`);
+      }
+      return { ...rec, peerId: welcome.peerId as string, user };
+    }
+
+    async function cameraOn(
+      instance: Instance,
+      seat: Recorder & { peerId: string; user: DbUser },
+    ): Promise<void> {
+      await instance.voice.handleVoiceMessage(
+        { socket: seat.socket, user: seat.user },
+        { type: "set-camera", streamId: `stream-${seat.peerId}` },
+      );
+    }
+
+    it("a fourth camera on A moves the room, the row and B's seats", async () => {
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+
+      const onA = [
+        await joinFollowing(a, channel),
+        await joinFollowing(a, channel),
+        await joinFollowing(a, channel),
+        await joinFollowing(a, channel),
+      ];
+      const onB = await joinFollowing(b, channel);
+      expect(frames(onA[0]!, "welcome")[0]?.transport).toBe("mesh");
+      expect(frames(onB, "welcome")[0]?.transport).toBe("mesh");
+      expect(await roomRow(channel)).toBe("mesh");
+      await settle();
+
+      // Three cameras fill the mesh, and the fourth is the click that used to
+      // be refused.
+      for (const seat of onA.slice(0, 3)) {
+        await cameraOn(a, seat);
+      }
+      onTheWire.length = 0;
+      await cameraOn(a, onA[3]!);
+
+      expect(await roomRow(channel)).toBe("livekit");
+      expect(a.voice.getRoomTransport(channel)).toBe("livekit");
+      for (const seat of onA) {
+        expect(frames(seat, "voice-transport-changed")).toHaveLength(1);
+      }
+      // The seat on the other machine moves too, and only through the bus.
+      await waitFor(
+        () => frames(onB, "voice-transport-changed").length === 1,
+        "the promotion on B",
+      );
+      expect(frames(onB, "voice-transport-changed")[0]).toMatchObject({
+        voiceChannelId: channel,
+        transport: "livekit",
+        reason: "cameras",
+      });
+      expect(b.voice.getRoomTransport(channel)).toBe("livekit");
+      // Announced once. A receiver never republishes, so a second frame here
+      // would be an echo loop, and this is where one would first show up.
+      expect(
+        onTheWire.filter((f) => f.topic === "voice.transport"),
+      ).toHaveLength(1);
+      // Nobody was evicted to do it.
+      expect(frames(onB, "peer-left")).toHaveLength(0);
+      expect(frames(onB, "voice-transport-unsupported")).toHaveLength(0);
+    });
+
+    it("releases a seat on B that cannot follow, and keeps the rest of the call", async () => {
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+
+      const onA = [
+        await joinFollowing(a, channel),
+        await joinFollowing(a, channel),
+        await joinFollowing(a, channel),
+        await joinFollowing(a, channel),
+      ];
+      // A phone on the other machine: it never declared the capability.
+      const phone = await join(b, randomUUID(), channel);
+      const follower = await joinFollowing(b, channel);
+      await settle();
+
+      for (const seat of onA.slice(0, 3)) {
+        await cameraOn(a, seat);
+      }
+      await cameraOn(a, onA[3]!);
+
+      await waitFor(
+        () => frames(phone, "voice-transport-unsupported").length === 1,
+        "the release on B",
+      );
+      expect(frames(phone, "voice-transport-unsupported")[0]).toMatchObject({
+        transport: "livekit",
+        reason: "promoted",
+      });
+      expect(frames(phone, "voice-transport-changed")).toHaveLength(0);
+      expect(frames(follower, "voice-transport-changed")).toHaveLength(1);
+      // Its row goes with its seat, so no roster anywhere still lists it.
+      await settle();
+      const rows = await pools[0]!
+        .getPool()
+        .query(`SELECT 1 FROM voice_peers WHERE peer_id = $1`, [phone.peerId]);
+      expect(rows.rowCount).toBe(0);
+    });
+  });
+
   describe("moderator mutes across instances", () => {
     interface MutedRoster {
       participants: { peerId: string; muted: boolean; serverMuted: boolean }[];

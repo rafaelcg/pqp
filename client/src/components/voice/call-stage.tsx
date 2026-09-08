@@ -1986,6 +1986,7 @@ export function CallControls({
     voiceState.screenSharePeerIds,
     voiceState.peerId,
     voiceState.roomTransport,
+    voiceState.canPromoteTransport,
   );
   const shareLimit = SCREEN_SHARE_LIMIT[voiceState.roomTransport ?? "mesh"];
   // The cap only bites somebody who is not already one of the shares.
@@ -1994,6 +1995,7 @@ export function CallControls({
     voiceState.cameraPeerIds,
     voiceState.peerId,
     voiceState.roomTransport,
+    voiceState.canPromoteTransport,
   );
   const cameraLimit = CAMERA_LIMIT[voiceState.roomTransport ?? "mesh"];
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
