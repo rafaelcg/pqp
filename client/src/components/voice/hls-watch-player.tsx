@@ -9,8 +9,10 @@ import { useTranslation } from "@/lib/i18n";
 import {
   chooseHlsEngine,
   isAutoplayRefusal,
+  isOwnHlsPlaylistProxyUrl,
   setHlsPlaybackStats,
 } from "@/lib/hls-playback";
+import { getAuthToken } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /**
@@ -54,6 +56,23 @@ export function HlsWatchPlayer({
     const video: HTMLVideoElement = el;
     let cancelled = false;
     let hls: { destroy: () => void } | null = null;
+
+    // `xhrSetup` runs synchronously (hls.js calls it, then `xhr.send()`,
+    // with no await in between), so the token has to already be in hand --
+    // an async read inside `xhrSetup` would set the header after the
+    // request already went out. Kept fresh by polling well inside a Clerk
+    // token's usual lifetime; a request that lands right after an unnoticed
+    // expiry gets a 401 and the manifest retry policy above tries again.
+    let authToken: string | null = null;
+    const refreshAuthToken = () => {
+      void getAuthToken().then((token) => {
+        if (!cancelled) {
+          authToken = token;
+        }
+      });
+    };
+    refreshAuthToken();
+    const authTokenTimer = window.setInterval(refreshAuthToken, 30_000);
 
     const reportSize = () => {
       if (cancelled || video.videoWidth === 0 || video.videoHeight === 0) {
@@ -122,6 +141,18 @@ export function HlsWatchPlayer({
         manifestLoadingMaxRetry: 12,
         manifestLoadingRetryDelay: 1000,
         manifestLoadingMaxRetryTimeout: 8000,
+        // Every segment/media URL hls.js loads is already an absolute,
+        // presigned bucket URL (the signed playlist proxy rewrites them
+        // that way) -- only the playlist request itself is our own API,
+        // and only that one needs a Bearer header. Attaching it to every
+        // request would leak the token to R2. hls.js calls this
+        // synchronously per XHR; the token is read from the in-memory
+        // Clerk-backed cache `getAuthToken` keeps, not fetched fresh here.
+        xhrSetup: (xhr, url) => {
+          if (isOwnHlsPlaylistProxyUrl(url) && authToken) {
+            xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
+          }
+        },
       });
       hls = player;
       player.loadSource(src);
@@ -134,6 +165,7 @@ export function HlsWatchPlayer({
     void attach();
     return () => {
       cancelled = true;
+      window.clearInterval(authTokenTimer);
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("loadedmetadata", reportSize);
       hls?.destroy();

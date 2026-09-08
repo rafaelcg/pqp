@@ -9,6 +9,8 @@ import {
 import { playlistLooksLive, type LiveHlsStream } from "@pqp/shared";
 import { isLiveKitConfigured } from "./backends.js";
 import { logEvent } from "../lib/log.js";
+import { getPool } from "../db.js";
+import { buildStorageConfig, type StorageConfig } from "../lib/s3.js";
 
 /**
  * Live HLS for a watch-party screen share: LiveKit Track Composite egress
@@ -85,6 +87,106 @@ function delaySeconds(): number {
   return Number.isFinite(raw) && raw > 0
     ? Math.floor(raw)
     : DEFAULT_DELAY_SECONDS;
+}
+
+const DEFAULT_RETENTION_MINUTES = 10;
+const DEFAULT_REPLAY_HOURS = 24;
+const DEFAULT_URL_TTL_SECONDS = 900;
+
+function positiveIntFromEnv(name: string, fallback: number): number {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+
+/** How long a finished session's objects stay once nobody asked to keep it. */
+export function hlsRetentionMinutes(): number {
+  return positiveIntFromEnv(
+    "LIVE_HLS_RETENTION_MINUTES",
+    DEFAULT_RETENTION_MINUTES,
+  );
+}
+
+/** How long a finished session's objects stay when `keep_replay` is set. */
+export function hlsReplayHours(): number {
+  return positiveIntFromEnv("LIVE_HLS_REPLAY_HOURS", DEFAULT_REPLAY_HOURS);
+}
+
+/** TTL for a viewer's presigned segment URLs and playlist-proxy access. */
+export function hlsUrlTtlSeconds(): number {
+  return positiveIntFromEnv("LIVE_HLS_URL_TTL_SECONDS", DEFAULT_URL_TTL_SECONDS);
+}
+
+/**
+ * Default true: a viewer gets a presigned, expiring URL rather than the raw
+ * public bucket URL. Set `LIVE_HLS_SIGNED_URLS=false` to fall back to the
+ * old public-base-URL behaviour (e.g. a bucket that is deliberately public).
+ */
+export function hlsSignedUrlsEnabled(): boolean {
+  return process.env.LIVE_HLS_SIGNED_URLS !== "false";
+}
+
+/** The separate `LIVE_HLS_S3_*` bucket, in the shape `s3.ts` operations want. */
+export function liveHlsStorageConfig(): StorageConfig | null {
+  return buildStorageConfig({
+    bucket: process.env.LIVE_HLS_S3_BUCKET,
+    accessKeyId: process.env.LIVE_HLS_S3_ACCESS_KEY_ID,
+    secretAccessKey: process.env.LIVE_HLS_S3_SECRET_ACCESS_KEY,
+    endpoint: process.env.LIVE_HLS_S3_ENDPOINT,
+    region: process.env.LIVE_HLS_S3_REGION,
+    forcePathStyle: process.env.LIVE_HLS_S3_FORCE_PATH_STYLE === "true",
+    publicBaseUrl: process.env.LIVE_HLS_PUBLIC_BASE_URL,
+  });
+}
+
+/**
+ * The exact string every object a session writes starts with: the segments
+ * (`filenamePrefix`) and both playlist names all derive from
+ * `live/{channelId}/{startedAt}`, per `playlistUrl` / `segmentOutput` below.
+ * The retention sweep deletes only objects under this prefix, so this
+ * function is the single source of truth both `hls-egress.ts` and
+ * `hls-cleanup.ts` call, rather than each re-deriving the string.
+ */
+export function hlsObjectPrefix(channelId: string, startedAt: number): string {
+  return `live/${channelId}/${startedAt}`;
+}
+
+async function recordSessionStarted(
+  channelId: string,
+  startedAt: number,
+): Promise<void> {
+  try {
+    await getPool().query(
+      `INSERT INTO hls_sessions (channel_id, object_prefix, started_at)
+       VALUES ($1, $2, to_timestamp($3 / 1000.0))
+       ON CONFLICT (object_prefix) DO NOTHING`,
+      [channelId, hlsObjectPrefix(channelId, startedAt), startedAt],
+    );
+  } catch (error) {
+    logEvent("voice.hlsSessionRecordFailed", {
+      channelId,
+      startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function recordSessionEnded(
+  channelId: string,
+  startedAt: number,
+): Promise<void> {
+  try {
+    await getPool().query(
+      `UPDATE hls_sessions SET ended_at = NOW()
+       WHERE object_prefix = $1 AND ended_at IS NULL`,
+      [hlsObjectPrefix(channelId, startedAt)],
+    );
+  } catch (error) {
+    logEvent("voice.hlsSessionEndFailed", {
+      channelId,
+      startedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 function liveHlsStorage(): {
@@ -308,12 +410,37 @@ async function probeScreenTracks(
   }
 }
 
-function playlistUrl(channelId: string, startedAt: number): string {
-  // LiveKit treats filenamePrefix as a file prefix, not a directory.
-  // Segments land at live/{channel}/{startedAt}_00000.ts; a reused
-  // live.m3u8 keeps the previous share's #EXT-X-ENDLIST until overwrite,
-  // so each share gets its own playlist name.
-  return `${publicBaseUrl()}/live/${channelId}/${startedAt}.m3u8`;
+/**
+ * The raw bucket URL, used internally (readiness probe, the playlist proxy's
+ * own fetch) regardless of what a viewer is handed. Never sent to a client
+ * directly once `LIVE_HLS_SIGNED_URLS` is on.
+ *
+ * LiveKit treats filenamePrefix as a file prefix, not a directory. Segments
+ * land at live/{channel}/{startedAt}_00000.ts; a reused live.m3u8 keeps the
+ * previous share's #EXT-X-ENDLIST until overwrite, so each share gets its
+ * own playlist name.
+ */
+export function rawPlaylistUrl(channelId: string, startedAt: number): string {
+  return `${publicBaseUrl()}/${hlsObjectPrefix(channelId, startedAt)}.m3u8`;
+}
+
+/**
+ * What a viewer is actually handed as `LiveHlsStream.hlsUrl`.
+ *
+ * `startedAt` rides in the signed path (not just the sibling `startedAt`
+ * field) so this string changes every time a session restarts -- the same
+ * reason each session already gets its own playlist name on the raw bucket
+ * URL: `reconcileLiveHls`'s track-replace restart needs viewers to reload,
+ * and a stable per-channel URL would not carry that signal on its own.
+ */
+function viewerPlaylistUrl(channelId: string, startedAt: number): string {
+  if (!hlsSignedUrlsEnabled()) {
+    return rawPlaylistUrl(channelId, startedAt);
+  }
+  // API-relative: the client prefixes this with its own API base URL and
+  // (for hls.js) attaches its Bearer token via xhrSetup. See
+  // `hls-playlist-proxy.ts` for the proxy that answers this route.
+  return `/api/voice/hls-playlist/${channelId}/${startedAt}`;
 }
 
 function segmentOutput(prefix: string, startedAt: number): SegmentedFileOutput {
@@ -343,6 +470,7 @@ async function stopRoom(channelId: string): Promise<void> {
     return;
   }
   rooms.delete(channelId);
+  await recordSessionEnded(channelId, current.stream.startedAt);
   const egress = getEgress();
   if (!egress) {
     return;
@@ -373,7 +501,7 @@ async function startRoom(
     return null;
   }
   const startedAt = Date.now();
-  const prefix = `live/${channelId}/${startedAt}`;
+  const prefix = hlsObjectPrefix(channelId, startedAt);
   try {
     const started = await egress.startTrackCompositeEgress(
       channelId,
@@ -386,7 +514,7 @@ async function startRoom(
       },
     );
     const stream: LiveHlsStream = {
-      hlsUrl: playlistUrl(channelId, startedAt),
+      hlsUrl: viewerPlaylistUrl(channelId, startedAt),
       startedAt,
       presenterPeerId,
       delaySeconds: delaySeconds(),
@@ -396,7 +524,12 @@ async function startRoom(
       stream,
       videoTrackId: tracks.videoTrackId,
     });
-    const ready = await waitForLivePlaylist(stream.hlsUrl);
+    await recordSessionStarted(channelId, startedAt);
+    // The readiness probe always checks the raw bucket URL, never the
+    // viewer-facing one: a viewer might get the signed proxy path, which
+    // this same process cannot usefully fetch from here before the DB row
+    // and the egress are both in place.
+    const ready = await waitForLivePlaylist(rawPlaylistUrl(channelId, startedAt));
     logEvent("voice.hlsStarted", {
       channelId,
       egressId: started.egressId,
