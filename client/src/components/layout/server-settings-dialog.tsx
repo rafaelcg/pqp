@@ -4,6 +4,7 @@ import {
   Image as ImageIcon,
   KeyRound,
   ScrollText,
+  ShieldBan,
   ShieldCheck,
   TriangleAlert,
   Users,
@@ -137,6 +138,7 @@ type SectionId =
   | "roles"
   | "integrations"
   | "moderation"
+  | "automod"
   | "audit"
   | "danger";
 
@@ -183,6 +185,13 @@ const SECTIONS: SectionDef[] = [
     label: "serverSettings.section.moderation",
     description: "serverSettings.moderation.description",
     icon: ShieldCheck,
+    ownerOnly: false,
+  },
+  {
+    id: "automod",
+    label: "serverSettings.section.automod",
+    description: "serverSettings.automod.description",
+    icon: ShieldBan,
     ownerOnly: false,
   },
   {
@@ -428,6 +437,7 @@ export function ServerSettingsDialog({
   const [retentionDays, setRetentionDays] = useState<number | null>(null);
   const [retentionError, setRetentionError] = useState<string | null>(null);
   const [retentionSaved, setRetentionSaved] = useState(false);
+  const [automodDirty, setAutomodDirty] = useState(false);
   const [ssoDomain, setSsoDomain] = useState("");
   const [savingSso, setSavingSso] = useState(false);
   const [ssoError, setSsoError] = useState<string | null>(null);
@@ -701,6 +711,8 @@ export function ServerSettingsDialog({
         return canSeeIntegrations;
       case "moderation":
         return canSeeModeration;
+      case "automod":
+        return isOwner || canManageServer;
       case "audit":
         return canSeeAudit;
       case "danger":
@@ -761,6 +773,7 @@ export function ServerSettingsDialog({
             label: t(section.label),
             icon: section.icon,
             danger: section.id === "danger",
+            dirty: section.id === "automod" && automodDirty,
           }))}
           active={active.id}
           onSelect={setSection}
@@ -897,10 +910,6 @@ export function ServerSettingsDialog({
             <>
               {serverId && <ReportsSection serverId={serverId} />}
 
-              {serverId && (isOwner || canManageServer) && (
-                <AutomodSettingsSection serverId={serverId} />
-              )}
-
               {isOwner && (
                 <Block title={t("serverSettings.retention.title")}>
                   <p className="text-sm text-paper-muted">
@@ -947,6 +956,13 @@ export function ServerSettingsDialog({
                 </Block>
               )}
             </>
+          )}
+
+          {active.id === "automod" && serverId && (
+            <AutomodSettingsSection
+              serverId={serverId}
+              onDirtyChange={setAutomodDirty}
+            />
           )}
 
           {active.id === "audit" && serverId && (

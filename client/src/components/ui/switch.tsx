@@ -14,6 +14,7 @@ export function Switch({
   description,
   title,
   className,
+  hideLabel = false,
 }: {
   checked: boolean;
   onCheckedChange: (checked: boolean) => void;
@@ -22,6 +23,11 @@ export function Switch({
   description?: string;
   title?: string;
   className?: string;
+  /**
+   * Keep the label for assistive tech but do not paint it: for a switch that
+   * sits beside a row that already names the setting.
+   */
+  hideLabel?: boolean;
 }) {
   const control = (
     <button
@@ -38,7 +44,7 @@ export function Switch({
         className,
       )}
     >
-      <span className="min-w-0">
+      <span className={cn("min-w-0", hideLabel && "sr-only")}>
         <span className="block text-sm text-text">{label}</span>
         {title && !description ? (
           <span className="sr-only">{title}</span>
