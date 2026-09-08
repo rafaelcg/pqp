@@ -7,7 +7,7 @@ import {
   type VideoSenderSample,
 } from "@/lib/voice-stats-probe";
 import { chosenScreenCeilingBps } from "@/lib/peer-connection-manager";
-import type { VideoQuality } from "@/lib/video-quality";
+import { cameraBitrateFor, type VideoQuality } from "@/lib/video-quality";
 
 /**
  * What this machine is actually sending, in words, next to the control that
@@ -127,10 +127,19 @@ export function OutboundVideoReadout({
   // Not `limitedBy` directly: the encoder calls its own `maxBitrate` a
   // bandwidth limit, so the raw field says "your connection" to somebody on
   // fibre whose only limit is the rung they picked. See `describeLimitation`.
-  const limited = describeLimitationAgainst(
-    camera,
-    camera.role === "screen" && quality ? chosenScreenCeilingBps(quality) : null,
-  );
+  // Each role against the ceiling its own user chose. The camera's is divided
+  // by the room and shared with a screen now (`meshCameraBitrate`), so without
+  // its own term a room-imposed ceiling reads as "your quality setting" —
+  // the same misattribution that was fixed for the screen.
+  const chosen =
+    quality === undefined
+      ? null
+      : camera.role === "screen"
+        ? chosenScreenCeilingBps(quality)
+        : camera.role === "camera"
+          ? cameraBitrateFor(quality)
+          : null;
+  const limited = describeLimitationAgainst(camera, chosen);
 
   return (
     <p className="mt-1 text-xs text-paper-muted" role="status">

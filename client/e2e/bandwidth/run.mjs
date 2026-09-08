@@ -39,6 +39,12 @@ const SHARE_RATE = process.env.SHARE_RATE ?? "3mbit";
  * attempt at this silently ran without a camera and looked like a pass.
  */
 const WITH_CAMERA = process.env.WITH_CAMERA === "true";
+/**
+ * Which sender starts first. Both orderings must land in the same place, and
+ * the one that broke was `share` — turning the camera on during a share left
+ * the screen holding the whole budget, so the pair asked for 133 % of it.
+ */
+const CAMERA_ORDER = process.env.CAMERA_ORDER === "after" ? "after" : "before";
 
 const ROLE = process.env.PQP_HARNESS_ROLE ?? null;
 // Long enough to show an unshaped baseline, then the controller's reaction
@@ -241,7 +247,12 @@ async function orchestratorMain() {
   const { serverId, sharerName } = await seedRoom();
   writeFileSync(
     `${COORD_DIR}room.json`,
-    JSON.stringify({ serverId, sharerName, withCamera: WITH_CAMERA }),
+    JSON.stringify({
+      serverId,
+      sharerName,
+      withCamera: WITH_CAMERA,
+      cameraOrder: CAMERA_ORDER,
+    }),
   );
 
   console.log("Waiting for all three agents to join voice...");
@@ -351,7 +362,7 @@ async function agentMain(role) {
 
   console.log(`[${role}] waiting for the room...`);
   await waitFile("room.json");
-  const { serverId, sharerName, withCamera } = JSON.parse(
+  const { serverId, sharerName, withCamera, cameraOrder } = JSON.parse(
     readFileSync(`${coord}room.json`, "utf8"),
   );
 
@@ -405,9 +416,7 @@ async function agentMain(role) {
       // baseline and then the controller's reaction to it changing — the
       // scenario the PR describes — rather than a link already constrained
       // before the first frame went out.
-      if (withCamera) {
-        // Before the share, so the split is in force from the first frame the
-        // screen sends rather than arriving as a mid-run correction.
+      const turnCameraOn = async () => {
         console.log(`[${role}] turning the camera on...`);
         // `.first()`: the label appears on the stage control, the voice bar
         // and the call panel, and any of the three does the job.
@@ -416,6 +425,9 @@ async function agentMain(role) {
           .first()
           .click({ timeout: 10_000 });
         await page.waitForTimeout(2000);
+      };
+      if (withCamera && cameraOrder === "before") {
+        await turnCameraOn();
       }
       console.log(`[${role}] starting the screen share...`);
       await page
@@ -449,6 +461,11 @@ async function agentMain(role) {
           ctx.putImageData(image, 0, 0);
         }, 66);
       });
+      if (withCamera && cameraOrder === "after") {
+        // The ordering that was broken: the screen has to give a slice back.
+        await page.waitForTimeout(3000);
+        await turnCameraOn();
+      }
       writeFileSync(`${coord}sharing`, "");
     } else {
       console.log(`[${role}] waiting for the share to start...`);

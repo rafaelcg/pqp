@@ -83,6 +83,8 @@ export function nextStrainStreak(
   screens: readonly VideoSenderSample[],
   chosenCeilingBps: number,
   viewers: number,
+  /** What a camera on the same uplink asked for, in bps. 0 when it is off. */
+  cameraChosenBps = 0,
 ): number {
   // No sender yet is the first second of a share, not a fault. It resets
   // rather than holds, so a share that stops and restarts starts counting
@@ -122,10 +124,17 @@ export function nextStrainStreak(
   // sender row. A four-person call with one joiner stuck on ICE has a ceiling
   // of 5000/3 and only two rows to divide by, which read as a weak link and
   // fired this warning at somebody on fibre. Found in review.
-  const expected = Math.min(
-    chosenCeilingBps,
-    DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, viewers),
-  );
+  // The camera's slice is part of what the room legitimately costs. Without
+  // this term the screen's ceiling is two thirds of the share whenever a
+  // camera is on, which reads as a weak link and told every mesh room of three
+  // or more on Auto that their connection was the problem, on fibre. Found in
+  // review, and it is the same false positive this whole rule exists to avoid.
+  const shareOfBudget = DEFAULT_SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, viewers);
+  const slice =
+    cameraChosenBps > 0
+      ? chosenCeilingBps / (chosenCeilingBps + cameraChosenBps)
+      : 1;
+  const expected = Math.min(chosenCeilingBps, shareOfBudget * slice);
   const ceilingBps = (screen.ceilingKbps ?? 0) * 1000;
   const cutByBudget = ceilingBps > 0 && ceilingBps < expected * CEILING_SLACK;
   return cutByBudget ? streak + 1 : 0;
@@ -141,6 +150,8 @@ export function useShareUplinkStrain(
   quality: VideoQuality,
   viewers: number,
   transport: VoiceRoomTransport | null,
+  /** What the camera asked for, in bps, or 0 when it is off. */
+  cameraChosenBps = 0,
 ): boolean {
   const [strained, setStrained] = useState(false);
   const streak = useRef(0);
@@ -178,6 +189,7 @@ export function useShareUplinkStrain(
           screens,
           chosenScreenCeilingBps(quality),
           viewers,
+          cameraChosenBps,
         );
         setStrained(isStrained(streak.current));
       });
@@ -188,7 +200,7 @@ export function useShareUplinkStrain(
       live = false;
       clearInterval(id);
     };
-  }, [isSharing, quality, viewers, transport]);
+  }, [isSharing, quality, viewers, transport, cameraChosenBps]);
 
   return strained;
 }

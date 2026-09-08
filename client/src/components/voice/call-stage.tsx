@@ -132,6 +132,7 @@ import {
 import { VoiceQualityMeter } from "@/components/voice/voice-quality-meter";
 import { useVoiceLinkQuality } from "@/hooks/use-voice-link-quality";
 import { useShareUplinkStrain } from "@/hooks/use-share-uplink-strain";
+import { cameraBitrateFor } from "@/lib/video-quality";
 import type { VoiceLinkQuality } from "@/lib/voice-link-quality";
 import { startSoundLoop, stopSoundLoop } from "@/lib/sounds";
 import {
@@ -800,6 +801,10 @@ function ActiveCall({
     videoQuality,
     voiceState.remotePeers.length,
     voiceState.roomTransport,
+    // A camera on the same uplink legitimately takes a slice of the share, so
+    // the rule has to expect a smaller screen ceiling rather than read it as
+    // a weak link.
+    voiceState.isCameraOn ? cameraBitrateFor(videoQuality) : 0,
   );
 
   const speaking = new Set(voiceState.speakingPeerIds);

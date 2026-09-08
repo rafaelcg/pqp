@@ -42,11 +42,16 @@ share ran unshaped for 9 seconds, then the sharer's container was capped to
 screen only  (SHARE_RATE=3mbit) : ceiling -> 1494 kbps a copy, paths [1729,1608]
 screen only  (SHARE_RATE=1mbit) : ceiling ->  500 kbps a copy, paths [536,413]
 
-WITH_CAMERA=true 3mbit : screen 1062 + camera 531 = 1593 a copy  (x2 = 3186)
-WITH_CAMERA=true 1mbit : screen  369 + camera 185 =  554 a copy  (x2 = 1108)
+WITH_CAMERA=true 3mbit CAMERA_ORDER=before : screen 1019.. + camera .. a copy
+WITH_CAMERA=true 3mbit CAMERA_ORDER=after  : screen 1064 + camera 532 = 1596  (x2 = 3192)
+WITH_CAMERA=true 1mbit                     : screen  369 + camera 185 =  554  (x2 = 1108)
 ```
 
-`WITH_CAMERA=true` turns the sharer's camera on before the share starts, so
+`WITH_CAMERA=true` turns the sharer's camera on, before the share by default or
+after it with `CAMERA_ORDER=after`. **Run both.** The ordering that broke in
+review was camera-on-during-a-share: nothing retuned the screen on that edge, so
+it kept the whole share and the pair asked for 133 % of it, and the
+camera-first run is the one ordering that does not show it. So
 the run exercises two video senders dividing one uplink instead of one sender
 owning it. The two ceilings come out at the 2:1 ratio of their chosen ladders
 (an Auto screen is 3 Mbps, an Auto camera 1.5), and their sum times the viewer
