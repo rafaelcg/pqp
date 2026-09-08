@@ -1,4 +1,8 @@
-import { Permission, type VoiceParticipant } from "@pqp/shared";
+import {
+  Permission,
+  type ChannelType,
+  type VoiceParticipant,
+} from "@pqp/shared";
 
 /**
  * Dragging people between voice channels, Discord-style.
@@ -19,9 +23,10 @@ export type VoiceOccupantDrag = {
   isSelf: boolean;
 };
 
+/** Anything that is not text or a category is a voice room (`watch_party` too). */
 export type VoiceDropTarget = {
   id: string;
-  type: "text" | "voice" | "category";
+  type: ChannelType;
 };
 
 export type VoiceDropCaps = {

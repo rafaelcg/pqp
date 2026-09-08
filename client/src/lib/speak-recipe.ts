@@ -1,4 +1,9 @@
-import { hasPermission, parsePermissions, Permission } from "@pqp/shared";
+import {
+  hasPermission,
+  isWatchPartyChannelType,
+  parsePermissions,
+  Permission,
+} from "@pqp/shared";
 import {
   applyOverwriteState,
   overwriteState,
@@ -23,6 +28,9 @@ export interface RecipeWrite {
 }
 
 export function recipeBitsForChannel(type: string): readonly bigint[] {
+  if (isWatchPartyChannelType(type)) {
+    return [Permission.SPEAK, Permission.START_WATCH_PARTY];
+  }
   return type === "voice"
     ? [Permission.SPEAK, Permission.STREAM]
     : [Permission.SEND_MESSAGES];
@@ -152,7 +160,11 @@ function writeBits(
     allow = next.allow;
     deny = next.deny;
   }
-  if (bits.includes(Permission.SPEAK) || bits.includes(Permission.STREAM)) {
+  if (
+    bits.includes(Permission.SPEAK) ||
+    bits.includes(Permission.STREAM) ||
+    bits.includes(Permission.START_WATCH_PARTY)
+  ) {
     for (const extra of VOICE_RECIPE_LEFTOVERS) {
       const next = applyOverwriteState(extra, "inherit", allow, deny);
       allow = next.allow;

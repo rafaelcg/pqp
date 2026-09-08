@@ -157,7 +157,8 @@ data class Channel(
     val slowmodeSeconds: Int = 0,
 ) {
     val isText: Boolean get() = type == "text"
-    val isVoice: Boolean get() = type == "voice"
+    // A watch party is a voice room with a gated stage; this app joins it as audience.
+    val isVoice: Boolean get() = type == "voice" || type == "watch_party"
     val isCategory: Boolean get() = type == "category"
 }
 

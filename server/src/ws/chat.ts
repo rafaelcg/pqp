@@ -1305,7 +1305,8 @@ export async function postChannelMessage(
     channel.kind === "server" &&
     (channel.type === "text" ||
       channel.type === "thread" ||
-      channel.type === "voice")
+      channel.type === "voice" ||
+      channel.type === "watch_party")
   ) {
     const seconds = channel.slowmode_seconds ?? 0;
     if (

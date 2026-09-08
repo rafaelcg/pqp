@@ -1,4 +1,8 @@
-import { hasPermission, Permission } from "@pqp/shared";
+import {
+  canStartWatchPartyStream,
+  hasPermission,
+  Permission,
+} from "@pqp/shared";
 import { computeMemberPermissions } from "../services/permissions.js";
 
 export interface VoicePublishGrant {
@@ -7,7 +11,10 @@ export interface VoicePublishGrant {
 }
 
 /**
- * SPEAK and STREAM, resolved for one member in one voice room.
+ * SPEAK and STREAM, resolved for one member in one voice room. In a
+ * `watch_party` channel the stage is START_WATCH_PARTY instead of STREAM
+ * (`canStartWatchPartyStream`), so the audience keeps its everyday bits and
+ * still cannot present.
  *
  * THE ONE PLACE THE ANSWER COMES FROM. The WS join (`ws/voice.ts`), the SFU
  * token (`POST /api/voice/token`) and the live re-check after a permissions
@@ -55,7 +62,10 @@ export async function resolveVoicePublish(
   );
   return {
     canSpeak: hasPermission(perms, Permission.SPEAK),
-    canStream: hasPermission(perms, Permission.STREAM),
+    canStream: canStartWatchPartyStream({
+      channelType: channel.type ?? "voice",
+      permissions: perms,
+    }),
   };
 }
 

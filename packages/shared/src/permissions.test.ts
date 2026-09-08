@@ -33,7 +33,7 @@ describe("permission bitfields", () => {
   it("round-trips as a decimal string, never a JS number", () => {
     expect(serializePermissions(PERMISSION_DEFAULT_EVERYONE)).toBe("2668225");
     expect(parsePermissions("2668225")).toBe(PERMISSION_DEFAULT_EVERYONE);
-    expect(serializePermissions(PERMISSION_ALL)).toBe("8388607");
+    expect(serializePermissions(PERMISSION_ALL)).toBe("16777215");
     expect(parsePermissions(PERMISSION_ALL)).toBe(PERMISSION_ALL);
   });
 

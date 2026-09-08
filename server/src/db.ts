@@ -183,7 +183,7 @@ export interface DbChannel {
   id: string;
   server_id: string;
   name: string;
-  type: "text" | "voice" | "category" | "thread";
+  type: "text" | "voice" | "category" | "thread" | "watch_party";
   position: number;
   is_private: boolean;
   topic: string | null;

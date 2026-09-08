@@ -31,6 +31,7 @@ import {
   publicProfileDisplayUrl,
   validateHandle,
   buildReplyExcerpt,
+  isVoiceRoomChannelType,
 } from "@pqp/shared";
 import type {
   AgeGateStatus,
@@ -38,6 +39,7 @@ import type {
   Channel,
   ChannelKind,
   ChannelSession,
+  ChannelType,
   DmSummary,
   MemberRole,
   SanctionNotice,
@@ -825,7 +827,7 @@ interface MainAppContentProps {
 
 interface ChannelPromptState {
   mode: "create" | "rename";
-  type?: "text" | "voice" | "category";
+  type?: ChannelType;
   isPrivate?: boolean;
   channel?: Channel;
 }
@@ -3058,7 +3060,11 @@ function MainAppContent({
     [communityHomeOn, loadUnread, selectChannel, syncRoute],
   );
 
-  async function handleChannelPromptConfirm(name: string, isPrivate?: boolean) {
+  async function handleChannelPromptConfirm(
+    name: string,
+    isPrivate?: boolean,
+    topic?: string,
+  ) {
     if (!channelPrompt) {
       return;
     }
@@ -3074,6 +3080,7 @@ function MainAppContent({
           name,
           channelPrompt.type,
           isPrivate ?? channelPrompt.isPrivate ?? false,
+          topic || undefined,
         );
         const next = [...channels, channel].sort(
           (a, b) => a.position - b.position,
@@ -4375,7 +4382,7 @@ function MainAppContent({
       // coming.
       seconds:
         channel?.kind === "server" &&
-        (channel.type === "text" || channel.type === "voice")
+        (channel.type === "text" || isVoiceRoomChannelType(channel.type))
           ? (channel.slowmodeSeconds ?? 0)
           : 0,
       bypass: perms.can(Permission.MANAGE_MESSAGES, selectedChannelId),
@@ -4841,7 +4848,7 @@ function MainAppContent({
               hover affordance does not exist on touch, and a call you cannot
               start from your phone is a call that does not happen. */}
           {selectedChannel.kind === "server" &&
-            selectedChannel.type === "voice" &&
+            isVoiceRoomChannelType(selectedChannel.type) &&
             !(
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.status !== "idle"
@@ -5074,7 +5081,7 @@ function MainAppContent({
       {/* The conversation's call surface: invisible until a call exists, a
           join banner while others talk, the full stage once we are in. */}
       {selectedChannel.kind === "server" &&
-        selectedChannel.type === "voice" &&
+        isVoiceRoomChannelType(selectedChannel.type) &&
         user && (
           <VoiceChannelStage
             fill={splitState.active}
@@ -5843,7 +5850,9 @@ function MainAppContent({
 
         {selectedChannel?.type === "text" && chatPane}
 
-        {selectedChannel?.type === "voice" && chatPane}
+        {selectedChannel &&
+          isVoiceRoomChannelType(selectedChannel.type) &&
+          chatPane}
       </main>
       </div>
       {whatsNewOpen && (
@@ -5967,7 +5976,7 @@ function MainAppContent({
           moderation={cardModeration}
           voiceOccupancy={voiceState.occupancy}
           voiceChannels={channels
-            .filter((c) => c.type === "voice")
+            .filter((c) => isVoiceRoomChannelType(c.type))
             .map((c) => ({ id: c.id, name: c.name }))}
           roles={serverRoles}
           friendIds={memberSidebarFriendIds}
@@ -6141,7 +6150,7 @@ function MainAppContent({
         voiceOccupancy={voiceState.occupancy}
         voiceRoomTransports={voiceRoomTransports}
         voiceChannels={channels
-          .filter((c) => c.type === "voice")
+          .filter((c) => isVoiceRoomChannelType(c.type))
           .map((c) => ({ id: c.id, name: c.name }))}
       />
 
@@ -6237,11 +6246,19 @@ function MainAppContent({
               : t("chrome.renameChannel")
             : channelPrompt?.type === "category"
               ? t("chrome.createCategory")
-              : channelPrompt?.type === "voice"
-                ? t("chrome.createVoiceChannel")
-                : t("chrome.createTextChannel")
+              : channelPrompt?.type === "watch_party"
+                ? t("chrome.createWatchParty")
+                : channelPrompt?.type === "voice"
+                  ? t("chrome.createVoiceChannel")
+                  : t("chrome.createTextChannel")
         }
         placeholder={t("chrome.channelNamePlaceholder")}
+        secondaryPlaceholder={
+          channelPrompt?.mode === "create" &&
+          channelPrompt.type === "watch_party"
+            ? t("chrome.watchPartyTopicPlaceholder")
+            : undefined
+        }
         confirmLabel={channelPrompt?.mode === "rename" ? t("chrome.rename") : t("chrome.create")}
         initialValue={
           channelPrompt?.mode === "rename"
@@ -6255,8 +6272,8 @@ function MainAppContent({
         }
         checkboxDefault={channelPrompt?.isPrivate ?? false}
         onClose={() => setChannelPrompt(null)}
-        onConfirm={(name, isPrivate) =>
-          handleChannelPromptConfirm(name, isPrivate)
+        onConfirm={(name, isPrivate, topic) =>
+          handleChannelPromptConfirm(name, isPrivate, topic)
         }
       />
 

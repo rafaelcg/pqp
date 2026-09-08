@@ -1,4 +1,5 @@
 import type {
+  ChannelType,
   AcquisitionInput,
   AgeCheckResponse,
   Attachment,
@@ -849,13 +850,16 @@ export const fetchChannels = (serverId: string) =>
 export const createChannel = (
   serverId: string,
   name: string,
-  type: "text" | "voice" | "category",
+  type: ChannelType,
   isPrivate = false,
+  /** Optional short description; the watch party dialog asks for one. */
+  topic?: string,
 ) =>
   post<{ channel: Channel }>(`/api/servers/${serverId}/channels`, {
     name,
     type,
     isPrivate,
+    ...(topic ? { topic } : {}),
   });
 
 export const updateChannel = (

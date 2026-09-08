@@ -522,7 +522,7 @@ class WireProtocolTest {
     @Test
     fun `the channel enums match shared`() {
         assertEquals(
-            listOf("text", "voice", "category"),
+            listOf("text", "voice", "category", "watch_party"),
             RepoSources.enumValues(api, "channelTypeSchema"),
         )
         assertTrue(

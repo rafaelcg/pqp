@@ -195,7 +195,8 @@ struct Channel: Codable, Identifiable, Hashable, Sendable {
     }
 
     var isText: Bool { type == "text" }
-    var isVoice: Bool { type == "voice" }
+    /// A watch party is a voice room with a gated stage; this app joins it as audience.
+    var isVoice: Bool { type == "voice" || type == "watch_party" }
     var isCategory: Bool { type == "category" }
 }
 

@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, Plus, X } from "lucide-react";
-import { Permission, parsePermissions, serializePermissions } from "@pqp/shared";
+import {
+  isVoiceRoomChannelType,
+  Permission,
+  parsePermissions,
+  serializePermissions,
+} from "@pqp/shared";
 import { Button } from "@/components/ui/button";
 import { CheckRow } from "@/components/ui/check-row";
 import { Input } from "@/components/ui/input";
@@ -47,6 +52,7 @@ const PERM_HINTS: Partial<Record<string, MessageKey>> = {
   CONNECT: "roles.permHint.CONNECT",
   SPEAK: "roles.permHint.SPEAK",
   STREAM: "roles.permHint.STREAM",
+  START_WATCH_PARTY: "roles.permHint.START_WATCH_PARTY",
 };
 
 const OVERRIDE_OPTIONS: {
@@ -226,7 +232,7 @@ export function ChannelPermissionsSection({
       recipe.roleIds.includes(role.id) && !roleIgnoresChannelOverwrites(role),
   );
   const recipeNames = pickedRoles.map((role) => role.name);
-  const isVoice = channelType === "voice";
+  const isVoice = isVoiceRoomChannelType(channelType);
   const [advancedOpen, setAdvancedOpen] = useState(
     forceAdvancedOpen || recipe.kind === "custom",
   );

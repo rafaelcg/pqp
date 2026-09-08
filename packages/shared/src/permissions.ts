@@ -5,7 +5,7 @@ import { z } from "zod";
  *
  * Names follow Discord's published flags so the 8-step overwrite algorithm
  * (https://docs.discord.com/developers/topics/permissions) maps 1:1. The bit
- * *numbers* are ours (0–22). Never do this math in JS `number` — `1 << 31`
+ * *numbers* are ours (0–23). Never do this math in JS `number` — `1 << 31`
  * overflows; always `bigint`.
  *
  * On the wire, bitfields are decimal strings. In Postgres they are `BIGINT`.
@@ -38,12 +38,18 @@ export const Permission = {
   STREAM: 1n << 21n,
   /** Move or disconnect someone in a voice channel. */
   MOVE_MEMBERS: 1n << 22n,
+  /**
+   * Start the stream in a `watch_party` channel. Everyone else there is the
+   * audience. In a plain voice channel the screen is still governed by STREAM;
+   * this bit only speaks in a watch party (`canStartWatchPartyStream`).
+   */
+  START_WATCH_PARTY: 1n << 23n,
 } as const;
 
 export type PermissionBit = (typeof Permission)[keyof typeof Permission];
 
 /** Every defined bit. Owner and Administrator resolve to this. */
-export const PERMISSION_ALL = (1n << 23n) - 1n;
+export const PERMISSION_ALL = (1n << 24n) - 1n;
 
 /**
  * Default `@everyone` mask: chat, react, attach, history, voice, own nick,
@@ -78,7 +84,8 @@ export const PERMISSION_DEFAULT_MODERATOR =
   Permission.MUTE_MEMBERS |
   Permission.MOVE_MEMBERS |
   Permission.MANAGE_MESSAGES |
-  Permission.MANAGE_NICKNAMES;
+  Permission.MANAGE_NICKNAMES |
+  Permission.START_WATCH_PARTY;
 
 export const ROLE_SYSTEM_KEYS = [
   "everyone",
@@ -224,6 +231,7 @@ export const PERMISSION_FLAGS = [
   { bit: Permission.MODERATE_MEMBERS, key: "MODERATE_MEMBERS" },
   { bit: Permission.ADD_REACTIONS, key: "ADD_REACTIONS" },
   { bit: Permission.MANAGE_WEBHOOKS, key: "MANAGE_WEBHOOKS" },
+  { bit: Permission.START_WATCH_PARTY, key: "START_WATCH_PARTY" },
 ] as const;
 
 export type PermissionFlagKey = (typeof PERMISSION_FLAGS)[number]["key"];

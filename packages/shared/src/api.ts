@@ -12,7 +12,18 @@ import { chanceResultSchema } from "./chance.js";
 import { voiceRoomTransportSchema } from "./signaling.js";
 import { pollSchema } from "./polls.js";
 
-export const channelTypeSchema = z.enum(["text", "voice", "category"]);
+/**
+ * `watch_party` is a voice room with one stage: only holders of
+ * START_WATCH_PARTY may put a stream on it, everyone else joins as audience.
+ * Clients that predate it should treat it as `voice` (see
+ * `isVoiceRoomChannelType` in watch-party-channel.ts).
+ */
+export const channelTypeSchema = z.enum([
+  "text",
+  "voice",
+  "category",
+  "watch_party",
+]);
 export type ChannelType = z.infer<typeof channelTypeSchema>;
 
 /** Per-channel slow mode. 0 is off. Ceiling matches Discord: 6 hours. */
@@ -862,6 +873,8 @@ export const createChannelSchema = z
       .regex(/^[a-z0-9-_]+$/i, "Use letters, numbers, - or _"),
     type: channelTypeSchema,
     isPrivate: z.boolean().optional().default(false),
+    /** Optional short description, stored as the channel topic. */
+    topic: z.string().trim().max(200).optional(),
   })
   // Permission-overwrite inheritance from a category to its children does
   // not exist yet (gap #22), so a "private category" would restrict nothing

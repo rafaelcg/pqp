@@ -3095,8 +3095,9 @@ END;
 $$;
 
 -- Moderator extras: KICK(2) | MANAGE_MESSAGES(256) | MUTE(16384) |
--- MANAGE_NICKNAMES(65536) | MODERATE_MEMBERS(262144) | MOVE(4194304) = 4538626.
--- Manager: ALL(8388607) minus ADMINISTRATOR(8) = 8388599.
+-- MANAGE_NICKNAMES(65536) | MODERATE_MEMBERS(262144) | MOVE(4194304) |
+-- START_WATCH_PARTY(8388608) = 12927234.
+-- Manager: ALL(16777215) minus ADMINISTRATOR(8) = 16777207.
 -- VIP is a colour and a hoist with no extra bits (0).
 -- Insert colours match STAFF_ROLE_COLORS in packages/shared/src/permissions.ts.
 CREATE OR REPLACE FUNCTION pqp_ensure_staff_ladder(p_server_id UUID)
@@ -3142,7 +3143,7 @@ BEGIN
       mentionable, hoist, show_badge, color
     )
     VALUES (
-      p_server_id, pqp_unique_role_name(p_server_id, 'Moderator'), 4538626, 1,
+      p_server_id, pqp_unique_role_name(p_server_id, 'Moderator'), 12927234, 1,
       FALSE, 'moderator', FALSE, TRUE, TRUE, '#4EC4B0'
     );
   END IF;
@@ -3155,7 +3156,7 @@ BEGIN
       mentionable, hoist, show_badge, color
     )
     VALUES (
-      p_server_id, pqp_unique_role_name(p_server_id, 'Manager'), 8388599, 2,
+      p_server_id, pqp_unique_role_name(p_server_id, 'Manager'), 16777207, 2,
       FALSE, 'manager', FALSE, TRUE, TRUE, '#6BA3E8'
     );
   END IF;
@@ -3649,3 +3650,44 @@ CREATE TABLE IF NOT EXISTS channel_session_reminders (
 CREATE INDEX IF NOT EXISTS idx_channel_session_reminders_due
   ON channel_session_reminders (session_id)
   WHERE notified_before_at IS NULL OR notified_live_at IS NULL;
+
+-- Watch party channels. A `watch_party` row is a voice room whose stage is
+-- gated by START_WATCH_PARTY (bit 23 = 8388608) instead of STREAM; joining is
+-- still VIEW + CONNECT. Clients that predate the type see a plain voice
+-- channel (the API keeps listing it with the same shape).
+DO $$
+BEGIN
+  ALTER TABLE channels DROP CONSTRAINT IF EXISTS channels_type_check;
+  ALTER TABLE channels
+    ADD CONSTRAINT channels_type_check
+    CHECK (type IN ('text', 'voice', 'category', 'thread', 'watch_party'));
+EXCEPTION WHEN others THEN NULL;
+END $$;
+
+-- START_WATCH_PARTY goes to whoever already runs the channels
+-- (MANAGE_CHANNELS, bit 4 = 16) and to the seeded Moderator cargo, which is
+-- the "admins and mods" the product promises. Never to @everyone: the whole
+-- point is that the audience cannot take the stage. One-shot via
+-- data_migrations, same reason as stream_move_bits_2026_09 above.
+DO $$
+DECLARE
+  manage_channels CONSTANT BIGINT := 16;
+  start_watch_party CONSTANT BIGINT := 8388608;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM data_migrations WHERE name = 'start_watch_party_bit_2026_09'
+  ) THEN
+    RETURN;
+  END IF;
+
+  UPDATE roles
+     SET permissions = permissions | start_watch_party
+   WHERE NOT is_everyone
+     AND ((permissions & manage_channels) = manage_channels
+          OR system_key = 'moderator');
+
+  UPDATE servers
+     SET permissions_version = permissions_version + 1;
+
+  INSERT INTO data_migrations (name) VALUES ('start_watch_party_bit_2026_09');
+END $$;
