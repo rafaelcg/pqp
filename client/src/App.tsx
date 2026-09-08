@@ -360,6 +360,7 @@ import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
+import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
 import { WatchChannelStage } from "@/components/voice/watch-stage";
 import { HlsHostAckSheet } from "@/components/voice/hls-host-ack-sheet";
 import { Button } from "@/components/ui/button";
@@ -1475,11 +1476,22 @@ function MainAppContent({
   const [hlsHostAckServerId, setHlsHostAckServerId] = useState<string | null>(
     null,
   );
+  // Whether this server may go out as HLS at all (the operator's per-server
+  // allowlist). A server that cannot has no broadcast to acknowledge, so the
+  // sheet is neither fetched nor shown there. Null is "not answered yet",
+  // which asks the old way rather than skipping a disclosure by accident.
+  const liveHlsConfig = useLiveHlsConfig(selectedServerId);
+  const liveHlsConfigRef = useRef(liveHlsConfig);
+  liveHlsConfigRef.current = liveHlsConfig;
   const startScreenShareGated = useCallback(
     (audio: boolean) => {
       const serverId = selectedServerIdRef.current;
       if (!serverId) {
         // DM / conversation voice: no server, nothing to gate.
+        void voice.startScreenShare(audio);
+        return;
+      }
+      if (liveHlsConfigRef.current?.enabled === false) {
         void voice.startScreenShare(audio);
         return;
       }

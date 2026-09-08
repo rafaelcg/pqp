@@ -568,8 +568,22 @@ export const fetchVoiceBackend = () =>
   apiFetch<{ backend: VoiceBackendType }>("/api/voice/backend");
 
 /** Whether this deployment transcodes screen shares to HLS. */
-export const fetchLiveHlsConfig = () =>
-  apiFetch<{ enabled: boolean; delaySeconds: number }>("/api/live-hls/config");
+/**
+ * Whether the egress is on, and for this server in particular when one is
+ * named: `enabled` reflects the server-side per-server allowlist, never a
+ * build flag. `delaySeconds` is what the badge should claim.
+ */
+export interface LiveHlsConfig {
+  enabled: boolean;
+  delaySeconds: number;
+}
+
+export const fetchLiveHlsConfig = (serverId?: string) =>
+  apiFetch<LiveHlsConfig>(
+    serverId
+      ? `/api/live-hls/config?serverId=${encodeURIComponent(serverId)}`
+      : "/api/live-hls/config",
+  );
 
 /**
  * What a channel's `channel-live` would say right now, for a client that
