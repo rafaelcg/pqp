@@ -229,9 +229,24 @@ export function createRemoteAudioDelivery(
   const graceMs = options.graceMs ?? AUDIO_SILENCE_GRACE_MS;
   const entries = new Map<AudioDeliveryPublication, Entry>();
   let plan: RemoteAudioPlan = SILENT_AUDIO_PLAN;
+  /**
+   * The plan's two lists as sets, rebuilt once per plan.
+   *
+   * `wantsRemoteAudio` walks the array, which is the right shape for the
+   * public function and the wrong one here: nobody sharing a screen puts
+   * every peer in `silentScreenPeerIds`, so a room of two hundred would do
+   * forty thousand string comparisons per plan, on every speaking-ring
+   * change, on a phone.
+   */
+  let silentVoice = new Set<string>();
+  let silentScreen = new Set<string>();
 
   function wanted(entry: Entry) {
-    return wantsRemoteAudio(plan, entry.peerId, entry.kind);
+    if (plan.deafened) {
+      return false;
+    }
+    const silenced = entry.kind === "voice" ? silentVoice : silentScreen;
+    return !silenced.has(entry.peerId);
   }
 
   function clearTimer(entry: Entry) {
@@ -303,6 +318,8 @@ export function createRemoteAudioDelivery(
 
     setPlan(next) {
       plan = next;
+      silentVoice = new Set(next.silentVoicePeerIds);
+      silentScreen = new Set(next.silentScreenPeerIds);
       for (const [publication, entry] of entries) {
         reconcile(publication, entry);
       }
