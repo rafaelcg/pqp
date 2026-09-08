@@ -172,9 +172,9 @@
    * the page, level 2 is anything that floats over the app (menu, tooltip,
    * popover), level 3 is a modal.
    *
-   * `--shadow-popover` is kept as a name because four component files already
-   * spell it, and now points at level 2 — so a theme sets the level once and
-   * every consumer follows.
+   * `--shadow-popover` is kept as a name because component files across the app
+   * already spell it, and now points at level 2 — so a theme sets the level once
+   * and every consumer follows.
    */
   --shadow-1: 0 1px 2px oklch(0.1 0.02 250 / 0.35);
   --shadow-2: 0 12px 40px oklch(0.1 0.02 250 / 0.55);
@@ -190,7 +190,7 @@
    *
    *   1  a resting card lifted off the page      surface-1 + border, no shadow
    *   2  a raised block inside a panel           surface-2 + border-strong + shadow-2
-   *   3  something floating over the app         surface-2 + shadow-3, border per theme
+   *   3  something floating over the app         surface-2 + shadow-2, border per theme
    *
    * These are `var()` references, not values: retint a surface and every level
    * follows. A theme that wants no edge at a level sets the border to
@@ -208,7 +208,13 @@
   --elevation-2-shadow: var(--shadow-2);
   --elevation-3-surface: var(--color-surface-2);
   --elevation-3-border: var(--color-border);
-  --elevation-3-shadow: var(--shadow-3);
+  /* Level 3 shares level 2's shadow on purpose. `--shadow-popover` is what the
+     menus, tooltips and popovers of this app have always drawn, it is
+     `--shadow-2`, and the levels exist to name what is already there rather
+     than to restyle it. The two levels differ in their edge, not their cast.
+     `--shadow-3` is the deepest rung of the ladder and is currently unused,
+     the same way `--shadow-1` is; both stay defined so a theme can move them. */
+  --elevation-3-shadow: var(--shadow-2);
 
   /*
    * MOTION. Three durations and two curves. `fast` is a state change on a
@@ -810,10 +816,17 @@
  * These write no colour of their own; the values are the tokens above, and a
  * theme moves the level by moving the token.
  *
- * A caller that needs a different surface at the same level overrides the one
- * property after the class (`elevation-3 bg-surface-1`) and keeps the rest;
- * `cn` cannot know these are related, so source order decides and the later
- * class wins.
+ * A caller that needs a different BACKGROUND or SHADOW at the same level
+ * overrides that one property after the class (`elevation-3 bg-surface-1`) and
+ * keeps the rest; `cn` cannot know these are related, so source order decides
+ * and the later class wins.
+ *
+ * THE BORDER COLOUR IS NOT OVERRIDABLE THIS WAY. Tailwind v4 orders the emitted
+ * rules by property rather than by the order the classes are written, and these
+ * utilities set the `border` shorthand, which lands after the `border-color`
+ * that `border-danger` emits. So `elevation-3 border-danger` keeps the level's
+ * edge and silently drops the danger colour. A different edge means a wrapper:
+ * the level on the outer element, the coloured border on an inner one.
  */
 @utility elevation-1 {
   background-color: var(--elevation-1-surface);

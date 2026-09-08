@@ -20,6 +20,7 @@ import {
   RADIUS_TOKENS,
   readToken,
   roundRatio,
+  SHADOW_TOKENS,
   SOFT_PAIRS,
   TYPE_ROLES,
 } from "@/lib/design-tokens";
@@ -255,6 +256,10 @@ function ColourSheet() {
         <div className="grid gap-3 sm:grid-cols-2">
           {SOFT_PAIRS.map((pair) => {
             const ratio = contrastRatio(readToken(pair.on), readToken(pair.fill));
+            const hoverRatio =
+              pair.hover === undefined
+                ? null
+                : contrastRatio(readToken(pair.on), readToken(pair.hover));
             return (
               <div
                 key={pair.id}
@@ -271,6 +276,18 @@ function ColourSheet() {
                   <TokenName name={pair.on} /> <TokenName name={pair.fill} />
                   {ratio === null ? null : ` · ${roundRatio(ratio)}`}
                 </span>
+                {pair.hover === undefined ? null : (
+                  <span
+                    className="rounded-[var(--radius-control)] px-2 py-1"
+                    style={{
+                      backgroundColor: `var(${pair.hover})`,
+                      fontSize: "var(--type-caption-size)",
+                    }}
+                  >
+                    <TokenName name={pair.hover} />
+                    {hoverRatio === null ? null : ` · ${roundRatio(hoverRatio)}`}
+                  </span>
+                )}
               </div>
             );
           })}
@@ -354,6 +371,10 @@ function RadiusSheet() {
  * The three levels, drawn on the app background so the surface step is visible.
  * Each sample writes the level's own utility class, not a copy of its parts —
  * if a level ever stops differing from its neighbour, it stops differing here.
+ *
+ * The raw shadow ladder follows the levels. Levels 2 and 3 both draw
+ * `--shadow-2`, so without these three swatches `--shadow-1` and `--shadow-3`
+ * would be tokens a theme can set and nobody can see.
  */
 function ElevationSheet() {
   return (
@@ -374,6 +395,21 @@ function ElevationSheet() {
                 <TokenName name={token} />
               </span>
             ))}
+          </span>
+        </div>
+      ))}
+      {SHADOW_TOKENS.map((token) => (
+        <div key={token} className="flex flex-col gap-2">
+          <span
+            aria-hidden
+            className="block h-16 w-40 rounded-[var(--radius-card)] bg-surface-1"
+            style={{ boxShadow: `var(${token})` }}
+          />
+          <span
+            className="flex flex-col gap-0.5 text-text-tertiary"
+            style={{ fontSize: "var(--type-caption-size)" }}
+          >
+            <TokenName name={token} />
           </span>
         </div>
       ))}

@@ -69,12 +69,26 @@ export const COLOR_TOKEN_GROUPS: readonly TokenGroup[] = [
  * number with no meaning, because it never sits there. The pair's own ratio is
  * the one that matters, and it is the one the bench pins at 4.5.
  */
-export const SOFT_PAIRS = [
+export interface SoftPair {
+  /** React key for the chip. The sheet's only soft-fill string is fixed. */
+  id: string;
+  fill: string;
+  on: string;
+  /** The hovered fill, where the role has one. Same foreground, same floor. */
+  hover?: string;
+}
+
+export const SOFT_PAIRS: readonly SoftPair[] = [
   { id: "accent", fill: "--color-accent-soft", on: "--color-on-accent-soft" },
-  { id: "danger", fill: "--color-danger-soft", on: "--color-on-danger-soft" },
+  {
+    id: "danger",
+    fill: "--color-danger-soft",
+    on: "--color-on-danger-soft",
+    hover: "--color-danger-soft-hover",
+  },
   { id: "warning", fill: "--color-warning-soft", on: "--color-on-warning-soft" },
   { id: "success", fill: "--color-success-soft", on: "--color-on-success-soft" },
-] as const;
+];
 
 /** The radius roles, lowest first. */
 export const RADIUS_TOKENS = [
@@ -84,6 +98,13 @@ export const RADIUS_TOKENS = [
   "--radius-panel",
   "--radius-pill",
 ] as const;
+
+/**
+ * The shadow ladder, shallowest first. These are what `--elevation-N-shadow`
+ * points at; levels 2 and 3 both draw `--shadow-2` today, so `--shadow-1` and
+ * `--shadow-3` are rungs a theme can move rather than rungs in use.
+ */
+export const SHADOW_TOKENS = ["--shadow-1", "--shadow-2", "--shadow-3"] as const;
 
 /**
  * The three elevation levels, lowest first. `utility` is the class a component

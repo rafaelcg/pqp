@@ -25,7 +25,8 @@ Reference page below.
 4. **Contrast is a number, not an opinion.** Every foreground and background
    pair that matters has a floor, and the bench measures it in every theme.
 5. **The rules are counted.** A rule nobody can enforce is a preference. Every
-   rule in this file that can be counted is counted by `bench/theme-tokens.mjs`.
+   rule in this file that can be counted is counted, by `bench/theme-tokens.mjs`
+   or, for the copy rule, by `scripts/check-i18n.mjs`.
 
 ## Foundations
 
@@ -154,8 +155,8 @@ Five roles, in the unlayered `:root`. Consumed as `rounded-[var(--radius-card)]`
 | Token | Value | Used for |
 |---|---|---|
 | `--radius-tick` | 3px | The square tick in CheckRow |
-| `--radius-control` | 6px | Button, Input, menu row, Skeleton, tooltip |
-| `--radius-card` | 8px | Menu and tooltip containers, a card |
+| `--radius-control` | 6px | Button, Input, menu row, Skeleton, the default tooltip bubble |
+| `--radius-card` | 8px | Menu containers, the `rail` tooltip shell, a card |
 | `--radius-panel` | 16px | A dialog panel |
 | `--radius-pill` | 999px | Anything fully rounded in plain CSS |
 
@@ -176,7 +177,12 @@ genuinely float. So each level is a surface, an edge and a shadow together.
 |---|---|---|---|---|
 | `elevation-1` | `surface-1` | `border` | none | A resting card lifted off the page |
 | `elevation-2` | `surface-2` | `border-strong` | `--shadow-2` | A raised block inside a panel |
-| `elevation-3` | `surface-2` | per theme | `--shadow-3` | Anything floating: popover, menu, dialog |
+| `elevation-3` | `surface-2` | per theme | `--shadow-2` | Anything floating: popover, menu, dialog |
+
+Levels 2 and 3 cast the same shadow and differ in their edge. That is deliberate:
+`--shadow-2` is what every menu, tooltip and popover in this app has always
+drawn, through the `--shadow-popover` alias, and naming the level must not
+restyle it.
 
 A component writes the level, not the parts. The three are Tailwind v4
 `@utility` blocks in `index.css`, so `elevation-3` is a real class that composes
@@ -192,9 +198,18 @@ not colours, so retinting a surface moves every level with it. They are
 deliberately not in `@theme`: a `bg-elevation-3-surface` utility is the call
 site the levels exist to remove.
 
+A caller that needs a different **background** or **shadow** at the same level
+writes that one utility after the class (`elevation-3 bg-surface-1`) and keeps
+the rest. The **border colour cannot be overridden this way**: Tailwind v4 orders
+the emitted rules by property rather than by the order the classes are written,
+and the level's `border` shorthand lands after the `border-color` a utility like
+`border-danger` emits, so the danger colour is silently dropped. A different edge
+means a wrapper: the level on the outer element, the coloured border on an inner
+one.
+
 A theme that wants no edge at a level sets the border to `transparent` rather
 than dropping it, so the 1px of geometry is the same in every theme. Light does
-that at level 3, where `--shadow-3` already separates a floating panel from a
+that at level 3, where the shadow already separates a floating panel from a
 white page and a hairline on top reads as a box in a box. High contrast puts a
 `border-strong` edge back at level 3, in both brightnesses.
 
@@ -210,11 +225,13 @@ control inside.
 
 The ladder itself is still `--shadow-1`, `--shadow-2` and `--shadow-3`, and all
 three are theme values: a black shadow reads as dirt on a light page, so the
-light block redefines them in the surface colour rather than in black.
+light block redefines them in the surface colour rather than in black. Only
+`--shadow-2` is drawn today; the other two are rungs a theme can move, and
+`/qa/ui` shows all three so neither is invisible.
 
 `--shadow-popover` is an alias for `--shadow-2` and is kept because component
-files outside `ui/` already spell it. Set the level in a theme and every consumer
-follows. The purpose-built shadows that are not part of the ladder
+files across the app already spell it, `ui/` included. Set the level in a theme
+and every consumer follows. The purpose-built shadows that are not part of the ladder
 (`--shadow-speaking`, `--shadow-medal`, `--shadow-chance-*`, the hero shadows)
 stay their own tokens because they are effects on one object, not elevation.
 
@@ -257,7 +274,7 @@ Every animation utility in `index.css` is switched off under
   `focus-visible` only, never `focus`: a mouse click on a button must not leave
   a ring behind.
 - **Hover.** A background step up the surface ramp, usually `hover:bg-surface-2`.
-  Text controls also lift `text-text-muted` to `text-text`.
+  Text controls also lift `text-text-tertiary` to `text-text`.
 - **Active.** `active:scale-[0.98]` on Button. Nothing else presses.
 - **Disabled.** `disabled:pointer-events-none disabled:opacity-40` on Button,
   `disabled:cursor-not-allowed disabled:opacity-50` on Input. The two differ
@@ -486,20 +503,22 @@ variant set, and then use it everywhere.
 
 `pnpm --filter @pqp/client bench:tokens` runs `client/bench/theme-tokens.mjs` in
 CI (`.github/workflows/ci.yml`). It writes `bench/results/theme-tokens.json` and
-reports three numbers.
+reports five numbers.
 
 | Number | Rule | Behaviour |
 |---|---|---|
 | `contrast` | 20 foreground and background pairs, in all 40 theme combinations | Always fails on a regression |
 | `leaks` | Rule 2, counted across `client/src` | Ratchet, pinned by `BENCH_MAX_LEAKS`. It is 0 today |
 | `uiAliases` | Rule 4, counted inside `client/src/components/ui/` | Gate at 0. `BENCH_MAX_UI_ALIASES` is an escape hatch for a half-finished migration, not a setting |
+| `uiStatics` | Rule 1, counted inside `client/src/components/ui/`: Tailwind's own static radius, duration and shadow utilities (`rounded-md`, `duration-150`, `shadow-2xl`). `rounded-full` is exempt, because the pill is documented above as a static utility | Gate at 0, with `BENCH_MAX_UI_STATICS` as the same kind of escape hatch |
+| `tokenDrift` | Every role token in `index.css` is listed in `client/src/lib/design-tokens.ts`, and every name listed there is still defined in the CSS | Always fails. The sheet is a hand-written mirror, so drift means `/qa/ui` quietly stopped showing part of the system |
 
 A contrast pair whose colour cannot be parsed is reported as "not defined yet"
 and does **not** fail the run, so a `color-mix()` token would sail through
 unmeasured. Every value the bench has to score is written as a plain `oklch()`.
 Read the `contrast: X/X pass` line and check that it grew, not the missing count.
 
-The alias count is scoped to `ui/` because the rest of the app still carries
+The alias and static-utility counts are scoped to `ui/` because the rest of the app still carries
 hundreds of them and codemodding it is a separate change. The primitives are the
 reference every other surface is copied from, so an `ink` or `signal` name there
 teaches the wrong name to the next component.
@@ -513,8 +532,8 @@ upgrade cannot silently change what a ratio means.
 flips the same attributes Settings does, every colour role with its live WCAG
 ratio against `surface-0` and `surface-1`, a chip per soft fill showing its
 `on-` foreground and the pair's own ratio, the type ramp, the spacing, radius,
-elevation and motion samples, the control ladder, and every primitive in every
-variant.
+elevation and shadow-ladder samples, the motion samples, the control ladder, and
+every primitive in every variant.
 
 It reads every value from the live document with `getComputedStyle`, so it
 scores the theme the viewer actually has on and holds no second copy of the
