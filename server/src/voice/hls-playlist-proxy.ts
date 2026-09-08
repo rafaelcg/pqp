@@ -1,5 +1,6 @@
 import { getPool } from "../db.js";
 import { signRequest } from "../lib/s3.js";
+import { verifyHlsViewerToken } from "./hls-viewer-token.js";
 import {
   hlsObjectPrefix,
   hlsUrlTtlSeconds,
@@ -8,6 +9,31 @@ import {
 } from "./hls-egress.js";
 
 const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * Who is asking for the playlist. The Bearer user wins when the router
+ * already resolved one; otherwise the per-viewer query token
+ * (`hls-viewer-token.ts`, Safari's native player and iOS carry no header)
+ * must verify for exactly this channel and session. Null is a 401: the
+ * caller still runs the channel-access check on whichever user comes back,
+ * so a token never grants more than the header would.
+ */
+export function resolveHlsPlaylistViewer(input: {
+  bearerUserId: string | null | undefined;
+  token: string | null | undefined;
+  channelId: string;
+  startedAt: number;
+  now?: number;
+}): { userId: string } | null {
+  if (input.bearerUserId) {
+    return { userId: input.bearerUserId };
+  }
+  return verifyHlsViewerToken(
+    input.token,
+    { channelId: input.channelId, startedAt: input.startedAt },
+    input.now,
+  );
+}
 
 /** Playlist proxy could not find a live session for this channel. */
 export class HlsPlaylistNotFound extends Error {}
@@ -25,9 +51,11 @@ export class HlsPlaylistUnavailable extends Error {}
  * fetches the live playlist through an internal signed GET (the bucket can
  * be fully private), then rewrites every segment/media line into its own
  * absolute presigned URL before handing the rewritten playlist back. The
- * route this backs (`GET /api/voice/hls-playlist/:channelId`) is Bearer-authed
- * like every other route (CLAUDE.md pitfall #8), so the same `hls-playlist`
- * URL itself needs no query signature -- only the objects it points at do.
+ * route this backs (`GET /api/voice/hls-playlist/:channelId/:startedAt`) is
+ * Bearer-authed like every other route (CLAUDE.md pitfall #8), or carries the
+ * per-viewer `?t=` token for players that cannot send a header (see
+ * `resolveHlsPlaylistViewer` above); only the objects it points at need a
+ * signature of their own.
  *
  * `startedAt` names the exact session (it is the same value `hls-egress.ts`
  * put in the URL it handed the viewer), rather than "whatever is live right

@@ -47,8 +47,93 @@ function disableHls() {
   delete process.env.LIVE_HLS_URL_TTL_SECONDS;
 }
 
-const { buildSignedPlaylist, HlsPlaylistNotFound, HlsPlaylistUnavailable } =
-  await import("./hls-playlist-proxy.js");
+const {
+  buildSignedPlaylist,
+  HlsPlaylistNotFound,
+  HlsPlaylistUnavailable,
+  resolveHlsPlaylistViewer,
+} = await import("./hls-playlist-proxy.js");
+const { mintHlsViewerToken } = await import("./hls-viewer-token.js");
+
+describe("resolveHlsPlaylistViewer", () => {
+  const USER = "00000000-0000-4000-8000-0000000000u1";
+
+  it("a valid token with no Bearer names the user it was minted for", () => {
+    const token = mintHlsViewerToken({
+      userId: USER,
+      channelId: CHANNEL,
+      startedAt: STARTED_AT,
+    });
+    expect(token).not.toBeNull();
+    expect(
+      resolveHlsPlaylistViewer({
+        bearerUserId: null,
+        token,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      }),
+    ).toEqual({ userId: USER });
+  });
+
+  it("a token for another channel or another session is refused", () => {
+    const token = mintHlsViewerToken({
+      userId: USER,
+      channelId: CHANNEL,
+      startedAt: STARTED_AT,
+    });
+    expect(
+      resolveHlsPlaylistViewer({
+        bearerUserId: null,
+        token,
+        channelId: "00000000-0000-4000-8000-0000000000bb",
+        startedAt: STARTED_AT,
+      }),
+    ).toBeNull();
+    expect(
+      resolveHlsPlaylistViewer({
+        bearerUserId: null,
+        token,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT + 1,
+      }),
+    ).toBeNull();
+    expect(
+      resolveHlsPlaylistViewer({
+        bearerUserId: null,
+        token: `${token}x`,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      }),
+    ).toBeNull();
+  });
+
+  it("no token and no Bearer is nobody", () => {
+    expect(
+      resolveHlsPlaylistViewer({
+        bearerUserId: null,
+        token: null,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      }),
+    ).toBeNull();
+  });
+
+  it("the Bearer user wins over any token", () => {
+    const token = mintHlsViewerToken({
+      userId: USER,
+      channelId: CHANNEL,
+      startedAt: STARTED_AT,
+    });
+    expect(
+      resolveHlsPlaylistViewer({
+        bearerUserId: "bearer-user",
+        token,
+        channelId: CHANNEL,
+        startedAt: STARTED_AT,
+      }),
+    ).toEqual({ userId: "bearer-user" });
+  });
+});
 
 describe("buildSignedPlaylist", () => {
   beforeEach(() => {

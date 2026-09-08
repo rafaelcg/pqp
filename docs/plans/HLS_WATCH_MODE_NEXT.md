@@ -44,9 +44,11 @@ going live (streaming responsibility / no pirated content).
 
 ## Known gaps (as reported by the agents who built these branches)
 
-- Native-HLS fallback (Safari without hls.js) cannot attach the Bearer header
-  a signed playlist proxy needs, so signed URLs and native fallback don't mix
-  cleanly yet.
+- Native-HLS fallback (Safari without hls.js, iOS) cannot attach the Bearer
+  header, so the playlist proxy also accepts the per-viewer `?t=` token
+  (`hls-viewer-token.ts`, minted per recipient when the stream frame is
+  sent). The header-less branch lives in `handleApi` ahead of the Bearer
+  resolution and runs the same channel-access check.
 - Four secondary screen-share call sites are not gated by the host
   acknowledgment sheet, only the primary one.
 - The call stage unmounts on channel change, which kills an active
