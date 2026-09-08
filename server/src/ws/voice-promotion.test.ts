@@ -113,6 +113,7 @@ const { SOCKET_CAPS, setAuthenticatedSocket, deleteAuthenticatedSocket } =
 const {
   CAMERA_LIMIT,
   MESH_ROOM_PROMOTION_SIZE,
+  MESH_VIDEO_HARD_LIMIT,
   MESH_VOICE_LIMIT,
   SCREEN_SHARE_LIMIT,
 } = await import("@pqp/shared");
@@ -199,19 +200,23 @@ async function seat(channel: string, follows = true): Promise<Seat> {
   return { ...knocked, peerId: knocked.peerId };
 }
 
-function cameraOn(person: Seat, channel: string): Promise<void> {
+function cameraOn(
+  person: Seat,
+  channel: string,
+  uplinkBps?: number,
+): Promise<void> {
   return handleVoiceMessage(
     { socket: person.socket, user: person.user },
-    { type: "set-camera", streamId: `stream-${person.peerId}` },
+    { type: "set-camera", streamId: `stream-${person.peerId}`, uplinkBps },
   ).then(() => {
     void channel;
   });
 }
 
-function shareOn(person: Seat): Promise<void> {
+function shareOn(person: Seat, uplinkBps?: number): Promise<void> {
   return handleVoiceMessage(
     { socket: person.socket, user: person.user },
-    { type: "set-sharing-screen", sharing: true },
+    { type: "set-sharing-screen", sharing: true, uplinkBps },
   );
 }
 
@@ -229,6 +234,14 @@ function camerasOn(watcher: Seat): number {
   const last = rosters[rosters.length - 1];
   const people = (last?.participants ?? []) as { cameraStreamId?: unknown }[];
   return people.filter((person) => person.cameraStreamId).length;
+}
+
+/** Whose share the server thinks is up, from the last roster it sent anyone. */
+function sharesOn(watcher: Seat): number {
+  const rosters = framesOf(watcher, "voice-roster");
+  const last = rosters[rosters.length - 1];
+  const people = (last?.participants ?? []) as { sharingScreen?: unknown }[];
+  return people.filter((person) => person.sharingScreen).length;
 }
 
 const ORIGINAL_BUDGET = process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
@@ -1078,5 +1091,279 @@ describe("more cameras on a room already on the SFU", () => {
       { type: "set-camera", streamId: null },
     );
     expect(typesOf(people[0]!)).not.toContain("camera-denied");
+  });
+});
+
+/**
+ * THE FIFTH SHARE, AND THE MESH LIMIT THAT IS NO LONGER A CONSTANT
+ * (2026-09-08).
+ *
+ * Two changes, one question. Rafael asked for "unlimited webcams and screens
+ * for all channels", and the honest answer is different on each transport:
+ *
+ * ON THE VOICE SERVER, YES. `SCREEN_SHARE_LIMIT.livekit` was 4 because Zoom
+ * says 4. A presenter uploads once whatever the room size, so a fifth share
+ * costs its publisher exactly what the first cost; what it costs the BOX is
+ * egress once per viewer, and that is priced per room. So the count is gone
+ * and the price is the rule, the same way the camera count went in PR 382.
+ *
+ * ON MESH, NO, AND THE OLD NUMBERS WERE WRONG ANYWAY. A mesh publication is a
+ * full copy per viewer off one uplink, so "unlimited" there is not a policy
+ * anybody can choose. But 2 and 3 were guesses about a typical home link
+ * applied to every link, and Andre's budget controller measures the real one.
+ * The limit is derived from it now: more on fibre in a small room, less on a
+ * weak link in a big one, and reaching it still promotes.
+ */
+describe("screens and the measured mesh limit", () => {
+  let channel: string;
+
+  beforeEach(() => {
+    for (const socket of openSockets) {
+      deleteAuthenticatedSocket(socket);
+    }
+    openSockets.length = 0;
+    resetVoicePeers();
+    resetVoiceRateLimits();
+    resetVoiceRoomTransports();
+    resetVoicePromotions();
+    backend.configured = "livekit";
+    rows.memberCount = 5;
+    channel = randomUUID();
+    delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_BUDGET === undefined) {
+      delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
+    } else {
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = ORIGINAL_BUDGET;
+    }
+  });
+
+  async function sfuRoomOf(size: number): Promise<Seat[]> {
+    rows.memberCount = 40;
+    const people: Seat[] = [];
+    for (let at = 0; at < size; at += 1) {
+      people.push(await seat(channel));
+    }
+    expect(getRoomTransport(channel)).toBe("livekit");
+    return people;
+  }
+
+  describe("on the voice server", () => {
+    it("admits a sixth share, where the old count refused the fifth", async () => {
+      const people = await sfuRoomOf(6);
+
+      for (const person of people) {
+        await shareOn(person);
+      }
+
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("screen-share-denied");
+      }
+      expect(sharesOn(people[0]!)).toBe(6);
+      // The constant that used to answer this question no longer has one.
+      expect(SCREEN_SHARE_LIMIT.livekit).toBeNull();
+    });
+
+    it("refuses the share that would take the box over its budget", async () => {
+      // A share is charged at SCREEN_STREAM_MBPS (4), not at a camera's 1.5:
+      // four people, the third share prices the room at 3 * 4 * 4 = 48.
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "40";
+      const people = await sfuRoomOf(4);
+
+      await shareOn(people[0]!);
+      await shareOn(people[1]!);
+      expect(sharesOn(people[0]!)).toBe(2);
+
+      await shareOn(people[2]!);
+
+      expect(typesOf(people[2]!)).toContain("screen-share-denied");
+      expect(sharesOn(people[0]!)).toBe(2);
+    });
+
+    it("would have admitted that share if it were priced as a camera", async () => {
+      // The bug this pins: 3 * 4 * 1.5 = 18 is under the same budget of 40,
+      // so a share charged at a camera's rate sails through a box it is about
+      // to overload by a factor of nearly three.
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "40";
+      const people = await sfuRoomOf(4);
+
+      for (const person of people.slice(0, 3)) {
+        await cameraOn(person, channel);
+      }
+
+      for (const person of people.slice(0, 3)) {
+        expect(typesOf(person)).not.toContain("camera-denied");
+      }
+      expect(camerasOn(people[0]!)).toBe(3);
+    });
+
+    it("never prices a share that is only re-declaring itself", async () => {
+      // A capture that gains audio re-sends the frame. It adds nothing to the
+      // box, so a full budget must not take a live share away.
+      const people = await sfuRoomOf(4);
+      await shareOn(people[0]!);
+      expect(sharesOn(people[0]!)).toBe(1);
+
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "1";
+      await handleVoiceMessage(
+        { socket: people[0]!.socket, user: people[0]!.user },
+        {
+          type: "set-sharing-screen",
+          sharing: true,
+          audioStreamId: "with-sound-now",
+        },
+      );
+
+      expect(typesOf(people[0]!)).not.toContain("screen-share-denied");
+      expect(sharesOn(people[0]!)).toBe(1);
+    });
+
+    it("reads no client number at all: a liar gains nothing", async () => {
+      // The room is priced from the roster. The same claim, with an absurd
+      // report attached, is refused in exactly the same place.
+      process.env.VOICE_PROMOTION_MAX_SFU_MBPS = "40";
+      const people = await sfuRoomOf(4);
+      await shareOn(people[0]!, 500_000_000);
+      await shareOn(people[1]!, 500_000_000);
+
+      await shareOn(people[2]!, 500_000_000);
+
+      expect(typesOf(people[2]!)).toContain("screen-share-denied");
+      expect(sharesOn(people[0]!)).toBe(2);
+    });
+  });
+
+  describe("on mesh", () => {
+    it("lets a measured fibre link hold a third share where the constant said two", async () => {
+      // Three people, 16 Mbit/s measured: two viewers each, so three shares
+      // is well inside the link. `MESH_VOICE_LIMIT` keeps the room small
+      // enough that this stays a mesh question.
+      backend.configured = "mesh"; // nowhere to promote to, so the cap decides
+      const people = [
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+      ];
+
+      for (const person of people) {
+        await shareOn(person, 16_000_000);
+      }
+
+      for (const person of people) {
+        expect(typesOf(person)).not.toContain("screen-share-denied");
+      }
+      expect(sharesOn(people[0]!)).toBe(3);
+      expect(SCREEN_SHARE_LIMIT.mesh).toBe(2);
+    });
+
+    it("stops a weak link at one, where the constant allowed three cameras", async () => {
+      backend.configured = "mesh";
+      const people = [
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+      ];
+
+      // Five people on 2 Mbit/s: one camera is already four copies.
+      await cameraOn(people[0]!, channel, 2_000_000);
+      await cameraOn(people[1]!, channel, 2_000_000);
+
+      expect(typesOf(people[1]!)).toContain("camera-denied");
+      expect(camerasOn(people[0]!)).toBe(1);
+      expect(CAMERA_LIMIT.mesh).toBe(3);
+    });
+
+    it("promotes at the measured limit rather than refusing", async () => {
+      // The same weak room, on a deployment that HAS a voice server. The
+      // limit is still 1, and reaching it moves the room instead of saying no,
+      // which is the better answer: on the box that camera costs one uplink
+      // rather than four copies.
+      const people = [
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+      ];
+      await cameraOn(people[0]!, channel, 2_000_000);
+      expect(getRoomTransport(channel)).toBe("mesh");
+
+      await cameraOn(people[1]!, channel, 2_000_000);
+
+      expect(getRoomTransport(channel)).toBe("livekit");
+      expect(typesOf(people[1]!)).not.toContain("camera-denied");
+      expect(camerasOn(people[0]!)).toBe(2);
+    });
+
+    it("takes the narrowest report, so one inflated one buys nothing", async () => {
+      // Two fibre reports and one 4G report in a five-person room. A client
+      // that claims half a gigabit cannot lift a limit somebody else's honest
+      // reading has already set.
+      backend.configured = "mesh";
+      const people = [
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+      ];
+      // The weak seat reports first, by turning its own camera on.
+      await cameraOn(people[0]!, channel, 2_000_000);
+      expect(camerasOn(people[0]!)).toBe(1);
+
+      await cameraOn(people[1]!, channel, 500_000_000);
+
+      expect(typesOf(people[1]!)).toContain("camera-denied");
+      expect(camerasOn(people[0]!)).toBe(1);
+    });
+
+    it("holds the hard ceiling however wide the link is", async () => {
+      // Five people, every one of them reporting half a gigabit. The link
+      // arithmetic alone would allow five shares here; the ceiling stops the
+      // fifth, because it stands in for every viewer's downlink and decode,
+      // which nothing in a browser reports.
+      backend.configured = "mesh";
+      const people = [
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+      ];
+
+      for (const person of people) {
+        await shareOn(person, 500_000_000);
+      }
+
+      expect(sharesOn(people[0]!)).toBe(MESH_VIDEO_HARD_LIMIT.screens);
+      expect(typesOf(people[4]!)).toContain("screen-share-denied");
+      expect(MESH_VIDEO_HARD_LIMIT.screens).toBe(4);
+      expect(MESH_VIDEO_HARD_LIMIT.cameras).toBe(6);
+    });
+
+    it("behaves exactly as before for a client that reports nothing", async () => {
+      // Every native client today. Four people, no reports: the old constant,
+      // and the fourth camera promotes exactly as it did before.
+      const people = [
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+        await seat(channel),
+      ];
+      for (const person of people.slice(0, 3)) {
+        await cameraOn(person, channel);
+      }
+      expect(camerasOn(people[0]!)).toBe(CAMERA_LIMIT.mesh);
+      expect(getRoomTransport(channel)).toBe("mesh");
+
+      await cameraOn(people[3]!, channel);
+
+      expect(getRoomTransport(channel)).toBe("livekit");
+      expect(camerasOn(people[0]!)).toBe(4);
+    });
   });
 });

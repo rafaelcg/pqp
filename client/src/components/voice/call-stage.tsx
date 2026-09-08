@@ -37,8 +37,6 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import {
-  CAMERA_LIMIT,
-  SCREEN_SHARE_LIMIT,
   MESH_VOICE_WARNING,
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
@@ -117,7 +115,12 @@ import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
 import { useLiveHlsReady } from "@/hooks/use-live-hls-src";
-import { isCameraAtCap, isScreenShareAtCap } from "@/lib/screen-share-roster";
+import {
+  isCameraAtCap,
+  isScreenShareAtCap,
+  meshRoomLinkOf,
+  videoLimitOf,
+} from "@/lib/screen-share-roster";
 import {
   loadParticipantRailOpen,
   saveParticipantRailOpen,
@@ -2013,13 +2016,15 @@ export function CallControls({
       setShareHint(null);
     }
   }, [voiceState.isSharingScreen, voiceState.error]);
+  const meshLink = meshRoomLinkOf(voiceState);
   const shareAtCap = isScreenShareAtCap(
     voiceState.screenSharePeerIds,
     voiceState.peerId,
     voiceState.roomTransport,
     voiceState.canPromoteTransport,
+    meshLink,
   );
-  const shareLimit = SCREEN_SHARE_LIMIT[voiceState.roomTransport ?? "mesh"];
+  const shareLimit = videoLimitOf(voiceState, "screens");
   // The cap only bites somebody who is not already one of the shares.
   const shareCappedOut = shareAtCap && !voiceState.isSharingScreen;
   const cameraAtCap = isCameraAtCap(
@@ -2027,8 +2032,9 @@ export function CallControls({
     voiceState.peerId,
     voiceState.roomTransport,
     voiceState.canPromoteTransport,
+    meshLink,
   );
-  const cameraLimit = CAMERA_LIMIT[voiceState.roomTransport ?? "mesh"];
+  const cameraLimit = videoLimitOf(voiceState, "cameras");
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
   const size = collapsed ? "h-8 w-8" : "h-10 w-10";
   const iconSize = collapsed ? "h-3.5 w-3.5" : "h-4 w-4";
@@ -2387,7 +2393,7 @@ export function CallControls({
           }
           detail={
             shareCappedOut
-              ? t("voice.control.shareLimit", { limit: shareLimit })
+              ? t("voice.control.shareLimit", { limit: shareLimit ?? 0 })
               : undefined
           }
         >

@@ -2,6 +2,7 @@ import {
   CAMERA_LIMIT,
   MESH_VOICE_WARNING,
   SCREEN_SHARE_LIMIT,
+  meshVideoLimit,
   type ClientRelayMessage,
   type VoiceParticipant,
   type VoiceRoomTransport,
@@ -16,6 +17,7 @@ import {
   isCameraAtCap,
   isScreenShareAtCap,
   nextScreenShareFocus,
+  type MeshRoomLink,
 } from "@/lib/screen-share-roster";
 import {
   screenShareUnavailableMessage,
@@ -322,6 +324,18 @@ export interface VoiceState {
   channelLive: Record<string, ChannelLive>;
   /** peerIds whose camera is on, from the roster's `cameraStreamId`. */
   cameraPeerIds: string[];
+  /**
+   * What this machine's uplink last measured, in bit/s, or null before there
+   * has been anything to measure.
+   *
+   * PREDICTION, NOT ENFORCEMENT. The buttons use it to grey themselves at the
+   * number this link can actually carry (`meshVideoLimit`), which is why it is
+   * on the state at all. The server holds every seat's report and takes the
+   * narrowest of them, so its answer can be smaller than this one, and its
+   * answer is the one that decides. Null everywhere on the voice server, where
+   * no client number is read.
+   */
+  uplinkBps: number | null;
   /**
    * Who occupies the large tile. Hook-owned so the audio sinks (mounted at
    * the app root) and both stage mounts can read the same value.
@@ -678,6 +692,23 @@ function cameraLimitMessage(
   return translateMessage("voice.error.cameraLimit", { limit });
 }
 
+/**
+ * The same three shapes for a screen share, now that the voice server has no
+ * share count either.
+ *
+ * On a mesh room that cannot move, the number is this room's own measured one
+ * and stating it is honest: it is what this call can carry. On a room that CAN
+ * move, or on the voice server, a refusal is the box being full rather than a
+ * count being reached, and "this call already has 2" would be a lie that a
+ * quieter box contradicts a minute later.
+ */
+function shareLimitMessage(limit: number | null, canPromote: boolean): string {
+  if (limit === null || canPromote) {
+    return translateMessage("voice.error.shareLimitBusy");
+  }
+  return translateMessage("voice.error.shareLimit", { limit });
+}
+
 function micErrorMessage(err: unknown): string {
   if (!(err instanceof Error)) {
     return translateMessage("voice.error.micFailed");
@@ -977,6 +1008,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     liveStream: null,
     channelLive: {},
     cameraPeerIds: [],
+    uplinkBps: null,
     focusedScreenPeerId: null,
     dismissedSharePeerIds: [],
     audibleScreenPeerIds: [],
@@ -1749,12 +1781,54 @@ export function createVoiceController(transport: RealtimeTransport) {
       : null;
   }
 
+  /**
+   * Take a fresh reading of this machine's uplink, for the mesh limit.
+   *
+   * Only on mesh, and only when there is a manager: on the voice server the
+   * server reads nothing a client sends about links, and a reading taken there
+   * would be a number travelling for no reason. A failed or absent reading
+   * keeps the last one rather than clearing it, because "I could not measure
+   * just now" is not "my link got smaller".
+   */
+  async function refreshUplinkMeasurement(): Promise<void> {
+    if (state.roomTransport === "livekit") {
+      return;
+    }
+    const measured = await manager?.measureUplinkBps();
+    if (measured !== null && measured !== undefined) {
+      state.uplinkBps = measured;
+    }
+  }
+
+  /** What `meshVideoLimit` needs to know about this room, from the state. */
+  function meshRoomLink(): MeshRoomLink {
+    return {
+      // Ourselves plus everyone the roster holds. `remotePeers` is the mesh's
+      // own view and is the number the server counts too.
+      roomSize: state.remotePeers.length + 1,
+      uplinkBps: state.uplinkBps,
+    };
+  }
+
+  function meshShareLimit(): number | null {
+    return state.roomTransport === "livekit"
+      ? SCREEN_SHARE_LIMIT.livekit
+      : meshVideoLimit({ kind: "screens", ...meshRoomLink() });
+  }
+
+  function meshCameraLimit(): number | null {
+    return state.roomTransport === "livekit"
+      ? CAMERA_LIMIT.livekit
+      : meshVideoLimit({ kind: "cameras", ...meshRoomLink() });
+  }
+
   /** Announce the share (and whether it has sound) to the room. */
   function announceSharing() {
     transport.sendVoice({
       type: "set-sharing-screen",
       sharing: true,
       audioStreamId: screenAudioStreamId(),
+      uplinkBps: state.uplinkBps ?? undefined,
     });
   }
 
@@ -2227,6 +2301,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // forget which rooms are live.
       channelLive: state.channelLive,
       cameraPeerIds: [],
+    uplinkBps: null,
       focusedScreenPeerId: null,
       dismissedSharePeerIds: [],
       audibleScreenPeerIds: [],
@@ -2412,11 +2487,10 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
         void stopScreenShareInternal();
-        state.error = canPromoteTransport()
-          ? translateMessage("voice.error.shareLimitBusy")
-          : translateMessage("voice.error.shareLimit", {
-              limit: SCREEN_SHARE_LIMIT[state.roomTransport ?? "mesh"],
-            });
+        state.error = shareLimitMessage(
+          meshShareLimit(),
+          canPromoteTransport(),
+        );
         emit();
         break;
       case "camera-denied":
@@ -2425,7 +2499,7 @@ export function createVoiceController(transport: RealtimeTransport) {
         }
         void stopCameraInternal();
         state.error = cameraLimitMessage(
-          CAMERA_LIMIT[state.roomTransport ?? "mesh"],
+          meshCameraLimit(),
           canPromoteTransport(),
         );
         emit();
@@ -3366,17 +3440,23 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
+      // Measured before the check, not after: the whole point of the reading
+      // is to decide this, and a stale one from the last room would answer for
+      // a link that may have changed since.
+      await refreshUplinkMeasurement();
       if (
         isScreenShareAtCap(
           state.screenSharePeerIds,
           state.peerId,
           state.roomTransport,
           canPromoteTransport(),
+          meshRoomLink(),
         )
       ) {
-        state.error = translateMessage("voice.error.shareLimit", {
-          limit: SCREEN_SHARE_LIMIT[state.roomTransport ?? "mesh"],
-        });
+        state.error = shareLimitMessage(
+          meshShareLimit(),
+          canPromoteTransport(),
+        );
         emit();
         return;
       }
@@ -3672,16 +3752,18 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
+      await refreshUplinkMeasurement();
       if (
         isCameraAtCap(
           state.cameraPeerIds,
           state.peerId,
           state.roomTransport,
           canPromoteTransport(),
+          meshRoomLink(),
         )
       ) {
         state.error = cameraLimitMessage(
-          CAMERA_LIMIT[state.roomTransport ?? "mesh"],
+          meshCameraLimit(),
           canPromoteTransport(),
         );
         emit();
@@ -3739,7 +3821,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
       // Announced before the track is added so receivers can classify the
       // incoming video on arrival; the manager re-checks on the roster anyway.
-      transport.sendVoice({ type: "set-camera", streamId: stream.id });
+      transport.sendVoice({
+        type: "set-camera",
+        streamId: stream.id,
+        uplinkBps: state.uplinkBps ?? undefined,
+      });
       try {
         await manager?.setLocalCameraStream(stream);
         if (sfu) {

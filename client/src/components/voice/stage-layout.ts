@@ -198,6 +198,17 @@ const EMPTY_KEYS: ReadonlySet<string> = new Set();
  * being legible; the bandwidth is a rounding error by then, and that is only
  * true because the ladder above exists.
  */
+/**
+ * Slots the shares may not take, so rules 3 and 4 (our own camera, whoever is
+ * speaking) still have somewhere to land in a room with more shares than the
+ * grid can draw.
+ *
+ * Two, which is exactly those two rules, and no more than that: a share is
+ * what people came for and holding back a third slot would push a screen into
+ * the strip to show a fourth face.
+ */
+export const STAGE_FACE_SLOTS_HELD = 2;
+
 export const STAGE_TILE_LIMIT_WIDE = 12;
 export const STAGE_TILE_LIMIT_NARROW = 6;
 
@@ -214,9 +225,14 @@ export interface StageTileSlots {
  * Deliberately the same shape as `listenerStripSlots`, because it is the same
  * problem one size up, and the rules are its rules:
  *
- *  1. Every share. A room gathers around a screen; there are at most four of
- *     them (`SCREEN_SHARE_LIMIT`) and cutting one would hide the thing people
- *     came for to make space for a face.
+ *  1. Every share, up to `screenSlots` of them. A room gathers around a
+ *     screen, so a share outranks a face. It is no longer an unbounded rule:
+ *     `SCREEN_SHARE_LIMIT.livekit` used to be 4, so "every share" could never
+ *     take more than a third of a wide grid, and it is now `null` (the box is
+ *     priced instead of counted). Twelve shares would otherwise take every
+ *     slot, and a grid with no faces in it, not even your own, is not a call.
+ *     Two slots are held back for the rules below whenever there is anybody
+ *     else to put in them.
  *  2. The first tile, which is the pin when there is one. Somebody who asked
  *     for a picture keeps it.
  *  3. Our own camera. Same reason our own chip is always in the strip: a
@@ -251,8 +267,15 @@ export function stageTileSlots(
       picked.set(tile.id, tile);
     }
   };
+  // Held back so a room full of shares still shows your own picture and
+  // whoever is talking. Only when there is somebody to hold them for: a call
+  // that is nothing but screens gets all of its screens.
+  const others = tiles.some((tile) => tile.kind !== "screen");
+  const screenSlots = others
+    ? Math.max(1, limit - STAGE_FACE_SLOTS_HELD)
+    : limit;
   for (const tile of tiles) {
-    if (tile.kind === "screen") {
+    if (tile.kind === "screen" && picked.size < screenSlots) {
       take(tile);
     }
   }

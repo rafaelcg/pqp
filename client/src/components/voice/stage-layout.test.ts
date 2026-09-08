@@ -10,6 +10,7 @@ import {
   STAGE_TILE_LIMIT_WIDE,
   STRIP_LIMIT_NARROW,
   STRIP_LIMIT_WIDE,
+  type StageTile,
 } from "./stage-layout";
 
 /**
@@ -486,5 +487,76 @@ describe("planStage under a bound", () => {
     for (const listener of listeners) {
       expect(shownKeys.has(listener.key)).toBe(false);
     }
+  });
+});
+
+/**
+ * A ROOM MADE ENTIRELY OF SHARES (2026-09-08).
+ *
+ * "Every share is kept" was written when `SCREEN_SHARE_LIMIT.livekit` was 4,
+ * so the rule could never take more than a third of a wide grid. With the
+ * count gone the same rule would hand twelve shares every slot, and a grid
+ * with no faces in it, not even your own, is not a call.
+ */
+describe("stageTileSlots with more shares than the grid can draw", () => {
+  const speaking = new Set<string>();
+
+  function screen(at: number): StageTile {
+    return {
+      id: `screen-${at}`,
+      key: `p${at}`,
+      kind: "screen",
+    } as unknown as StageTile;
+  }
+
+  function face(at: number, isSelf = false): StageTile {
+    return {
+      id: `face-${at}`,
+      key: `f${at}`,
+      kind: "person",
+      isSelf,
+    } as unknown as StageTile;
+  }
+
+  it("holds two slots back for our own picture and whoever is talking", () => {
+    const tiles = [
+      ...Array.from({ length: 12 }, (_, at) => screen(at)),
+      face(0, true),
+      face(1),
+      face(2),
+    ];
+    const talking = new Set(["f1"]);
+
+    const { shown } = stageTileSlots(tiles, 12, talking);
+
+    expect(shown).toHaveLength(12);
+    expect(shown.filter((tile) => tile.kind === "screen")).toHaveLength(10);
+    expect(shown.some((tile) => tile.isSelf)).toBe(true);
+    expect(shown.some((tile) => tile.key === "f1")).toBe(true);
+  });
+
+  it("gives a call that is nothing but screens all of its screens", () => {
+    const tiles = Array.from({ length: 20 }, (_, at) => screen(at));
+
+    const { shown } = stageTileSlots(tiles, 12, speaking);
+
+    expect(shown).toHaveLength(12);
+    expect(shown.every((tile) => tile.kind === "screen")).toBe(true);
+  });
+
+  it("leaves a room with a handful of shares exactly as it was", () => {
+    // The bound only bites past `limit - STAGE_FACE_SLOTS_HELD`, so the four
+    // that used to be the cap are all still kept.
+    const tiles = [
+      screen(0),
+      screen(1),
+      screen(2),
+      screen(3),
+      ...Array.from({ length: 12 }, (_, at) => face(at)),
+    ];
+
+    const { shown } = stageTileSlots(tiles, 12, speaking);
+
+    expect(shown.filter((tile) => tile.kind === "screen")).toHaveLength(4);
   });
 });

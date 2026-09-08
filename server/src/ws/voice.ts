@@ -8,9 +8,10 @@ import { z } from "zod";
 import {
   clientRelayMessageSchema,
   isClientRelayMessage,
-  CAMERA_LIMIT,
+  clampReportedUplinkBps,
+  meshVideoLimit,
+  narrowestUplinkBps,
   MESH_VOICE_LIMIT,
-  SCREEN_SHARE_LIMIT,
   canStartWatchPartyStream,
   hasPermission,
   isVoiceRoomChannelType,
@@ -24,6 +25,7 @@ import {
   voiceRoomTransportSchema,
   watchPartyStateSchema,
   liveReactionCountSchema,
+  type MeshVideoKind,
   type VoiceParticipant,
   type VoiceRoomTransport,
   type LiveHlsStream,
@@ -193,6 +195,20 @@ interface VoicePeer {
    * flag and are removed immediately, so they do not occupy a mesh seat.
    */
   canResume: boolean;
+  /**
+   * The uplink this client last measured, in bit/s, clamped on arrival, or
+   * null from a client that has never reported one (every native client
+   * today, and every web client before its first camera or share).
+   *
+   * READ ONLY ON MESH, and that restriction is the whole safety argument. On
+   * mesh a publication is uploaded by its publisher and by nobody else, so a
+   * number somebody inflated buys them copies out of their own uplink; and
+   * because `narrowestUplinkBps` takes the minimum, it cannot lift a limit
+   * that somebody else's honest reading has already set. On the voice server
+   * the cost IS shared, and there this field is never consulted: the box is
+   * priced from the roster by `decideVideoAdmission`.
+   */
+  measuredUplinkBps: number | null;
 }
 
 /**
@@ -3475,6 +3491,12 @@ export async function handleVoiceMessage(
       canSpeak,
       canStream,
       canResume: payload.resume === true,
+      // Deliberately not carried across a resume and not in the registry row.
+      // A measurement is about a link at a moment; a client that reconnects
+      // re-measures and re-reports on its next claim, and until it does the
+      // room falls back to the old constant, which is the same thing every
+      // client without the field gets.
+      measuredUplinkBps: null,
     };
     if (adopted && !canStream) {
       peer.sharingScreen = false;
@@ -3582,19 +3604,25 @@ export async function handleVoiceMessage(
       });
       return;
     }
+    // The measurement, before it is used. Clamped here and nowhere else, so
+    // every read of the field is already inside the believable window.
+    if (payload.uplinkBps !== undefined) {
+      peer.measuredUplinkBps =
+        clampReportedUplinkBps(payload.uplinkBps) ?? peer.measuredUplinkBps;
+    }
     if (payload.sharing) {
       const othersSharing = () =>
         getRoomPeers(peer.voiceChannelId).filter(
           (p) => p.id !== peer.id && p.sharingScreen,
         ).length;
-      if (
-        othersSharing() >=
-        SCREEN_SHARE_LIMIT[getRoomTransport(peer.voiceChannelId)]
-      ) {
-        // The mesh cap is two because mesh encodes a copy per peer. Where
-        // there is an SFU to move to, move the room rather than refuse the
-        // share; `promoteRoomPastMeshCap` prices the box first and answers
-        // false when it cannot, which is exactly the old refusal.
+      const shareCap = () => meshShareLimit(peer.voiceChannelId);
+      const cap = shareCap();
+      if (cap !== null && othersSharing() >= cap) {
+        // The mesh cap is what this room's measured links can carry (see
+        // `meshShareLimit`). Where there is an SFU to move to, move the room
+        // rather than refuse the share; `promoteRoomPastMeshCap` prices the
+        // box first and answers false when it cannot, which is exactly the
+        // old refusal.
         await promoteRoomPastMeshCap(peer.voiceChannelId, "screens", user.id);
         // The await above may have outlived the socket, and the promotion
         // itself releases seats: re-read everything before the write. This is
@@ -3604,10 +3632,29 @@ export async function handleVoiceMessage(
         if (socket.readyState !== 1 || peers.get(existingPeerId) !== peer) {
           return;
         }
-        if (
-          othersSharing() >=
-          SCREEN_SHARE_LIMIT[getRoomTransport(peer.voiceChannelId)]
-        ) {
+        const after = shareCap();
+        if (after !== null && othersSharing() >= after) {
+          send(peer.socket, {
+            type: "screen-share-denied",
+            voiceChannelId: peer.voiceChannelId,
+          });
+          return;
+        }
+      }
+      // THE FIFTH SHARE. On the voice server there is no count to hit, the
+      // box has a budget instead. A live sharer re-declaring (an audio id
+      // arriving, a rejoin) is not a new publication and is never priced, so
+      // re-declaring can never be refused for the slot it already holds.
+      if (shareCap() === null && !peer.sharingScreen) {
+        const admitted = await admitVideoOnSfu(
+          peer.voiceChannelId,
+          "screens",
+          user.id,
+        );
+        if (socket.readyState !== 1 || peers.get(existingPeerId) !== peer) {
+          return;
+        }
+        if (!admitted) {
           send(peer.socket, {
             type: "screen-share-denied",
             voiceChannelId: peer.voiceChannelId,
@@ -3832,19 +3879,24 @@ export async function handleVoiceMessage(
       });
       return;
     }
+    if (payload.uplinkBps !== undefined) {
+      peer.measuredUplinkBps =
+        clampReportedUplinkBps(payload.uplinkBps) ?? peer.measuredUplinkBps;
+    }
     if (payload.streamId) {
       const othersOn = () =>
         getRoomPeers(peer.voiceChannelId).filter(
           (p) => p.id !== peer.id && p.cameraStreamId,
         ).length;
-      const meshCap = () => CAMERA_LIMIT[getRoomTransport(peer.voiceChannelId)];
+      const meshCap = () => meshCameraLimit(peer.voiceChannelId);
       const cap = meshCap();
       if (cap !== null && othersOn() >= cap) {
-        // THE FOURTH CAMERA. Three is the mesh ceiling because a mesh camera
-        // is a full uplink copy per peer; it is not a ceiling on how many
-        // friends want to be seen. Move the room to the SFU and let the
-        // camera on. See the promotion section for what makes that safe and
-        // what stops it (the box's budget).
+        // THE CAMERA THE MESH CANNOT CARRY. A mesh camera is a full uplink
+        // copy per peer, so the room's own links decide how many fit
+        // (`meshCameraLimit`); that is not a ceiling on how many friends want
+        // to be seen. Move the room to the SFU and let the camera on. See the
+        // promotion section for what makes that safe and what stops it (the
+        // box's budget).
         await promoteRoomPastMeshCap(peer.voiceChannelId, "cameras", user.id);
         if (socket.readyState !== 1 || peers.get(existingPeerId) !== peer) {
           return;
@@ -4860,13 +4912,99 @@ export function resetVoicePromotions(): void {
   pendingPromotions.clear();
 }
 
-/** How many seats in a room are publishing video right now. */
-function countVideoPublishers(
+/** How many seats in a room are publishing each kind of video right now. */
+function countPublishers(
   people: readonly { sharingScreen: boolean; cameraStreamId: string | null }[],
-): number {
-  return people.filter(
-    (person) => person.sharingScreen || person.cameraStreamId,
-  ).length;
+): { cameras: number; screens: number } {
+  let cameras = 0;
+  let screens = 0;
+  for (const person of people) {
+    if (person.cameraStreamId) {
+      cameras += 1;
+    }
+    if (person.sharingScreen) {
+      screens += 1;
+    }
+  }
+  return { cameras, screens };
+}
+
+/**
+ * WHAT THIS ROOM'S LINKS CAN CARRY, or null when the room is not on mesh and
+ * the question is the box's rather than anybody's link.
+ *
+ * The constants (2 shares, 3 cameras) were guesses about a typical home
+ * connection applied to every room on every connection. This reads what the
+ * room actually reported instead, takes the narrowest of it, and asks
+ * `meshVideoLimit`. A room where nobody has reported anything gets exactly the
+ * old constant, so a call full of native clients behaves as it did before.
+ *
+ * ORPHANS COUNT toward the room size, the same rule the rest of this file
+ * follows: an orphan is a refresh in flight and its media is still on the
+ * wire, so it is still a viewer that every copy has to be encoded for.
+ */
+function meshVideoLimitFor(
+  voiceChannelId: string,
+  kind: MeshVideoKind,
+): number | null {
+  if (getRoomTransport(voiceChannelId) !== "mesh") {
+    return null;
+  }
+  const seated = getRoomPeers(voiceChannelId);
+  return meshVideoLimit({
+    kind,
+    roomSize: seated.length,
+    uplinkBps: narrowestUplinkBps(
+      seated.map((person) => person.measuredUplinkBps),
+    ),
+  });
+}
+
+/**
+ * The room as it will be once whatever triggered this actually lands.
+ *
+ * TWO AXES, AND EVERY TRIGGER MOVES EXACTLY ONE OF THEM OR NEITHER.
+ *
+ * A camera or a share adds a PUBLICATION, which the estimate multiplies by
+ * every participant. Which of the two counts it lands in is a factor of nearly
+ * three (a share is charged at `SCREEN_STREAM_MBPS`, a camera at
+ * `CAMERA_STREAM_MBPS`), so the reason travels here rather than being
+ * inferred: charging a share as a camera is exactly the mistake the split
+ * counts exist to prevent.
+ *
+ * A ninth person at the door, or the fourth person who trips the size
+ * threshold, adds a PARTICIPANT: one more subscriber to the publications
+ * already there, and no publication at all. Charging either of those for a
+ * camera nobody turned on would refuse the promotion of a big, silent call for
+ * load it is not about to create.
+ *
+ * A stale pin adds neither: the room is being moved because the policy already
+ * says it belongs on the SFU, and the seats and publications are the ones it
+ * already has.
+ */
+function withOneMore(
+  room: SfuRoomLoad,
+  reason: VoicePromotionReason,
+): SfuRoomLoad {
+  switch (reason) {
+    case "screens":
+      return { ...room, screenPublishers: room.screenPublishers + 1 };
+    case "cameras":
+      return { ...room, cameraPublishers: room.cameraPublishers + 1 };
+    case "room-full":
+    case "room-size":
+      return { ...room, participants: room.participants + 1 };
+    default:
+      return room;
+  }
+}
+
+function meshShareLimit(voiceChannelId: string): number | null {
+  return meshVideoLimitFor(voiceChannelId, "screens");
+}
+
+function meshCameraLimit(voiceChannelId: string): number | null {
+  return meshVideoLimitFor(voiceChannelId, "cameras");
 }
 
 /**
@@ -4880,12 +5018,16 @@ async function readRoomLoads(): Promise<SfuRoomLoad[]> {
   if (registryOn()) {
     try {
       const rooms = await listVoiceRosters();
-      return rooms.map((room) => ({
-        channelId: room.channelId,
-        transport: room.transport,
-        participants: room.peers.length,
-        videoPublishers: countVideoPublishers(room.peers),
-      }));
+      return rooms.map((room) => {
+        const publishing = countPublishers(room.peers);
+        return {
+          channelId: room.channelId,
+          transport: room.transport,
+          participants: room.peers.length,
+          cameraPublishers: publishing.cameras,
+          screenPublishers: publishing.screens,
+        };
+      });
     } catch (error) {
       logEvent("voice.registryReadFailed", {
         op: "promotionLoad",
@@ -4904,13 +5046,17 @@ async function readRoomLoads(): Promise<SfuRoomLoad[]> {
         channelId: peer.voiceChannelId,
         transport: getRoomTransport(peer.voiceChannelId),
         participants: 0,
-        videoPublishers: 0,
+        cameraPublishers: 0,
+        screenPublishers: 0,
       };
       byRoom.set(peer.voiceChannelId, room);
     }
     room.participants += 1;
-    if (peer.sharingScreen || peer.cameraStreamId) {
-      room.videoPublishers += 1;
+    if (peer.cameraStreamId) {
+      room.cameraPublishers += 1;
+    }
+    if (peer.sharingScreen) {
+      room.screenPublishers += 1;
     }
   }
   return [...byRoom.values()];
@@ -4957,13 +5103,22 @@ async function admitVideoOnSfu(
   }
   const seated = getRoomPeers(voiceChannelId);
   const known = rooms.find((room) => room.channelId === voiceChannelId);
-  const candidate: SfuRoomLoad = {
-    channelId: voiceChannelId,
-    transport: "livekit",
-    participants: Math.max(known?.participants ?? 0, seated.length, 1),
-    videoPublishers:
-      Math.max(known?.videoPublishers ?? 0, countVideoPublishers(seated)) + 1,
-  };
+  const candidate = withOneMore(
+    {
+      channelId: voiceChannelId,
+      transport: "livekit",
+      participants: Math.max(known?.participants ?? 0, seated.length, 1),
+      cameraPublishers: Math.max(
+        known?.cameraPublishers ?? 0,
+        countPublishers(seated).cameras,
+      ),
+      screenPublishers: Math.max(
+        known?.screenPublishers ?? 0,
+        countPublishers(seated).screens,
+      ),
+    },
+    reason,
+  );
   const verdict = decideVideoAdmission({ rooms, room: candidate, budgetMbps });
   if (!verdict.admit) {
     // The counter that proves the mechanism runs. Without it a budget that is
@@ -4976,7 +5131,8 @@ async function admitVideoOnSfu(
       addedMbps: Math.round(verdict.addedMbps),
       budgetMbps: verdict.budgetMbps,
       roomSize: candidate.participants,
-      videoPublishers: candidate.videoPublishers,
+      cameraPublishers: candidate.cameraPublishers,
+      screenPublishers: candidate.screenPublishers,
     });
   }
   return verdict.admit;
@@ -5123,18 +5279,22 @@ async function attemptPromotion(
   // nobody turned on would refuse the promotion of a big, silent call for
   // load it is not about to create.
   const known = rooms.find((room) => room.channelId === voiceChannelId);
-  const gainsPublisher = reason === "cameras" || reason === "screens";
-  const gainsParticipant = reason === "room-full" || reason === "room-size";
-  const candidate: SfuRoomLoad = {
-    channelId: voiceChannelId,
-    transport: "mesh",
-    participants:
-      Math.max(known?.participants ?? 0, seated.length, 1) +
-      (gainsParticipant ? 1 : 0),
-    videoPublishers:
-      Math.max(known?.videoPublishers ?? 0, countVideoPublishers(seated)) +
-      (gainsPublisher ? 1 : 0),
-  };
+  const candidate = withOneMore(
+    {
+      channelId: voiceChannelId,
+      transport: "mesh",
+      participants: Math.max(known?.participants ?? 0, seated.length, 1),
+      cameraPublishers: Math.max(
+        known?.cameraPublishers ?? 0,
+        countPublishers(seated).cameras,
+      ),
+      screenPublishers: Math.max(
+        known?.screenPublishers ?? 0,
+        countPublishers(seated).screens,
+      ),
+    },
+    reason,
+  );
   const verdict = decidePromotion({
     liveKitConfigured: configuredTransport() === "livekit",
     sfuReachable: stats?.reachable ?? null,

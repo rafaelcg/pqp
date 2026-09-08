@@ -614,6 +614,32 @@ describe("the screen goes up as simulcast layers", () => {
     expect(roomOptions.adaptiveStream).toBe(true);
   });
 
+  /**
+   * THE SAME PROMISE THE CAMERA NOW MAKES, RE-CHECKED FOR THE SHARE.
+   *
+   * Removing `SCREEN_SHARE_LIMIT.livekit` rests on a share behaving the way
+   * the camera does since PR 382: a small tile receives a small layer, so
+   * twelve shares are not twelve full-size streams into every phone. Shares
+   * have published a ladder since the watch-party work, and this is that fact
+   * stated where the count's removal depends on it, so a regression to one
+   * layer fails here rather than in production.
+   */
+  it("offers a small share layer for a small tile, the way the camera does", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+
+    const options = encodingFor(Track.Source.ScreenShare);
+    expect(options?.simulcast).toBe(true);
+    // 1080p on top, two smaller copies under it for adaptiveStream to pick.
+    expect(options?.screenShareSimulcastLayers?.map((l) => l.height)).toEqual([
+      360, 720,
+    ]);
+    const smallest = options?.screenShareSimulcastLayers?.[0];
+    expect(smallest?.maxBitrate).toBeLessThan(
+      options?.screenShareEncoding?.maxBitrate ?? 0,
+    );
+  });
+
   it("publishes only the rungs below an explicit 720p", async () => {
     const sfu = await session();
     await sfu.setScreenQuality("720p");

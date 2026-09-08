@@ -242,11 +242,13 @@ server has fewer than ten members, which is a guess about crowd size and says
 nothing about how many of the five who turned up want their faces on.
 
 **What happens now.** When a `set-camera` (or `set-sharing-screen`) would cross
-the mesh cap and LiveKit is configured, the server moves the whole room to the
-SFU and the camera turns on. `SCREEN_SHARE_LIMIT.livekit` is 4, so that is the
-share cap after the move. **`CAMERA_LIMIT.livekit` is `null` since
-2026-09-08**: there is no camera count on the voice server at all, only the
-box's budget. See "Cameras: the ladder, the bounded grid and the end of the
+the mesh limit and LiveKit is configured, the server moves the whole room to
+the SFU and the camera turns on. **Neither `CAMERA_LIMIT.livekit` nor
+`SCREEN_SHARE_LIMIT.livekit` is a number since 2026-09-08**: both are `null`,
+so after the move there is no count at all, only the box's budget. The mesh
+limit that triggered the move is itself measured now rather than fixed at 3
+cameras and 2 shares. See "Unlimited screens, and a mesh limit that is a
+measurement" and "Cameras: the ladder, the bounded grid and the end of the
 count" below.
 
 **Four triggers, one path (2026-09-08).** The same machinery answers three more
@@ -574,11 +576,11 @@ Neither native mobile client shares the defect: iOS drops every non-video `RPSam
 
 Publish/subscribe works: `publishScreen` tags the track `Track.Source.ScreenShare`, the far side subscribes it into `RemotePeer.screenStream`, and `unpublishScreen` clears it. Verified with two browsers against a live LiveKit.
 
-Concurrent presenters are capped in `ws/voice.ts` on the `set-sharing-screen` frame: **2 on mesh, 4 on LiveKit** (`SCREEN_SHARE_LIMIT`). A claimant past the cap gets `screen-share-denied` and the roster does not add them. Two caveats, both still true under a cap:
+Concurrent presenters are governed in `ws/voice.ts` on the `set-sharing-screen` frame. Since 2026-09-08 there is **no count on the voice server** (`SCREEN_SHARE_LIMIT.livekit` is `null`; the box is priced instead) and the **mesh number is derived from the room's measured uplink** rather than being the constant 2. Both are described under "Unlimited screens, and a mesh limit that is a measurement" below. A claimant past whatever the limit is gets `screen-share-denied` and the roster does not add them. Two caveats, both still true under a limit:
 
 - **The cap binds the roster, not the media.** A client that publishes a `ScreenShare` track without announcing it is not stopped by anything — LiveKit has no such rule and the server cannot see the track. Every other participant subscribes and decodes it. It is never *rendered*, because `ScreenStage` is driven by `screenSharePeerIds` from the roster, so this is a bandwidth-grief vector rather than a way to hijack a slot.
 - **The honest client publishes before it is answered.** `startScreenShare()` sends `set-sharing-screen` and publishes to the SFU without waiting; on a denial, `screen-share-denied` arrives a round trip later and unpublishes. In the simultaneous-click race at the cap a spare screen track is briefly live on the SFU.
-- **Cap 4:** with `adaptiveStream` on (below) a thumbnail share asks for its 360p layer, so four concurrent shares no longer mean four full-rate streams per viewer. Mesh is unchanged: `tuneScreenSender` already budgets per presenter across the peer count, so a second presenter adds no encode cost to the first.
+- **Why a count was safe to drop:** with `adaptiveStream` on (below) a thumbnail share asks for its 360p layer, so concurrent shares do not mean concurrent full-rate streams per viewer. Mesh is different in kind: `tuneScreenSender` budgets per presenter across the peer count, so a second presenter adds no encode cost to the first, but every presenter still uploads one copy per viewer off their own link, which is what the mesh limit is now measured against.
 
 ### Bandwidth: simulcast and receive quality (2026-09-06)
 
@@ -595,6 +597,86 @@ Why: a 100-viewer watch party on 5 Sep 2026 consumed 323 GB of SFU downstream in
 `degradationPreference: "maintain-framerate"` and 30 fps stay. The top layer is the **capture size** on purpose: livekit-client declares each layer's dimensions to the SFU and routes a viewer's size request against that declaration, so the session asks the capture for the plan's height with `applyConstraints({ height: { max } })` rather than scaling the top layer behind the library's back. A display capture climbs back to 1080 when the limit is lifted.
 
 **Large-room cap.** Above `LARGE_ROOM_PARTICIPANTS` (20, counted off `room.remoteParticipants` plus self) the top is held at **720p / 1.5 Mbps** unless the presenter picked **1080p by name** in the send menu, which steps around the cap. The menu says so while it acts ("Large room: your screen goes out at 720p to keep it smooth for everyone. Pick 1080p to send it anyway."). A change of top *height* on a live share (crossing 20 people, or choosing 1080p mid-share) republishes the same track with `unpublishTrack(track, false)` so the capture survives; viewers see one blink at that moment. A change of *ceiling* at the same height moves the sender in place, no blink, as before.
+
+### Unlimited screens, and a mesh limit that is a measurement (2026-09-08)
+
+The question was "unlimited webcams and screens for all channels, can we do
+that". The answer is different on each transport and the code now says so in
+both places.
+
+**On the voice server: yes, subject to the box.** `SCREEN_SHARE_LIMIT.livekit`
+was 4, which was Zoom's number rather than this box's. A presenter uploads
+once whatever the room size, so a fifth share costs its publisher exactly what
+the first cost. What it costs the BOX is egress once per viewer, and that is
+already priced per room. So the count is `null` and the price is the rule, the
+same move `CAMERA_LIMIT.livekit` made in the section below. A room already on
+the SFU asks `decideVideoAdmission`; over `VOICE_PROMOTION_MAX_SFU_MBPS` the
+claim comes back as `screen-share-denied` and the client says "no room for
+more screens right now" rather than naming a limit that is about to change.
+
+**A share is charged at a share's bitrate.** `VIDEO_STREAM_MBPS` was 1.5 for
+everything, which is the top of the camera ladder on Auto. Dropping the share
+count without fixing that would have swapped a count that was too strict for a
+price that was too generous by nearly three, which is worse: a count refuses
+one person, a wrong price takes the box down. `estimateRoomMbps` now charges
+`CAMERA_STREAM_MBPS` (1.5) per camera and `screenStreamMbps(participants)` per
+share, which is **4 Mbit/s** (the top rung a presenter can pick by name) in a
+room at or below `LARGE_ROOM_PARTICIPANTS` and **1.5** above it, because that
+is exactly where `screenSimulcastPlan` holds the published top layer. Shares
+have published a simulcast ladder since 2026-09-06, so a small tile of a share
+already receives a small layer the way a camera now does;
+`livekit-session-quality.test.ts` pins that where the count's removal depends
+on it.
+
+**On mesh: no, and the old numbers were wrong in the other direction.** A mesh
+publication is a full copy per viewer off one uplink, so "unlimited" there is
+not a policy anybody can choose, it is a link nobody has. But 2 shares and 3
+cameras were guesses about a typical Brazilian home connection applied to every
+room on every connection: a three-person call on fibre was held to two shares
+with tens of megabits going spare, and an eight-person call on 4G was allowed
+three cameras, which is twenty-one uplink copies. `screen-upload-budget.ts`
+measures the real link. `meshVideoLimit` in `@pqp/shared` is what reads it:
+
+```
+limit = clamp( budget / ((roomSize - 1) x floor), 1, hard ceiling )
+```
+
+`floor` is the smallest copy worth sending (800 kbps for a screen, 500 kbps for
+a camera, both just above the bottom rung of their own SFU ladder). The hard
+ceiling is 4 screens and 6 cameras, and it exists because the derivation reads
+an **uplink** while a fourth share also costs every viewer's **downlink** and
+decode, which no browser reports. Never below one: a weak link is not refused
+its first share, it gets a smaller picture, which is what the budget controller
+has done continuously since PR 340.
+
+**Nothing changes for a client that reports nothing.** `uplinkBps` is an
+optional field on `set-sharing-screen` and `set-camera`; absent, the limit is
+exactly `SCREEN_SHARE_LIMIT.mesh` and `CAMERA_LIMIT.mesh` as before. Every
+native client is in that group today.
+
+**Reaching the limit still promotes.** On a deployment with LiveKit the mesh
+number is not a wall, it is when the room moves. That makes a limit that falls
+on a weak link the better outcome rather than the worse one: on the box that
+camera costs its publisher one uplink instead of four copies.
+
+**What a client cannot gain by lying.** A report is clamped to
+`[MESH_UPLINK_MIN_BPS, MESH_UPLINK_MAX_BPS]` (1 to 16 Mbit/s, the window the
+budget controller itself runs in), so the largest possible lie is what an
+honest person on fibre already reports. The server then takes the
+**narrowest** report in the room (`narrowestUplinkBps`), so a bigger number
+cannot lift a limit somebody else's honest reading has already set. And on
+mesh the copies a report buys are uploaded by the person who sent it and by
+nobody else. On the voice server, where the cost genuinely is shared, no client
+number is read at all: `decideVideoAdmission` prices the room from the roster.
+The measurement is not carried across a resume and is not in the registry row,
+because a measurement is about a link at a moment.
+
+**The stage holds two slots back.** "Every share is kept" was written when
+there could be at most four; with the count gone, twelve shares would take
+every tile and a grid with no faces in it, not even your own, is not a call.
+`stageTileSlots` gives shares at most `limit - STAGE_FACE_SLOTS_HELD` slots
+whenever there is anybody else to draw, and all of them when the call really is
+nothing but screens.
 
 ### Cameras: the ladder, the bounded grid and the end of the count (2026-09-08)
 
@@ -643,12 +725,13 @@ question "does one more camera fit" is about the box's egress, and only the
 server can answer it. `decideVideoAdmission` in `server/src/voice/promotion.ts`
 is the same budget the promotion guard already used, asked by a room that is
 already on the SFU: the asking room is taken out of the box's total and added
-back at what it will cost with the new publication
-(`publishers x participants x 1.5 Mbit/s`), and over
+back at what it will cost with the new publication (cameras at 1.5 Mbit/s and
+shares at their own rate, times the participants), and over
 `VOICE_PROMOTION_MAX_SFU_MBPS` (600) the camera is refused with `camera-denied`
-and `voice.videoAdmissionRefused` in the log. **`CAMERA_LIMIT.mesh` is still 3
-and does not move**: a mesh camera is a full uplink copy per peer, and the
-fourth one still promotes the room. A camera that is only re-declaring itself
+and `voice.videoAdmissionRefused` in the log. **The mesh camera limit is still physics**: a
+mesh camera is a full uplink copy per peer, and the camera past the limit still
+promotes the room. Since 2026-09-08 that limit is measured rather than fixed at
+3, see the section above. A camera that is only re-declaring itself
 (a webcam switch mints a new stream id) is never priced, and turning a camera
 off is never refused.
 

@@ -18,6 +18,8 @@
  * than with no camera, and that promise is only worth making if it is pinned.
  */
 
+import { LARGE_ROOM_PARTICIPANTS } from "@pqp/shared";
+
 /** The user-facing choices. `auto` is the default and always will be. */
 export const VIDEO_QUALITIES = [
   "auto",
@@ -232,7 +234,7 @@ export function screenScaleFactor(
  * viewer. Twenty is where "a few friends" stops being a fair description of
  * the room, and it is well under the point where the bill becomes the story.
  */
-export const LARGE_ROOM_PARTICIPANTS = 20;
+export { LARGE_ROOM_PARTICIPANTS };
 
 /** What a large room's top layer is held to, unless 1080p was chosen by name. */
 export const LARGE_ROOM_SCREEN_HEIGHT = 720;

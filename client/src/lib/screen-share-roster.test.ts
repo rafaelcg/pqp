@@ -3,6 +3,7 @@ import {
   audibleScreenPeerIds,
   isCameraAtCap,
   isScreenShareAtCap,
+  videoLimitOf,
   nextScreenShareFocus,
 } from "./screen-share-roster";
 
@@ -41,9 +42,32 @@ describe("isScreenShareAtCap", () => {
     expect(isScreenShareAtCap(["a", "b"], "me", "mesh")).toBe(true);
   });
 
-  it("uses the LiveKit cap of four", () => {
-    expect(isScreenShareAtCap(["a", "b", "c"], "me", "livekit")).toBe(false);
-    expect(isScreenShareAtCap(["a", "b", "c", "d"], "me", "livekit")).toBe(true);
+  // THE VOICE SERVER HAS NO SHARE COUNT EITHER, since 2026-09-08. Four was
+  // Zoom's number, not this box's; the box is priced instead
+  // (`decideVideoAdmission`), and a refusal arrives in words.
+  it("never caps a voice-server room, however many shares are up", () => {
+    const many = Array.from({ length: 20 }, (_, at) => `p${at}`);
+    expect(isScreenShareAtCap(["a", "b", "c", "d"], "me", "livekit")).toBe(
+      false,
+    );
+    expect(isScreenShareAtCap(many, "me", "livekit")).toBe(false);
+  });
+
+  it("uses the measured link on mesh, not the constant", () => {
+    // Three people on fibre: the constant said two, the link says more.
+    expect(
+      isScreenShareAtCap(["a", "b"], "me", "mesh", false, {
+        roomSize: 3,
+        uplinkBps: 16_000_000,
+      }),
+    ).toBe(false);
+    // Five people on 2 Mbit/s: one share is already four copies.
+    expect(
+      isScreenShareAtCap(["a"], "me", "mesh", false, {
+        roomSize: 5,
+        uplinkBps: 2_000_000,
+      }),
+    ).toBe(true);
   });
 });
 
@@ -65,9 +89,43 @@ describe("isCameraAtCap", () => {
     expect(isCameraAtCap(many.slice(0, 8), "me", "livekit")).toBe(false);
   });
 
-  it("still caps mesh at three, which is physics and does not move", () => {
+  it("still caps mesh at three when nothing has been measured", () => {
     expect(isCameraAtCap(["a", "b"], "me", "mesh")).toBe(false);
     expect(isCameraAtCap(["a", "b", "c"], "me", "mesh")).toBe(true);
     expect(isCameraAtCap(["a", "b", "c", "d"], "me", "mesh")).toBe(true);
+  });
+
+  it("moves that mesh cap in both directions once the link is measured", () => {
+    const fibre = { roomSize: 3, uplinkBps: 16_000_000 };
+    const weak = { roomSize: 5, uplinkBps: 2_000_000 };
+    expect(isCameraAtCap(["a", "b", "c"], "me", "mesh", false, fibre)).toBe(
+      false,
+    );
+    expect(isCameraAtCap(["a"], "me", "mesh", false, weak)).toBe(true);
+  });
+});
+
+describe("videoLimitOf", () => {
+  it("has no number to show on the voice server", () => {
+    const state = {
+      remotePeers: [1, 2, 3],
+      uplinkBps: null,
+      roomTransport: "livekit" as const,
+    };
+    expect(videoLimitOf(state, "screens")).toBeNull();
+    expect(videoLimitOf(state, "cameras")).toBeNull();
+  });
+
+  it("counts ourselves into the room size", () => {
+    // Two remote peers is a room of three, which is two viewers per copy.
+    const state = {
+      remotePeers: [1, 2],
+      uplinkBps: 2_000_000,
+      roomTransport: "mesh" as const,
+    };
+    expect(videoLimitOf(state, "screens")).toBe(1);
+    expect(
+      videoLimitOf({ ...state, uplinkBps: 16_000_000 }, "screens"),
+    ).toBeGreaterThan(1);
   });
 });

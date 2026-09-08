@@ -25,9 +25,7 @@ import {
   connectionProviderFromPath,
   joinIntentFromSearch,
   normalizeHandle,
-  CAMERA_LIMIT,
   Permission,
-  SCREEN_SHARE_LIMIT,
   publicProfileDisplayUrl,
   validateHandle,
   buildReplyExcerpt,
@@ -188,6 +186,8 @@ import { VoiceStatusBar } from "@/components/voice/voice-status-bar";
 import {
   isCameraAtCap,
   isScreenShareAtCap,
+  meshRoomLinkOf,
+  videoLimitOf,
 } from "@/lib/screen-share-roster";
 import { CallRatingPrompt } from "@/components/voice/call-rating-prompt";
 import { useCallRating } from "@/hooks/use-call-rating";
@@ -4693,6 +4693,7 @@ function MainAppContent({
               voiceState.peerId,
               voiceState.roomTransport,
               voiceState.canPromoteTransport,
+              meshRoomLinkOf(voiceState),
             ) && !voiceState.isCameraOn
           }
           shareCappedOut={
@@ -4701,10 +4702,11 @@ function MainAppContent({
               voiceState.peerId,
               voiceState.roomTransport,
               voiceState.canPromoteTransport,
+              meshRoomLinkOf(voiceState),
             ) && !voiceState.isSharingScreen
           }
-          cameraLimit={CAMERA_LIMIT[voiceState.roomTransport ?? "mesh"]}
-          shareLimit={SCREEN_SHARE_LIMIT[voiceState.roomTransport ?? "mesh"]}
+          cameraLimit={videoLimitOf(voiceState, "cameras")}
+          shareLimit={videoLimitOf(voiceState, "screens")}
           onToggleCamera={() => void voice.toggleCamera()}
           onToggleScreenShare={() => {
             if (voiceState.isSharingScreen) {

@@ -3,9 +3,15 @@ import {
   DEFAULT_SCREEN_UPLOAD_BUDGET_BPS,
   MAX_SCREEN_UPLOAD_BUDGET_BPS,
   MIN_SCREEN_UPLOAD_BUDGET_BPS,
+  measuredUploadBudgetBps,
   nextScreenUploadBudget,
   readAvailableOutgoingBps,
 } from "./screen-upload-budget";
+import {
+  MESH_DEFAULT_UPLINK_BPS,
+  MESH_UPLINK_MAX_BPS,
+  MESH_UPLINK_MIN_BPS,
+} from "@pqp/shared";
 
 const M = 1_000_000;
 
@@ -274,5 +280,47 @@ describe("reading the uplink estimate off a stats report", () => {
       ],
     ]);
     expect(readAvailableOutgoingBps(map)).toBe(4 * M);
+  });
+});
+
+/**
+ * THE READING THE SERVER IS TOLD (2026-09-08).
+ *
+ * `meshVideoLimit` in `@pqp/shared` decides how many cameras and shares a mesh
+ * room may hold from this number, and the controller above decides what
+ * bitrate each of them gets from this number. Two models of one link is how
+ * the screen controller ended up with four in a day, so the outlier rule is
+ * shared and pinned here.
+ */
+describe("measuredUploadBudgetBps", () => {
+  it("is the mean of the sharing paths, times the room", () => {
+    expect(measuredUploadBudgetBps([2 * M, 2 * M, 2 * M])).toBeCloseTo(6 * M);
+  });
+
+  it("drops one bottlenecked path rather than reading it as the link", () => {
+    // A fibre room with one viewer on hotel wifi is a fibre room.
+    expect(measuredUploadBudgetBps([50_000, 4 * M, 4 * M])).toBeCloseTo(12 * M);
+  });
+
+  it("keeps the narrow paths when they are the majority", () => {
+    // Then they are not outliers, they are the room.
+    const measured = measuredUploadBudgetBps([4 * M, 200_000, 200_000])!;
+    expect(measured).toBeLessThan(6 * M);
+  });
+
+  it("has nothing to say about a 1:1 call or an unreadable room", () => {
+    // One connection is the browser's to govern; nothing readable is not a
+    // measurement of zero.
+    expect(measuredUploadBudgetBps([4 * M])).toBeNull();
+    expect(measuredUploadBudgetBps([null, null])).toBeNull();
+    expect(measuredUploadBudgetBps([])).toBeNull();
+  });
+
+  it("agrees with the window the shared limit believes reports inside", () => {
+    // The two files cannot import each other's reasoning, so the numbers are
+    // pinned against each other here.
+    expect(MESH_DEFAULT_UPLINK_BPS).toBe(DEFAULT_SCREEN_UPLOAD_BUDGET_BPS);
+    expect(MESH_UPLINK_MIN_BPS).toBe(MIN_SCREEN_UPLOAD_BUDGET_BPS);
+    expect(MESH_UPLINK_MAX_BPS).toBe(MAX_SCREEN_UPLOAD_BUDGET_BPS);
   });
 });

@@ -1,7 +1,11 @@
+<<<<<<< HEAD
 import {
   MESH_ROOM_PROMOTION_SIZE,
   type VoiceRoomTransport,
 } from "@pqp/shared";
+=======
+import { LARGE_ROOM_PARTICIPANTS, type VoiceRoomTransport } from "@pqp/shared";
+>>>>>>> dfccc56e (Unlimited screens on the voice server, and a mesh limit that is measured)
 
 /**
  * WHEN A MESH ROOM MAY BE MOVED TO THE SFU, AND WHAT THAT COSTS THE BOX.
@@ -32,15 +36,56 @@ import {
  */
 
 /**
- * What one video publication costs, in and out, per participant.
+ * What one CAMERA costs, in and out, per participant.
  *
- * 1.5 Mbit/s is the large-room cap the client already applies above
- * `LARGE_ROOM_PARTICIPANTS` (`client/src/lib/video-quality.ts`), and the rate
- * every measured run in `docs/CAPACITY.md` was made at. A small room's camera
- * may ask for more (auto is 3 Mbit/s), so this is a floor, not a promise, and
- * the budget below is set well under the box's measured ceiling to absorb it.
+ * 1.5 Mbit/s is the top of the camera ladder on Auto (`cameraBitrateFor` in
+ * `client/src/lib/video-quality.ts`), which is the rung nearly every camera in
+ * this product is on, and the rate every measured run in `docs/CAPACITY.md`
+ * was made at. An explicit 1080p camera asks for 2.5, so this is a working
+ * figure rather than a hard worst case, and the budget below is set well under
+ * the box's measured ceiling to absorb the difference.
  */
-export const VIDEO_STREAM_MBPS = 1.5;
+export const CAMERA_STREAM_MBPS = 1.5;
+
+/**
+ * Kept under its old name so nothing that only ever meant a camera has to
+ * change. New code should say which of the two it means.
+ */
+export const VIDEO_STREAM_MBPS = CAMERA_STREAM_MBPS;
+
+/**
+ * What one SCREEN SHARE costs, in and out, per participant, in a room small
+ * enough that the presenter may spend what they like.
+ *
+ * A SHARE IS NOT A CAMERA AND PRICING IT AS ONE WAS WRONG BY A FACTOR OF
+ * NEARLY THREE. `SCREEN_BITRATES["1080p"]` is 4 Mbit/s and Auto is 3, against
+ * a camera's 1.5, and the reason is in `video-quality.ts`: a talking head is a
+ * still background with a moving oval and inter-frame prediction eats it
+ * alive, while a shared screen is a game or a film or scrolling text, which is
+ * full-frame motion with hard edges the codec cannot blur. 4 rather than 3
+ * because the budget prices the worst case a presenter can actually ask for,
+ * and 1080p is one menu item away.
+ */
+export const SCREEN_STREAM_MBPS = 4;
+
+/**
+ * What one screen share costs in a room above `LARGE_ROOM_PARTICIPANTS`.
+ *
+ * The client holds the top layer to `LARGE_ROOM_SCREEN_BITRATE` there unless
+ * 1080p was chosen by name (`screenSimulcastPlan`), and a big room is exactly
+ * where the multiplication by the audience makes the number matter. Pricing
+ * every large room at 4 Mbit/s would have refused a hundred-person watch party
+ * that the box carries comfortably, which is the opposite mistake to the one
+ * this constant fixes.
+ */
+export const LARGE_ROOM_SCREEN_MBPS = 1.5;
+
+/** What a share in a room of this size is charged, in Mbit/s per participant. */
+export function screenStreamMbps(participants: number): number {
+  return participants > LARGE_ROOM_PARTICIPANTS
+    ? LARGE_ROOM_SCREEN_MBPS
+    : SCREEN_STREAM_MBPS;
+}
 
 /**
  * The default ceiling, in Mbit/s of estimated SFU traffic, past which a room
@@ -108,27 +153,40 @@ export interface SfuRoomLoad {
   transport: VoiceRoomTransport;
   /** Seats in the room, orphans included: an orphan's media is still flowing. */
   participants: number;
-  /** Seats publishing a camera or a screen share right now. */
-  videoPublishers: number;
+  /** Seats publishing a camera right now. */
+  cameraPublishers: number;
+  /**
+   * Seats sharing a screen right now, counted apart from the cameras because
+   * a share costs the box several times what a face does. One person doing
+   * both is in both counts, which is right: they publish two tracks.
+   */
+  screenPublishers: number;
 }
 
 /**
  * What one room asks of the box: every publication, up once and down to
- * everybody.
+ * everybody, each charged at what its own kind actually costs.
  *
  * `publishers * participants` rather than `publishers * (participants - 1)`
  * because the publisher's own uplink is on the same box as the downlinks it
  * feeds, and the box's limit is the socket, not the direction. A six-person
  * room with four 720p cameras is 4 * 6 * 1.5 = 36 Mbit/s, which is the figure
- * the capacity document uses for exactly this shape (4 in, 20 out).
+ * the capacity document uses for exactly this shape (4 in, 20 out). The same
+ * room with one share instead is 1 * 6 * 4 = 24, and that difference is the
+ * whole reason the two counts are kept apart: pricing that share as a camera
+ * said 9.
  */
 export function estimateRoomMbps(room: SfuRoomLoad): number {
   if (room.transport !== "livekit") {
     return 0;
   }
-  const publishers = Math.max(0, room.videoPublishers);
   const participants = Math.max(0, room.participants);
-  return publishers * participants * VIDEO_STREAM_MBPS;
+  const cameras = Math.max(0, room.cameraPublishers);
+  const screens = Math.max(0, room.screenPublishers);
+  return (
+    participants *
+    (cameras * CAMERA_STREAM_MBPS + screens * screenStreamMbps(participants))
+  );
 }
 
 /** The whole box, as far as this cluster can see it. */
