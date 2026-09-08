@@ -1,9 +1,25 @@
 name: Electron
 
+# Packaging is for a desktop artifact, not a merge gate. A docs-only push
+# to main used to start three runners (including a signed macOS build) and
+# fail on a stale CSC_KEY_PASSWORD. workflow_dispatch always runs. On main
+# (and on a v* tag), only a change that can affect the binary does.
+#
+# tags and paths both apply: a `v*` tag on a commit that touches none of
+# these paths will not run — bump electron/package.json (the version) when
+# you cut a release, or use workflow_dispatch.
 on:
   push:
     branches: [main]
     tags: ["v*"]
+    paths:
+      - "electron/**"
+      - "client/**"
+      - "packages/shared/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - "package.json"
+      - ".github/workflows/electron.yml"
   workflow_dispatch:
 
 concurrency:

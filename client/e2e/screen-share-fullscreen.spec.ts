@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
+  ensureServer,
   leaveVoiceIfConnected,
   openApp,
   waitUntilVoiceConnected,
@@ -45,6 +46,12 @@ test.use({
 });
 
 async function ensureVoiceChannel(): Promise<void> {
+  // The first server has to exist before it can be given a channel, and on a
+  // fresh database nothing has made one yet. Seven other voice specs already
+  // open with this line; these two did not, and got away with it only because
+  // a shard-mate happened to run `openApp` (which calls `ensureServer`) first.
+  // Splitting the media specs onto their own shards removed that accident.
+  await ensureServer();
   const res = await fetch(`${API}/api/servers`, { headers });
   const { servers } = (await res.json()) as { servers: { id: string }[] };
   const serverId = servers[0]!.id;
