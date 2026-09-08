@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
+import {
+  markChannelSessionEnded,
+  markChannelSessionLive,
+} from "../services/channel-sessions.js";
 import { z } from "zod";
 import {
   isClientRelayMessage,
@@ -3060,6 +3064,21 @@ export async function handleVoiceMessage(
       ? (payload.audioStreamId ?? null)
       : null;
     writePeerRow(peer);
+    // Watch party scheduling seam: a scheduled session on this channel flips
+    // live the moment anyone starts sharing here, and ends when the last
+    // screen-share in the room stops. Fire-and-forget: a missed flip costs a
+    // stale card, never a broken stream.
+    if (payload.sharing) {
+      void markChannelSessionLive(peer.voiceChannelId).catch((error) => {
+        console.error("[channel-sessions] markLive failed:", error);
+      });
+    } else if (
+      !getRoomPeers(peer.voiceChannelId).some((p) => p.sharingScreen)
+    ) {
+      void markChannelSessionEnded(peer.voiceChannelId).catch((error) => {
+        console.error("[channel-sessions] markEnded failed:", error);
+      });
+    }
     await broadcastRoster(peer.voiceChannelId, {
       kind: "updated",
       peer: toParticipant(peer),

@@ -3,6 +3,7 @@ export * from "./attachments.js";
 export * from "./audit.js";
 export * from "./auth.js";
 export * from "./avatars.js";
+export * from "./channel-sessions.js";
 export * from "./chat.js";
 export * from "./chat-text.js";
 export * from "./communities.js";

@@ -1113,3 +1113,68 @@ export async function sendCallPush(event: CallPushEvent): Promise<void> {
   });
   await deliverToUsers(recipients, () => payload, transports, CALL_DELIVERY);
 }
+
+// ------------------------------------------------------------ watch party session reminders
+
+/**
+ * A watch-party session reminder, as `sendDueChannelSessionReminders` in
+ * channel-sessions.ts concluded it. Unlike a call or a message, this can fire
+ * from a worker process with no live socket registry of its own (see
+ * COLD_PATHS.md), so `userIds` is pushed to unconditionally rather than
+ * narrowed to "no live socket anywhere" — a person who is online gets both
+ * the WS nudge (sent alongside this, in the same process, when there is one)
+ * and a push, which is redundant but never wrong.
+ */
+export interface ChannelSessionReminderEvent {
+  userIds: readonly string[];
+  title: string;
+  channelId: string;
+  kind: "before" | "live";
+}
+
+export function buildChannelSessionReminderPayload(
+  event: ChannelSessionReminderEvent,
+): PushPayload {
+  return {
+    title: truncateLabel(event.title),
+    body: event.kind === "live" ? "Live now" : "Starting in 10 minutes",
+    path: `/app/channels/${event.channelId}`,
+    tag: `channel-session:${event.channelId}`,
+  };
+}
+
+const SESSION_REMINDER_DELIVERY: PushDeliveryOptions = {
+  ttlSeconds: PUSH_TTL_SECONDS,
+  urgency: "normal",
+};
+
+/** Fire-and-forget, same contract as `pushChannelActivity` / `pushIncomingCall`. */
+export function pushChannelSessionReminder(
+  event: ChannelSessionReminderEvent,
+): void {
+  if (!isAnyPushEnabled() || event.userIds.length === 0) {
+    return;
+  }
+  void sendChannelSessionReminderPush(event).catch((error) => {
+    console.error(
+      `[push] session reminder fan-out failed for channel ${event.channelId}:`,
+      error,
+    );
+  });
+}
+
+export async function sendChannelSessionReminderPush(
+  event: ChannelSessionReminderEvent,
+): Promise<void> {
+  const transports = readTransports();
+  if (!transports) {
+    return;
+  }
+  const payload = buildChannelSessionReminderPayload(event);
+  await deliverToUsers(
+    event.userIds,
+    () => payload,
+    transports,
+    SESSION_REMINDER_DELIVERY,
+  );
+}
