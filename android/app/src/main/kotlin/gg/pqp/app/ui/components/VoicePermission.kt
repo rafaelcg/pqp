@@ -13,10 +13,10 @@ import androidx.core.content.ContextCompat
 /**
  * "Do the thing that needs the microphone", asking first when it must.
  *
- * The same two permissions `ChannelsScreen` asks for before a voice channel,
- * for the same reasons written there: only the microphone gates the call, and
- * notifications are asked in the same breath because the foreground service's
- * notification is how a person gets back to a call. The answer is read back
+ * Every explicit voice action asks for the same two permissions: only the
+ * microphone gates the call. Notifications are asked in the same breath
+ * because the foreground service's notification is how a person gets back to
+ * a call. The answer is read back
  * from the permission itself, not from the results map, which only carries
  * what was asked this time.
  *

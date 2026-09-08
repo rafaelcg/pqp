@@ -8,6 +8,10 @@ struct PqpApp: App {
     /// arrive while the user is anywhere, and the stage has to outlive whatever
     /// they navigate to mid-call.
     @State private var call = CallModel()
+    /// App-wide for the same reason the DM call is. A voice channel session
+    /// owned by its screen ended the moment that screen was popped, and popping
+    /// it is how you get back to the transcript.
+    @State private var voice = VoiceModel()
     /// App-wide for the same reason the call is: a voice screen is popped off
     /// the navigation stack at exactly the moment the call it hosted ended, so
     /// a question owned by that screen would be destroyed before it could be
@@ -37,6 +41,7 @@ struct PqpApp: App {
             RootView(push: push)
                 .environment(session)
                 .environment(call)
+                .environment(voice)
                 .environment(ratings)
                 // Clerk's views read `@Environment(Clerk.self)`. Configuring is
                 // not enough — without this injection, presenting `AuthView`
@@ -74,6 +79,7 @@ private struct ClerkEnvironment: ViewModifier {
 struct RootView: View {
     @Environment(SessionStore.self) private var session
     @Environment(CallModel.self) private var call
+    @Environment(VoiceModel.self) private var voice
     @Environment(CallRatingModel.self) private var ratings
     @Environment(\.scenePhase) private var scenePhase
 
@@ -144,6 +150,21 @@ struct RootView: View {
             }
         }
         .animation(Motion.standard, value: ratings.pending)
+        // A collapsed voice channel keeps a strip at the bottom of every
+        // screen, the transcript included, so leaving it to look at something
+        // else does not mean losing the room. One banner from the root rather
+        // than one per screen: the first cut also drew one on the transcript,
+        // and the two were on screen together.
+        .overlay(alignment: .bottom) {
+            if session.phase == .ready, voice.isLive, voice.isCollapsed, ratings.pending == nil {
+                VoiceCollapsedBanner()
+                    .padding(.horizontal, Metrics.hPadding)
+                    .padding(.bottom, 76)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(Motion.standard, value: voice.isCollapsed)
+        .animation(Motion.standard, value: voice.isLive)
         // Presented from the root rather than from the chat screen: a call
         // answered from the servers tab has to have somewhere to appear, and
         // collapsing it must not depend on which screen started it.
@@ -154,6 +175,20 @@ struct RootView: View {
             set: { if !$0 { call.isCollapsed = true } }
         )) {
             CallStageView()
+        }
+        // The voice channel stage, from the root for the same reason. Its own
+        // cover rather than a branch inside the call's: the two are different
+        // models with different lifetimes, and a DM ring can arrive mid-room.
+        .fullScreenCover(isPresented: Binding(
+            get: { voice.isLive && !voice.isCollapsed && voice.channel != nil },
+            // Swipe-down means "let me read something", not "hang up".
+            set: { if !$0 { voice.isCollapsed = true } }
+        )) {
+            if let channel = voice.channel {
+                NavigationStack { VoiceView(channel: channel) }
+                    .preferredColorScheme(.dark)
+                    .tint(Palette.signal)
+            }
         }
         // The pre-permission explainer. A sheet from the root rather than from
         // the hub because it is about the app, not about a screen — and because

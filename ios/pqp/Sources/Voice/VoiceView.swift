@@ -1,13 +1,19 @@
 import SwiftUI
 import WebRTC
 
+/// The voice channel stage.
+///
+/// Presented from the app root as a cover over whatever is on screen, the way
+/// the DM call stage is, and for the same reason: the session belongs to the
+/// process, not to the screen that started it. This view used to own its
+/// `VoiceModel` and leave the room on disappear, so the one gesture a person
+/// makes after joining, going back to read the transcript, hung up on them.
+/// Now going back collapses the stage to a banner and the call goes on.
 struct VoiceView: View {
     @Environment(SessionStore.self) private var session
     @Environment(CallRatingModel.self) private var ratings
-    @Environment(\.dismiss) private var dismiss
+    @Environment(VoiceModel.self) private var model
     let channel: Channel
-
-    @State private var model = VoiceModel()
 
     var body: some View {
         ZStack {
@@ -82,8 +88,22 @@ struct VoiceView: View {
         }
         .navigationTitle(channel.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Button {
+                    model.isCollapsed = true
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 15, weight: .bold))
+                }
+                .tint(Palette.paper)
+                .accessibilityIdentifier("voice.collapse")
+                .accessibilityLabel("Keep chatting")
+            }
+        }
+        // A no-op when the stage was merely reopened: `join` returns early for
+        // the room we are already in.
         .task { await model.join(channel: channel, session: session, ratings: ratings) }
-        .onDisappear { Task { await model.leave() } }
     }
 
     /// What the header becomes once a shared screen owns the space.
@@ -340,11 +360,10 @@ struct VoiceView: View {
                 .allowsHitTesting(model.status == .connected)
             }
 
+            // Leaving is what closes the cover: it is presented while the
+            // session is live, so there is nothing to dismiss by hand.
             Button {
-                Task {
-                    await model.leave()
-                    dismiss()
-                }
+                Task { await model.leave() }
             } label: {
                 Image(systemName: "phone.down.fill")
                     .font(.system(size: side / 3))
@@ -352,6 +371,8 @@ struct VoiceView: View {
                     .frame(width: side, height: side)
                     .background(Circle().fill(Palette.danger))
             }
+            .accessibilityIdentifier("voice.leave")
+            .accessibilityLabel("Leave")
         }
     }
 
