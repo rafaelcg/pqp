@@ -9,6 +9,7 @@ import {
   injectMarketingHead,
   marketingPageFromMetaPath,
   renderMarketingHead,
+  LANDING_FAQ,
   TELA_FAQ,
   VS_DISCORD_FAQ,
   type MarketingPage,
@@ -172,6 +173,24 @@ describe("the duplicated copy is pinned to the JSON catalogues", () => {
     });
   });
 
+  it("every homepage FAQ pair matches its landing.faq.* twin, both locales", () => {
+    // Same rule: the page renders LANDING_FAQ_IDS in this order and the
+    // JSON-LD must be the same list.
+    const ids = ["safe", "free", "install", "capacity", "import", "data"] as const;
+    expect(LANDING_FAQ.en).toHaveLength(ids.length);
+    expect(LANDING_FAQ["pt-BR"]).toHaveLength(ids.length);
+    ids.forEach((id, index) => {
+      expect(LANDING_FAQ.en[index]).toEqual({
+        question: en[`landing.faq.${id}.q`],
+        answer: en[`landing.faq.${id}.a`],
+      });
+      expect(LANDING_FAQ["pt-BR"][index]).toEqual({
+        question: ptBR[`landing.faq.${id}.q`],
+        answer: ptBR[`landing.faq.${id}.a`],
+      });
+    });
+  });
+
   it("every /tela FAQ pair matches its tela.faq.* twin, both locales", () => {
     // Same rule as above: page order, and the JSON-LD must be the same list.
     const ids = ["download", "vpn", "people", "free", "mobile", "data"] as const;
@@ -224,13 +243,14 @@ describe("renderMarketingHead", () => {
     );
   });
 
-  it("carries FAQPage JSON-LD on /vs-discord and /tela only", () => {
+  it("carries FAQPage JSON-LD on /, /vs-discord and /tela only", () => {
+    expect(renderMarketingHead("/", "pt-BR")).toContain('"FAQPage"');
+    expect(renderMarketingHead("/", "en")).toContain(LANDING_FAQ.en[0]!.question);
     expect(renderMarketingHead("/vs-discord", "pt-BR")).toContain('"FAQPage"');
     expect(renderMarketingHead("/tela", "pt-BR")).toContain('"FAQPage"');
     expect(renderMarketingHead("/tela", "en")).toContain(
       TELA_FAQ.en[0]!.question,
     );
-    expect(renderMarketingHead("/", "pt-BR")).not.toContain('"FAQPage"');
     expect(renderMarketingHead("/beta", "pt-BR")).not.toContain('"FAQPage"');
     expect(renderMarketingHead("/download", "pt-BR")).not.toContain('"FAQPage"');
     expect(renderMarketingHead("/privacy", "pt-BR")).not.toContain('"FAQPage"');

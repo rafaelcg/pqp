@@ -1,22 +1,31 @@
 import {
+  ArrowRight,
+  AtSign,
+  Check,
+  Code2,
   DoorOpen,
+  Import,
   KeyRound,
   LayoutGrid,
-  Link2,
-  MessageSquare,
-  MessagesSquare,
-  Mic,
+  MonitorSmartphone,
   MonitorUp,
-  Search,
-  ShieldCheck,
+  Palette,
   type LucideIcon,
 } from "lucide-react";
-import { type CSSProperties, useEffect, useRef, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { HeroDownload } from "@/components/marketing/hero-download";
 import { MarketingAuthCtas } from "@/components/marketing/marketing-auth-ctas";
 import { MarketingFooter } from "@/components/marketing/marketing-footer";
 import { MarketingNav } from "@/components/marketing/marketing-nav";
+import {
+  ChatFrame,
+  HeroFrame,
+  ImportFrame,
+  RolesFrame,
+  ScreenFrame,
+  VoiceFrame,
+} from "@/components/marketing/product-frames";
 import { Seo } from "@/components/marketing/seo";
 import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { SOURCE_REPO_URL } from "@/lib/downloads";
@@ -27,98 +36,122 @@ function stagger(i: number): CSSProperties {
   return { "--stagger": i } as CSSProperties;
 }
 
-const TRUST_ITEMS = [
-  {
-    key: "landing.trust.openSource",
-    href: SOURCE_REPO_URL,
-    external: true,
-  },
-  { key: "landing.trust.selfHostable", href: "/#hosting" },
-  { key: "landing.trust.voice", href: "/#features" },
-  { key: "landing.trust.inviteCodes", href: "/#features" },
-  { key: "landing.trust.yourKeys", href: "/#hosting" },
-] satisfies {
-  key: MessageKey;
-  href: string;
-  external?: boolean;
-}[];
-
-const HOW_STEPS = [
-  {
-    step: "01",
-    title: "landing.how.step1.title",
-    body: "landing.how.step1.body",
-  },
-  {
-    step: "02",
-    title: "landing.how.step2.title",
-    body: "landing.how.step2.body",
-  },
-  {
-    step: "03",
-    title: "landing.how.step3.title",
-    body: "landing.how.step3.body",
-  },
-] satisfies { step: string; title: MessageKey; body: MessageKey }[];
+/**
+ * Five facts, each of them checkable. The watch party is the one dated claim
+ * on the page and it is real (5 Sep 2026, see docs/HANDOVER-2026-09-07.md);
+ * if the number ever needs softening, delete the row rather than rounding it.
+ */
+const PROOF: { key: MessageKey; href?: string; external?: boolean }[] = [
+  { key: "landing.proof.openSource", href: SOURCE_REPO_URL, external: true },
+  { key: "landing.proof.watchParty", href: "/#voice" },
+  { key: "landing.proof.region", href: "/#faq" },
+  { key: "landing.proof.platforms", href: "/download" },
+  { key: "landing.proof.languages" },
+];
 
 /**
- * Only things that ship today and are on by default. Attachments are absent on
- * purpose — they stay dark unless `S3_*` is configured, so advertising them
- * would be a claim the hosted site cannot honour. Nothing here is aspirational;
- * if a row stops being true, delete the row rather than softening the wording.
+ * The three reasons a group leaves Discord for this, in the order visitors
+ * arrive with them. The screen-share card carries the only claim about another
+ * company's product, and it carries the date so it stays true after the fact
+ * changes. See docs/SEO.md for the fact sheet these are checked against.
  */
-const FEATURES = [
-  {
-    icon: Mic,
-    title: "landing.features.voice.title",
-    body: "landing.features.voice.body",
-  },
+const DISCORD_CARDS: {
+  icon: LucideIcon;
+  title: MessageKey;
+  body: MessageKey;
+  hint?: MessageKey;
+  link?: { key: MessageKey; to: string; external?: boolean };
+}[] = [
   {
     icon: MonitorUp,
-    title: "landing.features.screen.title",
-    body: "landing.features.screen.body",
+    title: "landing.discord.screen.title",
+    body: "landing.discord.screen.body",
+    link: { key: "landing.discord.screen.link", to: "/vs-discord" },
   },
   {
-    icon: MessageSquare,
-    title: "landing.features.chat.title",
-    body: "landing.features.chat.body",
+    icon: Import,
+    title: "landing.discord.import.title",
+    body: "landing.discord.import.body",
+    hint: "landing.discord.import.hint",
+    link: { key: "landing.discord.import.link", to: "/#import" },
   },
   {
-    icon: Search,
-    title: "landing.features.search.title",
-    body: "landing.features.search.body",
+    icon: Code2,
+    title: "landing.discord.own.title",
+    body: "landing.discord.own.body",
+    link: { key: "landing.discord.own.link", to: SOURCE_REPO_URL, external: true },
   },
-  {
-    icon: MessagesSquare,
-    title: "landing.features.dms.title",
-    body: "landing.features.dms.body",
-  },
-  {
-    icon: LayoutGrid,
-    title: "landing.features.structure.title",
-    body: "landing.features.structure.body",
-  },
-  {
-    icon: Link2,
-    title: "landing.features.invites.title",
-    body: "landing.features.invites.body",
-  },
-  {
-    icon: ShieldCheck,
-    title: "landing.features.moderation.title",
-    body: "landing.features.moderation.body",
-  },
-] satisfies { icon: LucideIcon; title: MessageKey; body: MessageKey }[];
+];
 
 /**
- * The three things a community is, sold on the open web.
- *
- * The directory itself is behind sign-in — it reads auth on every route and
- * hides rooms the viewer is banned from, so it is not and will not be an SEO
- * surface. This section is therefore the only public statement that the
- * feature exists, which is why it says what walking into one is like rather
- * than listing what one contains.
+ * The pillars, each with a screenshot of the running app. Only things
+ * that ship today and are on at pqp.gg; the comment on `product-frames.tsx`
+ * says what happens when one stops being true.
  */
+const PILLARS: {
+  id: string;
+  title: MessageKey;
+  body: MessageKey;
+  points: MessageKey[];
+  frame: ReactNode;
+}[] = [
+  {
+    id: "voice",
+    title: "landing.voice.title",
+    body: "landing.voice.body",
+    points: ["landing.voice.point1", "landing.voice.point2", "landing.voice.point3"],
+    frame: <VoiceFrame />,
+  },
+  {
+    id: "screen",
+    title: "landing.screen.title",
+    body: "landing.screen.body",
+    points: ["landing.screen.point1", "landing.screen.point2", "landing.screen.point3"],
+    frame: <ScreenFrame />,
+  },
+  {
+    id: "import",
+    title: "landing.import.title",
+    body: "landing.import.body",
+    points: ["landing.import.point1", "landing.import.point2", "landing.import.point3"],
+    frame: <ImportFrame />,
+  },
+  {
+    id: "chat",
+    title: "landing.chat.title",
+    body: "landing.chat.body",
+    points: ["landing.chat.point1", "landing.chat.point2", "landing.chat.point3"],
+    frame: <ChatFrame />,
+  },
+  {
+    id: "roles",
+    title: "landing.roles.title",
+    body: "landing.roles.body",
+    points: ["landing.roles.point1", "landing.roles.point2", "landing.roles.point3"],
+    frame: <RolesFrame />,
+  },
+];
+
+const MORE: { icon: LucideIcon; title: MessageKey; body: MessageKey; to?: string }[] = [
+  {
+    icon: AtSign,
+    title: "landing.more.handle.title",
+    body: "landing.more.handle.body",
+    to: "/garanta",
+  },
+  {
+    icon: MonitorSmartphone,
+    title: "landing.more.everywhere.title",
+    body: "landing.more.everywhere.body",
+    to: "/download",
+  },
+  {
+    icon: Palette,
+    title: "landing.more.appearance.title",
+    body: "landing.more.appearance.body",
+  },
+];
+
 const COMMUNITY_POINTS = [
   {
     icon: DoorOpen,
@@ -137,27 +170,36 @@ const COMMUNITY_POINTS = [
   },
 ] satisfies { icon: LucideIcon; title: MessageKey; body: MessageKey }[];
 
+/**
+ * The homepage FAQ. The edge middleware serves the same pairs as FAQPage
+ * JSON-LD (`src/lib/marketing-meta.ts`), and `marketing-meta.test.ts` pins the
+ * two copies together in this order, so a question added here without its
+ * edge twin fails the suite rather than silently drifting.
+ */
+export const LANDING_FAQ_IDS = ["safe", "free", "install", "capacity", "import", "data"] as const;
+
+const SECTION = "scroll-mt-20 px-5 py-20 sm:px-8 sm:py-28";
+const H2 = "font-display text-3xl font-bold tracking-tight sm:text-4xl md:text-5xl";
+const EYEBROW = "font-display text-xs font-bold uppercase tracking-[0.22em] text-signal";
+
 export function LandingPage() {
   const { t, locale } = useTranslation();
   const reducedMotion = usePrefersReducedMotion();
-  // The still is what paints first and what stays put if the clip never runs —
-  // a blocked autoplay (iOS Low Power Mode) simply leaves this false.
   const [heroPlaying, setHeroPlaying] = useState(false);
   const [overHero, setOverHero] = useState(true);
   const heroRef = useRef<HTMLElement>(null);
   const heroVideo = useRef<HTMLVideoElement>(null);
 
   // `autoplay` alone is not enough: a tab that mounts in the background leaves
-  // the element idle (networkState IDLE, nothing fetched) and Chrome does not
-  // revisit that on its own, so the loop would never start. Ask directly, and
-  // ask again whenever the tab comes forward.
+  // the element idle and Chrome does not revisit that on its own. Ask directly,
+  // and ask again whenever the tab comes forward.
   useEffect(() => {
     const el = heroVideo.current;
     if (!el) return;
     const start = () => {
       if (el.readyState === 0) el.load();
       void el.play().catch(() => {
-        // Autoplay refused (Low Power Mode, strict settings) — the still stands in.
+        // Autoplay refused (Low Power Mode, strict settings): the still stands in.
       });
     };
     start();
@@ -188,10 +230,11 @@ export function LandingPage() {
         <MarketingNav variant={overHero ? "hero" : "solid"} />
       </div>
 
-      <section
-        ref={heroRef}
-        className="relative -mt-16 flex min-h-[100svh] flex-col overflow-hidden"
-      >
+      {/* Hero. The painting stays as the backdrop, but the product now sits in
+          front of it: a real screenshot of the app, so a visitor knows what
+          it looks like before they read a word. The scrim is heavier than
+          before for the same reason. */}
+      <section ref={heroRef} className="relative -mt-16 overflow-hidden">
         <div className="hero-parallax pointer-events-none absolute inset-0" aria-hidden>
           <img
             src="/images/hero-background.jpg"
@@ -218,239 +261,255 @@ export function LandingPage() {
           )}
         </div>
         <div
-          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/50 via-black/28 to-black/75"
-          aria-hidden
-        />
-        <div
-          className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,transparent_0%,var(--scrim-media)_100%)]"
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/60 via-black/45 to-ink"
           aria-hidden
         />
         <div className="hero-grain pointer-events-none absolute inset-0" aria-hidden />
 
-        <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-5 pb-28 pt-24 text-center sm:px-8">
+        <div className="relative z-10 mx-auto flex max-w-6xl flex-col items-center px-5 pb-10 pt-28 text-center sm:px-8 sm:pt-36">
           <p
-            className="animate-rise font-brand text-6xl font-normal tracking-tight text-white drop-shadow-sm sm:text-7xl md:text-8xl"
+            className={cn("animate-rise", EYEBROW, "text-white/80")}
             style={stagger(0)}
           >
-            pqp
+            {t("landing.hero.eyebrow")}
           </p>
           <h1
-            className="animate-rise mt-6 max-w-2xl font-display text-3xl font-bold leading-[1.05] tracking-tight text-white sm:text-4xl md:text-5xl"
+            className="animate-rise mt-5 max-w-4xl font-display text-4xl font-bold leading-[1.02] tracking-tight text-white sm:text-6xl md:text-7xl"
             style={stagger(1)}
           >
             {t("landing.hero.title")}
           </h1>
           <p
-            className="animate-rise mt-4 max-w-lg text-base text-white/85 sm:text-lg"
+            className="animate-rise mt-6 max-w-2xl text-lg text-white/85 sm:text-xl"
             style={stagger(2)}
           >
             {t("landing.hero.body")}
           </p>
 
-          <div className="animate-rise mt-8" style={stagger(3)}>
-            <MarketingAuthCtas appearance="hero" />
+          <div className="animate-rise mt-9" style={stagger(3)}>
+            <MarketingAuthCtas appearance="hero" primaryKey="landing.hero.action" />
           </div>
 
-          <p
-            className="animate-rise mt-4 max-w-md text-sm text-white/65"
-            style={stagger(4)}
-          >
+          <p className="animate-rise mt-4 max-w-md text-sm text-white/65" style={stagger(4)}>
             {t("landing.hero.hint")}
           </p>
+          <HeroDownload className="animate-rise mt-4" style={stagger(5)} />
 
-          {/* Under the buttons, not beside them. See `HeroDownload` for why
-              this is a link rather than a second pill. */}
-          <HeroDownload className="animate-rise mt-5" style={stagger(5)} />
+          <div className="animate-rise mt-14 w-full" style={stagger(6)}>
+            <HeroFrame />
+          </div>
         </div>
 
-        <div className="absolute inset-x-0 bottom-0 z-10 border-t border-white/10 bg-black/25 px-5 py-4 backdrop-blur-sm sm:px-8">
-          <ul className="mx-auto flex max-w-4xl flex-wrap items-center justify-center gap-x-8 gap-y-2">
-            {TRUST_ITEMS.map((item, i) => (
-              <li key={item.key} className="animate-rise" style={stagger(5 + i)}>
-                <a
-                  href={item.href}
-                  {...(item.external
-                    ? { target: "_blank", rel: "noopener" }
-                    : {})}
-                  className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/70 underline decoration-transparent underline-offset-4 transition-colors duration-150 hover:text-white hover:decoration-white/70"
-                  // "Self-host" is left in English in Portuguese because that is
-                  // the word the audience uses. Saying so in the markup keeps a
-                  // screen reader from pronouncing it with Portuguese phonetics.
-                  lang={
-                    item.key === "landing.trust.selfHostable" && locale !== "en"
-                      ? "en"
-                      : undefined
-                  }
-                >
-                  {t(item.key)}
-                </a>
+        <ul className="relative z-10 mx-auto flex max-w-5xl flex-wrap items-center justify-center gap-x-8 gap-y-2 px-5 pb-10 sm:px-8">
+          {PROOF.map((item, i) => {
+            const cls =
+              "text-[11px] font-medium uppercase tracking-[0.22em] text-white/70 underline decoration-transparent underline-offset-4 transition-colors duration-150 hover:text-white hover:decoration-white/70";
+            return (
+              <li key={item.key} className="animate-rise" style={stagger(7 + i)}>
+                {item.href ? (
+                  <a
+                    href={item.href}
+                    {...(item.external ? { target: "_blank", rel: "noopener" } : {})}
+                    className={cls}
+                  >
+                    {t(item.key)}
+                  </a>
+                ) : (
+                  <span className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/70">
+                    {t(item.key)}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      {/* Why people leave Discord. First after the hero, because that is who
+          the page mostly gets, and the honest opener ("Discord is good") is
+          what makes the three cards believable. */}
+      <section id="discord" className={cn(SECTION, "border-b border-ink-4/40")}>
+        <div className="mx-auto max-w-6xl">
+          <div className="mx-auto max-w-2xl text-center">
+            <p className={EYEBROW}>{t("landing.discord.eyebrow")}</p>
+            <h2 className={cn(H2, "mt-3")}>{t("landing.discord.title")}</h2>
+            <p className="mt-4 text-lg text-paper-muted">{t("landing.discord.body")}</p>
+          </div>
+          <ul className="mt-14 grid gap-5 md:grid-cols-3">
+            {DISCORD_CARDS.map((card) => (
+              <li
+                key={card.title}
+                className="flex flex-col rounded-2xl border border-ink-4/60 bg-ink-2/60 p-6 transition-colors duration-200 hover:border-signal/40"
+              >
+                <span className="grid h-10 w-10 place-items-center rounded-xl bg-signal/15 text-signal">
+                  <card.icon aria-hidden className="h-5 w-5" />
+                </span>
+                <h3 className="mt-5 font-display text-xl font-bold">{t(card.title)}</h3>
+                <p className="mt-2 text-paper-muted">{t(card.body)}</p>
+                {card.hint && (
+                  <p className="mt-2 text-sm text-paper-muted/70">{t(card.hint)}</p>
+                )}
+                {card.link && (
+                  <p className="mt-auto pt-5">
+                    {card.link.external ? (
+                      <a
+                        href={card.link.to}
+                        target="_blank"
+                        rel="noopener"
+                        className="inline-flex items-center gap-1.5 text-sm font-medium text-signal hover:underline"
+                      >
+                        {t(card.link.key)} <ArrowRight className="h-4 w-4" aria-hidden />
+                      </a>
+                    ) : (
+                      <Link
+                        to={card.link.to}
+                        className="inline-flex items-center gap-1.5 text-sm font-medium text-signal hover:underline"
+                      >
+                        {t(card.link.key)} <ArrowRight className="h-4 w-4" aria-hidden />
+                      </Link>
+                    )}
+                  </p>
+                )}
               </li>
             ))}
           </ul>
         </div>
       </section>
 
-      <section className="border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24">
-        <div className="mx-auto max-w-2xl text-center">
-          <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
-            {t("landing.pitch.title")}
-          </h2>
-          <p className="mt-4 text-lg text-paper-muted">
-            {t("landing.pitch.body")}
-          </p>
-        </div>
-      </section>
-
-      <section
-        id="how"
-        className="scroll-mt-20 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
-      >
-        <div className="mx-auto max-w-4xl">
-          <div className="mx-auto max-w-xl text-center">
-            <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
-              {t("landing.how.title")}
-            </h2>
-            <p className="mt-3 text-paper-muted">{t("landing.how.body")}</p>
+      {/* The pillars, alternating text and frame. */}
+      <section id="features" className={cn(SECTION, "border-b border-ink-4/40")}>
+        <div className="mx-auto max-w-6xl">
+          <div className="mx-auto max-w-2xl text-center">
+            <p className={EYEBROW}>{t("landing.pillars.eyebrow")}</p>
+            <h2 className={cn(H2, "mt-3")}>{t("landing.pillars.title")}</h2>
+            <p className="mt-4 text-lg text-paper-muted">{t("landing.pillars.body")}</p>
           </div>
-          <ol className="mt-14 grid gap-10 sm:grid-cols-3 sm:gap-8">
-            {HOW_STEPS.map((item) => (
-              <li key={item.step} className="text-left sm:text-center">
-                <p className="font-display text-sm font-bold text-signal">
-                  {item.step}
-                </p>
-                <h3 className="mt-2 font-display text-xl font-bold">
-                  {t(item.title)}
-                </h3>
-                <p className="mt-2 text-sm text-paper-muted">{t(item.body)}</p>
-              </li>
+
+          <div className="mt-20 space-y-24 sm:space-y-32">
+            {PILLARS.map((pillar, i) => (
+              <article
+                key={pillar.id}
+                id={pillar.id}
+                className={cn(
+                  "scroll-mt-24 grid items-center gap-10 lg:grid-cols-12 lg:gap-14",
+                )}
+              >
+                <div
+                  className={cn(
+                    "lg:col-span-5",
+                    i % 2 === 1 && "lg:order-2",
+                  )}
+                >
+                  <h3 className="font-display text-2xl font-bold tracking-tight sm:text-3xl md:text-4xl">
+                    {t(pillar.title)}
+                  </h3>
+                  <p className="mt-4 text-lg text-paper-muted">{t(pillar.body)}</p>
+                  <ul className="mt-6 space-y-2.5">
+                    {pillar.points.map((p) => (
+                      <li key={p} className="flex items-start gap-3 text-paper">
+                        <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full bg-signal/15 text-signal">
+                          <Check aria-hidden className="h-3 w-3" />
+                        </span>
+                        {t(p)}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+                <div className={cn("lg:col-span-7", i % 2 === 1 && "lg:order-1")}>
+                  {pillar.frame}
+                </div>
+              </article>
             ))}
-          </ol>
+          </div>
+
+          <div className="mt-24 sm:mt-32">
+            <h3 className="text-center font-display text-2xl font-bold tracking-tight sm:text-3xl">
+              {t("landing.more.title")}
+            </h3>
+            <ul className="mt-10 grid gap-5 md:grid-cols-3">
+              {MORE.map((item) => {
+                const inner = (
+                  <>
+                    <item.icon aria-hidden className="h-5 w-5 text-signal" />
+                    <h4 className="mt-3 font-display text-lg font-bold">{t(item.title)}</h4>
+                    <p className="mt-2 text-sm text-paper-muted">{t(item.body)}</p>
+                  </>
+                );
+                return (
+                  <li key={item.title}>
+                    {item.to ? (
+                      <Link
+                        to={item.to}
+                        className="block h-full rounded-2xl border border-ink-4/60 p-6 transition-colors duration-200 hover:border-signal/40"
+                      >
+                        {inner}
+                      </Link>
+                    ) : (
+                      <div className="h-full rounded-2xl border border-ink-4/60 p-6">{inner}</div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         </div>
       </section>
 
-      {/* Communities. Placed straight after "three moves", because the three
-          moves assume you have people to invite and this is the answer for
-          everybody who does not. The band is tinted rather than plain so it
-          reads as the one different thing on a page of equal sections. */}
+      {/* Communities. The directory itself sits behind sign-in and hides rooms
+          the viewer is banned from, so this band is the only public statement
+          that it exists. */}
       <section
         id="communities"
-        className="scroll-mt-20 border-b border-ink-4/40 bg-signal/[0.04] px-5 py-20 sm:px-8 sm:py-24"
+        className={cn(SECTION, "border-b border-ink-4/40 bg-signal/[0.04]")}
       >
         <div className="mx-auto max-w-4xl">
           <div className="mx-auto max-w-xl text-center">
-            <p className="font-display text-xs font-bold uppercase tracking-[0.22em] text-signal">
-              {t("landing.communities.eyebrow")}
-            </p>
-            <h2 className="mt-3 font-display text-3xl font-bold tracking-tight sm:text-4xl">
-              {t("landing.communities.title")}
-            </h2>
-            <p className="mt-4 text-lg text-paper-muted">
-              {t("landing.communities.body")}
-            </p>
+            <p className={EYEBROW}>{t("landing.communities.eyebrow")}</p>
+            <h2 className={cn(H2, "mt-3")}>{t("landing.communities.title")}</h2>
+            <p className="mt-4 text-lg text-paper-muted">{t("landing.communities.body")}</p>
           </div>
           <ul className="mt-14 grid gap-10 sm:grid-cols-3 sm:gap-8">
             {COMMUNITY_POINTS.map((item) => (
               <li key={item.title} className="text-left sm:text-center">
-                <item.icon
-                  aria-hidden
-                  className="h-6 w-6 text-signal sm:mx-auto"
-                />
-                <h3 className="mt-2 font-display text-lg font-bold">
-                  {t(item.title)}
-                </h3>
+                <item.icon aria-hidden className="h-6 w-6 text-signal sm:mx-auto" />
+                <h3 className="mt-2 font-display text-lg font-bold">{t(item.title)}</h3>
                 <p className="mt-2 text-sm text-paper-muted">{t(item.body)}</p>
               </li>
             ))}
           </ul>
           <div className="mt-12 flex justify-center">
-            <MarketingAuthCtas
-              primaryKey="landing.communities.action"
-              showSignIn={false}
-            />
+            <MarketingAuthCtas primaryKey="landing.communities.action" showSignIn={false} />
           </div>
         </div>
       </section>
 
-      <section
-        id="features"
-        className="scroll-mt-20 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
-      >
+      <section id="hosting" className={cn(SECTION, "border-b border-ink-4/40")}>
         <div className="mx-auto max-w-4xl">
           <div className="mx-auto max-w-xl text-center">
-            <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
-              {t("landing.features.title")}
-            </h2>
-            <p className="mt-3 text-paper-muted">{t("landing.features.body")}</p>
+            <h2 className={H2}>{t("landing.hosting.title")}</h2>
+            <p className="mt-3 text-lg text-paper-muted">{t("landing.hosting.body")}</p>
           </div>
-          {/* One column on a phone, so each item is a heading and a single
-              line rather than a card to swipe past. */}
-          <ul className="mt-14 grid gap-x-8 gap-y-10 sm:grid-cols-2 lg:grid-cols-3">
-            {FEATURES.map((item) => (
-              <li key={item.title}>
-                <item.icon aria-hidden className="h-5 w-5 text-signal" />
-                <h3 className="mt-2 font-display text-lg font-bold">
-                  {t(item.title)}
-                </h3>
-                <p className="mt-2 text-sm text-paper-muted">{t(item.body)}</p>
-              </li>
-            ))}
-          </ul>
-          {/* The one in-content link to /tela. The footer already carries the
-              same destination, but a link sitting under the screen-share
-              feature is about the feature; a footer link is boilerplate, and
-              search engines treat the two very differently. It is also the
-              honest next step for the visitor this page gets most of: someone
-              who arrived because Discord stopped sharing screens. */}
-          <p className="mt-12 text-center text-sm text-paper-muted">
-            {t("landing.features.tela.lead")}{" "}
-            <Link
-              to="/tela"
-              className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
-            >
-              {t("landing.features.tela.link")}
-            </Link>
-          </p>
-        </div>
-      </section>
-
-      <section
-        id="hosting"
-        className="scroll-mt-20 border-b border-ink-4/40 px-5 py-20 sm:px-8 sm:py-24"
-      >
-        <div className="mx-auto max-w-4xl">
-          <div className="mx-auto max-w-xl text-center">
-            <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
-              {t("landing.hosting.title")}
-            </h2>
-            <p className="mt-3 text-paper-muted">{t("landing.hosting.body")}</p>
-          </div>
-          <div className="mt-14 grid gap-8 sm:grid-cols-2">
-            <div className="rounded-xl border border-ink-4/60 p-6 transition-colors duration-200 hover:border-signal/40">
+          <div className="mt-14 grid gap-5 sm:grid-cols-2">
+            <div className="rounded-2xl border border-ink-4/60 p-6 transition-colors duration-200 hover:border-signal/40">
               <h3
                 className="font-display text-xl font-bold"
                 lang={locale === "en" ? undefined : "en"}
               >
                 {t("landing.hosting.selfHost.title")}
               </h3>
-              <p className="mt-3 text-paper-muted">
-                {t("landing.hosting.selfHost.body")}
-              </p>
+              <p className="mt-3 text-paper-muted">{t("landing.hosting.selfHost.body")}</p>
               <a
                 href={SOURCE_REPO_URL}
                 target="_blank"
                 rel="noopener"
-                className="mt-5 inline-flex text-sm font-medium text-signal transition-colors duration-150 hover:underline"
+                className="mt-5 inline-flex items-center gap-1.5 text-sm font-medium text-signal transition-colors duration-150 hover:underline"
               >
-                {t("landing.hosting.selfHost.action")}
+                {t("landing.hosting.selfHost.action")} <ArrowRight className="h-4 w-4" aria-hidden />
               </a>
             </div>
-            <div className="rounded-xl border border-ink-4/60 p-6 transition-colors duration-200 hover:border-signal/40">
-              <h3 className="font-display text-xl font-bold">
-                {t("landing.hosting.hosted.title")}
-              </h3>
-              <p className="mt-3 text-paper-muted">
-                {t("landing.hosting.hosted.body")}
-              </p>
+            <div className="rounded-2xl border border-signal/30 bg-signal/[0.05] p-6">
+              <h3 className="font-display text-xl font-bold">{t("landing.hosting.hosted.title")}</h3>
+              <p className="mt-3 text-paper-muted">{t("landing.hosting.hosted.body")}</p>
               <div className="mt-5">
                 <MarketingAuthCtas
                   primaryKey="landing.hosting.hosted.action"
@@ -463,38 +522,61 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className="px-5 py-20 text-center sm:px-8 sm:py-24">
-        <h2 className="font-display text-3xl font-bold tracking-tight sm:text-4xl">
-          {t("landing.cta.title")}
-        </h2>
-        <p className="mx-auto mt-3 max-w-md text-paper-muted">
-          {t("landing.cta.body")}
-        </p>
-        <MarketingAuthCtas
-          primaryKey="landing.cta.action"
-          decoratePrimary
-          className="mt-8"
+      {/* FAQ. Real questions with real answers, rendered as copy, which is
+          what lets the edge serve them as FAQPage schema without lying. */}
+      <section id="faq" className={cn(SECTION, "border-b border-ink-4/40")}>
+        <div className="mx-auto max-w-3xl">
+          <h2 className={cn(H2, "text-center")}>{t("landing.faq.title")}</h2>
+          <dl className="mt-12 divide-y divide-ink-4/40">
+            {LANDING_FAQ_IDS.map((id) => (
+              <div key={id} className="py-6">
+                <dt className="font-display text-lg font-bold">
+                  {t(`landing.faq.${id}.q` as MessageKey)}
+                </dt>
+                <dd className="mt-2 text-paper-muted">
+                  {t(`landing.faq.${id}.a` as MessageKey)}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      </section>
+
+      <section className="relative overflow-hidden px-5 py-24 text-center sm:px-8 sm:py-32">
+        <img
+          src="/images/hero-background.jpg"
+          alt=""
+          aria-hidden
+          loading="lazy"
+          decoding="async"
+          className="pointer-events-none absolute inset-0 h-full w-full object-cover object-center opacity-40"
         />
-        {/* Phone betas are not just a mobile-visitor affordance (HeroDownload
-            handles that); they get a standing mention here so a desktop
-            visitor can send the right link to a friend. */}
-        <p className="mt-6 text-sm text-paper-muted">
-          <Link
-            to="/beta"
-            className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
-          >
-            {t("landing.cta.beta")}
-          </Link>
-          <span aria-hidden className="mx-2 text-paper-muted/40">
-            ·
-          </span>
-          <Link
-            to="/android"
-            className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
-          >
-            {t("landing.cta.android")}
-          </Link>
-        </p>
+        <div
+          className="pointer-events-none absolute inset-0 bg-gradient-to-b from-ink via-ink/70 to-ink"
+          aria-hidden
+        />
+        <div className="relative">
+          <h2 className={H2}>{t("landing.cta.title")}</h2>
+          <p className="mx-auto mt-3 max-w-md text-lg text-paper-muted">{t("landing.cta.body")}</p>
+          <MarketingAuthCtas primaryKey="landing.cta.action" decoratePrimary className="mt-8" />
+          <p className="mt-6 text-sm text-paper-muted">
+            <Link
+              to="/beta"
+              className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
+            >
+              {t("landing.cta.beta")}
+            </Link>
+            <span aria-hidden className="mx-2 text-paper-muted/40">
+              ·
+            </span>
+            <Link
+              to="/android"
+              className="underline decoration-paper-muted/40 underline-offset-4 transition-colors duration-150 hover:text-paper hover:decoration-paper/60"
+            >
+              {t("landing.cta.android")}
+            </Link>
+          </p>
+        </div>
       </section>
 
       <MarketingFooter />
