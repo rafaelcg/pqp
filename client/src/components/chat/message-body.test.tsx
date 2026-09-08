@@ -34,13 +34,23 @@ describe("MessageBody", () => {
     expect(html).toContain("line two");
   });
 
-  it("keeps a blank line as a blank line, not a tight paragraph gap", () => {
-    expect(brCount(render("hello\n\nworld"))).toBe(2);
+  it("keeps a blank line as a short spacer, not a tight paragraph gap", () => {
+    const html = render("hello\n\nworld");
+    expect(brCount(html)).toBe(1);
+    expect(html.match(/class="chat-blank"/g)?.length).toBe(1);
   });
 
   it("collapses extra blank lines so a paste cannot shove the channel down", () => {
-    expect(brCount(render("hello\n\n\nworld"))).toBe(2);
-    expect(brCount(render("hello\n\n\n\n\nworld"))).toBe(2);
+    for (const body of ["hello\n\n\nworld", "hello\n\n\n\n\nworld"]) {
+      const html = render(body);
+      expect(brCount(html)).toBe(1);
+      expect(html.match(/class="chat-blank"/g)?.length).toBe(1);
+    }
+  });
+
+  it("drops a trailing blank line instead of leaving a spacer", () => {
+    const html = render("hello\n\n");
+    expect(html).not.toContain("chat-blank");
   });
 
   it("renders bold, italic, strike, code, and autolinks", () => {
