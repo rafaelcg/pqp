@@ -203,14 +203,6 @@ class WireProtocolTest {
         "poll-update" to "no poll surface on the phone",
         // Watch party is a desktop feature by design (docs/ANDROID.md).
         "watch-party" to "no watch party on the phone",
-        // The scheduling half of that same desktop-only feature: a reminder
-        // that a session is about to start, for a session the phone cannot
-        // join in the first place.
-        "channel-session-reminder" to "no watch party on the phone to be reminded about",
-        // Floating reactions drawn over somebody's shared screen, on the web
-        // only and behind `VITE_LIVE_REACTIONS` even there. Android renders a
-        // share but has no overlay to put these in.
-        "live-reactions" to "no reaction overlay on the phone's share view",
     )
 
     /**
