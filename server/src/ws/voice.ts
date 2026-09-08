@@ -59,6 +59,11 @@ import {
   isLiveKitConfigured,
 } from "../voice/backends.js";
 import {
+  isLiveHlsEnabled,
+  liveHlsStreamFor,
+  reconcileLiveHls,
+} from "../voice/hls-egress.js";
+import {
   guardMeshAcrossInstances,
   resolveVoiceTransport,
   type VoiceTransportDecision,
@@ -463,10 +468,12 @@ async function decideRoomTransport(
   channel: ChannelRow,
 ): Promise<VoiceTransportDecision> {
   const liveKitConfigured = configuredTransport() === "livekit";
+  const liveHlsEnabled = isLiveHlsEnabled();
   const voiceTransport = channel.voice_transport ?? null;
   let server: { isCommunity: boolean; memberCount: number } | null = null;
   if (
     liveKitConfigured &&
+    !liveHlsEnabled &&
     channel.kind === "server" &&
     channel.server_id &&
     !voiceTransport
@@ -481,6 +488,7 @@ async function decideRoomTransport(
   }
   return resolveVoiceTransport({
     liveKitConfigured,
+    liveHlsEnabled,
     channel: { kind: channel.kind, voiceTransport },
     server,
   });
@@ -1065,6 +1073,38 @@ function broadcastToRoom(
     if (peer.id !== excludePeerId) {
       sendEncoded(peer.socket, encoded);
     }
+  }
+}
+
+/**
+ * First sharer in the room gets a Track Composite HLS egress. Nobody
+ * sharing stops it. Failures stay in the log — a missed transcode must
+ * not refuse the share itself.
+ */
+async function pushLiveHls(voiceChannelId: string): Promise<void> {
+  if (getRoomTransport(voiceChannelId) !== "livekit") {
+    return;
+  }
+  const sharer = getRoomPeers(voiceChannelId).find((peer) => peer.sharingScreen);
+  const prev = liveHlsStreamFor(voiceChannelId);
+  try {
+    const next = await reconcileLiveHls(voiceChannelId, sharer?.id ?? null);
+    const changed =
+      (prev?.hlsUrl ?? null) !== (next?.hlsUrl ?? null) ||
+      (prev?.presenterPeerId ?? null) !== (next?.presenterPeerId ?? null);
+    if (!changed) {
+      return;
+    }
+    broadcastToRoom(voiceChannelId, {
+      type: "voice-stream",
+      channelId: voiceChannelId,
+      stream: next,
+    });
+  } catch (error) {
+    logEvent("voice.hlsReconcileFailed", {
+      channelId: voiceChannelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -1724,6 +1764,7 @@ function removePeer(peerId: string) {
   });
   broadcastToRoom(voiceChannelId, { type: "peer-left", peerId });
   void broadcastRoster(voiceChannelId, { kind: "left", peerId });
+  void pushLiveHls(voiceChannelId);
 }
 
 /**
@@ -2385,6 +2426,14 @@ async function welcomeVoicePeer(
       type: "watch-party",
       channelId: peer.voiceChannelId,
       state: party,
+    });
+  }
+  const liveStream = liveHlsStreamFor(peer.voiceChannelId);
+  if (liveStream) {
+    send(peer.socket, {
+      type: "voice-stream",
+      channelId: peer.voiceChannelId,
+      stream: liveStream,
     });
   }
 
@@ -3055,6 +3104,7 @@ export async function handleVoiceMessage(
       kind: "updated",
       peer: toParticipant(peer),
     });
+    void pushLiveHls(peer.voiceChannelId);
     return;
   }
 

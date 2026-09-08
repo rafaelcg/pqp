@@ -76,4 +76,34 @@ describe("collectScreenTiles", () => {
     expect(mine!.hasAudio).toBe(false);
     expect(mine!.userId).toBeNull();
   });
+
+  it("puts the HLS playlist on the remote presenter, never on ourselves", () => {
+    const liveStream = {
+      hlsUrl: "https://live.example.test/live.m3u8",
+      presenterPeerId: "p2",
+      delaySeconds: 10,
+    };
+    const [theirs] = collectScreenTiles({
+      peerIds: ["p2"],
+      localPeerId: "p1",
+      localName: "eu",
+      localStream: null,
+      remotePeers: [peer()],
+      fallbackName: "alguem",
+      liveStream,
+    });
+    expect(theirs!.hlsUrl).toBe(liveStream.hlsUrl);
+    expect(theirs!.delaySeconds).toBe(10);
+
+    const [mine] = collectScreenTiles({
+      peerIds: ["p1"],
+      localPeerId: "p1",
+      localName: "eu",
+      localStream: { id: "mine" } as never,
+      remotePeers: [],
+      fallbackName: "alguem",
+      liveStream: { ...liveStream, presenterPeerId: "p1" },
+    });
+    expect(mine!.hlsUrl).toBeNull();
+  });
 });

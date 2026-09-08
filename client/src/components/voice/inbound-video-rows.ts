@@ -40,6 +40,10 @@ export function orderReceivers(
 /** The rows the readout renders, from one snapshot's receivers. */
 export function liveReceiverRows(
   receivers: VideoReceiverSample[],
+  opts?: { hideScreen?: boolean },
 ): VideoReceiverSample[] {
-  return receivers.filter(isLiveReceiver).sort(orderReceivers);
+  return receivers
+    .filter(isLiveReceiver)
+    .filter((row) => !(opts?.hideScreen && row.role === "screen"))
+    .sort(orderReceivers);
 }

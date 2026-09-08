@@ -1,0 +1,30 @@
+# Overlay for a STAGING LiveKit box. Do not add this to production
+# (sfu-pqp): production yaml is "no Redis, no webhooks" on purpose.
+#
+# Usage on a throwaway São Paulo VM, after tools/sfu/install.sh:
+#   docker compose -f /opt/livekit/docker-compose.yaml \
+#                  -f /opt/sfu/hls/docker-compose.yaml up -d
+#
+# LiveKit must also grow a redis: block pointing at 127.0.0.1:6379.
+# Track Composite egress does not need Chrome.
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    network_mode: host
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--bind", "127.0.0.1"]
+    logging: { driver: journald }
+  egress:
+    image: livekit/egress:v1.14.1
+    restart: unless-stopped
+    network_mode: host
+    # The image runs as a non-root user. Without this, a 0600 egress.yaml
+    # on the host is "permission denied" inside the container.
+    user: "0:0"
+    cap_add: ["SYS_ADMIN"]
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress.yaml
+    volumes:
+      - ./egress.yaml:/etc/egress.yaml:ro
+    logging: { driver: journald }
