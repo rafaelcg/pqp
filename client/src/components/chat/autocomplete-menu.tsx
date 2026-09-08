@@ -7,6 +7,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
+import { scrollSelectionIntoView } from "@/lib/scroll-selection-into-view";
 import { cn } from "@/lib/utils";
 
 export interface AutocompleteOption {
@@ -178,6 +179,24 @@ export function AutocompleteMenu({
     options.length,
   );
 
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  // The menu already opens scrolled to the top with the first row selected —
+  // it mounts fresh every time it opens — so the first render has nothing to
+  // chase. Only a selection that actually moved (arrow keys walking past the
+  // visible rows, in either direction, including the wrap) needs to drag the
+  // scroller along; a hover never needs it, because the pointer is already on
+  // top of whatever it selects, and `scrollSelectionIntoView` no-ops when the
+  // index did not change.
+  const previousSelectedIndex = useRef(selectedIndex);
+  useIsomorphicLayoutEffect(() => {
+    scrollSelectionIntoView(
+      optionRefs.current,
+      previousSelectedIndex.current,
+      selectedIndex,
+    );
+    previousSelectedIndex.current = selectedIndex;
+  }, [selectedIndex]);
+
   if (options.length === 0) {
     return (
       <div
@@ -241,6 +260,9 @@ export function AutocompleteMenu({
           return (
             <button
               key={option.id}
+              ref={(el) => {
+                optionRefs.current[index] = el;
+              }}
               type="button"
               role="option"
               aria-selected={selected}
@@ -265,6 +287,9 @@ export function AutocompleteMenu({
         return (
           <button
             key={option.id}
+            ref={(el) => {
+              optionRefs.current[index] = el;
+            }}
             type="button"
             role="option"
             aria-selected={selected}
