@@ -1,5 +1,9 @@
 # LiveKit Egress. Same API key pair as the LiveKit server on this box.
 # S3 here is the LIVE HLS bucket, never the attachment bucket.
+#
+# Install as /opt/sfu/hls/egress.yaml with mode 0644 (chmod 0644): the
+# egress container runs as a non-root user and cannot read a 0600 file.
+# The secrets in it are the same pair already in /opt/livekit on this box.
 api_key: __LIVEKIT_API_KEY__
 api_secret: __LIVEKIT_API_SECRET__
 ws_url: ws://127.0.0.1:7880

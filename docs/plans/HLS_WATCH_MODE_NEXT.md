@@ -55,12 +55,24 @@ going live (streaming responsibility / no pirated content).
   Picture-in-Picture session rather than handing it off.
 - A viewer only learns a stream is live after joining the room; there's no
   out-of-room "live now" signal.
-- The egress compose overlay's `user: "0:0"` makes egress exit silently on a
-  fresh box (reported by the egress branch's author; not exercised by this
-  merge's test run).
+- The egress compose overlay no longer sets `user: "0:0"`; instead
+  `/opt/sfu/hls/egress.yaml` must be mode 0644 so the image's non-root user
+  can read it (`tools/sfu/hls/docker-compose.yaml`, `egress.yaml.tmpl`).
+  This is the configuration that runs on staging.
 - The egress encoding is `LIVE_HLS_PRESET` (`720p30` default, `1080p30`),
   read per session start (`liveHlsPreset()` in `hls-egress.ts`). It is still
   one value per deployment, not per room or server size.
+
+## Findings
+
+- **Egress paints black when the presenter's video pauses for about 2 s.**
+  Seen on staging: a presenter-side stall of roughly one segment length
+  leaves the HLS output black until frames resume, rather than holding the
+  last frame. The presenter-side cause is unconfirmed (tab throttling,
+  capture source change and encoder starvation are all candidates). With
+  egress debug logging on (`log_level: debug` in `egress.yaml`) the
+  transition is visible in the egress log at the moment the video track goes
+  quiet, so that is the place to correlate against the presenter's timeline.
 
 ## Device QA list
 

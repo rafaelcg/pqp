@@ -7,6 +7,13 @@
 #
 # LiveKit must also grow a redis: block pointing at 127.0.0.1:6379.
 # Track Composite egress does not need Chrome.
+#
+# egress.yaml MUST be mode 0644 on the host:
+#   chmod 0644 /opt/sfu/hls/egress.yaml
+# The egress image runs as a non-root user and reads the file through the
+# read-only bind mount below. A 0600 file is "permission denied" inside the
+# container and the service exits without a useful line in journald. This
+# is what runs on staging; do not add `user: "0:0"` to work around it.
 
 services:
   redis:
@@ -19,9 +26,6 @@ services:
     image: livekit/egress:v1.14.1
     restart: unless-stopped
     network_mode: host
-    # The image runs as a non-root user. Without this, a 0600 egress.yaml
-    # on the host is "permission denied" inside the container.
-    user: "0:0"
     cap_add: ["SYS_ADMIN"]
     environment:
       EGRESS_CONFIG_FILE: /etc/egress.yaml
