@@ -435,6 +435,25 @@ export const profileUpdateSchema = z.object({
   avatarUrl: z.string().nullable(),
 });
 
+/**
+ * Watch party scheduling: fires at T-10 minutes and again when the session
+ * goes live. Addressed to each subscriber individually, same reasoning as
+ * `friendActivitySchema` below, so it is absent from
+ * `CHAT_SERVER_MESSAGE_TYPES` and never routed through the per-channel relay.
+ */
+export const channelSessionReminderSchema = z.object({
+  type: z.literal("channel-session-reminder"),
+  sessionId: z.string().uuid(),
+  channelId: z.string().uuid(),
+  title: z.string(),
+  startsAt: z.string(),
+  kind: z.enum(["before", "live"]),
+});
+
+export type ChannelSessionReminderMessage = z.infer<
+  typeof channelSessionReminderSchema
+>;
+
 export const chatServerMessageSchema = z.discriminatedUnion("type", [
   messageBroadcastSchema,
   messageUpdateBroadcastSchema,
@@ -469,6 +488,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   permissionsUpdateSchema,
   communityHomeUpdateSchema,
   pollUpdateBroadcastSchema,
+  channelSessionReminderSchema,
 ]);
 
 /**

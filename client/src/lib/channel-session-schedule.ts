@@ -100,3 +100,64 @@ export function formatSessionRelativeTime(
   const diffDays = Math.round(diffHours / 24);
   return pt ? `em ${diffDays} dias` : `in ${diffDays} days`;
 }
+
+// ---------------------------------------------------------- reminder toast bus
+
+/**
+ * A `channel-session-reminder` WS frame, as `App.tsx`'s message router
+ * received it. Same shape as `onActivityToast` in notifications.ts: the
+ * frame is addressed to this user specifically, so there is one listener
+ * (the toast stack), not a per-channel subscription.
+ */
+export interface ChannelSessionReminderToast {
+  sessionId: string;
+  channelId: string;
+  title: string;
+  startsAt: string;
+  kind: "before" | "live";
+}
+
+const reminderToastListeners = new Set<
+  (toast: ChannelSessionReminderToast) => void
+>();
+
+export function emitChannelSessionReminderToast(
+  toast: ChannelSessionReminderToast,
+): void {
+  for (const listener of reminderToastListeners) {
+    listener(toast);
+  }
+}
+
+export function onChannelSessionReminderToast(
+  listener: (toast: ChannelSessionReminderToast) => void,
+): () => void {
+  reminderToastListeners.add(listener);
+  return () => {
+    reminderToastListeners.delete(listener);
+  };
+}
+
+// ------------------------------------------------------------- form helpers
+
+/** `datetime-local` wants `YYYY-MM-DDTHH:mm` in local time. Same shape as
+ * the Baú schedule form's own helper (community-home-feed.tsx); duplicated
+ * rather than imported because that one is private to its component. */
+export function toLocalInputValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+export function browserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+export function defaultSessionScheduleValue(): string {
+  const next = new Date(Date.now() + 60 * 60 * 1000);
+  next.setMinutes(0, 0, 0);
+  return toLocalInputValue(next);
+}
