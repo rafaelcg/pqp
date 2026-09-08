@@ -626,6 +626,25 @@ describe("live HLS egress", () => {
       return calls;
     }
 
+    /**
+     * Advance the fake clock AND drain what the timer set off.
+     *
+     * The restart chain is timer -> change listener -> the per-channel
+     * reconcile queue -> StartEgress -> the session row -> the readiness
+     * probe. Every link is a promise, so the timer landing is not the same
+     * instant as the room being back, and `advanceTimersByTimeAsync` only
+     * drains as far as it happens to. Counting on a particular number of
+     * microtask ticks is how a suite passes on one machine and fails on the
+     * CI runner (it did, on this branch, when the ladder added one await to
+     * that chain). So: land the timer, then drain until it settles.
+     */
+    async function advance(ms: number): Promise<void> {
+      await vi.advanceTimersByTimeAsync(ms);
+      for (let tick = 0; tick < 20; tick += 1) {
+        await Promise.resolve();
+      }
+    }
+
     beforeEach(() => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date("2026-09-08T20:00:00Z"));
@@ -649,10 +668,10 @@ describe("live HLS egress", () => {
 
       // Inside the grace period nothing is held against a fresh egress.
       lk.kill("EG_1");
-      await vi.advanceTimersByTimeAsync(5_000);
+      await advance(5_000);
       expect(await checkLiveHlsHealth()).toEqual([]);
 
-      await vi.advanceTimersByTimeAsync(15_000);
+      await advance(15_000);
       expect(await checkLiveHlsHealth()).toEqual([
         { channelId: CHANNEL, outcome: "scheduled" },
       ]);
@@ -660,9 +679,9 @@ describe("live HLS egress", () => {
       // URL), the restart itself waits for the backoff.
       expect(liveHlsStreamFor(CHANNEL)).toBeNull();
       expect(heard).toEqual([]);
-      await vi.advanceTimersByTimeAsync(2_000);
+      await advance(2_000);
       expect(heard).toEqual(["egress-ended"]);
-      await vi.advanceTimersByTimeAsync(1);
+      await advance(1);
 
       const second = liveHlsStreamFor(CHANNEL);
       expect(second).not.toBeNull();
@@ -672,7 +691,7 @@ describe("live HLS egress", () => {
       expect(lk.stop).not.toHaveBeenCalled();
 
       // Healthy again: a further pass does nothing.
-      await vi.advanceTimersByTimeAsync(20_000);
+      await advance(20_000);
       expect(await checkLiveHlsHealth()).toEqual([]);
       expect(lk.start).toHaveBeenCalledTimes(2);
     });
@@ -694,20 +713,20 @@ describe("live HLS egress", () => {
       await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
 
       // Moving: two passes, sequence advancing, nothing happens.
-      await vi.advanceTimersByTimeAsync(20_000);
+      await advance(20_000);
       expect(await checkLiveHlsHealth()).toEqual([]);
       sequence += 1;
-      await vi.advanceTimersByTimeAsync(10_000);
+      await advance(10_000);
       expect(await checkLiveHlsHealth()).toEqual([]);
 
       // Frozen: the same shape for 20 s.
-      await vi.advanceTimersByTimeAsync(10_000);
+      await advance(10_000);
       expect(await checkLiveHlsHealth()).toEqual([]);
-      await vi.advanceTimersByTimeAsync(10_000);
+      await advance(10_000);
       expect(await checkLiveHlsHealth()).toEqual([
         { channelId: CHANNEL, outcome: "scheduled" },
       ]);
-      await vi.advanceTimersByTimeAsync(2_001);
+      await advance(2_001);
       expect(heard).toEqual(["egress-ended"]);
       expect(lk.start).toHaveBeenCalledTimes(2);
     });
@@ -723,7 +742,7 @@ describe("live HLS egress", () => {
       const heard = listenerThatReconciles();
       expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
       expect(heard).toEqual([]);
-      await vi.advanceTimersByTimeAsync(2_001);
+      await advance(2_001);
       expect(heard).toEqual(["start-failed"]);
       expect(lk.start).toHaveBeenCalledTimes(2);
       expect(liveHlsStreamFor(CHANNEL)).not.toBeNull();
@@ -739,7 +758,7 @@ describe("live HLS egress", () => {
       listenerThatReconciles();
       await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
       lk.kill("EG_1", "forgotten");
-      await vi.advanceTimersByTimeAsync(20_000);
+      await advance(20_000);
       expect(await checkLiveHlsHealth()).toEqual([
         { channelId: CHANNEL, outcome: "scheduled" },
       ]);
@@ -754,7 +773,7 @@ describe("live HLS egress", () => {
         findTracks: async () => ({ videoTrackId: "TR_V" }),
       });
       const first = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
-      await vi.advanceTimersByTimeAsync(20_000);
+      await advance(20_000);
       expect(await checkLiveHlsHealth()).toEqual([]);
       expect(liveHlsStreamFor(CHANNEL)).toEqual(first);
     });
@@ -771,19 +790,19 @@ describe("live HLS egress", () => {
 
       for (let round = 1; round <= HLS_MAX_RESTARTS; round += 1) {
         lk.kill(`EG_${round}`);
-        await vi.advanceTimersByTimeAsync(20_000);
+        await advance(20_000);
         expect(await checkLiveHlsHealth()).toEqual([
           { channelId: CHANNEL, outcome: "scheduled" },
         ]);
         // Backoff grows (2 s, 4 s, 8 s) and stays under the 15 s cap.
-        await vi.advanceTimersByTimeAsync(15_000);
+        await advance(15_000);
         expect(lk.start).toHaveBeenCalledTimes(round + 1);
       }
       expect(heard).toEqual(["egress-ended", "egress-ended", "egress-ended"]);
 
       // The fourth death inside five minutes is the end of the road.
       lk.kill(`EG_${HLS_MAX_RESTARTS + 1}`);
-      await vi.advanceTimersByTimeAsync(20_000);
+      await advance(20_000);
       expect(await checkLiveHlsHealth()).toEqual([
         { channelId: CHANNEL, outcome: "failed" },
       ]);
@@ -791,7 +810,7 @@ describe("live HLS egress", () => {
       expect(isLiveHlsFailed(CHANNEL)).toBe(true);
       // The listener's reconcile ran and was refused: no fifth egress, and
       // viewers get null.
-      await vi.advanceTimersByTimeAsync(1);
+      await advance(1);
       expect(lk.start).toHaveBeenCalledTimes(HLS_MAX_RESTARTS + 1);
       expect(liveHlsStreamFor(CHANNEL)).toBeNull();
       expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
@@ -817,7 +836,7 @@ describe("live HLS egress", () => {
       expect(liveHlsStreamFor(CHANNEL)).toBeNull();
       expect(lk.stop).toHaveBeenCalledWith("EG_1");
       // and a retry is on the clock, under the same cap
-      await vi.advanceTimersByTimeAsync(2_001);
+      await advance(2_001);
       expect(heard).toEqual(["playlist-not-ready"]);
       expect(lk.start).toHaveBeenCalledTimes(2);
     });

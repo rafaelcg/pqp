@@ -1278,13 +1278,25 @@ async function startRung(
   }
 }
 
-/** What the WebRTC side already costs, or 0 when nothing can tell us. */
-async function currentSfuLoadMbps(): Promise<number> {
-  if (!sfuLoadReader) {
+/**
+ * What the WebRTC side already costs, or 0 when nothing can tell us.
+ *
+ * Returns a NUMBER rather than a promise when there is no reader, so the
+ * common path (and every test with no load registered) adds no await to the
+ * restart chain. Awaiting a resolved promise is free at runtime and is not
+ * free for a suite that drives this with fake timers.
+ */
+function currentSfuLoadMbps(): number | Promise<number> {
+  const reader = sfuLoadReader;
+  if (!reader) {
     return 0;
   }
+  return readSfuLoad(reader);
+}
+
+async function readSfuLoad(reader: LiveHlsSfuLoadReader): Promise<number> {
   try {
-    return await sfuLoadReader();
+    return await reader();
   } catch (error) {
     logEvent("voice.hlsLoadReadFailed", {
       error: error instanceof Error ? error.message : String(error),
