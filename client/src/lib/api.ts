@@ -106,6 +106,17 @@ export function setAuthTokenProvider(provider: TokenProvider): void {
   tokenProvider = provider;
 }
 
+/**
+ * The raw Bearer token, for the rare caller that cannot go through
+ * `apiFetch` -- today only hls.js's `xhrSetup`, which needs the header on a
+ * request it issues itself against the signed HLS playlist proxy.
+ */
+export async function getAuthToken(
+  options?: Parameters<TokenProvider>[0],
+): Promise<string | null> {
+  return tokenProvider(options);
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,

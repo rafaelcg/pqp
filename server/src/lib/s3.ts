@@ -42,7 +42,7 @@ export class StorageError extends Error {
   }
 }
 
-interface StorageConfig {
+export interface StorageConfig {
   bucket: string;
   region: string;
   accessKeyId: string;
@@ -52,6 +52,41 @@ interface StorageConfig {
   forcePathStyle: boolean;
   /** Custom domain bound to the bucket. Reads only; see `objectTarget`. */
   publicBaseUrl: URL | null;
+}
+
+/**
+ * Builds a `StorageConfig` from already-validated fields, for a bucket that
+ * is not the attachments one (e.g. the separate Live HLS bucket in
+ * `voice/hls-egress.ts` and `voice/hls-cleanup.ts`, which uses its own
+ * `LIVE_HLS_S3_*` env set). Returns null the same way `readConfig` does when
+ * a required field is missing, so callers can treat "not configured" the
+ * same way regardless of which bucket they mean.
+ */
+export function buildStorageConfig(raw: {
+  bucket: string | undefined;
+  accessKeyId: string | undefined;
+  secretAccessKey: string | undefined;
+  endpoint: string | undefined;
+  region?: string;
+  forcePathStyle?: boolean;
+  publicBaseUrl?: string;
+}): StorageConfig | null {
+  const bucket = raw.bucket?.trim();
+  const accessKeyId = raw.accessKeyId?.trim();
+  const secretAccessKey = raw.secretAccessKey?.trim();
+  const endpoint = parseUrl(raw.endpoint);
+  if (!bucket || !accessKeyId || !secretAccessKey || !endpoint) {
+    return null;
+  }
+  return {
+    bucket,
+    accessKeyId,
+    secretAccessKey,
+    endpoint,
+    region: raw.region?.trim() || "auto",
+    forcePathStyle: raw.forcePathStyle === true,
+    publicBaseUrl: parseUrl(raw.publicBaseUrl),
+  };
 }
 
 function parseUrl(raw: string | undefined): URL | null {
@@ -265,7 +300,9 @@ function objectTarget(
 
 export interface PresignRequest {
   method: "GET" | "PUT" | "HEAD" | "DELETE";
-  /** Storage key, no leading slash. */
+  /** Storage key, no leading slash. Empty string signs the bucket root
+   * (used for `ListObjectsV2`, which is a query against the bucket, not an
+   * object). */
   key: string;
   ttlSeconds: number;
   /** Extra query parameters to sign in, e.g. S3 `response-*` overrides. */
@@ -276,6 +313,8 @@ export interface PresignRequest {
   forRead?: boolean;
   /** Injectable clock. Tests only. */
   now?: Date;
+  /** Sign against this bucket instead of the attachments `S3_*` one. */
+  config?: StorageConfig;
 }
 
 export interface SignedRequest {
@@ -294,7 +333,7 @@ export interface SignedRequest {
  * fine either way. `s3.test.ts` asserts on these strings.
  */
 export function signRequest(request: PresignRequest): SignedRequest {
-  const config = requireConfig();
+  const config = request.config ?? requireConfig();
   const { origin, host, canonicalUri } = objectTarget(
     config,
     request.key,
@@ -525,11 +564,15 @@ export async function headObject(key: string): Promise<ObjectHead | null> {
 }
 
 /** Idempotent: an object that is already gone is a success, not an error. */
-export async function deleteObject(key: string): Promise<void> {
+export async function deleteObject(
+  key: string,
+  config?: StorageConfig,
+): Promise<void> {
   const url = signRequest({
     method: "DELETE",
     key,
     ttlSeconds: INTERNAL_URL_TTL_SECONDS,
+    config,
   }).url;
 
   let response: Response;
@@ -549,4 +592,84 @@ export async function deleteObject(key: string): Promise<void> {
       `Storage returned HTTP ${response.status} for DELETE`,
     );
   }
+}
+
+/**
+ * `ListObjectsV2` under one prefix, paginated. Used only by the Live HLS
+ * retention sweep (`voice/hls-cleanup.ts`) to enumerate a session's own
+ * segment and playlist objects before deleting them, never by attachments,
+ * which always knows its key up front.
+ *
+ * A minimal hand-rolled XML read (`<Key>` and the continuation markers) for
+ * the same reason `signRequest` is hand-rolled SigV4: this is four
+ * operations total, not a reason to add an XML parser dependency.
+ */
+export async function listObjectKeys(
+  prefix: string,
+  config: StorageConfig,
+): Promise<string[]> {
+  const keys: string[] = [];
+  let continuationToken: string | undefined;
+  for (;;) {
+    const query: Record<string, string> = {
+      "list-type": "2",
+      prefix,
+    };
+    if (continuationToken) {
+      query["continuation-token"] = continuationToken;
+    }
+    const url = signRequest({
+      method: "GET",
+      key: "",
+      ttlSeconds: INTERNAL_URL_TTL_SECONDS,
+      query,
+      config,
+    }).url;
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: "GET",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (error) {
+      throw new StorageError(
+        error instanceof Error ? error.message : "Storage unreachable",
+      );
+    }
+    if (!response.ok) {
+      throw new StorageError(
+        `Storage returned HTTP ${response.status} for ListObjectsV2`,
+      );
+    }
+    const body = await response.text();
+    for (const match of body.matchAll(/<Key>([^<]*)<\/Key>/g)) {
+      keys.push(decodeXmlEntities(match[1]!));
+    }
+    const truncated = /<IsTruncated>true<\/IsTruncated>/.test(body);
+    if (!truncated) {
+      break;
+    }
+    const tokenMatch = body.match(
+      /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/,
+    );
+    if (!tokenMatch) {
+      // Truncated with no token to resume from is a malformed response, not
+      // a reason to loop forever or silently drop the rest of the listing.
+      throw new StorageError(
+        "Storage returned a truncated ListObjectsV2 with no continuation token",
+      );
+    }
+    continuationToken = decodeXmlEntities(tokenMatch[1]!);
+  }
+  return keys;
+}
+
+function decodeXmlEntities(value: string): string {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }

@@ -359,6 +359,8 @@ import type { VideoQuality } from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall } from "@/lib/in-call-state";
+import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
+import { HlsHostAckSheet } from "@/components/voice/hls-host-ack-sheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -1465,6 +1467,32 @@ function MainAppContent({
   selectedServerIdRef.current = selectedServerId;
   const serversRef = useRef(servers);
   serversRef.current = servers;
+
+  // One-time "you're responsible for what you stream" sheet, gating the
+  // first watch-party / HLS broadcast start per user per server.
+  const hlsHostAck = useHlsHostAck();
+  const [hlsHostAckServerId, setHlsHostAckServerId] = useState<string | null>(
+    null,
+  );
+  const startScreenShareGated = useCallback(
+    (audio: boolean) => {
+      const serverId = selectedServerIdRef.current;
+      if (!serverId) {
+        // DM / conversation voice: no server, nothing to gate.
+        void voice.startScreenShare(audio);
+        return;
+      }
+      void hlsHostAck.checkNeedsAck(serverId).then((needsAck) => {
+        if (needsAck) {
+          setHlsHostAckServerId(serverId);
+          return;
+        }
+        void voice.startScreenShare(audio);
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [hlsHostAck],
+  );
   const perms = usePermissions(selectedServerId);
   const permsRef = useRef(perms);
   permsRef.current = perms;
@@ -4655,7 +4683,7 @@ function MainAppContent({
               void voice.stopScreenShare();
               return;
             }
-            void voice.startScreenShare(shareSystemAudio);
+            startScreenShareGated(shareSystemAudio);
           }}
           onOpen={() => void openVoiceChannel()}
           shareHintEnabled={
@@ -6220,6 +6248,19 @@ function MainAppContent({
           }
         }}
         onClose={() => setPurgeChannel(null)}
+      />
+
+      <HlsHostAckSheet
+        open={hlsHostAckServerId !== null}
+        onConfirm={() => {
+          const serverId = hlsHostAckServerId;
+          if (!serverId) {
+            return;
+          }
+          void hlsHostAck.confirm(serverId);
+          void voice.startScreenShare(shareSystemAudio);
+        }}
+        onClose={() => setHlsHostAckServerId(null)}
       />
 
       <ConfirmDialog

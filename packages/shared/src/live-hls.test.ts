@@ -31,13 +31,27 @@ describe("voice-stream is an optional addition to the wire", () => {
     expect(parsed.stream).toBeNull();
   });
 
-  it("rejects a playlist that is not a URL", () => {
+  it("rejects an empty playlist URL", () => {
     expect(() =>
       liveHlsStreamSchema.parse({
         ...stream,
-        hlsUrl: "not-a-url",
+        hlsUrl: "",
       }),
     ).toThrow();
+  });
+
+  it("accepts an API-relative path, not just a full URL", () => {
+    // `LIVE_HLS_SIGNED_URLS=true` (the default) hands the client a path to
+    // the signed playlist proxy rather than the raw bucket URL -- the
+    // client prefixes it with its own API base URL. See
+    // `client/src/lib/hls-playback.ts#resolveHlsUrl`.
+    const parsed = liveHlsStreamSchema.parse({
+      ...stream,
+      hlsUrl: "/api/voice/hls-playlist/00000000-0000-4000-8000-0000000000aa/1725000000000",
+    });
+    expect(parsed.hlsUrl).toBe(
+      "/api/voice/hls-playlist/00000000-0000-4000-8000-0000000000aa/1725000000000",
+    );
   });
 });
 

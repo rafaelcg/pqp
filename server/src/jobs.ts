@@ -42,6 +42,7 @@ import {
   pruneDeliveredOutgoingWebhooks,
 } from "./services/outgoing-webhooks.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
+import { sweepHlsSessions } from "./voice/hls-cleanup.js";
 
 /**
  * Hourly, because the grace period is an hour: running more often only finds
@@ -77,6 +78,12 @@ export const COMMUNITY_HOME_MEDIA_SWEEP_INTERVAL_MS = 30_000;
  */
 export const OUTGOING_WEBHOOK_TICK_MS = 2_000;
 export const OUTGOING_WEBHOOK_PRUNE_INTERVAL_MS = 60 * 60_000;
+
+/**
+ * Every minute: the default retention window is ten minutes, so this needs
+ * to run often enough that a session's objects do not linger far past it.
+ */
+export const HLS_SESSION_SWEEP_INTERVAL_MS = 60_000;
 
 /**
  * Collect attachments no message claimed: uploads that were never sent, and
@@ -184,6 +191,7 @@ export function startColdJobs(): ColdJobs {
       "channel-sessions",
       sendDueChannelSessionReminders,
     ),
+    every(HLS_SESSION_SWEEP_INTERVAL_MS, "hls-sessions", sweepHlsSessions),
   ];
 
   void sweepAttachments();
