@@ -94,6 +94,7 @@ export type VoiceOccupantMenuAction =
   | "profile"
   | "muteForMe"
   | "unmuteForMe"
+  | "lowerHand"
   | "serverMute"
   | "serverUnmute"
   | "disconnect"
@@ -111,12 +112,22 @@ export function voiceOccupantMenuActions(input: {
   mutedForMe: boolean;
   canServerMute: boolean;
   serverMuted: boolean;
+  /** This person's hand is up: `handRaisedAt` on their roster entry. */
+  handRaised?: boolean;
   canDisconnect: boolean;
   canKick: boolean;
 }): VoiceOccupantMenuAction[] {
   const items: VoiceOccupantMenuAction[] = ["profile"];
   if (!input.isSelf && input.inSameCall) {
     items.push(input.mutedForMe ? "unmuteForMe" : "muteForMe");
+  }
+  // "You're up." Offered only while the hand is actually up, and on the same
+  // bit as the mute, because it is the same job: running the room. It lives
+  // here as well as on the call stage because an audio-only call has no
+  // expanded stage to put a queue on, and the sidebar is where that room's
+  // people are listed anyway.
+  if (!input.isSelf && input.canServerMute && input.handRaised) {
+    items.push("lowerHand");
   }
   if (!input.isSelf && input.canServerMute) {
     items.push(input.serverMuted ? "serverUnmute" : "serverMute");

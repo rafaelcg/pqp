@@ -236,6 +236,7 @@ import {
   moveChannel,
   moveMemberVoice,
   disconnectMemberVoice,
+  lowerMemberVoiceHand,
   setMemberVoiceMuted,
   kickMember,
   setAuthTokenProvider,
@@ -3527,6 +3528,22 @@ function MainAppContent({
     }
   }
 
+  /**
+   * Lower somebody else's hand: "you're up". Behind
+   * `Permission.MUTE_MEMBERS` in that channel, the same bit the other voice
+   * moderation actions use, and the server checks it again.
+   */
+  async function handleLowerOccupantHand(userId: string) {
+    if (!selectedServerId) {
+      return;
+    }
+    try {
+      await lowerMemberVoiceHand(selectedServerId, userId);
+    } catch (err) {
+      setAppError(voiceModerationError(err, t("member.muteFailed")));
+    }
+  }
+
   async function handleKickOccupant(userId: string, name: string) {
     if (!selectedServerId) {
       return;
@@ -5222,6 +5239,12 @@ function MainAppContent({
             onRetryPeer={(peerId) => {
               void voice.retryPeer(peerId);
             }}
+            onToggleRaisedHand={() => voice.toggleRaisedHand()}
+            canLowerHands={perms.can(
+              Permission.MUTE_MEMBERS,
+              selectedChannel.id,
+            )}
+            onLowerHand={(userId) => void handleLowerOccupantHand(userId)}
             compactPeers={localSettings.compactPeers}
           />
         )}
@@ -5258,6 +5281,7 @@ function MainAppContent({
           shareSystemAudio={shareSystemAudio}
           onShareSystemAudioChange={setShareSystemAudio}
           onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
+          onToggleRaisedHand={() => voice.toggleRaisedHand()}
           compactPeers={localSettings.compactPeers}
         />
       )}
@@ -5702,6 +5726,9 @@ function MainAppContent({
           }
           onServerMuteOccupant={(userId, muted) =>
             void handleServerMuteOccupant(userId, muted)
+          }
+          onLowerOccupantHand={(userId) =>
+            void handleLowerOccupantHand(userId)
           }
           onKickOccupant={(userId, name) =>
             void handleKickOccupant(userId, name)

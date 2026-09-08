@@ -35,6 +35,7 @@ export function DmCallStage({
   shareSystemAudio = false,
   onShareSystemAudioChange,
   onFocusScreenShare,
+  onToggleRaisedHand,
   compactPeers = false,
   fill = false,
   onShapeChange,
@@ -60,6 +61,11 @@ export function DmCallStage({
   onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
+  /**
+   * Our own hand in this call's queue. No `onLowerHand` here on purpose: a
+   * conversation has no moderators, so nobody can lower anybody else's.
+   */
+  onToggleRaisedHand?: () => void;
   compactPeers?: boolean;
   /** The pane's divider owns the stage's height. See `CallSplit`. */
   fill?: boolean;
@@ -132,6 +138,7 @@ export function DmCallStage({
       shareSystemAudio={shareSystemAudio}
       onShareSystemAudioChange={onShareSystemAudioChange}
       onFocusScreenShare={onFocusScreenShare}
+      onToggleRaisedHand={onToggleRaisedHand}
       compactPeers={compactPeers}
       fill={fill}
       onShapeChange={onShapeChange}

@@ -263,6 +263,7 @@ describeDb("voice moderation routes", () => {
     userId: string;
     muted: boolean;
     serverMuted: boolean;
+    handRaisedAt: number | null;
   }
 
   /** The newest `voice-roster` this socket received for the room. */
@@ -629,6 +630,73 @@ describeDb("voice moderation routes", () => {
     );
     expect(res.status).toBe(403);
     expect(await auditActions(serverId)).not.toContain("member.voice_mute");
+  });
+
+  // ------------------------------------------------------------ lower hand
+
+  async function raiseHand(socket: WebSocket, userId: string) {
+    await handleVoiceMessage(
+      { socket, user: await asDbUser(userId) },
+      { type: "set-raised-hand", raised: true },
+    );
+  }
+
+  function lowerHandCall(serverId: string, userId: string, as = owner) {
+    return call<{ error?: string }>(
+      as,
+      "POST",
+      `/api/servers/${serverId}/members/${userId}/voice-lower-hand`,
+    );
+  }
+
+  it("a moderator lowers a raised hand, and it comes off everybody's roster", async () => {
+    const { serverId, voiceChannelId } = await makeServer();
+    const target = await joinVoice(member.id, voiceChannelId);
+    const bystander = await joinVoice(owner.id, voiceChannelId);
+    await raiseHand(target.socket, member.id);
+    expect(
+      rosterEntry(bystander.sent, voiceChannelId, member.id).handRaisedAt,
+    ).toEqual(expect.any(Number));
+
+    const res = await lowerHandCall(serverId, member.id);
+    expect(res.status).toBe(200);
+
+    // Called on. The hand is down for the person who raised it and for
+    // everybody watching, off the one roster they all read.
+    expect(
+      rosterEntry(bystander.sent, voiceChannelId, member.id).handRaisedAt,
+    ).toBeNull();
+    expect(
+      rosterEntry(target.sent, voiceChannelId, member.id).handRaisedAt,
+    ).toBeNull();
+    // Ordinary room management, not a sanction: no audit row.
+    expect(await auditActions(serverId)).not.toContain("member.voice_mute");
+  });
+
+  it("refuses lowering somebody else's hand from a plain member", async () => {
+    const { serverId, voiceChannelId } = await makeServer();
+    const target = await joinVoice(owner.id, voiceChannelId);
+    await raiseHand(target.socket, owner.id);
+
+    const res = await lowerHandCall(serverId, owner.id, member);
+    expect(res.status).toBe(403);
+    // And it really is still up: a refused request must change nothing.
+    expect(
+      rosterEntry(target.sent, voiceChannelId, owner.id).handRaisedAt,
+    ).toEqual(expect.any(Number));
+  });
+
+  it("404s when the target is not in a voice channel of this server", async () => {
+    const { serverId } = await makeServer();
+    const res = await lowerHandCall(serverId, member.id);
+    expect(res.status).toBe(404);
+  });
+
+  it("is idempotent on a hand that is already down", async () => {
+    const { serverId, voiceChannelId } = await makeServer();
+    await joinVoice(member.id, voiceChannelId);
+    const res = await lowerHandCall(serverId, member.id);
+    expect(res.status).toBe(200);
   });
 
   it("reports an SFU that refuses the mute instead of pretending", async () => {

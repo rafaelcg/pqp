@@ -47,6 +47,7 @@ const idle: VoiceState = {
   self: null,
   speakingPeerIds: [],
   serverMutedPeerIds: [],
+  handRaisedAt: null,
   occupancy: {},
   peerVolumes: {},
   screenVolumes: {},

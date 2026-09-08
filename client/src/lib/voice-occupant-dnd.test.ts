@@ -155,6 +155,25 @@ describe("voiceOccupantMenuActions", () => {
     ]);
   });
 
+  it("offers lower-hand only while the hand is up and only to a moderator", () => {
+    expect(voiceOccupantMenuActions(base)).not.toContain("lowerHand");
+    expect(
+      voiceOccupantMenuActions({ ...base, handRaised: true }),
+    ).toContain("lowerHand");
+    // Same bit as the server mute, and never on yourself: your own hand comes
+    // down from the call.
+    expect(
+      voiceOccupantMenuActions({
+        ...base,
+        handRaised: true,
+        canServerMute: false,
+      }),
+    ).not.toContain("lowerHand");
+    expect(
+      voiceOccupantMenuActions({ ...base, handRaised: true, isSelf: true }),
+    ).not.toContain("lowerHand");
+  });
+
   it("gates mute-for-me on being in the same call", () => {
     expect(
       voiceOccupantMenuActions({ ...base, inSameCall: false }),

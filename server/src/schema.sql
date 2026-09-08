@@ -1458,6 +1458,26 @@ CREATE TABLE IF NOT EXISTS voice_server_mutes (
   PRIMARY KEY (channel_id, user_id)
 );
 
+-- One raised hand: the (room, person) pair and the instant the hand went up,
+-- the cluster's copy of `roomRaisedHands` in server/src/ws/voice.ts.
+--
+-- `raised_at` is the ORDER. It is stamped by the database and not by the
+-- raiser's client, so two API machines reading one Postgres agree on who was
+-- first without trusting either machine's wall clock, and a person cannot
+-- jump the queue by lying about when they clicked.
+--
+-- Keyed like the mute above, on the person rather than on the peer row: a
+-- socket blip reattaches one seat and a refresh inside the orphan window
+-- mints another, and neither is leaving the room. Leaving IS leaving, so
+-- `ws/voice.ts` deletes the row when the person's last seat in the room goes,
+-- and the row cascades with the room when the call is over.
+CREATE TABLE IF NOT EXISTS voice_raised_hands (
+  channel_id  UUID NOT NULL REFERENCES voice_rooms(channel_id) ON DELETE CASCADE,
+  user_id     UUID NOT NULL,
+  raised_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (channel_id, user_id)
+);
+
 -- Hung-up ids that must not be reconstructed for the resume token's life. The
 -- in-process `retiredPeerIds` map is the same fact for one instance; this is
 -- it for the cluster.

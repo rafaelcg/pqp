@@ -149,3 +149,27 @@ later, per app:
   `welcome.canStream`; the create sheet does not offer the type.
 - Android: same three; also `WireProtocolTest` mirrors the shared enum and was
   updated here.
+
+## Two hand-raises, and how they reconcile
+
+`docs/RAISED_HANDS.md` is a **general** raise-hand: any voice call, no party,
+no session row. It is `voice_raised_hands (channel_id, user_id, raised_at)`,
+carried on the roster as `handRaisedAt`, cleared when the person leaves, and
+visible to everyone in the room.
+
+The unmerged `feat/watch-party-journey` branch has a different one under the
+same words: `raiseHand` is a party OPTION, the rows are
+`channel_session_raised_hands` keyed on `session_id`, the queue is shown only
+to the people running the party, and the whole thing is coupled to
+`stageMode: "invited"` and to granting SPEAK to one person at a time. That is a
+stage door, not a queue, which is why it was not lifted and a general one was
+built instead.
+
+**When that branch lands**, the two should be reconciled rather than left side
+by side, and the cheapest shape is probably: keep the party's `raiseHand`
+option as the switch that turns the STAGE DOOR on (who gets promoted, and by
+whom), and make the queue underneath it the general one, so a person's hand is
+one hand wherever they raised it and the host is reading the same order the
+room is. The general implementation already has the pieces that costs the most
+to write twice: the server-stamped order, the roster field, the cluster path,
+and lowering on speaking and on leaving.

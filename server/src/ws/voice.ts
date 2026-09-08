@@ -98,6 +98,7 @@ import {
   getVoicePeerRow,
   isVoicePeerRetired,
   isVoiceRegistryEnabled,
+  getVoiceRaisedHand as getVoiceRaisedHandInRegistry,
   isVoiceServerMuted as isVoiceServerMutedInRegistry,
   listVoicePeersForUser,
   listVoicePeersInRoom,
@@ -111,6 +112,7 @@ import {
   readWatchParty,
   reconcileVoiceRegistry,
   retireVoicePeerId,
+  setVoiceRaisedHand as setVoiceRaisedHandRow,
   setVoiceServerMute,
   unpinVoiceRoomIfEmpty,
   upsertVoicePeer,
@@ -391,7 +393,26 @@ function rowToParticipant(row: VoiceRosterPeerRow): VoiceParticipant {
     serverMuted:
       row.serverMuted || isVoiceUserServerMuted(row.channelId, row.userId),
     canStream: row.canStream,
+    // Same rule as the mute one line up: the row is the cluster's answer and
+    // the map is this process's, which may be one write ahead of it. The
+    // earlier of the two is the honest one, because a hand only ever moves
+    // forward in time and the queue is ordered on it.
+    handRaisedAt: earlierHand(
+      row.handRaisedAt,
+      voiceUserHandRaisedAt(row.channelId, row.userId),
+    ),
   };
+}
+
+/** The earlier of two readings of one hand; null only when both are down. */
+function earlierHand(a: number | null, b: number | null): number | null {
+  if (a === null) {
+    return b;
+  }
+  if (b === null) {
+    return a;
+  }
+  return Math.min(a, b);
 }
 
 /**
@@ -645,6 +666,7 @@ export function resetVoiceRoomTransports(): void {
   roomTransports.clear();
   remoteTransports.clear();
   roomServerMutes.clear();
+  roomRaisedHands.clear();
   pendingTransportDecisions.clear();
   pendingPinRechecks.clear();
 }
@@ -760,6 +782,172 @@ function applyServerMuteLocally(
   // holds in this room now reads differently and nothing else does. Announcing
   // them by name is what lets the fan-out describe this as a delta instead of
   // re-sending the whole room.
+  const changed = getRoomPeers(voiceChannelId).filter(
+    (peer) => peer.userId === userId,
+  );
+  if (changed.length === 0) {
+    return broadcastRoster(voiceChannelId);
+  }
+  let last: Promise<void> = Promise.resolve();
+  for (const peer of changed) {
+    last = broadcastRoster(voiceChannelId, {
+      kind: "updated",
+      peer: toParticipant(peer),
+    });
+  }
+  return last;
+}
+
+/**
+ * RAISED HANDS: room id -> user id -> the instant that hand went up (ms).
+ *
+ * Asked for in the QG: "levantar a mão e aí forma a fila de quem levantou
+ * primeiro". A queue, and the only thing that makes it a queue rather than a
+ * pile is that ONE clock stamps it. That clock is here (or, with the registry
+ * on, Postgres), never the raiser's client, so nobody can arrive at the front
+ * by mis-stating when they clicked and two people watching the same room read
+ * the same order. Clients only sort what they are given
+ * (`raisedHandQueue` in @pqp/shared).
+ *
+ * KEYED ON THE PERSON, NOT ON THE SEAT, for a reason the mute above shares
+ * and then diverges from. A peer is a seat: a socket blip reattaches one, a
+ * refresh inside the orphan window mints another, and neither of those is
+ * somebody leaving the room. Losing your place in a queue because a tab
+ * reloaded is precisely the complaint this feature exists to answer, so the
+ * hand outlives the seat. Where it differs from a mute is at the other end:
+ * a mute is a sanction that must survive a rejoin, and a hand is a request
+ * that must NOT survive the person walking out. So `removePeer` clears it the
+ * moment that person holds no seat in the room at all, orphans included.
+ *
+ * Lifetime is otherwise the room's, like `roomTransports` and
+ * `roomServerMutes`: cleared when the last peer leaves, so tonight's queue is
+ * never waiting for tomorrow's call. Per-process, and copied to
+ * `voice_raised_hands` when the registry is on.
+ */
+const roomRaisedHands = new Map<string, Map<string, number>>();
+
+/** When this person raised their hand in this room, or null when it is down. */
+export function voiceUserHandRaisedAt(
+  voiceChannelId: string,
+  userId: string,
+): number | null {
+  return roomRaisedHands.get(voiceChannelId)?.get(userId) ?? null;
+}
+
+/**
+ * Seed a hand this process has not heard about into the map. Used on the way
+ * into a room, where the row may know something this instance does not (it
+ * was raised on the other machine, or before this process restarted).
+ */
+function noteRaisedHand(
+  voiceChannelId: string,
+  userId: string,
+  raisedAt: number,
+): void {
+  let hands = roomRaisedHands.get(voiceChannelId);
+  if (!hands) {
+    hands = new Map();
+    roomRaisedHands.set(voiceChannelId, hands);
+  }
+  if (!hands.has(userId)) {
+    hands.set(userId, raisedAt);
+  }
+}
+
+/** Drop every hand this room is holding for a person who has left it. */
+function clearRaisedHand(voiceChannelId: string, userId: string): void {
+  const hands = roomRaisedHands.get(voiceChannelId);
+  if (!hands?.delete(userId)) {
+    return;
+  }
+  if (hands.size === 0) {
+    roomRaisedHands.delete(voiceChannelId);
+  }
+  if (registryOn()) {
+    trackRowWrite(
+      voiceChannelId,
+      setVoiceRaisedHandRow(voiceChannelId, userId, false),
+    );
+  }
+  if (clusterOn()) {
+    publishVoice(VOICE_RAISED_HAND_TOPIC, {
+      channelId: voiceChannelId,
+      userId,
+      raisedAt: null,
+    } satisfies VoiceRaisedHandFrame);
+  }
+}
+
+/**
+ * Put one person's hand up or take it down, then tell the room.
+ *
+ * Row first, then the wire, then the local half, exactly as
+ * `setVoiceUserServerMuted` does and for the same reason: the row is what a
+ * join and a roster read, so an instance that re-reads on the hint below must
+ * find the answer already there.
+ *
+ * THE ROW'S TIMESTAMP WINS when there is one. That is what stops two machines
+ * with two wall clocks from disagreeing about who was first, and it is also
+ * what makes a repeated raise idempotent: the insert does nothing on conflict
+ * and the row hands back the original instant, so a client that redeclares
+ * after a reconnect keeps the place it already had instead of going to the
+ * back of its own queue.
+ */
+export async function setVoiceUserHandRaised(
+  voiceChannelId: string,
+  userId: string,
+  raised: boolean,
+): Promise<void> {
+  let raisedAt: number | null = raised ? Date.now() : null;
+  if (registryOn()) {
+    raisedAt = await setVoiceRaisedHandRow(voiceChannelId, userId, raised);
+    // The row refused the hand (the room emptied under it). Nothing to
+    // announce: the queue's lifetime was that room's.
+    if (raised && raisedAt === null) {
+      return applyRaisedHandLocally(voiceChannelId, userId, null);
+    }
+  }
+  if (clusterOn()) {
+    publishVoice(VOICE_RAISED_HAND_TOPIC, {
+      channelId: voiceChannelId,
+      userId,
+      raisedAt,
+    } satisfies VoiceRaisedHandFrame);
+  }
+  return applyRaisedHandLocally(voiceChannelId, userId, raisedAt);
+}
+
+/**
+ * The per-process half of a raise: the map and the fan-out. Run by the
+ * instance the frame landed on and by every instance that receives
+ * `voice.raisedHand`, each for the seats it holds.
+ */
+function applyRaisedHandLocally(
+  voiceChannelId: string,
+  userId: string,
+  raisedAt: number | null,
+): Promise<void> {
+  let hands = roomRaisedHands.get(voiceChannelId);
+  // Same rule as the mute map: a process with nobody in the room must not
+  // cache the state, because nothing here would ever clear it and the rows
+  // answer for that process anyway.
+  const holdsRoom = getRoomPeers(voiceChannelId).length > 0;
+  if (raisedAt !== null && (holdsRoom || !registryOn())) {
+    if (!hands) {
+      hands = new Map();
+      roomRaisedHands.set(voiceChannelId, hands);
+    }
+    hands.set(userId, raisedAt);
+  } else if (hands) {
+    hands.delete(userId);
+    if (hands.size === 0) {
+      roomRaisedHands.delete(voiceChannelId);
+    }
+  }
+  // Named peers rather than a bare "something changed", for the same reason
+  // the mute names them: `handRaisedAt` is computed by `toParticipant` from
+  // the map, so exactly this person's seats read differently and nothing
+  // else does, which is what lets the fan-out send a delta.
   const changed = getRoomPeers(voiceChannelId).filter(
     (peer) => peer.userId === userId,
   );
@@ -1151,6 +1339,7 @@ function toParticipant(peer: VoicePeer): VoiceParticipant {
     canSpeak: peer.canSpeak,
     serverMuted: isVoiceUserServerMuted(peer.voiceChannelId, peer.userId),
     canStream: peer.canStream,
+    handRaisedAt: voiceUserHandRaisedAt(peer.voiceChannelId, peer.userId),
   };
 }
 
@@ -1997,6 +2186,19 @@ function removePeer(peerId: string) {
     // Same lifetime for the moderator mutes: a sanction on a call that is
     // over must not be waiting for the next call in this channel.
     roomServerMutes.delete(voiceChannelId);
+    // And for the queue, which the room row's cascade also takes care of on
+    // the cluster side: the last peer's delete removes the room, and the
+    // hands go with it.
+    roomRaisedHands.delete(voiceChannelId);
+  } else if (
+    !getRoomPeers(voiceChannelId).some((other) => other.userId === peer.userId)
+  ) {
+    // LEAVING LOWERS YOUR HAND. Not the socket closing (an orphan is still
+    // in the call and is still in the queue) but this person holding no seat
+    // in this room at all any more. A queue of people who have gone is worse
+    // than no queue, which is the whole reason this is not simply left to
+    // expire.
+    clearRaisedHand(voiceChannelId, peer.userId);
   }
   if (registryOn()) {
     // One statement: the row goes, and the room row with it if this was the
@@ -2330,6 +2532,7 @@ function dropVoicePeerSilently(peerId: string): void {
     roomTransports.delete(peer.voiceChannelId);
     forgetTransportDecision(peer.voiceChannelId);
     roomServerMutes.delete(peer.voiceChannelId);
+    roomRaisedHands.delete(peer.voiceChannelId);
   }
   logEvent("voice.seatReleased", {
     peerId,
@@ -2459,6 +2662,7 @@ export function resetVoicePeers(): void {
   pendingRoomEvents.clear();
   remoteTransports.clear();
   roomServerMutes.clear();
+  roomRaisedHands.clear();
 }
 
 /** Whether a socket currently holds a voice peer (for disconnect diagnostics). */
@@ -3426,6 +3630,36 @@ export async function handleVoiceMessage(
       }
     }
 
+    // The place this person already holds in the room's queue, as the cluster
+    // has it: raised on another instance, or on this one before a restart
+    // emptied the map, or by the seat this join is replacing after a refresh
+    // inside the orphan window. Seeded so the welcome below and every roster
+    // read it the same way a raise made here would be read. Never LOWERS a
+    // hand this process already knows about (`noteRaisedHand`), because the
+    // map may be one write ahead of the row.
+    if (registryOn()) {
+      try {
+        const raisedAt = await getVoiceRaisedHandInRegistry(
+          payload.voiceChannelId,
+          user.id,
+        );
+        if (raisedAt !== null) {
+          noteRaisedHand(payload.voiceChannelId, user.id, raisedAt);
+        }
+      } catch (error) {
+        logEvent("voice.registryReadFailed", {
+          op: "raisedHand",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      if (socket.readyState !== 1) {
+        if (pinnedHere) {
+          void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
+        }
+        return;
+      }
+    }
+
     if (resume.kind === "reattach") {
       resume.peer.canResume = payload.resume === true;
       // A permission edit that landed during the signaling gap is carried by
@@ -3737,6 +3971,49 @@ export async function handleVoiceMessage(
       kind: "updated",
       peer: toParticipant(peer),
     });
+    return;
+  }
+
+  // --- raised hands ---
+  //
+  // "levantar a mão e aí forma a fila de quem levantou primeiro". Only ever
+  // about the sender: lowering somebody else's hand is a moderation action
+  // and lives on the HTTP route with the rest of them
+  // (`voice-lower-hand`, `Permission.MUTE_MEMBERS`).
+  //
+  // No refusal frame and no ack. The answer is the roster: `handRaisedAt` on
+  // the next one is where in the queue this person landed, and it is the same
+  // number everyone else in the room is reading. A raise that is dropped by
+  // the limiter below therefore corrects itself the moment the person clicks
+  // again, and never leaves the room disagreeing with itself.
+  if (payload.type === "set-raised-hand") {
+    if (!existingPeerId) {
+      return;
+    }
+    const peer = peers.get(existingPeerId);
+    if (!peer) {
+      return;
+    }
+    // No change, no fan-out. A client redeclares after every reconnect, and
+    // most of those declarations say what the room already holds. Note that
+    // a repeated `raised: true` is not a re-raise even when it does get
+    // through: the row keeps the original instant, so nobody loses their
+    // place by saying the same thing twice.
+    const standing =
+      voiceUserHandRaisedAt(peer.voiceChannelId, peer.userId) !== null;
+    if (standing === payload.raised) {
+      return;
+    }
+    // Through the same limiter as a mute toggle: both spend the whole
+    // channel audience's bandwidth on one person's click.
+    if (!stateLimiter.take(user.id)) {
+      return;
+    }
+    await setVoiceUserHandRaised(
+      peer.voiceChannelId,
+      peer.userId,
+      payload.raised,
+    );
     return;
   }
 
@@ -5400,6 +5677,7 @@ export const VOICE_CALL_TOPIC = "voice.call";
 export const VOICE_MODERATION_TOPIC = "voice.moderation";
 export const VOICE_REACTIONS_TOPIC = "voice.reactions";
 export const VOICE_SERVER_MUTE_TOPIC = "voice.serverMute";
+export const VOICE_RAISED_HAND_TOPIC = "voice.raisedHand";
 export const VOICE_SIGNAL_TOPIC = "voice.signal";
 export const VOICE_TRANSPORT_TOPIC = "voice.transport";
 
@@ -5651,6 +5929,43 @@ subscribeToCluster(VOICE_SIGNAL_TOPIC, (data) => {
   }
   noteClusterFrameReceived();
   send(target.socket, frame);
+});
+
+/**
+ * `voice.raisedHand`: one person's hand went up or came down, published by
+ * the instance the frame landed on after it wrote `voice_raised_hands`.
+ * `raisedAt` is the ROW's instant, not the publisher's clock, so the other
+ * machine files the hand at the same place in the queue rather than at the
+ * moment the frame happened to arrive. Null is a hand coming down.
+ *
+ * A hint about a row, like every other voice topic here: an instance that
+ * misses this frame still reads the hand on its next roster and on the next
+ * join. What the frame buys is that the queue moves now.
+ */
+const voiceRaisedHandFrameSchema = z.object({
+  channelId: z.string().uuid(),
+  userId: z.string().min(1),
+  raisedAt: z.number().int().nonnegative().nullable(),
+});
+type VoiceRaisedHandFrame = z.infer<typeof voiceRaisedHandFrameSchema>;
+
+subscribeToCluster(VOICE_RAISED_HAND_TOPIC, (data) => {
+  if (!registryOn()) {
+    return;
+  }
+  const parsed = voiceRaisedHandFrameSchema.safeParse(data);
+  if (!parsed.success) {
+    return;
+  }
+  const { channelId, userId, raisedAt } = parsed.data;
+  if (getRoomPeers(channelId).some((peer) => peer.userId === userId)) {
+    noteClusterFrameReceived();
+  }
+  void applyRaisedHandLocally(channelId, userId, raisedAt).catch(
+    (error: unknown) => {
+      console.error("[voice] raised hand frame failed:", error);
+    },
+  );
 });
 
 subscribeToCluster(VOICE_SERVER_MUTE_TOPIC, (data) => {

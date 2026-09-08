@@ -36,6 +36,9 @@ export function VoiceChannelStage({
   onDismissShare,
   onWatchShare,
   onRetryPeer,
+  onToggleRaisedHand,
+  canLowerHands = false,
+  onLowerHand,
   compactPeers = false,
   fill = false,
   onShapeChange,
@@ -72,6 +75,11 @@ export function VoiceChannelStage({
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
+  /** Our own hand in this room's queue. */
+  onToggleRaisedHand?: () => void;
+  /** `Permission.MUTE_MEMBERS` here: may lower somebody else's hand. */
+  canLowerHands?: boolean;
+  onLowerHand?: (userId: string) => void;
   compactPeers?: boolean;
   /** The pane's divider owns the stage's height. See `CallSplit`. */
   fill?: boolean;
@@ -111,6 +119,9 @@ export function VoiceChannelStage({
       onDismissShare={onDismissShare}
       onWatchShare={onWatchShare}
       onRetryPeer={onRetryPeer}
+      onToggleRaisedHand={onToggleRaisedHand}
+      canLowerHands={canLowerHands}
+      onLowerHand={onLowerHand}
       compactPeers={compactPeers}
       ringWhenAlone={false}
       fill={fill}
