@@ -55,6 +55,7 @@ const {
   resolveHlsPlaylistViewer,
 } = await import("./hls-playlist-proxy.js");
 const { mintHlsViewerToken } = await import("./hls-viewer-token.js");
+const { playlistLooksLive } = await import("@pqp/shared");
 
 describe("resolveHlsPlaylistViewer", () => {
   const USER = "00000000-0000-4000-8000-0000000000u1";
@@ -274,6 +275,21 @@ describe("buildMasterPlaylistFor", () => {
     });
     expect(body!.match(/#EXT-X-STREAM-INF/g)).toHaveLength(1);
     expect(body).toContain("RESOLUTION=1280x720");
+  });
+
+  it("the master it generates reads as live to the client's own gate", async () => {
+    // THE SEAM THIS PR BROKE ONCE. `useLiveHlsReady` will not attach a
+    // playlist until `playlistLooksLive` says go, and a master has no
+    // `#EXTINF`, so the stage sat on WebRTC forever and re-polled at 1 Hz
+    // with every fetch returning a perfectly good master. Two correct
+    // halves, one dead feature. Assert the actual generated body against
+    // the actual gate rather than each side against its own idea.
+    rungRows(["1080p30", "720p30"]);
+    const body = await buildMasterPlaylistFor({
+      channelId: CHANNEL,
+      startedAt: STARTED_AT,
+    });
+    expect(playlistLooksLive(body!)).toBe(true);
   });
 
   it("a pre-ladder session has no rungs and gets no master", async () => {
