@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
-  describeLimitation,
+  describeLimitationAgainst,
   sampleVoiceStats,
   type Limitation,
   type VideoSenderSample,
 } from "@/lib/voice-stats-probe";
+import { chosenScreenCeilingBps } from "@/lib/peer-connection-manager";
+import type { VideoQuality } from "@/lib/video-quality";
 
 /**
  * What this machine is actually sending, in words, next to the control that
@@ -51,8 +53,18 @@ export function OutboundVideoReadout({
    * has not produced a reading yet.
    */
   idleKey = "settings.voice.videoQuality.idle",
+  /**
+   * The rung the person actually chose, when the caller knows it.
+   *
+   * Without it a screen sender pinned to a ceiling the *budget controller*
+   * lowered reads as "limited by your quality setting", which since
+   * `screen-upload-budget.ts` started moving that ceiling is exactly backwards
+   * on a weak link. Optional because Settings renders this outside any call.
+   */
+  quality,
 }: {
   idleKey?: MessageKey;
+  quality?: VideoQuality;
 } = {}) {
   const { t } = useTranslation();
   const [camera, setCamera] = useState<VideoSenderSample | null>(null);
@@ -115,7 +127,10 @@ export function OutboundVideoReadout({
   // Not `limitedBy` directly: the encoder calls its own `maxBitrate` a
   // bandwidth limit, so the raw field says "your connection" to somebody on
   // fibre whose only limit is the rung they picked. See `describeLimitation`.
-  const limited = describeLimitation(camera);
+  const limited = describeLimitationAgainst(
+    camera,
+    camera.role === "screen" && quality ? chosenScreenCeilingBps(quality) : null,
+  );
 
   return (
     <p className="mt-1 text-xs text-paper-muted" role="status">

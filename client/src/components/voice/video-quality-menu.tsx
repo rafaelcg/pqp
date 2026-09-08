@@ -245,7 +245,7 @@ export function VideoQualityMenu({
               couple of seconds without the camera blinking. */}
           {isSendingVideo && (
             <div className="mt-1 border-t border-ink-4/60 px-2.5 pb-1.5 pt-1">
-              <OutboundVideoReadout idleKey="call.quality.unmeasured" />
+              <OutboundVideoReadout idleKey="call.quality.unmeasured" quality={value} />
             </div>
           )}
           {/* The other direction, and for a viewer the only thing in here.

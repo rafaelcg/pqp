@@ -974,6 +974,7 @@
   "voice.share.systemAudioOff": "Computer sound off. A Chrome tab still sends its own sound.",
   "voice.share.systemAudioLive": "You are sending this computer's sound. Everyone in the call hears themselves back.",
   "voice.share.cursorLive": "Your mouse goes out with a screen or a window. Share a Chrome tab and it does not.",
+  "voice.share.uplinkStrained": "Your connection is holding this share back. Fewer people in the call, or a lower quality, will help.",
   "voice.share.cursorLive_desktop": "Your mouse goes out with a screen or a window. Only a browser tab leaves it out.",
   "voice.share.fullscreenBlocked": "The browser wouldn't open fullscreen.",
   "voice.screenShareUnsupported": "Screen sharing isn't supported by this browser.",

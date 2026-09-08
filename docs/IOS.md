@@ -377,7 +377,8 @@ it makes them unreadable.
 
 "Every frame is an encode per peer in a mesh" is true, and is an argument for a
 governor rather than for this constant. The governor now exists:
-`meshScreenBitrate` splits one 5 Mbps upload budget across the room, so a crowded
+`meshScreenBitrate` splits one upload budget across the room (5 Mbps to start,
+and on the web moved by the measured uplink, `screen-upload-budget.ts`), so a crowded
 call spends its budget on fewer bits per frame, which WebRTC decides continuously
 and well, rather than on a frame rate chosen once by a number that could not see
 the room. The web has run its screen at 30 since it had one

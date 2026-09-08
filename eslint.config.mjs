@@ -91,6 +91,7 @@ export default tseslint.config(
       "client/scripts/**/*.mjs",
       "server/scripts/**/*.mjs",
       "client/bench/**/*.mjs",
+      "client/e2e/bandwidth/**/*.mjs",
       "electron/**/*.mjs",
       "tools/**/*.{js,mjs}",
       "*.mjs",

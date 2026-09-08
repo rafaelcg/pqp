@@ -3,7 +3,11 @@ import {
   createPeerConnectionManager,
   meshScreenBitrate,
 } from "./peer-connection-manager";
-import { screenBitrateFor } from "./video-quality";
+import {
+  DEFAULT_SCREEN_UPLOAD_BUDGET_BPS,
+  SCREEN_BUDGET_SAMPLE_MS,
+} from "./screen-upload-budget";
+import { DEFAULT_VIDEO_QUALITY, screenBitrateFor } from "./video-quality";
 
 /**
  * What the encoder is told, and whether saying no to it can break a call.
@@ -270,6 +274,30 @@ describe("screen budget across a growing room", () => {
     );
   });
 
+  it("never asks a measured link for more than it has, at any room size", () => {
+    // THE BUG THIS PINS, and it is specifically a weak-connection bug, which
+    // is to say a bug for most of this app's users. A 600 kbps per-copy floor
+    // used to sit under the division. Against the old constant 5 Mbps budget
+    // it never fired (5 Mbps across the seven remote peers a mesh can hold is
+    // 714 kbps, already over it), so nobody had seen what it does once the
+    // budget is a *measurement*: a room cut to the 1 Mbps minimum floored
+    // every copy back up to 600 kbps and asked a measured 1 Mbps link for
+    // 4.2 Mbps. That is the over-commit this module exists to prevent, and it
+    // fired only when the link had already been measured as weak.
+    const budget = 1_000_000;
+    for (const viewers of [2, 3, 5, 7]) {
+      const perCopy = meshScreenBitrate(viewers, "auto", budget);
+      expect(perCopy * viewers).toBeLessThanOrEqual(budget);
+    }
+  });
+
+  it("changes nothing for a room running on the un-measured default", () => {
+    // The other half of the argument for removing the floor: it was dormant.
+    // Every room on the starting budget gets exactly what it got before.
+    expect(meshScreenBitrate(2, "auto", 5_000_000)).toBe(2_500_000);
+    expect(meshScreenBitrate(7, "auto", 5_000_000)).toBe(714_286);
+  });
+
   it("clamps a call to the chosen ceiling rather than the raw share", () => {
     // Which is why the peer-count arithmetic could never explain a bad DM: the
     // clamp, not the division, is what a small call actually runs into.
@@ -314,12 +342,27 @@ describe("the quality choice reaches the screen sender", () => {
     expect(meshScreenBitrate(8, "1080p")).toBe(meshScreenBitrate(8, "auto"));
   });
 
-  it("never drops a share below the floor, whatever is chosen", () => {
+  it("keeps every room a mesh can actually hold above 600 kbps a copy", () => {
+    // WAS "never drops a share below the floor". The 600 kbps per-copy floor
+    // is gone (see `meshScreenBitrate` for why: against a *measured* budget it
+    // asked a 1 Mbps link for up to 4.2 Mbps). What survives is the property
+    // the floor was written to protect, and it turns out not to have needed
+    // the floor: a mesh holds `MESH_VOICE_LIMIT` (8) people, so seven remote
+    // peers, and the starting budget divided seven ways is 714 kbps.
     for (const rung of ["auto", "1080p", "720p", "480p", "360p"] as const) {
-      for (const peers of [1, 2, 4, 8, 16]) {
+      for (const peers of [1, 2, 4, 7]) {
         expect(meshScreenBitrate(peers, rung)).toBeGreaterThanOrEqual(600_000);
       }
     }
+  });
+
+  it("divides honestly past the mesh's own size, rather than inventing a floor", () => {
+    // Sixteen peers is not a room this app can open (the mesh caps at 8), but
+    // it is the shape the old floor test used, and the answer now is the
+    // honest one: the budget divided, not a number that would have the room
+    // ask for 9.6 Mbps of a 5 Mbps budget.
+    expect(meshScreenBitrate(16, "auto")).toBe(312_500);
+    expect(meshScreenBitrate(16, "auto") * 16).toBeLessThanOrEqual(5_000_000);
   });
 
   it("leaves every crowded room exactly where it was before the raise", () => {
@@ -479,5 +522,212 @@ describe("the quality choice reaches the screen sender", () => {
       manager.setLocalScreenStream(fakeStream("screen")),
     ).resolves.toBeUndefined();
     expect(screenSenders()[0]?.track?.id).toBe("screen");
+  });
+});
+
+describe("the screen budget follows what the connections measure", () => {
+  const M = 1_000_000;
+
+  /** What every fake connection's selected pair will report this tick. */
+  let uplinkBps: number | null = null;
+
+  function statsReport() {
+    const rows = new Map<string, unknown>();
+    if (uplinkBps !== null) {
+      rows.set("P", {
+        type: "candidate-pair",
+        id: "P",
+        nominated: true,
+        state: "succeeded",
+        availableOutgoingBitrate: uplinkBps,
+      });
+    }
+    return rows;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    uplinkBps = null;
+    FakePeerConnection.prototype.getStats = async () => statsReport();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** One sampling tick, with the stats promises given room to settle. */
+  async function tick() {
+    await vi.advanceTimersByTimeAsync(SCREEN_BUDGET_SAMPLE_MS);
+  }
+
+  it("starts every share on the default budget, before any sample", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    for (const sender of screenSenders()) {
+      expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBe(
+        meshScreenBitrate(2, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+      );
+    }
+    manager.dispose();
+  });
+
+  it("cuts every sender when the link turns out to be short", async () => {
+    // End to end: a three-person call, two viewers, on a 3 Mbps uplink. Each
+    // connection's estimator reports its half of the pipe; the room's budget
+    // becomes the pipe, and each copy gets half of that instead of 2.5 Mbps.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    uplinkBps = 1.5 * M;
+    await tick();
+
+    for (const sender of screenSenders()) {
+      expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBe(1.5 * M);
+    }
+    manager.dispose();
+  });
+
+  it("raises past the old constant when every link reports room", async () => {
+    // Fibre, four viewers. Under the constant each copy got 1.25 Mbps with
+    // the link barely touched. Give it a few ticks of "more than this".
+    const manager = createPeerConnectionManager("z-local", () => {});
+    for (const id of ["a", "b", "c", "d"]) {
+      manager.connectToPeer(`${id}-remote`);
+    }
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    uplinkBps = 20 * M;
+    for (let i = 0; i < 6; i += 1) {
+      await tick();
+    }
+
+    for (const sender of screenSenders()) {
+      expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBeGreaterThan(
+        meshScreenBitrate(4, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+      );
+    }
+    manager.dispose();
+  });
+
+  it("still lets the chosen rung win over a generous link", async () => {
+    // The budget can only lift a share as far as the person asked for.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.setScreenQuality("360p");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    uplinkBps = 50 * M;
+    for (let i = 0; i < 6; i += 1) {
+      await tick();
+    }
+
+    expect(lastParams(screenSenders()[0]!)?.encodings[0]?.maxBitrate).toBe(
+      screenBitrateFor("360p"),
+    );
+    manager.dispose();
+  });
+
+  it("does not re-tune when the reading is inside the wobble", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    const before = screenSenders().map((s) => s.setParameters.mock.calls.length);
+
+    uplinkBps = 2.45 * M;
+    await tick();
+    await tick();
+
+    expect(screenSenders().map((s) => s.setParameters.mock.calls.length)).toEqual(
+      before,
+    );
+    manager.dispose();
+  });
+
+  it("forgets the measurement when the share ends, and stops sampling", async () => {
+    // A laptop that moved from ethernet to café wifi between two shares is the
+    // ordinary case: a reading from the last share must not carry over.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    uplinkBps = 1.5 * M;
+    await tick();
+    expect(lastParams(screenSenders()[0]!)?.encodings[0]?.maxBitrate).toBe(1.5 * M);
+
+    await manager.setLocalScreenStream(null);
+    const getStats = vi.spyOn(FakePeerConnection.prototype, "getStats");
+    await tick();
+    expect(getStats).not.toHaveBeenCalled();
+
+    await manager.setLocalScreenStream(fakeStream("screen-2"));
+    const fresh = senders.filter((s) => s.track?.id === "screen-2");
+    expect(fresh).toHaveLength(2);
+    for (const sender of fresh) {
+      expect(lastParams(sender)?.encodings[0]?.maxBitrate).toBe(
+        meshScreenBitrate(2, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+      );
+    }
+    manager.dispose();
+  });
+
+  it("does not touch a 1:1 call's ceiling, whatever the link reports", async () => {
+    // FOUND IN REVIEW, and it is the most common call shape there is. The
+    // budget controller has nothing to coordinate with one connection, and
+    // clamping the ceiling to a measured dip would leave the browser unable
+    // to re-open the flow at its own pace.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    const before = lastParams(screenSenders()[0]!)?.encodings[0]?.maxBitrate;
+
+    uplinkBps = 400_000;
+    await tick();
+    await tick();
+    await tick();
+
+    expect(lastParams(screenSenders()[0]!)?.encodings[0]?.maxBitrate).toBe(before);
+    manager.dispose();
+  });
+
+  it("releases the clamp when a crowded room empties back down to one viewer", async () => {
+    // A ceiling the crowd needed, left on a link that is no longer carrying
+    // copies of anything, would be the same over-correction in reverse.
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    manager.connectToPeer("b-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+
+    uplinkBps = 700_000;
+    await tick();
+    const clamped = lastParams(screenSenders()[0]!)?.encodings[0]?.maxBitrate ?? 0;
+    expect(clamped).toBeLessThan(
+      meshScreenBitrate(2, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+    );
+
+    manager.removePeer("b-remote");
+    await tick();
+
+    const survivor = screenSenders().filter((s) => s.track !== null)[0]!;
+    expect(lastParams(survivor)?.encodings[0]?.maxBitrate).toBe(
+      meshScreenBitrate(1, DEFAULT_VIDEO_QUALITY, DEFAULT_SCREEN_UPLOAD_BUDGET_BPS),
+    );
+    manager.dispose();
+  });
+
+  it("stops sampling on dispose", async () => {
+    const manager = createPeerConnectionManager("z-local", () => {});
+    manager.connectToPeer("a-remote");
+    await manager.setLocalScreenStream(fakeStream("screen"));
+    manager.dispose();
+
+    const getStats = vi.spyOn(FakePeerConnection.prototype, "getStats");
+    await tick();
+    expect(getStats).not.toHaveBeenCalled();
   });
 });

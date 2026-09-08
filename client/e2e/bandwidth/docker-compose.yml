@@ -1,0 +1,100 @@
+# Three real Chromium processes in three real containers, so that shaping one
+# of them with `tc` shapes something real. See README.md for why this exists
+# and how to read the numbers it prints.
+#
+#   mkdir -p client/e2e/bandwidth/run
+#   docker compose -f client/e2e/bandwidth/docker-compose.yml up -d --build
+#   node client/e2e/bandwidth/run.mjs
+#   docker compose -f client/e2e/bandwidth/docker-compose.yml down -v
+#
+# All ports below are published only to host ports well outside the range
+# `pnpm dev` and the regular e2e suite use, so this can run alongside either
+# without a collision.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pqp
+      POSTGRES_PASSWORD: pqp
+      POSTGRES_DB: pqp_bandwidth
+    tmpfs:
+      # Throwaway database for one run; a volume would outlive the point of
+      # a fresh room every time.
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pqp"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: ../../..
+      dockerfile: client/e2e/bandwidth/Dockerfile.app
+    ports:
+      - "13001:3001"
+    environment:
+      DATABASE_URL: postgresql://pqp:pqp@postgres:5432/pqp_bandwidth
+      PORT: "3001"
+      DEV_AUTH_BYPASS: "true"
+      DEV_SEED: "false"
+      NODE_ENV: development
+      # A handful of requests from one script, but all from one IP as far as
+      # the API is concerned; the same generous ceiling the regular e2e suite
+      # runs under (client/playwright.config.ts).
+      RATE_LIMIT_API_CAPACITY: "10000"
+      RATE_LIMIT_API_REFILL: "1000"
+      RATE_LIMIT_WRITE_CAPACITY: "10000"
+      RATE_LIMIT_WRITE_REFILL: "1000"
+      RATE_LIMIT_WS_MESSAGE_CAPACITY: "10000"
+      RATE_LIMIT_WS_MESSAGE_REFILL: "1000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # The sharer. The only container with NET_ADMIN and the only one `run.mjs`
+  # runs `tc` inside: everything this test measures depends on this being the
+  # one constrained leg. Its own agent process (this same image, see
+  # Dockerfile.browser) launches Chromium locally and drives it in-process —
+  # nothing outside this container ever talks to that browser directly.
+  sharer:
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+    cap_add:
+      - NET_ADMIN
+    environment:
+      PQP_HARNESS_ROLE: sharer
+    volumes:
+      - ./run.mjs:/harness/run.mjs:ro
+      - ./run:/run/coord
+    depends_on:
+      app:
+        condition: service_started
+
+  viewer1:
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+    environment:
+      PQP_HARNESS_ROLE: viewer1
+    volumes:
+      - ./run.mjs:/harness/run.mjs:ro
+      - ./run:/run/coord
+    depends_on:
+      app:
+        condition: service_started
+
+  viewer2:
+    build:
+      context: .
+      dockerfile: Dockerfile.browser
+    environment:
+      PQP_HARNESS_ROLE: viewer2
+    volumes:
+      - ./run.mjs:/harness/run.mjs:ro
+      - ./run:/run/coord
+    depends_on:
+      app:
+        condition: service_started

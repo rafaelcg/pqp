@@ -488,6 +488,45 @@ export function describeLimitation(sample: VideoSenderSample): Limitation | null
   return targetKbps >= ceilingKbps * AT_CEILING ? "setting" : "bandwidth";
 }
 
+/**
+ * `describeLimitation`, corrected for a ceiling this app chose on the user's
+ * behalf rather than one the user picked.
+ *
+ * WHY THIS IS NOT OPTIONAL SINCE THE SCREEN BUDGET STARTED MOVING. The split
+ * above assumes any ceiling in force is the rung the person selected, so
+ * "target sitting on the ceiling" means "your setting" and nothing is wrong.
+ * That was true while the ceiling only ever came from the quality menu. It is
+ * not true now: `screen-upload-budget.ts` lowers the screen ceiling when it
+ * measures a weak uplink, and a sender pinned to *that* ceiling is pinned by
+ * the link, not by a preference.
+ *
+ * Caught by running the bandwidth harness at 1 Mbps and watching the reading
+ * flip to "setting" the moment the budget controller did its job: the app
+ * would have told somebody on a genuinely strained connection that their own
+ * quality setting was the limit, which is both wrong and the most annoying
+ * possible way to be wrong.
+ *
+ * `chosenCeilingBps` is what the user actually asked for. Null when the caller
+ * cannot know (the camera path, and Settings outside a call), where this
+ * degrades to exactly `describeLimitation`.
+ */
+export function describeLimitationAgainst(
+  sample: VideoSenderSample,
+  chosenCeilingBps: number | null,
+): Limitation | null {
+  const limited = describeLimitation(sample);
+  if (limited !== "setting" || chosenCeilingBps === null) {
+    return limited;
+  }
+  const ceilingBps = (sample.ceilingKbps ?? 0) * 1000;
+  // A little under, not merely "not equal": the two numbers pass through
+  // kbps rounding on the way here, and a rounding difference is not a
+  // measured link.
+  return ceilingBps > 0 && ceilingBps < chosenCeilingBps * AT_CEILING
+    ? "bandwidth"
+    : limited;
+}
+
 interface Registration {
   peerId: string;
   pc: RTCPeerConnection;

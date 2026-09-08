@@ -8,6 +8,13 @@ import {
 } from "./video-quality";
 import type { VoiceLinkQuality } from "./voice-link-quality";
 import {
+  DEFAULT_SCREEN_UPLOAD_BUDGET_BPS,
+  nextScreenUploadBudget,
+  readAvailableOutgoingBps,
+  SCREEN_BUDGET_SAMPLE_MS,
+  type UplinkSample,
+} from "./screen-upload-budget";
+import {
   registerVoiceConnection,
   unregisterVoiceConnection,
   type VideoSenderRole,
@@ -282,8 +289,12 @@ export interface PeerConnectionManager {
  * floor stops the arithmetic from producing something unwatchable in a big
  * room: past that point the honest fix is the SFU, not a smaller number.
  */
-const SCREEN_UPLOAD_BUDGET_BPS = 5_000_000;
-const SCREEN_MIN_BITRATE_BPS = 600_000;
+/**
+ * Where the room's screen upload budget starts. It no longer stays there: see
+ * `screen-upload-budget.ts` for how the measured uplink moves it, and
+ * `startScreenBudgetSampling` below for when.
+ */
+const SCREEN_UPLOAD_BUDGET_BPS = DEFAULT_SCREEN_UPLOAD_BUDGET_BPS;
 /**
  * The most any single screen sender may be given, whatever else is agreed.
  *
@@ -297,7 +308,7 @@ const SCREEN_MIN_BITRATE_BPS = 600_000;
  *
  * WHY 4 Mbps AND NOT MORE. Two limits, and both are real:
  *
- *  - `SCREEN_UPLOAD_BUDGET_BPS` is 5 Mbps and is divided by the peer count, so
+ *  - The upload budget starts at 5 Mbps and is divided by the peer count, so
  *    a two-person call is already capped at 5 Mbps by the budget alone. Going
  *    past 4 here would only push a 1:1 call toward saturating the 5 to 10 Mbps
  *    uplink a great many Brazilian home connections actually have, and a
@@ -327,21 +338,54 @@ const SCREEN_MAX_FRAMERATE = 30;
  *    picking 480p cannot be overruled into sending 4 Mbps by an empty room.
  *  - the **mesh budget share**, which is the room's answer. A full mesh uploads
  *    a separate copy per peer, so a per-peer rate multiplies; the split is what
- *    stops a six-way call asking one domestic uplink for 24 Mbps.
- *  - the **floor**, which only ever lifts the *budget share*, never the chosen
- *    ceiling. It exists so the division cannot produce something unwatchable
- *    in a big room. It is not a licence to exceed what the user asked for,
- *    which is why the chosen ceiling is the outermost `min`.
+ *    stops a six-way call asking one domestic uplink for 24 Mbps. `budgetBps`
+ *    is what the link has been measured to carry (`screen-upload-budget.ts`),
+ *    starting from the 5 Mbps default before any measurement exists.
+ * THERE USED TO BE A THIRD TERM, a 600 kbps per-copy floor, and removing it is
+ * the point of this change rather than a simplification of it. It was written
+ * to stop the division producing something unwatchable in a big room, and
+ * under the old constant budget it never once fired: 5 Mbps split across the
+ * most peers a mesh can hold (`MESH_VOICE_LIMIT` is 8, so seven remote) is
+ * 714 kbps, already above it. It was dormant.
+ *
+ * Making the budget a measurement woke it up, and only ever in the case it
+ * gets wrong. A budget cut to its 1 Mbps minimum gives each of seven viewers
+ * 143 kbps, the floor lifted each copy back to 600 kbps, and the room then
+ * asked a **measured** 1 Mbps link for 4.2 Mbps — the exact over-commit this
+ * whole file exists to stop, reintroduced at the bottom of the range, which is
+ * where a weak connection lives. A floor cannot conjure capacity: sending four
+ * times the link into the link does not produce a watchable picture, it
+ * produces the collapse.
+ *
+ * So the measured budget is authoritative and nothing may floor its way past
+ * it. The room total staying above something unwatchable is already handled
+ * one level up, by `MIN_SCREEN_UPLOAD_BUDGET_BPS`, which is the right place
+ * for it: a floor on the whole room, not on each copy of it. Where the honest
+ * per-copy answer is genuinely too small, the answer is the SFU
+ * (`transport-policy.ts`), not a number that lies about the link.
  */
+/**
+ * What the user asked for, before the room or the link had a say.
+ *
+ * Exported because the readout has to be able to tell a ceiling the *person*
+ * chose from one the budget controller imposed, and comparing against the
+ * wrong number is how "your connection is struggling" turns into "your
+ * quality setting is the limit". See `describeLimitationAgainst`.
+ */
+export function chosenScreenCeilingBps(
+  quality: VideoQuality = DEFAULT_VIDEO_QUALITY,
+): number {
+  return Math.min(screenBitrateFor(quality), SCREEN_MAX_BITRATE_BPS);
+}
+
 export function meshScreenBitrate(
   peerCount: number,
   quality: VideoQuality = DEFAULT_VIDEO_QUALITY,
+  budgetBps: number = SCREEN_UPLOAD_BUDGET_BPS,
 ): number {
-  const share = SCREEN_UPLOAD_BUDGET_BPS / Math.max(1, peerCount);
+  const share = budgetBps / Math.max(1, peerCount);
   const chosen = Math.min(screenBitrateFor(quality), SCREEN_MAX_BITRATE_BPS);
-  return Math.round(
-    Math.min(chosen, Math.max(SCREEN_MIN_BITRATE_BPS, share)),
-  );
+  return Math.round(Math.min(chosen, share));
 }
 
 /** The camera's own ceiling. Framerate is what the whole tuning protects. */
@@ -433,6 +477,7 @@ async function tuneScreenSender(
   sender: RTCRtpSender | null,
   peerCount: number,
   quality: VideoQuality,
+  budgetBps: number = SCREEN_UPLOAD_BUDGET_BPS,
 ): Promise<void> {
   if (!sender) {
     return;
@@ -452,7 +497,7 @@ async function tuneScreenSender(
     const captureHeight = sender.track?.getSettings?.().height ?? null;
     const scale = screenScaleFactor(quality, captureHeight);
     for (const encoding of params.encodings) {
-      encoding.maxBitrate = meshScreenBitrate(peerCount, quality);
+      encoding.maxBitrate = meshScreenBitrate(peerCount, quality, budgetBps);
       encoding.maxFramerate = SCREEN_MAX_FRAMERATE;
       // Written on every rung including 1080p, where it is 1: a divisor only
       // ever set on the way down would make the menu a one-way trip, leaving a
@@ -493,8 +538,94 @@ export function createPeerConnectionManager(
       return;
     }
     for (const peer of peers.values()) {
-      void tuneScreenSender(peer.screenSender, peerCount, screenQuality);
+      void tuneScreenSender(
+        peer.screenSender,
+        peerCount,
+        screenQuality,
+        screenBudgetBps,
+      );
     }
+  }
+
+  /**
+   * Ask every live connection what its path can carry, and move the budget.
+   *
+   * One `getStats()` per peer per tick, which is cheap: the stats probe's
+   * console tool samples the same way at the same rate. A peer whose report
+   * cannot be read (an old fake in a test, a browser that omits the field, a
+   * connection mid-restart) counts as "unknown" rather than as zero. What the
+   * controller does with that is `nextScreenUploadBudget`'s business.
+   *
+   * Only the budget's *movement* is decided here; what a new budget means for
+   * each sender is still `meshScreenBitrate`, so the chosen quality and the
+   * per-sender ceiling still apply exactly as they did when the
+   * budget was a constant.
+   */
+  async function sampleScreenBudget(): Promise<void> {
+    if (!localScreenStream) {
+      return;
+    }
+    // A 1:1 call is one connection, which is exactly what the browser's own
+    // congestion control is for; this controller exists to divide a link
+    // between connections that cannot see each other. Skipping the sampling
+    // outright rather than relying on `nextScreenUploadBudget` to decline
+    // also spares a `getStats()` per tick that could never change anything.
+    //
+    // The release matters as much as the skip: a room that was crowded and is
+    // now down to one viewer would otherwise keep whatever ceiling the crowd
+    // needed, on a link that is no longer being asked to carry copies of
+    // anything.
+    if (peers.size < 2) {
+      if (screenBudgetBps !== SCREEN_UPLOAD_BUDGET_BPS) {
+        screenBudgetBps = SCREEN_UPLOAD_BUDGET_BPS;
+        retuneAllScreenSenders();
+      }
+      return;
+    }
+    const samples: UplinkSample[] = await Promise.all(
+      [...peers.values()].map(async (peer) => {
+        if (typeof peer.pc.getStats !== "function") {
+          return null;
+        }
+        try {
+          return readAvailableOutgoingBps(await peer.pc.getStats());
+        } catch {
+          return null;
+        }
+      }),
+    );
+    // The share may have ended while the reports were in flight.
+    if (!localScreenStream) {
+      return;
+    }
+    const next = nextScreenUploadBudget(screenBudgetBps, samples);
+    if (next === screenBudgetBps) {
+      return;
+    }
+    screenBudgetBps = next;
+    retuneAllScreenSenders();
+  }
+
+  /**
+   * Sampling runs only while a share is up. Started by the share, stopped by
+   * its end and by `dispose`, and reset to the default each time so that a
+   * new share does not inherit a reading taken on a link that may have
+   * changed since (a laptop that moved from ethernet to a café's wifi
+   * between two shares is the ordinary case, not a corner one).
+   */
+  function startScreenBudgetSampling(): void {
+    stopScreenBudgetSampling();
+    screenBudgetTimer = setInterval(() => {
+      void sampleScreenBudget();
+    }, SCREEN_BUDGET_SAMPLE_MS);
+  }
+
+  function stopScreenBudgetSampling(): void {
+    if (screenBudgetTimer !== null) {
+      clearInterval(screenBudgetTimer);
+      screenBudgetTimer = null;
+    }
+    screenBudgetBps = SCREEN_UPLOAD_BUDGET_BPS;
   }
 
   /**
@@ -529,6 +660,13 @@ export function createPeerConnectionManager(
    * resolved bitrate would freeze one of those two inputs.
    */
   let screenQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
+  /**
+   * The room's screen upload budget as last measured, in bps. Starts at the
+   * default and is moved by `sampleScreenBudget` while a share is up; the
+   * other input to the screen sender's number, alongside `screenQuality`.
+   */
+  let screenBudgetBps = SCREEN_UPLOAD_BUDGET_BPS;
+  let screenBudgetTimer: ReturnType<typeof setInterval> | null = null;
   let stateHandler: PeerStateChangeHandler | null = null;
   let currentIceServers = iceServers;
 
@@ -866,7 +1004,12 @@ export function createPeerConnectionManager(
         // Somebody joining mid-share gets the same treatment as everybody who
         // was already here, and the room just grew, so this is also the moment
         // the existing senders need their share of the budget recomputed.
-        void tuneScreenSender(managed.screenSender, peers.size + 1, screenQuality);
+        void tuneScreenSender(
+          managed.screenSender,
+          peers.size + 1,
+          screenQuality,
+          screenBudgetBps,
+        );
         // `+ 1` for the same reason: this runs before the caller files the new
         // peer, and the room everyone is about to be in is the one to budget
         // for.
@@ -1184,6 +1327,12 @@ export function createPeerConnectionManager(
     async setLocalScreenStream(stream: MediaStream | null) {
       localScreenStream = stream;
       const nextVideo = stream?.getVideoTracks()[0] ?? null;
+      // A new share measures from scratch; the end of one stops measuring.
+      if (nextVideo) {
+        startScreenBudgetSampling();
+      } else {
+        stopScreenBudgetSampling();
+      }
       // Absent on Safari and Firefox, on any macOS screen or window capture,
       // and whenever the user leaves the "share audio" box unticked. None of
       // that is a failure here: the share is silent, exactly as it always was.
@@ -1197,7 +1346,12 @@ export function createPeerConnectionManager(
             peer.screenSender = peer.pc.addTrack(nextVideo, stream!);
             needsOffer = true;
           }
-          await tuneScreenSender(peer.screenSender, peers.size, screenQuality);
+          await tuneScreenSender(
+            peer.screenSender,
+            peers.size,
+            screenQuality,
+            screenBudgetBps,
+          );
         } else if (peer.screenSender) {
           peer.pc.removeTrack(peer.screenSender);
           peer.screenSender = null;
@@ -1513,6 +1667,7 @@ export function createPeerConnectionManager(
     },
 
     dispose() {
+      stopScreenBudgetSampling();
       for (const peer of peers.values()) {
         clearIceRestartTimer(peer);
         unregisterVoiceConnection(peer.pc);

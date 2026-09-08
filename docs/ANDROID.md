@@ -953,7 +953,7 @@ capture size. The rules, all in `ScreenCapture.kt` and all unit tested:
 The bitrate ceiling is then only a ceiling, split across the mesh because the
 presenter uploads a full copy per peer: 3 Mbps of budget, clamped to
 500 kbps to 2 Mbps per sender, re-split whenever somebody joins or leaves.
-Smaller than the web's 5 Mbps budget and 4 Mbps cap on purpose: this is a phone,
+Smaller than the web's 5 Mbps starting budget and 4 Mbps cap on purpose: this is a phone,
 on a domestic uplink at best, spending its own battery.
 
 **Verified at the far end, which is the only place worth measuring.** A Pixel
