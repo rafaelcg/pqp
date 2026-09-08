@@ -6,7 +6,7 @@ import type { DbUser } from "../db.js";
 /**
  * THE FOURTH CAMERA.
  *
- * "nao da pra ter mais de 3 cameras ligadas nessa porra", from a member of a
+ * "não dá pra ter mais de 3 câmeras ligadas nessa porra", from a member of a
  * five-person server, hitting `CAMERA_LIMIT.mesh`. The limit is correct: a
  * mesh camera is a full uplink copy per peer. The room was on mesh only
  * because the server has fewer than `LARGE_SERVER_MEMBER_THRESHOLD` members,

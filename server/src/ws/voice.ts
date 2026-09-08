@@ -4529,7 +4529,7 @@ onPermissionsUpdate((serverId) => {
 // WHAT CHANGED. `CAMERA_LIMIT.mesh` is three, and it is three for a real
 // reason: a mesh camera is a full uplink copy per peer, so the fourth camera
 // in a six-person mesh room asks each publisher for about 7.5 Mbit/s of
-// upload. The complaint that produced this ("nao da pra ter mais de 3 cameras
+// upload. The complaint that produced this ("não dá pra ter mais de 3 câmeras
 // ligadas nessa porra") was not about the number. It was about the answer: the
 // camera was refused, and the room was on mesh only because the server has
 // fewer than `LARGE_SERVER_MEMBER_THRESHOLD` members, which is a guess about

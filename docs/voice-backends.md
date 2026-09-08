@@ -233,7 +233,7 @@ LiveKit Cloud bills participant-minutes, and a call between three friends gains 
 Rule 4 above says a live room never changes transport. It has exactly one
 exception now, in one direction, and this is it.
 
-**The complaint.** "nao da pra ter mais de 3 cameras ligadas nessa porra", from
+**The complaint.** "não dá pra ter mais de 3 câmeras ligadas nessa porra", from
 a member of a five-person server. `CAMERA_LIMIT.mesh` is 3, and it is 3 for a
 real reason: a mesh camera is a full uplink copy per peer, so the fourth camera
 in a six-person mesh room asks each publisher for about 7.5 Mbit/s of upload.
@@ -259,8 +259,8 @@ join, reads the new pin, and cold-joins onto the SFU.
 
 **The budget.** Every promoted room is egress on one media box, and the click
 that spends it is a user's. `VOICE_PROMOTION_MAX_SFU_MBPS` (default **600**) is
-the ceiling; over it the promotion is refused and the client says "Nao da pra
-ligar mais cameras agora, a sala esta cheia" rather than naming a number that
+the ceiling; over it the promotion is refused and the client says "Não dá pra
+ligar mais câmeras agora, a sala está cheia" rather than naming a number that
 is about to change. The estimate is `publishers x participants x 1.5 Mbit/s`
 per LiveKit room, summed over every room the cluster can see (the rows with
 `VOICE_REGISTRY=postgres`, this process's peers without it); a mesh room counts
