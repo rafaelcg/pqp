@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { TIMEOUT_MAX_MINUTES } from "./sanctions.js";
 
 /**
  * AutoMod: the rules a server enforces on a message before it lands.
@@ -16,10 +17,11 @@ import { z } from "zod";
  * - `invite_links`: a Discord invite in the body. Opt-in.
  * - `mention_spam`: more than N distinct mentions in one message. Opt-in.
  *
- * The action is always block-and-tell: the message never lands and the
+ * The first action is always block-and-tell: the message never lands and the
  * author gets `message-rejected` with `reason: "automod"` plus the rule's own
- * `customMessage`. Timeout-on-trip and regex triggers are deliberately not
- * here; see the issue for why.
+ * `customMessage`. Two more may be added per rule, the same two Discord
+ * offers: post an alert into a channel the moderators read, and time the
+ * author out. Regex triggers are deliberately not here; see the issue.
  *
  * This module is pure so the server enforces it and the client's settings
  * page can run the same code as a "test a message" preview. The two must
@@ -44,6 +46,13 @@ export const AUTOMOD_MENTION_LIMIT_DEFAULT = 5;
 export const AUTOMOD_CUSTOM_MESSAGE_MAX = 150;
 export const AUTOMOD_EXEMPT_ROLES_MAX = 20;
 export const AUTOMOD_EXEMPT_CHANNELS_MAX = 50;
+/**
+ * Timeout-on-trip choices, in minutes. 0 is off. The rest are Discord's
+ * ladder (60 s, 5 min, 10 min, 1 h, 1 d, 1 w), so a moderator arriving from
+ * there finds the number they already use.
+ */
+export const AUTOMOD_TIMEOUT_PRESET_MINUTES = [0, 1, 5, 10, 60, 1440, 10080] as const;
+export const AUTOMOD_TIMEOUT_MAX_MINUTES = TIMEOUT_MAX_MINUTES;
 
 /** One keyword or allow-list entry: trimmed, non-empty, no newlines. */
 export const automodKeywordSchema = z
@@ -71,8 +80,10 @@ export const automodRuleSchema = z.object({
     .max(AUTOMOD_EXEMPT_CHANNELS_MAX),
   /** Shown to the author under the composer. Empty means the default copy. */
   customMessage: z.string().trim().max(AUTOMOD_CUSTOM_MESSAGE_MAX),
-  /** Also file a report on the instance-style reports queue for the server. */
-  reportHits: z.boolean(),
+  /** A text channel in the same server that gets a post per hit. Null: none. */
+  alertChannelId: z.string().uuid().nullable(),
+  /** Time the author out for this long on a hit. 0: do not. */
+  timeoutMinutes: z.number().int().min(0).max(AUTOMOD_TIMEOUT_MAX_MINUTES),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -88,7 +99,8 @@ export const createAutomodRuleSchema = automodRuleSchema
     exemptRoleIds: true,
     exemptChannelIds: true,
     customMessage: true,
-    reportHits: true,
+    alertChannelId: true,
+    timeoutMinutes: true,
   })
   .partial()
   .required({ kind: true })
@@ -117,6 +129,13 @@ export interface AutomodVerdict {
   matched: string;
   customMessage?: string;
 }
+
+/** Which rule kind a verdict names, as copy the alert can print. */
+export const AUTOMOD_KIND_LABEL: Record<AutomodRuleKind, string> = {
+  keywords: "Blocked words",
+  invite_links: "Discord invite links",
+  mention_spam: "Mention spam",
+};
 
 // ---------------------------------------------------------------------------
 // Normalisation

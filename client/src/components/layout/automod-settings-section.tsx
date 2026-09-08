@@ -7,6 +7,7 @@ import {
   AUTOMOD_MENTION_LIMIT_MAX,
   AUTOMOD_MENTION_LIMIT_MIN,
   AUTOMOD_RULE_KINDS,
+  AUTOMOD_TIMEOUT_PRESET_MINUTES,
   evaluateAutomod,
   type AutomodRule,
   type AutomodRuleKind,
@@ -92,7 +93,8 @@ interface RuleForm {
   exemptRoleIds: string[];
   exemptChannelIds: string[];
   customMessage: string;
-  reportHits: boolean;
+  alertChannelId: string | null;
+  timeoutMinutes: number;
 }
 
 function formFromRule(rule: AutomodRule | undefined): RuleForm {
@@ -104,7 +106,8 @@ function formFromRule(rule: AutomodRule | undefined): RuleForm {
     exemptRoleIds: rule?.exemptRoleIds ?? [],
     exemptChannelIds: rule?.exemptChannelIds ?? [],
     customMessage: rule?.customMessage ?? "",
-    reportHits: rule?.reportHits ?? false,
+    alertChannelId: rule?.alertChannelId ?? null,
+    timeoutMinutes: rule?.timeoutMinutes ?? 0,
   };
 }
 
@@ -117,7 +120,8 @@ function formToInput(form: RuleForm) {
     exemptRoleIds: form.exemptRoleIds,
     exemptChannelIds: form.exemptChannelIds,
     customMessage: form.customMessage.trim().slice(0, AUTOMOD_CUSTOM_MESSAGE_MAX),
-    reportHits: form.reportHits,
+    alertChannelId: form.alertChannelId,
+    timeoutMinutes: form.timeoutMinutes,
   };
 }
 
@@ -160,6 +164,30 @@ function Field({
       {children}
     </div>
   );
+}
+
+/** A Discord-style group heading: TRIGGER, RESPONSE, EXEMPTIONS. */
+function Group({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="space-y-4">
+      <h5 className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+        {title}
+      </h5>
+      {children}
+    </section>
+  );
+}
+
+const SELECT =
+  "h-[var(--control-md)] w-full rounded-[var(--radius-control)] border border-border bg-surface-0 px-3 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:opacity-50 sm:w-auto sm:min-w-[14rem]";
+
+function describeMinutes(
+  minutes: number,
+  t: ReturnType<typeof useTranslation>["t"],
+): string {
+  if (minutes < 60) return t("timeout.minutes", { count: minutes });
+  if (minutes < 60 * 24) return t("timeout.hours", { count: minutes / 60 });
+  return t("timeout.days", { count: minutes / (60 * 24) });
 }
 
 /**
@@ -396,6 +424,7 @@ export function AutomodSettingsSection({
   }, [serverId, t]);
 
   const ruleFor = (kind: AutomodRuleKind) => rules?.find((rule) => rule.kind === kind);
+  const textChannels = channels.filter((channel) => channel.type === "text");
   const editingRule = editing ? ruleFor(editing) : undefined;
   const dirty =
     editing !== null && form !== null && !sameForm(form, formFromRule(editingRule));
@@ -547,125 +576,196 @@ export function AutomodSettingsSection({
           )}
         </div>
 
-        <div className="mt-6 space-y-6">
-          {editing === "keywords" && (
-            <>
-              <Field
-                label={t("automod.keywords.list")}
-                hint={t("automod.keywords.hint")}
-                trailing={
-                  <span className="text-xs tabular-nums text-text-tertiary">
-                    {form.keywords.length}/{AUTOMOD_KEYWORDS_MAX}
-                  </span>
-                }
-              >
-                <ChipInput
-                  values={form.keywords}
-                  onChange={(keywords) => patch({ keywords })}
-                  placeholder={t("automod.keywords.placeholder")}
-                  max={AUTOMOD_KEYWORDS_MAX}
-                  ariaLabel={t("automod.keywords.list")}
-                />
-              </Field>
-              <Field label={t("automod.allowList")} hint={t("automod.allowList.hint")}>
-                <ChipInput
-                  values={form.allowList}
-                  onChange={(allowList) => patch({ allowList })}
-                  placeholder={t("automod.allowList.placeholder")}
-                  max={AUTOMOD_ALLOW_LIST_MAX}
-                  ariaLabel={t("automod.allowList")}
-                  tone="allow"
-                />
-              </Field>
-            </>
-          )}
-
-          {editing === "mention_spam" && (
-            <Field
-              label={t("automod.mentionSpam.limit")}
-              hint={t("automod.mentionSpam.limitHint")}
-            >
-              <Input
-                type="number"
-                inputMode="numeric"
-                min={AUTOMOD_MENTION_LIMIT_MIN}
-                max={AUTOMOD_MENTION_LIMIT_MAX}
-                value={form.mentionLimit}
-                aria-label={t("automod.mentionSpam.limit")}
-                className="w-28 tabular-nums"
-                onChange={(event) => {
-                  const next = Number(event.target.value);
-                  if (Number.isInteger(next)) {
-                    patch({
-                      mentionLimit: Math.min(
-                        AUTOMOD_MENTION_LIMIT_MAX,
-                        Math.max(AUTOMOD_MENTION_LIMIT_MIN, next),
-                      ),
-                    });
+        <div className="mt-6 space-y-8">
+          <Group title={t("automod.group.trigger")}>
+            {editing === "keywords" && (
+              <>
+                <Field
+                  label={t("automod.keywords.list")}
+                  hint={t("automod.keywords.hint")}
+                  trailing={
+                    <span className="text-xs tabular-nums text-text-tertiary">
+                      {form.keywords.length}/{AUTOMOD_KEYWORDS_MAX}
+                    </span>
                   }
-                }}
-              />
-            </Field>
-          )}
+                >
+                  <ChipInput
+                    values={form.keywords}
+                    onChange={(keywords) => patch({ keywords })}
+                    placeholder={t("automod.keywords.placeholder")}
+                    max={AUTOMOD_KEYWORDS_MAX}
+                    ariaLabel={t("automod.keywords.list")}
+                  />
+                </Field>
+                <Field label={t("automod.allowList")} hint={t("automod.allowList.hint")}>
+                  <ChipInput
+                    values={form.allowList}
+                    onChange={(allowList) => patch({ allowList })}
+                    placeholder={t("automod.allowList.placeholder")}
+                    max={AUTOMOD_ALLOW_LIST_MAX}
+                    ariaLabel={t("automod.allowList")}
+                    tone="allow"
+                  />
+                </Field>
+              </>
+            )}
+            {editing === "invite_links" && (
+              <p className="text-sm text-text-secondary">{t("automod.inviteLinks.trigger")}</p>
+            )}
+            {editing === "mention_spam" && (
+              <Field
+                label={t("automod.mentionSpam.limit")}
+                hint={t("automod.mentionSpam.limitHint")}
+              >
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  min={AUTOMOD_MENTION_LIMIT_MIN}
+                  max={AUTOMOD_MENTION_LIMIT_MAX}
+                  value={form.mentionLimit}
+                  aria-label={t("automod.mentionSpam.limit")}
+                  className="w-28 tabular-nums"
+                  onChange={(event) => {
+                    const next = Number(event.target.value);
+                    if (Number.isInteger(next)) {
+                      patch({
+                        mentionLimit: Math.min(
+                          AUTOMOD_MENTION_LIMIT_MAX,
+                          Math.max(AUTOMOD_MENTION_LIMIT_MIN, next),
+                        ),
+                      });
+                    }
+                  }}
+                />
+              </Field>
+            )}
+          </Group>
 
-          <Field
-            label={t("automod.customMessage")}
-            hint={t("automod.customMessage.hint")}
-            trailing={
-              <span className="text-xs tabular-nums text-text-tertiary">
-                {form.customMessage.length}/{AUTOMOD_CUSTOM_MESSAGE_MAX}
-              </span>
-            }
-          >
-            <Input
-              value={form.customMessage}
-              maxLength={AUTOMOD_CUSTOM_MESSAGE_MAX}
-              aria-label={t("automod.customMessage")}
-              placeholder={t("chat.reject.automod")}
-              onChange={(event) => patch({ customMessage: event.target.value })}
-            />
-          </Field>
+          <Group title={t("automod.group.response")}>
+            <div className="divide-y divide-border rounded-[var(--radius-card)] border border-border">
+              {/* Block is the one response every rule has; it is shown as a fact, not a switch. */}
+              <div className="space-y-3 px-3 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm text-text">{t("automod.response.block")}</p>
+                    <p className="mt-0.5 text-xs text-text-tertiary">
+                      {t("automod.response.block.hint")}
+                    </p>
+                  </div>
+                  <span className="mt-0.5 inline-flex h-5 items-center rounded-full bg-accent-soft px-2 text-[11px] font-semibold uppercase tracking-wider text-on-accent-soft">
+                    {t("automod.response.always")}
+                  </span>
+                </div>
+                <Field
+                  label={t("automod.customMessage")}
+                  trailing={
+                    <span className="text-xs tabular-nums text-text-tertiary">
+                      {form.customMessage.length}/{AUTOMOD_CUSTOM_MESSAGE_MAX}
+                    </span>
+                  }
+                >
+                  <Input
+                    value={form.customMessage}
+                    maxLength={AUTOMOD_CUSTOM_MESSAGE_MAX}
+                    aria-label={t("automod.customMessage")}
+                    placeholder={t("chat.reject.automod")}
+                    onChange={(event) => patch({ customMessage: event.target.value })}
+                  />
+                </Field>
+              </div>
 
-          <div className="grid gap-6 sm:grid-cols-2">
-            <Field label={t("automod.exemptRoles")} hint={t("automod.exemptRoles.hint")}>
-              <ExemptPicker
-                options={roles.map((role) => ({
-                  id: role.id,
-                  label: displayRoleName(role, t, roles),
-                  swatch: role.color,
-                }))}
-                selected={form.exemptRoleIds}
-                onChange={(exemptRoleIds) => patch({ exemptRoleIds })}
-                addLabel={t("automod.exemptRoles.add")}
-                emptyLabel={t("automod.noRoles")}
-              />
-            </Field>
-            <Field
-              label={t("automod.exemptChannels")}
-              hint={t("automod.exemptChannels.hint")}
-            >
-              <ExemptPicker
-                options={channels.map((channel) => ({
-                  id: channel.id,
-                  label: `#${channel.name}`,
-                }))}
-                selected={form.exemptChannelIds}
-                onChange={(exemptChannelIds) => patch({ exemptChannelIds })}
-                addLabel={t("automod.exemptChannels.add")}
-                emptyLabel={t("automod.noChannels")}
-              />
-            </Field>
-          </div>
+              <div className="space-y-3 px-3 py-3">
+                <Switch
+                  checked={form.alertChannelId !== null}
+                  onCheckedChange={(on) =>
+                    patch({
+                      alertChannelId: on ? (textChannels[0]?.id ?? null) : null,
+                    })
+                  }
+                  disabled={textChannels.length === 0}
+                  label={t("automod.response.alert")}
+                  description={
+                    textChannels.length === 0
+                      ? t("automod.response.alert.noChannels")
+                      : t("automod.response.alert.hint")
+                  }
+                  className="px-0"
+                />
+                {form.alertChannelId !== null && (
+                  <select
+                    value={form.alertChannelId}
+                    aria-label={t("automod.response.alert.channel")}
+                    className={SELECT}
+                    onChange={(event) => patch({ alertChannelId: event.target.value })}
+                  >
+                    {textChannels.map((channel) => (
+                      <option key={channel.id} value={channel.id}>
+                        #{channel.name}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
 
-          <div className="rounded-[var(--radius-card)] border border-border">
-            <Switch
-              checked={form.reportHits}
-              onCheckedChange={(reportHits) => patch({ reportHits })}
-              label={t("automod.reportHits")}
-              description={t("automod.reportHits.hint")}
-              className="px-3 py-3"
-            />
-          </div>
+              <div className="space-y-3 px-3 py-3">
+                <Switch
+                  checked={form.timeoutMinutes > 0}
+                  onCheckedChange={(on) => patch({ timeoutMinutes: on ? 5 : 0 })}
+                  label={t("automod.response.timeout")}
+                  description={t("automod.response.timeout.hint")}
+                  className="px-0"
+                />
+                {form.timeoutMinutes > 0 && (
+                  <select
+                    value={form.timeoutMinutes}
+                    aria-label={t("automod.response.timeout.duration")}
+                    className={SELECT}
+                    onChange={(event) => patch({ timeoutMinutes: Number(event.target.value) })}
+                  >
+                    {AUTOMOD_TIMEOUT_PRESET_MINUTES.filter((m) => m > 0).map((minutes) => (
+                      <option key={minutes} value={minutes}>
+                        {describeMinutes(minutes, t)}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+          </Group>
+
+          <Group title={t("automod.group.exemptions")}>
+            <div className="grid gap-6 sm:grid-cols-2">
+              <Field label={t("automod.exemptRoles")} hint={t("automod.exemptRoles.hint")}>
+                <ExemptPicker
+                  options={roles.map((role) => ({
+                    id: role.id,
+                    label: displayRoleName(role, t, roles),
+                    swatch: role.color,
+                  }))}
+                  selected={form.exemptRoleIds}
+                  onChange={(exemptRoleIds) => patch({ exemptRoleIds })}
+                  addLabel={t("automod.exemptRoles.add")}
+                  emptyLabel={t("automod.noRoles")}
+                />
+              </Field>
+              <Field
+                label={t("automod.exemptChannels")}
+                hint={t("automod.exemptChannels.hint")}
+              >
+                <ExemptPicker
+                  options={channels.map((channel) => ({
+                    id: channel.id,
+                    label: `#${channel.name}`,
+                  }))}
+                  selected={form.exemptChannelIds}
+                  onChange={(exemptChannelIds) => patch({ exemptChannelIds })}
+                  addLabel={t("automod.exemptChannels.add")}
+                  emptyLabel={t("automod.noChannels")}
+                />
+              </Field>
+            </div>
+            <p className="text-xs text-text-tertiary">{t("automod.exemptions.always")}</p>
+          </Group>
 
           {error && (
             <p role="alert" className="text-sm text-danger">
@@ -721,6 +821,15 @@ export function AutomodSettingsSection({
       parts.push(t("automod.summary.mentions", { count: rule.mentionLimit }));
     } else {
       parts.push(t("automod.state.on"));
+    }
+    if (rule.alertChannelId) {
+      const channel = channels.find((c) => c.id === rule.alertChannelId);
+      parts.push(
+        channel ? `#${channel.name}` : t("automod.summary.alert"),
+      );
+    }
+    if (rule.timeoutMinutes > 0) {
+      parts.push(t("automod.summary.timeout", { duration: describeMinutes(rule.timeoutMinutes, t) }));
     }
     if (exempt > 0) parts.push(t("automod.summary.exempt", { count: exempt }));
     return parts.join(" · ");

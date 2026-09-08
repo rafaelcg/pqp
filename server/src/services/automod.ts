@@ -1,4 +1,5 @@
 import {
+  AUTOMOD_KIND_LABEL,
   evaluateAutomod,
   Permission,
   hasPermission,
@@ -8,7 +9,8 @@ import {
 } from "@pqp/shared";
 import { getPool } from "../db.js";
 import { logAudit } from "./audit.js";
-import { createAutomatedReport } from "./reports.js";
+import { getHydratedMessage, type HydratedMessage } from "./messages.js";
+import { issueTimeout, type IssuedTimeout } from "./sanctions.js";
 
 /**
  * AutoMod: rules a server enforces on a message before it lands.
@@ -42,14 +44,15 @@ interface RuleRow {
   exempt_role_ids: string[];
   exempt_channel_ids: string[];
   custom_message: string;
-  report_hits: boolean;
+  alert_channel_id: string | null;
+  timeout_minutes: number;
   created_at: Date;
   updated_at: Date;
 }
 
 const COLUMNS = `id, server_id, kind, enabled, keywords, allow_list, mention_limit,
-  exempt_role_ids, exempt_channel_ids, custom_message, report_hits,
-  created_at, updated_at`;
+  exempt_role_ids, exempt_channel_ids, custom_message, alert_channel_id,
+  timeout_minutes, created_at, updated_at`;
 
 function mapRule(row: RuleRow): AutomodRule {
   return {
@@ -63,7 +66,8 @@ function mapRule(row: RuleRow): AutomodRule {
     exemptRoleIds: row.exempt_role_ids,
     exemptChannelIds: row.exempt_channel_ids,
     customMessage: row.custom_message,
-    reportHits: row.report_hits,
+    alertChannelId: row.alert_channel_id,
+    timeoutMinutes: row.timeout_minutes,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -119,7 +123,8 @@ export type AutomodRuleFields = Pick<
   | "exemptRoleIds"
   | "exemptChannelIds"
   | "customMessage"
-  | "reportHits"
+  | "alertChannelId"
+  | "timeoutMinutes"
 >;
 
 /** Trim, drop empties and duplicates, keep the owner's order. */
@@ -145,8 +150,9 @@ export async function createAutomodRule(
   const result = await getPool().query<RuleRow>(
     `INSERT INTO automod_rules (
        server_id, kind, enabled, keywords, allow_list, mention_limit,
-       exempt_role_ids, exempt_channel_ids, custom_message, report_hits
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       exempt_role_ids, exempt_channel_ids, custom_message, alert_channel_id,
+       timeout_minutes
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      RETURNING ${COLUMNS}`,
     [
       serverId,
@@ -158,7 +164,8 @@ export async function createAutomodRule(
       fields.exemptRoleIds,
       fields.exemptChannelIds,
       fields.customMessage.trim(),
-      fields.reportHits,
+      fields.alertChannelId,
+      fields.timeoutMinutes,
     ],
   );
   invalidateAutomodCache(serverId);
@@ -179,7 +186,10 @@ export async function updateAutomodRule(
        exempt_role_ids    = COALESCE($7, exempt_role_ids),
        exempt_channel_ids = COALESCE($8, exempt_channel_ids),
        custom_message     = COALESCE($9, custom_message),
-       report_hits        = COALESCE($10, report_hits),
+       -- Nullable, so COALESCE cannot say "leave it": $10 is the sentinel for
+       -- "not in the patch" and $11 the value, which may be NULL.
+       alert_channel_id   = CASE WHEN $10::boolean THEN $11::uuid ELSE alert_channel_id END,
+       timeout_minutes    = COALESCE($12, timeout_minutes),
        updated_at         = NOW()
      WHERE server_id = $1 AND id = $2
      RETURNING ${COLUMNS}`,
@@ -193,7 +203,9 @@ export async function updateAutomodRule(
       patch.exemptRoleIds ?? null,
       patch.exemptChannelIds ?? null,
       patch.customMessage?.trim() ?? null,
-      patch.reportHits ?? null,
+      patch.alertChannelId !== undefined,
+      patch.alertChannelId ?? null,
+      patch.timeoutMinutes ?? null,
     ],
   );
   invalidateAutomodCache(serverId);
@@ -232,11 +244,13 @@ export interface AutomodCheckInput {
 /**
  * Decide whether a message may land. Null means yes.
  *
- * MANAGE_MESSAGES walks through every rule, same convention as slow mode:
- * the person who can delete the flood is not the person the filter exists
- * for. A rule's own exemptions (cargos, channels) are applied per rule, so a
- * hall can keep the word filter on in general chat and off in a channel that
- * exists to talk about the word.
+ * MANAGE_MESSAGES, MANAGE_SERVER and ADMINISTRATOR walk through every rule.
+ * The first is slow mode's convention (the person who can delete the flood is
+ * not who the filter is for); the other two are Discord's, and matter because
+ * an owner can lose MANAGE_MESSAGES in one channel through an overwrite and
+ * must never be blocked by their own list. A rule's own exemptions (cargos,
+ * channels) are applied per rule, so a hall can keep the word filter on in
+ * general chat and off in a channel that exists to talk about the word.
  */
 export async function checkAutomod(
   input: AutomodCheckInput,
@@ -245,7 +259,11 @@ export async function checkAutomod(
   if (rules.length === 0) {
     return null;
   }
-  if (hasPermission(input.memberPerms, Permission.MANAGE_MESSAGES)) {
+  if (
+    hasPermission(input.memberPerms, Permission.MANAGE_MESSAGES) ||
+    hasPermission(input.memberPerms, Permission.MANAGE_SERVER) ||
+    hasPermission(input.memberPerms, Permission.ADMINISTRATOR)
+  ) {
     return null;
   }
   const enabled = rules.filter(
@@ -265,15 +283,64 @@ export async function checkAutomod(
 }
 
 /**
- * What a hit leaves behind: an audit row always, a report when the rule
- * asks for one. Best-effort, after the refusal has already been sent, so a
- * failure here never turns into a message landing. The body goes only into
- * the report (a moderator surface), never into the audit log.
+ * The instance's AutoMod pseudo-user: the author of every alert post and the
+ * issuer of every automatic timeout. Same mechanism as a webhook's pseudo-row
+ * (`is_webhook`, so it is excluded from search, mentions and member lists),
+ * with a fixed `clerk_id` so there is exactly one per database. Created on
+ * first use, never deleted.
+ */
+const AUTOMOD_CLERK_ID = "system:automod";
+let automodUserId: string | null = null;
+
+export async function ensureAutomodUser(): Promise<string> {
+  if (automodUserId) {
+    return automodUserId;
+  }
+  const result = await getPool().query<{ id: string }>(
+    `INSERT INTO users (clerk_id, display_name, avatar_url, is_webhook)
+     VALUES ($1, 'AutoMod', NULL, TRUE)
+     ON CONFLICT (clerk_id) DO UPDATE SET display_name = EXCLUDED.display_name
+     RETURNING id`,
+    [AUTOMOD_CLERK_ID],
+  );
+  automodUserId = result.rows[0]!.id;
+  return automodUserId;
+}
+
+/** Test seam: forget the cached pseudo-user id after a TRUNCATE. */
+export function resetAutomodUser(): void {
+  automodUserId = null;
+}
+
+/**
+ * What a hit did beyond refusing the send, for the caller to make live: the
+ * alert post to fan out, and the timeout to announce and enforce in voice.
+ * The database side is done by the time this is returned.
+ */
+export interface AutomodHitEffects {
+  alert: HydratedMessage | null;
+  timeout: IssuedTimeout | null;
+}
+
+function describeMinutes(minutes: number): string {
+  if (minutes % 10080 === 0) return `${minutes / 10080}w`;
+  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}m`;
+}
+
+/**
+ * What a hit leaves behind: an audit row always; a timeout and an alert post
+ * when the rule asks for them. Best-effort and after the refusal has already
+ * been sent, so a failure here never turns into a message landing. The body
+ * goes only into the alert (a channel the moderators chose), never into the
+ * audit log.
  */
 export async function recordAutomodHit(
   input: AutomodCheckInput,
   verdict: AutomodVerdict,
-): Promise<void> {
+): Promise<AutomodHitEffects> {
+  const effects: AutomodHitEffects = { alert: null, timeout: null };
   const rule = verdict.ruleId
     ? (await cachedRules(input.serverId)).find((r) => r.id === verdict.ruleId)
     : undefined;
@@ -296,17 +363,81 @@ export async function recordAutomodHit(
   } catch (error) {
     console.error("[automod] audit write failed:", error);
   }
-  if (!rule?.reportHits) {
-    return;
+  if (!rule) {
+    return effects;
   }
-  try {
-    await createAutomatedReport({
-      reportedUserId: input.authorId,
-      channelId: input.channelId,
-      reason: "spam",
-      details: `AutoMod (${verdict.kind}) blocked "${verdict.matched}": ${input.body.slice(0, 500)}`,
-    });
-  } catch (error) {
-    console.error("[automod] report write failed:", error);
+
+  if (rule.timeoutMinutes > 0) {
+    try {
+      const issuedBy = await ensureAutomodUser();
+      effects.timeout = await issueTimeout({
+        serverId: input.serverId,
+        userId: input.authorId,
+        issuedBy,
+        minutes: rule.timeoutMinutes,
+        reason: `AutoMod: ${AUTOMOD_KIND_LABEL[verdict.kind]}`,
+      });
+      await logAudit({
+        serverId: input.serverId,
+        actorId: null,
+        action: "member.timeout",
+        targetType: "user",
+        targetId: input.authorId,
+        reason: `AutoMod: ${AUTOMOD_KIND_LABEL[verdict.kind]}`,
+        changes: [
+          {
+            key: "expiresAt",
+            old: effects.timeout.previousExpiresAt?.toISOString() ?? null,
+            new: effects.timeout.expiresAt.toISOString(),
+          },
+          { key: "minutes", old: null, new: rule.timeoutMinutes },
+        ],
+      });
+    } catch (error) {
+      console.error("[automod] timeout failed:", error);
+    }
   }
+
+  if (rule.alertChannelId) {
+    try {
+      const authorId = await ensureAutomodUser();
+      const author = await getPool().query<{ display_name: string; username: string | null; discriminator: string | null; name: string | null }>(
+        `SELECT u.display_name, u.username, u.discriminator, c.name
+           FROM users u, channels c
+          WHERE u.id = $1 AND c.id = $2`,
+        [input.authorId, input.channelId],
+      );
+      const who = author.rows[0];
+      const tag =
+        who?.username && who.discriminator
+          ? `${who.username}#${who.discriminator}`
+          : (who?.display_name ?? "a member");
+      const now = new Date();
+      const embed = {
+        title: `AutoMod blocked a message`,
+        color: 0xe5484d,
+        fields: [
+          { name: "Rule", value: AUTOMOD_KIND_LABEL[verdict.kind], inline: true },
+          { name: "Member", value: tag, inline: true },
+          { name: "Channel", value: who?.name ? `#${who.name}` : input.channelId, inline: true },
+          { name: "Matched", value: verdict.matched, inline: true },
+          ...(effects.timeout
+            ? [{ name: "Timeout", value: describeMinutes(rule.timeoutMinutes), inline: true }]
+            : []),
+          { name: "Message", value: input.body.slice(0, 1024) },
+        ],
+        timestamp: now.toISOString(),
+      };
+      const inserted = await getPool().query<{ id: string }>(
+        `INSERT INTO messages (channel_id, author_id, body, webhook_embeds, webhook_username)
+         VALUES ($1, $2, '', $3, 'AutoMod')
+         RETURNING id`,
+        [rule.alertChannelId, authorId, JSON.stringify([embed])],
+      );
+      effects.alert = await getHydratedMessage(inserted.rows[0]!.id);
+    } catch (error) {
+      console.error("[automod] alert post failed:", error);
+    }
+  }
+  return effects;
 }

@@ -159,6 +159,7 @@ import {
   forEachAuthenticatedSocket,
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
+  applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,
   resolveStatuses,
@@ -5022,7 +5023,7 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
     };
     const verdict = await checkAutomod(automodInput);
     if (verdict) {
-      void recordAutomodHit(automodInput, verdict);
+      void recordAutomodHit(automodInput, verdict).then(applyAutomodEffects);
       throw new HttpError(
         422,
         verdict.customMessage ?? "This message was blocked by AutoMod",
@@ -6202,6 +6203,29 @@ router.post(
 
 // ----------------------------------------------------- end voice moderation
 
+/**
+ * An alert channel must be a text channel of this very server: a rule that
+ * posted into another hall's channel would be a cross-server write with the
+ * owner's fingerprints nowhere on it.
+ */
+async function requireAutomodAlertChannel(
+  serverId: string,
+  channelId: string | null,
+): Promise<void> {
+  if (!channelId) {
+    return;
+  }
+  const channel = await getChannel(channelId);
+  if (
+    !channel ||
+    channel.kind !== "server" ||
+    channel.server_id !== serverId ||
+    channel.type !== "text"
+  ) {
+    throw new HttpError(400, "The alert channel must be a text channel in this server");
+  }
+}
+
 // AutoMod rules. Reading needs MANAGE_MESSAGES (a moderator may see what the
 // filter does), writing needs MANAGE_SERVER (the owner's list, like the
 // server's other settings). Matching itself is in @pqp/shared and runs on
@@ -6223,6 +6247,7 @@ router.post(
   async ({ req, user }, { serverId }) => {
     await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
     const body = createAutomodRuleSchema.parse(await readJsonBody(req));
+    await requireAutomodAlertChannel(serverId!, body.alertChannelId ?? null);
     const rule = await createAutomodRule(serverId!, {
       kind: body.kind,
       enabled: body.enabled ?? true,
@@ -6232,7 +6257,8 @@ router.post(
       exemptRoleIds: body.exemptRoleIds ?? [],
       exemptChannelIds: body.exemptChannelIds ?? [],
       customMessage: body.customMessage ?? "",
-      reportHits: body.reportHits ?? false,
+      alertChannelId: body.alertChannelId ?? null,
+      timeoutMinutes: body.timeoutMinutes ?? 0,
     });
     await logAudit({
       serverId: serverId!,
@@ -6254,6 +6280,9 @@ router.patch(
       throw new NotFound("Rule not found");
     }
     const body = updateAutomodRuleSchema.parse(await readJsonBody(req));
+    if (body.alertChannelId !== undefined) {
+      await requireAutomodAlertChannel(serverId!, body.alertChannelId);
+    }
     const before = await getAutomodRule(serverId!, ruleId);
     if (!before) {
       throw new NotFound("Rule not found");
@@ -6268,7 +6297,8 @@ router.patch(
         ["keywords", before.keywords.length, rule.keywords.length],
         ["allowList", before.allowList.length, rule.allowList.length],
         ["mentionLimit", before.mentionLimit, rule.mentionLimit],
-        ["reportHits", before.reportHits, rule.reportHits],
+        ["alertChannelId", before.alertChannelId, rule.alertChannelId],
+        ["timeoutMinutes", before.timeoutMinutes, rule.timeoutMinutes],
       ] as const
     )
       .filter(([, oldValue, newValue]) => oldValue !== newValue)

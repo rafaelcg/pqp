@@ -40,7 +40,9 @@ vi.mock("../auth/clerk.js", () => ({
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
-const { invalidateAutomodCache } = await import("../services/automod.js");
+const { invalidateAutomodCache, resetAutomodUser } = await import(
+  "../services/automod.js"
+);
 const { postChannelMessage } = await import("../ws/index.js");
 const { getUserById } = await import("../services/users.js");
 
@@ -91,14 +93,20 @@ describeDb("automod", () => {
   });
 
   beforeEach(async () => {
+    // A hit's audit and alert writes run after the refusal returns, so the
+    // previous test may still be writing when this one truncates. Let them
+    // land first or TRUNCATE deadlocks against them.
+    await new Promise((done) => setTimeout(done, 120));
     resetApiRateLimits();
     invalidateAutomodCache();
+    resetAutomodUser();
     await getPool().query(
       `TRUNCATE users, user_preferences, servers, channels, messages,
                 server_members, channel_members, server_invites, server_bans,
                 channel_reads, message_mentions, message_reactions,
                 message_attachments, user_blocks, dm_pairs, link_embeds,
-                automod_rules, audit_log, reports
+                automod_rules, audit_log, reports, member_timeouts, roles,
+                member_roles
        RESTART IDENTITY CASCADE`,
     );
     owner = await upsertUser({
@@ -330,15 +338,13 @@ describeDb("automod", () => {
     await call(owner, "POST", rulesPath(serverId), {
       kind: "mention_spam",
       mentionLimit: 2,
-      reportHits: true,
     });
     expect((await send(member, channelId, "@a1 @b2 oi")).status).toBe(201);
     const blocked = await send(member, channelId, "@a1 @b2 @c3 segredo");
     expect(blocked.status).toBe(422);
     expect(blocked.body.error).toMatch(/AutoMod/);
 
-    // The hit's audit row and report are written after the refusal; give
-    // them a tick.
+    // The hit's audit row is written after the refusal; give it a tick.
     await new Promise((done) => setTimeout(done, 50));
 
     const audit = await getPool().query<{
@@ -355,13 +361,94 @@ describeDb("automod", () => {
     expect(audit.rows[0]!.target_id).toBe(member.id);
     expect(audit.rows[0]!.reason).toBe("mention_spam");
     expect(JSON.stringify(audit.rows[0]!.changes)).not.toContain("segredo");
+  });
 
-    const reports = await getPool().query<{ details: string; reported_user_id: string }>(
-      `SELECT details, reported_user_id FROM reports WHERE server_id = $1`,
+  it("a hit can post an alert and time the author out, as AutoMod", async () => {
+    const { serverId, channelId } = await makeServer();
+    const alerts = await call<{ channel: { id: string } }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/channels`,
+      { name: "mod-log", type: "text" },
+    );
+    const alertChannelId = alerts.body.channel.id;
+
+    // The alert channel has to be a text channel of this server.
+    const foreign = await call(owner, "POST", "/api/servers", { name: "Other" });
+    const foreignChannel = (foreign.body as { channels: Array<{ id: string; type: string }> })
+      .channels.find((c) => c.type === "text")!.id;
+    expect(
+      (
+        await call(owner, "POST", rulesPath(serverId), {
+          kind: "keywords",
+          keywords: ["golpe"],
+          alertChannelId: foreignChannel,
+        })
+      ).status,
+    ).toBe(400);
+
+    const created = await call<{ rule: { id: string; alertChannelId: string; timeoutMinutes: number } }>(
+      owner,
+      "POST",
+      rulesPath(serverId),
+      { kind: "keywords", keywords: ["golpe"], alertChannelId, timeoutMinutes: 5 },
+    );
+    expect(created.status).toBe(201);
+    expect(created.body.rule.alertChannelId).toBe(alertChannelId);
+    expect(created.body.rule.timeoutMinutes).toBe(5);
+
+    expect((await send(member, channelId, "golpe aqui")).status).toBe(422);
+    await new Promise((done) => setTimeout(done, 100));
+
+    const timeout = await getPool().query<{ issued_by: string; reason: string }>(
+      `SELECT issued_by, reason FROM member_timeouts WHERE server_id = $1 AND user_id = $2`,
+      [serverId, member.id],
+    );
+    expect(timeout.rows).toHaveLength(1);
+    expect(timeout.rows[0]!.reason).toMatch(/AutoMod/);
+    const issuer = await getPool().query<{ clerk_id: string; is_webhook: boolean }>(
+      `SELECT clerk_id, is_webhook FROM users WHERE id = $1`,
+      [timeout.rows[0]!.issued_by],
+    );
+    expect(issuer.rows[0]).toEqual({ clerk_id: "system:automod", is_webhook: true });
+
+    const alert = await getPool().query<{ webhook_username: string; webhook_embeds: unknown }>(
+      `SELECT webhook_username, webhook_embeds FROM messages WHERE channel_id = $1`,
+      [alertChannelId],
+    );
+    expect(alert.rows).toHaveLength(1);
+    expect(alert.rows[0]!.webhook_username).toBe("AutoMod");
+    expect(JSON.stringify(alert.rows[0]!.webhook_embeds)).toContain("golpe aqui");
+
+    const actions = await getPool().query<{ action: string }>(
+      `SELECT action FROM audit_log WHERE server_id = $1 AND actor_id IS NULL ORDER BY id`,
       [serverId],
     );
-    expect(reports.rows).toHaveLength(1);
-    expect(reports.rows[0]!.reported_user_id).toBe(member.id);
-    expect(reports.rows[0]!.details).toContain("segredo");
+    expect(actions.rows.map((r) => r.action)).toEqual(["automod.block", "member.timeout"]);
+
+    // Clearing the alert channel is a real patch, not "leave it".
+    const cleared = await call<{ rule: { alertChannelId: string | null } }>(
+      owner,
+      "PATCH",
+      `${rulesPath(serverId)}/${created.body.rule.id}`,
+      { alertChannelId: null },
+    );
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.rule.alertChannelId).toBeNull();
+  });
+
+  it("MANAGE_SERVER walks through even without MANAGE_MESSAGES", async () => {
+    const { serverId, channelId } = await makeServer();
+    await call(owner, "POST", rulesPath(serverId), { kind: "keywords", keywords: ["golpe"] });
+    const role = await call<{ role: { id: string } }>(owner, "POST", `/api/servers/${serverId}/roles`, {
+      name: "Gestor",
+      permissions: String(1n << 5n),
+    });
+    expect(role.status).toBe(201);
+    await getPool().query(
+      `INSERT INTO member_roles (server_id, user_id, role_id) VALUES ($1, $2, $3)`,
+      [serverId, member.id, role.body.role.id],
+    );
+    expect((await send(member, channelId, "golpe")).status).toBe(201);
   });
 });

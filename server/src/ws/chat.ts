@@ -55,7 +55,12 @@ import {
   listServerMemberIds,
 } from "../services/permissions.js";
 import { chargeSlowMode, refundSlowMode } from "../services/slow-mode.js";
-import { checkAutomod, recordAutomodHit } from "../services/automod.js";
+import {
+  checkAutomod,
+  recordAutomodHit,
+  type AutomodHitEffects,
+} from "../services/automod.js";
+import { listServerChannelIds } from "../services/servers.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
 import { canAccessChannel } from "../services/users.js";
@@ -1156,6 +1161,31 @@ async function notifyChannelActivity(
 }
 
 /**
+ * Make a hit's after-effects live: fan the alert post out to the channel the
+ * moderators chose, and take a timed-out author out of this server's voice
+ * rooms the way the moderator route does. Shared by the socket send and the
+ * HTTP edit, and safe to call with nothing to do.
+ */
+export async function applyAutomodEffects(
+  effects: AutomodHitEffects,
+): Promise<void> {
+  if (effects.alert) {
+    broadcastToChannel(effects.alert.channel_id, {
+      type: "message-broadcast",
+      message: mapMessage(effects.alert),
+    });
+  }
+  if (effects.timeout) {
+    // voice.ts imports this module, so the eviction is resolved at call time
+    // rather than at load: a static import here is a cycle that leaves
+    // `permissionsListeners` uninitialised when voice.ts subscribes to it.
+    const { evictVoiceUser } = await import("./voice.js");
+    const channelIds = await listServerChannelIds(effects.timeout.serverId);
+    evictVoiceUser(effects.timeout.userId, channelIds);
+  }
+}
+
+/**
  * Tell a timed-out sender why their frame went nowhere.
  *
  * A WebSocket frame has no status code, so a refusal that is not answered
@@ -1335,7 +1365,7 @@ export async function postChannelMessage(
     };
     const verdict = await checkAutomod(automodInput);
     if (verdict) {
-      void recordAutomodHit(automodInput, verdict);
+      void recordAutomodHit(automodInput, verdict).then(applyAutomodEffects);
       return {
         ok: false,
         reason: "automod",
