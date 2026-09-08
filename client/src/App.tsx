@@ -180,6 +180,7 @@ import {
   CALL_SPLIT_DEFAULT,
   loadCallSplit,
   saveCallSplit,
+  strongestStageShape,
   type CallSplitPreference,
   type CallStageShape,
 } from "@/lib/call-split";
@@ -1058,10 +1059,42 @@ function MainAppContent({
     // geometry late still gets the same answer.
     setCallSplit(loadCallSplit());
   }, []);
+  /**
+   * The pane's shape, taken from whichever mounted stage is asking for the
+   * most room rather than from whichever reported last.
+   *
+   * A watch party channel mounts three of them at once: the party panel, the
+   * watch stage and the call stage. Each reports its own shape as it appears
+   * and disappears, so under the old single setter the one going away
+   * ("none", about itself) could flatten the pane while another was still
+   * showing a picture, collapsing the split for no visible reason.
+   * `strongestStageShape` is the rule; the ref is so a report from one source
+   * does not have to know what the others last said.
+   */
+  const stageShapesRef = useRef<Record<string, CallStageShape>>({});
   const [stageShape, setStageShape] = useState<CallStageShape>("none");
-  const handleStageShape = useCallback((shape: CallStageShape) => {
-    setStageShape(shape);
-  }, []);
+  const reportStageShape = useCallback(
+    (source: string, shape: CallStageShape) => {
+      if (stageShapesRef.current[source] === shape) {
+        return;
+      }
+      stageShapesRef.current = { ...stageShapesRef.current, [source]: shape };
+      setStageShape(strongestStageShape(Object.values(stageShapesRef.current)));
+    },
+    [],
+  );
+  const handleStageShape = useCallback(
+    (shape: CallStageShape) => reportStageShape("call-stage", shape),
+    [reportStageShape],
+  );
+  const handleWatchStageShape = useCallback(
+    (shape: CallStageShape) => reportStageShape("watch-stage", shape),
+    [reportStageShape],
+  );
+  const handleWatchPartyShape = useCallback(
+    (shape: CallStageShape) => reportStageShape("watch-party", shape),
+    [reportStageShape],
+  );
   const [splitState, setSplitState] = useState<CallSplitState>({
     active: false,
     canSideBySide: false,
@@ -5537,7 +5570,7 @@ function MainAppContent({
             onStageAction={handleWatchPartyStage}
             canSpeak={voiceState.canSpeak}
             isAudienceSeat={voiceState.isAudienceSeat}
-            onShapeChange={handleStageShape}
+            onShapeChange={handleWatchPartyShape}
           />
         )}
       {selectedChannel.kind === "server" &&
@@ -5545,7 +5578,7 @@ function MainAppContent({
         user && (
           <WatchChannelStage
             fill={splitState.active}
-            onShapeChange={handleStageShape}
+            onShapeChange={handleWatchStageShape}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}

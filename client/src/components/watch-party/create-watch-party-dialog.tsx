@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Clapperboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog } from "@/components/ui/dialog";
+import { Dialog, DialogBody } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { ApiError } from "@/lib/api";
 import {
   browserTimezone,
@@ -100,14 +101,13 @@ export function CreateWatchPartyDialog({
         </div>
       }
     >
-      <div className="flex flex-col gap-3">
+      <DialogBody className="flex flex-col gap-3">
         <label className="block text-xs text-paper-muted">
           <span className="mb-1 block">{t("watchParty.create.nameLabel")}</span>
-          <input
+          <Input
             type="text"
             autoFocus
             maxLength={120}
-            className="w-full rounded-md border border-ink-4 bg-ink-3 px-2 py-1.5 text-sm text-paper"
             value={name}
             onChange={(event) => setName(event.target.value)}
             onKeyDown={(event) => {
@@ -140,9 +140,8 @@ export function CreateWatchPartyDialog({
                 timezone: browserTimezone(),
               })}
             </span>
-            <input
+            <Input
               type="datetime-local"
-              className="w-full rounded-md border border-ink-4 bg-ink-3 px-2 py-1.5 text-sm text-paper"
               value={startsAt}
               min={toLocalInputValue(new Date())}
               onChange={(event) => setStartsAt(event.target.value)}
@@ -153,7 +152,7 @@ export function CreateWatchPartyDialog({
           {t("watchParty.setup.goLiveHint", { channel: `#${channelName}` })}
         </p>
         {error && <p className="text-xs text-danger">{error}</p>}
-      </div>
+      </DialogBody>
     </Dialog>
   );
 }

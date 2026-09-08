@@ -31,6 +31,7 @@ const {
   splitAvailable,
   splitBounds,
   splitFraction,
+  strongestStageShape,
 } = await import("./call-split");
 
 const STACKED = splitBounds("stacked");
@@ -317,5 +318,32 @@ describe("collapsing a pane", () => {
     // the hiding; this asserts why it matters.
     expect(resolveCollapsed("stage", "expanded")).toBe("stage");
     expect(resolveCollapsed("stage", "none")).toBe("none");
+
+describe("strongestStageShape", () => {
+  it("is none when nobody is claiming anything", () => {
+    expect(strongestStageShape([])).toBe("none");
+    expect(strongestStageShape([undefined, "none"])).toBe("none");
+  });
+
+  it("takes the strongest claim, not the latest", () => {
+    // The bug: a watch party channel mounts the party panel, the watch stage
+    // and the call stage together. The one that unmounts reports "none" about
+    // ITSELF, and under last-write-wins that flattened the pane while another
+    // was still showing a picture.
+    expect(strongestStageShape(["expanded", "none"])).toBe("expanded");
+    expect(strongestStageShape(["none", "expanded"])).toBe("expanded");
+    expect(strongestStageShape(["none", "compact", "expanded"])).toBe(
+      "expanded",
+    );
+  });
+
+  it("lets fullscreen beat everything, because it has taken the window", () => {
+    expect(strongestStageShape(["expanded", "fullscreen", "none"])).toBe(
+      "fullscreen",
+    );
+  });
+
+  it("keeps compact above none, so a slim bar still reports itself", () => {
+    expect(strongestStageShape(["none", "compact"])).toBe("compact");
   });
 });

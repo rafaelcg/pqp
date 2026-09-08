@@ -509,16 +509,32 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
   const bar = (
     <div
       data-testid="watch-party-bar"
-      className="flex shrink-0 items-center gap-3 border-b border-ink-4/60 bg-ink-2 px-3 py-2"
+      /* WRAPS, BECAUSE THE COLUMN IS NOT ALWAYS THE WINDOW. Side by side gives
+         the stage roughly 62% of the pane, and on a laptop that is narrow
+         enough that the identity, the viewer count and three buttons do not
+         fit on one line: the first version clipped "Encerrar" against the
+         divider, which is the one control a host must always be able to
+         reach. The actions drop to a second row instead of overflowing, and
+         the identity keeps `min-w-0` so the party's name truncates rather
+         than pushing them off. */
+      className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-ink-4/60 bg-ink-2 px-3 py-2"
     >
-      <PartyIdentity party={party} compact />
-      <span className="ml-auto flex shrink-0 items-center gap-2">
-        <span
-          data-testid="watch-party-viewers"
-          className="text-xs text-paper-muted"
-        >
-          {t("watchParty.live.viewers", { count: props.audienceCount })}
-        </span>
+      {/* A REAL MINIMUM, so the wrap happens instead of the name vanishing.
+          Without it the identity is just `flex-1` and shrinks to nothing in a
+          side-by-side column: the party's name truncated away entirely and the
+          bar showed a live pill over "com Dev U...", which is the block's one
+          job (say WHAT is live) failing in the narrow layout. At this minimum
+          the actions wrap to their own row and the name keeps its line. */}
+      <PartyIdentity
+        party={party}
+        compact
+        className="min-w-[12rem]"
+        meta={t("watchParty.live.viewers", { count: props.audienceCount })}
+      />
+      {/* No `shrink-0`: in a narrow column the buttons wrap onto their own
+          line rather than running past the divider, which is how "Encerrar"
+          ended up half off the screen the first time. */}
+      <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
         {/* THE MICROPHONE IS ASKED FOR HERE AND NOWHERE ELSE.
             An audience seat opens no `getUserMedia` at all (see
             `VoiceAudioOptions.audienceOnly`), so nobody watching is ever
@@ -791,14 +807,19 @@ function LiveSurface(props: WatchPartyPanelProps & { party: WatchParty }) {
 function PartyIdentity({
   party,
   compact = false,
+  meta,
+  className,
 }: {
   party: WatchParty;
   compact?: boolean;
+  /** Appended after the host, for facts that are not actions (the count). */
+  meta?: string;
+  className?: string;
 }) {
   const { t } = useTranslation();
   const live = party.state === "live";
   return (
-    <span className={cn("flex min-w-0 items-center gap-2.5")}>
+    <span className={cn("flex min-w-0 flex-1 items-center gap-2.5", className)}>
       <UserAvatar
         name={party.hostDisplayName}
         avatarUrl={party.hostAvatarUrl}
@@ -829,8 +850,12 @@ function PartyIdentity({
             </span>
           )}
         </span>
-        <span className="truncate text-[11px] text-paper-muted">
+        <span
+          data-testid={meta ? "watch-party-viewers" : undefined}
+          className="truncate text-[11px] text-paper-muted"
+        >
           {t("watchParty.live.hostedBy", { name: party.hostDisplayName })}
+          {meta ? ` · ${meta}` : ""}
         </span>
       </span>
     </span>

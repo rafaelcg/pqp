@@ -347,11 +347,41 @@ do.
    nothing on screen and the panel says so in words. The other order would
    broadcast a picture from a party nobody has been told about.
 4. **The sidebar block**, above the categories: the party's name (not the
-   channel's), the host's face, a live pill, and Assistir.
-5. **The viewer**: one click on that block selects the channel, the watch
-   stage mounts, the HLS plays. No microphone, no seat, no second click.
+   channel's), the host's face and a live pill. The block IS the button, so
+   there is no chip inside it; it had one, in red, and both halves of that were
+   wrong. A button inside a button is a second target for the same action, and
+   red in this app means destructive (Encerrar, Banir). The bordered card that
+   lights up on hover is the affordance.
+5. **The viewer**: one click anywhere on that block selects the channel, the
+   watch stage mounts, the HLS plays. No microphone, no seat, no second click.
    Joining the call is a separate button on the stage.
 6. **Encerrar**, or the host's grace window expiring.
+
+### The layout
+
+The watch stage uses the SAME split machinery as a call: `lib/call-split.ts`
+and `components/layout/call-split.tsx`, not a second implementation. So a watch
+party gets the stacked and side-by-side arrangements, each with its own
+remembered fraction, the same draggable divider with the same pixel minimums,
+and the same toggle in the channel header. The shared `side` default (0.62)
+stands: no watch-party-specific number was introduced, on Rafael's call.
+
+The one change that made it work was `strongestStageShape`. `stageShape` drives
+the divider and the toggle, and it was last-write-wins from a single callback.
+A watch party channel mounts three stages at once (the party panel, the watch
+stage, the call stage) and each reports as it appears and disappears, so
+whichever went away could flatten the pane with a "none" that was only ever
+about itself. The pane takes the strongest claim now: a stage that has gone
+cannot outvote a picture that is still there.
+
+Side by side also exposed a layout bug worth recording, because it is the
+narrow-column version of the one the sidebar block had. The live bar put the
+party's identity, the viewer count and three buttons on one row; at 62% of a
+laptop pane that clipped **Encerrar** against the divider, which is the one
+control a host must always reach. The bar wraps now, the count moved into the
+identity line where it is information rather than an action, and the identity
+carries a real minimum width so the actions wrap to their own row instead of
+the party's name truncating away to nothing.
 
 ### Why the viewer entry changed
 

@@ -21,11 +21,17 @@ import { cn } from "@/lib/utils";
  * more room than a row. Loud would make the sidebar unusable during a show,
  * which is exactly when people need to read the rest of it.
  *
- * ONE CLICK IS WATCHING. The block's action is "Assistir" and it selects the
- * channel; the watch stage mounts on its own and the person is watching with
- * no microphone prompt and no second click. Joining the call is a separate,
- * deliberate button on the stage itself. That ordering is the fix for the
- * second browser that could not get in.
+ * ONE CLICK IS WATCHING, AND THE BLOCK IS THE BUTTON. Clicking anywhere on it
+ * selects the channel; the watch stage mounts on its own and the person is
+ * watching with no microphone prompt and no second click. Joining the call is
+ * a separate, deliberate button on the stage itself. That ordering is the fix
+ * for the second browser that could not get in.
+ *
+ * There is no "Assistir" chip inside the block. It had one, in red, and both
+ * halves of that were wrong: a button inside a button is a second target for
+ * the same action, and red in this app means destructive (Encerrar, Banir).
+ * The bordered card that lights up on hover is the affordance, and the
+ * accessible name says what a click does.
  */
 export function LivePartyBlock({
   parties,
@@ -57,6 +63,7 @@ export function LivePartyBlock({
                 data-channel-id={party.channelId}
                 aria-current={selected ? "page" : undefined}
                 title={t("watchParty.live.watchHint")}
+                aria-label={`${party.name}: ${t("watchParty.live.watch")}`}
                 onClick={() => onWatch(party.channelId)}
                 className={cn(
                   "flex w-full flex-col gap-1 rounded-lg border px-2.5 py-2 text-left transition-colors",
@@ -96,17 +103,28 @@ export function LivePartyBlock({
                     {party.name}
                   </span>
                 </span>
+                {/* THE LINE IS THE LIVE BADGE AND WHO IS HOSTING. NOTHING ELSE.
+                    It used to carry an "Assistir" chip as well, in red, and
+                    Rafael's objection was right twice over. The whole block is
+                    already the button, so a button inside it is a second
+                    target for the same action and it was eating the width the
+                    host's name needed. And red in this app means destructive:
+                    Encerrar is red, Banir is red. The primary action of a
+                    watch party is not in that family, and dressing it that
+                    way teaches the wrong thing about the colour.
+
+                    The affordance is the block: a bordered card that lights
+                    up on hover, with the live badge and a `title` saying what
+                    a click does. No chevron either, which would be one more
+                    thing to draw and would say less than the border does. */}
                 <span className="flex min-w-0 items-center gap-1.5">
                   <span className="shrink-0 rounded-full bg-danger/15 px-1.5 py-px text-[9px] font-bold uppercase tracking-wider text-danger">
                     {t("watchParty.live.badge")}
                   </span>
-                  <span className="truncate text-[11px] text-paper-muted">
+                  <span className="min-w-0 truncate text-[11px] text-paper-muted">
                     {t("watchParty.live.hostedBy", {
                       name: party.hostDisplayName,
                     })}
-                  </span>
-                  <span className="ml-auto shrink-0 rounded-md bg-danger/15 px-2 py-0.5 text-[11px] font-semibold text-danger">
-                    {t("watchParty.live.watch")}
                   </span>
                 </span>
               </button>

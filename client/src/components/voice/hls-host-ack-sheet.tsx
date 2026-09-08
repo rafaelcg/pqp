@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { Dialog } from "@/components/ui/dialog";
+import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { useTranslation } from "@/lib/i18n";
 
 /**
@@ -66,7 +66,9 @@ export function HlsHostAckSheet({
         </div>
       }
     >
-      <p className="text-sm text-paper-muted">{t("voice.hostAck.body")}</p>
+      <DialogBody>
+        <p className="text-sm text-paper-muted">{t("voice.hostAck.body")}</p>
+      </DialogBody>
     </Dialog>
   );
 }
