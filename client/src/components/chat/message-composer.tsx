@@ -83,6 +83,7 @@ import {
   findEmojiQuery,
 } from "@/lib/emoji-shortcodes";
 import { loadGifSearchEnabled } from "@/lib/gifs";
+import { wrapSelection } from "@/lib/menu-selection";
 import {
   applyMention,
   filterMentionCandidates,
@@ -989,9 +990,7 @@ export function MessageComposer({
 
   /** Wraps in both directions, whatever the step. */
   function moveSelection(delta: number) {
-    setSelectedIndex(
-      (index) => (((index + delta) % menuCount) + menuCount) % menuCount,
-    );
+    setSelectedIndex((index) => wrapSelection(index, delta, menuCount));
   }
 
   function applySelection(index: number) {
