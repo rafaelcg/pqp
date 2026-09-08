@@ -87,7 +87,7 @@ function ProductShot({
     <>
       <figure
         className={cn(
-          "w-full overflow-hidden rounded-2xl border border-white/10 bg-ink-2 shadow-[0_40px_120px_-40px_rgba(0,0,0,0.9)]",
+          "w-full overflow-hidden rounded-2xl border border-white/10 bg-ink-2 shadow-[var(--shadow-profile-card)]",
           className,
         )}
       >
