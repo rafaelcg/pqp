@@ -202,6 +202,15 @@ the once-a-minute sampler (`refreshSlowProbes`), never by serving
 the API call a third party or wait on one. A reading older than its window is
 dropped rather than shown, so a stopped sampler degrades to "not measured"
 instead of to an hour-old green. `api` is never measured and never will be.
+
+The GIF probe is **bounded and never awaited**: 8 seconds hard, one probe in
+flight at a time, and the sampler writes its row whatever the provider is
+doing. A probe that runs out of time is recorded as `degraded`, not as
+`operational` — we asked and got nothing back — and is **not** written to
+`status_samples`, so an unknown minute neither inflates nor deflates uptime.
+After a bad probe the next attempt is one minute later rather than fifteen, so
+a recovery shows up quickly and one blip cannot hold the component red for
+long enough to page anybody.
 The operator dashboard additionally reads 24 hours of bucketed latency per
 component (`statusHistory` on `/api/admin/metrics`, behind the machine token):
 a latency curve is a load curve, so it stays off the public page.

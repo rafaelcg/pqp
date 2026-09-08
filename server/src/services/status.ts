@@ -48,13 +48,21 @@ interface Probe {
   key: string;
   label: string;
   /**
-   * `null` means "not configured", which is reported as `disabled` and is
-   * explicitly not a failure — an instance with no object storage is healthy,
-   * it simply has attachments turned off.
+   * Three outcomes, deliberately distinct:
    *
-   * A result with no `latencyMs` means "healthy, but nothing was timed".
+   *  - `null` — **not configured**, reported as `disabled`. Explicitly not a
+   *    failure: an instance with no object storage is healthy, it simply has
+   *    attachments turned off.
+   *  - `{ ok: true | false }` — a verdict. Up or down.
+   *  - `{ ok: "unknown" }` — **asked, no answer in the time allowed**,
+   *    reported as `degraded`. Not up, and not claimed to be down either. It
+   *    is never written to `status_samples`, so an unknown minute neither
+   *    inflates nor deflates uptime.
+   *
+   * A result with no `latencyMs` means "nothing was timed". See the field's
+   * comment on `ComponentStatus`: absent is not zero.
    */
-  run: () => Promise<{ ok: boolean; latencyMs?: number } | null>;
+  run: () => Promise<{ ok: boolean | "unknown"; latencyMs?: number } | null>;
 }
 
 async function timed(
@@ -147,7 +155,16 @@ const PROBES: Probe[] = [
       if (!gifReading || Date.now() - gifReading.at > GIF_READING_MAX_AGE_MS) {
         return { ok: true };
       }
-      return { ok: gifReading.ok, latencyMs: gifReading.latencyMs };
+      // A probe that ran out of time is `unknown`, never `operational`. We
+      // asked and got nothing back; saying "up" would be inventing the half
+      // of the answer that never arrived.
+      if (gifReading.ok === "unknown") {
+        return { ok: "unknown" };
+      }
+      return {
+        ok: gifReading.ok,
+        ...(gifReading.latencyMs === undefined ? {} : { latencyMs: gifReading.latencyMs }),
+      };
     },
   },
 ];
@@ -162,11 +179,80 @@ const PROBES: Probe[] = [
 const SFU_READING_MAX_AGE_MS = 5 * 60_000;
 const GIF_READING_MAX_AGE_MS = 45 * 60_000;
 
-/** How often the GIF provider is actually asked. See `refreshSlowProbes`. */
+/**
+ * How often the GIF provider is actually asked.
+ *
+ * Fifteen minutes while it is answering; **one sampler tick** after a probe
+ * that failed or timed out, so a recovery is confirmed in a minute rather
+ * than a quarter of an hour, and so a single bad probe cannot hold the
+ * component in a bad state for long enough for anybody to be paged over it.
+ */
 const GIF_PROBE_INTERVAL_MS = 15 * 60_000;
+const GIF_RETRY_INTERVAL_MS = 60_000;
 
-let gifReading: { ok: boolean; latencyMs: number; at: number } | null = null;
+/**
+ * The hard ceiling on one GIF probe.
+ *
+ * `gifs.ts` already puts an `AbortSignal.timeout(5s)` on its own `fetch`, so
+ * in practice that one fires first and this never does — which is the point:
+ * this is the guard for everything the inner timeout does not cover. The
+ * sampler `await`s this call, and a promise that neither resolves nor rejects
+ * would stop `recordStatusSamples` before it ever reached the write. Uptime,
+ * the history and every status sample would silently stop moving while the
+ * dashboard kept showing the last good numbers, which is the worst shape a
+ * monitoring failure can take. Eight seconds is comfortably above the inner
+ * five and comfortably below the sampler's sixty, so the two never race and
+ * a skipped tick is impossible.
+ */
+const GIF_PROBE_TIMEOUT_MS = 8_000;
+
+/**
+ * `ok: "unknown"` means the probe ran out of time. Distinct from `false`,
+ * which means the provider answered and the answer was a refusal.
+ */
+let gifReading: { ok: boolean | "unknown"; latencyMs?: number; at: number } | null =
+  null;
 let gifProbeStartedAt = 0;
+/**
+ * The probe in flight, if any. Without it a slow provider gets a fresh probe
+ * every sampler tick and the sockets pile up for as long as the incident
+ * lasts; with it, a tick that finds one running simply skips.
+ */
+let gifProbeInFlight: Promise<void> | null = null;
+
+/**
+ * One GIF probe, bounded.
+ *
+ * The loser of the race is abandoned rather than awaited, and its rejection
+ * is swallowed, so a provider that answers at the ninth second cannot surface
+ * as an unhandled rejection long after the sampler moved on. The socket
+ * itself is closed by the `AbortSignal` inside `gifs.ts`, not left dangling.
+ */
+async function probeGifs(): Promise<void> {
+  const started = Date.now();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), GIF_PROBE_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  const attempt: Promise<"ok" | "error"> = Promise.resolve()
+    .then(() => trendingGifs(1))
+    .then(
+      () => "ok" as const,
+      () => "error" as const,
+    );
+  let outcome: "ok" | "error" | "timeout";
+  try {
+    outcome = await Promise.race([attempt, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+  const at = Date.now();
+  gifReading =
+    outcome === "timeout"
+      ? { ok: "unknown", at }
+      : { ok: outcome === "ok", latencyMs: at - started, at };
+}
 
 /**
  * The probes that cost somebody else something.
@@ -192,42 +278,55 @@ export async function refreshSlowProbes(): Promise<void> {
   const started = Date.now();
   const sfu = readSfuStats().catch(() => undefined);
 
-  let gif: Promise<unknown> = Promise.resolve();
+  const due =
+    gifReading === null || gifReading.ok === true
+      ? GIF_PROBE_INTERVAL_MS
+      : GIF_RETRY_INTERVAL_MS;
   if (
     isGifSearchConfigured() &&
-    started - gifProbeStartedAt >= GIF_PROBE_INTERVAL_MS
+    // A probe already running is never joined and never duplicated: this tick
+    // has nothing to add and the sampler must not wait on it.
+    gifProbeInFlight === null &&
+    started - gifProbeStartedAt >= due
   ) {
     gifProbeStartedAt = started;
-    gif = trendingGifs(1).then(
-      () => {
-        gifReading = { ok: true, latencyMs: Date.now() - started, at: Date.now() };
-      },
-      () => {
-        gifReading = { ok: false, latencyMs: Date.now() - started, at: Date.now() };
-      },
-    );
+    gifProbeInFlight = probeGifs().finally(() => {
+      gifProbeInFlight = null;
+    });
   }
 
-  await Promise.all([sfu, gif]);
+  // Only the SFU read is awaited. The GIF probe is bounded, but it is also
+  // simply not this tick's business: the sample must be written on time
+  // whatever the provider is doing, and the reading lands for the next tick.
+  await sfu;
+}
+
+/**
+ * Test hook: wait for the probe `refreshSlowProbes` deliberately does not
+ * wait for. Production never calls this — the whole point of the fire-and-
+ * forget above is that nothing on the sampler's path joins it.
+ */
+export function settleSlowProbes(): Promise<void> {
+  return gifProbeInFlight ?? Promise.resolve();
 }
 
 /** Test hook: forget the scheduled readings. */
 export function resetSlowProbes(): void {
   gifReading = null;
   gifProbeStartedAt = 0;
+  gifProbeInFlight = null;
 }
 
 /** Run every probe once. Used by the sampler and by the live endpoint alike. */
 export async function probeComponents(): Promise<
-  { key: string; label: string; ok: boolean | null; latencyMs?: number }[]
+  { key: string; label: string; ok: boolean | null | "unknown"; latencyMs?: number }[]
 > {
   return Promise.all(
     PROBES.map(async (probe) => {
       // A probe that threw outside its own timing measured nothing, so it
       // reports no latency rather than a zero.
-      const result: { ok: boolean; latencyMs?: number } | null = await probe
-        .run()
-        .catch(() => ({ ok: false }));
+      const result: { ok: boolean | "unknown"; latencyMs?: number } | null =
+        await probe.run().catch(() => ({ ok: false }));
       if (result === null) {
         return { key: probe.key, label: probe.label, ok: null };
       }
@@ -253,9 +352,12 @@ export async function recordStatusSamples(): Promise<void> {
   // previous minute's. A failure here is not a failure of the sample.
   await refreshSlowProbes().catch(() => undefined);
   const results = await probeComponents();
+  // Only a real verdict is written. `null` is "turned off" and `"unknown"` is
+  // "we asked and got nothing"; recording either would let a component that
+  // was never running, or never answered, move an uptime figure.
   const measured = results.filter(
     (r): r is { key: string; label: string; ok: boolean; latencyMs?: number } =>
-      r.ok !== null,
+      typeof r.ok === "boolean",
   );
   if (measured.length === 0) {
     return;
@@ -335,7 +437,13 @@ export async function getStatusSummary(): Promise<StatusSummary> {
       key: result.key,
       label: result.label,
       state:
-        result.ok === null ? "disabled" : result.ok ? "operational" : "down",
+        result.ok === null
+          ? "disabled"
+          : result.ok === "unknown"
+            ? "degraded"
+            : result.ok
+              ? "operational"
+              : "down",
       ...(result.latencyMs === undefined ? {} : { latencyMs: result.latencyMs }),
       uptime24h: history?.d1 ?? null,
       uptime7d: history?.d7 ?? null,

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * What `/status.json` says about a component nobody measured.
@@ -46,11 +46,16 @@ vi.mock("../voice/sfu-stats.js", () => ({
   readSfuStats: fakes.readSfuStats,
 }));
 
-const { probeComponents, refreshSlowProbes, resetSlowProbes } = await import(
-  "./status.js"
-);
+const { probeComponents, refreshSlowProbes, resetSlowProbes, settleSlowProbes } =
+  await import("./status.js");
 
-type Probed = { key: string; ok: boolean | null; latencyMs?: number };
+/** One sampler tick, then wait for the probe the tick itself never waits on. */
+async function tick(): Promise<void> {
+  await refreshSlowProbes();
+  await settleSlowProbes();
+}
+
+type Probed = { key: string; ok: boolean | null | "unknown"; latencyMs?: number };
 
 async function probe(key: string): Promise<Probed> {
   const results = (await probeComponents()) as Probed[];
@@ -77,13 +82,19 @@ function sfuReading(
 
 describe("status probes: measured or absent, never zero", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     resetSlowProbes();
     fakes.storageConfigured.mockReturnValue(false);
     fakes.gifsConfigured.mockReturnValue(false);
     fakes.voiceBackend.mockReturnValue("mesh");
     fakes.liveKitConfigured.mockReturnValue(false);
     fakes.peekSfuStats.mockReturnValue(null);
-    fakes.trendingGifs.mockClear();
+    fakes.trendingGifs.mockReset();
+    fakes.trendingGifs.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("omits latency for the API, which cannot time itself", async () => {
@@ -164,7 +175,7 @@ describe("status probes: measured or absent, never zero", () => {
 
   it("reports a real GIF round trip once the scheduled probe has run", async () => {
     fakes.gifsConfigured.mockReturnValue(true);
-    await refreshSlowProbes();
+    await tick();
     expect(fakes.trendingGifs).toHaveBeenCalledTimes(1);
 
     const gifs = await probe("gifs");
@@ -175,7 +186,7 @@ describe("status probes: measured or absent, never zero", () => {
   it("calls GIF search down when the provider refused", async () => {
     fakes.gifsConfigured.mockReturnValue(true);
     fakes.trendingGifs.mockRejectedValueOnce(new Error("HTTP 401"));
-    await refreshSlowProbes();
+    await tick();
 
     const gifs = await probe("gifs");
     expect(gifs.ok).toBe(false);
@@ -183,9 +194,9 @@ describe("status probes: measured or absent, never zero", () => {
 
   it("does not ask the GIF provider again on the next sampler tick", async () => {
     fakes.gifsConfigured.mockReturnValue(true);
-    await refreshSlowProbes();
-    await refreshSlowProbes();
-    await refreshSlowProbes();
+    await tick();
+    await tick();
+    await tick();
     // One every fifteen minutes, not one a minute: the sampler runs far more
     // often than this probe is worth paying for.
     expect(fakes.trendingGifs).toHaveBeenCalledTimes(1);
@@ -197,13 +208,134 @@ describe("status probes: measured or absent, never zero", () => {
     expect(fakes.readSfuStats).toHaveBeenCalled();
   });
 
+  /* --------------------------------------------------------------
+   * The sampler must survive the GIF provider, whatever it does.
+   *
+   * recordStatusSamples awaits refreshSlowProbes. If a hung upstream could
+   * hold that open, status samples, uptime and the latency history would all
+   * silently stop moving while the dashboard kept showing the last good
+   * numbers, which is the worst shape a monitoring failure can take.
+   * -------------------------------------------------------------- */
+
+  it("does not wait on the GIF provider at all, hung or otherwise", async () => {
+    fakes.gifsConfigured.mockReturnValue(true);
+    // A promise that never settles. Nothing here may join it.
+    fakes.trendingGifs.mockReturnValue(new Promise(() => {}));
+
+    const settled = await Promise.race([
+      refreshSlowProbes().then(() => "returned"),
+      new Promise((resolve) => setTimeout(() => resolve("hung"), 50)),
+    ]);
+    expect(settled).toBe("returned");
+    expect(fakes.trendingGifs).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts no second probe while one is still running", async () => {
+    fakes.gifsConfigured.mockReturnValue(true);
+    let release: (() => void) | undefined;
+    fakes.trendingGifs.mockReturnValue(
+      new Promise((resolve) => {
+        release = () => resolve([]);
+      }),
+    );
+
+    await refreshSlowProbes();
+    await refreshSlowProbes();
+    await refreshSlowProbes();
+    // Three sampler ticks over one slow provider is one socket, not three.
+    // Otherwise a long incident accumulates them for as long as it lasts.
+    expect(fakes.trendingGifs).toHaveBeenCalledTimes(1);
+
+    release?.();
+  });
+
+  it("starts no second probe even once the interval has come round again", async () => {
+    // The sharp edge of the previous test. The interval guard alone happens
+    // to cover the common case, because a probe normally finishes long
+    // before it is due again. It stops covering it the moment a probe
+    // outlives its own interval, and then nothing but the in-flight guard is
+    // between a long incident and a socket per tick for its whole duration.
+    vi.useFakeTimers();
+    fakes.gifsConfigured.mockReturnValue(true);
+    fakes.trendingGifs.mockReturnValue(new Promise(() => {}));
+
+    await refreshSlowProbes();
+    // Move the clock without letting the probe's own timeout fire, which is
+    // the only way to hold one open past its interval.
+    vi.setSystemTime(Date.now() + 20 * 60_000);
+    await refreshSlowProbes();
+    await refreshSlowProbes();
+
+    expect(fakes.trendingGifs).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a probe that ran out of time as unknown, never as operational", async () => {
+    vi.useFakeTimers();
+    fakes.gifsConfigured.mockReturnValue(true);
+    fakes.trendingGifs.mockReturnValue(new Promise(() => {}));
+
+    await refreshSlowProbes();
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    const gifs = await probe("gifs");
+    // Not `true`. We asked and got nothing back; claiming "up" would be
+    // inventing the half of the answer that never arrived.
+    expect(gifs.ok).toBe("unknown");
+    expect(gifs.ok).not.toBe(true);
+    expectUnprobed(gifs);
+  });
+
+  it("reports an unknown probe as degraded and keeps it out of uptime", async () => {
+    vi.useFakeTimers();
+    fakes.gifsConfigured.mockReturnValue(true);
+    fakes.trendingGifs.mockReturnValue(new Promise(() => {}));
+    await refreshSlowProbes();
+    await vi.advanceTimersByTimeAsync(9_000);
+
+    const gifs = (await probeComponents()).find((c) => c.key === "gifs");
+    // `recordStatusSamples` writes only components whose `ok` is a boolean,
+    // so an unknown minute neither inflates nor deflates the uptime figure.
+    expect(typeof gifs?.ok).not.toBe("boolean");
+  });
+
+  it("retries a minute after a bad probe instead of waiting fifteen", async () => {
+    vi.useFakeTimers();
+    fakes.gifsConfigured.mockReturnValue(true);
+    fakes.trendingGifs.mockRejectedValueOnce(new Error("HTTP 502"));
+    await tick();
+    expect((await probe("gifs")).ok).toBe(false);
+
+    // The very next tick is too soon for a *healthy* component (fifteen
+    // minutes) but not for a bad one.
+    fakes.trendingGifs.mockResolvedValue([]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await tick();
+    // A recovery must be visible in a minute, not in a quarter of an hour,
+    // and a single bad probe must not hold the component in a bad state for
+    // long enough for anybody to be paged over it.
+    expect(fakes.trendingGifs).toHaveBeenCalledTimes(2);
+    expect((await probe("gifs")).ok).toBe(true);
+  });
+
+  it("waits the full fifteen minutes after a good probe", async () => {
+    vi.useFakeTimers();
+    fakes.gifsConfigured.mockReturnValue(true);
+    await tick();
+    await vi.advanceTimersByTimeAsync(14 * 60_000);
+    await tick();
+    expect(fakes.trendingGifs).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2 * 60_000);
+    await tick();
+    expect(fakes.trendingGifs).toHaveBeenCalledTimes(2);
+  });
+
   it("carries the field on exactly the components that were measured", async () => {
     fakes.storageConfigured.mockReturnValue(true);
     fakes.gifsConfigured.mockReturnValue(true);
     fakes.voiceBackend.mockReturnValue("livekit");
     fakes.liveKitConfigured.mockReturnValue(true);
     fakes.peekSfuStats.mockReturnValue(sfuReading(true, 42, 30_000));
-    await refreshSlowProbes();
+    await tick();
 
     const withLatency = ((await probeComponents()) as Probed[])
       .filter((c) => "latencyMs" in c)
