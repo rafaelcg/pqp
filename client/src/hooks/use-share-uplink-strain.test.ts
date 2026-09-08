@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isStrained,
   nextStrainStreak,
+  shouldMeasureUplink,
   SUSTAINED_SAMPLES,
 } from "@/hooks/use-share-uplink-strain";
 import type { VideoSenderSample } from "@/lib/voice-stats-probe";
@@ -243,5 +244,45 @@ describe("the share uplink warning", () => {
   it("does not carry a previous share's grievance into the next one", () => {
     const carried = nextStrainStreak(runOf(SUSTAINED_SAMPLES, starved), [], CHOSEN, 2);
     expect(carried).toBe(0);
+  });
+});
+
+/**
+ * THE SEAM WITH ROOM PROMOTION.
+ *
+ * A room's transport used to be fixed for its whole life, so "is this a mesh
+ * room" was answered once, before the first sample. It is not any more: any of
+ * the promotion triggers moves a live room onto the SFU
+ * (`docs/voice-backends.md`, "The one time a live room changes transport"),
+ * and the common one is not a cap at all but the room simply reaching
+ * `MESH_ROOM_PROMOTION_SIZE` people. A share in progress when the fourth
+ * person walks in is promoted under the presenter, and this hook is then
+ * mid-streak on a mesh that is being torn down in the same tick.
+ *
+ * Getting this wrong is invisible in exactly the way that matters: the sampler
+ * would keep reading a torn-down mesh, or read the SFU's rows, where a capped
+ * top layer under an uncapped reported ceiling makes every tick look like
+ * "bandwidth". The presenter of a promoted call on fibre would be told their
+ * connection is the problem, permanently, with nothing on any screen to say
+ * why.
+ */
+describe("what is worth measuring at all", () => {
+  it("measures a mesh share", () => {
+    expect(shouldMeasureUplink(true, "mesh")).toBe(true);
+  });
+
+  it("measures a share on a server too old to state the transport", () => {
+    // `null` is a room whose transport was never stated. Mesh is what those
+    // deployments run, and it is what this warning was written against.
+    expect(shouldMeasureUplink(true, null)).toBe(true);
+  });
+
+  it("stops the moment a live room is promoted to the voice server", () => {
+    expect(shouldMeasureUplink(true, "livekit")).toBe(false);
+  });
+
+  it("measures nothing when this machine is not the one sharing", () => {
+    expect(shouldMeasureUplink(false, "mesh")).toBe(false);
+    expect(shouldMeasureUplink(false, "livekit")).toBe(false);
   });
 });
