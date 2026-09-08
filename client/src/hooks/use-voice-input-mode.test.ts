@@ -86,6 +86,7 @@ vi.mock("@/lib/livekit-session", () => ({
     setScreenMaxBitrate: async () => {},
     setScreenQuality: async () => {},
     setReceiveQuality: async () => {},
+    setAudioDelivery: () => {},
     unpublishCamera: async () => {},
     disconnect: async () => {},
     isConnected: () => false,

@@ -100,14 +100,22 @@ Applied to production:
 | `limit.num_tracks: -1` (and `bytes_per_sec: -1`) | 1.13.6 has no default track limit. Newer releases default to 400 tracks per CPU, which would silently cap a small box on an image bump. Pin before any bump | 2026-09-08 07:17:17Z |
 | Resize `sfu-pqp` from `vhp-2c-4gb-amd` to `vhp-4c-8gb-amd` | the port change only pays off with four cores to bind the four ports to; gated on LiveKit participants at most 4 | 2026-09-08 09:25:54Z |
 
-Known and not fixed: **TURN over TLS is dead.** Web, iOS and Android LiveKit
-clients receive only the LiveKit server's built-in TURN. LiveKit advertises
-`turns:turn.pqp.gg:443`, but Caddy owns 443 on the box, so that candidate never
-connects; the UDP 3478 relay is what works. Measured relay share on production:
-about one join in ten, all UDP, all Windows web or Electron. A viewer behind a
-network that blocks UDP has no working relay today. Fix under consideration:
-hand LiveKit clients the same `/api/ice-servers` list (Cloudflare TURN) the
-mesh path already uses.
+**TURN, corrected 2026-09-08.** This paragraph used to say that web, iOS and
+Android LiveKit clients receive only the media box's own built-in TURN, that
+its TLS relay is dead because Caddy owns 443, that about one join in ten
+relayed through the box, and that handing LiveKit clients the
+`/api/ice-servers` list was a fix under consideration. That fix has since
+shipped: `client/src/lib/sfu-ice-servers.ts` and its iOS and Android twins
+hand the app's own list (Cloudflare first) to the LiveKit SDK's `rtcConfig`,
+and the SDK then skips the join response's list entirely, so the box's relay
+is no longer offered to anybody.
+
+Checked on the box on 2026-09-08 with 9 to 12 participants live: **zero**
+relay allocations in the 30000 to 40000 range at three sampled instants.
+Three instants is not a proof of never, but the one-in-ten figure this
+replaces is certainly wrong now and should not be quoted. The TLS relay on
+5349 is still dead and still unused, and nothing depends on it; the reason it
+is dead (Caddy owns 443) is unchanged.
 
 **Co-tenancy note (reasoning, not measurement).** Redis and LiveKit Egress (for
 HLS) run on `sfu-pqp` alongside LiveKit itself, installed 2026-09-08; the box

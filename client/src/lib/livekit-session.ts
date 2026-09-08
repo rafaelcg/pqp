@@ -4,6 +4,10 @@ import type { ReceiveQuality } from "./receive-quality";
 import { registerRemoteVideoBinding } from "./remote-video-binding";
 import { sfuIceServers } from "./sfu-ice-servers";
 import {
+  createRemoteAudioDelivery,
+  type RemoteAudioPlan,
+} from "./remote-audio-delivery";
+import {
   createRemoteVideoDelivery,
   type DeliveryPublication,
 } from "./remote-video-delivery";
@@ -162,6 +166,15 @@ export interface LiveKitSession {
    * applied to what is subscribed now and to whatever arrives later.
    */
   setReceiveQuality(quality: ReceiveQuality): Promise<void>;
+  /**
+   * Which remote sounds this listener wants at all.
+   *
+   * Deafen, a person turned to zero, a moderator's mute and a share whose
+   * sound is off are all states in which the `<audio>` element already plays
+   * nothing; this is what stops the server sending the bytes as well. See
+   * `remote-audio-delivery.ts`, which owns the rule and the reasoning.
+   */
+  setAudioDelivery(plan: RemoteAudioPlan): void;
   /** Stop publishing the camera video track. */
   unpublishCamera(): Promise<void>;
   disconnect(): Promise<void>;
@@ -324,6 +337,18 @@ export async function connectLiveKit({
     },
   });
 
+  /**
+   * The same idea for the sounds nobody is listening to.
+   *
+   * NO `release` OVERRIDE HERE, and the asymmetry is the point. The video
+   * module has to hand its pause back to `adaptiveStream`, which has its own
+   * opinion about the same publication; nothing else in the library has an
+   * opinion about whether an audio track is enabled, so a plain
+   * `setEnabled(true)` is the whole of resuming. `isEnabled` reads
+   * `requestedDisabled` for a non-video publication and nothing overwrites it.
+   */
+  const audioDelivery = createRemoteAudioDelivery();
+
   function onVisibilityChange() {
     delivery.setTabHidden(document.visibilityState === "hidden");
   }
@@ -462,11 +487,20 @@ export async function connectLiveKit({
       const stream = new MediaStream([track.mediaStreamTrack]);
       // Audio is labelled by source too, so the presentation's sound never
       // lands in the slot the participant's voice is played and metered from.
-      if (pub.source === Track.Source.ScreenShareAudio) {
+      const screenAudio = pub.source === Track.Source.ScreenShareAudio;
+      if (screenAudio) {
         screenAudioStreams.set(participant.identity, stream);
       } else {
         streams.set(participant.identity, stream);
       }
+      // Delivered until the listener's plan says otherwise. Registered after
+      // the stream is filed so a plan that arrives in the same tick finds a
+      // consistent room.
+      audioDelivery.register(
+        pub,
+        participant.identity,
+        screenAudio ? "screen" : "voice",
+      );
       snapshot();
     })
     .on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
@@ -484,6 +518,7 @@ export async function connectLiveKit({
       if (track.kind !== Track.Kind.Audio) {
         return;
       }
+      audioDelivery.unregister(pub);
       if (pub.source === Track.Source.ScreenShareAudio) {
         screenAudioStreams.delete(participant.identity);
       } else {
@@ -1249,6 +1284,10 @@ export async function connectLiveKit({
       }
     },
 
+    setAudioDelivery(plan: RemoteAudioPlan) {
+      audioDelivery.setPlan(plan);
+    },
+
     async unpublishCamera() {
       if (!publishedCameraTrack) {
         return;
@@ -1261,6 +1300,7 @@ export async function connectLiveKit({
     async disconnect() {
       unregisterStats();
       delivery.dispose();
+      audioDelivery.dispose();
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVisibilityChange);
       }

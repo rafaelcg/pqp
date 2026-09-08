@@ -2,6 +2,7 @@ import type { VoiceSignalingMessage } from "@pqp/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTransport } from "@/lib/realtime";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
+import type { RemoteAudioPlan } from "@/lib/remote-audio-delivery";
 
 /**
  * The client obeys the room's transport, or leaves and says so.
@@ -122,9 +123,18 @@ const sfuScreenPublishes: (MediaStream | null)[] = [];
 const sfuMicPublishes: MediaStream[] = [];
 /** Every LiveKit publication mute the stub was asked for, in order. */
 const sfuMuteCalls: boolean[] = [];
+/** Every remote-audio plan the stub was handed, in order. */
+const sfuAudioPlans: RemoteAudioPlan[] = [];
+/**
+ * The last options `connectLiveKit` was called with, so a test can play the
+ * part of the SFU and hand the hook a roster of remote peers.
+ */
+let sfuConnectOptions: { onPeersChanged: (peers: RemotePeer[]) => void } | null =
+  null;
 
 vi.mock("@/lib/livekit-session", () => ({
-  connectLiveKit: vi.fn(async () => ({
+  connectLiveKit: vi.fn(async (options: unknown) => ({
+    __options: (sfuConnectOptions = options as typeof sfuConnectOptions),
     publish: async (stream: MediaStream) => {
       sfuMicPublishes.push(stream);
     },
@@ -144,6 +154,9 @@ vi.mock("@/lib/livekit-session", () => ({
     setScreenMaxBitrate: async () => {},
     setScreenQuality: async () => {},
     setReceiveQuality: async () => {},
+    setAudioDelivery: (plan: RemoteAudioPlan) => {
+      sfuAudioPlans.push(plan);
+    },
     unpublishCamera: async () => {},
     disconnect: async () => {},
     isConnected: () => false,
@@ -2733,5 +2746,85 @@ describe("watch mode without a seat", () => {
     });
     voice.seedChannelLive(WATCHED, { stream: null, watching: 0 });
     expect(voice.getState().channelLive[WATCHED]?.watching).toBe(5);
+  });
+});
+
+/**
+ * The listener's audio plan, from the hook's side of the seam.
+ *
+ * `remote-audio-delivery.test.ts` owns the rule and
+ * `livekit-session-audio-delivery.test.ts` owns what the session does with
+ * it. What is left, and what nothing else would notice going wrong, is
+ * whether the hook ever tells the session anything: a plan that is built
+ * correctly and never sent saves nothing, and every other test in this file
+ * would still pass.
+ */
+describe("telling the SFU what this listener wants to hear", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    sfuAudioPlans.length = 0;
+    vi.mocked(connectLiveKit).mockClear();
+  });
+
+  async function connectedSfu() {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => sfuSession());
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("livekit"));
+    await settle();
+    expect(voice.getState().usingSfu).toBe(true);
+    return voice;
+  }
+
+  it("sends a plan that wants everybody as soon as the session is up", async () => {
+    await connectedSfu();
+    expect(sfuAudioPlans.length).toBeGreaterThan(0);
+    const first = sfuAudioPlans[0]!;
+    expect(first.deafened).toBe(false);
+    expect(first.silentVoicePeerIds).toEqual([]);
+  });
+
+  it("sends a deafened plan when the button is pressed, and takes it back", async () => {
+    const voice = await connectedSfu();
+    sfuAudioPlans.length = 0;
+
+    voice.toggleDeafen();
+    await settle();
+    expect(sfuAudioPlans.at(-1)?.deafened).toBe(true);
+
+    voice.toggleDeafen();
+    await settle();
+    expect(sfuAudioPlans.at(-1)?.deafened).toBe(false);
+  });
+
+  it("names the peer whose voice was turned all the way down", async () => {
+    const voice = await connectedSfu();
+
+    // Play the part of the SFU: somebody's microphone is now in the room.
+    sfuConnectOptions!.onPeersChanged([
+      { peerId: "peer-2", userId: "user-2" } as RemotePeer,
+    ]);
+    await settle();
+    sfuAudioPlans.length = 0;
+
+    voice.setPeerVolume("user-2", 0);
+    await settle();
+    expect(sfuAudioPlans.at(-1)?.silentVoicePeerIds).toEqual(["peer-2"]);
+
+    voice.setPeerVolume("user-2", 0.5);
+    await settle();
+    expect(sfuAudioPlans.at(-1)?.silentVoicePeerIds).toEqual([]);
+  });
+
+  it("does not re-send a plan that says the same thing", async () => {
+    const voice = await connectedSfu();
+    sfuAudioPlans.length = 0;
+    voice.setPeerVolume("somebody-not-here", 0.5);
+    await settle();
+    voice.setPeerVolume("somebody-not-here", 0.6);
+    await settle();
+    expect(sfuAudioPlans).toEqual([]);
   });
 });
