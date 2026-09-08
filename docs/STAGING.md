@@ -14,11 +14,18 @@ A full staging environment: real Clerk auth, real Postgres, real Fly and Pages, 
 ## What staging is (and is not)
 
 - **Separate users.** Auth is a Clerk DEVELOPMENT instance (`pk_test` / `sk_test`). Accounts, sessions and origins are fully disjoint from production Clerk. Your prod account does not exist here; sign up again.
-- **Separate database on its own cluster.** Database `pqp-staging` (hyphen: Fly Managed Postgres rejects underscores in database names) on cluster **`pqp-db-staging`, id `dzx6qo65q9n0jpv5`**, region `gru`, Basic plan (shared x2 / 1 GB / 10 GB disk, $38 a month). The schema self-applies at boot via `server/src/schema.sql` (`initDb()` in `server/src/db.ts`); there is no migration step and nothing to run by hand.
+- **Separate database, on its own unmanaged Fly Postgres app, not Managed Postgres.** Database `pqp_staging` on Fly app **`pqp-db-staging-lite`**, region `gru`: one `shared-cpu-1x` machine, 256 MB RAM, 1 GB volume, `postgres-flex` image, `max_connections` 300 out of the box. Cost is roughly $2 to $3 a month, versus the $38 a month the prior Managed Postgres cluster (`pqp-db-staging`, Basic plan, shared x2 / 1 GB / 10 GB disk) cost for a database staging mostly leaves idle. Moved 2026-09-08 for that reason alone: staging data is disposable, so paying managed-cluster money for it was never buying anything staging needed. The schema self-applies at boot via `server/src/schema.sql` (`initDb()` in `server/src/db.ts`); there is no migration step and nothing to run by hand.
 
-  It used to live on production's cluster, and moving it off (2026-09-07) was a **safety** change, not a tidiness one: one cluster means one `max_connections` of 100, so a load test that exhausted connections on staging would have starved `pqp-api` and taken pqp.gg down. Isolation is what makes it legitimate to push staging to failure. Production is `pqp-db-2`, id `9g6y30wdxzmrv5ml`, database `fly-db`; nothing in this document should ever touch it.
+  `DATABASE_URL` on `pqp-api-staging` points at the app's Flycast address, `postgres://postgres:<password>@pqp-db-staging-lite.flycast:5432/pqp_staging`, private 6PN networking, the same as Managed Postgres, just without the pooler and without Fly operating it for you: this is unmanaged Postgres, so there is no automatic failover, no point-in-time restore, and no `fly mpg` tooling. That trade is fine for staging (see the safety rule below) and would not be fine for production. `DATABASE_SSL` is unset, matching how `pqp-api-staging` was already configured before the move; the connection is unencrypted but confined to Fly's private network.
 
-  Two things about that move that `fly mpg list` will make you doubt. **`pqp-db-staging` lists no attached apps**, because `DATABASE_URL` was set by hand at the `direct.<cluster>.flympg.net` host, which is how production is configured and is not what `fly mpg attach` writes; the attachment record is a label, the secret is the connection, and `/ready` is the thing that answers whether it works. And **the old `pqp-staging` database still exists on `pqp-db-2`**, holding the copy that was dumped out of it, unreferenced by anything. It is a rollback, not a live database. Delete it when nobody wants that rollback any more, remembering whose cluster it is on.
+  To connect by hand: `fly proxy 15433:5432 -a pqp-db-staging-lite`, then `psql -h 127.0.0.1 -p 15433 -U postgres -d pqp_staging` with the password from `fly ssh console -a pqp-api-staging -C "printenv DATABASE_URL"`. There is no `fly mpg proxy` for this instance; it is a plain `fly proxy`.
+
+  **A load test above roughly 100 concurrent connections needs `max_connections` raised on `pqp-db-staging-lite` (300 today is headroom, not a guarantee once `PG_POOL_MAX` is pushed past what the load-testing runbook below normally sets) or, for one run, a temporary Managed Postgres cluster stood up and torn down for it.** Do not assume this instance scales the way the old managed cluster did; it is deliberately the cheapest thing that keeps ordinary staging traffic working.
+
+  **The old Managed Postgres cluster, `pqp-db-staging` (id `dzx6qo65q9n0jpv5`), is destroyed** (2026-09-08). `fly mpg list` now shows only `pqp-db-2` (production). A `pg_dump` of the old cluster taken immediately before the switch lives at `~/.config/pqp/staging-db-dump-20260908.sql.gz` on the operator's machine (0600, never committed) as the rollback if anything looked wrong.
+
+  The GitHub repo variable `MONITOR_MPG_CLUSTER` points at production (`pqp-db-2`) and was never affected by any of this; it never pointed at staging.
+
 - **Object storage is its own R2 bucket, `pqp-attachments-staging`** (created 2026-09-01, private, CORS for `https://staging.pqp-3yr.pages.dev` and `http://localhost:5173`). `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION=auto` and `S3_FORCE_PATH_STYLE=false` are set on `pqp-api-staging`; the two credentials come from an R2 API token scoped to that bucket (Dashboard → R2 → Manage R2 API Tokens → Object Read & Write). `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are set from the account token `pqp-staging` (Object Read & Write, that bucket only), verified with a signed PUT / HEAD / DELETE round trip on 2026-09-01. Attachments and Baú media both work on staging. Never point staging at the production bucket; to rotate, create a new token in the dashboard, `fly secrets set` the pair, then delete the old token.
 - **No TURN.** Cross-NAT voice may fail on staging; same-network voice works. This is the known STUN-only limitation (CLAUDE.md pitfall 1), accepted here to keep staging cheap.
 - **No analytics or ads tags.** The build omits Umami, Google Ads and the APK click beacon on purpose; staging traffic must not pollute production numbers.
@@ -40,18 +47,15 @@ A deploy to staging never restarts production: the workflow only talks to `pqp-a
 
 ## Resetting the staging database
 
-Wipe the contents of `pqp-staging` in place; the next boot recreates the whole schema from `server/src/schema.sql`. Dropping the database itself is not an option on Managed Postgres: the `schema_admin` role owns neither the database nor the `public` schema (both belong to `postgres`, and there is no `fly mpg databases delete`), so `DROP DATABASE` and `DROP SCHEMA public` are both refused. What the role can drop is everything it created, which is exactly the app's tables and the `pgcrypto` extension (the app's `fly-user` login resolves to `schema_admin` on this cluster).
-
-**`fly mpg connect` cannot do this on the new cluster.** It authenticates as an MPG system role there, and `DROP OWNED BY current_user` comes back `ERROR: MPG system roles cannot be modified`. The app's own `fly-user` login is the one that owns the tables, so go in through the proxy with its password (the one in `DATABASE_URL`):
+Wipe the contents of `pqp_staging` in place; the next boot recreates the whole schema from `server/src/schema.sql`. `pqp-db-staging-lite` is unmanaged Postgres and the connection uses the `postgres` superuser, so this is the ordinary drop-and-recreate, not the Managed Postgres workaround an earlier version of this doc needed:
 
 ```bash
-fly machine stop <machine id> -a pqp-api-staging   # nothing holding connections or recreating tables mid-wipe
-fly mpg proxy dzx6qo65q9n0jpv5 -p 16394 &          # STAGING cluster; production is 9g6y30wdxzmrv5ml
-psql -h 127.0.0.1 -p 16394 -U fly-user -d pqp-staging -c 'DROP OWNED BY current_user;'
-fly machine start <machine id> -a pqp-api-staging  # boot reapplies schema.sql, including CREATE EXTENSION pgcrypto
+fly machine stop <machine id> -a pqp-api-staging     # nothing holding connections mid-wipe
+fly proxy 15433:5432 -a pqp-db-staging-lite &        # not `fly mpg proxy`; this instance is unmanaged
+psql -h 127.0.0.1 -p 15433 -U postgres -d postgres -c 'DROP DATABASE pqp_staging;'
+psql -h 127.0.0.1 -p 15433 -U postgres -d postgres -c 'CREATE DATABASE pqp_staging;'
+fly machine start <machine id> -a pqp-api-staging    # boot reapplies schema.sql, including CREATE EXTENSION pgcrypto
 ```
-
-Read that cluster id before pressing enter, every time.
 
 **After a load test you usually want the smaller version**, which keeps the staging accounts you signed up by hand and removes only what the run created. Verified on 2026-09-07, when it took the database from 5 638 users back to 3:
 
@@ -69,7 +73,7 @@ Every load-test identity carries the `load_test_user` prefix (`LOAD_TEST_CLERK_I
 | GitHub Actions secret | `FLY_API_TOKEN_STAGING` | Deploy token scoped to `pqp-api-staging` |
 | GitHub Actions secrets | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Shared with the production web deploy |
 | GitHub repo variable | `STAGING_CLERK_PUBLISHABLE_KEY` | Clerk dev `pk_test`; public by definition, so a variable, not a secret |
-| Fly secrets on `pqp-api-staging` | `DATABASE_URL` | Points at `pqp-staging` on `pqp-db-staging` (`dzx6qo65q9n0jpv5`), via its `direct.<cluster>.flympg.net` host, the way production is configured |
+| Fly secrets on `pqp-api-staging` | `DATABASE_URL` | Points at `pqp_staging` on `pqp-db-staging-lite`, an unmanaged Fly Postgres app, via its `.flycast` address |
 | Fly secrets on `pqp-api-staging` | `CLERK_SECRET_KEY` | The dev instance `sk_test`, never the prod key |
 | Fly secrets on `pqp-api-staging` | `CORS_ALLOWED_ORIGINS`, `CLERK_AUTHORIZED_PARTIES` | The staging Pages origin |
 | Fly secrets on `pqp-api-staging` | `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | R2 API token scoped to `pqp-attachments-staging` only |
@@ -86,7 +90,7 @@ Capacity is a measured number or it is a guess, and a guess gets discovered duri
 Read these before the commands, because the commands are easy and two of these mistakes are not recoverable.
 
 1. **Never point a load test at production.** `pqp.gg` and `api.pqp.gg` are out of bounds, full stop. `load-fanout.ts` refuses a `--url` on that domain, but the refusal is a backstop, not permission to try.
-2. **Never load test a deployment whose database cluster is shared with production.** This is the rule that made the September 2026 rig possible at all: staging and production shared one Fly Managed Postgres cluster with one `max_connections` of 100, and exhausting connections on staging would have starved `pqp-api`. Staging now has its own cluster (`pqp-db-staging`, `dzx6qo65q9n0jpv5`). If you ever repoint staging back onto `pqp-db-2`, load testing stops being allowed until you undo that.
+2. **Never load test a deployment whose database is shared with production.** This is the rule that made the September 2026 rig possible at all: staging and production originally shared one Fly Managed Postgres cluster with one `max_connections` of 100, and exhausting connections on staging would have starved `pqp-api`. Staging now has its own database, first on a dedicated Managed Postgres cluster (`pqp-db-staging`, since destroyed) and now on the unmanaged `pqp-db-staging-lite` (`max_connections` 300). If you ever repoint staging's `DATABASE_URL` back onto `pqp-db-2`, load testing stops being allowed until you undo that.
 3. **The harness writes.** It creates users, a server, channels, invites and messages, and it leaves them there. That is fine on staging and is why the database reset above exists.
 4. **`LOAD_TEST_TOKEN` belongs on `pqp-api-staging` and nowhere else.** The server refuses it on any Fly app not named `-staging`, but do not lean on that: the secret is the boundary, the app-name check is the second lock.
 5. **Put staging back when you are done.** A `performance-2x` machine left running is real money for an environment that is idle most of the week.
