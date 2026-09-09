@@ -587,6 +587,136 @@ describeDb("watch party ownership", () => {
       expect(after.rowCount).toBe(1);
     });
 
+    it("makes the room visible to a plain member on a server whose @everyone cannot see channels by default", async () => {
+      /**
+       * THE ONE THAT LOCKED AN AUDIENCE OUT OF ITS OWN EVENT.
+       *
+       * A community that does not put VIEW_CHANNEL on @everyone and hands it
+       * back per channel instead is an ordinary Discord-shaped setup, and a
+       * likely one for a server with two thousand members. The room is
+       * created here with no overwrites at all, so its visibility fell
+       * through to the server default, which on such a server is "no".
+       *
+       * Reproduced in a browser on 12 Sep 2026 before the fix: the room was
+       * absent from the member's `GET /channels`, the watch-parties endpoint
+       * answered `[]`, the sidebar block never appeared, and a deep link to
+       * the room bounced them to the first text channel. The host saw a
+       * perfectly normal live party the whole time. That is the entire
+       * audience locked out, silently, on the day of the show.
+       *
+       * The three assertions below are the three surfaces that failed, in
+       * the order a person meets them.
+       */
+      await getPool().query(`DELETE FROM channels WHERE id = $1`, [channelId]);
+
+      const everyoneId = (
+        await getPool().query<{ id: string }>(
+          `SELECT id FROM roles WHERE server_id = $1 AND is_everyone`,
+          [serverId],
+        )
+      ).rows[0]!.id;
+      await getPool().query(
+        `UPDATE roles SET permissions = permissions & ~$2::bigint WHERE id = $1`,
+        [everyoneId, Permission.VIEW_CHANNEL],
+      );
+      await getPool().query(
+        `UPDATE servers SET permissions_version = permissions_version + 1 WHERE id = $1`,
+        [serverId],
+      );
+
+      // Started by the OWNER, who short-circuits `computePermissions` and is
+      // who runs the show on the server this was reproduced against. A
+      // role-holding host is refused 403 on a server like this, because
+      // START_WATCH_PARTY still resolves through a channel they can no longer
+      // see. That is arguable rather than obviously wrong (you cannot act in
+      // a room you cannot enter) and it is a separate question from this one,
+      // which is about the AUDIENCE.
+      const started = await startOnServer(owner);
+      expect(started.status).toBe(200);
+      const roomId = started.body.channel.id;
+
+      // 1. The room is in the member's own channel list, which is what the
+      //    deep-link resolver looks it up in before deciding the channel does
+      //    not exist and landing them somewhere else.
+      const listed = await call<{ channels: { id: string }[] }>(
+        member,
+        "GET",
+        `/api/servers/${serverId}/channels`,
+      );
+      expect(listed.status).toBe(200);
+      expect(listed.body.channels.map((one) => one.id)).toContain(roomId);
+
+      // 2. And the party itself, which is what draws the sidebar block.
+      await call(owner, "POST", `/api/watch-parties/${started.body.party.id}/state`, {
+        state: "live",
+      });
+      const parties = await call<{ parties: { id: string }[] }>(
+        member,
+        "GET",
+        `/api/servers/${serverId}/watch-parties`,
+      );
+      expect(parties.status).toBe(200);
+      expect(parties.body.parties.map((one) => one.id)).toContain(
+        started.body.party.id,
+      );
+
+      // 3. The bit is written where it can still be overruled: an @everyone
+      //    ALLOW, so a per-role or per-member deny on this channel continues
+      //    to win. This removes the accidental case, not the deliberate one.
+      const overwrite = await getPool().query<{ allow: string; deny: string }>(
+        `SELECT allow, deny FROM channel_overwrites
+          WHERE channel_id = $1 AND target_type = 'role' AND target_id = $2`,
+        [roomId, everyoneId],
+      );
+      expect(overwrite.rowCount).toBe(1);
+      expect(BigInt(overwrite.rows[0]!.allow) & BigInt(Permission.VIEW_CHANNEL)).not.toBe(
+        0n,
+      );
+      // The VIEW bit only. The same row carries the SPEAK deny that going
+      // live writes for a closed floor, which is the stage mode working and
+      // has nothing to do with who can see the room.
+      expect(
+        BigInt(overwrite.rows[0]!.deny) & BigInt(Permission.VIEW_CHANNEL),
+      ).toBe(0n);
+    });
+
+    it("does not re-open a watch party room somebody deliberately made private", async () => {
+      // ADOPTION IS NOT CREATION. `beforeEach` leaves a `watch_party` channel
+      // on the server; a host who made theirs private meant it, and a party
+      // starting in it is not a reason for this code to overrule them.
+      const everyoneId = (
+        await getPool().query<{ id: string }>(
+          `SELECT id FROM roles WHERE server_id = $1 AND is_everyone`,
+          [serverId],
+        )
+      ).rows[0]!.id;
+      await getPool().query(
+        `UPDATE channels SET is_private = TRUE WHERE id = $1`,
+        [channelId],
+      );
+      await getPool().query(
+        `INSERT INTO channel_overwrites (channel_id, target_type, target_id, allow, deny)
+         VALUES ($1, 'role', $2, 0, $3)`,
+        [channelId, everyoneId, Permission.VIEW_CHANNEL],
+      );
+
+      const started = await startOnServer(host);
+      expect(started.status).toBe(200);
+      expect(started.body.channel.id).toBe(channelId);
+
+      const overwrite = await getPool().query<{ allow: string; deny: string }>(
+        `SELECT allow, deny FROM channel_overwrites
+          WHERE channel_id = $1 AND target_type = 'role' AND target_id = $2`,
+        [channelId, everyoneId],
+      );
+      expect(BigInt(overwrite.rows[0]!.deny) & BigInt(Permission.VIEW_CHANNEL)).not.toBe(
+        0n,
+      );
+      expect(
+        BigInt(overwrite.rows[0]!.allow) & BigInt(Permission.VIEW_CHANNEL),
+      ).toBe(0n);
+    });
+
     it("makes the room on demand for a server that has none", async () => {
       await getPool().query(`DELETE FROM channels WHERE id = $1`, [channelId]);
 
