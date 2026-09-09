@@ -459,6 +459,48 @@ describeDb("watch party options and the stage", () => {
     expect(await everyoneSpeakDenied()).toBe(false);
   });
 
+
+  it("leaves a channel's own SPEAK deny alone, and does not grant the host around it", async () => {
+    /**
+     * THE CONSEQUENCE OF WRITING NOTHING, PINNED SO IT IS A DECISION.
+     *
+     * Before this change the default party closed the floor and granted the
+     * host back, which had a side effect nobody designed: it routed around
+     * ANY pre-existing @everyone SPEAK deny on the channel, deliberate or
+     * stale. A voiceless party writes nothing, so it routes around nothing,
+     * and on such a channel the host has a seat and no microphone.
+     *
+     * That is the right trade (a rule that is never written cannot leak) and
+     * it is worth an assertion rather than a discovery on a Saturday. The
+     * answer to a stale deny is the cleanup query in docs/WATCH_PARTY.md,
+     * not a grant on the path that is supposed to write nothing.
+     */
+    await upsertChannelOverwrite(
+      channelId,
+      serverId,
+      "role",
+      everyoneId,
+      0n,
+      Permission.SPEAK,
+    );
+    const before = await allOverwrites();
+    const versionBefore = await permissionsVersion();
+
+    const party = await draft();
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+
+    // No grant for the host, and the deny is exactly as somebody else left
+    // it: the party neither honours it nor repairs it, it ignores it.
+    expect(await memberSpeakAllowed(host.id)).toBe(false);
+    expect(await allOverwrites()).toEqual(before);
+    expect(await permissionsVersion()).toBe(versionBefore);
+
+    // And ending does not hand the room a microphone it never had. The
+    // channel is left in the state it was found in, which is the promise.
+    expect((await setState(host, party.id, "ended")).status).toBe(200);
+    expect(await everyoneSpeakDenied()).toBe(true);
+    expect(await allOverwrites()).toEqual(before);
+  });
   it("a party stored before voiceEnabled existed still closes its floor", async () => {
     /**
      * EXISTING PARTIES MUST NOT BREAK, and this is the one that could.

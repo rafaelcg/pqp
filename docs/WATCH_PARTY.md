@@ -513,11 +513,27 @@ ahead of the `canSpeak` test. With no overwrite written, `canSpeak` is usually
 the everyday default `true`, so asking it first would put a Falar button on
 every viewer's screen in exactly the parties that are meant to have none.
 
-**One known edge, stated rather than hidden.** A host who turns voice OFF
-mid-show does not evict the people already seated. New joins are refused;
-existing seats stay until their owners leave. Those seats are already paid for
-on the media box, and yanking somebody out of a room they are speaking in is a
-louder act than a settings change implies.
+**Two known edges, stated rather than hidden.**
+
+A host who turns voice OFF mid-show does not evict the people already seated.
+New joins are refused; existing seats stay until their owners leave. Those
+seats are already paid for on the media box, and yanking somebody out of a
+room they are speaking in is a louder act than a settings change implies.
+
+**And a voiceless party does not grant its host SPEAK, so a channel that
+already denies it silences them.** Before this, the default party closed the
+floor and granted the host back, which had the side effect of routing around
+any pre-existing @everyone SPEAK deny on the channel: a stale one, or a
+deliberate one. A voiceless party writes nothing, so it routes around nothing,
+and on such a channel the host has a seat and no microphone while
+`watchPartySpeakAffordance` still offers them Falar (it offers the people
+running the show the button on purpose, because the server is the authority
+and a grant can be a version behind). This is not a new way to get a stale
+deny, it is the last thing that was papering over one, and the answer is the
+cleanup query in §"Leftover SPEAK overwrites" rather than a grant on the
+default path. **Run that query against any channel a big party is about to
+use.** A stale deny is invisible until a room is full, which is the whole
+reason this section exists.
 
 ### What going live does to the channel, and what ending puts back
 
