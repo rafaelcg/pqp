@@ -55,6 +55,15 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
     lateinit var calls: gg.pqp.app.voice.CallController
         private set
 
+    /**
+     * Application-scoped for one reason the others do not have: the watcher
+     * count is per socket, and this is what re-announces a watch after a
+     * reconnect. Tied to a screen it would forget the moment somebody rotated
+     * the phone mid-party.
+     */
+    lateinit var watch: gg.pqp.app.watch.WatchLiveStore
+        private set
+
     override fun onCreate() {
         super.onCreate()
 
@@ -71,6 +80,17 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
         voice = gg.pqp.app.voice.VoiceController(this, session, appScope)
         push = gg.pqp.app.push.PushController(this, session, appScope)
         calls = gg.pqp.app.voice.CallController(this, session, voice, appScope)
+        watch = gg.pqp.app.watch.WatchLiveStore(
+            frames = session.realtime.frames,
+            realtimeState = session.realtime.state,
+            send = { session.realtime.send(it) },
+            // Read lazily rather than captured: a seat comes and goes for the
+            // whole life of this object, and a snapshot taken here would be
+            // the answer from before anybody had joined anything.
+            seatedChannelId = { voice.state.value.channelId.takeIf { _ -> voice.state.value.isActive } },
+            seed = { channelId -> runCatching { session.api.channelLive(channelId) }.getOrNull() },
+            scope = appScope,
+        )
     }
 
     /**

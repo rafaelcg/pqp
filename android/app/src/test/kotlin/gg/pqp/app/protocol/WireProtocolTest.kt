@@ -165,6 +165,18 @@ class WireProtocolTest {
             "offer",
             "answer",
             "ice-candidate",
+            // The two live-HLS frames, and the reason they are up here rather
+            // than on the ignore list below. `voice-stream` is the playlist
+            // for the room's current screen share; `channel-live` is the same
+            // stream plus the seatless watcher count, sent to everybody who
+            // may VIEW the channel. Losing either branch does not break a
+            // badge: it takes the phone's whole watch party away, because the
+            // player has no other way to learn that a stream exists or that
+            // its URL changed. `channel-live` is also the only thing that
+            // restamps the viewer token, so a client that stopped reading it
+            // would play until the token expired and then stop for good.
+            "voice-stream",
+            "channel-live",
             // the Baú's one live frame
             "community-home-update",
             // handshake
@@ -220,17 +232,6 @@ class WireProtocolTest {
         // Coalesced emoji burst counts for a channel's live reactions. No
         // reaction-overlay surface on the phone yet.
         "live-reactions" to "no live reactions surface on the phone",
-        // The two live-HLS frames. `voice-stream` is the playlist for the
-        // room's current screen share; `channel-live` is the sidebar's "this
-        // room is live" plus its seatless watcher count. Both are behind
-        // LIVE_HLS_ENABLED, both feed a watch surface the phone does not
-        // draw, and Android watches a share over WebRTC when it is in the
-        // call. Neither has ever had a branch here: the entries were missing
-        // rather than the frames being handled, and this test could not say
-        // so because Gradle had cached `testDebugUnitTest` past every change
-        // to `packages/shared`, which is not one of its declared inputs.
-        "voice-stream" to "no HLS watch surface on the phone",
-        "channel-live" to "no live badge or seatless watch surface on the phone",
     )
 
     /**

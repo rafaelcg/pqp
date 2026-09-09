@@ -67,6 +67,7 @@ class MainActivity : ComponentActivity() {
                     voice = app.voice,
                     push = app.push,
                     calls = app.calls,
+                    watch = app.watch,
                 )
             }
         }
