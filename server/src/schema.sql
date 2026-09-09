@@ -4000,3 +4000,30 @@ ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS timeout_minutes INTEGER NOT N
 ALTER TABLE automod_rules DROP COLUMN IF EXISTS report_hits;
 -- The pqp half of the invite rule came a day after the Discord half.
 ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS block_pqp_invites BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Watch party live streaming, per server, as DATA rather than configuration.
+--
+-- `LIVE_HLS_SERVER_ALLOWLIST` is a Fly environment variable, so widening it
+-- meant a deploy, which restarts `pqp-api` and closes every WebSocket, and
+-- nothing anywhere showed which servers were on it. This column is the same
+-- decision written down where an operator can change it from the dashboard
+-- with no deploy and no restart, exactly the way `is_community` /
+-- `is_community_listed` already work.
+--
+-- THREE STATES, and the third one is the point:
+--
+--   TRUE   the operator turned it on for this server
+--   FALSE  the operator turned it OFF for this server, and that beats the
+--          environment variable, which is what gives a running event a kill
+--          switch that does not need a deploy
+--   NULL   nobody has decided; fall back to `LIVE_HLS_SERVER_ALLOWLIST`
+--          (on the list = on; the variable unset or empty = every server)
+--
+-- So the deploy that carries this column changes nothing: every row is NULL
+-- and every answer is the one the environment already gave. A self-host with
+-- no dashboard never touches it and keeps the variable it always had.
+--
+-- `LIVE_HLS_ENABLED` is untouched and stays the master switch: with it off,
+-- or without the dedicated bucket, this column cannot turn anything on. See
+-- `resolveLiveHlsForServer` in server/src/voice/hls-egress.ts.
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS live_hls_enabled BOOLEAN;

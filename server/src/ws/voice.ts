@@ -645,7 +645,7 @@ async function decideRoomTransport(
   channel: ChannelRow,
 ): Promise<VoiceTransportDecision> {
   const liveKitConfigured = configuredTransport() === "livekit";
-  const liveHlsEnabled = isLiveHlsEnabledForServer(channel.server_id);
+  const liveHlsEnabled = await isLiveHlsEnabledForServer(channel.server_id);
   const voiceTransport = channel.voice_transport ?? null;
   // The query is skipped only for the branches that answer without it, and
   // HLS is one of them ONLY for a watch party. Testing `liveHlsEnabled`

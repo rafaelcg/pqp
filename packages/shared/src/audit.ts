@@ -139,6 +139,25 @@ export const AUDIT_ACTIONS = [
   "automod.rule_update",
   "automod.rule_delete",
   "automod.block",
+  /**
+   * The instance operator turned watch party live streaming on or off for
+   * this server (`servers.live_hls_enabled`), or handed the decision back to
+   * `LIVE_HLS_SERVER_ALLOWLIST`.
+   *
+   * Written with a NULL actor when it came from the operator dashboard's
+   * machine token, which has no account behind it, and with the moderator's
+   * own id when they used a Clerk session. It lands in the SERVER's own log
+   * rather than nowhere, because unlike an account termination this is a
+   * change to one server and its owner is entitled to see that somebody
+   * outside their staff made it. See services/operator.ts.
+   */
+  "server.live_hls_update",
+  /**
+   * The instance operator pinned, or unpinned, a voice channel's media path
+   * (`channels.voice_transport`). Same actor rule as the row above. Read once
+   * when a room opens, so this never moves a call that is already running.
+   */
+  "channel.voice_transport_update",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

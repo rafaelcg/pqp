@@ -100,6 +100,14 @@ const AUDIT_ACTION_KEYS: Record<string, MessageKey> = {
   "automod.rule_update": "serverSettings.audit.action.automod.rule_update",
   "automod.rule_delete": "serverSettings.audit.action.automod.rule_delete",
   "automod.block": "serverSettings.audit.action.automod.block",
+  // The instance operator's two levers, from the dashboard rather than
+  // from this server's staff. They land in the server's own log because
+  // they change the server; the actor is null, so the row reads as the
+  // system did it, the same as an AutoMod block.
+  "server.live_hls_update":
+    "serverSettings.audit.action.server.live_hls_update",
+  "channel.voice_transport_update":
+    "serverSettings.audit.action.channel.voice_transport_update",
 };
 
 /* ------------------------------------------------------------------ layout */

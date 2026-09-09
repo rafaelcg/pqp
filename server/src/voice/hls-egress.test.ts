@@ -12,9 +12,11 @@ import {
   isLiveHlsEnabledForServer,
   liveHlsActivity,
   liveHlsConfig,
+  liveHlsConfigForServer,
   liveHlsLadder,
   liveHlsRungsFor,
   liveHlsServerAllowlist,
+  resolveLiveHlsForServer,
   setLiveHlsSfuLoadReader,
   liveHlsStreamFor,
   maxLiveHlsSessions,
@@ -37,7 +39,26 @@ vi.mock("../lib/log.js", () => ({ logEvent }));
  * fast the database answered. What the rows contain is `hls-cleanup.test.ts`
  * and `hls-playlist-proxy.test.ts`'s job; this file is about the egress.
  */
-const query = vi.hoisted(() => vi.fn(async () => ({ rowCount: 0, rows: [] })));
+/**
+ * `servers.live_hls_enabled` for whatever `liveHlsServerOverride` asks about.
+ * `present: false` is a server row that does not exist at all, which must not
+ * be confused with a row whose column is NULL.
+ */
+const overrideRow = vi.hoisted(() => ({
+  value: null as boolean | null,
+  present: true,
+}));
+const query = vi.hoisted(() =>
+  vi.fn(async (sql: string) => {
+    if (typeof sql === "string" && sql.includes("live_hls_enabled")) {
+      return {
+        rowCount: overrideRow.present ? 1 : 0,
+        rows: overrideRow.present ? [{ live_hls_enabled: overrideRow.value }] : [],
+      };
+    }
+    return { rowCount: 0, rows: [] };
+  }),
+);
 vi.mock("../db.js", () => ({ getPool: () => ({ query }) }));
 
 const CHANNEL = "00000000-0000-4000-8000-0000000000aa";
@@ -86,6 +107,8 @@ describe("live HLS egress", () => {
   beforeEach(() => {
     resetLiveHlsForTests();
     disableHls();
+    overrideRow.value = null;
+    overrideRow.present = true;
   });
 
   afterEach(() => {
@@ -317,41 +340,41 @@ describe("live HLS egress", () => {
   });
 
   describe("LIVE_HLS_SERVER_ALLOWLIST", () => {
-    it("unset or empty means every server, but never a conversation", () => {
+    it("unset or empty means every server", async () => {
       enableHls();
-      expect(isLiveHlsEnabledForServer(SERVER)).toBe(true);
-      expect(isLiveHlsEnabledForServer(OTHER_SERVER)).toBe(true);
-      expect(isLiveHlsEnabledForServer(null)).toBe(true);
+      expect(await isLiveHlsEnabledForServer(SERVER)).toBe(true);
+      expect(await isLiveHlsEnabledForServer(OTHER_SERVER)).toBe(true);
+      expect(await isLiveHlsEnabledForServer(null)).toBe(true);
       process.env.LIVE_HLS_SERVER_ALLOWLIST = " , ";
       expect(liveHlsServerAllowlist()).toBeNull();
-      expect(isLiveHlsEnabledForServer(OTHER_SERVER)).toBe(true);
+      expect(await isLiveHlsEnabledForServer(OTHER_SERVER)).toBe(true);
     });
 
-    it("set means only the listed ids, trimmed", () => {
+    it("set means only the listed ids, trimmed", async () => {
       enableHls();
       process.env.LIVE_HLS_SERVER_ALLOWLIST = ` ${SERVER} , other-id`;
       expect(liveHlsServerAllowlist()).toEqual(new Set([SERVER, "other-id"]));
-      expect(isLiveHlsEnabledForServer(SERVER)).toBe(true);
-      expect(isLiveHlsEnabledForServer(OTHER_SERVER)).toBe(false);
-      expect(isLiveHlsEnabledForServer(null)).toBe(false);
-      expect(isLiveHlsEnabledForServer(undefined)).toBe(false);
+      expect(await isLiveHlsEnabledForServer(SERVER)).toBe(true);
+      expect(await isLiveHlsEnabledForServer(OTHER_SERVER)).toBe(false);
+      expect(await isLiveHlsEnabledForServer(null)).toBe(false);
+      expect(await isLiveHlsEnabledForServer(undefined)).toBe(false);
     });
 
-    it("is never on when the global flag is off", () => {
+    it("is never on when the global flag is off", async () => {
       process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
-      expect(isLiveHlsEnabledForServer(SERVER)).toBe(false);
+      expect(await isLiveHlsEnabledForServer(SERVER)).toBe(false);
     });
 
-    it("liveHlsConfig(serverId) reflects the list; without one it is the global flag", () => {
+    it("liveHlsConfigForServer reflects the list; without a server it is the global flag", async () => {
       enableHls();
       process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
-      expect(liveHlsConfig(SERVER)).toEqual({
+      expect(await liveHlsConfigForServer(SERVER)).toEqual({
         enabled: true,
         delaySeconds: 10,
         ladder: [expect.objectContaining({ name: "720p30" })],
         allowlisted: true,
       });
-      expect(liveHlsConfig(OTHER_SERVER)).toEqual({
+      expect(await liveHlsConfigForServer(OTHER_SERVER)).toEqual({
         enabled: false,
         delaySeconds: 10,
         ladder: [expect.objectContaining({ name: "720p30" })],
@@ -388,6 +411,145 @@ describe("live HLS egress", () => {
       expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
       expect(stop).toHaveBeenCalledWith("EG_1");
       expect(liveHlsStreamFor(CHANNEL)).toBeNull();
+    });
+  });
+
+  /**
+   * The allowlist as DATA: `servers.live_hls_enabled`.
+   *
+   * EVERY TEST HERE RUNS WITH `LIVE_HLS_SERVER_ALLOWLIST` SET, because that
+   * is how production is configured (PR #428 made it the rollout switch) and
+   * because a resolution rule tested only against the unset case would prove
+   * nothing about the machine this runs on. That is pitfall 12 verbatim: the
+   * flag that changes the code path has to be the flag the tests exercise.
+   */
+  describe("servers.live_hls_enabled, the per-server row", () => {
+    describe("resolveLiveHlsForServer, the whole matrix", () => {
+      it("the master switch is above everything, TRUE row included", () => {
+        // LIVE_HLS_ENABLED off: no bucket, no LiveKit, nothing to turn on.
+        expect(resolveLiveHlsForServer(SERVER, true)).toBe(false);
+        expect(resolveLiveHlsForServer(SERVER, false)).toBe(false);
+        expect(resolveLiveHlsForServer(SERVER, null)).toBe(false);
+      });
+
+      it("a TRUE row beats an allowlist that leaves the server out", () => {
+        enableHls();
+        process.env.LIVE_HLS_SERVER_ALLOWLIST = OTHER_SERVER;
+        expect(resolveLiveHlsForServer(SERVER, null)).toBe(false);
+        expect(resolveLiveHlsForServer(SERVER, true)).toBe(true);
+      });
+
+      it("a FALSE row beats an allowlist that names the server", () => {
+        enableHls();
+        process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
+        expect(resolveLiveHlsForServer(SERVER, null)).toBe(true);
+        expect(resolveLiveHlsForServer(SERVER, false)).toBe(false);
+      });
+
+      it("a FALSE row beats no allowlist at all, which is the kill switch", () => {
+        enableHls();
+        delete process.env.LIVE_HLS_SERVER_ALLOWLIST;
+        expect(resolveLiveHlsForServer(SERVER, null)).toBe(true);
+        expect(resolveLiveHlsForServer(SERVER, false)).toBe(false);
+      });
+
+      it("NULL is the whole compatibility promise: the environment, unchanged", () => {
+        enableHls();
+        process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
+        expect(resolveLiveHlsForServer(SERVER, null)).toBe(true);
+        expect(resolveLiveHlsForServer(OTHER_SERVER, null)).toBe(false);
+        delete process.env.LIVE_HLS_SERVER_ALLOWLIST;
+        expect(resolveLiveHlsForServer(SERVER, null)).toBe(true);
+        expect(resolveLiveHlsForServer(OTHER_SERVER, null)).toBe(true);
+      });
+    });
+
+    it("isLiveHlsEnabledForServer reads the row, and the row decides", async () => {
+      enableHls();
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = OTHER_SERVER;
+
+      overrideRow.value = null;
+      expect(await isLiveHlsEnabledForServer(SERVER)).toBe(false);
+
+      overrideRow.value = true;
+      expect(await isLiveHlsEnabledForServer(SERVER)).toBe(true);
+
+      overrideRow.value = false;
+      expect(await isLiveHlsEnabledForServer(OTHER_SERVER)).toBe(false);
+    });
+
+    it("a server row that does not exist falls back to the environment", async () => {
+      enableHls();
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
+      overrideRow.present = false;
+      expect(await isLiveHlsEnabledForServer(SERVER)).toBe(true);
+      expect(await isLiveHlsEnabledForServer(OTHER_SERVER)).toBe(false);
+    });
+
+    it("a failed read falls back to the environment rather than revoking", async () => {
+      enableHls();
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
+      query.mockRejectedValueOnce(new Error("pool exhausted"));
+      // The database is the source of truth and it just refused to answer.
+      // A live event must not lose its stream over that: the answer this
+      // deployment had before the column existed is the safe one.
+      expect(await isLiveHlsEnabledForServer(SERVER)).toBe(true);
+    });
+
+    it("liveHlsConfigForServer answers from the row, and says it was confined", async () => {
+      enableHls();
+      delete process.env.LIVE_HLS_SERVER_ALLOWLIST;
+      overrideRow.value = false;
+      const config = await liveHlsConfigForServer(SERVER);
+      expect(config.enabled).toBe(false);
+      // No environment allowlist at all, so `allowlisted` is only true
+      // because somebody decided about this server. The client says "off for
+      // this server" rather than "off everywhere" on the strength of it.
+      expect(config.allowlisted).toBe(true);
+      expect(liveHlsConfig().allowlisted).toBe(false);
+    });
+
+    it("turning a server off stops a running egress, with the env still listing it", async () => {
+      enableHls();
+      // Production's shape: the variable is set and names this server.
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = SERVER;
+      const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+        async () => ({ egressId: "EG_9" }),
+      );
+      const stop = vi.fn();
+      setLiveHlsTestHooks({
+        egress: { startTrackCompositeEgress: start, stopEgress: stop },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      // The operator flips the row to FALSE on the dashboard. No deploy, no
+      // restart, and the environment variable is untouched and still says yes.
+      overrideRow.value = false;
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
+      expect(stop).toHaveBeenCalledWith("EG_9");
+      expect(liveHlsStreamFor(CHANNEL)).toBeNull();
+    });
+
+    it("turning a server on starts one the environment would have refused", async () => {
+      enableHls();
+      process.env.LIVE_HLS_SERVER_ALLOWLIST = OTHER_SERVER;
+      const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+        async () => ({ egressId: "EG_10" }),
+      );
+      setLiveHlsTestHooks({
+        egress: { startTrackCompositeEgress: start, stopEgress: vi.fn() },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).toBeNull();
+      expect(start).not.toHaveBeenCalled();
+
+      overrideRow.value = true;
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
+      expect(start).toHaveBeenCalledTimes(1);
     });
   });
 
