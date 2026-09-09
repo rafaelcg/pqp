@@ -131,6 +131,7 @@ const {
   removeVoicePeerBySocket,
   resetVoicePeers,
   resetVoiceRateLimits,
+  resetSeatHealthLog,
   resetVoiceRoomTransports,
   runVoiceReconcile,
 } = await import("./voice.js");
@@ -375,6 +376,7 @@ describeDb("voice seats that outlive the person", () => {
     resetVoicePeers();
     resetVoiceRateLimits();
     resetVoiceRoomTransports();
+    resetSeatHealthLog();
     vi.spyOn(console, "log").mockImplementation(() => {});
     await getPool().query(
       `TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_retired_peers, voice_instances`,
@@ -711,6 +713,47 @@ describeDb("voice seats that outlive the person", () => {
 
       expect(seats?.idleOverAnHour).toBe(1);
       expect(seats?.oldestIdleMinutes).toBeGreaterThanOrEqual(170);
+    });
+
+    /**
+     * THE NUMBERS HAVE TO BE IN THE LOGS, not only on a pull endpoint.
+     *
+     * `GET /api/admin/metrics` is polled by the dashboard and written down
+     * nowhere, so until this line existed nothing in Loki carried these
+     * counters and no panel or alert could be built on them. The decision
+     * they exist for, when to set `VOICE_MESH_RESUME_REQUIRES_CAP`, is a
+     * ratio watched over days as browsers cycle onto a new bundle, which is
+     * not something you read off an instantaneous dashboard.
+     */
+    it("writes the seat numbers to the logs on the reconcile beat", async () => {
+      const lines: string[] = [];
+      vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+        lines.push(args.map(String).join(" "));
+      });
+      await plantGhost({ ageMs: 3 * 60 * 60_000 });
+
+      await runVoiceReconcile();
+
+      const line = lines.find((text) => text.includes("voice.seats"));
+      expect(line).toBeDefined();
+      expect(line).toContain("idleOverAnHour=");
+      expect(line).toContain("meshResumeSockets=");
+      expect(line).toContain("sockets=");
+      expect(line).toContain("ghostsSwept=");
+      expect(line).toContain("requiresCap=");
+    });
+
+    it("writes it once an hour, not on every beat", async () => {
+      const lines: string[] = [];
+      vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+        lines.push(args.map(String).join(" "));
+      });
+
+      await runVoiceReconcile();
+      await runVoiceReconcile();
+      await runVoiceReconcile();
+
+      expect(lines.filter((t) => t.includes("voice.seats"))).toHaveLength(1);
     });
 
     it("reports no seat numbers at all with the registry off", async () => {

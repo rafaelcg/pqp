@@ -193,6 +193,8 @@ export interface AdminMetrics {
        * on the total.
        */
       meshResumeSockets: number;
+      /** Authenticated sockets right now: the denominator for the line above. */
+      sockets: number;
     } | null;
     /**
      * What the roster fan-out is doing since the last deploy: how many frames

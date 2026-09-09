@@ -614,6 +614,7 @@ https://smallkestrel237.grafana.net/d/pqp-api-events
 | WS auth failures, floods | `ws.authFail`, `ws.authTimeout`, `ws.flood`, `ws.heartbeatTerminate`, `ws.backpressureDrop` |
 | Account created | `turma1000.stamped` (see the gap below) |
 | Calls and watch parties | `voice.callRing`, `voice.callEnded`, `voice.watchPartyStart`, `voice.watchPartyEnd` |
+| Voice seat health (hourly) | `voice.seats`, `voice.ghostSeatsSwept`, `voice.staleRowWrite`, `voice.meshHoldRefused`. See the section below: one of these is the signal for a switch that is deliberately waiting to be turned on |
 | Last 50 error lines | the error filter above, newest first |
 
 Alert rules (folder `pqp`, group `pqp-api-logs`, evaluated every minute,
@@ -634,6 +635,75 @@ Gap worth closing: **there is no signup event.** `insertNewUser` in
 emits is `turma1000.stamped`, which stops after the 1000th account. Add
 `logEvent("user.created", { userId })` there when a server change is going out
 anyway (`restarts-api`), then point the "Account created" panel at it.
+
+### Voice seat health, and the one switch that is waiting to be flipped
+
+Once an hour the API writes a `voice.seats` line. It is the only place these
+numbers are written down at all: `GET /api/admin/metrics` is a pull, polled by
+the operator dashboard and stored nowhere, so before this line no panel and no
+alert could be built on any of it.
+
+```
+[pqp] voice.seats idleOverAnHour=3 oldestIdleMinutes=142 ghostsSwept=0 \
+      staleRowWritesRefused=0 meshHoldsRefused=0 meshResumeSockets=41 \
+      sockets=58 requiresCap=false
+```
+
+| Field | Healthy | What a bad reading means |
+|---|---|---|
+| `idleOverAnHour` | small, and it comes back down | Seats nobody has written to in an hour. A seat is written on join, on every state change and on resume, so a row untouched that long is either somebody genuinely silent or a seat with nobody behind it. **Climbs and never falls is the leak shape**: on 2026-09-08 ten of nineteen rooms held exactly one such person, the oldest for fifteen hours |
+| `oldestIdleMinutes` | under a few hundred | The worst of them. Hours is worth a look; a full day is not a person |
+| `ghostsSwept` | **0** | Rows this instance owned with no peer behind them, reclaimed by `sweepOwnStaleVoicePeers`. Anything above zero is a path that got past the guards in `ws/voice.ts`, and it resets on deploy |
+| `staleRowWritesRefused` | **0** | Handlers caught trying to write a seat that was already released. Above zero means the guard is earning its keep and something upstream is racing |
+| `meshHoldsRefused` | 0 until the flip | Mesh seats released at once instead of held. Stays 0 while `requiresCap=false` |
+| `meshResumeSockets` / `sockets` | see below | The flip signal |
+| `requiresCap` | matches what you set | Whether `VOICE_MESH_RESUME_REQUIRES_CAP` is on. If this says `false` when you believe you turned it on, the secret did not land |
+
+#### `VOICE_MESH_RESUME_REQUIRES_CAP` is off, and somebody has to turn it on
+
+**What it is for.** When a socket drops, the server holds its voice seat for 90
+seconds so a refresh mid-call keeps its place. That only helps a client that
+can actually rebuild its media. Browsers can, on mesh and on LiveKit. Phones
+cannot on mesh: they tear the peer connections down and cold rejoin with a new
+id. An iOS build claimed otherwise for every room (it read `GET
+/api/voice/backend`, which answers what a *new* room on this deployment would
+be pinned to, not what *this* room is), and since every conversation call is
+mesh by policy, **every DM call from an iPhone left a phantom participant for
+90 seconds**.
+
+Setting it to `true` makes the server release a mesh seat immediately for any
+socket that did not declare the `mesh-resume` capability. Web and Electron
+declare it; phones do not. LiveKit rooms are untouched either way.
+
+**Why it shipped off.** An API deploy reconnects open tabs without reloading
+them, so on the deploy that carried this every browser in a mesh call was still
+running a bundle that predates the capability. Turning it on in the same breath
+would have traded a cosmetic ghost for a real cold rejoin on live calls.
+
+**When to flip.** Read `meshResumeSockets` against `sockets` over a few days.
+Phones never declare the capability, so it does not converge on the total; it
+converges on the browser share. Flip when it has plateaued, which means the
+browsers still connecting are the ones that are never going to declare it.
+
+```bash
+# the trend, over a week
+{fly_app_name="pqp-api"} |= "voice.seats"
+
+fly secrets set VOICE_MESH_RESUME_REQUIRES_CAP=true --app pqp-api
+```
+
+`restarts-api`, so treat it like any other deploy and pick a quiet moment.
+
+**Afterwards.** `requiresCap=true` on the next hourly line confirms it landed.
+`meshHoldsRefused` should start climbing slowly: that is phones no longer
+leaving ghosts, which is the point. `idleOverAnHour` should trend down. If
+`meshHoldsRefused` climbs *fast* and users report being dropped from calls,
+`fly secrets unset VOICE_MESH_RESUME_REQUIRES_CAP --app pqp-api` is the whole
+rollback.
+
+The client half of the same bug is in the iOS app (#411) and only reaches
+people who update. This switch reaches every build already on a phone, which
+is the reason it exists.
 
 ### Adding a panel
 

@@ -1150,6 +1150,8 @@ export interface VoiceActivitySnapshot {
      * it does not converge on the total; it converges on the browser share.
      */
     meshResumeSockets: number;
+    /** Authenticated sockets right now: the denominator for the line above. */
+    sockets: number;
   } | null;
   /**
    * What the roster fan-out is actually doing, since boot.
@@ -1226,6 +1228,87 @@ function localRoomOccupancy(): VoiceActivitySnapshot["rooms"] {
  * than the instance that happened to serve the request. The peak stays
  * per-process, as the payload states. A failed read falls back to the map.
  */
+/**
+ * Seat health, read once and used twice: by the dashboard payload below and
+ * by the hourly log line in `runVoiceReconcile`.
+ *
+ * SHARED ON PURPOSE. Two copies of "how healthy are the seats" is two numbers
+ * that can disagree, and an operator comparing a Grafana panel against the
+ * dashboard would have no way to tell which one was lying.
+ *
+ * Null with the registry off: no rows, nothing to read, and a zero would
+ * claim an all-clear this deployment cannot give.
+ */
+async function readSeatHealth(): Promise<VoiceActivitySnapshot["seats"]> {
+  if (!registryOn()) {
+    return null;
+  }
+  try {
+    const idle = await countIdleVoiceSeats(SEAT_IDLE_ALARM_MS);
+    return {
+      idleOverAnHour: idle.seats,
+      oldestIdleMinutes: idle.oldestIdleMinutes,
+      staleRowWritesRefused,
+      ghostsSwept: ghostSeatsSwept,
+      meshHoldsRefused,
+      meshResumeSockets: countAuthenticatedSockets(SOCKET_CAPS.meshResume)
+        .withCap,
+      sockets: countAuthenticatedSockets(SOCKET_CAPS.meshResume).sockets,
+    };
+  } catch (error) {
+    logEvent("voice.registryReadFailed", {
+      op: "idleSeats",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/**
+ * The seat numbers, into the LOGS, once an hour.
+ *
+ * `GET /api/admin/metrics` is a pull: nothing writes it down, so nothing in
+ * Loki has ever carried these numbers and no alert or panel could be built on
+ * them. That matters most for exactly one decision, which is when it is safe
+ * to set `VOICE_MESH_RESUME_REQUIRES_CAP`: the answer is a ratio of
+ * `meshResumeSockets` to `sockets`, and reading a ratio off a dashboard that
+ * only shows the current instant, at whatever moment you happen to look, is
+ * not reading a trend. An hour is the right cadence for a number that moves
+ * as browsers cycle onto a new bundle over days.
+ *
+ * Also the counter that proves the rest of this file runs at all:
+ * `ghostsSwept` and `staleRowWritesRefused` sitting at zero forever is the
+ * healthy reading, and until now nobody could have seen it.
+ */
+const SEAT_LOG_INTERVAL_MS = 60 * 60_000;
+let seatsLoggedAt = 0;
+
+async function logSeatHealth(now = Date.now()): Promise<void> {
+  if (now - seatsLoggedAt < SEAT_LOG_INTERVAL_MS) {
+    return;
+  }
+  seatsLoggedAt = now;
+  const seats = await readSeatHealth();
+  if (!seats) {
+    return;
+  }
+  logEvent("voice.seats", {
+    idleOverAnHour: seats.idleOverAnHour,
+    oldestIdleMinutes: seats.oldestIdleMinutes ?? 0,
+    ghostsSwept: seats.ghostsSwept,
+    staleRowWritesRefused: seats.staleRowWritesRefused,
+    meshHoldsRefused: seats.meshHoldsRefused,
+    meshResumeSockets: seats.meshResumeSockets,
+    sockets: seats.sockets,
+    requiresCap: meshResumeRequiresCap(),
+  });
+}
+
+/** Test seam: the hourly seat line is a clock, and a test needs to move it. */
+export function resetSeatHealthLog(): void {
+  seatsLoggedAt = 0;
+}
+
 export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot> {
   rollPeakDay();
   const rosterSocketCensus = countAuthenticatedSockets(
@@ -1250,26 +1333,7 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
       largestRoomNow = room.participants;
     }
   }
-  let seats: VoiceActivitySnapshot["seats"] = null;
-  if (registryOn()) {
-    try {
-      const idle = await countIdleVoiceSeats(SEAT_IDLE_ALARM_MS);
-      seats = {
-        idleOverAnHour: idle.seats,
-        oldestIdleMinutes: idle.oldestIdleMinutes,
-        staleRowWritesRefused,
-        ghostsSwept: ghostSeatsSwept,
-        meshHoldsRefused,
-        meshResumeSockets: countAuthenticatedSockets(SOCKET_CAPS.meshResume)
-          .withCap,
-      };
-    } catch (error) {
-      logEvent("voice.registryReadFailed", {
-        op: "idleSeats",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  }
+  const seats = await readSeatHealth();
   return {
     activeRooms: rooms.length,
     participants,
@@ -2536,6 +2600,9 @@ export async function runVoiceReconcile(): Promise<{
       peerIds: ghosts.map((ghost) => ghost.peerId).join(","),
     });
   }
+  // Rate-limited to hourly inside; the beat is just the clock that is already
+  // ticking. Never allowed to break the reconcile.
+  await logSeatHealth().catch(() => undefined);
   const touched = new Set<string>();
   for (const { peerId, channelId } of [...result.removed, ...ghosts]) {
     broadcastToRoom(channelId, { type: "peer-left", peerId });
