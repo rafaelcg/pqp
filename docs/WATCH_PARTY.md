@@ -2178,9 +2178,11 @@ later, per app:
   Still to do on iOS: the party OBJECT (`watch-party-update`, the host,
   cohosts, the stage, raise hand), the presenter side, hiding the share
   control unless `welcome.canStream`, and the create sheet offering the type.
-- Android: a distinct icon and the create sheet are still missing, and the
-  share control is still hidden on a LiveKit room, which is every watch party.
-  `WireProtocolTest` mirrors the shared enum and was updated here.
+- Android: a distinct icon and the create sheet are still missing. The share
+  control follows `welcome.canStream` rather than the transport now, so a host
+  can present on a LiveKit room, which is the transport every watch party runs
+  on; nothing about that has been run on a device. `WireProtocolTest` mirrors
+  the shared enum and was updated here.
 
 **Android watches the stream too**, and landed on the same rules as iOS without
 either side reading the other. `voice-stream` and `channel-live` are handled

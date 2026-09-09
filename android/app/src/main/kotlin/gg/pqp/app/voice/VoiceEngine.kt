@@ -302,6 +302,18 @@ class VoiceEngine(
     }
 
     /**
+     * Nothing to invalidate here, and that is the difference between the two
+     * transports rather than an omission.
+     *
+     * A mesh share is a track on peer connections this device owns; there is no
+     * server-side grant that outlives a revocation, so the controller stopping
+     * the capture IS the enforcement. On the SFU the token keeps saying yes
+     * after the roster has said no, which is why [LiveKitEngine] has real work
+     * to do in this method.
+     */
+    override fun setCanPublishScreen(allowed: Boolean) = Unit
+
+    /**
      * Deafening silences every remote track **and** forces the microphone off.
      *
      * Being heard while hearing nothing is a trap rather than a feature, and it
