@@ -1,6 +1,6 @@
 # QA manual da watch party (staging)
 
-Dez passos, na ordem. É o que os testes automatizados **não** conseguem cobrir:
+Uma checagem antes e dez passos, na ordem. É o que os testes automatizados **não** conseguem cobrir:
 tudo que precisa de uma imagem de verdade saindo do LiveKit, de som, de uma
 segunda máquina e de um olho humano.
 
@@ -10,7 +10,7 @@ barra, quem vê e quem não vê o botão de criar, o chat durante a sessão, os 
 estados (marcada, ao vivo, encerrada) e o player sumindo pra quem entra na call.
 
 Onde: `https://staging.pqp-3yr.pages.dev` (API `pqp-api-staging`).
-Reserve uns 25 minutos e um filme qualquer aberto numa aba.
+Reserva uns 25 minutos e um filme qualquer aberto numa aba.
 
 ---
 
@@ -108,7 +108,7 @@ Abre a mesma sessão no celular: no navegador e, se der, no app do TestFlight
 **Certo:** no navegador dá pra assistir de pé, com o vídeo em cima e o chat
 embaixo. No iPhone o app mostra o vídeo acima do chat do canal, com **AO VIVO** e
 a contagem de quem está assistindo. No app ainda **não** existe criar, montar
-nem Encerrar: isso é esperado, não é bug.
+nem Encerrar, e isso é esperado.
 
 ### 9. O host cai
 
