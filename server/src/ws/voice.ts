@@ -1421,7 +1421,12 @@ function broadcastToRoom(
  * The server a voice channel belongs to, for the egress allowlist. The
  * audience cache already holds it for every channel with a roster, so this
  * is a map read on the hot path; the row is only fetched when the cache has
- * nothing (a channel deleted mid-share), and never at all for a stop.
+ * nothing (a channel deleted mid-share).
+ *
+ * It used to be skipped for a stop, which read as a saving and was a lost
+ * distinction: `null` means "not a server channel" to `reconcileLiveHls`, so
+ * an ordinary end of share took the not-allowlisted branch instead of the
+ * no-share one and was torn down without a word. See `pushLiveHls`.
  */
 async function hlsServerIdFor(voiceChannelId: string): Promise<string | null> {
   const audience = await getChannelAudience(voiceChannelId).catch(() => null);
