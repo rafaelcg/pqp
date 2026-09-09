@@ -634,9 +634,22 @@ id.
 server stops releasing this seat, so a build that asks for the frame and then
 fails to act on it leaves the person listed in everybody's roster in a room
 whose media they cannot reach: a silent dead call instead of a visible drop.
-That is why `WireProtocolTest` fails if `WIRE_CAPS` names the frame and no
-Android source has a branch for it, and why the frame is on the
-cannot-work-without list rather than the ignore list.
+That is why the frame is on `WireProtocolTest`'s cannot-work-without list
+rather than its ignore list, and why `declaring the promotion capability means
+the frame is handled` also asserts the branch still reaches
+`transportChangePlan`, still calls `swapTransport(plan.transport)` and still
+starts the engine on `plan.peerId`.
+
+Be clear about what that last test is. It is a **call-graph assertion read off
+the source**, not a behavioural one, because no JVM test can start
+`LiveKitEngine`: it wants a `Context`, a token from the API and a real SFU. It
+catches the two regressions that actually happen, deleting the branch and
+stubbing it out, and it would not catch a handler that kept all three calls
+behind an early return. The first version of this guard was weaker still and
+missed even the stub: the whole 565-test suite passed with the body replaced by
+`if (true) return`, which is exactly the "green without exercising anything"
+shape this repo keeps getting bitten by. The device check below is what the
+assertion stands in for, not a formality.
 
 **Audio does cut, briefly.** The mesh is disposed before the SFU leg exists,
 and that leg is an HTTP token mint plus a LiveKit handshake away, so the call

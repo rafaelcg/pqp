@@ -511,7 +511,17 @@ class WireProtocolTest {
      * worse than never having asked, because the server withholds the
      * `voice-transport-unsupported` release in exchange for the declaration.
      * The test above pins the string; this one pins that the branch it
-     * promises actually exists in the shipped sources.
+     * promises exists and still does the two things the promise is made of.
+     *
+     * WHAT THIS CANNOT PROVE, said here rather than left to be discovered.
+     * No JVM test can show that media actually moves: `LiveKitEngine` needs a
+     * `Context`, a token from the API and a real SFU. So the honest shape of
+     * this check is a call-graph assertion, and it has a hole: a handler that
+     * kept both calls but returned before reaching them would still pass. It
+     * catches the two regressions that actually happen, deleting the branch
+     * and stubbing it out, and it does not catch a deliberate adversary. The
+     * device-level verification this stands in for is in `docs/ANDROID.md`,
+     * "A room promoted mid-call is followed".
      */
     @Test
     fun `declaring the promotion capability means the frame is handled`() {
@@ -523,6 +533,30 @@ class WireProtocolTest {
                 "seat when a room is promoted, so the call becomes a seat on the roster with " +
                 "no media behind it: silent, and invisible from every screen.",
             RepoSources.frameTypesHandled().contains(cap),
+        )
+
+        val controller = RepoSources.androidSources.getValue("VoiceController.kt")
+        assertTrue(
+            "VoiceController has a branch for \"$cap\" that never consults " +
+                "`transportChangePlan`. Every rule about which promotions to follow lives " +
+                "there and is tested in TransportChangeTest; a branch that skips it is a " +
+                "branch with no rules.",
+            controller.contains("transportChangePlan("),
+        )
+        assertTrue(
+            "VoiceController handles \"$cap\" without calling `swapTransport(plan.transport)`. " +
+                "That call IS the move: it disposes the mesh engine and builds the LiveKit " +
+                "one. Without it this build declares it will follow a promotion, the server " +
+                "keeps its seat instead of releasing it, and the person sits in a room whose " +
+                "media they cannot reach.",
+            controller.contains("swapTransport(plan.transport)"),
+        )
+        assertTrue(
+            "VoiceController handles \"$cap\" without starting the new engine against the " +
+                "peer id it already had. A promotion is not a rejoin: the seat, the peer id " +
+                "and the roster entry are kept, and `engine.start(plan.peerId` is what keeps " +
+                "them.",
+            controller.contains("engine.start(plan.peerId"),
         )
     }
 
