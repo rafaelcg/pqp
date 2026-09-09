@@ -115,7 +115,11 @@ import {
   moveMembersBit,
   moveOccupantSeat,
 } from "@/lib/voice-occupant-dnd";
-import { useUpdatePromptShowing } from "@/lib/update-prompt-state";
+import {
+  requestUpdatePrompt,
+  useUpdatePromptShowing,
+  useUpdateWaiting,
+} from "@/lib/update-prompt-state";
 import { isAutomatedBrowser } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
 import { isWhatsNewSeen, rememberWhatsNew } from "@/lib/whats-new";
@@ -1014,7 +1018,8 @@ function MainAppContent({
    */
   const [arrivalServerId, setArrivalServerId] = useState<string | null>(null);
   const [qgHintReady, setQgHintReady] = useState(false);
-  const [qgHintShowing, setQgHintShowing] = useState(false);
+  /** Whether the QG card WANTS the corner. `cornerHint` decides who gets it. */
+  const [qgHintWanted, setQgHintWanted] = useState(false);
   /**
    * Captured once per mount so recording the impression cannot drop the
    * card mid-session (and cannot leave the slot empty while the next card
@@ -4848,15 +4853,20 @@ function MainAppContent({
   }, [conversations, voiceState.occupancy]);
 
   const updatePromptShowing = useUpdatePromptShowing();
+  // The durable half: a build is precached and has not been taken. The rail
+  // keeps a way back to the notice for as long as this is true, so a snooze,
+  // a stray Escape or a three-hour call cannot strand somebody on an old
+  // bundle with no button to press.
+  const updateWaiting = useUpdateWaiting();
   // Let the update card (mounted outside App) know when a reload would end a call.
   useEffect(() => {
     setInCall(voiceState.status !== "idle");
     return () => setInCall(false);
   }, [voiceState.status]);
 
-  const handleQgHintShowingChange = useCallback((showing: boolean) => {
+  const handleQgHintWantedChange = useCallback((wanted: boolean) => {
     setQgHintReady(true);
-    setQgHintShowing(showing);
+    setQgHintWanted(wanted);
   }, []);
 
   useEffect(() => {
@@ -5020,7 +5030,7 @@ function MainAppContent({
   });
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
-    qg: qgHintShowing,
+    qg: qgHintWanted,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,
     cargos: qgHintReady && Boolean(canManageRoles && selectedServerId),
@@ -6217,6 +6227,8 @@ function MainAppContent({
         whatsNewSelected={whatsNewOpen}
         whatsNewUnread={whatsNewUnread}
         onOpenWhatsNew={handleOpenWhatsNew}
+        updateWaiting={updateWaiting}
+        onOpenUpdate={() => requestUpdatePrompt()}
         pinnedConversations={pinnedConversations}
         pinnedUnread={unread}
         selectedPinnedId={selectedPinnedId}
@@ -7054,7 +7066,8 @@ function MainAppContent({
       />
       <MobileBetaHint enabled={cornerHint === "mobileBeta"} />
       <QgHint
-        onShowingChange={handleQgHintShowingChange}
+        enabled={cornerHint === "qg"}
+        onWantedChange={handleQgHintWantedChange}
         onJoined={(result) => {
           if (result.joinedNow) {
             const storage = browserStorage();

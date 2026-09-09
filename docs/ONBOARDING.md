@@ -12,7 +12,7 @@ Adding one means adding a row here.
 | First-run checklist | `components/onboarding/first-run-card.tsx` | Inline card in the hub, rows land staggered | not dismissed and one of server / friend / avatar still open | `firstRunDismissedAt` (preference), or auto-stamped when all three are done |
 | Arrival banner | `components/onboarding/arrival-banner.tsx` | Strip under the channel header | first visit to a server just joined | Session; `pqp:arrived-servers` remembers the join |
 | Baú intro | `components/community-home/community-home-onboarding.tsx` (staging) | Inline card in the feed | member's first Baú | `communityHomeIntroDismissedAt` (preference) |
-| Update ready | `components/layout/update-prompt.tsx` | Corner card | a new build is waiting | Reload, or Later (session snooze) |
+| Update ready | `components/layout/update-prompt.tsx` | Corner card, and a rail icon while a build waits | a new build is waiting | Reload. Later snoozes 20 min; Escape does not touch it |
 | QG invite | `components/layout/qg-hint.tsx` | Corner card with hero | QG is listed and not joined | `pqp:qg-hint-…` (impression) |
 | Mobile beta | `components/layout/mobile-beta-hint.tsx` | Corner card | phone browser, not the native app | `pqp:mobile-beta-hint-…` (impression) |
 | What's new (corner) | `components/layout/whats-new-prompt.tsx` | Corner card | pack id unseen | `pqp:whats-new` (impression) |
@@ -36,7 +36,12 @@ Adding one means adding a row here.
 cargos, shortcuts). The update prompt is mounted in `main.tsx` outside `App`;
 it reports through `lib/update-prompt-state.ts` so the queue in `App` yields
 to it. Two cards in the same corner is a stack, and the one underneath records
-its impression without ever being seen. Composer format, Watch party / share,
+its impression without ever being seen. Being in the order is not enough:
+a card has to take `enabled` and paint only when it holds the corner. QG
+reported that it wanted the corner and then rendered anyway until 9 Sep 2026,
+which put it and the update notice on screen together with an Escape listener
+each, and one keypress silenced the update instead of the card the person was
+aiming at. Composer format, Watch party / share,
 and Fixar use the same `CornerCard` frame with `layout="inline"` next to the
 control; they share `lib/feature-hints.ts` so only one of those mounts, and they
 yield while a campaign owns the corner. The two watch party hints are first in
@@ -69,6 +74,19 @@ voice channel, and only somebody who was seated across the change has a
 walks into an already-promoted room is told nothing, because nothing changed
 for them.
 
+**The update notice is not a hint.** It is the one prompt in the product
+that cannot be acted on later by other means, and it gates every other client
+fix, so it plays by different rules and only these: it is first in
+`CORNER_HINT_ORDER` and `elevated` in the shell, so it cannot be covered;
+`dismissOnEscape={false}`, because Escape means "get the thing I just opened
+out of my way" and nobody opened this; and while a build is waiting the server
+rail carries a `RefreshCw` icon (`data-update-rail`) that brings the card back
+through a snooze and through a call. `lib/update-prompt-state.ts` holds the
+two facts apart: `waiting` (a build is precached, drawn by the rail) and
+`showing` (the card is up, read by the queue). The in-call hush stays: a
+reload kills a screen share and a browser cannot restore one without the
+picker. The rail icon is what makes it a hush rather than a disappearance.
+
 **Preference vs. localStorage.** Things that answer a question about the
 *account* (the wizard, the checklist, the Baú intro) are preferences and
 follow the person to the next device. Campaign cards are per browser: seeing
@@ -85,5 +103,7 @@ that arrive together stagger (`--stagger`). All of it is off under
    key (campaign).
 2. Render it with `CornerCard` (corner, or `layout="inline"` next to a control).
 3. If it is a corner card, add its id to `CORNER_HINT_ORDER` in product
-   order and pass `enabled={cornerHint === "<id>"}` from `App`.
+   order and pass `enabled={cornerHint === "<id>"}` from `App`. Render nothing
+   when `enabled` is false, and do not spend the impression either: a card that
+   yielded the corner was never seen.
 4. Add the row above.

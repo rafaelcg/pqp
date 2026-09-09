@@ -2745,6 +2745,8 @@
   "update.dismiss": "Remind me later",
   "update.later": "Later",
   "update.dismiss.label": "Dismiss update notice",
+  "update.rail": "Update pqp",
+  "update.inCall": "You are in a call. Reloading will drop you out of it.",
   "claim.edition": "aug 2026",
   "handle.share.cta": "Show it off",
   "handle.share.copied": "Copied",

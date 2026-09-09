@@ -6,6 +6,7 @@ import {
   MessageCircle,
   PinOff,
   Plus,
+  RefreshCw,
   Settings,
   Sparkles,
   UserPlus,
@@ -81,6 +82,19 @@ interface ServerRailProps {
   whatsNewUnread?: boolean;
   onOpenWhatsNew?: () => void;
   /**
+   * A new build is precached and has not been taken yet.
+   *
+   * THE WAY BACK TO THE UPDATE NOTICE. The corner card can be snoozed, and it
+   * hushes itself during a call so a reload never ends somebody's screen
+   * share; both are correct and both used to end with a person on an old
+   * bundle and no button anywhere in the product. This icon is that button. It
+   * stays for exactly as long as the build is waiting and goes the moment it
+   * is taken, so it is never decoration.
+   */
+  updateWaiting?: boolean;
+  /** Brings the update notice back, snooze and call notwithstanding. */
+  onOpenUpdate?: () => void;
+  /**
    * Conversations this person pinned to the rail, already filtered to ones
    * still in the list, in pin order. Empty means the Home bubble is the only
    * DM door, which is the usual case.
@@ -120,6 +134,8 @@ export function ServerRail({
   whatsNewSelected = false,
   whatsNewUnread = false,
   onOpenWhatsNew,
+  updateWaiting = false,
+  onOpenUpdate,
   pinnedConversations = [],
   pinnedUnread = {},
   selectedPinnedId = null,
@@ -347,13 +363,44 @@ export function ServerRail({
           another room. It sits with discovery, pinned to the bottom, the
           same place Discord puts things that are not servers. A pip is
           allowed here (unlike the compass) because a new post is something
-          waiting; a count is not, because this is not a mention. */}
-      {onOpenWhatsNew && (
+          waiting; a count is not, because this is not a mention.
+
+          The update icon goes FIRST in this block and only exists while a
+          build is waiting. It is the one piece of rail chrome that is not a
+          standing door: it is the way back to a notice the person may have
+          snoozed, or that hushed itself because they are in a call. See
+          `lib/update-prompt-state.ts`. */}
+      {updateWaiting && onOpenUpdate && (
         <>
           <span
             aria-hidden="true"
             className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
           />
+          <Tooltip label={t("update.rail")} side="right" tone="rail">
+            <button
+              type="button"
+              data-update-rail
+              onClick={onOpenUpdate}
+              aria-label={t("update.rail")}
+              className="group relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-ink-3 text-paper transition-all duration-200 hover:rounded-xl hover:bg-signal hover:text-ink"
+            >
+              <RefreshCw className="h-5 w-5" />
+              <span
+                aria-hidden="true"
+                className="absolute right-[-2px] top-[-2px] h-2.5 w-2.5 rounded-full bg-signal ring-[3px] ring-rail"
+              />
+            </button>
+          </Tooltip>
+        </>
+      )}
+      {onOpenWhatsNew && (
+        <>
+          {!(updateWaiting && onOpenUpdate) && (
+            <span
+              aria-hidden="true"
+              className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"
+            />
+          )}
           <Tooltip
             label={
               whatsNewUnread ? t("whatsNew.rail.unread") : t("whatsNew.rail")
@@ -391,7 +438,7 @@ export function ServerRail({
       )}
       {onOpenCommunities && (
         <>
-          {!onOpenWhatsNew && (
+          {!onOpenWhatsNew && !(updateWaiting && onOpenUpdate) && (
             <span
               aria-hidden="true"
               className="mt-auto h-px w-8 shrink-0 rounded-full bg-ink-4/70"

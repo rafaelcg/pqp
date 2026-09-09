@@ -34,6 +34,8 @@ export function CornerCard({
   dismissLabel,
   tone = "default",
   layout = "corner",
+  elevated = false,
+  dismissOnEscape = true,
   dataAttribute,
 }: {
   open: boolean;
@@ -54,6 +56,19 @@ export function CornerCard({
    * the control it explains (composer Aa, Watch party on the call bar).
    */
   layout?: "corner" | "inline";
+  /**
+   * Sits above the other corner cards rather than beside them.
+   *
+   * `corner-hints.ts` is supposed to keep the corner to one card, and every
+   * campaign card obeys it. This is the backstop for the one card that must
+   * never be covered by a card that forgets: the update notice. See its file.
+   */
+  elevated?: boolean;
+  /**
+   * Escape closes this card. True everywhere except the update notice, which
+   * is the only card in the product the person cannot get back on their own.
+   */
+  dismissOnEscape?: boolean;
   /** A `data-*` hook for tests, e.g. `data-corner-card="qg"`. */
   dataAttribute?: string;
 }) {
@@ -78,7 +93,7 @@ export function CornerCard({
   }, [open, mounted]);
 
   useEffect(() => {
-    if (!open) {
+    if (!open || !dismissOnEscape) {
       return;
     }
     function onKeyDown(event: KeyboardEvent) {
@@ -90,7 +105,7 @@ export function CornerCard({
     }
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [open, onClose]);
+  }, [open, onClose, dismissOnEscape]);
 
   if (!mounted) {
     return null;
@@ -120,7 +135,10 @@ export function CornerCard({
       className={cn(
         layout === "inline"
           ? "relative z-30 w-[min(100%,17rem)]"
-          : "safe-pb fixed inset-x-3 bottom-3 z-30 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:w-[22rem]",
+          : cn(
+              "safe-pb fixed inset-x-3 bottom-3 sm:inset-x-auto sm:right-4 sm:bottom-4 sm:w-[22rem]",
+              elevated ? "z-40" : "z-30",
+            ),
         leaving ? "animate-pop-out" : "animate-pop-in",
       )}
     >
