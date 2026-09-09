@@ -962,6 +962,98 @@ the parties on it start stalling. This matters more than it looks:
 `LIVE_HLS_MAX_SESSIONS` counts **sessions**, so a cap of 3 means twelve handlers
 if each session can transiently run four.
 
+### Ending the party ends the broadcast, and it did not
+
+**The most expensive of these, and the one with no symptom at all.**
+`pickHlsSharer` asks `watchParty && sharingScreen && canStream` and never asked
+whether a party is live. A `watch_party` channel is an ordinary voice room
+between shows, so a host who pressed Encerrar and left their screen share
+running kept a two-rung transcode alive: about 1.4 cores of the media box,
+segments written to storage for as long as it ran, and a `channel-live` frame
+telling every member of the server there was something to watch. Seen in
+production on 2026-09-09: every `channel_sessions` row for the channel `ended`,
+the last of them at 13:24, and a transcode still running at 13:56. Three
+forgotten shares fill the box, and `LIVE_HLS_MAX_SESSIONS` would read 3.
+
+That the party and the picture are two facts is deliberate and is argued in
+`services/watch-parties.ts`. The argument only ever covered one direction: a
+live party with no picture, because conflating them gave a party that said LIVE
+over a black rectangle. **A picture with no party is the direction nobody
+argued for**, and it is the one that costs money.
+
+`ws/watch-party-live.ts` closes it, and the design is one sentence: it records
+only what it has positively seen **end**.
+
+- `broadcastWatchParty` is the single thing every state change passes through
+  (seven routes plus the no-show sweep), so it sets the mark.
+- `pushLiveHls` treats a marked channel as having no sharer, which stops a
+  running transcode and refuses to start another.
+- Only `live` clears the mark. A draft created after a show is somebody
+  thinking, and must not hand back the permission the end took away.
+- **It reconciles on the spot.** `pushLiveHls` otherwise runs on roster events,
+  and a host who presses Encerrar and touches nothing else is the ordinary
+  case, so the mark change itself kicks a reconcile through a listener
+  `ws/voice.ts` registers, exactly as the egress health monitor does.
+
+**Fail open, on purpose.** A channel this process has heard nothing about
+transcodes as it always did: a process that restarted mid-party, and a party
+ended by the sweep on `pqp-worker` (a different process with a different
+memory), both behave as before. Refusing to transcode a real party costs an
+event; missing a leak costs a core.
+
+**The share itself is untouched.** It is a voice room, people watch each other's
+screens in it, and ending a show is not the same act as stopping a share. Only
+the broadcast to people without a seat stops, which is what "Encerrar" means.
+
+`voice.hlsPartyOver` in the log is a host who did exactly that.
+
+### Leftover SPEAK overwrites, and whether they need cleaning
+
+Both ways a party can end (`POST /api/watch-parties/:id/state` and
+`sweepWatchPartyHosts`) go through `applyWatchPartyOptions`, and it is the only
+thing that ever calls `restoreChannelAfterParty`. Since #427 there is no path
+that leaks a new one. Audited on 2026-09-09 by walking the callers; there are
+two, and both restore.
+
+**Rows left by parties that ended BEFORE #427 do not self-heal.** The restore
+reads `stage_speak_applied` on the session row, and a session already `ended`
+with that flag still set is never revisited. `QG do pqp`'s watch-party channel
+still carries one: `@everyone` denied SPEAK (bit 13, `8192`) plus a member
+allowed the same. Rafael's second account got "Listening only" from exactly
+that.
+
+What it actually costs, which is worth knowing before deciding to clean:
+
+- The **deny** is largely self-repairing. The channel is unlisted between
+  shows, and the next party reconciles it: `hosts_only` (the default) wants
+  that deny anyway, and `everyone` removes it, because one idempotent
+  reconciler owns both directions.
+- The **member allow** is the residue that matters. It is somebody who was once
+  invited to the stage keeping a microphone in every future party on that
+  server, under a closed floor, with nothing on any screen saying why.
+
+So: worth cleaning, not urgent, and it is an operator action rather than a
+migration, because it must not touch an overwrite somebody set on purpose.
+Scope it to `watch_party` channels with no live session, read it before writing
+it, and never run it during an event:
+
+```sh
+# READ FIRST. Nothing is modified by this.
+psql "$DATABASE_URL" -c "
+SELECT o.channel_id, o.target_type, o.target_id, o.allow, o.deny
+  FROM channel_overwrites o
+  JOIN channels c ON c.id = o.channel_id
+ WHERE c.type = 'watch_party'
+   AND (o.allow & 8192 <> 0 OR o.deny & 8192 <> 0)
+   AND NOT EXISTS (
+     SELECT 1 FROM channel_sessions s
+      WHERE s.channel_id = c.id AND s.status = 'live')"
+```
+
+Clearing just the SPEAK bit (never the whole row, which may carry bits nobody
+here set) and deleting a row that is left holding nothing is the second step,
+and it is Rafael's call whether to run it at all.
+
 ### The restart that should not happen at all: swapping the share in place
 
 Rafael's framing, and it is a better fix than surviving the restart: in a watch
