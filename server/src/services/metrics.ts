@@ -156,6 +156,47 @@ export interface AdminMetrics {
       framesReceived: number;
     };
     /**
+     * WHETHER ANYBODY IS SITTING IN A CALL THEY LEFT.
+     *
+     * `idleOverAnHour` counts seats nothing has written to in an hour, and
+     * `oldestIdleMinutes` is the worst of them. A seat is written on join, on
+     * every state change and on resume, so a row untouched that long is
+     * either somebody genuinely silent or a seat with nobody behind it. The
+     * night of 2026-09-08 had ten of them, one fifteen hours old, and no
+     * number anywhere on this dashboard said so.
+     *
+     * `staleRowWritesRefused` and `ghostsSwept` are the mechanism, since the
+     * last deploy, on the instance that answered: a write that would have
+     * resurrected a deleted seat, and one that got through and had to be
+     * swept. Both belong at zero.
+     *
+     * Null when `VOICE_REGISTRY` is off: no rows, nothing to read, and a zero
+     * would claim an all-clear the deployment cannot give.
+     */
+    seats: {
+      idleOverAnHour: number;
+      oldestIdleMinutes: number | null;
+      staleRowWritesRefused: number;
+      ghostsSwept: number;
+      /**
+       * Mesh seats released at once instead of held, because the socket never
+       * declared `mesh-resume`. Zero until `VOICE_MESH_RESUME_REQUIRES_CAP`
+       * is on; after the flip it is what says the rule is doing something,
+       * and the `mesh-resume` socket fraction is what says whether it still
+       * needs to.
+       */
+      meshHoldsRefused: number;
+      /**
+       * Sockets declaring `mesh-resume`, against `voice.roster.sockets`. What
+       * an operator reads before flipping `VOICE_MESH_RESUME_REQUIRES_CAP`:
+       * phones never declare it, so this converges on the browser share, not
+       * on the total.
+       */
+      meshResumeSockets: number;
+      /** Authenticated sockets right now: the denominator for the line above. */
+      sockets: number;
+    } | null;
+    /**
      * What the roster fan-out is doing since the last deploy: how many frames
      * went out as a delta against how many went out whole, and how many
      * sockets asked for deltas at all. The second pair is the denominator that
@@ -780,6 +821,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       peakTrackedSince: voice.peakTrackedSince,
       backend: voice.backend,
       cluster: voice.cluster,
+      seats: voice.seats,
       roster: voice.roster,
       rooms: voice.rooms.map((room) => {
         const named = roomNames.get(room.voiceChannelId);

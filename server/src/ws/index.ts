@@ -335,12 +335,24 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
 /**
  * Proxies (Railway, Cloudflare) drop idle WebSocket connections. Pinging keeps
  * them open and detects half-open sockets that never fired `close`.
+ *
+ * THIS IS THE REAPER THE PROCESS ACTUALLY RUNS, and saying so is not
+ * decoration: until 2026-09-08 it was not. `index.ts` carried its own inline
+ * copy of this loop with a one-strike rule, and this function, along with
+ * `MAX_MISSED_PONGS`, `trackSocketLiveness` and the whole of
+ * `heartbeat.test.ts`, was dead code. The two-strike fix written the night of
+ * the moonkase stream was tested, merged, and never once executed in
+ * production. Anything that changes reaping belongs here, and here only.
  */
 export function startHeartbeat(
   clients: Iterable<WebSocket>,
   intervalMs = HEARTBEAT_INTERVAL_MS,
+  onTick: () => void = () => {},
 ): () => void {
   const timer = setInterval(() => {
+    // A free ride on a loop that already runs: `index.ts` samples the pool
+    // high-water marks here, because on a quiet server nothing else does.
+    onTick();
     for (const socket of clients) {
       if (alive.get(socket) === false) {
         const missed = (missedPongs.get(socket) ?? 0) + 1;

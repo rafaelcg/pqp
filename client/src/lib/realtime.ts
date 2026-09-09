@@ -40,6 +40,15 @@ export type RealtimeStatus =
  * viewer of it. Handled in `hooks/use-chat.ts`, under the same convergence
  * rule, written out on `presenceDeltaSchema` in `@pqp/shared`.
  *
+ * `mesh-resume`: this build keeps its MESH peer connections alive across a
+ * signalling drop and comes back to the same peer id, so the server may hold
+ * its seat for the resume window. Browsers can do this and phones cannot, and
+ * an iOS build that claimed otherwise spent 2026-09-08 leaving a phantom in
+ * every DM call. `join-voice-room.resume` is the older, coarser promise and
+ * stays exactly as it was; this one scopes it to the transport where it is
+ * hard to keep. Nothing changes for a LiveKit room, whose media is a separate
+ * connection that survives on its own.
+ *
  * `voice-transport-changed`: this build can move its own media from a peer
  * mesh onto the voice server, mid-call, without rejoining. Handled in
  * `hooks/use-voice.ts`. A socket that does not declare it is released from a
@@ -49,6 +58,7 @@ const WIRE_CAPS = [
   "voice-roster-delta",
   "presence-delta",
   "voice-transport-changed",
+  "mesh-resume",
 ] as const;
 
 const PING_INTERVAL_MS = 20_000;

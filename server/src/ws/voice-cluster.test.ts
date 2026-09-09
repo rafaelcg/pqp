@@ -2039,6 +2039,8 @@ describeDb("voice across two instances", () => {
         orphaned: 0,
         removed: 0,
         roomsSwept: 0,
+        // The instance's own ghost sweep, also a no-op with the flag off.
+        ghosts: 0,
       });
       const again = await resume(b, "x", channel, peerA.peerId, peerA.resumeToken);
       expect(again.peerId).not.toBe(peerA.peerId);

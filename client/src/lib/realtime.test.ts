@@ -117,6 +117,12 @@ describe("createRealtimeTransport", () => {
         "voice-roster-delta",
         "presence-delta",
         "voice-transport-changed",
+        // Honest for this bundle and only this bundle: a browser keeps its
+        // mesh peer connections up across a signalling drop and comes back to
+        // the same peer id (#162), which is the promise the server holds a
+        // mesh seat on. Phones tear theirs down, do not declare it, and stop
+        // leaving a phantom in every DM call.
+        "mesh-resume",
       ],
     });
   });
