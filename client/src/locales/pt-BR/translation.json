@@ -2853,6 +2853,8 @@
   "watchParty.setup.saving": "Salvando",
   "watchParty.live.badge": "AO VIVO",
   "watchParty.live.hostedBy": "com {name}",
+  "watchParty.live.rename": "Renomear",
+  "watchParty.live.renameLabel": "Nome da watch party",
   "watchParty.live.viewers_zero": "ninguém assistindo ainda",
   "watchParty.live.viewers_one": "{count} assistindo",
   "watchParty.live.viewers_other": "{count} assistindo",

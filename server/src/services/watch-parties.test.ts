@@ -64,6 +64,7 @@ const {
   markWatchPartyHostGone,
   sweepWatchPartyHosts,
 } = await import("./watch-parties.js");
+const watchPartyEvents = await import("../ws/watch-party-events.js");
 
 let httpServer: Server;
 let baseUrl: string;
@@ -219,6 +220,11 @@ describeDb("watch party ownership", () => {
       cohost,
     });
 
+  const rename = (as: User, id: string, name: string) =>
+    call<{ party: PartyBody }>(as, "PATCH", `/api/watch-parties/${id}`, {
+      name,
+    });
+
   const readChannelParty = (as: User, channel = channelId) =>
     call<{ party: PartyBody | null }>(
       as,
@@ -341,6 +347,45 @@ describeDb("watch party ownership", () => {
     const byMember = await setState(member, next.id, "ended");
     expect(byMember.status).toBe(403);
     expect((await readChannelParty(member)).body.party?.state).toBe("live");
+  });
+
+  it("lets host, co-host and manager rename a live party, and the room sees it", async () => {
+    const party = await draft();
+    expect((await setCohost(host, party.id, second.id, true)).status).toBe(200);
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+
+    const broadcast = vi.spyOn(watchPartyEvents, "broadcastWatchParty");
+
+    expect((await rename(member, party.id, "PQPTV")).status).toBe(403);
+    expect((await readChannelParty(member)).body.party?.name).toBe(
+      "Sessão do Rafa",
+    );
+
+    const asHost = await rename(host, party.id, "PQPTV test");
+    expect(asHost.status).toBe(200);
+    expect(asHost.body.party.name).toBe("PQPTV test");
+    expect(broadcast).toHaveBeenCalledWith(party.id);
+
+    // Same payload a late joiner would GET, and the same name the
+    // `watch-party-update` frame carries: the write persisted, and the
+    // audience does not need a refresh.
+    expect((await readChannelParty(member)).body.party?.name).toBe("PQPTV test");
+
+    expect((await rename(second, party.id, "Sessão da tarde")).status).toBe(200);
+    expect((await readChannelParty(member)).body.party?.name).toBe(
+      "Sessão da tarde",
+    );
+
+    expect((await rename(manager, party.id, "Cinemoon")).status).toBe(200);
+    expect((await readChannelParty(member)).body.party?.name).toBe("Cinemoon");
+
+    expect((await rename(host, party.id, "")).status).toBe(400);
+    expect((await rename(host, party.id, "   ")).status).toBe(400);
+
+    expect((await setState(host, party.id, "ended")).status).toBe(200);
+    expect((await rename(host, party.id, "Too late")).status).toBe(403);
+
+    broadcast.mockRestore();
   });
 
   it("refuses the moves the tables do not allow", async () => {
