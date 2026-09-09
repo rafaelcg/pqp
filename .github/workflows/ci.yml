@@ -165,6 +165,23 @@ jobs:
       - name: Test dashboard insights
         run: node --test tools/admin-dashboard/test/*.test.js
 
+      # The one test that opens the desktop app.
+      #
+      # Every other Electron test in this repo is a unit test of a helper, so
+      # none of them can see the failure that is easiest to ship and worst to
+      # miss: the binary starts and shows a white window. A bad require in
+      # main.js, a preload that throws, a nav policy that blocks its own
+      # origin. All of those pass `pnpm test` and are obvious one second after
+      # double-clicking the app.
+      #
+      # Cheap on purpose: it launches the real main.js against a fixture page
+      # on a local port, so no API, no Clerk, no network and no built client.
+      # It uses Electron's own Chromium through Playwright's `_electron`, so
+      # there is no browser to download and no `playwright install` step. Under
+      # xvfb because the shell wants a display; a few seconds, one process.
+      - name: Smoke test the desktop shell
+        run: xvfb-run --auto-servernum pnpm --filter @pqp/electron test:smoke
+
       # Colour-contrast floors and the count of colour literals living outside
       # the token layer. Both are ratchets: they only move the right way.
       - name: Benchmark theme tokens
