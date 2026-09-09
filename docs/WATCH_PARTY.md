@@ -799,6 +799,41 @@ is not visible while fullscreen. Escape or the same control brings it back.
 That is the correct trade for a viewer and worth revisiting for a host who
 wants to end a party without leaving fullscreen.
 
+### A preview on the sidebar block: asked for, costed, not built
+
+Rafael's idea, and worth writing down with numbers rather than a yes or a no:
+*"maybe we can add a low quality preview on hover or something"*, on the block
+at the top of the sidebar, so somebody can glance at what is playing before
+committing to opening it.
+
+It is a genuinely nice idea and the obvious implementation is expensive in
+exactly the wrong direction.
+
+**What a live preview would cost.** A hover would have to start an hls.js
+session: a playlist plus at least one segment. The playlist is not a static
+file here, it is `hls-playlist-proxy.ts`, which re-signs every segment line
+into a presigned URL **on every request**, so a hover is API processor time
+and a signing round trip, not only bucket egress. A 720p segment is roughly
+0.9 MB. The block is rendered for every member of the server who has the app
+open while a party is live, which for the QG is thousands of people, and the
+cost lands on the one resource the seatless path exists to protect. The
+arithmetic is the wrong shape: **cost proportional to curiosity, paid by
+people who are not watching**, at the moment an event is starting and the
+audience is at its most restless.
+
+**The cheaper approximation, if this is ever wanted.** A poster still, written
+by the egress on a slow timer (LiveKit can emit an image output beside the
+segments), a few KB, cacheable, and refreshed every fifteen or thirty seconds.
+That is cost proportional to the number of LIVE PARTIES rather than to the
+number of hovers, which is the only shape that survives a full room. It needs
+an image output on the egress, somewhere in `hls_sessions` to hang the key,
+and a cache header, so it is real work and it is not blocked on anything.
+
+**Not before an event.** It touches the egress and the bucket, which is the
+path the show itself runs on, and the block already carries the party's name,
+the host's face and a live pill. The gap it closes is small and the thing it
+risks is the broadcast.
+
 ### The control bar that reportedly never fades: not reproduced
 
 Rafael, from a live party: *"also this is always there... doesnt disappear"*,
