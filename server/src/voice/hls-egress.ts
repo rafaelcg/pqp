@@ -1539,13 +1539,14 @@ async function startRoom(
     logEvent("voice.hlsStartSuppressed", { channelId, presenterPeerId });
     return null;
   }
-  const tracks = knownTracks ?? (await findScreenTracks(channelId));
-  if (!tracks) {
-    logEvent("voice.hlsNoScreenTrack", { channelId, presenterPeerId });
-    return null;
-  }
-  // The concurrency guard, deliberately here rather than inside
-  // `decideLadder`: that one degrades a party, this one refuses a session.
+  // The concurrency guard, and it comes BEFORE the track probe on purpose:
+  // `findScreenTracks` polls LiveKit up to sixteen times over six seconds,
+  // and spending that on a session that is going to be refused is the wrong
+  // work to be doing on precisely the box that is already full.
+  //
+  // Deliberately here rather than inside `decideLadder`: that one degrades a
+  // party (it refuses the rungs above the lowest and never the lowest), this
+  // one refuses a session, and nothing else bounds the count.
   //
   // `rooms.size` is the count of OTHER sessions without having to subtract
   // one, because every caller that reaches here for a channel that was
@@ -1561,6 +1562,11 @@ async function startRoom(
       sessions: rooms.size,
       maxSessions,
     });
+    return null;
+  }
+  const tracks = knownTracks ?? (await findScreenTracks(channelId));
+  if (!tracks) {
+    logEvent("voice.hlsNoScreenTrack", { channelId, presenterPeerId });
     return null;
   }
   const ladder = liveHlsLadder();

@@ -608,11 +608,12 @@ describe("live HLS egress", () => {
           return { egressId: `EG_${started}` };
         },
       );
+      const findTracks = vi.fn(async () => ({ videoTrackId: "TR_V" }));
       setLiveHlsTestHooks({
         egress: { startTrackCompositeEgress: start, stopEgress: vi.fn() },
-        findTracks: async () => ({ videoTrackId: "TR_V" }),
+        findTracks,
       });
-      return start;
+      return { start, findTracks };
     }
 
     it("defaults to three, and an operator can raise or lower it", () => {
@@ -631,10 +632,11 @@ describe("live HLS egress", () => {
       resetLiveHlsForTests();
       enableHls();
       process.env.LIVE_HLS_MAX_SESSIONS = "2";
-      fakeStack();
+      const { findTracks } = fakeStack();
       expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
       expect(await reconcileLiveHls(CHANNEL_B, "peer-2", SERVER)).not.toBeNull();
       logEvent.mockClear();
+      const probesBefore = findTracks.mock.calls.length;
       expect(await reconcileLiveHls(CHANNEL_C, "peer-3", SERVER)).toBeNull();
       expect(liveHlsStreamFor(CHANNEL_C)).toBeNull();
       expect(logEvent).toHaveBeenCalledWith(
@@ -645,6 +647,10 @@ describe("live HLS egress", () => {
           maxSessions: 2,
         }),
       );
+      // Refused BEFORE the track probe. `findScreenTracks` polls LiveKit
+      // sixteen times over six seconds, and the box that is already running
+      // its cap is the last one that should be spending that.
+      expect(findTracks.mock.calls.length).toBe(probesBefore);
       // The two that got in are untouched: the cap refuses, it never evicts.
       expect(liveHlsStreamFor(CHANNEL)).not.toBeNull();
       expect(liveHlsStreamFor(CHANNEL_B)).not.toBeNull();
