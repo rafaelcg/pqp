@@ -5750,6 +5750,26 @@
           }
         }
       }
+    },
+    "Watch party" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watch party"
+          }
+        }
+      }
+    },
+    "Nobody is streaming yet. When it starts, it shows up here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguém começou a transmitir ainda. Quando começar, aparece aqui."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"

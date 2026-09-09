@@ -107,12 +107,27 @@ vez de sumirem.
 ### 8. Celular e o app do iPhone
 
 Abre a mesma sessão no celular: no navegador e, se der, no app do TestFlight
-(build 21).
+(build 22 ou mais novo).
 
 **Certo:** no navegador dá pra assistir de pé, com o vídeo em cima e o chat
 embaixo. No iPhone o app mostra o vídeo acima do chat do canal, com **AO VIVO** e
 a contagem de quem está assistindo. No app ainda **não** existe criar, montar
 nem Encerrar, e isso é esperado.
+
+### 8b. O canal no iPhone quando não tem nada rolando
+
+Do build 22 em diante, dá pra conferir isso a semana inteira, sem transmissão
+nenhuma. Abre a lista de canais do servidor no app.
+
+**Certo:** a watch party fica numa seção própria, **Watch party**, no topo da
+lista, com o ícone de claquete. Ela **não** aparece junto com os canais de voz.
+Abrindo o canal, aparece um cartão dizendo que ninguém começou a transmitir
+ainda, e **não** tem botão de telefone no canto de cima. Assistir não ocupa vaga
+na call, e é por isso que o botão não está lá.
+
+Com a transmissão no ar, a mesma lista ganha o selo **AO VIVO** na linha da
+watch party. Ele pode levar até 30 segundos pra aparecer se o app já estava
+aberto antes de começar: é o relógio do servidor, não o app travado.
 
 ### 9. Promover um co-host
 

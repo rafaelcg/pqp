@@ -1160,10 +1160,40 @@ later, per app:
   suppresses the player outright, because a seated viewer already has the
   presenter's screen as a WebRTC track with its own audio.
 
+  **The player was not enough, and build 21 is the proof.** It shipped with
+  everything above working and the first report from a real phone was "watch
+  party shows as a regular voice channel". It was one, exactly: `isVoice` is
+  true for `watch_party` and it was the ONLY question the app asked, so the
+  row drew the same speaker glyph under the same Voice heading, the toolbar
+  drew the same green phone, and `WatchStageView` rendered `EmptyView()` for
+  the two states that are true whenever nothing is being broadcast. Nothing
+  was broken. There was simply nothing on screen that said watch party until a
+  stream existed, and most of the week no stream exists. Build 22 asks
+  `Channel.isWatchParty` in the four places a person can see the difference:
+
+  - **The channel list** (`ChannelListView`) puts parties in their own
+    section, above Text, with the clapperboard the web draws, and filters them
+    out of Voice and out of every category with one filter, the way
+    `channel-list.tsx` does. A live one carries an `AO VIVO` pill fed by
+    `channel-live`, which restates itself on the audience keyframe clock, so a
+    list opened mid-party gains the pill within thirty seconds. There is no
+    REST seed: the catch-up burst is sent at socket auth, long before this
+    screen exists.
+  - **The empty stage** says so. `unknown` and `idle` draw one card rather
+    than two sentences a round trip apart, gated on the type, because this
+    view is mounted over every voice channel's transcript.
+  - **No seat is offered.** The chat toolbar's join button is not drawn in a
+    watch party. A watcher costs one socket in a set; a seat costs a
+    participant on the media box, a microphone prompt, and on the default
+    `hosts_only` stage it buys nothing, since the server denies SPEAK to
+    everyone but the host and the co-hosts. iOS has no presenter or stage
+    surface, so there is nothing on that screen a seat unlocks. The trade is
+    that an iOS host or co-host cannot take the room from the phone; hosting
+    is a web and desktop job today anyway.
+
   Still to do on iOS: the party OBJECT (`watch-party-update`, the host,
-  cohosts, the stage, raise hand), the presenter side, a distinct icon in the
-  channel list, hiding the share control unless `welcome.canStream`, and the
-  create sheet offering the type.
+  cohosts, the stage, raise hand), the presenter side, hiding the share
+  control unless `welcome.canStream`, and the create sheet offering the type.
 - Android: a distinct icon and the create sheet are still missing, and the
   share control is still hidden on a LiveKit room, which is every watch party.
   `WireProtocolTest` mirrors the shared enum and was updated here.
