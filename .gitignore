@@ -57,6 +57,7 @@ coverage/
 
 # Playwright
 client/test-results/
+electron/test-results/
 client/playwright-report/
 client/e2e-results.json
 

@@ -21,13 +21,15 @@
     "dist:mac": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac",
     "dist:win": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
     "dist:linux": "node scripts/ensure-client-dist.js && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --linux",
-    "test": "node --test lib/*.test.mjs"
+    "test": "node --test lib/*.test.mjs",
+    "test:smoke": "playwright test --config=playwright.config.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.3.9",
     "i18next": "^26.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "electron": "^44.0.0",
     "electron-builder": "^25.1.8"
   },
