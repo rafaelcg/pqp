@@ -324,9 +324,23 @@ export interface HlsSourceInput {
   ladderTopHeight: number | null;
   /**
    * The presenter's own measured uplink in bit/s, from the candidate pair
-   * (`voice-stats-probe.ts`), or null when it has not been read yet. Null
-   * allows the raise, the same convention `decidePromotion` uses for an
-   * SFU it has not probed: an unmeasured link is not a bad one.
+   * (`voice-stats-probe.ts`), or null when it has not been read yet.
+   *
+   * **Null REFUSES the raise**, and it used to allow it, on the convention
+   * `decidePromotion` uses for an SFU it has not probed. That convention is
+   * right there and wrong here, and a live party showed why: 1080p went up
+   * with a 4 Mbit/s target and about 2.35 Mbit/s actually arriving at the
+   * egress, so the audience got a starved top layer at roughly 20 fps on a
+   * full-motion source. A promotion that guesses wrong costs the box some
+   * headroom; this one costs the whole audience the picture, because **the
+   * egress subscribes with no layer preference and therefore always takes the
+   * top one** (`SetSubscribed(true)` and nothing else, in livekit/egress's
+   * SDK source; `TrackCompositeEgressRequest` has no layer field either). So
+   * the cleanly delivered 720p layer sitting right beside it is never used,
+   * and a starving 1080p is what every rung transcodes.
+   *
+   * A cleanly delivered 720p is better television than a starving 1080p, and
+   * it costs the presenter less than half the uplink.
    */
   uplinkBps: number | null;
 }
@@ -373,7 +387,9 @@ export function hlsSourceTopHeight(
     return null;
   }
   const needed = SCREEN_BITRATES["1080p"] * HLS_SOURCE_UPLINK_HEADROOM;
-  if (hls.uplinkBps !== null && hls.uplinkBps < needed) {
+  // Measured, and measured to clear the bar. See `uplinkBps` above for why an
+  // unmeasured link is a refusal here and a permission almost everywhere else.
+  if (hls.uplinkBps === null || hls.uplinkBps < needed) {
     return null;
   }
   return wanted;

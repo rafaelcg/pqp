@@ -1054,6 +1054,51 @@ Clearing just the SPEAK bit (never the whole row, which may carry bits nobody
 here set) and deleting a row that is left holding nothing is the second step,
 and it is Rafael's call whether to run it at all.
 
+### What the presenter publishes, and why 1080p was making it worse
+
+Measured on the live party, 2026-09-09. The presenter published
+`SCREEN_SHARE` VP8 at 1671x1080 with three simulcast layers (557x360 at
+450 kbit/s, 1114x720 at 1400, 1671x1080 at 4000), and about **2.35 Mbit/s was
+actually arriving at the egress** over five and a half minutes. So the top
+layer was running at roughly 60 % of its target on full-motion content, which
+is what "like 20fps, def not fluid" looks like from the outside. The media box
+was idle at load 0.87 throughout: this is the presenter's uplink, not the SFU.
+
+**The egress always takes the top layer, and cannot be told otherwise.** Its
+SDK source subscribes with `pub.SetSubscribed(true)` and sets no quality or
+dimension preference, and `TrackCompositeEgressRequest` has no layer field
+either. So the cleanly delivered 720p layer sitting right beside the starving
+one is never used, by any rung: **both rungs of the ladder transcode the same
+starved 1080p**. There is no server-side lever here at all. The only thing that
+decides what the audience sees is what the client publishes.
+
+**So the publish decision now requires a measurement.** `hlsSourceTopHeight`
+raises a watch-party share past the large-room 720p cap only when the uplink
+has been measured AND clears 4 Mbit/s plus 25 % headroom. It used to treat an
+unmeasured uplink as permission, on the convention `decidePromotion` uses for
+an unprobed SFU. Those two cases are not alike: a promotion that guesses wrong
+costs the box some headroom, and this one costs every viewer the picture. A
+cleanly delivered 720p is better television than a starving 1080p and costs the
+presenter less than half the uplink.
+
+Two things this leaves open, both worth doing and neither in that change.
+
+- **A rung taller than the source is an upscale.** With the source held at
+  720p, the ladder's `1080p30` rung burns 0.88 of a core to invent detail that
+  is not in its input. `decideLadder` cannot see the source height today;
+  `set-sharing-screen` already carries `uplinkBps`, so carrying the published
+  top height beside it would let the server refuse a rung it cannot honestly
+  fill. That is a shared-schema change, so it is its own PR.
+- **The host is not told their uplink is short.** This is the same requirement
+  as the silent-audio warning and it wants the same panel. The signal to read
+  is the screen sender's `qualityLimitationReason === "bandwidth"` plus
+  `targetBitrate` against what is actually going out, which
+  `voice-stats-probe.ts` already samples. Note that `useShareUplinkStrain` is
+  **not** the thing to reuse: it is mesh-only by design (PR 370), because the
+  stats it reads mean something else on the SFU, and a watch party big enough
+  to matter is always on the SFU. One sender, one reason code, one line in the
+  panel.
+
 ### The restart that should not happen at all: swapping the share in place
 
 Rafael's framing, and it is a better fix than surviving the restart: in a watch
