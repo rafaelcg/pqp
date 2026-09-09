@@ -105,6 +105,30 @@ function frame(rec: Recorder, type: string): Frame | undefined {
   return rec.frames.find((f) => f.type === type);
 }
 
+/**
+ * The welcome, or a failure that names what arrived instead.
+ *
+ * `frame()` above returns `undefined` when nothing matched, which is right
+ * for the refusal tests that ask whether a frame is absent. It is wrong for
+ * the ones that ask what the welcome CONTAINS. Written the old way, with an
+ * optional chain off `frame(rec, "welcome")`, "the rejoin got a fresh id" is
+ * also satisfied by a rejoin that never happened: the chain yields
+ * `undefined`, and `undefined` is not the old id. Seven assertions in this
+ * file passed on that basis.
+ *
+ * So the strict accessor exists alongside the loose one, and the assertions
+ * that describe a seat use this.
+ */
+function welcomeOf(rec: Recorder): Frame {
+  const welcome = frame(rec, "welcome");
+  if (!welcome) {
+    throw new Error(
+      `expected a welcome, got: ${JSON.stringify(typesOf(rec))}`,
+    );
+  }
+  return welcome;
+}
+
 function typesOf(rec: Recorder): string[] {
   return rec.frames.map((f) => f.type);
 }
@@ -270,7 +294,7 @@ describe("voice session resume", () => {
       resumePeerId: peerId,
       resumeToken: token,
     });
-    expect(frame(thief, "welcome")?.peerId).not.toBe(peerId);
+    expect(welcomeOf(thief).peerId).not.toBe(peerId);
     expect(frame(thief, "welcome")?.resumed).toBeUndefined();
 
     const ownerAgain = await join(recorder(), ownerId, channel, {
@@ -293,7 +317,7 @@ describe("voice session resume", () => {
     const again = await join(recorder(), userId, channel, {
       resumePeerId: peerId,
     });
-    expect(frame(again, "welcome")?.peerId).not.toBe(peerId);
+    expect(welcomeOf(again).peerId).not.toBe(peerId);
     expect(frame(again, "welcome")?.resumed).toBeUndefined();
   });
 
@@ -373,7 +397,7 @@ describe("voice session resume", () => {
       resumePeerId: peerId,
       resumeToken: token,
     });
-    expect(frame(again, "welcome")?.peerId).not.toBe(peerId);
+    expect(welcomeOf(again).peerId).not.toBe(peerId);
     expect(frame(again, "welcome")?.resumed).toBeUndefined();
   });
 
@@ -389,7 +413,7 @@ describe("voice session resume", () => {
     removeVoicePeerBySocket(holding.socket);
 
     const phone = await join(recorder(), userId, channel);
-    expect(frame(phone, "welcome")?.peerId).not.toBe(peerId);
+    expect(welcomeOf(phone).peerId).not.toBe(peerId);
     expect(typesOf(observer)).not.toContain("peer-left");
 
     const resumed = await join(recorder(), userId, channel, {
@@ -426,7 +450,7 @@ describe("voice session resume", () => {
       resumePeerId: peerId,
       resumeToken: token,
     });
-    expect(frame(again, "welcome")?.peerId).not.toBe(peerId);
+    expect(welcomeOf(again).peerId).not.toBe(peerId);
     expect(frame(again, "welcome")?.resumed).toBeUndefined();
   });
 
@@ -490,7 +514,7 @@ describe("voice session resume", () => {
       resumePeerId: peerId,
       resumeToken: token,
     });
-    expect(frame(again, "welcome")?.peerId).not.toBe(peerId);
+    expect(welcomeOf(again).peerId).not.toBe(peerId);
     expect(frame(again, "welcome")?.resumed).toBeUndefined();
   });
 
@@ -535,7 +559,7 @@ describe("voice session resume", () => {
       resumeToken: token,
       transports: ["mesh"],
     });
-    expect(frame(rec, "welcome")?.peerId).not.toBe(peerId);
+    expect(welcomeOf(rec).peerId).not.toBe(peerId);
     expect(frame(rec, "welcome")?.transport).toBe("mesh");
   });
 

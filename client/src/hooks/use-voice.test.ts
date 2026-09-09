@@ -746,8 +746,13 @@ describe("screen share audio", () => {
       sharing: true,
       audioStreamId: null,
     });
-    // Re-published without the audio half rather than torn down.
-    expect(managers[0]?.screenStreams.at(-1)).not.toBeNull();
+    // Re-published without the audio half rather than TORN DOWN, and the
+    // difference is the test. Doubly optional before: no manager gave
+    // `undefined`, and `.at(-1)` on an empty `screenStreams` gave `undefined`
+    // too, so a share that was dropped and never re-published passed.
+    expect(managers[0]).toBeDefined();
+    expect(managers[0]!.screenStreams.length).toBeGreaterThan(0);
+    expect(managers[0]!.screenStreams.at(-1)).not.toBeNull();
   });
 
   it("hands the ICE servers this tab already holds to the SFU connection", async () => {

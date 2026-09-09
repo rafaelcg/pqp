@@ -475,7 +475,12 @@ describeDb("18+ age gate", () => {
     expect(byId.get("dev_local_user_keeper")?.age_checked_at).not.toBeNull();
     // A refusal keeps the declared date, because it is the evidence an appeal
     // would have to be decided on.
-    expect(byId.get("dev_local_user_refused")?.age_check_dob).not.toBeNull();
+    // The row has to exist before its column can mean anything: `?.` on a
+    // missing row yields `undefined`, which is not `null`, so the assertion
+    // passed just as happily when the refusal had not been recorded at all.
+    const refused = byId.get("dev_local_user_refused");
+    expect(refused).toBeDefined();
+    expect(refused?.age_check_dob).not.toBeNull();
   });
 
   it("refuses to leave the two answer columns disagreeing", async () => {

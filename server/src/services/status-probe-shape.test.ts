@@ -293,6 +293,11 @@ describe("status probes: measured or absent, never zero", () => {
     await vi.advanceTimersByTimeAsync(9_000);
 
     const gifs = (await probeComponents()).find((c) => c.key === "gifs");
+    // The component is STILL LISTED, and its `ok` is not a boolean.
+    // `typeof gifs?.ok` is `"undefined"` when the component is missing
+    // entirely, which is not "unknown", it is "dropped", and the assertion
+    // used to wave that through as a pass.
+    expect(gifs).toBeDefined();
     // `recordStatusSamples` writes only components whose `ok` is a boolean,
     // so an unknown minute neither inflates nor deflates the uptime figure.
     expect(typeof gifs?.ok).not.toBe("boolean");
