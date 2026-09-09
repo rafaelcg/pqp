@@ -117,14 +117,47 @@ replaces is certainly wrong now and should not be quoted. The TLS relay on
 5349 is still dead and still unused, and nothing depends on it; the reason it
 is dead (Caddy owns 443) is unchanged.
 
-**Co-tenancy note (reasoning, not measurement).** Redis and LiveKit Egress (for
-HLS) run on `sfu-pqp` alongside LiveKit itself, installed 2026-09-08; the box
-has always run the TURN relay too. A live HLS transcode costs roughly one core
-on moving content. No run had Egress active concurrently with a WebRTC room, so
-this is arithmetic, not a result: during a watch party that has HLS turned on,
-the box is effectively one core short for WebRTC. If watch parties running HLS
-become routine, the clean split is a separate small egress box, not a bigger
-SFU.
+**Co-tenancy note.** Redis and LiveKit Egress (for HLS) run on `sfu-pqp`
+alongside LiveKit itself, installed 2026-09-08; the box has always run the TURN
+relay too. If watch parties running HLS become routine, the clean split is a
+separate small egress box, not a bigger SFU.
+
+The transcode cost itself used to be a guess here ("roughly one core on moving
+content"). It is now measured, on 2026-09-09, on the staging media box, which
+runs the same images and versions production does (`livekit/livekit-server`
+1.13.6, `livekit/egress` v1.14.1) from the same `tools/sfu/install.sh`:
+
+| rung | egress container CPU, sustained |
+|---|---|
+| `720p30` (1800 kbit/s out) | **0.51 core** |
+| `1080p30` (4500 kbit/s out) | **0.88 core** |
+
+Method: one publisher, one `SOURCE_SCREENSHARE` track at 1280x720@30 and
+1.5 Mbit/s in, no subscribers, `docker stats --no-stream` sampled every 8 s
+over 40 to 60 s of steady state. LiveKit's own container sat at 1.4 to 2.2%
+throughout, so the egress is essentially the whole cost.
+
+**Read it as an upper bound.** The source is synthetic full-frame motion at
+30 fps, which is close to worst case; real screen content is mostly static
+between frames and encodes considerably cheaper. And it is one rendition at a
+time on an idle box, not a rung alongside a busy WebRTC room.
+
+What it changes: the default two-rung ladder (`1080p30,720p30`) is about
+**1.4 of the production box's 4 cores** for one watch party, not the ~2 the old
+estimate implied, which leaves the SFU, TURN and the rest comfortably supplied
+for a single party. There is still no cap on **concurrent** parties, so
+`LIVE_HLS_SERVER_ALLOWLIST` is what bounds this in practice
+(`docs/WATCH_PARTY.md`, "Turning it on in production").
+
+Two things the same session showed that are not CPU. On a box with only one
+core, the second rung's `StartEgress` **timed out** rather than being refused
+by `LIVE_HLS_MAX_LADDER_MBPS` (the budget prices Mbit/s, not cores, so it does
+not know how many cores it has); the session correctly degraded to the one rung
+that started, logged `voice.hlsRungStartFailed`, and served it. And
+time-to-first-playlist is CPU-sensitive: 10.8 s for a `720p30`-first ladder
+against **43.7 s** for `1080p30` alone on that saturated single core. On a
+4 vCPU box neither should bite, but a host staring at a blank pane for
+three quarters of a minute after Ir ao vivo is the shape to watch for.
 
 ## 3. Methodology and its limits
 
@@ -137,6 +170,19 @@ exact staging API and WebSocket and forbids any `*.pqp.gg` SFU host).
 **Rig 1, API only:** `server/scripts/load-fanout.ts --mode join`. Real HTTP
 bootstrap, app socket, `welcome`, held open. No media. Runbook in
 [`docs/STAGING.md`](./STAGING.md).
+
+**Neither rig touches HLS at all.** This is the limit to read before quoting
+any number here at a watch party that has live HLS on. `tools/watch-party-load`
+never sends `set-sharing-screen`, which is the frame that starts an egress, so
+no run in this document has ever had a transcode running, and every "viewer" in
+every result is a **WebRTC subscriber** pulling its own stream off the SFU. An
+HLS viewer is a different animal on a different path: it holds an app socket
+and takes no seat, polls a playlist off `pqp-api` every two seconds, and pulls
+segments straight from R2. The SFU carries one publisher and nothing else for
+it. So the measured subscriber ceilings do not transfer to an HLS audience in
+either direction, and the parts of the HLS path that would give out first
+(the playlist proxy's CPU on `pqp-api`, and R2) have never been driven with
+hundreds of distinct viewers. See the additions to section 5.
 
 **Rig 2, media:** `tools/watch-party-load` (PR #337 plus #348). Each simulated
 viewer does the whole path: cold HTTP, app socket, `welcome`,
@@ -230,6 +276,28 @@ Not measured, in the order they would change that table most:
 7. An API-only ramp at the media runs' arrival shape, so the two rigs share a
    baseline.
 8. Eight vCPU.
+9. **An HLS audience of any size.** Nothing in either rig starts an egress, so
+   the whole watch-mode path is unmeasured above a handful of viewers. What is
+   known, from single-stream work against staging on 2026-09-09:
+   - the playlist proxy's own latency is flat from 5 to 55 requests per second
+     of successful traffic (p50 ~265 ms, p95 ~550 ms end to end from a laptop
+     to `gru`), which is the per-session render cache doing its job: the body
+     is identical for every viewer of a rendition and is rebuilt at most once
+     a second however many ask;
+   - segments come **straight from R2** over the presigned URL in the
+     rewritten playlist, never through `pqp-api` and never through a CDN, at
+     ~290 KB per two-second `720p30` segment. 300 concurrent fetches of one
+     segment returned 200 with no errors and no throttling;
+   - what could NOT be measured from one machine is the API's cost at hundreds
+     of **distinct** viewers, because a single identity is capped by the
+     per-user API limiter (120 burst, 10/s) and a single address by
+     `anonLimiter` (240 burst, 60/s). At roughly half a request per second per
+     viewer those bound a one-laptop rig to about a hundred viewers' worth of
+     polling, which is well under the interesting range.
+   Sizing that run means many distinct `LOAD_TEST_TOKEN` identities across
+   several generator addresses, holding a socket and polling a playlist each.
+   It needs no decode and no `rtc-node`, so it is far cheaper than rig 2; it
+   just does not exist yet.
 
 ## 6. Levers, ranked
 
