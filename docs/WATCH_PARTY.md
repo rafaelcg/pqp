@@ -1054,6 +1054,51 @@ Clearing just the SPEAK bit (never the whole row, which may carry bits nobody
 here set) and deleting a row that is left holding nothing is the second step,
 and it is Rafael's call whether to run it at all.
 
+### A finished session went on answering as if it were live
+
+**This is what viewers were actually hitting**, and it is a different bug from
+the leftover transcodes above even though the leftover transcode is what feeds
+it. Read from the production bucket on 2026-09-09:
+
+```
+14:27:50  live/<ch>/1788963814707-1080p30.m3u8   current session
+14:27:47  live/<ch>/1788962552321-1080p30.m3u8   SUPERSEDED, still being written
+```
+
+The superseded session's last segment was written at 14:23:35, its live
+playlist's newest entry was `14:20:22`, and its LastModified was **one second
+old**. A LiveKit egress whose input track has gone keeps rewriting its live
+playlist and produces no new segments, so the file is a corpse with a moving
+mtime.
+
+**And the proxy served it.** `renderSignedPlaylist` asked only
+`cleaned_at IS NULL`, which means "the objects have not been deleted yet";
+with retention at 180 minutes that is three hours of a finished session
+answering as though it were on air. `sessionRungs` had the same clause, so the
+master went on advertising its variants too. The comment on
+`buildSignedPlaylist` had always claimed a link from an ended session "404s
+cleanly"; nothing implemented it. Both queries ask `ended_at IS NULL` now, and
+`hls-playlist-proxy-session.test.ts` proves the predicate against a real
+Postgres rather than a mocked `rowCount`, because a mock cannot tell one
+predicate from another and would have passed either way.
+
+**Why a 404 is the right answer rather than a redirect.** Every client already
+has the recovery: the web player's watchdog treats a fatal error as a reason to
+refetch `GET /api/channels/:id/live` and follow whatever session that names,
+and iOS's `WatchStreamSwap` swaps on a failure as well as on `startedAt`. So a
+404 puts a pinned viewer onto the live session within one watchdog tick, on
+both platforms, with no new machinery. It also answers "can a client end up
+pinned to an old session": it can, whenever it misses the `channel-live` frame,
+and this is what unpins it.
+
+**The backstop not built.** A playlist whose newest entry is older than a few
+target durations is not live whatever the rows say, and the proxy could refuse
+on the body as well as on the row. It is deliberately left out for now: the
+only clock in the file is the egress box's, `#EXT-X-PROGRAM-DATE-TIME` is not
+guaranteed present, and the health monitor already tears down a session whose
+playlist stops moving for twenty seconds. Worth adding if a session is ever
+seen serving stale content with an open row.
+
 ### What the presenter publishes, and why 1080p was making it worse
 
 Measured on the live party, 2026-09-09. The presenter published

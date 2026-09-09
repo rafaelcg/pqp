@@ -190,9 +190,30 @@ async function renderSignedPlaylist(
   }
 
   const objectPrefix = hlsObjectPrefix(channelId, startedAt, rung);
+  // `ended_at IS NULL`, NOT just `cleaned_at IS NULL`, and the difference is
+  // the whole bug. `cleaned_at` is "the objects have not been deleted yet",
+  // which after retention was raised to 180 minutes means a session that
+  // finished three hours ago still answered here as if it were live. Read
+  // from the production bucket on 2026-09-09: a superseded session's live
+  // playlist had a LastModified one second old and a newest entry seven
+  // minutes stale, because a LiveKit egress whose input track is gone keeps
+  // rewriting its playlist while producing no new segments. A player pinned
+  // to it polls a file that keeps changing, concludes the stream is live, and
+  // never receives media: buffer drains, "Loading stream", retry, repeat,
+  // every ten to twenty seconds, and on iOS never recovers because there is
+  // nothing to recover to.
+  //
+  // The comment on `buildSignedPlaylist` above has always claimed that a link
+  // from a session that already ended "404s cleanly". This is the clause that
+  // makes that true. A 404 is what the client's watchdog wants: it refetches
+  // `GET /api/channels/:id/live` and follows the current session, which is
+  // machinery that already exists and already works.
   const session = await getPool().query(
     `SELECT 1 FROM hls_sessions
-     WHERE channel_id = $1 AND object_prefix = $2 AND cleaned_at IS NULL`,
+     WHERE channel_id = $1
+       AND object_prefix = $2
+       AND ended_at IS NULL
+       AND cleaned_at IS NULL`,
     [channelId, objectPrefix],
   );
   if (session.rowCount === 0) {
@@ -271,6 +292,11 @@ const rungCache = new Map<string, { rungs: string[]; at: number }>();
  * A row whose `rung` names nothing this build knows (an operator downgraded
  * mid-stream) is dropped rather than guessed at: the master lists what it can
  * describe truthfully, and a viewer plays the rest.
+ *
+ * ENDED ROWS ARE NOT RUNGS. Same clause and same reason as
+ * `renderSignedPlaylist`: without it a finished session goes on advertising
+ * its variants for the whole retention window, so a viewer who never learns
+ * about the new session is handed a master pointing at a corpse.
  */
 async function sessionRungs(
   channelId: string,
@@ -287,6 +313,7 @@ async function sessionRungs(
      WHERE channel_id = $1
        AND object_prefix LIKE $2
        AND rung IS NOT NULL
+       AND ended_at IS NULL
        AND cleaned_at IS NULL
      ORDER BY started_at ASC`,
     [channelId, sessionPrefixPattern(channelId, startedAt)],
