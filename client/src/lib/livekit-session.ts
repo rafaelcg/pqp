@@ -296,6 +296,36 @@ export async function connectLiveKit({
   /** The plan the share on the wire was published under. Null while not sharing. */
   let publishedScreenPlan: ScreenSimulcastPlan | null = null;
   /**
+   * THE DECLARED LAYERS ARE DECIDED ONCE PER BROADCAST AND THEN HELD.
+   *
+   * Set when the share goes up while an HLS ladder is transcoding from it, and
+   * cleared when the share stops. While it is set, `reconcileScreenPlan`
+   * refuses to republish: it moves the ceiling in place instead, which no
+   * viewer sees, and leaves the layer set alone.
+   *
+   * WHY, and it is a production incident rather than a precaution. A republish
+   * is a new track sid, a new Track Composite egress, a new `startedAt` and a
+   * new playlist URL, so it rebuffers EVERY seatless viewer. The plan depends
+   * on `participantCount()` and on `hlsSource`, and `use-voice.ts` resamples
+   * the presenter's uplink into `setHlsSource` every two seconds, so once
+   * `hlsSourceTopHeight` started requiring a MEASURED uplink (the right fix
+   * for a starved 1080p layer) any measurement wobbling across the threshold
+   * could republish the track. Production on 2026-09-09 logged six teardowns
+   * in sixteen minutes on one continuous party, two of them
+   * `screen-track-replaced` with nobody touching the share, and Rafael saw the
+   * stream stop every few seconds to minutes on web and iOS.
+   *
+   * A better decision arriving later is not worth a rebuffer for the whole
+   * audience, and certainly not repeatedly. The one raise this still allows is
+   * the intended one: the share is published before the egress exists, so the
+   * first plan is the large-room 720p one, and the reconcile that runs when
+   * the ladder appears is the only one that finds the pin clear.
+   *
+   * A deliberate act by the host is not this: `setScreenQuality` forces past
+   * it, because somebody who picks 1080p by name has chosen the blink.
+   */
+  let screenPlanPinned = false;
+  /**
    * The capture's constraints as the browser handed them over, so the plan's
    * height can be laid over them and lifted again without losing the frame
    * rate or width the capture was asked for.
@@ -944,20 +974,36 @@ export async function connectLiveKit({
       },
     });
     publishedScreenPlan = plan;
+    // PINNED THE MOMENT IT GOES UP UNDER A LIVE BROADCAST. See
+    // `screenPlanPinned` and `reconcileScreenPlan`.
+    screenPlanPinned = broadcastIsLive();
+  }
+
+  /** A live HLS ladder is transcoding from this share right now. */
+  function broadcastIsLive(): boolean {
+    return hlsSource !== null && hlsSource.ladderTopHeight !== null;
   }
 
   /**
    * Bring the share on the wire in line with the plan the room now calls for.
    *
-   * Runs on every quality change and every time the room grows or shrinks. A
-   * different top HEIGHT means a different set of declared layers, and the
+   * Runs on every quality change, every time the room grows or shrinks, and
+   * every two seconds while a watch party is transcoding from this share
+   * (`use-voice.ts` resamples the uplink into `setHlsSource` on that cadence).
+   * That last caller is why the pin below exists.
+   *
+   * A different top HEIGHT means a different set of declared layers, and the
    * only honest way to change those is to publish again, so the track is
    * unpublished without being stopped and published under the new plan; the
-   * viewers see the picture blink once, at the moment the room crosses twenty
-   * people or the presenter picks 1080p by name. A different top CEILING at
-   * the same height is moved in place, with no blink, exactly as before.
+   * viewers see the picture blink once. A different top CEILING at the same
+   * height is moved in place, with no blink.
+   *
+   * **While a broadcast is live the height is pinned** and a change of mind
+   * becomes a ceiling change: see `screenPlanPinned` for the incident. `force`
+   * is the host choosing a quality by name, which is a deliberate act and gets
+   * the blink it asked for.
    */
-  function reconcileScreenPlan(): Promise<void> {
+  function reconcileScreenPlan(options?: { force?: boolean }): Promise<void> {
     const run = async () => {
       const track = publishedScreenTrack;
       const published = publishedScreenPlan;
@@ -965,7 +1011,35 @@ export async function connectLiveKit({
         return;
       }
       const plan = currentScreenPlan();
-      if (plan.topHeight !== published.topHeight) {
+      const heightChanged = plan.topHeight !== published.topHeight;
+      // `broadcastIsLive()` as well as the pin: when the stream STOPS the
+      // large-room cap has to come back, because a 1080p top layer with no
+      // egress behind it is bandwidth per viewer for nothing, which is the
+      // reason the cap exists. Pinned means "while broadcasting", not "for
+      // ever".
+      if (
+        heightChanged &&
+        screenPlanPinned &&
+        broadcastIsLive() &&
+        !options?.force
+      ) {
+        // HELD. The layer set stays exactly as published, and the capture is
+        // NOT reconstrained: shrinking it under a layer set declared for the
+        // old height would starve the top layer, which is the thing this
+        // whole path is trying to stop. What can move without anybody
+        // noticing is the ceiling, so that is what moves. A worse uplink
+        // therefore still gets a lower bitrate; it just gets it in place.
+        if (plan.topBitrate !== published.topBitrate) {
+          await setSourceMaxBitrate(
+            Track.Source.ScreenShare,
+            plan.topBitrate,
+            "screen",
+          );
+          publishedScreenPlan = { ...published, topBitrate: plan.topBitrate };
+        }
+        return;
+      }
+      if (heightChanged) {
         await constrainScreenCapture(track, plan.topHeight);
         // `false`: the capture stays alive; it is the same track going back up.
         await room.localParticipant.unpublishTrack(track, false);
@@ -1236,6 +1310,10 @@ export async function connectLiveKit({
       publishedScreenTrack = null;
       publishedScreenPlan = null;
       screenCaptureConstraints = null;
+      // A new share is a new decision. The pin is per broadcast, not per
+      // session: somebody who stops and shares a different window gets the
+      // plan that window and that room call for.
+      screenPlanPinned = false;
     },
 
     async publishCamera(stream: MediaStream) {
@@ -1272,7 +1350,10 @@ export async function connectLiveKit({
     async setScreenQuality(quality: VideoQuality) {
       screenQuality = quality;
       screenMaxBitrate = screenBitrateFor(quality);
-      await reconcileScreenPlan();
+      // `force`: the host picked this by name. The pin exists to stop a
+      // resampled measurement rebuffering the audience, not to overrule a
+      // person who reached for the menu.
+      await reconcileScreenPlan({ force: true });
     },
 
     /**

@@ -31,7 +31,11 @@ import {
   isPipAvailable,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
-import { resolveHlsUrl } from "@/lib/hls-playback";
+import {
+  hlsSessionKey,
+  resolveHlsUrl,
+  sameHlsSession,
+} from "@/lib/hls-playback";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
@@ -184,7 +188,30 @@ export function HlsWatchPlayer({
 
   const offered = offeredHlsLevels(levels);
 
+  /**
+   * A RESTAMPED URL IS NOT A NEW STREAM, and treating it as one is what made
+   * every seatless web viewer rebuffer twice a minute for the whole film.
+   *
+   * `hlsUrl` carries a per-viewer `?t=` token and the server restamps it on
+   * the audience keyframe, every 30 seconds while the channel is live, so this
+   * prop changes constantly for a stream that has not moved. Adopting it
+   * re-attaches the element, drops the buffer and starts the whole ladder
+   * negotiation again. Only the path names the session
+   * (`.../<channelId>/<startedAt>`), and only `startedAt` changing means the
+   * viewer genuinely has to move.
+   *
+   * This is the same rule iOS's `WatchStreamSwap` was given when the audience
+   * half was written; the web was never given it, and because the symptom is
+   * identical on both it read as the stream being broken rather than one
+   * platform missing a guard.
+   */
+  const sessionRef = useRef<string | null>(null);
   useEffect(() => {
+    const key = hlsSessionKey(src);
+    if (sessionRef.current !== null && sessionRef.current === key) {
+      return;
+    }
+    sessionRef.current = key;
     setActiveSrc(src);
     setPhase("playing");
     watchRef.current.reset(Date.now());
@@ -216,7 +243,15 @@ export function HlsWatchPlayer({
         // URL we have, the watchdog will call it dead if that fails too.
       }
     }
-    if (next && next !== activeSrc) {
+    if (next && !sameHlsSession(next, activeSrc)) {
+      // A genuinely different session: follow it, and remember it so the
+      // `src` prop arriving with the same session a moment later does not
+      // re-attach on top of this one.
+      sessionRef.current = hlsSessionKey(next);
+      setActiveSrc(next);
+    } else if (next && next !== activeSrc) {
+      // Same session, fresher token. Worth taking on a reconnect (the old one
+      // may be what failed) and never worth taking otherwise.
       setActiveSrc(next);
     } else {
       setAttempt((n) => n + 1);

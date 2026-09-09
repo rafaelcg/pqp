@@ -799,6 +799,86 @@ describe("the presenter as a live ladder's source", () => {
     expect(published).toHaveLength(publishesBefore);
   });
 
+  /**
+   * THE STALL, and it is the whole of it.
+   *
+   * `use-voice.ts` resamples the presenter's uplink into `setHlsSource` every
+   * two seconds, and the server restamps the stream frame every thirty, so
+   * this path runs constantly for a party doing nothing unusual. Once
+   * `hlsSourceTopHeight` started requiring a MEASURED uplink, a link sitting
+   * near the 5 Mbit/s threshold made `topHeight` a function of a fluctuating
+   * bandwidth estimate, and each crossing republished the track: a new sid, a
+   * new egress, a new `startedAt`, and a rebuffer for the entire audience.
+   * Production logged six teardowns in sixteen minutes on one continuous
+   * party, two of them `screen-track-replaced` with nobody touching the share.
+   *
+   * There is no hysteresis worth adding here. The decision is worth making
+   * once.
+   */
+  it("holds the layers through an uplink that keeps changing its mind", async () => {
+    const sfu = await session();
+    fillRoom(50);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    // The one raise the pin is meant to allow: the share was published before
+    // the egress existed, so the first plan was the capped one.
+    expect(constrained).toEqual([720, 1080]);
+    const publishesAfterRaise = published.length;
+    const unpublishesAfterRaise = unpublished.length;
+
+    // Now the measurement wobbles, as it does for the rest of the film.
+    for (const uplinkBps of [2_000_000, 9_000_000, 1_000_000, 9_000_000]) {
+      await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps });
+    }
+
+    expect(published).toHaveLength(publishesAfterRaise);
+    expect(unpublished).toHaveLength(unpublishesAfterRaise);
+    // The capture is left alone too: shrinking it under a layer set declared
+    // for 1080 would starve the top layer, which is what this exists to stop.
+    expect(constrained).toEqual([720, 1080]);
+  });
+
+  /**
+   * Held is not frozen. A worse uplink still has to reach the encoder; it just
+   * reaches it as a ceiling, which no viewer sees, rather than as a republish,
+   * which every viewer sees.
+   */
+  it("still lowers the ceiling in place while the layers are held", async () => {
+    const sfu = await session();
+    fillRoom(50);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const writesBefore = senderWrites.length;
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 1_000_000 });
+
+    const moved = senderWrites
+      .slice(writesBefore)
+      .filter((write) => write.source === Track.Source.ScreenShare);
+    expect(moved.length).toBeGreaterThan(0);
+    expect(moved[moved.length - 1]!.maxBitrate).toBe(1_500_000);
+  });
+
+  /**
+   * The host reaching for the quality menu is a deliberate act, and the pin
+   * exists to stop a bandwidth estimate rebuffering an audience, not to
+   * overrule a person.
+   */
+  it("lets the host change quality by name even while pinned", async () => {
+    const sfu = await session();
+    fillRoom(50);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const publishesAfterRaise = published.length;
+
+    await sfu.setScreenQuality("720p");
+
+    expect(published.length).toBeGreaterThan(publishesAfterRaise);
+  });
+
   it("does not blink the share for a 720p-only ladder", async () => {
     const sfu = await session();
     fillRoom(50);

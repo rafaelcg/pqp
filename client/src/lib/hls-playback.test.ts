@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   chooseHlsEngine,
+  hlsSessionKey,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
   resolveHlsUrl,
+  sameHlsSession,
 } from "./hls-playback";
 
 describe("chooseHlsEngine", () => {
@@ -99,5 +101,56 @@ describe("isOwnHlsPlaylistProxyUrl with the viewer token", () => {
     );
     expect(isOwnHlsPlaylistProxyUrl(own)).toBe(true);
     expect(isOwnHlsPlaylistProxyUrl(`${own}&x=1`)).toBe(true);
+  });
+});
+
+/**
+ * WHICH URL CHANGES MEAN THE VIEWER HAS TO MOVE, and it is very few of them.
+ *
+ * `hlsUrl` carries a per-viewer signed `?t=` token and the server restamps it
+ * on the audience keyframe, every 30 seconds while a channel is live. So the
+ * string a viewer holds changes twice a minute for a stream that has not
+ * changed at all, and `HlsWatchPlayer` re-attached its `<video>` on any change
+ * of `src`: **every seatless web viewer rebuffered every 30 seconds, for the
+ * whole film, on every watch party there has ever been.**
+ *
+ * iOS was given exactly this rule when the audience half was written
+ * (`WatchStreamSwap` swaps on `startedAt`, on a failure and on the token
+ * clock). The web was never given it, and because the symptom is identical on
+ * both platforms it read as the stream being broken rather than as one
+ * platform missing a guard. Rafael reported the stream stopping every few
+ * seconds to minutes on web and iOS; this is the web half.
+ */
+describe("hlsSessionKey", () => {
+  const SESSION = "https://api.example.test/api/voice/hls-playlist/ch-1/1788962552321";
+
+  it("ignores the per-viewer token, which is the only thing that usually moves", () => {
+    expect(sameHlsSession(`${SESSION}?t=aaa`, `${SESSION}?t=bbb`)).toBe(true);
+  });
+
+  it("separates two sessions on the same channel", () => {
+    const later = "https://api.example.test/api/voice/hls-playlist/ch-1/1788963814707";
+    expect(sameHlsSession(`${SESSION}?t=aaa`, `${later}?t=aaa`)).toBe(false);
+  });
+
+  it("separates two channels", () => {
+    const other = "https://api.example.test/api/voice/hls-playlist/ch-2/1788962552321";
+    expect(sameHlsSession(SESSION, other)).toBe(false);
+  });
+
+  it("separates a rung playlist from the master it belongs to", () => {
+    expect(sameHlsSession(SESSION, `${SESSION}/720p30`)).toBe(false);
+  });
+
+  it("treats a raw bucket URL, which has no token to strip, as its own key", () => {
+    const raw = "https://live.example.test/live/ch-1/1788962552321.m3u8";
+    expect(hlsSessionKey(raw)).toBe(raw);
+    expect(sameHlsSession(raw, raw)).toBe(true);
+  });
+
+  it("says nothing is nothing", () => {
+    expect(hlsSessionKey(null)).toBeNull();
+    expect(sameHlsSession(null, null)).toBe(true);
+    expect(sameHlsSession(null, SESSION)).toBe(false);
   });
 });
