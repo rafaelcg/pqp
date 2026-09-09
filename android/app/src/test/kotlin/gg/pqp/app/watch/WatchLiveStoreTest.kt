@@ -41,6 +41,7 @@ class WatchLiveStoreTest {
     private var seated: String? = null
     private var seedResponse: ChannelLiveResponse? = null
     private var seedCalls = 0
+    private var self: String? = ME
 
     private fun store(scope: TestScope) = WatchLiveStore(
         frames = frames,
@@ -48,6 +49,7 @@ class WatchLiveStoreTest {
         send = { sent += it },
         seatedChannelId = { seated },
         seed = { seedCalls += 1; seedResponse },
+        selfUserId = { self },
         scope = scope,
     )
 
@@ -265,5 +267,83 @@ class WatchLiveStoreTest {
         seedResponse = null
         store.seedFromApi("c1")
         assertEquals(ChannelLive.NOTHING, store.live("c1"))
+    }
+
+    // ------------------------------------------------------ the way IN
+
+    private fun partyFrame(channelId: String, role: String, voiceEnabled: Boolean) = frame(
+        """
+        {"type":"watch-party-update","channelId":"$channelId",
+         "party":{"id":"p1","channelId":"$channelId","name":"Sessao",
+                  "viewerRole":"$role",
+                  "options":{"voiceEnabled":$voiceEnabled,"stageMode":"hosts_only"},
+                  "stage":{"invited":[],"hands":[],"handRaised":false}}}
+        """,
+    )
+
+    /**
+     * The affordance half of the seatless design, and the case that matters on
+     * Saturday: an ordinary viewer is not offered a seat on the media box for
+     * something the pane above the transcript is already playing them.
+     */
+    @Test
+    fun `a viewer of a voiceless party is not offered a seat`() = runTest {
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val store = store(scope)
+        frames.emit(partyFrame("c1", role = "viewer", voiceEnabled = false))
+        assertTrue(store.seats.value.containsKey("c1"))
+        assertEquals(false, store.mayTakeSeat("c1"))
+    }
+
+    /**
+     * The reason this could not be a blanket removal. A host presenting from
+     * Android is what the screen-share work exists for, and `viewerRole` is
+     * how this phone knows before it joins.
+     */
+    @Test
+    fun `the host of the same party still is`() = runTest {
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val store = store(scope)
+        frames.emit(partyFrame("c1", role = "host", voiceEnabled = false))
+        assertTrue(store.mayTakeSeat("c1"))
+    }
+
+    @Test
+    fun `a channel nobody has said anything about joins like the voice room it is`() = runTest {
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val store = store(scope)
+        assertTrue(store.mayTakeSeat("c-untouched"))
+    }
+
+    /**
+     * The party ended, or left the states this account may see. The channel
+     * goes back to being an ordinary voice room rather than staying shut.
+     */
+    @Test
+    fun `party null gives the channel back`() = runTest {
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val store = store(scope)
+        frames.emit(partyFrame("c1", role = "viewer", voiceEnabled = false))
+        assertEquals(false, store.mayTakeSeat("c1"))
+        frames.emit(frame("""{"type":"watch-party-update","channelId":"c1","party":null}"""))
+        assertTrue(store.seats.value.isEmpty())
+        assertTrue(store.mayTakeSeat("c1"))
+    }
+
+    /**
+     * Reading the party costs the audience nothing on the wire. The claim this
+     * whole file exists to defend is unchanged by knowing about the party.
+     */
+    @Test
+    fun `learning about a party sends nothing`() = runTest {
+        val scope = TestScope(UnconfinedTestDispatcher(testScheduler))
+        val store = store(scope)
+        frames.emit(partyFrame("c1", role = "viewer", voiceEnabled = false))
+        assertEquals(emptyList<String?>(), types())
+        assertEquals(false, store.mayTakeSeat("c1"))
+    }
+
+    private companion object {
+        const val ME = "11111111-1111-1111-1111-111111111111"
     }
 }

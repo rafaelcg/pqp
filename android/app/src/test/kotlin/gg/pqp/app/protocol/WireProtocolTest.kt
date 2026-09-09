@@ -177,6 +177,21 @@ class WireProtocolTest {
             // would play until the token expired and then stop for good.
             "voice-stream",
             "channel-live",
+            // The watch party EVENT, and the reason it is required rather
+            // than ignored. `viewerRole` on this frame is the ONLY thing that
+            // tells this phone whether it is running a party or watching one
+            // before it joins, because `welcome.canStream` is the other
+            // answer and `welcome` arrives after the seat is already taken.
+            // Losing the branch puts the join button back in front of an
+            // audience, which is a seat on the media box per viewer and the
+            // exact cost the seatless design exists to avoid.
+            "watch-party-update",
+            // The server's own "no" to a join. Only ever sent in answer to a
+            // resume today, which this client does not ask for, so the branch
+            // is a floor rather than a live path: `JoinWatchdog` is what
+            // covers the refusals that send nothing. Named here so that it is
+            // deleted deliberately rather than tidied away.
+            "voice-join-refused",
             // the Baú's one live frame
             "community-home-update",
             // handshake
@@ -201,10 +216,6 @@ class WireProtocolTest {
      * branch, so the list cannot go stale in that direction either.
      */
     private val deliberatelyIgnored: Map<String, String> = mapOf(
-        // Sent only in answer to a `join-voice-room` that carried a
-        // `resumePeerId`, and this client never sends one: a socket drop
-        // rebuilds the call from scratch (VoiceController.followConnection).
-        "voice-join-refused" to "Android never resumes a peer id, so this refusal is never addressed to it",
         // Only ever answers a `set-camera`, which Android does not send.
         "camera-denied" to "Android has no camera publishing, so nothing here can be denied",
         // Who is online in the channel. Android draws no member list yet.
@@ -219,13 +230,10 @@ class WireProtocolTest {
         "permissions-update" to "no permission-gated controls on the phone to refresh",
         // Polls render as their message body; votes and closes are web only.
         "poll-update" to "no poll surface on the phone",
-        // Watch party is a desktop feature by design (docs/ANDROID.md).
-        "watch-party" to "no watch party on the phone",
-        // The watch party EVENT: its name, host, co-hosts, state and options,
-        // resolved per recipient. Same reason as the line above and as the
-        // scheduling reminder below: the phone has no watch party surface at
-        // all, so there is nothing for a party's state to change.
-        "watch-party-update" to "no watch party surface on the phone",
+        // The party's own CHAT frame, which the phone has no panel to put
+        // anywhere. `watch-party-update` is a different frame and IS handled;
+        // see the required list above for what it decides.
+        "watch-party" to "no watch party panel on the phone to render the party in",
         // Watch party scheduling reminder ("T-10 minutes" / "now live"), sent
         // individually per subscriber. No reminders surface on the phone yet.
         "channel-session-reminder" to "no watch party scheduling surface on the phone",

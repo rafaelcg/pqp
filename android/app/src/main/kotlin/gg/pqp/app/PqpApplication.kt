@@ -11,6 +11,7 @@ import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.clerk.api.Clerk
 import gg.pqp.app.core.AuthMode
 import gg.pqp.app.core.Backend
+import gg.pqp.app.core.SessionPhase
 import gg.pqp.app.core.SessionStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
@@ -89,6 +90,9 @@ class PqpApplication : Application(), SingletonImageLoader.Factory {
             // the answer from before anybody had joined anything.
             seatedChannelId = { voice.state.value.channelId.takeIf { _ -> voice.state.value.isActive } },
             seed = { channelId -> runCatching { session.api.channelLive(channelId) }.getOrNull() },
+            // Lazily, like the seat above: this object is built before anybody
+            // has signed in, and `stage.invited` is matched by user id.
+            selfUserId = { (session.phase.value as? SessionPhase.Ready)?.me?.id },
             scope = appScope,
         )
     }
