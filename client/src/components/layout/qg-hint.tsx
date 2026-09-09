@@ -27,16 +27,30 @@ export interface QgHintJoin {
  * Escape or the X closes it. A PNG of the live room would go stale the next
  * time the QG swaps a banner; the illustration is the fallback, and a live
  * banner from the listing replaces it when the community has one.
+ *
+ * IT TAKES `enabled` LIKE EVERY OTHER CORNER CARD. It used to only *report*
+ * whether it wanted the corner and then render regardless, which made the
+ * "one corner at a time" rule in `lib/corner-hints.ts` a claim rather than a
+ * fact: this card and the update notice were mounted together, overlapping,
+ * with two Escape listeners on `document` between them. `wanted` is what the
+ * queue arbitrates over; `show` is what actually paints; and the impression is
+ * only spent when it paints, which is the whole point of the rule.
  */
 export function QgHint({
+  enabled = true,
   onJoined,
   onFailed,
-  onShowingChange,
+  onWantedChange,
 }: {
+  /** False while a higher-priority corner card owns the corner. */
+  enabled?: boolean;
   onJoined: (result: QgHintJoin) => void;
   onFailed: () => void;
-  /** Fired once lookup has settled, and again when the card is dismissed. */
-  onShowingChange?: (showing: boolean) => void;
+  /**
+   * Whether this card WANTS the corner, which is not whether it has it.
+   * Fired once the lookup has settled, and again when the card is dismissed.
+   */
+  onWantedChange?: (wanted: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [eligible] = useState(
@@ -85,7 +99,7 @@ export function QgHint({
   }, [eligible]);
 
   const preview = !shouldPersistQgHint();
-  const show =
+  const wanted =
     eligible &&
     open &&
     listing.status === "ready" &&
@@ -96,7 +110,10 @@ export function QgHint({
       joined: listing.joined,
       preview,
     });
+  const show = wanted && enabled;
 
+  // Spent on the impression, not on the intention: a card that yielded the
+  // corner was never seen, and must still be there next time.
   useEffect(() => {
     if (show) {
       rememberQgHint();
@@ -105,14 +122,14 @@ export function QgHint({
 
   useEffect(() => {
     if (!eligible) {
-      onShowingChange?.(false);
+      onWantedChange?.(false);
       return;
     }
     if (listing.status !== "ready") {
       return;
     }
-    onShowingChange?.(show);
-  }, [eligible, listing.status, show, onShowingChange]);
+    onWantedChange?.(wanted);
+  }, [eligible, listing.status, wanted, onWantedChange]);
 
   if (!show || listing.status !== "ready") {
     return null;

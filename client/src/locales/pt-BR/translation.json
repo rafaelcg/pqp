@@ -2747,6 +2747,8 @@
   "update.dismiss": "Me lembra depois",
   "update.later": "Depois",
   "update.dismiss.label": "Fechar aviso de atualização",
+  "update.rail": "Atualizar o pqp",
+  "update.inCall": "Você está numa call. Recarregar vai te tirar dela.",
   "claim.edition": "ago 2026",
   "handle.share.cta": "Mostrar pra galera",
   "handle.share.copied": "Copiado",
