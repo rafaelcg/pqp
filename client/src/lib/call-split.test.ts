@@ -30,7 +30,6 @@ const {
   saveCallSplit,
   splitAvailable,
   splitBounds,
-  resolveCollapsed,
   splitFraction,
   strongestStageShape,
 } = await import("./call-split");
@@ -319,6 +318,8 @@ describe("collapsing a pane", () => {
     // the hiding; this asserts why it matters.
     expect(resolveCollapsed("stage", "expanded")).toBe("stage");
     expect(resolveCollapsed("stage", "none")).toBe("none");
+  });
+});
 
 describe("strongestStageShape", () => {
   it("is none when nobody is claiming anything", () => {

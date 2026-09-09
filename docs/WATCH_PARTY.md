@@ -509,27 +509,22 @@ one place silently change the other, which is the mistake the two existing
 kinds were split to avoid. It defaults to `contain`, so nothing about a first
 render moved, and ordinary call tiles are untouched.
 
-**Hiding a pane.** "The host can choose if they want to see their cam or chat
-or not" is the same preference as the ratio, taken to its end, so it lives on
-`CallSplitPreference` as `collapsed: "none" | "stage" | "chat"` beside the
-orientation and the fractions. It is a general property of the split, not a
-watch party special case, so a plain call gets it too.
+**Hiding a pane** is not this branch's work. It landed separately as PR 403
+(`collapsed: "none" | "stage" | "chat"` on `CallSplitPreference`, chevrons on
+the divider, a full-edge strip to restore), from the same QG request, and this
+branch was building the same thing at the same time. Main's version won on
+merge: same type, same values, same `resolveCollapsed`, same
+hidden-not-unmounted rule. Nothing was lost and nothing is duplicated.
 
-It is deliberately NOT a fraction of 0 or 1, which is the obvious cheaper
-design. `clampSplit` forces every fraction inside the pixel minimums, on
-purpose, so that a drag can never strand somebody with a sliver; a collapse is
-exactly what those minimums forbid, so it has to be said in a different word
-rather than smuggled through as a number the clamp would undo. The minimums
-still bound the visible pane, which by definition gets the whole container.
-
-The affordances live at the boundary, because that is where the mental model
-is: two small chevrons on the divider collapse either way, and a collapsed pane
-leaves a full-edge strip in its place that restores it. The strip is a whole
-edge rather than a corner button because a collapsed pane is the one state
-somebody can be stuck in. Both are real buttons, so the keyboard reaches them,
-and `resolveCollapsed` honours the preference only where the divider exists
-(`shape === "expanded"`), without writing, so it returns on its own when a
-picture does.
+What this branch does add to the split is **`strongestStageShape`**. `stageShape`
+drives the divider and the side-by-side toggle and was last-write-wins from a
+single callback, which is fine while one stage can be mounted. A watch party
+channel mounts three at once (the party panel, the watch stage, the call
+stage), and each reports as it appears and disappears, so whichever went away
+could flatten the pane with a "none" that was only ever about itself. The pane
+takes the strongest claim instead: a stage that has gone cannot outvote a
+picture that is still there. A plain call never hits this, which is why PR 403
+did not need it.
 
 **What the host is transmitting.** `components/watch-party/watch-party-transmission.tsx`,
 host and co-hosts only, never viewers. Assembled from what already existed

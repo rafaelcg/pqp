@@ -206,13 +206,6 @@ export function CallSplit({
     [onPreferenceChange, preference],
   );
 
-  const setCollapsed = useCallback(
-    (next: CallSplitCollapsed) => {
-      onPreferenceChange({ ...preference, collapsed: next }, true);
-    },
-    [onPreferenceChange, preference],
-  );
-
   const dragRef = useRef<{ origin: number; startPx: number } | null>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -613,119 +606,6 @@ function SplitRestoreBar({
         data-call-split-restore={collapsed}
         className={cn(
           "flex shrink-0 items-center justify-center border-ink-4/60 bg-ink-2/70 text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
-          sideBySide ? "h-full w-4 border-x" : "h-4 w-full border-y",
-        )}
-        onClick={onRestore}
-      >
-        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
-      </button>
-    </Tooltip>
-      <SplitCollapseButton
-        sideBySide={sideBySide}
-        toward="chat"
-        onCollapse={onCollapse}
-      />
-    </div>
-  );
-}
-
-/**
- * One end of the divider: put the pane on this side away.
- *
- * The chevron points the way the pane goes, which is the convention every
- * splitter in every editor uses and needs no copy to read. The tooltip and
- * the accessible name say which pane in words.
- */
-function SplitCollapseButton({
-  sideBySide,
-  toward,
-  onCollapse,
-}: {
-  sideBySide: boolean;
-  /** Which pane this button hides. */
-  toward: "stage" | "chat";
-  onCollapse: (which: CallSplitCollapsed) => void;
-}) {
-  const { t } = useTranslation();
-  const label =
-    toward === "stage"
-      ? t("call.split.collapseStage")
-      : t("call.split.collapseChat");
-  const Icon = sideBySide
-    ? toward === "stage"
-      ? ChevronLeft
-      : ChevronRight
-    : toward === "stage"
-      ? ChevronUp
-      : ChevronDown;
-  return (
-    <Tooltip
-      label={label}
-      detail={t("call.split.collapseHint")}
-      side={sideBySide ? "right" : "bottom"}
-    >
-      <button
-        type="button"
-        data-testid={`call-split-collapse-${toward}`}
-        className={cn(
-          // Small and quiet until the pointer is near the boundary: this is a
-          // control for a decision people make once, not furniture.
-          "flex shrink-0 items-center justify-center bg-ink-2/70 text-paper-muted opacity-0 transition-opacity hover:bg-ink-3 hover:text-paper focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent motion-reduce:transition-none",
-          sideBySide ? "h-6 w-2" : "h-2 w-6",
-        )}
-        onClick={() => onCollapse(toward)}
-      >
-        <Icon
-          className={cn(sideBySide ? "h-3 w-3" : "h-3 w-3")}
-          aria-hidden="true"
-        />
-      </button>
-    </Tooltip>
-  );
-}
-
-/**
- * A collapsed pane's way back: a thin bar exactly where the pane was, with the
- * chevron pointing at where it will reappear from.
- *
- * It is a full edge rather than a small button on purpose. A collapsed pane is
- * the one state of this component somebody can be stuck in, and a 6px strip
- * along the whole boundary is impossible to miss and impossible to miss
- * clicking, which a 24px chevron in a corner is not.
- */
-function SplitRestoreBar({
-  sideBySide,
-  collapsed,
-  onRestore,
-}: {
-  sideBySide: boolean;
-  collapsed: CallSplitCollapsed;
-  onRestore: () => void;
-}) {
-  const { t } = useTranslation();
-  const label =
-    collapsed === "stage"
-      ? t("call.split.restoreStage")
-      : t("call.split.restoreChat");
-  const Icon = sideBySide
-    ? collapsed === "stage"
-      ? ChevronRight
-      : ChevronLeft
-    : collapsed === "stage"
-      ? ChevronDown
-      : ChevronUp;
-  return (
-    <Tooltip
-      label={label}
-      detail={t("call.split.collapseHint")}
-      side={sideBySide ? "right" : "bottom"}
-    >
-      <button
-        type="button"
-        data-testid="call-split-restore"
-        data-call-split-restore={collapsed}
-        className={cn(
-          "group flex shrink-0 items-center justify-center border-ink-4/60 bg-ink-2/70 text-paper-muted transition-colors hover:bg-ink-3 hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
           sideBySide ? "h-full w-4 border-x" : "h-4 w-full border-y",
         )}
         onClick={onRestore}
