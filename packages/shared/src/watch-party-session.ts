@@ -380,6 +380,43 @@ export function stageModeClosesTheFloor(mode: WatchPartyStageMode): boolean {
  * A dead dropdown that changes nothing would be worse than its absence.
  */
 export const watchPartyOptionsSchema = z.object({
+  /**
+   * WHETHER THIS PARTY HAS VOICE AT ALL, and it is off by default.
+   *
+   * A watch party used to be a voice channel with an audience bolted on, and
+   * almost every defect a full day of live testing found came from that. A
+   * viewer was offered three primary-green ways to join a call while they
+   * were watching one. Joining a `hosts_only` party landed them in "Listening
+   * only. You do not have permission to speak", so the button promised what
+   * it could not deliver. The audience is seatless by construction and the
+   * transcode does not carry a microphone, so voice in a broadcast was only
+   * ever for the handful who took a seat: watching costs a socket, a seat
+   * costs a LiveKit participant and forwarded streams.
+   *
+   * AND THE FAILURE MODE THAT DECIDED IT. Closing the floor is implemented by
+   * writing an @everyone SPEAK deny onto the channel. A party that ends
+   * through a path which does not clean up leaves that rule behind, and one
+   * was found on production on 2026-09-11 that would have silenced an entire
+   * audience the following Saturday even with the floor set to open. It had
+   * to be deleted by hand. THE DEFAULT PATH NOW WRITES NO PERMISSION RULE AT
+   * ALL, so that class of leak cannot happen: not "is cleaned up correctly",
+   * but "was never written". `watchPartyFloorIsClosed` is the one question
+   * that decides whether anything is written, and it is false here by
+   * default.
+   *
+   * A HOST TURNS IT ON IN ONE CONTROL. Six friends watching a film genuinely
+   * want to talk over it; five hundred people watching a presentation do not.
+   * The panel offers "Voz" as a single select whose first entry is off and
+   * whose other three are the stage modes below, so the film night is one
+   * click away and the broadcast is zero.
+   *
+   * LEGACY ROWS READ AS ON. A party stored before this option existed carries
+   * no `voiceEnabled` key, and it was a voice room when its host set it up.
+   * `withLegacyWatchPartyVoice` restores that reading before this schema is
+   * applied, so a party that was already running keeps working. Every row
+   * written since carries the key explicitly.
+   */
+  voiceEnabled: z.boolean().default(false),
   stageMode: z.enum(WATCH_PARTY_STAGE_MODES).default("hosts_only"),
   /**
    * A viewer may ask to come up. Meaningless when everyone may already speak,
@@ -402,11 +439,111 @@ export const watchPartyOptionsSchema = z.object({
 export type WatchPartyOptions = z.infer<typeof watchPartyOptionsSchema>;
 
 export const WATCH_PARTY_DEFAULT_OPTIONS: WatchPartyOptions = Object.freeze({
+  voiceEnabled: false,
   stageMode: "hosts_only",
   raiseHand: true,
   slowModeSeconds: 0,
   reactionsEnabled: true,
 });
+
+/**
+ * Whether this party is holding the channel's floor closed, which is the ONLY
+ * question that may cause a permission rule to be written.
+ *
+ * Two conditions, and the first is the one that matters: a party with no
+ * voice does not touch the channel's permissions, whatever its stage mode
+ * says. A stored `stageMode` on a voice-off party is a preference the host
+ * has not activated, not a rule, so it must not reach `channel_overwrites`.
+ * That is what makes "the leak cannot happen" true rather than "the leak is
+ * cleaned up": with voice off, `applyGoLiveOptions` writes nothing at all.
+ *
+ * Both sides ask this one function, so the server's writes and the client's
+ * reading of them cannot disagree about when a channel is being borrowed.
+ */
+export function watchPartyFloorIsClosed(options: WatchPartyOptions): boolean {
+  return options.voiceEnabled && stageModeClosesTheFloor(options.stageMode);
+}
+
+/**
+ * Read an options object stored before `voiceEnabled` existed.
+ *
+ * A row written by an older build has no `voiceEnabled` key, and it was set
+ * up in a world where every watch party was a voice room. Letting the schema
+ * default decide would silently take voice away from a party that was already
+ * running, which is the one thing this change must not do. Presence of the
+ * key is the whole test: `createWatchParty` writes the full option set, so
+ * every row written since carries it, including an explicit `false`.
+ *
+ * Anything that is not a plain object is handed back untouched:
+ * `watchPartyOptionsSchema` owns rejecting it, and this must not turn junk
+ * into a valid party.
+ */
+export function withLegacyWatchPartyVoice(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  if ("voiceEnabled" in raw) {
+    return raw;
+  }
+  return { ...(raw as Record<string, unknown>), voiceEnabled: true };
+}
+
+/**
+ * Whether a seat in this party's room is this person's to take.
+ *
+ * THE MODEL, IN ONE FUNCTION. A watch party has an audience and it has the
+ * people running it. The audience watches, which is a socket and no seat; the
+ * people running it need a seat, because the HLS egress follows whoever is
+ * SHARING and a screen share needs a peer in the room. With voice off there
+ * is nobody in between.
+ *
+ * NOT ENFORCED THROUGH PERMISSION BITS, deliberately. The obvious
+ * implementation is a CONNECT deny on @everyone, and that is the same
+ * mechanism as the SPEAK deny whose leak caused this change: a rule written
+ * onto a channel that outlives the party which wrote it. This is a decision
+ * taken at the door, on the party's own row, so it disappears when the party
+ * does, by construction. The server asks it at `join-voice-room`, which is
+ * the only way into a room; the client asks it to decide what to draw.
+ *
+ * WHO IS ALWAYS LET IN, and why each:
+ *  - anyone holding START_WATCH_PARTY on the channel. They run parties here,
+ *    they have to be able to get into the room to present, and this covers
+ *    the host on every path without a lookup;
+ *  - the host and the co-hosts by name, because a co-host is any member the
+ *    host promoted and need not hold the bit;
+ *  - anyone the host invited up to speak, for whom the whole point of the
+ *    invitation is that they can now talk.
+ *
+ * NO ACTIVE PARTY IS NOT A CLOSED ROOM. A `watch_party` channel with nothing
+ * running is an ordinary voice room and joins like one, which is exactly what
+ * `VITE_WATCH_PARTY_CHANNELS` off already promises for a build that draws no
+ * party chrome at all. Refusing there would break a deployment that has the
+ * channel type and not the feature.
+ */
+export function mayTakeWatchPartySeat(input: {
+  /** `START_WATCH_PARTY` on this channel, as the server resolved it. */
+  canStartWatchParty: boolean;
+  /** The channel's active party, or null when there is none. */
+  party: {
+    voiceEnabled: boolean;
+    isHost: boolean;
+    isCohost: boolean;
+    isInvited: boolean;
+  } | null;
+}): boolean {
+  if (input.canStartWatchParty) {
+    return true;
+  }
+  if (!input.party) {
+    return true;
+  }
+  return (
+    input.party.voiceEnabled ||
+    input.party.isHost ||
+    input.party.isCohost ||
+    input.party.isInvited
+  );
+}
 
 /**
  * Whether this person may take the microphone in a party with these options,
@@ -424,6 +561,16 @@ export function watchPartySpeakAffordance(input: {
   /** `welcome.canSpeak` for this room, as the server resolved it. */
   canSpeak: boolean;
 }): "speak" | "raiseHand" | "none" {
+  if (input.role !== "host" && input.role !== "cohost") {
+    // A party with no voice offers the audience nothing, whatever the
+    // channel's own SPEAK bit happens to say. With no overwrite written that
+    // bit is usually the everyday default and `canSpeak` is true, so asking
+    // it first would put a Falar button on every viewer's screen in exactly
+    // the parties that are meant to have none.
+    if (!input.options.voiceEnabled) {
+      return "none";
+    }
+  }
   if (input.canSpeak) {
     return "speak";
   }

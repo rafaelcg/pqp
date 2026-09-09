@@ -252,15 +252,25 @@ The list already exists in `App.tsx` for the composer's `@` completion, so this
 costs no extra request; the server re-checks membership and channel access on
 every promotion, so the list is an affordance and never the authority.
 
-**Promoting mid-show grants the microphone.** A closed floor (the default,
-`hosts_only`) denies SPEAK to @everyone and grants it back per member, and
-`applyGoLiveOptions` does that for the host and co-hosts at the moment the
-party goes live. Somebody promoted after that moment was not in the list when
-it ran, so before this they arrived with Encerrar, Assumir, the options panel
-and no voice: a co-host who could take a room over and not say a word in it.
-The grant is now in `addWatchPartyCohost`, beside the identical one
-`inviteToWatchPartyStage` has always done, and a demotion revokes it unless the
-person is still on the stage some other way.
+**Promoting mid-show grants the microphone, when there is one to grant.** A
+closed floor (voice on, and a stage mode other than `everyone`) denies SPEAK to
+@everyone and grants it back per member, and `applyGoLiveOptions` does that for
+the host and co-hosts at the moment the party goes live. Somebody promoted
+after that moment was not in the list when it ran, so before this they arrived
+with Encerrar, Assumir, the options panel and no voice: a co-host who could
+take a room over and not say a word in it. The grant is now in
+`addWatchPartyCohost`, beside the identical one `inviteToWatchPartyStage` has
+always done, and a demotion revokes it unless the person is still on the stage
+some other way.
+
+**The grant is gated on `floorIsClosed`, not merely on the party being live.**
+Live is necessary and it is not sufficient. The grant exists to give back what
+closing the floor took away, so on a party that never closed it there is
+nothing to give back and the overwrite would be a permission rule written for
+no reason: exactly the row shape §"Leftover SPEAK overwrites" is about. A
+watch party has no voice by default, which means the ordinary promotion writes
+nothing to `channel_overwrites` at all. A co-host still gets into the room,
+because that is decided on the party's own row rather than on a bit.
 
 **A draft's co-host gets no overwrite.** A draft's options are a plan, not a
 rule, and writing SPEAK bits onto a channel over a show nobody has been told
@@ -276,6 +286,13 @@ only one party per channel can be live.
 ### Nobody watching is ever asked for a microphone
 
 This is the rule, and it is a product decision before it is a technical one.
+
+**And by default there is no microphone anywhere in the room.** `voiceEnabled`
+is off unless a host turns it on, so the ordinary watch party is a broadcast:
+nobody is asked for a device, nobody is offered a seat, and `join-voice-room`
+refuses one to anybody who is not running the party or invited up to speak.
+Voice is the exception a host opts into, and the argument for that shape is in
+§"A watch party has no voice by default".
 
 **Watching is the default and needs no device permission at all.** An audience
 seat opens no `getUserMedia`: no prompt, no device, no notice, and no
@@ -295,7 +312,8 @@ already negotiates correctly on mesh and on the SFU and a third negotiation
 path is how those two drift apart.
 
 **Whether an audience member may speak is the host's decision, not the
-browser's**, which is what `stageMode` below is for.
+browser's**, which is what the Voz control below is for: one select whose
+first entry is "no voice at all" and whose other three are the stage modes.
 
 The QA that proves it counts `getUserMedia` calls in the viewer's page rather
 than reading a screenshot: a viewer watching, and then taking the audience
@@ -360,8 +378,8 @@ rendered with an avatar, a name and a Promote button: 104 rows in the DOM on a
 which is the wrong half. The filter above it is how a host reaches anybody
 else, and the count says how many that is so nothing is silently hidden.
 
-**Frequency is not prominence.** "Quem pode falar" and "Chat lento" are levers
-a host pulls mid-event. "Quem pode ver" and the co-host explainer are read once,
+**Frequency is not prominence.** "Voz", which carries who may speak inside it,
+and "Chat lento" are levers a host pulls mid-event. "Quem pode ver" and the co-host explainer are read once,
 ever, and both used to sit at the same visual weight as the controls. They are
 `<details>` disclosures now: one quiet line each, the answer one press away. Every change is applied by the server on the spot
 (`reconcileLiveWatchPartyOptions`), so it lands for the people already
@@ -369,19 +387,24 @@ watching.
 
 | Option | Default | What the server does |
 |---|---|---|
-| **Quem pode falar** (`stageMode`) | `hosts_only` | closes the floor: denies SPEAK to @everyone, and grants it back to the host and co-hosts |
-| **Pedir pra falar** (`raiseHand`) | on, and shown only for `invited` | nothing by itself; it is what makes the queue exist |
+| **Voz** (`voiceEnabled`) | **off** | nothing to the channel at all, and `join-voice-room` refuses a seat to anybody who is not running the party or invited up |
+| **Quem pode falar** (`stageMode`) | `hosts_only`, and it applies only once voice is on | closes the floor: denies SPEAK to @everyone, and grants it back to the host and co-hosts |
+| **Pedir pra falar** (`raiseHand`) | on, and shown only for `invited` with voice on | nothing by itself; it is what makes the queue exist |
 | **Chat lento** (`slowModeSeconds`) | 0 | writes `channels.slowmode_seconds`, the channel's own slow mode, and puts the old value back at the end |
 | **Reações** (`reactionsEnabled`) | on | carried on the party, read by the client |
 | **Quem pode ver** | not a control | the channel's own permissions. A sentence, not a switch |
 | **Qualidade** | not here yet | the HLS ladder branch owns it and adds one key when it lands |
 
-`hosts_only` is the default because of the failure mode rather than a
-preference: a party of two hundred people with open microphones is not a watch
-party, and the 2026-09-05 spike showed how fast a room here gets to two
+The first two rows are one control on screen, and the next section says why.
+`hosts_only` is the default stage mode because of the failure mode rather than
+a preference: a party of two hundred people with open microphones is not a
+watch party, and the 2026-09-05 spike showed how fast a room here gets to two
 hundred. `invited` is the same closed floor plus a door, one person at a time.
 `everyone` is the old behaviour, kept because six friends watching a film
-genuinely want it, and warned about in the copy once the room is busy.
+genuinely want it, and warned about in the copy once the room is busy. None of
+the three is a rule until a host turns voice on: on a voice-off party a stored
+`stageMode` is a preference nobody has activated, and it never reaches
+`channel_overwrites`.
 
 **Closing the floor must never silence the people running the party.** A host
 who is not the server owner has no short circuit through `computePermissions`,
@@ -401,6 +424,101 @@ a message they did not write. The party bar and the options panel show the
 current values instead, and they update on the same frame that changed them.
 If a written notice is wanted, it needs a system-message type first.
 
+### A watch party has no voice by default
+
+`voiceEnabled` is a new option and it is **false** unless a host says
+otherwise. That is a product decision, and it is also the fix for a class of
+bug rather than an instance of one.
+
+**The failure mode that decided it.** "Who can talk" was implemented by
+writing an @everyone SPEAK deny onto the channel. A party that ends through a
+path which does not clean up leaves that rule sitting on the room, and the
+room outlives the party by definition. One such leftover was found on
+production on 2026-09-11: it would have silenced Saturday's entire audience
+even with the floor set to open, and it had to be deleted by hand. The section
+below on leftover overwrites is the archaeology of the same class. **A rule
+that is never written cannot leak**, so the default path now writes nothing:
+this is prevention, not tidier cleanup, and the difference is the whole point.
+
+**One question guards every write.** `watchPartyFloorIsClosed(options)` is
+`voiceEnabled && stageModeClosesTheFloor(stageMode)`, it lives in
+`packages/shared/src/watch-party-session.ts` so both sides ask the same
+function, and in `services/watch-parties.ts` it is the condition on all three
+places that write a SPEAK bit: the go-live deny and its member grants, the
+co-host promotion grant, and the stage invitation grant. The room's VIEW_CHANNEL
+allow is a different write for a different reason and is untouched. With
+voice off, going live takes the other branch and runs `openTheFloor`, whose
+two helpers read before they write and return early on a channel that has no
+overwrite row: two reads per stage member and zero `upsertChannelOverwrite`
+calls. A party that never wrote a bit has none to leave behind.
+
+**Voice absence is enforced at the door, on the party's own row.**
+`mayTakeWatchPartySeat` is the model and `join-voice-room` in
+`server/src/ws/voice.ts` is the chokepoint, marked THE SEAT GATE. The client
+stopped offering a viewer any way in (§"A viewer cannot join a watch party"),
+but a removed button is a convention and not a model, and the join frame is
+the only way into a room. Who is always let in, and why each:
+
+- **anyone holding START_WATCH_PARTY on the channel.** They run parties here
+  and have to be able to get into the room to present. This covers the host on
+  every path, and it costs nothing: `canStream` in a watch party IS that bit
+  (`canStartWatchPartyStream`), already resolved at the join, so the gate skips
+  its query entirely and only people about to be refused pay for one;
+- **the host and the co-hosts by name**, because a co-host is any member the
+  host promoted and need not hold the bit;
+- **anyone invited up to the stage**, for whom the invitation is precisely the
+  permission to talk and is useless without a way in.
+
+Everybody else is refused while a party with voice off is active.
+
+**A channel with no active party is not a closed room.** It joins like the
+ordinary voice room it is, which is exactly what `VITE_WATCH_PARTY_CHANNELS`
+off already promises a build that draws no party chrome at all. Refusing there
+would break a deployment that has the channel type and not the feature.
+
+**Not a CONNECT deny on @everyone**, which is the obvious implementation and
+the wrong one: it is the same mechanism as the SPEAK deny whose leftovers
+caused this change, a rule written onto a channel that can outlive the party
+that wrote it. A decision taken at the door, on the party's row, disappears
+when the party does, by construction.
+
+**The gate fails open.** A database hiccup must not lock a host out of their
+own show minutes before it starts. The worst an allowed join costs is one
+seat; the worst a wrongly refused one costs is the party. A refusal is
+`voice.watchPartySeatRefused` in the log.
+
+**Legacy rows read as ON.** A party stored before this option existed has no
+`voiceEnabled` key, and it was set up when every watch party was a voice room.
+`withLegacyWatchPartyVoice` restores that reading **before** the zod schema
+applies its `false` default, so `parseOptions` cannot silently take voice away
+from a party that is already running across the deploy. Presence of the key is
+the entire test: `createWatchParty` writes the full option set, so every row
+written since carries it, including an explicit `false`.
+
+**One control, not two.** The options panel offers a single "Voz" select with
+four entries: off, and the three stage modes. It writes `voiceEnabled` and
+`stageMode` in one patch. Two products share this feature and the select is
+shaped for both: six friends watching a film reach "Todo mundo" in one click,
+the same cost as today, and five hundred people watching a presentation pay
+zero clicks for the thing they want. Two separate controls would have made the
+film night cost two, and would have left a stored `stageMode` sitting on a
+voice-off party looking like a rule when it is a preference. Turning voice off
+leaves `stageMode` alone, so turning it back on gives the host the floor they
+had chosen. `raiseHand` and the stage queue are hidden while voice is off,
+because they mean nothing there.
+
+**The affordance asks about voice first, and the order is load bearing.**
+`watchPartySpeakAffordance` returns `none` for a viewer whenever voice is off,
+ahead of the `canSpeak` test. With no overwrite written, `canSpeak` is usually
+the everyday default `true`, so asking it first would put a Falar button on
+every viewer's screen in exactly the parties that are meant to have none.
+
+**One known edge, stated rather than hidden.** A host who turns voice OFF
+mid-show does not evict the people already seated. New joins are refused;
+existing seats stay until their owners leave. Those seats are already paid for
+on the media box, and yanking somebody out of a room they are speaking in is a
+louder act than a settings change implies.
+
 ### What going live does to the channel, and what ending puts back
 
 The setup surface asks the host to decide the things that matter before an
@@ -410,12 +528,17 @@ audience arrives. Two of them are real channel state, and both are
 | Option | What Ir ao vivo does | What Encerrar does |
 |---|---|---|
 | `slowModeSeconds` | writes `channels.slowmode_seconds`, recording the old value in `restore_slowmode_seconds` (only the FIRST change records it, so a host who moves 30s to 60s mid-show still gets the channel's original value back) | writes the old value back |
-| a closed `stageMode` | denies SPEAK to @everyone with an ordinary channel overwrite, records `stage_speak_applied`, and grants a member SPEAK allow to the host, the co-hosts and anyone invited up | removes those bits, and deletes an overwrite row only when the party is the sole reason it existed |
+| voice off (`voiceEnabled` false, **the default**) | **nothing to the channel's permissions**. `applyGoLiveOptions` takes the `openTheFloor` branch, which reads before it writes and returns early on a channel with no overwrite row: zero `upsertChannelOverwrite` calls | nothing to undo, because nothing was borrowed |
+| a closed `stageMode`, voice on | denies SPEAK to @everyone with an ordinary channel overwrite, records `stage_speak_applied`, and grants a member SPEAK allow to the host, the co-hosts and anyone invited up | removes those bits, and deletes an overwrite row only when the party is the sole reason it existed |
 | `reactionsEnabled` | carried on the party, read by the client | nothing to undo |
 
 A channel that already had slow mode on keeps it. A channel where @everyone
 was already denied SPEAK is left alone, and ending the party does not hand the
 room a microphone it never had.
+
+The first row is the one almost every party takes, and it is what makes the
+restore path matter less than it used to: the only rows that need putting back
+are the ones a host deliberately asked for by turning voice on.
 
 One reconciler does all of it, rather than an apply and an undo, because the
 options are editable while the party runs: a host switching from `everyone` to
@@ -824,14 +947,33 @@ about each other, each correct on its own.
 | | offered a seat | why |
 |---|---|---|
 | host, co-host | yes | they run the show and have to be able to get back into their own room after a reload or a dropped call |
+| START_WATCH_PARTY on the channel | yes | they run parties here, so the room is theirs to get into whether or not this one is theirs |
 | invited up to speak | yes | being invited up is precisely the permission to talk, and it is useless without a way in |
 | manager | **no** | MANAGE_CHANNELS ends and edits somebody else's party. It does not perform in it |
-| everybody else | **no** | they watch |
+| everybody else, voice off | **no** | they watch |
+| everybody else, **voice on** | yes | the host asked for a room that talks, and a setting that opens voice and offers nobody a way in is a setting that does nothing |
+
+The last row is the one a blanket removal got wrong, and it is why the rule
+lives in `mayTakeWatchPartySeat` rather than in the component. "A viewer
+cannot join a watch party" was said about a broadcast with three green buttons
+on it, and it is right about a broadcast. It is wrong about six friends
+watching a film whose host has deliberately turned Voz on: that party's
+audience IS the call.
 
 `stage.invited` is public on the wire and always has been (`presentStage`: who
 is UP is public, who is ASKING is not), so this is the party's own answer
 rather than the client guessing. `WatchPartyPanel` takes a `currentUserId` so
 an invited guest can recognise themselves in it.
+
+**And the same function draws the control and refuses the join**, because a
+removed button is a convention and not a model, and two copies of one rule is
+how a button that does nothing gets shipped. `join-voice-room` asks
+`mayTakeWatchPartySeat` and refuses everybody this table refuses,
+plus nobody it does not: START_WATCH_PARTY, the host, the co-hosts and the
+invited get in, the manager and the audience do not. It is decided on the
+party's own row rather than with a permission bit, for the reason in §"A watch
+party has no voice by default". A party whose host turned voice ON is an
+ordinary voice room again and the gate steps out of the way.
 
 **The listen-only warning went with the control**, and so did
 `watchPartyJoinIsListenOnly` in `packages/shared` and its tests. Everybody who
@@ -1052,7 +1194,15 @@ silence.
 
 - **`stageMode` is enforced through the ordinary SPEAK overwrite**, not
   through a new mechanism. A separate piece of work owns per-channel SPEAK
-  policy; this rides on it rather than growing a second one.
+  policy; this rides on it rather than growing a second one. It only ever runs
+  for a party whose host turned voice on, which is what keeps that mechanism
+  off the ordinary broadcast.
+- **Voice absence is NOT enforced with a permission bit.** The parallel move
+  would be a CONNECT deny on @everyone, and it is the same mechanism as the
+  SPEAK deny whose leftovers caused the change. The seat is decided at the
+  door on the party's own row instead, so it goes when the party goes.
+- **Turning voice off mid-show does not evict the seated.** New joins are
+  refused and existing seats stay. Deliberate, argued above.
 - **No quality control yet.** The HLS ladder branch owns what a host may pick;
   when it lands it adds one key to `watchPartyOptionsSchema` and one control to
   `WatchPartyOptionsPanel`. A dropdown that changes nothing would be worse.
@@ -1370,6 +1520,17 @@ thing that ever calls `restoreChannelAfterParty`. Since #427 there is no path
 that leaks a new one. Audited on 2026-09-09 by walking the callers; there are
 two, and both restore.
 
+**The class is now closed for new parties, and that is a stronger statement
+than the paragraph above.** Walking the callers proves the two known paths
+restore; it cannot prove a third will not appear, and one leftover found on
+production on 2026-09-11 (which would have silenced a whole audience the
+following Saturday, and was deleted by hand) is what a proof of that shape
+buys you. A watch party has no voice by default, so the ordinary party writes
+no SPEAK overwrite at all: not cleaned up correctly, never created. Only a
+host who turned voice on and picked a closed floor borrows the channel's
+permissions, and only that party has anything to give back. Everything below
+still applies to rows written before this, which do not self-heal.
+
 **Rows left by parties that ended BEFORE #427 do not self-heal.** The restore
 reads `stage_speak_applied` on the session row, and a session already `ended`
 with that flag still set is never revisited. `QG do pqp`'s watch-party channel
@@ -1379,13 +1540,19 @@ that.
 
 What it actually costs, which is worth knowing before deciding to clean:
 
-- The **deny** is largely self-repairing. The channel is unlisted between
-  shows, and the next party reconciles it: `hosts_only` (the default) wants
-  that deny anyway, and `everyone` removes it, because one idempotent
-  reconciler owns both directions.
-- The **member allow** is the residue that matters. It is somebody who was once
-  invited to the stage keeping a microphone in every future party on that
-  server, under a closed floor, with nothing on any screen saying why.
+- The **deny** used to be largely self-repairing: the channel is unlisted
+  between shows, and the next party reconciled it, because `hosts_only` was
+  the effective default and wanted that deny anyway. That reading is now
+  wrong in both halves. The default party has no voice, so it wants no deny
+  and writes none, and `openTheFloor` lifts only a deny **its own session**
+  recorded in `stage_speak_applied`, never one inherited from a party that
+  ended before it. So a leftover deny is no longer re-created and no longer
+  cleared: it just sits there, silencing the channel between shows, until
+  somebody removes it.
+- The **member allow** is the quieter residue. It is somebody who was once
+  invited to the stage keeping a microphone in that channel for good, with
+  nothing on any screen saying why. It bites whenever the floor is closed
+  again, which now only happens on a party whose host turned voice on.
 
 So: worth cleaning, not urgent, and it is an operator action rather than a
 migration, because it must not touch an overwrite somebody set on purpose.
@@ -1963,8 +2130,8 @@ later, per app:
   - **No seat is offered.** The chat toolbar's join button is not drawn in a
     watch party. A watcher costs one socket in a set; a seat costs a
     participant on the media box, a microphone prompt, and on the default
-    `hosts_only` stage it buys nothing, since the server denies SPEAK to
-    everyone but the host and the co-hosts. iOS has no presenter or stage
+    party it buys nothing at all, because the default party has no voice and
+    the server refuses the join outright. iOS has no presenter or stage
     surface, so there is nothing on that screen a seat unlocks. The trade is
     that an iOS host or co-host cannot take the room from the phone; hosting
     is a web and desktop job today anyway.

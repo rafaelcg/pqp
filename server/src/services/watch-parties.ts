@@ -2,12 +2,13 @@ import {
   hasPermission,
   parsePermissions,
   Permission,
-  stageModeClosesTheFloor,
   canPerformWatchPartyAction,
   canTransitionWatchParty,
   resolveWatchPartyHost,
+  watchPartyFloorIsClosed,
   watchPartyOptionsSchema,
   watchPartyRole,
+  withLegacyWatchPartyVoice,
   WATCH_PARTY_DEFAULT_OPTIONS,
   type WatchParty,
   type WatchPartyAction,
@@ -121,10 +122,30 @@ const PARTY_FROM = `
 const ACTIVE_STATES = "('draft', 'scheduled', 'live')";
 
 function parseOptions(raw: unknown): WatchPartyOptions {
-  const parsed = watchPartyOptionsSchema.safeParse(raw ?? {});
+  // `withLegacyWatchPartyVoice` runs BEFORE the schema, and the order is the
+  // whole point: a row stored before `voiceEnabled` existed has no such key,
+  // and letting the schema's `false` default decide would take voice away
+  // from a party set up when every watch party was a voice room. Presence of
+  // the key is the test, so an explicit `false` written since is untouched.
+  const parsed = watchPartyOptionsSchema.safeParse(
+    withLegacyWatchPartyVoice(raw ?? {}),
+  );
   // A row written by an older build, or by hand, must not take a channel's
   // sidebar down. Unknown or broken options read as the defaults.
   return parsed.success ? parsed.data : { ...WATCH_PARTY_DEFAULT_OPTIONS };
+}
+
+/**
+ * Is this party holding the channel's floor closed right now?
+ *
+ * The one question every write to `channel_overwrites` in this file is gated
+ * on, asked off the stored row so the go-live path, a mid-show promotion and
+ * a stage invitation cannot each answer it differently. With voice off the
+ * answer is no and nothing is written, which is what makes a leftover SPEAK
+ * deny impossible on the default path rather than merely tidied up.
+ */
+function floorIsClosed(row: WatchPartyRow): boolean {
+  return watchPartyFloorIsClosed(parseOptions(row.options));
 }
 
 export interface WatchPartyCohostRow {
@@ -229,6 +250,58 @@ export async function getActiveWatchPartyRow(
     [channelId],
   );
   return result.rows[0] ?? null;
+}
+
+/**
+ * What `join-voice-room` needs to know about this channel's party, in ONE
+ * query, for one person.
+ *
+ * ONE QUERY BECAUSE OF WHERE IT RUNS. This is on the join path, which the
+ * 2026-09-05 spike ran several hundred times in an evening against a database
+ * answering in 80 to 240 ms with the pool pinned; a comment in `ws/voice.ts`
+ * already records two dead round trips being removed from it for exactly that
+ * reason. So the co-host and the invitation are `EXISTS` subqueries on the
+ * same statement rather than the two extra calls `listCohostIds` and the
+ * stage loader would have cost, and `ws/voice.ts` skips the call entirely for
+ * anybody holding START_WATCH_PARTY, who is allowed in regardless.
+ *
+ * `null` means there is no active party here, which is not the same as a
+ * closed room: see `mayTakeWatchPartySeat`.
+ */
+export async function loadWatchPartySeat(
+  channelId: string,
+  userId: string,
+): Promise<{
+  voiceEnabled: boolean;
+  isHost: boolean;
+  isCohost: boolean;
+  isInvited: boolean;
+} | null> {
+  const result = await getPool().query<{
+    options: unknown;
+    host_user_id: string;
+    is_cohost: boolean;
+    is_invited: boolean;
+  }>(
+    `SELECT s.options, s.host_user_id,
+            EXISTS (SELECT 1 FROM channel_session_cohosts c
+                     WHERE c.session_id = s.id AND c.user_id = $2) AS is_cohost,
+            EXISTS (SELECT 1 FROM channel_session_stage_invites i
+                     WHERE i.session_id = s.id AND i.user_id = $2) AS is_invited
+       FROM channel_sessions s
+      WHERE s.channel_id = $1 AND s.status IN ${ACTIVE_STATES}`,
+    [channelId, userId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  return {
+    voiceEnabled: parseOptions(row.options).voiceEnabled,
+    isHost: row.host_user_id === userId,
+    isCohost: row.is_cohost,
+    isInvited: row.is_invited,
+  };
 }
 
 export async function listCohostIds(sessionId: string): Promise<string[]> {
@@ -603,6 +676,12 @@ export async function transitionWatchParty(
  * Only while the party is LIVE. A draft's options are a plan, not a rule, and
  * writing channel overwrites for a party nobody has been told about would
  * leave SPEAK bits on a room over a show that never happened.
+ *
+ * AND ONLY WHILE THE FLOOR IS CLOSED. The grant exists to give back what
+ * closing the floor took away, so on a party that never closed it there is
+ * nothing to give back and an overwrite here would be a rule with no reason
+ * to exist. A party with voice off never closes the floor, so promoting a
+ * co-host on the default path writes nothing.
  */
 export async function addWatchPartyCohost(
   row: WatchPartyRow,
@@ -614,7 +693,7 @@ export async function addWatchPartyCohost(
      VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
     [row.id, userId, addedBy],
   );
-  if (row.server_id && row.status === "live") {
+  if (row.server_id && row.status === "live" && floorIsClosed(row)) {
     await grantMemberSpeak(row.channel_id, row.server_id, userId);
   }
 }
@@ -944,7 +1023,15 @@ async function applyGoLiveOptions(row: WatchPartyRow): Promise<void> {
     return;
   }
 
-  if (stageModeClosesTheFloor(options.stageMode)) {
+  // THE ONE BRANCH THAT DECIDES WHETHER THIS PARTY TOUCHES PERMISSIONS AT
+  // ALL. `watchPartyFloorIsClosed` is false for every party with voice off,
+  // which is the default, so the ordinary watch party reaches `openTheFloor`
+  // below and that writes nothing on a channel it never wrote to: two reads
+  // per stage member, zero `upsertChannelOverwrite`. A leftover @everyone
+  // SPEAK deny is then not a bug that was fixed, it is a row that was never
+  // created. See `server/src/services/watch-party-options.test.ts`, "a party
+  // with no voice writes no permission rule at all".
+  if (watchPartyFloorIsClosed(options)) {
     const applied = await denyEveryoneSpeak(row.channel_id, current.server_id);
     if (applied) {
       await getPool().query(
@@ -960,7 +1047,10 @@ async function applyGoLiveOptions(row: WatchPartyRow): Promise<void> {
       await grantMemberSpeak(row.channel_id, current.server_id, userId);
     }
   } else {
-    // The floor is open again. Undo ours and nothing else.
+    // The floor is open again, or was never closed. Undo ours and nothing
+    // else. Both helpers this calls read before they write and return early
+    // on a channel with no overwrite row, so a voice-off party runs it every
+    // time and never writes.
     await openTheFloor(row, current.server_id);
   }
 }
@@ -1056,7 +1146,16 @@ async function openTheFloor(
 
 // ------------------------------------------------------------- the stage
 
-/** Put one person on the stage of a party whose floor is closed. */
+/**
+ * Put one person on the stage.
+ *
+ * THE SPEAK GRANT ONLY WHEN THE FLOOR IS ACTUALLY CLOSED, for the reason on
+ * `addWatchPartyCohost`: it gives back what closing the floor took, and on an
+ * open floor (a party with voice off, or one whose stage mode is `everyone`)
+ * the guest already holds the channel's own SPEAK and the row would be a
+ * permission rule written for nothing. The invitation still stands on the
+ * party's own table, which is what `mayTakeWatchPartySeat` reads.
+ */
 export async function inviteToWatchPartyStage(
   row: WatchPartyRow,
   userId: string,
@@ -1071,7 +1170,7 @@ export async function inviteToWatchPartyStage(
     `DELETE FROM channel_session_raised_hands WHERE session_id = $1 AND user_id = $2`,
     [row.id, userId],
   );
-  if (row.server_id && row.status === "live") {
+  if (row.server_id && row.status === "live" && floorIsClosed(row)) {
     await grantMemberSpeak(row.channel_id, row.server_id, userId);
   }
 }
