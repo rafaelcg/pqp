@@ -118,10 +118,12 @@ enum WatchNowPlaying {
  is posted, and the picture is frozen. From the sofa that is indistinguishable
  from the film being paused, so nothing recovers it and nobody reports it.
 
- The rule is only about time moving. A player that is buffering honestly
- (`.waitingToPlayAtSpecifiedRate`) is not stalled, it is slow, and restarting
- it makes the buffering worse. So the clock only runs while the player claims
- to be playing.
+ The rule is about time moving while the viewer still wants the picture. A
+ player that is buffering honestly (`.waitingToPlayAtSpecifiedRate`) is not
+ stalled, it is slow, and restarting it makes the buffering worse. A pause
+ the viewer tapped is not a stall either. A pause nobody asked for, with
+ the playhead frozen, is: `play()` is the first recovery and this clock is
+ the fallback when that does not unstick it.
 
  `deadAfter` is set against the segment length: segments are 2 s and the
  playlist is refetched at about that cadence, so 20 s is ten missed segments,
@@ -136,10 +138,31 @@ struct WatchStallWatch: Equatable {
     /// Returns true the first time the picture has been stuck long enough to
     /// be worth reattaching. Resets itself on the way out so a caller that
     /// acts on it does not get a second answer for the same stall.
-    mutating func tick(position: Double, isPlaying: Bool, now: Date) -> Bool {
-        guard isPlaying else {
-            // Not claiming to play: buffering, paused, or between items.
-            // Nothing to judge, and the clock must not run.
+    ///
+    /// `isPlaying` is `timeControlStatus == .playing`. That is the failure
+    /// this type was written for (a player that claims to play and does not
+    /// move). Two other states used to go blind here and must not:
+    ///
+    /// - Buffering (`isWaiting`) is still not a stall. Restarting a player
+    ///   that is filling its buffer makes the buffering worse. That clock
+    ///   belongs to `WatchLiveEdge`.
+    /// - A pause the viewer did not ask for (`wantsPlayback && !isPlaying &&
+    ///   !isWaiting`) is a stall if the playhead stays put. The view also
+    ///   calls `play()` on the first tick of that state; this is the
+    ///   fallback when `play()` does not unstick it.
+    ///
+    /// `wantsPlayback` defaults to `isPlaying` so existing callers keep the
+    /// original contract: a tick with only `isPlaying: false` still resets.
+    mutating func tick(
+        position: Double,
+        isPlaying: Bool,
+        wantsPlayback: Bool? = nil,
+        isWaiting: Bool = false,
+        now: Date
+    ) -> Bool {
+        let wants = wantsPlayback ?? isPlaying
+        guard wants, !isWaiting else {
+            // User paused, or honestly buffering. Nothing to judge.
             lastPosition = nil
             lastMovedAt = nil
             return false

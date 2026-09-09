@@ -376,6 +376,53 @@ final class WatchPartyTests: XCTestCase {
         )
     }
 
+    /// THE SYSTEM TRANSPORT BAR IS THE UGLY PLAYER.
+    ///
+    /// `AVPlayerViewController` draws a scrubber on a live window and a
+    /// generic LIVE badge. The picture is an `AVPlayerLayer`; the chrome is
+    /// `WatchOverlay`. A later change that hands the rectangle back to the
+    /// system player is how this becomes the Videos app again.
+    func testThePictureIsAPlayerLayerWithOurChrome() throws {
+        let surface = try String(
+            contentsOf: sources.appending(path: "Voice/WatchVideoSurface.swift"), encoding: .utf8
+        )
+        let stage = try String(
+            contentsOf: sources.appending(path: "Voice/WatchStageView.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(surface.contains("AVPlayerLayer"))
+        XCTAssertFalse(
+            surface.contains("AVPlayerViewController"),
+            "the system player is the chrome this replaced"
+        )
+        XCTAssertTrue(stage.contains("WatchOverlay"))
+        XCTAssertFalse(stage.contains("showsPlaybackControls"))
+        XCTAssertTrue(
+            stage.contains("wantsPlayback: userWantsPlayback"),
+            "a seek-to-live must follow the chrome, not player.rate"
+        )
+        XCTAssertFalse(
+            stage.contains("wantsPlayback: player.rate"),
+            "rate drops on a pause nobody asked for; treating that as pause left build 23 frozen"
+        )
+        // A rung switch that rebuilds the player is a one second black frame
+        // dressed up as a quality picker. The same write of an unchanged
+        // ceiling also pauses the picture, so a no-op must not touch the item.
+        XCTAssertTrue(stage.contains("preferredMaximumResolution != resolution"))
+        if let apply = stage.range(of: "private func applyQuality()") {
+            let rest = stage[apply.lowerBound...]
+            if let end = rest.range(of: "\n    private func ") {
+                XCTAssertFalse(
+                    rest[..<end.lowerBound].contains("attach("),
+                    "applyQuality must retune the item, never rebuild the player"
+                )
+            } else {
+                XCTFail("could not bound applyQuality")
+            }
+        } else {
+            XCTFail("applyQuality is gone")
+        }
+    }
+
     // MARK: - Telling a watch party apart from a voice channel
 
     /**

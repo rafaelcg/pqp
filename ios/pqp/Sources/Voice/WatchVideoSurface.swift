@@ -2,100 +2,124 @@ import AVKit
 import SwiftUI
 
 /**
- THE PICTURE ITSELF, AND WHY IT IS NOT SwiftUI's `VideoPlayer` ANY MORE.
+ THE PICTURE ITSELF, DRAWN BY A LAYER WE OWN.
 
- A watch party is a film, and the first thing a person watching a film on a
- phone for two hours wants is for it to fill the phone. SwiftUI's `VideoPlayer`
- wraps this exact class and exposes almost none of it: no fullscreen button, no
- Picture in Picture, no AirPlay route picker, no video gravity. Every one of
- those already exists on the platform, is the control every other video on the
- phone draws, and rotating a custom pane into landscape by hand would be a
- reimplementation of machinery Apple ships and a viewer already knows.
+ Build 21-23 handed the rectangle to the system playback controller. That
+ bought fullscreen, AirPlay and PiP for free, and it also bought the system
+ transport bar: a scrubber on a live window, a generic LIVE badge, and chrome
+ that looks like every other video on the phone. A watch party is pqp's film,
+ not the Videos app, so the layer stays and the chrome is ours (`WatchOverlay`).
 
- So the system owns the inside of the rectangle: its transport bar, which fades
- while you watch and comes back on a touch, its LIVE indicator, its expand
- button, its AirPlay picker. What pqp owns is the strip underneath, which is
- the part the system has no opinion about: whether this is live, how many
- people are here, and which rung is being decoded.
+ AirPlay is an `AVRoutePickerView` on the overlay. Picture in Picture is
+ `AVPictureInPictureController` pointed at this layer. Fullscreen is the same
+ overlay in a cover, not a second system player.
 
- IT REPORTS ITS OWN SIZE IN PIXELS, and that is not decoration. Nothing was
- setting `preferredMaximumResolution`, so `AVPlayer` climbed to the tallest
- rung a broadcast published and decoded 1080p to draw it into a strip a phone
- wide. `WatchLadder.resolutionCap` turns the size below into a ceiling, which
- means the same code holds 720p inline and allows 1080p the moment the viewer
- taps expand, without either being a hard coded number.
+ IT STILL REPORTS ITS OWN SIZE IN PIXELS. `WatchLadder.resolutionCap` turns
+ that into a ceiling, so Auto holds 720p in the strip and allows 1080p the
+ moment the viewer opens the theater, without either number being hard coded.
  */
-struct WatchVideoSurface: UIViewControllerRepresentable {
+struct WatchVideoSurface: UIViewRepresentable {
     let player: AVPlayer
+    let pip: WatchPictureInPicture
     /// The video rectangle in DEVICE PIXELS, whenever it changes. Pixels
     /// rather than points because a rendition is measured in pixels and a
     /// ceiling in points would mean three different things on three phones.
     let onSurfacePixels: (CGSize) -> Void
 
-    func makeUIViewController(context: Context) -> WatchPlayerViewController {
-        let controller = WatchPlayerViewController()
-        controller.player = player
-        // The transport bar is the whole reason this class is here: the expand
-        // button that takes a film fullscreen in landscape lives in it.
-        controller.showsPlaybackControls = true
-        // A live broadcast has no aspect ratio of its own to respect. A screen
-        // share is whatever shape the presenter's screen is, and cropping it
-        // to fill would cut off the half of a game that matters.
-        controller.videoGravity = .resizeAspect
-        // Offered, never automatic. Automatic PiP on backgrounding needs a
-        // delegate to put the app back together on the way out, and a viewer
-        // who wanted a floating window can say so with one tap.
-        controller.allowsPictureInPicturePlayback = true
-        controller.canStartPictureInPictureAutomaticallyFromInline = false
-        // A live stream never plays to an end, so neither of these should ever
-        // fire. Stated anyway, because the defaults are the tvOS defaults and
-        // a film that yanked itself fullscreen on the first frame would be the
-        // worse surprise.
-        controller.entersFullScreenWhenPlaybackBegins = false
-        controller.exitsFullScreenWhenPlaybackEnds = false
-        controller.onSurfacePixels = onSurfacePixels
-        return controller
+    func makeUIView(context: Context) -> WatchPlayerCanvas {
+        let canvas = WatchPlayerCanvas()
+        canvas.player = player
+        canvas.playerLayer.videoGravity = .resizeAspect
+        canvas.onLayout = { [weak coordinator = context.coordinator] pixels in
+            coordinator?.report(pixels)
+        }
+        context.coordinator.onSurfacePixels = onSurfacePixels
+        context.coordinator.bind(layer: canvas.playerLayer, pip: pip)
+        return canvas
     }
 
-    func updateUIViewController(_ controller: WatchPlayerViewController, context: Context) {
-        // Identity, not equality. Handing the same player back is the common
-        // case and re-assigning it would drop the current item and re-buffer,
-        // which is the whole failure `WatchStreamSwap` exists to avoid.
-        if controller.player !== player {
-            controller.player = player
+    func updateUIView(_ canvas: WatchPlayerCanvas, context: Context) {
+        if canvas.player !== player {
+            canvas.player = player
+            context.coordinator.bind(layer: canvas.playerLayer, pip: pip)
         }
-        controller.onSurfacePixels = onSurfacePixels
+        context.coordinator.onSurfacePixels = onSurfacePixels
+        canvas.onLayout = { [weak coordinator = context.coordinator] pixels in
+            coordinator?.report(pixels)
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    @MainActor
+    final class Coordinator {
+        var onSurfacePixels: ((CGSize) -> Void)?
+        private var lastReported: CGSize = .zero
+        private var pipController: AVPictureInPictureController?
+
+        func bind(layer: AVPlayerLayer, pip: WatchPictureInPicture) {
+            guard AVPictureInPictureController.isPictureInPictureSupported() else {
+                pip.attach(nil)
+                return
+            }
+            let controller = AVPictureInPictureController(playerLayer: layer)
+            controller?.canStartPictureInPictureAutomaticallyFromInline = false
+            pipController = controller
+            pip.attach(controller)
+        }
+
+        func report(_ pixels: CGSize) {
+            guard pixels.width > 0, pixels.height > 0 else { return }
+            guard abs(pixels.height - lastReported.height) > 1
+                || abs(pixels.width - lastReported.width) > 1
+            else { return }
+            lastReported = pixels
+            onSurfacePixels?(pixels)
+        }
     }
 }
 
-/// `AVPlayerViewController` that says how big its picture is.
-///
-/// A subclass rather than a KVO observer on `videoBounds`, because layout is
-/// the moment the answer changes and `viewDidLayoutSubviews` is where layout
-/// finishes. Fullscreen, rotation, the strip being collapsed and the keyboard
-/// coming up all arrive here and nowhere else.
-final class WatchPlayerViewController: AVPlayerViewController {
-    var onSurfacePixels: ((CGSize) -> Void)?
+/// The one `AVPlayerLayer` the overlay, the theater and PiP all share.
+final class WatchPlayerCanvas: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
 
-    private var lastReported: CGSize = .zero
+    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
 
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        // `videoBounds` is the picture inside the letterboxing, which is the
-        // rectangle a rendition is actually drawn into. It is empty until the
-        // first frame decodes, and the view's own bounds are the honest
-        // stand-in until then.
-        let rect = videoBounds.isEmpty ? view.bounds : videoBounds
-        let scale = traitCollection.displayScale > 0 ? traitCollection.displayScale : 3
-        let pixels = CGSize(width: rect.width * scale, height: rect.height * scale)
-        guard pixels.width > 0, pixels.height > 0 else { return }
-        // Layout runs constantly. Re-tuning the player on every pass would set
-        // `preferredMaximumResolution` dozens of times a second, and each set
-        // is a decision the player has to act on.
-        guard abs(pixels.height - lastReported.height) > 1
-            || abs(pixels.width - lastReported.width) > 1
-        else { return }
-        lastReported = pixels
-        onSurfacePixels?(pixels)
+    var player: AVPlayer? {
+        get { playerLayer.player }
+        set { playerLayer.player = newValue }
+    }
+
+    var onLayout: ((CGSize) -> Void)?
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let scale = window?.screen.scale ?? max(traitCollection.displayScale, 1)
+        onLayout?(CGSize(width: bounds.width * scale, height: bounds.height * scale))
+    }
+}
+
+/**
+ The PiP controller lives on the layer, but the button that starts it lives
+ on the overlay. This is the handshake: the surface attaches whatever
+ controller the current layer can offer, and a tap asks this object to start.
+ */
+@MainActor
+@Observable
+final class WatchPictureInPicture {
+    private(set) var canStart = false
+    private weak var controller: AVPictureInPictureController?
+
+    func attach(_ controller: AVPictureInPictureController?) {
+        self.controller = controller
+        canStart = controller != nil
+            && AVPictureInPictureController.isPictureInPictureSupported()
+    }
+
+    func start() {
+        guard let controller, !controller.isPictureInPictureActive else { return }
+        controller.startPictureInPicture()
     }
 }
