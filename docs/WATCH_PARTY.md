@@ -723,9 +723,36 @@ viewer count, off under `prefers-reduced-motion`). Default off: production
 shows nothing new until Rafael flips it. With the flag off an existing
 `watch_party` channel renders and joins as a plain voice channel. With the dev
 auth bypass on, `?watchParty=1|0` latches the flag for that tab
-(`client/src/lib/watch-party-channels.ts`). The snapshot's
-`GET /api/live-hls/config` is not on main; when it is, this flag can follow
-it the way Baú follows `/api/community-home/config`.
+(`client/src/lib/watch-party-channels.ts`). `GET /api/live-hls/config` is on
+main now, so this flag could follow it the way Baú follows
+`/api/community-home/config`; it does not yet.
+
+**How production turns it on.** It is a BUILD-TIME flag, so no API secret can
+do it and no server flag implies it: the string has to be in the environment of
+the `pnpm --filter @pqp/client build` step in `deploy-web.yml`, or the bundle
+Cloudflare Pages serves simply has no watch party in it. Until 2026-09-09 the
+name was not in that workflow at all, so the answer was permanently "off"
+however `LIVE_HLS_ENABLED` was set on `pqp-api` — the server could start an
+egress that the shipped client had no surface to show.
+
+```sh
+gh variable set VITE_WATCH_PARTY_CHANNELS --body true
+gh workflow run deploy-web.yml --ref main       # rebuild and republish Pages
+```
+
+Then read it back off the deployed bundle rather than trusting the run:
+
+```sh
+curl -s https://pqp.gg/ | grep -o '/assets/index-[A-Za-z0-9]*\.js' | head -1
+```
+
+and check the sidebar shows Criar watch party for an account holding
+START_WATCH_PARTY. `gh variable delete VITE_WATCH_PARTY_CHANNELS` plus another
+web deploy is the way back off; it needs no code change either way. The same
+applies to `VITE_WATCH_PARTY_SCHEDULE` (the sidebar's next-session hint) and
+`VITE_LIVE_REACTIONS`. Staging sets all three to `true` by default
+(`deploy-staging.yml`), which is why a thing can look shipped there and be
+invisible in production.
 
 ## Native apps
 

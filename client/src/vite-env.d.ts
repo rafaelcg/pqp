@@ -29,6 +29,12 @@ interface ImportMetaEnv {
    */
   readonly VITE_WATCH_PARTY_CHANNELS?: string;
   /**
+   * The sidebar's "próxima: sex 21h" hint for a scheduled session. Build-time,
+   * off unless the literal "true". Read through `isWatchPartyScheduleEnabled()`
+   * in `client/src/lib/channel-session-schedule.ts`, never inline.
+   */
+  readonly VITE_WATCH_PARTY_SCHEDULE?: string;
+  /**
    * Public TestFlight join URL. Optional; a default lives in `lib/testflight.ts`.
    */
   readonly VITE_TESTFLIGHT_URL?: string;
