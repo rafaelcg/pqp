@@ -1134,6 +1134,181 @@ No window or app picker of our own: Android's consent dialog offers "one app"
 or "entire screen", and that is the platform's choice to present, not ours. No
 quality menu: there is one rung, and it is 720 lines.
 
+## Watch party, the HLS path
+
+A watch party's audience does not join the call. That is the entire economy of
+the feature: a viewer costs one playlist reader and nothing on the media
+server, so six hundred people can watch a room that seats eight. On 5 September
+a Twitch watch party sent 212 signups in twenty minutes at a mesh room with a
+limit of eight, and every one of them was refused. Android had no watch surface
+at all until this: the two frames arrived and nothing drew them.
+
+### The seam, exactly
+
+The server transcodes the presenter's LiveKit screen share into an HLS
+playlist (`server/src/voice/hls-egress.ts`) and tells clients about it on two
+frames, both defined in `packages/shared/src/live-hls.ts`:
+
+| Frame | Who gets it | Carries |
+|---|---|---|
+| `voice-stream` | seats in the room | `{ channelId, stream \| null }` |
+| `channel-live` | everybody with VIEW on the channel, seat or not | `{ channelId, stream \| null, watching }` |
+
+`channel-live` arrives at socket auth for every live channel this account may
+see, again whenever the egress starts, stops or changes URL, and on the
+server's audience keyframe clock (30 s) while the channel is live or watched.
+`GET /api/channels/:id/live` answers the same thing over HTTP, for a screen
+opened before the socket said anything.
+
+To be counted, a client sends `watch-live { channelId, watching }`. That is the
+**only** frame the audience path sends. No `join-voice-room`, no
+`POST /api/voice/token`, no `PeerConnection`, no LiveKit `Room`, and therefore
+no microphone permission: watching asks for no device at all. The server checks
+VIEW, counts the *socket*, and refuses to double count one that already holds a
+seat. `gg.pqp.app.watch.WatchLiveStore` is that path and it has no reference to
+`VoiceController`, which is what makes "seatless" structural rather than a
+promise. `WatchLiveStoreTest` asserts the exact frames that leave the phone, by
+type, in order, because a regression that quietly joined the call would still
+play a picture on a laptop with two viewers and would only show up at the
+event.
+
+### The URL is a credential, and it changes every thirty seconds
+
+`hlsUrl` is `/api/voice/hls-playlist/<channel>/<startedAt>?t=<token>`, and the
+token is minted **per recipient**, bound to that user, channel and session
+(`server/src/voice/hls-viewer-token.ts`). Two consequences that shape the
+player:
+
+- **No `Authorization` header, anywhere.** The `?t=` exists precisely so no
+  header is needed. A Media3 `DefaultHttpDataSource` applies its default
+  headers to every request it makes, and the segment lines inside the playlist
+  are presigned absolutes on the bucket's own origin, so a bearer set on the
+  data source would send a user's Clerk-derived token to R2. The player sets
+  none.
+- **A new URL is not a new stream.** The audience keyframe restamps the token
+  twice a minute, so `hlsUrl` is a different string every thirty seconds for a
+  stream nobody touched. `watchSourceChanged` compares `startedAt` (the egress
+  session) and nothing else. Re-attaching on the URL would rebuffer every
+  viewer twice a minute for the whole party, and would read as a bad
+  connection rather than as one line of code.
+
+### The player
+
+`media3-exoplayer-hls`, a new artifact: `media3-exoplayer` alone has no `.m3u8`
+parser at all. It is told twice that this is HLS, because the path has no
+`.m3u8` extension for anything to sniff: `MimeTypes.APPLICATION_M3U8` on the
+media item, and an explicit `HlsMediaSource.Factory` on the player.
+
+The second one is the load-bearing half. `DefaultMediaSourceFactory` finds the
+HLS source by **reflection**, so nothing in this module would reference it and
+R8 is entitled to strip it out of the release build: debug plays, the signed
+sideload APK does not, and the only symptom is a playback error. Naming the
+class is a reference. Same reasoning as registering the GIF decoder by hand in
+`PqpApplication` rather than trusting a `META-INF/services` entry through the
+shrinker.
+
+`HlsWatchdog` is a port of the web's `client/src/lib/hls-stall.ts`, with the
+same numbers on purpose, and it exists because Media3's own retry cannot fix
+the failure that actually happens: the *session* changed. Four triggers, each
+one something seen at a party:
+
+- a fatal `PlaybackException`;
+- `STATE_ENDED`, which is `#EXT-X-ENDLIST`. LiveKit writes it when the egress
+  stops, and a reused `live.m3u8` stays that finished VOD until the next share
+  overwrites it. A player handed one plays to the end and freezes on a black
+  frame, which is exactly what the web hit on 7 September;
+- buffering for more than 8 s with nothing playing;
+- the playlist's media sequence not advancing for 15 s, which is what a dead
+  egress looks like while the playlist still answers 200.
+
+Each of those refetches `GET /api/channels/:id/live` for the new session. Three
+inside five minutes and the stream is called dead: a button, not a spinner,
+because a phone retrying forever is somebody's data plan.
+
+**The token is renewed on a clock, not on a failure.** `HLS_VIEWER_TOKEN_TTL_MS`
+is an hour and a film is longer, so the token stamped into the attached URL
+expires mid-party if nothing is done: the proxy answers 401 and the recovery is
+a fatal error plus a reconnect. That recovery works and is not good enough, so
+the swap is scheduled at fifty minutes instead, re-attaching with the URL the
+audience keyframe has already restamped. iOS renews at the same moment for the
+same reason (`WatchStreamSwap`), and the two were written without either side
+reading the other. `WatchSourceTest` pins the margin against the TTL and
+against the keyframe cadence that supplies the replacement.
+
+Backgrounding pauses and coming back seeks to the live edge, rather than
+resuming ten minutes behind everybody else. This app's foreground-service
+exemption is for a *call*; a film does not get one.
+
+### What it looks like
+
+An `AO VIVO` pill on the channel row, so a person scrolling the list can find
+the party. Opening the channel puts a 16:9 player above the transcript with the
+audience count and the delay under it, and a tap on the corner takes it full
+screen. Joining the call is the same separate button in the app bar it always
+was, which is the point: watching is one tap and costs nobody a seat.
+
+The pane draws **nothing** on a voice channel with no watch party. Not a
+placeholder, not an apology for a stream that was never running.
+
+### What it says when it cannot work
+
+Every state has words, in Portuguese, and none of them is a black rectangle:
+
+| State | pt-BR |
+|---|---|
+| live, no picture yet | Esperando a imagem chegar |
+| stalled, refetching | A transmissão travou, reconectando |
+| given up | A transmissão caiu, plus **Tentar de novo** |
+| the stream stopped | A transmissão acabou / Quem estava na call continua lá. |
+
+A stream the server says is over outranks both trouble states, so nobody is
+offered a retry button for something no retry can bring back.
+
+### What is verified, and what is not
+
+On this machine: the module compiles debug and release, R8 and the resource
+shrinker survive the new artifact, `lintVitalRelease` passes, and the unit
+suite is green including 40 new tests. Every one of those was proven by
+breaking the code it covers and watching it fail by name.
+
+On a Pixel 10 Pro emulator (API 37) against a local API with the dev bypass:
+
+- **The seatless path, measured rather than argued.** Opening the seeded voice
+  channel took `GET /api/channels/:id/live` from
+  `{"watching":0,"participants":0}` to `{"watching":1,"participants":0}`, and
+  leaving it put the count back. A watcher, and no seat.
+- **The player decodes a real HLS playlist.** With a temporary local patch
+  feeding the pane a public test playlist (reverted; not in the branch), video
+  rendered above the transcript with `AO VIVO`, `3 assistindo` and `~10s de
+  atraso` on a device set to pt-BR, and fullscreen handed the same player
+  between two `PlayerView`s without dropping playback.
+- **A channel with nothing live is untouched.** No pane on a plain voice
+  channel and none on a text channel, which is the check that matters for the
+  `ChatScreen` restructure.
+- **No crash.** `logcat` carries nothing from the app across the whole session.
+
+**Not verified: our own stream, end to end.** That test played somebody else's
+playlist. Untested against the real thing: the `?t=` viewer token at the
+playlist proxy, the master playlist and its rungs, ladder switching, whether
+the delay badge is honest about our transcode, and whether a share that dies
+and restarts mid-party is followed (the `startedAt` rule and `HlsWatchdog` are
+unit-tested, and the wiring around them has never seen a real session change).
+Also untested: a real phone on mobile data with the screen off, because an
+emulator's lifecycle and network are not a phone's. Say so rather than
+reporting green.
+
+### Still not done
+
+- **Sending a screen on the SFU.** See the section above; the button is still
+  hidden on a LiveKit room, which is the transport every watch party runs on.
+  A host cannot present from Android yet.
+- **The watch party *event*.** `watch-party` and `watch-party-update` are still
+  on the ignore list: the phone draws the stream, not the party's name, host,
+  co-hosts or state machine, and has no create surface.
+- **Picture in picture**, and playing on with the screen off. Both want a media
+  session and a service, which is a different piece of work with its own
+  battery argument.
+
 ## Cameras, receiving
 
 A phone in the 5 Sep watch party saw the film and not one face. Every other

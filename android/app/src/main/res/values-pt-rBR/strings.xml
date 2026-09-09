@@ -395,4 +395,20 @@
         <item quantity="one">%1$d recusou</item>
         <item quantity="other">%1$d recusaram</item>
     </plurals>
+    <!-- Watch party -->
+    <string name="watch_live">AO VIVO</string>
+    <string name="watch_audience_none">ningu\u00e9m assistindo ainda</string>
+    <plurals name="watch_audience">
+        <item quantity="one">%1$d assistindo</item>
+        <item quantity="other">%1$d assistindo</item>
+    </plurals>
+    <string name="watch_delay">~%1$ds de atraso</string>
+    <string name="watch_opening">Esperando a imagem chegar</string>
+    <string name="watch_reconnecting">A transmiss\u00e3o travou, reconectando</string>
+    <string name="watch_dead">A transmiss\u00e3o caiu</string>
+    <string name="watch_ended">A transmiss\u00e3o acabou</string>
+    <string name="watch_ended_hint">Quem estava na call continua l\u00e1.</string>
+    <string name="watch_retry">Tentar de novo</string>
+    <string name="watch_fullscreen">Tela cheia</string>
+    <string name="watch_exit_fullscreen">Sair da tela cheia</string>
 </resources>

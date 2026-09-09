@@ -62,6 +62,8 @@ import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.voice.CallController
 import gg.pqp.app.voice.Refusal
 import gg.pqp.app.voice.VoiceController
+import gg.pqp.app.watch.WatchLiveStore
+import gg.pqp.app.watch.ui.WatchChannelPane
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.serialization.Serializable
 
@@ -108,6 +110,7 @@ fun PqpApp(
     voice: VoiceController,
     push: PushController,
     calls: CallController,
+    watch: WatchLiveStore,
 ) {
     val phase by session.phase.collectAsStateWithLifecycle()
 
@@ -132,7 +135,7 @@ fun PqpApp(
                     reason = (phase as? SessionPhase.Blocked)?.reason.orEmpty(),
                     onRetry = null,
                 )
-                PhaseKey.Ready -> SignedInNav(session, voice, push, calls)
+                PhaseKey.Ready -> SignedInNav(session, voice, push, calls, watch)
             }
         }
     }
@@ -160,6 +163,7 @@ private fun SignedInNav(
     voice: VoiceController,
     push: PushController,
     calls: CallController,
+    watch: WatchLiveStore,
 ) {
     val nav = rememberNavController()
     val voiceState by voice.state.collectAsStateWithLifecycle()
@@ -324,6 +328,7 @@ private fun SignedInNav(
                     ChannelsScreen(
                         session = session,
                         voice = voice,
+                        watch = watch,
                         serverId = route.serverId,
                         serverName = route.serverName,
                         onBack = nav::popBackStack,
@@ -361,6 +366,19 @@ private fun SignedInNav(
                         slowmodeSeconds = route.slowmodeSeconds,
                         onBack = nav::popBackStack,
                         serverId = route.serverId,
+                        // The watch party, above the transcript, for anybody
+                        // who may see the channel. It draws nothing at all
+                        // unless the server says a stream is live, so an
+                        // ordinary voice channel is untouched.
+                        header = {
+                            if (route.isVoiceChannel) {
+                                WatchChannelPane(
+                                    session = session,
+                                    store = watch,
+                                    channelId = route.channelId,
+                                )
+                            }
+                        },
                         actions = {
                             // Offered only while this room is not already the
                             // call. Once joining or connected, the call bar
@@ -421,12 +439,21 @@ private suspend fun navigateToPush(
     when (target) {
         is DeepLinkTarget.Channel -> {
             nav.navigate(ChannelsRoute(target.serverId, serverName(target.serverId)))
-            val name = runCatching { session.api.channels(target.serverId) }
+            // The row, not just its name. `isVoiceChannel` is what mounts the
+            // watch party pane, and a tap on a notification about a live party
+            // is exactly the way somebody arrives at one: landing there with no
+            // player would be the one route where the feature is missing.
+            val channel = runCatching { session.api.channels(target.serverId) }
                 .getOrNull()
                 ?.firstOrNull { it.id == target.channelId }
-                ?.name
-                .orEmpty()
-            nav.navigate(ChatRoute(target.channelId, name))
+            nav.navigate(
+                ChatRoute(
+                    target.channelId,
+                    channel?.name.orEmpty(),
+                    serverId = target.serverId,
+                    isVoiceChannel = channel?.isVoice == true,
+                ),
+            )
         }
 
         is DeepLinkTarget.Server ->

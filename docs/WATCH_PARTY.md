@@ -943,5 +943,22 @@ later, per app:
   cohosts, the stage, raise hand), the presenter side, a distinct icon in the
   channel list, hiding the share control unless `welcome.canStream`, and the
   create sheet offering the type.
-- Android: same three; also `WireProtocolTest` mirrors the shared enum and was
-  updated here.
+- Android: a distinct icon and the create sheet are still missing, and the
+  share control is still hidden on a LiveKit room, which is every watch party.
+  `WireProtocolTest` mirrors the shared enum and was updated here.
+
+**Android watches the stream too**, and landed on the same rules as iOS without
+either side reading the other. `voice-stream` and `channel-live` are handled
+(`gg.pqp.app.watch`), the audience is seatless in the same way the web is
+(`watch-live` and nothing else: no `join-voice-room`, no SFU token, no
+microphone), and the playlist plays through Media3 above the transcript. The
+channel row grows an `AO VIVO` pill.
+
+The convergence is worth recording because it is the part that is easy to get
+wrong twice: `watchSourceChanged` swaps on `startedAt` for exactly the reason
+`WatchStreamSwap` does, and a seat is what suppresses the announcement rather
+than the player. What Android does not have is the party *itself*:
+`watch-party` and `watch-party-update` are still ignored, so the phone draws a
+stream rather than a named event with a host and a state machine. See
+`docs/ANDROID.md`, section "Watch party, the HLS path", for what is and is not
+verified.

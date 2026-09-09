@@ -401,4 +401,20 @@
         <item quantity="one">%1$d declined</item>
         <item quantity="other">%1$d declined</item>
     </plurals>
+    <!-- Watch party -->
+    <string name="watch_live">LIVE</string>
+    <string name="watch_audience_none">nobody watching yet</string>
+    <plurals name="watch_audience">
+        <item quantity="one">%1$d watching</item>
+        <item quantity="other">%1$d watching</item>
+    </plurals>
+    <string name="watch_delay">~%1$ds behind</string>
+    <string name="watch_opening">Waiting for the picture</string>
+    <string name="watch_reconnecting">The stream stalled, reconnecting</string>
+    <string name="watch_dead">The stream dropped</string>
+    <string name="watch_ended">The stream ended</string>
+    <string name="watch_ended_hint">Whoever was in the call is still there.</string>
+    <string name="watch_retry">Try again</string>
+    <string name="watch_fullscreen">Fullscreen</string>
+    <string name="watch_exit_fullscreen">Exit fullscreen</string>
 </resources>

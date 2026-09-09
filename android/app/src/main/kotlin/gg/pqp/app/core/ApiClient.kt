@@ -1,5 +1,6 @@
 package gg.pqp.app.core
 
+import gg.pqp.app.watch.ChannelLiveResponse
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.resume
@@ -226,6 +227,19 @@ class ApiClient(
 
     suspend fun voiceBackend(): String =
         get<VoiceBackendResponse>("/api/voice/backend").backend
+
+    /**
+     * What a channel's `channel-live` would say right now.
+     *
+     * For a screen opened before its socket delivered one, and for the player's
+     * own recovery: a share that died and came back has a new session, so the
+     * URL the player is holding is gone and this is where the new one is. The
+     * `stream.hlsUrl` is API-relative like the frame's, stamped for this caller,
+     * and 404s on a server with live HLS off, which the caller reads as
+     * "nothing to watch" rather than as an error worth showing.
+     */
+    suspend fun channelLive(channelId: String): ChannelLiveResponse =
+        get("/api/channels/$channelId/live")
 
     /**
      * SFU credentials for a peer the voice room has already accepted.
