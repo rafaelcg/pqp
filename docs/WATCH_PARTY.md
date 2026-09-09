@@ -712,6 +712,123 @@ The rule behind all three: **a control that decides whether an event happens
 does not live at the bottom of a scrolling column, and the state it changes is
 worth a sentence rather than a badge.**
 
+### The viewer's screen, and the one control on it that costs money
+
+Reported from a live party, and this section is one problem with several
+symptoms rather than several problems.
+
+**A viewer with a picture playing was offered the call three times on one
+screen.** The channel header's green Entre na call, the party bar's Entrar na
+call, and a third, also green, on the watch stage. Three components that did
+not know about each other, each correct on its own; only a count across the
+whole page can see it, which is what
+`client/e2e/watch-party.spec.ts` does now.
+
+That is not cosmetic. Watching is seatless: one socket, nothing on the media
+box. A seat is a LiveKit participant and forwarded streams, and the measured
+envelope is roughly 600 interactive users against an effectively unbounded HLS
+audience (`docs/CAPACITY.md`). A Saturday of 500 viewers, a modest fraction of
+them pressing the loudest thing on screen, is the load the egress exists to
+avoid, arriving in the first minute. **The party bar owns the join.** The
+header suppresses it for a `watch_party` channel; `WatchStage` takes `onJoin`
+as OPTIONAL and is passed nothing there, while a plain voice channel with a
+share going out still gets it, because there is no bar in that room.
+
+**And it is quiet.** `ghost`, not the primary fill. Watching is the default
+and the correct state for almost everybody, so the control that leaves it does
+not shout.
+
+**It says what joining will actually do.** `hosts_only` is the default, so for
+most of an audience the button led to a seat they could not speak from, and
+the app said so afterwards, in a banner: "Só ouvindo". `watchPartyJoinIsListenOnly`
+in `packages/shared` reads the party's stage mode rather than
+`welcome.canSpeak`, because a seatless watcher has no `welcome` yet, and that
+is the whole point of asking before the press. The label becomes "Entrar só
+ouvindo".
+
+**The state is not announced any more, and that is the fix rather than a
+regression.** The stage bar was headed "Assistindo sem entrar na call".
+Rafael: *"'Watching without joining the call' how's that even a thing in watch
+party lol."* He is right. That sentence describes the IMPLEMENTATION, which is
+a voice room with an HLS audience attached, and frames the thing everybody came
+for as an abstention from the thing almost nobody wants. A playing film is
+unusually good evidence that somebody is watching a film, so nothing replaced
+it: the row says how many people are here and how far behind live they are,
+both of which are true and neither of which is derivable from looking.
+
+**There is a way to stop.** Watching starts by itself when the channel is
+opened. That default is right and is deliberately not changed: it is the cheap
+path, and putting a click in front of it while prominent buttons offered the
+expensive one would be exactly backwards. What was missing is the other half,
+so the bar carries "Parar de assistir", which is honest that stopping means
+leaving the room (the party room is never in the sidebar, so it lands on the
+server's first text channel).
+
+### Fullscreen, and why it takes the pane
+
+A watch party is a film, and people watch films fullscreen for two hours. The
+player had a fit toggle, a quality menu, a volume slider and
+Picture-in-Picture, and no fullscreen control at all. Rafael: *"i dont think i
+can make it full screen as a viewer"*.
+
+**The obvious fix is the wrong one.** `video.requestFullscreen()` renders only
+that element's subtree, so a fullscreen `<video>` is a film with no chat, no
+reactions and no way to reach either. In a watch party what would be left
+behind is the room talking about the film.
+
+So `components/voice/watch-fullscreen.ts` takes the **split pane**
+(`[data-call-split]`), which already holds the stage, the divider and the
+transcript in whatever arrangement this person chose. Fullscreen then means
+"the film and my chat take the screen": `68svh` is a fraction of the VIEWPORT
+and in element fullscreen the viewport is the screen, so the same rule that
+gives the film two thirds of a window gives it two thirds of a screen. The
+divider still drags inside it, and somebody who wants nothing but the film
+puts the chat away and gets exactly that. One layout, two sizes of viewport,
+nothing new to learn.
+
+The refusal path is the one `element-fullscreen.ts` was written for: an
+Electron shell can answer neither way and leave the promise pending, so a
+`false` still owes the person a filled viewport. The fallback is an in-page
+`expand`, a `data-watch-expanded` attribute on the pane and one rule in
+`index.css`, with Escape wired up by hand because in that mode the browser is
+not the one holding it.
+
+**One honest gap.** The party's chrome (the bar with Encerrar, the options, the
+join) is drawn ABOVE the split, so it is not inside the fullscreen element and
+is not visible while fullscreen. Escape or the same control brings it back.
+That is the correct trade for a viewer and worth revisiting for a host who
+wants to end a party without leaving fullscreen.
+
+### The control bar that reportedly never fades: not reproduced
+
+Rafael, from a live party: *"also this is always there... doesnt disappear"*,
+about the call's control cluster over the picture.
+
+`hooks/use-idle-chrome.ts` already implements exactly this: three seconds of
+stillness fades the bar, any pointer move, key or focus brings it back, a tap
+toggles it on touch, reduced motion switches the fade for an instant toggle,
+and a hidden bar swallows the first press rather than taking
+`pointer-events: none`, so it can never be pressed by accident and can always
+be woken.
+
+**It could not be reproduced locally**, in either role: in a mesh watch party
+on 12 Sep 2026 the chrome went to `opacity: 0` after about five seconds of
+stillness both for the presenting host and for a viewer who had taken a seat,
+and `dm-call-screen-share.spec.ts` covers the same behaviour in CI. Two
+explanations survive, and neither is guessable from here:
+
+- **The pointer was resting on the bar.** `barHovered` is in the `pinned` set
+  by design, and a pointer parked at the bottom of the screen is an ordinary
+  film-watching posture.
+- **`hasVideo` was false.** The fade is enabled by `anyVideo && !collapsed`,
+  and `hasVideo` counts local camera, remote cameras and
+  `screenSharePeerIds`. A room state where that is empty while a picture is on
+  screen would pin the bar open over it.
+
+Worth reading the second one against a real LiveKit room before changing
+anything, because a fade that is loosened on a guess is a hang-up button that
+disappears while somebody needs it.
+
 ### Three controls the host and the viewer asked for
 
 **Fit or fill, on the player.** The app already had both behaviours and a

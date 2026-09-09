@@ -15,6 +15,7 @@ import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
 import type { VideoQuality } from "@/lib/video-quality";
 import {
   canPerformWatchPartyAction,
+  watchPartyJoinIsListenOnly,
   watchPartySpeakAffordance,
   watchPartySurface,
   type WatchParty,
@@ -710,6 +711,13 @@ function LiveSurface(
     role: party.viewerRole,
     canSpeak: props.canSpeak ?? false,
   });
+  // What pressing the join will actually get them. Read from the party's
+  // stage mode rather than from `welcome.canSpeak`, which a seatless watcher
+  // does not have yet: that is the whole point of asking before the join.
+  const joinIsListenOnly = watchPartyJoinIsListenOnly({
+    options: party.options,
+    role: party.viewerRole,
+  });
 
   const bar = (
     <div
@@ -778,17 +786,44 @@ function LiveSurface(
               : t("watchParty.stage.raise")}
           </Button>
         )}
+        {/* THE ONE JOIN, AND IT IS QUIET.
+            A viewer with a picture playing was offered this action three
+            times on one screen: the channel header's green Entre na call,
+            this, and a third green one on the watch stage. Both of the others
+            are gone in a watch party room (`App.tsx`, `WatchStage`), and this
+            is `ghost` rather than `secondary`, because watching is the
+            default and the correct state for almost everybody in the
+            audience. Watching costs a socket; a seat costs a LiveKit
+            participant and forwarded streams, and the room's measured
+            envelope is about 600 interactive users against an effectively
+            unbounded HLS audience.
+
+            AND IT SAYS WHAT IT WILL ACTUALLY DO. `hosts_only` is the default,
+            so for most of an audience this button leads to a seat they cannot
+            speak from, and the app used to say so only afterwards, in a
+            banner: "Listening only. You do not have permission to speak in
+            this channel." A control that promises what it cannot deliver is
+            worse than no control, so the label carries the outcome. */}
         {!props.inCall && (
           <Button
             type="button"
-            variant="secondary"
+            variant="ghost"
             size="sm"
-            title={t("watchParty.live.watchHint")}
+            title={
+              joinIsListenOnly
+                ? t("watchParty.live.joinListenOnlyHint")
+                : t("watchParty.live.watchHint")
+            }
             onClick={props.onJoinCall}
             data-watch-party-join-call
+            data-watch-party-join-listen-only={
+              joinIsListenOnly ? "" : undefined
+            }
           >
             <Phone className="mr-1.5 h-3 w-3" aria-hidden />
-            {t("watchParty.live.joinCall")}
+            {joinIsListenOnly
+              ? t("watchParty.live.joinListenOnly")
+              : t("watchParty.live.joinCall")}
           </Button>
         )}
         {runsTheShow && (

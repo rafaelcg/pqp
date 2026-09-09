@@ -19,6 +19,7 @@ import {
   stageModeClosesTheFloor,
   watchPartyOptionsSchema,
   watchPartyRole,
+  watchPartyJoinIsListenOnly,
   watchPartySpeakAffordance,
   type WatchPartyAction,
   type WatchPartyOptions,
@@ -545,5 +546,67 @@ describe("which surface a watch party channel shows", () => {
     // stale answer would have been the create button over a live picture.
     expect(surface("ended", true)).toBe("liveUntitled");
     expect(surface("ended", false, false, true)).toBe("empty");
+  });
+});
+
+describe("whether joining the call will get a microphone", () => {
+  const opts = (over: Partial<WatchPartyOptions> = {}) =>
+    watchPartyOptionsSchema.parse(over);
+
+  it("tells a viewer that a closed floor is listen only", () => {
+    /**
+     * `hosts_only` is the DEFAULT, so this is the ordinary case rather than a
+     * corner of one, and the app used to say it only after the seat had been
+     * paid for: Rafael pressed join on production and got "Listening only.
+     * You do not have permission to speak in this channel." The label has to
+     * carry that before the press.
+     */
+    for (const mode of ["hosts_only", "invited"] as const) {
+      expect(
+        watchPartyJoinIsListenOnly({
+          options: opts({ stageMode: mode }),
+          role: "viewer",
+        }),
+        mode,
+      ).toBe(true);
+    }
+  });
+
+  it("promises nothing it cannot keep on an open floor", () => {
+    // `everyone` denies nothing, so a seat there really can speak.
+    expect(
+      watchPartyJoinIsListenOnly({
+        options: opts({ stageMode: "everyone" }),
+        role: "viewer",
+      }),
+    ).toBe(false);
+  });
+
+  it("never warns the people the server grants SPEAK to", () => {
+    // `applyGoLiveOptions` writes a member SPEAK allow for the host and the
+    // co-hosts at the moment the party goes live, and `addWatchPartyCohost`
+    // does the same for anybody promoted after it. Warning them would be the
+    // opposite mistake: a true control labelled as a broken one.
+    for (const role of ["host", "cohost"] as const) {
+      expect(
+        watchPartyJoinIsListenOnly({
+          options: opts({ stageMode: "hosts_only" }),
+          role,
+        }),
+        role,
+      ).toBe(false);
+    }
+  });
+
+  it("warns a manager, who runs the channel and not the stage", () => {
+    // MANAGE_CHANNELS ends and edits somebody else's party and is not granted
+    // SPEAK by it, so a manager who joins a closed floor is listening like
+    // anybody else.
+    expect(
+      watchPartyJoinIsListenOnly({
+        options: opts({ stageMode: "hosts_only" }),
+        role: "manager",
+      }),
+    ).toBe(true);
   });
 });

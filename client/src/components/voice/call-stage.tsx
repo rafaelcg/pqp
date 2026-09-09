@@ -56,6 +56,13 @@ import {
   type FullscreenMode,
 } from "@/components/voice/capabilities";
 import { attemptElementFullscreen } from "@/components/voice/element-fullscreen";
+import {
+  currentFullscreenElement,
+  exitDocumentFullscreen,
+  fullscreenDocument,
+  requestElementFullscreen,
+  type WebkitFullscreenElement,
+} from "@/components/voice/document-fullscreen";
 import { CinemaHint } from "@/components/voice/cinema-hint";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { useImmersiveStage } from "@/hooks/use-immersive-stage";
@@ -250,46 +257,6 @@ interface WebkitFullscreenVideo extends HTMLVideoElement {
   webkitExitFullscreen?: () => void;
 }
 
-interface WebkitFullscreenElement extends HTMLElement {
-  webkitRequestFullscreen?: () => Promise<void> | void;
-}
-
-interface WebkitFullscreenDocument extends Document {
-  webkitFullscreenEnabled?: boolean;
-  webkitFullscreenElement?: Element | null;
-  webkitExitFullscreen?: () => Promise<void> | void;
-}
-
-function fullscreenDocument(): WebkitFullscreenDocument {
-  return document as WebkitFullscreenDocument;
-}
-
-function currentFullscreenElement(): Element | null {
-  const doc = fullscreenDocument();
-  return doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
-}
-
-async function requestElementFullscreen(element: HTMLElement): Promise<void> {
-  const webkit = element as WebkitFullscreenElement;
-  if (typeof element.requestFullscreen === "function") {
-    await element.requestFullscreen();
-    return;
-  }
-  if (typeof webkit.webkitRequestFullscreen === "function") {
-    await webkit.webkitRequestFullscreen();
-    return;
-  }
-  throw new Error("no element fullscreen API");
-}
-
-async function exitDocumentFullscreen(): Promise<void> {
-  const doc = fullscreenDocument();
-  if (typeof doc.exitFullscreen === "function") {
-    await doc.exitFullscreen();
-    return;
-  }
-  await doc.webkitExitFullscreen?.();
-}
 
 /**
  * Fullscreen for the stage container, with the iOS in-page fallback.

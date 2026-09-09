@@ -439,6 +439,47 @@ export function watchPartySpeakAffordance(input: {
   return "none";
 }
 
+/**
+ * What pressing "join the call" will ACTUALLY get this person: a seat they
+ * can talk from, or a seat they can only listen from.
+ *
+ * WHY IT MATTERS ENOUGH TO BE A RULE. `hosts_only` is the default, and it is
+ * the default because a two hundred person room with open microphones is not
+ * a watch party. Going live with it denies SPEAK to @everyone and grants it
+ * back per member to the host, the co-hosts and anyone invited up. So for
+ * almost everybody in the audience, the button that says "join the call"
+ * leads to a room they cannot speak in, and the app told them so only AFTER
+ * they had paid for a seat: Rafael pressed it on production and got
+ * "Listening only. You do not have permission to speak in this channel."
+ *
+ * A control that promises something it cannot deliver is worse than no
+ * control. This is what lets the label say the true thing before the press.
+ *
+ * IT IS NOT `watchPartySpeakAffordance`, and the difference is which side of
+ * the join you are on. That one reads `welcome.canSpeak`, which is the
+ * server's answer FOR A ROOM YOU ARE ALREADY IN. Somebody watching without a
+ * seat has no `welcome` at all, so the only honest source before the join is
+ * the party's own stage mode, which every viewer already has.
+ *
+ * NOT AN AUTHORITY, like everything else on this side of the wire: the SPEAK
+ * overwrite the server wrote is what actually decides, and a client that gets
+ * this wrong shows the wrong label rather than gaining a microphone.
+ */
+export function watchPartyJoinIsListenOnly(input: {
+  options: WatchPartyOptions;
+  role: WatchPartyRole;
+}): boolean {
+  if (input.role === "host" || input.role === "cohost") {
+    // `applyGoLiveOptions` grants these two SPEAK by member overwrite at the
+    // moment the party goes live, and `addWatchPartyCohost` does it for
+    // anybody promoted after that.
+    return false;
+  }
+  // `everyone` is the old open floor: nothing is denied, so nothing is
+  // promised that will not arrive.
+  return input.options.stageMode !== "everyone";
+}
+
 // ------------------------------------------------------------- the wire shape
 
 const nameField = z.string().trim().min(1).max(120);

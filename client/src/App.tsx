@@ -3044,6 +3044,19 @@ function MainAppContent({
     [navigate],
   );
 
+  /**
+   * Where "stop watching" goes: the server's first ordinary text channel.
+   *
+   * A watch party room is never in the sidebar, so leaving it has to land
+   * somewhere real rather than on "Escolha um canal". Undefined on a server
+   * with no text channel at all, in which case the control is not offered:
+   * a button that goes nowhere is worse than no button.
+   */
+  const firstTextChannelId = useMemo(
+    () => channels.find((one) => one.type === "text")?.id,
+    [channels],
+  );
+
   const selectChannel = useCallback(
     async (channelId: string, serverIdOverride?: string) => {
       // The override matters when a server was only just chosen: `selection` is
@@ -5365,6 +5378,16 @@ function MainAppContent({
               start from your phone is a call that does not happen. */}
           {selectedChannel.kind === "server" &&
             isVoiceRoomChannelType(selectedChannel.type) &&
+            // NOT IN A WATCH PARTY ROOM. The party's own bar carries the one
+            // join, and this header button was one of THREE offers of the
+            // same expensive action a viewer counted on one screen with a
+            // party running, two of them in the primary fill. A seat costs a
+            // LiveKit participant and forwarded streams; watching costs a
+            // socket. See `WatchStage`'s `onJoin` for the arithmetic.
+            !(
+              isWatchPartyChannelType(selectedChannel.type) &&
+              isWatchPartyChannelsEnabled()
+            ) &&
             !(
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.status !== "idle"
@@ -5793,7 +5816,27 @@ function MainAppContent({
             serverName={selectedServer?.name ?? null}
             serverIconUrl={selectedServer?.iconUrl ?? null}
             voiceState={voiceState}
-            onJoin={() => void handleJoinVoice(selectedChannel.id)}
+            /* The party bar owns the join in a watch party room; a plain
+               voice channel with a share going out has no bar, so there this
+               is still the only way in. One control, not three. */
+            onJoin={
+              isWatchPartyChannelType(selectedChannel.type) &&
+              isWatchPartyChannelsEnabled()
+                ? undefined
+                : () => void handleJoinVoice(selectedChannel.id)
+            }
+            /* STOPPING WATCHING IS LEAVING THE ROOM, and only this component
+               knows where to go instead. Watching starts by itself when the
+               channel is opened, which is right; what was missing is any way
+               to stop, so a person could not tell whether they were watching,
+               in the call, both or neither, and could not end any of it. The
+               first text channel is where the server's conversation lives, so
+               it is where "not watching any more" lands. */
+            onLeaveParty={
+              firstTextChannelId
+                ? () => void selectChannel(firstTextChannelId)
+                : undefined
+            }
             onSetWatchingLive={(channelId, watching) =>
               voice.setWatchingLive(channelId, watching)
             }

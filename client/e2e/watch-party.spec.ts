@@ -629,7 +629,13 @@ test("a seated viewer does not get the player twice", async ({ browser }) => {
     // Now take the seat. The presenter's screen arrives as a WebRTC track
     // with its own audio, so the HLS player must go: the same film twice,
     // seconds apart, with both soundtracks, is the bug.
-    await viewer.getByTestId("watch-stage-join").click();
+    //
+    // FROM THE PARTY BAR, which is where the one join lives now. It used to
+    // be here on the stage as well, and in the channel header, and a viewer
+    // with a picture playing was offered the same expensive action three
+    // times on one screen. See "a viewer with a picture is offered the call
+    // once" below for the count that keeps it at one.
+    await viewer.locator("[data-watch-party-join-call]").click();
     await expect(stage).toHaveCount(0, { timeout: 20_000 });
     await expect(viewer.getByTestId("watch-stage-live")).toHaveCount(0);
 
@@ -1070,4 +1076,224 @@ test("opening the options does not move the picture", async ({ page }) => {
   const after = (await paneBoxes(page)).pane!;
   expect(after.top).toBe(before.top);
   expect(after.height).toBe(before.height);
+});
+
+// --------------------------------------------- what a viewer is offered, and how loudly
+
+/**
+ * Every visible control on this page that offers to join the call, with the
+ * fill it is painted in.
+ *
+ * COUNTED RATHER THAN NAMED, because the defect was arithmetic. A viewer with
+ * a picture playing was offered the one expensive action three times on one
+ * screen: the channel header's Entre na call, the party bar's Entrar na call
+ * and a third on the watch stage, two of them in the app's primary green.
+ * Three components that did not know about each other, each correct on its
+ * own. Only a count across the whole page can see that, which is why this
+ * reads the document rather than a locator per component.
+ *
+ * WHY IT IS NOT COSMETIC. Watching is seatless: one socket, nothing on the
+ * media box. Joining takes a seat, a LiveKit participant and forwarded
+ * streams, and the measured envelope is roughly 600 interactive users against
+ * an effectively unbounded HLS audience. A Saturday of 500 viewers, a modest
+ * fraction of them pressing the most prominent thing on screen, is the load
+ * the egress exists to avoid, in the first minute.
+ */
+async function joinOffers(page: Page) {
+  return page.evaluate(() => {
+    const out: { text: string; bg: string }[] = [];
+    document.querySelectorAll("button").forEach((element) => {
+      const text = (element.textContent ?? "").trim();
+      if (!/\bjoin\b/i.test(text)) {
+        return;
+      }
+      const box = element.getBoundingClientRect();
+      if (box.width === 0 || box.height === 0) {
+        return;
+      }
+      out.push({ text, bg: getComputedStyle(element).backgroundColor });
+    });
+    return out;
+  });
+}
+
+test("a viewer with a picture is offered the call once, quietly, and told what it costs", async ({
+  browser,
+}) => {
+  const shared = await seedServer("wp-offer", "wp-offer-guest");
+  const party = await createParty("wp-offer", shared.serverId, "Cinemoon");
+  await setPartyState("wp-offer", party.partyId, "live");
+
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(
+      viewer,
+      `/app/server/${shared.serverId}/channel/${party.channelId}`,
+      "wp-offer-guest",
+    );
+    await expect(viewer.getByTestId("watch-channel-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    const offers = await joinOffers(viewer);
+    expect(offers, JSON.stringify(offers)).toHaveLength(1);
+    // And it is not painted in the primary fill. Watching is the default and
+    // the correct state for almost everybody, so the control that leaves it
+    // does not shout. `ghost` renders transparent until hovered.
+    expect(offers[0]!.bg).toMatch(/rgba\(0, 0, 0, 0\)|transparent/);
+
+    // IT SAYS WHAT WILL ACTUALLY HAPPEN. `hosts_only` is the default, so this
+    // seat cannot speak, and the app used to say so only afterwards in a
+    // banner. A control that promises what it cannot deliver is worse than no
+    // control.
+    const join = viewer.locator("[data-watch-party-join-call]");
+    await expect(join).toHaveAttribute(
+      "data-watch-party-join-listen-only",
+      "",
+    );
+    await expect(join).toContainText("Join to listen");
+
+    // The two that are gone: the channel header's green button and the watch
+    // stage's own. Asserted by absence rather than by the count alone, so a
+    // future change that removes the wrong one still fails.
+    await expect(
+      viewer.getByRole("button", { name: "Join Voice", exact: true }),
+    ).toHaveCount(0);
+    await expect(viewer.getByTestId("watch-stage-join")).toHaveCount(0);
+  } finally {
+    await second.context.close();
+  }
+});
+
+test("a viewer can tell they are watching, and can stop", async ({
+  browser,
+}) => {
+  /**
+   * Watching starts by itself when the channel is opened. That is the right
+   * default and is not what is being changed: it is the cheap path and the
+   * one almost everybody should be on, and putting a click in front of it
+   * while prominent buttons offered the expensive one would be exactly
+   * backwards. What was missing is that nothing said it was happening and
+   * nothing could stop it, so a person could not tell whether they were
+   * watching, in the call, both or neither.
+   */
+  const shared = await seedServer("wp-state", "wp-state-guest");
+  const party = await createParty("wp-state", shared.serverId, "Cinemoon");
+  await setPartyState("wp-state", party.partyId, "live");
+
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(
+      viewer,
+      `/app/server/${shared.serverId}/channel/${party.channelId}`,
+      "wp-state-guest",
+    );
+
+    // WHAT IS TRUE, AND NOT WHAT IS NOT. This row used to be headed
+    // "Watching without joining the call", which describes the
+    // implementation (a voice room with an HLS audience attached) and frames
+    // the thing everybody came for as an abstention. Rafael: "how's that even
+    // a thing in watch party lol". A playing film says they are watching; the
+    // row says the two things it cannot: how many people, and how far behind.
+    const state = viewer.getByTestId("watch-stage-state");
+    await expect(state).toBeVisible({ timeout: 20_000 });
+    await expect(state).toContainText("watching");
+    await expect(state).toContainText("delay");
+    await expect(viewer.getByText("without joining the call")).toHaveCount(0);
+
+    // And the way out is beside the statement, which is honest about what
+    // stopping is: leaving the room.
+    await viewer.getByTestId("watch-stage-leave").click();
+    await expect(viewer.getByTestId("watch-channel-stage")).toHaveCount(0, {
+      timeout: 20_000,
+    });
+    // Landed somewhere real rather than on "pick a channel": the party room
+    // is never in the sidebar, so leaving it has to go somewhere.
+    await expect(viewer.getByPlaceholder(/^Message /)).toBeVisible();
+  } finally {
+    await second.context.close();
+  }
+});
+
+test("a viewer can put the film on the whole screen, with the chat", async ({
+  browser,
+}) => {
+  /**
+   * "i dont think i can make it full screen as a viewer", and he could not:
+   * the player had a fit toggle, a quality menu, a volume slider and
+   * Picture-in-Picture, and no fullscreen control at all. A watch party is a
+   * film and people watch films fullscreen for two hours.
+   *
+   * IT TAKES THE PANE, NOT THE VIDEO, and this is the assertion that says so.
+   * A fullscreen `<video>` renders only its own subtree, so it would be a
+   * film with no chat and no way to reach one. The pane already holds the
+   * stage, the divider and the transcript in the arrangement this person
+   * chose, so fullscreen means "the film and my chat take the screen".
+   */
+  const shared = await seedServer("wp-fs", "wp-fs-guest");
+  const party = await createParty("wp-fs", shared.serverId, "Cinemoon");
+  await setPartyState("wp-fs", party.partyId, "live");
+
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(
+      viewer,
+      `/app/server/${shared.serverId}/channel/${party.channelId}`,
+      "wp-fs-guest",
+    );
+    await expect(viewer.getByTestId("watch-channel-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    const control = viewer.getByTestId("watch-stage-fullscreen");
+    await expect(control).toBeVisible();
+    await control.click();
+
+    await expect
+      .poll(
+        () =>
+          viewer.evaluate(
+            () =>
+              document.fullscreenElement?.hasAttribute("data-call-split") ??
+              false,
+          ),
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+
+    // The film fills the screen and the chat came with it.
+    const box = await viewer.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>("[data-call-split]")!;
+      const rect = pane.getBoundingClientRect();
+      const composer = document.querySelector<HTMLElement>(
+        "[contenteditable], textarea",
+      );
+      return {
+        paneHeight: Math.round(rect.height),
+        viewportHeight: window.innerHeight,
+        composerVisible:
+          !!composer && composer.getBoundingClientRect().height > 0,
+      };
+    });
+    expect(box.paneHeight).toBe(box.viewportHeight);
+    expect(box.composerVisible, "the chat did not come along").toBe(true);
+
+    // AND THE WAY OUT IS OBVIOUS. The same control, now saying the opposite,
+    // plus Escape, which the browser owns in this mode.
+    await expect(control).toHaveAttribute("aria-pressed", "true");
+    await control.click();
+    await expect
+      .poll(() =>
+        viewer.evaluate(() => document.fullscreenElement !== null),
+      )
+      .toBe(false);
+  } finally {
+    await second.context.close();
+  }
 });
