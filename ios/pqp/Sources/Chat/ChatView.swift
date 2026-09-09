@@ -201,6 +201,18 @@ struct ChatView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        // The broadcast, above the transcript it belongs to, for somebody who
+        // has not taken a seat. Opening the channel is the whole gesture:
+        // watching costs no seat, asks for no microphone and needs no second
+        // navigation. `WatchStageView` renders nothing at all when the channel
+        // is not being broadcast to, so this is inert on an ordinary voice
+        // channel and on every text one.
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if let voiceChannel {
+                WatchStageView(channel: voiceChannel)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
         .animation(Motion.standard, value: call.isCollapsed)
         .animation(Motion.standard, value: actionTarget?.id)
         .threadDestination($openedThread)
