@@ -397,6 +397,7 @@
     </plurals>
     <!-- Watch party -->
     <string name="watch_live">AO VIVO</string>
+    <string name="watch_audience_none">ningu\u00e9m assistindo ainda</string>
     <plurals name="watch_audience">
         <item quantity="one">%1$d assistindo</item>
         <item quantity="other">%1$d assistindo</item>

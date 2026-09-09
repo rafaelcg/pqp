@@ -444,11 +444,19 @@ fun WatchPane(
                 )
             }
             Text(
-                text = pluralStringResource(
-                    R.plurals.watch_audience,
-                    live.watching,
-                    live.watching,
-                ),
+                // Zero gets its own sentence rather than "0 assistindo".
+                // Portuguese CLDR counts 0 as `one`, so no plural form can say
+                // this; the web client splits it the same way and for the same
+                // reason (`voice.watch.audience_zero`).
+                text = if (live.watching == 0) {
+                    stringResource(R.string.watch_audience_none)
+                } else {
+                    pluralStringResource(
+                        R.plurals.watch_audience,
+                        live.watching,
+                        live.watching,
+                    )
+                },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.testTag("watch.audience"),

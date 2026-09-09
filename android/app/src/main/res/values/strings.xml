@@ -403,6 +403,7 @@
     </plurals>
     <!-- Watch party -->
     <string name="watch_live">LIVE</string>
+    <string name="watch_audience_none">nobody watching yet</string>
     <plurals name="watch_audience">
         <item quantity="one">%1$d watching</item>
         <item quantity="other">%1$d watching</item>
