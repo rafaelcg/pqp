@@ -6263,6 +6263,7 @@ router.post(
       customMessage: body.customMessage ?? "",
       alertChannelId: body.alertChannelId ?? null,
       timeoutMinutes: body.timeoutMinutes ?? 0,
+      blockPqpInvites: body.blockPqpInvites ?? false,
     });
     await logAudit({
       serverId: serverId!,
@@ -6303,6 +6304,7 @@ router.patch(
         ["mentionLimit", before.mentionLimit, rule.mentionLimit],
         ["alertChannelId", before.alertChannelId, rule.alertChannelId],
         ["timeoutMinutes", before.timeoutMinutes, rule.timeoutMinutes],
+        ["blockPqpInvites", before.blockPqpInvites, rule.blockPqpInvites],
       ] as const
     )
       .filter(([, oldValue, newValue]) => oldValue !== newValue)

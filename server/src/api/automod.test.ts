@@ -333,6 +333,50 @@ describeDb("automod", () => {
     ).toBe(422);
   });
 
+  it("blocks another pqp server's invite, and lets this server's own through", async () => {
+    const { serverId, channelId } = await makeServer();
+    // Off by default: the Discord half alone lets a pqp link through.
+    const rule = await call<{ rule: { id: string; blockPqpInvites: boolean } }>(
+      owner,
+      "POST",
+      rulesPath(serverId),
+      { kind: "invite_links" },
+    );
+    expect(rule.body.rule.blockPqpInvites).toBe(false);
+    expect(
+      (await send(member, channelId, "vem https://pqp.gg/app/invite/AbCd1234")).status,
+    ).toBe(201);
+
+    await call(owner, "PATCH", `${rulesPath(serverId)}/${rule.body.rule.id}`, {
+      blockPqpInvites: true,
+    });
+    expect(
+      (await send(member, channelId, "vem https://pqp.gg/app/invite/AbCd1234")).status,
+    ).toBe(422);
+    expect((await send(member, channelId, "vem pqp.gg/c/outra-casa")).status).toBe(422);
+
+    // This server's own invite and address are not poaching.
+    const invite = await call<{ invite: { code: string } }>(
+      owner,
+      "POST",
+      `/api/servers/${serverId}/invites`,
+      {},
+    );
+    expect(invite.status).toBe(201);
+    await getPool().query(`UPDATE servers SET community_slug = 'nossa-casa' WHERE id = $1`, [
+      serverId,
+    ]);
+    expect(
+      (
+        await send(
+          member,
+          channelId,
+          `entra em pqp.gg/app/invite/${invite.body.invite.code} ou pqp.gg/c/nossa-casa`,
+        )
+      ).status,
+    ).toBe(201);
+  });
+
   it("mention spam trips above the limit and logs the hit without the body", async () => {
     const { serverId, channelId } = await makeServer();
     await call(owner, "POST", rulesPath(serverId), {
@@ -418,7 +462,13 @@ describeDb("automod", () => {
     );
     expect(alert.rows).toHaveLength(1);
     expect(alert.rows[0]!.webhook_username).toBe("AutoMod");
-    expect(JSON.stringify(alert.rows[0]!.webhook_embeds)).toContain("golpe aqui");
+    const embed = JSON.stringify(alert.rows[0]!.webhook_embeds);
+    expect(embed).toContain("golpe aqui");
+    // The alert is a stored message read by Brazilian staff, so it is written
+    // in PT-BR rather than in the API's own English.
+    expect(embed).toContain("O AutoMod bloqueou uma mensagem");
+    expect(embed).toContain("Palavras bloqueadas");
+    expect(embed).not.toMatch(/Blocked words|"Rule"|"Matched"/);
 
     // Both rows are the AutoMod pseudo-user's, so the log names it rather
     // than rendering a null actor as a departed account.

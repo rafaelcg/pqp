@@ -310,6 +310,7 @@ function toChatMessage(message: MessageBroadcast["message"]): ChatMessage {
     attachments: message.attachments ?? [],
     mentionEveryone: message.mentionEveryone ?? false,
     mentionHere: message.mentionHere ?? false,
+    isAutomod: message.isAutomod ?? false,
     chance: message.chance ?? null,
     poll: message.poll ?? null,
   };
@@ -993,6 +994,7 @@ export function createChatController(
         // The composer only ever sends as the signed-in user, never as a
         // webhook — an optimistic bubble is never one.
         isWebhook: false,
+        isAutomod: false,
         webhookEmbeds: [],
         mentionEveryone: false,
         mentionHere: false,

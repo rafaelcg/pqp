@@ -5,6 +5,7 @@ import {
   evaluateAutomod,
   findBlockedKeyword,
   findInviteLink,
+  findPqpInviteLinks,
   parseKeyword,
   normalizeForAutomod,
   type AutomodRuleInput,
@@ -180,6 +181,59 @@ describe("findInviteLink", () => {
   it("ignores discord.com pages that are not invites", () => {
     expect(findInviteLink("see discord.com/developers")).toBeNull();
     expect(findInviteLink("i left discord")).toBeNull();
+  });
+});
+
+describe("findPqpInviteLinks", () => {
+  it("finds an invite code on any host and a community slug on pqp.gg", () => {
+    expect(findPqpInviteLinks("vem https://pqp.gg/app/invite/aBc12_xY")).toEqual([
+      { matched: "https://pqp.gg/app/invite/aBc12_xY", code: "aBc12_xY" },
+    ]);
+    expect(findPqpInviteLinks("localhost:5173/app/invite/Zz9_-abc ok")).toEqual([
+      { matched: "localhost:5173/app/invite/Zz9_-abc", code: "Zz9_-abc" },
+    ]);
+    expect(findPqpInviteLinks("entra em pqp.gg/c/mesa-dos-amigos")).toEqual([
+      { matched: "pqp.gg/c/mesa-dos-amigos", slug: "mesa-dos-amigos" },
+    ]);
+  });
+
+  it("does not take a /c/ path on another host for a community", () => {
+    expect(findPqpInviteLinks("youtube.com/c/somechannel")).toEqual([]);
+    expect(findPqpInviteLinks("pqp.gg/@rafa pqp.gg/blog")).toEqual([]);
+  });
+});
+
+describe("evaluateAutomod: pqp invites", () => {
+  const rule: AutomodRuleInput = {
+    kind: "invite_links",
+    keywords: [],
+    allowList: [],
+    mentionLimit: 5,
+    blockPqpInvites: true,
+  };
+
+  it("is off unless the rule asks for it", () => {
+    expect(
+      evaluateAutomod("pqp.gg/app/invite/aBc12_xY", [{ ...rule, blockPqpInvites: false }]),
+    ).toBeNull();
+  });
+
+  it("blocks another server's link and lets the caller keep its own", () => {
+    expect(evaluateAutomod("pqp.gg/app/invite/aBc12_xY", [rule])).toMatchObject({
+      kind: "invite_links",
+      matched: "pqp.gg/app/invite/aBc12_xY",
+    });
+    const own = { ownPqpInvite: (link: { code?: string; slug?: string }) => link.code === "aBc12_xY" || link.slug === "mesa" };
+    expect(evaluateAutomod("pqp.gg/app/invite/aBc12_xY e pqp.gg/c/mesa", [rule], own)).toBeNull();
+    expect(evaluateAutomod("pqp.gg/app/invite/aBc12_xY e pqp.gg/c/outra", [rule], own)).toMatchObject({
+      matched: "pqp.gg/c/outra",
+    });
+  });
+
+  it("still names the Discord link first", () => {
+    expect(evaluateAutomod("discord.gg/abc pqp.gg/c/outra", [rule])).toMatchObject({
+      matched: "discord.gg/abc",
+    });
   });
 });
 

@@ -1,6 +1,9 @@
 import {
+  AUTOMOD_CLERK_ID,
   AUTOMOD_KIND_LABEL,
   evaluateAutomod,
+  findPqpInviteLinks,
+  type AutomodContext,
   Permission,
   hasPermission,
   type AutomodRule,
@@ -77,13 +80,14 @@ interface RuleRow {
   custom_message: string;
   alert_channel_id: string | null;
   timeout_minutes: number;
+  block_pqp_invites: boolean;
   created_at: Date;
   updated_at: Date;
 }
 
 const COLUMNS = `id, server_id, kind, enabled, keywords, allow_list, mention_limit,
   exempt_role_ids, exempt_channel_ids, custom_message, alert_channel_id,
-  timeout_minutes, created_at, updated_at`;
+  timeout_minutes, block_pqp_invites, created_at, updated_at`;
 
 function mapRule(row: RuleRow): AutomodRule {
   return {
@@ -99,6 +103,7 @@ function mapRule(row: RuleRow): AutomodRule {
     customMessage: row.custom_message,
     alertChannelId: row.alert_channel_id,
     timeoutMinutes: row.timeout_minutes,
+    blockPqpInvites: row.block_pqp_invites,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -156,6 +161,7 @@ export type AutomodRuleFields = Pick<
   | "customMessage"
   | "alertChannelId"
   | "timeoutMinutes"
+  | "blockPqpInvites"
 >;
 
 /** Trim, drop empties and duplicates, keep the owner's order. */
@@ -182,8 +188,8 @@ export async function createAutomodRule(
     `INSERT INTO automod_rules (
        server_id, kind, enabled, keywords, allow_list, mention_limit,
        exempt_role_ids, exempt_channel_ids, custom_message, alert_channel_id,
-       timeout_minutes
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       timeout_minutes, block_pqp_invites
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING ${COLUMNS}`,
     [
       serverId,
@@ -197,6 +203,7 @@ export async function createAutomodRule(
       fields.customMessage.trim(),
       fields.alertChannelId,
       fields.timeoutMinutes,
+      fields.blockPqpInvites,
     ],
   );
   invalidateAutomodCache(serverId);
@@ -221,6 +228,7 @@ export async function updateAutomodRule(
        -- "not in the patch" and $11 the value, which may be NULL.
        alert_channel_id   = CASE WHEN $10::boolean THEN $11::uuid ELSE alert_channel_id END,
        timeout_minutes    = COALESCE($12, timeout_minutes),
+       block_pqp_invites  = COALESCE($13, block_pqp_invites),
        updated_at         = NOW()
      WHERE server_id = $1 AND id = $2
      RETURNING ${COLUMNS}`,
@@ -237,6 +245,7 @@ export async function updateAutomodRule(
       patch.alertChannelId !== undefined,
       patch.alertChannelId ?? null,
       patch.timeoutMinutes ?? null,
+      patch.blockPqpInvites ?? null,
     ],
   );
   invalidateAutomodCache(serverId);
@@ -310,7 +319,48 @@ export async function checkAutomod(
   const applicable = roleIds
     ? enabled.filter((rule) => !rule.exemptRoleIds.some((id) => roleIds.has(id)))
     : enabled;
-  return evaluateAutomod(input.body, applicable);
+  const context = applicable.some(
+    (rule) => rule.kind === "invite_links" && rule.blockPqpInvites,
+  )
+    ? await ownInviteContext(input.serverId, input.body)
+    : {};
+  return evaluateAutomod(input.body, applicable, context);
+}
+
+/**
+ * Which of the pqp links in a body point back at this server, so a member
+ * sharing their own hall's invite is not treated as poaching. One query for
+ * the codes found, plus the server's own community slug. Only runs when a
+ * rule with the pqp half on applies, so the common path pays nothing.
+ */
+async function ownInviteContext(
+  serverId: string,
+  body: string,
+): Promise<AutomodContext> {
+  const links = findPqpInviteLinks(body);
+  if (links.length === 0) {
+    return {};
+  }
+  const codes = links.flatMap((link) => (link.code ? [link.code] : []));
+  const [invites, server] = await Promise.all([
+    codes.length > 0
+      ? getPool().query<{ code: string }>(
+          `SELECT code FROM server_invites WHERE server_id = $1 AND code = ANY($2::text[])`,
+          [serverId, codes],
+        )
+      : Promise.resolve({ rows: [] as { code: string }[] }),
+    getPool().query<{ community_slug: string | null }>(
+      `SELECT community_slug FROM servers WHERE id = $1`,
+      [serverId],
+    ),
+  ]);
+  const ownCodes = new Set(invites.rows.map((row) => row.code));
+  const ownSlug = server.rows[0]?.community_slug ?? null;
+  return {
+    ownPqpInvite: (link) =>
+      (link.code !== undefined && ownCodes.has(link.code)) ||
+      (link.slug !== undefined && ownSlug !== null && link.slug === ownSlug),
+  };
 }
 
 /**
@@ -320,7 +370,6 @@ export async function checkAutomod(
  * with a fixed `clerk_id` so there is exactly one per database. Created on
  * first use, never deleted.
  */
-const AUTOMOD_CLERK_ID = "system:automod";
 let automodUserId: string | null = null;
 
 export async function ensureAutomodUser(): Promise<string> {
@@ -354,10 +403,16 @@ export interface AutomodHitEffects {
 }
 
 function describeMinutes(minutes: number): string {
-  if (minutes % 10080 === 0) return `${minutes / 10080}w`;
-  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
-  if (minutes % 60 === 0) return `${minutes / 60}h`;
-  return `${minutes}m`;
+  if (minutes % 10080 === 0) {
+    const weeks = minutes / 10080;
+    return weeks === 1 ? "1 semana" : `${weeks} semanas`;
+  }
+  if (minutes % 1440 === 0) {
+    const days = minutes / 1440;
+    return days === 1 ? "1 dia" : `${days} dias`;
+  }
+  if (minutes % 60 === 0) return `${minutes / 60} h`;
+  return `${minutes} min`;
 }
 
 /**
@@ -445,20 +500,20 @@ export async function recordAutomodHit(
       const tag =
         who?.username && who.discriminator
           ? `${who.username}#${who.discriminator}`
-          : (who?.display_name ?? "a member");
+          : (who?.display_name ?? "um membro");
       const now = new Date();
       const embed = {
-        title: `AutoMod blocked a message`,
+        title: "O AutoMod bloqueou uma mensagem",
         color: 0xe5484d,
         fields: [
-          { name: "Rule", value: AUTOMOD_KIND_LABEL[verdict.kind], inline: true },
-          { name: "Member", value: tag, inline: true },
-          { name: "Channel", value: who?.name ? `#${who.name}` : input.channelId, inline: true },
-          { name: "Matched", value: verdict.matched.slice(0, 1024), inline: true },
+          { name: "Regra", value: AUTOMOD_KIND_LABEL[verdict.kind], inline: true },
+          { name: "Membro", value: tag, inline: true },
+          { name: "Canal", value: who?.name ? `#${who.name}` : input.channelId, inline: true },
+          { name: "Pegou", value: verdict.matched.slice(0, 1024), inline: true },
           ...(effects.timeout
             ? [{ name: "Timeout", value: describeMinutes(rule.timeoutMinutes), inline: true }]
             : []),
-          { name: "Message", value: input.body.slice(0, 1024) },
+          { name: "Mensagem", value: input.body.slice(0, 1024) },
         ],
         timestamp: now.toISOString(),
       };

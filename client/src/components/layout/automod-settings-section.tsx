@@ -95,6 +95,7 @@ interface RuleForm {
   customMessage: string;
   alertChannelId: string | null;
   timeoutMinutes: number;
+  blockPqpInvites: boolean;
 }
 
 function formFromRule(rule: AutomodRule | undefined): RuleForm {
@@ -108,6 +109,7 @@ function formFromRule(rule: AutomodRule | undefined): RuleForm {
     customMessage: rule?.customMessage ?? "",
     alertChannelId: rule?.alertChannelId ?? null,
     timeoutMinutes: rule?.timeoutMinutes ?? 0,
+    blockPqpInvites: rule?.blockPqpInvites ?? false,
   };
 }
 
@@ -122,6 +124,7 @@ function formToInput(form: RuleForm) {
     customMessage: form.customMessage.trim().slice(0, AUTOMOD_CUSTOM_MESSAGE_MAX),
     alertChannelId: form.alertChannelId,
     timeoutMinutes: form.timeoutMinutes,
+    blockPqpInvites: form.blockPqpInvites,
   };
 }
 
@@ -383,10 +386,17 @@ function ExemptPicker({
 export function AutomodSettingsSection({
   serverId,
   onDirtyChange,
+  readOnly = false,
 }: {
   serverId: string;
   /** Lets the rail mark this section while an edit is unsaved. */
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * Manage Messages may read the rules and run the test box but not change
+   * them (the API says the same). Every control in the list and the editor
+   * is disabled and the save bar is gone, so the page reads as a reference.
+   */
+  readOnly?: boolean;
 }) {
   const { t } = useTranslation();
   const [rules, setRules] = useState<AutomodRule[] | null>(null);
@@ -554,6 +564,11 @@ export function AutomodSettingsSection({
           {t("automod.back")}
         </button>
 
+        {/* A disabled fieldset switches off every control inside it, which is
+            the whole read-only mode. `contents` keeps it out of the layout.
+            The back button sits above it on purpose. */}
+        <fieldset disabled={readOnly} className="contents min-w-0 border-0 p-0">
+
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-start gap-3">
             <span className="grid h-10 w-10 shrink-0 place-items-center rounded-[var(--radius-card)] bg-accent-soft text-on-accent-soft">
@@ -610,7 +625,16 @@ export function AutomodSettingsSection({
               </>
             )}
             {editing === "invite_links" && (
-              <p className="text-sm text-text-secondary">{t("automod.inviteLinks.trigger")}</p>
+              <>
+                <p className="text-sm text-text-secondary">{t("automod.inviteLinks.trigger")}</p>
+                <Switch
+                  checked={form.blockPqpInvites}
+                  onCheckedChange={(blockPqpInvites) => patch({ blockPqpInvites })}
+                  label={t("automod.inviteLinks.pqp")}
+                  description={t("automod.inviteLinks.pqp.hint")}
+                  className="px-0"
+                />
+              </>
             )}
             {editing === "mention_spam" && (
               <Field
@@ -774,6 +798,9 @@ export function AutomodSettingsSection({
           )}
         </div>
 
+        </fieldset>
+
+        {!readOnly && (
         <div className="mt-8 flex items-center justify-between gap-3 border-t border-border pt-4">
           {existing ? (
             <Button variant="ghost" size="sm" disabled={busy} onClick={() => void remove()}>
@@ -801,6 +828,7 @@ export function AutomodSettingsSection({
             </Button>
           </div>
         </div>
+        )}
       </div>
     );
   }
@@ -821,6 +849,7 @@ export function AutomodSettingsSection({
       parts.push(t("automod.summary.mentions", { count: rule.mentionLimit }));
     } else {
       parts.push(t("automod.state.on"));
+      if (rule.blockPqpInvites) parts.push(t("automod.summary.pqp"));
     }
     if (rule.alertChannelId) {
       const channel = channels.find((c) => c.id === rule.alertChannelId);
@@ -837,6 +866,9 @@ export function AutomodSettingsSection({
 
   return (
     <div className="space-y-6">
+      {readOnly && (
+        <p className="text-sm text-text-secondary">{t("automod.readOnly")}</p>
+      )}
       <ul className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border bg-surface-1">
         {AUTOMOD_RULE_KINDS.map((kind) => {
           const meta = KIND_META[kind];
@@ -882,6 +914,7 @@ export function AutomodSettingsSection({
               <Switch
                 checked={on}
                 onCheckedChange={(checked) => void toggle(kind, checked)}
+                disabled={readOnly}
                 label={t(meta.title)}
                 hideLabel
                 title={rule ? undefined : t("automod.state.notSetUp")}

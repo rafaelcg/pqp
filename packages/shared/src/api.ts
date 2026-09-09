@@ -728,6 +728,10 @@ export const messageSchema = z.object({
    * account — the client shows a "Webhook" tag next to the name instead of
    * treating it as someone to @mention or open a DM with. */
   isWebhook: z.boolean().default(false),
+  /** True when the author is the instance's AutoMod pseudo-user (a webhook
+   * row with a fixed id, see `AUTOMOD_CLERK_ID`). The client gives it its
+   * own face and tag rather than the generic webhook chip. */
+  isAutomod: z.boolean().default(false),
   /** True when the body contained `@everyone` and the sender was allowed to
    * fire it. Defaulted so an older API still parses. */
   mentionEveryone: z.boolean().default(false),

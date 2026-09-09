@@ -6683,6 +6683,7 @@ function MainAppContent({
           moderationBits.ban ||
           moderationBits.timeout
         }
+        canManageMessages={canManageMessages}
         requestedSection={serverSettingsSection}
         onClose={() => {
           setServerSettingsOpen(false);

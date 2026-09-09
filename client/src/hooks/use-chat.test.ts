@@ -95,6 +95,7 @@ function serverMessage(overrides: Partial<Message> = {}): Message {
     pinnedBy: null,
     embeds: [],
     isWebhook: false,
+    isAutomod: false,
     webhookEmbeds: [],
     mentionEveryone: false,
     mentionHere: false,

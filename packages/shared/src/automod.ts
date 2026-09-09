@@ -14,7 +14,11 @@ import { TIMEOUT_MAX_MINUTES } from "./sanctions.js";
  *   or phrase. Case-insensitive, unicode-aware, and normalised first (see
  *   `normalizeForAutomod`) so `sc<zero-width>am` and fullwidth letters do not walk
  *   past it. Every rule has an allow list that wins over a hit.
- * - `invite_links`: a Discord invite in the body. Opt-in.
+ * - `invite_links`: a Discord invite in the body. Opt-in. With
+ *   `blockPqpInvites` it also catches a link to *another* pqp server (an
+ *   `/app/invite/<code>` or a `pqp.gg/c/<slug>`); links to the server the
+ *   message is in are let through, which is the caller's call to make
+ *   (`AutomodContext.ownPqpInvite`), because only the server knows its codes.
  * - `mention_spam`: more than N distinct mentions in one message. Opt-in.
  *
  * The first action is always block-and-tell: the message never lands and the
@@ -27,6 +31,14 @@ import { TIMEOUT_MAX_MINUTES } from "./sanctions.js";
  * page can run the same code as a "test a message" preview. The two must
  * never disagree about what a rule catches.
  */
+
+/**
+ * The `clerk_id` of the instance's AutoMod pseudo-user, the author of every
+ * alert post and the issuer of every automatic timeout. Shared so the message
+ * hydration can flag its posts (`isAutomod`) and the client can draw a face
+ * for it instead of the generic webhook chip.
+ */
+export const AUTOMOD_CLERK_ID = "system:automod";
 
 export const AUTOMOD_RULE_KINDS = [
   "keywords",
@@ -84,6 +96,11 @@ export const automodRuleSchema = z.object({
   alertChannelId: z.string().uuid().nullable(),
   /** Time the author out for this long on a hit. 0: do not. */
   timeoutMinutes: z.number().int().min(0).max(AUTOMOD_TIMEOUT_MAX_MINUTES),
+  /**
+   * `invite_links` only: also block links to other pqp servers. Discord
+   * links are always part of that rule; this is the second half.
+   */
+  blockPqpInvites: z.boolean(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -101,6 +118,7 @@ export const createAutomodRuleSchema = automodRuleSchema
     customMessage: true,
     alertChannelId: true,
     timeoutMinutes: true,
+    blockPqpInvites: true,
   })
   .partial()
   .required({ kind: true })
@@ -120,7 +138,22 @@ export type UpdateAutomodRuleInput = z.infer<typeof updateAutomodRuleSchema>;
 export type AutomodRuleInput = Pick<
   AutomodRule,
   "kind" | "keywords" | "allowList" | "mentionLimit"
-> & { id?: string; customMessage?: string; enabled?: boolean };
+> & {
+  id?: string;
+  customMessage?: string;
+  enabled?: boolean;
+  blockPqpInvites?: boolean;
+};
+
+/**
+ * What the matcher cannot know on its own. `ownPqpInvite` says whether a pqp
+ * link found in the body points at the server the message is in: the server
+ * answers from its invite codes and community slug, the settings preview
+ * from the slug alone. Absent, every pqp link counts as another server's.
+ */
+export interface AutomodContext {
+  ownPqpInvite?: (link: PqpInviteLink) => boolean;
+}
 
 export interface AutomodVerdict {
   kind: AutomodRuleKind;
@@ -130,11 +163,15 @@ export interface AutomodVerdict {
   customMessage?: string;
 }
 
-/** Which rule kind a verdict names, as copy the alert can print. */
+/**
+ * Which rule kind a verdict names, as copy the alert and the audit reason can
+ * print. PT-BR, the same words the settings UI uses: the alert is a stored
+ * message, so the server picks one language and the product's is Portuguese.
+ */
 export const AUTOMOD_KIND_LABEL: Record<AutomodRuleKind, string> = {
-  keywords: "Blocked words",
-  invite_links: "Discord invite links",
-  mention_spam: "Mention spam",
+  keywords: "Palavras bloqueadas",
+  invite_links: "Convites de outros servidores",
+  mention_spam: "Spam de menção",
 };
 
 // ---------------------------------------------------------------------------
@@ -466,6 +503,38 @@ export function findInviteLink(body: string): string | null {
   return match ? match[0] : null;
 }
 
+/** A pqp invite found in a body: the text that matched, and what it names. */
+export interface PqpInviteLink {
+  matched: string;
+  /** `/app/invite/<code>` on any host: a server invite. */
+  code?: string;
+  /** `pqp.gg/c/<slug>`: a community address. */
+  slug?: string;
+}
+
+/**
+ * A link into pqp. `/app/invite/<code>` is pqp's own path, so it is matched on
+ * any host (a self-host shares people the same way); `/c/<slug>` is too
+ * generic for that (`youtube.com/c/...`) and is matched on pqp.gg only.
+ * Invite codes are base64url, slugs lowercase; both bounded. Runs on the raw
+ * body rather than the normalised one, because a code is case-sensitive and
+ * the normaliser folds case.
+ */
+const PQP_INVITE_RE =
+  /(?:https?:\/\/)?(?:[\w.-]{1,253}(?::\d{1,5})?)\/app\/invite\/([A-Za-z0-9_-]{4,32})|(?:https?:\/\/)?(?:www\.)?pqp\.gg\/c\/([a-z0-9][a-z0-9-]{1,63})/g;
+
+export function findPqpInviteLinks(body: string): PqpInviteLink[] {
+  const links: PqpInviteLink[] = [];
+  for (const match of body.matchAll(PQP_INVITE_RE)) {
+    if (match[1]) {
+      links.push({ matched: match[0], code: match[1] });
+    } else if (match[2]) {
+      links.push({ matched: match[0], slug: match[2] });
+    }
+  }
+  return links;
+}
+
 // ---------------------------------------------------------------------------
 // Mention spam
 // ---------------------------------------------------------------------------
@@ -504,12 +573,13 @@ const compiledCache = new WeakMap<object, CompiledKeywords>();
 export function evaluateAutomod(
   body: string,
   rules: readonly AutomodRuleInput[],
+  context: AutomodContext = {},
 ): AutomodVerdict | null {
   for (const rule of rules) {
     if (rule.enabled === false) {
       continue;
     }
-    const verdict = evaluateRule(body, rule);
+    const verdict = evaluateRule(body, rule, context);
     if (verdict) {
       return verdict;
     }
@@ -520,6 +590,7 @@ export function evaluateAutomod(
 function evaluateRule(
   body: string,
   rule: AutomodRuleInput,
+  context: AutomodContext,
 ): AutomodVerdict | null {
   const base = {
     kind: rule.kind,
@@ -538,7 +609,16 @@ function evaluateRule(
     }
     case "invite_links": {
       const hit = findInviteLink(body);
-      return hit ? { ...base, matched: hit } : null;
+      if (hit) {
+        return { ...base, matched: hit };
+      }
+      if (!rule.blockPqpInvites) {
+        return null;
+      }
+      const foreign = findPqpInviteLinks(body).find(
+        (link) => !context.ownPqpInvite?.(link),
+      );
+      return foreign ? { ...base, matched: foreign.matched } : null;
     }
     case "mention_spam": {
       const count = countDistinctMentions(body);
