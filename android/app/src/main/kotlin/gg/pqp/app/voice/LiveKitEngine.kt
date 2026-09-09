@@ -215,17 +215,27 @@ class LiveKitEngine(
     override val isSharingScreen: Boolean get() = screenTrack != null
 
     /**
-     * Whether the SFU token granted `SCREEN_SHARE`, from
-     * `VoiceSessionResponse.stream`.
-     *
-     * Read here as well as in the caller because the two answers are minted at
-     * different moments: the caller's comes from `welcome.canStream`, this one
-     * from the token `POST /api/voice/token` returned, and a permissions edit
-     * between them would let a capture start that the SFU then refuses. A
-     * refused publish with the projection already taken is the worst version
-     * of this, so it is checked before the grant is consumed.
+     * What the SFU token granted, from `VoiceSessionResponse.stream`. A
+     * CEILING, set once at connect and never re-asked, because the token is
+     * never re-minted.
      */
-    @Volatile private var canPublishScreen = false
+    @Volatile private var tokenGrantsScreen = false
+
+    /**
+     * What the roster says right now: `welcome.canStream`, then every
+     * `voice-speak-changed`. Starts false so nothing can publish before the
+     * controller has said anything.
+     *
+     * This is the half that was missing, and its absence was a moderation
+     * bypass: see [canPublishScreenNow].
+     */
+    @Volatile private var rosterAllowsScreen = false
+
+    /** Which screen operation is current. See [ScreenPublishGuard]. */
+    private val screenGuard = ScreenPublishGuard()
+
+    /** The in-flight publish, so a stop or a teardown can cancel it. */
+    private var screenJob: Job? = null
 
     /** The `/api/ice-servers` list of the current join; read once, at connect. */
     private var ice: List<IceServer> = emptyList()
@@ -355,7 +365,7 @@ class LiveKitEngine(
         // used, but minted later: a permissions edit in between lands here
         // first, and a capture started on the older answer would be a refused
         // publish with the whole screen already taken.
-        canPublishScreen = credentials.stream
+        tokenGrantsScreen = credentials.stream
 
         eventsJob = scope.launch { listen(created) }
 
@@ -979,6 +989,23 @@ class LiveKitEngine(
             ?.let(::applyAudioEnabled)
     }
 
+    /**
+     * The roster's live answer about the stage, and the fix for the bypass.
+     *
+     * Called on every `welcome` and every `voice-speak-changed`, exactly as
+     * [setCanPublishAudio] is for SPEAK. Revoking also takes down a share that
+     * is already running: the moderator's decision has to reach the wire, and
+     * the controller's own `stopScreenShare` is not the only path into this
+     * state.
+     */
+    override fun setCanPublishScreen(allowed: Boolean) {
+        rosterAllowsScreen = allowed
+        if (!allowed && screenTrack != null) {
+            Log.i(TAG, "the stage was taken away; dropping the screen publication")
+            stopScreenShare()
+        }
+    }
+
     /** The SFU muted the publication itself; nothing reaches this phone to gate. */
     override fun setPeerServerMuted(remotePeerId: String, muted: Boolean) = Unit
 
@@ -1029,12 +1056,19 @@ class LiveKitEngine(
     override fun startScreenShare(permission: Intent, profile: ScreenCaptureProfile): Boolean {
         val room = room ?: return false
         if (screenTrack != null) return true
-        if (!canPublishScreen) {
-            // The token says no. Consuming the grant to find that out from a
-            // refused publish would take the whole screen for nothing.
-            Log.w(TAG, "SFU token does not grant SCREEN_SHARE; refusing the capture")
+        if (!canPublishScreenNow(tokenGrantsScreen, rosterAllowsScreen)) {
+            // BOTH answers, and the roster's is the live one. Consuming the
+            // projection grant to find this out from a refused publish would
+            // take the whole screen for nothing, and trusting the token alone
+            // would let a revoked presenter start again.
+            Log.w(TAG, "not allowed to publish a screen; refusing the capture")
             return false
         }
+
+        // Claim this share before anything asynchronous starts, so a stop, a
+        // teardown or a second start can invalidate everything below by moving
+        // the generation on.
+        val ticket = screenGuard.begin()
 
         val track = runCatching {
             room.localParticipant.createScreencastTrack(
@@ -1050,19 +1084,26 @@ class LiveKitEngine(
                 ),
                 // Posted, not run inline: this arrives on the projection's own
                 // callback thread, from inside the capturer the caller is about
-                // to dispose.
-                onStop = { scope.launch { onScreenShareEnded() } },
+                // to dispose. Gated on the ticket, because the capturer for a
+                // share that has already been replaced still fires this, and
+                // acting on it would tear down the share that is working.
+                onStop = {
+                    scope.launch {
+                        if (screenGuard.isCurrent(ticket)) onScreenShareEnded()
+                    }
+                },
             )
         }.getOrElse { error ->
             Log.w(TAG, "screen capture failed to start: ${error.message}")
+            screenGuard.invalidate()
             return false
         }
 
         screenTrack = track
         return runCatching {
             track.startCapture()
-            scope.launch {
-                runCatching {
+            screenJob = scope.launch {
+                val published = runCatching {
                     room.localParticipant.publishVideoTrack(
                         track,
                         VideoTrackPublishOptions(
@@ -1076,9 +1117,21 @@ class LiveKitEngine(
                                 RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION,
                         ),
                     )
-                }.onFailure { error ->
-                    // The roster already says this device is presenting, and
-                    // the picture is not on the wire. Tear it down rather than
+                }
+                if (!screenGuard.isCurrent(ticket)) {
+                    // Stopped, promoted or restarted while this was in flight.
+                    // If it published anyway, take it straight back down: the
+                    // room must not be left holding a track nobody is driving.
+                    if (published.isSuccess) {
+                        Log.i(TAG, "publish landed after the share was replaced; undoing it")
+                        unpublish(room, track)
+                    }
+                    runCatching { track.stop() }
+                    return@launch
+                }
+                published.onFailure { error ->
+                    // The roster already says this device is presenting and the
+                    // picture is not on the wire. Tear it down rather than
                     // leave an empty tile in front of the room.
                     Log.w(TAG, "screen publish refused: ${error.message}")
                     onScreenShareEnded()
@@ -1094,15 +1147,47 @@ class LiveKitEngine(
 
     override fun stopScreenShare() {
         val track = screenTrack ?: return
+        // The generation moves FIRST. Everything in flight is stale from this
+        // line on, including a publish that is about to succeed and a late
+        // `onStop` from this track's own capturer.
+        screenGuard.invalidate()
         screenTrack = null
-        scope.launch {
-            runCatching { room?.localParticipant?.unpublishTrack(track) }
-                .onFailure { Log.w(TAG, "could not unpublish the screen: ${it.message}") }
-        }
+        screenJob?.cancel()
+        screenJob = null
+        val leaving = room
+        // Not on `screenJob`: that one was just cancelled, and the unpublish
+        // has to outlive it or the server keeps the publication.
+        scope.launch { if (leaving != null) unpublish(leaving, track) }
         runCatching { track.stop() }
     }
 
+    /**
+     * Ask the SFU to drop a publication, and keep asking for a moment.
+     *
+     * A single attempt that failed used to be logged and forgotten. That is the
+     * quietest bad outcome here: the presenter's own screen says they stopped,
+     * their capture really has stopped, and everybody else keeps a frozen
+     * rectangle. See [unpublishRetryDelayMs] for why it is bounded.
+     */
+    private suspend fun unpublish(room: Room, track: LocalScreencastVideoTrack) {
+        for (attempt in 1..UNPUBLISH_MAX_ATTEMPTS) {
+            val result = runCatching { room.localParticipant.unpublishTrack(track) }
+            if (result.isSuccess) return
+            Log.w(
+                TAG,
+                "could not unpublish the screen (attempt $attempt): ${result.exceptionOrNull()?.message}",
+            )
+            val wait = unpublishRetryDelayMs(attempt)
+            if (wait == 0L) break
+            delay(wait)
+        }
+        Log.w(TAG, "gave up unpublishing the screen; a reconnect republishes from scratch")
+    }
+
     private fun releaseScreenTrack() {
+        screenGuard.invalidate()
+        screenJob?.cancel()
+        screenJob = null
         val track = screenTrack ?: return
         screenTrack = null
         runCatching { track.stop() }
@@ -1119,11 +1204,18 @@ class LiveKitEngine(
         eventsJob = null
         val leaving = room
         val mic = micTrack
+        // Everything in flight is stale before anything is torn down, so a
+        // publish that is mid-await cannot land in a room being disconnected.
+        // This is the promotion case, which is ordinary rather than rare.
+        screenGuard.invalidate()
+        screenJob?.cancel()
+        screenJob = null
         val screen = screenTrack
         room = null
         micTrack = null
         screenTrack = null
-        canPublishScreen = false
+        tokenGrantsScreen = false
+        rosterAllowsScreen = false
         val (showing, oncamera) = synchronized(peerLock) {
             sharingByRoster.clear()
             watchedScreens.clear()

@@ -1151,11 +1151,48 @@ participants and takes the first track whose source is `SCREEN_SHARE`
 pixels under any other source is a share every human in the room can see and no
 watch party can transcode.
 
-**The grant is checked twice, on purpose.** `welcome.canStream` hides the
-button; `VoiceSessionResponse.stream` (what the token actually granted) is
-checked again before the projection is consumed. The two are minted at different
-moments by the same `resolveVoicePublish`, and a permissions edit between them
-would otherwise take somebody's whole screen to discover a refused publish.
+**The token is a ceiling, never a permission.** This is the correction that
+matters most, and it was a moderation bypass before review caught it.
+
+`VoiceSessionResponse.stream` is minted once, at connect, and the SFU token
+carrying it is never re-minted. So when a moderator takes the stage away
+mid-party, the server stops relaying the roster claim and stops the egress, but
+the LiveKit grant this phone is holding stays valid. An engine that remembered
+only that grant let the revoked presenter press share again and go straight back
+on air: the revocation was a suggestion they took once. At a hosted event, where
+the host deciding who broadcasts is the entire point, that is the worst place
+for it.
+
+So publishing needs **both** answers, every time (`canPublishScreenNow`): the
+token's ceiling AND the roster's live answer, which arrives on `welcome` and on
+every `voice-speak-changed` through `VoiceTransport.setCanPublishScreen`, the
+twin of `setCanPublishAudio`. Revoking also takes down a share already running,
+because the moderator's decision has to reach the wire rather than only the
+button. A fresh engine starts out refusing until it has been told, so the
+promotion path cannot hand the stage back to somebody who lost it just because
+the room grew.
+
+Mesh implements that method as a no-op, and that is the difference between the
+transports rather than an omission: a mesh share is a track on peer connections
+this device owns, with no server-side grant to outlive a revocation.
+
+**One publish at a time, and the room never keeps what nobody is driving.**
+Publishing is a capture, a track and an awaited publish, and four ordinary
+things can happen in between: the person stops, the room promotes (at four
+participants, which this client follows, so an engine swap mid-share is a
+Saturday event rather than an edge case), the share is restarted quickly, or the
+old capturer's `onStop` arrives late. Each one used to be able to publish a
+stopped track, publish into a room being disconnected, or tear down the share
+that was working. `ScreenPublishGuard` is a generation counter answering one
+question for all four: is the thing that just finished still the thing we are
+doing. A publish that lands stale is undone rather than left in the room.
+
+**A failed unpublish is retried.** It used to be logged and forgotten, which is
+the quietest bad outcome here: the presenter's UI says they stopped, their
+capture really has stopped, and everybody else keeps a frozen rectangle with no
+way to know it is stale. Bounded and short, because by then the local track is
+already stopped and this is chasing a server-side row, not keeping a feature
+alive.
 
 **Simulcast off, `MAINTAIN_RESOLUTION`, 2 Mbps.** The web publishes a screen the
 same way and for the same reason: the egress transcodes from the published
@@ -1172,7 +1209,11 @@ the host presses the button again instead of watching it disappear for the rest
 of the call.
 
 **What is not verified: any of it, on a device.** No screen has been published
-to a LiveKit room from this code. It compiles, it is shaped like the web's
+to a LiveKit room from this code. The moderation rule, the generation guard and
+the retry policy are pure and tested, and the fact that every permission path
+tells the transport both halves is checked by reading `VoiceController.kt`;
+what none of that proves is the behaviour of a real `MediaProjection`, a real
+SFU and a real moderator pressing the button. It compiles, it is shaped like the web's
 publisher and the LiveKit API it calls was read out of the 2.28.1 bytecode
 rather than from memory, and the pure rules around it are tested. Whether a
 phone's capture actually reaches the SFU, whether the egress finds it, and

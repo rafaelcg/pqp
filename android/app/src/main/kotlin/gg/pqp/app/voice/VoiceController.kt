@@ -848,6 +848,10 @@ class VoiceController(
         // exactly the person who must not be offered the button.
         val canStream = rule.canSpeak && canStreamFrom(frame)
         engine.setCanPublishAudio(rule.canSpeak)
+        // The engine gets told too, and not only the UI. On the SFU the publish
+        // grant lives in a token that outlives a revocation, so the transport
+        // has to hold the live answer or a revoked presenter can publish again.
+        engine.setCanPublishScreen(canStream)
 
         val peers = frame.participants("peers")
         // Written **before** the engine is started, not after. On the SFU path
@@ -959,8 +963,12 @@ class VoiceController(
         peerMedia.clear()
 
         // Before any media is built, exactly as on `welcome`: a fresh engine
-        // starts out allowed, so a listen-only seat has to be told again.
+        // starts out knowing nothing, so both answers have to be told again.
+        // The screen one matters more here than it looks: the new engine mints
+        // a NEW token, and a presenter whose stage was revoked before the
+        // promotion must not get it back because the room grew.
         engine.setCanPublishAudio(_state.value.canSpeak)
+        engine.setCanPublishScreen(_state.value.screenShareSupported)
 
         // Written **before** the engine is started, for the same reason
         // [onWelcome] does it: `LiveKitEngine.start` hands the join to a
@@ -1037,6 +1045,9 @@ class VoiceController(
             notice = rule.notice?.let(::noticeText) ?: _state.value.notice,
         )
         engine.setCanPublishAudio(rule.canSpeak)
+        // The moderation half. Without this the engine keeps the connect-time
+        // token grant and a revoked presenter can start again.
+        engine.setCanPublishScreen(canStream)
         engine.setMuted(_state.value.muted || _state.value.deafened)
         if (rule.mute) pushVoiceState()
     }
