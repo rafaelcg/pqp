@@ -20,29 +20,30 @@ import {
 import { useTranslation } from "@/lib/i18n";
 import {
   chooseHlsEngine,
+  hasHlsViewerToken,
+  hlsSessionKey,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
+  resolveHlsUrl,
+  sameHlsSession,
   setHlsPlaybackStats,
+  shouldAdoptHlsSource,
 } from "@/lib/hls-playback";
 import {
   buildMediaSessionMetadata,
   hasSafariPresentationMode,
+  hlsLivePlayerConfig,
   isBehindLive,
   isPipAvailable,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
-import {
-  hasHlsViewerToken,
-  hlsSessionKey,
-  resolveHlsUrl,
-  sameHlsSession,
-} from "@/lib/hls-playback";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
 import { HlsStallWatch, channelIdFromHlsUrl } from "@/lib/hls-stall";
 import {
   AUTO_HLS_QUALITY,
+  applyHlsQualityLevel,
   describeHlsLevel,
   levelIndexFor,
   offeredHlsLevels,
@@ -70,8 +71,10 @@ interface HlsHandle {
   destroy: () => void;
   liveSyncPosition: number | null;
   media: HTMLMediaElement | null;
-  /** `-1` is Auto. Assigning pins the rendition; hls.js owns it otherwise. */
+  /** `-1` is Auto. Assigning flushes the buffer; use `nextLevel` mid-stream. */
   currentLevel: number;
+  /** `-1` is Auto. Assigning waits for the next segment, no flush. */
+  nextLevel: number;
   levels: HlsLevelLike[];
 }
 
@@ -183,7 +186,13 @@ export function HlsWatchPlayer({
     setQualityOpen(false);
     const hls = hlsRef.current;
     if (hls) {
-      hls.currentLevel = levelIndexFor(hls.levels, next);
+      // Next segment, not a flush. `currentLevel` pauses the picture for
+      // about a second while hls.js dumps the buffer; Auto stays ABR.
+      applyHlsQualityLevel(
+        hls,
+        levelIndexFor(hls.levels, next),
+        "next-fragment",
+      );
     }
   }, []);
 
@@ -208,11 +217,10 @@ export function HlsWatchPlayer({
    */
   const sessionRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = hlsSessionKey(src);
-    if (sessionRef.current !== null && sessionRef.current === key) {
+    if (!shouldAdoptHlsSource(sessionRef.current, src)) {
       return;
     }
-    sessionRef.current = key;
+    sessionRef.current = hlsSessionKey(src);
     setActiveSrc(src);
     setPhase("playing");
     watchRef.current.reset(Date.now());
@@ -258,6 +266,12 @@ export function HlsWatchPlayer({
       setAttempt((n) => n + 1);
     }
   }, [activeSrc]);
+
+  // Held in a ref so the attach effect does not list `reconnect` as a
+  // dependency. That callback's identity changes with `activeSrc`, and a
+  // changing identity tears hls.js down, drops the buffer, and is a stall.
+  const reconnectRef = useRef(reconnect);
+  reconnectRef.current = reconnect;
 
   const retryFromDead = useCallback(() => {
     watchRef.current.reset(Date.now());
@@ -519,7 +533,7 @@ export function HlsWatchPlayer({
         return;
       }
       console.warn(`[hls] stream stalled (${watch.lastReason}), reconnecting`);
-      void reconnect();
+      void reconnectRef.current();
     }, STALL_TICK_MS);
 
     // A refused play() is a paused element behind the "loading" overlay
@@ -564,7 +578,7 @@ export function HlsWatchPlayer({
         return;
       }
       const player = new Hls({
-        liveSyncDurationCount: 3,
+        ...hlsLivePlayerConfig(),
         enableWorker: true,
         // Playlist is written after the first 2 s segment. Retry the
         // initial 404 instead of giving up while egress is still starting.
@@ -637,9 +651,13 @@ export function HlsWatchPlayer({
           // not in it comes back as -1, which is hls.js's own Auto, so a
           // viewer whose rung was refused for budget gets a working player
           // rather than a stuck one.
-          player.currentLevel = levelIndexFor(
-            data.levels as HlsLevelLike[],
-            qualityPrefRef.current,
+          applyHlsQualityLevel(
+            player as unknown as HlsHandle,
+            levelIndexFor(
+              data.levels as HlsLevelLike[],
+              qualityPrefRef.current,
+            ),
+            "immediate",
           );
         }
         void play();
@@ -647,6 +665,10 @@ export function HlsWatchPlayer({
     }
 
     void attach();
+    // `reconnect` lives on reconnectRef: listing it here re-created hls.js
+    // on every restamp of the callback. `videoRef` is a parent object whose
+    // identity must not tear the session down either; the element is always
+    // on innerRef after the callback ref runs.
     return () => {
       cancelled = true;
       window.clearInterval(authTokenTimer);
@@ -662,7 +684,7 @@ export function HlsWatchPlayer({
       video.load();
       setHlsPlaybackStats(null);
     };
-  }, [activeSrc, attempt, videoRef, reconnect]);
+  }, [activeSrc, attempt]);
 
   return (
     <div className={cn("relative h-full w-full bg-black", className)}>

@@ -1,14 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { detectFullscreenMode } from "@/components/voice/capabilities";
 import { attemptElementFullscreen } from "@/components/voice/element-fullscreen";
 import {
   currentFullscreenElement,
   exitDocumentFullscreen,
+  fullscreenDocument,
   requestElementFullscreen,
+  type WebkitFullscreenElement,
 } from "@/components/voice/document-fullscreen";
+import {
+  enterNativeVideoFullscreen,
+  exitNativeVideoFullscreen,
+  videoSupportsNativeFullscreen,
+} from "@/lib/fullscreen";
 
 /**
  * Fullscreen for a watch party, and the reason it is the PANE rather than the
- * video.
+ * video on desktop.
  *
  * A watch party is a film. People watch films fullscreen, on a laptop, for two
  * hours, and until now there was no way to: the HLS player carried a fit
@@ -17,11 +25,12 @@ import {
  * sidebar and a chat column. Rafael, watching one: "i dont think i can make it
  * full screen as a viewer".
  *
- * THE OBVIOUS FIX IS THE WRONG ONE. `video.requestFullscreen()` takes the
- * screen and leaves everything else behind, and in a watch party what is left
- * behind is the room talking about the film. Element fullscreen renders only
- * the fullscreen element's subtree, so a fullscreen `<video>` is a film with
- * no chat, no reactions and no way to reach either without leaving.
+ * THE OBVIOUS FIX IS THE WRONG ONE ON DESKTOP. `video.requestFullscreen()`
+ * takes the screen and leaves everything else behind, and in a watch party
+ * what is left behind is the room talking about the film. Element fullscreen
+ * renders only the fullscreen element's subtree, so a fullscreen `<video>` is
+ * a film with no chat, no reactions and no way to reach either without
+ * leaving.
  *
  * So the target is the SPLIT PANE (`[data-call-split]`), which already holds
  * the stage, the divider and the transcript in the arrangement this person
@@ -30,20 +39,50 @@ import {
  * wants nothing but the film puts the chat away and gets exactly that. Nothing
  * new to learn, and one less layout to maintain.
  *
- * THE FALLBACK IS THE SAME ONE THE CALL STAGE USES. `attemptElementFullscreen`
- * exists because an Electron shell can refuse a request without resolving,
- * rejecting or firing an event; a caller that gets `false` back still owes the
- * person a filled viewport, so this falls back to an in-page `expand` that
- * covers the window with CSS. `expand` is also where an iPhone lands, which
- * has no element fullscreen at all.
+ * IPHONE HAS NO ELEMENT FULLSCREEN. The in-page `expand` fallback is what the
+ * call stage uses because `webkitEnterFullscreen` on a MediaStream showed
+ * black. A watch party is HLS, not a MediaStream: the native player can
+ * actually show this picture, and a working film-only fullscreen beats a
+ * broken expand that never covers the Safari viewport. Desktop and Electron
+ * still take the pane.
  */
-export type WatchFullscreenMode = "off" | "element" | "expand";
+
+export type WatchFullscreenMode = "off" | "element" | "expand" | "video";
+
+export type WatchFullscreenPath = "element" | "video" | "expand";
 
 export interface WatchFullscreen {
   mode: WatchFullscreenMode;
   active: boolean;
   toggle: () => void;
   exit: () => void;
+}
+
+/**
+ * Which fullscreen path a watch party should take. Pure, so an iPhone and a
+ * laptop can be reproduced in a Node test rather than only on the device.
+ *
+ * Element fullscreen wins wherever it exists (desktop, Android, iPad,
+ * Electron that honours the permission): that is the pane, with the chat.
+ * iPhone has none, and there the native player is the one path that hides
+ * Safari's chrome. Expand is the floor: Electron after a silent refusal,
+ * or a browser with neither API.
+ */
+export function chooseWatchFullscreenPath(probe: {
+  elementFullscreen: boolean;
+  videoNativeFullscreen: boolean;
+  elementPreviouslyRefused?: boolean;
+}): WatchFullscreenPath {
+  if (probe.elementPreviouslyRefused) {
+    return probe.videoNativeFullscreen ? "video" : "expand";
+  }
+  if (probe.elementFullscreen) {
+    return "element";
+  }
+  if (probe.videoNativeFullscreen) {
+    return "video";
+  }
+  return "expand";
 }
 
 /**
@@ -64,6 +103,7 @@ export function useWatchFullscreen(
    * and the state never clears. Same reasoning as `call-stage.tsx`.
    */
   const refusedRef = useRef(false);
+  const nativeFilmUnbindRef = useRef<(() => void) | null>(null);
 
   const paneOf = useCallback((): HTMLElement | null => {
     const anchor = targetRef.current;
@@ -72,6 +112,29 @@ export function useWatchFullscreen(
     }
     return anchor.closest<HTMLElement>("[data-call-split]") ?? anchor;
   }, [targetRef]);
+
+  const filmOf = useCallback((): HTMLVideoElement | null => {
+    const root = targetRef.current ?? paneOf();
+    return root?.querySelector("video") ?? null;
+  }, [paneOf, targetRef]);
+
+  const listenToNativeFilm = useCallback((film: HTMLVideoElement) => {
+    nativeFilmUnbindRef.current?.();
+    const onBegin = () => setMode("video");
+    const onEnd = () => {
+      setMode((was) => (was === "video" ? "off" : was));
+    };
+    film.addEventListener("webkitbeginfullscreen", onBegin);
+    film.addEventListener("webkitendfullscreen", onEnd);
+    nativeFilmUnbindRef.current = () => {
+      film.removeEventListener("webkitbeginfullscreen", onBegin);
+      film.removeEventListener("webkitendfullscreen", onEnd);
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => nativeFilmUnbindRef.current?.();
+  }, []);
 
   // The browser is the authority on element fullscreen: Escape, the window
   // chrome and the platform's own gestures all exit without asking us.
@@ -117,8 +180,16 @@ export function useWatchFullscreen(
       });
       return;
     }
+    if (mode === "video") {
+      const film = filmOf();
+      if (film) {
+        exitNativeVideoFullscreen(film);
+      }
+      setMode("off");
+      return;
+    }
     setMode("off");
-  }, [mode]);
+  }, [filmOf, mode]);
 
   const toggle = useCallback(() => {
     if (mode !== "off") {
@@ -129,24 +200,65 @@ export function useWatchFullscreen(
     if (!pane) {
       return;
     }
-    if (refusedRef.current) {
+    const film = filmOf();
+    const doc = fullscreenDocument();
+    const path = chooseWatchFullscreenPath({
+      elementFullscreen:
+        detectFullscreenMode({
+          documentFullscreenEnabled:
+            doc.fullscreenEnabled ?? doc.webkitFullscreenEnabled,
+          requestFullscreen: pane.requestFullscreen,
+          webkitRequestFullscreen: (pane as WebkitFullscreenElement)
+            .webkitRequestFullscreen,
+        }) === "element",
+      videoNativeFullscreen: videoSupportsNativeFullscreen(film),
+      elementPreviouslyRefused: refusedRef.current,
+    });
+
+    if (path === "video") {
+      if (!film) {
+        setMode("expand");
+        return;
+      }
+      // MUST stay synchronous: iOS consumes the user gesture across an
+      // await, and `webkitEnterFullscreen` after the element-fullscreen
+      // grace period is a dead button.
+      try {
+        listenToNativeFilm(film);
+        enterNativeVideoFullscreen(film);
+        setMode("video");
+      } catch (error) {
+        console.warn("[watch] native video fullscreen refused", error);
+        setMode("expand");
+      }
+      return;
+    }
+
+    if (path === "expand") {
       setMode("expand");
       return;
     }
+
     void attemptElementFullscreen({
       request: () => requestElementFullscreen(pane),
       isActive: () => currentFullscreenElement() === pane,
       onRefusal: (error) => console.warn("[watch] fullscreen refused", error),
-    }).then((entered) => {
-      if (entered) {
-        setMode("element");
-        return;
-      }
-      console.warn("[watch] element fullscreen unavailable; expanding in page");
-      refusedRef.current = true;
-      setMode("expand");
-    });
-  }, [exit, mode, paneOf]);
+    })
+      .then((entered) => {
+        if (entered) {
+          setMode("element");
+          return;
+        }
+        console.warn("[watch] element fullscreen unavailable; expanding in page");
+        refusedRef.current = true;
+        setMode("expand");
+      })
+      .catch((error: unknown) => {
+        console.warn("[watch] fullscreen refused", error);
+        refusedRef.current = true;
+        setMode("expand");
+      });
+  }, [exit, filmOf, listenToNativeFilm, mode, paneOf]);
 
   // THE IN-PAGE FALLBACK IS A CLASS ON THE PANE, SET FROM HERE.
   //
