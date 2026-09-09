@@ -17,6 +17,7 @@ import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.core.VoiceParticipant
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -131,6 +132,32 @@ enum class Refusal {
     ScreenShareDenied,
 
     /**
+     * The server said no to the join, in as many words.
+     *
+     * Rare, because `voice-join-refused` is only sent in answer to a join that
+     * carried a `resumePeerId` and this client never sends one. Handled all
+     * the same: the branch costs a line, it turns a twelve second wait into an
+     * immediate answer the day the server starts sending it on a cold join,
+     * and the alternative is a frame this client can see arriving and chooses
+     * to sit through. [JoinTimedOut] is the backstop that covers every refusal
+     * that says nothing at all, which today is all of them.
+     */
+    JoinRefused,
+
+    /**
+     * The join went out and nothing came back inside [VOICE_JOIN_TIMEOUT_MS].
+     *
+     * THE FAILURE THIS ENDS. Most of the ways a join is refused send no frame
+     * at all: `refuseResume()` in `server/src/ws/voice.ts` answers only a join
+     * that asked to resume. So a timed-out account, a lost CONNECT bit, a
+     * blocked DM, a channel that went away, a watch party viewer asking for a
+     * seat, and an ordinary dropped packet all looked the same on this phone,
+     * and what they looked like was a call bar that said Conectando until the
+     * app was killed. There is no state in which that is the right answer.
+     */
+    JoinTimedOut,
+
+    /**
      * The room's transport is one this client speaks, and the media leg still
      * did not come up.
      *
@@ -206,6 +233,15 @@ class VoiceController(
      * longer shares.
      */
     private val rosterTracker = VoiceRosterTracker()
+
+    /**
+     * Whether the join this device is waiting on is still the one it wants.
+     *
+     * `join-voice-room` has no acknowledgement and most refusals send no frame
+     * at all, so without a deadline a refused join is a spinner forever. See
+     * [JoinWatchdog] for the whole argument.
+     */
+    private val joinWatchdog = JoinWatchdog()
 
     /**
      * The media half of the current call, and it changes with the room.
@@ -459,6 +495,15 @@ class VoiceController(
         // notification is killed within a minute regardless of version.
         VoiceService.start(context)
 
+        // Armed before the frame goes out rather than after, because the ICE
+        // fetch below is on this path and a `/api/ice-servers` that hangs is
+        // one of the ways a join never happens.
+        val ticket = joinWatchdog.arm(channelId)
+        scope.launch {
+            delay(VOICE_JOIN_TIMEOUT_MS)
+            joinWatchdog.claim(ticket)?.let { onJoinTimedOut(it) }
+        }
+
         scope.launch {
             pendingIce = resolveIceServers()
             session.realtime.send(
@@ -520,6 +565,7 @@ class VoiceController(
      * orphan window expires.
      */
     fun leave() {
+        joinWatchdog.settled()
         wantedChannel = null
         needsRejoin = false
         if (_state.value.channelId != null) {
@@ -560,9 +606,41 @@ class VoiceController(
      * with a sentence about it, which is what [Refusal.VoiceBackendUnreachable]
      * carries to the snackbar.
      */
+    /**
+     * The join went out and the server never answered.
+     *
+     * ENDS THE ATTEMPT RATHER THAN RETRYING IT. A retry would be guessing that
+     * the cause was transient, and the likeliest causes are not: a refusal
+     * this client cannot see, a timeout, a seat in a watch party that is not
+     * this account's to take. A person told what happened can tap the button
+     * again in one gesture; a phone retrying a refusal in a loop cannot be
+     * told to stop.
+     *
+     * `leave-voice-room` goes out first, because "nothing came back" does not
+     * mean "the server never saw it": a `welcome` lost on the way here leaves
+     * a seat on everybody else's roster, and this is the only chance to
+     * release it. The HTTP beacon is not usable, since it needs a resume token
+     * that only `welcome` carries.
+     */
+    private fun onJoinTimedOut(channelId: String) {
+        if (_state.value.channelId != channelId || !_state.value.isActive) return
+        Log.w(TAG, "join timed out after ${VOICE_JOIN_TIMEOUT_MS}ms in $channelId")
+        wantedChannel = null
+        needsRejoin = false
+        session.realtime.send(buildJsonObject { put("type", "leave-voice-room") })
+        teardown()
+        _state.value = VoiceState(
+            stage = VoiceStage.Refused,
+            refusal = Refusal.JoinTimedOut,
+            muted = _state.value.muted,
+            speakerphone = _state.value.speakerphone,
+        )
+    }
+
     private fun onVoiceBackendUnreachable(reason: String) {
         if (!_state.value.isActive) return
         Log.w(TAG, "voice backend unreachable: $reason")
+        joinWatchdog.settled()
         wantedChannel = null
         needsRejoin = false
         val sent = session.realtime.send(buildJsonObject { put("type", "leave-voice-room") })
@@ -724,6 +802,7 @@ class VoiceController(
                 "voice-speak-changed" -> onSpeakChanged(frame)
                 "voice-room-full" -> onRefused(frame, Refusal.RoomFull)
                 "voice-transport-unsupported" -> onRefused(frame, Refusal.TransportUnsupported)
+                "voice-join-refused" -> onRefused(frame, Refusal.JoinRefused)
                 "voice-transport-changed" -> onTransportChanged(frame)
                 "screen-share-denied" -> onScreenShareDenied(frame)
                 "voice-moderation" -> onModeration(frame)
@@ -789,6 +868,10 @@ class VoiceController(
      * can rebuild the call.
      */
     private fun holdForRejoin() {
+        // The attempt this deadline belongs to is over; `enter()` arms a fresh
+        // one when the socket comes back. Without this the old deadline fires
+        // during the rebuild and refuses a call nobody refused.
+        joinWatchdog.settled()
         needsRejoin = true
         engine.stop()
         // The seat is gone with the socket, so the resume identity it was
@@ -820,6 +903,12 @@ class VoiceController(
     private fun onWelcome(frame: JsonObject) {
         val channelId = frame.str("voiceChannelId") ?: return
         if (channelId != _state.value.channelId) return
+
+        // The server answered, so the deadline is over whatever it goes on to
+        // say. Cleared before the transport check below rather than after,
+        // because that branch refuses the join and a deadline still armed
+        // would refuse it a second time twelve seconds later.
+        joinWatchdog.settled()
 
         // Binding, not advisory. The server pins a room's transport for the
         // room's lifetime, so this is what the call runs on or the call does
@@ -1204,6 +1293,7 @@ class VoiceController(
 
     private fun onRefused(frame: JsonObject, refusal: Refusal) {
         if (frame.str("voiceChannelId") != _state.value.channelId) return
+        joinWatchdog.settled()
         wantedChannel = null
         needsRejoin = false
         teardown()

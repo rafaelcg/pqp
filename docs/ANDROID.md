@@ -1343,8 +1343,10 @@ exemption is for a *call*; a film does not get one.
 An `AO VIVO` pill on the channel row, so a person scrolling the list can find
 the party. Opening the channel puts a 16:9 player above the transcript with the
 audience count and the delay under it, and a tap on the corner takes it full
-screen. Joining the call is the same separate button in the app bar it always
-was, which is the point: watching is one tap and costs nobody a seat.
+screen. Watching is one tap, costs nobody a seat, and is the whole offer on
+this screen for anybody who is not running the party: the join button in the
+app bar is drawn only for somebody who may actually have a seat. See "The seat,
+and who is offered one" below.
 
 The pane draws **nothing** on a voice channel with no watch party. Not a
 placeholder, not an apology for a stream that was never running.
@@ -1396,14 +1398,101 @@ Also untested: a real phone on mobile data with the screen off, because an
 emulator's lifecycle and network are not a phone's. Say so rather than
 reporting green.
 
+### The seat, and who is offered one
+
+A watch party's audience is seatless, and until this the phone enforced that on
+the way **out** and not on the way **in**. `Channel.isVoice` answers true for
+`watch_party` as well as `voice`, so `chat.joinVoice` in the app bar was drawn
+for a watch party: a green button putting a viewer on the media box for
+something the pane right above it plays for free. At five hundred viewers that
+is the exact cost the HLS path exists to avoid. The web stopped offering it in
+#436; this client had not followed.
+
+**It could not be a blanket removal.** The host is the reason the screen-share
+work exists, and the phone could not tell a host from a viewer before joining:
+`welcome.canStream` is the answer and `welcome` only arrives once the seat is
+already taken.
+
+`watch-party-update` is what closes that, and it is why the frame came off the
+deliberately-ignored list. It carries `viewerRole`, resolved **per recipient**
+by the server, and `catchUpWatchParties` sends one at socket auth for every
+active party this account may see, so the answer is here before anybody can tap
+anything. `stage.invited` rides along and is public on the wire (who is UP is
+public, who is ASKING is not), so an invited guest recognises themselves with no
+second request.
+
+The rule itself is `mayTakeWatchPartySeat` in
+`android/.../watch/WatchPartySeat.kt`, a transcription of the function of the
+same name in `packages/shared/src/watch-party-session.ts`: the one the server
+refuses `join-voice-room` with, and the one the web panel draws from. Three
+implementations of a permission rule is how they drift, so this one is meant to
+read as a copy: same name, same terms, same order. Who is let in: the host and
+co-hosts by name, anybody invited up to speak, and everybody once a host turns
+voice on. A channel with **no active party is not a closed room** and joins like
+the ordinary voice room it is.
+
+Two things it gets deliberately wrong, both stated rather than hidden:
+
+- **`canStartWatchParty` is always false here.** The phone models no permission
+  bits. Staff who hold `START_WATCH_PARTY` and are neither the host nor a
+  co-host of the party currently running see no join button while it runs. A tap
+  they never get is a smaller failure than a seat sold to five hundred viewers,
+  and the parameter is kept so wiring a real answer in later is one line.
+- **A `draft` party is invisible to a viewer**, so the phone sees no party and
+  offers the button, and the server refuses. That is not new and the web has the
+  same blind spot; what makes it survivable is the deadline below, which turns
+  it into a sentence instead of a spinner.
+
+**`voiceEnabled` arrives with the change that turns voice off by default.** A
+server that has never heard of it sends no such key, and it ran watch parties as
+ordinary voice rooms, so the decoder reads an absent key as **on**
+(`LEGACY_VOICE_ENABLED`). Reading it as off would hide the button on exactly the
+servers that would have honoured the join, which is the mirror of the bug being
+fixed. Pinned by `a party from a server that has never heard of voiceEnabled
+reads as voice on`.
+
+### A join that is refused now says so
+
+`join-voice-room` has no acknowledgement, and **most refusals send no frame at
+all**: `refuseResume()` in `server/src/ws/voice.ts` sends `voice-join-refused`
+only when the join carried a `resumePeerId`, and this client never sends one. So
+a timed-out account, a lost CONNECT bit, a blocked DM, a channel that went away,
+a seat in a watch party that is not yours, and an ordinary dropped packet all
+produced the same thing here: silence, and a call bar reading `Entrando…` until
+somebody killed the app.
+
+`JoinWatchdog` ends every one of them. Twelve seconds, the same
+`JOIN_TIMEOUT_MS` the web client uses and asserted against that file so the two
+cannot drift. It covers the socket leg only; the media leg after `welcome` keeps
+its own 45 s deadline inside `LiveKitEngine`, which ends in
+`Refusal.VoiceBackendUnreachable`. On expiry the app sends `leave-voice-room`
+first, because "nothing came back" is not "the server never saw it" and a lost
+`welcome` leaves a seat on everybody's roster; then it stops and says *Não deu
+para entrar na call. Tenta de novo.*
+
+It does not retry. The likeliest causes are not transient, and a person told
+what happened taps the button again in one gesture, while a phone retrying a
+refusal in a loop cannot be told to stop.
+
+The generation counter is the whole of the correctness argument: a socket drop
+rebuilds the call from scratch, so a second `enter` happens while the first
+attempt's deadline is still asleep, and firing it would hang up the room that
+had just come back. `claim` is one-shot for the same reason a refusal must not
+be delivered twice.
+
+`voice-join-refused` is handled as well, and came off the ignore list with it.
+It is a floor rather than a live path today, and it turns a twelve second wait
+into an immediate answer the day the server starts answering a cold join.
+
 ### Still not done
 
 - **Sending a screen on the SFU.** See the section above; the button is still
   hidden on a LiveKit room, which is the transport every watch party runs on.
   A host cannot present from Android yet.
-- **The watch party *event*.** `watch-party` and `watch-party-update` are still
-  on the ignore list: the phone draws the stream, not the party's name, host,
-  co-hosts or state machine, and has no create surface.
+- **The watch party *event*, as a surface.** `watch-party-update` is read now,
+  but only for `viewerRole` and `options` (see below); `watch-party` is still
+  ignored. The phone draws the stream, not the party's name, host, co-hosts or
+  state machine, and has no create surface.
 - **Picture in picture**, and playing on with the screen off. Both want a media
   session and a service, which is a different piece of work with its own
   battery argument.

@@ -182,6 +182,8 @@
     <string name="voice_notification_hang_up">Hang up</string>
     <string name="voice_transport_unsupported">This call runs on a server this app cannot join yet.</string>
     <string name="voice_backend_unreachable">Could not reach the voice server for this call.</string>
+    <string name="voice_join_refused">You cannot join this call.</string>
+    <string name="voice_join_timeout">Could not join the call. Try again.</string>
     <string name="voice_participants">%1$d in this call</string>
     <string name="voice_peer_unreachable">Cannot reach everyone in this call</string>
     <string name="voice_notification_sharing">Sharing your screen</string>
