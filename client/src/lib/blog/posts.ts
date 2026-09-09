@@ -64,6 +64,19 @@ export interface BlogPost {
  */
 export const POSTS: readonly BlogPost[] = [
   {
+    slug: "automod-e-esconder-o-chat",
+    date: "2026-09-09",
+    title: {
+      "pt-BR": "AutoMod, e esconder o chat na call",
+      en: "AutoMod, and hiding the chat on a call",
+    },
+    summary: {
+      "pt-BR":
+        "AutoMod em Config da comunidade: palavras bloqueadas, convites do Discord e spam de menção, checados antes da mensagem entrar. Esconder o chat na call, e o chat com tamanho e layout.",
+      en: "AutoMod in Community settings: blocked words, Discord invites and mention spam, checked before a message lands. Hide the chat on a call, and chat with a size and a layout.",
+    },
+  },
+  {
     slug: "watch-party-e-o-aa",
     date: "2026-09-07",
     title: {

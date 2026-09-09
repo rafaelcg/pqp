@@ -418,7 +418,13 @@ describeDb("automod", () => {
     );
     expect(alert.rows).toHaveLength(1);
     expect(alert.rows[0]!.webhook_username).toBe("AutoMod");
-    expect(JSON.stringify(alert.rows[0]!.webhook_embeds)).toContain("golpe aqui");
+    const embed = JSON.stringify(alert.rows[0]!.webhook_embeds);
+    expect(embed).toContain("golpe aqui");
+    // The alert is a stored message read by Brazilian staff, so it is written
+    // in PT-BR rather than in the API's own English.
+    expect(embed).toContain("O AutoMod bloqueou uma mensagem");
+    expect(embed).toContain("Palavras bloqueadas");
+    expect(embed).not.toMatch(/Blocked words|"Rule"|"Matched"/);
 
     // Both rows are the AutoMod pseudo-user's, so the log names it rather
     // than rendering a null actor as a departed account.

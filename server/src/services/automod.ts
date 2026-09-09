@@ -354,10 +354,16 @@ export interface AutomodHitEffects {
 }
 
 function describeMinutes(minutes: number): string {
-  if (minutes % 10080 === 0) return `${minutes / 10080}w`;
-  if (minutes % 1440 === 0) return `${minutes / 1440}d`;
-  if (minutes % 60 === 0) return `${minutes / 60}h`;
-  return `${minutes}m`;
+  if (minutes % 10080 === 0) {
+    const weeks = minutes / 10080;
+    return weeks === 1 ? "1 semana" : `${weeks} semanas`;
+  }
+  if (minutes % 1440 === 0) {
+    const days = minutes / 1440;
+    return days === 1 ? "1 dia" : `${days} dias`;
+  }
+  if (minutes % 60 === 0) return `${minutes / 60} h`;
+  return `${minutes} min`;
 }
 
 /**
@@ -445,20 +451,20 @@ export async function recordAutomodHit(
       const tag =
         who?.username && who.discriminator
           ? `${who.username}#${who.discriminator}`
-          : (who?.display_name ?? "a member");
+          : (who?.display_name ?? "um membro");
       const now = new Date();
       const embed = {
-        title: `AutoMod blocked a message`,
+        title: "O AutoMod bloqueou uma mensagem",
         color: 0xe5484d,
         fields: [
-          { name: "Rule", value: AUTOMOD_KIND_LABEL[verdict.kind], inline: true },
-          { name: "Member", value: tag, inline: true },
-          { name: "Channel", value: who?.name ? `#${who.name}` : input.channelId, inline: true },
-          { name: "Matched", value: verdict.matched.slice(0, 1024), inline: true },
+          { name: "Regra", value: AUTOMOD_KIND_LABEL[verdict.kind], inline: true },
+          { name: "Membro", value: tag, inline: true },
+          { name: "Canal", value: who?.name ? `#${who.name}` : input.channelId, inline: true },
+          { name: "Pegou", value: verdict.matched.slice(0, 1024), inline: true },
           ...(effects.timeout
             ? [{ name: "Timeout", value: describeMinutes(rule.timeoutMinutes), inline: true }]
             : []),
-          { name: "Message", value: input.body.slice(0, 1024) },
+          { name: "Mensagem", value: input.body.slice(0, 1024) },
         ],
         timestamp: now.toISOString(),
       };

@@ -130,11 +130,15 @@ export interface AutomodVerdict {
   customMessage?: string;
 }
 
-/** Which rule kind a verdict names, as copy the alert can print. */
+/**
+ * Which rule kind a verdict names, as copy the alert and the audit reason can
+ * print. PT-BR, the same words the settings UI uses: the alert is a stored
+ * message, so the server picks one language and the product's is Portuguese.
+ */
 export const AUTOMOD_KIND_LABEL: Record<AutomodRuleKind, string> = {
-  keywords: "Blocked words",
-  invite_links: "Discord invite links",
-  mention_spam: "Mention spam",
+  keywords: "Palavras bloqueadas",
+  invite_links: "Convites do Discord",
+  mention_spam: "Spam de menção",
 };
 
 // ---------------------------------------------------------------------------
