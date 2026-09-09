@@ -28,6 +28,8 @@ import {
 } from "@/components/watch-party/watch-party-cohosts";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { Dialog, DialogBody } from "@/components/ui/dialog";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { FeatureHint } from "@/components/layout/feature-hint";
 import { LivePill } from "@/components/watch-party/live-pill";
@@ -138,10 +140,44 @@ export interface WatchPartyPanelProps {
    * split, and it is the only half that reports a shape.
    */
   slot?: "chrome" | "surface";
+  /**
+   * The split pane owns this surface's height, so stop sizing to the window.
+   *
+   * THE SAME PROP `WatchChannelStage` AND `CallStage` ALREADY TAKE, and the
+   * bug it fixes is that this component was the only stage in the slot that
+   * never got it. Every pane-filling surface here was `h-[68svh] shrink-0`: a
+   * fraction of the WINDOW, fixed, inside a pane whose height is the window
+   * minus the chrome above it. With both panes drawn that is close enough to
+   * look deliberate. Collapse the chat and the pane hands the stage slot the
+   * whole 803px of an 819px pane while this surface keeps insisting it is 612,
+   * so a host who hid the chat got their preview, the go-live bar stranded in
+   * the middle of the screen, and a 191px band of empty pane below it with the
+   * restore strip at the bottom of it. Reported from production on 12 Sep
+   * 2026: "hid the chat and got this bugged UI".
+   *
+   * Two sources of truth for one height, and the pane's is the correct one:
+   * only the pane has measured itself. So this follows it, exactly the way the
+   * other two stages in the same slot always have.
+   */
+  fill?: boolean;
   /** First time this host has reached a setup surface. */
   showHostHint?: boolean;
   /** First time this person has watched a live party. */
   showViewerHint?: boolean;
+}
+
+/**
+ * How a pane-filling surface sizes itself: the pane's number when the pane has
+ * one, its own old window fraction when it does not.
+ *
+ * Written once because there are four of these (empty, setup, scheduled, the
+ * live waiting placeholder) and the whole defect was one of them disagreeing
+ * with the pane. `h-full min-h-0` is character for character what
+ * `call-stage.tsx` and `watch-stage.tsx` use, so all three stages in the slot
+ * answer the pane the same way.
+ */
+function surfaceHeight(fill: boolean | undefined, floor: string): string {
+  return fill ? "h-full min-h-0 flex-1" : `${floor} shrink-0`;
 }
 
 export function WatchPartyPanel(props: WatchPartyPanelProps) {
@@ -265,7 +301,10 @@ function EmptyStage(props: WatchPartyPanelProps) {
   return (
     <div
       data-testid="watch-party-empty"
-      className="flex shrink-0 flex-col items-center justify-center gap-2 border-b border-ink-4/60 bg-ink px-6 py-8 text-center"
+      className={cn(
+        "flex flex-col items-center justify-center gap-2 overflow-hidden border-b border-ink-4/60 bg-ink px-6 py-8 text-center",
+        surfaceHeight(props.fill, "min-h-0"),
+      )}
     >
       <span className="flex h-11 w-11 items-center justify-center rounded-full bg-ink-3 text-paper-muted">
         <Clapperboard className="h-5 w-5" aria-hidden />
@@ -375,7 +414,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   return (
     <div
       data-testid="watch-party-setup"
-      className="relative flex h-[68svh] min-h-[320px] shrink-0 flex-col overflow-hidden border-b border-ink-4/60 bg-ink"
+      className={cn(
+        "relative flex flex-col overflow-hidden border-b border-ink-4/60 bg-ink",
+        surfaceHeight(props.fill, "h-[68svh] min-h-[320px]"),
+      )}
     >
       <div className="flex min-h-0 flex-1">
         <div className="relative min-w-0 flex-1 bg-black">
@@ -405,7 +447,23 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
               )}
             </div>
           )}
-          <span className="pointer-events-none absolute left-2 top-2 rounded bg-ink/80 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-paper-muted">
+          {/* NOT A CAPTION. A HOST READ THE OLD ONE AND SAID "im live".
+              This used to be 10px uppercase grey in the corner of the
+              preview, which is the visual language of a watermark, and on
+              12 Sep 2026 a host on production announced he was live to a
+              room while the server reported `sharingScreen: 0` and no
+              transcode running. He had picked a window, he could see his own
+              picture, and the only thing telling him it was going nowhere
+              was that badge.
+              So it says what state this is, in a sentence, in the warning
+              tone this app uses for "careful", with a dot that reads as a
+              status light and never as decoration. It is deliberately the
+              same shape as the LIVE pill it is the opposite of. */}
+          <span
+            data-testid="watch-party-preview-state"
+            className="pointer-events-none absolute left-3 top-3 flex items-center gap-1.5 rounded-full border border-warning/40 bg-surface-0/90 px-2.5 py-1 text-xs font-semibold text-warning"
+          >
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
             {t("watchParty.setup.heading")}
           </span>
           {stream && (
@@ -421,48 +479,96 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           )}
         </div>
 
-        <aside className="hidden w-72 shrink-0 flex-col gap-3 overflow-y-auto border-l border-ink-4/60 p-3 sm:flex">
-          <p className="text-xs text-paper-muted">{t("watchParty.setup.body")}</p>
-          <label className="block text-xs text-paper-muted">
-            <span className="mb-1 block">{t("watchParty.setup.nameLabel")}</span>
-            <input
-              type="text"
-              maxLength={120}
-              className="w-full rounded-md border border-ink-4 bg-ink-3 px-2 py-1.5 text-sm text-paper"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              onBlur={() => {
-                const next = name.trim();
-                if (next.length > 0 && next !== party.name) {
-                  void props.onRename(next);
-                }
-              }}
-              data-watch-party-name
-            />
-          </label>
+        {/* THE INTRO PARAGRAPH IS GONE. It said "pick what you are going to
+            share, check it here and go live when it looks right", which is
+            what the not-live bar below now says with the button that does it
+            attached. Two instructional paragraphs on one screen is one too
+            many, and the one that cost the column 44px was the one nobody
+            was reading: it pushed the co-host list past the bottom of the
+            aside, which is where the host's screenshot showed it cut off
+            mid-row. */}
+        <aside className="hidden w-72 shrink-0 border-l border-ink-4/60 sm:block">
+          {/* A REAL SCROLLBAR, because this column scrolls and macOS draws
+              overlay scrollbars, so it showed a row cut in half and nothing
+              at all to say why. `ScrollArea` with `type="always"` is the
+              primitive `docs/DESIGN.md` names for exactly this: a native
+              scrollbar here draws OS chrome over the design, and no
+              scrollbar reads as a broken list. */}
+          <ScrollArea
+            type="always"
+            // The thumb's default `surface-2` is nearly invisible against
+            // this surface's `surface-0`, and an invisible scrollbar is the
+            // thing being fixed. Local, so no other scroller moves.
+            className="h-full [&_[data-radix-scroll-area-thumb]]:bg-surface-3"
+          >
+            <div className="flex flex-col gap-3 p-3">
+              <label className="block text-xs text-paper-muted">
+                <span className="mb-1 block">{t("watchParty.setup.nameLabel")}</span>
+                <input
+                  type="text"
+                  maxLength={120}
+                  className="w-full rounded-md border border-ink-4 bg-ink-3 px-2 py-1.5 text-sm text-paper"
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                  onBlur={() => {
+                    const next = name.trim();
+                    if (next.length > 0 && next !== party.name) {
+                      void props.onRename(next);
+                    }
+                  }}
+                  data-watch-party-name
+                />
+              </label>
 
-          <p className="mt-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-            {t("watchParty.options.title")}
-          </p>
-          <WatchPartyOptionsPanel
-            options={party.options}
-            live={false}
-            audienceCount={props.audienceCount}
-            onChange={(patch) => void props.onOptionsChange(patch)}
-          />
+              <p className="mt-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                {t("watchParty.options.title")}
+              </p>
+              <WatchPartyOptionsPanel
+                options={party.options}
+                audienceCount={props.audienceCount}
+                onChange={(patch) => void props.onOptionsChange(patch)}
+              />
 
-          {/* BEFORE Ir ao vivo is where this belongs. A host who names a
-              backup here has one for the whole show; a host who only finds
-              this control after their own connection has already died has
-              nothing. */}
-          {cohostSection(props, party, "mt-1 border-t border-ink-4/60 pt-3")}
+              {/* BEFORE Ir ao vivo is where this belongs. A host who names a
+                  backup here has one for the whole show; a host who only finds
+                  this control after their own connection has already died has
+                  nothing. */}
+              {cohostSection(props, party, "mt-1 border-t border-ink-4/60 pt-3")}
+            </div>
+          </ScrollArea>
         </aside>
       </div>
 
-      <div className="flex shrink-0 flex-col gap-2 border-t border-ink-4/60 px-3 py-2.5 sm:flex-row sm:items-center">
-        <p className="min-w-0 flex-1 text-[11px] text-paper-muted">
-          {t("watchParty.setup.goLiveHint")}
-        </p>
+      {/* A STATE BAR, NOT A FOOTER, and that is the whole of the third fix.
+          A host on production picked a window, watched his own preview and
+          told a room he was live while nothing at all was being sent. The
+          controls were here already; what was missing was anything that said
+          what state he was in. So the bar leads with the state in words, in
+          the warning tone, and the button that changes it sits at the end of
+          that sentence rather than at the bottom of a form.
+
+          IT IS ALWAYS THE LAST THING IN THE PANE. `shrink-0` under a row that
+          is `min-h-0 flex-1`, inside a surface that now takes its height from
+          the pane (`fill`). However long the options column and the co-host
+          list get, they scroll inside the row above; this never moves and
+          never needs scrolling to. That is the other half of the same
+          report: the host's screenshot only showed Ir ao vivo after
+          scrolling, under a co-host list long enough to push it away. */}
+      <div
+        data-testid="watch-party-not-live"
+        className="flex shrink-0 flex-col gap-2 border-t border-warning/30 bg-warning/10 px-3 py-2.5 sm:flex-row sm:items-center"
+      >
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="h-2 w-2 shrink-0 rounded-full bg-warning" />
+          <p className="min-w-0 text-xs">
+            <span className="font-semibold text-warning">
+              {t("watchParty.setup.notLive")}
+            </span>{" "}
+            <span className="text-text-tertiary">
+              {t("watchParty.setup.goLiveHint")}
+            </span>
+          </p>
+        </div>
         <div className="flex shrink-0 items-center gap-2">
           <Button
             type="button"
@@ -525,7 +631,10 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   return (
     <div
       data-testid="watch-party-scheduled"
-      className="flex shrink-0 flex-col items-center justify-center gap-2 border-b border-ink-4/60 bg-ink px-6 py-8 text-center"
+      className={cn(
+        "flex flex-col items-center justify-center gap-2 overflow-hidden border-b border-ink-4/60 bg-ink px-6 py-8 text-center",
+        surfaceHeight(props.fill, "min-h-0"),
+      )}
     >
       <PartyIdentity party={party} />
       <p className="text-xs text-paper-muted">
@@ -753,26 +862,48 @@ function LiveSurface(
     />
   );
 
-  const optionsDrawer = runsTheShow && optionsOpen && (
-    <div
-      data-testid="watch-party-options-drawer"
-      className="shrink-0 border-b border-ink-4/60 bg-ink-2 px-3 py-3"
+  /**
+   * THE OPTIONS ARE A DIALOG NOW, NOT A DRAWER IN THE COLUMN.
+   *
+   * It used to be a `shrink-0` block above the split, so opening it PUSHED
+   * the split down by its own height. Measured on 12 Sep 2026 at 1440x900
+   * with a live party: the drawer was 586px and the pane holding the picture
+   * went from 735px to 149px. Rafael's words, with a party running: "need to
+   * improve this ui. settings is messy. maybe a popup or pulldown menu?" The
+   * picture is the entire point of the screen and a host changing slow mode
+   * lost it.
+   *
+   * `Dialog` rather than a popover or a dropdown because `docs/DESIGN.md`
+   * says both of those are PLANNED primitives and that a screen must not
+   * hand-roll a local one. Dialog is the modal this app has: focus trap,
+   * Escape, focus restoration, a body that scrolls on its own. The stage
+   * behind it does not move a pixel, so closing it puts the host back exactly
+   * where they were.
+   */
+  const optionsDialog = runsTheShow && (
+    <Dialog
+      open={optionsOpen}
+      onClose={() => setOptionsOpen(false)}
+      title={t("watchParty.options.title")}
+      eyebrow={party.name}
+      description={t("watchParty.options.liveNote")}
+      size="md"
     >
-      <WatchPartyOptionsPanel
-        options={party.options}
-        live
-        audienceCount={props.audienceCount}
-        onChange={(patch) => void props.onOptionsChange(patch)}
-      />
-      {/* Mid-show, and it is the same control the setup surface had. A co-host
-          promoted here is granted SPEAK on the spot by the server, so somebody
-          brought in to help can actually talk to the room. */}
-      {cohostSection(props, party, "mt-3 border-t border-ink-4/60 pt-3")}
-      {/* The queue is a moderation surface and only the people running the
-          party see it: an audience that can watch who asked and was passed
-          over is an audience having a worse time. */}
-      {party.options.stageMode === "invited" && (
-        <div className="mt-3 border-t border-ink-4/60 pt-3">
+      <DialogBody className="flex flex-col gap-4" data-testid="watch-party-options-drawer">
+        <WatchPartyOptionsPanel
+          options={party.options}
+          audienceCount={props.audienceCount}
+          onChange={(patch) => void props.onOptionsChange(patch)}
+        />
+        {/* Mid-show, and it is the same control the setup surface had. A
+            co-host promoted here is granted SPEAK on the spot by the server,
+            so somebody brought in to help can actually talk to the room. */}
+        {cohostSection(props, party, "border-t border-border pt-4")}
+        {/* The queue is a moderation surface and only the people running the
+            party see it: an audience that can watch who asked and was passed
+            over is an audience having a worse time. */}
+        {party.options.stageMode === "invited" && (
+          <div className="border-t border-border pt-4">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
             {t("watchParty.stage.hands")}
           </p>
@@ -843,10 +974,11 @@ function LiveSurface(
                 ))}
               </ul>
             </>
-          )}
-        </div>
-      )}
-    </div>
+            )}
+          </div>
+        )}
+      </DialogBody>
+    </Dialog>
   );
 
   const hostGone = party.hostDisconnectedAt !== null && (
@@ -868,7 +1000,9 @@ function LiveSurface(
       <div className="relative shrink-0">
         {bar}
         {transmission}
-        {optionsDrawer}
+        {/* Portalled by `Dialog`, so it takes no room in this column and the
+            split below it never moves. */}
+        {optionsDialog}
         {hostGone}
         {viewerHint}
       </div>
@@ -882,7 +1016,12 @@ function LiveSurface(
     const preparing = props.someoneIsSharing === true;
     const hostSide = runningTheShow && props.canStart;
     return (
-      <div className="relative flex h-[68svh] min-h-[280px] shrink-0 flex-col overflow-hidden border-b border-ink-4/60 bg-ink">
+      <div
+        className={cn(
+          "relative flex flex-col overflow-hidden border-b border-ink-4/60 bg-ink",
+          surfaceHeight(props.fill, "h-[68svh] min-h-[280px]"),
+        )}
+      >
         <div
           data-testid="watch-party-waiting"
           data-watch-party-waiting={preparing ? "preparing" : "idle"}
