@@ -541,6 +541,16 @@
         }
       }
     },
+    "Auto (%lldp)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automático (%lldp)"
+          }
+        }
+      }
+    },
     "Back to the voice channel" : {
       "localizations" : {
         "pt-BR" : {
@@ -627,6 +637,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Baú"
+          }
+        }
+      }
+    },
+    "Broadcast quality" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qualidade da transmissão"
           }
         }
       }
@@ -2137,6 +2157,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Entrar com convite"
+          }
+        }
+      }
+    },
+    "Jump to live" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pular pro ao vivo"
           }
         }
       }
@@ -5727,6 +5757,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld assistindo"
+          }
+        }
+      }
+    },
+    "~%llds delay" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~%llds de atraso"
           }
         }
       }
