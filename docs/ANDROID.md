@@ -1117,11 +1117,69 @@ unannounced publication stays silent.
 `screen-share-denied` (the server's `SCREEN_SHARE_LIMIT`, 2 on mesh) tears the
 capture down rather than leaving a live projection nobody can see.
 
-### What screen sharing does not do
+### Sending on the SFU, which is where a watch party actually happens
 
-No **sending on the SFU**. The button is hidden on a LiveKit room rather than
-left to fail: it raises Android's consent dialog, and taking a projection grant
-only to publish nothing is worse than not offering. Mesh sending is untouched.
+The share button used to be hidden on a LiveKit room, and `screenShareSupported`
+was literally `transport == mesh`. That hid it on exactly the rooms a watch
+party runs in: `server/src/voice/transport-policy.ts` pins a listed community
+or a server of ten or more to the SFU, so a host on Android could not present
+at the one event the feature exists for. Both engines publish a screen now.
+
+**The button follows the permission, not the transport.** `welcome.canStream`
+is the answer, and the server has already decided which question it was: STREAM
+in a plain voice channel, START_WATCH_PARTY in a `watch_party` one
+(`canStartWatchPartyStream`). This client asks one thing and never compares
+channel types. Absent on the wire reads as `canSpeak`, which is the shared
+schema's own rule and the safe direction, since a listen-only seat must not be
+offered a share button. `voice-speak-changed` carries the same bit optionally,
+so a moderator can stop a broadcast mid-party; absent there leaves the answer
+alone rather than retiring the button on every self-host whose server predates
+the field.
+
+**Not `setScreenShareEnabled`.** The one-line SDK entry point starts LiveKit's
+own foreground service to carry the `mediaProjection` type, and this app already
+runs one that already juggles that type for the mesh path. Two services fighting
+over one projection is either a duplicate notification or a lost grant. So the
+track is built by hand: `createScreencastTrack`, then `startCapture()`, then
+`publishVideoTrack`. The ordering rule is unchanged and is the same one the mesh
+path obeys: consent, then a foreground service already carrying
+`mediaProjection`, and only then may the projection be created.
+
+**`Track.Source.SCREEN_SHARE` is not cosmetic.** The HLS egress lists the room's
+participants and takes the first track whose source is `SCREEN_SHARE`
+(`defaultFindTracks` in `server/src/voice/hls-egress.ts`). Publishing the same
+pixels under any other source is a share every human in the room can see and no
+watch party can transcode.
+
+**The grant is checked twice, on purpose.** `welcome.canStream` hides the
+button; `VoiceSessionResponse.stream` (what the token actually granted) is
+checked again before the projection is consumed. The two are minted at different
+moments by the same `resolveVoicePublish`, and a permissions edit between them
+would otherwise take somebody's whole screen to discover a refused publish.
+
+**Simulcast off, `MAINTAIN_RESOLUTION`, 2 Mbps.** The web publishes a screen the
+same way and for the same reason: the egress transcodes from the published
+track, so a second low layer buys the ladder nothing and costs this phone a
+second encoder. The ceiling does not scale with the room, unlike
+`meshScreenBitrate`, because on the SFU the phone uploads exactly once however
+many people watch. `StageRuleTest` pins that difference.
+
+**A promotion still stops the share, and now the button comes back.** The mesh
+engine is disposed with its capture, and from Android 15 a fresh projection
+grant is required per capture session anyway, so a share cannot be carried
+across. What changed is that `screenShareSupported` survives the promotion, so
+the host presses the button again instead of watching it disappear for the rest
+of the call.
+
+**What is not verified: any of it, on a device.** No screen has been published
+to a LiveKit room from this code. It compiles, it is shaped like the web's
+publisher and the LiveKit API it calls was read out of the 2.28.1 bytecode
+rather than from memory, and the pure rules around it are tested. Whether a
+phone's capture actually reaches the SFU, whether the egress finds it, and
+whether the picture that comes out is watchable all need a phone, a LiveKit
+room and somebody looking at the result.
+
+### What screen sharing still does not do
 
 No **screen audio out of this device**. `MediaProjection` can record device
 playback from Android 10, but only from apps that allow it, so a system-audio

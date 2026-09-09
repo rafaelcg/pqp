@@ -69,14 +69,23 @@ data class VoiceState(
     /** This device is capturing and publishing its screen. */
     val sharingScreen: Boolean = false,
     /**
-     * Whether this call's transport can carry a screen from *this* device.
+     * Whether this device may put a screen on this room's stage.
      *
-     * False on LiveKit, where this client publishes audio only. The button is
-     * hidden rather than left to fail: it raises Android's consent dialog, and
-     * taking a projection grant only to publish nothing is a worse answer than
-     * not offering. Mesh is unaffected and still shares screens. Watching
-     * somebody else's share is a separate question with a different answer:
-     * both transports deliver one into [VoiceController.remoteScreens].
+     * IT IS THE PERMISSION, NOT THE TRANSPORT. It used to be
+     * `kind == Mesh`, because this client could only publish a screen over a
+     * peer connection, and that hid the button on exactly the rooms a watch
+     * party runs in: a listed community or a server of ten or more is pinned
+     * to the SFU, so a host on Android could not present at the one event the
+     * feature exists for. LiveKit publishes a screen now, so what is left is
+     * the only question that was ever product: may this person.
+     *
+     * The answer is `welcome.canStream`, which is STREAM in a plain voice
+     * channel and START_WATCH_PARTY in a `watch_party` one. The server decides
+     * which; this client asks one thing.
+     *
+     * Watching somebody else's share is a separate question with a different
+     * answer: both transports deliver one into
+     * [VoiceController.remoteScreens].
      */
     val screenShareSupported: Boolean = true,
     /**
@@ -290,6 +299,10 @@ class VoiceController(
             session.api.voiceSession(channelId, peerId, resumeToken)
         },
         onPeerState = ::onPeerMediaState,
+        // Same callback and the same reason as the mesh engine's: the system's
+        // "Stop sharing" chip and a refused publish both have to take the
+        // roster claim down with them.
+        onScreenShareEnded = { scope.launch { stopScreenShare() } },
         onFailed = { reason -> onVoiceBackendUnreachable(reason) },
         onConnected = {
             // Only now is the call actually a call. `welcome` arrived long
@@ -830,6 +843,10 @@ class VoiceController(
         // fresh engine from `swapTransport` starts out allowed, so the rule is
         // told to it on every welcome, not only when it changes.
         val rule = speakRule(canSpeakFrom(frame), was = _state.value.canSpeak, source = SpeakRuleSource.Welcome)
+        // The stage bit, and never inferred from `canSpeak`: a member with
+        // SPEAK and no STREAM is the ordinary case in a watch party, and it is
+        // exactly the person who must not be offered the button.
+        val canStream = rule.canSpeak && canStreamFrom(frame)
         engine.setCanPublishAudio(rule.canSpeak)
 
         val peers = frame.participants("peers")
@@ -850,7 +867,7 @@ class VoiceController(
             },
             participants = peers + listOfNotNull(frame.participant("self")),
             localPeerId = peerId,
-            screenShareSupported = kind == VoiceTransportKind.Mesh,
+            screenShareSupported = canStream,
             canSpeak = rule.canSpeak,
             muted = _state.value.muted || rule.mute,
             notice = rule.notice?.let(::noticeText) ?: _state.value.notice,
@@ -953,9 +970,14 @@ class VoiceController(
         _state.value = _state.value.copy(
             stage = VoiceStage.Joining,
             unreachablePeers = 0,
-            // This client publishes a screen on mesh only, so the button goes
-            // away with the mesh. Watching somebody else's is unaffected.
-            screenShareSupported = false,
+            // The capture goes, the permission does not. Every mesh peer
+            // connection is disposed with the engine, and Android 15 requires a
+            // fresh projection grant per capture session anyway, so a share
+            // cannot be carried across a promotion and the person has to press
+            // the button again. The button is therefore still there, which is
+            // the whole difference from before: it used to disappear for the
+            // rest of the call, on exactly the rooms a watch party runs in.
+            screenShareSupported = _state.value.screenShareSupported,
             notice = context.getString(
                 when (plan.notice) {
                     PromotionNotice.Cameras -> R.string.voice_promoted_cameras
@@ -992,11 +1014,25 @@ class VoiceController(
         if (!_state.value.isActive) return
         val next = (frame["canSpeak"] as? JsonPrimitive)?.booleanOrNull ?: return
         val rule = speakRule(next, was = _state.value.canSpeak, source = SpeakRuleSource.Change)
-        if (rule.stopPublishing && (_state.value.sharingScreen || engine.isSharingScreen)) {
+        // The stage half of the same frame. Optional on the wire, so absent
+        // leaves the answer this seat already had rather than inventing one;
+        // present and false has to take the capture down, because losing the
+        // bit mid-party is a moderator stopping a broadcast and the server has
+        // already stopped relaying it.
+        val canStream = streamRule(
+            canSpeak = rule.canSpeak,
+            next = (frame["canStream"] as? JsonPrimitive)?.booleanOrNull,
+            was = _state.value.screenShareSupported,
+        )
+        if (
+            (rule.stopPublishing || !canStream) &&
+            (_state.value.sharingScreen || engine.isSharingScreen)
+        ) {
             stopScreenShare()
         }
         _state.value = _state.value.copy(
             canSpeak = rule.canSpeak,
+            screenShareSupported = canStream,
             muted = _state.value.muted || rule.mute,
             notice = rule.notice?.let(::noticeText) ?: _state.value.notice,
         )

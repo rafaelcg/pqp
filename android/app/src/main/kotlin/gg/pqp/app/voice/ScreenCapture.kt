@@ -109,6 +109,29 @@ fun meshScreenBitrate(peerCount: Int): Int {
     return minOf(SCREEN_MAX_BITRATE_BPS, maxOf(SCREEN_MIN_BITRATE_BPS, share))
 }
 
+/**
+ * What ONE screen publication to the SFU is allowed to spend.
+ *
+ * The whole per-sender cap rather than a share of a budget, and that is the
+ * real difference between the two transports. In a mesh the presenter uploads a
+ * full copy to every peer, which is why [meshScreenBitrate] divides; on the SFU
+ * this phone uploads exactly once however many people are watching, and the
+ * server fans it out. So the number does not move with the room, and a test
+ * says so, because "it worked with two people in the call" is how a ceiling
+ * that scales the wrong way ships.
+ *
+ * It is the mesh's per-sender cap rather than something larger. This is still a
+ * phone on a domestic uplink at best and a cellular one at worst, encoding in
+ * software often enough to matter and spending its own battery; and in a watch
+ * party the audience is on the egress ladder rather than on this track, so the
+ * rung a viewer sees is decided by the transcode and not by giving the phone
+ * more room here.
+ *
+ * A CEILING, NOT A TARGET, exactly as above: WebRTC's congestion controller
+ * has its own estimate and sends the lower of the two.
+ */
+fun sfuScreenBitrate(): Int = SCREEN_MAX_BITRATE_BPS
+
 private const val SCREEN_UPLOAD_BUDGET_BPS = 3_000_000
 private const val SCREEN_MIN_BITRATE_BPS = 500_000
 private const val SCREEN_MAX_BITRATE_BPS = 2_000_000

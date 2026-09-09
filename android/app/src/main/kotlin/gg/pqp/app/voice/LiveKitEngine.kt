@@ -16,13 +16,18 @@ import io.livekit.android.events.collect
 import io.livekit.android.room.Room
 import io.livekit.android.room.participant.AudioTrackPublishOptions
 import io.livekit.android.room.participant.Participant
+import io.livekit.android.room.participant.VideoTrackPublishOptions
 import io.livekit.android.room.track.LocalAudioTrack
 import io.livekit.android.room.track.LocalAudioTrackOptions
+import io.livekit.android.room.track.LocalScreencastVideoTrack
+import io.livekit.android.room.track.LocalVideoTrackOptions
 import io.livekit.android.room.track.RemoteAudioTrack
 import io.livekit.android.room.track.RemoteTrackPublication
 import io.livekit.android.room.track.RemoteVideoTrack
 import io.livekit.android.room.track.Track
 import io.livekit.android.room.track.TrackPublication
+import io.livekit.android.room.track.VideoCaptureParameter
+import io.livekit.android.room.track.VideoEncoding
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
@@ -30,6 +35,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import livekit.org.webrtc.PeerConnection
+import livekit.org.webrtc.RtpParameters
 
 /**
  * LiveKit SFU audio, for a room the server put on the `livekit` transport.
@@ -117,6 +123,13 @@ class LiveKitEngine(
      * data mid-call, and the next share it opens should notice.
      */
     private val isMetered: () -> Boolean = { false },
+    /**
+     * The capture stopped without us asking: the system's own "Stop sharing"
+     * chip, or the platform revoking the projection. A UI that still says
+     * "sharing" after that is lying, and the roster claim behind it would put
+     * an empty tile in front of everybody.
+     */
+    private val onScreenShareEnded: () -> Unit = {},
 ) : VoiceTransport {
 
     private var room: Room? = null
@@ -197,7 +210,22 @@ class LiveKitEngine(
     /** Non-null between [start] and [stop]. Guards late callbacks from an old room. */
     @Volatile private var localPeerId: String? = null
 
-    override val isSharingScreen: Boolean get() = false
+    private var screenTrack: LocalScreencastVideoTrack? = null
+
+    override val isSharingScreen: Boolean get() = screenTrack != null
+
+    /**
+     * Whether the SFU token granted `SCREEN_SHARE`, from
+     * `VoiceSessionResponse.stream`.
+     *
+     * Read here as well as in the caller because the two answers are minted at
+     * different moments: the caller's comes from `welcome.canStream`, this one
+     * from the token `POST /api/voice/token` returned, and a permissions edit
+     * between them would let a capture start that the SFU then refuses. A
+     * refused publish with the projection already taken is the worst version
+     * of this, so it is checked before the grant is consumed.
+     */
+    @Volatile private var canPublishScreen = false
 
     /** The `/api/ice-servers` list of the current join; read once, at connect. */
     private var ice: List<IceServer> = emptyList()
@@ -321,6 +349,13 @@ class LiveKitEngine(
             ),
         )
         room = created
+        // What the token actually granted, rather than what the roster said a
+        // moment ago. `stream` is `VoiceSessionResponse.stream`, which the
+        // server derived from the same `resolveVoicePublish` the `welcome`
+        // used, but minted later: a permissions edit in between lands here
+        // first, and a capture started on the older answer would be a refused
+        // publish with the whole screen already taken.
+        canPublishScreen = credentials.stream
 
         eventsJob = scope.launch { listen(created) }
 
@@ -950,16 +985,128 @@ class LiveKitEngine(
     override fun setPeerScreenAudioStreamId(remotePeerId: String, streamId: String?) = Unit
 
     /**
-     * Refused, cleanly, every time.
+     * Publish this device's screen to the SFU.
      *
-     * Not "not implemented yet" dressed up as a failure: the caller hides the
-     * button on this transport, so this is the belt to that braces, and it
-     * never touches the projection grant it was handed.
+     * This is what a watch party actually needs, because a watch party runs on
+     * LiveKit by policy: a listed community or a server of ten or more is
+     * pinned to the SFU, so until this existed a host on Android could not
+     * present at all, and the button was hidden rather than left to fail.
+     *
+     * ### Why not `setScreenShareEnabled`
+     *
+     * The one-line SDK entry point starts LiveKit's OWN foreground service
+     * (`ScreenCaptureService`) to carry the `mediaProjection` type. This app
+     * already runs one, `VoiceService`, and it already juggles that type for
+     * the mesh path; a second foreground service claiming the same projection
+     * is either a duplicate notification or a fight over the grant. So the
+     * track is built by hand and the service stays ours. The ordering rule is
+     * unchanged and is [VoiceController.beginScreenCapture]'s: consent, then a
+     * foreground service already carrying `mediaProjection`, and only then may
+     * the projection be created. From Android 14 doing it the other way throws
+     * inside the capturer, where it reads as a capture failure.
+     *
+     * ### The source is not cosmetic
+     *
+     * `Track.Source.SCREEN_SHARE` is what the HLS egress looks for: the server
+     * lists the room's participants and takes the first track whose source is
+     * `SCREEN_SHARE` (`defaultFindTracks` in `server/src/voice/hls-egress.ts`).
+     * Publishing the same pixels under any other source is a share every human
+     * in the room can see and no watch party can transcode.
+     *
+     * ### Simulcast is off, deliberately
+     *
+     * The web publishes a screen with `simulcast: false` for the reason in
+     * `client/src/lib/livekit-session.ts`, and the egress transcodes from the
+     * published track, so a second low layer buys the ladder nothing and costs
+     * this phone a second encoder. `MAINTAIN_RESOLUTION` for the same reason
+     * the mesh sender sets `isScreencast`: screen content is text and film, and
+     * a link that dips should lose frames rather than pixels.
+     *
+     * Capture and publish are separate steps and the failure of either is
+     * reported the same way, `false`, so the caller gives the projection back
+     * rather than announcing a presenter with nothing behind them.
      */
-    override fun startScreenShare(permission: Intent, profile: ScreenCaptureProfile): Boolean =
-        false
+    override fun startScreenShare(permission: Intent, profile: ScreenCaptureProfile): Boolean {
+        val room = room ?: return false
+        if (screenTrack != null) return true
+        if (!canPublishScreen) {
+            // The token says no. Consuming the grant to find that out from a
+            // refused publish would take the whole screen for nothing.
+            Log.w(TAG, "SFU token does not grant SCREEN_SHARE; refusing the capture")
+            return false
+        }
 
-    override fun stopScreenShare() = Unit
+        val track = runCatching {
+            room.localParticipant.createScreencastTrack(
+                name = SCREEN_TRACK_NAME,
+                mediaProjectionPermissionResultData = permission,
+                options = LocalVideoTrackOptions(
+                    isScreencast = true,
+                    captureParams = VideoCaptureParameter(
+                        width = profile.width,
+                        height = profile.height,
+                        maxFps = profile.frameRate,
+                    ),
+                ),
+                // Posted, not run inline: this arrives on the projection's own
+                // callback thread, from inside the capturer the caller is about
+                // to dispose.
+                onStop = { scope.launch { onScreenShareEnded() } },
+            )
+        }.getOrElse { error ->
+            Log.w(TAG, "screen capture failed to start: ${error.message}")
+            return false
+        }
+
+        screenTrack = track
+        return runCatching {
+            track.startCapture()
+            scope.launch {
+                runCatching {
+                    room.localParticipant.publishVideoTrack(
+                        track,
+                        VideoTrackPublishOptions(
+                            source = Track.Source.SCREEN_SHARE,
+                            simulcast = false,
+                            videoEncoding = VideoEncoding(
+                                maxBitrate = sfuScreenBitrate(),
+                                maxFps = profile.frameRate,
+                            ),
+                            degradationPreference =
+                                RtpParameters.DegradationPreference.MAINTAIN_RESOLUTION,
+                        ),
+                    )
+                }.onFailure { error ->
+                    // The roster already says this device is presenting, and
+                    // the picture is not on the wire. Tear it down rather than
+                    // leave an empty tile in front of the room.
+                    Log.w(TAG, "screen publish refused: ${error.message}")
+                    onScreenShareEnded()
+                }
+            }
+            true
+        }.getOrElse { error ->
+            Log.w(TAG, "screen capture could not start: ${error.message}")
+            releaseScreenTrack()
+            false
+        }
+    }
+
+    override fun stopScreenShare() {
+        val track = screenTrack ?: return
+        screenTrack = null
+        scope.launch {
+            runCatching { room?.localParticipant?.unpublishTrack(track) }
+                .onFailure { Log.w(TAG, "could not unpublish the screen: ${it.message}") }
+        }
+        runCatching { track.stop() }
+    }
+
+    private fun releaseScreenTrack() {
+        val track = screenTrack ?: return
+        screenTrack = null
+        runCatching { track.stop() }
+    }
 
     override fun stop() {
         // Cleared first. `listen` reads it to tell a disconnect we asked for
@@ -972,8 +1119,11 @@ class LiveKitEngine(
         eventsJob = null
         val leaving = room
         val mic = micTrack
+        val screen = screenTrack
         room = null
         micTrack = null
+        screenTrack = null
+        canPublishScreen = false
         val (showing, oncamera) = synchronized(peerLock) {
             sharingByRoster.clear()
             watchedScreens.clear()
@@ -991,6 +1141,10 @@ class LiveKitEngine(
         // it, but only after `disconnect` has finished its round trip, and the
         // gap is a microphone still recording for somebody who has hung up.
         runCatching { mic?.stop() }
+        // Same reasoning as the microphone: the capture is stopped before the
+        // room's disconnect round trip, so nothing is still recording the
+        // screen of somebody who has left.
+        runCatching { screen?.stop() }
         runCatching { leaving?.disconnect() }
         runCatching { leaving?.release() }
     }
@@ -1043,6 +1197,7 @@ class LiveKitEngine(
     companion object {
         private const val TAG = "pqp.voice"
         private const val LOCAL_AUDIO_ID = "pqp-mic"
+        private const val SCREEN_TRACK_NAME = "pqp-screen"
 
         /**
          * How long a camera keeps flowing after the last surface stops drawing
