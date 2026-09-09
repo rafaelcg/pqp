@@ -845,6 +845,114 @@ the count cadence, the token on every path).
 Scheduling (built in parallel) attaches to the channel; the sidebar row has a
 `TODO(schedule)` where the next session time goes in the idle state.
 
+## What the stream carries, and what it does not
+
+**The two audiences are not watching the same event, and the host cannot tell.**
+This is the most surprising thing in the feature and the easiest to be wrong
+about, so it is written out rather than left to be inferred from
+`hls-egress.ts`.
+
+| | seated in the room | watching the HLS |
+|---|---|---|
+| the presenter's screen | yes | yes |
+| the screen's own audio | yes | **only if the capture had it** |
+| every microphone, host included | yes | **no** |
+| every camera | yes | **no** |
+| delay | sub-second | about ten seconds |
+
+The transcode is a **Track Composite** egress, and
+`TrackCompositeEgressRequest` carries one video track sid and one audio track
+sid, singular. So `pickScreenTracks` is not filtering a mix, it is making the
+entire editorial decision: the screen share, and that same participant's
+`SCREEN_SHARE_AUDIO`. Nothing else exists as far as the seatless audience is
+concerned.
+
+**A share picked without its own audio is a silent film for everybody outside
+the room.** Chrome on macOS cannot capture system audio for a whole screen or a
+window at all; only a tab share can, and only with the audio box ticked. The
+host hears the film out of their own speakers either way, and the room they are
+talking to hears them perfectly over WebRTC, so nothing they can see contains
+the fact. On 2026-09-09 Rafael went live with his webcam on and reasonably
+assumed it was going out.
+
+**Which is why the server states it.** `LiveHlsStream.hasAudio` is set when the
+egress starts, `voice.hlsStarted` carries `audio: "screen" | "none"`, and
+`liveHls.silentSessions` on `GET /api/admin/metrics` is the number during a
+party rather than a `grep` after one. The host's transmission panel shows it
+collapsed as well as expanded, says what to do (share a tab and tick its audio
+box), and states what the stream carries and what it does not whether or not
+anything is wrong. Adding the audio needs a **new share**: the audio half is
+published from the same `getDisplayMedia` capture, so it cannot be added to one
+already running, and re-picking changes the screen track sid, which is a
+restart the reconcile already handles.
+
+`hasAudio` is absent, not false, on a session this process **adopted** across a
+deploy: the `hls_sessions` row carries the video track sid and not the audio
+one. The panel says "not stated" there and warns about nothing, because a false
+"your film is silent" during a film that is playing fine teaches a host to
+ignore the warning that matters.
+
+**The ten seconds are a broadcast delay and they interact badly with a host who
+is also in a live call.** Someone in the room asks a question and the host
+answers immediately; the stream audience hears the answer ten seconds after the
+host gave it and never heard the question. A host reading chat is reading a
+room that is ten seconds ahead of the people they are addressing. That is
+ordinary for broadcast and it is worth saying out loud, because a watch party
+host is doing both at once. The panel says it in one line.
+
+**Getting the host's microphone into the stream is a feature, not a fix**, and
+it is costed in [`docs/plans/WATCH_PARTY_STREAM_AUDIO.md`](./plans/WATCH_PARTY_STREAM_AUDIO.md):
+the recommendation is a client-side mix into the screen-share audio track, which
+costs the media box nothing, and explicitly NOT a Room Composite egress, which
+LiveKit's own docs price at 2 to 6 CPUs against the 0.51 to 0.88 core this one
+measures.
+
+## When a session restarts, and the leftovers it used to leave behind
+
+A stalling stream and a healthy one look identical from the API. Read this
+before diagnosing one.
+
+**Every teardown is narrated now.** `voice.hlsStopped` carries a `reason`:
+`no-share`, `screen-track-replaced`, `presenter-changed`, `not-allowlisted`,
+`playlist-not-ready`. It did not, and on 2026-09-09 a live party logged two
+`voice.hlsStarted` for one channel nine minutes apart, same presenter, with
+nothing at all in between. Three of `stopRoom`'s callers logged nothing and the
+fourth logged only in a branch a silent one pre-empted, so there was no way to
+tell a host re-picking their share from a transcode dying, which want opposite
+responses during an event.
+
+The silent one that mattered: `pushLiveHls` resolved the channel's server id
+only when it had a sharer and passed `null` otherwise, and `null` means "not a
+server channel" to `reconcileLiveHls`. So an ordinary end of share was torn down
+by the allowlist branch instead of the no-share branch. It is a map read, so the
+saving was imaginary and the ambiguity was not.
+
+**A rung the monitor declares dead may still be running.** `rungHealth` says
+"ended" for two different reasons and only one of them means the handler is
+over. LiveKit saying so is final. The playlist not moving for
+`PLAYLIST_STUCK_MS` is a rule that exists *because* a killed egress node is
+reported ACTIVE forever, and its mirror case, a handler still transcoding while
+its output stalled, was dropped from `rooms` and never stopped. It then burned a
+core until the box was rebuilt, and `scheduleRestart` started a fresh ladder
+beside it on the way out. `stillRunning` now tells the halves apart: a stalled
+rung is stopped, a cleanly finished one costs no pointless RPC.
+
+**And there is a net under all of it.** On every monitor tick, for each channel
+this process holds a session for, `reapForeignEgresses` asks LiveKit for the
+ACTIVE egresses in that room and stops any that are not one of our rungs. Within
+a room we are already presenting, an egress that is not ours cannot be anything
+but ours from before. It is deliberately NOT "stop everything I do not
+recognise", which would kill the sessions `adoptLiveHlsSession` exists to
+inherit across a deploy; the 15 s health grace covers the boot window in which a
+ladder's rungs are still being adopted one at a time, and a listing it could not
+fetch is never a reason to act.
+
+**`liveHls.orphansStopped` belongs at zero.** It is the only evidence a leak
+ever happened, because the leak itself is silent: the box simply gets slower and
+the parties on it start stalling. This matters more than it looks:
+`LIVE_HLS_MAX_SESSIONS` counts **sessions**, so a cap of 3 means twelve handlers
+if each session can transiently run four.
+
 ## How you know it is running
 
 The whole of the above can be deployed, configured and doing nothing, and for
@@ -866,6 +974,18 @@ egress not starting, which on the viewer's screen is a blank pane and in the
 log is `voice.hlsStarted` never appearing. `sessions` sitting at `maxSessions`
 with a party complaining of a blank pane is the concurrency cap
 (`LIVE_HLS_MAX_SESSIONS`), and the log says so: `voice.hlsSessionsCapped`.
+
+**Can the audience hear it?** The same block's `silentSessions`, against
+`sessions`. Equal means every live party is going out with no audio at all,
+which is a share picked without its own audio rather than a fault, and the host
+is told in their own transmission panel. In the log it is
+`voice.hlsStarted ... audio="none"`.
+
+**Is the box carrying more transcodes than it should?** The same block's
+`orphansStopped`. It belongs at zero. Anything else means a session leaked
+handlers onto the media box and the monitor cleaned up after it; the log line is
+`voice.hlsOrphanStopped`. See "When a session restarts" above for why this is
+the number that bounds `LIVE_HLS_MAX_SESSIONS` actually meaning three.
 
 **Are the recordings being deleted?** The same block's `uncleaned`: finished
 sessions past their retention window that still hold objects. It belongs at

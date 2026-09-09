@@ -280,6 +280,20 @@ export interface AdminMetrics {
     maxSessions: number;
     rungs: number;
     oldestSessionMinutes: number | null;
+    /**
+     * Live sessions whose transcode has no audio track at all: the share was
+     * picked without its own audio, so the seatless audience is watching a
+     * silent film while the seated room hears every microphone. Not an error
+     * on its own, and the number to look at during a film night.
+     */
+    silentSessions: number;
+    /**
+     * Leftover transcodes the monitor has stopped since this process started:
+     * handlers still running on the media box for a room whose session this
+     * process had already replaced. Belongs at zero; anything else is a leak
+     * whose only other symptom is the box getting slower.
+     */
+    orphansStopped: number;
     /** Sessions past retention that still hold objects. Belongs at zero. */
     uncleaned: number;
     /** Whether this process runs the retention sweep (`WORKER_MODE`). */
@@ -907,6 +921,8 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       maxSessions: hlsActivity.maxSessions,
       rungs: hlsActivity.rungs,
       oldestSessionMinutes: hlsActivity.oldestMinutes,
+      silentSessions: hlsActivity.silentSessions,
+      orphansStopped: hlsActivity.orphansStopped,
       uncleaned: hlsUncleaned,
       sweepsHere: runsColdJobs(processRole()),
     },

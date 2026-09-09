@@ -74,6 +74,23 @@ export function WatchPartyTransmission({
   );
 
   const height = stream?.topHeight ?? null;
+  /**
+   * THE ONE THING THE HOST CANNOT CHECK FOR THEMSELVES, and the reason this
+   * component grew past a readout.
+   *
+   * The transcode carries the shared window and that window's OWN audio, and
+   * nothing else: no microphone, no camera, from anybody. A host who shared a
+   * whole screen or a window, or a tab without ticking its audio box, is
+   * broadcasting a silent film while hearing it perfectly out of their own
+   * speakers and talking to a seated room that hears them perfectly over
+   * WebRTC. Nothing in either of those two experiences contains the fact.
+   *
+   * `unknown` is "the server did not say" (an older API, or a session adopted
+   * across a deploy) and draws no warning: a false alarm during a film that is
+   * playing fine is worse than no alarm.
+   */
+  const audioState = streamAudioState(stream);
+  const silent = audioState === "none";
   const minutes = wentLiveAt
     ? Math.max(
         0,
@@ -122,7 +139,21 @@ export function WatchPartyTransmission({
         <span data-testid="watch-party-tx-summary" className="truncate">
           {summary}
         </span>
-        {strained && (
+        {/* IN THE COLLAPSED ROW, because the panel is collapsed by default and
+            a warning only a host who expanded it can see is a warning nobody
+            gets. It is the one line worth stealing the summary's space for. */}
+        {silent && (
+          <span
+            data-testid="watch-party-tx-silent-pill"
+            className="ml-auto flex shrink-0 items-center gap-1 text-warning"
+          >
+            <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden />
+            <span className="hidden sm:inline">
+              {t("watchParty.tx.silentPill")}
+            </span>
+          </span>
+        )}
+        {strained && !silent && (
           <TriangleAlert
             className="ml-auto h-3 w-3 shrink-0 text-warning"
             aria-hidden
@@ -163,6 +194,26 @@ export function WatchPartyTransmission({
                   })}
             </dd>
           </div>
+          {/* The audio the AUDIENCE gets, which is a different question from
+              the audio the room gets and has a different answer. */}
+          <div className="flex gap-2">
+            <dt className="w-28 shrink-0 text-paper-muted">
+              {t("watchParty.tx.audio")}
+            </dt>
+            <dd
+              data-testid="watch-party-tx-audio"
+              className={cn(
+                "min-w-0 flex-1",
+                silent ? "text-warning" : "text-paper",
+              )}
+            >
+              {audioState === "unknown"
+                ? t("watchParty.tx.audioUnknown")
+                : audioState === "none"
+                  ? t("watchParty.tx.audioNone")
+                  : t("watchParty.tx.audioScreen")}
+            </dd>
+          </div>
           <div className="flex gap-2">
             <dt className="w-28 shrink-0 text-paper-muted">
               {t("watchParty.tx.audience")}
@@ -186,8 +237,62 @@ export function WatchPartyTransmission({
               {t("watchParty.tx.strained")}
             </p>
           )}
+          {silent && (
+            <p
+              data-testid="watch-party-tx-silent"
+              className="flex items-start gap-1.5 text-warning"
+            >
+              <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
+              {t("watchParty.tx.silentFix")}
+            </p>
+          )}
+          {/* STATED WHETHER OR NOT ANYTHING IS WRONG. The two audiences are on
+              two different paths and the seated one is strictly richer; a host
+              who never learns that assumes the stream carries whatever they
+              can hear. This is the sentence that stops that assumption, and it
+              costs one line whether or not the audio is fine. */}
+          <p
+            data-testid="watch-party-tx-carries"
+            className="text-paper-muted"
+          >
+            {t("watchParty.tx.carries")}
+          </p>
+          <p className="text-paper-muted">
+            {t("watchParty.tx.behind", {
+              seconds: stream?.delaySeconds ?? 10,
+            })}
+          </p>
         </dl>
       )}
     </div>
   );
+}
+
+/**
+ * What the SEATLESS audience is hearing, which is a different question from
+ * what the room is hearing and often has a different answer.
+ *
+ * `"screen"`  the share went up with its own audio and the egress is carrying
+ *             it. A film shared as a Chrome tab with the audio box ticked.
+ * `"none"`    there is no audio track in the transcode at all. Every
+ *             whole-screen and window capture (macOS Chrome cannot capture
+ *             system audio), and any tab share where the box was left
+ *             unticked. The audience is watching a silent film.
+ * `"unknown"` the server did not say: an API older than `hasAudio`, or a
+ *             session this process adopted across a restart rather than
+ *             started, where the row carries the video track sid and not the
+ *             audio one. Draws no warning on purpose.
+ *
+ * A function rather than an inline ternary because it is the whole of what
+ * this panel exists to say, and the unit suite runs in `node` through
+ * `react-dom/server`: the detail rows are behind a click nothing here can
+ * make, so without this the only testable half would be the collapsed line.
+ */
+export function streamAudioState(
+  stream: LiveHlsStream | null,
+): "screen" | "none" | "unknown" {
+  if (!stream || stream.hasAudio === undefined) {
+    return "unknown";
+  }
+  return stream.hasAudio ? "screen" : "none";
 }

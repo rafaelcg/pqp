@@ -1452,7 +1452,15 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
   const sharer = pickHlsSharer(getRoomPeers(voiceChannelId));
   const prev = liveHlsStreamFor(voiceChannelId);
   try {
-    const serverId = sharer ? await hlsServerIdFor(voiceChannelId) : null;
+    // RESOLVED EVEN WITH NO SHARER, and it used to be `sharer ? ... : null`.
+    // That looked like a saved lookup and was a lost distinction: null means
+    // "not a server channel" to `reconcileLiveHls`, so an ordinary end of
+    // share took the not-allowlisted branch, which tore the session down
+    // without a word, instead of the no-share branch, which says so. A live
+    // party then showed two starts nine minutes apart with nothing logged in
+    // between and no way to tell why. It is a map read (see
+    // `hlsServerIdFor`), so the lookup was never worth the ambiguity.
+    const serverId = await hlsServerIdFor(voiceChannelId);
     const next = await reconcileLiveHls(
       voiceChannelId,
       sharer?.id ?? null,

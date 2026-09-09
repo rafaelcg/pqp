@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EgressStatus } from "livekit-server-sdk";
+import { EgressStatus, TrackSource } from "livekit-server-sdk";
 import {
   type LiveHlsEgressApi,
   HLS_MAX_RESTARTS,
@@ -21,6 +21,7 @@ import {
   liveHlsStreamFor,
   maxLiveHlsSessions,
   DEFAULT_MAX_HLS_SESSIONS,
+  pickScreenTracks,
   reconcileLiveHls,
   resetLiveHlsForTests,
   setLiveHlsTestHooks,
@@ -1137,5 +1138,514 @@ describe("live HLS egress", () => {
       setLiveHlsTestHooks({ egress: lk.api });
       expect(await listActiveEgresses()).toBeNull();
     });
+
+    /**
+     * LEFTOVER TRANSCODES, which is the failure a stalling stream looks like
+     * from the outside and the one `LIVE_HLS_MAX_SESSIONS` cannot see.
+     *
+     * A live watch party on 2026-09-09 logged two `voice.hlsStarted` for one
+     * channel nine minutes apart, same presenter, nothing in between, and the
+     * first pair's handlers were still on the media box two minutes after the
+     * second pair started. Four transcoders on one room, on a four core box
+     * that also carries the SFU and the TURN relay. The cap counts SESSIONS,
+     * so three parties each leaking a ladder is twelve handlers under a limit
+     * that reads as three.
+     */
+    describe("leftover transcodes on the same room", () => {
+      /** A `ListEgress` answer with one extra ACTIVE egress nobody owns. */
+      function withLeftover(lk: ReturnType<typeof fakeLiveKit>, id: string) {
+        let alive = true;
+        return {
+          ...lk.api,
+          stopEgress: async (egressId: string) => {
+            if (egressId === id) {
+              alive = false;
+              return;
+            }
+            await lk.api.stopEgress(egressId);
+          },
+          listEgress: async (opts: {
+            egressId?: string;
+            roomName?: string;
+            active?: boolean;
+          }) => {
+            const mine = await lk.list(opts);
+            const showLeftover =
+              alive && !opts.egressId && opts.roomName === CHANNEL;
+            return showLeftover
+              ? [
+                  ...mine,
+                  { egressId: id, status: EgressStatus.EGRESS_ACTIVE },
+                ]
+              : mine;
+          },
+        } satisfies LiveHlsEgressApi;
+      }
+
+      it("stops one that is still running on a room this process is presenting", async () => {
+        enableHls();
+        const lk = fakeLiveKit();
+        // ONE fake, spied on. Two of them would each keep their own idea of
+        // whether the leftover is still alive, so the stop would land on one
+        // and the listing would keep offering it from the other.
+        const api = withLeftover(lk, "EG_LEFTOVER");
+        const stop = vi.fn(api.stopEgress);
+        setLiveHlsTestHooks({
+          egress: { ...api, stopEgress: stop },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+        await advance(20_000);
+        await checkLiveHlsHealth();
+
+        expect(stop).toHaveBeenCalledWith("EG_LEFTOVER");
+        // The counter, because the leak itself is silent: the box just gets
+        // slower and the parties on it start stalling.
+        expect(liveHlsActivity().orphansStopped).toBe(1);
+        // And it is gone, so a second pass does not keep re-stopping it.
+        await advance(10_000);
+        await checkLiveHlsHealth();
+        expect(liveHlsActivity().orphansStopped).toBe(1);
+      });
+
+      it("never stops this session's own rungs", async () => {
+        enableHls();
+        process.env.LIVE_HLS_LADDER = "720p30,1080p30";
+        const lk = fakeLiveKit();
+        setLiveHlsTestHooks({
+          egress: withLeftover(lk, "EG_LEFTOVER"),
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+        await advance(20_000);
+        await checkLiveHlsHealth();
+
+        expect(lk.stop.mock.calls.map((call) => call[0])).toEqual([]);
+        expect(liveHlsStreamFor(CHANNEL)).not.toBeNull();
+      });
+
+      /**
+       * The same rule `listActiveEgresses` states for the retention sweep:
+       * "could not ask" is not "nothing is running", and it is certainly not
+       * permission to stop things.
+       */
+      it("does nothing when the listing cannot be fetched", async () => {
+        enableHls();
+        const lk = fakeLiveKit();
+        const stop = vi.fn(async () => {});
+        setLiveHlsTestHooks({
+          egress: {
+            startTrackCompositeEgress: lk.start,
+            stopEgress: stop,
+            listEgress: async () => {
+              throw new Error("ListEgress: 503");
+            },
+          },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+        await advance(20_000);
+        await checkLiveHlsHealth();
+
+        expect(stop).not.toHaveBeenCalled();
+        expect(liveHlsActivity().orphansStopped).toBe(0);
+      });
+    });
+
+    /**
+     * A RUNG DECLARED DEAD BECAUSE ITS PLAYLIST STALLED IS STILL RUNNING.
+     *
+     * The two halves of "ended" are not the same fact. LiveKit saying so means
+     * the handler is over and there is nothing to stop. The playlist not
+     * moving for `PLAYLIST_STUCK_MS` means only that: the rule exists because
+     * a killed egress node goes on being reported ACTIVE forever, and the
+     * mirror case, a handler that is genuinely still transcoding while its
+     * output stalled, was dropped from `rooms` and never stopped. It then
+     * burned a core until somebody rebuilt the box, and `scheduleRestart`
+     * started a fresh ladder beside it on the way out.
+     */
+    describe("stopping what it declares dead", () => {
+      function frozenPlaylist(lk: ReturnType<typeof fakeLiveKit>) {
+        setLiveHlsTestHooks({
+          egress: lk.api,
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+          playlistProbe: () =>
+            "#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\n#EXTINF:2,\nseg_1.ts\n",
+        });
+      }
+
+      it("stops a primary whose playlist stalled while LiveKit still calls it active", async () => {
+        enableHls();
+        const lk = fakeLiveKit();
+        frozenPlaylist(lk);
+        listenerThatReconciles();
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+        await advance(20_000);
+        await checkLiveHlsHealth();
+        await advance(20_000);
+        expect(await checkLiveHlsHealth()).toEqual([
+          { channelId: CHANNEL, outcome: "scheduled" },
+        ]);
+
+        expect(lk.stop).toHaveBeenCalledWith("EG_1");
+      });
+
+      it("stops a secondary rung in the same state rather than only forgetting it", async () => {
+        enableHls();
+        process.env.LIVE_HLS_LADDER = "720p30,1080p30";
+        const lk = fakeLiveKit();
+        frozenPlaylist(lk);
+        listenerThatReconciles();
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+        await advance(20_000);
+        await checkLiveHlsHealth();
+        await advance(20_000);
+        await checkLiveHlsHealth();
+
+        // Both rungs: the secondary through the per-rung loop, the primary
+        // through the session teardown under it.
+        expect(lk.stop.mock.calls.map((call) => call[0]).sort()).toEqual([
+          "EG_1",
+          "EG_2",
+        ]);
+      });
+
+      /**
+       * The other direction, and the reason `stillRunning` exists rather than
+       * an unconditional stop: an egress LiveKit has already reported as
+       * finished needs no RPC, and asking would log a failure about a session
+       * that ended perfectly normally.
+       */
+      it("does not call stop on an egress LiveKit already reported as finished", async () => {
+        enableHls();
+        const lk = fakeLiveKit();
+        setLiveHlsTestHooks({
+          egress: lk.api,
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+        listenerThatReconciles();
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+        lk.kill("EG_1");
+
+        await advance(20_000);
+        expect(await checkLiveHlsHealth()).toEqual([
+          { channelId: CHANNEL, outcome: "scheduled" },
+        ]);
+
+        expect(lk.stop).not.toHaveBeenCalledWith("EG_1");
+      });
+    });
+
+    /**
+     * WHY THE SESSION RESTARTED, WHICH THE LOG COULD NOT ANSWER.
+     *
+     * Three of `stopRoom`'s callers logged nothing and a fourth logged only in
+     * a branch a silent one pre-empted, so a live party produced two starts
+     * and no explanation. During an event that is the difference between "the
+     * host re-picked their share" and "the transcode is dying", which want
+     * opposite responses.
+     */
+    describe("narrating the teardown", () => {
+      it("says the share stopped", async () => {
+        enableHls();
+        setLiveHlsTestHooks({
+          egress: {
+            startTrackCompositeEgress: async () => ({ egressId: "EG_1" }),
+            stopEgress: vi.fn(),
+          },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+        logEvent.mockClear();
+
+        await reconcileLiveHls(CHANNEL, null, SERVER);
+
+        expect(logEvent).toHaveBeenCalledWith(
+          "voice.hlsStopped",
+          expect.objectContaining({
+            channelId: CHANNEL,
+            reason: "no-share",
+            egressIds: ["EG_1"],
+          }),
+        );
+      });
+
+      it("says the presenter re-picked their screen", async () => {
+        enableHls();
+        let videoTrackId = "TR_V1";
+        setLiveHlsTestHooks({
+          egress: {
+            startTrackCompositeEgress: async () => ({ egressId: "EG_1" }),
+            stopEgress: vi.fn(),
+          },
+          findTracks: async () => ({ videoTrackId }),
+        });
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+        logEvent.mockClear();
+        videoTrackId = "TR_V2";
+
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+        expect(logEvent).toHaveBeenCalledWith(
+          "voice.hlsStopped",
+          expect.objectContaining({ reason: "screen-track-replaced" }),
+        );
+      });
+
+      it("says the server is not allowlisted, which is a different sentence", async () => {
+        enableHls();
+        setLiveHlsTestHooks({
+          egress: {
+            startTrackCompositeEgress: async () => ({ egressId: "EG_1" }),
+            stopEgress: vi.fn(),
+          },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+        logEvent.mockClear();
+
+        process.env.LIVE_HLS_SERVER_ALLOWLIST = OTHER_SERVER;
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+        expect(logEvent).toHaveBeenCalledWith(
+          "voice.hlsStopped",
+          expect.objectContaining({ reason: "not-allowlisted" }),
+        );
+      });
+    });
   });
+
+/**
+ * WHICH TWO TRACKS THE HLS AUDIENCE ACTUALLY RECEIVES.
+ *
+ * Every other case in this file injects `findTracks`, so until `pickScreenTracks`
+ * was pulled out of `defaultFindTracks` the real selection ran nowhere but
+ * production. That is the shape CLAUDE.md pitfalls 9 and 12 are both about, and
+ * it hid two things at once: the audience gets no microphone and no camera from
+ * anybody, and with two people sharing the video and the audio could come from
+ * two different ones.
+ *
+ * The participant shapes below are the real thing, not tidied. A live watch
+ * party on `QG do pqp` was sampled on 2026-09-09 and the host's microphone came
+ * back as `source: 0`, which is `SOURCE_UNKNOWN`, because the web client
+ * published it without naming a source (fixed in `client/src/lib/livekit-session.ts`).
+ * A picker written against `TrackSource.MICROPHONE` and tested against a mock
+ * that tags it properly would pass here and find nothing there.
+ */
+describe("pickScreenTracks", () => {
+  const MIC_AS_PRODUCTION_SENDS_IT = { source: 0, sid: "TR_mic" };
+
+  it("takes the screen share and that share's own audio", () => {
+    expect(
+      pickScreenTracks([
+        {
+          identity: "peer-host",
+          tracks: [
+            MIC_AS_PRODUCTION_SENDS_IT,
+            { source: TrackSource.SCREEN_SHARE, sid: "TR_screen" },
+            { source: TrackSource.SCREEN_SHARE_AUDIO, sid: "TR_screen_audio" },
+          ],
+        },
+      ]),
+    ).toEqual({ videoTrackId: "TR_screen", audioTrackId: "TR_screen_audio" });
+  });
+
+  /**
+   * The Saturday shape: a window or a whole screen, or a tab with the audio
+   * box unticked. There is no `SCREEN_SHARE_AUDIO` track, so the egress has
+   * nothing to put in its audio channel and the seatless audience watches a
+   * silent film. The microphone sitting right there is NOT picked up, and this
+   * asserts that rather than assuming it: a Track Composite egress takes one
+   * audio sid and the film's audio has to be able to win it.
+   */
+  it("leaves the audience silent rather than reaching for the microphone", () => {
+    expect(
+      pickScreenTracks([
+        {
+          identity: "peer-host",
+          tracks: [
+            MIC_AS_PRODUCTION_SENDS_IT,
+            { source: TrackSource.SCREEN_SHARE, sid: "TR_screen" },
+          ],
+        },
+      ]),
+    ).toEqual({ videoTrackId: "TR_screen", audioTrackId: undefined });
+  });
+
+  it("never carries a camera", () => {
+    const picked = pickScreenTracks([
+      {
+        identity: "peer-host",
+        tracks: [
+          { source: TrackSource.CAMERA, sid: "TR_cam" },
+          { source: TrackSource.SCREEN_SHARE, sid: "TR_screen" },
+        ],
+      },
+    ]);
+    expect(picked?.videoTrackId).toBe("TR_screen");
+  });
+
+  it("is nothing at all when nobody is sharing", () => {
+    expect(
+      pickScreenTracks([
+        { identity: "peer-host", tracks: [MIC_AS_PRODUCTION_SENDS_IT] },
+      ]),
+    ).toBeNull();
+  });
+
+  /**
+   * `TrackInfo.source` arrives as the enum's numeric value over the wire and as
+   * its NAME through some of the SDK's own shapes, and `isTrackSource` accepts
+   * both. Dropping half of that reads as "nobody is sharing" forever.
+   */
+  it("reads a source given by name as well as by number", () => {
+    expect(
+      pickScreenTracks([
+        {
+          identity: "peer-host",
+          tracks: [
+            { source: "SCREEN_SHARE", sid: "TR_screen" },
+            { source: "SCREEN_SHARE_AUDIO", sid: "TR_screen_audio" },
+          ],
+        },
+      ]),
+    ).toEqual({ videoTrackId: "TR_screen", audioTrackId: "TR_screen_audio" });
+  });
+
+  /**
+   * TWO SHARERS, which a party with co-hosts can genuinely have: both hold
+   * START_WATCH_PARTY, so the SFU refuses neither. The first version scanned
+   * every participant into two variables, so the audience could have been sent
+   * one person's picture over the other person's sound, decided by whatever
+   * order `listParticipants` answered in.
+   */
+  it("takes both tracks from one participant, never one from each", () => {
+    const picked = pickScreenTracks([
+      {
+        identity: "peer-cohost",
+        tracks: [{ source: TrackSource.SCREEN_SHARE, sid: "TR_cohost_screen" }],
+      },
+      {
+        identity: "peer-host",
+        tracks: [
+          { source: TrackSource.SCREEN_SHARE, sid: "TR_host_screen" },
+          { source: TrackSource.SCREEN_SHARE_AUDIO, sid: "TR_host_audio" },
+        ],
+      },
+    ]);
+    // Without the presenter, the first sharer found wins and takes ONLY its
+    // own audio with it, which here is none.
+    expect(picked).toEqual({
+      videoTrackId: "TR_cohost_screen",
+      audioTrackId: undefined,
+    });
+  });
+
+  it("follows the presenter the room decided on, not the first sharer listed", () => {
+    expect(
+      pickScreenTracks(
+        [
+          {
+            identity: "peer-cohost",
+            tracks: [
+              { source: TrackSource.SCREEN_SHARE, sid: "TR_cohost_screen" },
+            ],
+          },
+          {
+            identity: "peer-host",
+            tracks: [
+              { source: TrackSource.SCREEN_SHARE, sid: "TR_host_screen" },
+              { source: TrackSource.SCREEN_SHARE_AUDIO, sid: "TR_host_audio" },
+            ],
+          },
+        ],
+        "peer-host",
+      ),
+    ).toEqual({
+      videoTrackId: "TR_host_screen",
+      audioTrackId: "TR_host_audio",
+    });
+  });
+
+  it("falls back to any sharer when the presenter is not in the listing yet", () => {
+    expect(
+      pickScreenTracks(
+        [
+          {
+            identity: "peer-cohost",
+            tracks: [
+              { source: TrackSource.SCREEN_SHARE, sid: "TR_cohost_screen" },
+            ],
+          },
+        ],
+        "peer-host",
+      )?.videoTrackId,
+    ).toBe("TR_cohost_screen");
+  });
+});
+
+/**
+ * THE HOST HAS TO BE ABLE TO SEE THIS WHILE THEY ARE LIVE.
+ *
+ * A silent transcode is invisible from every seat that exists: the host hears
+ * the film out of their own speakers, the seated room hears both the film and
+ * every microphone over WebRTC, and the only people who can tell are the
+ * seatless audience, who have no way to say so. So the server states it on the
+ * stream, logs it, and counts it.
+ */
+describe("whether the transcode carries any audio", () => {
+  it("says so on the stream and in the log when it does", async () => {
+    enableHls();
+    logEvent.mockClear();
+    setLiveHlsTestHooks({
+      egress: {
+        startTrackCompositeEgress: async () => ({ egressId: "EG_1" }),
+        stopEgress: vi.fn(),
+      },
+      findTracks: async () => ({
+        videoTrackId: "TR_V",
+        audioTrackId: "TR_A",
+      }),
+    });
+
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(stream?.hasAudio).toBe(true);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsStarted",
+      expect.objectContaining({ audio: "screen" }),
+    );
+    expect(liveHlsActivity().silentSessions).toBe(0);
+  });
+
+  it("says so on the stream, in the log and on the dashboard when it does not", async () => {
+    enableHls();
+    logEvent.mockClear();
+    setLiveHlsTestHooks({
+      egress: {
+        startTrackCompositeEgress: async () => ({ egressId: "EG_1" }),
+        stopEgress: vi.fn(),
+      },
+      findTracks: async () => ({ videoTrackId: "TR_V" }),
+    });
+
+    const stream = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    expect(stream?.hasAudio).toBe(false);
+    expect(logEvent).toHaveBeenCalledWith(
+      "voice.hlsStarted",
+      expect.objectContaining({ audio: "none" }),
+    );
+    // The number an operator can read DURING a party, rather than grepping
+    // the log after it. `silentSessions` at `sessions` on a film night is the
+    // whole audience hearing nothing.
+    expect(liveHlsActivity()).toEqual(
+      expect.objectContaining({ sessions: 1, silentSessions: 1 }),
+    );
+  });
+});
+
 });
