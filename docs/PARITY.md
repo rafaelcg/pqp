@@ -92,6 +92,7 @@ Paths are relative to the repo root. `ios/` means
 | Voice channel row: tap opens the view, does not join | full: a click/tap only ever selects and shows chat + stage, a genuine double click/tap joins (`touch-manipulation` on the row so a phone emits `dblclick`), Enter joins, the Entrar button, the context menu and the header call button still join (`client/src/components/layout/channel-list.tsx` `ChannelRow`). Stricter than #360, which also joined on a second tap of the already-selected row; the phones never had that either, and their one-press join is the same header button web has | same | full since #339 (`ios/`) | full since #339 (`android/app/src/main/kotlin/gg/pqp/app/ui/screens/ChannelsScreen.kt`) |
 | Mesh voice, mute, deafen | full (`client/src/lib/peer-connection-manager.ts`) | same | full (`ios/Voice/VoiceClient.swift`) | full, audio measured by `getStats` but never by a human ear (`android/voice/VoiceEngine.kt`, `docs/ANDROID.md` "What is real") |
 | LiveKit / SFU voice | full (`client/src/lib/livekit-session.ts`) | same | full: joins, publishes mic, receives shares and publishes one with the web's ladder (`ios/Voice/LiveKitVoiceClient.swift`, `ios/Voice/VideoQuality.swift` `sfuScreenPlan`) | partial: audio, share watching with its sound, and camera tiles; no share publish, no camera publish, no stats (`android/voice/LiveKitEngine.kt`) |
+| Follow a mid-call room promotion | full: keeps the seat and the peer id, republishes mic / camera / share (`client/src/hooks/use-voice.ts` `voice-transport-changed`) | same | missing: the seat is released with `voice-transport-unsupported { reason: "promoted" }` and the call ends | full for audio: declares the capability, stops its mesh share, swaps engines against the same peer id (`android/voice/TransportChange.kt`, `android/voice/VoiceController.kt` `onTransportChanged`). Audio cuts for the token mint plus the SFU handshake. **Unverified on hardware** |
 | Resume media across an API restart | full, 90 s orphan window (`client/src/lib/realtime.ts`, `client/src/hooks/use-voice.ts`) | same, plus `setBackgroundThrottling(false)` (`electron/main.js:939`) | partial: LiveKit resumes, mesh is rebuilt (`ios/Voice/VoiceModel.swift:507`) | partial: call is rebuilt, not resumed; `resumeToken` sent since PR #270 (`android/voice/VoiceController.kt`) |
 | Speaking indicators | full (`client/src/hooks/use-voice.ts`) | same | full, 300 ms `audioLevel` polling (`ios/Voice/VoiceClient.swift`) | missing |
 | Per-peer volume | full (`client/src/components/voice/peer-tile-controls.tsx`) | same | full (`ios/Voice/RemoteAudio.swift`) | missing |
@@ -369,17 +370,18 @@ On the current code the top of the list is item 2, Android push.
 13. iOS: game connections (Steam, Twitch, Battle.net) so a Twitch-linked profile shows on the phone.
 14. Android: members list, kick, ban, timeout; then roles.
 14b. Android: camera **send** (receive shipped; `CAMERA_LIMIT` allows eight on a media-server room).
-14c. iOS and Android: **follow a room promotion** (`voice-transport-changed`). A
-    mesh room whose fourth camera moves it to the SFU releases every seat that
-    did not declare `SOCKET_CAPS.voiceTransportChanged` at `auth`; both native
-    clients are in that group, so a phone in such a call is dropped with
+14c. iOS: **follow a room promotion** (`voice-transport-changed`). A mesh room
+    whose fourth seat or fourth camera moves it to the SFU releases every seat
+    that did not declare `SOCKET_CAPS.voiceTransportChanged` at `auth`; iOS is
+    still in that group, so a phone in such a call is dropped with
     `voice-transport-unsupported { reason: "promoted" }` and has to rejoin.
-    Both already run LiveKit rooms, so the missing piece is only the mid-call
-    swap: declare the cap, then on the frame tear the mesh engine down and
-    bring the LiveKit engine up **against the same peer id**, keeping mute,
-    camera and share intent. Android's `WireProtocolTest.deliberatelyIgnored`
-    holds the entry to delete when it lands. See `docs/voice-backends.md`
-    "The one time a live room changes transport".
+    iOS already runs LiveKit rooms, so the missing piece is only the mid-call
+    swap: declare the cap, then on the frame tear the mesh client down and
+    bring the LiveKit client up **against the same peer id**, keeping mute,
+    camera and share intent. **Android landed this**: see
+    `android/voice/TransportChange.kt` for the branches that move and the ones
+    that stay put, and `VoiceController.onTransportChanged` for the swap. See
+    `docs/voice-backends.md` "The one time a live room changes transport".
 15. iOS and Android: roles and permission bits beyond owner / admin / member.
 16. iOS: group DMs (API takes nine, picker takes one).
 17. Android: presence in servers and a self status picker.

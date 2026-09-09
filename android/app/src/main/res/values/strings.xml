@@ -202,6 +202,9 @@
     <string name="voice_listen_only">Listen only</string>
     <string name="voice_listen_only_locked">Listening only. You do not have permission to speak in this channel.</string>
     <string name="voice_speak_granted">You can speak now. Unmute when you are ready.</string>
+    <string name="voice_promoted_cameras">This call became a large room so more cameras fit</string>
+    <string name="voice_promoted_screens">This call became a large room so more screens fit</string>
+    <string name="voice_promoted_room">This call became a large room so more people fit</string>
 
     <!-- Push notifications -->
     <string name="push_channel_messages">Mentions and messages</string>

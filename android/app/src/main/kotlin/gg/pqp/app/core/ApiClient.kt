@@ -240,10 +240,18 @@ class ApiClient(
      * a mesh client in a LiveKit room is a name on the roster that can neither
      * hear nor be heard.
      */
-    suspend fun voiceSession(voiceChannelId: String, peerId: String): VoiceSessionResponse {
+    suspend fun voiceSession(
+        voiceChannelId: String,
+        peerId: String,
+        resumeToken: String? = null,
+    ): VoiceSessionResponse {
         val body = json.encodeToString(
             VoiceSessionRequest.serializer(),
-            VoiceSessionRequest(voiceChannelId = voiceChannelId, peerId = peerId),
+            VoiceSessionRequest(
+                voiceChannelId = voiceChannelId,
+                peerId = peerId,
+                resumeToken = resumeToken,
+            ),
         )
         return post("/api/voice/token", body)
     }

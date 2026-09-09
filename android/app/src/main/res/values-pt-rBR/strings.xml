@@ -192,6 +192,9 @@
     <string name="voice_listen_only">Só ouvindo</string>
     <string name="voice_listen_only_locked">Só ouvindo. Você não tem permissão para falar neste canal.</string>
     <string name="voice_speak_granted">Agora você pode falar. Ligue o microfone quando quiser.</string>
+    <string name="voice_promoted_cameras">Essa call virou uma sala grande pra caber mais câmeras</string>
+    <string name="voice_promoted_screens">Essa call virou uma sala grande pra caber mais telas</string>
+    <string name="voice_promoted_room">Essa call virou uma sala grande pra caber mais gente</string>
 
     <!-- Notificações -->
     <string name="push_channel_messages">Menções e mensagens</string>

@@ -283,7 +283,11 @@ class VoiceController(
         session = { peerId ->
             val channelId = _state.value.channelId
                 ?: error("No voice channel to mint an SFU token for")
-            session.api.voiceSession(channelId, peerId)
+            // The HMAC `welcome` minted for exactly this peer, when we have
+            // one. It is the only proof that works when the mint lands on an
+            // API instance that never saw the join, which is every promotion
+            // followed on a two-machine deployment.
+            session.api.voiceSession(channelId, peerId, resumeToken)
         },
         onPeerState = ::onPeerMediaState,
         onFailed = { reason -> onVoiceBackendUnreachable(reason) },
@@ -382,17 +386,20 @@ class VoiceController(
     private var pendingIce: List<IceServer> = emptyList()
 
     /**
-     * The peer id and resume token `welcome` handed us, kept for one purpose.
+     * The peer id and resume token `welcome` handed us, kept for two purposes.
      *
      * `POST /api/voice/leave` is the only way to leave a room when the socket
      * has already gone, and this pair is its credential. The route is handled
      * before Clerk resolution precisely so a dying client can still use it.
      *
-     * **This client never asks to resume.** It rebuilds a call after a socket
-     * drop rather than resuming one (see [followConnection]), and claiming
-     * `resume: true` without resuming would make the server hold the seat for
-     * 90 seconds. Holding the token is not the same as sending it back on a
-     * join, and only the leave path ever reads it.
+     * `POST /api/voice/token` is the other: the same HMAC proves this seat is
+     * ours when the mint lands on an API instance that never saw the join.
+     *
+     * **This client still never asks to resume a call.** It rebuilds after a
+     * socket drop rather than resuming one (see [followConnection]), and
+     * claiming `resume: true` without resuming would make the server hold the
+     * seat for 90 seconds. Holding the token, and presenting it to prove who
+     * we are, is not the same as sending it back on a *join*.
      */
     @Volatile private var resumePeerId: String? = null
 
@@ -704,6 +711,7 @@ class VoiceController(
                 "voice-speak-changed" -> onSpeakChanged(frame)
                 "voice-room-full" -> onRefused(frame, Refusal.RoomFull)
                 "voice-transport-unsupported" -> onRefused(frame, Refusal.TransportUnsupported)
+                "voice-transport-changed" -> onTransportChanged(frame)
                 "screen-share-denied" -> onScreenShareDenied(frame)
                 "voice-moderation" -> onModeration(frame)
                 "offer" -> frame.str("sdp")?.let { engine.handleOffer(frame.str("from")!!, it) }
@@ -868,6 +876,108 @@ class VoiceController(
         // dropped socket all left everyone else's roster saying this person was
         // live while their microphone was off. The web does the same thing on
         // every new peer id (`client/src/components/voice/voice-state-sync.ts`).
+        pushVoiceState()
+    }
+
+    /**
+     * THE ROOM MOVED ONTO THE VOICE SERVER, MID-CALL, AND WE FOLLOW IT.
+     *
+     * Somebody turned on a fourth camera, or the room simply reached
+     * `MESH_ROOM_PROMOTION_SIZE`, and the server moved the whole room rather
+     * than refusing them. Our seat, our peer id, our mute and our place on the
+     * roster all survive: only the media path changes.
+     *
+     * Deliberately NOT a rejoin, which is what makes it different from every
+     * other way this client rebuilds a call ([followConnection] rebuilds,
+     * never resumes). A rejoin would mint a new peer id and tell the room we
+     * left and arrived; the seat is still ours and the server still holds it,
+     * so this is the media half of [onWelcome]'s SFU branch and nothing else,
+     * run against the peer id we already have.
+     *
+     * Which branches move and which stay put is [transportChangePlan], where a
+     * JVM test can hold them to the rule. Reaching this method at all is the
+     * promise `RealtimeClient.WIRE_CAPS` makes: the server only sends this
+     * frame to a socket that declared `voice-transport-changed`, and it stops
+     * releasing that socket's seat in exchange. A build that declared it and
+     * then did nothing here would leave the person seated in a room whose
+     * media they cannot reach, which is worse than the visible drop it
+     * replaced.
+     *
+     * **Audio does cut, briefly.** The mesh is disposed here and the SFU leg
+     * is an HTTP token mint plus a LiveKit handshake away, so the call goes
+     * quiet for that round trip and the bar says "Joining…" until
+     * [LiveKitEngine] reports it is publishing. The web client has the same
+     * gap for the same reason. It is a pause in a call that continues, rather
+     * than the hang-up this replaces.
+     */
+    private fun onTransportChanged(frame: JsonObject) {
+        val plan = transportChangePlan(
+            frameChannelId = frame.str("voiceChannelId"),
+            frameTransport = frame.str("transport"),
+            reason = frame.str("reason"),
+            frameParticipants = frame.participants("participants"),
+            heldParticipants = _state.value.participants,
+            inChannelId = _state.value.channelId,
+            active = _state.value.isActive,
+            // The engine is the honest reading of where this device's media
+            // actually is, and it is what [swapTransport] keys off.
+            currentTransport = engineKind,
+            localPeerId = _state.value.localPeerId,
+            sharingScreen = _state.value.sharingScreen || engine.isSharingScreen,
+        ) ?: return
+
+        Log.i(TAG, "room moved to ${plan.transport.name}; keeping peer ${plan.peerId}")
+
+        // First, and while the mesh engine that owns the capture is still
+        // alive. It also sends `set-sharing-screen false`, so the roster stops
+        // showing a presenter this device is about to stop being.
+        if (plan.stopScreenShare) stopScreenShare()
+
+        // The mesh goes unconditionally. Every peer connection in it is
+        // addressed to a room whose `offer` / `answer` / `ice-candidate` the
+        // server has stopped relaying, so leaving one up is a dead connection
+        // and a stale tile; disposing it is also what hands the microphone
+        // back before LiveKit's own recorder asks for it.
+        swapTransport(plan.transport)
+        peerMedia.clear()
+
+        // Before any media is built, exactly as on `welcome`: a fresh engine
+        // starts out allowed, so a listen-only seat has to be told again.
+        engine.setCanPublishAudio(_state.value.canSpeak)
+
+        // Written **before** the engine is started, for the same reason
+        // [onWelcome] does it: `LiveKitEngine.start` hands the join to a
+        // coroutine that reports Connected once the media is up, and a state
+        // write sequenced after it would overwrite that with the Joining it
+        // was already too late to claim.
+        _state.value = _state.value.copy(
+            stage = VoiceStage.Joining,
+            unreachablePeers = 0,
+            // This client publishes a screen on mesh only, so the button goes
+            // away with the mesh. Watching somebody else's is unaffected.
+            screenShareSupported = false,
+            notice = context.getString(
+                when (plan.notice) {
+                    PromotionNotice.Cameras -> R.string.voice_promoted_cameras
+                    PromotionNotice.Screens -> R.string.voice_promoted_screens
+                    PromotionNotice.Room -> R.string.voice_promoted_room
+                },
+            ),
+        )
+
+        engine.start(plan.peerId, pendingIce)
+        engine.setMuted(_state.value.muted || _state.value.deafened)
+        engine.setDeafened(_state.value.deafened, _state.value.muted)
+        plan.participants.forEach { engine.addPeer(it.peerId) }
+        // The roster's enforcement steps, on the new engine: a moderator's
+        // mute on us or on a peer, and the camera and screen bookkeeping.
+        // Stage is left alone; it stays Joining until the media is up.
+        absorbRoster(plan.participants)
+
+        // The seat is the same one; the publication behind it is brand new.
+        // The SFU built the microphone track from this device's flags and
+        // nobody has told the roster, so both flags go out again, exactly as
+        // on every join.
         pushVoiceState()
     }
 
