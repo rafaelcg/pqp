@@ -15,6 +15,16 @@ ao vivo; a picture exists because somebody is sharing. Conflating those two
 was the bug that made a viewer stare at a blank pane and conclude nothing
 worked.
 
+**What is tested, and by whom.** The client journey is pinned end to end in
+`client/e2e/watch-party.spec.ts`: creating one from the sidebar, the setup
+surface, Ir ao vivo, who does and does not get the create control, the block
+appearing for a second real account, the audience surface without a seat, the
+player disappearing when that viewer takes a seat, and the three states a real
+event produces. It runs with the flag genuinely on (`?watchParty=1`) and
+substitutes exactly one thing CI cannot make: the `stream` field, because there
+is no LiveKit and no egress on a runner. Everything a person still has to click
+by hand, in order, is `docs/WATCH_PARTY_QA.md`.
+
 ## The event
 
 ### One row, not two
