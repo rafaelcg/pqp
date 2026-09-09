@@ -605,6 +605,53 @@ logged `CLOSED`, then `socket back; rebuilding the call in <id>`, then a **new**
 peer id reaching `CONNECTED` with audio flowing again, about twenty seconds
 later.
 
+### A room promoted mid-call is followed, and it is the one thing that is not a rebuild
+
+Everything above says a call is rebuilt rather than resumed. There is exactly
+one exception, and it is not a socket drop: the server may move a live mesh
+room onto the voice server, so that a fourth camera, a third screen, a ninth
+person, or simply a fourth seat, fits. `MESH_ROOM_PROMOTION_SIZE` is 4, so an
+ordinary five-friend call meets this.
+
+Before this, the phone was **dropped out of the call** when that happened. The
+server only sends `voice-transport-changed` to a socket that declared
+`SOCKET_CAPS.voiceTransportChanged` at `auth`; every other seat is released and
+told with `voice-transport-unsupported { reason: "promoted" }`. Measured on
+production over 24 hours: five rooms promoted, nine seats followed the move,
+**nine seats were released**, and every one of those was a person whose call
+ended mid-sentence.
+
+Android now declares the capability (`RealtimeClient.WIRE_CAPS`) and follows
+the frame. The seat, the peer id, the mute and the place on the roster are all
+kept: only the media path changes, so nobody sees a leave and a join. The
+branches that decide whether to move are a pure function in
+`voice/TransportChange.kt` and the swap is `VoiceController.onTransportChanged`,
+which stops any outgoing screen share (this client publishes one on mesh only),
+disposes the mesh engine, and brings `LiveKitEngine` up against the same peer
+id.
+
+**Declaring the capability is a promise with teeth.** In exchange for it the
+server stops releasing this seat, so a build that asks for the frame and then
+fails to act on it leaves the person listed in everybody's roster in a room
+whose media they cannot reach: a silent dead call instead of a visible drop.
+That is why `WireProtocolTest` fails if `WIRE_CAPS` names the frame and no
+Android source has a branch for it, and why the frame is on the
+cannot-work-without list rather than the ignore list.
+
+**Audio does cut, briefly.** The mesh is disposed before the SFU leg exists,
+and that leg is an HTTP token mint plus a LiveKit handshake away, so the call
+goes quiet for that round trip and the bar says "Joining…" until the SFU
+reports it is publishing. The web client has the same gap for the same reason.
+A pause in a call that continues, rather than a hang-up.
+
+**Not verified on hardware.** The decision logic is covered by
+`TransportChangeTest`, and every branch of it was proven by breaking the code
+on purpose. The actual mid-call swap needs a room of four real clients against
+a real LiveKit deployment, which no emulator pair here can produce. What a
+device has to show: the phone stays in the call, the participant count does not
+flicker, audio comes back, and the notice reads *Essa call virou uma sala
+grande…*.
+
 ### Audio goes to the speaker, and that is not a preference
 
 `MODE_IN_COMMUNICATION` on its own routes to the **earpiece**. That is right for

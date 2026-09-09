@@ -153,6 +153,12 @@ class WireProtocolTest {
             "voice-roster-delta",
             "voice-room-full",
             "voice-transport-unsupported",
+            // The mid-call promotion. Losing this branch while `WIRE_CAPS`
+            // still asks for the frame is the worst outcome in this file: the
+            // server stops releasing the seat in exchange for the promise, so
+            // the person stays on everybody's roster in a room whose media
+            // they cannot reach. A visible drop became a silent dead call.
+            "voice-transport-changed",
             // The mid-call SPEAK revoke. In a mesh room this client is the
             // only enforcement, so losing the branch is an open microphone.
             "voice-speak-changed",
@@ -220,18 +226,6 @@ class WireProtocolTest {
         // to `packages/shared`, which is not one of its declared inputs.
         "voice-stream" to "no HLS watch surface on the phone",
         "channel-live" to "no live badge or seatless watch surface on the phone",
-        // A mesh room moved onto the voice server mid-call so a fourth camera
-        // would fit. Following it means tearing the mesh down and bringing a
-        // LiveKit session up against the SAME peer id, which this client has
-        // no path for: its own reconnect story is "rebuild, never resume"
-        // (VoiceController.followConnection). The server knows: it only sends
-        // this frame to sockets that declared SOCKET_CAPS.voiceTransportChanged
-        // at auth, which this client does not, and it releases the seats that
-        // did not with `voice-transport-unsupported` instead. So the branch is
-        // missing on purpose and the phone is told, rather than left building
-        // a mesh whose signaling the server has stopped relaying.
-        "voice-transport-changed" to
-            "Android cannot move media mid-call; the server releases its seat with voice-transport-unsupported instead",
     )
 
     /**
@@ -409,53 +403,126 @@ class WireProtocolTest {
     }
 
     /**
-     * THE CAPABILITY THIS BUILD ASKS FOR, against the two places that answer.
+     * The promotion frame, field for field and reason for reason.
      *
-     * `voice-roster-delta` is opt-in per socket: the server sends whole
-     * rosters to anything that does not declare it, so getting the string
-     * wrong, or dropping the array from the handshake, produces no error
-     * anywhere. The app carries on working and the phone quietly keeps paying
-     * for ~99 kB frames it does not need. That is precisely the shape of
-     * CLAUDE.md pitfall 9, where Cloudflare TURN was configured, deployed and
-     * never once used, so the only defence is to pin the string in both
-     * directions rather than trust it.
+     * `VoiceController.onTransportChanged` reads four keys off this frame by
+     * name, out of an undecoded `JsonObject`. A renamed key does not fail to
+     * compile and does not throw: it reads as null, and the plan quietly
+     * declines to move. Since the server has already stopped releasing this
+     * seat, declining is a seat on the roster with no media behind it.
      *
-     * Four hand-copies of one literal: `@pqp/shared`'s schema, the server's
-     * `SOCKET_CAPS`, the web client's `WIRE_CAPS`, and this app's. Three of
-     * them are read off disk here.
+     * The reasons are only the sentence, so a new one is not a failure. It is
+     * checked anyway because `promotionNoticeFor` has an `else` branch, and an
+     * `else` is exactly what makes a new reason invisible.
      */
     @Test
-    fun `the roster delta capability matches the server and the web client`() {
-        val cap = "voice-roster-delta"
+    fun `the promotion frame matches shared`() {
+        val keys = RepoSources.objectKeys(signaling, "voiceTransportChangedMessageSchema")
+        listOf("type", "voiceChannelId", "transport", "reason", "participants").forEach { key ->
+            assertTrue(
+                "voiceTransportChangedMessageSchema no longer carries \"$key\". " +
+                    "VoiceController.onTransportChanged reads it by name off a raw JsonObject, " +
+                    "so a rename reads as null and the promotion is silently not followed.",
+                keys.contains(key),
+            )
+        }
 
-        assertTrue(
-            "$signaling no longer declares the $cap frame, so this app is negotiating " +
-                "a capability that does not exist any more.",
-            RepoSources.frameTypeLiterals(signaling).contains(cap),
+        // Parsed out of the schema's inline `z.enum([...])` rather than a
+        // named const, so the reason list is read where it actually lives.
+        val reasons = Regex("""reason:\s*z\.enum\(\[([^\]]*)]""")
+            .find(RepoSources.stripComments(RepoSources.read(signaling)))
+            ?.groupValues
+            ?.get(1)
+            ?.let { Regex(""""([^"]+)"""").findAll(it).map { m -> m.groupValues[1] }.toSet() }
+            ?: emptySet()
+
+        assertEquals(
+            "The promotion reasons changed. `promotionNoticeFor` in TransportChange.kt maps " +
+                "them onto three sentences and falls back to \"the room grew\", which stays " +
+                "true of any new reason. Check the fallback still reads right, then update " +
+                "this list.",
+            setOf("cameras", "screens", "room-full", "room-size", "stale-pin"),
+            reasons,
         )
-        assertTrue(
-            "server/src/ws/sockets.ts no longer names \"$cap\" in SOCKET_CAPS. The server " +
-                "matches this string exactly; a rename there makes every Android socket " +
-                "silently fall back to whole rosters.",
-            RepoSources.read("server/src/ws/sockets.ts").contains("\"$cap\""),
-        )
+    }
+
+    /**
+     * THE CAPABILITIES THIS BUILD ASKS FOR, against the places that answer.
+     *
+     * Both are opt-in per socket and both fail in silence when the string is
+     * wrong. `voice-roster-delta` fails cheaply: the server keeps sending
+     * whole rosters, the app works, and the phone quietly pays for ~99 kB
+     * frames it does not need. `voice-transport-changed` fails *expensively*
+     * in the other direction: the server stops releasing the seat of a socket
+     * that declared it, so a build whose string is right but whose handler is
+     * missing leaves the person on everybody's roster in a room whose media
+     * they cannot reach.
+     *
+     * That is CLAUDE.md pitfall 9 in both directions, so the strings are
+     * pinned against every other copy rather than trusted. Four hand-copies of
+     * each literal: `@pqp/shared`'s schema, the server's `SOCKET_CAPS`, the
+     * web client's `WIRE_CAPS`, and this app's. Three of them are read off
+     * disk here.
+     *
+     * Exact equality on the list, not `contains`, so adding an entry without
+     * its handler fails here and has to be argued for in the diff.
+     */
+    @Test
+    fun `the capabilities this build negotiates match the server and the web client`() {
+        val caps = listOf("voice-roster-delta", "voice-transport-changed")
+
+        for (cap in caps) {
+            assertTrue(
+                "$signaling no longer declares the $cap frame, so this app is negotiating " +
+                    "a capability that does not exist any more.",
+                RepoSources.frameTypeLiterals(signaling).contains(cap),
+            )
+            assertTrue(
+                "server/src/ws/sockets.ts no longer names \"$cap\" in SOCKET_CAPS. The server " +
+                    "matches this string exactly, and a rename there is silent on both sides.",
+                RepoSources.read("server/src/ws/sockets.ts").contains("\"$cap\""),
+            )
+            assertTrue(
+                "client/src/lib/realtime.ts no longer declares \"$cap\". The two clients must " +
+                    "ask for the same string; a phone left behind is a phone paying for frames " +
+                    "the browser stopped receiving, or sitting in a call it cannot hear.",
+                RepoSources.read("client/src/lib/realtime.ts").contains("\"$cap\""),
+            )
+        }
+
         assertTrue(
             "server/src/ws/index.ts no longer reads `caps` off the auth frame, so nothing " +
                 "this handshake declares is heard at all.",
             RepoSources.stripComments(RepoSources.read(wsIndex)).contains("caps"),
         )
-        assertTrue(
-            "client/src/lib/realtime.ts no longer declares \"$cap\". The two clients must " +
-                "ask for the same string; a phone left behind is a phone on mobile data " +
-                "paying for frames the browser stopped receiving.",
-            RepoSources.read("client/src/lib/realtime.ts").contains("\"$cap\""),
-        )
 
         assertEquals(
             "RealtimeClient.WIRE_CAPS is the promise this build makes about which frames " +
                 "it can apply. Add an entry only alongside its handler.",
-            listOf(cap),
+            caps,
             RealtimeClient.WIRE_CAPS,
+        )
+    }
+
+    /**
+     * The promise and the handler, tied together in the direction that hurts.
+     *
+     * `voice-transport-changed` is the one capability whose absent handler is
+     * worse than never having asked, because the server withholds the
+     * `voice-transport-unsupported` release in exchange for the declaration.
+     * The test above pins the string; this one pins that the branch it
+     * promises actually exists in the shipped sources.
+     */
+    @Test
+    fun `declaring the promotion capability means the frame is handled`() {
+        val cap = "voice-transport-changed"
+        if (!RealtimeClient.WIRE_CAPS.contains(cap)) return
+        assertTrue(
+            "RealtimeClient.WIRE_CAPS declares \"$cap\" and no Android source has a `when` " +
+                "branch for it. The server answers that declaration by NOT releasing this " +
+                "seat when a room is promoted, so the call becomes a seat on the roster with " +
+                "no media behind it: silent, and invisible from every screen.",
+            RepoSources.frameTypesHandled().contains(cap),
         )
     }
 
