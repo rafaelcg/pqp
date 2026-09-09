@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
   Clapperboard,
   Crown,
@@ -21,6 +21,11 @@ import {
   type WatchPartyOptions,
 } from "@pqp/shared";
 import { WatchPartyOptionsPanel } from "@/components/watch-party/watch-party-options";
+import {
+  canAppointCohosts,
+  WatchPartyCohosts,
+  type CohostCandidate,
+} from "@/components/watch-party/watch-party-cohosts";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -82,6 +87,21 @@ export interface WatchPartyPanelProps {
   onOptionsChange: (options: Partial<WatchPartyOptions>) => Promise<void>;
   onRename: (name: string) => Promise<void>;
   onClaimHost: () => Promise<void>;
+  /**
+   * Everybody the host may hand a co-host badge to: this server's members.
+   *
+   * NOT the room's occupants, and the reason is the surface rather than the
+   * role. The moment a host most needs a co-host is before Ir ao vivo, and a
+   * draft is invisible, so its room is empty by construction; a list built
+   * from the voice roster would be blank on the one screen that matters most.
+   * The server re-checks membership and channel access on every promotion, so
+   * this is an affordance and never the authority.
+   */
+  cohostCandidates?: readonly CohostCandidate[];
+  /** The host promoting somebody. Host only; the server enforces that too. */
+  onPromoteCohost?: (userId: string) => Promise<void>;
+  /** The host taking the badge back. */
+  onDemoteCohost?: (userId: string) => Promise<void>;
   onJoinCall: () => void;
   /** Watch this party without a seat, or take the audience seat with no mic. */
   onWatchAsAudience?: () => void;
@@ -197,6 +217,45 @@ export function WatchPartyPanel(props: WatchPartyPanelProps) {
     case "none":
       return null;
   }
+}
+
+/**
+ * The co-host list, drawn identically on the setup surface and in the live
+ * Opções drawer.
+ *
+ * ONE HELPER RATHER THAN TWO CALL SITES because `promoteCohost` is legal in
+ * `draft`, `scheduled` AND `live`, so a host can appoint a backup before the
+ * show and again in the middle of it, and the two must be the same control.
+ * Nothing renders at all without the callbacks: a section whose buttons did
+ * nothing would read as a broken feature rather than an absent one.
+ */
+function cohostSection(
+  props: WatchPartyPanelProps,
+  party: WatchParty,
+  className: string,
+): ReactElement | null {
+  // THE DIVIDER IS INSIDE THE GATE, not around the call. The component itself
+  // draws nothing for anybody but the host, so a wrapper outside this check
+  // left a co-host looking at an empty bordered box under the options: a
+  // separator with nothing to separate, which reads as a control that failed
+  // to load rather than one they do not have.
+  if (
+    !props.onPromoteCohost ||
+    !props.onDemoteCohost ||
+    !canAppointCohosts(party)
+  ) {
+    return null;
+  }
+  return (
+    <div className={className}>
+      <WatchPartyCohosts
+        party={party}
+        candidates={props.cohostCandidates ?? []}
+        onPromote={props.onPromoteCohost}
+        onDemote={props.onDemoteCohost}
+      />
+    </div>
+  );
 }
 
 // ------------------------------------------------------------- no party yet
@@ -391,6 +450,12 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
             audienceCount={props.audienceCount}
             onChange={(patch) => void props.onOptionsChange(patch)}
           />
+
+          {/* BEFORE Ir ao vivo is where this belongs. A host who names a
+              backup here has one for the whole show; a host who only finds
+              this control after their own connection has already died has
+              nothing. */}
+          {cohostSection(props, party, "mt-1 border-t border-ink-4/60 pt-3")}
         </aside>
       </div>
 
@@ -699,6 +764,10 @@ function LiveSurface(
         audienceCount={props.audienceCount}
         onChange={(patch) => void props.onOptionsChange(patch)}
       />
+      {/* Mid-show, and it is the same control the setup surface had. A co-host
+          promoted here is granted SPEAK on the spot by the server, so somebody
+          brought in to help can actually talk to the room. */}
+      {cohostSection(props, party, "mt-3 border-t border-ink-4/60 pt-3")}
       {/* The queue is a moderation surface and only the people running the
           party see it: an audience that can watch who asked and was passed
           over is an audience having a worse time. */}

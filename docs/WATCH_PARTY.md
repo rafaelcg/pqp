@@ -19,8 +19,10 @@ worked.
 `client/e2e/watch-party.spec.ts`: creating one from the sidebar, the setup
 surface, Ir ao vivo, who does and does not get the create control, the block
 appearing for a second real account, the audience surface without a seat, the
-player disappearing when that viewer takes a seat, and the three states a real
-event produces. It runs with the flag genuinely on (`?watchParty=1`) and
+player disappearing when that viewer takes a seat, the three states a real
+event produces, and the whole takeover: the host promoting a co-host, that
+promotion reaching a second real account's running client on the socket, the
+host's browser genuinely closing, and the co-host pressing Assumir. It runs with the flag genuinely on (`?watchParty=1`) and
 substitutes exactly one thing CI cannot make: the `stream` field, because there
 is no LiveKit and no egress on a runner. Everything a person still has to click
 by hand, in order, is `docs/WATCH_PARTY_QA.md`.
@@ -154,10 +156,116 @@ browser reload, which reconnects in seconds. Much longer leaves a room "live"
 with nobody running it, which is worse than ending it, because the sidebar
 keeps promising a show.
 
-**This clock is not the stream.** The egress dies when the presenter's share
-stops, which is a separate event with its own monitor and its own recovery
-(`hls-egress.ts`), and a host can perfectly well drop while a co-host is
-presenting.
+**This clock is not the stream, and the difference is the most important
+sentence in this document.** See the next section, which answers it in full.
+
+**The end this sweep produces puts the channel back.** For a while it did not:
+every other end path goes through the state route, which calls
+`applyWatchPartyOptions`, while `sweepWatchPartyHosts` only flipped the row. So
+a party ended by a host's wifi dying left the channel with the slow mode the
+party had set and left @everyone denied SPEAK, for good, and nothing said so.
+It is the same restore, it is idempotent, it is best effort (a failure logs
+`voice.watchPartyRestoreFailed` and the sweep carries on to the next party),
+and it is pinned by "puts the channel back when the host's grace window ends
+the party" in `watch-party-options.test.ts`.
+
+### Does the stream survive the host dropping? No, and a button cannot fix it
+
+Read this before promising anybody that a co-host is a safety net.
+
+**The egress follows whoever is SHARING, not whoever is host.** `pickHlsSharer`
+is `peers.find((peer) => peer.sharingScreen && peer.canStream)` and there is
+not one reference to a host anywhere in `hls-egress.ts`. So:
+
+| who drops | who was presenting | what the audience sees |
+|---|---|---|
+| the host | the host | **the picture stops**, in the same tick |
+| the host | a co-host | nothing changes. The show carries on |
+| the presenting co-host | that co-host | the picture stops |
+
+The first row is the one that matters, because it is the ordinary shape of a
+watch party: one person runs it and that same person shares their screen.
+
+**And it is immediate, not five minutes.** The client sends `leave-voice-room`
+plus a `POST /api/voice/leave` beacon on `pagehide`, so a closed tab removes
+the peer at once, `pushLiveHls` finds no sharer, and `reconcileLiveHls(..., null)`
+calls `stopEgress`. The 90 second orphan window only applies when `pagehide`
+never fired at all (a crash, an OS kill, a lid closing on a dead network); in
+that case the egress does keep running and the audience does keep watching,
+until the orphan timer removes the peer. Neither number is the five minute
+grace clock, which never touches the egress and is only ever about who is in
+charge.
+
+**So what a co-host actually buys.** Not the picture. What survives a host
+dropping is the party OBJECT: it stays live, the audience is not cut off, the
+room keeps its chat, and somebody other than the person whose laptop died can
+end it, change the options, or take it over. Putting a picture back is a
+second, deliberate act by the co-host: they share their own screen, which
+starts a new egress with a new playlist URL, and every viewer reloads onto it.
+
+**The thing to know before an event**: a co-host who does not hold
+START_WATCH_PARTY on the channel can take the party over and **cannot** put a
+picture back, because `canStartWatchPartyStream` gates the share on that bit
+and the client hides the share control when `welcome.canStream` is false.
+Promoting a co-host grants them SPEAK and deliberately does NOT grant them
+START_WATCH_PARTY: handing out a broadcast bit as a side effect of a roster
+change is a decision that wants making on purpose, not inside this one. The
+practical answer is to appoint somebody who already holds it (an admin, or the
+seeded Moderador cargo, which carries it). The co-host panel says so in the
+copy. **If the real requirement is "any co-host can rescue the picture", that
+is a separate change**: either grant the bit alongside SPEAK on the same
+channel for the length of the show and revoke it in `restoreChannelAfterParty`,
+or hand it out with a per-channel member overwrite before the event.
+
+**The genuinely safe configuration**, and the one to use for an event that
+matters: the host and the presenter are **two different people**. Then the host
+dropping costs nothing at all, because the row that says "nothing changes" is
+the one you are in.
+
+### Appointing a co-host
+
+`POST /api/watch-parties/:id/cohosts` takes `{ userId, cohost }`, host only,
+legal in `draft`, `scheduled` and `live`, and refuses the party's own host with
+a 409. `true` promotes and `false` demotes; both re-check that the person is a
+member of the server and can see the channel, and both broadcast the party.
+
+**It shipped with nothing calling it.** The route, the `channel_session_cohosts`
+table and `setWatchPartyCohost` in `client/src/lib/watch-parties-api.ts` all
+existed and no client code ever invoked the last one, so the co-host role was
+unreachable and the takeover with it: `Assumir` renders for `role === "cohost"`
+and there was no way to become one short of a curl. That is the pitfall-9 shape
+again, complete on both ends of the wire and absent in the middle, and nothing
+catches it: not a type, not the server suite, not a screenshot of a party
+running perfectly well.
+
+`components/watch-party/watch-party-cohosts.tsx` is the missing screen. It is
+in the Opções drawer while the party runs AND in the setup surface before it
+starts, because the moment a host most needs a backup is before their own
+connection becomes the single point of failure, and a draft is invisible so its
+room is empty by construction.
+
+**The candidates are the server's members, not the room's occupants.** That
+reads like the wrong source for a control inside a live party and it is the
+deliberate one, for the reason directly above: a picker built from the voice
+roster is blank on the setup surface, which is the screen that matters most.
+The list already exists in `App.tsx` for the composer's `@` completion, so this
+costs no extra request; the server re-checks membership and channel access on
+every promotion, so the list is an affordance and never the authority.
+
+**Promoting mid-show grants the microphone.** A closed floor (the default,
+`hosts_only`) denies SPEAK to @everyone and grants it back per member, and
+`applyGoLiveOptions` does that for the host and co-hosts at the moment the
+party goes live. Somebody promoted after that moment was not in the list when
+it ran, so before this they arrived with Encerrar, Assumir, the options panel
+and no voice: a co-host who could take a room over and not say a word in it.
+The grant is now in `addWatchPartyCohost`, beside the identical one
+`inviteToWatchPartyStage` has always done, and a demotion revokes it unless the
+person is still on the stage some other way.
+
+**A draft's co-host gets no overwrite.** A draft's options are a plan, not a
+rule, and writing SPEAK bits onto a channel over a show nobody has been told
+about leaves permissions behind for a party that may never happen. Going live
+picks them up the ordinary way through `stageMemberIds`, so nothing is lost.
 
 **The recording, if there is one, stays with the host who ran the show.** A
 takeover does not transfer it. There is no foreign key from `hls_sessions` to

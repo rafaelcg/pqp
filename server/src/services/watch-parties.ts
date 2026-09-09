@@ -17,6 +17,7 @@ import {
   type WatchPartyStage,
 } from "@pqp/shared";
 import { getPool } from "../db.js";
+import { logEvent } from "../lib/log.js";
 import { getEveryoneRoleId } from "./permissions.js";
 import {
   deleteChannelOverwrite,
@@ -585,26 +586,66 @@ export async function transitionWatchParty(
 
 // ------------------------------------------------------------- the co-hosts
 
+/**
+ * Promote somebody to co-host, and give them the microphone the role implies.
+ *
+ * THE SPEAK GRANT IS THE HALF THAT WAS MISSING. A closed floor
+ * (`stageMode` other than `everyone`, which is the DEFAULT) denies SPEAK to
+ * @everyone and grants it back per member, and `applyGoLiveOptions` does that
+ * for `stageMemberIds` at the moment the party goes live. A co-host promoted
+ * AFTER that moment was never in that list when it ran, so they arrived with
+ * the party's controls and no microphone: they could press Assumir and then
+ * not be able to say a word to the room they had just taken over. It is the
+ * same grant `inviteToWatchPartyStage` has always done for an invited guest,
+ * for the same reason, and it lives here rather than in the route so that no
+ * second caller can promote without it.
+ *
+ * Only while the party is LIVE. A draft's options are a plan, not a rule, and
+ * writing channel overwrites for a party nobody has been told about would
+ * leave SPEAK bits on a room over a show that never happened.
+ */
 export async function addWatchPartyCohost(
-  sessionId: string,
+  row: WatchPartyRow,
   userId: string,
   addedBy: string,
 ): Promise<void> {
   await getPool().query(
     `INSERT INTO channel_session_cohosts (session_id, user_id, added_by)
      VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`,
-    [sessionId, userId, addedBy],
+    [row.id, userId, addedBy],
   );
+  if (row.server_id && row.status === "live") {
+    await grantMemberSpeak(row.channel_id, row.server_id, userId);
+  }
 }
 
+/**
+ * Demote a co-host, and take back the microphone the role was holding open.
+ *
+ * NOT IF THEY ARE STILL ON THE STAGE BY SOME OTHER ROUTE. A co-host the host
+ * had also invited up by hand keeps their SPEAK: the demotion is about who
+ * runs the party, and revoking here would silence somebody the host put on
+ * the stage on purpose. `removeFromWatchPartyStage` guards the mirror image of
+ * this and for the mirror image of the reason.
+ */
 export async function removeWatchPartyCohost(
-  sessionId: string,
+  row: WatchPartyRow,
   userId: string,
 ): Promise<void> {
   await getPool().query(
     `DELETE FROM channel_session_cohosts WHERE session_id = $1 AND user_id = $2`,
-    [sessionId, userId],
+    [row.id, userId],
   );
+  if (!row.server_id) {
+    return;
+  }
+  // Recomputed AFTER the delete, so this reads the roster the demotion left
+  // behind rather than the one it started from.
+  const stillOnStage = await stageMemberIds(row);
+  if (stillOnStage.includes(userId)) {
+    return;
+  }
+  await revokeMemberSpeak(row.channel_id, row.server_id, userId);
 }
 
 /**
@@ -752,7 +793,26 @@ export async function sweepWatchPartyHosts(
       continue;
     }
     try {
-      await transitionWatchParty(row.id, "ended", "live");
+      const moved = await transitionWatchParty(row.id, "ended", "live");
+      // PUT THE ROOM BACK, exactly as Encerrar does.
+      //
+      // This sweep is the ONLY end path that used not to. A party ended by a
+      // host pressing Encerrar goes through the state route, which calls
+      // `applyWatchPartyOptions`; a party ended by the host's five minutes
+      // running out went through this loop, which only flipped the row. So the
+      // channel kept the slow mode the party set and kept @everyone denied
+      // SPEAK, for good, over a show that ended because somebody's wifi died.
+      // It is the same restore, it is idempotent, and it is best effort by
+      // construction, so a failure here must not stop the sweep ending the
+      // next party.
+      try {
+        await applyWatchPartyOptions(moved, "ended");
+      } catch (restoreError) {
+        logEvent("voice.watchPartyRestoreFailed", {
+          sessionId: row.id,
+          error: String(restoreError),
+        });
+      }
       ended.push({ sessionId: row.id, channelId: row.channel_id });
     } catch (error) {
       // A host who reconnected between the SELECT and the UPDATE, or a

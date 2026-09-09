@@ -64,6 +64,7 @@ const { assignRole, createRole, upsertChannelOverwrite } = await import(
   "./roles.js"
 );
 const { getEveryoneRoleId } = await import("./permissions.js");
+const { sweepWatchPartyHosts } = await import("./watch-parties.js");
 const { Permission, parsePermissions, WATCH_PARTY_DEFAULT_OPTIONS } =
   await import("@pqp/shared");
 
@@ -239,6 +240,14 @@ describeDb("watch party options and the stage", () => {
   const stage = (as: User, id: string, body: Record<string, unknown>) =>
     call<{ party: PartyBody }>(as, "POST", `/api/watch-parties/${id}/stage`, body);
 
+  const cohost = (as: User, id: string, userId: string, promote: boolean) =>
+    call<{ party: PartyBody | null }>(
+      as,
+      "POST",
+      `/api/watch-parties/${id}/cohosts`,
+      { userId, cohost: promote },
+    );
+
   const readChannelParty = (as: User, channel = channelId) =>
     call<{ party: PartyBody | null }>(
       as,
@@ -274,6 +283,15 @@ describeDb("watch party options and the stage", () => {
   async function everyoneSpeakDenied(): Promise<boolean> {
     const row = await overwrite("role", everyoneId);
     return row ? has(row.deny, Permission.SPEAK) : false;
+  }
+
+  /** The channel's own slow mode, which the party borrows and gives back. */
+  async function slowModeSeconds(): Promise<number> {
+    const result = await getPool().query<{ slowmode_seconds: number | null }>(
+      `SELECT slowmode_seconds FROM channels WHERE id = $1`,
+      [channelId],
+    );
+    return result.rows[0]?.slowmode_seconds ?? 0;
   }
 
   /** Does this person hold a party-issued microphone right now? */
@@ -572,5 +590,126 @@ describeDb("watch party options and the stage", () => {
 
     const asHost = await readChannelParty(host, other.id);
     expect(asHost.body.party?.stage.hands).toEqual([]);
+  });
+
+  /**
+   * THE MICROPHONE THAT CAME WITH THE BADGE, AND ONLY WHILE IT IS ON AIR.
+   *
+   * A co-host exists so the show does not depend on one person's laptop, and
+   * the takeover it makes possible is worthless if the person who takes over
+   * cannot speak. `applyGoLiveOptions` grants SPEAK to the host and co-hosts
+   * at the moment the party goes live; somebody promoted after that moment was
+   * not in that list when it ran, so before this they arrived with Encerrar,
+   * Assumir, the options panel, and no voice. There is no type that catches
+   * it and no error anybody sees: the button is there and the room is silent.
+   */
+  it("hands a co-host promoted mid-show the microphone, and takes it back on demotion", async () => {
+    const party = await draft({ options: { stageMode: "hosts_only" } });
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    expect(await everyoneSpeakDenied()).toBe(true);
+    // The floor is closed and `second` is part of the audience it closed on.
+    expect(await memberSpeakAllowed(second.id)).toBe(false);
+
+    const promoted = await cohost(host, party.id, second.id, true);
+    expect(promoted.status).toBe(200);
+    expect(
+      await memberSpeakAllowed(second.id),
+      "a co-host promoted mid-show can run the party and cannot say a word in it",
+    ).toBe(true);
+
+    const demoted = await cohost(host, party.id, second.id, false);
+    expect(demoted.status).toBe(200);
+    // The grant was the badge's, so it goes with the badge. A microphone that
+    // outlived the role would be a permission nobody remembers issuing.
+    expect(await overwrite("member", second.id)).toBeNull();
+  });
+
+  /**
+   * A DEMOTION MUST NOT SILENCE SOMEBODY THE HOST PUT ON THE STAGE BY HAND.
+   *
+   * The mirror image of the guard `removeFromWatchPartyStage` already carries.
+   * Two independent reasons to hold a microphone, and taking one away must not
+   * take the other with it, or a host who demotes a co-host has also, silently,
+   * cut off a guest they invited up to talk.
+   */
+  it("leaves a demoted co-host speaking when they were also invited up", async () => {
+    const party = await draft({ options: { stageMode: "invited" } });
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+
+    expect((await cohost(host, party.id, second.id, true)).status).toBe(200);
+    expect(
+      (await stage(host, party.id, { action: "invite", userId: second.id }))
+        .status,
+    ).toBe(200);
+    expect(await memberSpeakAllowed(second.id)).toBe(true);
+
+    expect((await cohost(host, party.id, second.id, false)).status).toBe(200);
+    expect(
+      await memberSpeakAllowed(second.id),
+      "demoting a co-host also took the microphone off a guest the host had invited up",
+    ).toBe(true);
+  });
+
+  /**
+   * A DRAFT'S CO-HOST GETS NO OVERWRITE, because a draft's options are a plan
+   * rather than a rule. Writing SPEAK bits onto a channel over a show nobody
+   * has been told about leaves permissions behind for a party that may never
+   * happen, and `restoreChannelAfterParty` only runs on an end or a cancel.
+   */
+  it("writes nothing to the channel for a co-host promoted on a draft", async () => {
+    const party = await draft({ options: { stageMode: "hosts_only" } });
+    expect(party.state).toBe("draft");
+
+    expect((await cohost(host, party.id, second.id, true)).status).toBe(200);
+    expect(await overwrite("member", second.id)).toBeNull();
+    expect(await everyoneSpeakDenied()).toBe(false);
+
+    // And going live afterwards picks them up the ordinary way, through
+    // `stageMemberIds`, so nothing is lost by waiting.
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    expect(await memberSpeakAllowed(second.id)).toBe(true);
+  });
+
+  /**
+   * THE END NOBODY PRESSES.
+   *
+   * A host whose five minutes run out has their party ended by
+   * `sweepWatchPartyHosts`, and that loop used to flip the row and stop. Every
+   * other end path goes through the state route, which calls
+   * `applyWatchPartyOptions`, so the channel keeps the slow mode the party set
+   * and keeps @everyone denied SPEAK, for good, over a show that ended because
+   * somebody's wifi died. It is exactly the path this whole area is about: the
+   * host dropping is the case the grace window exists for.
+   */
+  it("puts the channel back when the host's grace window ends the party", async () => {
+    const party = await draft({
+      options: { stageMode: "hosts_only", slowModeSeconds: 30 },
+    });
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    expect(await everyoneSpeakDenied()).toBe(true);
+    expect(await slowModeSeconds()).toBe(30);
+
+    // The host's last socket closed six minutes ago. Stamped directly rather
+    // than through the socket path: this is about what the SWEEP does with a
+    // stamp, and `ws/watch-party-events.ts` owns how one gets there.
+    await getPool().query(
+      `UPDATE channel_sessions SET host_disconnected_at = NOW() - INTERVAL '6 minutes'
+        WHERE id = $1`,
+      [party.id],
+    );
+
+    const { ended } = await sweepWatchPartyHosts();
+    expect(ended.map((one) => one.sessionId)).toContain(party.id);
+    expect((await readChannelParty(host)).body.party).toBeNull();
+
+    expect(
+      await everyoneSpeakDenied(),
+      "the sweep left the room's microphones denied after the party it ended",
+    ).toBe(false);
+    expect(
+      await slowModeSeconds(),
+      "the sweep left the party's slow mode on the channel for good",
+    ).toBe(0);
+    expect(await overwrite("member", host.id)).toBeNull();
   });
 });

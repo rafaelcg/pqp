@@ -4622,9 +4622,9 @@ router.post(
         throw new HttpError(400, "That person cannot see this channel");
       }
       await requireServerMember(channel.server_id, body.userId);
-      await addWatchPartyCohost(sessionId!, body.userId, user.id);
+      await addWatchPartyCohost(row, body.userId, user.id);
     } else {
-      await removeWatchPartyCohost(sessionId!, body.userId);
+      await removeWatchPartyCohost(row, body.userId);
     }
     void broadcastWatchParty(sessionId!);
     const updated = await getWatchPartyRow(sessionId!);

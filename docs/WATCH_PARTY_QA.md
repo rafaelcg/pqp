@@ -1,13 +1,17 @@
 # QA manual da watch party (staging)
 
-Uma checagem antes e dez passos, na ordem. É o que os testes automatizados **não** conseguem cobrir:
+Uma checagem antes e onze passos, na ordem. É o que os testes automatizados **não** conseguem cobrir:
 tudo que precisa de uma imagem de verdade saindo do LiveKit, de som, de uma
 segunda máquina e de um olho humano.
 
 O que já está coberto por `client/e2e/watch-party.spec.ts` e não precisa de você:
 criar pela barra, o nome, a tela de montagem, Ir ao vivo, o bloco no topo da
 barra, quem vê e quem não vê o botão de criar, o chat durante a sessão, os três
-estados (marcada, ao vivo, encerrada) e o player sumindo pra quem entra na call.
+estados (marcada, ao vivo, encerrada), o player sumindo pra quem entra na call
+e o caminho inteiro do co-host (promover, o outro navegador virando co-host no
+socket, o host caindo de verdade e o Assumir). O que o e2e **não** consegue
+provar é justamente o que os passos 9 e 10 pedem: a imagem parando quando o
+host cai e quanto tempo ela demora pra voltar.
 
 Onde: `https://staging.pqp-3yr.pages.dev` (API `pqp-api-staging`).
 Reserva uns 25 minutos e um filme qualquer aberto numa aba.
@@ -110,21 +114,49 @@ embaixo. No iPhone o app mostra o vídeo acima do chat do canal, com **AO VIVO**
 a contagem de quem está assistindo. No app ainda **não** existe criar, montar
 nem Encerrar, e isso é esperado.
 
-### 9. O host cai
+### 9. Promover um co-host
+
+Do lado do host, com a sessão no ar, abre **Opções** na barra da watch party e
+desce até **Co-hosts**. Acha a segunda conta na lista e clica **Promover**.
+
+**Certo:** a pessoa sai da lista de baixo e aparece em cima com **Tirar co-host** do
+lado. Na segunda máquina, **sem recarregar nada**, o botão **Encerrar** aparece
+na barra: ela virou co-host de verdade, na hora, pelo socket.
+
+Ainda na segunda máquina, com o palco fechado (`Só o host e convidados`), o
+botão de **Falar** tem que aparecer. Co-host promovido no meio da sessão ganha
+o microfone junto com o crachá; se não ganhar, a pessoa assume uma sala em que
+não consegue dizer uma palavra.
+
+Clica **Tirar co-host** e confere que some dos dois lados. Depois promove de novo, que é
+o estado que o passo 10 precisa.
+
+**Escolhe quem pode transmitir.** Um co-host que não tem permissão de
+transmitir nesse canal assume a watch party e **não** consegue colocar imagem
+de volta (não aparece botão de compartilhar pra ele). Pra sábado, promove
+alguém do staff.
+
+### 10. O host cai, e o co-host assume
 
 **Fecha a aba do host** com a sessão no ar e olha a segunda máquina.
 
 **Certo:** a sessão continua ao vivo e ninguém é cortado. Quem está assistindo
 vê **O host caiu** com o recado de que a watch party encerra sozinha se ele não
-voltar. Reabre a aba do host dentro de 5 minutos: o aviso some sozinho.
+voltar. O co-host vê **Assumir**. Clica: o aviso some, o botão some, e a barra
+passa a mostrar o nome dele como host. A sessão continua **AO VIVO**.
 
-O botão **Assumir** só aparece pra co-host, e hoje **não existe tela pra
-promover co-host** (só a rota `POST /api/watch-parties/:id/cohosts`). Se você
-quiser ver esse botão no sábado, promova pela API antes de começar. Se não
-quiser, o caminho é o de cima: ou o host volta, ou a sessão encerra sozinha em
-5 minutos.
+**A imagem, porém, não sobrevive.** Se quem estava compartilhando era o host, a
+transmissão para na hora que a aba dele fecha, porque o egress segue quem
+compartilha e não quem é host. Cronometra: fecha a aba do host e conta quantos
+segundos até o player da segunda máquina parar. Depois o co-host compartilha a
+tela dele e conta quantos segundos até a imagem voltar. **Esses dois números
+são o buraco real do sábado**, e nenhum botão de co-host encurta eles.
 
-### 10. Encerrar e o que fica pra trás
+Se quiser ver o caso bom: põe o **co-host** compartilhando desde o começo e
+fecha a aba do host. Aí não acontece nada com a imagem, que é a configuração
+segura pra um evento grande.
+
+### 11. Encerrar e o que fica pra trás
 
 Do lado do host, **Encerrar** e confirma.
 
@@ -145,3 +177,9 @@ party** no lugar do bloco.
   querer entrar. Manda sair da call e assistir só pelo bloco.
 - **Sala virando bagunça:** **Opções**, **Quem pode falar** em
   `Só o host e convidados`, e **Chat lento** em 30 segundos.
+- **O host caiu no meio:** a sessão não acaba, mas a imagem para se era ele que
+  estava compartilhando. O co-host clica **Assumir** e **compartilha a tela
+  dele**. São duas ações, não uma. Se ninguém assumir, a watch party encerra
+  sozinha em 5 minutos.
+- **Prevenção, e é a única que funciona de verdade:** quem compartilha e quem é
+  host são duas pessoas diferentes. Aí o host cair não mexe na imagem.

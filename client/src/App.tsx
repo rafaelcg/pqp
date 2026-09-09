@@ -157,6 +157,7 @@ import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
   claimWatchPartyHost as apiClaimWatchPartyHost,
   createServerWatchParty as apiCreateServerWatchParty,
+  setWatchPartyCohost as apiSetWatchPartyCohost,
   setWatchPartyStage,
   setWatchPartyState as apiSetWatchPartyState,
   updateWatchParty as apiUpdateWatchParty,
@@ -250,6 +251,7 @@ import {
   lookupUserByHandle,
   markChannelRead,
   markCommunityHomeRead,
+  memberDisplayName,
   moveChannel,
   moveMemberVoice,
   disconnectMemberVoice,
@@ -2090,6 +2092,26 @@ function MainAppContent({
     moderationBits.manageRoles;
 
   /**
+   * Who the host may hand a co-host badge to.
+   *
+   * The server's own member list, which this component already holds for the
+   * composer's `@` completion, so appointing a co-host costs no extra request.
+   * `memberDisplayName` rather than the raw display name, because a nickname is
+   * what the rest of this server calls that person and a picker that disagreed
+   * with the member list would be a second name for the same face.
+   */
+  const cohostCandidates = useMemo(
+    () =>
+      serverMembers.map((member) => ({
+        userId: member.id,
+        displayName: memberDisplayName(member),
+        avatarUrl: member.avatarUrl,
+        isCharacter: member.isCharacter,
+      })),
+    [serverMembers],
+  );
+
+  /**
    * What the profile card may do to somebody, in the server it was opened in.
    *
    * Null in a conversation — a DM has no moderators — and null when this
@@ -3816,6 +3838,32 @@ function MainAppContent({
         ? { action, userId: userId! }
         : { action },
     );
+    if (answer.party) {
+      watchParties.put(answer.party);
+    }
+  }
+
+  /**
+   * Promote or demote a co-host.
+   *
+   * THE CALLER `setWatchPartyCohost` NEVER HAD. The route, the table and this
+   * client wrapper all shipped and nothing ever invoked them, so the co-host
+   * role was unreachable and the takeover with it: Assumir renders for
+   * `role === "cohost"` and there was no way to become one.
+   * `docs/WATCH_PARTY.md` has the full account of what that does and does not
+   * fix, and the short version is that it does not save the picture.
+   *
+   * The answer is applied even though `watch-party-update` is also coming: the
+   * broadcast is resolved per recipient and the round trip is what the button
+   * is already waiting on, so applying it here is what makes the row move on
+   * the same press rather than a frame later.
+   */
+  async function handleWatchPartyCohost(userId: string, cohost: boolean) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await apiSetWatchPartyCohost(party.id, userId, cohost);
     if (answer.party) {
       watchParties.put(answer.party);
     }
@@ -5586,6 +5634,13 @@ function MainAppContent({
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
             onClaimHost={handleWatchPartyClaimHost}
+            cohostCandidates={cohostCandidates}
+            onPromoteCohost={(userId) =>
+              handleWatchPartyCohost(userId, true)
+            }
+            onDemoteCohost={(userId) =>
+              handleWatchPartyCohost(userId, false)
+            }
             onJoinCall={() =>
               void handleWatchPartyJoinAsAudience(selectedChannel.id)
             }
@@ -5679,6 +5734,13 @@ function MainAppContent({
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
             onClaimHost={handleWatchPartyClaimHost}
+            cohostCandidates={cohostCandidates}
+            onPromoteCohost={(userId) =>
+              handleWatchPartyCohost(userId, true)
+            }
+            onDemoteCohost={(userId) =>
+              handleWatchPartyCohost(userId, false)
+            }
             onJoinCall={() =>
               void handleWatchPartyJoinAsAudience(selectedChannel.id)
             }

@@ -560,6 +560,134 @@ test("a seated viewer does not get the player twice", async ({ browser }) => {
   }
 });
 
+/**
+ * THE TAKEOVER, END TO END, AND IT IS THE ONE JOURNEY THAT HAD NO WAY IN.
+ *
+ * `POST /api/watch-parties/:id/cohosts`, `channel_session_cohosts` and
+ * `setWatchPartyCohost` all shipped; nothing in the client ever called them.
+ * So `Assumir` was rendered for `role === "cohost"` and there was no way to
+ * become a co-host short of a curl, which `docs/WATCH_PARTY_QA.md` step 9 said
+ * out loud. Every assertion below is on the real thing: a real promotion
+ * through the real route, a real `watch-party-update` reaching a second
+ * account's running client, a real socket close, and the real claim.
+ *
+ * THE HOST'S DROP IS NOT SIMULATED. The host's whole browser context is
+ * closed, so their last socket goes and `onHostSocketClosed` stamps
+ * `host_disconnected_at` the way it does in production. Nothing here writes
+ * that column by hand, because the thing most likely to break is the path
+ * between a closed tab and a stamped row.
+ *
+ * WHAT THIS DOES NOT PROVE, and `docs/WATCH_PARTY.md` says why: the PICTURE
+ * does not survive the host dropping. The egress follows whoever is sharing,
+ * not whoever is host, so a host who was presenting takes the stream with
+ * them and the co-host has to share again. CI has no LiveKit and no egress, so
+ * this spec could not assert that either way; it asserts that the party and
+ * its controls survive, which is the half a button can deliver.
+ */
+test("the host appoints a co-host, drops, and the co-host takes the party over", async ({
+  page,
+  browser,
+}) => {
+  const shared = await seedServer("wp-hand-host", "wp-hand-guest");
+  const here = `/app/server/${shared.serverId}/channel/${shared.textChannelId}`;
+  const guestId = await materialiseAccount("wp-hand-guest");
+
+  const party = await createParty("wp-hand-host", shared.serverId, "Cinemoon 5");
+  await setPartyState("wp-hand-host", party.partyId, "live");
+
+  // THE GUEST IS THE ONE ON THE DEFAULT PAGE, deliberately. The host goes in a
+  // context of its own so the whole browser can be closed, which is the only
+  // way to make the drop real rather than a row written by the test.
+  const guest = page;
+  await openAs(guest, here, "wp-hand-guest");
+  await guest.locator("[data-live-party-row]").first().click();
+  await expect(guest.getByTestId("watch-party-bar")).toBeVisible({
+    timeout: 20_000,
+  });
+
+  // A plain viewer runs nothing. This is the baseline the promotion has to
+  // move, and without it a later "Encerrar is visible" would prove nothing:
+  // it might have been there all along.
+  await expect(guest.locator("[data-watch-party-end]")).toHaveCount(0);
+  await expect(guest.locator("[data-watch-party-options-toggle]")).toHaveCount(0);
+  await expect(guest.locator("[data-watch-party-claim]")).toHaveCount(0);
+
+  const hostClient = await secondClient(browser);
+  let hostOpen = true;
+  try {
+    const host = hostClient.page;
+    await openAs(host, here, "wp-hand-host");
+    await host.locator("[data-live-party-row]").first().click();
+    await expect(host.getByTestId("watch-party-bar")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    // THE CONTROL THAT DID NOT EXIST. Opções, which the host already knows
+    // from the setup surface, and the co-host list inside it.
+    await host.locator("[data-watch-party-options-toggle]").click();
+    const cohosts = host.locator("[data-watch-party-cohosts]");
+    await expect(cohosts).toBeVisible({ timeout: 20_000 });
+
+    // The host is never offered their own badge, so the guest is the only row.
+    await expect(
+      cohosts.locator("[data-watch-party-cohost-promote]"),
+    ).toHaveCount(1);
+    await cohosts
+      .locator(`[data-watch-party-cohost-promote="${guestId}"]`)
+      .click();
+
+    // The badge landed: the same person is now offered a Remove rather than a
+    // Promote, which is the list and the party agreeing.
+    await expect(
+      cohosts.locator(`[data-watch-party-cohost-demote="${guestId}"]`),
+    ).toBeVisible({ timeout: 20_000 });
+    await expect(
+      cohosts.locator("[data-watch-party-cohost-promote]"),
+    ).toHaveCount(0);
+
+    // AND IT REACHED THE OTHER BROWSER, on the socket, with nothing reloaded.
+    // `watch-party-update` is resolved per recipient, so this is the guest's
+    // own client learning its new role: a co-host may end the party, and a
+    // viewer may not.
+    await expect(guest.locator("[data-watch-party-end]")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    // THE DROP. Not a stamped column: the host's browser goes away.
+    await hostClient.context.close();
+    hostOpen = false;
+  } finally {
+    if (hostOpen) {
+      await hostClient.context.close();
+    }
+  }
+
+  // The audience is NOT cut off, which is the rule the grace window exists
+  // for: the party stays live and says in words what is happening.
+  await expect(guest.getByTestId("watch-party-host-gone")).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(guest.getByTestId("watch-party-bar")).toBeVisible();
+
+  const claim = guest.locator("[data-watch-party-claim]");
+  await expect(claim).toBeVisible({ timeout: 30_000 });
+  await claim.click();
+
+  // The party is theirs. The grace strip goes because the row's
+  // `host_disconnected_at` was cleared by the claim, and Assumir goes with it:
+  // both are the server's answer, not a local optimism.
+  await expect(claim).toHaveCount(0, { timeout: 20_000 });
+  await expect(guest.getByTestId("watch-party-host-gone")).toHaveCount(0);
+  // And the bar names the new host, so the room can see who is running it.
+  await expect(
+    guest.getByTestId("watch-party-bar").getByText("with Dev User wp-hand-guest"),
+  ).toBeVisible({ timeout: 20_000 });
+  // Still live. A takeover is a change of hands, never an end.
+  await expect(
+    guest.getByTestId("watch-party-bar").getByText("LIVE"),
+  ).toBeVisible();
+});
+
 test("the three states a real event produces read differently", async ({
   page,
   browser,
