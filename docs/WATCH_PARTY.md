@@ -886,6 +886,15 @@ published from the same `getDisplayMedia` capture, so it cannot be added to one
 already running, and re-picking changes the screen track sid, which is a
 restart the reconcile already handles.
 
+**A silent stream is the host's capture, not a race.** The obvious alternative
+explanation is that the egress looks for tracks before the audio half is
+published, since `findScreenTracks` returns as soon as it sees the video. It
+does not happen: `use-voice.ts` awaits `sfu.publishScreen(stream)`, which
+publishes the video and then the audio, and only then sends
+`set-sharing-screen`, which is the frame that starts the transcode. The comment
+above that call says as much, for a different reason. So `hasAudio: false` means
+the capture had no audio, every time.
+
 `hasAudio` is absent, not false, on a session this process **adopted** across a
 deploy: the `hls_sessions` row carries the video track sid and not the audio
 one. The panel says "not stated" there and warns about nothing, because a false
@@ -952,6 +961,49 @@ ever happened, because the leak itself is silent: the box simply gets slower and
 the parties on it start stalling. This matters more than it looks:
 `LIVE_HLS_MAX_SESSIONS` counts **sessions**, so a cap of 3 means twelve handlers
 if each session can transiently run four.
+
+### The restart that should not happen at all: swapping the share in place
+
+Rafael's framing, and it is a better fix than surviving the restart: in a watch
+party the share control should offer to **change** what is being shared rather
+than stop and start. Not shipped; written down here because the mechanism is
+already available and the caveats are the whole of the design.
+
+**The client can do it.** `LocalTrack.replaceTrack(newMediaStreamTrack)` in
+livekit-client 2.21.0 swaps the `RTCRtpSender`'s track and leaves the
+publication alone: same track sid, same SFU-side track, same RTP stream. Today
+`publishScreen` unpublishes and republishes instead, which is a new sid every
+time, which `probeScreenTracks` sees as `screen-track-replaced`, which is a new
+egress, a new playlist URL and a rebuffer for everybody watching. With
+`replaceTrack` the server sees nothing change and there is nothing to survive.
+
+Three caveats, and the third is the one that would bite.
+
+- **Whether the egress rides through a mid-stream resolution change is not
+  verified.** The SSRC continues and the encoder reconfigures; whether the
+  egress's GStreamer pipeline takes that gracefully cannot be tested on a dev
+  stack, which has no LiveKit and no egress. This is the thing to try on a real
+  party before promising it.
+- **Simulcast layers are declared at publish.** `publishScreen` computes
+  `screenSimulcastPlan(topHeight)` and constrains the capture to match, and an
+  in-place swap keeps the layers the OLD capture declared. The new capture has
+  to be constrained to the same top height, which `constrainScreenCapture`
+  already does.
+- **It cannot add or remove the share's audio, and that is exactly what a host
+  re-shares for.** The audio half is a separate publication with its own sid,
+  and a running Track Composite egress is bound to the pair it was started with,
+  so an audio track published afterwards never reaches it. The 2026-09-09
+  restart was Rafael re-sharing *to add the window's audio*: done as a seamless
+  swap, the room would have gained the film's sound and the HLS audience would
+  have stayed silent, with the picture never flickering to suggest anything had
+  happened. So the seamless path is for **changing which window**, and gaining
+  or losing the share's audio has to go through a real restart, which
+  `probeScreenTracks` would need to notice by comparing the audio sid as well as
+  the video one. Say so in the control's copy rather than letting the host find
+  out from five hundred people.
+
+None of this replaces the server-side work above. A share also dies for reasons
+nobody chose: the window closes, the tab crashes, the machine sleeps.
 
 ## How you know it is running
 
