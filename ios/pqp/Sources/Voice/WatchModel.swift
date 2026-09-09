@@ -156,6 +156,13 @@ final class WatchModel {
             return
         }
         guard self.channelId == channelId else { return }
+        // THE SEED IS OLDER THAN ANY FRAME, ALWAYS. It was requested before
+        // the socket answered and it can land after, so applying it
+        // unconditionally can restart a broadcast the wire has already
+        // reported stopped, which then plays a finished VOD for the thirty
+        // seconds until the next keyframe corrects it. A frame has arrived
+        // means the socket is answering, and the socket outranks this.
+        guard phase == .unknown else { return }
         participants = state.participants
         watching = state.watching
         applyStream(state.stream)
