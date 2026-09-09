@@ -178,6 +178,21 @@ export interface AdminMetrics {
       oldestIdleMinutes: number | null;
       staleRowWritesRefused: number;
       ghostsSwept: number;
+      /**
+       * Mesh seats released at once instead of held, because the socket never
+       * declared `mesh-resume`. Zero until `VOICE_MESH_RESUME_REQUIRES_CAP`
+       * is on; after the flip it is what says the rule is doing something,
+       * and the `mesh-resume` socket fraction is what says whether it still
+       * needs to.
+       */
+      meshHoldsRefused: number;
+      /**
+       * Sockets declaring `mesh-resume`, against `voice.roster.sockets`. What
+       * an operator reads before flipping `VOICE_MESH_RESUME_REQUIRES_CAP`:
+       * phones never declare it, so this converges on the browser share, not
+       * on the total.
+       */
+      meshResumeSockets: number;
     } | null;
     /**
      * What the roster fan-out is doing since the last deploy: how many frames

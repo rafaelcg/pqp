@@ -145,6 +145,8 @@ const { MAX_MISSED_PONGS, startHeartbeat, trackSocketLiveness } = await import(
 const { mintVoiceResumeToken, VOICE_RESUME_TTL_MS } = await import(
   "./voice-resume-token.js"
 );
+const { deleteAuthenticatedSocket, setAuthenticatedSocket, SOCKET_CAPS } =
+  await import("./sockets.js");
 const { INSTANCE_ID } = await import("../lib/bus.js");
 
 interface Frame {
@@ -270,6 +272,21 @@ async function peerRow(peerId: string) {
         joined_at: Date;
       }
     | undefined;
+}
+
+/**
+ * The seat is STILL THERE and marked orphaned.
+ *
+ * Deliberately not `expect(row?.orphaned_at).not.toBeNull()`, which is how the
+ * first version of the LiveKit case below passed while proving nothing: when
+ * the row has been deleted, `?.` yields `undefined`, `undefined` is not
+ * `null`, and the assertion waves through the exact failure it was written to
+ * catch. Assert the row exists, then assert the stamp.
+ */
+async function expectHeldAsOrphan(peerId: string) {
+  const row = await peerRow(peerId);
+  expect(row).toBeDefined();
+  expect(row?.orphaned_at).toBeInstanceOf(Date);
 }
 
 /**
@@ -738,7 +755,7 @@ describeDb("voice seats that outlive the person", () => {
       await settleRows();
 
       // The seat is held, not gone: a refresh mid-call still gets its 90s.
-      expect((await peerRow(peerId))?.orphaned_at).not.toBeNull();
+      await expectHeldAsOrphan(peerId);
 
       await vi.advanceTimersByTimeAsync(VOICE_RESUME_TTL_MS + 1_000);
       await settleRows();
@@ -770,6 +787,134 @@ describeDb("voice seats that outlive the person", () => {
     });
   });
 
+  /**
+   * A HOLD NOBODY CAN REDEEM IS A GHOST IN SOMEBODY ELSE'S CALL.
+   *
+   * `join-voice-room.resume` says "I can hold media across a signalling
+   * drop", and its own schema says phones omit it. On 2026-09-08 an iOS build
+   * sent it for every room, having asked `GET /api/voice/backend` what a NEW
+   * room on this deployment would be pinned to instead of what THIS room is.
+   * Production runs LiveKit, so it said yes to mesh rooms as well, and that
+   * build cannot keep the promise on mesh: it tears the peer connections down
+   * and cold rejoins with a new id. Every conversation call is mesh by
+   * policy, so every DM call from an iPhone left a phantom for ninety
+   * seconds. #411 fixes the client; this is the half that also reaches the
+   * builds already on people's phones.
+   */
+  describe("holding a mesh seat for a client that cannot redeem it", () => {
+    const previousFlag = process.env.VOICE_MESH_RESUME_REQUIRES_CAP;
+
+    afterEach(() => {
+      if (previousFlag === undefined) {
+        delete process.env.VOICE_MESH_RESUME_REQUIRES_CAP;
+      } else {
+        process.env.VOICE_MESH_RESUME_REQUIRES_CAP = previousFlag;
+      }
+    });
+
+    /** Register the socket the way `handleWsConnection` does, with caps. */
+    function authenticate(socket: FakeSocket, userId: string, caps: string[]) {
+      setAuthenticatedSocket(asSocket(socket), asUser(userId), caps);
+    }
+
+    it("holds nothing for a phone in a mesh room once the rule is on", async () => {
+      process.env.VOICE_MESH_RESUME_REQUIRES_CAP = "true";
+      const channel = randomUUID();
+      const userId = randomUUID();
+      const phone = new FakeSocket();
+      authenticate(phone, userId, ["voice-roster-delta"]);
+      const peerId = await join(phone, userId, channel);
+      expect(await peerRow(peerId)).toBeDefined();
+
+      // The phone drops. It declared `resume`, but it never declared that it
+      // can rebuild mesh media, so the seat goes now rather than in 90s.
+      removeVoicePeerBySocket(asSocket(phone));
+      await settleRows();
+
+      expect(await peerRow(peerId)).toBeUndefined();
+      expect(await count("voice_peers", "channel_id = $1", [channel])).toBe(0);
+      expect(await count("voice_rooms", "channel_id = $1", [channel])).toBe(0);
+      deleteAuthenticatedSocket(asSocket(phone));
+    });
+
+    it("still holds the seat for a browser, which is what the window is for", async () => {
+      process.env.VOICE_MESH_RESUME_REQUIRES_CAP = "true";
+      const channel = randomUUID();
+      const userId = randomUUID();
+      const tab = new FakeSocket();
+      authenticate(tab, userId, [
+        "voice-roster-delta",
+        SOCKET_CAPS.meshResume,
+      ]);
+      const peerId = await join(tab, userId, channel);
+      const resumeToken = tab.frame("welcome")?.resumeToken as string;
+
+      removeVoicePeerBySocket(asSocket(tab));
+      await settleRows();
+
+      // Held, and redeemable: pitfall 11's behaviour, untouched.
+      await expectHeldAsOrphan(peerId);
+      const back = new FakeSocket();
+      const resumed = await join(back, userId, channel, {
+        resumePeerId: peerId,
+        resumeToken,
+      });
+      expect(resumed).toBe(peerId);
+      expect(back.frame("welcome")).toMatchObject({ peerId, resumed: true });
+      deleteAuthenticatedSocket(asSocket(tab));
+    });
+
+    it("leaves a LiveKit room alone, where the promise is keepable", async () => {
+      process.env.VOICE_MESH_RESUME_REQUIRES_CAP = "true";
+      backend.configured = "livekit";
+      const channel = randomUUID();
+      const userId = randomUUID();
+      const phone = new FakeSocket();
+      authenticate(phone, userId, ["voice-roster-delta"]);
+      const peerId = await join(phone, userId, channel);
+      expect(peerId).toBeDefined();
+
+      removeVoicePeerBySocket(asSocket(phone));
+      await settleRows();
+
+      // iOS keeps a LiveKit call across an API restart today and must keep on
+      // doing so: that media is a separate connection and is still up.
+      await expectHeldAsOrphan(peerId);
+      deleteAuthenticatedSocket(asSocket(phone));
+    });
+
+    it("changes nothing at all while the flag is off, which is how it ships", async () => {
+      delete process.env.VOICE_MESH_RESUME_REQUIRES_CAP;
+      const channel = randomUUID();
+      const userId = randomUUID();
+      const phone = new FakeSocket();
+      authenticate(phone, userId, ["voice-roster-delta"]);
+      const peerId = await join(phone, userId, channel);
+
+      removeVoicePeerBySocket(asSocket(phone));
+      await settleRows();
+
+      await expectHeldAsOrphan(peerId);
+      deleteAuthenticatedSocket(asSocket(phone));
+    });
+
+    it("counts the refusals, so the flip can be read rather than assumed", async () => {
+      process.env.VOICE_MESH_RESUME_REQUIRES_CAP = "true";
+      const before = (await getVoiceActivitySnapshot()).seats;
+      const channel = randomUUID();
+      const userId = randomUUID();
+      const phone = new FakeSocket();
+      authenticate(phone, userId, ["voice-roster-delta"]);
+      await join(phone, userId, channel);
+      removeVoicePeerBySocket(asSocket(phone));
+      await settleRows();
+
+      const after = (await getVoiceActivitySnapshot()).seats;
+      expect(after?.meshHoldsRefused).toBe((before?.meshHoldsRefused ?? 0) + 1);
+      deleteAuthenticatedSocket(asSocket(phone));
+    });
+  });
+
   describe("resume against the grace period", () => {
     it("keeps the seat when the client comes back inside the window", async () => {
       const channel = randomUUID();
@@ -780,7 +925,7 @@ describeDb("voice seats that outlive the person", () => {
 
       removeVoicePeerBySocket(asSocket(socket));
       await settleRows();
-      expect((await peerRow(peerId))?.orphaned_at).not.toBeNull();
+      await expectHeldAsOrphan(peerId);
 
       const back = new FakeSocket();
       const resumed = await join(back, userId, channel, {

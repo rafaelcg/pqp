@@ -318,6 +318,12 @@ function clusterOn(): boolean {
  * THE COUNTERS THE SEAT LEAK DID NOT HAVE, both since boot, both on
  * `GET /api/admin/metrics`.
  *
+ * `meshHoldsRefused` counts seats released at once rather than held, because
+ * the room runs on mesh and the socket never declared `mesh-resume`. It is
+ * how an operator reads whether `VOICE_MESH_RESUME_REQUIRES_CAP` is doing
+ * anything after the flip: flat zero with the flag on means every client in a
+ * mesh call is declaring the capability, and the rule is costing nothing.
+ *
  * `staleRowWritesRefused` is `writePeerRow` catching a handler about to
  * resurrect a deleted seat; `ghostSeatsSwept` is `sweepOwnStaleVoicePeers`
  * finding one that got through anyway. Zero and zero is the healthy reading.
@@ -335,6 +341,7 @@ const SEAT_IDLE_ALARM_MS = 60 * 60_000;
 
 let staleRowWritesRefused = 0;
 let ghostSeatsSwept = 0;
+let meshHoldsRefused = 0;
 
 /**
  * Registry writes, under TWO keys, because the two guarantees they carry are
@@ -1133,6 +1140,16 @@ export interface VoiceActivitySnapshot {
     oldestIdleMinutes: number | null;
     staleRowWritesRefused: number;
     ghostsSwept: number;
+    meshHoldsRefused: number;
+    /**
+     * Sockets that declared `mesh-resume`, against `roster.sockets` for the
+     * denominator. THE NUMBER THAT SAYS WHEN TO FLIP
+     * `VOICE_MESH_RESUME_REQUIRES_CAP`: while it is well short of the total,
+     * turning the rule on would cost browsers still running an older bundle
+     * their seamless mesh resume. Phones never declare it and never will, so
+     * it does not converge on the total; it converges on the browser share.
+     */
+    meshResumeSockets: number;
   } | null;
   /**
    * What the roster fan-out is actually doing, since boot.
@@ -1242,6 +1259,9 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
         oldestIdleMinutes: idle.oldestIdleMinutes,
         staleRowWritesRefused,
         ghostsSwept: ghostSeatsSwept,
+        meshHoldsRefused,
+        meshResumeSockets: countAuthenticatedSockets(SOCKET_CAPS.meshResume)
+          .withCap,
       };
     } catch (error) {
       logEvent("voice.registryReadFailed", {
@@ -2552,6 +2572,76 @@ export async function runVoiceReconcile(): Promise<{
 }
 
 /**
+ * The rollout switch for the mesh hold rule below. Off by default, and that
+ * default is the whole reason it exists.
+ *
+ * The rule refuses to hold a mesh seat for a socket that did not declare
+ * `mesh-resume`. Web and Electron declare it from the bundle this shipped in,
+ * but a Pages deploy does not reload a tab that is already open, and an API
+ * deploy reconnects those tabs without reloading them (pitfall 11). So on the
+ * deploy that carries this change, every browser in a mesh call is by
+ * definition running a bundle that predates the capability, and turning the
+ * rule on in the same breath would cost each of them the seamless resume they
+ * have today: one cold rejoin, a new peer id, a couple of seconds of audio.
+ *
+ * Shipping the mechanism dark and flipping it later is the same pattern
+ * `TURN_PREFER_STATIC` and `WS_COMPRESSION` use. Flip it once tabs have
+ * cycled (the dashboard's `mesh-resume` socket fraction is the number to
+ * read), and from that moment every phone build already in the field stops
+ * leaving mesh ghosts, with no app update and no client deploy.
+ *
+ * Read per call, never cached: a restart is the only other way it changes.
+ */
+function meshResumeRequiresCap(): boolean {
+  return process.env.VOICE_MESH_RESUME_REQUIRES_CAP === "true";
+}
+
+/**
+ * Whether this socket's mesh seat is worth holding.
+ *
+ * The hold exists so a client that still has live media can come back to the
+ * same peer id. In a mesh room that media is a set of peer connections this
+ * client owns, and a client that tears them down on reconnect gains nothing
+ * from the hold while the room pays for it: ninety seconds of a participant
+ * who is not there, a tile nobody can talk to, and a `peer-left` that arrives
+ * long after the person did.
+ *
+ * LiveKit is untouched. Its media is a separate connection that genuinely
+ * survives a signalling drop, which is why iOS keeps a LiveKit call across an
+ * API restart today and must go on doing so.
+ *
+ * WHAT THIS CANNOT DO. The server knows the room's transport exactly; it does
+ * not know whether a given build can rebuild mesh media, and no signal on the
+ * wire tells it. `join-voice-room.resume` is a self-report, and the incident
+ * this comes from is a build that got its own self-report wrong. So this asks
+ * for a narrower promise instead of inferring one, and a client that never
+ * makes it is treated as unable. Guessing from a fingerprint (which caps a
+ * build happens to send, what its user agent says) would work today and rot
+ * silently the first time a client changed, which is pitfall 12 exactly.
+ *
+ * Called from `removeVoicePeerBySocket`, which the close handler runs BEFORE
+ * `deleteAuthenticatedSocket`, so the socket's caps are still readable here.
+ */
+function meshHoldAllowed(peer: VoicePeer, socket: WebSocket): boolean {
+  if (!meshResumeRequiresCap()) {
+    return true;
+  }
+  if (getRoomTransport(peer.voiceChannelId) !== "mesh") {
+    return true;
+  }
+  if (socketHasCap(socket, SOCKET_CAPS.meshResume)) {
+    return true;
+  }
+  meshHoldsRefused += 1;
+  logEvent("voice.meshHoldRefused", {
+    peerId: peer.id,
+    userId: peer.userId,
+    voiceChannelId: peer.voiceChannelId,
+  });
+  return false;
+}
+
+/**
  * Socket closed. Peers that declared `resume: true` stay in the room for
  * `VOICE_RESUME_TTL_MS` so a brief signaling outage can reattach the same
  * id without broadcasting `peer-left`. Everyone else (phones, old tabs)
@@ -2571,7 +2661,9 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
     return;
   }
   socketToPeerId.delete(socket);
-  if (!peer.canResume) {
+  // `canResume` is the client's own promise; `meshHoldAllowed` is whether
+  // this room is one where the promise can be kept.
+  if (!peer.canResume || !meshHoldAllowed(peer, socket)) {
     removePeer(peerId);
     return;
   }

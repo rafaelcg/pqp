@@ -41,6 +41,30 @@ export const SOCKET_CAPS = {
    * has moved: that is silence nobody can see.
    */
   voiceTransportChanged: "voice-transport-changed",
+  /**
+   * This socket keeps its MESH peer connections alive across a signalling
+   * drop and will come back to the same peer id. Without it the server does
+   * not hold a mesh seat for this client (see `meshHoldAllowed` in
+   * `ws/voice.ts`), because a hold nobody can redeem is just a ghost in
+   * somebody else's call.
+   *
+   * WHY A SEPARATE PROMISE FROM `join-voice-room.resume`. That flag already
+   * says "I can hold media across a signalling drop", and its schema in
+   * `@pqp/shared` says in as many words that phones omit it. On 2026-09-08 an
+   * iOS build sent it for every room anyway, having read `GET
+   * /api/voice/backend`, which answers what a NEW room on this deployment
+   * would be pinned to rather than what THIS room is. Production runs
+   * LiveKit, so it said yes to mesh rooms too, and iOS cannot keep that
+   * promise on mesh: it tears the peer connections down and cold rejoins with
+   * a new id. Every conversation call is mesh by policy, so every DM call
+   * from an iPhone left a phantom participant for ninety seconds.
+   *
+   * A boolean a client can get wrong is not a contract the server can
+   * enforce. This is the narrower claim, made per transport, that a client
+   * has to opt into, so a build that has never heard of it is treated as
+   * unable rather than assumed able.
+   */
+  meshResume: "mesh-resume",
 } as const;
 
 export interface AuthenticatedSocket {
