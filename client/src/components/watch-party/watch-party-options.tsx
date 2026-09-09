@@ -12,9 +12,9 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
  *
  * ONE COMPONENT FOR BOTH, because the whole point is that the decisions are
  * the same ones and a host who changes their mind at minute forty gets the
- * panel they already learned at minute zero. `live` only changes the sentence
- * underneath, which promises that a change lands immediately for people
- * already watching.
+ * panel they already learned at minute zero. The promise that a change lands
+ * immediately for people already watching is the dialog's own description
+ * while the party runs, so this draws only controls.
  *
  * FOUR CONTROLS AND A SENTENCE, and the sentence is deliberate. Who may WATCH
  * is not a control here: it is the channel's own permissions, and layering a
@@ -62,14 +62,11 @@ const fieldClass =
 
 export function WatchPartyOptionsPanel({
   options,
-  live,
   disabled = false,
   audienceCount,
   onChange,
 }: {
   options: WatchPartyOptions;
-  /** Changes land immediately for people already watching. */
-  live: boolean;
   disabled?: boolean;
   /** Drives the "with a crowd, try 10 or 30 seconds" nudge. */
   audienceCount: number;
@@ -161,20 +158,17 @@ export function WatchPartyOptionsPanel({
         {t("watchParty.options.reactions")}
       </label>
 
-      <div className="rounded-md bg-ink-3/60 px-2 py-1.5">
-        <p className="text-[11px] font-semibold text-paper-muted">
+      {/* FREQUENCY IS NOT PROMINENCE. Everything above is a lever a host
+          pulls mid-event; this is a fact they read once, ever, and it used to
+          be a filled card with a heading, sitting between the controls and
+          the co-host list at the same visual weight as the controls. It is a
+          disclosure now: one quiet line, the answer one press away. */}
+      <details className="text-[11px] text-paper-muted">
+        <summary className="cursor-pointer select-none text-text-tertiary hover:text-text">
           {t("watchParty.options.whoCanWatch")}
-        </p>
-        <p className="text-[11px] text-paper-muted">
-          {t("watchParty.options.whoCanWatchBody")}
-        </p>
-      </div>
-
-      {live && (
-        <p className="text-[11px] text-paper-muted">
-          {t("watchParty.options.liveNote")}
-        </p>
-      )}
+        </summary>
+        <p className="mt-1.5">{t("watchParty.options.whoCanWatchBody")}</p>
+      </details>
     </div>
   );
 }

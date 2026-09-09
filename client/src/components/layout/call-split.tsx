@@ -347,7 +347,22 @@ export function CallSplit({
           collapsed === "chat" || shape === "fullscreen"
             ? "flex-1"
             : "shrink-0",
-          sized && "overflow-hidden",
+          // CLIP WHENEVER THE PANE OWNS THE SIZE, which is `fills` and not
+          // `sized`. It used to be `sized` alone, and `sized` is false the
+          // moment either pane is collapsed (`resizable` requires
+          // `collapsed === "none"`). So the one state where the stage is
+          // given the WHOLE pane was also the one state with no guard on it:
+          // a child that sized itself larger than the pane ran straight out
+          // of the bottom, painted over the restore strip and over whatever
+          // the app draws below, and the person could not find their way
+          // back. The watch party's setup surface was exactly such a child.
+          //
+          // That child is fixed (`WatchPartyPanel`'s `fill`), and this stays
+          // anyway: the pane is the thing that measured itself, so it is the
+          // thing that should hold the line. A stage that gets its own height
+          // wrong should be cut off inside its pane, not allowed to redraw
+          // the window.
+          fills && "overflow-hidden",
         )}
         style={
           stagePx === null
@@ -436,7 +451,7 @@ function SplitDivider({
     <div
       data-call-split-boundary=""
       className={cn(
-        "group/boundary flex shrink-0",
+        "flex shrink-0",
         sideBySide ? "h-full flex-col" : "w-full flex-row",
       )}
     >
@@ -512,10 +527,21 @@ function SplitDivider({
  * splitter in every editor uses and needs no copy to read. The tooltip and the
  * accessible name say which pane in words.
  *
- * Quiet until the pointer is somewhere near the boundary, because this is a
- * control people use once a call and not furniture, but revealed by hovering
- * the divider rather than by hovering the button itself: a control that only
- * appears once the pointer is already on it is a control nobody finds.
+ * IT USED TO BE INVISIBLE UNTIL HOVERED, and that was wrong twice over.
+ * Rafael, hosting on production: "btw the hide chat button is so small". It
+ * was `opacity-0` until the pointer reached the boundary and 32x8 CSS pixels
+ * once it got there, which is a control you have to already know about to
+ * find. A host running an event in front of an audience does not go hunting
+ * along an 8px line, and there is no hover at all on a touch screen, so on a
+ * phone it did not exist.
+ *
+ * So it is furniture now: always painted, 48px along the boundary, filled
+ * rather than transparent, and with a hit area that reaches 8px into each
+ * neighbouring pane. The layout box stays 8px on the cross axis, because
+ * `CALL_SPLIT_DIVIDER_PX` is the arithmetic every clamp in `lib/call-split.ts`
+ * is done against and a taller button would silently make the divider thicker
+ * than the number the maths uses. Hover still brightens it; what changed is
+ * that hover is no longer how you learn it is there.
  */
 function SplitCollapseButton({
   sideBySide,
@@ -548,17 +574,18 @@ function SplitCollapseButton({
       <button
         type="button"
         data-testid={`call-split-collapse-${toward}`}
+        aria-label={label}
         className={cn(
           // The `::before` is the hit area, for the reason the divider has
           // one: the boundary is 8px thick and a thumb is not.
-          "relative flex shrink-0 items-center justify-center bg-ink-2/70 text-paper-muted opacity-0 transition-opacity before:absolute before:content-[''] hover:bg-ink-3 hover:text-paper focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent group-hover/boundary:opacity-100 motion-reduce:transition-none",
+          "relative flex shrink-0 items-center justify-center bg-surface-3 text-text transition-colors before:absolute before:content-[''] hover:bg-accent hover:text-surface-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent motion-reduce:transition-none",
           sideBySide
-            ? "h-8 w-2 before:inset-y-0 before:-inset-x-1.5"
-            : "h-2 w-8 before:inset-x-0 before:-inset-y-1.5",
+            ? "h-12 w-2 before:inset-y-0 before:-inset-x-2"
+            : "h-2 w-12 before:inset-x-0 before:-inset-y-2",
         )}
         onClick={() => onCollapse(toward)}
       >
-        <Icon className="h-3 w-3" aria-hidden="true" />
+        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
       </button>
     </Tooltip>
   );

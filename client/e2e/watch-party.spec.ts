@@ -853,3 +853,221 @@ test("the three states a real event produces read differently", async ({
     await second.context.close();
   }
 });
+
+// ---------------------------------------------- the host's pane, in a browser
+
+/**
+ * Every box the layout defects were measured in, in one read.
+ *
+ * `getBoundingClientRect` is the point: these bugs are about a surface's
+ * height DISAGREEING with the pane's, and a class-name assertion cannot see a
+ * disagreement. `client/src/components/watch-party/watch-party-panel.test.tsx`
+ * pins the classes; this pins the pixels.
+ */
+async function paneBoxes(page: Page) {
+  return page.evaluate(() => {
+    const box = (selector: string) => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (!element) {
+        return null;
+      }
+      const rect = element.getBoundingClientRect();
+      return {
+        top: Math.round(rect.top),
+        bottom: Math.round(rect.bottom),
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+        height: Math.round(rect.height),
+        width: Math.round(rect.width),
+      };
+    };
+    return {
+      pane: box("[data-call-split]"),
+      stagePane: box("[data-call-split-stage]"),
+      setup: box('[data-testid="watch-party-setup"]'),
+      goLive: box("[data-watch-party-go-live]"),
+    };
+  });
+}
+
+/** Put the chat away from the divider, the way a person does. */
+async function hideTheChat(page: Page): Promise<void> {
+  const divider = page.getByTestId("call-split-divider");
+  await expect(divider).toBeVisible({ timeout: 20_000 });
+  const grip = (await divider.boundingBox())!;
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.getByTestId("call-split-collapse-chat").click();
+  await expect(page.getByTestId("call-split-restore")).toBeVisible({
+    timeout: 20_000,
+  });
+}
+
+test("the setup surface fills the pane when the chat is put away, and after a reload", async ({
+  page,
+}) => {
+  /**
+   * REPORTED FROM PRODUCTION, 12 Sep 2026: "hid the chat and got this bugged
+   * UI". Measured here before the fix at 1440x900: the pane handed the stage
+   * slot 803px and the setup surface stayed at 612px, its own `68svh` of the
+   * WINDOW, leaving Ir ao vivo stranded in mid-screen over a 191px band of
+   * empty pane with the restore strip at the bottom of it.
+   *
+   * BOTH DIRECTIONS ARE ASSERTED, and that is not belt and braces. The
+   * existing collapse spec in `call-split-layout.spec.ts` checks
+   * `paneHeight - stageHeight <= 24`, which a surface OVERFLOWING its pane
+   * passes trivially with a negative number. A surface too short and a
+   * surface too tall are the same defect seen from two sides and only one of
+   * them was catchable.
+   *
+   * AND THE RELOAD PATH, because the preference persists: this is the state
+   * the app LOADS INTO until the person finds the restore strip, and the
+   * collapse is applied from storage before anything has measured itself. A
+   * spec that only clicked the control would pass on a build where the
+   * restored state is the broken one.
+   */
+  const shared = await seedServer("wp-collapse");
+  const party = await createParty("wp-collapse", shared.serverId, "Cinemoon");
+  await openAs(
+    page,
+    `/app/server/${shared.serverId}/channel/${party.channelId}`,
+    "wp-collapse",
+  );
+
+  await expect(page.getByTestId("watch-party-setup")).toBeVisible({
+    timeout: 20_000,
+  });
+  const ack = page.getByRole("dialog").filter({ hasText: "Before you go live" });
+  if (await ack.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await ack.getByRole("button", { name: "Got it", exact: true }).click();
+    await expect(ack).toBeHidden({ timeout: 20_000 });
+  }
+
+  await hideTheChat(page);
+  await expect(page.getByPlaceholder(/^Message /)).toBeHidden();
+
+  const assertItFits = async (when: string) => {
+    const boxes = await paneBoxes(page);
+    const pane = boxes.pane!;
+    const stagePane = boxes.stagePane!;
+    const setup = boxes.setup!;
+    const goLive = boxes.goLive!;
+
+    // The pane gives the stage slot everything but the restore strip.
+    expect(pane.height - stagePane.height, `${when}: pane vs slot`).toBeLessThanOrEqual(24);
+    // AND the surface takes what it was given. This is the number that was
+    // 612 against 803.
+    expect(
+      Math.abs(stagePane.height - setup.height),
+      `${when}: slot vs surface`,
+    ).toBeLessThanOrEqual(2);
+    // Nothing runs out of the pane, in either axis.
+    expect(setup.bottom, `${when}: surface past the pane`).toBeLessThanOrEqual(
+      pane.bottom,
+    );
+    expect(setup.right, `${when}: surface past the pane`).toBeLessThanOrEqual(
+      pane.right + 1,
+    );
+    // And Go live is inside the window, whole, without scrolling to it.
+    expect(goLive.bottom, `${when}: go live below the fold`).toBeLessThanOrEqual(
+      page.viewportSize()!.height,
+    );
+    expect(goLive.top, `${when}: go live above the pane`).toBeGreaterThanOrEqual(
+      pane.top,
+    );
+  };
+
+  await assertItFits("after hiding the chat");
+
+  // F5. The collapse comes back from `localStorage` before the pane, the
+  // party or any stage has measured anything.
+  await page.reload();
+  await expect(page.getByTestId("watch-party-setup")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId("call-split-restore")).toBeVisible({
+    timeout: 20_000,
+  });
+  await assertItFits("after a reload");
+});
+
+test("a host who has not gone live is told so, in words", async ({ page }) => {
+  /**
+   * A host on production announced "im live" to a room while the server
+   * reported `sharingScreen: 0` and no transcode running. He had picked a
+   * window and was looking at his own preview; the only thing saying
+   * otherwise was a 10px uppercase badge in the corner of it.
+   */
+  const shared = await seedServer("wp-notlive");
+  const party = await createParty("wp-notlive", shared.serverId, "Cinemoon");
+  await openAs(
+    page,
+    `/app/server/${shared.serverId}/channel/${party.channelId}`,
+    "wp-notlive",
+  );
+
+  const notLive = page.getByTestId("watch-party-not-live");
+  await expect(notLive).toBeVisible({ timeout: 20_000 });
+  await expect(notLive.getByText("Not live yet")).toBeVisible();
+  // The state and the control that changes it are the same row, so reading
+  // one puts the other under the pointer.
+  await expect(notLive.locator("[data-watch-party-go-live]")).toBeVisible();
+
+  const ack = page.getByRole("dialog").filter({ hasText: "Before you go live" });
+  if (await ack.isVisible({ timeout: 5000 }).catch(() => false)) {
+    await ack.getByRole("button", { name: "Got it", exact: true }).click();
+    await expect(ack).toBeHidden({ timeout: 20_000 });
+  }
+
+  // And it goes the moment it stops being true, which is the half that makes
+  // it a state rather than decoration.
+  await page.locator("[data-watch-party-go-live]").click();
+  await expect(page.getByTestId("watch-party-bar")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByTestId("watch-party-not-live")).toHaveCount(0);
+});
+
+test("opening the options does not move the picture", async ({ page }) => {
+  /**
+   * "need to improve this ui. settings is messy. maybe a popup or pulldown
+   * menu?" The options were a `shrink-0` block above the split, so opening
+   * them pushed the split down by their own height: measured at 1440x900
+   * with a live party, a 586px drawer took the pane holding the picture from
+   * 735px to 149px. They are a `Dialog` now, which is portalled, so the pane
+   * does not move at all.
+   */
+  const shared = await seedServer("wp-options");
+  const party = await createParty("wp-options", shared.serverId, "Cinemoon");
+  await setPartyState("wp-options", party.partyId, "live");
+  await openAs(
+    page,
+    `/app/server/${shared.serverId}/channel/${party.channelId}`,
+    "wp-options",
+  );
+
+  await expect(page.getByTestId("watch-party-bar")).toBeVisible({
+    timeout: 20_000,
+  });
+  const before = (await paneBoxes(page)).pane!;
+
+  await page.locator("[data-watch-party-options-toggle]").click();
+  const options = page.getByTestId("watch-party-options-drawer");
+  await expect(options).toBeVisible({ timeout: 20_000 });
+
+  const during = (await paneBoxes(page)).pane!;
+  expect(during.top, "the pane was pushed down").toBe(before.top);
+  expect(during.height, "the pane was squeezed").toBe(before.height);
+
+  // THE LIST IS A SHORTLIST. `cohostCandidates` is the whole membership, and
+  // every member used to be drawn with an avatar and a Promote button: 104
+  // rows on a 106-member sandbox. Five, and a count for the rest.
+  const candidates = options.locator("[data-watch-party-cohost-candidate]");
+  expect(await candidates.count()).toBeLessThanOrEqual(5);
+
+  // Escape puts the host back where they were, with nothing having moved.
+  await page.keyboard.press("Escape");
+  await expect(options).toBeHidden({ timeout: 20_000 });
+  const after = (await paneBoxes(page)).pane!;
+  expect(after.top).toBe(before.top);
+  expect(after.height).toBe(before.height);
+});

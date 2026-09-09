@@ -338,9 +338,32 @@ different server, which a ref answers without fighting the render cycle.
 ### The options
 
 Six controls at most, one of which is a sentence. In the setup surface before
-going live, and again in an "Opções" panel while the party runs; the same
+going live, and again in an "Opções" **dialog** while the party runs; the same
 component, because a host who learned it at minute zero should not learn a
-second one at minute forty. Every change is applied by the server on the spot
+second one at minute forty.
+
+**It is a dialog and it used to be a drawer, and that was a real bug rather
+than a preference.** The drawer was a `shrink-0` block above the split, so
+opening it pushed the split down by its own height. Measured at 1440x900 with a
+party live: a 586px drawer took the pane holding the picture from 735px to
+149px, a fifth of what it was. Rafael, mid-show: "need to improve this ui.
+settings is messy. maybe a popup or pulldown menu?" `Dialog` rather than either
+of those because `docs/DESIGN.md` lists Menu and Popover as PLANNED primitives
+and says a screen does not hand-roll one; Dialog is the modal this app has, it
+is portalled, and the pane behind it does not move a pixel. The trade is that
+the picture is dimmed while the dialog is open, which Escape undoes.
+
+**The co-host offer is five rows and a count.** `cohostCandidates` is the
+SERVER'S member list, which on the QG is 2078 people, and every one of them was
+rendered with an avatar, a name and a Promote button: 104 rows in the DOM on a
+106-member sandbox. `max-h-48` bounded what was VISIBLE and not what was BUILT,
+which is the wrong half. The filter above it is how a host reaches anybody
+else, and the count says how many that is so nothing is silently hidden.
+
+**Frequency is not prominence.** "Quem pode falar" and "Chat lento" are levers
+a host pulls mid-event. "Quem pode ver" and the co-host explainer are read once,
+ever, and both used to sit at the same visual weight as the controls. They are
+`<details>` disclosures now: one quiet line each, the answer one press away. Every change is applied by the server on the spot
 (`reconcileLiveWatchPartyOptions`), so it lands for the people already
 watching.
 
@@ -563,7 +586,9 @@ the first thing to revisit** if the ended conversation turns out to matter.
    handed to the call at go-live (`ScreenCaptureIntent.stream`), so what they
    approved and what goes out are the same capture rather than two different
    ones.
-3. **Ir ao vivo**, one button, and three things in this order: the party's
+3. **Ir ao vivo**, one button in a bar that says, in the warning tone, that
+   nothing is going out yet ("Ainda não tá no ar"), and three things in this
+   order: the party's
    state changes, the host takes a seat in the room, the capture goes on the
    stage. State first on purpose: if the share fails, the party is live with
    nothing on screen and the panel says so in words. The other order would
@@ -599,6 +624,50 @@ whichever went away could flatten the pane with a "none" that was only ever
 about itself. The pane takes the strongest claim now: a stage that has gone
 cannot outvote a picture that is still there.
 
+**`strongestStageShape` was necessary and it was not sufficient.** It settles
+which SHAPE the pane is in when three stages claim it; it says nothing about
+who owns the stage's HEIGHT. `CallSplit` reports that up as
+`CallSplitState.active`, and `App.tsx` passed it to `WatchChannelStage` and to
+`VoiceChannelStage` and not to `WatchPartyPanel`. Both of those draw
+`fill ? "h-full min-h-0" : "h-[68svh] min-h-[280px]"`; the party's four
+pane-filling surfaces (the empty stage, the setup preview, the scheduled card,
+the live waiting placeholder) were `h-[68svh] shrink-0` with no way to be told
+otherwise.
+
+With both panes drawn nobody notices: 68% of the window is close enough to the
+pane that it reads as deliberate. **Put the chat away and the two numbers
+separate.** Measured at 1440x900 on 12 Sep 2026: the pane handed the stage slot
+803px of an 819px pane, the setup surface kept insisting on 612, and the host
+got their preview, the Ir ao vivo bar stranded in mid-screen, and a 191px band
+of empty pane under it with the restore strip at the bottom. Rafael, hosting on
+production: "hid the chat and got this bugged UI". The collapse persists, so it
+is also the state the app LOADS INTO on the next reload.
+
+Two things fix it and the second is the durable one. The surfaces take `fill`
+like their two siblings, so the disagreement is gone. And the stage pane now
+clips whenever the pane owns the size (`fills && "overflow-hidden"`, where it
+used to be `sized &&`): `sized` requires `collapsed === "none"`, so the ONE
+state in which the stage is handed the whole pane was also the one state with
+no guard on it, and a child that got its height wrong ran out of the bottom and
+painted over the restore strip. The pane is the thing that measured itself, so
+the pane holds the line.
+
+Pinned in `client/e2e/watch-party.spec.ts` ("the setup surface fills the pane
+when the chat is put away, and after a reload"), which asserts BOTH directions
+against the pane and repeats every assertion after an F5. The direction matters:
+the existing collapse test in `call-split-layout.spec.ts` asserted
+`paneHeight - stageHeight <= 24`, which a surface OVERFLOWING its pane passes
+with a negative number.
+
+**The collapse control is furniture now.** "btw the hide chat button is so
+small", from the same session. It was `opacity-0` until the pointer reached the
+boundary and 32x8 CSS pixels once it got there, which is a control you have to
+already know about to find, and on a touch screen there is no hover at all. It
+is painted at rest, 48px along the boundary, filled rather than transparent,
+with a hit area 8px into each neighbour. The 8px cross axis does not move:
+that is `CALL_SPLIT_DIVIDER_PX`, and every clamp in `lib/call-split.ts` is
+computed against it.
+
 Side by side also exposed a layout bug worth recording, because it is the
 narrow-column version of the one the sidebar block had. The live bar put the
 party's identity, the viewer count and three buttons on one row; at 62% of a
@@ -607,6 +676,41 @@ control a host must always reach. The bar wraps now, the count moved into the
 identity line where it is information rather than an action, and the identity
 carries a real minimum width so the actions wrap to their own row instead of
 the party's name truncating away to nothing.
+
+### Knowing you are not live yet
+
+On 12 Sep 2026 a host on production told a room he was live while the server
+reported `sharingScreen: 0` and no transcode running. He had created the party,
+picked a window and was looking at his own capture. Everything on that screen
+was working exactly as designed, and he was wrong about the one fact that
+matters. On the Saturday this exists for, that is the difference between an
+audience watching and an audience staring at nothing while the host believes it
+is working.
+
+The only thing that had said otherwise was `watchParty.setup.heading`, rendered
+as 10px uppercase grey in the corner of the preview. That is the visual
+language of a watermark, and a watermark is read as decoration.
+
+Three changes, and the third is the one that generalises:
+
+1. **The badge on the preview is a status light.** A pill with a dot, in the
+   warning tone, at a size that is read rather than skimmed. Deliberately the
+   same shape as `LivePill`, which it is the opposite of.
+2. **The bar under the setup surface is a state, not a footer.** It leads with
+   "Ainda não tá no ar" in the warning tone and the button that changes that is
+   at the end of the same sentence, so reading the state puts the remedy under
+   the pointer. It disappears the moment it stops being true, which is what
+   makes it a state rather than a decoration.
+3. **That bar cannot be pushed out of view.** It is `shrink-0` under a row that
+   is `min-h-0 flex-1`, inside a surface that now takes its height from the
+   pane. The settings column and the co-host list scroll inside the row above;
+   the bar never moves. Before this, the host's own screenshot showed Ir ao
+   vivo only after scrolling, under a co-host list long enough to push it away,
+   and the co-host list was the whole membership (see §The options).
+
+The rule behind all three: **a control that decides whether an event happens
+does not live at the bottom of a scrolling column, and the state it changes is
+worth a sentence rather than a badge.**
 
 ### Three controls the host and the viewer asked for
 

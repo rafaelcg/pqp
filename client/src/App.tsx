@@ -5773,6 +5773,12 @@ function MainAppContent({
             }
             transport={voiceState.roomTransport}
             slot="surface"
+            /* The pane owns this surface's height, exactly as it owns
+               `WatchChannelStage`'s and `VoiceChannelStage`'s below. This
+               component was the only one of the three that never got told,
+               which is why hiding the chat left a band of empty pane under
+               the setup surface. */
+            fill={splitState.active}
             onShapeChange={handleWatchPartyShape}
           />
         )}

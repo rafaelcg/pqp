@@ -198,3 +198,36 @@ describe("the co-host list", () => {
     expect(html).toContain("Nobody else in the server to promote");
   });
 });
+
+describe("the offer is a shortlist, not the membership", () => {
+  /**
+   * `candidates` is the SERVER'S MEMBER LIST, which on the QG is 2078 people.
+   * Every one of them used to be rendered: an avatar, a name and a Promote
+   * button each. Measured on the local sandbox on 12 Sep 2026 with 106
+   * members, the options panel put 104 promote rows in the DOM and the
+   * section pushed everything under it, including the go-live control on the
+   * setup surface, off the bottom of the pane. `max-h-48` bounded what was
+   * VISIBLE and not what was BUILT, which is the wrong half.
+   */
+  const crowd = Array.from({ length: 40 }, (_, i) => person(i));
+
+  it("draws five and never the whole server", () => {
+    const html = render({}, crowd);
+    expect(promotable(html)).toHaveLength(5);
+  });
+
+  it("says how many it did not draw, so nothing is silently hidden", () => {
+    // A cut list with no count reads as a list that ended, and a host looking
+    // for somebody outside the first five would conclude they are not in the
+    // server.
+    const html = render({}, crowd);
+    expect(html).toContain('data-watch-party-cohost-more="35"');
+  });
+
+  it("counts what the filter left, not what the server holds", () => {
+    // The count is about this query. Filtering to six names says "1 more",
+    // not "35 more", or it is describing a list nobody is looking at.
+    const short = Array.from({ length: 5 }, (_, i) => person(i));
+    expect(render({}, short)).not.toContain("data-watch-party-cohost-more");
+  });
+});

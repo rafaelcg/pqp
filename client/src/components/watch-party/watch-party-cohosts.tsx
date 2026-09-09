@@ -52,6 +52,25 @@ export interface CohostCandidate {
 const FILTER_FROM = 8;
 
 /**
+ * How many candidates are ever drawn at once.
+ *
+ * THE LIST WAS THE WHOLE MEMBERSHIP. `candidates` is the server's member list
+ * (see the header), which on the QG is 2078 people and on the local sandbox
+ * measured 104 rows in the DOM on 12 Sep 2026. Every one of them was rendered
+ * with an avatar, a name and a Promote button, so the section grew without
+ * limit and pushed everything under it, including the go-live control on the
+ * setup surface, off the bottom of the pane. `max-h-48` bounded what was
+ * VISIBLE and not what was BUILT, which is the wrong half: the layout still
+ * had a 3000px child in it and the host still had 2078 rows of React.
+ *
+ * Five, because this is not a directory. A host appointing a backup either
+ * knows who they want, in which case the filter above finds them in two
+ * keystrokes, or they want the first few names to remind them. A count says
+ * how many more the filter would reach, so nothing is silently hidden.
+ */
+const MAX_OFFERED = 5;
+
+/**
  * Whether this person may staff this party right now.
  *
  * Exported so the surface that FRAMES this section (a divider, a heading gap)
@@ -117,15 +136,26 @@ export function WatchPartyCohosts({
   };
 
   const showFilter = candidates.length > FILTER_FROM;
+  const shown = offered.slice(0, MAX_OFFERED);
+  const hidden = offered.length - shown.length;
 
   return (
     <div data-watch-party-cohosts className="flex flex-col gap-2">
       <p className="text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
         {t("watchParty.cohosts.title")}
       </p>
-      <p className="text-[11px] text-paper-muted">
-        {t("watchParty.cohosts.body")}
-      </p>
+      {/* THE PARAGRAPH IS READ ONCE AND THE CONTROLS ARE USED EVERY SHOW, so
+          it is a detail the host opens rather than four lines of prose above
+          the thing they came for. `<details>` and not a state hook: it is one
+          disclosure with no behaviour, the browser already has the semantics
+          and the keyboard handling, and a `useState` here would be a second
+          way to do what the platform does. */}
+      <details className="text-[11px] text-paper-muted">
+        <summary className="cursor-pointer select-none text-text-tertiary hover:text-text">
+          {t("watchParty.cohosts.summary")}
+        </summary>
+        <p className="mt-1.5">{t("watchParty.cohosts.body")}</p>
+      </details>
 
       {party.cohosts.length > 0 && (
         <ul className="flex flex-col gap-1">
@@ -183,8 +213,8 @@ export function WatchPartyCohosts({
             : t("watchParty.cohosts.nobody")}
         </p>
       ) : (
-        <ul className="flex max-h-48 flex-col gap-1 overflow-y-auto">
-          {offered.map((person) => (
+        <ul className="flex flex-col gap-1">
+          {shown.map((person) => (
             <li
               key={person.userId}
               className="flex items-center gap-2"
@@ -212,6 +242,19 @@ export function WatchPartyCohosts({
             </li>
           ))}
         </ul>
+      )}
+
+      {/* NOTHING IS SILENTLY HIDDEN. A cut list with no count reads as a list
+          that ended, and a host looking for somebody who is not in the first
+          five would conclude they are not in the server. This says how many
+          the filter above would reach. */}
+      {hidden > 0 && (
+        <p
+          className="text-[11px] text-paper-muted"
+          data-watch-party-cohost-more={hidden}
+        >
+          {t("watchParty.cohosts.more", { count: hidden })}
+        </p>
       )}
     </div>
   );

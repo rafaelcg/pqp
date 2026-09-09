@@ -5,6 +5,7 @@ import {
   useId,
   useRef,
   useState,
+  type ComponentPropsWithoutRef,
   type CSSProperties,
   type ReactNode,
 } from "react";
@@ -406,9 +407,14 @@ export function Dialog({
 export function DialogBody({
   className,
   children,
+  ...rest
 }: {
   className?: string;
   children: ReactNode;
-}) {
-  return <div className={cn("px-5 py-4", className)}>{children}</div>;
+} & Omit<ComponentPropsWithoutRef<"div">, "className" | "children">) {
+  return (
+    <div className={cn("px-5 py-4", className)} {...rest}>
+      {children}
+    </div>
+  );
 }

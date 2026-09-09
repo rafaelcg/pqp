@@ -219,3 +219,83 @@ describe("the chrome survives a collapsed video", () => {
     expect(surface).toContain("watch-party-waiting");
   });
 });
+
+describe("the pane owns the surface's height", () => {
+  /**
+   * WHAT BROKE. Every pane-filling surface here sized itself `h-[68svh]`, a
+   * fraction of the WINDOW, and `shrink-0`. The split pane sizes itself from
+   * its own measurement and, when the chat is put away, hands the stage slot
+   * the whole pane. The two numbers disagreed, and the pane's is the one that
+   * is true: at 1440x900 the pane gave the slot 803px while the setup surface
+   * insisted on 612, leaving the go-live bar stranded in mid-screen over a
+   * 191px band of empty pane. `WatchChannelStage` and `CallStage` both take a
+   * `fill` prop for exactly this; this component never got one.
+   *
+   * These assert the class rather than a rendered height because
+   * `renderToStaticMarkup` lays nothing out. The geometry is asserted for
+   * real, in a browser, in `client/e2e/watch-party.spec.ts` ("the setup
+   * surface fills the pane when the chat is put away"), including the reload
+   * path, where the collapse is restored from storage before anything has
+   * measured itself.
+   */
+  const filling: [string, Partial<Parameters<typeof WatchPartyPanel>[0]>][] = [
+    ["setup", { party: { ...PARTY, state: "draft", viewerRole: "host" } }],
+    [
+      "scheduled",
+      { party: { ...PARTY, state: "scheduled", viewerRole: "host" } },
+    ],
+    ["waiting", { hasStream: false }],
+    ["empty", { party: null, canStart: true }],
+  ];
+
+  for (const [name, over] of filling) {
+    it(`${name} takes the pane's height when the pane owns it`, () => {
+      const owned = render({ ...over, fill: true });
+      expect(owned, name).toContain("h-full min-h-0 flex-1");
+      // The window fraction is what the pane is REPLACING, so it has to be
+      // gone rather than merely overridden by a later class.
+      expect(owned, name).not.toContain("68svh");
+    });
+
+    it(`${name} keeps its own rule when nobody has taken the pane`, () => {
+      // Nothing about a first render changes on the day this ships: with two
+      // panes drawn the stage still sizes itself and the transcript keeps the
+      // rest, exactly as before.
+      const own = render({ ...over, fill: false });
+      expect(own, name).toContain("shrink-0");
+      expect(own, name).not.toContain("h-full min-h-0 flex-1");
+    });
+  }
+});
+
+describe("a host can tell they are not live", () => {
+  const draft: Partial<Parameters<typeof WatchPartyPanel>[0]> = {
+    party: { ...PARTY, state: "draft", viewerRole: "host" },
+  };
+
+  it("says it in a sentence, not in a 10px watermark", () => {
+    /**
+     * On 12 Sep 2026 a host on production announced "im live" to a room while
+     * the server reported `sharingScreen: 0` and no transcode running. He had
+     * picked a window and was looking at his own preview. The only thing
+     * saying otherwise was a 10px uppercase grey badge in the corner of that
+     * preview, which is the visual language of a watermark.
+     */
+    const html = render(draft);
+    expect(html).toContain("watch-party-not-live");
+    expect(html).toContain("Not live yet");
+    // And the badge on the preview is a status light now, not a caption.
+    expect(html).toContain("watch-party-preview-state");
+  });
+
+  it("keeps Go live in the row pinned to the bottom of the surface", () => {
+    // The other half of the same report: the host's screenshot only showed Ir
+    // ao vivo after scrolling, under a co-host list long enough to push it
+    // away. The bar is `shrink-0` under a `min-h-0 flex-1` row, so the
+    // settings column scrolls and this never moves.
+    const html = render(draft);
+    const bar = html.slice(html.indexOf("watch-party-not-live"));
+    expect(bar).toContain("data-watch-party-go-live");
+    expect(bar).toContain("data-watch-party-discard");
+  });
+});

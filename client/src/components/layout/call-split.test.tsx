@@ -410,3 +410,78 @@ describe("CallSplit puts a pane away without unmounting it", () => {
     }
   });
 });
+
+describe("the pane holds the line when it owns the stage's size", () => {
+  /** The stage pane's own class list. */
+  function stagePaneClass(html: string): string {
+    const tag = /<div[^>]*data-call-split-stage[^>]*>/.exec(html)?.[0] ?? "";
+    return /class="([^"]*)"/.exec(tag)?.[1] ?? "";
+  }
+
+  it("clips the stage pane once the chat is put away", () => {
+    /**
+     * WHAT THIS PINS. The clip used to be `sized && "overflow-hidden"`, and
+     * `sized` requires `collapsed === "none"` (through `resizable`). So the
+     * one state in which the stage is handed the WHOLE pane was also the one
+     * state with no guard on it, and a stage that got its own height wrong
+     * ran out of the bottom of the pane, painted over the restore strip and
+     * over whatever the app draws below it. That is what a host saw on
+     * production after hiding the chat in a watch party: the surface
+     * continuing past the pane with the bar overlapping it.
+     */
+    const collapsed = split({
+      preference: { ...CALL_SPLIT_DEFAULT, collapsed: "chat" },
+    });
+    expect(stagePaneClass(collapsed)).toContain("overflow-hidden");
+    expect(stagePaneClass(collapsed)).toContain("flex-1");
+  });
+
+  it("still clips it once somebody has dragged the divider", () => {
+    // The case that always worked, kept so the widening cannot lose it.
+    expect(stagePaneClass(split())).toContain("overflow-hidden");
+  });
+
+  it("leaves a stage that sizes itself alone", () => {
+    // Nobody has dragged and nothing is collapsed: the stage keeps its own
+    // height rule and the transcript keeps the rest, exactly as before. A
+    // clip here would crop a stage the pane never sized.
+    const untouched = split({ preference: CALL_SPLIT_DEFAULT });
+    expect(stagePaneClass(untouched)).not.toContain("overflow-hidden");
+  });
+});
+
+describe("the collapse controls are findable without hovering", () => {
+  /**
+   * Reported from production while hosting: "btw the hide chat button is so
+   * small". It was `opacity-0` until the pointer reached the boundary and
+   * 32x8 CSS pixels once it got there, so it had to be known about to be
+   * found, and on a touch screen there is no hover at all.
+   */
+  function collapseTag(html: string, toward: "stage" | "chat"): string {
+    return (
+      new RegExp(`<button[^>]*call-split-collapse-${toward}[^>]*>`).exec(
+        html,
+      )?.[0] ?? ""
+    );
+  }
+
+  for (const toward of ["stage", "chat"] as const) {
+    it(`paints the ${toward} control before anybody hovers anything`, () => {
+      const tag = collapseTag(split(), toward);
+      expect(tag).not.toBe("");
+      // `opacity-0` plus a `group-hover` reveal is what made it invisible.
+      expect(tag).not.toContain("opacity-0");
+      expect(tag).not.toContain("group-hover");
+    });
+
+    it(`gives the ${toward} control a target rather than a sliver`, () => {
+      const tag = collapseTag(split(), toward);
+      // 48px along the boundary, and a hit area that reaches 8px into each
+      // neighbouring pane. The 8px cross axis is not negotiable: it is
+      // `CALL_SPLIT_DIVIDER_PX`, which every clamp in `lib/call-split.ts` is
+      // computed against.
+      expect(tag).toMatch(/w-12|h-12/);
+      expect(tag).toMatch(/before:-inset-[xy]-2/);
+    });
+  }
+});
