@@ -584,6 +584,39 @@ export function liveHlsRungsFor(channelId: string): LadderRung[] {
   return (rooms.get(channelId)?.rungs ?? []).map((entry) => entry.rung);
 }
 
+export interface LiveHlsActivity {
+  /** Sessions this process is running an egress for, right now. */
+  sessions: number;
+  /** Renditions across all of them: what the media box is actually encoding. */
+  rungs: number;
+  /** Longest-running session, in minutes, or null when none is live. */
+  oldestMinutes: number | null;
+}
+
+/**
+ * WHAT THE DASHBOARD READS TO KNOW A TRANSCODE EVER RAN.
+ *
+ * In-process, so it is the number for the instance that answered, the same
+ * way `voice.rooms` is. Zero on a machine that is not the one presenting;
+ * zero everywhere for a deployment where the flag is on and the egress
+ * silently never starts, which is the case worth being able to see. Pair it
+ * with `retention.uncleaned` below: sessions climbing with `uncleaned` flat
+ * is healthy, `uncleaned` climbing on its own is a sweep that is not running.
+ */
+export function liveHlsActivity(now = Date.now()): LiveHlsActivity {
+  let rungs = 0;
+  let oldest: number | null = null;
+  for (const room of rooms.values()) {
+    rungs += room.rungs.length;
+    oldest = oldest === null ? room.startedAtMs : Math.min(oldest, room.startedAtMs);
+  }
+  return {
+    sessions: rooms.size,
+    rungs,
+    oldestMinutes: oldest === null ? null : Math.floor((now - oldest) / 60_000),
+  };
+}
+
 function notifyChanged(channelId: string, reason: string): void {
   if (!changeListener) {
     return;
@@ -976,8 +1009,22 @@ function getEgress(): LiveHlsEgressApi | null {
 export async function listActiveEgresses(): Promise<EgressListing[] | null> {
   const egress = getEgress();
   if (!egress) {
-    // No LiveKit configured at all: there is genuinely nothing running.
-    return [];
+    // NO LIVEKIT HERE. This used to answer `[]` — "there is genuinely nothing
+    // running" — which is true of the process that would have started an
+    // egress and false of any OTHER process asking about one. The retention
+    // sweep's whole safety rule is "ask the media server, do not trust the
+    // row", and `[]` turns that into a rubber stamp: a session whose egress is
+    // still writing segments reads as finished and its objects get deleted
+    // underneath a live watch party.
+    //
+    // That is reachable on the split deployment. `pqp-worker` is where the
+    // sweep runs and it holds neither `LIVEKIT_*` nor `LIVE_HLS_S3_*`; the
+    // moment somebody fixes half of that by giving it the bucket, this
+    // function starts saying "nothing is running" about a box that is running
+    // everything. `null` means "could not ask", every caller already treats
+    // that as "leave it alone", and the log line names the reason.
+    logEvent("voice.hlsListEgressUnavailable", { reason: "no-livekit" });
+    return null;
   }
   if (!egress.listEgress) {
     return null;
@@ -1237,6 +1284,49 @@ export function internalPlaylistUrl(
     forRead: false,
     config,
   }).url;
+}
+
+/**
+ * Can this process reach the live-HLS bucket, with credentials it is allowed
+ * to use? For `/ready`.
+ *
+ * WHY IT IS NOT COVERED BY THE EXISTING `storage` CHECK. That one probes the
+ * ATTACHMENT bucket (`S3_*`). Live HLS deliberately uses a second, separate
+ * set (`LIVE_HLS_S3_*`) with its own bucket and its own key pair, so
+ * `storage: ok` says nothing whatsoever about whether a watch party can
+ * write a segment. Production had `LIVE_HLS_S3_*` deployed and `/ready`
+ * green for a week without either fact implying the other.
+ *
+ * A 404 is a PASS: the key cannot exist, and answering "not found" with a
+ * valid signature is exactly the proof wanted — the endpoint resolves, the
+ * bucket is there, and the credentials are accepted. Only a transport
+ * failure or a non-404 error status is a failure. Same trick as the
+ * attachment probe and the status page.
+ */
+const LIVE_HLS_PROBE_KEY = "__ready_probe__/does-not-exist";
+
+export async function probeLiveHlsStorage(): Promise<void> {
+  const config = liveHlsStorageConfig();
+  if (!config) {
+    throw new Error("live HLS storage is not configured");
+  }
+  const url = signRequest({
+    method: "HEAD",
+    key: LIVE_HLS_PROBE_KEY,
+    ttlSeconds: 60,
+    forRead: false,
+    config,
+  }).url;
+  const response = await fetch(url, {
+    method: "HEAD",
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (response.status === 404 || response.ok) {
+    return;
+  }
+  // 403 here is the one worth having: the bucket answers and the key pair is
+  // wrong or has lost its grant, which is invisible until a party starts.
+  throw new Error(`live HLS storage answered HTTP ${response.status}`);
 }
 
 /**

@@ -715,6 +715,57 @@ the count cadence, the token on every path).
 Scheduling (built in parallel) attaches to the channel; the sidebar row has a
 `TODO(schedule)` where the next session time goes in the idle state.
 
+## How you know it is running
+
+The whole of the above can be deployed, configured and doing nothing, and for
+a while that is exactly what it was. Three surfaces answer three different
+questions, and none of them substitutes for another.
+
+**Can it write a segment at all?** `GET /ready`, `checks.liveHls`. A signed
+`HEAD` of a key that cannot exist against the `LIVE_HLS_S3_*` bucket, so a 404
+is a pass and a 403 is the answer worth having. **It is not `checks.storage`**:
+that is the attachment bucket, a different bucket with a different key pair,
+and one being green has never implied anything about the other. Skipped, and
+never a 503, while `LIVE_HLS_ENABLED` is not `"true"`.
+
+**Did a transcode actually start?** `GET /api/admin/metrics`, the `liveHls`
+block: `enabled`, `configured`, `allowlisted`, `ladder`, and `sessions` /
+`rungs` / `oldestSessionMinutes` for the transcodes running on the instance
+that answered. `sessions: 0` during a live watch party is the egress not
+starting, which on the viewer's screen is a blank pane and in the log is
+`voice.hlsStarted` never appearing.
+
+**Are the recordings being deleted?** The same block's `uncleaned`: finished
+sessions past their retention window that still hold objects. It belongs at
+zero and self-corrects within a sweep tick (60 s) of each party ending.
+**Climbing on its own is a dead sweep**, and it is the only symptom one has.
+
+That last number exists because of a live production gap, which is worth
+stating plainly since the shape recurs (CLAUDE.md pitfalls 9, 12 and 13).
+`sweepHlsSessions` is a cold job, so it runs wherever `jobs.ts` runs.
+Production splits that: `pqp-api` has every `LIVE_HLS_S3_*` secret and
+`WORKER_MODE=api`, which skips every batch job; `pqp-worker` runs them and has
+none of those secrets. So the sweep runs in the one process that cannot reach
+the bucket, returns 0, and until now said nothing. Segments accumulate in R2
+for good and the only evidence is the bill.
+
+Two halves to closing it, and both are needed:
+
+- **The code half** (done): the sweep logs `voice.hlsSweepMisconfigured` once
+  per process when it is the one running and finds sessions it owes but cannot
+  reach the bucket, and `uncleaned` on the dashboard makes the leak a number.
+- **The operator half**: `pqp-worker` needs `LIVE_HLS_S3_*` **and**
+  `LIVEKIT_*`. Not one or the other. The sweep's central rule is "ask the
+  media server, do not trust the row" — `ended_at` says when this cluster
+  stopped believing in a session, and an API that restarted mid-share leaves a
+  row ended while the egress keeps writing. Giving the worker the bucket
+  without LiveKit would let it delete a live party's segments, which looks
+  like corruption rather than a restart. `listActiveEgresses()` answers `null`
+  ("could not ask") rather than `[]` ("nothing is running") when there is no
+  media server to ask, and every caller treats null as leave-it-alone, so the
+  half-configured worker now refuses instead of deleting. It is safe; it is
+  just not sweeping, and `uncleaned` will say so.
+
 ## Client flag
 
 `VITE_WATCH_PARTY_CHANNELS=true` turns on the create affordance and the

@@ -99,7 +99,8 @@ ok and `503` otherwise, with a JSON body that names the failing one:
     "postgres": { "ok": true, "ms": 3 },
     "pool":     { "ok": true, "inUse": 2, "max": 10, "queued": 0 },
     "livekit":  { "ok": true, "ms": 41, "host": "sfu.pqp.gg" },
-    "storage":  { "ok": true, "skipped": true }
+    "storage":  { "ok": true, "skipped": true },
+    "liveHls":  { "ok": true, "skipped": true }
   },
   "version": "<deployed commit>"
 }
@@ -110,7 +111,8 @@ ok and `503` otherwise, with a JSON body that names the failing one:
 | `postgres` | One `SELECT 1` through the pool, 2 s timeout. Fails on error or timeout. |
 | `pool` | Sampled every second in-process. Not ok when `queued > 0` **continuously** for more than 10 s, or `inUse == max` continuously for more than 30 s. A momentary queue (cold start, deploy stampede) never flips it; the run has to be unbroken. |
 | `livekit` | `RoomService.listRooms`, 3 s timeout, result cached 30 s, concurrent callers share one probe. Carries `host`, the SFU hostname from `LIVEKIT_URL` (never the key or secret), so a rollback from `sfu.pqp.gg` to LiveKit Cloud is visible to a monitor. `{ ok: true, skipped: true }` when LiveKit is not configured. |
-| `storage` | A signed `HEAD` of a key that cannot exist (a 404 is a success), same timeout and cache as LiveKit. `skipped` when `S3_*` is unset. |
+| `storage` | A signed `HEAD` of a key that cannot exist (a 404 is a success), same timeout and cache as LiveKit. `skipped` when `S3_*` is unset. This is the **attachment** bucket. |
+| `liveHls` | The same probe against the **watch-party** bucket, which is a different bucket with a different key pair (`LIVE_HLS_S3_*`) and is deliberately not the attachment one. `skipped` unless `LIVE_HLS_ENABLED=true`, so a deployment that does not run watch parties never goes 503 over a bucket it has no reason to own. Once the flag is on, an unreachable or forbidding bucket is a real outage: no segment can be written and every watch party is a blank pane. Production ran for a week with `LIVE_HLS_S3_*` deployed and `/ready` green, and neither fact implied the other, which is why this row exists. |
 
 It leaks nothing useful: component names, booleans, counts and milliseconds,
 plus the one hostname every voice client is already handed (the SFU's). No

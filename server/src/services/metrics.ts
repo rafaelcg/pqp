@@ -5,6 +5,13 @@ import { checkReady, type ReadyReport } from "./ready.js";
 import { readSfuStats, type SfuStats } from "../voice/sfu-stats.js";
 import { readStatusHistory, type StatusHistory } from "./status.js";
 import { getVoiceActivitySnapshot } from "../ws/voice.js";
+import {
+  isLiveHlsEnabled,
+  liveHlsActivity,
+  liveHlsConfig,
+} from "../voice/hls-egress.js";
+import { countDueSessions } from "../voice/hls-cleanup.js";
+import { processRole, runsColdJobs } from "../lib/process-role.js";
 import { getPresenceFanoutStats } from "../ws/chat.js";
 import {
   acquisitionReport,
@@ -229,6 +236,52 @@ export interface AdminMetrics {
       participants: number;
       sharingScreen: number;
     }[];
+  };
+  /**
+   * LIVE HLS: WHETHER A WATCH PARTY EVER ACTUALLY TRANSCODED, AND WHETHER ITS
+   * RECORDINGS ARE BEING DELETED.
+   *
+   * This block exists because the feature could be fully deployed, fully
+   * configured, and silently doing nothing, with no number anywhere saying so.
+   * `/ready` answers whether the bucket is reachable; this answers whether it
+   * is being used. The three that matter, in the order to read them:
+   *
+   *  - `enabled` / `configured`: the flag, and the flag plus every secret the
+   *    egress needs. `enabled: true, configured: false` is the shape where an
+   *    operator turned it on and nothing can ever start.
+   *  - `sessions` / `rungs`: transcodes running on the instance that
+   *    answered, right now. Zero during a live watch party means the egress
+   *    is not starting and the audience is looking at a blank pane.
+   *  - `uncleaned`: finished sessions past their retention window that still
+   *    hold objects. **This is the one that catches a dead sweep.** It belongs
+   *    at zero and self-corrects within a minute of each party ending. It
+   *    climbs forever, silently, on a deployment where the process that runs
+   *    the sweep cannot reach the bucket, which is exactly what the
+   *    `WORKER_MODE=api` / `pqp-worker` split produced: `pqp-api` has
+   *    `LIVE_HLS_S3_*` and skips every batch job, `pqp-worker` runs them and
+   *    had none of those secrets. Nothing else in this product would have
+   *    shown that except the R2 bill.
+   *
+   * `sweepsHere` says whether the process answering this request is the one
+   * that runs the sweep at all, so a zero can be read as "clean" rather than
+   * "not my job". On the split deployment it is false on `pqp-api`, and the
+   * number to trust for `uncleaned` is still true and shared, because it is a
+   * database count rather than a process counter.
+   */
+  liveHls: {
+    enabled: boolean;
+    configured: boolean;
+    /** Whether `LIVE_HLS_SERVER_ALLOWLIST` confines it to named servers. */
+    allowlisted: boolean;
+    /** Rung names this deployment would encode, lowest first. */
+    ladder: string[];
+    sessions: number;
+    rungs: number;
+    oldestSessionMinutes: number | null;
+    /** Sessions past retention that still hold objects. Belongs at zero. */
+    uncleaned: number;
+    /** Whether this process runs the retention sweep (`WORKER_MODE`). */
+    sweepsHere: boolean;
   };
   topServers24h: {
     name: string;
@@ -540,6 +593,16 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
   // two calls and render with no name at all.
   const voice = await getVoiceActivitySnapshot();
 
+  // Live HLS. The flag, the ladder and the running transcodes are all
+  // in-process reads; only `uncleaned` costs a query, and it is a COUNT over
+  // an index-shaped predicate on a table with one row per rendition per
+  // party. A failure here must not take the whole dashboard down: a null
+  // would be indistinguishable from zero on the one number that matters, so
+  // it falls back to -1, which reads as "could not ask" rather than "clean".
+  const hlsFlag = liveHlsConfig();
+  const hlsActivity = liveHlsActivity();
+  const hlsUncleaned = await countDueSessions().catch(() => -1);
+
   // The tab detail, in a second round of parallel queries. It is separate from
   // the block above only for readability; both rounds are inside the same
   // 30-second cache entry, so a dashboard switching tabs never touches the API.
@@ -832,6 +895,17 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
           sharingScreen: room.sharingScreen,
         };
       }),
+    },
+    liveHls: {
+      enabled: hlsFlag.enabled,
+      configured: isLiveHlsEnabled(),
+      allowlisted: hlsFlag.allowlisted,
+      ladder: hlsFlag.ladder.map((rung) => rung.name),
+      sessions: hlsActivity.sessions,
+      rungs: hlsActivity.rungs,
+      oldestSessionMinutes: hlsActivity.oldestMinutes,
+      uncleaned: hlsUncleaned,
+      sweepsHere: runsColdJobs(processRole()),
     },
     topServers24h: topServers.rows.map((row) => ({
       name: row.name,
