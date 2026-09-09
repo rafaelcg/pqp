@@ -156,7 +156,14 @@ jobs:
                 echo "MAC_NOTARIZED=true" >> "$GITHUB_ENV"
                 echo "::notice::Notarizing with an App Store Connect API key."
               elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
-                args+=("-c.mac.notarize.teamId=${APPLE_TEAM_ID}")
+                # `mac.notarize` is a boolean in electron-builder 26. Up to
+                # 25.1.8 it also accepted `{ teamId }`, and this line used to
+                # pass `-c.mac.notarize.teamId=...`; that shape was removed in
+                # 26.0.0 (PR #8582) and would now be an object where the schema
+                # wants a boolean. The team id was never needed as config
+                # anyway: @electron/notarize reads APPLE_TEAM_ID straight from
+                # the environment, and it is already exported on this step.
+                args+=("-c.mac.notarize=true")
                 echo "MAC_NOTARIZED=true" >> "$GITHUB_ENV"
                 echo "::notice::Notarizing with an Apple ID app-specific password."
               else

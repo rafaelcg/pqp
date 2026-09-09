@@ -496,14 +496,26 @@ read when this job disagrees with itself between two runs.
 
 **The fix.** `electron-builder` **26.16.1**, published 2026-09-07, passes the
 keychain password, with a comment naming the mistake. `electron/package.json` is
-on `^26.16.1`.
+on `^26.16.1`. Upstream's own trail, which took three releases to land:
+
+| | |
+|---|---|
+| [#10066](https://github.com/electron-userland/electron-builder/issues/10066) | 2026-08-07, the bug reported against a macOS beta |
+| [#10101](https://github.com/electron-userland/electron-builder/pull/10101) | 2026-08-27, fixed on `master` (the v27 line) |
+| [#10167](https://github.com/electron-userland/electron-builder/issues/10167) | 2026-09-03, the fix is missing from 26.16.0 |
+| [#10172](https://github.com/electron-userland/electron-builder/pull/10172) | 2026-09-03, backported to `release/v26` |
+| 26.16.1 | 2026-09-07, first published version that has it |
 
 That caret is load-bearing, not tidiness. npm's `latest` tag for
 `electron-builder` is still **26.15.3**, which does not have the fix, and both
 npm and pnpm prefer the `latest` version whenever it satisfies the range. The
 first attempt at this fix asked for `^26.15.3`, resolved to 26.15.3, and would
-have shipped the same bug under a version number that looks new. Check the
-resolved version, never the range:
+have shipped the same bug under a version number that looks new. `latest` is
+held back on purpose: `master` is a CommonJS to ESM rewrite for v27 and
+publishes under `next`, while the 26 line lives on `release/v26` and publishes
+under the `v26` tag ([#9864](https://github.com/electron-userland/electron-builder/pull/9864)).
+So `latest` is not the newest 26, and 26.16.0 is newer than the fix report but
+older than the fix. Check the resolved version, never the range:
 
 ```bash
 grep 'app-builder-lib@' pnpm-lock.yaml | head -1
@@ -513,6 +525,19 @@ grep -A1 set-key-partition-list \
 
 The second command must print `keychainPassword`. If it prints `password`, the
 bug is installed. Widening the range to `^26` puts it back.
+
+**One other thing the 25 to 26 upgrade required.** `mac.notarize` accepted
+`{ teamId }` up to 25.1.8 and is a plain boolean from 26.0.0
+([#8582](https://github.com/electron-userland/electron-builder/pull/8582)),
+so the Apple ID fallback in the workflow no longer passes
+`-c.mac.notarize.teamId=...`. It passes `-c.mac.notarize=true` and lets
+`@electron/notarize` read `APPLE_TEAM_ID` from the environment, which the step
+already exports. That branch is dormant while the App Store Connect API key
+secrets are set, so nothing would have failed until the day someone fell back to
+the Apple ID path, which is the worst time to find out. The other 26.0.0
+breaking changes do not touch this config: `win.*` signing fields moved under
+`win.signtoolOptions` (this repo signs Windows through `WIN_CSC_*` env vars, not
+config) and `linux.desktop` became an object (this repo does not set it).
 
 **The second-order lesson.** Path-filtering a workflow to quieten it also cuts
 how often a real failure is seen. The filter earns its place here (a macOS
