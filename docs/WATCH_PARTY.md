@@ -735,8 +735,25 @@ This PR widened `isVoice` on both (`ios/pqp/Sources/Core/Models.swift`,
 as audience; the server refuses their share claim like any other. Still to do
 later, per app:
 
-- iOS: a distinct icon and the `AO VIVO` pill (needs `sharingScreen` from the
-  roster it already receives); hide the share control in a watch party unless
-  `welcome.canStream`; the create sheet does not offer the type.
+- iOS: the AUDIENCE half now exists (`ios/Voice/WatchStageView.swift`,
+  `WatchModel.swift`, `WatchPlayer.swift`, `LiveStream.swift`). It decodes
+  `voice-stream` and `channel-live`, subscribes with `watch-live` without
+  taking a seat, seeds from `GET /api/channels/:id/live`, and plays the
+  stamped playlist with `AVPlayer` above the channel's transcript, with the
+  `AO VIVO` pill and the combined headcount.
+
+  Three things about that player are worth knowing before changing it. The
+  stamped `hlsUrl` is a different string every keyframe, so re-attaching on a
+  changed URL means a re-buffer every 30 seconds for the whole film;
+  `WatchStreamSwap` swaps on `startedAt`, on a failure and on the token clock
+  only. `HLS_VIEWER_TOKEN_TTL_MS` is an hour and a film is longer, so the
+  renewal at 50 minutes is load bearing rather than defensive. And a seat
+  suppresses the player outright, because a seated viewer already has the
+  presenter's screen as a WebRTC track with its own audio.
+
+  Still to do on iOS: the party OBJECT (`watch-party-update`, the host,
+  cohosts, the stage, raise hand), the presenter side, a distinct icon in the
+  channel list, hiding the share control unless `welcome.canStream`, and the
+  create sheet offering the type.
 - Android: same three; also `WireProtocolTest` mirrors the shared enum and was
   updated here.
