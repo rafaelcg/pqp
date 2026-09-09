@@ -3776,7 +3776,12 @@ function MainAppContent({
       stream.getTracks().forEach((track) => track.stop());
       return;
     }
-    startScreenShareGated(stream.getAudioTracks().length > 0, { stream });
+    // `false` is the system-audio opt-in, not "has an audio track". Tab audio
+    // still rides on the already-captured stream; passing track count here
+    // used to look like an opt-in to whole-computer sound. `preferBrowserTab`
+    // matches the setup picker so a retry without a handed stream stays on
+    // the echo-safe path.
+    startScreenShareGated(false, { preferBrowserTab: true, stream });
   }
 
   async function handleWatchPartyEnd() {
