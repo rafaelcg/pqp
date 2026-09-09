@@ -114,15 +114,38 @@ jobs:
             decide false "production is already on this tree"; exit 0
           fi
 
-          # Everything baked into the API image, plus the files that decide how
-          # it is built and run. `packages/` is here in full because the server
-          # imports @pqp/shared and a Docker build copies the workspace.
-          if printf '%s\n' "$changed" | grep -qE '^(server/|packages/|Dockerfile|fly\.toml|fly\.worker\.toml|pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|\.github/workflows/deploy-api-fly\.yml)'; then
-            decide true "server-relevant files changed since $deployed"
-          else
-            decide false "only client-side files changed since ${deployed:0:7}; leaving the machine and its sockets alone"
-            printf '%s\n' "$changed" | sed 's/^/  skipped: /'
-          fi
+          # THE PATTERN MOVED, AND SO DID THE REASON. It used to be a `grep`
+          # right here, which was right about client-only changes and wrong
+          # about test-only ones: a PR touching nothing but `server/src/**`
+          # *.test.ts files matched, replaced the machine and dropped every
+          # live socket to ship a `dist` that was byte-for-byte identical.
+          # That is the outage-for-nothing this step already existed to
+          # prevent, in a case it did not cover.
+          #
+          # It is a script now for two reasons. It decides what to exclude by
+          # reading each package's `tsconfig.build.json` rather than by
+          # trusting a filename, so the filter and the build cannot drift; and
+          # a script can be tested, which a `run:` block cannot. Both answers
+          # are pinned in scripts/deploy/api-deploy-needed.test.mjs, run by CI.
+          #
+          # Exit 20 means "no deploy"; anything else that is not 0 is a
+          # malfunction and falls open, like every other branch in this step.
+          set +e
+          reason=$(printf '%s\n' "$changed" | node scripts/deploy/api-deploy-needed.mjs)
+          status=$?
+          set -e
+          case "$status" in
+            0)
+              decide true "$reason (since ${deployed:0:7})"
+              ;;
+            20)
+              decide false "$reason (since ${deployed:0:7})"
+              printf '%s\n' "$changed" | sed 's/^/  skipped: /'
+              ;;
+            *)
+              decide true "relevance script exited $status, failing open"
+              ;;
+          esac
 
       - name: Check deploy environment
         if: steps.relevant.outputs.needed == 'true'

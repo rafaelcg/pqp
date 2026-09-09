@@ -146,6 +146,13 @@ jobs:
       - name: Test monitor scripts
         run: node --test scripts/monitor/*.test.mjs
 
+      # Same reason as the monitor scripts above, with a sharper edge: this one
+      # decides whether merging drops every live WebSocket. It used to be a
+      # `grep` inside deploy-api-fly.yml, where the only way to learn what it
+      # did was to merge something and watch.
+      - name: Test deploy relevance
+        run: node --test scripts/deploy/*.test.mjs
+
       # `tools/support-bot` is outside the workspace too, for the reason its
       # README gives, so `pnpm test` never saw it either. It is the one thing in
       # this repo that writes into a public channel on its own judgement: the
