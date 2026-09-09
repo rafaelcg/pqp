@@ -10,12 +10,15 @@ import {
   listActiveEgresses,
   isLiveHlsEnabled,
   isLiveHlsEnabledForServer,
+  liveHlsActivity,
   liveHlsConfig,
   liveHlsLadder,
   liveHlsRungsFor,
   liveHlsServerAllowlist,
   setLiveHlsSfuLoadReader,
   liveHlsStreamFor,
+  maxLiveHlsSessions,
+  DEFAULT_MAX_HLS_SESSIONS,
   reconcileLiveHls,
   resetLiveHlsForTests,
   setLiveHlsTestHooks,
@@ -75,6 +78,7 @@ function disableHls() {
   delete process.env.LIVE_HLS_PRESET;
   delete process.env.LIVE_HLS_LADDER;
   delete process.env.LIVE_HLS_MAX_LADDER_MBPS;
+  delete process.env.LIVE_HLS_MAX_SESSIONS;
   delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
 }
 
@@ -582,6 +586,93 @@ describe("live HLS egress", () => {
       await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
       await reconcileLiveHls(CHANNEL, null, SERVER);
       expect(stop.mock.calls.map((call) => call[0])).toEqual(["EG_1", "EG_2"]);
+    });
+  });
+
+  /**
+   * The guard the ladder budget cannot be: `decideLadder`'s first rule starts
+   * the lowest rung whatever the budget says, so N parties cost N floor rungs
+   * and nothing ever refuses the Nth. On the 4-core media box that is about
+   * 0.51 of a core each after the first party's 1.39 (`docs/CAPACITY.md`,
+   * measured 2026-09-09), so the count has to stop somewhere.
+   */
+  describe("LIVE_HLS_MAX_SESSIONS", () => {
+    const CHANNEL_B = "00000000-0000-4000-8000-0000000000bb";
+    const CHANNEL_C = "00000000-0000-4000-8000-0000000000cc";
+
+    function fakeStack() {
+      let started = 0;
+      const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+        async () => {
+          started += 1;
+          return { egressId: `EG_${started}` };
+        },
+      );
+      setLiveHlsTestHooks({
+        egress: { startTrackCompositeEgress: start, stopEgress: vi.fn() },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      return start;
+    }
+
+    it("defaults to three, and an operator can raise or lower it", () => {
+      expect(DEFAULT_MAX_HLS_SESSIONS).toBe(3);
+      expect(maxLiveHlsSessions()).toBe(3);
+      process.env.LIVE_HLS_MAX_SESSIONS = "8";
+      expect(maxLiveHlsSessions()).toBe(8);
+      // Junk and zero fall back rather than turning the guard off.
+      process.env.LIVE_HLS_MAX_SESSIONS = "0";
+      expect(maxLiveHlsSessions()).toBe(3);
+      process.env.LIVE_HLS_MAX_SESSIONS = "lots";
+      expect(maxLiveHlsSessions()).toBe(3);
+    });
+
+    it("refuses the party past the cap, and logs why", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      process.env.LIVE_HLS_MAX_SESSIONS = "2";
+      fakeStack();
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
+      expect(await reconcileLiveHls(CHANNEL_B, "peer-2", SERVER)).not.toBeNull();
+      logEvent.mockClear();
+      expect(await reconcileLiveHls(CHANNEL_C, "peer-3", SERVER)).toBeNull();
+      expect(liveHlsStreamFor(CHANNEL_C)).toBeNull();
+      expect(logEvent).toHaveBeenCalledWith(
+        "voice.hlsSessionsCapped",
+        expect.objectContaining({
+          channelId: CHANNEL_C,
+          sessions: 2,
+          maxSessions: 2,
+        }),
+      );
+      // The two that got in are untouched: the cap refuses, it never evicts.
+      expect(liveHlsStreamFor(CHANNEL)).not.toBeNull();
+      expect(liveHlsStreamFor(CHANNEL_B)).not.toBeNull();
+      // And the refused channel gets in once a slot frees.
+      await reconcileLiveHls(CHANNEL_B, null, SERVER);
+      expect(await reconcileLiveHls(CHANNEL_C, "peer-3", SERVER)).not.toBeNull();
+    });
+
+    it("counts what is running, so the dashboard can show the ceiling", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      process.env.LIVE_HLS_MAX_SESSIONS = "2";
+      fakeStack();
+      expect(liveHlsActivity()).toMatchObject({ sessions: 0, maxSessions: 2 });
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      expect(liveHlsActivity()).toMatchObject({ sessions: 1, maxSessions: 2 });
+    });
+
+    it("a presenter change in a session that is already running is not the Nth party", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      process.env.LIVE_HLS_MAX_SESSIONS = "1";
+      fakeStack();
+      expect(await reconcileLiveHls(CHANNEL, "peer-1", SERVER)).not.toBeNull();
+      // The co-host takeover: same room, new presenter. The old egress is
+      // stopped first, so this must not be refused by the cap it is inside.
+      const taken = await reconcileLiveHls(CHANNEL, "peer-2", SERVER);
+      expect(taken?.presenterPeerId).toBe("peer-2");
     });
   });
 

@@ -267,6 +267,33 @@ export function hlsUrlTtlSeconds(): number {
 }
 
 /**
+ * How many parties this process will transcode at once. Three.
+ *
+ * WHY THERE HAS TO BE ONE. `decideLadder` already prices the box, but read
+ * its first rule: the lowest rung ALWAYS starts, because a party with no
+ * rendition is a party nobody can see. That is right per party and unbounded
+ * across parties: the fourth, tenth and fortieth simultaneous party each get
+ * their floor rung whatever the budget says, and the budget only ever refuses
+ * the rungs above it. So the ladder guard degrades quality and never refuses
+ * a session, and something has to refuse the session.
+ *
+ * WHY THREE. Measured on the box production runs (`docs/CAPACITY.md`,
+ * 2026-09-09): `1080p30` costs 0.88 of a core and `720p30` costs 0.51. The
+ * first party gets the default two-rung ladder, 1.39 cores; every party after
+ * it finds the ladder budget already spent and gets its floor rung alone,
+ * 0.51. Three parties is therefore about 2.4 of the box's 4 cores, which
+ * leaves the SFU, the TURN relay and everything else on the same machine the
+ * rest. An operator with a bigger box says so with a bigger number; there is
+ * no sentinel for "unlimited", because a value that turns the guard off is
+ * the value somebody sets by accident.
+ */
+export const DEFAULT_MAX_HLS_SESSIONS = 3;
+
+export function maxLiveHlsSessions(): number {
+  return positiveIntFromEnv("LIVE_HLS_MAX_SESSIONS", DEFAULT_MAX_HLS_SESSIONS);
+}
+
+/**
  * Default true: a viewer gets a presigned, expiring URL rather than the raw
  * public bucket URL. Set `LIVE_HLS_SIGNED_URLS=false` to fall back to the
  * old public-base-URL behaviour (e.g. a bucket that is deliberately public).
@@ -587,6 +614,12 @@ export function liveHlsRungsFor(channelId: string): LadderRung[] {
 export interface LiveHlsActivity {
   /** Sessions this process is running an egress for, right now. */
   sessions: number;
+  /**
+   * `LIVE_HLS_MAX_SESSIONS`. The number `sessions` is refused at, so the
+   * dashboard can show "2 of 3" rather than a count with no ceiling, and so
+   * an operator raising the cap can read back that the process took it.
+   */
+  maxSessions: number;
   /** Renditions across all of them: what the media box is actually encoding. */
   rungs: number;
   /** Longest-running session, in minutes, or null when none is live. */
@@ -612,6 +645,7 @@ export function liveHlsActivity(now = Date.now()): LiveHlsActivity {
   }
   return {
     sessions: rooms.size,
+    maxSessions: maxLiveHlsSessions(),
     rungs,
     oldestMinutes: oldest === null ? null : Math.floor((now - oldest) / 60_000),
   };
@@ -1508,6 +1542,25 @@ async function startRoom(
   const tracks = knownTracks ?? (await findScreenTracks(channelId));
   if (!tracks) {
     logEvent("voice.hlsNoScreenTrack", { channelId, presenterPeerId });
+    return null;
+  }
+  // The concurrency guard, deliberately here rather than inside
+  // `decideLadder`: that one degrades a party, this one refuses a session.
+  //
+  // `rooms.size` is the count of OTHER sessions without having to subtract
+  // one, because every caller that reaches here for a channel that was
+  // already running stopped that room first (the three `stopRoom` calls in
+  // `reconcileLiveHlsNow`, and the restart path, which stops before it
+  // schedules). A restart is therefore judged on the same terms as a first
+  // start: if three other parties have filled the box meanwhile, it waits.
+  const maxSessions = maxLiveHlsSessions();
+  if (rooms.size >= maxSessions) {
+    logEvent("voice.hlsSessionsCapped", {
+      channelId,
+      presenterPeerId,
+      sessions: rooms.size,
+      maxSessions,
+    });
     return null;
   }
   const ladder = liveHlsLadder();

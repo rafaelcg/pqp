@@ -15,6 +15,7 @@ import {
   canStartWatchPartyStream,
   hasPermission,
   isVoiceRoomChannelType,
+  isWatchPartyChannelType,
   Permission,
   callDeclinedMessageSchema,
   callIncomingMessageSchema,
@@ -78,6 +79,7 @@ import {
   setLiveHlsSfuLoadReader,
 } from "../voice/hls-egress.js";
 import {
+  liveHlsForcesSfu,
   resolveVoiceTransport,
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
@@ -189,6 +191,12 @@ interface VoicePeer {
    * `Permission.STREAM`: camera and screen share. Independent of SPEAK.
    */
   canStream: boolean;
+  /**
+   * The seat is in a `watch_party` channel. Resolved from `channel.type` at
+   * join, beside `canStream`, and read by exactly one thing: `pickHlsSharer`,
+   * which will not start an HLS transcode from any other kind of room.
+   */
+  watchParty: boolean;
   /** Set when the socket closed; cleared on resume. Absent = live. */
   orphanedAt?: number;
   orphanTimer?: ReturnType<typeof setTimeout>;
@@ -639,10 +647,19 @@ async function decideRoomTransport(
   const liveKitConfigured = configuredTransport() === "livekit";
   const liveHlsEnabled = isLiveHlsEnabledForServer(channel.server_id);
   const voiceTransport = channel.voice_transport ?? null;
+  // The query is skipped only for the branches that answer without it, and
+  // HLS is one of them ONLY for a watch party. Testing `liveHlsEnabled`
+  // alone here is what used to send an ordinary voice channel down the
+  // `server: null` path and back out as `livekit` / `default`, so the
+  // narrowing in the policy would have been undone by its own caller.
+  const hlsForcesSfu = liveHlsForcesSfu({
+    liveHlsEnabled,
+    channelType: channel.type,
+  });
   let server: { isCommunity: boolean; memberCount: number } | null = null;
   if (
     liveKitConfigured &&
-    !liveHlsEnabled &&
+    !hlsForcesSfu &&
     channel.kind === "server" &&
     channel.server_id &&
     !voiceTransport
@@ -658,7 +675,7 @@ async function decideRoomTransport(
   return resolveVoiceTransport({
     liveKitConfigured,
     liveHlsEnabled,
-    channel: { kind: channel.kind, voiceTransport },
+    channel: { kind: channel.kind, type: channel.type, voiceTransport },
     server,
   });
 }
@@ -1416,15 +1433,17 @@ async function hlsServerIdFor(voiceChannelId: string): Promise<string | null> {
 }
 
 /**
- * First sharer in the room gets a Track Composite HLS egress. Nobody
- * sharing stops it. Failures stay in the log: a missed transcode must
+ * First sharer in a WATCH PARTY room gets a Track Composite HLS egress.
+ * Nobody sharing stops it. Failures stay in the log: a missed transcode must
  * not refuse the share itself.
  *
- * The sharer is read through `pickHlsSharer`, so only a peer that holds the
- * stage bit (`canStream`, which in a watch party is START_WATCH_PARTY) can
- * feed the egress. `set-sharing-screen` refuses the claim without it and
- * `reevaluateVoiceSpeak` clears the share when it is revoked; this is the
- * same gate read at the one place a transcode actually starts.
+ * The sharer is read through `pickHlsSharer`, which asks two questions and
+ * this function asks neither of them itself. The stage bit (`canStream`,
+ * which in a watch party is START_WATCH_PARTY): `set-sharing-screen` refuses
+ * the claim without it and `reevaluateVoiceSpeak` clears the share when it is
+ * revoked, and this is the same gate read where a transcode actually starts.
+ * And the room type (`watchParty`): a screen share in an ordinary voice
+ * channel that happens to be on the SFU never starts one.
  */
 async function pushLiveHls(voiceChannelId: string): Promise<void> {
   if (getRoomTransport(voiceChannelId) !== "livekit") {
@@ -3213,6 +3232,9 @@ export async function handleVoiceMessage(
       });
       nickname = resolved.nickname;
     }
+    // THE ROOM GATE for the egress, read off the same row as the stage gate
+    // so the two cannot disagree. See `pickHlsSharer`.
+    const watchParty = isWatchPartyChannelType(channel.type);
 
     // What this room would open on, if this join is the one that opens it. A
     // pinned room never re-decides, so the (at most one) query behind this is
@@ -3749,6 +3771,7 @@ export async function handleVoiceMessage(
       // live path's job (`reevaluateVoiceSpeak`), which ran when it changed.
       resume.peer.canSpeak = canSpeak;
       resume.peer.canStream = canStream;
+      resume.peer.watchParty = watchParty;
       if (!canSpeak) {
         resume.peer.muted = true;
       }
@@ -3806,6 +3829,7 @@ export async function handleVoiceMessage(
       deafened: adopted?.deafened ?? false,
       canSpeak,
       canStream,
+      watchParty,
       canResume: payload.resume === true,
       // Deliberately not carried across a resume and not in the registry row.
       // A measurement is about a link at a moment; a client that reconnects

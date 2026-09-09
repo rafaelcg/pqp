@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import type { DbUser } from "../db.js";
 
@@ -482,6 +482,115 @@ describe("voice room transport", () => {
       } finally {
         log.mockRestore();
       }
+    });
+
+    /**
+     * WITH THE FLAG GENUINELY SET. `isLiveHlsEnabledForServer` is NOT mocked
+     * in this suite, so these cases set the real environment variables that
+     * production sets and go through the same `process.env` reads the API
+     * does. That is the point: `LIVE_HLS_ENABLED` used to promote every
+     * server voice channel to the SFU, and the way to prove it no longer
+     * does is to turn it on and watch an ordinary room stay on mesh.
+     *
+     * `profileReads` is the counter that proves the narrowing reached the
+     * CALLER too. `decideRoomTransport` skips the member-count query for the
+     * branches that answer without it, and while HLS was one of those for
+     * every channel, an ordinary voice channel got `server: null` and came
+     * back `livekit` with reason `default`. So a narrow policy with a wide
+     * skip would still be wide. One read means the query ran; the mesh answer
+     * means the size rule decided it.
+     */
+    describe("live HLS on", () => {
+      const HLS_ENV = {
+        LIVE_HLS_ENABLED: "true",
+        LIVE_HLS_S3_BUCKET: "pqp-live-test",
+        LIVE_HLS_S3_ACCESS_KEY_ID: "ak",
+        LIVE_HLS_S3_SECRET_ACCESS_KEY: "sk",
+        LIVE_HLS_S3_ENDPOINT: "https://s3.example.test",
+      };
+
+      beforeEach(() => {
+        for (const [key, value] of Object.entries(HLS_ENV)) {
+          process.env[key] = value;
+        }
+      });
+
+      afterEach(() => {
+        for (const key of Object.keys(HLS_ENV)) {
+          delete process.env[key];
+        }
+        delete process.env.LIVE_HLS_SERVER_ALLOWLIST;
+      });
+
+      /** The flag really is on, or every case below passes for free. */
+      it("the flag is actually set for these cases", async () => {
+        const { isLiveHlsEnabledForServer } = await import(
+          "../voice/hls-egress.js"
+        );
+        expect(isLiveHlsEnabledForServer(randomUUID())).toBe(true);
+      });
+
+      it("opens a watch party in a two-member server on the SFU", async () => {
+        serverChannel(2);
+        rows.channels.get(channel)!.type = "watch_party";
+        const rec = track(
+          await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+        );
+
+        expect(frame(rec, "welcome")?.transport).toBe("livekit");
+        // HLS settles it before the size rule, so nothing is read.
+        expect(rows.profileReads).toBe(0);
+      });
+
+      it("leaves an ordinary voice channel in the same server on mesh", async () => {
+        serverChannel(2);
+        const rec = track(
+          await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+        );
+
+        expect(frame(rec, "welcome")?.transport).toBe("mesh");
+        expect(getRoomTransport(channel)).toBe("mesh");
+        // The query the wide skip used to swallow.
+        expect(rows.profileReads).toBe(1);
+      });
+
+      it("names the size rule, not HLS, as the reason for an ordinary room", async () => {
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        try {
+          serverChannel(2);
+          track(await join(recorder(), "u1", channel, ["mesh", "livekit"]));
+          const pinned = log.mock.calls
+            .map((call) => String(call[0]))
+            .filter((line) => line.includes("voice.transportPinned"));
+          expect(pinned).toHaveLength(1);
+          expect(pinned[0]).toContain("reason=small");
+        } finally {
+          log.mockRestore();
+        }
+      });
+
+      it("still admits a mesh-only phone to that ordinary room", async () => {
+        // The user-visible half of the regression: with the wide rule a
+        // two-person server's voice channel became an SFU room, and every
+        // native client that cannot run LiveKit was refused from it.
+        serverChannel(2);
+        const phone = track(await join(recorder(), "u1", channel, ["mesh"]));
+
+        expect(frame(phone, "welcome")?.transport).toBe("mesh");
+        expect(typesOf(phone)).not.toContain("voice-transport-unsupported");
+      });
+
+      it("leaves a watch party alone when its server is off the allowlist", async () => {
+        process.env.LIVE_HLS_SERVER_ALLOWLIST = randomUUID();
+        serverChannel(2);
+        rows.channels.get(channel)!.type = "watch_party";
+        const rec = track(
+          await join(recorder(), "u1", channel, ["mesh", "livekit"]),
+        );
+
+        expect(frame(rec, "welcome")?.transport).toBe("mesh");
+        expect(rows.profileReads).toBe(1);
+      });
     });
 
     it("stays mesh everywhere, without a lookup, when LiveKit is not configured", async () => {

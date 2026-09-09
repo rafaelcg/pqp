@@ -151,7 +151,10 @@ import { ConnectionCallbackOverlay } from "@/components/connections/connection-c
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
 import { CreateWatchPartyDialog } from "@/components/watch-party/create-watch-party-dialog";
-import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
+import {
+  canOfferWatchPartyCreate,
+  isWatchPartyChannelsEnabled,
+} from "@/lib/watch-party-channels";
 import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
 import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
@@ -6311,7 +6314,16 @@ function MainAppContent({
           onJoinVoice={handleJoinVoiceFromList}
           liveParties={watchParties.live}
           onWatchLiveParty={(channelId) => void handleWatchLiveParty(channelId)}
-          canStartWatchParty={perms.can(Permission.START_WATCH_PARTY)}
+          canStartWatchParty={canOfferWatchPartyCreate({
+            // The rollout gate, not a capability check. See
+            // `canOfferWatchPartyCreate`: the bit alone is on thousands of
+            // roles, so the control also asks whether the OPEN server can
+            // actually run one. `liveHlsConfig` is the same per-server answer
+            // the screen-share disclosure already fetches above, cached for
+            // the page, so this costs no extra request.
+            hlsEnabled: liveHlsConfig?.enabled ?? null,
+            hasPermission: perms.can(Permission.START_WATCH_PARTY),
+          })}
           onCreateWatchParty={() => setCreateWatchPartyOpen(true)}
           currentUserId={user?.id ?? null}
           pendingMoveUserIds={pendingVoiceMoves}

@@ -22,16 +22,28 @@ import { expect, test, type Browser, type Page } from "@playwright/test";
  * and its absence side by side in one run, so a flag that stopped working
  * fails that test rather than quietly emptying every other one.
  *
- * WHAT IS STUBBED, AND WHERE THE LINE IS. CI has no LiveKit and no egress, so
- * no HLS playlist can exist. Exactly one field is substituted, in
- * `withFakeLiveStream`: the `stream` of a `channel-live` frame and of
- * `GET /api/channels/:id/live`, both of which are otherwise the real server's
- * real answers on the real socket. Nothing else is faked: the party rows, the
- * permissions, the broadcast, the seat and the roster are all genuine. The one
- * test that uses it (`a seated viewer does not get the player twice`) keeps
- * the substitution CONSTANT across both halves and moves only the seat, so it
- * cannot pass by the stub failing to arrive: the picture has to appear, then
- * go when the seat is taken, then come back when it is given up.
+ * WHAT IS STUBBED, AND WHERE THE LINE IS. CI has no LiveKit, no egress and no
+ * `LIVE_HLS_S3_*` bucket, so two things it cannot produce are substituted and
+ * nothing else is.
+ *
+ * 1. `withFakeLiveStream`: the `stream` of a `channel-live` frame and of
+ *    `GET /api/channels/:id/live`, both of which are otherwise the real
+ *    server's real answers on the real socket. The one test that uses it
+ *    (`a seated viewer does not get the player twice`) keeps the
+ *    substitution CONSTANT across both halves and moves only the seat, so it
+ *    cannot pass by the stub failing to arrive: the picture has to appear,
+ *    then go when the seat is taken, then come back when it is given up.
+ * 2. `withLiveHlsConfig`: `GET /api/live-hls/config`, the operator's
+ *    per-server `LIVE_HLS_SERVER_ALLOWLIST` answer. `openAs` sets it to
+ *    `enabled: true`, because the create control now follows it as well as
+ *    the permission bit (`canOfferWatchPartyCreate`) and a runner's API says
+ *    `false` for every server. `the create control is absent on a server the
+ *    operator has not allowlisted` is the test that runs it the other way, so
+ *    the substitution is exercised in both directions rather than being a
+ *    switch nobody ever turns off.
+ *
+ * Nothing else is faked: the party rows, the permissions, the broadcast, the
+ * seat and the roster are all genuine.
  *
  * TWO ACCOUNTS, ALWAYS. The dev bypass signs every browser in as one shared
  * account unless `pqp:dev-user-suffix` is set, so a one-browser test of "the
@@ -196,12 +208,36 @@ async function setPartyState(
 }
 
 /**
- * Open the app as one of the two accounts, with the watch party flag on.
+ * The operator's per-server answer, which a runner cannot produce: with no
+ * `LIVE_HLS_S3_*` bucket the real endpoint says `enabled: false` for every
+ * server. `enabled` is the only field written; `delaySeconds`, `allowlisted`
+ * and `ladder` stay exactly as the server sent them.
+ */
+async function withLiveHlsConfig(page: Page, enabled: boolean): Promise<void> {
+  await page.route("**/api/live-hls/config*", async (route) => {
+    const response = await route.fetch();
+    const body = (await response.json()) as Record<string, unknown>;
+    await route.fulfill({ response, json: { ...body, enabled } });
+  });
+}
+
+/**
+ * Open the app as one of the two accounts, with the watch party flag on and
+ * the open server allowlisted for live HLS.
  *
  * `?watchParty=1` is the whole point: without it every watch party assertion
- * below would be looking at chrome the build never rendered.
+ * below would be looking at chrome the build never rendered. The config
+ * substitution is the second half of the same point: the create control asks
+ * the server whether a party can run here, and on a runner the honest answer
+ * is no.
  */
-async function openAs(page: Page, path: string, suffix: string): Promise<void> {
+async function openAs(
+  page: Page,
+  path: string,
+  suffix: string,
+  options: { hlsEnabled?: boolean } = {},
+): Promise<void> {
+  await withLiveHlsConfig(page, options.hlsEnabled ?? true);
   await page.addInitScript((value) => {
     localStorage.setItem("pqp:dev-user-suffix", value);
   }, suffix);
@@ -429,6 +465,51 @@ test("the create control is gated on the permission, and the block is not", asyn
     await expect(second.page.locator("[data-live-party-create]")).toHaveCount(0);
   } finally {
     await second.context.close();
+  }
+});
+
+/**
+ * THE QUIET LAUNCH, and the reason the allowlist still exists after the
+ * blast radius was narrowed away. `START_WATCH_PARTY` was backfilled onto
+ * 2753 roles across 908 servers, so with the build flag on globally the
+ * permission bit alone would put this button in front of every one of those
+ * moderators. It follows the server's live HLS config as well, so on a server
+ * the operator has not named there is nothing: no button, no heading, no
+ * disabled control and no empty state.
+ *
+ * The owner half runs in the same test, against the same build and the same
+ * account, with only the config answer moved. Without it this would pass on a
+ * build where the sidebar renders no watch party chrome at all.
+ */
+test("the create control is absent on a server the operator has not allowlisted", async ({
+  page,
+  browser,
+}) => {
+  const shared = await seedServer("wp-quiet-a", "wp-quiet-b");
+  const here = `/app/server/${shared.serverId}/channel/${shared.textChannelId}`;
+
+  await openAs(page, here, "wp-quiet-a", { hlsEnabled: false });
+  // The sidebar really rendered, so "nothing" below is an absence and not a
+  // page that failed to load.
+  await expect(page.locator("[data-channel-type]").first()).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.locator("[data-live-party-create]")).toHaveCount(0);
+  await expect(page.getByTestId("live-party-create")).toHaveCount(0);
+  await expect(page.getByTestId("live-party-block")).toHaveCount(0);
+  // Not a disabled control either: the label is not on the page at all.
+  await expect(page.getByText("New watch party")).toHaveCount(0);
+
+  // Same person, same permission, same build: allowlist the server and the
+  // control appears. That is the whole rollout switch, in one run.
+  const allowed = await secondClient(browser);
+  try {
+    await openAs(allowed.page, here, "wp-quiet-a", { hlsEnabled: true });
+    await expect(allowed.page.locator("[data-live-party-create]")).toBeVisible({
+      timeout: 20_000,
+    });
+  } finally {
+    await allowed.context.close();
   }
 });
 

@@ -1,4 +1,8 @@
-import type { ChannelKind, VoiceRoomTransport } from "@pqp/shared";
+import {
+  isWatchPartyChannelType,
+  type ChannelKind,
+  type VoiceRoomTransport,
+} from "@pqp/shared";
 
 /**
  * Which transport a voice room gets when its first peer opens it.
@@ -35,7 +39,11 @@ export type VoiceTransportReason =
   | "community"
   /** The channel's `voice_transport` column. */
   | "override"
-  /** Live HLS is on: Track Composite needs the SFU, even in a small server. */
+  /**
+   * A `watch_party` channel on a deployment with live HLS on: Track Composite
+   * needs the SFU, even in a small server. ONLY that channel type. See
+   * `liveHlsForcesSfu`.
+   */
   | "hls"
   /** A server channel whose server row could not be read: configured default. */
   | "default";
@@ -49,18 +57,61 @@ export interface VoiceTransportPolicyInput {
   /** `getServerVoiceBackend() === "livekit" && isLiveKitConfigured()`. */
   liveKitConfigured: boolean;
   /**
-   * `LIVE_HLS_ENABLED=true` plus the dedicated bucket. A screen-share
-   * transcode only exists on LiveKit, so a two-person staging hall cannot
-   * stay on mesh or every share misses the track.
+   * `isLiveHlsEnabledForServer(server_id)`: the flag, the dedicated bucket
+   * and the allowlist. A transcode only exists on LiveKit, so a watch party
+   * in a two-person hall cannot stay on mesh or the share misses the track.
+   * On its own it promotes nothing: it is read through `liveHlsForcesSfu`,
+   * which also requires the channel to be a `watch_party`.
    */
   liveHlsEnabled?: boolean;
   channel: {
     kind: ChannelKind;
+    /**
+     * `channels.type`, as a string rather than `ChannelType` for the same
+     * reason `canStartWatchPartyStream` takes one: the column is wider than
+     * the enum the create API accepts (`thread`), and nothing here compares
+     * it to anything but one name. Read for exactly one question,
+     * `liveHlsForcesSfu`: a live transcode only ever runs in a `watch_party`
+     * channel, so only that type is promoted for HLS. Every other rule below
+     * still looks at `kind`.
+     */
+    type: string;
     /** The per-channel override column; null is automatic. */
     voiceTransport: VoiceRoomTransport | null;
   };
   /** The channel's server, or null for a conversation or an unreadable row. */
   server: { isCommunity: boolean; memberCount: number } | null;
+}
+
+/**
+ * Whether live HLS is the reason this channel must be on the SFU.
+ *
+ * NARROW ON PURPOSE, and the narrowing is the point of this function
+ * existing rather than the condition being inlined once. `LIVE_HLS_ENABLED`
+ * used to promote EVERY server voice channel to LiveKit, so turning the flag
+ * on for a watch party moved every unrelated peer-to-peer call in that server
+ * onto the media box, which pays for those bytes (`docs/CAPACITY.md` §6b: the
+ * monthly transfer allowance binds long before the cores do).
+ *
+ * An egress only ever attaches to a `watch_party` channel: that is the one
+ * room `findOrCreateWatchPartyRoom` opens a party in, and `pickHlsSharer`
+ * refuses to feed a transcode from anywhere else. So this is the exact set
+ * that needs the SFU for HLS, and every other channel goes back to being
+ * decided by size, community and the override alone.
+ *
+ * Two callers read it and neither may drift from the other:
+ * `resolveVoiceTransport` below, and `decideRoomTransport` in `ws/voice.ts`,
+ * which uses it to decide whether the member-count query can be skipped. When
+ * it was one inline condition, skipping that query in the wide case is what
+ * made an ordinary voice channel come back `livekit` with reason `default`.
+ */
+export function liveHlsForcesSfu(input: {
+  liveHlsEnabled?: boolean;
+  channelType: string;
+}): boolean {
+  return (
+    Boolean(input.liveHlsEnabled) && isWatchPartyChannelType(input.channelType)
+  );
 }
 
 export function resolveVoiceTransport(
@@ -77,7 +128,12 @@ export function resolveVoiceTransport(
   if (input.channel.voiceTransport) {
     return { transport: input.channel.voiceTransport, reason: "override" };
   }
-  if (input.liveHlsEnabled && input.channel.kind === "server") {
+  if (
+    liveHlsForcesSfu({
+      liveHlsEnabled: input.liveHlsEnabled,
+      channelType: input.channel.type,
+    })
+  ) {
     return { transport: "livekit", reason: "hls" };
   }
   if (!input.server) {

@@ -73,12 +73,20 @@ vi.mock("../services/dms.js", () => ({
 
 const SERVER = randomUUID();
 const CINEMA = randomUUID();
+/**
+ * An ORDINARY voice channel in the same server, pinned to the SFU by its
+ * override the way a ten-member server's rooms are pinned by size. A screen
+ * share here is the case the egress must refuse: `LIVE_HLS_ENABLED` is on
+ * (`isLiveHlsEnabledForServer` below answers true for everything), the room
+ * is on LiveKit, and the sharer holds STREAM. Only the channel type differs.
+ */
+const HANGOUT = randomUUID();
 
 vi.mock("../services/servers.js", () => ({
   getChannel: async (id: string) => ({
     id,
     kind: "server",
-    type: "watch_party",
+    type: id === HANGOUT ? "voice" : "watch_party",
     server_id: SERVER,
     voice_transport: "livekit",
   }),
@@ -238,11 +246,30 @@ describe("HLS start reads the stage gate", () => {
   });
 
   it("a sharing peer without canStream never feeds the egress", () => {
-    const usurper = { id: "p1", sharingScreen: true, canStream: false };
-    const idle = { id: "p2", sharingScreen: false, canStream: true };
+    const seat = (id: string, sharingScreen: boolean, canStream: boolean) => ({
+      id,
+      sharingScreen,
+      canStream,
+      watchParty: true,
+    });
+    const usurper = seat("p1", true, false);
+    const idle = seat("p2", false, true);
     expect(pickHlsSharer([usurper, idle])).toBeNull();
-    const host = { id: "p3", sharingScreen: true, canStream: true };
+    const host = seat("p3", true, true);
     expect(pickHlsSharer([usurper, host])).toBe(host);
+  });
+
+  it("a sharing peer outside a watch party never feeds the egress", () => {
+    const streamer = {
+      id: "p1",
+      sharingScreen: true,
+      canStream: true,
+      watchParty: false,
+    };
+    expect(pickHlsSharer([streamer])).toBeNull();
+    expect(pickHlsSharer([streamer, { ...streamer, id: "p2" }])).toBeNull();
+    const host = { ...streamer, id: "p3", watchParty: true };
+    expect(pickHlsSharer([streamer, host])).toBe(host);
   });
 
   it("a host with START_WATCH_PARTY starts it, with the channel's server id", async () => {
@@ -254,6 +281,29 @@ describe("HLS start reads the stage gate", () => {
     const starts = egress.calls.filter(([, presenter]) => presenter !== null);
     expect(starts).toEqual([[CINEMA, peerId, SERVER]]);
     expect(egress.streams.get(CINEMA)?.presenterPeerId).toBe(peerId);
+  });
+
+  /**
+   * THE ROOM GATE, end to end and with the flag genuinely on: this suite's
+   * `isLiveHlsEnabledForServer` answers true for every server, and the room
+   * really is pinned to `livekit` (asserted, because a room that fell back to
+   * mesh would make `pushLiveHls` return early and pass this test for the
+   * wrong reason). The share is accepted by the room; only the transcode is
+   * refused, and `reconcileLiveHls` is never even reached with a presenter.
+   */
+  it("a screen share in an ordinary voice channel starts no transcode", async () => {
+    bits.byUser.set("host", PERMISSION_ALL);
+    const streamer = await join(recorder(), "host", HANGOUT);
+    const welcome = lastFrame(streamer, "welcome")!;
+    expect(welcome.transport).toBe("livekit");
+    expect(welcome.canStream).toBe(true);
+    await claimStage(streamer, "host");
+    await settle();
+    expect(frames(streamer, "screen-share-denied")).toHaveLength(0);
+    expect(
+      egress.calls.filter(([, presenter]) => presenter !== null),
+    ).toEqual([]);
+    expect(egress.streams.has(HANGOUT)).toBe(false);
   });
 
   it("a member's refused claim never reaches the egress with a presenter", async () => {
