@@ -1005,6 +1005,37 @@ Three caveats, and the third is the one that would bite.
 None of this replaces the server-side work above. A share also dies for reasons
 nobody chose: the window closes, the tab crashes, the machine sleeps.
 
+### The presenter's socket blinking, which is the other way a session restarts
+
+Watched live on 2026-09-09, the presenter of the party in question reconnected
+and resumed the same peer id (`voice.resumeAdopted ... orphaned=true`). That is
+the machinery working: the seat is held for 90 s and the person never left.
+
+What it does to the transcode depends on which resume they get, and the
+difference is not obvious.
+
+- **`adopt`** (the registry has the row, which production runs) carries
+  `sharingScreen` onto the new peer, so `pickHlsSharer` never loses the sharer
+  and, if the client kept its LiveKit room across the WS reconnect (web and
+  Electron do), the screen track sid is unchanged and **nothing restarts at
+  all**.
+- **`reconstruct` and a cold join** start the peer clean and wait for the client
+  to re-declare. Between the roster push and that frame, `pickHlsSharer` finds
+  nobody, and until this PR that was a **silent** teardown followed by a
+  **silent** start: two `voice.hlsStarted` and no explanation, a new playlist
+  URL, and a rebuffer for the whole audience. It is now `no-share` followed by
+  a start, which at least names itself.
+
+**The repair is not obvious and is deliberately not in this PR.** Holding the
+session open whenever the presenter's peer is still seated would also hold it
+open when they genuinely stop sharing and stay in the room, which leaks a core
+and shows a frozen frame until the stuck-playlist rule notices twenty seconds
+later. Carrying `sharingScreen` across a reconstruct the way `adopt` does is
+narrower and probably right, and it still costs one clean restart because a
+reconstructed client republishes with a new sid. Do it with the reason field
+above in hand: one party's log now says which resume kind is actually
+happening, which is the fact this reasoning is missing.
+
 ## How you know it is running
 
 The whole of the above can be deployed, configured and doing nothing, and for
