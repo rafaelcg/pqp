@@ -202,6 +202,31 @@ Method: one publisher, one `SOURCE_SCREENSHARE` track at 1280x720@30 and
 over 40 to 60 s of steady state. LiveKit's own container sat at 1.4 to 2.2%
 throughout, so the egress is essentially the whole cost.
 
+**Those figures are for a Track Composite egress, which is the only kind this
+repo starts.** A **Room Composite** one, which is what would be needed to put
+the host's microphone or anybody's camera into the stream, runs a headless
+Chrome to lay the room out before GStreamer encodes it. LiveKit's own
+[egress self-hosting docs](https://docs.livekit.io/transport/self-hosting/egress/)
+say "We recommend giving each Egress instance at least 4 CPUs and 4 GB of
+memory" and that "RoomComposite egress can use anywhere between 2-6 CPUs",
+against a TrackEgress that "consumes minimal resources because it doesn't need
+to transcode". So one Room Composite rendition is two to seven times one of the
+numbers above, and the default ladder is two renditions, on a box that also
+carries the SFU, the TURN relay and Redis. **We have not measured it, and it
+does not need measuring to be ruled out for this box**; it wants a separate
+egress box, which is the split this section already names. The options and the
+recommendation are in
+[`docs/plans/WATCH_PARTY_STREAM_AUDIO.md`](./plans/WATCH_PARTY_STREAM_AUDIO.md).
+
+**A second thing that moves these numbers, and it is not a workload.** Until
+2026-09-09 a rung the health monitor declared dead because its playlist had
+stalled was dropped from the API's bookkeeping and never stopped, so it kept
+transcoding while the restart started a fresh ladder beside it. A party could
+therefore cost two ladders rather than one, and `LIVE_HLS_MAX_SESSIONS` counts
+sessions, so a cap of 3 could mean twelve handlers. `liveHls.orphansStopped` on
+the operator dashboard is what says whether it is happening; see
+`docs/WATCH_PARTY.md`, "When a session restarts".
+
 **Read it as an upper bound.** The source is synthetic full-frame motion at
 30 fps, which is close to worst case; real screen content is mostly static
 between frames and encodes considerably cheaper. And it is one rendition at a

@@ -442,11 +442,37 @@ describe("the presenter as the ladder's source", () => {
     expect(plan.capped).toBe(true);
   });
 
-  it("an unmeasured uplink allows it, like an unprobed SFU allows promotion", () => {
+  /**
+   * THIS ASSERTION IS THE REVERSE OF WHAT IT WAS, and the reversal is the
+   * point. It used to say an unmeasured uplink allows the raise, on the
+   * convention `decidePromotion` uses for an SFU it has not probed. A live
+   * party on 2026-09-09 showed what that costs here: 1080p published with a
+   * 4 Mbit/s target and about 2.35 Mbit/s actually reaching the egress, which
+   * is a starved top layer at roughly 20 fps on full-motion content.
+   *
+   * The two cases are not alike. A promotion that guesses wrong costs the box
+   * some headroom. This one costs every viewer the picture, because the egress
+   * subscribes with no layer preference and always takes the top layer, so the
+   * cleanly delivered 720p one beside it is never used. A guess is not good
+   * enough to spend an audience on.
+   */
+  it("refuses the raise until the uplink has actually been measured", () => {
     expect(
       screenSimulcastPlan("auto", 100, {
         ladderTopHeight: 1080,
         uplinkBps: null,
+      }).topHeight,
+    ).toBe(720);
+    expect(
+      hlsSourceTopHeight("auto", { ladderTopHeight: 1080, uplinkBps: null }),
+    ).toBeNull();
+  });
+
+  it("still raises on a measured uplink that clears the bar", () => {
+    expect(
+      screenSimulcastPlan("auto", 100, {
+        ladderTopHeight: 1080,
+        uplinkBps: 6_000_000,
       }).topHeight,
     ).toBe(1080);
   });

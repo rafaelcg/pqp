@@ -14,6 +14,7 @@ import { getChannelAudience } from "../services/servers.js";
 import { computeMemberPermissions } from "../services/permissions.js";
 import { canAccessChannel } from "../services/users.js";
 import { forEachAuthenticatedSocket, userHasAuthenticatedSocket } from "./sockets.js";
+import { noteWatchPartyState } from "./watch-party-live.js";
 
 /**
  * The `watch-party-update` fan-out, and the host's connection.
@@ -74,6 +75,17 @@ export async function broadcastWatchParty(sessionId: string): Promise<void> {
   if (!audience) {
     return;
   }
+  // THE ONE PLACE THAT SEES EVERY STATE CHANGE, which is why the egress's
+  // "is the party over" mark is set from here rather than from each of the
+  // seven callers. Before the audience walk and before any `await` that could
+  // fail: the mark must be set even for a party nobody is left to tell.
+  // See `watch-party-live.ts` for why this exists and why it fails open.
+  // THE ONE PLACE THAT SEES EVERY STATE CHANGE, which is why the egress's
+  // "is the party over" mark is set from here rather than from each of the
+  // seven callers. Before the audience walk and before any `await` that could
+  // fail: the mark must be set even for a party nobody is left to tell.
+  // See `watch-party-live.ts` for why this exists and why it fails open.
+  noteWatchPartyState(row.channel_id, row.status);
   const cohosts = await loadCohostRows(row.id).catch(() => []);
   const cohostIds = cohosts.map((c) => c.user_id);
   const cache: PermissionCache = new Map();

@@ -136,6 +136,11 @@ import {
   sendEncodedDroppable,
 } from "./fanout.js";
 import { createHlsAudience, pickHlsSharer } from "./hls-audience.js";
+import {
+  logWatchPartyOverStop,
+  setWatchPartyLiveListener,
+  watchPartyKnownOver,
+} from "./watch-party-live.js";
 import { stampViewerStream } from "../voice/hls-viewer-token.js";
 import {
   adoptWatchPartyState,
@@ -1421,7 +1426,12 @@ function broadcastToRoom(
  * The server a voice channel belongs to, for the egress allowlist. The
  * audience cache already holds it for every channel with a roster, so this
  * is a map read on the hot path; the row is only fetched when the cache has
- * nothing (a channel deleted mid-share), and never at all for a stop.
+ * nothing (a channel deleted mid-share).
+ *
+ * It used to be skipped for a stop, which read as a saving and was a lost
+ * distinction: `null` means "not a server channel" to `reconcileLiveHls`, so
+ * an ordinary end of share took the not-allowlisted branch instead of the
+ * no-share one and was torn down without a word. See `pushLiveHls`.
  */
 async function hlsServerIdFor(voiceChannelId: string): Promise<string | null> {
   const audience = await getChannelAudience(voiceChannelId).catch(() => null);
@@ -1449,10 +1459,36 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
   if (getRoomTransport(voiceChannelId) !== "livekit") {
     return;
   }
-  const sharer = pickHlsSharer(getRoomPeers(voiceChannelId));
+  // THE PARTY IS THE BROADCAST, AND ENDING IT ENDS THE BROADCAST.
+  // `pickHlsSharer` asks whether somebody is sharing in a watch-party room
+  // with the stage bit, and never asked whether a party is live, so a host who
+  // pressed Encerrar and left their share running kept a two-rung transcode
+  // alive with nothing naming it: about 1.4 cores of the media box, segments
+  // written for as long as it ran, and a `channel-live` frame telling the
+  // whole server there was something to watch. Seen in production on
+  // 2026-09-09, half an hour after the last party ended.
+  //
+  // Their screen share itself is untouched: it is a voice room, people watch
+  // each other's screens in it, and ending a show is not the same act as
+  // stopping a share. Only the broadcast to people without a seat stops.
+  const over = watchPartyKnownOver(voiceChannelId);
+  const sharing = pickHlsSharer(getRoomPeers(voiceChannelId));
   const prev = liveHlsStreamFor(voiceChannelId);
+  // Once, on the push that tears it down: `prev` is null on every push after.
+  if (over && prev && sharing) {
+    logWatchPartyOverStop(voiceChannelId, sharing.id);
+  }
+  const sharer = over ? null : sharing;
   try {
-    const serverId = sharer ? await hlsServerIdFor(voiceChannelId) : null;
+    // RESOLVED EVEN WITH NO SHARER, and it used to be `sharer ? ... : null`.
+    // That looked like a saved lookup and was a lost distinction: null means
+    // "not a server channel" to `reconcileLiveHls`, so an ordinary end of
+    // share took the not-allowlisted branch, which tore the session down
+    // without a word, instead of the no-share branch, which says so. A live
+    // party then showed two starts nine minutes apart with nothing logged in
+    // between and no way to tell why. It is a map read (see
+    // `hlsServerIdFor`), so the lookup was never worth the ambiguity.
+    const serverId = await hlsServerIdFor(voiceChannelId);
     const next = await reconcileLiveHls(
       voiceChannelId,
       sharer?.id ?? null,
@@ -1482,6 +1518,13 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
     });
   }
 }
+
+// A party went live or ended: reconcile the stream on the spot rather than at
+// the next roster event. Ending a show has to end the broadcast even when
+// nobody joins or leaves the room afterwards, which is the ordinary case.
+setWatchPartyLiveListener((channelId) => {
+  void pushLiveHls(channelId);
+});
 
 // The egress monitor (`hls-egress.ts`) found a dead egress, or gave up on
 // one: reconcile again so a still-live share gets a fresh session and every

@@ -410,6 +410,91 @@ describe("receiving a camera and a screen share from the same person", () => {
   });
 });
 
+/**
+ * The microphone, which is the source this file was missing and the one that
+ * cost the most.
+ *
+ * Every publication the web client makes carries a source EXCEPT the mic:
+ * `new LocalAudioTrack(raw)` starts at `Track.Source.Unknown` and
+ * `publishTrack` only overwrites that when `source` is passed. A real
+ * production room, sampled on 2026-09-09 during a live watch party, showed the
+ * host's microphone as `source = 0` (UNKNOWN) beside a screen share correctly
+ * tagged `3`.
+ *
+ * That is not cosmetic. `liveKitPublishGrant` (server/src/voice/backends.ts)
+ * sends `canPublishSources: ["microphone"]` to anyone holding SPEAK and not
+ * STREAM, and LiveKit treats a non-empty list as an allowlist that UNKNOWN is
+ * not in (`VideoGrant.GetCanPublishSource` in livekit/protocol). In a
+ * `watch_party` channel the stream bit is START_WATCH_PARTY, which no ordinary
+ * member holds, so an invited speaker got exactly that grant and the media
+ * server refused their microphone. Their own app showed them unmuted.
+ */
+describe("publishing the microphone", () => {
+  it("tags it as the microphone, which is what a SPEAK-only grant allows", async () => {
+    const sfu = await session();
+
+    await sfu.publish(audioStream("mic").stream);
+
+    expect(sourcesPublished()).toEqual([Track.Source.Microphone]);
+    // Stated separately because the failure was not a WRONG source, it was no
+    // source at all, and a list comparison that happened to be `[undefined]`
+    // reads like a missing publish rather than an untagged one.
+    expect(published[0]!.source).not.toBeUndefined();
+  });
+
+  it("keeps tagging it when the capture is replaced", async () => {
+    const sfu = await session();
+
+    await sfu.publish(audioStream("mic-1").stream);
+    await sfu.replaceTrack(audioStream("mic-2").stream);
+
+    expect(sourcesPublished()).toEqual([
+      Track.Source.Microphone,
+      Track.Source.Microphone,
+    ]);
+  });
+
+  it("puts a mic, a camera and a share up under three different sources", async () => {
+    const sfu = await session();
+
+    await sfu.publish(audioStream("mic").stream);
+    await sfu.publishCamera(videoStream("camera").stream);
+    await sfu.publishScreen(videoStream("screen").stream);
+
+    expect(sourcesPublished()).toEqual([
+      Track.Source.Microphone,
+      Track.Source.Camera,
+      Track.Source.ScreenShare,
+    ]);
+  });
+});
+
+function fakeAudioTrack(id: string): MediaStreamTrack {
+  return {
+    kind: "audio",
+    id,
+    enabled: true,
+    getConstraints: () => ({}),
+    applyConstraints: async () => {},
+  } as unknown as MediaStreamTrack;
+}
+
+function audioStream(id: string): {
+  stream: MediaStream;
+  track: MediaStreamTrack;
+} {
+  const track = fakeAudioTrack(id);
+  return {
+    track,
+    stream: {
+      id: `stream-${id}`,
+      getTracks: () => [track],
+      getAudioTracks: () => [track],
+      getVideoTracks: () => [],
+    } as unknown as MediaStream,
+  };
+}
+
 /** Let the reconcile chain the join events queued settle. */
 async function settle() {
   for (let i = 0; i < 8; i += 1) {

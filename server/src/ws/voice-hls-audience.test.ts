@@ -164,6 +164,9 @@ const { verifyHlsViewerToken, HLS_VIEWER_TOKEN_PARAM } = await import(
   "../voice/hls-viewer-token.js"
 );
 const { pickHlsSharer } = await import("./hls-audience.js");
+const { noteWatchPartyState, resetWatchPartyLiveForTests } = await import(
+  "./watch-party-live.js"
+);
 const { PERMISSION_ALL, PERMISSION_DEFAULT_EVERYONE } = await import(
   "@pqp/shared"
 );
@@ -238,6 +241,7 @@ describe("HLS start reads the stage gate", () => {
     egress.calls.length = 0;
     egress.refuse = false;
     backend.configured = "livekit";
+    resetWatchPartyLiveForTests();
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
@@ -304,6 +308,83 @@ describe("HLS start reads the stage gate", () => {
       egress.calls.filter(([, presenter]) => presenter !== null),
     ).toEqual([]);
     expect(egress.streams.has(HANGOUT)).toBe(false);
+  });
+
+  /**
+   * THE PARTY GATE. `pickHlsSharer` asks whether somebody is sharing in a
+   * watch-party room with the stage bit, and asked nothing about whether a
+   * party is live, so a host who pressed Encerrar and left their screen share
+   * running kept a two-rung transcode alive with nothing naming it. Observed
+   * in production on 2026-09-09: every `channel_sessions` row for the channel
+   * `ended`, the last of them at 13:24, and a transcode still running at
+   * 13:56 on a four core box that also carries the SFU and the TURN relay.
+   *
+   * The share itself is untouched in all three cases below. It is a voice
+   * room; ending a show is not the same act as stopping a share.
+   */
+  describe("the party gate", () => {
+    it("stops the transcode when the party ends under a running share", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(true);
+
+      // NOTHING ELSE HAPPENS IN THE ROOM. Ending the show has to reconcile
+      // the stream by itself: `pushLiveHls` runs on roster events, and a host
+      // who presses Encerrar and touches nothing else is the ordinary case.
+      noteWatchPartyState(CINEMA, "ended");
+      await settle();
+
+      expect(egress.streams.has(CINEMA)).toBe(false);
+      expect(
+        egress.calls.filter(([channel, presenter]) =>
+          channel === CINEMA && presenter === null,
+        ).length,
+      ).toBeGreaterThan(0);
+    });
+
+    it("refuses to start one again while the party is over", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      noteWatchPartyState(CINEMA, "ended");
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+
+      expect(egress.streams.has(CINEMA)).toBe(false);
+      expect(
+        egress.calls.filter(([, presenter]) => presenter !== null),
+      ).toEqual([]);
+    });
+
+    it("starts again once a party goes live, and a draft does not count", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      noteWatchPartyState(CINEMA, "ended");
+      // A draft is somebody thinking. Nothing is broadcast until Ir ao vivo,
+      // so it must not clear the mark the end set.
+      noteWatchPartyState(CINEMA, "draft");
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(false);
+
+      noteWatchPartyState(CINEMA, "live");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(true);
+    });
+
+    /**
+     * FAIL OPEN, which is the whole design. A process that restarted mid-party
+     * has seen no state change and must transcode exactly as it does today:
+     * refusing a real party costs an event, missing a leak costs a core.
+     */
+    it("transcodes a channel it has heard nothing about", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(true);
+    });
   });
 
   it("a member's refused claim never reaches the egress with a presenter", async () => {
