@@ -29,6 +29,19 @@ struct ChannelListView: View {
     /// re-reads it, after `CommunityHomeView` has told the server it was
     /// read.
     @State private var bauUnread = 0
+    /**
+     Channels with a picture on them right now, from `channel-live`.
+
+     Not seeded over REST, and not a gap. The server restates every live
+     channel to everybody who may see it on the audience keyframe clock
+     (`ROSTER_AUDIENCE_KEYFRAME_MS`, 30 s) for as long as the broadcast runs,
+     so a list opened mid-party gains its pill within half a minute and a
+     party that starts while somebody is looking at the list gains it at once.
+     The catch-up burst that would answer instantly is sent at socket auth,
+     which happened long before this screen existed, so asking for it is not
+     an option this view has.
+     */
+    @State private var liveChannels: Set<String> = []
     private var showsBau: Bool { (communityHome?.enabled ?? false) && current.communityHomeEnabled }
     @State private var showingInvites = false
     @State private var showingSearch = false
@@ -50,16 +63,30 @@ struct ChannelListView: View {
     @State private var openedChannel: Channel?
     @State private var hasSeededInitialChannel = false
 
+    /**
+     A WATCH PARTY IS NOT A VOICE ROW, AND THIS IS WHERE THAT IS ENFORCED.
+
+     One filter, applied once, exactly as `channel-list.tsx` does it on the
+     web. Four separate filters (loose voice, category children, the section
+     that lists them) could disagree, and the way they disagree is a party
+     appearing twice or, as shipped in build 21, not at all: it fell into
+     `looseVoice` and was drawn as an ordinary speaker row.
+     */
+    private var parties: [Channel] {
+        channels.filter(\.isWatchParty).sorted { $0.position < $1.position }
+    }
+    private var listed: [Channel] { channels.filter { !$0.isWatchParty } }
+
     private var categories: [Channel] {
-        channels.filter(\.isCategory).sorted { $0.position < $1.position }
+        listed.filter(\.isCategory).sorted { $0.position < $1.position }
     }
     /// Channels with no category, which the sidebar shows above the grouped
     /// ones — matching the web client's layout.
-    private var looseText: [Channel] { channels.filter { $0.isText && $0.parentId == nil } }
-    private var looseVoice: [Channel] { channels.filter { $0.isVoice && $0.parentId == nil } }
+    private var looseText: [Channel] { listed.filter { $0.isText && $0.parentId == nil } }
+    private var looseVoice: [Channel] { listed.filter { $0.isVoice && $0.parentId == nil } }
 
     private func children(of category: Channel) -> [Channel] {
-        channels
+        listed
             .filter { $0.parentId == category.id && !$0.isCategory }
             .sorted { $0.position < $1.position }
     }
@@ -92,6 +119,29 @@ struct ChannelListView: View {
                     }
 
                     LazyVStack(alignment: .leading, spacing: 8) {
+                        // ABOVE EVERYTHING, which is where the web puts it: a
+                        // party is an event, and on the one evening it matters
+                        // it is the reason the app is open. Its own heading
+                        // rather than a row in Voice, because "watch party
+                        // shows as a regular voice channel" was the whole bug.
+                        if !parties.isEmpty {
+                            SectionLabel(text: String(localized: "Watch party"))
+                                .padding(.horizontal, 4)
+                                .padding(.top, 4)
+                            ForEach(parties) { channel in
+                                NavigationLink { chat(for: channel) } label: {
+                                    ChannelRow(
+                                        channel: channel,
+                                        unread: unread[channel.id],
+                                        isLive: liveChannels.contains(channel.id)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("channels.watchParty")
+                                .contextMenu { channelActions(for: channel) }
+                            }
+                        }
+
                         // Above TEXT, where the web sidebar puts it. Not a
                         // channel and not drawn as one: the row carries its own
                         // hint so nobody opens it expecting to type.
@@ -281,6 +331,16 @@ struct ChannelListView: View {
                 // would have to move it the other way.
                 case .communityHomeUpdate(let serverId) where serverId == server.id:
                     Task { await refreshBauUnread() }
+                // A broadcast started or stopped in a channel this account may
+                // see. `stream == nil` is a stop, and it has to remove the
+                // pill: a badge that survives the end of the show sends people
+                // into an empty room.
+                case .channelLive(let channelId, let stream, _):
+                    if stream == nil {
+                        liveChannels.remove(channelId)
+                    } else {
+                        liveChannels.insert(channelId)
+                    }
                 default:
                     return
                 }
@@ -576,10 +636,27 @@ struct ChannelRow: View {
     let channel: Channel
     let unread: UnreadEntry?
     var isDisabled: Bool = false
+    /// Something is being broadcast in this channel right now. Draws the one
+    /// badge that tells somebody scrolling a list that the show has started.
+    var isLive: Bool = false
+
+    /**
+     The glyph, and the reason a watch party gets its own.
+
+     The clapperboard is what the web sidebar draws (`ChannelIcon`), so the
+     two clients name the same thing the same way. Build 21 asked only
+     `isVoice`, which is true for a watch party, so it drew the speaker: the
+     type shipped with a player, a stream and no way to tell it apart from the
+     voice channel above it.
+     */
+    private var glyph: String {
+        if channel.isWatchParty { return "movieclapper.fill" }
+        return channel.isVoice ? "speaker.wave.2.fill" : "number"
+    }
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: channel.isVoice ? "speaker.wave.2.fill" : "number")
+            Image(systemName: glyph)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(isDisabled ? Palette.paperMuted.opacity(0.5) : Palette.paperMuted)
                 .frame(width: 20)
@@ -593,6 +670,21 @@ struct ChannelRow: View {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 10))
                     .foregroundStyle(Palette.paperMuted)
+            }
+
+            // Red, and not the signal colour: the signal green means "the call
+            // you are in" everywhere else in this app, and this means
+            // "something is being broadcast", which is a different sentence.
+            // No pulse. A list of rows is not the place for a moving object.
+            if isLive {
+                Text("LIVE")
+                    .font(Typography.label)
+                    .tracking(0.8)
+                    .foregroundStyle(Palette.paper)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(Palette.danger, in: RoundedRectangle(cornerRadius: 4))
+                    .accessibilityIdentifier("channels.live")
             }
 
             Spacer()

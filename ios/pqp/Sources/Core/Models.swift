@@ -197,6 +197,22 @@ struct Channel: Codable, Identifiable, Hashable, Sendable {
     var isText: Bool { type == "text" }
     /// A watch party is a voice room with a gated stage; this app joins it as audience.
     var isVoice: Bool { type == "voice" || type == "watch_party" }
+    /**
+     The room a watch party runs in, as opposed to an ordinary voice channel.
+
+     `isVoice` is true for both, which is what lets a party carry a transcript,
+     a roster and a stream without a second code path. It is ALSO what made
+     this type invisible: with `isVoice` as the only question anyone asked, a
+     watch party drew the same speaker glyph under the same Voice heading and
+     offered the same phone button, so the first report from a real phone was
+     "watch party shows as a regular voice channel". It was, exactly.
+
+     Everywhere the answer should be different from an ordinary voice room
+     asks THIS instead: the glyph and the section in the channel list, the
+     seat the toolbar does or does not offer, and whether an empty stage says
+     anything at all.
+     */
+    var isWatchParty: Bool { type == "watch_party" }
     var isCategory: Bool { type == "category" }
 }
 

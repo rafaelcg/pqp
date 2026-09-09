@@ -92,13 +92,36 @@ struct WatchStageView: View {
         }
     }
 
+    /**
+     AN EMPTY WATCH PARTY STILL HAS TO LOOK LIKE ONE.
+
+     Build 21 drew `EmptyView()` here, and nothing is running most of the
+     week, so a `watch_party` channel opened outside show time was byte for
+     byte an ordinary voice channel: a transcript, and a phone button. That is
+     what "watch party shows as a regular voice channel" was. The player was
+     right; there was simply nothing on screen until a stream existed, and
+     "nothing" is the one state a person cannot tell from a broken app.
+
+     An ordinary voice channel keeps the old behaviour exactly. This view is
+     mounted for EVERY voice room's transcript, so a card that drew itself on
+     all of them would put a film poster over every call in the server.
+
+     `unknown` and `idle` deliberately draw the same card. They are a round
+     trip apart, and two different sentences half a second apart is a flicker,
+     not information. `ended` keeps its own notice: "acabou" and "ainda não
+     começou" are opposite facts and that distinction is worth the state.
+     */
     @ViewBuilder
     private var stage: some View {
         switch model.phase {
-        case .unknown:
-            EmptyView()
-        case .idle:
-            EmptyView()
+        case .unknown, .idle:
+            if channel.isWatchParty {
+                notice(
+                    icon: "movieclapper.fill",
+                    title: "Watch party",
+                    message: "Nobody is streaming yet. When it starts, it shows up here."
+                )
+            }
         case .live:
             picture
         case .ended:

@@ -142,7 +142,23 @@ struct ChatView: View {
         .animation(Motion.standard, value: model.editing?.id)
         .animation(Motion.standard, value: model.error)
         .toolbar {
-            if let voiceChannel {
+            /**
+             THE SEAT IS NOT OFFERED IN A WATCH PARTY, AND THAT IS THE POINT.
+
+             A watcher costs one socket in a set on the API. A seat costs a
+             participant on the media box, a microphone permission prompt, and
+             on the default stage (`hosts_only`) it buys nothing at all: the
+             server denies SPEAK to everyone but the host and the co-hosts, so
+             the person ends up paying for a room they cannot talk in while
+             already having the film seatlessly on the same screen.
+
+             Six hundred people arriving at once is the whole design
+             constraint, and this was one green phone button away from six
+             hundred participants. iOS has no presenter or stage surface yet
+             (see `docs/WATCH_PARTY.md`), so there is nothing on this screen
+             the seat unlocks. Opening the channel IS attending.
+             */
+            if let voiceChannel, !voiceChannel.isWatchParty {
                 ToolbarItem(placement: .topBarTrailing) {
                     // A button, not a link to the stage: the stage is presented
                     // from the root while the session is live, so this only

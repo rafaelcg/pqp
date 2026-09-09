@@ -1,4 +1,5 @@
 import AVFoundation
+import UIKit
 import XCTest
 @testable import pqp
 
@@ -373,5 +374,166 @@ final class WatchPartyTests: XCTestCase {
             source.contains("audiovisualBackgroundPlaybackPolicy = .continuesIfPossible"),
             "without this the picture and the sound stop when the phone locks"
         )
+    }
+
+    // MARK: - Telling a watch party apart from a voice channel
+
+    /**
+     THE REPORT FROM A REAL PHONE, IN ONE SENTENCE: "watch party shows as a
+     regular voice channel".
+
+     It did. `isVoice` is true for both types, which is deliberate and load
+     bearing (a party has a roster, a transcript and a room), and until this it
+     was the ONLY question the app asked, so the two types were the same type
+     everywhere a person could see. This is the predicate that separates them,
+     and it is asked by the glyph, the section heading, the seat the toolbar
+     offers and the empty stage.
+     */
+    func testAWatchPartyIsAVoiceRoomAndStillNotAVoiceChannel() {
+        let party = ChannelFixture.make(type: "watch_party")
+        let voice = ChannelFixture.make(type: "voice")
+        let text = ChannelFixture.make(type: "text")
+
+        XCTAssertTrue(party.isVoice, "a party still joins, rosters and transcribes as a room")
+        XCTAssertTrue(party.isWatchParty)
+        XCTAssertTrue(voice.isVoice)
+        XCTAssertFalse(voice.isWatchParty, "an ordinary call must not grow a film poster")
+        XCTAssertFalse(text.isWatchParty)
+    }
+
+    /// An unknown future type must not become a watch party by accident: the
+    /// app decodes `type` as a plain string, so anything at all can arrive.
+    func testAnUnknownChannelTypeIsNotAWatchParty() {
+        XCTAssertFalse(ChannelFixture.make(type: "forum").isWatchParty)
+    }
+
+    /**
+     THE GLYPH HAS TO EXIST.
+
+     `Image(systemName:)` for a symbol this OS does not have renders nothing
+     and reports nothing, so a wrong name is a channel row with a hole in it
+     and no failure anywhere. The web draws a clapperboard for this type and
+     `movieclapper.fill` is its SF Symbols equivalent (SF Symbols 5, iOS 17,
+     which is this app's floor).
+     */
+    func testTheWatchPartyGlyphResolvesOnThisOs() {
+        XCTAssertNotNil(
+            UIImage(systemName: "movieclapper.fill"),
+            "the channel row would draw an empty box and say nothing about it"
+        )
+    }
+
+    /**
+     THE CHANNEL LIST DRAWS A PARTY AS A PARTY.
+
+     Source-read rather than rendered, and the honest reason is that a SwiftUI
+     body is not inspectable from a unit test in this project. What it can do
+     is fail when somebody deletes the branch, which is exactly how the type
+     came to be invisible in build 21: nothing anywhere claimed it should look
+     different, so nothing noticed that it did not.
+     */
+    func testTheChannelListGivesAPartyItsOwnGlyphAndItsOwnSection() throws {
+        let source = try String(
+            contentsOf: sources.appending(path: "Chat/ChannelListView.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            source.contains("if channel.isWatchParty { return \"movieclapper.fill\" }"),
+            "a party drawn with the speaker glyph is a party nobody can find"
+        )
+        XCTAssertTrue(
+            source.contains("String(localized: \"Watch party\")"),
+            "the section heading is the other half of telling the two apart"
+        )
+        XCTAssertTrue(
+            source.contains("channels.filter(\\.isWatchParty)"),
+            "the party section has to be built from the type"
+        )
+        XCTAssertTrue(
+            source.contains("channels.filter { !$0.isWatchParty }"),
+            "and filtered out of Voice, or it is listed twice"
+        )
+    }
+
+    /**
+     AN EMPTY WATCH PARTY IS STILL A WATCH PARTY.
+
+     Nothing is streaming most of the week, and `EmptyView()` for that case
+     made the channel identical to a voice channel on the screen as well as in
+     the list. The card is what a person sees when they arrive early, which on
+     the night is most of the audience.
+
+     Both halves are asserted: that the empty case draws something, and that it
+     is gated on the type. This view is mounted over EVERY voice channel's
+     transcript, so an ungated card would put a film poster on every call in
+     the server.
+     */
+    func testAnEmptyStageSaysWatchPartyAndOnlyInAWatchParty() throws {
+        let source = try String(
+            contentsOf: sources.appending(path: "Voice/WatchStageView.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            source.contains("case .unknown, .idle:"),
+            "waiting and nothing-yet are one card, not two sentences half a second apart"
+        )
+        XCTAssertTrue(
+            source.contains("if channel.isWatchParty {"),
+            "an ordinary voice channel must stay inert"
+        )
+        XCTAssertTrue(
+            source.contains("Nobody is streaming yet."),
+            "the empty state has to be a sentence, not a blank"
+        )
+    }
+
+    /**
+     THE SEAT NOBODY IS OFFERED, WHICH IS THE OTHER HALF OF THE SEAT NOBODY
+     TAKES.
+
+     `WatchModel` never joins, and that has a test above. It did not stop the
+     app inviting a seat: the chat toolbar drew a green phone on every channel
+     `isVoice` answered yes to, so the single most obvious control on a watch
+     party was "become a participant on the media box". Six hundred people
+     arriving at once is the design constraint the whole feature is built on
+     and it was one tap from being six hundred seats.
+
+     Asserted on the guard rather than on the button: the button is correct and
+     stays, for voice channels.
+     */
+    func testTheChatToolbarDoesNotOfferASeatInAWatchParty() throws {
+        let source = try String(
+            contentsOf: sources.appending(path: "Chat/ChatView.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            source.contains("if let voiceChannel, !voiceChannel.isWatchParty {"),
+            "watching is seatless, and a green phone button is how that stops being true"
+        )
+    }
+
+    /**
+     THE PILL IN THE LIST FOLLOWS THE STREAM, INCLUDING DOWNWARDS.
+
+     A `channel-live` with `stream: null` is a stop. A badge that survives the
+     end of the show walks people into an empty room, which is worse than no
+     badge at all.
+     */
+    func testTheListPillIsClearedWhenTheStreamStops() throws {
+        let source = try String(
+            contentsOf: sources.appending(path: "Chat/ChannelListView.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(source.contains("case .channelLive(let channelId, let stream, _):"))
+        XCTAssertTrue(source.contains("liveChannels.remove(channelId)"))
+        XCTAssertTrue(source.contains("liveChannels.insert(channelId)"))
+    }
+}
+
+private enum ChannelFixture {
+    static func make(type: String) -> Channel {
+        let json = """
+        {"id":"c1","serverId":"s1","kind":"server","name":"sessao-de-sabado",
+         "type":"\(type)","position":0,"isPrivate":false,"topic":null,
+         "imageUrl":null,"parentId":null}
+        """
+        // Force-tried: a fixture that cannot decode is a broken test.
+        return try! Coding.decoder.decode(Channel.self, from: Data(json.utf8))
     }
 }
