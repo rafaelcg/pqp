@@ -2896,7 +2896,7 @@
   "watchParty.cohosts.title": "Co-hosts",
   "watchParty.cohosts.body": "Co-host pode ir ao vivo, mexer nas opções e encerrar. Se você cair, é quem pode assumir. Escolhe alguém que também pode transmitir no canal, senão a pessoa assume a watch party mas não consegue colocar imagem de volta.",
   "watchParty.cohosts.promote": "Promover",
-  "watchParty.cohosts.demote": "Tirar",
+  "watchParty.cohosts.demote": "Tirar co-host",
   "watchParty.cohosts.nobody": "Ninguém mais no servidor pra promover.",
   "watchParty.cohosts.noMatch": "Ninguém com esse nome.",
   "watchParty.cohosts.filterPlaceholder": "Procurar alguém",

@@ -119,7 +119,7 @@ nem Encerrar, e isso é esperado.
 Do lado do host, com a sessão no ar, abre **Opções** na barra da watch party e
 desce até **Co-hosts**. Acha a segunda conta na lista e clica **Promover**.
 
-**Certo:** a pessoa sai da lista de baixo e aparece em cima com **Tirar** do
+**Certo:** a pessoa sai da lista de baixo e aparece em cima com **Tirar co-host** do
 lado. Na segunda máquina, **sem recarregar nada**, o botão **Encerrar** aparece
 na barra: ela virou co-host de verdade, na hora, pelo socket.
 
@@ -128,7 +128,7 @@ botão de **Falar** tem que aparecer. Co-host promovido no meio da sessão ganha
 o microfone junto com o crachá; se não ganhar, a pessoa assume uma sala em que
 não consegue dizer uma palavra.
 
-Clica **Tirar** e confere que some dos dois lados. Depois promove de novo, que é
+Clica **Tirar co-host** e confere que some dos dois lados. Depois promove de novo, que é
 o estado que o passo 10 precisa.
 
 **Escolhe quem pode transmitir.** Um co-host que não tem permissão de

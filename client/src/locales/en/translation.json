@@ -2896,7 +2896,7 @@
   "watchParty.cohosts.title": "Co-hosts",
   "watchParty.cohosts.body": "A co-host can go live, change the options and end the party. If you drop, they are the one who can take over. Pick somebody who can also broadcast in this channel, or they take the watch party over and cannot put a picture back.",
   "watchParty.cohosts.promote": "Promote",
-  "watchParty.cohosts.demote": "Remove",
+  "watchParty.cohosts.demote": "Remove co-host",
   "watchParty.cohosts.nobody": "Nobody else in the server to promote.",
   "watchParty.cohosts.noMatch": "Nobody by that name.",
   "watchParty.cohosts.filterPlaceholder": "Find somebody",
