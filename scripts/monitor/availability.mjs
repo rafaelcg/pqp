@@ -392,6 +392,81 @@ async function checkStatusComponents() {
   };
 }
 
+/**
+ * The watch-party bucket, through `/ready`.
+ *
+ * It is deliberately NOT covered by anything above. `api-health` reads
+ * `/health`, which is shallow by design; `status-components` reads
+ * `/status.json`, whose `storage` probe is the ATTACHMENT bucket. Live HLS
+ * writes to a second bucket with a second key pair (`LIVE_HLS_S3_*`), and one
+ * being green has never implied anything about the other: production ran a
+ * week with the HLS secrets deployed and every existing check green.
+ *
+ * `skip` while the feature is off, which is what `/ready` reports as
+ * `{ skipped: true }`. That is the state on merge, so this opens nothing until
+ * somebody sets `LIVE_HLS_ENABLED`, and it starts watching by itself the
+ * moment they do. There is nothing to remember to turn on.
+ */
+async function checkLiveHls() {
+  const result = await untilOk(async () => {
+    const res = await httpGet(`${API_ORIGIN}/ready`, { timeoutMs: 10_000 });
+    let parsed = null;
+    try {
+      parsed = JSON.parse(res.body);
+    } catch {
+      /* reported below */
+    }
+    const check = parsed?.checks?.liveHls;
+    // A 503 for some OTHER dependency still carries a truthful liveHls block,
+    // and blaming the bucket for a Postgres outage would send somebody to the
+    // wrong dashboard. So this reads its own field and ignores the envelope.
+    return {
+      ok: check === undefined || check.skipped === true || check.ok === true,
+      state:
+        check === undefined
+          ? "absent"
+          : check.skipped
+            ? "skipped"
+            : check.ok
+              ? "ok"
+              : "failing",
+      ms: check?.ms,
+      note: `HTTP ${res.status} in ${res.ms}ms, liveHls=${JSON.stringify(check ?? null)}`,
+    };
+  }, RETRY);
+
+  // `absent` is an API older than the check, not an outage.
+  if (result.state === "absent" || result.state === "skipped") {
+    return {
+      key: "live-hls",
+      title: "Watch party HLS bucket (/ready checks.liveHls)",
+      status: "skip",
+      summary:
+        result.state === "absent"
+          ? "The deployed API has no liveHls check yet."
+          : "LIVE_HLS_ENABLED is off, so there is no bucket to watch.",
+    };
+  }
+
+  return {
+    key: "live-hls",
+    title: "Watch party HLS bucket (/ready checks.liveHls)",
+    status: result.ok ? "ok" : "fail",
+    summary: result.ok
+      ? `Bucket reachable and the key pair accepted${result.ms === undefined ? "" : ` (${result.ms}ms)`}.`
+      : "Live HLS is ON and the API cannot reach its bucket. No segment can be written, so every watch party is a blank pane.",
+    detail: trail(result.tries),
+    runbook: [
+      "This is the LIVE_HLS_S3_* bucket, not the attachment S3_* one. `status-components` -> storage watches the other.",
+      "The probe is a signed HEAD of a key that cannot exist, so a 404 passes.",
+      "403 means the key pair was rejected or lost its grant on the bucket: check the R2 API token in the Cloudflare dashboard and `fly secrets list -a pqp-api`.",
+      "A transport failure means R2 or the endpoint is unreachable: check the Cloudflare status page.",
+      "To turn the feature off while fixing it: `fly secrets unset LIVE_HLS_ENABLED -a pqp-api`. Rooms go back to the ordinary transport policy on their next pin.",
+      "Full runbook: docs/WATCH_PARTY.md, 'Turning it on in production'.",
+    ].join("\n"),
+  };
+}
+
 export async function runAvailabilityChecks() {
   // Sequential on purpose. Running five probes in parallel against one small
   // machine means the monitor's own load is part of what it is measuring, and
@@ -403,6 +478,7 @@ export async function runAvailabilityChecks() {
     ["fly-machines", checkFlyMachines],
     ["worker-image-drift", checkWorkerImageDrift],
     ["status-components", checkStatusComponents],
+    ["live-hls", checkLiveHls],
   ];
   const results = [];
   for (const [key, check] of checks) {
