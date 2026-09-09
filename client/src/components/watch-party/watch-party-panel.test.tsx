@@ -268,6 +268,34 @@ describe("the pane owns the surface's height", () => {
   }
 });
 
+describe("renaming from the live identity row", () => {
+  const chrome = (role: WatchParty["viewerRole"]) =>
+    render({
+      slot: "chrome",
+      hasStream: true,
+      inCall: true,
+      party: { ...PARTY, viewerRole: role },
+    });
+
+  it("lets the host, a co-host and a manager tap the name", () => {
+    for (const role of ["host", "cohost", "manager"] as const) {
+      const html = chrome(role);
+      expect([role, html.includes("data-watch-party-rename=")]).toEqual([
+        role,
+        true,
+      ]);
+      expect(html, role).toContain("Cinemoon");
+    }
+  });
+
+  it("leaves a viewer with the name as a label, no pencil", () => {
+    const html = chrome("viewer");
+    expect(html).toContain("data-watch-party-name-label");
+    expect(html).toContain("Cinemoon");
+    expect(html).not.toContain("data-watch-party-rename=");
+  });
+});
+
 describe("a host can tell they are not live", () => {
   const draft: Partial<Parameters<typeof WatchPartyPanel>[0]> = {
     party: { ...PARTY, state: "draft", viewerRole: "host" },

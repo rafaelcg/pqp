@@ -5,6 +5,7 @@ import {
   Hand,
   Mic,
   MonitorPlay,
+  Pencil,
   Phone,
   Radio,
   SlidersHorizontal,
@@ -642,7 +643,7 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         surfaceHeight(props.fill, "min-h-0"),
       )}
     >
-      <PartyIdentity party={party} />
+      <PartyIdentity party={party} onRename={props.onRename} />
       <p className="text-xs text-paper-muted">
         {formatSessionRelativeTime(party.startsAt ?? "", new Date(), "pt-BR")}
       </p>
@@ -756,6 +757,7 @@ function LiveSurface(
         compact
         className="min-w-[12rem]"
         meta={t("watchParty.live.viewers", { count: props.audienceCount })}
+        onRename={props.onRename}
       />
       {/* No `shrink-0`: in a narrow column the buttons wrap onto their own
           line rather than running past the divider, which is how "Encerrar"
@@ -1112,21 +1114,78 @@ function LiveSurface(
 
 // -------------------------------------------------------------- the identity
 
-/** The party's own name, the host's face, and the live pill. Never the channel. */
+/**
+ * The party's own name, the host's face, and the live pill. Never the channel.
+ *
+ * WHO MAY RENAME is `edit` on the shared role table: host, co-host, manager,
+ * while the party is draft / scheduled / live. A viewer sees the name as a
+ * label. The people who can change it tap the name (or the pencil) here, on
+ * the row the room is already looking at, rather than hunting a settings
+ * page. The write is the existing PATCH; `watch-party-update` is how the
+ * rest of the room gets the new title without a refresh.
+ */
 function PartyIdentity({
   party,
   compact = false,
   meta,
   className,
+  onRename,
 }: {
   party: WatchParty;
   compact?: boolean;
   /** Appended after the host, for facts that are not actions (the count). */
   meta?: string;
   className?: string;
+  onRename?: (name: string) => Promise<void>;
 }) {
   const { t } = useTranslation();
   const live = party.state === "live";
+  const canRename =
+    onRename !== undefined &&
+    canPerformWatchPartyAction({
+      action: "edit",
+      role: party.viewerRole,
+      state: party.state,
+    });
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(party.name);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const skipBlur = useRef(false);
+
+  useEffect(() => {
+    if (!editing) {
+      setDraft(party.name);
+    }
+  }, [party.id, party.name, editing]);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  const commit = () => {
+    if (skipBlur.current) {
+      skipBlur.current = false;
+      return;
+    }
+    const next = draft.trim();
+    setEditing(false);
+    if (!onRename || next.length === 0) {
+      setDraft(party.name);
+      return;
+    }
+    if (next !== party.name) {
+      void onRename(next);
+    }
+  };
+
+  const nameClass = cn(
+    "truncate font-semibold text-paper",
+    compact ? "text-sm" : "text-base",
+  );
+
   return (
     <span className={cn("flex min-w-0 flex-1 items-center gap-2.5", className)}>
       <UserAvatar
@@ -1137,15 +1196,56 @@ function PartyIdentity({
       />
       <span className="flex min-w-0 flex-col">
         <span className="flex min-w-0 items-center gap-1.5">
-          <span
-            data-watch-party-name-label
-            className={cn(
-              "truncate font-semibold text-paper",
-              compact ? "text-sm" : "text-base",
-            )}
-          >
-            {party.name}
-          </span>
+          {editing ? (
+            <input
+              ref={inputRef}
+              type="text"
+              maxLength={120}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onBlur={commit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commit();
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  skipBlur.current = true;
+                  setDraft(party.name);
+                  setEditing(false);
+                }
+              }}
+              aria-label={t("watchParty.live.renameLabel")}
+              data-watch-party-rename-input
+              className={cn(
+                "min-w-0 flex-1 rounded-md border border-ink-4 bg-ink-3 px-1.5 py-0.5 font-semibold text-paper outline-none focus-visible:border-accent",
+                compact ? "text-sm" : "text-base",
+              )}
+            />
+          ) : canRename ? (
+            <button
+              type="button"
+              data-watch-party-name-label
+              data-watch-party-rename
+              title={t("watchParty.live.rename")}
+              onClick={() => setEditing(true)}
+              className={cn(
+                "flex min-w-0 items-center gap-1 rounded-sm text-left hover:text-paper",
+                nameClass,
+              )}
+            >
+              <span className="truncate">{party.name}</span>
+              <Pencil
+                className="h-3 w-3 shrink-0 text-paper-muted"
+                aria-hidden
+              />
+            </button>
+          ) : (
+            <span data-watch-party-name-label className={nameClass}>
+              {party.name}
+            </span>
+          )}
           {live && <LivePill />}
         </span>
         <span
