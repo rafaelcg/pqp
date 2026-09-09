@@ -394,7 +394,7 @@ describeDb("watch party options and the stage", () => {
   /**
    * THE TEST THAT WOULD HAVE CAUGHT THE ROW SOMEBODY DELETED BY HAND.
    *
-   * On 2026-09-11 a production channel was found still carrying an @everyone
+   * On 2026-09-09 a production channel was found still carrying an @everyone
    * SPEAK deny from a watch party that had ended through a path which did not
    * clean up. Nothing surfaced it: the party was gone, the channel looked
    * normal, and the only symptom would have arrived the following Saturday as

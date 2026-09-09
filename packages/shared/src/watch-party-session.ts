@@ -396,8 +396,8 @@ export const watchPartyOptionsSchema = z.object({
    * AND THE FAILURE MODE THAT DECIDED IT. Closing the floor is implemented by
    * writing an @everyone SPEAK deny onto the channel. A party that ends
    * through a path which does not clean up leaves that rule behind, and one
-   * was found on production on 2026-09-11 that would have silenced an entire
-   * audience the following Saturday even with the floor set to open. It had
+   * was found on production on 2026-09-09 that would have silenced an entire
+   * audience three days later, on the Saturday, even with the floor set to open. It had
    * to be deleted by hand. THE DEFAULT PATH NOW WRITES NO PERMISSION RULE AT
    * ALL, so that class of leak cannot happen: not "is cleaned up correctly",
    * but "was never written". `watchPartyFloorIsClosed` is the one question

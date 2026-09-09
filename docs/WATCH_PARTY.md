@@ -434,7 +434,7 @@ bug rather than an instance of one.
 writing an @everyone SPEAK deny onto the channel. A party that ends through a
 path which does not clean up leaves that rule sitting on the room, and the
 room outlives the party by definition. One such leftover was found on
-production on 2026-09-11: it would have silenced Saturday's entire audience
+production on 2026-09-09: it would have silenced Saturday's entire audience
 even with the floor set to open, and it had to be deleted by hand. The section
 below on leftover overwrites is the archaeology of the same class. **A rule
 that is never written cannot leak**, so the default path now writes nothing:
@@ -1539,7 +1539,7 @@ two, and both restore.
 **The class is now closed for new parties, and that is a stronger statement
 than the paragraph above.** Walking the callers proves the two known paths
 restore; it cannot prove a third will not appear, and one leftover found on
-production on 2026-09-11 (which would have silenced a whole audience the
+production on 2026-09-09 (which would have silenced a whole audience the
 following Saturday, and was deleted by hand) is what a proof of that shape
 buys you. A watch party has no voice by default, so the ordinary party writes
 no SPEAK overwrite at all: not cleaned up correctly, never created. Only a
