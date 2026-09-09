@@ -276,6 +276,8 @@ export interface AdminMetrics {
     /** Rung names this deployment would encode, lowest first. */
     ladder: string[];
     sessions: number;
+    /** `LIVE_HLS_MAX_SESSIONS`: what `sessions` is refused at. */
+    maxSessions: number;
     rungs: number;
     oldestSessionMinutes: number | null;
     /** Sessions past retention that still hold objects. Belongs at zero. */
@@ -902,6 +904,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       allowlisted: hlsFlag.allowlisted,
       ladder: hlsFlag.ladder.map((rung) => rung.name),
       sessions: hlsActivity.sessions,
+      maxSessions: hlsActivity.maxSessions,
       rungs: hlsActivity.rungs,
       oldestSessionMinutes: hlsActivity.oldestMinutes,
       uncleaned: hlsUncleaned,

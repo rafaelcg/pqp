@@ -145,8 +145,11 @@ time on an idle box, not a rung alongside a busy WebRTC room.
 What it changes: the default two-rung ladder (`1080p30,720p30`) is about
 **1.4 of the production box's 4 cores** for one watch party, not the ~2 the old
 estimate implied, which leaves the SFU, TURN and the rest comfortably supplied
-for a single party. There is still no cap on **concurrent** parties, so
-`LIVE_HLS_SERVER_ALLOWLIST` is what bounds this in practice
+for a single party. Each party after the first finds the ladder budget spent
+and gets its floor rung alone, another 0.51 core, and `decideLadder` never
+refuses that floor rung. **`LIVE_HLS_MAX_SESSIONS`** (default 3, about 2.4 of
+the 4 cores) is what bounds the count; `LIVE_HLS_SERVER_ALLOWLIST` is a
+confinement switch rather than the capacity guard it used to be
 (`docs/WATCH_PARTY.md`, "Turning it on in production").
 
 Two things the same session showed that are not CPU. On a box with only one

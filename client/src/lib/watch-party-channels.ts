@@ -124,6 +124,49 @@ export function isWatchPartyChannelsEnabled(): boolean {
   });
 }
 
+export interface WatchPartyCreateInput {
+  /**
+   * `GET /api/live-hls/config?serverId=` for the OPEN server: the operator's
+   * `LIVE_HLS_SERVER_ALLOWLIST` answer, plus the flag and the bucket. `null`
+   * is "has not answered yet".
+   */
+  hlsEnabled: boolean | null;
+  /** This person holds `START_WATCH_PARTY` somewhere in this server. */
+  hasPermission: boolean;
+}
+
+/**
+ * Whether the sidebar offers to start a watch party HERE.
+ *
+ * THE PERMISSION BIT IS NOT ENOUGH, and that is the whole reason this
+ * function exists rather than the two facts being `&&`ed at the call site.
+ * `START_WATCH_PARTY` was backfilled onto every role already holding
+ * MANAGE_CHANNELS plus every seeded Moderator, which on this instance is
+ * thousands of roles across hundreds of servers. Turning the build flag on
+ * would put a create button in front of all of them, most on servers where
+ * the feature cannot run at all: they would press it, get a party with no
+ * seatless audience, and the quiet launch would be neither quiet nor a
+ * launch.
+ *
+ * So the control follows the SERVER'S answer as well: `enabled` from
+ * `/api/live-hls/config?serverId=`, which is `LIVE_HLS_ENABLED` and the
+ * bucket and the allowlist, resolved server-side. With the allowlist naming
+ * one or two servers, the feature is genuinely absent everywhere else rather
+ * than present and inert.
+ *
+ * `null` (not answered yet, or the probe failed) is treated as NO, unlike the
+ * screen-share disclosure sheet, which treats it as "ask the old way". The
+ * asymmetry is deliberate and it is about which way each one fails: a missed
+ * disclosure shows a person something they did not agree to broadcast, while
+ * a create button that appears a beat late costs a moderator nothing.
+ */
+export function canOfferWatchPartyCreate({
+  hlsEnabled,
+  hasPermission,
+}: WatchPartyCreateInput): boolean {
+  return hlsEnabled === true && hasPermission;
+}
+
 /** Test / local QA: force the latch on or off, or clear it with `null`. */
 export function setWatchPartyChannelsEnabled(
   on: boolean | null,

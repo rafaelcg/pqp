@@ -2249,7 +2249,7 @@
   "channelMeta.voiceRoute.reason.large": "the server has 10 members or more",
   "channelMeta.voiceRoute.reason.community": "it is a community with a public page",
   "channelMeta.voiceRoute.reason.override": "you picked it in the setting above",
-  "channelMeta.voiceRoute.reason.hls": "live streaming needs the media server",
+  "channelMeta.voiceRoute.reason.hls": "a watch party streams live, and that needs the media server",
   "channelMeta.voiceRoute.reason.default": "it is this instance's default",
   "channelMeta.voiceRoute.pinned": "This call started earlier and stays this way until it empties.",
   "channelSettings.nav": "Channel sections",

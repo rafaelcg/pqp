@@ -15,17 +15,42 @@ export interface HlsSharerLike {
   id: string;
   sharingScreen: boolean;
   canStream: boolean;
+  /**
+   * The seat is in a `watch_party` channel (`isWatchPartyChannelType` on the
+   * row, resolved at join beside `canStream`). A channel fact carried on the
+   * peer because every seat in a room came from the same row, so the picker
+   * answers without a query on a path that runs on every join and leave.
+   */
+  watchParty: boolean;
 }
 
 /**
- * The peer that feeds the egress, or null. THE STAGE GATE: `canStream` is
- * `Permission.STREAM` in a voice channel and `START_WATCH_PARTY` in a watch
- * party (see `canStartWatchPartyStream`), resolved at join and re-resolved on
- * a permissions change. A roster claim that slipped past that gate must not
- * become a transcode, so the flag is read here as well as on the claim.
+ * The peer that feeds the egress, or null.
+ *
+ * TWO GATES, and the second one is why `LIVE_HLS_ENABLED` is safe to set
+ * globally.
+ *
+ * THE STAGE GATE: `canStream` is `Permission.STREAM` in a voice channel and
+ * `START_WATCH_PARTY` in a watch party (see `canStartWatchPartyStream`),
+ * resolved at join and re-resolved on a permissions change. A roster claim
+ * that slipped past that gate must not become a transcode, so the flag is
+ * read here as well as on the claim.
+ *
+ * THE ROOM GATE: `watchParty`. A transcode costs the media box about 1.4 of
+ * its 4 cores for the default two-rung ladder (`docs/CAPACITY.md`), and
+ * before this gate ANY screen share in ANY LiveKit room started one: a
+ * ten-member server showing a friend some code, a listed community's hangout,
+ * a room already on the SFU for size alone. None of those is a watch party
+ * and none of them has an audience that could ever read the playlist, since
+ * the watch surface only exists on a `watch_party` channel. So the egress is
+ * confined to the one channel type a party can live in.
  */
 export function pickHlsSharer<T extends HlsSharerLike>(peers: T[]): T | null {
-  return peers.find((peer) => peer.sharingScreen && peer.canStream) ?? null;
+  return (
+    peers.find(
+      (peer) => peer.watchParty && peer.sharingScreen && peer.canStream,
+    ) ?? null
+  );
 }
 
 export interface HlsAudienceOptions {

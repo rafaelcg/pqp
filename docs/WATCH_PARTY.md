@@ -716,10 +716,14 @@ silence.
 ## The type
 
 `channels.type = 'watch_party'`. Everything else about the row is a voice
-channel: same columns, same overwrites, same voice room on `/ws`, same
-transport decision (`server/src/voice/transport-policy.ts` looks at `kind`,
-not `type`). `createChannelSchema` accepts it, and gained an optional `topic`
-(max 200) so the create dialog can take a short description.
+channel: same columns, same overwrites, same voice room on `/ws`, and the
+same transport decision, with ONE exception. `resolveVoiceTransport` decides
+on `kind` for every rule but live HLS, where it reads `type`: a Track
+Composite egress needs the SFU and only a `watch_party` channel can host one,
+so only that type is promoted for it (`liveHlsForcesSfu` in
+`server/src/voice/transport-policy.ts`). `createChannelSchema` accepts the
+type, and gained an optional `topic` (max 200) so the create dialog can take
+a short description.
 
 Shared helpers in `packages/shared/src/watch-party-channel.ts`:
 
@@ -784,13 +788,21 @@ What landed on the server side (`server/src/ws/voice.ts`,
 `server/src/ws/hls-audience.ts`, contract in
 `packages/shared/src/live-hls.ts`):
 
-**The stage gate on the egress start.** `pushLiveHls` picks the sharer
-through `pickHlsSharer`: `sharingScreen && canStream`. In a watch party
-`canStream` is START_WATCH_PARTY (`canStartWatchPartyStream`), so the
-transcode reads the same bit `set-sharing-screen` refuses on; there is no
-second check keyed on `type`. It also hands `reconcileLiveHls` the channel's
-server id (from the audience cache, no extra query) for the
-`LIVE_HLS_SERVER_ALLOWLIST` refusal.
+**Two gates on the egress start.** `pushLiveHls` picks the sharer through
+`pickHlsSharer`, which asks for `watchParty && sharingScreen && canStream`.
+
+- **The stage gate**, `canStream`. In a watch party that is
+  START_WATCH_PARTY (`canStartWatchPartyStream`), so the transcode reads the
+  same bit `set-sharing-screen` refuses on.
+- **The room gate**, `watchParty`: the seat is in a channel of type
+  `watch_party`, resolved from the row at join beside `canStream`. A screen
+  share in an ordinary voice channel that happens to be on the SFU (a
+  ten-member server, a listed community, an override) starts no transcode.
+  Before this gate, any share in any LiveKit room did, which is half of why
+  `LIVE_HLS_ENABLED` used to be dangerous to set instance-wide.
+
+It also hands `reconcileLiveHls` the channel's server id (from the audience
+cache, no extra query) for the `LIVE_HLS_SERVER_ALLOWLIST` refusal.
 
 **Two frames, one per audience.**
 
@@ -848,10 +860,12 @@ never a 503, while `LIVE_HLS_ENABLED` is not `"true"`.
 
 **Did a transcode actually start?** `GET /api/admin/metrics`, the `liveHls`
 block: `enabled`, `configured`, `allowlisted`, `ladder`, and `sessions` /
-`rungs` / `oldestSessionMinutes` for the transcodes running on the instance
-that answered. `sessions: 0` during a live watch party is the egress not
-starting, which on the viewer's screen is a blank pane and in the log is
-`voice.hlsStarted` never appearing.
+`maxSessions` / `rungs` / `oldestSessionMinutes` for the transcodes running on
+the instance that answered. `sessions: 0` during a live watch party is the
+egress not starting, which on the viewer's screen is a blank pane and in the
+log is `voice.hlsStarted` never appearing. `sessions` sitting at `maxSessions`
+with a party complaining of a blank pane is the concurrency cap
+(`LIVE_HLS_MAX_SESSIONS`), and the log says so: `voice.hlsSessionsCapped`.
 
 **Are the recordings being deleted?** The same block's `uncleaned`: finished
 sessions past their retention window that still hold objects. It belongs at
@@ -901,41 +915,110 @@ feature off, and only two of them have a symptom you would notice.
 | 6 | LiveKit **Egress** and Redis running beside the SFU | the media box | running (`livekit/egress:v1.14.1`, `redis:7-alpine`) |
 | 7 | `VITE_WATCH_PARTY_CHANNELS=true` at **web build time** | `deploy-web.yml` | **missing**. See "Client flag" below. This is the one no server setting can substitute for |
 | 8 | `LIVE_HLS_S3_*` **and** `LIVEKIT_*` on `pqp-worker` | `pqp-worker` | **missing**, so the retention sweep cannot run anywhere. See "How you know it is running" |
-| 9 | `LIVE_HLS_SERVER_ALLOWLIST` | `pqp-api` | unset, which means **every** server. See the warning below |
+| 9 | `LIVE_HLS_SERVER_ALLOWLIST` | `pqp-api` | unset, which means **every** server. Set it: it is the rollout switch, and with row 7 on globally it is what keeps the create control off 908 other servers. See below |
+| 10 | `LIVE_HLS_MAX_SESSIONS` | `pqp-api` | unset, which means the default of 3 concurrent parties per process |
 
-### Why the allowlist is not optional for a first outing
+### What `LIVE_HLS_ENABLED=true` does, and no longer does
 
-Two things happen the moment `LIVE_HLS_ENABLED=true` with no allowlist, and
-neither is "watch parties now work".
+It used to do two things beyond making watch parties work, and both were
+wider than the feature.
 
-**Every server voice channel moves to the SFU.** `resolveVoiceTransport`
-returns `livekit` with reason `hls` for any server channel as soon as live HLS
-is on for that server, ahead of the size and community rules. Rooms that are
-peer-to-peer today, and cost the media box nothing, start being carried by it.
-`docs/CAPACITY.md` §6b prices that: moving the peer-to-peer half onto the box
-roughly doubles its bytes, and the monthly transfer allowance is what runs out
-first, not the cores.
+**It moved every server voice channel to the SFU.** `resolveVoiceTransport`
+returned `livekit` with reason `hls` for any server channel as soon as live
+HLS was on for that server, ahead of the size and community rules, so rooms
+that are peer-to-peer and cost the media box nothing started being carried by
+it. `docs/CAPACITY.md` §6b prices that: moving the peer-to-peer half onto the
+box roughly doubles its bytes, and the monthly transfer allowance is what runs
+out first, not the cores.
 
-**Every screen share anywhere starts a transcode.** `pushLiveHls` picks a
-sharer with `sharingScreen && canStream` in any LiveKit room. It is not
-limited to `watch_party` channels, and there is no cap on how many run at
-once.
+**Every screen share anywhere started a transcode.** `pushLiveHls` picked a
+sharer with `sharingScreen && canStream` in any LiveKit room, `watch_party`
+or not.
 
-Both are per-server: `isLiveHlsEnabledForServer` gates the transport decision
-and the egress alike, so naming the event's server confines both. Measured
-cost of one party's transcodes, on the same LiveKit and egress versions
-production runs (2026-09-09, synthetic full-frame 30 fps motion, which is
-close to worst case for screen content):
+**Both are gone.** The promotion asks for a `watch_party` channel
+(`liveHlsForcesSfu`), and so does the egress picker (`pickHlsSharer`'s room
+gate). A party can only live in a `watch_party` channel: the create route
+that the client actually calls,
+`POST /api/servers/:serverId/watch-parties`, routes every party through
+`findOrCreateWatchPartyRoom`, which finds or makes exactly that. So the flag
+can be set instance-wide and an ordinary voice channel is decided by size,
+community and its override exactly as it is with the flag off. The tests that
+say so run with the environment variables really set:
+`server/src/ws/voice-transport.test.ts` §"live HLS on" reads `profileReads`
+to prove the member-count query still runs, which is the counter that catches
+a narrow policy with a wide caller.
+
+### The allowlist is now the ROLLOUT SWITCH, and that is the live reason
+
+**Read this before reasoning from the old text.** The allowlist used to be
+mandatory because of the blast radius above. That reason is gone: the flag no
+longer touches an ordinary voice channel. Do not keep the allowlist because
+of capacity, and do not drop it because capacity is handled. The reason it
+still exists is a different one.
+
+**`START_WATCH_PARTY` is not a rollout control.** The migration
+(`start_watch_party_bit_2026_09`) ORed the bit onto every non-everyone role
+already holding MANAGE_CHANNELS plus every seeded Moderator, which on this
+instance is **2753 roles across 908 servers**. So `VITE_WATCH_PARTY_CHANNELS`
+on globally, with the control gated on the bit alone, is a create button in
+front of a few thousand moderators at once, most of them on servers where no
+egress can run. That is not a quiet launch, and "they can press it, they just
+get a party with no seatless audience" is the problem rather than a mitigation
+of it.
+
+**So the control follows the server too.** `canOfferWatchPartyCreate`
+(`client/src/lib/watch-party-channels.ts`) needs BOTH the permission bit and
+`enabled` from `GET /api/live-hls/config?serverId=`, which is the server-side
+answer to `LIVE_HLS_ENABLED` + the bucket + the allowlist. `App.tsx` already
+holds that answer for the open server (`useLiveHlsConfig`, fetched once per
+server and cached for the page's lifetime, for the screen-share disclosure
+sheet), so the gate costs no extra request. An unanswered config counts as
+**no**, which is the opposite of `gateScreenShareStart` and deliberately so:
+a button that appears a beat late costs a moderator nothing, a missed
+disclosure costs a person a lot.
+
+**The end state.** `VITE_WATCH_PARTY_CHANNELS=true` in the web build,
+`LIVE_HLS_ENABLED=true` and `LIVE_HLS_SERVER_ALLOWLIST` naming one or two
+servers on `pqp-api`. Live in production, invisible everywhere else.
+
+**What a member on a non-allowlisted server sees: nothing.** Not a disabled
+button, not an empty section, not a heading. `LivePartyBlock` returns `null`
+when there is no live party and no create control, so the sidebar is byte for
+byte the sidebar they had yesterday. Their voice channels are unaffected
+(that is the narrowing above), and if somebody on an allowlisted server goes
+live, only that server's members see the block. Pinned by
+`the create control is absent on a server the operator has not allowlisted`
+in `client/e2e/watch-party.spec.ts`, which flips only the config answer and
+watches the same account with the same permission gain and lose the control.
+
+Widening the rollout is `fly secrets set -a pqp-api LIVE_HLS_SERVER_ALLOWLIST=`
+with more ids, or unsetting it for every server. No deploy, no rebuild.
+
+### The one real cost left: concurrent parties
+
+Measured on the same LiveKit and egress versions production runs (2026-09-09,
+synthetic full-frame 30 fps motion, close to worst case for screen content):
 
 | rung | cost |
 |---|---|
 | `720p30` | 0.51 core |
 | `1080p30` | 0.88 core |
 
-So the default two-rung ladder is about 1.4 of the media box's 4 cores for one
-party, leaving the rest for the SFU, the TURN relay and everything else on the
-same box. For **one** party that is comfortable. There is no ceiling on
-concurrent parties, which is what the allowlist is for.
+The default two-rung ladder is about 1.4 of the media box's 4 cores for one
+party. `LIVE_HLS_MAX_LADDER_MBPS` prices the rungs, but read `decideLadder`'s
+first rule: **the lowest rung always starts**, because a party with no
+rendition is a party nobody can see. So the ladder budget degrades the second
+and third party (they get their floor rung alone, 0.51 core each) and never
+refuses one. Nothing bounded the count.
+
+`LIVE_HLS_MAX_SESSIONS` does, default **3**: about 1.39 + 0.51 + 0.51, call
+it 2.4 of 4 cores, leaving the SFU and the TURN relay the rest. The fourth
+simultaneous party gets no transcode, logs `voice.hlsSessionsCapped`, and the
+share still works over WebRTC for everyone seated in the room; only the
+seatless audience misses out. Raise it for a bigger box; zero and anything
+unreadable fall back to the default rather than turning the guard off.
+`liveHls.sessions` and `liveHls.maxSessions` on `/api/admin/metrics` show how
+close it is.
 
 ### The commands
 
@@ -966,6 +1049,11 @@ fly secrets set -a pqp-worker LIVEKIT_URL=- LIVEKIT_API_KEY=- LIVEKIT_API_SECRET
 fly secrets set -a pqp-api LIVE_HLS_ENABLED=- LIVE_HLS_SERVER_ALLOWLIST=-
 ```
 
+The allowlist in step 3 is no longer a capacity guard, but it IS the rollout
+switch: with the client flag on globally it is the only thing keeping the
+create control off 908 other servers. Set it, and name only the servers the
+launch is for. See "The allowlist is now the ROLLOUT SWITCH" above.
+
 Step 3 restarts `pqp-api` and closes every `/ws`. Do it well before the event,
 not during it.
 
@@ -978,8 +1066,13 @@ curl -s https://api.pqp.gg/ready | jq '.checks.liveHls'
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" \
   https://api.pqp.gg/api/admin/metrics | jq '.liveHls'
 # enabled true, configured true, allowlisted true, ladder listed,
-# uncleaned 0, sweepsHere false (the sweep lives on pqp-worker)
+# sessions 0, maxSessions 3, uncleaned 0,
+# sweepsHere false (the sweep lives on pqp-worker)
 ```
+
+Then, on a server that is NOT in the allowlist, confirm an account holding
+START_WATCH_PARTY sees no Criar watch party control at all. That is the quiet
+half of the launch and it is the half a metric cannot show you.
 
 Then a real party on the allowlisted server, and during it:
 `liveHls.sessions` at least 1, `liveHls.rungs` matching the ladder, and
@@ -989,7 +1082,8 @@ back at 0 and `voice.hlsSessionCleaned` in the log.
 ### Turning it back off
 
 `fly secrets unset LIVE_HLS_ENABLED -a pqp-api`. One command, no deploy, and
-every room goes back to the ordinary transport policy on its next pin. The
+a watch party goes back to the ordinary transport policy on its next pin.
+Every other room was already on it. The
 client flag can stay on: with the API answering `enabled: false` the create
 surface still appears but nothing can broadcast, so unset
 `VITE_WATCH_PARTY_CHANNELS` and redeploy web if the surface itself should go.
@@ -1000,7 +1094,16 @@ surface still appears but nothing can broadcast, so unset
 distinct sidebar row (icon, description, pulsing `AO VIVO` pill with the
 viewer count, off under `prefers-reduced-motion`). Default off: production
 shows nothing new until Rafael flips it. With the flag off an existing
-`watch_party` channel renders and joins as a plain voice channel. With the dev
+`watch_party` channel renders and joins as a plain voice channel.
+
+**It is the outer gate, not the rollout.** The build flag is global by
+construction (one bundle, every server), so it says whether this build has
+watch parties in it at all. WHERE they are offered is
+`canOfferWatchPartyCreate`: the permission bit AND the open server's
+`GET /api/live-hls/config?serverId=` answer. Turning the build flag on
+without an allowlist offers the control on every server whose moderators hold
+a bit that was backfilled onto 2753 roles. See "The allowlist is now the
+ROLLOUT SWITCH" above. With the dev
 auth bypass on, `?watchParty=1|0` latches the flag for that tab
 (`client/src/lib/watch-party-channels.ts`). `GET /api/live-hls/config` is on
 main now, so this flag could follow it the way Baú follows
