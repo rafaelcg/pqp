@@ -2,7 +2,7 @@ Two days of merges, and the biggest one is for people who run a community: AutoM
 
 ## AutoMod
 
-Community settings, **AutoMod**. Three rules, each with a switch: **Blocked words**, **Discord invites** and **Mention spam**. Turn one on and that is it. The server checks the message before it lands.
+Community settings, **AutoMod**. Three rules, each with a switch: **Blocked words**, **Invites to other servers** and **Mention spam**. Turn one on and that is it. The server checks the message before it lands.
 
 ![The AutoMod rule list](/blog/automod-e-esconder-o-chat/automod-lista.webp "Community settings, AutoMod. Three rules, one switch each.")
 
@@ -10,11 +10,17 @@ Click a rule to open it. In **Blocked words**, type a word and press Enter. `sca
 
 ![The Blocked words rule open](/blog/automod-e-esconder-o-chat/automod-regra.webp "Trigger, Response, Exemptions.")
 
+**Invites to other servers** catches Discord links. A switch inside it catches invites to other pqp communities too: invite links and `pqp.gg/c/` addresses. Your own server's go through.
+
+![The Invites to other servers rule](/blog/automod-e-esconder-o-chat/automod-convites.webp "Discord always. pqp, if you turn it on.")
+
 Under **Response**, the message is always blocked. You pick what else: a line the author sees, an alert in a channel staff reads, and a timeout from one minute to one week. Under **Exemptions**, roles and channels where the rule does not apply. Anyone with Manage Server or Manage Messages walks through.
 
 Under the list, **Test a message**: type one and see what the server would do, with the saved rules.
 
-For the person who got blocked: the message does not post, and the reason shows under it. Only the author sees it. Editing a message goes through the same filter. Every block goes to the **Audit log**.
+For the person who got blocked: the message does not post, and the reason shows under it. Only the author sees it. Editing a message goes through the same filter. Every block goes to the **Audit log**, and the channel alert is in Portuguese.
+
+Manage Messages sees the tab and can test a message. Changing a rule takes Manage Server.
 
 ![A message blocked by AutoMod](/blog/automod-e-esconder-o-chat/automod-bloqueada.webp "It never posts. The author sees why, and nobody else sees anything.")
 

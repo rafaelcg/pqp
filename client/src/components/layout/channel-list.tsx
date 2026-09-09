@@ -1116,7 +1116,7 @@ export function ChannelList({
           icon: Users,
           onSelect: onOpenMembers,
         },
-        ...(canManage
+        ...(canManage || canManageMessages
           ? [
               { id: "sep", label: "", separator: true },
               {
@@ -1208,7 +1208,9 @@ export function ChannelList({
           <div className="flex shrink-0 items-center gap-1">
             {server && (
               <>
-                {canManage && (
+                {/* Manage Messages too: that rank has Moderação and a
+                    read-only AutoMod in the dialog, which decides the rail. */}
+                {(canManage || canManageMessages) && (
                   <Tooltip label={t("chrome.communitySettings")}>
                     <button
                       type="button"

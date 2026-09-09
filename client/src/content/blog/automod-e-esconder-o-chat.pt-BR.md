@@ -2,7 +2,7 @@ Dois dias de merge, e a maior é pra quem cuida de comunidade: o AutoMod. També
 
 ## AutoMod
 
-Config da comunidade, **AutoMod**. Três regras, cada uma com um switch: **Palavras bloqueadas**, **Convites do Discord** e **Spam de menção**. Liga e pronto. O servidor checa a mensagem antes dela entrar.
+Config da comunidade, **AutoMod**. Três regras, cada uma com um switch: **Palavras bloqueadas**, **Convites de outros servidores** e **Spam de menção**. Liga e pronto. O servidor checa a mensagem antes dela entrar.
 
 ![A lista de regras do AutoMod](/blog/automod-e-esconder-o-chat/automod-lista.webp "Config da comunidade, AutoMod. Três regras, um switch em cada.")
 
@@ -10,11 +10,17 @@ Clica na regra pra abrir. Em **Palavras bloqueadas**, digita a palavra e aperta 
 
 ![A regra Palavras bloqueadas aberta](/blog/automod-e-esconder-o-chat/automod-regra.webp "Gatilho, Resposta, Exceções.")
 
+**Convites de outros servidores** pega link do Discord. Tem um switch pra pegar convite de outra comunidade do pqp também: link de convite e endereço `pqp.gg/c/`. Os do seu próprio servidor passam.
+
+![A regra Convites de outros servidores](/blog/automod-e-esconder-o-chat/automod-convites.webp "Discord sempre. O pqp, se você ligar.")
+
 Em **Resposta**, a mensagem sempre é bloqueada. Você escolhe o que mais: um texto que o autor vê, um alerta num canal que a staff lê, e timeout de um minuto a uma semana. Em **Exceções**, cargos e canais onde a regra não vale. Quem tem Gerenciar servidor ou Gerenciar mensagens passa direto.
 
 Embaixo da lista, **Testar uma mensagem**: digita e vê o que o servidor faria, com as regras salvas.
 
-Pra quem foi barrado: a mensagem não posta, e aparece o motivo embaixo dela. Só o autor vê. Editar uma mensagem passa pelo mesmo filtro. Cada bloqueio vai pro **Registro**.
+Pra quem foi barrado: a mensagem não posta, e aparece o motivo embaixo dela. Só o autor vê. Editar uma mensagem passa pelo mesmo filtro. Cada bloqueio vai pro **Registro**, e o alerta no canal sai em português.
+
+Quem tem Gerenciar mensagens vê a aba e pode testar. Mudar regra é com quem tem Gerenciar servidor.
 
 ![Uma mensagem bloqueada pelo AutoMod](/blog/automod-e-esconder-o-chat/automod-bloqueada.webp "Não posta. O autor vê o motivo, e mais ninguém vê nada.")
 

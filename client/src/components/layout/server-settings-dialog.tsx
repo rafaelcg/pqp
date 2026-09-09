@@ -383,6 +383,8 @@ interface ServerSettingsDialogProps {
   canManageServer?: boolean;
   canManageWebhooks?: boolean;
   canModerateQueue?: boolean;
+  /** Manage Messages: sees AutoMod read-only, with the test box. */
+  canManageMessages?: boolean;
   /** Land on this pane when the dialog opens, if the viewer can see it. */
   requestedSection?: "roles";
   onClose: () => void;
@@ -408,6 +410,7 @@ export function ServerSettingsDialog({
   canManageServer = false,
   canManageWebhooks = false,
   canModerateQueue = false,
+  canManageMessages = false,
   requestedSection,
   onClose,
   onRenamed,
@@ -462,8 +465,11 @@ export function ServerSettingsDialog({
   const canSeeIntegrations = canManageWebhooks;
   const canSeeModeration = canModerateQueue || isOwner;
   const canSeeAudit = canManageServer;
+  const canEditAutomod = isOwner || canManageServer;
+  const canSeeAutomod = canEditAutomod || canManageMessages;
   const canOpenSettings =
     isOwner ||
+    canSeeAutomod ||
     canSeeOverview ||
     canSeeRoles ||
     canSeeIntegrations ||
@@ -712,7 +718,7 @@ export function ServerSettingsDialog({
       case "moderation":
         return canSeeModeration;
       case "automod":
-        return isOwner || canManageServer;
+        return canSeeAutomod;
       case "audit":
         return canSeeAudit;
       case "danger":
@@ -962,6 +968,7 @@ export function ServerSettingsDialog({
             <AutomodSettingsSection
               serverId={serverId}
               onDirtyChange={setAutomodDirty}
+              readOnly={!canEditAutomod}
             />
           )}
 

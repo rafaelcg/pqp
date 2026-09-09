@@ -3985,6 +3985,7 @@ CREATE TABLE IF NOT EXISTS automod_rules (
   custom_message      TEXT NOT NULL DEFAULT '' CHECK (char_length(custom_message) <= 150),
   alert_channel_id    UUID REFERENCES channels(id) ON DELETE SET NULL,
   timeout_minutes     INTEGER NOT NULL DEFAULT 0 CHECK (timeout_minutes BETWEEN 0 AND 40320),
+  block_pqp_invites   BOOLEAN NOT NULL DEFAULT FALSE,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -3997,3 +3998,5 @@ CREATE INDEX IF NOT EXISTS idx_automod_rules_server
 ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS alert_channel_id UUID REFERENCES channels(id) ON DELETE SET NULL;
 ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS timeout_minutes INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE automod_rules DROP COLUMN IF EXISTS report_hits;
+-- The pqp half of the invite rule came a day after the Discord half.
+ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS block_pqp_invites BOOLEAN NOT NULL DEFAULT FALSE;

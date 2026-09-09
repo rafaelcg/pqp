@@ -1,6 +1,8 @@
 import {
   AUTOMOD_KIND_LABEL,
   evaluateAutomod,
+  findPqpInviteLinks,
+  type AutomodContext,
   Permission,
   hasPermission,
   type AutomodRule,
@@ -77,13 +79,14 @@ interface RuleRow {
   custom_message: string;
   alert_channel_id: string | null;
   timeout_minutes: number;
+  block_pqp_invites: boolean;
   created_at: Date;
   updated_at: Date;
 }
 
 const COLUMNS = `id, server_id, kind, enabled, keywords, allow_list, mention_limit,
   exempt_role_ids, exempt_channel_ids, custom_message, alert_channel_id,
-  timeout_minutes, created_at, updated_at`;
+  timeout_minutes, block_pqp_invites, created_at, updated_at`;
 
 function mapRule(row: RuleRow): AutomodRule {
   return {
@@ -99,6 +102,7 @@ function mapRule(row: RuleRow): AutomodRule {
     customMessage: row.custom_message,
     alertChannelId: row.alert_channel_id,
     timeoutMinutes: row.timeout_minutes,
+    blockPqpInvites: row.block_pqp_invites,
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
@@ -156,6 +160,7 @@ export type AutomodRuleFields = Pick<
   | "customMessage"
   | "alertChannelId"
   | "timeoutMinutes"
+  | "blockPqpInvites"
 >;
 
 /** Trim, drop empties and duplicates, keep the owner's order. */
@@ -182,8 +187,8 @@ export async function createAutomodRule(
     `INSERT INTO automod_rules (
        server_id, kind, enabled, keywords, allow_list, mention_limit,
        exempt_role_ids, exempt_channel_ids, custom_message, alert_channel_id,
-       timeout_minutes
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       timeout_minutes, block_pqp_invites
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
      RETURNING ${COLUMNS}`,
     [
       serverId,
@@ -197,6 +202,7 @@ export async function createAutomodRule(
       fields.customMessage.trim(),
       fields.alertChannelId,
       fields.timeoutMinutes,
+      fields.blockPqpInvites,
     ],
   );
   invalidateAutomodCache(serverId);
@@ -221,6 +227,7 @@ export async function updateAutomodRule(
        -- "not in the patch" and $11 the value, which may be NULL.
        alert_channel_id   = CASE WHEN $10::boolean THEN $11::uuid ELSE alert_channel_id END,
        timeout_minutes    = COALESCE($12, timeout_minutes),
+       block_pqp_invites  = COALESCE($13, block_pqp_invites),
        updated_at         = NOW()
      WHERE server_id = $1 AND id = $2
      RETURNING ${COLUMNS}`,
@@ -237,6 +244,7 @@ export async function updateAutomodRule(
       patch.alertChannelId !== undefined,
       patch.alertChannelId ?? null,
       patch.timeoutMinutes ?? null,
+      patch.blockPqpInvites ?? null,
     ],
   );
   invalidateAutomodCache(serverId);
@@ -310,7 +318,48 @@ export async function checkAutomod(
   const applicable = roleIds
     ? enabled.filter((rule) => !rule.exemptRoleIds.some((id) => roleIds.has(id)))
     : enabled;
-  return evaluateAutomod(input.body, applicable);
+  const context = applicable.some(
+    (rule) => rule.kind === "invite_links" && rule.blockPqpInvites,
+  )
+    ? await ownInviteContext(input.serverId, input.body)
+    : {};
+  return evaluateAutomod(input.body, applicable, context);
+}
+
+/**
+ * Which of the pqp links in a body point back at this server, so a member
+ * sharing their own hall's invite is not treated as poaching. One query for
+ * the codes found, plus the server's own community slug. Only runs when a
+ * rule with the pqp half on applies, so the common path pays nothing.
+ */
+async function ownInviteContext(
+  serverId: string,
+  body: string,
+): Promise<AutomodContext> {
+  const links = findPqpInviteLinks(body);
+  if (links.length === 0) {
+    return {};
+  }
+  const codes = links.flatMap((link) => (link.code ? [link.code] : []));
+  const [invites, server] = await Promise.all([
+    codes.length > 0
+      ? getPool().query<{ code: string }>(
+          `SELECT code FROM server_invites WHERE server_id = $1 AND code = ANY($2::text[])`,
+          [serverId, codes],
+        )
+      : Promise.resolve({ rows: [] as { code: string }[] }),
+    getPool().query<{ community_slug: string | null }>(
+      `SELECT community_slug FROM servers WHERE id = $1`,
+      [serverId],
+    ),
+  ]);
+  const ownCodes = new Set(invites.rows.map((row) => row.code));
+  const ownSlug = server.rows[0]?.community_slug ?? null;
+  return {
+    ownPqpInvite: (link) =>
+      (link.code !== undefined && ownCodes.has(link.code)) ||
+      (link.slug !== undefined && ownSlug !== null && link.slug === ownSlug),
+  };
 }
 
 /**

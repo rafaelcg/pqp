@@ -72,8 +72,8 @@ export const POSTS: readonly BlogPost[] = [
     },
     summary: {
       "pt-BR":
-        "AutoMod em Config da comunidade: palavras bloqueadas, convites do Discord e spam de menção, checados antes da mensagem entrar. Esconder o chat na call, e o chat com tamanho e layout.",
-      en: "AutoMod in Community settings: blocked words, Discord invites and mention spam, checked before a message lands. Hide the chat on a call, and chat with a size and a layout.",
+        "AutoMod em Config da comunidade: palavras bloqueadas, convites de outros servidores e spam de menção, checados antes da mensagem entrar. Esconder o chat na call, e o chat com tamanho e layout.",
+      en: "AutoMod in Community settings: blocked words, invites to other servers and mention spam, checked before a message lands. Hide the chat on a call, and chat with a size and a layout.",
     },
   },
   {
