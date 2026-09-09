@@ -101,6 +101,7 @@ function disableHls() {
   delete process.env.LIVE_HLS_LADDER;
   delete process.env.LIVE_HLS_MAX_LADDER_MBPS;
   delete process.env.LIVE_HLS_MAX_SESSIONS;
+  delete process.env.LIVE_HLS_REAP_ORPHANS;
   delete process.env.VOICE_PROMOTION_MAX_SFU_MBPS;
 }
 
@@ -1207,6 +1208,25 @@ describe("live HLS egress", () => {
         await advance(10_000);
         await checkLiveHlsHealth();
         expect(liveHlsActivity().orphansStopped).toBe(1);
+      });
+
+      it("is off in one command, without a deploy", async () => {
+        enableHls();
+        process.env.LIVE_HLS_REAP_ORPHANS = "false";
+        const lk = fakeLiveKit();
+        const api = withLeftover(lk, "EG_LEFTOVER");
+        const stop = vi.fn(api.stopEgress);
+        setLiveHlsTestHooks({
+          egress: { ...api, stopEgress: stop },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+        await advance(20_000);
+        await checkLiveHlsHealth();
+
+        expect(stop).not.toHaveBeenCalledWith("EG_LEFTOVER");
+        expect(liveHlsActivity().orphansStopped).toBe(0);
       });
 
       it("never stops this session's own rungs", async () => {

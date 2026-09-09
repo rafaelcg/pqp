@@ -301,6 +301,22 @@ export function maxLiveHlsSessions(): number {
 }
 
 /**
+ * ON BY DEFAULT, and `LIVE_HLS_REAP_ORPHANS=false` is the rollback switch.
+ *
+ * `reapForeignEgresses` is the only mechanism here that STOPS something it
+ * did not start, and it is landing days before a large event. Its scope is
+ * deliberately narrow (see the function), but "one command, no deploy" is how
+ * this repo lands anything that can go wrong on a night that matters, the way
+ * `TURN_PREFER_STATIC` and `WS_COMPRESSION` do. Turning it off restores the
+ * pre-2026-09-09 behaviour: leftovers accumulate and `liveHls.orphansStopped`
+ * stays at zero because nothing is looking.
+ */
+export function reapOrphansEnabled(): boolean {
+  const raw = process.env.LIVE_HLS_REAP_ORPHANS?.trim().toLowerCase();
+  return raw !== "false" && raw !== "0" && raw !== "off";
+}
+
+/**
  * Default true: a viewer gets a presigned, expiring URL rather than the raw
  * public bucket URL. Set `LIVE_HLS_SIGNED_URLS=false` to fall back to the
  * old public-base-URL behaviour (e.g. a bucket that is deliberately public).
@@ -1064,7 +1080,7 @@ async function reapForeignEgresses(
   channelId: string,
   room: RoomHls,
 ): Promise<void> {
-  if (!egress.listEgress) {
+  if (!egress.listEgress || !reapOrphansEnabled()) {
     return;
   }
   let listing: EgressListing[];
