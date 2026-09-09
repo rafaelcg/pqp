@@ -310,6 +310,13 @@ fun WatchPane(
         }
     }
 
+    // The stream went away. Stop rather than sit on the last decoded frame:
+    // the pane is about to say so in words, and a paused MediaCodec behind
+    // that sentence is a codec held for a party that is over.
+    LaunchedEffect(player, attached) {
+        if (attached == null) player.stop()
+    }
+
     // Backgrounding pauses, and coming back rejoins the live edge rather than
     // resuming wherever the buffer stopped. A watch party watched ten minutes
     // behind everybody else is not a watch party, and this app's
