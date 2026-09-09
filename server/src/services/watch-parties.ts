@@ -1338,5 +1338,74 @@ export async function findOrCreateWatchPartyRoom(
     WATCH_PARTY_ROOM_NAME,
     "watch_party",
   );
+  await openWatchPartyRoomToEveryone(serverId, created.id);
   return created.id;
+}
+
+/**
+ * The new room is visible to the server's members, said explicitly rather
+ * than inherited.
+ *
+ * WHAT THIS FIXES, AND IT IS NOT A THEORY. A channel is created here with no
+ * overwrites, so its visibility falls through to whatever @everyone carries
+ * at the server level. A community that does NOT put VIEW_CHANNEL on
+ * @everyone and hands it back per channel instead -- an ordinary and popular
+ * Discord-shaped setup, and one a 2000-member server is likely to have -- ends
+ * up with a watch party room that nobody but the staff can see. Reproduced on
+ * 12 Sep 2026 against a server configured exactly that way:
+ *
+ *   guest sees channels BEFORE: general, Lobby
+ *   guest sees channels AFTER:  general, Lobby   (room visible: false)
+ *   GET /api/servers/:id/watch-parties -> 200 []
+ *   the sidebar block: absent
+ *   a deep link to the room: bounced to #general
+ *
+ * That is the entire audience locked out of the event, silently, with the
+ * host seeing a perfectly normal live party from the inside. It is the
+ * "working and silently not working look identical" shape, and the failure
+ * lands on the day of the show.
+ *
+ * THE INTENT WAS ALWAYS THAT THE ROOM IS ORDINARY. `watchParty.options`
+ * says so to the host in as many words: who can watch is "everyone who can
+ * already see the channel. To make it private, make the channel private."
+ * A room nobody can see is not that sentence being honoured, it is the
+ * sentence being false. So the allow is written once, at creation, and
+ * privacy stays a deliberate act on the channel afterwards.
+ *
+ * ONLY ON CREATE. `findOrCreateWatchPartyRoom` ADOPTS an existing
+ * `watch_party` channel, and a server that deliberately made theirs private
+ * must keep it that way; re-opening somebody's private room because a party
+ * started in it would be this function deciding a policy question that is not
+ * its own. Adoption therefore does not come through here.
+ *
+ * A ROLE CAN STILL SHUT SOMEBODY OUT. `channel_viewable` applies the
+ * @everyone overwrite first and per-role and per-member overwrites after it,
+ * so a role that denies VIEW on this channel still wins. What this removes is
+ * only the accidental case: a room nobody was ever denied and nobody can see.
+ */
+async function openWatchPartyRoomToEveryone(
+  serverId: string,
+  channelId: string,
+): Promise<void> {
+  const everyoneId = await getEveryoneRoleId(serverId);
+  if (!everyoneId) {
+    // No @everyone role is a server shaped in a way this cannot reason
+    // about. The room is created either way; it is not worth failing the
+    // party over.
+    return;
+  }
+  // `upsertChannelOverwrite` rather than raw SQL because it also bumps
+  // `permissions_version` and invalidates the server's audience cache. Every
+  // connected seat re-resolves off that number, so a room that appeared
+  // without it would stay invisible to everybody already online until
+  // something else happened to bump it, which on the night of a show is
+  // indistinguishable from this fix not existing.
+  await upsertChannelOverwrite(
+    channelId,
+    serverId,
+    "role",
+    everyoneId,
+    BigInt(Permission.VIEW_CHANNEL),
+    0n,
+  );
 }
