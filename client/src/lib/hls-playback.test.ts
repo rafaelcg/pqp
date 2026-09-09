@@ -7,6 +7,7 @@ import {
   isOwnHlsPlaylistProxyUrl,
   resolveHlsUrl,
   sameHlsSession,
+  shouldAdoptHlsSource,
 } from "./hls-playback";
 
 describe("chooseHlsEngine", () => {
@@ -153,6 +154,28 @@ describe("hlsSessionKey", () => {
     expect(hlsSessionKey(null)).toBeNull();
     expect(sameHlsSession(null, null)).toBe(true);
     expect(sameHlsSession(null, SESSION)).toBe(false);
+  });
+});
+
+describe("shouldAdoptHlsSource", () => {
+  const SESSION =
+    "https://api.example.test/api/voice/hls-playlist/ch-1/1788962552321";
+
+  it("adopts the first URL, because nothing is attached yet", () => {
+    expect(shouldAdoptHlsSource(null, `${SESSION}?t=aaa`)).toBe(true);
+  });
+
+  it("does not re-attach on a restamped ?t= of the same session", () => {
+    const attached = hlsSessionKey(`${SESSION}?t=aaa`);
+    expect(shouldAdoptHlsSource(attached, `${SESSION}?t=bbb`)).toBe(false);
+    expect(shouldAdoptHlsSource(attached, `${SESSION}?t=aaa`)).toBe(false);
+  });
+
+  it("re-attaches when the egress actually restarted", () => {
+    const attached = hlsSessionKey(`${SESSION}?t=aaa`);
+    const later =
+      "https://api.example.test/api/voice/hls-playlist/ch-1/1788963814707?t=aaa";
+    expect(shouldAdoptHlsSource(attached, later)).toBe(true);
   });
 });
 

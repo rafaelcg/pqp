@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AUTO_HLS_QUALITY,
+  applyHlsQualityLevel,
   describeHlsLevel,
   levelIndexFor,
   offeredHlsLevels,
@@ -91,5 +92,28 @@ describe("describeHlsLevel", () => {
   it("names the rung the way a player names it", () => {
     expect(describeHlsLevel(1080)).toBe("1080p");
     expect(describeHlsLevel(480)).toBe("480p");
+  });
+});
+
+describe("applyHlsQualityLevel", () => {
+  it("a mid-stream pick uses nextLevel so the buffer is not flushed", () => {
+    const hls = { currentLevel: 0, nextLevel: 0 };
+    applyHlsQualityLevel(hls, 1, "next-fragment");
+    expect(hls.nextLevel).toBe(1);
+    expect(hls.currentLevel).toBe(0);
+  });
+
+  it("Auto on a running player is also nextLevel, so ABR does not flush", () => {
+    const hls = { currentLevel: 1, nextLevel: 1 };
+    applyHlsQualityLevel(hls, -1, "next-fragment");
+    expect(hls.nextLevel).toBe(-1);
+    expect(hls.currentLevel).toBe(1);
+  });
+
+  it("a fresh attach pins immediately, before the first segment plays", () => {
+    const hls = { currentLevel: -1, nextLevel: -1 };
+    applyHlsQualityLevel(hls, 1, "immediate");
+    expect(hls.currentLevel).toBe(1);
+    expect(hls.nextLevel).toBe(-1);
   });
 });

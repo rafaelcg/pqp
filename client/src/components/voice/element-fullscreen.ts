@@ -69,14 +69,23 @@ export async function attemptElementFullscreen({
   graceMs = ELEMENT_FULLSCREEN_GRACE_MS,
   wait = defaultWait,
 }: ElementFullscreenAttempt): Promise<boolean> {
-  const answered = request().then(
-    () => undefined,
-    (error: unknown) => {
-      // Attached here rather than left to a caller's `.catch` so a refusal can
-      // never surface as an unhandled rejection while we are still waiting.
-      onRefusal?.(error);
-    },
-  );
+  let answered: Promise<void>;
+  try {
+    answered = request().then(
+      () => undefined,
+      (error: unknown) => {
+        // Attached here rather than left to a caller's `.catch` so a refusal can
+        // never surface as an unhandled rejection while we are still waiting.
+        onRefusal?.(error);
+      },
+    );
+  } catch (error) {
+    // `requestFullscreen` is usually async, but a probe that throws
+    // synchronously (no API on the element at all) must still count as a
+    // refusal, not as an unhandled rejection the caller never expands from.
+    onRefusal?.(error);
+    return isActive();
+  }
   await Promise.race([answered, wait(graceMs)]);
   return isActive();
 }

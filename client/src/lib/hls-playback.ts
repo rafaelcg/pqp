@@ -51,6 +51,21 @@ export function sameHlsSession(a: string | null, b: string | null): boolean {
 }
 
 /**
+ * Whether an incoming playlist URL is a different session and must re-attach.
+ *
+ * A restamped `?t=` on the same path is NOT a new session. Adopting it
+ * tears hls.js down, drops the buffer, and is the stall that looked like
+ * the stream dying twice a minute. `null` means nothing is attached yet.
+ */
+export function shouldAdoptHlsSource(
+  attachedSessionKey: string | null,
+  incomingUrl: string,
+): boolean {
+  const incoming = hlsSessionKey(incomingUrl);
+  return attachedSessionKey === null || attachedSessionKey !== incoming;
+}
+
+/**
  * Whether a playlist URL already carries its own per-viewer capability.
  *
  * The one question `xhrSetup` has to ask before attaching a Bearer header. A

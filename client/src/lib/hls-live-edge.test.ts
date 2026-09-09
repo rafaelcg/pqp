@@ -1,12 +1,38 @@
 import { describe, expect, it } from "vitest";
 import {
   BEHIND_LIVE_THRESHOLD_SECONDS,
+  HLS_LIVE_SEGMENT_SECONDS,
+  HLS_LIVE_WINDOW_SECONDS,
   buildMediaSessionMetadata,
   hasSafariPresentationMode,
+  hlsLivePlayerConfig,
+  hlsLiveSyncFitsWindow,
   isBehindLive,
   isPipAvailable,
   secondsBehindLive,
 } from "./hls-live-edge";
+
+describe("hlsLivePlayerConfig", () => {
+  it("sits a little further from the edge than the old 3 segments, still inside the 10 s window", () => {
+    const config = hlsLivePlayerConfig();
+    expect(config.liveSyncDurationCount).toBeGreaterThan(3);
+    expect(
+      config.liveSyncDurationCount * HLS_LIVE_SEGMENT_SECONDS,
+    ).toBeLessThan(HLS_LIVE_WINDOW_SECONDS);
+    expect(hlsLiveSyncFitsWindow(config)).toBe(true);
+  });
+
+  it("refuses a sync that would join on the oldest segment of the window", () => {
+    expect(
+      hlsLiveSyncFitsWindow({
+        liveSyncDurationCount: 5,
+        liveMaxLatencyDurationCount: 6,
+        maxBufferLength: 8,
+        maxMaxBufferLength: 10,
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("secondsBehindLive", () => {
   it("is zero when caught up or ahead", () => {
