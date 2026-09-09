@@ -79,6 +79,14 @@ final class VoiceModel {
     /// Why the microphone is locked, or that it has just been unlocked.
     /// Cleared on leave and by the next rule change.
     private(set) var speakNotice: String?
+    /// The room moved onto the voice server while we were in it, and this is
+    /// the sentence that says why. Set by `followPromotion` and cleared on
+    /// leave; deliberately not an error, because nothing went wrong.
+    ///
+    /// It exists because the move is AUDIBLE: the mesh is torn down before the
+    /// SFU room is up, so there is a second or so of quiet. A line explaining
+    /// it is the difference between a call that grew and a call that glitched.
+    private(set) var transportNotice: String?
 
     /// Whether to draw the share control at all.
     var offersScreenShare: Bool {
@@ -547,6 +555,7 @@ final class VoiceModel {
         isCameraOn = false
         cameraError = nil
         canSpeak = true
+        transportNotice = nil
     }
 
     /// Apply the server's SPEAK rule to the local media. See `VoiceSpeakRule`.
@@ -967,13 +976,31 @@ final class VoiceModel {
         case .voiceRoomFull(let limit):
             status = .failed(String(localized: "This voice channel is full (max \(limit))."))
 
-        case .voiceTransportUnsupported(let voiceChannelId, let transport):
+        case .voiceTransportUnsupported(let voiceChannelId, let transport, let reason):
             guard voiceChannelId == channelId else { return }
-            // Refused before a peer ever existed — nobody saw us appear.
             intendedChannel = nil
-            status = .failed(String(
-                localized: "This voice channel runs on \(transport), which the iOS app cannot join yet."
-            ))
+            // Two different events wear this frame, and telling somebody the
+            // app "cannot join" a room it was sitting in a moment ago is a
+            // sentence that reads as a bug.
+            //
+            // Without `reason` the join was refused before a peer existed and
+            // nobody saw us appear. With `promoted` we WERE seated: the room
+            // moved to the voice server and the server released the seat
+            // because this socket did not follow. Since this build declares
+            // `voice-transport-changed`, that second case now means the two
+            // ends disagree, which is a real failure and gets copy that says
+            // what to do rather than copy that blames the platform.
+            status = .failed(
+                reason == "promoted"
+                    ? String(localized: "This call became a large room and this app could not follow it. Join again to come back.")
+                    : String(localized: "This voice channel runs on \(transport), which the iOS app cannot join yet.")
+            )
+
+        case .voiceTransportChanged(let voiceChannelId, let transport, let reason, let participants):
+            followPromotion(
+                voiceChannelId: voiceChannelId, transport: transport,
+                reason: reason, participants: participants
+            )
 
         // Mesh signalling. The server drops these in an SFU room, and so does
         // this client: a peer connection built here would be to nobody.
@@ -1004,7 +1031,21 @@ final class VoiceModel {
     /// of the call is on the SFU and would neither hear a mesh peer nor see it
     /// drop out; that silent split is the bug `docs/voice-backends.md` "One
     /// room, one transport" exists to make impossible.
-    private func startSfuSession(peerId: String, channelId: String) {
+    ///
+    /// `promoted` is the mid-call version of the same work (`followPromotion`).
+    /// It changes two things and nothing else. The status this expects to still
+    /// be holding is `.connected` rather than `.joining`, because a promotion
+    /// never left the call; and on success the capture that was running on the
+    /// mesh is started again on the SFU, which is what makes the move a handover
+    /// rather than a camera and a share that quietly went off.
+    private func startSfuSession(peerId: String, channelId: String, promoted: Bool = false) {
+        let expected: VoiceStatus = promoted ? .connected : .joining
+        // Read before the mesh is torn down inside `connectSfu`: by the time
+        // the task below resolves, `isCameraOn` has been cleared and the
+        // ReplayKit bridge is pushing frames at an SFU that has no screen
+        // track. What the person had switched on is only knowable now.
+        let hadCamera = promoted && isCameraOn
+        let wasSharing = promoted && screenShare.isSharing
         sfuJoin?.cancel()
         sfuJoin = Task { [weak self] in
             guard let self else { return }
@@ -1021,7 +1062,7 @@ final class VoiceModel {
             }
             // A leave, or a displacement, that landed while this was in flight
             // has already reset the model. Nothing here may write over it.
-            guard !Task.isCancelled, self.selfPeerId == peerId, self.status == .joining else {
+            guard !Task.isCancelled, self.selfPeerId == peerId, self.status == expected else {
                 if case .success = outcome { await self.sfu.disconnect() }
                 return
             }
@@ -1029,14 +1070,42 @@ final class VoiceModel {
             case .success:
                 self.sfuIsConnected = true
                 self.status = .connected
-                // Media is up, so a share now has a room to land in.
+                // Media is up, so a share now has a room to land in. A no-op
+                // on the promoted path: the bridge was armed for the mesh and
+                // `arm()` is idempotent, which is exactly what keeps a live
+                // broadcast from being interrupted by the move.
                 self.screenShare.arm()
                 await self.reportVoiceState()
+                if wasSharing {
+                    // The broadcast never stopped and the bridge never stopped
+                    // delivering, but the track those frames were going into
+                    // died with the mesh. Creating the SFU one is all that is
+                    // needed: `pushScreenFrame` publishes on the first frame,
+                    // and the next one is milliseconds away.
+                    _ = await self.sfu.startScreenShare(
+                        quality: VideoQualitySettings.shared.quality
+                    )
+                    await self.session?.realtime.setSharingScreen(true)
+                }
+                if hadCamera {
+                    // A fresh capture on the SFU. Cannot be handed over: the
+                    // mesh capture belongs to the WebRTC framework and this one
+                    // to LiveKit's, and the two never hold the device at once.
+                    await self.enableCamera()
+                }
             case .failure(let error):
                 guard let message = sfuFailureMessage(error) else { return }
+                // EXACTLY THE BEHAVIOUR THIS APP HAD BEFORE IT FOLLOWED
+                // PROMOTIONS, which is the point: leave, and say so. The rest
+                // of the room is on the voice server and would neither hear a
+                // mesh peer nor see it drop out, so rebuilding the mesh would
+                // leave this person alone in a call that looks fine. Only the
+                // sentence differs, because "you have not joined this call" is
+                // false about a call somebody was in a moment ago.
+                self.transportNotice = nil
                 self.intendedChannel = nil
                 self.resumeClaim = nil
-                self.status = .failed(message)
+                self.status = .failed(promoted ? sfuPromotionFailureMessage() : message)
                 await self.session?.realtime.leaveVoice()
                 await self.sfu.disconnect()
                 self.sfuIsConnected = false
@@ -1045,6 +1114,61 @@ final class VoiceModel {
                 self.selfPeerId = nil
             }
         }
+    }
+
+    /**
+     THE ROOM MOVED AND WE MOVE WITH IT, KEEPING THE SEAT.
+
+     Not a rejoin. The seat, the peer id and everyone else's view of us are
+     unchanged, so there is no leave and no arrival: only the media path is
+     rebuilt, from the participant list the frame carried rather than from a
+     roster we would otherwise have to wait for.
+
+     The order matters. The roster and the transport are written first, so a
+     `voice-roster` arriving during the reconnect is read as an SFU room; the
+     local camera flags are cleared next, because `connectSfu` tears the mesh
+     down and the capture goes with it and a button still claiming "on" would
+     be lying; and `startSfuSession(promoted:)` restarts whatever was running
+     once the room is up.
+
+     Status stays `.connected` throughout, matching `use-voice.ts`. Dropping to
+     `.joining` for a second would be honest about the media and dishonest
+     about the call: nobody left, nobody has to do anything, and the stage
+     flashing "Connecting" is how a working promotion reads as a dropped call.
+     */
+    private func followPromotion(
+        voiceChannelId: String, transport: String, reason: String?,
+        participants: [VoiceParticipant]
+    ) {
+        guard case .follow(let next) = voicePromotionAction(
+            frameChannelId: voiceChannelId,
+            frameTransport: transport,
+            currentChannelId: channelId,
+            currentTransport: self.transport,
+            isLive: status == .connected,
+            selfPeerId: selfPeerId
+        ) else { return }
+        guard let peerId = selfPeerId else { return }
+        self.transport = next
+        transportNotice = voicePromotionNotice(reason: reason)
+        // Self included in this frame, unlike `welcome.peers`, so it is
+        // filtered out here: `roster` holds other people, and our own entry
+        // going in would draw us as a second tile in our own call.
+        let others = participants.filter { $0.peerId != peerId }
+        for participant in others { roster[participant.peerId] = participant }
+        cameraWatchdog?.cancel()
+        cameraWatchdog = nil
+        localCamera = nil
+        isCameraOn = false
+        Task {
+            await sfu.setRoster(others)
+            for participant in others {
+                if let volume = volumeByUser[participant.userId] {
+                    await sfu.setVolume(volume, for: participant.peerId)
+                }
+            }
+        }
+        startSfuSession(peerId: peerId, channelId: voiceChannelId, promoted: true)
     }
 
     private func connectSfu(peerId: String, channelId: String) async throws {

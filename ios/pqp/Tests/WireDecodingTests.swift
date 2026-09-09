@@ -304,11 +304,15 @@ final class WireDecodingTests: XCTestCase {
          "voiceChannelId":"33333333-3333-3333-3333-333333333333","transport":"livekit"}
         """
         let event = await firstEvent(from: json)
-        guard case .voiceTransportUnsupported(let channelId, let transport) = event else {
+        guard case .voiceTransportUnsupported(let channelId, let transport, let reason) = event else {
             return XCTFail("Expected voiceTransportUnsupported, got \(String(describing: event))")
         }
         XCTAssertEqual(channelId, "33333333-3333-3333-3333-333333333333")
         XCTAssertEqual(transport, "livekit")
+        // Absent is the original case: refused before a peer existed. The
+        // `promoted` case, and why the two need different copy, is in
+        // `VoicePromotionTests`.
+        XCTAssertNil(reason)
     }
 
     /// The server is growing threads; a message carrying the new `thread` key

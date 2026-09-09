@@ -4351,6 +4351,56 @@
         }
       }
     },
+    "This call became a large room and the voice server could not be reached, so the call ended. Join again to come back." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa call virou uma sala grande e o servidor de voz não respondeu, então a call caiu. Entre de novo pra voltar."
+          }
+        }
+      }
+    },
+    "This call became a large room and this app could not follow it. Join again to come back." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa call virou uma sala grande e esta versão do app não conseguiu acompanhar. Entre de novo pra voltar."
+          }
+        }
+      }
+    },
+    "This call became a large room so more cameras fit" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa call virou uma sala grande pra caber mais câmeras"
+          }
+        }
+      }
+    },
+    "This call became a large room so more people fit" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa call virou uma sala grande pra caber mais gente"
+          }
+        }
+      }
+    },
+    "This call became a large room so more screens fit" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa call virou uma sala grande pra caber mais telas"
+          }
+        }
+      }
+    },
     "This call is full (max %lld)." : {
       "localizations" : {
         "pt-BR" : {

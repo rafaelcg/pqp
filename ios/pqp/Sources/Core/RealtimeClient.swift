@@ -110,7 +110,28 @@ enum RealtimeEvent: Sendable {
     case voiceCameraDenied(voiceChannelId: String)
     /// The server refused the join because this room is pinned to a transport
     /// we declared we cannot do. Nobody ever saw us in the roster.
-    case voiceTransportUnsupported(voiceChannelId: String, transport: String)
+    ///
+    /// `reason` is `"promoted"` in the one case where this reaches a seat that
+    /// already existed: the room moved to the SFU and this socket did not
+    /// negotiate `voice-transport-changed`, so the server released the seat.
+    /// Since this build DOES negotiate it, `promoted` now only arrives when
+    /// the two ends disagree, which is worth a different sentence.
+    case voiceTransportUnsupported(voiceChannelId: String, transport: String, reason: String?)
+    /// THE ROOM MOVED UNDER US, ON PURPOSE, AND WE KEEP OUR SEAT.
+    ///
+    /// The server promoted this mesh room to the SFU (a fourth person, a
+    /// camera past the mesh cap, a ninth at the door) and is telling every
+    /// seat that negotiated the frame. Deliberately not a rejoin: the peer id
+    /// and the seat are still ours, so nobody sees a leave and an arrival, and
+    /// only the media path is rebuilt.
+    ///
+    /// `participants` is the room as the server holds it at that instant,
+    /// **self included** (unlike `welcome.peers`, which excludes it), so the
+    /// receiver can build its SFU session without waiting for a roster.
+    /// `reason` only decides the sentence on screen. See
+    /// `voicePromotionAction`.
+    case voiceTransportChanged(voiceChannelId: String, transport: String, reason: String?,
+                               participants: [VoiceParticipant])
     case voiceOffer(from: String, sdp: String)
     case voiceAnswer(from: String, sdp: String)
     case voiceCandidate(from: String, candidate: IceCandidatePayload?)
@@ -310,8 +331,22 @@ actor RealtimeClient {
      written on `voiceRosterDeltaMessageSchema` in `@pqp/shared`. The web
      client declares the identical string in `client/src/lib/realtime.ts` and
      the server reads it in `server/src/ws/sockets.ts`.
+
+     `voice-transport-changed`: keep the seat when the server moves a mesh room
+     onto the SFU mid call, instead of being released and told to rejoin.
+     Applied by `followPromotion` in `VoiceModel` and `CallModel`, under
+     `voicePromotionAction`.
+
+     THIS ONE IS NOT AN OPTIMISATION, and its failure runs the other way from
+     the roster delta's. Declaring the roster delta and mishandling it costs a
+     stale list. Declaring THIS and mishandling it means the server stops
+     releasing our seat on a promotion, so the person stays seated in a room
+     whose media they cannot reach: a silent broken call rather than a visible
+     drop, which is strictly worse than never asking. It is here only because
+     both models act on it and the SFU half of `welcome` already existed to be
+     reused.
      */
-    static let wireCaps = ["voice-roster-delta"]
+    static let wireCaps = ["voice-roster-delta", "voice-transport-changed"]
 
     /**
      The handshake, as a value rather than as a side effect.
@@ -969,7 +1004,25 @@ actor RealtimeClient {
         case "voice-transport-unsupported":
             guard let voiceChannelId = envelope.voiceChannelId,
                   let transport = envelope.transport else { return }
-            event = .voiceTransportUnsupported(voiceChannelId: voiceChannelId, transport: transport)
+            event = .voiceTransportUnsupported(voiceChannelId: voiceChannelId,
+                                               transport: transport,
+                                               reason: envelope.reason)
+        case "voice-transport-changed":
+            // `participants` is required rather than defaulted to empty. The
+            // whole point of the frame carrying the room is that the follower
+            // does not have to wait for a roster, and an empty list would move
+            // this session to the SFU holding a roster of nobody, so everyone
+            // else in the call would vanish from the screen until a keyframe
+            // arrived. A frame without it is one this build does not
+            // understand, and dropping it leaves the seat exactly where it is
+            // rather than half moving it.
+            guard let voiceChannelId = envelope.voiceChannelId,
+                  let transport = envelope.transport,
+                  let participants = envelope.participants else { return }
+            event = .voiceTransportChanged(voiceChannelId: voiceChannelId,
+                                           transport: transport,
+                                           reason: envelope.reason,
+                                           participants: participants)
         case "offer":
             guard let from = envelope.from, let sdp = envelope.sdp else { return }
             event = .voiceOffer(from: from, sdp: sdp)
