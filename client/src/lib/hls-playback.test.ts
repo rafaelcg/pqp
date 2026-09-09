@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   chooseHlsEngine,
+  hasHlsViewerToken,
   hlsSessionKey,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
@@ -152,5 +153,47 @@ describe("hlsSessionKey", () => {
     expect(hlsSessionKey(null)).toBeNull();
     expect(sameHlsSession(null, null)).toBe(true);
     expect(sameHlsSession(null, SESSION)).toBe(false);
+  });
+});
+
+/**
+ * WHETHER TO ATTACH A BEARER HEADER, which is the client half of the stall.
+ *
+ * The header was called belt and braces in the code that added it. It was the
+ * only strap that could break: `handleApi` resolves a Bearer ahead of the
+ * router, so a Clerk JWT that expired in the last few seconds turned a request
+ * the `?t=` capability would have served into a 401. `hls.js` refreshes its
+ * cached JWT every 30 s without `forceRefresh` and a Clerk JWT lives about 60,
+ * so roughly once a minute every web viewer's playlist request was rejected,
+ * and the player stalled and recovered, over and over.
+ *
+ * The server no longer lets a failed Bearer veto a good capability either.
+ * Both halves: either alone fixes today, and the pair is what stops it coming
+ * back the next time somebody adds a header for safety.
+ */
+describe("hasHlsViewerToken", () => {
+  const PROXY = "https://api.example.test/api/voice/hls-playlist/ch-1/17889";
+
+  it("sees the capability that makes a header unnecessary", () => {
+    expect(hasHlsViewerToken(`${PROXY}?t=abc.def`)).toBe(true);
+  });
+
+  it("sees it beside other parameters, in any order", () => {
+    expect(hasHlsViewerToken(`${PROXY}?x=1&t=abc.def`)).toBe(true);
+    expect(hasHlsViewerToken(`${PROXY}?t=abc.def&x=1`)).toBe(true);
+  });
+
+  /**
+   * The case that must still get a header: a deployment with no viewer key
+   * mints no token, and there the Bearer is the only door there is.
+   */
+  it("says no when there is no token, so the header still goes on", () => {
+    expect(hasHlsViewerToken(PROXY)).toBe(false);
+    expect(hasHlsViewerToken(`${PROXY}?x=1`)).toBe(false);
+  });
+
+  it("is not fooled by a parameter that merely starts with t", () => {
+    expect(hasHlsViewerToken(`${PROXY}?token=abc`)).toBe(false);
+    expect(hasHlsViewerToken(`${PROXY}?tt=abc`)).toBe(false);
   });
 });

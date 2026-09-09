@@ -1099,6 +1099,56 @@ guaranteed present, and the health monitor already tears down a session whose
 playlist stops moving for twenty seconds. Worth adding if a session is ever
 seen serving stale content with an open row.
 
+### The 401 that stalled every web viewer, and said nothing
+
+**Read this first if a stream is stalling.** It was the largest single cause and
+it had no server-side symptom whatsoever.
+
+The playlist proxy takes two credentials: a Bearer header, and a `?t=`
+capability this server signs itself, naming the user, the channel and the
+session, minted only after a real access check. `handleApi` resolves a Bearer
+**before the router**, so any `Authorization` header had to succeed or the
+request was 401 before the token in the URL was looked at, and the token-only
+door was gated on there being no header at all.
+
+`hls.js` attaches a Clerk JWT through `xhrSetup` **on top of** the `?t=`
+already in the URL, caches it in a closure, and refreshes it every 30 s without
+`forceRefresh`, while a Clerk JWT lives about 60 s. So roughly once a minute
+every playlist request carried an expired token and was rejected. The player
+stalled, retried, recovered, and did it again a minute later, for the whole
+film, for every web viewer of every watch party since the feature shipped.
+
+Proved on production, one URL, one valid token:
+
+```
+?t= alone                          200
+?t= + Authorization: expired jwt   401
+?t= + Authorization: garbage       401
+```
+
+**Why nothing caught it.** Every server test and every `curl` sent only `?t=`,
+which is the one request shape that never fails; native iOS and Safari send only
+`?t=` too. There was even a test named "serves hls.js (header AND token)" and it
+used a **valid** header, so it exercised the shape without the failure inside
+it. And the proxy logged nothing on a 401, so every server-side measurement said
+the stream was healthy: it took a screenshot of Rafael's network panel.
+
+**Both halves are fixed.** The server tries the capability again after the
+Bearer resolution has failed, which is late enough that there is no other caller
+to confuse it with. Trying it *first* would be wrong and a test says so: a token
+naming one user must not become a different authenticated caller's capability,
+which is a rule this route already had. And the client stops attaching a header
+when the URL already carries a token, because a second credential is a second
+thing that can fail. Either half fixes today; the pair is what stops the next
+person adding a header "for safety" and bringing it back.
+
+**A rejection now says why.** `voice.hlsPlaylistRejected` carries `missing`,
+`malformed`, `bad-signature`, `expired`, `wrong-channel` or `wrong-session`,
+plus whether an `Authorization` header was also present, rate limited to one
+line per channel per reason per 30 s with a `suppressed` count. `wrong-session`
+is the honest common one, a viewer holding the previous session's token, and it
+should cost one clean refetch rather than repeating.
+
 ### The stall, and the four things that were causing it
 
 Rafael reported the stream stopping every few seconds to minutes, on web and
