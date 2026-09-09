@@ -23,6 +23,7 @@
 import { getPool } from "../db.js";
 import { deleteObject, listObjectKeys, type StorageConfig } from "../lib/s3.js";
 import { logEvent } from "../lib/log.js";
+import { processRole } from "../lib/process-role.js";
 import {
   hlsReplayHours,
   hlsRetentionMinutes,
@@ -33,6 +34,52 @@ import {
 } from "./hls-egress.js";
 
 const SWEEP_BATCH = 25;
+
+/**
+ * One line per distinct misconfiguration, not one per minute. The sweep ticks
+ * every 60 s and a misconfiguration is a standing condition, so an unthrottled
+ * log would be 1,440 identical lines a day and the alert that matters would be
+ * the one nobody reads.
+ */
+const warned = new Set<string>();
+function warnOnce(key: string, emit: () => void): void {
+  if (warned.has(key)) {
+    return;
+  }
+  warned.add(key);
+  emit();
+}
+
+/** Test hook: forget the once-per-process warnings. */
+export function resetHlsSweepWarningsForTests(): void {
+  warned.clear();
+}
+
+/**
+ * How many finished sessions are past their retention window and still hold
+ * objects. This is the number that should sit at zero on a deployment whose
+ * sweep runs, and climb forever on one whose sweep cannot. `sweepHlsSessions`
+ * reads it to decide whether a missing configuration is harmless or is
+ * quietly leaking a bucket, and `services/metrics.ts` reports it.
+ */
+export async function countDueSessions(
+  retentionMinutes = hlsRetentionMinutes(),
+  replayHours = hlsReplayHours(),
+): Promise<number> {
+  const result = await getPool().query<{ n: string }>(
+    `SELECT COUNT(*)::text AS n
+     FROM hls_sessions
+     WHERE cleaned_at IS NULL
+       AND ended_at IS NOT NULL
+       AND (
+         (keep_replay = FALSE AND ended_at < NOW() - ($1 || ' minutes')::interval)
+         OR
+         (keep_replay = TRUE AND ended_at < NOW() - ($2 || ' hours')::interval)
+       )`,
+    [retentionMinutes, replayHours],
+  );
+  return Number(result.rows[0]?.n ?? 0);
+}
 
 interface StaleSession {
   id: string;
@@ -273,8 +320,25 @@ export async function reconcileStaleHlsSessions(): Promise<{
 export async function sweepHlsSessions(): Promise<number> {
   const config = liveHlsStorageConfig();
   if (!config) {
-    // Nothing to sweep: without storage configured no session ever wrote an
-    // object in the first place.
+    // "No storage here" used to mean "nothing ever wrote an object", and the
+    // function returned 0 without asking anything. That reasoning holds for a
+    // one-process deployment and is FALSE for the split one production runs:
+    // `pqp-api` has `LIVE_HLS_S3_*` and `WORKER_MODE=api`, so it never runs
+    // this; `pqp-worker` runs it and (until somebody sets them) has none of
+    // those secrets. Every watch party's segments would then sit in the
+    // bucket for good, and the only evidence would be the R2 bill. So look
+    // for the rows first and say so when they exist.
+    const orphaned = await countDueSessions().catch(() => 0);
+    if (orphaned > 0) {
+      warnOnce("no-storage", () =>
+        logEvent("voice.hlsSweepMisconfigured", {
+          reason: "no-live-hls-storage",
+          due: orphaned,
+          role: processRole(),
+          hint: "this process runs the retention sweep but has no LIVE_HLS_S3_* configuration",
+        }),
+      );
+    }
     return 0;
   }
   const due = await dueSessions(hlsRetentionMinutes(), hlsReplayHours());

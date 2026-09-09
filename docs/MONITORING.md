@@ -68,6 +68,7 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 | `websocket` | `wss://api.pqp.gg/ws` upgrades (101) and answers an invalid auth frame with close code 4401 | **The one a plain HTTP check misses.** Chat, presence and voice signalling all ride this socket; `/health` can be green while every WebSocket is dead. That is CLAUDE.md pitfall #9, verbatim. Needs no credential — an invalid token is enough to prove the upgrade, the message loop and the Clerk call all work. |
 | `fly-machines` | exactly **1** machine, `started`, in `gru` | The machine count is a decision (`fly.toml` `min_machines_running`, `docs/deploy-fly.md` 6a-bis), and this is the continuous half of asserting it: the deploy workflow checks the number at release time, this checks it between deploys, because a stray `fly scale count 2` or a machine Fly recreates after a host failure never goes through a deploy. One today by choice, until the two-machine rehearsal in `docs/STAGING.md` passes with `LIVEKIT_*` set; the code can share state (the bus and the registry are on, and mesh crosses the bus since 2026-09-08). When the flip lands, raise the count in `scripts/monitor/availability.mjs` in the same PR as `fly.toml`. |
 | `worker-image-drift` | `pqp-worker`'s started machine(s) run the same image as `pqp-api`'s | **Added 2026-09-08**, after the gap it would have caught: the deploy workflow's "Deploy the worker (same image)" step started failing silently (`FLY_API_TOKEN_WORKER` could not pull the API's image ref — an app-scoped token cannot read another app's registry), CI stayed red on a step everyone had learned to ignore, and `pqp-worker` sat on a two-day-old image while `pqp-api` redeployed two dozen times. Every job merged in that window — watch-party session reminders, the HLS retention sweep, voice occupancy sampling — was shipped and simply not running anywhere. Needs `FLY_ORG_TOKEN` to list a second app; skips (not fails) without it, and skips cleanly on a fork with no `pqp-worker`. |
+| `live-hls` | `/ready`'s `checks.liveHls` is ok, or the feature is off | The **watch-party** bucket (`LIVE_HLS_S3_*`), which nothing else here watches: `api-health` reads the shallow `/health`, and `status-components`' `storage` probe is the **attachment** bucket (`S3_*`). Two buckets, two key pairs, and one being green has never implied the other; production ran a week with the HLS secrets deployed and every check above green. `skip` while `LIVE_HLS_ENABLED` is off, which is the state it merges in, so it opens nothing until somebody flips the flag and starts watching by itself the moment they do. When it fails, no segment can be written and every watch party is a blank pane. Runbook: `docs/WATCH_PARTY.md`, "Turning it on in production". |
 | `status-components` | no component in `/status.json` is `degraded` or `down` | Bridges the app's own probes (`server/src/services/status.ts`, sampled every minute) to a notification. Without it, the status page is something you have to remember to look at. `disabled` components are ignored — off on purpose is not broken. |
 
 > **Detection time is 10–30 minutes, not 10.** GitHub's cron minimum is 5
@@ -99,7 +100,8 @@ ok and `503` otherwise, with a JSON body that names the failing one:
     "postgres": { "ok": true, "ms": 3 },
     "pool":     { "ok": true, "inUse": 2, "max": 10, "queued": 0 },
     "livekit":  { "ok": true, "ms": 41, "host": "sfu.pqp.gg" },
-    "storage":  { "ok": true, "skipped": true }
+    "storage":  { "ok": true, "skipped": true },
+    "liveHls":  { "ok": true, "skipped": true }
   },
   "version": "<deployed commit>"
 }
@@ -110,7 +112,8 @@ ok and `503` otherwise, with a JSON body that names the failing one:
 | `postgres` | One `SELECT 1` through the pool, 2 s timeout. Fails on error or timeout. |
 | `pool` | Sampled every second in-process. Not ok when `queued > 0` **continuously** for more than 10 s, or `inUse == max` continuously for more than 30 s. A momentary queue (cold start, deploy stampede) never flips it; the run has to be unbroken. |
 | `livekit` | `RoomService.listRooms`, 3 s timeout, result cached 30 s, concurrent callers share one probe. Carries `host`, the SFU hostname from `LIVEKIT_URL` (never the key or secret), so a rollback from `sfu.pqp.gg` to LiveKit Cloud is visible to a monitor. `{ ok: true, skipped: true }` when LiveKit is not configured. |
-| `storage` | A signed `HEAD` of a key that cannot exist (a 404 is a success), same timeout and cache as LiveKit. `skipped` when `S3_*` is unset. |
+| `storage` | A signed `HEAD` of a key that cannot exist (a 404 is a success), same timeout and cache as LiveKit. `skipped` when `S3_*` is unset. This is the **attachment** bucket. |
+| `liveHls` | The same probe against the **watch-party** bucket, which is a different bucket with a different key pair (`LIVE_HLS_S3_*`) and is deliberately not the attachment one. `skipped` unless `LIVE_HLS_ENABLED=true`, so a deployment that does not run watch parties never goes 503 over a bucket it has no reason to own. Once the flag is on, an unreachable or forbidding bucket is a real outage: no segment can be written and every watch party is a blank pane. Production ran for a week with `LIVE_HLS_S3_*` deployed and `/ready` green, and neither fact implied the other, which is why this row exists. |
 
 It leaks nothing useful: component names, booleans, counts and milliseconds,
 plus the one hostname every voice client is already handed (the SFU's). No

@@ -715,6 +715,167 @@ the count cadence, the token on every path).
 Scheduling (built in parallel) attaches to the channel; the sidebar row has a
 `TODO(schedule)` where the next session time goes in the idle state.
 
+## How you know it is running
+
+The whole of the above can be deployed, configured and doing nothing, and for
+a while that is exactly what it was. Three surfaces answer three different
+questions, and none of them substitutes for another.
+
+**Can it write a segment at all?** `GET /ready`, `checks.liveHls`. A signed
+`HEAD` of a key that cannot exist against the `LIVE_HLS_S3_*` bucket, so a 404
+is a pass and a 403 is the answer worth having. **It is not `checks.storage`**:
+that is the attachment bucket, a different bucket with a different key pair,
+and one being green has never implied anything about the other. Skipped, and
+never a 503, while `LIVE_HLS_ENABLED` is not `"true"`.
+
+**Did a transcode actually start?** `GET /api/admin/metrics`, the `liveHls`
+block: `enabled`, `configured`, `allowlisted`, `ladder`, and `sessions` /
+`rungs` / `oldestSessionMinutes` for the transcodes running on the instance
+that answered. `sessions: 0` during a live watch party is the egress not
+starting, which on the viewer's screen is a blank pane and in the log is
+`voice.hlsStarted` never appearing.
+
+**Are the recordings being deleted?** The same block's `uncleaned`: finished
+sessions past their retention window that still hold objects. It belongs at
+zero and self-corrects within a sweep tick (60 s) of each party ending.
+**Climbing on its own is a dead sweep**, and it is the only symptom one has.
+
+That last number exists because of a live production gap, which is worth
+stating plainly since the shape recurs (CLAUDE.md pitfalls 9, 12 and 13).
+`sweepHlsSessions` is a cold job, so it runs wherever `jobs.ts` runs.
+Production splits that: `pqp-api` has every `LIVE_HLS_S3_*` secret and
+`WORKER_MODE=api`, which skips every batch job; `pqp-worker` runs them and has
+none of those secrets. So the sweep runs in the one process that cannot reach
+the bucket, returns 0, and until now said nothing. Segments accumulate in R2
+for good and the only evidence is the bill.
+
+Two halves to closing it, and both are needed:
+
+- **The code half** (done): the sweep logs `voice.hlsSweepMisconfigured` once
+  per process when it is the one running and finds sessions it owes but cannot
+  reach the bucket, and `uncleaned` on the dashboard makes the leak a number.
+- **The operator half**: `pqp-worker` needs `LIVE_HLS_S3_*` **and**
+  `LIVEKIT_*`. Not one or the other. The sweep's central rule is "ask the
+  media server, do not trust the row". `ended_at` says when this cluster
+  stopped believing in a session, and an API that restarted mid-share leaves a
+  row ended while the egress keeps writing. Giving the worker the bucket
+  without LiveKit would let it delete a live party's segments, which looks
+  like corruption rather than a restart. `listActiveEgresses()` answers `null`
+  ("could not ask") rather than `[]` ("nothing is running") when there is no
+  media server to ask, and every caller treats null as leave-it-alone, so the
+  half-configured worker now refuses instead of deleting. It is safe; it is
+  just not sweeping, and `uncleaned` will say so.
+
+## Turning it on in production
+
+Everything below has to be true at once. Any one of them missing is the whole
+feature off, and only two of them have a symptom you would notice.
+
+### The state on 2026-09-09
+
+| # | What | Where | State |
+|---|---|---|---|
+| 1 | `LIVE_HLS_ENABLED=true` | `pqp-api` | **missing** |
+| 2 | `LIVE_HLS_S3_BUCKET` / `_ENDPOINT` / `_REGION` / `_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_FORCE_PATH_STYLE` | `pqp-api` | set, and the bucket was proved to accept a write, a read and a delete from that key pair on 2026-09-09 |
+| 3 | `LIVE_HLS_DELAY_SECONDS` | `pqp-api` | set |
+| 4 | `LIVE_HLS_PUBLIC_BASE_URL` | `pqp-api` | **not set, and correct**: signed mode is the default, the bucket stays private, and this is only read with `LIVE_HLS_SIGNED_URLS=false`. Never point it at `r2.dev` |
+| 5 | `LIVEKIT_URL` / `_API_KEY` / `_API_SECRET` | `pqp-api` | set, `/ready` green |
+| 6 | LiveKit **Egress** and Redis running beside the SFU | the media box | running (`livekit/egress:v1.14.1`, `redis:7-alpine`) |
+| 7 | `VITE_WATCH_PARTY_CHANNELS=true` at **web build time** | `deploy-web.yml` | **missing**. See "Client flag" below. This is the one no server setting can substitute for |
+| 8 | `LIVE_HLS_S3_*` **and** `LIVEKIT_*` on `pqp-worker` | `pqp-worker` | **missing**, so the retention sweep cannot run anywhere. See "How you know it is running" |
+| 9 | `LIVE_HLS_SERVER_ALLOWLIST` | `pqp-api` | unset, which means **every** server. See the warning below |
+
+### Why the allowlist is not optional for a first outing
+
+Two things happen the moment `LIVE_HLS_ENABLED=true` with no allowlist, and
+neither is "watch parties now work".
+
+**Every server voice channel moves to the SFU.** `resolveVoiceTransport`
+returns `livekit` with reason `hls` for any server channel as soon as live HLS
+is on for that server, ahead of the size and community rules. Rooms that are
+peer-to-peer today, and cost the media box nothing, start being carried by it.
+`docs/CAPACITY.md` §6b prices that: moving the peer-to-peer half onto the box
+roughly doubles its bytes, and the monthly transfer allowance is what runs out
+first, not the cores.
+
+**Every screen share anywhere starts a transcode.** `pushLiveHls` picks a
+sharer with `sharingScreen && canStream` in any LiveKit room. It is not
+limited to `watch_party` channels, and there is no cap on how many run at
+once.
+
+Both are per-server: `isLiveHlsEnabledForServer` gates the transport decision
+and the egress alike, so naming the event's server confines both. Measured
+cost of one party's transcodes, on the same LiveKit and egress versions
+production runs (2026-09-09, synthetic full-frame 30 fps motion, which is
+close to worst case for screen content):
+
+| rung | cost |
+|---|---|
+| `720p30` | 0.51 core |
+| `1080p30` | 0.88 core |
+
+So the default two-rung ladder is about 1.4 of the media box's 4 cores for one
+party, leaving the rest for the SFU, the TURN relay and everything else on the
+same box. For **one** party that is comfortable. There is no ceiling on
+concurrent parties, which is what the allowlist is for.
+
+### The commands
+
+Read the server id first; do not guess it.
+
+```sh
+# the event's server, by name
+psql "$DATABASE_URL" -c "SELECT id, name FROM servers WHERE name ILIKE '%<part of the name>%'"
+```
+
+Then, in this order. Each is one command and each is reversible.
+
+```sh
+# 1. The web build. Nothing is visible without this, whatever the API says.
+gh variable set VITE_WATCH_PARTY_CHANNELS --body true
+gh workflow run deploy-web.yml --ref main
+
+# 2. The retention sweep's process. BOTH, never one: the bucket without
+#    LIVEKIT_* leaves the sweep unable to tell a finished session from a live
+#    one. It refuses rather than deleting, so it is safe, but it does not sweep.
+fly secrets set -a pqp-worker LIVEKIT_URL=- LIVEKIT_API_KEY=- LIVEKIT_API_SECRET=- \
+  LIVE_HLS_S3_BUCKET=- LIVE_HLS_S3_ENDPOINT=- LIVE_HLS_S3_REGION=- \
+  LIVE_HLS_S3_ACCESS_KEY_ID=- LIVE_HLS_S3_SECRET_ACCESS_KEY=- \
+  LIVE_HLS_S3_FORCE_PATH_STYLE=-   # each value on stdin, never on the command line
+
+# 3. The feature, confined to one server. Both in one command so there is
+#    never a window where it is on for everybody.
+fly secrets set -a pqp-api LIVE_HLS_ENABLED=- LIVE_HLS_SERVER_ALLOWLIST=-
+```
+
+Step 3 restarts `pqp-api` and closes every `/ws`. Do it well before the event,
+not during it.
+
+### Reading it back, in order
+
+```sh
+curl -s https://api.pqp.gg/ready | jq '.checks.liveHls'
+# {"ok":true,"ms":…}  not "skipped", which would mean the flag did not take
+
+curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" \
+  https://api.pqp.gg/api/admin/metrics | jq '.liveHls'
+# enabled true, configured true, allowlisted true, ladder listed,
+# uncleaned 0, sweepsHere false (the sweep lives on pqp-worker)
+```
+
+Then a real party on the allowlisted server, and during it:
+`liveHls.sessions` at least 1, `liveHls.rungs` matching the ladder, and
+`voice.hlsStarted` in the log. Ten minutes after it ends, `liveHls.uncleaned`
+back at 0 and `voice.hlsSessionCleaned` in the log.
+
+### Turning it back off
+
+`fly secrets unset LIVE_HLS_ENABLED -a pqp-api`. One command, no deploy, and
+every room goes back to the ordinary transport policy on its next pin. The
+client flag can stay on: with the API answering `enabled: false` the create
+surface still appears but nothing can broadcast, so unset
+`VITE_WATCH_PARTY_CHANNELS` and redeploy web if the surface itself should go.
+
 ## Client flag
 
 `VITE_WATCH_PARTY_CHANNELS=true` turns on the create affordance and the
