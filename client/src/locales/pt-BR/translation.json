@@ -2105,7 +2105,7 @@
   "automod.response.timeout": "Dar timeout no membro",
   "automod.response.timeout.hint": "Continua lendo, mas não posta nem entra em voz até acabar.",
   "automod.response.timeout.duration": "Duração do timeout",
-  "automod.exemptions.always": "Gerenciar Servidor e Gerenciar Mensagens sempre passam pelo AutoMod, igual no Discord.",
+  "automod.exemptions.always": "Quem tem Gerenciar Servidor ou Gerenciar Mensagens sempre passa pelo AutoMod.",
   "automod.summary.alert": "Alerta",
   "automod.summary.timeout": "Timeout {duration}",
   "automod.unsaved": "Alterações não salvas",

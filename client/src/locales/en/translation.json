@@ -2105,7 +2105,7 @@
   "automod.response.timeout": "Time out the member",
   "automod.response.timeout.hint": "They keep reading but cannot post or join voice until it ends.",
   "automod.response.timeout.duration": "Timeout length",
-  "automod.exemptions.always": "Manage Server and Manage Messages always skip AutoMod, the same as on Discord.",
+  "automod.exemptions.always": "Manage Server and Manage Messages always skip AutoMod.",
   "automod.summary.alert": "Alert",
   "automod.summary.timeout": "Timeout {duration}",
   "automod.unsaved": "Unsaved changes",

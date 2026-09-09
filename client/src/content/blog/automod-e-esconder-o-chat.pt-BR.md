@@ -8,7 +8,7 @@ Config da comunidade, **AutoMod**. Três regras, cada uma com um switch: **Palav
 
 Clica na regra pra abrir. Em **Palavras bloqueadas**, digita a palavra e aperta Enter. `golpe*` pega golpista. Maiúscula, acento e letra parecida não importam: quem escreve com cirílico pra escapar, não escapa. Tem uma lista de **Liberadas mesmo assim** pra frase que tem a palavra dentro mas é de boa.
 
-![A regra Palavras bloqueadas aberta](/blog/automod-e-esconder-o-chat/automod-regra.webp "Gatilho, Resposta, Exceções. Mesma ordem do Discord.")
+![A regra Palavras bloqueadas aberta](/blog/automod-e-esconder-o-chat/automod-regra.webp "Gatilho, Resposta, Exceções.")
 
 Em **Resposta**, a mensagem sempre é bloqueada. Você escolhe o que mais: um texto que o autor vê, um alerta num canal que a staff lê, e timeout de um minuto a uma semana. Em **Exceções**, cargos e canais onde a regra não vale. Quem tem Gerenciar servidor ou Gerenciar mensagens passa direto.
 

@@ -8,7 +8,7 @@ Community settings, **AutoMod**. Three rules, each with a switch: **Blocked word
 
 Click a rule to open it. In **Blocked words**, type a word and press Enter. `scam*` catches scammer. Case, accents and look-alike letters do not matter: writing it in Cyrillic to slip past does not slip past. There is an **Allowed anyway** list for a phrase that has the word inside but is fine.
 
-![The Blocked words rule open](/blog/automod-e-esconder-o-chat/automod-regra.webp "Trigger, Response, Exemptions. Same order as Discord.")
+![The Blocked words rule open](/blog/automod-e-esconder-o-chat/automod-regra.webp "Trigger, Response, Exemptions.")
 
 Under **Response**, the message is always blocked. You pick what else: a line the author sees, an alert in a channel staff reads, and a timeout from one minute to one week. Under **Exemptions**, roles and channels where the rule does not apply. Anyone with Manage Server or Manage Messages walks through.
 
