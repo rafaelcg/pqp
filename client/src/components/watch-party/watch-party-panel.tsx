@@ -114,6 +114,12 @@ export interface WatchPartyPanelProps {
     action: "invite" | "remove" | "raise" | "lower",
     userId?: string,
   ) => Promise<void>;
+  /**
+   * Who is reading this, so an invited guest can recognise themselves in
+   * `stage.invited`. Only the people running the party and the people invited
+   * up are offered a seat at all; everybody else watches.
+   */
+  currentUserId?: string;
   /** `welcome.canSpeak` for this room, as the server resolved it. */
   canSpeak?: boolean;
   /** The channel's live HLS stream, for the host's transmission readout. */
@@ -710,6 +716,21 @@ function LiveSurface(
     role: party.viewerRole,
     canSpeak: props.canSpeak ?? false,
   });
+  /**
+   * Whether a seat in this room is this person's to take at all.
+   *
+   * NOT "may they" in a permission sense, which the server settles: this is
+   * whether the app offers it, and for an audience the answer is no. See the
+   * comment on the button. `stage.invited` is sent to everybody by
+   * `presentStage`, so an invited guest recognises themselves here without a
+   * second request and without the client guessing.
+   */
+  const mayTakeASeat =
+    runsTheShow ||
+    (props.currentUserId !== undefined &&
+      party.stage.invited.some(
+        (person) => person.userId === props.currentUserId,
+      ));
 
   const bar = (
     <div
@@ -778,12 +799,39 @@ function LiveSurface(
               : t("watchParty.stage.raise")}
           </Button>
         )}
-        {!props.inCall && (
+        {/* A VIEWER CANNOT JOIN A WATCH PARTY. NOT DISABLED: ABSENT.
+            Rafael, on being shown one quiet join control where there used to
+            be three: "NO. A VIEWER CANT JOIN A WATCH PARTY BRO". He is right,
+            and the earlier fix was still the wrong shape. Demoting a control
+            and labelling its consequence ("Entrar so ouvindo") is a way of
+            keeping something that should not be on the screen: it still says
+            joining is a thing an audience does, and it still costs a reader
+            the moment it takes to decide against it.
+
+            A watch party has an audience and it has the people running it.
+            The audience watches. That is the whole interaction, it needs no
+            control, and the seatless path exists precisely so it needs none:
+            watching is a socket, a seat is a LiveKit participant and
+            forwarded streams against an envelope of about 600 of them.
+
+            WHO STILL GETS IT, and why each: the host and the co-hosts, who
+            run the show and have to be able to get back into their own room;
+            and anybody the host has invited up to speak, for whom the whole
+            point of being invited is that they can now talk. `stage.invited`
+            is public on the wire (`presentStage`: who is UP is public, who is
+            ASKING is not), so this is the party's own answer rather than a
+            guess. A manager is deliberately NOT here: MANAGE_CHANNELS ends
+            and edits somebody else's party, it does not perform in it.
+
+            The listen-only label went with the control. Everybody who can
+            still see this button can speak once they are in, so a warning
+            about a seat that cannot would now be false. */}
+        {!props.inCall && mayTakeASeat && (
           <Button
             type="button"
-            variant="secondary"
+            variant="ghost"
             size="sm"
-            title={t("watchParty.live.watchHint")}
+            title={t("watchParty.live.joinCallHint")}
             onClick={props.onJoinCall}
             data-watch-party-join-call
           >

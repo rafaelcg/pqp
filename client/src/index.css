@@ -1730,3 +1730,21 @@ h2,
 html[data-immersive-stage] [data-immersive-hide] {
   display: none !important;
 }
+
+/*
+ * The watch party pane covering the window, when the platform refused element
+ * fullscreen (an Electron shell that answers neither way, an iPhone that has
+ * no element fullscreen at all). `components/voice/watch-fullscreen.ts` sets
+ * the attribute; one rule here so `CallSplit` needs no state of its own for a
+ * mode it is not the one entering.
+ *
+ * It covers the window rather than the pane's own box on purpose: the film is
+ * the point, and the chat rides along inside the same pane, in whatever
+ * arrangement the person had already chosen.
+ */
+[data-call-split][data-watch-expanded] {
+  background: var(--color-surface-0);
+  inset: 0;
+  position: fixed;
+  z-index: 50;
+}

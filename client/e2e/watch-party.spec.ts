@@ -207,6 +207,22 @@ async function setPartyState(
   }
 }
 
+/** The host bringing somebody up to speak. The one path to a seat for a non-host. */
+async function inviteToStage(
+  suffix: string,
+  partyId: string,
+  userId: string,
+): Promise<void> {
+  const res = await fetch(`${API}/api/watch-parties/${partyId}/stage`, {
+    method: "POST",
+    headers: headersFor(suffix),
+    body: JSON.stringify({ action: "invite", userId }),
+  });
+  if (!res.ok) {
+    throw new Error(`could not put them on the stage: ${res.status}`);
+  }
+}
+
 /**
  * The operator's per-server answer, which a runner cannot produce: with no
  * `LIVE_HLS_S3_*` bucket the real endpoint says `enabled: false` for every
@@ -601,12 +617,22 @@ test("a member opens the party from the sidebar, gets the audience surface witho
   }
 });
 
-test("a seated viewer does not get the player twice", async ({ browser }) => {
+test("an invited guest takes a seat and does not get the player twice", async ({
+  browser,
+}) => {
   const shared = await seedServer("wp-host3", "wp-seat");
   const here = `/app/server/${shared.serverId}/channel/${shared.textChannelId}`;
 
   const party = await createParty("wp-host3", shared.serverId, "Cinemoon 3");
   await setPartyState("wp-host3", party.partyId, "live");
+  // THE ONLY WAY A NON-HOST GETS A SEAT NOW, and the reason this test moved
+  // rather than being deleted: a plain viewer is offered nothing, so the
+  // person who ends up seated is one the host brought up to speak. The
+  // invariant underneath is unchanged and still worth pinning: the HLS
+  // player must go when the WebRTC screen arrives, or it is the same film
+  // twice, seconds apart, with both soundtracks.
+  const guestId = await materialiseAccount("wp-seat");
+  await inviteToStage("wp-host3", party.partyId, guestId);
 
   const second = await secondClient(browser);
   try {
@@ -626,10 +652,10 @@ test("a seated viewer does not get the player twice", async ({ browser }) => {
     // Watching still opened no microphone.
     expect(await gumCalls(viewer)).toBe(0);
 
-    // Now take the seat. The presenter's screen arrives as a WebRTC track
-    // with its own audio, so the HLS player must go: the same film twice,
-    // seconds apart, with both soundtracks, is the bug.
-    await viewer.getByTestId("watch-stage-join").click();
+    // Now take the seat, from the party bar, which for this person exists
+    // only because the host invited them up. "a plain viewer is offered no
+    // way into the call, anywhere" below is the other side of that.
+    await viewer.locator("[data-watch-party-join-call]").click();
     await expect(stage).toHaveCount(0, { timeout: 20_000 });
     await expect(viewer.getByTestId("watch-stage-live")).toHaveCount(0);
 
@@ -1170,6 +1196,346 @@ test("a reload on the party channel stays on it", async ({ browser }) => {
     await expect(viewer.getByTestId("live-party-block")).toBeVisible({
       timeout: 20_000,
     });
+  } finally {
+    await second.context.close();
+  }
+});
+
+// --------------------------------------------- what a viewer is offered, and how loudly
+
+/**
+ * Every visible control on this page that offers to join the call, with the
+ * fill it is painted in.
+ *
+ * COUNTED RATHER THAN NAMED, because the defect was arithmetic. A viewer with
+ * a picture playing was offered the one expensive action three times on one
+ * screen: the channel header's Entre na call, the party bar's Entrar na call
+ * and a third on the watch stage, two of them in the app's primary green.
+ * Three components that did not know about each other, each correct on its
+ * own. Only a count across the whole page can see that, which is why this
+ * reads the document rather than a locator per component.
+ *
+ * WHY IT IS NOT COSMETIC. Watching is seatless: one socket, nothing on the
+ * media box. Joining takes a seat, a LiveKit participant and forwarded
+ * streams, and the measured envelope is roughly 600 interactive users against
+ * an effectively unbounded HLS audience. A Saturday of 500 viewers, a modest
+ * fraction of them pressing the most prominent thing on screen, is the load
+ * the egress exists to avoid, in the first minute.
+ */
+async function joinOffers(page: Page) {
+  return page.evaluate(() => {
+    const out: { text: string; bg: string }[] = [];
+    document.querySelectorAll("button").forEach((element) => {
+      const text = (element.textContent ?? "").trim();
+      if (!/\bjoin\b/i.test(text)) {
+        return;
+      }
+      const box = element.getBoundingClientRect();
+      if (box.width === 0 || box.height === 0) {
+        return;
+      }
+      out.push({ text, bg: getComputedStyle(element).backgroundColor });
+    });
+    return out;
+  });
+}
+
+test("a plain viewer is offered no way into the call, anywhere", async ({
+  browser,
+}) => {
+  /**
+   * ZERO, AND ZERO IS THE POINT. Rafael, on being shown one quiet join
+   * control where there had been three: "NO. A VIEWER CANT JOIN A WATCH
+   * PARTY BRO". Demoting the control and labelling its consequence was still
+   * the wrong shape: it kept saying that joining is a thing an audience does,
+   * and it still cost every reader the moment it takes to decide against it.
+   *
+   * A count across the whole document rather than a locator per component,
+   * because the defect was arithmetic: three components that did not know
+   * about each other, each correct on its own. Only the page can see that.
+   *
+   * "One" would have been a weak assertion, satisfied by any of the three
+   * surviving. Zero cannot be satisfied by accident, so this is what keeps a
+   * join from creeping back in through a component nobody was looking at.
+   */
+  const shared = await seedServer("wp-offer", "wp-offer-guest");
+  const party = await createParty("wp-offer", shared.serverId, "Cinemoon");
+  await setPartyState("wp-offer", party.partyId, "live");
+
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(
+      viewer,
+      `/app/server/${shared.serverId}/channel/${party.channelId}`,
+      "wp-offer-guest",
+    );
+    await expect(viewer.getByTestId("watch-channel-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    const offers = await joinOffers(viewer);
+    expect(offers, JSON.stringify(offers)).toHaveLength(0);
+
+    // Named individually as well, so a regression says WHICH surface brought
+    // it back rather than only that the count moved.
+    await expect(viewer.locator("[data-watch-party-join-call]")).toHaveCount(0);
+    await expect(viewer.getByTestId("watch-stage-join")).toHaveCount(0);
+    await expect(
+      viewer.getByRole("button", { name: "Join Voice", exact: true }),
+    ).toHaveCount(0);
+
+    // NOT VACUOUS: the party surfaces this viewer SHOULD have are all there,
+    // so a zero above is "no join offered" and not "nothing rendered".
+    await expect(viewer.getByTestId("watch-party-bar")).toBeVisible();
+    await expect(viewer.getByTestId("watch-stage-state")).toBeVisible();
+  } finally {
+    await second.context.close();
+  }
+});
+
+test("the people running the party keep their way into the room", async ({
+  page,
+}) => {
+  /**
+   * The other half of the rule, and the half that makes it a rule rather than
+   * a blanket removal. A host has to be able to get back into their own room:
+   * a browser reload, a dropped call, a co-host arriving after the show
+   * started. What changed is who is offered it, not that it exists.
+   */
+  const shared = await seedServer("wp-host-join");
+  const party = await createParty("wp-host-join", shared.serverId, "Cinemoon");
+  await setPartyState("wp-host-join", party.partyId, "live");
+
+  await openAs(
+    page,
+    `/app/server/${shared.serverId}/channel/${party.channelId}`,
+    "wp-host-join",
+  );
+  await expect(page.getByTestId("watch-party-bar")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.locator("[data-watch-party-join-call]")).toBeVisible();
+});
+
+test("a viewer can tell they are watching, and can stop", async ({
+  browser,
+}) => {
+  /**
+   * Watching starts by itself when the channel is opened. That is the right
+   * default and is not what is being changed: it is the cheap path and the
+   * one almost everybody should be on, and putting a click in front of it
+   * while prominent buttons offered the expensive one would be exactly
+   * backwards. What was missing is that nothing said it was happening and
+   * nothing could stop it, so a person could not tell whether they were
+   * watching, in the call, both or neither.
+   */
+  const shared = await seedServer("wp-state", "wp-state-guest");
+  const party = await createParty("wp-state", shared.serverId, "Cinemoon");
+  await setPartyState("wp-state", party.partyId, "live");
+
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(
+      viewer,
+      `/app/server/${shared.serverId}/channel/${party.channelId}`,
+      "wp-state-guest",
+    );
+
+    // WHAT IS TRUE, AND NOT WHAT IS NOT. This row used to be headed
+    // "Watching without joining the call", which describes the
+    // implementation (a voice room with an HLS audience attached) and frames
+    // the thing everybody came for as an abstention. Rafael: "how's that even
+    // a thing in watch party lol". A playing film says they are watching; the
+    // row says the two things it cannot: how many people, and how far behind.
+    const state = viewer.getByTestId("watch-stage-state");
+    await expect(state).toBeVisible({ timeout: 20_000 });
+    await expect(state).toContainText("watching");
+    await expect(state).toContainText("delay");
+    await expect(viewer.getByText("without joining the call")).toHaveCount(0);
+
+    // And the way out is beside the statement, which is honest about what
+    // stopping is: leaving the room.
+    await viewer.getByTestId("watch-stage-leave").click();
+    await expect(viewer.getByTestId("watch-channel-stage")).toHaveCount(0, {
+      timeout: 20_000,
+    });
+    // Landed somewhere real rather than on "pick a channel": the party room
+    // is never in the sidebar, so leaving it has to go somewhere.
+    await expect(viewer.getByPlaceholder(/^Message /)).toBeVisible();
+  } finally {
+    await second.context.close();
+  }
+});
+
+test("the film still fills the window on a platform with no element fullscreen", async ({
+  browser,
+}) => {
+  /**
+   * THE PATH ELECTRON AND AN IPHONE TAKE, and the one most likely to be
+   * shipped broken, because Chromium on a laptop never walks it.
+   * `element-fullscreen.ts` exists because an Electron shell can refuse a
+   * request without resolving it, rejecting it or firing an event, so a
+   * caller that gets `false` back still owes the person a filled viewport.
+   * An untested fallback in this repo is the "working and silently not
+   * working look identical" trap, so the API is removed from the page and
+   * the in-page `expand` is asserted for real.
+   */
+  const shared = await seedServer("wp-fs2", "wp-fs2-guest");
+  const party = await createParty("wp-fs2", shared.serverId, "Cinemoon");
+  await setPartyState("wp-fs2", party.partyId, "live");
+
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    // Both spellings, before anything boots. A platform that has neither is
+    // exactly what `requestElementFullscreen` throws for.
+    await viewer.addInitScript(() => {
+      // @ts-expect-error deleting a platform API is the point
+      delete Element.prototype.requestFullscreen;
+      // @ts-expect-error the prefixed spelling too
+      delete Element.prototype.webkitRequestFullscreen;
+    });
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(
+      viewer,
+      `/app/server/${shared.serverId}/channel/${party.channelId}`,
+      "wp-fs2-guest",
+    );
+    await expect(viewer.getByTestId("watch-channel-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    await viewer.getByTestId("watch-stage-fullscreen").click();
+
+    // No element went fullscreen, and the pane covers the window anyway.
+    await expect
+      .poll(
+        () =>
+          viewer.evaluate(() => {
+            const pane = document.querySelector<HTMLElement>(
+              "[data-call-split]",
+            );
+            return pane?.hasAttribute("data-watch-expanded") ?? false;
+          }),
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    const filled = await viewer.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>("[data-call-split]")!;
+      const rect = pane.getBoundingClientRect();
+      return {
+        fullscreenElement: document.fullscreenElement !== null,
+        top: Math.round(rect.top),
+        left: Math.round(rect.left),
+        height: Math.round(rect.height),
+        width: Math.round(rect.width),
+        viewport: { w: window.innerWidth, h: window.innerHeight },
+      };
+    });
+    expect(filled.fullscreenElement).toBe(false);
+    expect(filled.top).toBe(0);
+    expect(filled.left).toBe(0);
+    expect(filled.height).toBe(filled.viewport.h);
+    expect(filled.width).toBe(filled.viewport.w);
+
+    // AND ESCAPE WORKS HERE TOO. In element fullscreen the browser owns it
+    // and never tells the page; in this mode nothing does, so the hook binds
+    // it. A full-window layout whose only exit is a control somebody has to
+    // find is the state this is meant to avoid being stuck in.
+    await viewer.keyboard.press("Escape");
+    await expect
+      .poll(() =>
+        viewer.evaluate(
+          () =>
+            document
+              .querySelector("[data-call-split]")
+              ?.hasAttribute("data-watch-expanded") ?? false,
+        ),
+      )
+      .toBe(false);
+  } finally {
+    await second.context.close();
+  }
+});
+
+test("a viewer can put the film on the whole screen, with the chat", async ({
+  browser,
+}) => {
+  /**
+   * "i dont think i can make it full screen as a viewer", and he could not:
+   * the player had a fit toggle, a quality menu, a volume slider and
+   * Picture-in-Picture, and no fullscreen control at all. A watch party is a
+   * film and people watch films fullscreen for two hours.
+   *
+   * IT TAKES THE PANE, NOT THE VIDEO, and this is the assertion that says so.
+   * A fullscreen `<video>` renders only its own subtree, so it would be a
+   * film with no chat and no way to reach one. The pane already holds the
+   * stage, the divider and the transcript in the arrangement this person
+   * chose, so fullscreen means "the film and my chat take the screen".
+   */
+  const shared = await seedServer("wp-fs", "wp-fs-guest");
+  const party = await createParty("wp-fs", shared.serverId, "Cinemoon");
+  await setPartyState("wp-fs", party.partyId, "live");
+
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(
+      viewer,
+      `/app/server/${shared.serverId}/channel/${party.channelId}`,
+      "wp-fs-guest",
+    );
+    await expect(viewer.getByTestId("watch-channel-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    const control = viewer.getByTestId("watch-stage-fullscreen");
+    await expect(control).toBeVisible();
+    await control.click();
+
+    await expect
+      .poll(
+        () =>
+          viewer.evaluate(
+            () =>
+              document.fullscreenElement?.hasAttribute("data-call-split") ??
+              false,
+          ),
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+
+    // The film fills the screen and the chat came with it.
+    const box = await viewer.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>("[data-call-split]")!;
+      const rect = pane.getBoundingClientRect();
+      const composer = document.querySelector<HTMLElement>(
+        "[contenteditable], textarea",
+      );
+      return {
+        paneHeight: Math.round(rect.height),
+        viewportHeight: window.innerHeight,
+        composerVisible:
+          !!composer && composer.getBoundingClientRect().height > 0,
+      };
+    });
+    expect(box.paneHeight).toBe(box.viewportHeight);
+    expect(box.composerVisible, "the chat did not come along").toBe(true);
+
+    // AND THE WAY OUT IS OBVIOUS. The same control, now saying the opposite,
+    // plus Escape, which the browser owns in this mode.
+    await expect(control).toHaveAttribute("aria-pressed", "true");
+    await control.click();
+    await expect
+      .poll(() =>
+        viewer.evaluate(() => document.fullscreenElement !== null),
+      )
+      .toBe(false);
   } finally {
     await second.context.close();
   }

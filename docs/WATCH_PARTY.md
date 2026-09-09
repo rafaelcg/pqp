@@ -797,6 +797,172 @@ screen rather than the "Pick a channel" empty state, and that the sidebar
 block survived. Broken on purpose by making `applyChannelRoute` skip a
 `watch_party` channel; both failed.
 
+### A viewer cannot join a watch party
+
+Rafael, shown a version of this that had cut three join controls down to one
+quiet one and labelled its consequence: *"NO. A VIEWER CANT JOIN A WATCH PARTY
+BRO"*. He is right, and the earlier fix was still the wrong shape.
+
+**Not disabled, not quiet, not explained. Absent.** Demoting a control and
+writing an honest label for it ("Entrar só ouvindo") is a way of keeping
+something that should not be on the screen: it still says joining is a thing
+an audience does, and it still costs every reader the moment it takes to
+decide against it. A watch party has an audience and it has the people running
+it. The audience watches. That is the whole interaction and it needs no
+control.
+
+The seatless path exists exactly so it needs none. Watching is a socket. A
+seat is a LiveKit participant and forwarded streams, against a measured
+envelope of about 600 interactive users versus an effectively unbounded HLS
+audience. Before this, a viewer with a picture playing was offered that seat
+**three times on one screen** (the channel header, the party bar and the watch
+stage, two of them in the primary fill) by three components that did not know
+about each other, each correct on its own.
+
+**Who still gets it, and why each one:**
+
+| | offered a seat | why |
+|---|---|---|
+| host, co-host | yes | they run the show and have to be able to get back into their own room after a reload or a dropped call |
+| invited up to speak | yes | being invited up is precisely the permission to talk, and it is useless without a way in |
+| manager | **no** | MANAGE_CHANNELS ends and edits somebody else's party. It does not perform in it |
+| everybody else | **no** | they watch |
+
+`stage.invited` is public on the wire and always has been (`presentStage`: who
+is UP is public, who is ASKING is not), so this is the party's own answer
+rather than the client guessing. `WatchPartyPanel` takes a `currentUserId` so
+an invited guest can recognise themselves in it.
+
+**The listen-only warning went with the control**, and so did
+`watchPartyJoinIsListenOnly` in `packages/shared` and its tests. Everybody who
+can still see the button can speak once they are in, so a warning about a seat
+that cannot would now be false. Work deleted rather than kept.
+
+**And the copy that described the absence.** The stage bar was headed
+"Assistindo sem entrar na call". Rafael: *"'Watching without joining the call'
+how's that even a thing in watch party lol."* It described the implementation,
+which is a voice room with an HLS audience attached, and framed the thing
+everybody came for as an abstention from a thing that is no longer even on
+offer. Nothing replaced it: a playing film is unusually good evidence that
+somebody is watching a film. The row keeps the two facts that are not
+derivable from looking, how many people are here and how far behind live they
+are, and a quiet "Parar de assistir" that is honest that stopping means
+leaving the room.
+
+**What a plain viewer's party bar holds now**, measured: the party's name, the
+live pill, the host, the audience count, and zero buttons. That is a title
+bar, not an empty container, and it is the only place on screen that names the
+party (the channel header says `watch-party`). The count stays because when
+the picture has not started there is no stage bar under it, so it is not
+always a duplicate.
+
+**The assertion that keeps it that way is a zero.** "One" was satisfiable by
+any of the three surfaces surviving; zero cannot be satisfied by accident. "a
+plain viewer is offered no way into the call, anywhere" counts every visible
+control on the whole document, names each of the three surfaces individually
+so a regression says which one came back, and checks the party surfaces that
+SHOULD be there so a zero is never "nothing rendered".
+
+### Fullscreen, and why it takes the pane
+
+A watch party is a film, and people watch films fullscreen for two hours. The
+player had a fit toggle, a quality menu, a volume slider and
+Picture-in-Picture, and no fullscreen control at all. Rafael: *"i dont think i
+can make it full screen as a viewer"*.
+
+**The obvious fix is the wrong one.** `video.requestFullscreen()` renders only
+that element's subtree, so a fullscreen `<video>` is a film with no chat, no
+reactions and no way to reach either. In a watch party what would be left
+behind is the room talking about the film.
+
+So `components/voice/watch-fullscreen.ts` takes the **split pane**
+(`[data-call-split]`), which already holds the stage, the divider and the
+transcript in whatever arrangement this person chose. Fullscreen then means
+"the film and my chat take the screen": `68svh` is a fraction of the VIEWPORT
+and in element fullscreen the viewport is the screen, so the same rule that
+gives the film two thirds of a window gives it two thirds of a screen. The
+divider still drags inside it, and somebody who wants nothing but the film
+puts the chat away and gets exactly that. One layout, two sizes of viewport,
+nothing new to learn.
+
+The refusal path is the one `element-fullscreen.ts` was written for: an
+Electron shell can answer neither way and leave the promise pending, so a
+`false` still owes the person a filled viewport. The fallback is an in-page
+`expand`, a `data-watch-expanded` attribute on the pane and one rule in
+`index.css`, with Escape wired up by hand because in that mode the browser is
+not the one holding it.
+
+**One honest gap.** The party's chrome (the bar with Encerrar, the options, the
+join) is drawn ABOVE the split, so it is not inside the fullscreen element and
+is not visible while fullscreen. Escape or the same control brings it back.
+That is the correct trade for a viewer and worth revisiting for a host who
+wants to end a party without leaving fullscreen.
+
+### A preview on the sidebar block: asked for, costed, not built
+
+Rafael's idea, and worth writing down with numbers rather than a yes or a no:
+*"maybe we can add a low quality preview on hover or something"*, on the block
+at the top of the sidebar, so somebody can glance at what is playing before
+committing to opening it.
+
+It is a genuinely nice idea and the obvious implementation is expensive in
+exactly the wrong direction.
+
+**What a live preview would cost.** A hover would have to start an hls.js
+session: a playlist plus at least one segment. The playlist is not a static
+file here, it is `hls-playlist-proxy.ts`, which re-signs every segment line
+into a presigned URL **on every request**, so a hover is API processor time
+and a signing round trip, not only bucket egress. A 720p segment is roughly
+0.9 MB. The block is rendered for every member of the server who has the app
+open while a party is live, which for the QG is thousands of people, and the
+cost lands on the one resource the seatless path exists to protect. The
+arithmetic is the wrong shape: **cost proportional to curiosity, paid by
+people who are not watching**, at the moment an event is starting and the
+audience is at its most restless.
+
+**The cheaper approximation, if this is ever wanted.** A poster still, written
+by the egress on a slow timer (LiveKit can emit an image output beside the
+segments), a few KB, cacheable, and refreshed every fifteen or thirty seconds.
+That is cost proportional to the number of LIVE PARTIES rather than to the
+number of hovers, which is the only shape that survives a full room. It needs
+an image output on the egress, somewhere in `hls_sessions` to hang the key,
+and a cache header, so it is real work and it is not blocked on anything.
+
+**Not before an event.** It touches the egress and the bucket, which is the
+path the show itself runs on, and the block already carries the party's name,
+the host's face and a live pill. The gap it closes is small and the thing it
+risks is the broadcast.
+
+### The control bar that reportedly never fades: not reproduced
+
+Rafael, from a live party: *"also this is always there... doesnt disappear"*,
+about the call's control cluster over the picture.
+
+`hooks/use-idle-chrome.ts` already implements exactly this: three seconds of
+stillness fades the bar, any pointer move, key or focus brings it back, a tap
+toggles it on touch, reduced motion switches the fade for an instant toggle,
+and a hidden bar swallows the first press rather than taking
+`pointer-events: none`, so it can never be pressed by accident and can always
+be woken.
+
+**It could not be reproduced locally**, in either role: in a mesh watch party
+on 12 Sep 2026 the chrome went to `opacity: 0` after about five seconds of
+stillness both for the presenting host and for a viewer who had taken a seat,
+and `dm-call-screen-share.spec.ts` covers the same behaviour in CI. Two
+explanations survive, and neither is guessable from here:
+
+- **The pointer was resting on the bar.** `barHovered` is in the `pinned` set
+  by design, and a pointer parked at the bottom of the screen is an ordinary
+  film-watching posture.
+- **`hasVideo` was false.** The fade is enabled by `anyVideo && !collapsed`,
+  and `hasVideo` counts local camera, remote cameras and
+  `screenSharePeerIds`. A room state where that is empty while a picture is on
+  screen would pin the bar open over it.
+
+Worth reading the second one against a real LiveKit room before changing
+anything, because a fade that is loosened on a guess is a hang-up button that
+disappears while somebody needs it.
+
 ### Three controls the host and the viewer asked for
 
 **Fit or fill, on the player.** The app already had both behaviours and a
