@@ -74,9 +74,14 @@ final class CallModel {
     /// this is true in practice; it is read all the same so the two rooms
     /// obey one rule (`screenShareIsOffered`).
     private(set) var canSpeak = true
+    /// The STREAM grant, separate from SPEAK. Always true in a conversation
+    /// call today (`transport-policy.ts` gives one no roles), and read off the
+    /// wire rather than assumed so that stays true by evidence.
+    private(set) var canStream = true
 
     var offersScreenShare: Bool {
-        screenShareIsOffered(isAvailable: screenShare.isAvailable, canSpeak: canSpeak)
+        // STREAM, not SPEAK. See `VoiceModel.offersScreenShare`.
+        screenShareIsOffered(isAvailable: screenShare.isAvailable, canSpeak: canStream)
     }
 
     var isMuted = false {
@@ -131,7 +136,23 @@ final class CallModel {
     /// SFU room built later in the same join gets the same list the mesh
     /// would, with no second fetch.
     private var iceServers: [IceServerConfig] = []
-    private var declaresResume = false
+    /// Whether this DEPLOYMENT has an SFU. Kept for symmetry with
+    /// `VoiceModel`, and deliberately not the answer on its own.
+    private var deploymentRunsLiveKit = false
+    /// What this build promises the server about holding its seat.
+    ///
+    /// FALSE ON A COLD JOIN, ALWAYS, and that is the fix rather than an
+    /// oversight: `transport-policy.ts` pins every conversation call to mesh
+    /// before it looks at anything else, and this client cannot resume a mesh
+    /// room. Reading the deployment's backend here is what left a seat nobody
+    /// was in behind every DM call on production for 90 seconds.
+    private var declaresResume: Bool {
+        declaresVoiceResume(
+            roomKind: .conversation,
+            knownTransport: transport,
+            deploymentRunsLiveKit: deploymentRunsLiveKit
+        )
+    }
     private var resumeClaim: VoiceResumeClaim?
     private var session: SessionStore?
     private static let handlerKey = "dm-call"
@@ -255,7 +276,7 @@ final class CallModel {
             isOn: isCameraOn, isBusy: isCameraBusy,
             isLive: phase == .active || phase == .ringing,
             // A DM call has no roles, so the seat can always publish.
-            canPublish: true
+            canPublish: canStream
         ) {
         case .start: await enableCamera()
         case .stop: await disableCamera()
@@ -435,9 +456,11 @@ final class CallModel {
         do {
             let ice: IceServersResponse = try await session.api.get("/api/ice-servers")
             iceServers = ice.iceServers
-            // Advisory only; see `VoiceModel.join` for what it decides.
+            // Advisory only; see `declaresVoiceResume` for what it decides,
+            // which for a conversation call is nothing at all until `welcome`
+            // has spoken.
             let backend: VoiceBackendInfo? = try? await session.api.get("/api/voice/backend")
-            declaresResume = backend?.declaresResume ?? false
+            deploymentRunsLiveKit = backend?.runsLiveKit ?? false
             try await voice.startAudio()
             // "Mute microphone when joining voice" covers a DM call too, which
             // is how the web client reads it: `handleConversationCall` passes
@@ -633,7 +656,7 @@ final class CallModel {
         // `canSpeak` is ignored on purpose: a conversation call has no roles,
         // so the server always resolves it true there.
         case .voiceWelcome(let peerId, let voiceChannelId, let existing, let selfPeer, let transport,
-                           let resumed, let resumeToken, _):
+                           let resumed, let resumeToken, _, _):
             guard voiceChannelId == conversationId else {
                 // A `welcome` for somewhere else means this socket joined
                 // another voice room, and the server keeps exactly one peer per
@@ -668,6 +691,7 @@ final class CallModel {
             self.transport = plan.transport
             selfPeerId = peerId
             canSpeak = selfPeer.canSpeak
+            canStream = selfPeer.canStream
             // On the mesh the media is up the moment the first peer connects,
             // so the bridge can listen now. On LiveKit it waits for the room
             // (`startSfuSession`): armed before that, it would announce a
@@ -819,6 +843,13 @@ final class CallModel {
                     localized: "This call already has the maximum number of cameras."
                 )
             }
+
+        // The rejoin was refused and we are holding live media. Not in the
+        // room, in nobody's roster, audible to nobody. See `VoiceModel`.
+        case .voiceJoinRefused(let voiceChannelId, _):
+            guard phase.isLive, voiceChannelId == conversationId else { return }
+            resumeClaim = nil
+            fail(String(localized: "Could not rejoin this call. Join again to come back."))
 
         case .voiceTransportUnsupported(let voiceChannelId, let transport, let reason):
             guard voiceChannelId == conversationId else { return }

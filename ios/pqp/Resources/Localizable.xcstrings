@@ -1211,6 +1211,16 @@
         }
       }
     },
+    "Could not rejoin this call. Join again to come back." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra voltar pra essa call. Entre de novo."
+          }
+        }
+      }
+    },
     "Could not start the camera. Close anything else using it and try again." : {
       "localizations" : {
         "pt-BR" : {
@@ -2597,6 +2607,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sem resposta"
+          }
+        }
+      }
+    },
+    "No camera or screen share in this channel." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neste canal você não liga câmera nem compartilha tela."
           }
         }
       }
@@ -5067,6 +5087,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Você pode trocar de novo a partir de %@."
+          }
+        }
+      }
+    },
+    "You can turn on camera or share a screen now." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agora você pode ligar a câmera ou compartilhar a tela."
           }
         }
       }
