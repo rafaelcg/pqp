@@ -32,6 +32,14 @@ import { TIMEOUT_MAX_MINUTES } from "./sanctions.js";
  * never disagree about what a rule catches.
  */
 
+/**
+ * The `clerk_id` of the instance's AutoMod pseudo-user, the author of every
+ * alert post and the issuer of every automatic timeout. Shared so the message
+ * hydration can flag its posts (`isAutomod`) and the client can draw a face
+ * for it instead of the generic webhook chip.
+ */
+export const AUTOMOD_CLERK_ID = "system:automod";
+
 export const AUTOMOD_RULE_KINDS = [
   "keywords",
   "invite_links",

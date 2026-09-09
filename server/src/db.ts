@@ -216,6 +216,8 @@ export interface DbMessage {
   pinned_by_name?: string | null;
   /** Joined from `author_id`; true when the author is a webhook's pseudo-identity. */
   author_is_webhook?: boolean;
+  /** Joined from `author_id`; true when the author is the AutoMod pseudo-user. */
+  author_is_automod?: boolean;
   webhook_embeds?: unknown;
   webhook_username?: string | null;
   webhook_avatar_url?: string | null;

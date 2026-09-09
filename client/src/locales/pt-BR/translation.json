@@ -2694,6 +2694,7 @@
   "chat.reactionsSummary": "Reações: {summary}",
   "chat.gifAlt": "GIF: {alt}",
   "chat.webhookPosted": "Publicado por um webhook, não por um membro",
+  "chat.automodPosted": "O AutoMod desta comunidade. As regras ficam em Config da comunidade, AutoMod.",
   "gif.search": "Buscar no KLIPY",
   "gif.results": "Resultados de GIF",
   "gif.unavailable": "A busca de GIFs está indisponível agora.",

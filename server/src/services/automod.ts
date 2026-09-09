@@ -1,4 +1,5 @@
 import {
+  AUTOMOD_CLERK_ID,
   AUTOMOD_KIND_LABEL,
   evaluateAutomod,
   findPqpInviteLinks,
@@ -369,7 +370,6 @@ async function ownInviteContext(
  * with a fixed `clerk_id` so there is exactly one per database. Created on
  * first use, never deleted.
  */
-const AUTOMOD_CLERK_ID = "system:automod";
 let automodUserId: string | null = null;
 
 export async function ensureAutomodUser(): Promise<string> {

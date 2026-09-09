@@ -161,6 +161,7 @@ const broadcastMessageSchema = z.object({
   pinnedBy: messagePinnedBySchema.nullable().default(null),
   embeds: z.array(embedSchema).default([]),
   isWebhook: z.boolean().default(false),
+  isAutomod: z.boolean().default(false),
   mentionEveryone: z.boolean().default(false),
   mentionHere: z.boolean().default(false),
   webhookEmbeds: z.array(webhookEmbedSchema).default([]),

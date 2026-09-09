@@ -18,7 +18,9 @@ Em **Resposta**, a mensagem sempre é bloqueada. Você escolhe o que mais: um te
 
 Embaixo da lista, **Testar uma mensagem**: digita e vê o que o servidor faria, com as regras salvas.
 
-Pra quem foi barrado: a mensagem não posta, e aparece o motivo embaixo dela. Só o autor vê. Editar uma mensagem passa pelo mesmo filtro. Cada bloqueio vai pro **Registro**, e o alerta no canal sai em português.
+Pra quem foi barrado: a mensagem não posta, e aparece o motivo embaixo dela. Só o autor vê. Editar uma mensagem passa pelo mesmo filtro. Cada bloqueio vai pro **Registro**. O alerta no canal vem do próprio AutoMod, com escudo e tag, em português.
+
+![Um alerta do AutoMod no canal da staff](/blog/automod-e-esconder-o-chat/automod-alerta.webp "Regra, membro, canal, o que pegou, timeout e a mensagem.")
 
 Quem tem Gerenciar mensagens vê a aba e pode testar. Mudar regra é com quem tem Gerenciar servidor.
 

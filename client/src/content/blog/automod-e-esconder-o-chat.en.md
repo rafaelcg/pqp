@@ -18,7 +18,9 @@ Under **Response**, the message is always blocked. You pick what else: a line th
 
 Under the list, **Test a message**: type one and see what the server would do, with the saved rules.
 
-For the person who got blocked: the message does not post, and the reason shows under it. Only the author sees it. Editing a message goes through the same filter. Every block goes to the **Audit log**, and the channel alert is in Portuguese.
+For the person who got blocked: the message does not post, and the reason shows under it. Only the author sees it. Editing a message goes through the same filter. Every block goes to the **Audit log**. The channel alert comes from AutoMod itself, with a shield and a tag, in Portuguese.
+
+![An AutoMod alert in the staff channel](/blog/automod-e-esconder-o-chat/automod-alerta.webp "Rule, member, channel, what it caught, timeout and the message.")
 
 Manage Messages sees the tab and can test a message. Changing a rule takes Manage Server.
 
