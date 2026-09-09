@@ -51,6 +51,25 @@ export function sameHlsSession(a: string | null, b: string | null): boolean {
 }
 
 /**
+ * Whether a playlist URL already carries its own per-viewer capability.
+ *
+ * The one question `xhrSetup` has to ask before attaching a Bearer header. A
+ * URL with `?t=` authorises itself, and adding a Clerk JWT beside it can only
+ * make the request WORSE: `handleApi` resolves a Bearer ahead of the router,
+ * so a JWT that has expired in the last few seconds turns a request the
+ * capability would have served into a 401. That is exactly what stalled every
+ * web viewer of every watch party, roughly once a minute, for as long as the
+ * feature has existed.
+ */
+export function hasHlsViewerToken(url: string): boolean {
+  const query = url.indexOf("?");
+  if (query === -1) {
+    return false;
+  }
+  return new URLSearchParams(url.slice(query + 1)).has("t");
+}
+
+/**
  * Whether a URL hls.js is about to fetch is our own signed playlist proxy --
  * the one request in the whole HLS pipeline that needs a Bearer header. Every
  * segment/media URL the proxy hands back is already an absolute, presigned

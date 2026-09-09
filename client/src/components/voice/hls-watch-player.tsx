@@ -32,6 +32,7 @@ import {
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import {
+  hasHlsViewerToken,
   hlsSessionKey,
   resolveHlsUrl,
   sameHlsSession,
@@ -573,18 +574,35 @@ export function HlsWatchPlayer({
         // Every segment/media URL hls.js loads is already an absolute,
         // presigned bucket URL (the signed playlist proxy rewrites them
         // that way) -- only the playlist request itself is our own API,
-        // and only that one gets a Bearer header. Attaching it to every
-        // request would leak the token to R2. hls.js calls this
-        // synchronously per XHR; the token is read from the in-memory
-        // Clerk-backed cache `getAuthToken` keeps, not fetched fresh here.
+        // and only that one could take a Bearer header. Attaching it to
+        // every request would leak the token to R2.
         //
-        // The header is belt and braces now: the playlist URL carries its
-        // own per-viewer token (`?t=`, see `hls-viewer-token.ts` on the
-        // server) which authorizes the request on its own. That is what
-        // lets the native `<video src>` path below and `useLiveHlsReady`'s
-        // plain `fetch` work, since neither can set a header.
+        // NOT SENT WHEN THE URL ALREADY CARRIES `?t=`, and that is the fix
+        // for the stall rather than a tidy-up. The header was called belt and
+        // braces; it was the only strap that could break. `handleApi`
+        // resolves a Bearer ahead of the router, so a header that fails is a
+        // 401 before anything looks at the capability in the URL. This
+        // closure refreshes its Clerk JWT every 30 s without `forceRefresh`
+        // and a Clerk JWT lives about 60, so roughly once a minute a playlist
+        // request went out carrying a dead token and was rejected, and the
+        // player stalled and recovered, over and over, for every web viewer
+        // of every watch party. Proved on production: same URL and same valid
+        // `?t=`, token alone 200, token plus an expired Bearer 401.
+        //
+        // The server no longer lets a failed Bearer veto a good capability
+        // either. Both halves, because either alone fixes today and the pair
+        // is what stops it coming back.
+        //
+        // The header still goes on a playlist URL that has NO token: a
+        // deployment with no `LIVE_HLS_VIEWER_KEY` mints none, and there the
+        // Bearer is the only door. hls.js calls this synchronously per XHR,
+        // so the token has to be in hand already.
         xhrSetup: (xhr, url) => {
-          if (isOwnHlsPlaylistProxyUrl(url) && authToken) {
+          if (
+            isOwnHlsPlaylistProxyUrl(url) &&
+            authToken &&
+            !hasHlsViewerToken(url)
+          ) {
             xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
           }
         },
