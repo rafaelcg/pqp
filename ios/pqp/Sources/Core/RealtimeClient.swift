@@ -146,6 +146,24 @@ enum RealtimeEvent: Sendable {
     case voiceAnswer(from: String, sdp: String)
     case voiceCandidate(from: String, candidate: IceCandidatePayload?)
 
+    // The broadcast. Both frames carry the same object and mean two different
+    // things about who is being told.
+    /// The room's current HLS broadcast, to the SEATS only. `nil` is a stop.
+    /// Sent after `welcome` if one is already running, and whenever the egress
+    /// starts, stops or changes URL.
+    case voiceStream(voiceChannelId: String, stream: LiveHlsStream?)
+    /// The channel's current HLS broadcast, to EVERYONE who may view the
+    /// channel, seat or no seat. This is the one a watcher lives on: it
+    /// arrives without joining the voice room, on socket auth for every live
+    /// channel the account can see, on every start and stop, and on the
+    /// audience keyframe clock (30 s) with a freshly stamped URL and the
+    /// current headcount.
+    ///
+    /// `watching` counts seatless viewers ONLY; seats are on the roster. The
+    /// two are disjoint by construction, which is what makes a watch party
+    /// cost one media-server participant no matter how many people watch.
+    case channelLive(channelId: String, stream: LiveHlsStream?, watching: Int)
+
     // Conversation calls. A DM "rings" where a server voice channel is
     // join-when-you-want; these three frames are that whole lifecycle as the
     // client sees it. Accepting a ring is not a frame — it is `join-voice-room`.
@@ -678,6 +696,30 @@ actor RealtimeClient {
         await send(raw: ["type": "leave-voice-room"])
     }
 
+    /**
+     "I am watching this channel's broadcast, and I am not in its voice room."
+
+     THIS IS THE SEATLESS PATH, AND IT IS THE WHOLE POINT. It is not a lighter
+     `join-voice-room`; it never touches that code. The server rate-limits it,
+     checks VIEW on the channel, puts this socket in a per-channel `Set` and
+     answers this socket alone with a `channel-live`. No peer is created, no
+     LiveKit token is minted, no row is written, and nothing appears on
+     anybody's roster. So a watcher costs one socket in a set, and six hundred
+     of them cost the media server exactly what one presenter costs.
+
+     Taking a seat is the other path, and the server drops this socket from the
+     count the moment it does, so the two never double count one person.
+
+     `watching: false` on leaving. The server also drops the socket on close,
+     so a killed app is not a stuck viewer, but saying so is a frame and
+     waiting for a close is a timeout.
+     */
+    func watchLive(channelId: String, watching: Bool) async {
+        await send(raw: [
+            "type": "watch-live", "channelId": channelId, "watching": watching,
+        ])
+    }
+
     func sendOffer(to peerId: String, from selfPeerId: String, sdp: String) async {
         await send(raw: ["type": "offer", "from": selfPeerId, "to": peerId, "sdp": sdp])
     }
@@ -881,6 +923,28 @@ actor RealtimeClient {
         let size: Int
         let joined: [PresenceUser]?
         let left: [String]?
+    }
+
+    /**
+     `voice-stream` and `channel-live`, decoded on their own.
+
+     Not because `Envelope` would throw on them, which is why `SanctionFrame`
+     and `PresenceDeltaFrame` exist, but because it would do something worse:
+     decode CLEANLY and silently drop the payload. `stream` and `watching` are
+     not among its `CodingKeys`, and an unlisted key is ignored, so routing
+     these through the envelope yields a frame that arrived, parsed and said
+     nothing. That is the failure this repo keeps paying for, and the fix is a
+     type whose fields ARE the frame.
+
+     `watching` is absent on `voice-stream`, which addresses the room rather
+     than the channel and carries no headcount.
+     */
+    private struct LiveStreamFrame: Decodable {
+        let channelId: String
+        /// Present-and-null is a stop; the whole point of the frame. Absent
+        /// would be a server that does not send this, and reads the same way.
+        let stream: LiveHlsStream?
+        let watching: Int?
     }
 
     private struct TypeProbe: Decodable { let type: String }
@@ -1130,6 +1194,20 @@ actor RealtimeClient {
                                            transport: transport,
                                            reason: envelope.reason,
                                            participants: participants)
+        // Decoded from `data` rather than from `envelope`: see `LiveStreamFrame`
+        // for why the envelope parses these and throws the payload away.
+        case "voice-stream":
+            guard let frame = try? Coding.decoder.decode(LiveStreamFrame.self, from: data)
+            else { return }
+            event = .voiceStream(voiceChannelId: frame.channelId, stream: frame.stream)
+        case "channel-live":
+            guard let frame = try? Coding.decoder.decode(LiveStreamFrame.self, from: data)
+            else { return }
+            // A count the server did not send is 0 watchers, not "unknown":
+            // the frame's whole job is to state the current audience.
+            event = .channelLive(channelId: frame.channelId,
+                                 stream: frame.stream,
+                                 watching: frame.watching ?? 0)
         case "offer":
             guard let from = envelope.from, let sdp = envelope.sdp else { return }
             event = .voiceOffer(from: from, sdp: sdp)
