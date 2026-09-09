@@ -17,6 +17,40 @@ export function resolveHlsUrl(hlsUrl: string): string {
 }
 
 /**
+ * WHICH SESSION A PLAYLIST URL NAMES, ignoring the query string.
+ *
+ * THE BUG THIS EXISTS FOR. `hlsUrl` is stamped per recipient with a signed
+ * `?t=` token, and the server restamps it on the audience keyframe, which is
+ * every 30 seconds while a channel is live. So the string a viewer holds
+ * changes twice a minute for a stream that has not changed at all. The web
+ * player re-attached its `<video>` on any change of `src`, so **every seatless
+ * web viewer rebuffered every 30 seconds, for the whole film**, on every watch
+ * party there has ever been. iOS was given exactly this fix when the audience
+ * half was written (`WatchStreamSwap` swaps on `startedAt`, on a failure and on
+ * the token clock); the web never was, and the symptom on both is identical, so
+ * it read as one shared problem with the stream rather than one platform
+ * missing a guard.
+ *
+ * The session is the path: `/api/voice/hls-playlist/<channelId>/<startedAt>`,
+ * which changes exactly when the egress restarts, which is the only time a
+ * viewer genuinely has to move. A URL that is not the proxy's (a raw public
+ * bucket URL, `LIVE_HLS_SIGNED_URLS=false`) has no token to strip and is its
+ * own key.
+ */
+export function hlsSessionKey(url: string | null): string | null {
+  if (!url) {
+    return null;
+  }
+  const query = url.indexOf("?");
+  return query === -1 ? url : url.slice(0, query);
+}
+
+/** Two playlist URLs that differ only by their per-viewer token. */
+export function sameHlsSession(a: string | null, b: string | null): boolean {
+  return hlsSessionKey(a) === hlsSessionKey(b);
+}
+
+/**
  * Whether a URL hls.js is about to fetch is our own signed playlist proxy --
  * the one request in the whole HLS pipeline that needs a Bearer header. Every
  * segment/media URL the proxy hands back is already an absolute, presigned
