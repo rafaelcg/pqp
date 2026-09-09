@@ -55,12 +55,25 @@ interface SearchCursor {
 
 /**
  * Results are ordered by relevance first, so a cursor has to carry the rank as
- * well as the row's position in time — `(created_at, id)` alone would skip
+ * well as the row's position in time. `(created_at, id)` alone would skip
  * every later-but-less-relevant message.
  *
  * Postgres prints `real` with the shortest text that round-trips, so parsing it
  * to a JS number and casting it back to `real` in the next query reproduces the
  * same value exactly.
+ *
+ * `createdAt` IS A STRING FROM POSTGRES, NEVER A JS `Date`, and that is the
+ * whole of what this file got wrong until 2026-09-09. `timestamptz` stores
+ * microseconds; `Date` holds milliseconds; `toISOString()` therefore truncated
+ * the boundary downward. Since the page predicate is a strict row comparison
+ * against the same tuple the ordering uses, every equally-ranked row inside the
+ * boundary's millisecond then compared GREATER than the cursor and was dropped
+ * from the next page, and from every page after it. Skip-only, silent, and
+ * `hasMore` still said the list was complete.
+ *
+ * The query hands the boundary back already formatted to microseconds in UTC
+ * (`created_at_cursor` below), so no `Date` is involved in the round trip and
+ * the value that goes out is the value that comes back.
  */
 function encodeCursor(cursor: SearchCursor): string {
   return Buffer.from(
@@ -80,6 +93,10 @@ export function decodeSearchCursor(raw: string): SearchCursor | null {
   if (!Number.isFinite(parsedRank)) {
     return null;
   }
+  // `Date.parse` is the shape check, not a conversion: V8 accepts the six
+  // fractional digits Postgres emits (and the three an older cursor carries)
+  // and the parsed number is thrown away. The string itself is what goes back
+  // into `$8::timestamptz`, at whatever precision it arrived with.
   if (Number.isNaN(Date.parse(createdAt))) {
     return null;
   }
@@ -96,6 +113,13 @@ interface SearchRow {
   author_discriminator: string | null;
   author_avatar_url: string | null;
   created_at: Date;
+  /**
+   * The same instant as `created_at`, at the precision Postgres actually
+   * stores, for the cursor. `created_at` stays a `Date` because the response
+   * body is milliseconds and a client renders it; only the cursor needs to
+   * survive a round trip exactly.
+   */
+  created_at_cursor: string;
   rank: number;
   snippet: string;
 }
@@ -155,6 +179,11 @@ export async function searchMessages(
      SELECT h.id, h.channel_id, h.channel_name, h.author_id, h.author_name,
             h.author_username, h.author_discriminator, h.author_avatar_url,
             h.created_at, h.rank,
+            -- Microseconds, explicit UTC, unambiguous to a timestamptz cast
+            -- on the way back in. to_char rather than a plain ::text cast,
+            -- because that one renders in the session's TimeZone.
+            to_char(h.created_at AT TIME ZONE 'UTC',
+                    'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS created_at_cursor,
             pqp_search_headline(h.body, q.query, $5, $6) AS snippet
      FROM hits h
      CROSS JOIN q
@@ -172,7 +201,9 @@ export async function searchMessages(
       hasMore && last
         ? encodeCursor({
             rank: last.rank,
-            createdAt: last.created_at.toISOString(),
+            // NOT `last.created_at.toISOString()`: that is a `Date`, and a
+            // `Date` cannot hold the microseconds the row is ordered by.
+            createdAt: last.created_at_cursor,
             id: last.id,
           })
         : null,
