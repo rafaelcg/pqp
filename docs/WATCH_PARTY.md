@@ -1229,6 +1229,86 @@ later, per app:
     that an iOS host or co-host cannot take the room from the phone; hosting
     is a web and desktop job today anyway.
 
+  **Build 23 is the player itself**, after the first report from a real phone
+  against a live production stream: "the player is very simple, need to
+  modernise", "need fullscreen", "no way to change quality", and "it's choppy,
+  every 3 to 5 seconds it stops and I need to press play, which doesn't
+  necessarily work".
+
+  Read the stalls first, because they were not the player. A share that
+  outlived its watch party counted as a finished session and the retention
+  sweep deleted the files of a stream still being written to, roughly every
+  ten minutes; the web stalled on it too. That is fixed separately and nothing
+  on the phone should be tuned against it.
+
+  What the phone did own, measured against production on 2026-09-09:
+
+  - **The live window is ten seconds.** The egress publishes five two second
+    segments and slides them, on both rungs. `AVPlayer` joins a live playlist
+    three target durations from the end (RFC 8216, 6.3.3), so it holds about
+    four seconds of runway with the back edge five seconds behind. A player
+    stopped for longer than the window, for any reason at all, has the
+    playlist slide past the position it stopped at: the playhead then names a
+    time nothing can serve, and `play()` is powerless there. That is the
+    literal mechanism of "pressing play doesn't necessarily work", and only a
+    seek fixes it. `WatchLiveEdge` is that seek, and it lands three target
+    durations back from the live edge, which is where RFC 8216 says a client
+    should join a live playlist and therefore where `AVPlayer` puts itself
+    unprompted. Measured from the END rather than the front, because
+    `seekableTimeRanges` is not guaranteed to be only the current window: on a
+    ten second window the two are the same point, and on a range that grows
+    with the session a target measured from the front is a seek to the opening
+    credits.
+  - **A stall is not free once it ends.** "It's so choppy it got very
+    delayed" is a second bug, not a restatement of the first. `AVPlayer`
+    resumes where it stopped, which is right for a recording and wrong for a
+    broadcast, so every stall adds its own length to the distance behind live
+    and none of it is paid back. Six of them is minutes, and minutes behind on
+    a watch party means the chat is discussing a scene the viewer has not
+    reached. `catchUpAfter` pays it back: the badge offers Pular pro ao vivo
+    at ten seconds behind (the web's own `BEHIND_LIVE_THRESHOLD_SECONDS`, so
+    the two clients call the same drift by the same name) and the player
+    insists at forty five, where being left behind has stopped being a
+    preference. Nothing buffers more. More buffer is more delay, which is the
+    complaint.
+  - **The delay readout was a constant.** It printed `delaySeconds` off the
+    wire, which is the pipeline and the same figure for everybody, so a viewer
+    two minutes behind was shown "~10s". It is now the pipeline plus the
+    measured distance from the live edge (`WatchDelay`), and it turns amber
+    once the badge says behind.
+  - **The existing watchdog could not see any of it.** `WatchStallWatch`'s
+    clock runs only while `timeControlStatus == .playing`. A starved player is
+    `.waitingToPlayAtSpecifiedRate` and an interrupted one is `.paused`, so it
+    returned false on every tick of the reported failure and the recovery it
+    guards was unreachable. It is untouched and no threshold in it was
+    relaxed; the new type sits beside it, and a test pins the blindness so
+    nobody "fixes" it by widening the old one into calling a buffering player
+    dead.
+  - **Nothing was capping the decode.** `preferredMaximumResolution` was never
+    set, so on a good link `AVPlayer` climbed to 1080p30 at about 4.6 Mbps and
+    decoded it to draw a strip a phone wide. Auto was always adapting, which
+    is worth stating because "no quality control" reads as "pinned"; what was
+    missing was the ceiling and the honesty. `WatchLadder.resolutionCap` turns
+    the surface's own pixels into the ceiling, so the same rule holds 720p
+    inline and allows 1080p the moment the viewer taps expand, clamped so it
+    never describes a rung the ladder does not publish.
+  - **An audio session interruption was permanent.** A call, Siri or another
+    app taking the session stops `AVPlayer` and leaves it stopped. Nothing was
+    listening, so the film never came back.
+
+  The picture is now `AVPlayerViewController` (`WatchVideoSurface`) rather
+  than SwiftUI's `VideoPlayer`, which wraps the same class and exposes none of
+  it. That is where fullscreen in landscape comes from, along with AirPlay,
+  Picture in Picture and a transport bar that fades while you watch. pqp draws
+  the strip underneath: live or how far behind, the headcount, and a quality
+  menu built from `AVAsset.variants` (Auto plus whatever the master actually
+  advertises, never a hard coded list) labelled with the rung
+  `presentationSize` says is being decoded. Collapsing now REMOVES the
+  surface rather than squashing it to zero height, which used to leave a
+  decoder running to fill a rectangle nobody could see.
+
+  Tests: `ios/pqp/Tests/WatchLivePlayerTests.swift`.
+
   Still to do on iOS: the party OBJECT (`watch-party-update`, the host,
   cohosts, the stage, raise hand), the presenter side, hiding the share
   control unless `welcome.canStream`, and the create sheet offering the type.
