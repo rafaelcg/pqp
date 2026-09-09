@@ -65,6 +65,7 @@ vi.mock("../db.js", () => ({ getPool: () => ({ query }) }));
 const CHANNEL = "00000000-0000-4000-8000-0000000000aa";
 const SERVER = "00000000-0000-4000-8000-0000000000ee";
 const OTHER_SERVER = "00000000-0000-4000-8000-0000000000ff";
+const OTHER_CHANNEL = "00000000-0000-4000-8000-0000000000bb";
 
 function enableHls() {
   process.env.LIVE_HLS_ENABLED = "true";
@@ -1153,8 +1154,19 @@ describe("live HLS egress", () => {
      * that reads as three.
      */
     describe("leftover transcodes on the same room", () => {
-      /** A `ListEgress` answer with one extra ACTIVE egress nobody owns. */
-      function withLeftover(lk: ReturnType<typeof fakeLiveKit>, id: string) {
+      /**
+       * A `ListEgress` answer with one extra ACTIVE egress nobody owns.
+       *
+       * `room` is which room the answer CLAIMS it is in, which is a different
+       * thing from which room the request asked about: the third case below
+       * uses that gap to stand in for a LiveKit version, a proxy or a future
+       * SDK that ignores `roomName` and answers with everything.
+       */
+      function withLeftover(
+        lk: ReturnType<typeof fakeLiveKit>,
+        id: string,
+        room: string = CHANNEL,
+      ) {
         let alive = true;
         return {
           ...lk.api,
@@ -1170,13 +1182,18 @@ describe("live HLS egress", () => {
             roomName?: string;
             active?: boolean;
           }) => {
-            const mine = await lk.list(opts);
-            const showLeftover =
-              alive && !opts.egressId && opts.roomName === CHANNEL;
-            return showLeftover
+            const mine = (await lk.list(opts)).map((info) => ({
+              ...info,
+              roomName: CHANNEL,
+            }));
+            return alive && !opts.egressId
               ? [
                   ...mine,
-                  { egressId: id, status: EgressStatus.EGRESS_ACTIVE },
+                  {
+                    egressId: id,
+                    status: EgressStatus.EGRESS_ACTIVE,
+                    roomName: room,
+                  },
                 ]
               : mine;
           },
@@ -1208,6 +1225,31 @@ describe("live HLS egress", () => {
         await advance(10_000);
         await checkLiveHlsHealth();
         expect(liveHlsActivity().orphansStopped).toBe(1);
+      });
+
+      /**
+       * The worst thing anything in this file could do. `roomName` goes into
+       * the request, and if a LiveKit version, a proxy or a future SDK ignored
+       * it, this loop would stop every other live party on the instance. The
+       * answer's own `roomName` is re-checked, so an entry belonging to
+       * somebody else's room is left alone however it got into the listing.
+       */
+      it("never crosses into another room, even if the listing ignores the filter", async () => {
+        enableHls();
+        const lk = fakeLiveKit();
+        const api = withLeftover(lk, "EG_OTHER_ROOM", OTHER_CHANNEL);
+        const stop = vi.fn(api.stopEgress);
+        setLiveHlsTestHooks({
+          egress: { ...api, stopEgress: stop },
+          findTracks: async () => ({ videoTrackId: "TR_V" }),
+        });
+        await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+
+        await advance(20_000);
+        await checkLiveHlsHealth();
+
+        expect(stop).not.toHaveBeenCalledWith("EG_OTHER_ROOM");
+        expect(liveHlsActivity().orphansStopped).toBe(0);
       });
 
       it("is off in one command, without a deploy", async () => {

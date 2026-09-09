@@ -1098,6 +1098,15 @@ async function reapForeignEgresses(
     if (ours.has(info.egressId)) {
       continue;
     }
+    // THE FILTER IS RE-CHECKED HERE, and it is not paranoia about our own
+    // code. `roomName` went into the request; if a LiveKit version, a proxy or
+    // a future SDK ignored it, this loop would stop every other party's live
+    // transcode across the instance, which is the worst outcome available to
+    // anything in this file. A listing entry that does not name its room is
+    // left alone rather than assumed to be this one.
+    if (info.roomName !== channelId) {
+      continue;
+    }
     if (healthFromListing(info.egressId, listing) !== "alive") {
       continue;
     }
