@@ -1078,6 +1078,109 @@ test("opening the options does not move the picture", async ({ page }) => {
   expect(after.height).toBe(before.height);
 });
 
+// ------------------------------------------------- arriving by link, and reloading
+
+/**
+ * HOW AN AUDIENCE ACTUALLY ARRIVES, which is not how any other test in this
+ * file arrives.
+ *
+ * Every assertion above reaches the party by clicking the sidebar block. That
+ * is one code path (`handleWatchLiveParty`, which refetches the channel list
+ * when it does not recognise the id) and it hides a whole class of failure:
+ * a room the client cannot resolve from a URL. `applyChannelRoute` looks the
+ * id up in `GET /api/servers/:id/channels` and, when it is not there, sets
+ * "That channel no longer exists or is private" and lands the person on the
+ * first text channel instead. On a link-driven Saturday that is the event.
+ *
+ * Reported from production web on 12 Sep 2026: opening the room drew "Pick a
+ * channel", and a reload redirected to #general with the watch party gone
+ * from the sidebar. The cause found was server side and is pinned in
+ * `server/src/services/watch-parties.test.ts` ("makes the room visible to a
+ * plain member on a server whose @everyone cannot see channels by default");
+ * these two are the client half, so a future regression in the ROUTE is
+ * caught here rather than in a browser on the day.
+ */
+test("a viewer arrives by link, with no sidebar click anywhere", async ({
+  browser,
+}) => {
+  const shared = await seedServer("wp-link", "wp-link-guest");
+  const party = await createParty("wp-link", shared.serverId, "Cinemoon");
+  await setPartyState("wp-link", party.partyId, "live");
+
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    await withFakeLiveStream(viewer, party.channelId);
+    // Straight at the room. Nothing is clicked, so nothing can paper over a
+    // route that cannot resolve it.
+    await openAs(
+      viewer,
+      `/app/server/${shared.serverId}/channel/${party.channelId}`,
+      "wp-link-guest",
+    );
+
+    // The URL is still the one they were given: no silent redirect.
+    expect(new URL(viewer.url()).pathname).toContain(party.channelId);
+    // The party is on screen, not the "pick a channel" empty state.
+    await expect(viewer.getByTestId("watch-party-bar")).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(viewer.getByText("Pick a channel")).toHaveCount(0);
+    await expect(viewer.getByTestId("watch-channel-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+    // And the error the fallback path sets on its way past.
+    await expect(
+      viewer.getByText("no longer exists or is private", { exact: false }),
+    ).toHaveCount(0);
+  } finally {
+    await second.context.close();
+  }
+});
+
+test("a reload on the party channel stays on it", async ({ browser }) => {
+  /**
+   * The second half of the same report: after a reload the deep link
+   * redirected to #general and the watch party vanished from the sidebar.
+   * A reload is a cold boot, so it runs `applyChannelRoute` from nothing,
+   * with no client state to fall back on and no click to trigger a refetch.
+   */
+  const shared = await seedServer("wp-reload", "wp-reload-guest");
+  const party = await createParty("wp-reload", shared.serverId, "Cinemoon");
+  await setPartyState("wp-reload", party.partyId, "live");
+
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(
+      viewer,
+      `/app/server/${shared.serverId}/channel/${party.channelId}`,
+      "wp-reload-guest",
+    );
+    await expect(viewer.getByTestId("watch-party-bar")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    await viewer.reload();
+
+    await expect(viewer.getByTestId("watch-party-bar")).toBeVisible({
+      timeout: 20_000,
+    });
+    expect(
+      new URL(viewer.url()).pathname,
+      "the reload redirected somewhere else",
+    ).toContain(party.channelId);
+    await expect(viewer.getByText("Pick a channel")).toHaveCount(0);
+    // And the sidebar block is still there, which is the third symptom.
+    await expect(viewer.getByTestId("live-party-block")).toBeVisible({
+      timeout: 20_000,
+    });
+  } finally {
+    await second.context.close();
+  }
+});
+
 // --------------------------------------------- what a viewer is offered, and how loudly
 
 /**

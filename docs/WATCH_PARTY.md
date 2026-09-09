@@ -799,6 +799,80 @@ is not visible while fullscreen. Escape or the same control brings it back.
 That is the correct trade for a viewer and worth revisiting for a host who
 wants to end a party without leaving fullscreen.
 
+### The room has to be visible, and it was not on a restrictive server
+
+The worst defect this feature has had, found on production web on 12 Sep 2026
+and reproduced in a browser the same day.
+
+`findOrCreateWatchPartyRoom` creates the room with `createChannel` and no
+overwrites, so its visibility falls through to whatever @everyone carries at
+the SERVER level. A community that does not put VIEW_CHANNEL on @everyone and
+hands it back per channel instead is an ordinary Discord-shaped setup, and a
+likely one for a server with two thousand members. On such a server the room
+is created invisible to everybody except the staff.
+
+What that looks like, measured against a server configured exactly that way:
+
+| | before | after |
+|---|---|---|
+| the room in a member's `GET /channels` | absent | present |
+| `GET /api/servers/:id/watch-parties` for them | `[]` | the party |
+| the sidebar block | never appears | appears |
+| a deep link to the room | **redirects to #general** | opens the party |
+
+So the entire audience is locked out, silently, while the host sees a
+perfectly normal live party from the inside. It is the shape this repo keeps
+hitting (pitfalls 9, 12, 13): working and silently not working look identical,
+and the difference only shows up on the day of the show, from the outside.
+
+**The intent was always that the room is ordinary.** The options panel says so
+to the host in as many words: who can watch is "everyone who can already see
+the channel. To make it private, make the channel private." A room nobody can
+see is not that sentence being honoured; it is that sentence being false, on a
+channel that is never listed and therefore has no settings entry point to fix
+it from.
+
+So the room is created with an explicit @everyone **allow** of VIEW_CHANNEL.
+Two things about that are deliberate:
+
+- **Only on create.** `findOrCreateWatchPartyRoom` ADOPTS an existing
+  `watch_party` channel, and a server that deliberately made theirs private
+  meant it. A party starting in it is not a reason for this function to
+  overrule a policy decision that is not its own.
+- **An allow, not a base permission.** `channel_viewable` applies the
+  @everyone overwrite first and per-role and per-member overwrites after it, so
+  a role that denies VIEW on this channel still wins. What this removes is the
+  accidental case only: a room nobody was ever denied and nobody can see.
+
+Pinned by "makes the room visible to a plain member on a server whose
+@everyone cannot see channels by default" and "does not re-open a watch party
+room somebody deliberately made private" in
+`server/src/services/watch-parties.test.ts`.
+
+**One thing this does NOT fix, stated rather than hidden.** On such a server a
+non-owner holding START_WATCH_PARTY is refused 403 when creating a party,
+because the bit still resolves through a channel they can no longer see. That
+is arguable rather than obviously wrong (you cannot act in a room you cannot
+enter) and it is a separate question from the audience one. The owner is
+unaffected, which is who runs the show on the server this was found on.
+
+### Arriving by link is its own code path, and it had no test
+
+Every client assertion in this feature used to reach the party by clicking the
+sidebar block. That is ONE path, `handleWatchLiveParty`, which refetches the
+channel list when it does not recognise the id, and it papers over the other
+one: `applyChannelRoute` looks the id up in `GET /channels`, and when it is not
+there it sets "That channel no longer exists or is private" and lands the
+person on the first text channel. On a link-driven Saturday that is the whole
+event, and it is exactly what the report above described.
+
+`client/e2e/watch-party.spec.ts` now covers both arrivals a real audience
+uses, neither of which clicks anything: straight at the room's URL, and a
+reload while on it. Both assert the URL did not change, that the party is on
+screen rather than the "Pick a channel" empty state, and that the sidebar
+block survived. Broken on purpose by making `applyChannelRoute` skip a
+`watch_party` channel; both failed.
+
 ### A preview on the sidebar block: asked for, costed, not built
 
 Rafael's idea, and worth writing down with numbers rather than a yes or a no:
