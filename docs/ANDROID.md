@@ -1256,17 +1256,36 @@ offered a retry button for something no retry can bring back.
 
 ### What is verified, and what is not
 
-Verified on this machine: the module compiles debug and release, R8 and the
-resource shrinker survive the new artifact, `lintVitalRelease` passes, and 609
-unit tests pass including 40 new ones. Every one of those tests was proven by
+On this machine: the module compiles debug and release, R8 and the resource
+shrinker survive the new artifact, `lintVitalRelease` passes, and the unit
+suite is green including 40 new tests. Every one of those was proven by
 breaking the code it covers and watching it fail by name.
 
-**Not verified: a single frame of video.** Nothing here has played a real
-playlist. That needs a phone, a LiveKit room and a presenter actually sharing,
-and it is the only way to answer the questions that matter: whether the picture
-arrives, whether the delay badge is honest, whether a backgrounded app comes
-back to the live edge, and whether a share that dies and restarts is followed.
-Say so rather than reporting green.
+On a Pixel 10 Pro emulator (API 37) against a local API with the dev bypass:
+
+- **The seatless path, measured rather than argued.** Opening the seeded voice
+  channel took `GET /api/channels/:id/live` from
+  `{"watching":0,"participants":0}` to `{"watching":1,"participants":0}`, and
+  leaving it put the count back. A watcher, and no seat.
+- **The player decodes a real HLS playlist.** With a temporary local patch
+  feeding the pane a public test playlist (reverted; not in the branch), video
+  rendered above the transcript with `AO VIVO`, `3 assistindo` and `~10s de
+  atraso` on a device set to pt-BR, and fullscreen handed the same player
+  between two `PlayerView`s without dropping playback.
+- **A channel with nothing live is untouched.** No pane on a plain voice
+  channel and none on a text channel, which is the check that matters for the
+  `ChatScreen` restructure.
+- **No crash.** `logcat` carries nothing from the app across the whole session.
+
+**Not verified: our own stream, end to end.** That test played somebody else's
+playlist. Untested against the real thing: the `?t=` viewer token at the
+playlist proxy, the master playlist and its rungs, ladder switching, whether
+the delay badge is honest about our transcode, and whether a share that dies
+and restarts mid-party is followed (the `startedAt` rule and `HlsWatchdog` are
+unit-tested, and the wiring around them has never seen a real session change).
+Also untested: a real phone on mobile data with the screen off, because an
+emulator's lifecycle and network are not a phone's. Say so rather than
+reporting green.
 
 ### Still not done
 
