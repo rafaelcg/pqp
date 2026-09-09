@@ -312,6 +312,69 @@ describe("live HLS egress", () => {
     expect(start).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * A NEW PEER ID IS NOT NECESSARILY A NEW PRESENTER.
+   *
+   * LiveKit identities are peer ids, and a reconnect that reconstructs or cold
+   * joins gets a fresh one, so the room reports a different presenter for
+   * plainly the same person. Production logged
+   * `voice.hlsStopped reason=presenter-changed` on a party with exactly one
+   * person sharing. Every one of those is a new `startedAt`, a new playlist
+   * URL and a rebuffer for the whole audience, to say the same picture again.
+   *
+   * Sids are unique per publication, so this cannot confuse two people: a
+   * genuine second presenter has a track this session was never bound to,
+   * which is the case directly below.
+   */
+  it("adopts a changed peer id onto the running session when the track is the same", async () => {
+    enableHls();
+    const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+      async () => ({ egressId: "EG_1" }),
+    );
+    const stop = vi.fn();
+    setLiveHlsTestHooks({
+      egress: { startTrackCompositeEgress: start, stopEgress: stop },
+      findTracks: async () => ({ videoTrackId: "TR_V" }),
+    });
+
+    const first = await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    const again = await reconcileLiveHls(CHANNEL, "peer-2", SERVER);
+
+    // Same session, same playlist: nobody rebuffers.
+    expect(again?.startedAt).toBe(first?.startedAt);
+    expect(again?.hlsUrl).toBe(first?.hlsUrl);
+    // But the room's idea of who is presenting has moved, or the next
+    // reconcile would think it had changed all over again.
+    expect(again?.presenterPeerId).toBe("peer-2");
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(stop).not.toHaveBeenCalled();
+  });
+
+  it("still restarts for a genuinely different presenter, who has a different track", async () => {
+    enableHls();
+    let egressN = 0;
+    const start = vi.fn<LiveHlsEgressApi["startTrackCompositeEgress"]>(
+      async () => ({ egressId: `EG_${(egressN += 1)}` }),
+    );
+    const stop = vi.fn();
+    let videoTrackId = "TR_V1";
+    setLiveHlsTestHooks({
+      egress: { startTrackCompositeEgress: start, stopEgress: stop },
+      findTracks: async () => ({ videoTrackId }),
+    });
+
+    await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+    videoTrackId = "TR_V2";
+    const second = await reconcileLiveHls(CHANNEL, "peer-2", SERVER);
+
+    // Not compared on `startedAt`: two restarts inside one millisecond share
+    // it, and a timestamp is not what makes these two different sessions
+    // anyway. The egress calls are.
+    expect(second?.presenterPeerId).toBe("peer-2");
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(stop).toHaveBeenCalledWith("EG_1");
+  });
+
   it("stops when nobody is sharing", async () => {
     enableHls();
     const stop = vi.fn();

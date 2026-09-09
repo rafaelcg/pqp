@@ -1455,6 +1455,54 @@ async function hlsServerIdFor(voiceChannelId: string): Promise<string | null> {
  * And the room type (`watchParty`): a screen share in an ordinary voice
  * channel that happens to be on the SFU never starts one.
  */
+/**
+ * How long the sharer may be missing before the broadcast is torn down.
+ *
+ * Five seconds: comfortably longer than a reconnect's re-declare or a
+ * permissions bump's round trip, and short enough that a real "stop sharing"
+ * does not leave a frozen frame up for a noticeable time. It is not the 90 s
+ * seat orphan window: a seat being held is invisible, a transcode being held
+ * costs a core.
+ *
+ * `HLS_NO_SHARER_GRACE_MS=0` restores the old behaviour, which is a stop on
+ * the first push that finds nobody sharing. That is the rollback switch, and
+ * it is also what the stop-path tests in `voice-hls-audience.test.ts` set, so
+ * that what they pin stays "the stop reaches the channel" rather than
+ * accidentally becoming "the grace works".
+ */
+function noSharerGraceMs(): number {
+  const raw = Number(process.env.HLS_NO_SHARER_GRACE_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 5_000;
+}
+
+/** When each channel's sharer went missing, while a stream is still up. */
+const noSharerSince = new Map<string, number>();
+
+/**
+ * WHICH OF THE THREE GATE BITS WENT FALSE, because "no sharer" is three
+ * different faults wearing one name and the log could not tell them apart.
+ *
+ * `pickHlsSharer` needs `watchParty && sharingScreen && canStream`. A
+ * presenter who stopped sharing, a peer rebuilt by a reconnect that has not
+ * re-declared yet, and a permissions bump that cleared `canStream` all arrive
+ * here identically. The peers are dumped with their bits so the next
+ * occurrence names itself instead of needing another party to reproduce.
+ */
+function logNoSharer(voiceChannelId: string, presenterPeerId: string): void {
+  logEvent("voice.hlsSharerVanished", {
+    channelId: voiceChannelId,
+    presenterPeerId,
+    graceMs: noSharerGraceMs(),
+    peers: getRoomPeers(voiceChannelId).map((peer) => ({
+      id: peer.id,
+      watchParty: peer.watchParty,
+      sharingScreen: peer.sharingScreen,
+      canStream: peer.canStream,
+      wasPresenter: peer.id === presenterPeerId,
+    })),
+  });
+}
+
 async function pushLiveHls(voiceChannelId: string): Promise<void> {
   if (getRoomTransport(voiceChannelId) !== "livekit") {
     return;
@@ -1477,6 +1525,50 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
   // Once, on the push that tears it down: `prev` is null on every push after.
   if (over && prev && sharing) {
     logWatchPartyOverStop(voiceChannelId, sharing.id);
+  }
+  if (sharing) {
+    noSharerSince.delete(voiceChannelId);
+  } else if (!over && prev) {
+    // A SHARER THAT VANISHES FOR A MOMENT MUST NOT END THE BROADCAST.
+    //
+    // `pickHlsSharer` needs `watchParty && sharingScreen && canStream`, and
+    // all three can go false without the presenter doing anything. A
+    // reconnect that reconstructs rather than adopts starts the peer with
+    // `sharingScreen: false` until the client re-declares; and
+    // `reevaluateVoiceSpeak` clears `sharingScreen` outright for anyone whose
+    // `canStream` resolves false, which runs on every permissions bump,
+    // including the ones a watch party's own options reconciler causes by
+    // writing channel overwrites.
+    //
+    // Until now the first such push ended the session, and production logged
+    // `voice.hlsStopped reason=no-share` twice inside sixteen minutes on one
+    // continuous party where nobody stopped sharing. Each one is a new
+    // `startedAt` and a rebuffer for every seatless viewer.
+    //
+    // So a disappearance has to persist before it counts. A genuine stop
+    // costs the audience one grace window of a frozen last frame, which
+    // is nothing; a transient one now costs them nothing at all. Deliberately
+    // NOT applied to `over`: ending the party is somebody pressing a button
+    // and should take effect at once.
+    const grace = noSharerGraceMs();
+    const since = noSharerSince.get(voiceChannelId);
+    if (grace > 0 && since === undefined) {
+      noSharerSince.set(voiceChannelId, Date.now());
+      logNoSharer(voiceChannelId, prev.presenterPeerId);
+      // Nothing else will look again: the sharer going away is the last event
+      // this channel produces until somebody does something. So the grace has
+      // to wake itself up.
+      setTimeout(() => {
+        void pushLiveHls(voiceChannelId);
+      }, grace + 100).unref?.();
+      return;
+    }
+    if (grace > 0 && since !== undefined && Date.now() - since < grace) {
+      return;
+    }
+    noSharerSince.delete(voiceChannelId);
+  } else {
+    noSharerSince.delete(voiceChannelId);
   }
   const sharer = over ? null : sharing;
   try {
