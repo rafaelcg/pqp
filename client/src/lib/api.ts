@@ -257,6 +257,12 @@ export const updateMe = (body: {
   avatarUrl?: string | null;
   dmPrivacy?: DmPrivacy;
   handle?: string;
+  /**
+   * O recado. Absent leaves it alone, null clears it, a string sets it. The
+   * settings form only puts this key in the body when the field was touched,
+   * so an unrelated save cannot wipe a status the person never opened.
+   */
+  customStatus?: string | null;
   /** First-touch attribution, sent once after sign-up. See `lib/acquisition.ts`. */
   acquisition?: AcquisitionInput;
 }) => patch<User>("/api/me", body);
@@ -1077,6 +1083,16 @@ export interface ServerMember {
    * still parses; absent is treated as "none", never as a URL to invent.
    */
   handle?: string | null;
+  /**
+   * O recado, the line drawn under the name in the sidebar.
+   *
+   * Optional for the same reason `status` is, and read as "none" when absent so
+   * an older API degrades to a one-line row rather than to a blank second line.
+   * Unlike `status`, this comes off a stored column rather than the live socket
+   * registry, so it is still there when the person is offline, which is the
+   * whole point of it: "volto às 22h" is worth reading precisely then.
+   */
+  customStatus?: string | null;
 }
 
 export function memberDisplayName(member: {

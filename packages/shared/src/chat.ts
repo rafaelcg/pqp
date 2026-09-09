@@ -433,6 +433,32 @@ export const profileUpdateSchema = z.object({
   username: z.string().nullable(),
   tag: z.string().nullable(),
   avatarUrl: z.string().nullable(),
+  /**
+   * O recado, the line under the name. Rides this frame rather than getting a
+   * push of its own, and rather than riding the member-list poll that carries
+   * presence.
+   *
+   * NOT THE POLL, because a recado is not presence. Presence is pulled because
+   * it changes on a timer for everybody at once (one idle transition per person
+   * per ten minutes across the whole instance), so pushing it would cost a
+   * fan-out to sockets with no member list open. A recado changes when somebody
+   * decides to type one, which is rarer than a rename and far rarer than an
+   * idle flip, and it is exactly the kind of change whose whole point is that
+   * the people already looking see it happen.
+   *
+   * NOT A NEW FRAME, because this one already goes to every socket for exactly
+   * the same reason a recado has to: the string is drawn in the member list of
+   * a server nobody is viewing, in a conversation row, and on a profile card,
+   * none of which is reachable from a channel id. Adding a second global
+   * fan-out for a second short string about the same person would double the
+   * cost of a profile edit and give a client two orders to reconcile.
+   *
+   * Null means "this person has none", which is a real value here: clearing a
+   * recado has to reach other screens, and an absent key could not say it.
+   * Defaulted so a client built against this schema still parses a frame from
+   * an API that predates the field.
+   */
+  customStatus: z.string().nullable().default(null),
 });
 
 /**

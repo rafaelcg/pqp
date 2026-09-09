@@ -4,7 +4,7 @@ import { clampChatNewlines } from "./chat-text.js";
 import { embedSchema } from "./embeds.js";
 import { handleSchema } from "./profiles.js";
 import { nicknameSchema } from "./permissions.js";
-import { manualStatusSchema } from "./status.js";
+import { customStatusSchema, manualStatusSchema } from "./status.js";
 // --- threads ---
 import { threadSummarySchema } from "./threads.js";
 import { webhookEmbedSchema } from "./webhooks.js";
@@ -474,6 +474,13 @@ export const userSchema = z.object({
    * response from an API that predates banners still parses.
    */
   bannerUrl: z.string().nullable().default(null),
+  /**
+   * O recado, as the account's own copy of it. The same string
+   * `publicUserSchema` carries for everybody else, which is the point: the
+   * settings form has to prefill from the value other people are being shown,
+   * not from a second one.
+   */
+  customStatus: z.string().nullable().default(null),
 });
 
 /**
@@ -497,6 +504,25 @@ export const publicUserSchema = z.object({
   username: z.string().nullable(),
   tag: z.string().nullable(),
   avatarUrl: z.string().nullable(),
+  /**
+   * O recado: the one line this person wrote about themselves, or null.
+   *
+   * ON THE PUBLIC SHAPE ON PURPOSE, and it is the first field here that is not
+   * simply a name or a picture. It belongs because it is the ONLY thing in the
+   * product that an account writes with the express intention that the people
+   * around them read it under their name. Withholding it from the shape that
+   * draws member lists and DM rows would mean the feature does not exist on the
+   * surfaces it was built for.
+   *
+   * It is still bounded like everything else here: 80 characters of plain text,
+   * whitespace collapsed, no control or bidi characters, and never a URL the
+   * client fetches. See `customStatusSchema` in status.ts.
+   *
+   * Defaulted so a payload from an API that predates the column still parses,
+   * and null is "has none" rather than "unknown", which is what lets a row draw
+   * one line instead of reserving space for a second.
+   */
+  customStatus: z.string().nullable().default(null),
 });
 
 export type PublicUser = z.infer<typeof publicUserSchema>;
@@ -1017,6 +1043,21 @@ export const updateProfileSchema = z.object({
    * ignores it for an account that already has one. See `acquisitionSchema`.
    */
   acquisition: acquisitionSchema.optional(),
+  /**
+   * O recado. Three states, and all three are needed:
+   *
+   *   absent  leave it alone. The settings form only sends this key when the
+   *           field was touched, so saving a new display name cannot wipe a
+   *           status the person never looked at.
+   *   a string  set it. Normalised and capped by `customStatusSchema`; a body
+   *           that is only whitespace normalises to `""` and is stored as null,
+   *           so "clear it" and "set it to nothing" are the same request.
+   *   null    clear it.
+   *
+   * The absent/null distinction is why this is `.nullable().optional()` rather
+   * than either one alone, and why the server cannot use COALESCE to write it.
+   */
+  customStatus: customStatusSchema.nullable().optional(),
 });
 
 /**

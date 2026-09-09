@@ -565,6 +565,10 @@ function UserProfileCard({
             username: null,
             tag: subject.tag,
             avatarUrl: subject.avatarUrl,
+            // The card already knows it, and the friends list draws the same
+            // shape, so passing it through is what stops a person appearing
+            // there without the line they appear with everywhere else.
+            customStatus: subject.customStatus ?? null,
           });
           setNotice(
             t(
@@ -1159,6 +1163,25 @@ function UserProfileCard({
         {subject.tag && (
           <p className="truncate text-center font-mono text-xs text-paper-muted">
             {subject.tag}
+          </p>
+        )}
+        {/* O recado, under the tag and above the public URL.
+
+            THE ONE SURFACE THAT SHOWS THE WHOLE THING. The sidebar row truncates
+            at roughly 35 characters and the DM row at fewer, so a recado longer
+            than a few words is only ever readable here. `line-clamp-2` rather
+            than `truncate` for that reason: eighty characters is two lines at
+            this width, and clamping at two is what lets the card hold all of it
+            without letting a pasted line push the buttons off the bottom.
+
+            Not `font-mono` like the tag above it. A tag is an identifier and a
+            recado is somebody talking. */}
+        {subject.customStatus && (
+          <p
+            className="mt-1 line-clamp-2 text-center text-xs text-paper"
+            data-profile-custom-status=""
+          >
+            {subject.customStatus}
           </p>
         )}
         {publicHref && subject.handle && (

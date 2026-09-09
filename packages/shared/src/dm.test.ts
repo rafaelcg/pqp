@@ -48,8 +48,15 @@ describe("publicUserSchema", () => {
       dmPrivacy: "nobody",
     });
 
+    // `customStatus` is on this shape deliberately and is the only field here
+    // that is not a name or a picture. It earns the place because it is the one
+    // thing an account writes with the express intention that the people around
+    // them read it, so a shape that draws member lists and DM rows without it
+    // makes the feature not exist on the surfaces it was built for. Everything
+    // else about this guard stands: nothing account-private goes on it.
     expect(Object.keys(parsed).sort()).toEqual([
       "avatarUrl",
+      "customStatus",
       "displayName",
       "id",
       "tag",
@@ -278,9 +285,16 @@ describe("blockedUserSchema", () => {
       avatarUrl: null,
       blockedAt: "2026-08-01T00:00:00.000Z",
     });
+    // Carried because this shape is `publicUserSchema` plus a timestamp, and
+    // a field that appears on one and not the other is a divergence somebody
+    // has to maintain. The block list draws a name and a picture and nothing
+    // else, and the member row will not draw a blocked person's recado at all
+    // (`MemberRow`'s `blocked` prop), which is where the reader's decision is
+    // actually honoured.
     expect(Object.keys(parsed).sort()).toEqual([
       "avatarUrl",
       "blockedAt",
+      "customStatus",
       "displayName",
       "id",
       "tag",

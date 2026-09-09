@@ -135,6 +135,15 @@ export interface DbUser {
    */
   banner_url?: string | null;
   banner_key?: string | null;
+  /**
+   * O recado, the line this account wrote under its own name, or null when it
+   * has none. Optional for the same reason as everything above it: several
+   * reads select a narrower column list, and an absent value must read as
+   * "unknown" rather than as "this account has none", because a null written
+   * from an absent value is how somebody's status disappears on an unrelated
+   * save. See the `users.custom_status` block in schema.sql.
+   */
+  custom_status?: string | null;
   /** When the account was created. Month-truncated before it reaches a page. */
   created_at?: Date | string | null;
   /**

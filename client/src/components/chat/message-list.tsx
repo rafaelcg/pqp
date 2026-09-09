@@ -139,6 +139,14 @@ export interface MessageAuthorInfo {
   username?: string | null;
   isCharacter?: boolean;
   handle?: string | null;
+  /**
+   * O recado. Not drawn in the transcript, which has no room for a second line
+   * per message and would repeat it once per row anyway. It is carried so the
+   * profile card opened FROM a message shows the same thing the card opened
+   * from the member list shows, rather than being the one door into a person
+   * that quietly drops a field.
+   */
+  customStatus?: string | null;
 }
 
 export interface MessageRoleColor {
@@ -2600,6 +2608,7 @@ function AuthorButton({
             rank: author?.rank,
             isCharacter: author?.isCharacter,
             handle: author?.handle ?? null,
+            customStatus: author?.customStatus ?? null,
           },
           event.currentTarget,
         );

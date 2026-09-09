@@ -348,6 +348,7 @@ import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
 import { useChannelNotifications } from "@/hooks/use-notifications";
+import { useCustomStatus } from "@/hooks/use-custom-status";
 import { useUserStatus } from "@/hooks/use-status";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
@@ -1443,6 +1444,18 @@ function MainAppContent({
     connected: connection === "online",
   });
 
+  /**
+   * O recado, the line under the name. A separate hook from `useUserStatus`
+   * even though the two controls share a popover, because they share nothing
+   * else: the manual status is a preference resolved out of an in-memory
+   * registry and never stored anywhere a member list joins to, while this is a
+   * column on `users` that reaches everybody through `profile-update`.
+   */
+  const customStatus = useCustomStatus({
+    stored: user?.customStatus ?? null,
+    onUserUpdated: setUser,
+  });
+
   const location = useLocation();
   const navigate = useNavigate();
   // Last path this component applied or emitted — guards the deep-link effect
@@ -1945,6 +1958,7 @@ function MainAppContent({
         username: member.username ?? usernameFromTag(member.tag),
         isCharacter: member.isCharacter,
         handle: member.handle ?? null,
+        customStatus: member.customStatus ?? null,
       });
     }
     for (const person of conversationParticipants ?? []) {
@@ -1953,6 +1967,7 @@ function MainAppContent({
       }
       map.set(person.id, {
         username: person.username,
+        customStatus: person.customStatus ?? null,
       });
     }
     return map;
@@ -2701,6 +2716,10 @@ function MainAppContent({
                           username: message.username,
                           tag: message.tag,
                           avatarUrl: message.avatarUrl,
+                          // Applied whole, never diffed: the frame is an
+                          // absolute statement, so null here is "they cleared
+                          // it" and has to land as null.
+                          customStatus: message.customStatus,
                         }
                       : one,
                   )
@@ -2721,6 +2740,7 @@ function MainAppContent({
                               username: message.username,
                               tag: message.tag,
                               avatarUrl: message.avatarUrl,
+                              customStatus: message.customStatus,
                             }
                           : person,
                       ),
@@ -2736,6 +2756,9 @@ function MainAppContent({
                     username: message.username,
                     tag: message.tag,
                     avatarUrl: message.avatarUrl,
+                    // The account's own copy, so a recado typed in one tab
+                    // shows in this one without a reload.
+                    customStatus: message.customStatus,
                   }
                 : prev,
             );
@@ -4750,6 +4773,11 @@ function MainAppContent({
         statusSaving={status.saving}
         statusError={status.error}
         onSetStatus={status.setManual}
+        customStatus={customStatus.value}
+        customStatusSaving={customStatus.saving}
+        customStatusError={customStatus.error}
+        onSetCustomStatus={customStatus.save}
+        onClearCustomStatusError={customStatus.clearError}
         onToggleMute={() => voice.toggleMute()}
         onToggleDeafen={() => voice.toggleDeafen()}
         onOpenSettings={() => {
@@ -5908,6 +5936,7 @@ function MainAppContent({
               username: user.username ?? null,
               tag: user.tag ?? null,
               avatarUrl: user.avatarUrl ?? null,
+              customStatus: user.customStatus ?? null,
             }}
             canManageServer={canManageServer}
             isOwner={selectedServer.role === "owner"}
@@ -6032,6 +6061,7 @@ function MainAppContent({
                   username: user.username,
                   tag: user.tag,
                   avatarUrl: user.avatarUrl,
+                  customStatus: user.customStatus ?? null,
                 }
               : null
           }

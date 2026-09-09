@@ -120,6 +120,11 @@ describeDb("blocking", () => {
     expect(Object.keys(entry!).sort()).toEqual([
       "avatarUrl",
       "blockedAt",
+      // The public shape plus a timestamp, and it stays exactly that. The block
+      // list draws a name and a picture; the member row refuses to draw a
+      // blocked person's recado at all, which is where the reader's decision is
+      // honoured.
+      "customStatus",
       "displayName",
       "id",
       "tag",

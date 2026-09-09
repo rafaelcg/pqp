@@ -25,6 +25,7 @@ function dm(channelId: string): DmSummary {
         username: null,
         tag: null,
         avatarUrl: null,
+        customStatus: null,
       },
     ],
     lastMessageAt: null,

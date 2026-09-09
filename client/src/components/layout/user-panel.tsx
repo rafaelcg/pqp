@@ -1,13 +1,14 @@
-import { Bug, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Pencil, Settings } from "lucide-react";
+import { Bug, Check, Download, HeadphoneOff, Headphones, Mic, MicOff, Pencil, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { UserButton } from "@clerk/clerk-react";
-import type { ManualStatus, UserStatus } from "@pqp/shared";
+import { CUSTOM_STATUS_MAX_LENGTH, type ManualStatus, type UserStatus } from "@pqp/shared";
 import { DownloadDialog } from "@/components/downloads/download-dialog";
 import { DownloadHint } from "@/components/downloads/download-hint";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { StatusDot } from "@/components/user/status-dot";
 import { UserAvatar } from "@/components/user/user-avatar";
+import { customStatusRemaining } from "@/hooks/use-custom-status";
 import { isDesktopApp } from "@/lib/desktop";
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 import { escapeOwnedByOverlay } from "@/lib/escape-unless-overlay";
@@ -40,6 +41,17 @@ interface UserPanelProps {
   statusSaving: boolean;
   statusError: string | null;
   onSetStatus: (status: ManualStatus) => void;
+  /**
+   * O recado, as the account's own copy of it. Empty string means none, which
+   * is the same thing the field shows when it is untouched.
+   */
+  customStatus: string;
+  customStatusSaving: boolean;
+  customStatusError: string | null;
+  /** Saves it. An empty string clears it. Never rejects. */
+  onSetCustomStatus: (next: string) => void;
+  /** Drops a stale error when the field is reopened. */
+  onClearCustomStatusError: () => void;
   onToggleMute: () => void;
   onToggleDeafen: () => void;
   onOpenSettings: () => void;
@@ -74,6 +86,18 @@ interface UserPanelProps {
  * Anyone who wants its *appearance* while staying connected wants `invisible`,
  * which is here and says so.
  */
+/**
+ * The browser's own ceiling on the field, and deliberately not
+ * `CUSTOM_STATUS_MAX_LENGTH`.
+ *
+ * `maxLength` counts UTF-16 units, so setting it to 80 would cut a recado off
+ * at 40 emoji while the counter beside it still read 40 left. It is here only
+ * to stop somebody pasting a novel into a text input; the real cap is the
+ * counter and the refusal in `useCustomStatus`, both of which count code
+ * points the way a person does.
+ */
+const CUSTOM_STATUS_INPUT_MAX = CUSTOM_STATUS_MAX_LENGTH * 4;
+
 const CHOICES: readonly {
   manual: ManualStatus;
   /** The pip a choice shows — invisible deliberately borrows offline's. */
@@ -112,6 +136,11 @@ export function UserPanel({
   statusSaving,
   statusError,
   onSetStatus,
+  customStatus,
+  customStatusSaving,
+  customStatusError,
+  onSetCustomStatus,
+  onClearCustomStatusError,
   onToggleMute,
   onToggleDeafen,
   onOpenSettings,
@@ -121,6 +150,10 @@ export function UserPanel({
 }: UserPanelProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  // The recado being typed, which is NOT the recado that is saved. They part
+  // company for exactly as long as somebody has the field focused, and the
+  // saved one is what every other surface in the app is drawing meanwhile.
+  const [draft, setDraft] = useState(customStatus);
   const [downloadOpen, setDownloadOpen] = useState(false);
   const [hintDismissed, setHintDismissed] = useState(isDownloadHintDismissed);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -133,6 +166,15 @@ export function UserPanel({
   // 72px column, which renders as two unexplained glyphs. It comes back with
   // the labels, and it is a one-shot invitation rather than a control.
   const showHint = showDownload && !hintDismissed && !onPhone && !compact;
+
+  // Re-seed the draft from the truth: when the menu opens, and whenever the
+  // saved value moves under it (another tab, another device, or this write
+  // landing and coming back normalised). Not while the menu is shut, because a
+  // shut menu has no draft worth preserving, and not on every render, because
+  // that would fight the person typing.
+  useEffect(() => {
+    setDraft(customStatus);
+  }, [customStatus, open]);
 
   useEffect(() => {
     if (!open) {
@@ -167,6 +209,11 @@ export function UserPanel({
   // took, which is the failure a privacy control cannot afford.
   const ownLabel =
     manualStatus === "invisible" ? t("status.invisible") : undefined;
+
+  // Counted against the normalised draft, so a run of spaces mid-sentence does
+  // not tick it down twice. Negative is a real state and is drawn in red: the
+  // save is refused rather than the field silently truncating what was pasted.
+  const remaining = customStatusRemaining(draft);
 
   return (
     <div className="safe-pb relative border-t border-ink-4/60 bg-ink">
@@ -211,6 +258,88 @@ export function UserPanel({
             <Pencil className="h-4 w-4 shrink-0 text-paper-muted" aria-hidden />
             {t("userMenu.editProfile")}
           </button>
+          <div role="separator" className="my-1 border-t border-ink-4/60" />
+
+          {/* O RECADO, and it lives HERE rather than in Settings.
+
+              It is the sibling of the three choices directly under it, not of
+              the display name above it: both answer "what am I telling the room
+              right now", and both take effect the moment you set them. Putting
+              it behind Settings would give one half of that pair a Save button
+              and leave the other half without one, in a product whose whole
+              reference point is MSN, where the personal message was a line you
+              typed next to your own name and were done with.
+
+              It is a field and not a menu item on purpose. A menu item that
+              opens a dialog to collect one short string is two clicks and a
+              context switch for something people change several times a day.
+
+              ENTER SAVES. Blur saves too, because clicking a status choice
+              underneath is a perfectly ordinary way to finish typing, and
+              losing what you wrote to that would be a bug people would only
+              notice later. Escape closes the whole menu and keeps nothing,
+              which is the cancel: the popover's own capture-phase handler owns
+              that key and reopening re-seeds the field from what is saved. */}
+          <div className="px-1.5 pb-1 pt-0.5">
+            <div className="relative">
+              <input
+                type="text"
+                value={draft}
+                disabled={customStatusSaving}
+                maxLength={CUSTOM_STATUS_INPUT_MAX}
+                aria-label={t("customStatus.label")}
+                placeholder={t("customStatus.placeholder")}
+                data-custom-status-input=""
+                className="w-full rounded-md border border-ink-4 bg-ink px-2.5 py-1.5 pr-7 text-sm text-paper placeholder:text-paper-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60 disabled:opacity-60"
+                onChange={(event) => {
+                  onClearCustomStatusError();
+                  setDraft(event.target.value);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    onSetCustomStatus(draft);
+                    event.currentTarget.blur();
+                  }
+                }}
+                onBlur={() => onSetCustomStatus(draft)}
+              />
+              {draft !== "" && (
+                <button
+                  type="button"
+                  aria-label={t("customStatus.clear")}
+                  title={t("customStatus.clear")}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-paper-muted hover:text-paper focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
+                  // Keeps focus on the input, so clearing does not first fire
+                  // the blur handler and save the very text it is removing.
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => {
+                    setDraft("");
+                    onSetCustomStatus("");
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            {customStatusError ? (
+              <p role="alert" className="mt-1 text-[11px] text-danger">
+                {customStatusError}
+              </p>
+            ) : (
+              draft !== "" && (
+                <p
+                  className={cn(
+                    "mt-1 text-right text-[11px] tabular-nums",
+                    remaining < 0 ? "text-danger" : "text-paper-muted",
+                  )}
+                  data-custom-status-remaining=""
+                >
+                  {remaining}
+                </p>
+              )
+            )}
+          </div>
           <div role="separator" className="my-1 border-t border-ink-4/60" />
           {CHOICES.map((choice) => {
             const selected = choice.manual === manualStatus;
