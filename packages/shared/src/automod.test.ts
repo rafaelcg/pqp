@@ -151,6 +151,11 @@ describe("allow list", () => {
     expect(hit("sc x am", ["scam"], ["x"])).toBeNull();
   });
 
+  it("an allowed word never bridges a phrase across itself", () => {
+    expect(hit("free lol nitro", ["free nitro"], ["lol"])).toBeNull();
+    expect(hit("free nitro", ["free nitro"], ["lol"])).toBe("free nitro");
+  });
+
   it("an allowed word does not rescue a different blocked word", () => {
     expect(hit("scam and spam", ["scam", "spam"], ["spam"])).toBe("scam");
   });

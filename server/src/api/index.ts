@@ -5023,7 +5023,11 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
     };
     const verdict = await checkAutomod(automodInput);
     if (verdict) {
-      void recordAutomodHit(automodInput, verdict).then(applyAutomodEffects);
+      void recordAutomodHit(automodInput, verdict)
+        .then(applyAutomodEffects)
+        .catch((error: unknown) => {
+          console.error("[automod] hit effects failed:", error);
+        });
       throw new HttpError(
         422,
         verdict.customMessage ?? "This message was blocked by AutoMod",

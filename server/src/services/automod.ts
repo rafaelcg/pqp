@@ -33,6 +33,37 @@ import { issueTimeout, type IssuedTimeout } from "./sanctions.js";
 
 const CACHE_TTL_MS = 30_000;
 
+/**
+ * One alert post per author per server within this window; further hits in
+ * the window are audited but not posted. A blocked send is refused before
+ * slow mode charges it, so without this a member with a keyword and the
+ * socket's send budget could put two hundred embeds a second into #mod-log.
+ * Per process, like the rule cache, and for the same reason: an occasional
+ * duplicate across two machines is a nuisance, not a hole.
+ */
+const ALERT_COOLDOWN_MS = 10_000;
+const lastAlertAt = new Map<string, number>();
+
+function alertAllowed(serverId: string, authorId: string, now: number): boolean {
+  const key = `${serverId}:${authorId}`;
+  const last = lastAlertAt.get(key);
+  if (last !== undefined && now - last < ALERT_COOLDOWN_MS) {
+    return false;
+  }
+  lastAlertAt.set(key, now);
+  if (lastAlertAt.size > 10_000) {
+    for (const [k, at] of lastAlertAt) {
+      if (now - at >= ALERT_COOLDOWN_MS) lastAlertAt.delete(k);
+    }
+  }
+  return true;
+}
+
+/** Test seam. */
+export function resetAutomodAlertCooldown(): void {
+  lastAlertAt.clear();
+}
+
 interface RuleRow {
   id: string;
   server_id: string;
@@ -344,10 +375,14 @@ export async function recordAutomodHit(
   const rule = verdict.ruleId
     ? (await cachedRules(input.serverId)).find((r) => r.id === verdict.ruleId)
     : undefined;
+  // The pseudo-user is the actor of every row here. The audit log renders a
+  // null actor as "a departed account", which is the opposite of what
+  // happened.
+  const actorId = await ensureAutomodUser();
   try {
     await logAudit({
       serverId: input.serverId,
-      actorId: null,
+      actorId,
       action: "automod.block",
       targetType: "user",
       targetId: input.authorId,
@@ -369,17 +404,16 @@ export async function recordAutomodHit(
 
   if (rule.timeoutMinutes > 0) {
     try {
-      const issuedBy = await ensureAutomodUser();
       effects.timeout = await issueTimeout({
         serverId: input.serverId,
         userId: input.authorId,
-        issuedBy,
+        issuedBy: actorId,
         minutes: rule.timeoutMinutes,
         reason: `AutoMod: ${AUTOMOD_KIND_LABEL[verdict.kind]}`,
       });
       await logAudit({
         serverId: input.serverId,
-        actorId: null,
+        actorId,
         action: "member.timeout",
         targetType: "user",
         targetId: input.authorId,
@@ -398,9 +432,9 @@ export async function recordAutomodHit(
     }
   }
 
-  if (rule.alertChannelId) {
+  if (rule.alertChannelId && alertAllowed(input.serverId, input.authorId, Date.now())) {
     try {
-      const authorId = await ensureAutomodUser();
+      const authorId = actorId;
       const author = await getPool().query<{ display_name: string; username: string | null; discriminator: string | null; name: string | null }>(
         `SELECT u.display_name, u.username, u.discriminator, c.name
            FROM users u, channels c
@@ -420,7 +454,7 @@ export async function recordAutomodHit(
           { name: "Rule", value: AUTOMOD_KIND_LABEL[verdict.kind], inline: true },
           { name: "Member", value: tag, inline: true },
           { name: "Channel", value: who?.name ? `#${who.name}` : input.channelId, inline: true },
-          { name: "Matched", value: verdict.matched, inline: true },
+          { name: "Matched", value: verdict.matched.slice(0, 1024), inline: true },
           ...(effects.timeout
             ? [{ name: "Timeout", value: describeMinutes(rule.timeoutMinutes), inline: true }]
             : []),

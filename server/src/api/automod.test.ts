@@ -40,9 +40,8 @@ vi.mock("../auth/clerk.js", () => ({
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
-const { invalidateAutomodCache, resetAutomodUser } = await import(
-  "../services/automod.js"
-);
+const { invalidateAutomodCache, resetAutomodUser, resetAutomodAlertCooldown } =
+  await import("../services/automod.js");
 const { postChannelMessage } = await import("../ws/index.js");
 const { getUserById } = await import("../services/users.js");
 
@@ -100,6 +99,7 @@ describeDb("automod", () => {
     resetApiRateLimits();
     invalidateAutomodCache();
     resetAutomodUser();
+    resetAutomodAlertCooldown();
     await getPool().query(
       `TRUNCATE users, user_preferences, servers, channels, messages,
                 server_members, channel_members, server_invites, server_bans,
@@ -420,11 +420,30 @@ describeDb("automod", () => {
     expect(alert.rows[0]!.webhook_username).toBe("AutoMod");
     expect(JSON.stringify(alert.rows[0]!.webhook_embeds)).toContain("golpe aqui");
 
-    const actions = await getPool().query<{ action: string }>(
-      `SELECT action FROM audit_log WHERE server_id = $1 AND actor_id IS NULL ORDER BY id`,
+    // Both rows are the AutoMod pseudo-user's, so the log names it rather
+    // than rendering a null actor as a departed account.
+    const actions = await getPool().query<{ action: string; actor_id: string }>(
+      `SELECT action, actor_id FROM audit_log
+        WHERE server_id = $1 AND action IN ('automod.block', 'member.timeout')
+        ORDER BY id`,
       [serverId],
     );
     expect(actions.rows.map((r) => r.action)).toEqual(["automod.block", "member.timeout"]);
+    expect(new Set(actions.rows.map((r) => r.actor_id))).toEqual(new Set([timeout.rows[0]!.issued_by]));
+
+    // A second hit inside the cooldown is audited but not posted again.
+    expect((await send(member, channelId, "golpe de novo")).status).toBe(422);
+    await new Promise((done) => setTimeout(done, 100));
+    const alertsAfter = await getPool().query(
+      `SELECT 1 FROM messages WHERE channel_id = $1`,
+      [alertChannelId],
+    );
+    expect(alertsAfter.rowCount).toBe(1);
+    const blocks = await getPool().query(
+      `SELECT 1 FROM audit_log WHERE server_id = $1 AND action = 'automod.block'`,
+      [serverId],
+    );
+    expect(blocks.rowCount).toBe(2);
 
     // Clearing the alert channel is a real patch, not "leave it".
     const cleared = await call<{ rule: { alertChannelId: string | null } }>(

@@ -302,6 +302,9 @@ function matchParts(
   openStart: boolean,
   openEnd: boolean,
 ): boolean {
+  if (token.length === 0) {
+    return false;
+  }
   if (parts.length === 1) {
     const [part] = parts as [string];
     if (!openStart && !openEnd) return token === part;
@@ -418,7 +421,13 @@ export function findBlockedKeyword(
       }
     }
     if (drop.size > 0) {
-      tokens = tokens.filter((_, i) => !drop.has(i));
+      // Blank, never remove: a removed token would let a phrase match across
+      // the gap ("free nitro" over "free lol nitro" with "lol" allowed).
+      // A blank token matches nothing, exact or wildcard, so the phrase
+      // stays broken where the allowed word stood.
+      tokens = tokens.map((token, i) =>
+        drop.has(i) ? { ...token, text: "" } : token,
+      );
     }
   }
   if (compiled.exact.size > 0) {

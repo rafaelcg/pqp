@@ -1365,7 +1365,11 @@ export async function postChannelMessage(
     };
     const verdict = await checkAutomod(automodInput);
     if (verdict) {
-      void recordAutomodHit(automodInput, verdict).then(applyAutomodEffects);
+      void recordAutomodHit(automodInput, verdict)
+        .then(applyAutomodEffects)
+        .catch((error: unknown) => {
+          console.error("[automod] hit effects failed:", error);
+        });
       return {
         ok: false,
         reason: "automod",
