@@ -915,7 +915,7 @@ feature off, and only two of them have a symptom you would notice.
 | 6 | LiveKit **Egress** and Redis running beside the SFU | the media box | running (`livekit/egress:v1.14.1`, `redis:7-alpine`) |
 | 7 | `VITE_WATCH_PARTY_CHANNELS=true` at **web build time** | `deploy-web.yml` | **missing**. See "Client flag" below. This is the one no server setting can substitute for |
 | 8 | `LIVE_HLS_S3_*` **and** `LIVEKIT_*` on `pqp-worker` | `pqp-worker` | **missing**, so the retention sweep cannot run anywhere. See "How you know it is running" |
-| 9 | `LIVE_HLS_SERVER_ALLOWLIST` | `pqp-api` | unset, which means **every** server. Set it: it is the rollout switch, and with row 7 on globally it is what keeps the create control off 908 other servers. See below |
+| 9 | `LIVE_HLS_SERVER_ALLOWLIST` | `pqp-api` | unset, which means **every** server. It is now the *fallback* under `servers.live_hls_enabled`, which the operator dashboard writes with no restart. Either one keeps the create control off 908 other servers; the column is the one you can change at 21h on a Saturday. See below |
 | 10 | `LIVE_HLS_MAX_SESSIONS` | `pqp-api` | unset, which means the default of 3 concurrent parties per process |
 
 ### What `LIVE_HLS_ENABLED=true` does, and no longer does
@@ -978,8 +978,9 @@ a button that appears a beat late costs a moderator nothing, a missed
 disclosure costs a person a lot.
 
 **The end state.** `VITE_WATCH_PARTY_CHANNELS=true` in the web build,
-`LIVE_HLS_ENABLED=true` and `LIVE_HLS_SERVER_ALLOWLIST` naming one or two
-servers on `pqp-api`. Live in production, invisible everywhere else.
+`LIVE_HLS_ENABLED=true` on `pqp-api`, and the servers that may run a party
+turned on **in the dashboard** (`servers.live_hls_enabled`). Live in
+production, invisible everywhere else.
 
 **What a member on a non-allowlisted server sees: nothing.** Not a disabled
 button, not an empty section, not a heading. `LivePartyBlock` returns `null`
@@ -991,8 +992,45 @@ live, only that server's members see the block. Pinned by
 in `client/e2e/watch-party.spec.ts`, which flips only the config answer and
 watches the same account with the same permission gain and lose the control.
 
-Widening the rollout is `fly secrets set -a pqp-api LIVE_HLS_SERVER_ALLOWLIST=`
-with more ids, or unsetting it for every server. No deploy, no rebuild.
+### Widening it is a click now, not a secret
+
+`LIVE_HLS_SERVER_ALLOWLIST` is a Fly environment variable, and
+`fly secrets set` **restarts the machine**: every WebSocket closes, and the
+old line here that said "no deploy, no rebuild" quietly skipped past that.
+Worse, nothing anywhere showed which servers were on the list, so the only way
+to answer "is Cinemoon allowed" was to read a secret.
+
+So the per-server decision is a column: **`servers.live_hls_enabled`**, read
+per request by `resolveLiveHlsForServer` (`server/src/voice/hls-egress.ts`),
+the same pattern `COMMUNITY_HOME_ENABLED` and `is_community` already follow.
+The operator dashboard's **controles** section searches the 908 servers by
+name and writes it; `tools/admin-dashboard/README.md` has the screen.
+
+**Three states, and which wins.**
+
+| `live_hls_enabled` | Answer | Why that order |
+|---|---|---|
+| `TRUE` | on | a person decided about this server, from the dashboard, after whoever set the secret had left |
+| `FALSE` | **off, even if the variable names the server** | this is the kill switch, and a kill switch that needs a deploy is not one |
+| `NULL` | whatever `LIVE_HLS_SERVER_ALLOWLIST` says | nobody has decided; the environment is still the answer |
+
+`LIVE_HLS_ENABLED` is above all three and is untouched: with it off, or
+without the dedicated bucket, no row turns anything on. And the deploy that
+added the column changed nothing, because every row was `NULL`.
+
+**What "takes effect immediately" does and does not cover.** The server-side
+capability is immediate: the next `join-voice-room` pins the transport with
+the new answer, the next share reconcile starts or stops the egress, and the
+next `GET /api/live-hls/config?serverId=` answers the new value. What is
+**not** immediate is the create control in a tab that is already open:
+`useLiveHlsConfig` caches the config per server for the page's lifetime, so a
+host looking at the channel when you flip it has to reload before the button
+appears. Flip it before the host opens the channel, or tell them to press F5.
+The dashboard says so under the buttons.
+
+Turning a server **off while a party is streaming** stops the egress at the
+next reconcile and the audience loses the picture. That is the one control on
+that page with a confirmation.
 
 ### The one real cost left: concurrent parties
 

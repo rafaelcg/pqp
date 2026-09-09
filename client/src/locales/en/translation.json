@@ -1649,6 +1649,8 @@
   "serverSettings.audit.action.automod.rule_update": "changed an AutoMod rule",
   "serverSettings.audit.action.automod.rule_delete": "removed an AutoMod rule",
   "serverSettings.audit.action.automod.block": "had a message blocked by AutoMod",
+  "serverSettings.audit.action.server.live_hls_update": "changed watch party live streaming for this server",
+  "serverSettings.audit.action.channel.voice_transport_update": "changed a voice channel's media path",
   "serverSettings.export.title": "Export data",
   "serverSettings.export.description": "Download every channel, member, and message in {server} as a JSON file. Attachment bytes are not included, only their filenames and sizes.",
   "serverSettings.export.action": "Export server data",

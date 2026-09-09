@@ -483,15 +483,69 @@ export function liveHlsServerAllowlist(): Set<string> | null {
 }
 
 /**
- * The per-server answer: the global flag, and the server is on the allowlist
- * (or there is no allowlist). A conversation has no server id and is never
- * HLS, whatever the list says.
+ * `servers.live_hls_enabled` for one server: TRUE / FALSE when an operator
+ * has decided, NULL when nobody has.
+ *
+ * Read per call, never cached, for the same reason the flag is: the whole
+ * point of moving this out of the environment is that a change takes effect
+ * without a deploy and without restarting `pqp-api`. One indexed primary-key
+ * lookup, on paths that run once per room pin and once per share, not per
+ * frame.
+ *
+ * A failed read answers NULL, which falls back to the environment. A database
+ * hiccup must not silently revoke a running event's stream, and the
+ * environment is exactly the answer this deployment had before the column
+ * existed.
  */
-export function isLiveHlsEnabledForServer(
+export async function liveHlsServerOverride(
+  serverId: string,
+): Promise<boolean | null> {
+  try {
+    const result = await getPool().query<{ live_hls_enabled: boolean | null }>(
+      `SELECT live_hls_enabled FROM servers WHERE id = $1`,
+      [serverId],
+    );
+    return result.rows[0]?.live_hls_enabled ?? null;
+  } catch (error) {
+    logEvent("voice.hlsOverrideReadFailed", {
+      serverId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/**
+ * The per-server answer, given the row this server carries. Pure, so the
+ * whole resolution matrix is testable without a database.
+ *
+ * ORDER, AND WHY. The master switch first: `LIVE_HLS_ENABLED` plus LiveKit
+ * plus the dedicated bucket. Nothing below can turn on a deployment that
+ * cannot encode. Then the per-server row, TRUE or FALSE alike, because it is
+ * a decision a person made about this one server, from the dashboard, after
+ * whoever set the environment variable had left the building; it is also the
+ * only kill switch that does not need a deploy, which is worth more during a
+ * live event than consistency with a Fly secret. Only a NULL row falls
+ * through to `LIVE_HLS_SERVER_ALLOWLIST`, which keeps behaving exactly as it
+ * always did: on the list is on, no list at all is every server.
+ *
+ * The last two lines are the previous function verbatim, INCLUDING the case
+ * where there is no allowlist and no server id: a deployment that confines
+ * nothing answers true for a conversation too. That is not obviously right
+ * (nothing starts an egress outside a `watch_party` channel, which is always
+ * in a server), and it is deliberately left alone here: production runs with
+ * an allowlist, so it already answers false, and widening or narrowing it is
+ * a separate decision from moving the list into a table.
+ */
+export function resolveLiveHlsForServer(
   serverId: string | null | undefined,
+  override: boolean | null,
 ): boolean {
   if (!isLiveHlsEnabled()) {
     return false;
+  }
+  if (override !== null) {
+    return override;
   }
   const allowlist = liveHlsServerAllowlist();
   if (allowlist === null) {
@@ -500,11 +554,34 @@ export function isLiveHlsEnabledForServer(
   return Boolean(serverId) && allowlist.has(serverId!);
 }
 
+/**
+ * The per-server answer, reading the row. Async since the source of truth
+ * moved into the database; every caller was already on an async path.
+ */
+export async function isLiveHlsEnabledForServer(
+  serverId: string | null | undefined,
+): Promise<boolean> {
+  if (!isLiveHlsEnabled()) {
+    return false;
+  }
+  return resolveLiveHlsForServer(
+    serverId,
+    serverId ? await liveHlsServerOverride(serverId) : null,
+  );
+}
+
 export interface LiveHlsConfig {
   /** Per-server when a `serverId` is given, the global flag otherwise. */
   enabled: boolean;
   delaySeconds: number;
-  /** Whether an allowlist exists at all; the client may say why it is off. */
+  /**
+   * Whether live HLS is confined to named servers rather than open to all.
+   *
+   * True when `LIVE_HLS_SERVER_ALLOWLIST` is set, and, for a per-server
+   * answer, also when this server's own `live_hls_enabled` row decided it.
+   * The client only ever reads it to say why streaming is off, so "somebody
+   * chose, per server" is the same sentence as "there is a list".
+   */
   allowlisted: boolean;
   /**
    * The renditions this deployment encodes, lowest first. The presenter's
@@ -517,13 +594,15 @@ export interface LiveHlsConfig {
   ladder: { name: string; width: number; height: number; videoKbps: number }[];
 }
 
-export function liveHlsConfig(serverId?: string | null): LiveHlsConfig {
+/**
+ * The deployment-wide answer, with no server in hand. Still synchronous:
+ * nothing here reads a row, and the dashboard's metrics payload wants it on
+ * the hot path with the rest of the process counters.
+ */
+export function liveHlsConfig(): LiveHlsConfig {
   const allowlist = liveHlsServerAllowlist();
   return {
-    enabled:
-      serverId === undefined || serverId === null
-        ? isLiveHlsEnabled()
-        : isLiveHlsEnabledForServer(serverId),
+    enabled: isLiveHlsEnabled(),
     delaySeconds: delaySeconds(),
     allowlisted: allowlist !== null,
     ladder: liveHlsLadder().map((rung) => ({
@@ -533,6 +612,31 @@ export function liveHlsConfig(serverId?: string | null): LiveHlsConfig {
       videoKbps: rung.videoKbps,
     })),
   };
+}
+
+/**
+ * The answer for one server, or the deployment-wide one when there is no
+ * server (`GET /api/live-hls/config` with no `?serverId=`, which is what a
+ * client asks before it knows where it is).
+ */
+export async function liveHlsConfigForServer(
+  serverId: string | null,
+): Promise<LiveHlsConfig> {
+  const base = liveHlsConfig();
+  if (!serverId) {
+    return base;
+  }
+  const override = await liveHlsServerOverride(serverId);
+  return {
+    ...base,
+    enabled: resolveLiveHlsForServer(serverId, override),
+    allowlisted: base.allowlisted || override !== null,
+  };
+}
+
+/** The channels this process is currently running an egress for. */
+export function liveHlsRunningChannelIds(): string[] {
+  return [...rooms.keys()];
 }
 
 export function liveHlsStreamFor(channelId: string): LiveHlsStream | null {
@@ -1692,9 +1796,11 @@ async function startRoom(
  * same presenter re-declaring is a no-op unless their screen track is a new
  * sid, in which case the egress is bound to a dead track and is restarted
  * (new playlist URL, so the caller broadcasts it and viewers reload).
- * `serverId` is the channel's server: a server outside
- * `LIVE_HLS_SERVER_ALLOWLIST` (or a conversation, null) never starts an
- * egress, and one already running for it is stopped.
+ * `serverId` is the channel's server: a server whose `live_hls_enabled` row
+ * (or, with no row, `LIVE_HLS_SERVER_ALLOWLIST`) says no never starts an
+ * egress, and one already running for it is stopped. Read here, per share,
+ * so turning a server off from the dashboard ends its stream at the next
+ * reconcile rather than at the next deploy.
  */
 export function reconcileLiveHls(
   channelId: string,
@@ -1719,7 +1825,7 @@ async function reconcileLiveHlsNow(
   presenterPeerId: string | null,
   serverId: string | null,
 ): Promise<LiveHlsStream | null> {
-  if (!isLiveHlsEnabledForServer(serverId)) {
+  if (!(await isLiveHlsEnabledForServer(serverId))) {
     if (rooms.has(channelId)) {
       await stopRoom(channelId);
     }

@@ -17,6 +17,14 @@
  *     token and only the `days` and `day` parameters forwarded; `/health`
  *     is `${API_ORIGIN}/status.json`. The page only ever talks to its own
  *     origin and never holds a credential.
+ *
+ *     Four `/operator/*` routes join them, and they are this Worker's FIRST
+ *     WRITES. Two reads (find a server, list its voice channels) and two PUTs
+ *     (watch party availability per server, a channel's transport pin). They
+ *     are in `OPERATOR_ROUTES` below, an exact (method, path) table for the
+ *     same reason the API keeps one: the blast radius of the password plus
+ *     the machine token should be readable in one glance, and a prefix is a
+ *     thing somebody widens by accident. Everything else stays GET-only.
  *  3. Serve. `/` is the static page from the assets binding, and
  *     `/insights.js` the one script it loads (the three verdicts on "agora",
  *     kept in their own file so they can be unit tested). Both sit behind the
@@ -247,12 +255,23 @@ async function metricsWithDistribution(
 }
 
 /** Fetch an upstream JSON document and pass status + body through, nothing else. */
-async function proxyJson(url: string, headers: Record<string, string>): Promise<Response> {
+async function proxyJson(
+  url: string,
+  headers: Record<string, string>,
+  init: { method?: string; body?: string } = {},
+): Promise<Response> {
   let upstream: Response;
   try {
     upstream = await fetch(url, {
-      method: "GET",
-      headers: { Accept: "application/json", ...headers },
+      method: init.method ?? "GET",
+      headers: {
+        Accept: "application/json",
+        ...(init.body === undefined
+          ? {}
+          : { "Content-Type": "application/json" }),
+        ...headers,
+      },
+      body: init.body,
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
   } catch {
@@ -263,6 +282,63 @@ async function proxyJson(url: string, headers: Record<string, string>): Promise<
     status: upstream.status,
     headers: { ...BASE_HEADERS, "Content-Type": "application/json; charset=utf-8" },
   });
+}
+
+/**
+ * The operator controls: two reads and two writes, as an exact table.
+ *
+ * `forward` builds the upstream URL from the parameters this Worker is
+ * willing to pass on, and never from the incoming query string wholesale: an
+ * open query passthrough is a proxy nobody asked for, and the same reasoning
+ * already governs `/occupancy`.
+ *
+ * A write's BODY is passed through untouched, because validating it here
+ * would be a second copy of a Zod schema that the API already applies and
+ * that would rot. The API answers 400 for anything that is not the shape, and
+ * the page shows that answer.
+ */
+const OPERATOR_ROUTES: {
+  method: "GET" | "PUT";
+  path: string;
+  forward: (url: URL, origin: string) => string;
+}[] = [
+  {
+    method: "GET",
+    path: "/operator/servers",
+    forward: (url, origin) => {
+      const upstream = new URL(`${origin}/api/admin/servers`);
+      const q = url.searchParams.get("q");
+      if (q) upstream.searchParams.set("q", q);
+      return upstream.toString();
+    },
+  },
+  {
+    method: "GET",
+    path: "/operator/channels",
+    forward: (url, origin) => {
+      const upstream = new URL(`${origin}/api/admin/server-channels`);
+      upstream.searchParams.set("serverId", url.searchParams.get("serverId") ?? "");
+      return upstream.toString();
+    },
+  },
+  {
+    method: "PUT",
+    path: "/operator/server-live-hls",
+    forward: (_url, origin) => `${origin}/api/admin/server-live-hls`,
+  },
+  {
+    method: "PUT",
+    path: "/operator/channel-transport",
+    forward: (_url, origin) => `${origin}/api/admin/channel-voice-transport`,
+  },
+];
+
+function matchOperatorRoute(method: string, path: string) {
+  return (
+    OPERATOR_ROUTES.find(
+      (route) => route.method === method && route.path === path,
+    ) ?? null
+  );
 }
 
 export default {
@@ -290,11 +366,31 @@ export default {
       return unauthorized();
     }
 
+    const origin = (env.API_ORIGIN ?? "").replace(/\/+$/, "");
+
+    // The operator controls. Behind the same password as everything else and
+    // forwarded on the same machine token; the page never holds either.
+    const operatorRoute = matchOperatorRoute(request.method, path);
+    if (operatorRoute) {
+      if (!origin || !env.ADMIN_METRICS_TOKEN) {
+        return json(503, { error: "operator controls not configured" });
+      }
+      return proxyJson(
+        operatorRoute.forward(url, origin),
+        { Authorization: `Bearer ${env.ADMIN_METRICS_TOKEN}` },
+        {
+          method: operatorRoute.method,
+          body:
+            operatorRoute.method === "PUT"
+              ? await request.text()
+              : undefined,
+        },
+      );
+    }
+
     if (request.method !== "GET" && request.method !== "HEAD") {
       return json(404, { error: "not found" });
     }
-
-    const origin = (env.API_ORIGIN ?? "").replace(/\/+$/, "");
 
     if (path === "/metrics") {
       if (!origin || !env.ADMIN_METRICS_TOKEN) {

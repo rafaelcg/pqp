@@ -522,12 +522,22 @@ describe("voice room transport", () => {
         delete process.env.LIVE_HLS_SERVER_ALLOWLIST;
       });
 
-      /** The flag really is on, or every case below passes for free. */
+      /**
+       * The flag really is on, or every case below passes for free.
+       *
+       * `isLiveHlsEnabledForServer` reads `servers.live_hls_enabled` now, so
+       * it is async and it touches the pool. This suite has no seeded server
+       * row, and that is the case being asserted: no row means NULL means the
+       * environment decides, which is exactly what the deploy that carried
+       * the column promised and what every case below relies on.
+       */
       it("the flag is actually set for these cases", async () => {
         const { isLiveHlsEnabledForServer } = await import(
           "../voice/hls-egress.js"
         );
-        expect(isLiveHlsEnabledForServer(randomUUID())).toBe(true);
+        await expect(isLiveHlsEnabledForServer(randomUUID())).resolves.toBe(
+          true,
+        );
       });
 
       it("opens a watch party in a two-member server on the SFU", async () => {

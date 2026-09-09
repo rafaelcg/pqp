@@ -130,7 +130,7 @@ import {
   getServerVoiceBackend,
   isLiveKitConfigured,
 } from "../voice/backends.js";
-import { liveHlsConfig } from "../voice/hls-egress.js";
+import { liveHlsConfigForServer } from "../voice/hls-egress.js";
 import {
   buildMasterPlaylistFor,
   buildSignedPlaylist,
@@ -495,6 +495,19 @@ import {
   isAdminMetricsTokenValid,
 } from "../services/metrics.js";
 import {
+  OPERATOR_CHANNELS_PATH,
+  OPERATOR_CHANNEL_TRANSPORT_PATH,
+  OPERATOR_SERVERS_PATH,
+  OPERATOR_SERVER_LIVE_HLS_PATH,
+  OperatorTargetMissing,
+  listOperatorChannels,
+  listOperatorServers,
+  setChannelVoiceTransport,
+  setChannelVoiceTransportSchema,
+  setServerLiveHls,
+  setServerLiveHlsSchema,
+} from "../services/operator.js";
+import {
   claimHandle,
   findUserIdByHandle,
   getPublicProfileByHandle,
@@ -830,6 +843,10 @@ export function resetApiRateLimits(): void {
   publicCommunityLimiter.reset();
   voiceLeaveLimiter.reset();
   bulkDeleteLimiter.reset();
+  // Keyed on the string "machine" rather than a user id, so unlike every
+  // bucket above it is shared by every test in a file and would otherwise
+  // drain across them.
+  operatorLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -1748,6 +1765,180 @@ router.get(ADMIN_METRICS_PATH, async ({ user }) => {
   return getAdminMetrics();
 });
 
+// ------------------------------------------------- the operator's two levers
+//
+// Watch party availability per server, and a voice channel's transport pin.
+// Same gate and the same two ways in as the reads above: an instance
+// moderator's Clerk session here, or the dashboard's machine token, resolved
+// in `handleApi` against `ADMIN_MACHINE_ROUTES` before Clerk runs.
+//
+// These are the FIRST WRITES on that token. What each one costs when it is
+// wrong is argued in services/operator.ts; the short version is that neither
+// is destructive and both are one click to undo, so neither carries a
+// server-side confirmation. The one genuinely disruptive case, turning a
+// server off while it is streaming to an audience, is confirmed in the
+// dashboard, which is the only place that knows a human is about to do it.
+
+router.get(OPERATOR_SERVERS_PATH, async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return listOperatorServers(url.searchParams.get("q") ?? "");
+});
+
+router.get(OPERATOR_CHANNELS_PATH, async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return operatorChannels(url.searchParams.get("serverId"));
+});
+
+router.put(OPERATOR_SERVER_LIVE_HLS_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  const body = setServerLiveHlsSchema.parse(await readJsonBody(req));
+  return operatorSetServerLiveHls(body.serverId, body.enabled, user.id);
+});
+
+router.put(OPERATOR_CHANNEL_TRANSPORT_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  const body = setChannelVoiceTransportSchema.parse(await readJsonBody(req));
+  return operatorSetChannelTransport(body.channelId, body.transport, user.id);
+});
+
+/**
+ * EVERYTHING the operator dashboard's machine token can reach, and nothing
+ * else, as a flat table of exact (method, pathname) pairs.
+ *
+ * This is the entire blast radius of `ADMIN_METRICS_TOKEN`. It is a table
+ * rather than a chain of `if`s so that adding a route is a visible line in a
+ * diff and widening the token by accident is not a thing a refactor can do:
+ * there is no pattern here to loosen, no prefix to extend, and a path that is
+ * not spelled out below falls through to the ordinary Clerk resolution and
+ * ends in the same 404 as a route that does not exist.
+ *
+ * `DELETE /api/admin/users/:id` is the reason this shape matters. It is on
+ * the same `isInstanceModerator` gate as the reads above and is deliberately
+ * absent here: terminating somebody's account is not something a token in a
+ * Cloudflare Worker behind an HTTP Basic password gets to do.
+ *
+ * The machine caller has no account, so every write it makes is audited with
+ * a NULL actor. See services/operator.ts.
+ */
+const ADMIN_MACHINE_ROUTES: {
+  method: string;
+  path: string;
+  run: (req: IncomingMessage, query: URLSearchParams) => Promise<unknown>;
+}[] = [
+  {
+    method: "GET",
+    path: ADMIN_METRICS_PATH,
+    run: async () => getAdminMetrics(),
+  },
+  {
+    method: "GET",
+    path: ADMIN_VOICE_OCCUPANCY_PATH,
+    run: async (_req, query) => voiceOccupancyReport(occupancyQuery(query)),
+  },
+  {
+    method: "GET",
+    path: OPERATOR_SERVERS_PATH,
+    run: async (_req, query) => listOperatorServers(query.get("q") ?? ""),
+  },
+  {
+    method: "GET",
+    path: OPERATOR_CHANNELS_PATH,
+    run: async (_req, query) => operatorChannels(query.get("serverId")),
+  },
+  {
+    method: "PUT",
+    path: OPERATOR_SERVER_LIVE_HLS_PATH,
+    run: async (req) => {
+      const body = setServerLiveHlsSchema.parse(await readJsonBody(req));
+      return operatorSetServerLiveHls(body.serverId, body.enabled, null);
+    },
+  },
+  {
+    method: "PUT",
+    path: OPERATOR_CHANNEL_TRANSPORT_PATH,
+    run: async (req) => {
+      const body = setChannelVoiceTransportSchema.parse(await readJsonBody(req));
+      return operatorSetChannelTransport(body.channelId, body.transport, null);
+    },
+  },
+];
+
+export function matchAdminMachineRoute(
+  method: string,
+  pathname: string,
+): (typeof ADMIN_MACHINE_ROUTES)[number] | null {
+  return (
+    ADMIN_MACHINE_ROUTES.find(
+      (route) => route.method === method && route.path === pathname,
+    ) ?? null
+  );
+}
+
+/**
+ * The machine caller's request budget, keyed on the caller rather than on an
+ * identity it does not have. Wide enough for a dashboard that polls every 30
+ * seconds and an operator clicking, narrow enough that a runaway loop in the
+ * page is a 429 rather than a load test against production.
+ */
+const operatorLimiter = createRateLimiter({
+  capacity: limitFromEnv("RATE_LIMIT_OPERATOR_CAPACITY", 60),
+  refillPerSecond: limitFromEnv("RATE_LIMIT_OPERATOR_REFILL", 1),
+});
+
+/**
+ * The four handlers, once, so the session route above and the machine-token
+ * dispatch below cannot drift. Every one of them turns a missing target into
+ * the same 404 the router would have produced.
+ */
+async function operatorChannels(serverId: string | null) {
+  if (!serverId) {
+    throw new HttpError(400, "serverId is required");
+  }
+  const list = await listOperatorChannels(serverId);
+  if (!list) {
+    throw new NotFound("Server not found");
+  }
+  return list;
+}
+
+async function operatorSetServerLiveHls(
+  serverId: string,
+  enabled: boolean | null,
+  actorId: string | null,
+) {
+  try {
+    return await setServerLiveHls(serverId, enabled, actorId);
+  } catch (error) {
+    if (error instanceof OperatorTargetMissing) {
+      throw new NotFound(error.message);
+    }
+    throw error;
+  }
+}
+
+async function operatorSetChannelTransport(
+  channelId: string,
+  transport: "mesh" | "livekit" | null,
+  actorId: string | null,
+) {
+  try {
+    return await setChannelVoiceTransport(channelId, transport, actorId);
+  } catch (error) {
+    if (error instanceof OperatorTargetMissing) {
+      throw new NotFound(error.message);
+    }
+    throw error;
+  }
+}
+
 // --------------------------------------------------------- user discovery
 
 /**
@@ -1934,10 +2125,12 @@ router.get("/api/voice/backend", async () => {
   };
 });
 
-// `?serverId=` answers for that server (the allowlist applies); without it,
-// the global flag, which is what a client asks before it knows the server.
+// `?serverId=` answers for that server (its `live_hls_enabled` row, else the
+// allowlist); without it, the global flag, which is what a client asks before
+// it knows the server. Read per request, so an operator flipping a server on
+// the dashboard is answered correctly by the very next call.
 router.get("/api/live-hls/config", async ({ url }) =>
-  liveHlsConfig(url.searchParams.get("serverId")),
+  liveHlsConfigForServer(url.searchParams.get("serverId")),
 );
 
 /**
@@ -7529,18 +7722,36 @@ export async function handleApi(
   // deliberately: it is the same reader, the same dashboard and the same
   // sensitivity (aggregate counts, no id, no name), and a second secret to
   // rotate would be a second secret to forget.
-  const isAdminMetricsRequest =
-    req.method === "GET" && pathname === ADMIN_METRICS_PATH;
-  const isAdminOccupancyRequest =
-    req.method === "GET" && pathname === ADMIN_VOICE_OCCUPANCY_PATH;
-  const isAdminMachineRequest = isAdminMetricsRequest || isAdminOccupancyRequest;
-  if (isAdminMachineRequest && isAdminMetricsTokenValid(req.headers.authorization)) {
-    if (isAdminOccupancyRequest) {
-      const query = new URL(req.url ?? "/", "http://localhost").searchParams;
-      sendJson(res, 200, await voiceOccupancyReport(occupancyQuery(query)), req);
+  const machineRoute = matchAdminMachineRoute(req.method ?? "GET", pathname);
+  const isAdminMachineRequest = machineRoute !== null;
+  if (machineRoute && isAdminMetricsTokenValid(req.headers.authorization)) {
+    // The operator's own bucket. The per-identity limiters below are keyed on
+    // a user id and this caller has none, so without this a loop in the
+    // dashboard's own JavaScript would hit the database as fast as the Worker
+    // could forward it. One dashboard, generous; a script, not.
+    if (!operatorLimiter.take("machine")) {
+      res.setHeader("Retry-After", String(operatorLimiter.retryAfter("machine")));
+      sendError(res, 429, "Slow down", req);
       return;
     }
-    sendJson(res, 200, await getAdminMetrics(), req);
+    const query = new URL(req.url ?? "/", "http://localhost").searchParams;
+    try {
+      sendJson(res, 200, await machineRoute.run(req, query), req);
+    } catch (error) {
+      if (error instanceof HttpError) {
+        sendError(res, error.status, error.message, req);
+      } else if (
+        error &&
+        typeof error === "object" &&
+        "name" in error &&
+        error.name === "ZodError"
+      ) {
+        sendError(res, 400, "Invalid request", req);
+      } else {
+        console.error("[operator] machine route failed:", error);
+        sendError(res, 500, "Internal server error", req);
+      }
+    }
     return;
   }
 
