@@ -487,6 +487,18 @@ own show minutes before it starts. The worst an allowed join costs is one
 seat; the worst a wrongly refused one costs is the party. A refusal is
 `voice.watchPartySeatRefused` in the log.
 
+**What it does to Android, which is the client this touches hardest.**
+`Models.kt` has `isVoice = type == "voice" || type == "watch_party"`, so
+Android treats a party room as an ordinary voice channel and offers a join;
+it has no watch surface, so what it could ever get there was audio from
+whoever was on a microphone. From now on that join is refused in a voiceless
+party, and refused the way every other refusal on this path is refused: a
+cold join gets no frame back at all, so the app sits in "connecting" rather
+than being told. That is not a new failure shape (a timeout, a block and a
+CONNECT deny have always ended the same way) and it is not a good one. The
+fix is a `voice-join-refused` for cold joins as well as resumes, which is a
+wider change than this one and wants the three clients moving together.
+
 **Legacy rows read as ON.** A party stored before this option existed has no
 `voiceEnabled` key, and it was set up when every watch party was a voice room.
 `withLegacyWatchPartyVoice` restores that reading **before** the zod schema
