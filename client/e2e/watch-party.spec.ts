@@ -1219,6 +1219,97 @@ test("a viewer can tell they are watching, and can stop", async ({
   }
 });
 
+test("the film still fills the window on a platform with no element fullscreen", async ({
+  browser,
+}) => {
+  /**
+   * THE PATH ELECTRON AND AN IPHONE TAKE, and the one most likely to be
+   * shipped broken, because Chromium on a laptop never walks it.
+   * `element-fullscreen.ts` exists because an Electron shell can refuse a
+   * request without resolving it, rejecting it or firing an event, so a
+   * caller that gets `false` back still owes the person a filled viewport.
+   * An untested fallback in this repo is the "working and silently not
+   * working look identical" trap, so the API is removed from the page and
+   * the in-page `expand` is asserted for real.
+   */
+  const shared = await seedServer("wp-fs2", "wp-fs2-guest");
+  const party = await createParty("wp-fs2", shared.serverId, "Cinemoon");
+  await setPartyState("wp-fs2", party.partyId, "live");
+
+  const second = await secondClient(browser);
+  try {
+    const viewer = second.page;
+    // Both spellings, before anything boots. A platform that has neither is
+    // exactly what `requestElementFullscreen` throws for.
+    await viewer.addInitScript(() => {
+      // @ts-expect-error deleting a platform API is the point
+      delete Element.prototype.requestFullscreen;
+      // @ts-expect-error the prefixed spelling too
+      delete Element.prototype.webkitRequestFullscreen;
+    });
+    await withFakeLiveStream(viewer, party.channelId);
+    await openAs(
+      viewer,
+      `/app/server/${shared.serverId}/channel/${party.channelId}`,
+      "wp-fs2-guest",
+    );
+    await expect(viewer.getByTestId("watch-channel-stage")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    await viewer.getByTestId("watch-stage-fullscreen").click();
+
+    // No element went fullscreen, and the pane covers the window anyway.
+    await expect
+      .poll(
+        () =>
+          viewer.evaluate(() => {
+            const pane = document.querySelector<HTMLElement>(
+              "[data-call-split]",
+            );
+            return pane?.hasAttribute("data-watch-expanded") ?? false;
+          }),
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+    const filled = await viewer.evaluate(() => {
+      const pane = document.querySelector<HTMLElement>("[data-call-split]")!;
+      const rect = pane.getBoundingClientRect();
+      return {
+        fullscreenElement: document.fullscreenElement !== null,
+        top: Math.round(rect.top),
+        left: Math.round(rect.left),
+        height: Math.round(rect.height),
+        width: Math.round(rect.width),
+        viewport: { w: window.innerWidth, h: window.innerHeight },
+      };
+    });
+    expect(filled.fullscreenElement).toBe(false);
+    expect(filled.top).toBe(0);
+    expect(filled.left).toBe(0);
+    expect(filled.height).toBe(filled.viewport.h);
+    expect(filled.width).toBe(filled.viewport.w);
+
+    // AND ESCAPE WORKS HERE TOO. In element fullscreen the browser owns it
+    // and never tells the page; in this mode nothing does, so the hook binds
+    // it. A full-window layout whose only exit is a control somebody has to
+    // find is the state this is meant to avoid being stuck in.
+    await viewer.keyboard.press("Escape");
+    await expect
+      .poll(() =>
+        viewer.evaluate(
+          () =>
+            document
+              .querySelector("[data-call-split]")
+              ?.hasAttribute("data-watch-expanded") ?? false,
+        ),
+      )
+      .toBe(false);
+  } finally {
+    await second.context.close();
+  }
+});
+
 test("a viewer can put the film on the whole screen, with the chat", async ({
   browser,
 }) => {
