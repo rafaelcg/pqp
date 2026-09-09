@@ -76,3 +76,31 @@ fun watchPhaseOf(
     hasFrame -> WatchPhase.Playing
     else -> WatchPhase.Opening
 }
+
+/**
+ * The viewer token's life, and when to get a new one.
+ *
+ * `HLS_VIEWER_TOKEN_TTL_MS` is an hour and a film is longer, which is the
+ * whole problem: the token stamped into the URL this player attached is a
+ * capability with a clock on it, and the player refetches that same URL for
+ * the entire watch. Left alone it expires mid-film, the proxy answers 401, and
+ * the recovery is a fatal error plus a reconnect. That recovery does work, and
+ * it is not good enough: it is an uncontrolled failure in the middle of a
+ * party, and everything before it looked fine.
+ *
+ * So the swap is scheduled instead. Ten minutes of margin, and it costs
+ * nothing: the URL the audience keyframe has been restamping every thirty
+ * seconds is already in the store, so the renewal is one re-attach and no
+ * round trip. iOS renews at the same moment for the same reason
+ * (`WatchStreamSwap`, see docs/WATCH_PARTY.md), and the two were written
+ * without either side reading the other, which is a reason to write the rule
+ * down rather than leave it as a bare constant.
+ *
+ * The margin has to stay wide enough to survive a socket that was down for a
+ * while, because the store only holds a fresh token if a `channel-live`
+ * actually arrived: a client offline for the last few minutes renews with
+ * whatever it last heard, and that has to still be valid.
+ */
+const val HLS_VIEWER_TOKEN_TTL_MS: Long = 60 * 60 * 1000
+
+const val WATCH_TOKEN_RENEWAL_MS: Long = 50 * 60 * 1000

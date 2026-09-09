@@ -63,6 +63,7 @@ import gg.pqp.app.watch.ChannelLive
 import gg.pqp.app.watch.HlsWatchdog
 import gg.pqp.app.watch.LiveStream
 import gg.pqp.app.watch.WatchPhase
+import gg.pqp.app.watch.WATCH_TOKEN_RENEWAL_MS
 import gg.pqp.app.watch.WatchdogDecision
 import gg.pqp.app.watch.watchPhaseOf
 import gg.pqp.app.watch.watchSourceChanged
@@ -308,6 +309,17 @@ fun WatchPane(
                 }
             }
         }
+    }
+
+    // The token renewal. A film is longer than an hour and the token is not,
+    // so the swap is scheduled rather than left to expire into a 401 in the
+    // middle of the party. Keyed on the attach, so a reconnect restarts the
+    // clock; `attempt` is what re-attaches, and it picks up the freshly
+    // stamped URL the keyframe has already delivered.
+    LaunchedEffect(player, attached?.startedAt, attempt) {
+        if (attached == null) return@LaunchedEffect
+        delay(WATCH_TOKEN_RENEWAL_MS)
+        attempt += 1
     }
 
     // The stream went away. Stop rather than sit on the last decoded frame:

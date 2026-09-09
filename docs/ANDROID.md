@@ -1225,6 +1225,16 @@ Each of those refetches `GET /api/channels/:id/live` for the new session. Three
 inside five minutes and the stream is called dead: a button, not a spinner,
 because a phone retrying forever is somebody's data plan.
 
+**The token is renewed on a clock, not on a failure.** `HLS_VIEWER_TOKEN_TTL_MS`
+is an hour and a film is longer, so the token stamped into the attached URL
+expires mid-party if nothing is done: the proxy answers 401 and the recovery is
+a fatal error plus a reconnect. That recovery works and is not good enough, so
+the swap is scheduled at fifty minutes instead, re-attaching with the URL the
+audience keyframe has already restamped. iOS renews at the same moment for the
+same reason (`WatchStreamSwap`), and the two were written without either side
+reading the other. `WatchSourceTest` pins the margin against the TTL and
+against the keyframe cadence that supplies the replacement.
+
 Backgrounding pauses and coming back seeks to the live edge, rather than
 resuming ten minutes behind everybody else. This app's foreground-service
 exemption is for a *call*; a film does not get one.
