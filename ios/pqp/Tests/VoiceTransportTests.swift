@@ -82,12 +82,105 @@ final class VoiceTransportTests: XCTestCase {
         XCTAssertEqual(back["resume"] as? Bool, true)
     }
 
-    /// Only an SFU deployment gets the seat held. A mesh room that held one
-    /// would show a ghost of this phone for 90 seconds after every blip.
-    func testResumeIsDeclaredOnlyForLiveKitDeployments() {
-        XCTAssertTrue(VoiceBackendInfo(backend: "livekit").declaresResume)
-        XCTAssertFalse(VoiceBackendInfo(backend: "mesh").declaresResume)
-        XCTAssertFalse(VoiceBackendInfo(backend: "cloudflare-sfu").declaresResume)
+    /**
+     WHAT `GET /api/voice/backend` ACTUALLY TELLS US, which is less than it
+     looks.
+
+     This is the DEPLOYMENT's default and nothing about the room being joined.
+     The property used to be called `declaresResume` and was fed straight into
+     `join-voice-room.resume`, under a comment that said "only an SFU
+     deployment gets the seat held. A mesh room that held one would show a
+     ghost of this phone for 90 seconds after every blip." The comment was
+     right about the harm and the code did the harm anyway: production runs
+     LiveKit, so it answered true for every room, mesh ones included.
+
+     The name is the fix as much as the rule is. `declaresVoiceResume` below
+     is the only thing allowed to answer the resume question.
+     */
+    func testTheBackendEndpointOnlyDescribesTheDeployment() {
+        XCTAssertTrue(VoiceBackendInfo(backend: "livekit").runsLiveKit)
+        XCTAssertFalse(VoiceBackendInfo(backend: "mesh").runsLiveKit)
+        XCTAssertFalse(VoiceBackendInfo(backend: "cloudflare-sfu").runsLiveKit)
+    }
+
+    // MARK: - Whether to ask the server to hold this seat
+
+    /**
+     THE GHOST SEAT, which is what this rule exists to stop.
+
+     `resume: true` makes the server keep this peer in the room for 90 seconds
+     after the socket dies instead of removing it and telling everyone. This
+     client can only honour that in a LiveKit room; on mesh it tears every peer
+     connection down on `ready` and cold rejoins with a NEW peer id. So a mesh
+     seat that was held is a person in the roster who is not there and never
+     coming back, which is the one person room nobody is in.
+     */
+    func testAMeshRoomNeverAsksForItsSeatToBeHeld() {
+        XCTAssertFalse(declaresVoiceResume(
+            roomKind: .serverChannel, knownTransport: .mesh, deploymentRunsLiveKit: true
+        ))
+        XCTAssertFalse(declaresVoiceResume(
+            roomKind: .conversation, knownTransport: .mesh, deploymentRunsLiveKit: true
+        ))
+    }
+
+    /// The case the whole mechanism is for: a LiveKit room's media is a
+    /// separate connection to a separate host and survives a `/ws` blip, so
+    /// the seat should be waiting when the socket comes back.
+    func testALiveKitRoomAsksForItsSeatToBeHeld() {
+        XCTAssertTrue(declaresVoiceResume(
+            roomKind: .serverChannel, knownTransport: .livekit, deploymentRunsLiveKit: true
+        ))
+    }
+
+    /**
+     A DM OR GROUP CALL, COLD, ON A LIVEKIT DEPLOYMENT. This is the exact
+     production case that leaked seats.
+
+     `transport-policy.ts` returns mesh for any channel whose kind is not
+     `server`, before it looks at the deployment, the server size or anything
+     else. So a conversation call's transport IS known at join time without a
+     `welcome`, and the answer is always no.
+     */
+    func testAColdConversationCallNeverAsksEvenOnALiveKitDeployment() {
+        XCTAssertFalse(declaresVoiceResume(
+            roomKind: .conversation, knownTransport: nil, deploymentRunsLiveKit: true
+        ))
+    }
+
+    /// A server voice channel is genuinely unknown before `welcome`, so the
+    /// deployment default is still the best guess available and is kept rather
+    /// than traded for a different silent wrong answer. A small server's mesh
+    /// channel can therefore still ghost once; the durable fix is server side,
+    /// where the room's pinned transport is already known.
+    func testAColdServerChannelStillFollowsTheDeployment() {
+        XCTAssertTrue(declaresVoiceResume(
+            roomKind: .serverChannel, knownTransport: nil, deploymentRunsLiveKit: true
+        ))
+        XCTAssertFalse(declaresVoiceResume(
+            roomKind: .serverChannel, knownTransport: nil, deploymentRunsLiveKit: false
+        ))
+    }
+
+    /// A deployment with no SFU cannot produce a LiveKit room, so nothing is
+    /// ever held. Belt to the suspender above.
+    func testAMeshOnlyDeploymentNeverAsks() {
+        for kind in [VoiceRoomKind.conversation, .serverChannel] {
+            XCTAssertFalse(declaresVoiceResume(
+                roomKind: kind, knownTransport: nil, deploymentRunsLiveKit: false
+            ))
+        }
+    }
+
+    /// What the room is beats what the deployment is, in both directions: once
+    /// `welcome` has spoken the guess is irrelevant.
+    func testTheRoomOutranksTheDeployment() {
+        XCTAssertTrue(declaresVoiceResume(
+            roomKind: .conversation, knownTransport: .livekit, deploymentRunsLiveKit: false
+        ))
+        XCTAssertFalse(declaresVoiceResume(
+            roomKind: .serverChannel, knownTransport: .mesh, deploymentRunsLiveKit: true
+        ))
     }
 
     // MARK: - The token request

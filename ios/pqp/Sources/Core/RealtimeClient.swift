@@ -80,7 +80,7 @@ enum RealtimeEvent: Sendable {
     /// False means: join muted, keep the mic locked, offer no share or camera.
     case voiceWelcome(peerId: String, voiceChannelId: String, peers: [VoiceParticipant],
                       selfPeer: VoiceParticipant, transport: String?,
-                      resumed: Bool, resumeToken: String?, canSpeak: Bool)
+                      resumed: Bool, resumeToken: String?, canSpeak: Bool, canStream: Bool)
     case voicePeerJoined(VoiceParticipant)
     /// Somebody already in the room now shows a different name or picture.
     /// Distinct from `voicePeerJoined` on purpose: that one opens a peer
@@ -102,7 +102,17 @@ enum RealtimeEvent: Sendable {
     /// override, a timeout. `false` mutes and locks the controls; `true`
     /// unlocks them and leaves the unmute to the person. Unicast; the roster
     /// frame that follows carries the same bit for everybody else.
-    case voiceSpeakChanged(voiceChannelId: String, canSpeak: Bool)
+    case voiceSpeakChanged(voiceChannelId: String, canSpeak: Bool, canStream: Bool)
+    /// The join was refused after we asked to resume (an ACL change, the
+    /// orphan window elapsed, a block), or a cold mesh join was refused
+    /// because the API is on more than one machine and this one cannot relay
+    /// to the room's peers.
+    ///
+    /// A client that is HOLDING media when this lands has to hang up. It is
+    /// not in the room, nobody can hear it, and it is absent from every
+    /// roster, so sitting on a live microphone and a call screen is the same
+    /// silent broken call a released seat produces.
+    case voiceJoinRefused(voiceChannelId: String, reason: String?)
     case voiceRoomFull(limit: Int)
     /// The call is already at the screen-share cap. Unicast to whoever tried.
     case voiceScreenShareDenied(voiceChannelId: String)
@@ -229,17 +239,24 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
     /// it, and absent has to read as "nobody is muted", not as a failed frame.
     var serverMuted: Bool = false
     /// Set by the server, never self-reported: the channel's SPEAK permission
-    /// resolved for this person. It is the mic grant and also the screen and
-    /// camera grant (`set-sharing-screen` answers `screen-share-denied` when
-    /// it is false). Absent on a server that predates the field, which reads
-    /// as true, exactly as `welcome.canSpeak` does on the web.
+    /// resolved for this person. The MICROPHONE grant, and only that. Absent
+    /// on a server that predates the field, which reads as true, exactly as
+    /// `welcome.canSpeak` does on the web.
     var canSpeak: Bool = true
+    /// The channel's STREAM permission, which is the camera and screen share
+    /// grant and is a SEPARATE bit from `canSpeak`.
+    ///
+    /// Defaulted to `canSpeak` rather than to true, and decoded after it for
+    /// that reason: absent means a server from before the grants were split,
+    /// where SPEAK gated publishing too. See `VoiceSpeakRule.resolveStream`.
+    var canStream: Bool = true
 
     var id: String { peerId }
 
     enum CodingKeys: String, CodingKey {
         case peerId, userId, displayName, avatarUrl, sharingScreen
-        case cameraStreamId, screenAudioStreamId, muted, deafened, serverMuted, canSpeak
+        case cameraStreamId, screenAudioStreamId, muted, deafened, serverMuted
+        case canSpeak, canStream
     }
 
     init(from decoder: Decoder) throws {
@@ -255,6 +272,7 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
         deafened = try c.decodeIfPresent(Bool.self, forKey: .deafened) ?? false
         serverMuted = try c.decodeIfPresent(Bool.self, forKey: .serverMuted) ?? false
         canSpeak = try c.decodeIfPresent(Bool.self, forKey: .canSpeak) ?? true
+        canStream = try c.decodeIfPresent(Bool.self, forKey: .canStream) ?? canSpeak
     }
 }
 
@@ -798,6 +816,10 @@ actor RealtimeClient {
         /// `welcome` (top level, same value as `self.canSpeak`) and
         /// `voice-speak-changed`.
         let canSpeak: Bool?
+        /// `welcome` (top level, same value as `self.canStream`) and
+        /// `voice-speak-changed`. Absent means a server from before SPEAK and
+        /// STREAM were separate grants.
+        let canStream: Bool?
         /// `permissions-update` only. Optional because the frame is advisory:
         /// the client refetches either way, and a missing version just means
         /// "refetch anyway" (`shouldApplyPermissionsVersion` on the web).
@@ -819,7 +841,8 @@ actor RealtimeClient {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
-            case candidate, limit, transport, version, resumed, resumeToken, canSpeak
+            case candidate, limit, transport, version, resumed, resumeToken
+            case canSpeak, canStream
             case seq, size, joined, updated, left
             case conversationId, kind, caller, reason, thread, retryAfterMs, automodMessage
             // `self` is a Swift keyword, so the wire key is remapped.
@@ -1008,6 +1031,14 @@ actor RealtimeClient {
                                   canSpeak: VoiceSpeakRule.resolve(
                                       topLevel: envelope.canSpeak,
                                       selfPeer: selfPeer.canSpeak
+                                  ),
+                                  canStream: VoiceSpeakRule.resolveStream(
+                                      topLevel: envelope.canStream,
+                                      selfPeer: selfPeer.canStream,
+                                      canSpeak: VoiceSpeakRule.resolve(
+                                          topLevel: envelope.canSpeak,
+                                          selfPeer: selfPeer.canSpeak
+                                      )
                                   ))
         case "peer-joined":
             guard let peer = envelope.peer else { return }
@@ -1058,7 +1089,17 @@ actor RealtimeClient {
         case "voice-speak-changed":
             guard let voiceChannelId = envelope.voiceChannelId,
                   let canSpeak = envelope.canSpeak else { return }
-            event = .voiceSpeakChanged(voiceChannelId: voiceChannelId, canSpeak: canSpeak)
+            // `canStream` absent means a server from before the grants were
+            // split, where SPEAK carried both. Never `true`: defaulting a
+            // missing permission open is the wrong direction to be wrong in.
+            event = .voiceSpeakChanged(
+                voiceChannelId: voiceChannelId,
+                canSpeak: canSpeak,
+                canStream: envelope.canStream ?? canSpeak
+            )
+        case "voice-join-refused":
+            guard let voiceChannelId = envelope.voiceChannelId else { return }
+            event = .voiceJoinRefused(voiceChannelId: voiceChannelId, reason: envelope.reason)
         case "voice-room-full":
             event = .voiceRoomFull(limit: envelope.limit ?? 0)
         case "screen-share-denied":

@@ -77,15 +77,82 @@ struct VoiceSessionInfo: Decodable, Equatable, Sendable {
 struct VoiceBackendInfo: Decodable, Sendable {
     let backend: String
 
-    /// Whether to tell the server this client can hold media across a
-    /// signalling drop (`join-voice-room.resume`).
-    ///
-    /// Only for an SFU deployment. A LiveKit room survives a `/ws` blip on its
-    /// own, so holding the seat and reattaching is the right story there. A mesh
-    /// room does not: this client tears its peer connections down on `ready`
-    /// and rejoins cold, and a seat held for a peer that is about to come back
-    /// with a different id is a ghost in everyone's roster for 90 seconds.
-    var declaresResume: Bool { backend == VoiceRoomTransport.livekit.rawValue }
+    /// Whether this deployment has an SFU at all. The *deployment's* default,
+    /// never a statement about the room being joined: a LiveKit deployment
+    /// still pins small servers and every conversation call to mesh. Feeding
+    /// this straight into `join-voice-room.resume` is the ghost seat bug; see
+    /// `declaresVoiceResume`.
+    var runsLiveKit: Bool { backend == VoiceRoomTransport.livekit.rawValue }
+}
+
+/// What kind of room is being joined, as far as the client can know before
+/// `welcome` answers.
+///
+/// Load-bearing for exactly one decision, and only because the server's own
+/// policy is unconditional here: `resolveVoiceTransport` returns mesh for any
+/// channel whose kind is not `server`, before it looks at anything else. So a
+/// conversation call's transport IS knowable at join time, and a voice
+/// channel's is not.
+enum VoiceRoomKind: Equatable, Sendable {
+    /// A DM or group call. Always mesh, by `transport-policy.ts`.
+    case conversation
+    /// A server voice channel. Mesh or LiveKit depending on the server's size,
+    /// its community flag and the channel override, none of which this client
+    /// can compute.
+    case serverChannel
+}
+
+/**
+ WHETHER TO ASK THE SERVER TO HOLD THIS SEAT ACROSS A SOCKET DROP.
+
+ `join-voice-room.resume` is not a preference and not an optimisation. It is a
+ PROMISE that this client is still holding live media and will come back to
+ this exact peer id, and the server acts on it: `removeVoicePeerBySocket` keeps
+ a peer that declared it for `VOICE_RESUME_TTL_MS` (90 seconds) instead of
+ removing it and telling the room.
+
+ THE BUG THIS REPLACES. The declaration used to be read off
+ `GET /api/voice/backend`, which answers what a NEW room on this DEPLOYMENT
+ would be pinned to. Production runs LiveKit, so it answered yes for every
+ room, including the mesh ones. And this client cannot honour it on a mesh
+ room: `ready` tears every peer connection down and rejoins cold with a new
+ peer id. So every mesh call left a seat nobody was in, in the roster, for 90
+ seconds after the phone dropped, backgrounded or was killed. Every
+ conversation call is mesh, so every DM call did it. That is a one person room
+ that nobody is in.
+
+ The rule is therefore: declare it only where this client can actually keep the
+ promise, and say nothing where it cannot know.
+
+ - A room we are already in and know is on **mesh**: no. We tear it down and
+   cold rejoin, so a held seat is a ghost by construction.
+ - A room we are already in and know is on **LiveKit**: yes. The media is a
+   separate connection to a separate host and it is still up, which is exactly
+   what the seat is being held for.
+ - A **cold join** with no `welcome` yet:
+   - a conversation call is mesh by server policy, so: no. Correct by
+     construction rather than by guess.
+   - a server voice channel is genuinely unknown here, so this keeps the old
+     deployment guess rather than trading one silent wrong answer for another.
+     A small server's mesh channel can therefore still ghost once, on the first
+     drop of a session. The durable fix is server side and belongs there: the
+     server knows the room's pinned transport and could simply decline to hold
+     a mesh seat, which would also fix every build already on a phone.
+ */
+func declaresVoiceResume(
+    roomKind: VoiceRoomKind,
+    knownTransport: VoiceRoomTransport?,
+    deploymentRunsLiveKit: Bool
+) -> Bool {
+    if let knownTransport {
+        return knownTransport == .livekit
+    }
+    switch roomKind {
+    case .conversation:
+        return false
+    case .serverChannel:
+        return deploymentRunsLiveKit
+    }
 }
 
 /// What a `welcome` handed back that a later rejoin can present.

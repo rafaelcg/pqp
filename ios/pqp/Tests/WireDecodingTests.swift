@@ -153,7 +153,7 @@ final class WireDecodingTests: XCTestCase {
          "transport":"mesh"}
         """
         let event = await firstEvent(from: json)
-        guard case .voiceWelcome(_, _, let peers, let selfPeer, _, _, _, _) = event else {
+        guard case .voiceWelcome(_, _, let peers, let selfPeer, _, _, _, _, _) = event else {
             return XCTFail("Expected voiceWelcome, got \(String(describing: event))")
         }
         XCTAssertEqual(peers.map(\.serverMuted), [true])
@@ -206,7 +206,7 @@ final class WireDecodingTests: XCTestCase {
          "transport":"livekit"}
         """
         let event = await firstEvent(from: json)
-        guard case .voiceWelcome(_, _, _, _, let transport, _, _, _) = event else {
+        guard case .voiceWelcome(_, _, _, _, let transport, _, _, _, _) = event else {
             return XCTFail("Expected voiceWelcome, got \(String(describing: event))")
         }
         XCTAssertEqual(transport, "livekit")
@@ -220,7 +220,7 @@ final class WireDecodingTests: XCTestCase {
          "displayName":"Ana","avatarUrl":null}}
         """
         let event = await firstEvent(from: json)
-        guard case .voiceWelcome(_, _, _, _, let transport, _, _, _) = event else {
+        guard case .voiceWelcome(_, _, _, _, let transport, _, _, _, _) = event else {
             return XCTFail("Expected voiceWelcome, got \(String(describing: event))")
         }
         XCTAssertNil(transport)
@@ -237,7 +237,7 @@ final class WireDecodingTests: XCTestCase {
          "transport":"livekit","canSpeak":false}
         """
         let event = await firstEvent(from: json)
-        guard case .voiceWelcome(_, _, _, let selfPeer, _, _, _, let canSpeak) = event else {
+        guard case .voiceWelcome(_, _, _, let selfPeer, _, _, _, let canSpeak, _) = event else {
             return XCTFail("Expected voiceWelcome, got \(String(describing: event))")
         }
         XCTAssertFalse(canSpeak)
@@ -253,7 +253,7 @@ final class WireDecodingTests: XCTestCase {
          "peers":[],"self":{"peerId":"p1","userId":"44444444-4444-4444-4444-444444444444",
          "displayName":"Ana","avatarUrl":null,"canSpeak":false}}
         """
-        guard case .voiceWelcome(_, _, _, _, _, _, _, let fromSelf) = await firstEvent(from: onSelf) else {
+        guard case .voiceWelcome(_, _, _, _, _, _, _, let fromSelf, _) = await firstEvent(from: onSelf) else {
             return XCTFail("Expected voiceWelcome")
         }
         XCTAssertFalse(fromSelf)
@@ -263,7 +263,7 @@ final class WireDecodingTests: XCTestCase {
          "peers":[],"self":{"peerId":"p1","userId":"44444444-4444-4444-4444-444444444444",
          "displayName":"Ana","avatarUrl":null}}
         """
-        guard case .voiceWelcome(_, _, _, let selfPeer, _, _, _, let canSpeak) = await firstEvent(from: absent) else {
+        guard case .voiceWelcome(_, _, _, let selfPeer, _, _, _, let canSpeak, _) = await firstEvent(from: absent) else {
             return XCTFail("Expected voiceWelcome")
         }
         XCTAssertTrue(canSpeak)
@@ -278,7 +278,7 @@ final class WireDecodingTests: XCTestCase {
          "voiceChannelId":"33333333-3333-3333-3333-333333333333","canSpeak":false}
         """
         let event = await firstEvent(from: json)
-        guard case .voiceSpeakChanged(let channelId, let canSpeak) = event else {
+        guard case .voiceSpeakChanged(let channelId, let canSpeak, _) = event else {
             return XCTFail("Expected voiceSpeakChanged, got \(String(describing: event))")
         }
         XCTAssertEqual(channelId, "33333333-3333-3333-3333-333333333333")
