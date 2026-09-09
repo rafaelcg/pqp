@@ -3,6 +3,13 @@ import {
   addChannelMemberSchema,
   ageDeclarationSchema,
   createChannelSessionSchema,
+  createWatchPartySchema,
+  updateWatchPartySchema,
+  watchPartyCohostRequestSchema,
+  watchPartyHostRequestSchema,
+  watchPartyStageRequestSchema,
+  watchPartyStateRequestSchema,
+  type WatchPartyAction,
   updateChannelSessionSchema,
   AUDIT_LOG_PAGE_MAX,
   AUDIT_LOG_PAGE_SIZE,
@@ -277,6 +284,27 @@ import {
   setChannelSessionReminder,
   updateChannelSession,
 } from "../services/channel-sessions.js";
+import {
+  addWatchPartyCohost,
+  applyWatchPartyOptions,
+  authoriseWatchParty,
+  createWatchParty,
+  findOrCreateWatchPartyRoom,
+  getActiveWatchPartyRow,
+  getWatchPartyRow,
+  listActiveWatchPartiesForServer,
+  presentWatchParty,
+  inviteToWatchPartyStage,
+  reconcileLiveWatchPartyOptions,
+  removeFromWatchPartyStage,
+  removeWatchPartyCohost,
+  setWatchPartyRaisedHand,
+  transferWatchPartyHost,
+  transitionWatchParty,
+  updateWatchParty,
+  WatchPartyError,
+} from "../services/watch-parties.js";
+import { broadcastWatchParty } from "../ws/watch-party-events.js";
 import { buildServerExport } from "../services/export.js";
 import {
   CommunityListingForbiddenError,
@@ -4090,12 +4118,16 @@ router.post(
   "/api/channels/:channelId/sessions",
   async ({ req, user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
-    // REPLACE-WHEN-READY: swap for START_WATCH_PARTY once
-    // `feat/watch-party-channel` lands that permission bit.
+    // The REPLACE-WHEN-READY from PR #352, honoured: START_WATCH_PARTY is
+    // what says "you may run a show here", and it is the same bit the stage
+    // asks for, so a mod who can put a screen up can also announce it.
+    // MANAGE_CHANNELS is not asked for and is not enough on its own; a
+    // manager holds every bit anyway.
     await requirePermission(
       channel.server_id,
       user.id,
-      Permission.MANAGE_CHANNELS,
+      Permission.START_WATCH_PARTY,
+      channelId!,
     );
     const body = createChannelSessionSchema.parse(await readJsonBody(req));
     if (new Date(body.startsAt).getTime() <= Date.now()) {
@@ -4157,7 +4189,17 @@ router.patch("/api/sessions/:sessionId", async ({ req, user }, { sessionId }) =>
     throw new NotFound("Session not found");
   }
   const channel = await requireServerChannel(existing.channel_id);
-  await requirePermission(channel.server_id, user.id, Permission.MANAGE_CHANNELS);
+  // The host of the session edits their own; MANAGE_CHANNELS edits anyone's.
+  // Before this only the second half existed, so a mod who scheduled a
+  // session on a channel they did not manage could not fix its time.
+  if (existing.host_user_id !== user.id) {
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+      existing.channel_id,
+    );
+  }
   const body = updateChannelSessionSchema.parse(await readJsonBody(req));
   if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
     throw new HttpError(400, "startsAt must be in the future");
@@ -4177,11 +4219,14 @@ router.post(
       throw new NotFound("Session not found");
     }
     const channel = await requireServerChannel(existing.channel_id);
-    await requirePermission(
-      channel.server_id,
-      user.id,
-      Permission.MANAGE_CHANNELS,
-    );
+    if (existing.host_user_id !== user.id) {
+      await requirePermission(
+        channel.server_id,
+        user.id,
+        Permission.MANAGE_CHANNELS,
+        existing.channel_id,
+      );
+    }
     try {
       await cancelChannelSession(sessionId!);
     } catch (error) {
@@ -4214,6 +4259,400 @@ router.delete(
     await requireChannelAccess(existing.channel_id, user.id);
     await setChannelSessionReminder(sessionId!, user.id, false);
     return { ok: true as const, reminding: false as const };
+  },
+);
+
+
+// ------------------------------------------------------- watch parties (event)
+/**
+ * The stage: the host putting somebody up or taking them down, and a viewer
+ * raising or lowering their own hand.
+ *
+ * TWO DIFFERENT AUTHORISATIONS IN ONE ROUTE, which is why the body is a union
+ * rather than one shape with an optional field. `invite` and `remove` are the
+ * host's, and go through `promoteCohost`'s rule because putting somebody on
+ * the stage is the same kind of act as promoting them, one show long.
+ * `raise` and `lower` are the viewer's own and need nothing but the ability
+ * to see the party, because a hand is a request and not a permission.
+ */
+router.post(
+  "/api/watch-parties/:sessionId/stage",
+  async ({ req, user }, { sessionId }) => {
+    const body = watchPartyStageRequestSchema.parse(await readJsonBody(req));
+    const hostSide = body.action === "invite" || body.action === "remove";
+    const { row, actor } = await requireWatchParty(
+      sessionId!,
+      user.id,
+      hostSide ? "promoteCohost" : "view",
+    );
+    if (hostSide) {
+      if (body.action === "invite") {
+        if (!(await canAccessChannel(row.channel_id, body.userId))) {
+          throw new HttpError(400, "That person cannot see this channel");
+        }
+        await inviteToWatchPartyStage(row, body.userId, user.id);
+      } else {
+        await removeFromWatchPartyStage(row, body.userId);
+      }
+    } else {
+      // A hand is only meaningful while a show is running.
+      if (row.status !== "live") {
+        throw new HttpError(409, "This watch party is not live");
+      }
+      await setWatchPartyRaisedHand(
+        sessionId!,
+        user.id,
+        body.action === "raise",
+      );
+    }
+    void broadcastWatchParty(sessionId!);
+    const updated = await getWatchPartyRow(sessionId!);
+    return { party: updated ? await presentWatchParty(updated, actor) : null };
+  },
+);
+
+
+
+/**
+ * The watch party journey. `docs/WATCH_PARTY.md` has the ownership rules; the
+ * state machine and the role table live in
+ * `packages/shared/src/watch-party-session.ts` and are imported by both sides
+ * so a button the client renders and a route the server allows cannot drift.
+ *
+ * A party is a `channel_sessions` row. These routes are the only ones that
+ * know about `draft`, co-hosts and options; the `/api/sessions/...` routes
+ * above stay exactly what PR #352 shipped, for the schedule card.
+ */
+function mapWatchPartyError(error: unknown): never {
+  if (error instanceof WatchPartyError) {
+    if (error.code === "not_found") {
+      throw new NotFound(error.message);
+    }
+    if (error.code === "forbidden") {
+      throw new HttpError(403, error.message);
+    }
+    throw new HttpError(409, error.message);
+  }
+  throw error;
+}
+
+/** The actor's effective permissions on the party's channel. */
+async function watchPartyActor(
+  channel: { server_id: string; id: string },
+  userId: string,
+): Promise<{ userId: string; permissions: bigint }> {
+  return {
+    userId,
+    permissions: await computeMemberPermissions(
+      channel.server_id,
+      userId,
+      channel.id,
+    ),
+  };
+}
+
+/**
+ * Load the party, check the actor may do this to it, and hand back everything
+ * the route needs. Every mutating route starts here, so "who may" is asked in
+ * one place and asked before anything is written.
+ */
+async function requireWatchParty(
+  sessionId: string,
+  userId: string,
+  action: WatchPartyAction,
+) {
+  const row = await getWatchPartyRow(sessionId);
+  if (!row) {
+    throw new NotFound("Watch party not found");
+  }
+  const channel = await requireServerChannel(row.channel_id);
+  if (!(await canAccessChannel(row.channel_id, userId))) {
+    throw new NotFound("Watch party not found");
+  }
+  const actor = await watchPartyActor(channel, userId);
+  try {
+    const { role } = await authoriseWatchParty(row, actor, action);
+    return { row, channel, actor, role };
+  } catch (error) {
+    mapWatchPartyError(error);
+  }
+}
+
+/**
+ * START A WATCH PARTY, without first making a channel for it.
+ *
+ * The action Rafael asked for: one control for people who hold
+ * START_WATCH_PARTY, no channel type to pick, no room to name. This finds or
+ * makes the server's hidden party room and opens a draft in it, so the client
+ * needs one call rather than a create-channel followed by a create-party.
+ *
+ * ASKED OF THE SERVER, NOT A CHANNEL, because there may be no channel yet. A
+ * per-channel deny on the room that already exists is still honoured: the
+ * draft is created through the same service the per-channel route uses, and
+ * everything after this point (going live, the stage, the egress) re-resolves
+ * the bit against the actual channel.
+ */
+router.post(
+  "/api/servers/:serverId/watch-parties",
+  async ({ req, user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.START_WATCH_PARTY);
+    const body = createWatchPartySchema.parse(await readJsonBody(req));
+    if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
+      throw new HttpError(400, "startsAt must be in the future");
+    }
+    const channelId = await findOrCreateWatchPartyRoom(serverId!);
+    const channel = await requireServerChannel(channelId);
+    // The room may have just been created, so the client has never seen it.
+    // Handing it back whole lets the caller put it in its channel list and
+    // select it in one go, the same way the create-channel route does; a bare
+    // id would select a channel the client cannot resolve, which is a blank
+    // "Escolha um canal" pane on the very click that starts the party.
+    const room = mapChannel(channel);
+    try {
+      const row = await createWatchParty({
+        channelId,
+        serverId: channel.server_id,
+        name: body.name,
+        description: body.description ?? null,
+        startsAt: body.startsAt ?? null,
+        options: body.options ?? {},
+        hostUserId: user.id,
+      });
+      const actor = await watchPartyActor(channel, user.id);
+      const party = await presentWatchParty(row, actor);
+      void broadcastWatchParty(row.id);
+      return { party, channel: room };
+    } catch (error) {
+      mapWatchPartyError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/channels/:channelId/watch-parties",
+  async ({ req, user }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.START_WATCH_PARTY,
+      channelId!,
+    );
+    const body = createWatchPartySchema.parse(await readJsonBody(req));
+    if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
+      throw new HttpError(400, "startsAt must be in the future");
+    }
+    try {
+      const row = await createWatchParty({
+        channelId: channelId!,
+        serverId: channel.server_id,
+        name: body.name,
+        description: body.description ?? null,
+        startsAt: body.startsAt ?? null,
+        options: body.options ?? {},
+        hostUserId: user.id,
+      });
+      const actor = await watchPartyActor(channel, user.id);
+      const party = await presentWatchParty(row, actor);
+      // A draft is announced to nobody. `broadcastWatchParty` re-resolves the
+      // audience per socket and drops anyone who may not see this state, so
+      // calling it here is safe as well as correct for a scheduled party.
+      void broadcastWatchParty(row.id);
+      return { party };
+    } catch (error) {
+      mapWatchPartyError(error);
+    }
+  },
+);
+
+/** The channel's active party as this person may see it, or null. */
+router.get(
+  "/api/channels/:channelId/watch-party",
+  async ({ user }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireChannelAccess(channelId!, user.id);
+    const row = await getActiveWatchPartyRow(channelId!);
+    if (!row) {
+      return { party: null };
+    }
+    const actor = await watchPartyActor(channel, user.id);
+    return { party: await presentWatchParty(row, actor) };
+  },
+);
+
+/**
+ * Every party in the server this person may see, for the sidebar's live
+ * block. One request per server rather than one per channel: the block sits
+ * above the categories and has to know before any channel is opened.
+ */
+router.get(
+  "/api/servers/:serverId/watch-parties",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    const cache = new Map<string, bigint>();
+    const parties = await listActiveWatchPartiesForServer(serverId!, {
+      userId: user.id,
+      permissionsFor: async (channelId) => {
+        const hit = cache.get(channelId);
+        if (hit !== undefined) {
+          return hit;
+        }
+        const perms = await computeMemberPermissions(
+          serverId!,
+          user.id,
+          channelId,
+        );
+        cache.set(channelId, perms);
+        return perms;
+      },
+    });
+    // A party on a channel this person cannot see must not leak through the
+    // server-wide list, which is why VIEW is re-checked per channel here and
+    // not trusted to the party's own row.
+    const visible: typeof parties = [];
+    for (const party of parties) {
+      if (await canAccessChannel(party.channelId, user.id)) {
+        visible.push(party);
+      }
+    }
+    return { parties: visible };
+  },
+);
+
+router.patch("/api/watch-parties/:sessionId", async ({ req, user }, { sessionId }) => {
+  const { row, actor } = await requireWatchParty(sessionId!, user.id, "edit");
+  const body = updateWatchPartySchema.parse(await readJsonBody(req));
+  if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
+    throw new HttpError(400, "startsAt must be in the future");
+  }
+  try {
+    const updated = await updateWatchParty(sessionId!, {
+      name: body.name,
+      description: body.description,
+      startsAt: body.startsAt,
+      options: body.options,
+    });
+    // The options are editable WHILE the party runs, and a host moving "quem
+    // pode falar" from `everyone` to `hosts_only` mid-show has to take effect
+    // for the people already in the room. The reconciler is idempotent, so
+    // calling it for a rename costs one read and writes nothing.
+    if (body.options) {
+      await reconcileLiveWatchPartyOptions(sessionId!).catch((error) => {
+        console.error("[watch-party] option reconcile failed:", error);
+      });
+    }
+    void broadcastWatchParty(row.id);
+    return { party: await presentWatchParty(updated, actor) };
+  } catch (error) {
+    mapWatchPartyError(error);
+  }
+});
+
+/**
+ * The one route that moves a party: Ir ao vivo, Encerrar, Cancelar, and
+ * publishing a draft.
+ *
+ * ONE ROUTE RATHER THAN FOUR because the transition table already says which
+ * moves exist and the role table already says who may make them. Four routes
+ * would be four places to forget one of those two checks.
+ */
+router.post(
+  "/api/watch-parties/:sessionId/state",
+  async ({ req, user }, { sessionId }) => {
+    const body = watchPartyStateRequestSchema.parse(await readJsonBody(req));
+    const action: WatchPartyAction =
+      body.state === "live"
+        ? "goLive"
+        : body.state === "ended"
+          ? "end"
+          : body.state === "cancelled"
+            ? "cancel"
+            : "schedule";
+    const { row, actor } = await requireWatchParty(sessionId!, user.id, action);
+    try {
+      const moved = await transitionWatchParty(
+        sessionId!,
+        body.state,
+        row.status,
+      );
+      // Going live is the moment the host's setup choices become the room's
+      // rules. Slow mode is a channel field owned by the chat feature; the
+      // party only carries what the host picked in the sheet so one press
+      // applies it, and ending puts it back.
+      await applyWatchPartyOptions(moved, body.state);
+      void broadcastWatchParty(sessionId!);
+      return { party: await presentWatchParty(moved, actor) };
+    } catch (error) {
+      mapWatchPartyError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/watch-parties/:sessionId/cohosts",
+  async ({ req, user }, { sessionId }) => {
+    const body = watchPartyCohostRequestSchema.parse(await readJsonBody(req));
+    const { row, actor, channel } = await requireWatchParty(
+      sessionId!,
+      user.id,
+      body.cohost ? "promoteCohost" : "demoteCohost",
+    );
+    if (body.userId === row.host_user_id) {
+      throw new HttpError(409, "The host is already running this party");
+    }
+    if (body.cohost) {
+      // A co-host has to be able to reach the channel in the first place;
+      // promoting someone who cannot see the room produces a person with
+      // authority over a party they cannot open.
+      if (!(await canAccessChannel(row.channel_id, body.userId))) {
+        throw new HttpError(400, "That person cannot see this channel");
+      }
+      await requireServerMember(channel.server_id, body.userId);
+      await addWatchPartyCohost(sessionId!, body.userId, user.id);
+    } else {
+      await removeWatchPartyCohost(sessionId!, body.userId);
+    }
+    void broadcastWatchParty(sessionId!);
+    const updated = await getWatchPartyRow(sessionId!);
+    return { party: updated ? await presentWatchParty(updated, actor) : null };
+  },
+);
+
+/**
+ * Hand the party over, or take it after the host dropped.
+ *
+ * Both live here because they are the same write with different authority:
+ * `{ userId }` is the host delegating, `{ claim: true }` is a co-host
+ * succeeding. Splitting them would duplicate the transfer transaction.
+ */
+router.post(
+  "/api/watch-parties/:sessionId/host",
+  async ({ req, user }, { sessionId }) => {
+    const body = watchPartyHostRequestSchema.parse(await readJsonBody(req));
+    const claiming = body.claim === true;
+    const { row, actor, channel } = await requireWatchParty(
+      sessionId!,
+      user.id,
+      claiming ? "claimHost" : "transferHost",
+    );
+    const newHostId = claiming ? user.id : body.userId;
+    if (!newHostId) {
+      throw new HttpError(400, "userId is required to hand the party over");
+    }
+    if (!claiming) {
+      await requireServerMember(channel.server_id, newHostId);
+      if (!(await canAccessChannel(row.channel_id, newHostId))) {
+        throw new HttpError(400, "That person cannot see this channel");
+      }
+    }
+    try {
+      const moved = await transferWatchPartyHost(sessionId!, newHostId);
+      void broadcastWatchParty(sessionId!);
+      return { party: await presentWatchParty(moved, actor) };
+    } catch (error) {
+      mapWatchPartyError(error);
+    }
   },
 );
 

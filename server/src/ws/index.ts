@@ -15,6 +15,11 @@ import {
   unregisterStatusSocket,
 } from "./status.js";
 import {
+  catchUpWatchParties,
+  onHostSocketClosed,
+  onHostSocketOpened,
+} from "./watch-party-events.js";
+import {
   handleVoiceMessage,
   isSocketInVoice,
   removeVoicePeerBySocket,
@@ -267,6 +272,16 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       void registerStatusSocket(socket, resolved.user.id).catch((error) => {
         console.error("[ws] status registration failed:", error);
       });
+      // A host reconnecting stops the grace clock on their live party, and a
+      // client connecting mid-show is told about every party it may see. Both
+      // are fire and forget: `ready` must not wait on either, and the worst
+      // case is a sidebar block that arrives with the next state change.
+      void onHostSocketOpened(resolved.user.id).catch((error) => {
+        console.error("[watch-party] host reconnect failed:", error);
+      });
+      void catchUpWatchParties(socket, resolved.user.id).catch((error) => {
+        console.error("[watch-party] catch-up failed:", error);
+      });
       socket.send(JSON.stringify({ type: "ready" }));
       await sendAllVoiceRosters(socket, resolved.user);
       return;
@@ -329,6 +344,15 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     // forgotten first.
     unregisterStatusSocket(socket);
     deleteAuthenticatedSocket(socket);
+    // AFTER the delete, and it has to be: the check is "does this person have
+    // any socket left", and the one that just closed must already be out of
+    // the map or a host closing their last tab looks like a host with a tab
+    // open. Only a live party they host is affected.
+    if (user) {
+      void onHostSocketClosed(user.id).catch((error) => {
+        console.error("[watch-party] host disconnect failed:", error);
+      });
+    }
   });
 }
 

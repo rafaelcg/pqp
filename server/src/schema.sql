@@ -3837,3 +3837,117 @@ CREATE TABLE IF NOT EXISTS voice_occupancy_daily (
   peak_largest_room INTEGER NOT NULL,
   samples           INTEGER NOT NULL DEFAULT 0
 );
+-- ---------------------------------------------------------------------------
+-- The watch party as an event with a host.
+--
+-- `channel_sessions` shipped (PR #352) as an announcement: a title, a time,
+-- and reminders. What it never had was an owner or a lifecycle, so a party
+-- had no name of its own while it ran, nobody was in charge of it, and the
+-- only way to start one was to walk into the room and press Share.
+--
+-- ONE TABLE, NOT TWO. Everything below extends this row rather than adding a
+-- `watch_parties` table beside it. `channel_sessions` already carries the
+-- title, the channel, the creator and the reminder subscriptions, and its
+-- partial unique index already says "one active per channel", which is the
+-- cardinality a party wants. A scheduled session that goes live keeps its id,
+-- so "the thing I was reminded about" and "the thing on air" are one row with
+-- one history. The state machine lives in
+-- `packages/shared/src/watch-party-session.ts`; the argument is in
+-- `docs/WATCH_PARTY.md`.
+ALTER TABLE channel_sessions
+  ADD COLUMN IF NOT EXISTS host_user_id UUID REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE channel_sessions
+  ADD COLUMN IF NOT EXISTS options JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE channel_sessions
+  ADD COLUMN IF NOT EXISTS went_live_at TIMESTAMPTZ;
+ALTER TABLE channel_sessions
+  ADD COLUMN IF NOT EXISTS ended_at TIMESTAMPTZ;
+-- Stamped when the host's last socket goes away; cleared when they come back.
+-- `WATCH_PARTY_HOST_GRACE_MS` after this the party ends unless a co-host has
+-- taken it over. NULL is the normal state and means "the host is here".
+ALTER TABLE channel_sessions
+  ADD COLUMN IF NOT EXISTS host_disconnected_at TIMESTAMPTZ;
+
+-- Every row that predates the host column was created by its host: before
+-- this there was no way to schedule a session for somebody else.
+UPDATE channel_sessions SET host_user_id = created_by WHERE host_user_id IS NULL;
+
+-- A `draft` has no time yet. It is being set up, and the host has not decided
+-- whether it is starting now or on Friday, so `starts_at` has to be nullable.
+-- Nothing else reads it without a status filter that excludes drafts
+-- (`noShowSweep` and the T-10 reminders are both `status = 'scheduled'`).
+ALTER TABLE channel_sessions ALTER COLUMN starts_at DROP NOT NULL;
+
+DO $$
+BEGIN
+  ALTER TABLE channel_sessions DROP CONSTRAINT IF EXISTS channel_sessions_status_check;
+  ALTER TABLE channel_sessions
+    ADD CONSTRAINT channel_sessions_status_check
+    CHECK (status IN ('draft', 'scheduled', 'live', 'ended', 'cancelled'));
+EXCEPTION
+  WHEN others THEN NULL;
+END $$;
+
+-- A draft counts against the one-active-per-channel rule. Two people setting
+-- up two different parties in the same room and both pressing Ir ao vivo is
+-- the race this index exists to lose early and loudly.
+DROP INDEX IF EXISTS idx_channel_sessions_one_active_per_channel;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_sessions_one_active_per_channel
+  ON channel_sessions (channel_id)
+  WHERE status IN ('draft', 'scheduled', 'live');
+
+-- The sweep that ends a party whose host never came back reads this.
+CREATE INDEX IF NOT EXISTS idx_channel_sessions_host_disconnected
+  ON channel_sessions (host_disconnected_at)
+  WHERE status = 'live' AND host_disconnected_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_channel_sessions_host
+  ON channel_sessions (host_user_id, status);
+
+-- Co-hosts. A list the host keeps: they can run the party (rename it, go
+-- live, end it) and, if the host drops, claim the host role during the grace
+-- window. They cannot edit this table, which is what keeps one chain of
+-- authority instead of a mutual demotion match.
+CREATE TABLE IF NOT EXISTS channel_session_cohosts (
+  session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  added_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (session_id, user_id)
+);
+
+-- What "Ir ao vivo" changed about the channel, so ending the party can put it
+-- back. A watch party sets the room's rules for the length of the show and
+-- NOT for ever: a host who turned slow mode on for a film night must not
+-- leave the channel throttled next Tuesday.
+--
+-- NULL / FALSE means "the party changed nothing here", which is also what a
+-- party that never went live says, so an end that runs twice is a no-op.
+ALTER TABLE channel_sessions
+  ADD COLUMN IF NOT EXISTS restore_slowmode_seconds INTEGER;
+ALTER TABLE channel_sessions
+  ADD COLUMN IF NOT EXISTS stage_speak_applied BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Who the host has personally put on the stage of a party whose floor is
+-- closed (`stageMode = 'invited'`). One row per person per party; the row is
+-- what makes the SPEAK allow overwrite on the channel removable again when
+-- the party ends, without having to guess which overwrites were ours.
+CREATE TABLE IF NOT EXISTS channel_session_stage_invites (
+  session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  invited_by UUID REFERENCES users(id) ON DELETE SET NULL,
+  invited_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (session_id, user_id)
+);
+
+-- A viewer asking to come up. Deleted when the hand is lowered, when they are
+-- put on the stage, and with the party.
+CREATE TABLE IF NOT EXISTS channel_session_raised_hands (
+  session_id UUID NOT NULL REFERENCES channel_sessions(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  raised_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (session_id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_session_raised_hands_queue
+  ON channel_session_raised_hands (session_id, raised_at);

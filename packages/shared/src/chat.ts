@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { watchPartySchema } from "./watch-party-session.js";
 import {
   channelKindSchema,
   MESSAGE_BULK_DELETE_MAX,
@@ -454,6 +455,29 @@ export type ChannelSessionReminderMessage = z.infer<
   typeof channelSessionReminderSchema
 >;
 
+/**
+ * The watch party event object changed: created, published, live, ended, or a
+ * co-host list edited. Sent to every socket that may see the party in its
+ * current state (a `draft` reaches only the host and co-hosts), so a client
+ * that gets one may render it without a second opinion.
+ *
+ * `party: null` means "there is nothing here for you any more", which covers
+ * an end, a cancel, and the party leaving the states you may see.
+ *
+ * ROUTED PER SOCKET, NOT PER CHANNEL, which is why it is out of
+ * `CHAT_SERVER_MESSAGE_TYPES` alongside the reminder above: whether a person
+ * may see a draft depends on their role in it, so the sender resolves the
+ * frame per recipient rather than fanning one encoded copy through the
+ * channel relay.
+ */
+export const watchPartyUpdateSchema = z.object({
+  type: z.literal("watch-party-update"),
+  channelId: z.string().uuid(),
+  party: watchPartySchema.nullable(),
+});
+
+export type WatchPartyUpdateBroadcast = z.infer<typeof watchPartyUpdateSchema>;
+
 export const chatServerMessageSchema = z.discriminatedUnion("type", [
   messageBroadcastSchema,
   messageUpdateBroadcastSchema,
@@ -489,6 +513,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   communityHomeUpdateSchema,
   pollUpdateBroadcastSchema,
   channelSessionReminderSchema,
+  watchPartyUpdateSchema,
 ]);
 
 /**

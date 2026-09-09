@@ -23,6 +23,8 @@ Adding one means adding a row here.
 | Call grew | `components/voice/capacity-notice.tsx` | Inline CornerCard above the call controls | the room's limits went up while you were sitting in it | `pqp:voice-capacity-<voiceChannelId>` (impression, `lib/voice-capacity.ts`) |
 | Composer format | `components/layout/feature-hint.tsx` in the composer | Inline CornerCard above Aa / + | first text channel, once | `pqp:feature-hint-composer-format-…` |
 | Watch party | `components/layout/feature-hint.tsx` on the call bar or the in-call strip | Inline CornerCard | first time in a call that can share | `pqp:feature-hint-watch-party-…` |
+| Watch party host | `components/watch-party/watch-party-panel.tsx` (setup surface) | Inline CornerCard, over the preview | first time a host reaches a `draft` setup surface | `pqp:feature-hint-watch-party-host-…` |
+| Watch party viewer | `components/watch-party/watch-party-panel.tsx` (live bar) | Inline CornerCard, under the party bar | first time watching a live party without a seat | `pqp:feature-hint-watch-party-viewer-…` |
 | Channel pin | `components/layout/feature-hint.tsx` in the channel list | Inline CornerCard | first time a server list is open | `pqp:feature-hint-channel-pin-…` |
 | Shortcuts | `components/layout/shortcuts-hint.tsx` | Corner card, last in the queue | `/app` on a keyboard, after a quiet beat, no attached hint up | `pqp:feature-hint-shortcuts-…` |
 
@@ -37,7 +39,10 @@ to it. Two cards in the same corner is a stack, and the one underneath records
 its impression without ever being seen. Composer format, Watch party / share,
 and Fixar use the same `CornerCard` frame with `layout="inline"` next to the
 control; they share `lib/feature-hints.ts` so only one of those mounts, and they
-yield while a campaign owns the corner.
+yield while a campaign owns the corner. The two watch party hints are first in
+`ATTACHED_FEATURE_HINT_ORDER` because they are moments (setting a show up,
+landing in one) rather than states, and must not queue behind the standing
+"share is on the call bar" tip that fires for anyone in any call.
 
 **One shell.** `CornerCard` owns the frame (radius, border, shadow, width,
 safe area), the entrance (`animate-pop-in`), the exit (`animate-pop-out`,

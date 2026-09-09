@@ -107,6 +107,23 @@ export interface ScreenCaptureOptions
 export interface ScreenCaptureIntent {
   preferBrowserTab?: boolean;
   hideCursor?: boolean;
+  /**
+   * A display stream the caller already has, to publish instead of opening
+   * the picker again.
+   *
+   * The watch party setup surface exists so a host can see exactly what the
+   * room will see BEFORE anybody sees it, which means the picker has to run
+   * during setup rather than at "Ir ao vivo". Handing that same stream to the
+   * call is what makes the preview a preview rather than a rehearsal: without
+   * it the host picks a window, looks at it, presses go live, and is asked to
+   * pick a window a second time, at which point the thing they approved and
+   * the thing that goes out are two different captures.
+   *
+   * Everything downstream of the capture is unchanged: the same track
+   * bookkeeping, the same "share ended" listener, the same audio handling.
+   * Only the two lines that would have called `getDisplayMedia` are skipped.
+   */
+  stream?: MediaStream;
 }
 
 /** `MediaTrackConstraintSet` plus the screen-audio member TypeScript lacks. */

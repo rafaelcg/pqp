@@ -384,3 +384,31 @@ export function Dialog({
     document.body,
   );
 }
+
+/**
+ * The standard padding for a dialog's body.
+ *
+ * `Dialog` deliberately does not pad its own children, because several
+ * dialogs are full-bleed on purpose (the settings modals' section rail, the
+ * attachment lightbox, the search chrome). The cost of that is that every
+ * ordinary dialog has to remember `px-5 py-4`, and the ones that forget look
+ * broken in a specific way: the copy and the fields run flush into the border,
+ * which is what a 2026-09-08 review caught in four dialogs at once, two of
+ * them added the same day.
+ *
+ * So the padding gets a name. A dialog with ordinary content wraps its
+ * children in this and cannot forget; a full-bleed one keeps doing what it
+ * does. `dialog-body.test.ts` scans for the ones that do neither.
+ *
+ * The values match the header and footer above (`px-5 py-4`), which is what
+ * makes the three read as one panel rather than three.
+ */
+export function DialogBody({
+  className,
+  children,
+}: {
+  className?: string;
+  children: ReactNode;
+}) {
+  return <div className={cn("px-5 py-4", className)}>{children}</div>;
+}

@@ -146,6 +146,7 @@ export function MemberModerationDialog({
       }
     >
       <div
+        className="px-5 py-4"
         data-member-timeout-composer={action === "timeout" ? "" : undefined}
         data-member-mod-confirm={action}
       >
