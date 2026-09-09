@@ -439,12 +439,21 @@ private suspend fun navigateToPush(
     when (target) {
         is DeepLinkTarget.Channel -> {
             nav.navigate(ChannelsRoute(target.serverId, serverName(target.serverId)))
-            val name = runCatching { session.api.channels(target.serverId) }
+            // The row, not just its name. `isVoiceChannel` is what mounts the
+            // watch party pane, and a tap on a notification about a live party
+            // is exactly the way somebody arrives at one: landing there with no
+            // player would be the one route where the feature is missing.
+            val channel = runCatching { session.api.channels(target.serverId) }
                 .getOrNull()
                 ?.firstOrNull { it.id == target.channelId }
-                ?.name
-                .orEmpty()
-            nav.navigate(ChatRoute(target.channelId, name))
+            nav.navigate(
+                ChatRoute(
+                    target.channelId,
+                    channel?.name.orEmpty(),
+                    serverId = target.serverId,
+                    isVoiceChannel = channel?.isVoice == true,
+                ),
+            )
         }
 
         is DeepLinkTarget.Server ->
