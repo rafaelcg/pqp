@@ -1040,12 +1040,26 @@ final class VoiceModel {
     /// rather than a camera and a share that quietly went off.
     private func startSfuSession(peerId: String, channelId: String, promoted: Bool = false) {
         let expected: VoiceStatus = promoted ? .connected : .joining
-        // Read before the mesh is torn down inside `connectSfu`: by the time
-        // the task below resolves, `isCameraOn` has been cleared and the
-        // ReplayKit bridge is pushing frames at an SFU that has no screen
-        // track. What the person had switched on is only knowable now.
+        // WHAT WAS SWITCHED ON, READ AND THEN CLEARED IN ONE PLACE.
+        //
+        // The reading has to happen before `connectSfu` tears the mesh down,
+        // because the capture goes with it, and the clearing has to happen
+        // after the reading or the intent is gone before anybody looked at it.
+        // Those two lines being adjacent is the whole invariant: an earlier
+        // version cleared the camera flag in `followPromotion` and read it
+        // here, so a promotion always turned the camera off and never back on,
+        // and nothing said a word about it.
         let hadCamera = promoted && isCameraOn
         let wasSharing = promoted && screenShare.isSharing
+        if promoted {
+            // The button goes back to off rather than claiming a capture that
+            // is about to be destroyed with the mesh. It comes back on below
+            // once the SFU room is up.
+            cameraWatchdog?.cancel()
+            cameraWatchdog = nil
+            localCamera = nil
+            isCameraOn = false
+        }
         sfuJoin?.cancel()
         sfuJoin = Task { [weak self] in
             guard let self else { return }
@@ -1156,10 +1170,9 @@ final class VoiceModel {
         // going in would draw us as a second tile in our own call.
         let others = participants.filter { $0.peerId != peerId }
         for participant in others { roster[participant.peerId] = participant }
-        cameraWatchdog?.cancel()
-        cameraWatchdog = nil
-        localCamera = nil
-        isCameraOn = false
+        // The local camera and share flags are deliberately NOT touched here.
+        // `startSfuSession(promoted:)` reads what was switched on and clears it
+        // in the same breath, which is the only ordering that cannot lose it.
         Task {
             await sfu.setRoster(others)
             for participant in others {

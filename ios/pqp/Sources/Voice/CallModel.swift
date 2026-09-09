@@ -957,6 +957,11 @@ final class CallModel {
         for participant in others { roster[participant.peerId] = participant }
         // The mesh capture dies with the mesh inside `connectSfu`, so the
         // button goes back to off and the intent is handed to the SFU join.
+        //
+        // ORDER IS LOAD BEARING: the intent has to be recorded before the flag
+        // it is read from is cleared, or the camera goes off and never comes
+        // back and nothing says so. `VoiceModel` keeps the same pair adjacent
+        // inside `startSfuSession` for exactly this reason.
         if isCameraOn { wantsCamera = true }
         cameraWatchdog?.cancel()
         cameraWatchdog = nil
