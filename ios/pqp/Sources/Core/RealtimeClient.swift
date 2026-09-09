@@ -316,6 +316,11 @@ actor RealtimeClient {
     /// while the phone is merely sitting in a text channel receiving the
     /// rosters this change exists to shrink. See `VoiceRosterTracker`.
     private var rosterTracker = VoiceRosterTracker()
+    /// The baseline every `presence-delta` is applied to. Here for the same
+    /// reason `rosterTracker` is: the sequence belongs to the SOCKET, and this
+    /// client is sent presence for every channel it has open, not only the one
+    /// on screen. See `PresenceTracker`.
+    private var presenceTracker = PresenceTracker()
 
     /**
      OPTIONAL WIRE FEATURES THIS BUILD UNDERSTANDS, declared on `auth`.
@@ -345,8 +350,15 @@ actor RealtimeClient {
      drop, which is strictly worse than never asking. It is here only because
      both models act on it and the SFU half of `welcome` already existed to be
      reused.
+
+     `presence-delta`: send what changed in a channel's viewer list instead of
+     the whole list. Applied by `PresenceTracker` under the same convergence
+     rule as the roster delta's, on purpose. Bytes only, like the roster
+     delta: the viewer list this app reconstructs is byte for byte the one it
+     was already being sent, and every phone on mobile data was paying for the
+     whole of it every time anybody opened or closed a channel.
      */
-    static let wireCaps = ["voice-roster-delta", "voice-transport-changed"]
+    static let wireCaps = ["voice-roster-delta", "voice-transport-changed", "presence-delta"]
 
     /**
      The handshake, as a value rather than as a side effect.
@@ -441,6 +453,7 @@ actor RealtimeClient {
         // has restarted its numbering. The full rosters the server sends right
         // after `auth` are what re-baseline whatever is still live.
         rosterTracker.forgetAll()
+        presenceTracker.forgetAll()
         await send(raw: RealtimeClient.authFrame(token: token))
         listen()
         // The channel re-joins wait for `ready`. The server verifies the token
@@ -822,6 +835,27 @@ actor RealtimeClient {
         let message: String
     }
 
+    /**
+     `presence-delta`, decoded on its own rather than through `Envelope`.
+
+     It has to be, and the reason is a live trap in this file. `Envelope.joined`
+     is `[VoiceParticipant]?`, because the voice roster delta got there first
+     and the two frames happen to share a key name. A `PresenceUser` is
+     `{id, name, avatarUrl}` and a `VoiceParticipant` needs `peerId`,
+     `userId` and `displayName`, so decoding a presence delta through
+     `Envelope` THROWS on that one field, `try?` swallows it, and every frame
+     is dropped with nothing anywhere saying so. That would look exactly like
+     the capability having no effect, which is the failure shape this repo
+     keeps getting bitten by. `SanctionFrame` exists for the same reason.
+     */
+    private struct PresenceDeltaFrame: Decodable {
+        let channelId: String
+        let seq: Int
+        let size: Int
+        let joined: [PresenceUser]?
+        let left: [String]?
+    }
+
     private struct TypeProbe: Decodable { let type: String }
 
     /// Internal rather than private so tests can feed frames straight in —
@@ -847,6 +881,28 @@ actor RealtimeClient {
                 reason: frame.reason,
                 message: frame.message
             )))
+            return
+        }
+
+        // BEFORE `Envelope`, and it has to be: see `PresenceDeltaFrame` for the
+        // key collision that makes decoding this frame through the shared
+        // envelope throw and vanish.
+        //
+        // Only ever sent to a socket that asked for it on `auth`. A frame the
+        // tracker refuses is not an error and is deliberately silent: nothing
+        // is emitted, whoever is reading keeps the list they had, and the
+        // server's next whole list repairs it wholesale.
+        if probe.type == "presence-delta" {
+            guard let frame = try? Coding.decoder.decode(PresenceDeltaFrame.self, from: data),
+                  let users = presenceTracker.apply(
+                      deltaFor: frame.channelId,
+                      seq: frame.seq,
+                      size: frame.size,
+                      joined: frame.joined ?? [],
+                      left: frame.left ?? []
+                  )
+            else { return }
+            continuation?.yield(.presence(channelId: frame.channelId, users: users))
             return
         }
 
@@ -907,7 +963,12 @@ actor RealtimeClient {
             event = .typing(channelId: channelId, userId: userId, displayName: displayName)
         case "presence-update":
             guard let channelId = envelope.channelId else { return }
-            event = .presence(channelId: channelId, users: envelope.users ?? [])
+            let users = envelope.users ?? []
+            // Recorded even though the list is passed on verbatim: a snapshot
+            // is the baseline every following delta is measured against, and
+            // its `seq` is the number they have to follow on from.
+            presenceTracker.apply(snapshot: users, channelId: channelId, seq: envelope.seq)
+            event = .presence(channelId: channelId, users: users)
         case "channel-activity":
             guard let channelId = envelope.channelId else { return }
             event = .activity(channelId: channelId, serverId: envelope.serverId,

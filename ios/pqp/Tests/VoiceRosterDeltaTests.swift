@@ -524,10 +524,10 @@ final class VoiceRosterDeltaTests: XCTestCase {
         // call whose media has moved without them. A `contains` would let the
         // list grow silently, which is exactly the drift this asserts against.
         // The promotion capability's own contract is in `VoicePromotionTests`.
-        XCTAssertEqual(RealtimeClient.wireCaps, [cap, "voice-transport-changed"])
+        XCTAssertEqual(RealtimeClient.wireCaps, [cap, "voice-transport-changed", "presence-delta"])
         XCTAssertEqual(
             RealtimeClient.authFrame(token: "t")["caps"] as? [String],
-            [cap, "voice-transport-changed"],
+            [cap, "voice-transport-changed", "presence-delta"],
             "The handshake must declare exactly RealtimeClient.wireCaps. A correct list "
                 + "that never reaches the socket is the same outcome as no capability at "
                 + "all, and neither the app nor the server would say a word about it."
