@@ -5640,6 +5640,116 @@
           }
         }
       }
+    },
+    "The watch party ended" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A watch party acabou"
+          }
+        }
+      }
+    },
+    "The stream is over." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A transmissão acabou."
+          }
+        }
+      }
+    },
+    "The picture stopped" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A imagem parou"
+          }
+        }
+      }
+    },
+    "Connecting to the stream" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conectando na transmissão"
+          }
+        }
+      }
+    },
+    "LIVE" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AO VIVO"
+          }
+        }
+      }
+    },
+    "Show the stream" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar a transmissão"
+          }
+        }
+      }
+    },
+    "Hide the stream" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esconder a transmissão"
+          }
+        }
+      }
+    },
+    "1 watching" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 assistindo"
+          }
+        }
+      }
+    },
+    "%lld watching" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld assistindo"
+          }
+        }
+      }
+    },
+    "The stream address was not readable." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra ler o endereço da transmissão."
+          }
+        }
+      }
+    },
+    "The connection to the stream dropped." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A conexão com a transmissão caiu."
+          }
+        }
+      }
     }
   },
   "version" : "1.0"
