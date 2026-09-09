@@ -376,6 +376,61 @@ final class WatchLivePlayerTests: XCTestCase {
         }
     }
 
+    /// Buffering with the viewer still wanting playback is still not a stall.
+    /// Widening the clock to every non-playing state is how a slow start
+    /// becomes a re-attach loop.
+    func testAWaitingPlayerIsStillNotAStallEvenWhenTheViewerWantsPlayback() {
+        var stall = WatchStallWatch()
+        for second in 0..<120 {
+            XCTAssertFalse(
+                stall.tick(
+                    position: 109,
+                    isPlaying: false,
+                    wantsPlayback: true,
+                    isWaiting: true,
+                    now: now.addingTimeInterval(Double(second))
+                ),
+                "at second \(second)"
+            )
+        }
+    }
+
+    /// THE PAUSE NOBODY ASKED FOR. Rate dropped, the viewer did not tap
+    /// pause, the playhead is frozen. `play()` is the first recovery; this
+    /// is the fallback when that does not unstick it.
+    func testAnUnexpectedPauseWithAFrozenPlayheadIsAStall() {
+        var stall = WatchStallWatch()
+        XCTAssertFalse(
+            stall.tick(
+                position: 109, isPlaying: false, wantsPlayback: true, isWaiting: false,
+                now: now
+            )
+        )
+        XCTAssertFalse(
+            stall.tick(
+                position: 109, isPlaying: false, wantsPlayback: true, isWaiting: false,
+                now: now.addingTimeInterval(WatchStallWatch.deadAfter - 1)
+            )
+        )
+        XCTAssertTrue(
+            stall.tick(
+                position: 109, isPlaying: false, wantsPlayback: true, isWaiting: false,
+                now: now.addingTimeInterval(WatchStallWatch.deadAfter)
+            )
+        )
+    }
+
+    /// A tap on pause is the one frozen playhead that must not recover.
+    func testAViewerWhoPausedDoesNotLookLikeAStall() {
+        var stall = WatchStallWatch()
+        XCTAssertFalse(
+            stall.tick(
+                position: 109, isPlaying: false, wantsPlayback: false, isWaiting: false,
+                now: now.addingTimeInterval(WatchStallWatch.deadAfter * 3)
+            )
+        )
+    }
+
     // MARK: - The ladder a broadcast actually publishes
 
     private let ladder = WatchLadder.from(variants: [
@@ -532,5 +587,35 @@ final class WatchLivePlayerTests: XCTestCase {
             "1080p",
             "a pin states the pin, not whatever the player is currently on"
         )
+    }
+
+    // MARK: - Cinema chrome, which hides itself while the film is moving
+
+    func testATapShowsTheBarsAndASecondTapPutsThemAway() {
+        var clock = WatchChromeClock()
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertTrue(clock.visible, "a freshly opened player starts with the bars up")
+        clock.tap(at: now)
+        XCTAssertFalse(clock.visible)
+        clock.tap(at: now)
+        XCTAssertTrue(clock.visible)
+    }
+
+    func testPlayingHidesTheBarsAfterAFewSeconds() {
+        var clock = WatchChromeClock()
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        clock.reveal(at: now)
+        clock.tick(playing: true, at: now.addingTimeInterval(WatchChromeClock.hideAfter - 0.1))
+        XCTAssertTrue(clock.visible, "still inside the window")
+        clock.tick(playing: true, at: now.addingTimeInterval(WatchChromeClock.hideAfter))
+        XCTAssertFalse(clock.visible)
+    }
+
+    func testAPausedFilmKeepsTheBars() {
+        var clock = WatchChromeClock()
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        clock.reveal(at: now)
+        clock.tick(playing: false, at: now.addingTimeInterval(WatchChromeClock.hideAfter + 10))
+        XCTAssertTrue(clock.visible, "hiding the play button on a still frame is how you lose it")
     }
 }
