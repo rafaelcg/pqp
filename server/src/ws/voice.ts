@@ -1472,14 +1472,13 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
   // each other's screens in it, and ending a show is not the same act as
   // stopping a share. Only the broadcast to people without a seat stops.
   const over = watchPartyKnownOver(voiceChannelId);
-  const sharer = over ? null : pickHlsSharer(getRoomPeers(voiceChannelId));
+  const sharing = pickHlsSharer(getRoomPeers(voiceChannelId));
   const prev = liveHlsStreamFor(voiceChannelId);
-  if (over && prev) {
-    const kept = pickHlsSharer(getRoomPeers(voiceChannelId));
-    if (kept) {
-      logWatchPartyOverStop(voiceChannelId, kept.id);
-    }
+  // Once, on the push that tears it down: `prev` is null on every push after.
+  if (over && prev && sharing) {
+    logWatchPartyOverStop(voiceChannelId, sharing.id);
   }
+  const sharer = over ? null : sharing;
   try {
     // RESOLVED EVEN WITH NO SHARER, and it used to be `sharer ? ... : null`.
     // That looked like a saved lookup and was a lost distinction: null means
