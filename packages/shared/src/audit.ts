@@ -128,6 +128,17 @@ export const AUDIT_ACTIONS = [
    * the row. The DELETE route is a separate action.
    */
   "channel.overwrite_delete",
+  /**
+   * AutoMod rules changed, and AutoMod refused a message. The refusal row
+   * has no actor (the server did it), targets the author, and carries the
+   * rule kind and the matched term in `changes`. The body itself is not
+   * recorded here: the log is readable by every admin, and a blocked message
+   * is by definition the text the owner did not want on the server.
+   */
+  "automod.rule_create",
+  "automod.rule_update",
+  "automod.rule_delete",
+  "automod.block",
 ] as const;
 
 export const auditActionSchema = z.enum(AUDIT_ACTIONS);

@@ -3951,3 +3951,49 @@ CREATE TABLE IF NOT EXISTS channel_session_raised_hands (
 
 CREATE INDEX IF NOT EXISTS idx_channel_session_raised_hands_queue
   ON channel_session_raised_hands (session_id, raised_at);
+
+
+-- AutoMod: the rules a server enforces on a message before it lands.
+--
+-- One row per rule. `kind` picks the trigger (`keywords`, `invite_links`,
+-- `mention_spam`); the other columns are the fields that trigger reads, and
+-- the ones a kind does not use stay at their defaults. The action is always
+-- "block the send and tell the author" (`message-rejected`, reason `automod`),
+-- so there is no action column. Matching itself lives in
+-- packages/shared/src/automod.ts, shared with the client's settings preview.
+--
+-- Exemptions are arrays of ids rather than join tables: a rule exempts a
+-- handful of cargos and channels, they are read whole on every send, and a
+-- deleted cargo or channel leaves a harmless dangling id that the next save
+-- from the settings page drops.
+--
+-- Two optional actions ride along, the two Discord offers beside blocking:
+-- `alert_channel_id` gets a post per hit (authored by the instance's AutoMod
+-- pseudo-user, see services/automod.ts) and `timeout_minutes` times the author
+-- out. The alert channel is a real FK so deleting the channel switches the
+-- alert off rather than leaving the rule pointing at nothing.
+CREATE TABLE IF NOT EXISTS automod_rules (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  server_id           UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  kind                TEXT NOT NULL CHECK (kind IN ('keywords', 'invite_links', 'mention_spam')),
+  enabled             BOOLEAN NOT NULL DEFAULT TRUE,
+  keywords            TEXT[] NOT NULL DEFAULT '{}',
+  allow_list          TEXT[] NOT NULL DEFAULT '{}',
+  mention_limit       INTEGER NOT NULL DEFAULT 5 CHECK (mention_limit BETWEEN 1 AND 50),
+  exempt_role_ids     UUID[] NOT NULL DEFAULT '{}',
+  exempt_channel_ids  UUID[] NOT NULL DEFAULT '{}',
+  custom_message      TEXT NOT NULL DEFAULT '' CHECK (char_length(custom_message) <= 150),
+  alert_channel_id    UUID REFERENCES channels(id) ON DELETE SET NULL,
+  timeout_minutes     INTEGER NOT NULL DEFAULT 0 CHECK (timeout_minutes BETWEEN 0 AND 40320),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_automod_rules_server
+  ON automod_rules (server_id, created_at);
+
+-- Dev databases created from the first draft of the table above, before the
+-- two actions existed. Production never had the draft.
+ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS alert_channel_id UUID REFERENCES channels(id) ON DELETE SET NULL;
+ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS timeout_minutes INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE automod_rules DROP COLUMN IF EXISTS report_hits;

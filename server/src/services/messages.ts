@@ -362,6 +362,21 @@ export async function getMessage(
   return { ...message, attachments: attachments.get(messageId) ?? [] };
 }
 
+/**
+ * One message in the same shape history returns, for a broadcast of a row
+ * that was written outside `createMessage` (an AutoMod alert, say).
+ */
+export async function getHydratedMessage(
+  messageId: string,
+): Promise<HydratedMessage | null> {
+  const result = await getPool().query<DbMessage>(
+    `${MESSAGE_SELECT} WHERE m.id = $1`,
+    [messageId],
+  );
+  const message = result.rows[0];
+  return message ? hydrateOne(message) : null;
+}
+
 /** Just enough of a parent message to validate a reply and quote it. */
 export interface ReplyParent {
   id: string;

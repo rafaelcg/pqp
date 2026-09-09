@@ -30,6 +30,7 @@ import {
 import { webhookEmbedSchema } from "./webhooks.js";
 import { chanceRequestSchema, chanceResultSchema } from "./chance.js";
 import { pollRequestSchema, pollSchema } from "./polls.js";
+import { AUTOMOD_CUSTOM_MESSAGE_MAX } from "./automod.js";
 
 export const joinChannelMessageSchema = z.object({
   type: z.literal("join-channel"),
@@ -228,6 +229,12 @@ export const messageRejectReasonSchema = z.enum([
   "undeliverable",
   /** Channel slow mode: this sender must wait before the next create. */
   "slow-mode",
+  /**
+   * An AutoMod rule on the server refused the body. `automodMessage` carries
+   * the rule's own copy when the owner wrote one; the client shows its
+   * default otherwise. The matched term is never echoed back.
+   */
+  "automod",
 ]);
 export type MessageRejectReason = z.infer<typeof messageRejectReasonSchema>;
 
@@ -244,6 +251,8 @@ export const messageRejectedSchema = z.object({
     .min(0)
     .max(SLOWMODE_SECONDS_MAX * 1000)
     .optional(),
+  /** May be present when `reason` is `automod`: the rule's custom copy. */
+  automodMessage: z.string().max(AUTOMOD_CUSTOM_MESSAGE_MAX).optional(),
 });
 export type MessageRejected = z.infer<typeof messageRejectedSchema>;
 

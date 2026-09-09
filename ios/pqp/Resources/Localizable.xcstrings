@@ -3951,6 +3951,16 @@
         }
       }
     },
+    "AutoMod blocked this message." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O AutoMod bloqueou essa mensagem."
+          }
+        }
+      }
+    },
     "Slow mode is on." : {
       "localizations" : {
         "pt-BR" : {

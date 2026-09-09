@@ -71,6 +71,7 @@
     <string name="chat_reject_cannot_send">You don\'t have permission to send here</string>
     <string name="chat_reject_undeliverable">This message wasn\'t delivered</string>
     <string name="chat_reject_slow_mode">Slow mode is on.</string>
+    <string name="chat_reject_automod">AutoMod blocked this message.</string>
     <string name="chat_reject_generic">Failed to send</string>
     <string name="chat_slow_mode_wait">Slow mode. You can send again in %1$ds.</string>
     <!-- The row between two calendar days. Older days are formatted dates. -->
