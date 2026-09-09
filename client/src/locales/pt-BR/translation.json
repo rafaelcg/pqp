@@ -2249,7 +2249,7 @@
   "channelMeta.voiceRoute.reason.large": "o servidor tem 10 membros ou mais",
   "channelMeta.voiceRoute.reason.community": "é uma comunidade com página pública",
   "channelMeta.voiceRoute.reason.override": "você escolheu isso na opção aqui de cima",
-  "channelMeta.voiceRoute.reason.hls": "watch party transmite ao vivo, e isso precisa do servidor de mídia",
+  "channelMeta.voiceRoute.reason.hls": "a watch party transmite ao vivo, e isso precisa do servidor de mídia",
   "channelMeta.voiceRoute.reason.default": "é o padrão deste pqp",
   "channelMeta.voiceRoute.pinned": "Essa call começou antes e continua assim até esvaziar.",
   "channelSettings.nav": "Seções do canal",

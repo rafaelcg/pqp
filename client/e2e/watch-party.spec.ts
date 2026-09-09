@@ -401,6 +401,19 @@ test("a host creates a watch party from the sidebar, names it, and goes live", a
   // is what going live produces, and this is the assertion that says so.
   await expect(page.getByTestId("live-party-block")).toBeHidden();
 
+  // THE DISCLOSURE, which only exists on a server that can actually
+  // broadcast. The setup surface raises it once per server per session
+  // (`hlsHostAckAskedRef` in App.tsx), so the host reads what they are
+  // responsible for while nothing is being sent, rather than in the middle of
+  // pressing Ir ao vivo. This spec used to skip it silently: a runner's
+  // `/api/live-hls/config` says `enabled: false`, and the effect bails on an
+  // explicit false. With `openAs` stubbing the operator answer to true, this
+  // is the flow a real host on an allowlisted server walks.
+  const ack = page.getByRole("dialog").filter({ hasText: "Before you go live" });
+  await expect(ack).toBeVisible({ timeout: 20_000 });
+  await ack.getByRole("button", { name: "Got it", exact: true }).click();
+  await expect(ack).toBeHidden({ timeout: 20_000 });
+
   // Step three: Ir ao vivo. Deliberately with nothing picked, which is the
   // documented order (the party goes live first, the picture second) and the
   // case a host hits when the share fails. The room must still be told.
