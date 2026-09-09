@@ -13,7 +13,7 @@ instead of a dead join URL.
 |---|---|
 | Bundle ID | `gg.pqp.app` (`ios/project.yml`) |
 | Team | `WXBFUF9WMA` |
-| Version | `ios/pqp/Info.plist` and `ios/pqp/Broadcast/Info.plist`, which must agree. `1.0` since build 10; `CFBundleVersion` is what moves. Build 18 is the latest uploaded |
+| Version | `ios/pqp/Info.plist` and `ios/pqp/Broadcast/Info.plist`, which must agree. `1.0` since build 10; `CFBundleVersion` is what moves. The repo carries **21**. What is actually UPLOADED is a different question and only the API answers it (`GET /v1/builds?filter[app]=6799265799&sort=-version`); this row has been stale before, and a number that disagrees with App Store Connect is a refused upload after a 30 MB transfer |
 | App Store Connect app id | `6799265799` |
 | Release API | `https://api.pqp.gg` + live Clerk publishable key in Release config |
 | Public App Store listing | Not yet |
