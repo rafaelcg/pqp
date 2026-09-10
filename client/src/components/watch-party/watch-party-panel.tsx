@@ -36,7 +36,12 @@ import { FeatureHint } from "@/components/layout/feature-hint";
 import { LivePill } from "@/components/watch-party/live-pill";
 import { WatchPartyTransmission } from "@/components/watch-party/watch-party-transmission";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
+import { getDesktop, isDesktopApp } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
+import {
+  screenCaptureEnvironment,
+  screenCaptureOptions,
+} from "@/lib/screen-capture-audio";
 import { cn } from "@/lib/utils";
 
 /**
@@ -348,6 +353,15 @@ function EmptyStage(props: WatchPartyPanelProps) {
  * made the host pick again at go-live would be a rehearsal, not a preview: the
  * thing they approved and the thing that went out would be two different
  * captures.
+ *
+ * THE OPTIONS ARE THE SAME AS EVERY OTHER SHARE. A bare `{ audio: true }` is
+ * the 23 Aug 2026 echo: on Windows Electron it becomes WASAPI loopback of the
+ * whole render endpoint (the call included), and in a browser it leaves
+ * `systemAudio` / `restrictOwnAudio` to the engine's defaults. Setup must go
+ * through `screenCaptureOptions` with `preferBrowserTab` so the picker steers
+ * at a tab, system audio stays excluded, and the call's own playback is
+ * stripped when the engine knows how. The stream handed to go-live is then
+ * already a capture that cannot put every voice back into the room.
  */
 function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const { t } = useTranslation();
@@ -384,10 +398,18 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const pick = async () => {
     setPickError(null);
     try {
-      const picked = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
-        audio: true,
-      });
+      // Same builder every ordinary share uses. `preferBrowserTab` is the
+      // watch-party product: the player tab and its sound, never the machine
+      // mixer that contains the call. See `lib/screen-capture-audio.ts`.
+      const options = screenCaptureOptions(
+        false,
+        screenCaptureEnvironment(
+          isDesktopApp(),
+          getDesktop()?.platform ?? null,
+        ),
+        { preferBrowserTab: true },
+      );
+      const picked = await navigator.mediaDevices.getDisplayMedia(options);
       stream?.getTracks().forEach((track) => track.stop());
       // The host stopping the share from the browser's own bar during setup
       // must clear the preview, not leave a frozen last frame that they then
