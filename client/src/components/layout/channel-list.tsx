@@ -575,7 +575,9 @@ export function ChannelList({
                   liveState={liveStateFor(channel)}
                   onSelect={() => onSelectChannel(channel.id)}
                   onJoinVoice={
-                    isVoiceRoomChannelType(channel.type) && onJoinVoice
+                    isVoiceRoomChannelType(channel.type) &&
+                    !isWatchPartyChannelType(channel.type) &&
+                    onJoinVoice
                       ? () => onJoinVoice(channel.id)
                       : undefined
                   }
@@ -991,7 +993,9 @@ export function ChannelList({
             onMobileClose?.();
           }}
           onJoinVoice={
-            isVoiceRoomChannelType(channel.type) && onJoinVoice
+            isVoiceRoomChannelType(channel.type) &&
+            !isWatchPartyChannelType(channel.type) &&
+            onJoinVoice
               ? () => {
                   onJoinVoice(channel.id);
                   // Same as a select: on a phone the drawer must get out of
@@ -2008,8 +2012,9 @@ function ChannelRow({
   /**
    * Present only for a watch party room while the flag is on. Turns the row
    * into the watch party shape: topic under the name, the AO VIVO pill and
-   * viewer count while someone is on the stage, an Entrar button for the
-   * rest. Absent (flag off, or any other type) the row is the plain one.
+   * viewer count while someone is on the stage, a Watch chip while live.
+   * Absent (flag off, or any other type) the row is the plain one. A
+   * watch_party row never full-joins voice from this list.
    */
   liveState?: ChannelLiveState;
   isDragging: boolean;
@@ -2446,35 +2451,24 @@ function ChannelRow({
         <Tooltip label={joinHint ?? channel.name} name={rowName} side="right">
           {rowButton}
         </Tooltip>
-        {watchParty && onJoinVoice && !connected && (
-          /* The same join the row itself does, spelled out: a watch party is
-             joined by people who have never been in a voice channel here and
-             would not guess that the name is the door. Nobody gets a "start"
-             here; the presenter starts from the Watch party button in the
-             call, which the welcome grant gates. */
+        {watchParty && live && !connected && (
+          /* Watching is select, never a full voice join. The chip is only
+             here while the party is live so a draft room is opened by
+             clicking the row, the way setup and Encerrar expect. */
           <button
             type="button"
             data-channel-join=""
-            data-channel-watch={live ? "" : undefined}
+            data-channel-watch=""
             draggable={false}
-            className={cn(
-              "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold",
-              live
-                ? "bg-danger/15 text-danger hover:bg-danger/25"
-                : "bg-ink-4/70 text-paper-muted hover:bg-ink-4 hover:text-paper",
-            )}
-            title={live ? t("watchParty.live.watchHint") : undefined}
+            className="shrink-0 rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold text-danger hover:bg-danger/25"
+            title={t("watchParty.live.watchHint")}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              if (live) {
-                onSelect();
-                return;
-              }
-              onJoinVoice?.();
+              onSelect();
             }}
           >
-            {live ? t("watchParty.live.watch") : t("chrome.watchPartyJoin")}
+            {t("watchParty.live.watch")}
           </button>
         )}
         {onToggleFavorite && (
