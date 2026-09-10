@@ -23,7 +23,9 @@ const {
   MIN_STAGE_HEIGHT_PX,
   MIN_STAGE_WIDTH_PX,
   clampSplit,
+  effectiveOrientation,
   loadCallSplit,
+  MIN_WATCH_CHAT_WIDTH_PX,
   nudgeSplit,
   resolveCollapsed,
   resolveOrientation,
@@ -205,12 +207,14 @@ describe("stored preference", () => {
   it("survives a reload", () => {
     saveCallSplit({
       orientation: "side-by-side",
+      watchOrientation: "stacked",
       stacked: 0.4,
       side: 0.55,
       collapsed: "none",
     });
     expect(loadCallSplit()).toEqual({
       orientation: "side-by-side",
+      watchOrientation: "stacked",
       stacked: 0.4,
       side: 0.55,
       collapsed: "none",
@@ -220,6 +224,7 @@ describe("stored preference", () => {
   it("keeps the two orientations' fractions apart", () => {
     saveCallSplit({
       orientation: "stacked",
+      watchOrientation: null,
       stacked: 0.3,
       side: 0.8,
       collapsed: "none",
@@ -239,6 +244,7 @@ describe("stored preference", () => {
     );
     expect(loadCallSplit()).toEqual({
       orientation: "stacked",
+      watchOrientation: null,
       stacked: CALL_SPLIT_DEFAULT.stacked,
       side: 1,
       collapsed: "none",
@@ -257,6 +263,7 @@ describe("collapsing a pane", () => {
     // as the app forgetting.
     saveCallSplit({
       orientation: "stacked",
+      watchOrientation: null,
       stacked: 0.5,
       side: 0.6,
       collapsed: "chat",
@@ -362,6 +369,7 @@ describe("collapsing a pane", () => {
     // as the app forgetting.
     saveCallSplit({
       orientation: "stacked",
+      watchOrientation: null,
       stacked: 0.5,
       side: 0.6,
       collapsed: "chat",
@@ -412,5 +420,32 @@ describe("collapsing does not undo itself", () => {
     // the collapse is dropped rather than leaving somebody with two hidden
     // panes and no divider to restore from.
     expect(resolveCollapsed("stage", "none")).toBe("none");
+  });
+});
+
+/**
+ * A watch party is a film with a chat beside it. It starts side by side
+ * unless the person chose otherwise, and its chat column may be narrower
+ * than a call's transcript, which is what let side by side never appear on
+ * a laptop with the roster open.
+ */
+describe("a watch party's own layout", () => {
+  it("starts side by side, and follows its own choice, not the call's", () => {
+    const base = { ...CALL_SPLIT_DEFAULT, orientation: "stacked" as const };
+    expect(effectiveOrientation(base, "watch")).toBe("side-by-side");
+    expect(effectiveOrientation(base, "call")).toBe("stacked");
+    expect(
+      effectiveOrientation({ ...base, watchOrientation: "stacked" }, "watch"),
+    ).toBe("stacked");
+  });
+
+  it("asks less width of the chat than a call does", () => {
+    expect(MIN_WATCH_CHAT_WIDTH_PX).toBeLessThan(MIN_CHAT_WIDTH_PX);
+    const tight = MIN_STAGE_WIDTH_PX + MIN_WATCH_CHAT_WIDTH_PX + CALL_SPLIT_DIVIDER_PX;
+    expect(splitAvailable(tight, "side-by-side", "watch")).toBe(true);
+    expect(splitAvailable(tight, "side-by-side", "call")).toBe(false);
+    expect(resolveOrientation("side-by-side", tight, "expanded", "watch")).toBe(
+      "side-by-side",
+    );
   });
 });

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Maximize2, Minimize2, Phone, Radio } from "lucide-react";
+import { Film, Maximize2, Minimize2, Phone, Radio } from "lucide-react";
 import { liveStateFromStream } from "@pqp/shared";
 import type { ChannelLive, VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
@@ -33,6 +33,7 @@ export function WatchStage({
   ended,
   onJoin,
   fullscreen,
+  cinema,
   onLeaveParty,
   mediaTitle,
   communityName,
@@ -67,6 +68,12 @@ export function WatchStage({
   onJoin?: () => void;
   /** The film taking the screen, and the way back out. */
   fullscreen?: { active: boolean; toggle: () => void };
+  /**
+   * Modo cinema: the film and the chat and nothing else. The channel list
+   * folds to icons and the member column goes away, the way Twitch's theatre
+   * mode does; Escape brings them back. Absent means no button.
+   */
+  cinema?: { active: boolean; toggle: () => void };
   /** How to stop watching, when leaving the room is a thing this person can do. */
   onLeaveParty?: () => void;
   mediaTitle?: string;
@@ -188,6 +195,30 @@ export function WatchStage({
               what anybody came for. It takes the whole SPLIT PANE rather than
               the video, so the chat comes with it; see
               `voice/watch-fullscreen.ts`. */}
+          {cinema ? (
+            <button
+              type="button"
+              data-testid="watch-stage-cinema"
+              aria-pressed={cinema.active}
+              aria-label={
+                cinema.active
+                  ? t("voice.watch.exitCinema")
+                  : t("voice.watch.cinema")
+              }
+              title={
+                cinema.active
+                  ? t("voice.watch.exitCinema")
+                  : t("voice.watch.cinema")
+              }
+              className={cn(
+                "flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-surface-2 hover:text-text",
+                cinema.active ? "text-text" : "text-text-secondary",
+              )}
+              onClick={cinema.toggle}
+            >
+              <Film className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          ) : null}
           {fullscreen ? (
             <button
               type="button"
@@ -257,6 +288,7 @@ export function WatchChannelStage({
   onSeedChannelLive,
   fill = false,
   onShapeChange,
+  cinema,
 }: {
   channelId: string;
   channelName: string;
@@ -276,6 +308,7 @@ export function WatchChannelStage({
   /** The pane's divider owns the stage's height. See `CallSplit`. */
   fill?: boolean;
   onShapeChange?: (shape: CallStageShape) => void;
+  cinema?: { active: boolean; toggle: () => void };
 }) {
   const inThisCall =
     voiceState.voiceChannelId === channelId && voiceState.status !== "idle";
@@ -404,6 +437,7 @@ export function WatchChannelStage({
         onJoin={onJoin}
         onLeaveParty={onLeaveParty}
         fullscreen={{ active: fullscreen.active, toggle: fullscreen.toggle }}
+        cinema={cinema}
         mediaTitle={channelName}
         communityName={serverName}
         coverUrl={serverIconUrl}

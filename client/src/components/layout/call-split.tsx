@@ -21,8 +21,10 @@ import {
   CALL_SPLIT_STEP_PX,
   clampSplit,
   nudgeSplit,
+  effectiveOrientation,
   resolveCollapsed,
   resolveOrientation,
+  type CallSplitKind,
   splitAvailable,
   splitBounds,
   splitFraction,
@@ -60,6 +62,8 @@ import { cn } from "@/lib/utils";
 export interface CallSplitProps {
   /** What the stage is right now. Only `expanded` is split. */
   shape: CallStageShape;
+  /** A watch party starts side by side with a narrower chat; a call does not. */
+  kind?: CallSplitKind;
   /**
    * The whole stored preference, not a single number: the orientation this
    * pane actually draws is resolved HERE, against a width only this component
@@ -130,6 +134,7 @@ function usePaneSize(ref: RefObject<HTMLDivElement | null>): PaneSize {
 
 export function CallSplit({
   shape,
+  kind = "call",
   preference,
   onPreferenceChange,
   onSplitStateChange,
@@ -149,14 +154,19 @@ export function CallSplit({
   // pane that cannot hold two columns, or a stage with nothing on it, draws
   // the stacked layout without touching what is stored: widening the window,
   // or somebody turning a camera on, brings the choice back on its own.
-  const orientation = resolveOrientation(preference.orientation, width, shape);
+  const orientation = resolveOrientation(
+    effectiveOrientation(preference, kind),
+    width,
+    shape,
+    kind,
+  );
   const sideBySide = orientation === "side-by-side";
   // Same rule as the orientation, one line below it on purpose: stored is what
   // they asked for, this is what the pane can honour now.
   const collapsed = resolveCollapsed(preference.collapsed, shape);
   const fraction = sideBySide ? preference.side : preference.stacked;
   const container = sideBySide ? width : height;
-  const bounds = splitBounds(orientation);
+  const bounds = splitBounds(orientation, kind);
 
   // Two different questions, and conflating them is how a default gets
   // rewritten by accident.
@@ -178,7 +188,7 @@ export function CallSplit({
   const resizable =
     shape === "expanded" &&
     collapsed === "none" &&
-    splitAvailable(container, orientation);
+    splitAvailable(container, orientation, kind);
   const sized = resizable && fraction !== null;
   const stagePx = sized ? clampSplit({ fraction, container, ...bounds }) : null;
   /** Where the divider is right now, dragged or not. */
@@ -189,7 +199,7 @@ export function CallSplit({
   // the toggle offering an arrangement the pane would refuse to draw is the
   // bug this used to have on an empty stage, in the other direction.
   const canSideBySide =
-    resolveOrientation("side-by-side", width, shape) === "side-by-side";
+    resolveOrientation("side-by-side", width, shape, kind) === "side-by-side";
   // `active` is "the pane owns the stage's size", and a stage with the chat
   // put away owns all of it. Without this the stage keeps its own `68svh`
   // rule inside a pane it has entirely to itself, and the person who asked

@@ -1695,3 +1695,39 @@ test("the host promotes a co-host from the member card", async ({
     await second.context.close();
   }
 });
+
+test("a watch party puts the chat beside the film, and cinema mode clears the rest", async ({
+  page,
+}) => {
+  /**
+   * Twitch, YouTube and Kick all draw a stream the same way: video wide on
+   * the left, a narrow chat column on the right. A watch party room starts
+   * that way on its own (an ordinary call still stacks), and the film's
+   * cinema button folds the channel list to icons the way a share already
+   * does. Escape brings it back.
+   */
+  const shared = await seedServer("wp-cinema-host", "wp-cinema-guest");
+  const party = await createParty("wp-cinema-host", shared.serverId, "Cinemoon 9");
+  await setPartyState("wp-cinema-host", party.partyId, "live");
+  await withFakeLiveStream(page, party.channelId);
+  await openAs(
+    page,
+    `/app/server/${shared.serverId}/channel/${party.channelId}`,
+    "wp-cinema-guest",
+  );
+
+  const stage = page.getByTestId("watch-channel-stage");
+  await expect(stage).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('[data-call-split="side-by-side"]')).toBeVisible();
+
+  // The list folds for the film on its own, and cinema is the explicit ask
+  // that also takes the roster away; Escape undoes only what cinema did.
+  const cinema = page.getByTestId("watch-stage-cinema");
+  await expect(cinema).toBeVisible();
+  await cinema.click();
+  await expect(cinema).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("[data-channel-rail]")).toBeVisible();
+  await expect(page.locator("[data-member-sidebar]")).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(cinema).toHaveAttribute("aria-pressed", "false");
+});

@@ -170,6 +170,16 @@ Mostly as is. Two changes:
   that does.
 - "Entrar na call" stays where it is. It is the one thing a viewer might
   want that is not watching.
+- **The chat goes beside the film.** Twitch, YouTube and Kick all draw a
+  stream the same way: video wide on the left, a narrow chat column on the
+  right, and a "theatre mode" that hides everything else. A watch party
+  room starts side by side on its own (its own stored choice,
+  `watchOrientation`, so it never rearranges an ordinary call), with a
+  340px chat minimum instead of the transcript's 560, which is what kept
+  side by side from ever appearing on a laptop. A live stream steps the
+  member column aside without writing the preference; the channel list
+  stays, because the live party block lives in it. **Modo cinema** on the
+  player folds the channel list to icons as well; Escape undoes it. Shipped.
 
 ## 4. Copy rules (pt-BR)
 

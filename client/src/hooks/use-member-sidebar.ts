@@ -37,6 +37,12 @@ export interface MemberSidebarControls {
   wide: boolean;
   toggle: () => void;
   close: () => void;
+  /**
+   * Put the column away WITHOUT writing the preference: the app wants the
+   * room for a film, not the person changing their mind. A click on the
+   * toggle lifts it. Resizing never writes, and neither does this.
+   */
+  suspend: (on: boolean) => void;
 }
 
 export function useMemberSidebar(): MemberSidebarControls {
@@ -59,7 +65,8 @@ export function useMemberSidebar(): MemberSidebarControls {
     return () => query.removeEventListener("change", onChange);
   }, []);
 
-  const open = memberSidebarVisible(preference, wide);
+  const [suspended, setSuspended] = useState(false);
+  const open = !suspended && memberSidebarVisible(preference, wide);
 
   const set = useCallback((next: boolean) => {
     // Written on every change, so the *next* window inherits the choice rather
@@ -68,8 +75,13 @@ export function useMemberSidebar(): MemberSidebarControls {
     setPreference(next);
   }, []);
 
-  const toggle = useCallback(() => set(!open), [open, set]);
+  const toggle = useCallback(() => {
+    // A click is a choice: it lifts a suspension before it flips anything.
+    setSuspended(false);
+    set(!open);
+  }, [open, set]);
   const close = useCallback(() => set(false), [set]);
+  const suspend = useCallback((on: boolean) => setSuspended(on), []);
 
-  return { open, wide, toggle, close };
+  return { open, wide, toggle, close, suspend };
 }

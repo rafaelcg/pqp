@@ -191,7 +191,9 @@ import {
   CALL_SPLIT_DEFAULT,
   loadCallSplit,
   saveCallSplit,
+  effectiveOrientation,
   strongestStageShape,
+  type CallSplitKind,
   type CallSplitPreference,
   type CallStageShape,
 } from "@/lib/call-split";
@@ -1140,13 +1142,18 @@ function MainAppContent({
     },
     [],
   );
-  const toggleSplitOrientation = useCallback(() => {
+  const toggleSplitOrientation = useCallback((kind: CallSplitKind) => {
     setCallSplit((previous) => {
-      const next: CallSplitPreference = {
-        ...previous,
-        orientation:
-          previous.orientation === "side-by-side" ? "stacked" : "side-by-side",
-      };
+      const flipped =
+        effectiveOrientation(previous, kind) === "side-by-side"
+          ? "stacked"
+          : "side-by-side";
+      // A watch party keeps its own answer: flipping the film night's layout
+      // must not rearrange tomorrow's work call, and the other way round.
+      const next: CallSplitPreference =
+        kind === "watch"
+          ? { ...previous, watchOrientation: flipped }
+          : { ...previous, orientation: flipped };
       saveCallSplit(next);
       return next;
     });
@@ -1446,6 +1453,49 @@ function MainAppContent({
   );
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+  /**
+   * MODO CINEMA: the film and the chat and nothing else. Twitch's theatre
+   * mode, YouTube's theater mode. The channel list folds to icons and the
+   * member column goes away; Escape, or the button again, brings them back.
+   * Per channel, never stored: leaving the room leaves the mode.
+   */
+  const [cinema, setCinema] = useState(false);
+  useEffect(() => {
+    setCinema(false);
+  }, [selectedChannelId]);
+  useEffect(() => {
+    if (!cinema) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setCinema(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cinema]);
+  /**
+   * Somebody watching a live party without a seat is looking at a film. The
+   * member column is the thing that eats the width the chat needs beside it,
+   * and a viewer never needs the roster during a show, so it steps aside on
+   * its own (not written: their preference is untouched, and the toggle
+   * brings it straight back). The channel list is deliberately NOT folded
+   * for this: the live party block lives in it.
+   */
+  const watchingAParty =
+    selectedChannelId !== null &&
+    watchParties.byChannel[selectedChannelId]?.state === "live" &&
+    voiceState.channelLive[selectedChannelId]?.stream != null &&
+    !(
+      voiceState.voiceChannelId === selectedChannelId &&
+      voiceState.status !== "idle"
+    );
+  useEffect(() => {
+    memberSidebar.suspend(cinema || watchingAParty);
+    // `memberSidebar.suspend` is a stable callback from the hook.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cinema, watchingAParty]);
   const [pendingVoiceMoves, setPendingVoiceMoves] = useState<string[]>([]);
   /**
    * Audio consent for a Windows desktop shell whose picker cannot ask yet.
@@ -5111,6 +5161,13 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
+  /** A watch party room arranges its panes like a stream; a call does not. */
+  const splitKind: CallSplitKind =
+    selectedChannel?.kind === "server" &&
+    isWatchPartyChannelType(selectedChannel.type) &&
+    isWatchPartyChannelsEnabled()
+      ? "watch"
+      : "call";
   // Baú gating is computed above the early returns (it owns a hook); see
   // `communityHomeEnabled` / `communityHomeOpen` near `settleCommunityHomeIntro`.
   const meMember = serverMembers.find((member) => member.id === user?.id);
@@ -5210,7 +5267,10 @@ function MainAppContent({
       (peerId) => peerId !== voiceState.peerId,
     );
   const sidebarIconsOnly = channelSidebarIconsOnly(channelSidebar, {
-    watchingAShare,
+    // Cinema mode asks for the fold outright. A party's stream alone does
+    // NOT fold it: the live party block lives in that list, and it is the
+    // way back to the show for everybody else in the server.
+    watchingAShare: watchingAShare || cinema,
     columnLayout,
   });
   // A plain function, not a `useCallback`: it is read below the early returns
@@ -5218,7 +5278,7 @@ function MainAppContent({
   const toggleChannelSidebar = () => {
     setChannelSidebar((previous) => {
       const iconsNow = channelSidebarIconsOnly(previous, {
-        watchingAShare,
+        watchingAShare: watchingAShare || cinema,
         columnLayout,
       });
       // Whichever way it is now, the click makes the opposite explicit, so the
@@ -5578,7 +5638,7 @@ function MainAppContent({
           {splitState.canSideBySide && (
             <Tooltip
               label={
-                callSplit.orientation === "side-by-side"
+                effectiveOrientation(callSplit, splitKind) === "side-by-side"
                   ? t("call.split.stack")
                   : t("call.split.sideBySide")
               }
@@ -5587,14 +5647,17 @@ function MainAppContent({
               <button
                 type="button"
                 data-call-split-toggle=""
-                aria-pressed={callSplit.orientation === "side-by-side"}
+                aria-pressed={
+                  effectiveOrientation(callSplit, splitKind) === "side-by-side"
+                }
                 className={cn(
                   HEADER_ACTION_TILE,
-                  callSplit.orientation === "side-by-side" && "text-paper",
+                  effectiveOrientation(callSplit, splitKind) === "side-by-side" &&
+                    "text-paper",
                 )}
-                onClick={toggleSplitOrientation}
+                onClick={() => toggleSplitOrientation(splitKind)}
               >
-                {callSplit.orientation === "side-by-side" ? (
+                {effectiveOrientation(callSplit, splitKind) === "side-by-side" ? (
                   <Rows2 className="h-4 w-4" />
                 ) : (
                   <Columns2 className="h-4 w-4" />
@@ -5811,6 +5874,7 @@ function MainAppContent({
         )}
       <CallSplit
         shape={stageShape}
+        kind={splitKind}
         preference={callSplit}
         onPreferenceChange={handleCallSplitChange}
         onSplitStateChange={handleSplitState}
@@ -5922,6 +5986,11 @@ function MainAppContent({
           <WatchChannelStage
             fill={splitState.active}
             onShapeChange={handleWatchStageShape}
+            cinema={
+              splitKind === "watch"
+                ? { active: cinema, toggle: () => setCinema((on) => !on) }
+                : undefined
+            }
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
