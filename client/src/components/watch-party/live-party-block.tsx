@@ -50,6 +50,7 @@ export function LivePartyBlock({
   parties,
   selectedChannelId,
   canStart = false,
+  pending = null,
   audience,
   onWatch,
   onCreate,
@@ -59,6 +60,13 @@ export function LivePartyBlock({
   selectedChannelId: string | null;
   /** This person holds `START_WATCH_PARTY` somewhere in this server. */
   canStart?: boolean;
+  /**
+   * A draft or scheduled party in this server that this person runs. A
+   * draft is private and lives only on its channel, so the sidebar used to
+   * keep offering "Criar" over one that already existed, and the API then
+   * refused. The control becomes the way back to it instead.
+   */
+  pending?: WatchParty | null;
   /** People watching, by channel id. Absent means "do not show a number". */
   audience?: Readonly<Record<string, number>>;
   onWatch: (channelId: string) => void;
@@ -86,6 +94,31 @@ export function LivePartyBlock({
      * who may start one gets a single control, and it reads as an action
      * rather than as a channel type, which is the whole point of the change.
      */
+    if (pending) {
+      const scheduled = pending.state === "scheduled";
+      return (
+        <div className="mb-3 px-1" data-testid="live-party-pending">
+          <button
+            type="button"
+            data-live-party-pending={pending.state}
+            className="flex w-full items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-2 text-left transition-colors hover:bg-warning/15"
+            onClick={() => onWatch(pending.channelId)}
+          >
+            <Clapperboard className="h-4 w-4 shrink-0 text-warning" aria-hidden />
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate text-sm font-medium text-paper">
+                {pending.name}
+              </span>
+              <span className="text-[11px] text-warning">
+                {scheduled
+                  ? t("watchParty.block.pendingScheduled")
+                  : t("watchParty.block.pendingDraft")}
+              </span>
+            </span>
+          </button>
+        </div>
+      );
+    }
     if (!canStart || !onCreate) {
       return null;
     }

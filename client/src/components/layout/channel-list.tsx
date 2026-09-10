@@ -183,6 +183,8 @@ interface ChannelListProps {
    * `components/watch-party/live-party-block.tsx`.
    */
   liveParties?: readonly WatchParty[];
+  /** See `LivePartyBlock.pending`. */
+  pendingParty?: WatchParty | null;
   /** One click: select the channel, which is what starts watching. */
   onWatchLiveParty?: (channelId: string) => void;
   /**
@@ -317,6 +319,7 @@ export function ChannelList({
   onSelectChannel,
   onJoinVoice,
   liveParties,
+  pendingParty,
   onWatchLiveParty,
   canStartWatchParty,
   onCreateWatchParty,
@@ -1390,6 +1393,7 @@ export function ChannelList({
             {watchPartyOn && onWatchLiveParty && (
               <LivePartyBlock
                 parties={liveParties ?? []}
+                pending={pendingParty ?? null}
                 selectedChannelId={selectedChannelId}
                 audience={Object.fromEntries(
                   (liveParties ?? []).map((party) => [

@@ -850,7 +850,13 @@ test("the three states a real event produces read differently", async ({
   // create button being back in its place is the same fact from the other
   // side, and catches a block that renders for every state.
   await expect(page.getByTestId("live-party-block")).toHaveCount(0);
-  await expect(page.locator("[data-live-party-create]")).toBeVisible();
+  // And the create control is not offered over a party that already exists:
+  // the host gets the way back to the one they scheduled instead. The API
+  // refuses a second one, and a button that leads to a refusal is a bug.
+  await expect(page.locator("[data-live-party-create]")).toHaveCount(0);
+  await expect(
+    page.locator('[data-live-party-pending="scheduled"]'),
+  ).toBeVisible();
 
   const second = await secondClient(browser);
   try {

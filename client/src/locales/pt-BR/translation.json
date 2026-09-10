@@ -2916,6 +2916,8 @@
   "watchParty.scheduled.reminding": "Vou te avisar",
   "watchParty.scheduled.viewerNote": "O chat já tá aberto. Fica por aqui ou volta na hora.",
   "watchParty.block.label": "Watch party",
+  "watchParty.block.pendingDraft": "Montando. Toca pra continuar.",
+  "watchParty.block.pendingScheduled": "Marcada. Toca pra abrir.",
   "watchParty.role.host": "Host",
   "watchParty.role.cohost": "Co-host",
   "featureHint.watchPartyHost.body": "Você monta a watch party do seu lado. Nada sai daqui até você clicar em Ir ao vivo.",

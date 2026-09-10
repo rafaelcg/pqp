@@ -6512,6 +6512,14 @@ function MainAppContent({
           onSelectChannel={(id) => void selectChannel(id)}
           onJoinVoice={handleJoinVoiceFromList}
           liveParties={watchParties.live}
+          pendingParty={
+            Object.values(watchParties.byChannel).find(
+              (party) =>
+                party.serverId === selectedServerId &&
+                (party.state === "draft" || party.state === "scheduled") &&
+                (party.viewerRole === "host" || party.viewerRole === "cohost"),
+            ) ?? null
+          }
           onWatchLiveParty={(channelId) => void handleWatchLiveParty(channelId)}
           canStartWatchParty={canOfferWatchPartyCreate({
             // The rollout gate, not a capability check. See
