@@ -17,13 +17,11 @@ import Foundation
  the rungs are whatever the egress happened to start. Sharing a type between
  the two would tie a viewer's choice to a publisher's contract.
 
- AUTO IS THE DEFAULT AND IT ALREADY WORKED. Worth stating plainly, because
- "there is no quality control on iOS" reads as "iOS is pinned to something".
- It is not: nothing sets `preferredMaximumResolution` or `preferredPeakBitRate`
- on the item, so `AVPlayer` has been picking a variant and adapting on its own
- since the player shipped. What was missing was the control and, more
- importantly, the honesty: a viewer on mobile data could not see which rung
- they were paying for, and could not refuse the expensive one.
+ AUTO IS THE DEFAULT. The phone-wide strip cannot earn a 1080 decode, so
+ Auto caps to the shortest published rung until the surface or a pin says
+ otherwise. Writing that cap *after* `play()` is the stall: ABR climbs,
+ the rendition switch freezes a ~10 s live window. The cap is written
+ before the first `play()`, and `readyToPlay` is not treated as playing.
  */
 struct WatchRung: Equatable, Identifiable, Sendable {
     /// Picture lines, which is what "720p" has always meant and what the label
@@ -151,7 +149,11 @@ struct WatchLadder: Equatable, Sendable {
         }
         let candidates = [pinned?.size, validSurface(surfacePixels)].compactMap { $0 }
         guard let smallest = candidates.min(by: { $0.height < $1.height }) else {
-            return .zero
+            // No surface yet and Auto: cap to the shortest published rung
+            // rather than to nothing. Returning `.zero` here is "no ceiling",
+            // which is how Auto started at 1080, ABR climbed a few seconds
+            // in, and the live window stalled.
+            return shortest.size
         }
         return smallest.height < shortest.size.height ? shortest.size : smallest
     }
@@ -183,14 +185,6 @@ enum WatchQualityLabel {
 }
 
 /**
- The master playlist's variants, read once per attach.
-
- `AVURLAsset.load(.variants)` parses the master this player is already going to
- fetch, so this costs one extra request at most and nothing at all when the
- response is still in the URL cache. It is deliberately tolerant: a failure
- here means no picker, never no picture.
- */
-/**
  WHEN A LIVE ITEM MAY HAVE ITS CEILINGS REWRITTEN.
 
  `preferredMaximumResolution` is a live property, and writing it is a
@@ -212,6 +206,22 @@ enum WatchQualityRetune {
         case fullscreen
     }
 
+    /// Whether the player has entered a playback session.
+    ///
+    /// `AVPlayerItem.status == .readyToPlay` is deliberately not consulted.
+    /// That flag means the master parsed, which is the moment the Auto
+    /// ceiling has to be written, before `play()`. Treating it as "already
+    /// playing" skipped the write, ABR climbed a few seconds later, and
+    /// the picture froze. Rate and `timeControlStatus` are the session.
+    static func hasStartedPlayback(
+        rate: Float,
+        timeControlStatus: AVPlayer.TimeControlStatus
+    ) -> Bool {
+        rate > 0
+            || timeControlStatus == .playing
+            || timeControlStatus == .waitingToPlayAtSpecifiedRate
+    }
+
     static func shouldWrite(alreadyPlaying: Bool, trigger: Trigger) -> Bool {
         switch trigger {
         case .pin, .fullscreen:
@@ -222,7 +232,38 @@ enum WatchQualityRetune {
     }
 }
 
+/**
+ HOW FAR FROM LIVE TO SIT, AND HOW MUCH BUFFER TO ASK FOR.
+
+ Port of `hlsLivePlayerConfig()` in `client/src/lib/hls-live-edge.ts`.
+ `AVPlayer` will happily wait for a 30 s buffer a live playlist of five
+ 2 s segments cannot grow, which is "plays for a few seconds, then
+ stops" with `timeControlStatus == .waitingToPlayAtSpecifiedRate` and
+ no error. The web already refused to ask hls.js for more than the
+ window; this is the same numbers on the item.
+ */
+enum WatchPlayerItemTuning {
+    /// `HLS_MAX_BUFFER_LENGTH_SECONDS`.
+    static let forwardBuffer: TimeInterval = 8
+    /// `HLS_LIVE_SYNC_DURATION_COUNT * HLS_LIVE_SEGMENT_SECONDS`.
+    static let timeOffsetFromLive: TimeInterval = 8
+
+    static func apply(_ item: AVPlayerItem) {
+        item.preferredForwardBufferDuration = forwardBuffer
+        item.configuredTimeOffsetFromLive = CMTime(
+            seconds: timeOffsetFromLive, preferredTimescale: 600
+        )
+        item.automaticallyPreservesTimeOffsetFromLive = true
+        item.canUseNetworkResourcesForLiveStreamingWhilePaused = true
+    }
+}
+
 enum WatchVariants {
+    /// The master playlist's variants, read once per attach.
+    ///
+    /// `AVURLAsset.load(.variants)` parses the master this player is already
+    /// going to fetch, so this costs one extra request at most. A failure
+    /// here means no picker, never no picture.
     static func load(from asset: AVURLAsset) async -> WatchLadder {
         guard let variants = try? await asset.load(.variants) else { return .empty }
         let described = variants.compactMap { variant -> (size: CGSize, peakBitRate: Double?)? in

@@ -103,6 +103,10 @@ struct WatchLiveEdge: Equatable {
     /// gone. `target(in:)` therefore also honours `minRunway`.
     static let liveTargetOffset: Double = 8
 
+    /// Jump-to-live and stall recovery, matching web `jumpToLiveTime`:
+    /// one 2 s segment behind the edge, not onto it.
+    static let jumpOffset: Double = 2
+
     /// Never land closer to the back of the window than this, in seconds.
     /// Two segments. Combined with `liveTargetOffset` a ten second window
     /// lands six seconds from the edge (four from the back), not eight.
@@ -210,10 +214,21 @@ struct WatchLiveEdge: Equatable {
     /// short playlist. A window shorter than `minRunway` has no such
     /// position and lands at the start of everything that exists.
     static func target(in window: WatchLiveWindow) -> Double {
+        land(in: window, offset: liveTargetOffset)
+    }
+
+    /// Where the Jump to live control (and a stall recover) should land.
+    /// One segment behind the edge, matching the web, still honouring
+    /// `minRunway` on a short playlist.
+    static func jumpTarget(in window: WatchLiveWindow) -> Double {
+        land(in: window, offset: jumpOffset)
+    }
+
+    private static func land(in window: WatchLiveWindow, offset: Double) -> Double {
         if window.span <= minRunway {
             return window.start
         }
-        return max(window.start + minRunway, window.end - liveTargetOffset)
+        return max(window.start + minRunway, window.end - offset)
     }
 
     /// How far behind the playlist's newest segment the picture is. Never
