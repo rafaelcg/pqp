@@ -1300,6 +1300,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.voiceChannelId = null;
     state.speakingPeerIds = [];
     state.serverMutedPeerIds = [];
+    discardPendingHand();
+    state.handRaisedAt = null;
     state.transportFailure = failure;
     state.error = translateMessage(TRANSPORT_FAILURE_KEY[failure.reason]);
     emit();
@@ -1837,8 +1839,43 @@ export function createVoiceController(transport: RealtimeTransport) {
    * win, which is the only side that can be right about a queue.
    */
   const HAND_ECHO_MS = 3_000;
-  /** Our last unacknowledged raise/lower: what we said, and when we said it. */
-  let pendingHand: { raised: boolean; at: number } | null = null;
+  /**
+   * Our last unacknowledged raise/lower. `seen` is the latest roster value
+   * that arrived while we were waiting — including a moderator's null —
+   * so a mismatch is retained rather than discarded. `previous` is what to
+   * revert to if the echo never comes (the frame was dropped).
+   */
+  let pendingHand: {
+    raised: boolean;
+    at: number;
+    previous: number | null;
+    seen: number | null | undefined;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
+
+  function discardPendingHand() {
+    if (!pendingHand) {
+      return;
+    }
+    clearTimeout(pendingHand.timer);
+    pendingHand = null;
+  }
+
+  function reconcilePendingHand(
+    pending: NonNullable<typeof pendingHand>,
+  ) {
+    if (pendingHand !== pending) {
+      return;
+    }
+    pendingHand = null;
+    // A roster we held back (moderator lower, or a late echo of the old
+    // state) wins once the window closes. No roster at all means the
+    // frame never landed: revert so a quiet room cannot leave the button
+    // pressed forever.
+    state.handRaisedAt =
+      pending.seen !== undefined ? pending.seen : pending.previous;
+    emit();
+  }
 
   /**
    * Take our own hand from a roster (`welcome`, `voice-roster`,
@@ -1850,11 +1887,12 @@ export function createVoiceController(transport: RealtimeTransport) {
    */
   function applySelfHand(serverValue: number | null) {
     if (pendingHand) {
+      pendingHand.seen = serverValue;
       const agrees = (serverValue !== null) === pendingHand.raised;
       if (!agrees && Date.now() - pendingHand.at < HAND_ECHO_MS) {
         return;
       }
-      pendingHand = null;
+      discardPendingHand();
     }
     state.handRaisedAt = serverValue;
   }
@@ -1887,7 +1925,19 @@ export function createVoiceController(transport: RealtimeTransport) {
 
   /** Declare our own hand, and believe it until the room says otherwise. */
   function sendRaisedHand(raised: boolean) {
-    pendingHand = { raised, at: Date.now() };
+    const previous = state.handRaisedAt;
+    discardPendingHand();
+    const pending: NonNullable<typeof pendingHand> = {
+      raised,
+      at: Date.now(),
+      previous,
+      seen: undefined,
+      timer: undefined as unknown as ReturnType<typeof setTimeout>,
+    };
+    pending.timer = setTimeout(() => {
+      reconcilePendingHand(pending);
+    }, HAND_ECHO_MS);
+    pendingHand = pending;
     state.handRaisedAt = raised ? Date.now() : null;
     transport.sendVoice({ type: "set-raised-hand", raised });
   }
@@ -2475,6 +2525,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     pushToTalkHeld = false;
     voiceActivityOpen = false;
     voiceActivityTracker.clear();
+    discardPendingHand();
     state = {
       status: "idle",
       peerId: null,
@@ -3375,7 +3426,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // A queue belongs to a room. Walking into another one is not a place
       // in its queue, and the welcome will say so anyway.
       state.handRaisedAt = null;
-      pendingHand = null;
+      discardPendingHand();
       // Known from the moment we start, not only once the server says welcome —
       // otherwise the UI cannot tell which channel is connecting.
       state.voiceChannelId = voiceChannelId;

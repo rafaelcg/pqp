@@ -109,6 +109,19 @@ describe("RaisedHandQueue", () => {
     );
   });
 
+  it("does not offer the moderator lower on your own hand", () => {
+    // The moderation route rejects self-targets. Your own hand still comes
+    // down from the ordinary hand button; this X would only show an error.
+    const room = [person("me", 100), person("alice", 200)];
+    const html = render(room, {
+      selfUserId: "me",
+      canLowerHands: true,
+      onLowerHand: () => {},
+    });
+    expect(html).not.toContain('data-hand-lower="me"');
+    expect(html).toContain('data-hand-lower="alice"');
+  });
+
   it("collapses to one line and a count for the call strip", () => {
     const room = [person("alice", 100), person("bob", 200), person("me", 300)];
     const html = render(room, { compact: true, selfUserId: "me" });

@@ -2949,6 +2949,38 @@ describe("raising a hand", () => {
     expect(voice.getState().handRaisedAt).toBeNull();
   });
 
+  it("applies a moderator lower once the echo window expires, instead of keeping the button pressed", async () => {
+    const { voice } = await connected();
+    vi.useFakeTimers();
+    try {
+      voice.toggleRaisedHand();
+      expect(voice.getState().handRaisedAt).not.toBeNull();
+
+      // Arrives inside the window: keep the optimistic raise, but retain the
+      // null so it is not forgotten.
+      voice.handleSignaling(rosterWithSelfHand(null));
+      expect(voice.getState().handRaisedAt).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(voice.getState().handRaisedAt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reverts a raise that never echoed, so a dropped frame cannot stick forever", async () => {
+    const { voice } = await connected();
+    vi.useFakeTimers();
+    try {
+      voice.toggleRaisedHand();
+      expect(voice.getState().handRaisedAt).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(voice.getState().handRaisedAt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("leaves the queue behind when the call ends", async () => {
     const { voice } = await connected();
     voice.toggleRaisedHand();

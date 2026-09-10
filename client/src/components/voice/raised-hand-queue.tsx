@@ -140,7 +140,7 @@ export function RaisedHandQueue({
               {index + 1}
             </span>
             <span className="min-w-0 flex-1 truncate">{person.displayName}</span>
-            {canLowerHands && onLowerHand && (
+            {canLowerHands && onLowerHand && person.userId !== selfUserId && (
               <Tooltip
                 label={t("voice.hand.lowerFor", { name: person.displayName })}
               >

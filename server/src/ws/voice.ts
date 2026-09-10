@@ -513,18 +513,15 @@ function rowToParticipant(row: VoiceRosterPeerRow): VoiceParticipant {
     serverMuted:
       row.serverMuted || isVoiceUserServerMuted(row.channelId, row.userId),
     canStream: row.canStream,
-    // Same rule as the mute one line up: the row is the cluster's answer and
-    // the map is this process's, which may be one write ahead of it. The
-    // earlier of the two is the honest one, because a hand only ever moves
-    // forward in time and the queue is ordered on it.
-    handRaisedAt: earlierHand(
-      row.handRaisedAt,
-      voiceUserHandRaisedAt(row.channelId, row.userId),
-    ),
+    handRaisedAt: clusterHandRaisedAt(row),
   };
 }
 
-/** The earlier of two readings of one hand; null only when both are down. */
+/**
+ * The earlier of two readings of one hand while both say it is up.
+ * Null is not a candidate: a missed lower must not be resurrected by a
+ * stale cache (see `clusterHandRaisedAt`).
+ */
 function earlierHand(a: number | null, b: number | null): number | null {
   if (a === null) {
     return b;
@@ -533,6 +530,28 @@ function earlierHand(a: number | null, b: number | null): number | null {
     return a;
   }
   return Math.min(a, b);
+}
+
+/**
+ * A roster rebuilt from the registry rows. `sendRoster` / `welcomeVoicePeer`
+ * wait on `settledRowWrites` first, so a raise this process just wrote is
+ * already visible here. After that settle, a database null is the cluster's
+ * answer that the hand is down: forget a stale local cache rather than
+ * letting `earlierHand(null, cached)` put the person back in the queue.
+ */
+function clusterHandRaisedAt(row: VoiceRosterPeerRow): number | null {
+  if (row.handRaisedAt === null) {
+    forgetLocalRaisedHand(row.channelId, row.userId);
+    return null;
+  }
+  // After settle the row is the cluster's raise. Seed a cache this
+  // process missed so a later local overlay (`toParticipant`) cannot
+  // wipe it back to down.
+  noteRaisedHand(row.channelId, row.userId, row.handRaisedAt);
+  return earlierHand(
+    row.handRaisedAt,
+    voiceUserHandRaisedAt(row.channelId, row.userId),
+  );
 }
 
 /**
@@ -983,20 +1002,34 @@ function noteRaisedHand(
   }
 }
 
-/** Drop every hand this room is holding for a person who has left it. */
-function clearRaisedHand(voiceChannelId: string, userId: string): void {
+/** Drop the in-process copy of one hand. Does not touch the registry row. */
+function forgetLocalRaisedHand(voiceChannelId: string, userId: string): void {
   const hands = roomRaisedHands.get(voiceChannelId);
-  if (!hands?.delete(userId)) {
+  if (!hands) {
     return;
   }
+  hands.delete(userId);
   if (hands.size === 0) {
     roomRaisedHands.delete(voiceChannelId);
   }
+}
+
+/**
+ * This person holds no seat in this room anywhere. Drop the hand: local
+ * cache (even if this instance never saw the raise), the registry row, and
+ * a null hint so the other machines do not keep a ghost in the queue.
+ *
+ * Callers with the registry on must already have confirmed there is no
+ * remaining cluster seat, and should run this inside that peer's write
+ * chain so the delete is visible to the roster that follows.
+ */
+async function dropRaisedHandForUser(
+  voiceChannelId: string,
+  userId: string,
+): Promise<void> {
+  forgetLocalRaisedHand(voiceChannelId, userId);
   if (registryOn()) {
-    trackRowWrite(
-      voiceChannelId,
-      setVoiceRaisedHandRow(voiceChannelId, userId, false),
-    );
+    await setVoiceRaisedHandRow(voiceChannelId, userId, false);
   }
   if (clusterOn()) {
     publishVoice(VOICE_RAISED_HAND_TOPIC, {
@@ -2569,24 +2602,36 @@ function removePeer(peerId: string) {
     roomServerMutes.delete(voiceChannelId);
     // And for the queue, which the room row's cascade also takes care of on
     // the cluster side: the last peer's delete removes the room, and the
-    // hands go with it.
+    // hands go with it. This process holds nobody, so the cache goes too;
+    // whether THIS user's registry row should be deleted is the check below
+    // (another instance may still seat them).
     roomRaisedHands.delete(voiceChannelId);
   } else if (
+    !registryOn() &&
     !getRoomPeers(voiceChannelId).some((other) => other.userId === peer.userId)
   ) {
     // LEAVING LOWERS YOUR HAND. Not the socket closing (an orphan is still
     // in the call and is still in the queue) but this person holding no seat
-    // in this room at all any more. A queue of people who have gone is worse
-    // than no queue, which is the whole reason this is not simply left to
-    // expire.
-    clearRaisedHand(voiceChannelId, peer.userId);
+    // in this room at all any more. Registry off: this map is the room.
+    void dropRaisedHandForUser(voiceChannelId, peer.userId);
   }
   if (registryOn()) {
     // One statement: the row goes, and the room row with it if this was the
     // last peer anywhere in the cluster (not only on this instance). Then the
-    // party, for the one race that can leave a room row behind.
+    // party, for the one race that can leave a room row behind. Then the
+    // hand: only if no cluster seat remains for this person, including a
+    // seat this instance never held. The cache may be empty (we missed the
+    // raise frame); the row is deleted anyway.
+    const userId = peer.userId;
     trackRowWrite(voiceChannelId, peerId, () =>
-      deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(voiceChannelId)),
+      deleteVoicePeer(peerId)
+        .then(() => clearWatchPartyIfEmpty(voiceChannelId))
+        .then(async () => {
+          const remaining = await listVoicePeersInRoom(voiceChannelId);
+          if (!remaining.some((row) => row.userId === userId)) {
+            await dropRaisedHandForUser(voiceChannelId, userId);
+          }
+        }),
     );
   }
   retirePeerId(peerId, voiceChannelId);
@@ -3313,7 +3358,6 @@ async function welcomeVoicePeer(
     voiceChannelId: peer.voiceChannelId,
     transport,
   });
-  const self = toParticipant(peer);
   // Orphans stay on the roster (sidebar still shows them) but must not be
   // in `welcome.peers`. A joiner that offered to a closed socket would sit
   // in `have-local-offer` forever; on resume `connectToPeer` is a no-op.
@@ -3322,14 +3366,24 @@ async function welcomeVoicePeer(
   if (registryOn()) {
     // The room's other instances' peers, and the party the room holds. One
     // read each, both best effort: a failed read leaves the local view,
-    // which is what a single machine would have shown.
+    // which is what a single machine would have shown. The raised hand is
+    // folded into this roster (the LEFT JOIN on `voice_raised_hands`): after
+    // the peer row exists there is no second round trip for it.
     try {
+      await settledRowWrites(peer.voiceChannelId);
       const [room, held] = await Promise.all([
         listVoiceRoster(peer.voiceChannelId),
         readWatchParty(peer.voiceChannelId),
       ]);
       noteRemoteTransport(peer.voiceChannelId, room?.transport ?? null);
       for (const row of room?.peers ?? []) {
+        if (row.userId === peer.userId) {
+          if (row.handRaisedAt !== null) {
+            noteRaisedHand(peer.voiceChannelId, peer.userId, row.handRaisedAt);
+          } else {
+            forgetLocalRaisedHand(peer.voiceChannelId, peer.userId);
+          }
+        }
         if (row.orphanedAt === null) {
           byId.set(row.peerId, rowToParticipant(row));
         }
@@ -3347,6 +3401,7 @@ async function welcomeVoicePeer(
     // The await may have outlived the socket. `send` drops the frame on a
     // closed socket anyway; the room broadcast below is still owed.
   }
+  const self = toParticipant(peer);
   for (const live of getLiveRoomPeers(peer.voiceChannelId)) {
     byId.set(live.id, toParticipant(live));
   }
@@ -4092,36 +4147,6 @@ export async function handleVoiceMessage(
       } catch (error) {
         logEvent("voice.registryReadFailed", {
           op: "serverMute",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-      if (socket.readyState !== 1) {
-        if (pinnedHere) {
-          void unpinVoiceRoomIfEmpty(payload.voiceChannelId);
-        }
-        return;
-      }
-    }
-
-    // The place this person already holds in the room's queue, as the cluster
-    // has it: raised on another instance, or on this one before a restart
-    // emptied the map, or by the seat this join is replacing after a refresh
-    // inside the orphan window. Seeded so the welcome below and every roster
-    // read it the same way a raise made here would be read. Never LOWERS a
-    // hand this process already knows about (`noteRaisedHand`), because the
-    // map may be one write ahead of the row.
-    if (registryOn()) {
-      try {
-        const raisedAt = await getVoiceRaisedHandInRegistry(
-          payload.voiceChannelId,
-          user.id,
-        );
-        if (raisedAt !== null) {
-          noteRaisedHand(payload.voiceChannelId, user.id, raisedAt);
-        }
-      } catch (error) {
-        logEvent("voice.registryReadFailed", {
-          op: "raisedHand",
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -6415,7 +6440,9 @@ subscribeToCluster(VOICE_SIGNAL_TOPIC, (data) => {
  *
  * A hint about a row, like every other voice topic here: an instance that
  * misses this frame still reads the hand on its next roster and on the next
- * join. What the frame buys is that the queue moves now.
+ * join. What the frame buys is that the queue moves now. A delayed raise
+ * must not resurrect a hand the row has already deleted, so a non-null
+ * hint is re-read before it is applied.
  */
 const voiceRaisedHandFrameSchema = z.object({
   channelId: z.string().uuid(),
@@ -6423,6 +6450,21 @@ const voiceRaisedHandFrameSchema = z.object({
   raisedAt: z.number().int().nonnegative().nullable(),
 });
 type VoiceRaisedHandFrame = z.infer<typeof voiceRaisedHandFrameSchema>;
+
+async function applyClusterRaisedHandHint(
+  channelId: string,
+  userId: string,
+  raisedAt: number | null,
+): Promise<void> {
+  let next = raisedAt;
+  if (next !== null) {
+    // Raise writes then publishes; a lower on another instance can delete
+    // the row and publish null before that raise is delivered. The row is
+    // the order: if it is gone, apply down, not the delayed timestamp.
+    next = await getVoiceRaisedHandInRegistry(channelId, userId);
+  }
+  return applyRaisedHandLocally(channelId, userId, next);
+}
 
 subscribeToCluster(VOICE_RAISED_HAND_TOPIC, (data) => {
   if (!registryOn()) {
@@ -6436,7 +6478,7 @@ subscribeToCluster(VOICE_RAISED_HAND_TOPIC, (data) => {
   if (getRoomPeers(channelId).some((peer) => peer.userId === userId)) {
     noteClusterFrameReceived();
   }
-  void applyRaisedHandLocally(channelId, userId, raisedAt).catch(
+  void applyClusterRaisedHandHint(channelId, userId, raisedAt).catch(
     (error: unknown) => {
       console.error("[voice] raised hand frame failed:", error);
     },

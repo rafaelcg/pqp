@@ -2093,7 +2093,10 @@ describeDb("voice across two instances", () => {
       expect(at).not.toBeNull();
 
       // The seat moves to A by resume. A is a process that never saw the
-      // raise, so the only thing that can tell it is the row.
+      // raise, so the only thing that can tell it is the roster read this
+      // join already waits on (`listVoiceRoster` LEFT JOINs the hand). A
+      // standalone SELECT on the way in would be a second round trip for
+      // the same fact.
       const again = await resume(a, target, channel, seat.peerId, seat.resumeToken);
       const welcome = frames(again, "welcome")[0] as unknown as
         | { resumed?: boolean; self: { handRaisedAt: number | null } }
@@ -2147,6 +2150,141 @@ describeDb("voice across two instances", () => {
         | { self: { handRaisedAt: number | null } }
         | undefined;
       expect(welcome?.self.handRaisedAt ?? null).toBeNull();
+    });
+
+    it("leaving one of two seats does not lower the hand while the other instance still holds one", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const alice = randomUUID();
+      const aliceOnA = await join(a, alice, channel);
+      const aliceOnB = await join(b, alice, channel);
+      await settle();
+      await raise(a, aliceOnA, alice, true);
+      await settle();
+      await waitFor(
+        () => b.voice.voiceUserHandRaisedAt(channel, alice) !== null,
+        "the hand on B",
+      );
+
+      a.voice.removeVoicePeerBySocket(aliceOnA.socket);
+      await a.voice.leaveVoiceByResumeToken(
+        aliceOnA.peerId,
+        aliceOnA.resumeToken,
+      );
+      await settle();
+      expect(b.voice.voiceUserHandRaisedAt(channel, alice)).not.toBeNull();
+      const still = await pools[0]!.getPool().query(
+        `SELECT 1 FROM voice_raised_hands WHERE channel_id = $1 AND user_id = $2`,
+        [channel, alice],
+      );
+      expect(still.rowCount).toBe(1);
+
+      b.voice.removeVoicePeerBySocket(aliceOnB.socket);
+      await b.voice.leaveVoiceByResumeToken(
+        aliceOnB.peerId,
+        aliceOnB.resumeToken,
+      );
+      await settle();
+      const gone = await pools[0]!.getPool().query(
+        `SELECT 1 FROM voice_raised_hands WHERE channel_id = $1 AND user_id = $2`,
+        [channel, alice],
+      );
+      expect(gone.rowCount).toBe(0);
+    });
+
+    it("a leave deletes the registry row even when this instance never cached the raise", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const alice = randomUUID();
+      const aliceOnA = await join(a, alice, channel);
+      await join(b, randomUUID(), channel);
+      await settle();
+      await pools[0]!.getPool().query(
+        `INSERT INTO voice_raised_hands (channel_id, user_id) VALUES ($1, $2)`,
+        [channel, alice],
+      );
+      expect(a.voice.voiceUserHandRaisedAt(channel, alice)).toBeNull();
+
+      a.voice.removeVoicePeerBySocket(aliceOnA.socket);
+      await a.voice.leaveVoiceByResumeToken(
+        aliceOnA.peerId,
+        aliceOnA.resumeToken,
+      );
+      await settle();
+      const rows = await pools[0]!.getPool().query(
+        `SELECT 1 FROM voice_raised_hands WHERE channel_id = $1 AND user_id = $2`,
+        [channel, alice],
+      );
+      expect(rows.rowCount).toBe(0);
+    });
+
+    it("a missed lower is not resurrected by the stale cache on the next roster", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnB = watcher(b);
+      const alice = randomUUID();
+      const aliceOnA = await join(a, alice, channel);
+      const bob = randomUUID();
+      const bobOnB = await join(b, bob, channel);
+      await settle();
+      await raise(a, aliceOnA, alice, true);
+      await settle();
+      await waitFor(
+        () => handsOn(sidebarOnB, channel).length === 1,
+        "the hand on B",
+      );
+
+      // The lower's cluster frame never arrives: the row is gone, B's cache
+      // still says up. The next roster B builds must trust the null.
+      await pools[0]!.getPool().query(
+        `DELETE FROM voice_raised_hands WHERE channel_id = $1 AND user_id = $2`,
+        [channel, alice],
+      );
+      await b.voice.handleVoiceMessage(
+        { socket: bobOnB.socket, user: asUser(bob) },
+        { type: "set-voice-state", muted: true, deafened: false },
+      );
+      await settle();
+      await waitFor(
+        () => handsOn(sidebarOnB, channel).length === 0,
+        "B's roster to drop the hand",
+      );
+      expect(b.voice.voiceUserHandRaisedAt(channel, alice)).toBeNull();
+    });
+
+    it("a delayed raise hint does not bring back a hand the row already deleted", async () => {
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      const sidebarOnB = watcher(b);
+      const target = randomUUID();
+      await join(a, randomUUID(), channel);
+      const targetOnB = await join(b, target, channel);
+      await settle();
+      await raise(b, targetOnB, target, true);
+      await settle();
+      const at = b.voice.voiceUserHandRaisedAt(channel, target);
+      expect(at).not.toBeNull();
+
+      await a.voice.setVoiceUserHandRaised(channel, target, false);
+      await waitFor(
+        () => b.voice.voiceUserHandRaisedAt(channel, target) === null,
+        "B to lower it",
+      );
+
+      // The raise's cluster frame, arriving after the lower deleted the row.
+      a.bus.publishToCluster(a.voice.VOICE_RAISED_HAND_TOPIC, {
+        channelId: channel,
+        userId: target,
+        raisedAt: at,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await settle();
+      expect(b.voice.voiceUserHandRaisedAt(channel, target)).toBeNull();
+      expect(handsOn(sidebarOnB, channel)).toEqual([]);
     });
   });
 
