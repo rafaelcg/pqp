@@ -16,10 +16,13 @@ import {
   WATCH_PARTY_ACTIONS,
   WATCH_PARTY_HOST_GRACE_MS,
   WATCH_PARTY_PHASES,
+  mayTakeWatchPartySeat,
   stageModeClosesTheFloor,
+  watchPartyFloorIsClosed,
   watchPartyOptionsSchema,
   watchPartyRole,
   watchPartySpeakAffordance,
+  withLegacyWatchPartyVoice,
   type WatchPartyAction,
   type WatchPartyOptions,
   type WatchPartyRole,
@@ -367,13 +370,75 @@ describe("the host disconnect", () => {
 });
 
 describe("the options", () => {
-  it("closes the stage by default, because two hundred open microphones is the failure mode", () => {
+  it("gives a party no voice at all by default, and closes the stage under it", () => {
+    // THE WHOLE OBJECT, because a default that drifts has no symptom until a
+    // room is full. `voiceEnabled: false` is the one that decides whether
+    // this party ever touches the channel's permissions; `hosts_only` is the
+    // floor it would close if somebody turned voice on without picking one.
     expect(watchPartyOptionsSchema.parse({})).toEqual({
+      voiceEnabled: false,
       stageMode: "hosts_only",
       raiseHand: true,
       slowModeSeconds: 0,
       reactionsEnabled: true,
     });
+  });
+
+  it("closes the floor only when voice is actually on", () => {
+    // THE ONE QUESTION EVERY OVERWRITE WRITE IS GATED ON. A stored stage mode
+    // on a party with no voice is a preference nobody activated, not a rule,
+    // and it must not reach `channel_overwrites`: a rule that is never
+    // written cannot be left behind.
+    const options = (over: Partial<WatchPartyOptions>) =>
+      watchPartyOptionsSchema.parse(over);
+    expect(
+      watchPartyFloorIsClosed(options({ voiceEnabled: false, stageMode: "hosts_only" })),
+    ).toBe(false);
+    expect(
+      watchPartyFloorIsClosed(options({ voiceEnabled: false, stageMode: "invited" })),
+    ).toBe(false);
+    expect(
+      watchPartyFloorIsClosed(options({ voiceEnabled: true, stageMode: "hosts_only" })),
+    ).toBe(true);
+    expect(
+      watchPartyFloorIsClosed(options({ voiceEnabled: true, stageMode: "invited" })),
+    ).toBe(true);
+    // Voice on with an open floor still writes nothing: there is no floor to
+    // close, which is what it always meant.
+    expect(
+      watchPartyFloorIsClosed(options({ voiceEnabled: true, stageMode: "everyone" })),
+    ).toBe(false);
+  });
+
+  it("reads a party stored before voiceEnabled existed as having voice", () => {
+    // A row written by an older build has no key, and it was set up when
+    // every watch party was a voice room. Taking voice away from a party that
+    // is already running is the one thing this change must not do.
+    const legacy = { stageMode: "hosts_only", raiseHand: true, slowModeSeconds: 0, reactionsEnabled: true };
+    expect(
+      watchPartyOptionsSchema.parse(withLegacyWatchPartyVoice(legacy)).voiceEnabled,
+    ).toBe(true);
+
+    // PRESENCE OF THE KEY IS THE TEST, so an explicit false written since is
+    // untouched. Reading it as "falsy, therefore missing" would have made
+    // every new party a voice party, which is the failure this whole change
+    // exists to prevent and would have looked identical from the outside.
+    expect(
+      watchPartyOptionsSchema.parse(
+        withLegacyWatchPartyVoice({ ...legacy, voiceEnabled: false }),
+      ).voiceEnabled,
+    ).toBe(false);
+
+    // An empty object is a legacy row too: `parseOptions` hands `{}` in for a
+    // NULL column, and a party with a NULL options column predates this.
+    expect(
+      watchPartyOptionsSchema.parse(withLegacyWatchPartyVoice({})).voiceEnabled,
+    ).toBe(true);
+
+    // Junk is left for the schema to reject rather than repaired into a
+    // valid party.
+    expect(withLegacyWatchPartyVoice(null)).toBeNull();
+    expect(withLegacyWatchPartyVoice("nope")).toBe("nope");
   });
 
   it("knows which modes close the floor to everyone", () => {
@@ -397,14 +462,131 @@ describe("the options", () => {
   });
 });
 
+describe("who may take a seat in a watch party's room", () => {
+  const party = (over: Partial<{
+    voiceEnabled: boolean;
+    isHost: boolean;
+    isCohost: boolean;
+    isInvited: boolean;
+  }> = {}) => ({
+    voiceEnabled: false,
+    isHost: false,
+    isCohost: false,
+    isInvited: false,
+    ...over,
+  });
+
+  it("refuses the audience of a party with no voice", () => {
+    // THE MODEL. Watching is a socket; a seat is a LiveKit participant and
+    // forwarded streams against an envelope of about 600. At five hundred
+    // viewers that difference is whether the media box holds.
+    expect(
+      mayTakeWatchPartySeat({ canStartWatchParty: false, party: party() }),
+    ).toBe(false);
+  });
+
+  it("always lets the people running the party in", () => {
+    // Each of these three separately, because they are three different
+    // reasons and a co-host is the one that cannot be derived from a bit: the
+    // host may promote any member, permission or not.
+    expect(
+      mayTakeWatchPartySeat({ canStartWatchParty: true, party: party() }),
+    ).toBe(true);
+    expect(
+      mayTakeWatchPartySeat({
+        canStartWatchParty: false,
+        party: party({ isHost: true }),
+      }),
+    ).toBe(true);
+    expect(
+      mayTakeWatchPartySeat({
+        canStartWatchParty: false,
+        party: party({ isCohost: true }),
+      }),
+    ).toBe(true);
+  });
+
+  it("lets in somebody the host invited up, which is the point of inviting them", () => {
+    expect(
+      mayTakeWatchPartySeat({
+        canStartWatchParty: false,
+        party: party({ isInvited: true }),
+      }),
+    ).toBe(true);
+  });
+
+  it("lets everybody in once a host turns voice on", () => {
+    // The film night. From here `stageMode` decides who may SPEAK, through
+    // the ordinary overwrite, exactly as it did before.
+    expect(
+      mayTakeWatchPartySeat({
+        canStartWatchParty: false,
+        party: party({ voiceEnabled: true }),
+      }),
+    ).toBe(true);
+  });
+
+  it("leaves a channel with no party running alone", () => {
+    // NOT A CLOSED ROOM. A `watch_party` channel with nothing running is an
+    // ordinary voice room, which is exactly what a build with
+    // `VITE_WATCH_PARTY_CHANNELS` off already promises. Refusing here would
+    // break a deployment that has the channel type and not the feature.
+    expect(
+      mayTakeWatchPartySeat({ canStartWatchParty: false, party: null }),
+    ).toBe(true);
+  });
+});
+
 describe("which control a person is offered for speaking", () => {
   const opts = (over: Partial<WatchPartyOptions> = {}) =>
-    watchPartyOptionsSchema.parse(over);
+    watchPartyOptionsSchema.parse({ voiceEnabled: true, ...over });
 
   it("offers Falar to anyone the server already lets speak", () => {
     for (const role of ["host", "cohost", "manager", "viewer"] as const) {
       expect(
         watchPartySpeakAffordance({ options: opts(), role, canSpeak: true }),
+      ).toBe("speak");
+    }
+  });
+
+  it("offers a viewer nothing at all in a party with no voice", () => {
+    // AND THE ORDER MATTERS. With voice off the server writes no overwrite,
+    // so `canSpeak` is whatever the channel's everyday default says, which is
+    // usually true. Asking that first would put a Falar button on every
+    // viewer's screen in exactly the parties meant to have none.
+    for (const canSpeak of [true, false]) {
+      for (const stageMode of ["hosts_only", "invited", "everyone"] as const) {
+        expect(
+          watchPartySpeakAffordance({
+            options: opts({ voiceEnabled: false, stageMode, raiseHand: true }),
+            role: "viewer",
+            canSpeak,
+          }),
+        ).toBe("none");
+      }
+    }
+    // A manager is not running the party either: MANAGE_CHANNELS ends and
+    // edits somebody else's show, it does not perform in it.
+    expect(
+      watchPartySpeakAffordance({
+        options: opts({ voiceEnabled: false }),
+        role: "manager",
+        canSpeak: true,
+      }),
+    ).toBe("none");
+  });
+
+  it("still offers the people running a voiceless party the microphone", () => {
+    // They have a seat and they are the ones who might present. Taking the
+    // button off the host as well would mean a party nobody can talk in even
+    // when the host wants to say one sentence over the film.
+    for (const role of ["host", "cohost"] as const) {
+      expect(
+        watchPartySpeakAffordance({
+          options: opts({ voiceEnabled: false }),
+          role,
+          canSpeak: true,
+        }),
       ).toBe("speak");
     }
   });

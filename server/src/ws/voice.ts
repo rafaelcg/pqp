@@ -16,6 +16,7 @@ import {
   hasPermission,
   isVoiceRoomChannelType,
   isWatchPartyChannelType,
+  mayTakeWatchPartySeat,
   Permission,
   callDeclinedMessageSchema,
   callIncomingMessageSchema,
@@ -56,6 +57,16 @@ import {
   type ChannelRow,
 } from "../services/servers.js";
 import { resolveMemberChannelPermissions } from "../services/permissions.js";
+/**
+ * ONE STATIC EDGE, AND IT POINTS THIS WAY ON PURPOSE.
+ *
+ * `services/watch-parties.ts` calls back into this module (a host's socket
+ * closing starts the grace clock, an options change re-resolves the room) and
+ * does it through a dynamic `await import` precisely so the static graph stays
+ * acyclic. Importing it statically from here is the direction that stays
+ * acyclic, so the seat gate below costs no lazy import on the join path.
+ */
+import { loadWatchPartySeat } from "../services/watch-parties.js";
 import { canAccessChannel, resolveMemberName } from "../services/users.js";
 import { broadcastToChannel, onPermissionsUpdate } from "./chat.js";
 import { resolveStatus } from "./status.js";
@@ -3385,6 +3396,68 @@ export async function handleVoiceMessage(
     // THE ROOM GATE for the egress, read off the same row as the stage gate
     // so the two cannot disagree. See `pickHlsSharer`.
     const watchParty = isWatchPartyChannelType(channel.type);
+
+    /**
+     * THE SEAT GATE. A watch party has no voice by default, and this is the
+     * enforcement rather than the affordance.
+     *
+     * The audience of a watch party is seatless by construction: watching is
+     * a socket reading an HLS playlist, and a seat is a LiveKit participant
+     * with forwarded streams against an envelope of about 600 of them. The
+     * client stopped offering a viewer any way in (#436), but a removed
+     * button is a convention and not a model, and `join-voice-room` is the
+     * only way into a room, so this is where the model lives.
+     *
+     * NOT A PERMISSION BIT, deliberately. A CONNECT deny on @everyone would
+     * be the same mechanism as the SPEAK deny whose leftovers caused this
+     * whole change: a rule written onto a channel that can outlive the party
+     * that wrote it. This asks the party's own row instead, so it goes when
+     * the party goes.
+     *
+     * SKIPPED ENTIRELY FOR ANYBODY WHO MAY PRESENT HERE, which is the host on
+     * every path, so the snapshot below is not even consulted for them.
+     * `canStream` in a watch party IS `START_WATCH_PARTY`
+     * (`canStartWatchPartyStream`), so the two gates read one resolution and
+     * cannot disagree. Everybody else reads a per-channel snapshot (voice
+     * on or off, host, co-hosts, stage invites) that `loadWatchPartySeat`
+     * caches in front of the database: a 500-person audience is one query,
+     * not 500. `broadcastWatchParty` drops that snapshot on every mutation.
+     *
+     * FAILS OPEN. A database hiccup here must not lock a host out of their
+     * own show minutes before it starts; the worst an allowed join can cost
+     * is one seat, and the worst a wrongly refused one costs is the party.
+     */
+    if (watchParty && !canStream) {
+      // `allowed` starts TRUE and only a read that succeeded may set it
+      // false. Written this way round on purpose: an early return, a thrown
+      // query or a branch added later all leave a join allowed, which is the
+      // direction whose worst case is one seat rather than a cancelled show.
+      let allowed = true;
+      try {
+        allowed = mayTakeWatchPartySeat({
+          canStartWatchParty: false,
+          party: await loadWatchPartySeat(payload.voiceChannelId, user.id),
+        });
+      } catch (error) {
+        console.error("[voice] failed to read the watch party seat:", error);
+      }
+      if (!allowed) {
+        logEvent("voice.watchPartySeatRefused", {
+          channelId: payload.voiceChannelId,
+        });
+        // A COLD JOIN TOO. `refuseResume` only answers a resume, because the
+        // other gates on this path (no access, a timeout, a block) have
+        // always been silent and iOS treats `voice-join-refused` as "could
+        // not rejoin". A watch-party viewer is different: Android treats the
+        // channel as an ordinary voice room and sits on "connecting" until
+        // a watchdog fires, unless we say so. Same frame shape as a resume.
+        send(socket, {
+          type: "voice-join-refused",
+          voiceChannelId: payload.voiceChannelId,
+        });
+        return;
+      }
+    }
 
     // What this room would open on, if this join is the one that opens it. A
     // pinned room never re-decides, so the (at most one) query behind this is

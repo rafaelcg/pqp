@@ -32,6 +32,7 @@ const PARTY: WatchParty = {
   hostDisconnectedAt: null,
   cohosts: [],
   options: {
+    voiceEnabled: false,
     stageMode: "hosts_only",
     raiseHand: true,
     slowModeSeconds: 0,
@@ -330,6 +331,70 @@ describe("a host can tell they are not live", () => {
 });
 
 /**
+ * WHO IS OFFERED A SEAT, which is a different question from who may speak.
+ *
+ * A watch party has no voice by default, and the audience is seatless by
+ * construction: watching is a socket, a seat is a LiveKit participant with
+ * forwarded streams. The rule is `mayTakeWatchPartySeat` in `@pqp/shared`,
+ * asked here and again by `join-voice-room` on the server, so a control drawn
+ * here is one the server will honour and a control withheld is a join it
+ * would turn away.
+ *
+ * The case a blanket removal got wrong is the last one: a host who
+ * deliberately turns Voz on and is then offered nobody a way in has a setting
+ * that does nothing.
+ */
+describe("the way into the room", () => {
+  const joinControl = "data-watch-party-join-call";
+  /* The bar lives in the `chrome` slot: `surface` draws the stage. */
+  const inBar = (over: Partial<Parameters<typeof WatchPartyPanel>[0]> = {}) =>
+    render({ slot: "chrome", ...over });
+
+  it("offers a viewer nothing while the party has no voice", () => {
+    expect(inBar()).not.toContain(joinControl);
+  });
+
+  it("offers it to the people running the show, voice or no voice", () => {
+    for (const viewerRole of ["host", "cohost"] as const) {
+      expect(inBar({ party: { ...PARTY, viewerRole } })).toContain(joinControl);
+    }
+  });
+
+  it("offers it to anybody who may start a party in this channel", () => {
+    // They run parties here and the server lets them in for the same reason,
+    // so withholding the control would draw a room they can reach and no way
+    // to reach it.
+    expect(inBar({ canStart: true })).toContain(joinControl);
+  });
+
+  it("offers it to somebody the host invited up to speak", () => {
+    const me = "55555555-5555-4555-8555-555555555555";
+    expect(
+      inBar({
+        currentUserId: me,
+        party: {
+          ...PARTY,
+          stage: {
+            ...PARTY.stage,
+            invited: [{ userId: me, displayName: "Bob", avatarUrl: null }],
+          },
+        },
+      }),
+    ).toContain(joinControl);
+  });
+
+  it("offers it to everybody once the host turns voice on", () => {
+    // The film night. Six friends watching something together genuinely want
+    // to talk over it, and one click on Voz is what that costs them.
+    expect(
+      inBar({
+        party: { ...PARTY, options: { ...PARTY.options, voiceEnabled: true } },
+      }),
+    ).toContain(joinControl);
+  });
+});
+
+/**
  * THE ECHO REGRESSION. Setup used to call
  * `getDisplayMedia({ video: true, audio: true })` directly, which on Windows
  * Electron becomes WASAPI loopback of the call and puts every voice back into
@@ -365,5 +430,6 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
       "startScreenShareGated(false, { preferBrowserTab: true, stream })",
     );
     expect(goLive).not.toContain("getAudioTracks().length > 0");
+
   });
 });

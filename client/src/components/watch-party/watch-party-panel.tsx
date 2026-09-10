@@ -16,6 +16,7 @@ import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
 import type { VideoQuality } from "@/lib/video-quality";
 import {
   canPerformWatchPartyAction,
+  mayTakeWatchPartySeat,
   watchPartySpeakAffordance,
   watchPartySurface,
   type WatchParty,
@@ -742,18 +743,30 @@ function LiveSurface(
   /**
    * Whether a seat in this room is this person's to take at all.
    *
-   * NOT "may they" in a permission sense, which the server settles: this is
-   * whether the app offers it, and for an audience the answer is no. See the
-   * comment on the button. `stage.invited` is sent to everybody by
-   * `presentStage`, so an invited guest recognises themselves here without a
-   * second request and without the client guessing.
+   * THE SAME FUNCTION THE SERVER REFUSES THE JOIN WITH. This used to be a
+   * hand-rolled `runsTheShow || invited` here and a separate rule in
+   * `join-voice-room`, which is two answers to one question and exactly how a
+   * button that does nothing gets shipped. `mayTakeWatchPartySeat` is now the
+   * only place the rule is written, so a control drawn here is one the server
+   * will honour and a control withheld is a join it would refuse.
+   *
+   * `stage.invited` is public on the wire (`presentStage`: who is UP is
+   * public, who is ASKING is not), so an invited guest recognises themselves
+   * without a second request and without the client guessing.
    */
-  const mayTakeASeat =
-    runsTheShow ||
-    (props.currentUserId !== undefined &&
-      party.stage.invited.some(
-        (person) => person.userId === props.currentUserId,
-      ));
+  const mayTakeASeat = mayTakeWatchPartySeat({
+    canStartWatchParty: props.canStart,
+    party: {
+      voiceEnabled: party.options.voiceEnabled,
+      isHost: party.viewerRole === "host",
+      isCohost: party.viewerRole === "cohost",
+      isInvited:
+        props.currentUserId !== undefined &&
+        party.stage.invited.some(
+          (person) => person.userId === props.currentUserId,
+        ),
+    },
+  });
 
   const bar = (
     <div
@@ -840,12 +853,21 @@ function LiveSurface(
 
             WHO STILL GETS IT, and why each: the host and the co-hosts, who
             run the show and have to be able to get back into their own room;
-            and anybody the host has invited up to speak, for whom the whole
+            anybody who may start a watch party in this channel at all; and
+            anybody the host has invited up to speak, for whom the whole
             point of being invited is that they can now talk. `stage.invited`
             is public on the wire (`presentStage`: who is UP is public, who is
             ASKING is not), so this is the party's own answer rather than a
             guess. A manager is deliberately NOT here: MANAGE_CHANNELS ends
             and edits somebody else's party, it does not perform in it.
+
+            AND EVERYBODY, ONCE A HOST TURNS VOZ ON. That is the film night,
+            and it is the case the blanket removal got wrong: a party whose
+            host deliberately opened voice and then offered nobody a way in
+            would be a setting that does nothing. The rule is
+            `mayTakeWatchPartySeat` above, which is the same function
+            `join-voice-room` refuses with, so this control is never drawn for
+            a join the server would turn away.
 
             The listen-only label went with the control. Everybody who can
             still see this button can speak once they are in, so a warning
@@ -968,13 +990,16 @@ function LiveSurface(
           onChange={(patch) => void props.onOptionsChange(patch)}
         />
         {/* Mid-show, and it is the same control the setup surface had. A
-            co-host promoted here is granted SPEAK on the spot by the server,
-            so somebody brought in to help can actually talk to the room. */}
+            co-host promoted here is granted SPEAK on the spot by the server
+            when the party's floor is closed, so somebody brought in to help
+            can actually talk to the room. */}
         {cohostSection(props, party, "border-t border-border pt-4")}
         {/* The queue is a moderation surface and only the people running the
             party see it: an audience that can watch who asked and was passed
-            over is an audience having a worse time. */}
-        {party.options.stageMode === "invited" && (
+            over is an audience having a worse time. It is also nonsense in a
+            party with no voice, where nobody is asking for anything, so it
+            follows the Voz control rather than the stored stage mode. */}
+        {party.options.voiceEnabled && party.options.stageMode === "invited" && (
           <div className="border-t border-border pt-4">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
             {t("watchParty.stage.hands")}

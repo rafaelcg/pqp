@@ -39,6 +39,7 @@ const PARTY: WatchParty = {
   hostDisconnectedAt: null,
   cohosts: [],
   options: {
+    voiceEnabled: false,
     stageMode: "hosts_only",
     raiseHand: true,
     slowModeSeconds: 0,

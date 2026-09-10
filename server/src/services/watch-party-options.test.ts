@@ -109,6 +109,7 @@ interface PartyBody {
   viewerRole: string;
   hostUserId: string;
   options: {
+    voiceEnabled: boolean;
     stageMode: string;
     raiseHand: boolean;
     slowModeSeconds: number;
@@ -300,6 +301,50 @@ describeDb("watch party options and the stage", () => {
     return row ? has(row.allow, Permission.SPEAK) : false;
   }
 
+  /**
+   * Every overwrite on this channel, ordered, as raw strings.
+   *
+   * The snapshot the leak test compares. Rows rather than a resolved
+   * permission, for the reason `overwrite` above already gives: a resolver
+   * bug would hide a leftover row behind a role that happens to carry the
+   * bit anyway.
+   */
+  async function allOverwrites(): Promise<
+    { target_type: string; target_id: string; allow: string; deny: string }[]
+  > {
+    const result = await getPool().query<{
+      target_type: string;
+      target_id: string;
+      allow: string;
+      deny: string;
+    }>(
+      `SELECT target_type, target_id, allow, deny FROM channel_overwrites
+        WHERE channel_id = $1
+        ORDER BY target_type, target_id`,
+      [channelId],
+    );
+    return result.rows;
+  }
+
+  /**
+   * The server's `permissions_version`, and why this is the stronger half of
+   * the leak test.
+   *
+   * `upsertChannelOverwrite` and `deleteChannelOverwrite` both bump it, on
+   * every call, before anything else. So it counts WRITES, not rows: an
+   * upsert that happens to write the bits that were already there leaves the
+   * table identical and moves this number. "The default path writes no
+   * overwrite at all" is a claim about calls, and this is the only thing in
+   * reach that can see one.
+   */
+  async function permissionsVersion(): Promise<number> {
+    const result = await getPool().query<{ permissions_version: number }>(
+      `SELECT permissions_version FROM servers WHERE id = $1`,
+      [serverId],
+    );
+    return result.rows[0].permissions_version;
+  }
+
   // --------------------------------------------------------------- the cases
 
   it("gives a party with no options the safe defaults, in full", async () => {
@@ -310,6 +355,10 @@ describeDb("watch party options and the stage", () => {
     // is what keeps two hundred people from being asked for a microphone,
     // and `raiseHand` is the door that makes closing the floor tolerable.
     expect(party.options).toEqual({
+      // NO VOICE. The one that decides whether this party ever writes a
+      // permission rule on the channel, and the one whose drift would put
+      // five hundred people back in a call they did not ask to be in.
+      voiceEnabled: false,
       stageMode: "hosts_only",
       raiseHand: true,
       slowModeSeconds: 0,
@@ -342,8 +391,175 @@ describeDb("watch party options and the stage", () => {
     expect(good.status).toBe(200);
   });
 
+  /**
+   * THE TEST THAT WOULD HAVE CAUGHT THE ROW SOMEBODY DELETED BY HAND.
+   *
+   * On 2026-09-09 a production channel was found still carrying an @everyone
+   * SPEAK deny from a watch party that had ended through a path which did not
+   * clean up. Nothing surfaced it: the party was gone, the channel looked
+   * normal, and the only symptom would have arrived the following Saturday as
+   * an entire audience that could not talk even with the floor set to open.
+   *
+   * The fix is not a better cleanup. It is that a party with no voice, which
+   * is now the DEFAULT, never writes a permission rule in the first place, so
+   * there is nothing left to leak. Both halves are asserted: the table is
+   * byte for byte what it was, and `permissions_version` has not moved, which
+   * is what catches a write that put back the bits already there.
+   */
+  it("a party with no voice writes no permission rule at all", async () => {
+    // A channel that already carries a rule somebody set on purpose, because
+    // "wrote nothing" has to mean "wrote nothing", not "left an empty table".
+    await upsertChannelOverwrite(
+      channelId,
+      serverId,
+      "role",
+      everyoneId,
+      0n,
+      Permission.ADD_REACTIONS,
+    );
+    const before = await allOverwrites();
+    const versionBefore = await permissionsVersion();
+    expect(before).toHaveLength(1);
+
+    // The default. No options at all, which is what pressing Criar watch
+    // party and then Ir ao vivo produces.
+    const party = await draft();
+    expect(party.options.voiceEnabled).toBe(false);
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+
+    expect(
+      await allOverwrites(),
+      "going live with no voice wrote a permission rule on the channel",
+    ).toEqual(before);
+    expect(
+      await permissionsVersion(),
+      "going live with no voice called an overwrite writer",
+    ).toBe(versionBefore);
+
+    // A co-host and a stage invitation, the two other paths that write a
+    // member grant. Both are gated on the floor actually being closed, so on
+    // a voiceless party neither writes.
+    expect((await cohost(host, party.id, second.id, true)).status).toBe(200);
+    expect(
+      (await stage(host, party.id, { action: "invite", userId: member.id }))
+        .status,
+    ).toBe(200);
+    expect(await allOverwrites()).toEqual(before);
+    expect(await permissionsVersion()).toBe(versionBefore);
+
+    expect((await setState(host, party.id, "ended")).status).toBe(200);
+
+    // THE ASSERTION THIS FILE EXISTS FOR: exactly the overwrites it started
+    // with, and the moderators' own bit untouched.
+    expect(
+      await allOverwrites(),
+      "the party left a permission rule behind on the channel",
+    ).toEqual(before);
+    expect(await permissionsVersion()).toBe(versionBefore);
+    expect(await everyoneSpeakDenied()).toBe(false);
+  });
+
+
+  it("leaves a channel's own SPEAK deny alone, and does not grant the host around it", async () => {
+    /**
+     * THE CONSEQUENCE OF WRITING NOTHING, PINNED SO IT IS A DECISION.
+     *
+     * Before this change the default party closed the floor and granted the
+     * host back, which had a side effect nobody designed: it routed around
+     * ANY pre-existing @everyone SPEAK deny on the channel, deliberate or
+     * stale. A voiceless party writes nothing, so it routes around nothing,
+     * and on such a channel the host has a seat and no microphone.
+     *
+     * That is the right trade (a rule that is never written cannot leak) and
+     * it is worth an assertion rather than a discovery on a Saturday. The
+     * answer to a stale deny is the cleanup query in docs/WATCH_PARTY.md,
+     * not a grant on the path that is supposed to write nothing.
+     */
+    await upsertChannelOverwrite(
+      channelId,
+      serverId,
+      "role",
+      everyoneId,
+      0n,
+      Permission.SPEAK,
+    );
+    const before = await allOverwrites();
+    const versionBefore = await permissionsVersion();
+
+    const party = await draft();
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+
+    // No grant for the host, and the deny is exactly as somebody else left
+    // it: the party neither honours it nor repairs it, it ignores it.
+    expect(await memberSpeakAllowed(host.id)).toBe(false);
+    expect(await allOverwrites()).toEqual(before);
+    expect(await permissionsVersion()).toBe(versionBefore);
+
+    // And ending does not hand the room a microphone it never had. The
+    // channel is left in the state it was found in, which is the promise.
+    expect((await setState(host, party.id, "ended")).status).toBe(200);
+    expect(await everyoneSpeakDenied()).toBe(true);
+    expect(await allOverwrites()).toEqual(before);
+  });
+  it("a party stored before voiceEnabled existed still closes its floor", async () => {
+    /**
+     * EXISTING PARTIES MUST NOT BREAK, and this is the one that could.
+     *
+     * A row written by yesterday's build has no `voiceEnabled` key and was
+     * set up when every watch party was a voice room. If the schema's `false`
+     * default decided, a party that was live across the deploy would lose its
+     * voice and its host would lose the microphone mid-show. The options
+     * column is written by hand here because that is exactly the shape the
+     * old build stored and no route can produce it any more.
+     */
+    const party = await draft();
+    await getPool().query(
+      `UPDATE channel_sessions
+          SET options = '{"stageMode":"hosts_only","raiseHand":true,"slowModeSeconds":0,"reactionsEnabled":true}'::jsonb
+        WHERE id = $1`,
+      [party.id],
+    );
+
+    const read = await readChannelParty(host);
+    expect(read.body.party?.options.voiceEnabled).toBe(true);
+
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    expect(await everyoneSpeakDenied()).toBe(true);
+    expect(await memberSpeakAllowed(host.id)).toBe(true);
+
+    // And it still puts the channel back, so a legacy party is not a leak
+    // either: the cleanup path never depended on the new option.
+    expect((await setState(host, party.id, "ended")).status).toBe(200);
+    expect(await everyoneSpeakDenied()).toBe(false);
+    expect(await overwrite("member", host.id)).toBeNull();
+  });
+
+  it("lifts everything the moment a host turns voice back off mid-show", async () => {
+    // The reconciler runs on every edit, so switching Voz to Desligada is the
+    // same code path as switching the floor to `everyone`: whatever the party
+    // put down comes back up, for the people already in the room.
+    const party = await draft({
+      options: { voiceEnabled: true, stageMode: "hosts_only" },
+    });
+    expect((await setState(host, party.id, "live")).status).toBe(200);
+    expect(await everyoneSpeakDenied()).toBe(true);
+    expect(await memberSpeakAllowed(host.id)).toBe(true);
+
+    const off = await patchOptions(host, party.id, { voiceEnabled: false });
+    expect(off.status).toBe(200);
+    expect(off.body.party.options.voiceEnabled).toBe(false);
+    // The stage mode is REMEMBERED, not reset: a host who turns voice on
+    // again gets back the floor they had chosen.
+    expect(off.body.party.options.stageMode).toBe("hosts_only");
+    expect(off.body.party.state).toBe("live");
+
+    expect(await everyoneSpeakDenied()).toBe(false);
+    expect(await overwrite("member", host.id)).toBeNull();
+    expect(await allOverwrites()).toEqual([]);
+  });
+
   it("closes the floor for hosts_only without silencing the host", async () => {
-    const party = await draft({ options: { stageMode: "hosts_only" } });
+    const party = await draft({ options: { voiceEnabled: true, stageMode: "hosts_only" } });
     // Nothing is applied until Ir ao vivo. A draft's options are a plan.
     expect(await everyoneSpeakDenied()).toBe(false);
     expect(await memberSpeakAllowed(host.id)).toBe(false);
@@ -367,7 +583,7 @@ describeDb("watch party options and the stage", () => {
   });
 
   it("leaves the floor open for everyone", async () => {
-    const party = await draft({ options: { stageMode: "everyone" } });
+    const party = await draft({ options: { voiceEnabled: true, stageMode: "everyone" } });
     expect(party.options.stageMode).toBe("everyone");
 
     expect((await setState(host, party.id, "live")).status).toBe(200);
@@ -379,7 +595,7 @@ describeDb("watch party options and the stage", () => {
   });
 
   it("applies a stage mode changed while the party is live, both ways", async () => {
-    const party = await draft({ options: { stageMode: "everyone" } });
+    const party = await draft({ options: { voiceEnabled: true, stageMode: "everyone" } });
     expect((await setState(host, party.id, "live")).status).toBe(200);
     expect(await everyoneSpeakDenied()).toBe(false);
 
@@ -416,7 +632,7 @@ describeDb("watch party options and the stage", () => {
       Permission.ADD_REACTIONS,
     );
 
-    const party = await draft({ options: { stageMode: "hosts_only" } });
+    const party = await draft({ options: { voiceEnabled: true, stageMode: "hosts_only" } });
     expect((await setState(host, party.id, "live")).status).toBe(200);
 
     const during = await overwrite("role", everyoneId);
@@ -454,7 +670,10 @@ describeDb("watch party options and the stage", () => {
   });
 
   it("lets the people running the party change the options and refuses the audience", async () => {
-    const party = await draft();
+    // Voice on, so the last assertion below (a manager opening a floor
+    // somebody else closed) is about the floor moving rather than about a
+    // party that never had one.
+    const party = await draft({ options: { voiceEnabled: true } });
     // Live, so a refusal below is about the role table and not about a draft
     // being invisible: a member who cannot see a draft is told 404, and a
     // 404 would prove nothing about who may edit.
@@ -495,7 +714,7 @@ describeDb("watch party options and the stage", () => {
 
   it("runs the invited stage: a hand, an invitation, and a hand nobody else sees", async () => {
     const party = await draft({
-      options: { stageMode: "invited", raiseHand: true },
+      options: { voiceEnabled: true, stageMode: "invited", raiseHand: true },
     });
     expect((await setState(host, party.id, "live")).status).toBe(200);
     expect(await everyoneSpeakDenied()).toBe(true);
@@ -574,7 +793,7 @@ describeDb("watch party options and the stage", () => {
       host,
       {
         startsAt: new Date(Date.now() + 60 * 60_000).toISOString(),
-        options: { stageMode: "invited" },
+        options: { voiceEnabled: true, stageMode: "invited" },
       },
       other.id,
     );
@@ -604,7 +823,7 @@ describeDb("watch party options and the stage", () => {
    * it and no error anybody sees: the button is there and the room is silent.
    */
   it("hands a co-host promoted mid-show the microphone, and takes it back on demotion", async () => {
-    const party = await draft({ options: { stageMode: "hosts_only" } });
+    const party = await draft({ options: { voiceEnabled: true, stageMode: "hosts_only" } });
     expect((await setState(host, party.id, "live")).status).toBe(200);
     expect(await everyoneSpeakDenied()).toBe(true);
     // The floor is closed and `second` is part of the audience it closed on.
@@ -633,7 +852,7 @@ describeDb("watch party options and the stage", () => {
    * cut off a guest they invited up to talk.
    */
   it("leaves a demoted co-host speaking when they were also invited up", async () => {
-    const party = await draft({ options: { stageMode: "invited" } });
+    const party = await draft({ options: { voiceEnabled: true, stageMode: "invited" } });
     expect((await setState(host, party.id, "live")).status).toBe(200);
 
     expect((await cohost(host, party.id, second.id, true)).status).toBe(200);
@@ -657,7 +876,7 @@ describeDb("watch party options and the stage", () => {
    * happen, and `restoreChannelAfterParty` only runs on an end or a cancel.
    */
   it("writes nothing to the channel for a co-host promoted on a draft", async () => {
-    const party = await draft({ options: { stageMode: "hosts_only" } });
+    const party = await draft({ options: { voiceEnabled: true, stageMode: "hosts_only" } });
     expect(party.state).toBe("draft");
 
     expect((await cohost(host, party.id, second.id, true)).status).toBe(200);
@@ -683,7 +902,7 @@ describeDb("watch party options and the stage", () => {
    */
   it("puts the channel back when the host's grace window ends the party", async () => {
     const party = await draft({
-      options: { stageMode: "hosts_only", slowModeSeconds: 30 },
+      options: { voiceEnabled: true, stageMode: "hosts_only", slowModeSeconds: 30 },
     });
     expect((await setState(host, party.id, "live")).status).toBe(200);
     expect(await everyoneSpeakDenied()).toBe(true);
