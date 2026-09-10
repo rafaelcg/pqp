@@ -103,15 +103,28 @@ test("a reading inside the component's own p95 is not an alarm, however high the
   assert.match(i.body, /distribuição torta, não incidente/);
 });
 
-test("the same ratio one millisecond above p95 is an alarm", () => {
-  // The pair is the rule: a multiple of the median AND outside the whole
-  // distribution. Either one alone is not worth waking somebody for.
+test("one millisecond above p95 of a bimodal probe is still the slow cluster, not an incident", () => {
+  // The pair used to treat any overshoot of p95 as "above the whole day's
+  // band". For a bimodal probe p95 *is* the slow cluster, so 236 vs 235 is
+  // rounding, the same cold listRooms the 220-vs-235 case already called
+  // fine. Production on 2026-09-10 was this shape: 173 vs p50 22 / p95 171.
   const i = latencyInsight({
     components: [{ key: "voice", label: "Voice", state: "operational", latencyMs: 236 }],
     history: { components: [{ key: "voice", p50: 33, p95: 235 }] }, names: NAMES
   });
+  assert.equal(i.state, "ok");
+  assert.match(i.head, /dentro da faixa dele/);
+  assert.match(i.body, /distribuição torta, não incidente/);
+});
+
+test("a bimodal probe past 1,5× its own p95 still alarms when there is no recent window", () => {
+  const i = latencyInsight({
+    components: [{ key: "voice", label: "Voice", state: "operational", latencyMs: 400 }],
+    history: { components: [{ key: "voice", p50: 33, p95: 235 }] }, names: NAMES
+  });
   assert.equal(i.state, "bad");
-  assert.match(i.body, /acima de tudo que ele mostrou hoje/);
+  assert.match(i.head, /12,1× o normal dele/);
+  assert.match(i.body, /400 ms agora/);
 });
 
 test("a hair above p95 but barely off the median is not an alarm either", () => {
@@ -163,6 +176,61 @@ test("a p50 of zero is not used as a divisor", () => {
     history: { components: [{ key: "database", p50: 0, p95: 0 }] }, names: NAMES
   });
   assert.equal(i.state, "raw");
+});
+
+function voiceBuckets(lastMs, lastSamples = 20) {
+  const points = Array.from({ length: 48 }, () => ({ ms: 22, fails: 0, samples: 30 }));
+  points[points.length - 1] = { ms: lastMs, fails: 0, samples: lastSamples };
+  return points;
+}
+
+test("a cold listRooms peek does not alarm when the last half hour is still the warm cluster", () => {
+  // Production 2026-09-10: dashboard "agora" 173 ms, p50 22, p95 171. The
+  // live peek is the slow mode of the SFU probe (cold TLS); the bucket the
+  // sampler has been writing is still ~22 ms. Red there is the card crying
+  // wolf at whoever is looking at it.
+  const i = latencyInsight({
+    components: [{ key: "voice", label: "Voice", state: "operational", latencyMs: 173 }],
+    history: { components: [{ key: "voice", p50: 22, p95: 171, points: voiceBuckets(28) }] },
+    names: NAMES
+  });
+  assert.equal(i.state, "ok");
+  assert.match(i.head, /normal dele|dentro da faixa/);
+  assert.deepEqual(i.figs, [
+    ["agora", "173 ms"],
+    ["últimos 30 min", "28 ms"],
+    ["p50 24 h", "22 ms"],
+    ["p95 24 h", "171 ms"]
+  ]);
+});
+
+test("a half hour stuck in the slow cluster does alarm, even if this peek is warm", () => {
+  const i = latencyInsight({
+    components: [{ key: "voice", label: "Voice", state: "operational", latencyMs: 19 }],
+    history: { components: [{ key: "voice", p50: 22, p95: 171, points: voiceBuckets(180, 30) }] },
+    names: NAMES
+  });
+  assert.equal(i.state, "bad");
+  assert.match(i.head, /voz está respondendo a/);
+  assert.match(i.body, /média de 180 ms nos últimos 30 min/);
+  assert.match(i.body, /a leitura de agora é 19 ms/);
+});
+
+test("too few recent samples fall back to the live peek rather than a 1-probe mean", () => {
+  const i = latencyInsight({
+    components: [{ key: "voice", label: "Voice", state: "operational", latencyMs: 173 }],
+    history: {
+      components: [{
+        key: "voice", p50: 22, p95: 171,
+        points: [{ ms: 200, fails: 0, samples: 3 }]
+      }]
+    },
+    names: NAMES
+  });
+  // 3 samples is not a window. 173 vs p95 171 on a skewed probe is the slow
+  // cluster, so this stays ok the same way the 1 ms overshoot does.
+  assert.equal(i.state, "ok");
+  assert.deepEqual(i.figs.map((f) => f[0]), ["agora", "p50 24 h", "p95 24 h"]);
 });
 
 /* ------------------------------------------------------------------ *

@@ -59,19 +59,27 @@ hand from three cards.
 | Verdict | What it decides |
 |---|---|
 | **the pool** | A burst absorbed, or the ceiling. A queue on its own is normal after every deploy (pg queues whenever it cannot hand over a connection in the same tick); a queue **with the pool full** is the wall, and only that is red. |
-| **latency** | Each component against **its own** median, from `statusHistory`. 241 ms means nothing beside a database at 7 ms and everything beside storage's own p50 of 236 ms, so the usual reading is the reassuring one: the slowest thing on the page is slow on purpose. It alarms only when a reading is **both** a multiple of its own median (1,4x warns, 2x is bad) **and** above its own p95 — see below. |
+| **latency** | Each component against **its own** median, from `statusHistory`. 241 ms means nothing beside a database at 7 ms and everything beside storage's own p50 of 236 ms, so the usual reading is the reassuring one: the slowest thing on the page is slow on purpose. It alarms only when the **recent window** (the newest ~30 min mean, falling back to the live peek) is **both** a multiple of its own median (1,4x warns, 2x is bad) **and** above its own p95 — see below. |
 | **voice** | Today's peak against the last seven days, and what the media server's own peak was. It never adds the three daily numbers: they are independent maxima over the same day, so `mesh + livekit` is not `participants`, and the sentence says so out loud. |
 
-**Why the latency verdict needs two conditions.** The first reading this card
-ever took against production nearly went red for nothing. The SFU probe is
-bimodal — p50 33 ms, p95 235 ms, mostly fast with an occasional full cold round
-trip — and it read 220 ms, which is 6,7x its median and would have alarmed,
-while sitting *below* its p95: the component had already spent part of the day
-up there. The ratio alone says "unusual for the middle of the distribution";
-the p95 alone is crossed 5% of the time by definition and means nothing on its
-own. Only the pair is worth waking somebody for, and a strip that cries wolf on
-day one is worse than no strip. A reading that is high against the median and
-still inside the band gets its own sentence saying exactly that.
+**Why the latency verdict needs two conditions, and then a third.** The first
+reading this card ever took against production nearly went red for nothing. The
+SFU probe is bimodal — p50 33 ms, p95 235 ms, mostly fast with an occasional
+full cold round trip — and it read 220 ms, which is 6,7x its median and would
+have alarmed, while sitting *below* its p95: the component had already spent
+part of the day up there. The ratio alone says "unusual for the middle of the
+distribution"; the p95 alone is crossed 5% of the time by definition and means
+nothing on its own. Only the pair is worth waking somebody for, and a strip that
+cries wolf on day one is worse than no strip. A reading that is high against the
+median and still inside the band gets its own sentence saying exactly that.
+
+The third lesson is the complement. p95 of a bimodal probe *is* the slow
+cluster, so 173 ms against a p50 of 22 and a p95 of 171 is 7,9× **and** 2 ms
+over p95 — red by the pair — while `/ready`'s own `listRooms` on the same
+process answers in ~10 ms. The live peek is one probe; the slow mode is a cold
+TLS handshake, not voz falling over. The verdict therefore judges the newest
+~30 min mean when `statusHistory` has enough samples, and when it only has the
+peek, a skewed probe (p95 ≥ 3× p50) has to clear 1,5× its own p95, not 1 ms.
 
 They live in **fixed slots** and there are always three. A slot with no honest
 verdict renders dashed and muted and says what is missing (no history yet, no
