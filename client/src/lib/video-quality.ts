@@ -112,21 +112,23 @@ export function cameraProfileFor(quality: VideoQuality): CameraProfile {
  * `scaleResolutionDownBy`.
  */
 const SCREEN_BITRATES: Record<Exclude<VideoQuality, "auto">, number> = {
-  "1080p": 4_000_000,
-  "720p": 2_000_000,
-  "480p": 1_000_000,
-  "360p": 600_000,
+  "1080p": 8_000_000,
+  "720p": 3_500_000,
+  "480p": 1_500_000,
+  "360p": 800_000,
 };
 
 /**
  * What `auto` spends on a screen.
  *
  * 3 Mbps, which is above the 2.5 Mbps every share used to get and below the
- * 4 Mbps a deliberate 1080p now asks for. Auto has to be the number that is
+ * 8 Mbps a deliberate 1080p now asks for. Auto has to be the number that is
  * right for somebody who has never opened this menu and never will, on an
  * uplink nobody has measured, so it buys a visibly better share than today
  * without being the most expensive thing the product can do behind their back.
- * Choosing 1080p is how you say "I have the upload, spend it".
+ * Choosing 1080p is how you say "I have the upload, spend it". A watch-party
+ * HLS source uses `max(auto, 1080p)` so the ladder is not starved by this
+ * compromise.
  */
 const AUTO_SCREEN_BITRATE = 3_000_000;
 
@@ -383,7 +385,7 @@ export interface HlsSourceInput {
 export const HLS_SOURCE_UPLINK_HEADROOM = 1.25;
 
 /**
- * 720p30 HLS rung (1800 kbps) × headroom, floored at the 720p screen
+ * 720p30 HLS rung (3200 kbps) × headroom, floored at the 720p screen
  * ceiling. Never `LARGE_ROOM_SCREEN_BITRATE` (1.5 Mbps): that number is
  * what a large *WebRTC* room spends per viewer, and using it as the HLS
  * source made every playlist rung an upscale of a starved 720p.
@@ -391,9 +393,11 @@ export const HLS_SOURCE_UPLINK_HEADROOM = 1.25;
  * Lockstep with `LADDER_RUNGS["720p30"].videoKbps` in
  * `server/src/voice/hls-ladder.ts`.
  */
+export const HLS_720P30_VIDEO_BPS = 3_200_000;
+
 export const HLS_HELD_720_BITRATE = Math.max(
   SCREEN_BITRATES["720p"],
-  Math.round(1_800_000 * HLS_SOURCE_UPLINK_HEADROOM),
+  Math.round(HLS_720P30_VIDEO_BPS * HLS_SOURCE_UPLINK_HEADROOM),
 );
 
 /**
@@ -485,7 +489,7 @@ export function screenSimulcastPlan(
       ? Math.min(chosenHeight, LARGE_ROOM_SCREEN_HEIGHT)
       : chosenHeight;
   const topBitrate = holdAt720
-    ? Math.min(screenBitrateFor(quality), HLS_HELD_720_BITRATE)
+    ? HLS_HELD_720_BITRATE
     : largeRoomCapped
       ? Math.min(screenBitrateFor(quality), LARGE_ROOM_SCREEN_BITRATE)
       : hlsTop !== null

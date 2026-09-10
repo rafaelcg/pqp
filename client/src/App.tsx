@@ -404,7 +404,11 @@ import {
   screenCaptureEnvironment,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
-import { hlsCaptureMaxFrameRate } from "@/lib/hls-capture-rate";
+import {
+  hlsCaptureMaxFrameRate,
+  screenCaptureMaxFrameRate,
+  type ScreenFrameRate,
+} from "@/lib/hls-capture-rate";
 import {
   gateScreenShareStart,
   type ScreenShareStart,
@@ -1591,20 +1595,26 @@ function MainAppContent({
   const liveHlsConfig = useLiveHlsConfig(selectedServerId);
   const liveHlsConfigRef = useRef(liveHlsConfig);
   liveHlsConfigRef.current = liveHlsConfig;
+  const screenFrameRateRef = useRef(localSettings.screenFrameRate);
+  screenFrameRateRef.current = localSettings.screenFrameRate;
+
+  function shareMaxFrameRate(): 30 | 60 {
+    const config = liveHlsConfigRef.current;
+    return screenCaptureMaxFrameRate({
+      preference: screenFrameRateRef.current,
+      hlsLadderMax:
+        config?.enabled === true
+          ? hlsCaptureMaxFrameRate(config.ladder, true)
+          : 60,
+    });
+  }
+
   const startScreenShareGated = useCallback(
     (audio: boolean, intent?: ScreenCaptureIntent) => {
-      const withFps =
-        intent?.preferBrowserTab
-          ? {
-              ...intent,
-              maxFrameRate:
-                intent.maxFrameRate ??
-                hlsCaptureMaxFrameRate(
-                  liveHlsConfigRef.current?.ladder,
-                  liveHlsConfigRef.current?.enabled,
-                ),
-            }
-          : intent;
+      const withFps = {
+        ...intent,
+        maxFrameRate: intent?.maxFrameRate ?? shareMaxFrameRate(),
+      };
       // Every share start in this file goes through here: the sidebar
       // button, the call stage, the "share without sound" retry, and the DM
       // stage. `screen-share-gate.test.ts` scans this file to keep it so.
@@ -4249,6 +4259,10 @@ function MainAppContent({
     // the encoder's ceiling. Safe mid-call by construction, and a no-op when
     // the camera is off, where the next `toggleCamera` reads the new value.
     void voice.setVideoQuality(next.videoQuality);
+    if (next.screenFrameRate !== localSettings.screenFrameRate) {
+      screenFrameRateRef.current = next.screenFrameRate;
+      void voice.applyScreenFrameRate(shareMaxFrameRate());
+    }
   }
 
   /**
@@ -4268,6 +4282,14 @@ function MainAppContent({
     setLocalSettings(next);
     saveLocalSettings(next);
     void voice.setVideoQuality(quality);
+  }
+
+  function handleScreenFrameRateChange(rate: ScreenFrameRate) {
+    const next = { ...localSettings, screenFrameRate: rate };
+    setLocalSettings(next);
+    saveLocalSettings(next);
+    screenFrameRateRef.current = rate;
+    void voice.applyScreenFrameRate(shareMaxFrameRate());
   }
 
   const refreshAfterJoin = useCallback(
@@ -5830,10 +5852,7 @@ function MainAppContent({
             currentUserId={user.id}
             canSpeak={voiceState.canSpeak}
             isAudienceSeat={voiceState.isAudienceSeat}
-            hlsMaxFrameRate={hlsCaptureMaxFrameRate(
-              liveHlsConfig?.ladder,
-              liveHlsConfig?.enabled,
-            )}
+            hlsMaxFrameRate={shareMaxFrameRate()}
             liveStream={
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }
@@ -5935,10 +5954,7 @@ function MainAppContent({
             currentUserId={user.id}
             canSpeak={voiceState.canSpeak}
             isAudienceSeat={voiceState.isAudienceSeat}
-            hlsMaxFrameRate={hlsCaptureMaxFrameRate(
-              liveHlsConfig?.ladder,
-              liveHlsConfig?.enabled,
-            )}
+            hlsMaxFrameRate={shareMaxFrameRate()}
             liveStream={
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }
@@ -6019,10 +6035,12 @@ function MainAppContent({
             }}
             voiceState={voiceState}
             videoQuality={localSettings.videoQuality}
+            screenFrameRate={localSettings.screenFrameRate}
             onLeave={() => voice.leave()}
             onToggleMute={() => voice.toggleMute()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
+            onScreenFrameRateChange={handleScreenFrameRateChange}
             onStartScreenShare={requestScreenShare}
             onShareWithoutSound={() => {
               startScreenShareGated(false);
@@ -6069,6 +6087,7 @@ function MainAppContent({
           }}
           voiceState={voiceState}
           videoQuality={localSettings.videoQuality}
+          screenFrameRate={localSettings.screenFrameRate}
           onJoinCall={() =>
             void handleConversationCall(activeConversation.channelId, false)
           }
@@ -6076,6 +6095,7 @@ function MainAppContent({
           onToggleMute={() => voice.toggleMute()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
+          onScreenFrameRateChange={handleScreenFrameRateChange}
           onStartScreenShare={requestScreenShare}
           onShareWithoutSound={() => {
             startScreenShareGated(false);

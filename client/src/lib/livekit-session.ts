@@ -1047,7 +1047,7 @@ export async function connectLiveKit({
     if (plan.heldForHls) {
       return {
         ...plan,
-        topBitrate: Math.min(screenMaxBitrate, HLS_HELD_720_BITRATE),
+        topBitrate: HLS_HELD_720_BITRATE,
       };
     }
     return {
@@ -1159,7 +1159,7 @@ export async function connectLiveKit({
             layer.width,
             layer.height,
             layer.maxBitrate,
-            layer.maxFramerate,
+            publishMaxFrameRateFromTrack(track),
           ),
       ),
       // The SFU half of the same argument as the mesh path: without these the

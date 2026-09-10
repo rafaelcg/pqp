@@ -3,11 +3,16 @@
 Date: 2026-09-10. Trigger: watch parties feel like "~25 fps" on web, and the
 Vultr SFU box jumped from ~7% to ~48% CPU with a single watch-party sender.
 
-Follow-up, same day: **`720p60` is a named `LIVE_HLS_LADDER` option, not a
-default.** Capture and publish stay at 30 fps unless that name is listed,
-because a 60 fps encode is roughly 1.6–2× the 720p30 core cost on this box
-(§4 item 11). The this-week client items in §4 (1–6 except `playlistLength`,
-which livekit-server-sdk 2.17.0 does not expose) landed in the same change:
+Follow-up, 2026-09-10 (quality): **`1080p60` is now the default top rung.**
+Capture and HLS match the host display (60 Hz) so a 24 fps film looks like
+it does on the presenter's screen instead of 3:2 judder at 30. Bitrate
+floors went up with it (1080p60 8000 kbit/s, 720p30 3200). The media box
+pays more per party (~1.6–2× a 1080p30 encode for the top rung). Operator
+rollback: `LIVE_HLS_LADDER=1080p30,720p30,480p30`. `720p60` remains a named
+option for a game ladder that should not spend 1080p60.
+
+The this-week client items in §4 (1–6 except `playlistLength`,
+which livekit-server-sdk 2.17.0 does not expose) landed earlier the same day:
 in-place stall recovery before teardown, ABR seed from the previous estimate,
 `capLevelToPlayerSize`, `maxLiveSyncPlaybackRate: 1.5`, jump-to-live one
 segment behind the edge, and `getVideoPlaybackQuality` on HLS stats. Item 3

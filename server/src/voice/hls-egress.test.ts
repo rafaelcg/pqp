@@ -129,7 +129,7 @@ describe("live HLS egress", () => {
       // The presenter's client reads the top of this to decide whether to
       // publish past the large-room cap.
       ladder: [
-        { name: "720p30", width: 1280, height: 720, framerate: 30, videoKbps: 1800 },
+        { name: "720p30", width: 1280, height: 720, framerate: 30, videoKbps: 3200 },
       ],
       allowlisted: false,
     });
@@ -233,7 +233,7 @@ describe("live HLS egress", () => {
         encodingOptions: expect.objectContaining({
           width: 1280,
           height: 720,
-          videoBitrate: 1800,
+          videoBitrate: 3200,
         }),
       }),
     );
@@ -649,7 +649,7 @@ describe("live HLS egress", () => {
       return { stream, heights, start };
     }
 
-    it("defaults to 480p30 + 720p30 + 1080p30, started lowest rung first", async () => {
+    it("defaults to 480p30 + 720p30 + 1080p60, started lowest rung first", async () => {
       const { stream, heights } = await startLadder(undefined);
       expect(stream).not.toBeNull();
       // Lowest first: a viewer is never left with nothing while the
@@ -658,7 +658,7 @@ describe("live HLS egress", () => {
       expect(liveHlsRungsFor(CHANNEL).map((rung) => rung.name)).toEqual([
         "480p30",
         "720p30",
-        "1080p30",
+        "1080p60",
       ]);
     });
 
