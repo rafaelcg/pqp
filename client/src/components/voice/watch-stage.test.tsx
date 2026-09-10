@@ -116,6 +116,22 @@ describe("WatchStage draws only the controls it was given", () => {
     expect(html).toContain('data-testid="watch-stage-fullscreen"');
     expect(html).toContain('aria-pressed="false"');
   });
+
+  it("offers a chat overlay only while the film is fullscreen", () => {
+    expect(
+      render({ fullscreen: { active: false, toggle: () => {} } }),
+    ).not.toContain('data-testid="watch-stage-chat-overlay"');
+    const html = render({
+      fullscreen: {
+        active: true,
+        toggle: () => {},
+        chatOverlay: false,
+        toggleChatOverlay: () => {},
+      },
+    });
+    expect(html).toContain('data-testid="watch-stage-chat-overlay"');
+    expect(html).toContain('aria-pressed="false"');
+  });
 });
 
 describe("watchAudienceCount", () => {

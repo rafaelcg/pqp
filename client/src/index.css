@@ -1739,8 +1739,7 @@ html[data-immersive-stage] [data-immersive-hide] {
  * mode it is not the one entering.
  *
  * It covers the window rather than the pane's own box on purpose: the film is
- * the point, and the chat rides along inside the same pane, in whatever
- * arrangement the person had already chosen.
+ * the point. Chat is not a column of this layout; see cinema below.
  */
 [data-call-split][data-watch-expanded] {
   background: var(--color-surface-0);
@@ -1762,4 +1761,60 @@ html[data-immersive-stage] [data-immersive-hide] {
   max-width: 100%;
   max-height: 100%;
   z-index: 50;
+}
+
+/*
+ * Cinema: native fullscreen (or the expand fallback above) with the film
+ * edge-to-edge. Chat does not take layout space. Overlaying it
+ * (`data-watch-chat-overlay`) floats the existing transcript on the right
+ * without shrinking the video, which is the Twitch pattern.
+ *
+ * `:fullscreen` is a backup for the moment between `requestFullscreen`
+ * resolving and React writing the attribute; the hook is the authority.
+ */
+[data-call-split][data-watch-cinema],
+[data-call-split]:fullscreen,
+[data-call-split]:-webkit-full-screen {
+  background: black;
+}
+
+[data-call-split][data-watch-cinema] [data-call-split-stage],
+[data-call-split]:fullscreen [data-call-split-stage],
+[data-call-split]:-webkit-full-screen [data-call-split-stage] {
+  position: absolute;
+  inset: 0;
+  width: auto !important;
+  height: auto !important;
+  flex: none;
+  min-height: 0;
+  min-width: 0;
+}
+
+[data-call-split][data-watch-cinema] [data-call-split-boundary],
+[data-call-split][data-watch-cinema] [data-call-split-restore],
+[data-call-split]:fullscreen [data-call-split-boundary],
+[data-call-split]:fullscreen [data-call-split-restore],
+[data-call-split]:-webkit-full-screen [data-call-split-boundary],
+[data-call-split]:-webkit-full-screen [data-call-split-restore] {
+  display: none;
+}
+
+[data-call-split][data-watch-cinema] [data-call-split-chat],
+[data-call-split]:fullscreen [data-call-split-chat],
+[data-call-split]:-webkit-full-screen [data-call-split-chat] {
+  display: none;
+}
+
+[data-call-split][data-watch-cinema][data-watch-chat-overlay] [data-call-split-chat] {
+  display: flex;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  width: min(22rem, 80vw);
+  min-width: 0;
+  background: color-mix(in oklab, var(--color-surface-0) 92%, transparent);
+  border-left: 1px solid var(--color-border);
+  box-shadow: var(--shadow-2);
 }
