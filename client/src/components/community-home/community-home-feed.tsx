@@ -265,6 +265,8 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
       >
         <iframe
           title={t("communityHome.media.openTikTok")}
+          src={src}
+          className="mx-auto aspect-[9/16] w-full max-w-[325px]"
           allow="encrypted-media; fullscreen; picture-in-picture"
           allowFullScreen
         />
@@ -284,6 +286,8 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
       >
         <iframe
           title={t("communityHome.media.openInstagram")}
+          src={src}
+          className="mx-auto min-h-[540px] w-full max-w-[540px]"
           allow="encrypted-media; clipboard-write; picture-in-picture"
           allowFullScreen
         />
