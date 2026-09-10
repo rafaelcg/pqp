@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Clapperboard, Clock, Eye } from "lucide-react";
+import { Clapperboard, Eye } from "lucide-react";
 import type { WatchParty } from "@pqp/shared";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { LivePill } from "@/components/watch-party/live-pill";
@@ -126,73 +126,56 @@ export function LivePartyBlock({
                 aria-label={`${party.name}: ${t("watchParty.live.watch")}`}
                 onClick={() => onWatch(party.channelId)}
                 className={cn(
-                  "flex w-full flex-col gap-1.5 rounded-lg border px-2.5 py-2 text-left transition-colors",
+                  "flex w-full flex-col gap-1 rounded-lg border px-2.5 py-2 text-left transition-colors",
                   selected
                     ? "border-danger/50 bg-danger/10"
                     : "border-ink-4/70 bg-ink-2 hover:border-danger/40 hover:bg-ink-3",
                 )}
               >
-                {/* WHO AND WHAT. The host's face, then the party's name with
-                    the host under it. The name wraps to two lines rather than
-                    truncating, because "Cinemoon: sessão coruja" cut to
-                    "Cinemoon: sessão cor..." is most of a name people chose;
-                    a third line would cost, so the clamp is still behind
-                    them. The host's name is the thing that truncates: people
-                    already know it. */}
-                <span className="flex min-w-0 items-center gap-2.5">
-                  <span className="relative shrink-0">
-                    <UserAvatar
-                      name={party.hostDisplayName}
-                      avatarUrl={party.hostAvatarUrl}
-                      rounded="full"
-                      className="h-9 w-9"
-                    />
-                    {/* Static. `LivePill` below is the one thing that
-                        moves; two heartbeats out of step in a card this size
-                        is noise, not life. */}
-                    <span
-                      aria-hidden="true"
-                      className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-ink-2 bg-danger"
-                    />
-                  </span>
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="line-clamp-2 break-words text-sm font-semibold leading-snug text-paper">
-                      {party.name}
-                    </span>
-                    <span className="truncate text-[11px] text-paper-muted">
-                      {t("watchParty.live.hostedBy", {
-                        name: party.hostDisplayName,
-                      })}
-                    </span>
-                  </span>
+                {/* THE ANATOMY EVERY LIVE PRODUCT CONVERGES ON (Twitch's
+                    sidebar row, YouTube's live tile, Kick's card, Discord's
+                    Go Live card): the badge alone in the top-right, the name
+                    as the one loud element, and the host and the numbers on
+                    one muted line under it. The first cut of this card put
+                    the badge, the count and the clock on one row with icons
+                    and it read as busy; three lines, each with one job, is
+                    what a 230px rail can carry. Red is reserved for the
+                    badge: the avatar has no dot, nothing else competes. */}
+                <span className="flex items-start justify-between gap-2">
+                  <UserAvatar
+                    name={party.hostDisplayName}
+                    avatarUrl={party.hostAvatarUrl}
+                    rounded="full"
+                    className="h-8 w-8 shrink-0"
+                  />
+                  <LivePill className="mt-0.5" />
                 </span>
-                {/* THE NUMBERS. Live badge, then how many are watching, then
-                    for how long. Muted and small: the name is the content,
-                    these are the reasons to click it. A count of zero still
-                    shows, in words, so an empty room reads as an invitation
-                    rather than as a missing number. */}
-                {/* Wraps rather than truncates: on a 256px rail "ninguém
-                    ainda" beside the badge and the clock was "ninguém a…",
-                    and a number that cannot be read is worse than a second
-                    line. */}
-                <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-paper-muted">
-                  <LivePill />
+                <span className="line-clamp-2 break-words text-sm font-semibold leading-snug text-paper">
+                  {party.name}
+                </span>
+                <span className="flex min-w-0 items-baseline justify-between gap-2 text-[11px] text-paper-muted">
+                  <span className="min-w-0 truncate">
+                    {t("watchParty.live.hostedBy", {
+                      name: party.hostDisplayName,
+                    })}
+                  </span>
                   {typeof watching === "number" && (
                     <span
-                      className="flex shrink-0 items-center gap-1"
+                      className="flex shrink-0 items-center gap-1 tabular-nums"
                       data-live-party-audience={watching}
+                      data-live-party-uptime={liveFor ?? undefined}
                     >
                       <Eye className="h-3 w-3 shrink-0" aria-hidden />
-                      {t("watchParty.block.viewers", { count: watching })}
-                    </span>
-                  )}
-                  {liveFor && (
-                    <span
-                      className="flex shrink-0 items-center gap-1"
-                      data-live-party-uptime
-                    >
-                      <Clock className="h-3 w-3 shrink-0" aria-hidden />
-                      {liveFor}
+                      <span className="sr-only">
+                        {t("watchParty.live.viewers", { count: watching })}
+                      </span>
+                      <span aria-hidden>{watching}</span>
+                      {liveFor && (
+                        <span className="text-paper-muted/70" aria-hidden>
+                          {" · "}
+                          {liveFor}
+                        </span>
+                      )}
                     </span>
                   )}
                 </span>
