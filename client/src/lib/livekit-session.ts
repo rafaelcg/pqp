@@ -363,7 +363,7 @@ export async function connectLiveKit({
    * Pending capture height while pinned, and how many consecutive
    * `setHlsSource` ticks have asked for it. Three ticks (≈6 s) before we
    * `applyConstraints` — uplink wobble must not thrash the capture pipeline
-   * every two seconds (Farol on #460).
+   * every two seconds (Farol on PR 460).
    */
   let pendingCaptureHeight: number | null = null;
   let captureHeightStreak = 0;
