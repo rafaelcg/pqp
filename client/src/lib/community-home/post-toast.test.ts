@@ -55,4 +55,15 @@ describe("shouldOfferCommunityHomePostToast", () => {
       shouldOfferCommunityHomePostToast({ ...rise, fromNudge: false }),
     ).toBe(false);
   });
+
+  it("does not treat a failed mark-as-read as a baseline of zero", () => {
+    expect(
+      shouldOfferCommunityHomePostToast({
+        ...rise,
+        hasUnreadBaseline: false,
+        unreadBefore: 0,
+        unreadAfter: 5,
+      }),
+    ).toBe(false);
+  });
 });
