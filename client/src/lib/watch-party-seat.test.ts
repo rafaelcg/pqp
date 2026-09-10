@@ -29,7 +29,7 @@ describe("shouldReleaseAudienceWatchSeat", () => {
     ).toBe(false);
   });
 
-  it("is false for a host or mic seat even if the stream is gone", () => {
+  it("is false for a host or mic seat while the party is still live", () => {
     expect(
       shouldReleaseAudienceWatchSeat({
         ...audience,
@@ -37,6 +37,17 @@ describe("shouldReleaseAudienceWatchSeat", () => {
         hasLiveStream: false,
       }),
     ).toBe(false);
+  });
+
+  it("is true for a mic seat once the party has ended", () => {
+    expect(
+      shouldReleaseAudienceWatchSeat({
+        ...audience,
+        isAudienceSeat: false,
+        hasLiveStream: true,
+        partyState: "ended",
+      }),
+    ).toBe(true);
   });
 
   it("is true for an audience seat with no stream and no share", () => {

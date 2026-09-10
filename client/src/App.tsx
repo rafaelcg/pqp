@@ -3719,10 +3719,11 @@ function MainAppContent({
   }, [selectedServerId, selectedChannelId, watchParties.byChannel, liveHlsConfig]);
 
   /**
-   * Audience seats die with the stream. Watching is HLS; a leftover
-   * LiveKit participant is leave-voice chrome after Encerrar, and the
-   * host path always `voice.leave()`s itself. This is the backstop for
-   * everybody who only sat down to watch.
+   * Seats die with the show. Watching is HLS; a leftover LiveKit
+   * participant is leave-voice chrome after Encerrar. The host path
+   * always `voice.leave()`s itself; this is the backstop for audience
+   * seats when the stream dies, and for anybody still seated once the
+   * party is over (including a mic that was handed out mid-show).
    */
   useEffect(() => {
     const channelId = voiceState.voiceChannelId;
