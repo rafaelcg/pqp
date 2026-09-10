@@ -1026,6 +1026,12 @@ export async function connectLiveKit({
       await room.localParticipant.publishTrack(track, options);
     }
     publishedScreenPlan = plan;
+    // If the ladder is already live (share restarted mid-party), pin now —
+    // do not wait for the next setHlsSource tick. Farol caught the window
+    // where a room-size change could still republish before that tick.
+    if (hlsSource !== null && hlsSource.ladderTopHeight !== null) {
+      screenPlanPinned = true;
+    }
   }
 
   /**
@@ -1059,6 +1065,11 @@ export async function connectLiveKit({
       // watch party. Uplink / ladder / room-size opinion changes reach the
       // encoder as a ceiling only.
       if (screenPlanPinned && !options?.force) {
+        // Same sid, lower capture when the plan wants less height: saves host
+        // encode cost without a Track Composite restart. Declared layers stay.
+        if (plan.topHeight < published.topHeight) {
+          await constrainScreenCapture(track, plan.topHeight);
+        }
         if (plan.topBitrate !== published.topBitrate) {
           await setSourceMaxBitrate(
             Track.Source.ScreenShare,

@@ -856,9 +856,11 @@ describe("the presenter as a live ladder's source", () => {
 
     await setHlsUplink(sfu, 1_000_000, 10);
 
+    // Capture may shrink in place (CPU), but the LiveKit sid must not move.
     expect(published).toHaveLength(publishesBefore);
     expect(unpublished).toHaveLength(0);
-    expect(constrained).toEqual([1080]);
+    expect(constrained.at(0)).toBe(1080);
+    expect(constrained.at(-1)).toBe(720);
   });
 
   it("does not raise on an uplink that cannot carry it", async () => {
