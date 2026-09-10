@@ -1018,13 +1018,12 @@ describe("the presenter as a live ladder's source", () => {
     const sharing = sfu.publishScreen(fakeStream("video", "screen"));
     await settle();
 
-    await sfu.unpublishScreen();
-    const unpublishedAtStop = unpublished.length;
+    // Stop waits for the in-flight publish (one queue), then tears it down.
+    const stopping = sfu.unpublishScreen();
     releasePublish?.();
     await sharing;
+    await stopping;
 
-    expect(unpublished.length).toBeGreaterThan(unpublishedAtStop);
-    expect(unpublished.at(-1)?.stop).toBe(false);
     expect(publications.has(Track.Source.ScreenShare)).toBe(false);
 
     const publishesAfterStop = published.length;

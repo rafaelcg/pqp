@@ -269,19 +269,31 @@ export async function connectLiveKit({
   let receiveQuality: ReceiveQuality = "auto";
 
   /**
-   * One reconcile at a time; a second request waits its turn. Declared here,
-   * ahead of the `room.on(...)` registrations below, rather than beside
-   * `reconcileScreenPlan` further down: Firefox can fire `ParticipantConnected`
-   * synchronously inside `room.connect()`, before this function has finished
-   * running past its own later statements, and that handler calls
-   * `reconcileScreenPlan`, which reads this variable. A `let` declared after
-   * that point would still be in its temporal dead zone when the handler
-   * fires, throwing `ReferenceError: can't access lexical declaration
-   * 'reconciling' before initialization` and dropping the connection.
-   * Chromium happens not to fire the event that early, so this only showed up
-   * in Firefox. See the regression test in `livekit-session.test.ts`.
+   * One screen lifecycle op at a time (publish, unpublish, reconcile). A second
+   * request waits its turn. Declared here, ahead of the `room.on(...)`
+   * registrations below, rather than beside `reconcileScreenPlan` further down:
+   * Firefox can fire `ParticipantConnected` synchronously inside
+   * `room.connect()`, before this function has finished running past its own
+   * later statements, and that handler calls `reconcileScreenPlan`, which reads
+   * this variable. A `let` declared after that point would still be in its
+   * temporal dead zone when the handler fires, throwing `ReferenceError: can't
+   * access lexical declaration 'reconciling' before initialization` and
+   * dropping the connection. Chromium happens not to fire the event that early,
+   * so this only showed up in Firefox. See the regression test in
+   * `livekit-session-firefox-join.test.ts`.
    */
   let reconciling: Promise<void> | null = null;
+
+  function enqueueScreenOp<T>(fn: () => Promise<T>): Promise<T> {
+    const result = (reconciling ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(fn);
+    reconciling = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
   /** Track we published, kept so we can replace/mute it later. */
   let published: InstanceType<typeof LocalAudioTrack> | null = null;
   /** Raw screen-share track we published, kept so we can unpublish it later. */
@@ -1051,13 +1063,10 @@ export async function connectLiveKit({
     // Stop/disconnect bump the epoch before they await. A publish that
     // finished after that must not stay on the wire or write the plan.
     if (screenShareEpoch !== epoch) {
-      try {
+      // A newer publish of the same track already owns it — do not tear that
+      // one down. Only drop a ghost this call created after stop cleared us.
+      if (publishedScreenTrack !== track) {
         await room.localParticipant.unpublishTrack(track, false);
-      } catch (err) {
-        console.warn(
-          "[pqp] could not drop a screen publish that outlived stop",
-          err,
-        );
       }
       return false;
     }
@@ -1218,17 +1227,9 @@ export async function connectLiveKit({
         };
       }
     };
-    const next = (reconciling ?? Promise.resolve())
-      .then(run)
-      .catch((err) => {
-        console.warn("[pqp] SFU screen plan could not be applied", err);
-      })
-      .finally(() => {
-        if (reconciling === next) {
-          reconciling = null;
-        }
-      });
-    reconciling = next;
+    const next = enqueueScreenOp(run).catch((err) => {
+      console.warn("[pqp] SFU screen plan could not be applied", err);
+    });
     return next;
   }
 
@@ -1406,6 +1407,7 @@ export async function connectLiveKit({
     },
 
     async publishScreen(stream: MediaStream) {
+      return enqueueScreenOp(async () => {
       const [videoTrack] = stream.getVideoTracks();
       if (!videoTrack) {
         throw new Error("No video track to publish");
@@ -1441,6 +1443,9 @@ export async function connectLiveKit({
       ) {
         await local.replaceTrack(videoTrack);
         if (screenShareEpoch !== epoch) {
+          if (publishedScreenTrack !== videoTrack) {
+            await room.localParticipant.unpublishTrack(videoTrack, false);
+          }
           return;
         }
         publishedScreenTrack = videoTrack;
@@ -1497,38 +1502,43 @@ export async function connectLiveKit({
         dtx: false,
         red: false,
       });
+      });
     },
 
     async unpublishScreenAudio() {
-      if (!publishedScreenAudioTrack) {
-        return;
-      }
-      await room.localParticipant.unpublishTrack(publishedScreenAudioTrack);
-      publishedScreenAudioTrack = null;
+      return enqueueScreenOp(async () => {
+        if (!publishedScreenAudioTrack) {
+          return;
+        }
+        await room.localParticipant.unpublishTrack(publishedScreenAudioTrack);
+        publishedScreenAudioTrack = null;
+      });
     },
 
     async unpublishScreen() {
-      // Invalidate in-flight reconcile before any await so it cannot write
-      // height/bitrate onto a share that no longer exists.
-      screenShareEpoch += 1;
-      if (publishedScreenAudioTrack) {
-        await room.localParticipant.unpublishTrack(publishedScreenAudioTrack);
-        publishedScreenAudioTrack = null;
-      }
-      if (!publishedScreenTrack) {
-        return;
-      }
-      await room.localParticipant.unpublishTrack(publishedScreenTrack);
-      publishedScreenTrack = null;
-      publishedScreenPlan = null;
-      screenCaptureConstraints = null;
-      // A new share is a new decision. The pin is per broadcast, not per
-      // session: somebody who stops and shares a different window gets the
-      // plan that window and that room call for.
-      screenPlanPinned = false;
-      appliedScreenCaptureHeight = null;
-      pendingCaptureHeight = null;
-      captureHeightStreak = 0;
+      return enqueueScreenOp(async () => {
+        // Invalidate in-flight reconcile before any await so it cannot write
+        // height/bitrate onto a share that no longer exists.
+        screenShareEpoch += 1;
+        if (publishedScreenAudioTrack) {
+          await room.localParticipant.unpublishTrack(publishedScreenAudioTrack);
+          publishedScreenAudioTrack = null;
+        }
+        if (!publishedScreenTrack) {
+          return;
+        }
+        await room.localParticipant.unpublishTrack(publishedScreenTrack);
+        publishedScreenTrack = null;
+        publishedScreenPlan = null;
+        screenCaptureConstraints = null;
+        // A new share is a new decision. The pin is per broadcast, not per
+        // session: somebody who stops and shares a different window gets the
+        // plan that window and that room call for.
+        screenPlanPinned = false;
+        appliedScreenCaptureHeight = null;
+        pendingCaptureHeight = null;
+        captureHeightStreak = 0;
+      });
     },
 
     async publishCamera(stream: MediaStream) {
@@ -1628,16 +1638,18 @@ export async function connectLiveKit({
       cameraStreams.clear();
       screenAudioStreams.clear();
       qualities.clear();
-      published = null;
-      publishedScreenTrack = null;
-      publishedScreenPlan = null;
-      screenCaptureConstraints = null;
-      appliedScreenCaptureHeight = null;
-      pendingCaptureHeight = null;
-      captureHeightStreak = 0;
-      screenShareEpoch += 1;
-      publishedCameraTrack = null;
-      publishedScreenAudioTrack = null;
+      await enqueueScreenOp(async () => {
+        published = null;
+        publishedScreenTrack = null;
+        publishedScreenPlan = null;
+        screenCaptureConstraints = null;
+        appliedScreenCaptureHeight = null;
+        pendingCaptureHeight = null;
+        captureHeightStreak = 0;
+        screenShareEpoch += 1;
+        publishedCameraTrack = null;
+        publishedScreenAudioTrack = null;
+      });
       await room.disconnect();
     },
 
