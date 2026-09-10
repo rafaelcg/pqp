@@ -385,12 +385,12 @@ export interface HlsSourceInput {
 export const HLS_SOURCE_UPLINK_HEADROOM = 1.25;
 
 /**
- * 720p30 HLS rung (3200 kbps) × headroom, floored at the 720p screen
+ * 720 HLS rung (3200 kbps) × headroom, floored at the 720p screen
  * ceiling. Never `LARGE_ROOM_SCREEN_BITRATE` (1.5 Mbps): that number is
  * what a large *WebRTC* room spends per viewer, and using it as the HLS
  * source made every playlist rung an upscale of a starved 720p.
  *
- * Lockstep with `LADDER_RUNGS["720p30"].videoKbps` in
+ * Lockstep with the default mid-rung override (`720p60@3200`) in
  * `server/src/voice/hls-ladder.ts`.
  */
 export const HLS_720P30_VIDEO_BPS = 3_200_000;

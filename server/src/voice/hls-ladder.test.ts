@@ -27,14 +27,16 @@ function names(rungs: readonly LadderRung[]): string[] {
 }
 
 describe("parseLadder", () => {
-  it("defaults to 1080p60 + 720p30 + 480p30, lowest first", () => {
-    expect(names(parseLadder({}).rungs)).toEqual([
-      "480p30",
-      "720p30",
-      "1080p60",
-    ]);
-    expect(names(parseLadder({}).rungs)).not.toContain("720p60");
-    expect(names(parseLadder({}).rungs)).not.toContain("1080p30");
+  it("defaults to 1080p60 + 720p60 + 480p30, lowest first", () => {
+    const rungs = parseLadder({}).rungs;
+    expect(names(rungs)).toEqual(["480p30", "720p60", "1080p60"]);
+    expect(names(rungs)).not.toContain("720p30");
+    expect(names(rungs)).not.toContain("1080p30");
+    // Same 3200 as 720p30 so hls.js keeps a ≥2.5× gap under 1080p60, but
+    // 60 fps so a viewer who lands here still matches the host display.
+    const mid = rungs.find((rung) => rung.name === "720p60");
+    expect(mid?.framerate).toBe(60);
+    expect(mid?.videoKbps).toBe(3200);
   });
 
   it("1080p60 is a named rung with a 60 fps encode", () => {
@@ -96,7 +98,7 @@ describe("parseLadder", () => {
 
   it("a list with nothing valid in it falls back to the default", () => {
     const parsed = parseLadder({ ladder: "4k,potato" });
-    expect(names(parsed.rungs)).toEqual(["480p30", "720p30", "1080p60"]);
+    expect(names(parsed.rungs)).toEqual(["480p30", "720p60", "1080p60"]);
     expect(parsed.invalid).toEqual(["4k", "potato"]);
   });
 
@@ -123,7 +125,7 @@ describe("parseLadder", () => {
     // a viewer oscillates. LiveKit's own presets (3000 and 4500) leave about
     // 1.10x; these leave about 1.36x.
     const rungs = parseLadder({}).rungs;
-    const low = rungs.find((rung) => rung.name === "720p30");
+    const low = rungs.find((rung) => rung.name === "720p60");
     const high = rungs.find((rung) => rung.name === "1080p60");
     const up = high!.videoKbps / 0.7;
     const down = high!.videoKbps / 0.95;
@@ -206,7 +208,7 @@ describe("decideLadder", () => {
     const decisions = decideLadder({ ...base, rungs: defaultRungs });
     expect(decisions.map((d) => [d.rung.name, d.start])).toEqual([
       ["480p30", true],
-      ["720p30", true],
+      ["720p60", true],
       ["1080p60", true],
     ]);
   });
@@ -306,7 +308,7 @@ describe("decideLadder", () => {
     });
     expect(decisions.map((d) => [d.rung.name, d.start, d.refusal])).toEqual([
       ["480p30", true, null],
-      ["720p30", true, null],
+      ["720p60", true, null],
       ["1080p60", false, "source-height"],
     ]);
   });

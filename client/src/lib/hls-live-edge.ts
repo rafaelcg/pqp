@@ -33,7 +33,7 @@ export interface HlsLivePlayerConfig {
   liveMaxLatencyDurationCount: number;
   maxBufferLength: number;
   maxMaxBufferLength: number;
-  /** Auto: ABR picks from the seed, which is the 720p30 rung. */
+  /** Auto: ABR picks from the seed, which is the 720p60@3200 rung. */
   startLevel: number;
 }
 
@@ -47,7 +47,7 @@ export function hlsLivePlayerConfig(): HlsLivePlayerConfig {
   };
 }
 
-/** hls.js ABR seed: above the 720p30 peak so Auto does not start on 480p. */
+/** hls.js ABR seed: above the 720 peak so Auto does not start on 480p. */
 export const HLS_ABR_DEFAULT_ESTIMATE_BPS = 3_500_000;
 
 /**

@@ -649,7 +649,7 @@ describe("live HLS egress", () => {
       return { stream, heights, start };
     }
 
-    it("defaults to 480p30 + 720p30 + 1080p60, started lowest rung first", async () => {
+    it("defaults to 480p30 + 720p60 + 1080p60, started lowest rung first", async () => {
       const { stream, heights } = await startLadder(undefined);
       expect(stream).not.toBeNull();
       // Lowest first: a viewer is never left with nothing while the
@@ -657,7 +657,7 @@ describe("live HLS egress", () => {
       expect(heights).toEqual(["480", "720", "1080"]);
       expect(liveHlsRungsFor(CHANNEL).map((rung) => rung.name)).toEqual([
         "480p30",
-        "720p30",
+        "720p60",
         "1080p60",
       ]);
     });

@@ -3,13 +3,16 @@
 Date: 2026-09-10. Trigger: watch parties feel like "~25 fps" on web, and the
 Vultr SFU box jumped from ~7% to ~48% CPU with a single watch-party sender.
 
-Follow-up, 2026-09-10 (quality): **`1080p60` is now the default top rung.**
-Capture and HLS match the host display (60 Hz) so a 24 fps film looks like
-it does on the presenter's screen instead of 3:2 judder at 30. Bitrate
-floors went up with it (1080p60 8000 kbit/s, 720p30 3200). The media box
-pays more per party (~1.6–2× a 1080p30 encode for the top rung). Operator
-rollback: `LIVE_HLS_LADDER=1080p30,720p30,480p30`. `720p60` remains a named
-option for a game ladder that should not spend 1080p60.
+Follow-up, 2026-09-10 (quality): **`1080p60` is the default top rung, and
+the mid rung is `720p60@3200`.** Capture and HLS match the host display
+(60 Hz) so a 24 fps film looks like it does on the presenter's screen
+instead of 3:2 judder at 30 — including for a viewer whose player size
+pins 720. Bitrate floors went up with it (1080p60 8000 kbit/s, 720 at
+3200 so the ABR gap stays ≥2.5×). The media box pays more per party
+(~1.6–2× a 1080p30 encode for the top rung, plus a 60 fps 720). Operator
+rollback: `LIVE_HLS_LADDER=1080p30,720p30,480p30`. Named `720p60` at 5500
+remains the game-only ladder (`720p60,480p30`) that should not spend
+1080p60.
 
 The this-week client items in §4 (1–6 except `playlistLength`,
 which livekit-server-sdk 2.17.0 does not expose) landed earlier the same day:
@@ -277,7 +280,7 @@ box, not a bigger SFU.**
 10. Publish-side uplink gating hardening (A2): bigger headroom factor and/or
     faster sustained-drop, since the egress can't be told to take a lower
     layer.
-11. **Landed (ahead of 9):** the default ladder is `1080p60,720p30,480p30`,
+11. **Landed (ahead of 9):** the default ladder is `1080p60,720p60@3200,480p30`,
     capture Auto follows it, and presenters can pin 30 or 60. Rollback is
     `LIVE_HLS_LADDER=1080p30,720p30,480p30`. The media box still wants item 9;
     1080p60 costs ~1.6–2× a 1080p30 encode on the 4 vCPU box.
