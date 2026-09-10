@@ -101,6 +101,12 @@ export interface WatchPartyPanelProps {
   audienceCount: number;
   onCreate: () => void;
   onGoLive: (stream: MediaStream | null) => Promise<void>;
+  /**
+   * The host putting a picture up on a party that is already live: join the
+   * room if needed and open the picker. Without it the waiting screen told
+   * a host who had stopped sharing to share again, with no control that did.
+   */
+  onShareScreen?: () => Promise<void>;
   onEnd: () => Promise<void>;
   onDiscard: () => Promise<void>;
   onOptionsChange: (options: Partial<WatchPartyOptions>) => Promise<void>;
@@ -1461,6 +1467,17 @@ function LiveSurface(
                     name: party.hostDisplayName,
                   })}
           </p>
+          {hostSide && !preparing && props.onShareScreen && (
+            <Button
+              type="button"
+              className="mt-2"
+              onClick={() => void props.onShareScreen?.()}
+              data-watch-party-share-screen
+            >
+              <MonitorPlay className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {t("watchParty.live.shareScreen")}
+            </Button>
+          )}
         </div>
       </div>
     );

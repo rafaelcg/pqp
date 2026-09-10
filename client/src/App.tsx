@@ -3917,6 +3917,26 @@ function MainAppContent({
     watchParties.put({ ...party, reminding: wants });
   }
 
+  /**
+   * A live party with nothing on screen, and the host pressing the button
+   * that puts something there. Same road as going live minus the state
+   * change: join the room if needed, wait for it, open the picker through
+   * the gate every share uses.
+   */
+  async function handleWatchPartyShareScreen() {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    if (voice.getState().voiceChannelId !== party.channelId) {
+      await handleJoinVoice(party.channelId);
+    }
+    if (!(await waitForVoiceConnected())) {
+      return;
+    }
+    startScreenShareGated(false, { preferBrowserTab: true });
+  }
+
   async function handleWatchPartyEnd() {
     const party = currentWatchParty();
     if (!party) {
@@ -5782,6 +5802,7 @@ function MainAppContent({
             })}
             onCreate={() => setCreateWatchPartyOpen(true)}
             onGoLive={handleWatchPartyGoLive}
+            onShareScreen={handleWatchPartyShareScreen}
             onEnd={handleWatchPartyEnd}
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}
@@ -5883,6 +5904,7 @@ function MainAppContent({
             })}
             onCreate={() => setCreateWatchPartyOpen(true)}
             onGoLive={handleWatchPartyGoLive}
+            onShareScreen={handleWatchPartyShareScreen}
             onEnd={handleWatchPartyEnd}
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}
