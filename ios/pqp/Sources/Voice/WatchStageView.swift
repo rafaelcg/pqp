@@ -63,6 +63,7 @@ struct WatchStageView: View {
     @State private var seekingUntil = Date.distantPast
     @State private var chrome = WatchChromeClock()
     @State private var pip = WatchPictureInPicture()
+    @State private var chromeInsets = EdgeInsets()
 
     /// The pinned rung, in lines. Zero is Auto.
     ///
@@ -102,9 +103,9 @@ struct WatchStageView: View {
         .onChange(of: model.phase) { _, phase in
             if phase != .live { tearDown() }
         }
-        .onChange(of: pinnedLines) { _, _ in applyQuality() }
-        .onChange(of: surfacePixels) { _, _ in applyQuality() }
-        .onChange(of: isFullscreen) { _, _ in applyQuality() }
+        .onChange(of: pinnedLines) { _, _ in applyQuality(trigger: .pin) }
+        .onChange(of: surfacePixels) { _, _ in applyQuality(trigger: .surface) }
+        .onChange(of: isFullscreen) { _, _ in applyQuality(trigger: .fullscreen) }
         // THE ONE PAUSE NOBODY ASKED FOR. A call, Siri, an alarm or another
         // app taking the session stops `AVPlayer` dead and leaves it stopped;
         // there is no automatic resume and nothing in the app was listening,
@@ -295,7 +296,22 @@ struct WatchStageView: View {
         }
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
-        .onAppear { chrome.reveal(at: Date()) }
+        .onAppear {
+            chrome.reveal(at: Date())
+            WatchOrientation.enterTheater()
+            chromeInsets = WatchOrientation.safeInsets
+        }
+        .onDisappear {
+            WatchOrientation.leaveTheater()
+            chromeInsets = .init()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIDevice.orientationDidChangeNotification
+            )
+        ) { _ in
+            chromeInsets = WatchOrientation.safeInsets
+        }
     }
 
     @ViewBuilder
@@ -316,6 +332,7 @@ struct WatchStageView: View {
                     audienceCount: model.audienceCount,
                     audienceLabel: viewerLabel,
                     pipAvailable: pip.canStart,
+                    chromeInsets: isTheater ? chromeInsets : .init(),
                     onTogglePlay: togglePlay,
                     onJumpToLive: jumpToLive,
                     onToggleFullscreen: toggleFullscreen,
@@ -330,9 +347,11 @@ struct WatchStageView: View {
             }
         }
         .overlay {
-            Rectangle()
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
-                .allowsHitTesting(false)
+            if !isTheater {
+                Rectangle()
+                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
         }
     }
 
@@ -558,12 +577,12 @@ struct WatchStageView: View {
         // face down on the table. `audio` is already in `UIBackgroundModes`,
         // so the sound keeps coming and the video resumes on return.
         next.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
-        // Left alone deliberately. Turning this off makes `play()` start on
-        // whatever is buffered, which is tempting on a ten second window and
-        // is also a change nothing available here can measure: it trades
-        // stalls for a faster start and only a real phone on a real link can
-        // say which way that lands. `WatchLiveEdge` handles the state it would
-        // have been aimed at.
+        // ON on purpose. Build 25 turned this off so the player would
+        // decode the first segment instead of waiting for a buffer a ten
+        // second playlist cannot grow. Combined with an immediate settle
+        // seek it decoded one frame and sat. Waiting is what a live
+        // playlist is for; `WatchLiveEdge` only seeks if the playhead
+        // falls out of the window.
         next.automaticallyWaitsToMinimizeStalling = true
         player = next
         attached = AttachedStream(startedAt: stream.startedAt, attachedAt: Date())
@@ -590,7 +609,7 @@ struct WatchStageView: View {
             // broadcast would offer rungs it does not serve.
             guard player === next else { return }
             ladder = published
-            applyQuality()
+            applyQuality(trigger: .variants)
         }
     }
 
@@ -603,8 +622,13 @@ struct WatchStageView: View {
     /// the properties at all: writing `preferredMaximumResolution` is what
     /// pauses the picture for about a second, even when the number did not
     /// change.
-    private func applyQuality() {
+    private func applyQuality(trigger: WatchQualityRetune.Trigger) {
         guard let player, let item = player.currentItem else { return }
+        let alreadyPlaying = item.status == .readyToPlay || player.rate > 0
+            || player.timeControlStatus != .paused
+        guard WatchQualityRetune.shouldWrite(
+            alreadyPlaying: alreadyPlaying, trigger: trigger
+        ) else { return }
         // A remembered pin from a broadcast with a different ladder falls back
         // to Auto rather than to the nearest rung. See `WatchLadder.limits`.
         let effective = ladder.contains(choice) ? choice : .auto
@@ -619,8 +643,15 @@ struct WatchStageView: View {
         item.preferredPeakBitRate = peak
         // The switch itself can drop the player into `.paused` for a second.
         // `play()` on the same item keeps that from looking like a pause.
-        // Never `attach` from this path.
+        // Never `attach` from this path. A person who asked (pin / theater)
+        // also gets a seek back into the live window, because the write is
+        // the same rendition switch that froze Auto a few seconds in.
         if userWantsPlayback {
+            if trigger == .pin || trigger == .fullscreen,
+               let window = Self.liveWindow(of: item) {
+                seek(to: WatchLiveEdge.target(in: window))
+                return
+            }
             seekingUntil = Date().addingTimeInterval(2)
             player.play()
         }
@@ -758,6 +789,7 @@ struct WatchStageView: View {
         userWantsPlayback = true
         seekingUntil = .distantPast
         chrome = WatchChromeClock()
+        chromeInsets = .init()
         pip.attach(nil)
         WatchNowPlaying.end()
         WatchAudioSession.deactivate()

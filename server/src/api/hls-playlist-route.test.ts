@@ -433,7 +433,8 @@ describeDb("hls playlist route", () => {
       expect(response.status).toBe(200);
       const cacheControl = response.headers.get("cache-control") ?? "";
       expect(cacheControl).toContain("private");
-      expect(cacheControl).toMatch(/max-age=1\b/);
+      expect(cacheControl).toMatch(/no-store/);
+      expect(cacheControl).not.toMatch(/max-age/);
       expect(response.headers.get("vary")).toContain("Authorization");
     });
   });

@@ -19,7 +19,9 @@ import { cn } from "@/lib/utils";
  *    from one the LINK imposed (`expectedCeilingBps`);
  *  - what the room receives is `LiveHlsStream.topHeight`, the tallest rung the
  *    ladder actually started for this session (PR 376), and `delaySeconds`;
- *  - whether the uplink is losing is `useShareUplinkStrain` from PRs 340/370;
+ *  - whether the uplink is losing is `useShareUplinkStrain` (mesh splits
+ *    the room; LiveKit is one upload and reads `describeLimitation` on
+ *    the SFU sender row);
  *  - the audience and the clock are the party's own.
  *
  * Nothing is recomputed here. A second opinion about a bitrate is a second
@@ -33,11 +35,9 @@ import { cn } from "@/lib/utils";
  * NEVER SHOWN TO VIEWERS. It is rendered only inside the host's own controls;
  * a viewer has no use for the presenter's encoder and no business knowing it.
  *
- * ONE HONEST GAP, stated rather than hidden: `useShareUplinkStrain` is
- * mesh-only by design (on the SFU the stats it reads mean something else and
- * it would blame a healthy uplink, which is exactly the bug PR 370 fixed). A
- * watch party big enough to matter is on LiveKit, so the strain line will
- * simply not appear there. That is the truthful behaviour, not a stub.
+ * The strain line now speaks on LiveKit too. The SFU session registers its
+ * own sender rows, and those carry the published plan as the ceiling, so
+ * "bandwidth" there is the host's uplink, not a leftover mesh reading.
  */
 export function WatchPartyTransmission({
   stream,

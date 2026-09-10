@@ -1,5 +1,6 @@
 import AVKit
 import SwiftUI
+import UIKit
 
 /**
  WHEN THE CONTROLS ARE ON THE PICTURE, AND WHEN THEY ARE NOT.
@@ -76,6 +77,9 @@ struct WatchOverlay<Quality: View>: View {
     let audienceCount: Int
     let audienceLabel: String
     let pipAvailable: Bool
+    /// Device safe area, so theater chrome clears the island and the home
+    /// indicator. Zero in the inline strip, which is already below the notch.
+    var chromeInsets: EdgeInsets = .init()
     let onTogglePlay: () -> Void
     let onJumpToLive: () -> Void
     let onToggleFullscreen: () -> Void
@@ -97,9 +101,10 @@ struct WatchOverlay<Quality: View>: View {
                 Spacer(minLength: 0).allowsHitTesting(false)
                 bottomBar
             }
-            .padding(.horizontal, isTheater ? 20 : 10)
-            .padding(.top, isTheater ? 8 : 8)
-            .padding(.bottom, isTheater ? 16 : 8)
+            .padding(.leading, isTheater ? max(20, chromeInsets.leading + 8) : 10)
+            .padding(.trailing, isTheater ? max(20, chromeInsets.trailing + 8) : 10)
+            .padding(.top, isTheater ? max(12, chromeInsets.top + 6) : 8)
+            .padding(.bottom, isTheater ? max(16, chromeInsets.bottom + 8) : 8)
         }
         .animation(Motion.standard, value: chromeVisible)
         .animation(Motion.standard, value: isPlaying)
@@ -323,5 +328,58 @@ struct WatchControlStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(Motion.press, value: configuration.isPressed)
+    }
+}
+
+/**
+ Portrait everywhere, landscape in the watch theater.
+
+ Info.plist lists landscape so iOS will rotate that cover at all. This lock
+ is what stops the rest of the app going with it. iPad already rotates
+ and is left alone.
+ */
+@MainActor
+enum WatchOrientation {
+    private static var theaterOpen = false
+
+    static var allowed: UIInterfaceOrientationMask {
+        if theaterOpen { return .allButUpsideDown }
+        if UIDevice.current.userInterfaceIdiom == .pad { return .all }
+        return .portrait
+    }
+
+    static var safeInsets: EdgeInsets {
+        let raw = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .first(where: \.isKeyWindow)?
+            .safeAreaInsets ?? .zero
+        return EdgeInsets(
+            top: raw.top,
+            leading: raw.left,
+            bottom: raw.bottom,
+            trailing: raw.right
+        )
+    }
+
+    static func enterTheater() {
+        theaterOpen = true
+        apply()
+    }
+
+    static func leaveTheater() {
+        theaterOpen = false
+        apply()
+    }
+
+    private static func apply() {
+        guard let scene = UIApplication.shared.connectedScenes
+            .compactMap({ $0 as? UIWindowScene })
+            .first
+        else { return }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: allowed)) { _ in }
+        scene.windows.first { $0.isKeyWindow }?
+            .rootViewController?
+            .setNeedsUpdateOfSupportedInterfaceOrientations()
     }
 }

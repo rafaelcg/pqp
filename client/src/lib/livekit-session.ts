@@ -18,6 +18,7 @@ import {
   DEFAULT_VIDEO_QUALITY,
   hlsSourceTopHeight,
   LARGE_ROOM_SCREEN_BITRATE,
+  LARGE_ROOM_SCREEN_HEIGHT,
   screenBitrateFor,
   screenSimulcastPlan,
   type CameraLayer,
@@ -38,6 +39,9 @@ import {
   type VideoSenderSample,
   type VoiceStatsSnapshot,
 } from "./voice-stats-probe";
+
+/** How many weak `setHlsSource` ticks before a pinned 1080 share may drop. */
+export const HLS_SOURCE_DROP_SAMPLES = 5;
 
 function asLiveKitQuality(value: unknown): LiveKitConnectionQuality {
   if (
@@ -325,6 +329,14 @@ export async function connectLiveKit({
    * it, because somebody who picks 1080p by name has chosen the blink.
    */
   let screenPlanPinned = false;
+  /**
+   * Consecutive `setHlsSource` ticks whose plan is shorter than what is
+   * already on the wire. Five is ten seconds at the two-second sample
+   * cadence. One weak reading is the wobble the pin exists to ignore; ten
+   * seconds of "this uplink cannot carry 1080" is a starved top layer, and
+   * that is what makes the film drift off its own audio.
+   */
+  let shorterPlanStreak = 0;
   /**
    * The capture's constraints as the browser handed them over, so the plan's
    * height can be laid over them and lifted again without losing the frame
@@ -868,7 +880,8 @@ export async function connectLiveKit({
       participantCount(),
       hlsSource,
     );
-    if (hlsSourceTopHeight(screenQuality, hlsSource) !== null) {
+    const hlsTop = hlsSourceTopHeight(screenQuality, hlsSource);
+    if (hlsTop !== null && hlsTop > LARGE_ROOM_SCREEN_HEIGHT) {
       // The share is the ladder's source: the egress transcodes from this
       // track, so holding it at the large-room ceiling would cap every
       // playlist viewer too. `screenSimulcastPlan` already decided the
@@ -1023,21 +1036,25 @@ export async function connectLiveKit({
         broadcastIsLive() &&
         !options?.force
       ) {
-        // HELD. The layer set stays exactly as published, and the capture is
-        // NOT reconstrained: shrinking it under a layer set declared for the
-        // old height would starve the top layer, which is the thing this
-        // whole path is trying to stop. What can move without anybody
-        // noticing is the ceiling, so that is what moves. A worse uplink
-        // therefore still gets a lower bitrate; it just gets it in place.
-        if (plan.topBitrate !== published.topBitrate) {
-          await setSourceMaxBitrate(
-            Track.Source.ScreenShare,
-            plan.topBitrate,
-            "screen",
-          );
-          publishedScreenPlan = { ...published, topBitrate: plan.topBitrate };
+        const sustainedDrop =
+          plan.topHeight < published.topHeight &&
+          shorterPlanStreak >= HLS_SOURCE_DROP_SAMPLES;
+        if (!sustainedDrop) {
+          // HELD. A single weaker reading is the wobble that used to
+          // restart the egress six times in one party. Ten seconds of a
+          // shorter plan is a starved 1080 that drifts off its own audio,
+          // and that drop is allowed to republish once.
+          if (plan.topBitrate !== published.topBitrate) {
+            await setSourceMaxBitrate(
+              Track.Source.ScreenShare,
+              plan.topBitrate,
+              "screen",
+            );
+            publishedScreenPlan = { ...published, topBitrate: plan.topBitrate };
+          }
+          return;
         }
-        return;
+        shorterPlanStreak = 0;
       }
       if (heightChanged) {
         await constrainScreenCapture(track, plan.topHeight);
@@ -1253,6 +1270,47 @@ export async function connectLiveKit({
         throw new Error("No video track to publish");
       }
       const replacing = publishedScreenTrack !== null;
+      const [audioTrack] = stream.getAudioTracks();
+      const hadAudio = publishedScreenAudioTrack !== null;
+      const hasAudio = Boolean(audioTrack);
+      const audioChanged = replacing && hadAudio !== hasAudio;
+      const plan = currentScreenPlan();
+      await constrainScreenCapture(videoTrack, plan.topHeight);
+
+      // Same sid, same egress, same playlist. A host who picks a different
+      // window should not rebuffer every viewer. Gaining or losing the
+      // share's audio is a different pair of tracks and HAS to republish:
+      // a running Track Composite egress is bound to the sids it started
+      // with, and an audio track published afterwards never reaches it.
+      const publication = room.localParticipant.getTrackPublication(
+        Track.Source.ScreenShare,
+      );
+      const local = publication?.track as
+        | { replaceTrack?: (track: MediaStreamTrack) => Promise<void> }
+        | undefined;
+      if (
+        replacing &&
+        !audioChanged &&
+        local &&
+        typeof local.replaceTrack === "function"
+      ) {
+        await local.replaceTrack(videoTrack);
+        publishedScreenTrack = videoTrack;
+        if (audioTrack && publishedScreenAudioTrack) {
+          const audioPub = room.localParticipant.getTrackPublication(
+            Track.Source.ScreenShareAudio,
+          );
+          const audioLocal = audioPub?.track as
+            | { replaceTrack?: (track: MediaStreamTrack) => Promise<void> }
+            | undefined;
+          if (audioLocal && typeof audioLocal.replaceTrack === "function") {
+            await audioLocal.replaceTrack(audioTrack);
+            publishedScreenAudioTrack = audioTrack;
+          }
+        }
+        return;
+      }
+
       if (publishedScreenTrack) {
         await room.localParticipant.unpublishTrack(publishedScreenTrack);
       }
@@ -1262,8 +1320,6 @@ export async function connectLiveKit({
       // the library reads its dimensions, so the layers it declares are the
       // layers that exist. See `screenSimulcastPlan` for why height and not
       // a divisor.
-      const plan = currentScreenPlan();
-      await constrainScreenCapture(videoTrack, plan.topHeight);
       await publishScreenVideo(videoTrack, plan);
       if (replacing) {
         onScreenRepublished?.();
@@ -1276,7 +1332,6 @@ export async function connectLiveKit({
         await room.localParticipant.unpublishTrack(publishedScreenAudioTrack);
         publishedScreenAudioTrack = null;
       }
-      const [audioTrack] = stream.getAudioTracks();
       if (!audioTrack) {
         return;
       }
@@ -1314,6 +1369,7 @@ export async function connectLiveKit({
       // session: somebody who stops and shares a different window gets the
       // plan that window and that room call for.
       screenPlanPinned = false;
+      shorterPlanStreak = 0;
     },
 
     async publishCamera(stream: MediaStream) {
@@ -1368,6 +1424,14 @@ export async function connectLiveKit({
      */
     async setHlsSource(next: HlsSourceInput | null) {
       hlsSource = next;
+      const published = publishedScreenPlan;
+      if (published && next && next.ladderTopHeight !== null) {
+        const plan = currentScreenPlan();
+        shorterPlanStreak =
+          plan.topHeight < published.topHeight ? shorterPlanStreak + 1 : 0;
+      } else {
+        shorterPlanStreak = 0;
+      }
       await reconcileScreenPlan();
     },
 

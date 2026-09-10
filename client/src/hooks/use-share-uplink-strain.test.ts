@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isStrained,
+  nextSfuStrainStreak,
   nextStrainStreak,
   shouldMeasureUplink,
   SUSTAINED_SAMPLES,
@@ -250,21 +251,10 @@ describe("the share uplink warning", () => {
 /**
  * THE SEAM WITH ROOM PROMOTION.
  *
- * A room's transport used to be fixed for its whole life, so "is this a mesh
- * room" was answered once, before the first sample. It is not any more: any of
- * the promotion triggers moves a live room onto the SFU
- * (`docs/voice-backends.md`, "The one time a live room changes transport"),
- * and the common one is not a cap at all but the room simply reaching
- * `MESH_ROOM_PROMOTION_SIZE` people. A share in progress when the fourth
- * person walks in is promoted under the presenter, and this hook is then
- * mid-streak on a mesh that is being torn down in the same tick.
- *
- * Getting this wrong is invisible in exactly the way that matters: the sampler
- * would keep reading a torn-down mesh, or read the SFU's rows, where a capped
- * top layer under an uncapped reported ceiling makes every tick look like
- * "bandwidth". The presenter of a promoted call on fibre would be told their
- * connection is the problem, permanently, with nothing on any screen to say
- * why.
+ * A room promoted onto the SFU mid-share keeps measuring. The SFU session
+ * registers its own sender rows, and those carry the published plan as the
+ * ceiling, so `describeLimitation` can tell fibre sitting on 4 Mbps from
+ * a starving uplink. The mesh leftovers are gone with the mesh.
  */
 describe("what is worth measuring at all", () => {
   it("measures a mesh share", () => {
@@ -277,12 +267,27 @@ describe("what is worth measuring at all", () => {
     expect(shouldMeasureUplink(true, null)).toBe(true);
   });
 
-  it("stops the moment a live room is promoted to the voice server", () => {
-    expect(shouldMeasureUplink(true, "livekit")).toBe(false);
+  it("keeps measuring after a live room is promoted to the voice server", () => {
+    expect(shouldMeasureUplink(true, "livekit")).toBe(true);
   });
 
   it("measures nothing when this machine is not the one sharing", () => {
     expect(shouldMeasureUplink(false, "mesh")).toBe(false);
     expect(shouldMeasureUplink(false, "livekit")).toBe(false);
+  });
+});
+
+describe("the SFU streak, one upload, no room split", () => {
+  it("counts a sender the encoder says is bandwidth-limited", () => {
+    expect(nextSfuStrainStreak(0, [starved])).toBe(1);
+    expect(nextSfuStrainStreak(4, [starved])).toBe(5);
+  });
+
+  it("resets when the sender is sitting on the published ceiling", () => {
+    expect(nextSfuStrainStreak(4, [atCeiling])).toBe(0);
+  });
+
+  it("resets when there is no screen sender yet", () => {
+    expect(nextSfuStrainStreak(4, [])).toBe(0);
   });
 });

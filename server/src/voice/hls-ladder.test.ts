@@ -26,8 +26,12 @@ function names(rungs: readonly LadderRung[]): string[] {
 }
 
 describe("parseLadder", () => {
-  it("defaults to 1080p30 + 720p30, lowest first", () => {
-    expect(names(parseLadder({}).rungs)).toEqual(["720p30", "1080p30"]);
+  it("defaults to 1080p30 + 720p30 + 480p30, lowest first", () => {
+    expect(names(parseLadder({}).rungs)).toEqual([
+      "480p30",
+      "720p30",
+      "1080p30",
+    ]);
   });
 
   it("sorts by bitrate whatever order the operator wrote", () => {
@@ -66,7 +70,7 @@ describe("parseLadder", () => {
 
   it("a list with nothing valid in it falls back to the default", () => {
     const parsed = parseLadder({ ladder: "4k,potato" });
-    expect(names(parsed.rungs)).toEqual(["720p30", "1080p30"]);
+    expect(names(parsed.rungs)).toEqual(["480p30", "720p30", "1080p30"]);
     expect(parsed.invalid).toEqual(["4k", "potato"]);
   });
 
@@ -92,7 +96,9 @@ describe("parseLadder", () => {
     // falls under the current one. A narrow band between those two is where
     // a viewer oscillates. LiveKit's own presets (3000 and 4500) leave about
     // 1.10x; these leave about 1.36x.
-    const [low, high] = parseLadder({}).rungs;
+    const rungs = parseLadder({}).rungs;
+    const low = rungs.find((rung) => rung.name === "720p30");
+    const high = rungs.find((rung) => rung.name === "1080p30");
     const up = high!.videoKbps / 0.7;
     const down = high!.videoKbps / 0.95;
     expect(up / down).toBeGreaterThan(1.3);
@@ -120,10 +126,10 @@ describe("rungEncodingOptions", () => {
 });
 
 describe("ladderBudgetMbps", () => {
-  it("defaults to two rungs' worth", () => {
+  it("defaults to three rungs' worth", () => {
     delete process.env.LIVE_HLS_MAX_LADDER_MBPS;
     expect(ladderBudgetMbps()).toBe(DEFAULT_MAX_LADDER_MBPS);
-    expect(DEFAULT_MAX_LADDER_MBPS).toBe(HLS_RUNG_MBPS * 2);
+    expect(DEFAULT_MAX_LADDER_MBPS).toBe(HLS_RUNG_MBPS * 3);
   });
 
   it("reads the environment per call, so an operator needs no deploy", () => {
@@ -153,11 +159,13 @@ describe("decideLadder", () => {
     ladderBudgetMbps: DEFAULT_MAX_LADDER_MBPS,
     boxBudgetMbps: 600,
   };
-  const twoRung = parseLadder({}).rungs;
+  const twoRung = [LADDER_RUNGS["720p30"]!, LADDER_RUNGS["1080p30"]!];
+  const defaultRungs = parseLadder({}).rungs;
 
   it("starts every rung when the box is idle", () => {
-    const decisions = decideLadder({ ...base, rungs: twoRung });
+    const decisions = decideLadder({ ...base, rungs: defaultRungs });
     expect(decisions.map((d) => [d.rung.name, d.start])).toEqual([
+      ["480p30", true],
       ["720p30", true],
       ["1080p30", true],
     ]);
@@ -248,6 +256,39 @@ describe("decideLadder", () => {
       ladderBudgetMbps: HLS_RUNG_MBPS * 2,
     });
     expect(decisions.every((d) => d.start)).toBe(true);
+  });
+
+  it("refuses a rung taller than the published source", () => {
+    const decisions = decideLadder({
+      ...base,
+      rungs: defaultRungs,
+      sourceHeight: 720,
+    });
+    expect(decisions.map((d) => [d.rung.name, d.start, d.refusal])).toEqual([
+      ["480p30", true, null],
+      ["720p30", true, null],
+      ["1080p30", false, "source-height"],
+    ]);
+  });
+
+  it("a 1078-line window is still a 1080p source", () => {
+    const decisions = decideLadder({
+      ...base,
+      rungs: defaultRungs,
+      sourceHeight: 1078,
+    });
+    expect(decisions.every((d) => d.start)).toBe(true);
+  });
+
+  it("the lowest rung starts even when it is taller than the source", () => {
+    const decisions = decideLadder({
+      ...base,
+      rungs: twoRung,
+      sourceHeight: 360,
+    });
+    expect(decisions[0]!.start).toBe(true);
+    expect(decisions[1]!.start).toBe(false);
+    expect(decisions[1]!.refusal).toBe("source-height");
   });
 });
 

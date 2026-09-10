@@ -238,6 +238,12 @@ interface VoicePeer {
    * priced from the roster by `decideVideoAdmission`.
    */
   measuredUplinkBps: number | null;
+  /**
+   * Published capture height, in lines, last declared on
+   * `set-sharing-screen`. The HLS ladder refuses a rung taller than this.
+   * Not in the registry: a reconnect re-declares with the share.
+   */
+  sourceHeight: number | null;
 }
 
 /**
@@ -1833,6 +1839,7 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
       voiceChannelId,
       sharer?.id ?? null,
       serverId,
+      sharer?.sourceHeight ?? null,
     );
     const changed =
       (prev?.hlsUrl ?? null) !== (next?.hlsUrl ?? null) ||
@@ -4319,6 +4326,7 @@ export async function handleVoiceMessage(
       // room falls back to the old constant, which is the same thing every
       // client without the field gets.
       measuredUplinkBps: null,
+      sourceHeight: null,
     };
     if (adopted && !canStream) {
       peer.sharingScreen = false;
@@ -4431,6 +4439,12 @@ export async function handleVoiceMessage(
     if (payload.uplinkBps !== undefined) {
       peer.measuredUplinkBps =
         clampReportedUplinkBps(payload.uplinkBps) ?? peer.measuredUplinkBps;
+    }
+    if (payload.sourceHeight !== undefined) {
+      peer.sourceHeight = payload.sourceHeight;
+    }
+    if (!payload.sharing) {
+      peer.sourceHeight = null;
     }
     if (payload.sharing) {
       const othersSharing = () =>

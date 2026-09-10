@@ -649,16 +649,62 @@ describe("live HLS egress", () => {
       return { stream, heights, start };
     }
 
-    it("defaults to 1080p30 + 720p30, started lowest rung first", async () => {
+    it("defaults to 480p30 + 720p30 + 1080p30, started lowest rung first", async () => {
       const { stream, heights } = await startLadder(undefined);
       expect(stream).not.toBeNull();
       // Lowest first: a viewer is never left with nothing while the
       // expensive rendition is still spinning up.
-      expect(heights).toEqual(["720", "1080"]);
+      expect(heights).toEqual(["480", "720", "1080"]);
       expect(liveHlsRungsFor(CHANNEL).map((rung) => rung.name)).toEqual([
+        "480p30",
         "720p30",
         "1080p30",
       ]);
+    });
+
+    it("refuses a 1080 rung when the published source is 720", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      delete process.env.LIVE_HLS_LADDER;
+      const heights: string[] = [];
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: fakeEgress(heights),
+          stopEgress: vi.fn(),
+        },
+        findTracks: async () => ({ videoTrackId: "TR_V", sourceHeight: 720 }),
+      });
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      expect(heights).toEqual(["480", "720"]);
+    });
+
+    it("stops a leftover egress from a previous session on the same channel", async () => {
+      resetLiveHlsForTests();
+      enableHls();
+      process.env.LIVE_HLS_LADDER = "720p30";
+      const stopEgress = vi.fn();
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: fakeEgress([]),
+          stopEgress,
+          listEgress: async () => [
+            {
+              egressId: "EG_OLD",
+              status: EgressStatus.EGRESS_ACTIVE,
+              roomName: CHANNEL,
+            },
+            {
+              egressId: "EG_1",
+              status: EgressStatus.EGRESS_ACTIVE,
+              roomName: CHANNEL,
+            },
+          ],
+        },
+        findTracks: async () => ({ videoTrackId: "TR_V" }),
+      });
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
+      expect(stopEgress).toHaveBeenCalledWith("EG_OLD");
+      expect(stopEgress).not.toHaveBeenCalledWith("EG_1");
     });
 
     it("a one-entry ladder is exactly the old single-rendition behaviour", async () => {
@@ -1277,17 +1323,20 @@ describe("live HLS egress", () => {
         });
         await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
 
+        // A leftover on THIS channel is a superseded session. Stopping it
+        // at start is what keeps a zombie playlist from sitting next to
+        // the real one. The monitor's orphan counter is for leftovers
+        // that appear later, not for this.
+        expect(stop).toHaveBeenCalledWith("EG_LEFTOVER");
+
         await advance(20_000);
         await checkLiveHlsHealth();
 
-        expect(stop).toHaveBeenCalledWith("EG_LEFTOVER");
-        // The counter, because the leak itself is silent: the box just gets
-        // slower and the parties on it start stalling.
-        expect(liveHlsActivity().orphansStopped).toBe(1);
+        expect(liveHlsActivity().orphansStopped).toBe(0);
         // And it is gone, so a second pass does not keep re-stopping it.
         await advance(10_000);
         await checkLiveHlsHealth();
-        expect(liveHlsActivity().orphansStopped).toBe(1);
+        expect(liveHlsActivity().orphansStopped).toBe(0);
       });
 
       /**
@@ -1327,10 +1376,15 @@ describe("live HLS egress", () => {
         });
         await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
 
+        // Start-time superseded cleanup is not the monitor and is not
+        // behind `LIVE_HLS_REAP_ORPHANS`. The flag only silences the
+        // background hunt, so a leftover already on this channel when
+        // the new session starts is still stopped.
+        expect(stop).toHaveBeenCalledWith("EG_LEFTOVER");
+
         await advance(20_000);
         await checkLiveHlsHealth();
 
-        expect(stop).not.toHaveBeenCalledWith("EG_LEFTOVER");
         expect(liveHlsActivity().orphansStopped).toBe(0);
       });
 
@@ -1588,6 +1642,27 @@ describe("pickScreenTracks", () => {
    * asserts that rather than assuming it: a Track Composite egress takes one
    * audio sid and the film's audio has to be able to win it.
    */
+  it("carries the published height when LiveKit stated it", () => {
+    expect(
+      pickScreenTracks([
+        {
+          identity: "peer-host",
+          tracks: [
+            {
+              source: TrackSource.SCREEN_SHARE,
+              sid: "TR_screen",
+              height: 1078,
+            },
+          ],
+        },
+      ]),
+    ).toEqual({
+      videoTrackId: "TR_screen",
+      audioTrackId: undefined,
+      sourceHeight: 1078,
+    });
+  });
+
   it("leaves the audience silent rather than reaching for the microphone", () => {
     expect(
       pickScreenTracks([

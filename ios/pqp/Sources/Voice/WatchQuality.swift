@@ -190,6 +190,38 @@ enum WatchQualityLabel {
  response is still in the URL cache. It is deliberately tolerant: a failure
  here means no picker, never no picture.
  */
+/**
+ WHEN A LIVE ITEM MAY HAVE ITS CEILINGS REWRITTEN.
+
+ `preferredMaximumResolution` is a live property, and writing it is a
+ rendition switch. On a ten second playlist that switch is "plays for a
+ few seconds, then stops": the master finishes parsing, the pane reports
+ its size, Auto writes a 720p cap onto an item that has already started
+ at 1080, and `AVPlayer` sits in `.waitingToPlayAtSpecifiedRate` while
+ the window slides past.
+
+ So variants and layout may only write BEFORE the first `play()`. A pin
+ or the theater is a person asking, and that write is allowed (with a
+ seek back to live on the other side).
+ */
+enum WatchQualityRetune {
+    enum Trigger: Equatable {
+        case variants
+        case surface
+        case pin
+        case fullscreen
+    }
+
+    static func shouldWrite(alreadyPlaying: Bool, trigger: Trigger) -> Bool {
+        switch trigger {
+        case .pin, .fullscreen:
+            return true
+        case .variants, .surface:
+            return !alreadyPlaying
+        }
+    }
+}
+
 enum WatchVariants {
     static func load(from asset: AVURLAsset) async -> WatchLadder {
         guard let variants = try? await asset.load(.variants) else { return .empty }

@@ -2307,7 +2307,7 @@ async function hlsPlaylistResponse(
       token: options.token,
     });
     if (master !== null) {
-      res.setHeader("Cache-Control", "private, max-age=1");
+      res.setHeader("Cache-Control", "private, no-store");
       res.setHeader("Vary", "Authorization");
       return new RawResponse(master, "application/vnd.apple.mpegurl");
     }
@@ -2323,14 +2323,14 @@ async function hlsPlaylistResponse(
     }
     throw error;
   }
-  // One second, never more: a playlist older than a segment sends the player
-  // to a live edge that has already moved. `private` plus `Vary` because the
-  // Bearer form of this request is the SAME URL for every viewer and only the
-  // header tells them apart, so a shared cache without both could hand one
-  // viewer a body fetched for another. The real saving is the per-session
-  // render cache in `hls-playlist-proxy.ts`; this only stops an edge or a
-  // browser from holding a stale window for longer than a segment.
-  res.setHeader("Cache-Control", "private, max-age=1");
+  // Not even one second. `AVPlayer` treats `max-age` as permission to replay
+  // a live playlist it already has, and a ten second window replayed is a
+  // playhead sitting on segments the bucket has already deleted. hls.js
+  // busts this on its own; the phone does not. `private` plus `Vary` still
+  // because the Bearer form of this request is the SAME URL for every
+  // viewer and only the header tells them apart. The real saving is the
+  // per-session render cache in `hls-playlist-proxy.ts`.
+  res.setHeader("Cache-Control", "private, no-store");
   res.setHeader("Vary", "Authorization");
   return new RawResponse(body, "application/vnd.apple.mpegurl");
 }

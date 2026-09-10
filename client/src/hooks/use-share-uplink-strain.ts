@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  describeLimitation,
   describeLimitationAgainst,
   sampleVoiceStats,
   type VideoSenderSample,
@@ -169,13 +170,17 @@ export function isStrained(streak: number): boolean {
  * time a live room changes transport") and a seam nobody can see is a seam
  * somebody deletes.
  *
- * MESH ONLY, and `livekit` is not a hypothetical here. A room's transport used
- * to be fixed for the room's life, so "this is a mesh room" was settled before
- * the first sample. It is not any more: any of the promotion triggers moves a
- * live room onto the SFU under everybody in it, and the common one is simply
- * the room reaching `MESH_ROOM_PROMOTION_SIZE` people. A share in progress
- * when the fourth person walks in is promoted under the presenter, and this
- * hook is then mid-streak on a peer mesh being torn down in the same tick.
+ * MESH AND SFU. A watch party big enough to matter is on LiveKit, and the
+ * SFU session registers its own sender rows (`registerVoiceStatsSource` in
+ * `livekit-session.ts`). Those rows carry the published plan as
+ * `ceilingKbps`, so `describeLimitation` is honest there: fibre sitting on
+ * 4 Mbps is "setting", a starving uplink is "bandwidth". The mesh path
+ * still splits the room; the SFU path does not, because there is one
+ * upload.
+ *
+ * The earlier "mesh only" rule was written before the SFU sampler existed.
+ * On that day, enabling this on LiveKit would have read mesh leftovers
+ * after a promotion and blamed fibre. That sampler is gone with the mesh.
  *
  * Two independent things then have to be true, and both are:
  *
@@ -190,11 +195,22 @@ export function isStrained(streak: number): boolean {
  *    line of defence, not the reason: a reading that is *absent* is luck, and
  *    this rule is the part that does not depend on it.
  */
+export function nextSfuStrainStreak(
+  streak: number,
+  screens: readonly VideoSenderSample[],
+): number {
+  const screen = screens[0];
+  if (!screen) {
+    return 0;
+  }
+  return describeLimitation(screen) === "bandwidth" ? streak + 1 : 0;
+}
+
 export function shouldMeasureUplink(
   isSharing: boolean,
   transport: VoiceRoomTransport | null,
 ): boolean {
-  return isSharing && transport !== "livekit";
+  return isSharing;
 }
 
 export function useShareUplinkStrain(
@@ -209,9 +225,8 @@ export function useShareUplinkStrain(
   const streak = useRef(0);
 
   useEffect(() => {
-    // The rule, and why it is a rule, is on `shouldMeasureUplink`. A room
-    // promoted to the SFU mid-share lands here, so this must clear the streak
-    // and stop the timer rather than merely stop counting up.
+    // The rule is on `shouldMeasureUplink`. A room promoted to the SFU
+    // mid-share keeps measuring: the tick below switches to the SFU streak.
     if (!shouldMeasureUplink(isSharing, transport)) {
       streak.current = 0;
       setStrained(false);
@@ -231,13 +246,16 @@ export function useShareUplinkStrain(
         const screens = snapshot.senders.filter(
           (sender) => sender.role === "screen",
         );
-        streak.current = nextStrainStreak(
-          streak.current,
-          screens,
-          chosenScreenCeilingBps(quality),
-          viewers,
-          cameraChosenBps,
-        );
+        streak.current =
+          transport === "livekit"
+            ? nextSfuStrainStreak(streak.current, screens)
+            : nextStrainStreak(
+                streak.current,
+                screens,
+                chosenScreenCeilingBps(quality),
+                viewers,
+                cameraChosenBps,
+              );
         setStrained(isStrained(streak.current));
       });
     };
