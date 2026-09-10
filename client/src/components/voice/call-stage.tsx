@@ -568,11 +568,22 @@ export interface CallStageProps {
    * commit.
    */
   onShapeChange?: (shape: CallStageShape) => void;
+  /**
+   * A WATCH PARTY IS NOT A LOBBY. In a watch party channel with voice off,
+   * the party bar is the host's control bar and this stage's strip (faces,
+   * a status line, the call controls) is a second set of the same verbs in
+   * a call's words: a share icon beside "Compartilhar tela", a red Sair
+   * beside Encerrar. With this set the collapsed strip is not drawn at all
+   * and an expanded stage draws no controls; the seat stays, the furniture
+   * goes. See docs/plans/WATCH_PARTY_SETUP_UX.md section 10.
+   */
+  watchPartyChrome?: boolean;
 }
 
 export function CallStage({
   channelId,
   title,
+  watchPartyChrome = false,
   serverName = null,
   serverIconUrl = null,
   currentUser,
@@ -626,6 +637,7 @@ export function CallStage({
     <ActiveCall
       channelId={channelId}
       title={title}
+      watchPartyChrome={watchPartyChrome}
       serverName={serverName}
       serverIconUrl={serverIconUrl}
       currentUser={currentUser}
@@ -671,6 +683,7 @@ export function CallStage({
 function ActiveCall({
   channelId,
   title,
+  watchPartyChrome = false,
   serverName = null,
   serverIconUrl = null,
   currentUser,
@@ -709,6 +722,7 @@ function ActiveCall({
 }: {
   channelId: string;
   title: string;
+  watchPartyChrome?: boolean;
   serverName?: string | null;
   serverIconUrl?: string | null;
   currentUser: CallStageProps["currentUser"];
@@ -1320,6 +1334,9 @@ function ActiveCall({
     );
   }
 
+  if (collapsed && watchPartyChrome) {
+    return null;
+  }
   if (collapsed) {
     return (
       <div
@@ -1377,7 +1394,7 @@ function ActiveCall({
           participants={roomParticipants}
           selfUserId={voiceState.self?.userId ?? null}
         />
-        {controls}
+        {watchPartyChrome ? null : controls}
       </div>
     );
   }
@@ -1870,7 +1887,7 @@ function ActiveCall({
           visible={!chrome.hidden}
         />
         <CinemaHint visible={screenStream !== null} />
-        {controls}
+        {watchPartyChrome ? null : controls}
       </div>
     </div>
   );

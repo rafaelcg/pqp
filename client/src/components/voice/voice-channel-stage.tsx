@@ -40,6 +40,7 @@ export function VoiceChannelStage({
   compactPeers = false,
   fill = false,
   onShapeChange,
+  watchPartyChrome,
 }: {
   channelId: string;
   channelName: string;
@@ -77,6 +78,8 @@ export function VoiceChannelStage({
   canLowerHands?: boolean;
   onLowerHand?: (userId: string) => void;
   compactPeers?: boolean;
+  /** See `CallStage.watchPartyChrome`. */
+  watchPartyChrome?: boolean;
   /** The pane's divider owns the stage's height. See `CallSplit`. */
   fill?: boolean;
   onShapeChange?: (shape: CallStageShape) => void;
@@ -117,6 +120,7 @@ export function VoiceChannelStage({
       canLowerHands={canLowerHands}
       onLowerHand={onLowerHand}
       compactPeers={compactPeers}
+      watchPartyChrome={watchPartyChrome}
       ringWhenAlone={false}
       fill={fill}
       onShapeChange={onShapeChange}

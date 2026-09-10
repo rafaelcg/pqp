@@ -536,3 +536,31 @@ describe("a scheduled party gathers people", () => {
     expect(on).toContain('aria-pressed="true"');
   });
 });
+
+/**
+ * THE MIC PILL IS THE MUTE BUTTON. The thing that says whether you are heard
+ * is the thing you press to stop being heard; a label three panes away from
+ * the control it describes is how a host asked "is my mic on?" in the first
+ * place.
+ */
+describe("the mic pill on the live bar", () => {
+  const live = (micState: "off" | "muted" | "room" | "everyone") =>
+    render({
+      slot: "chrome",
+      party: { ...PARTY, state: "live", viewerRole: "host" },
+      micState,
+      onToggleMute: () => {},
+    });
+
+  it("is a button while seated, and says everyone hears you when they do", () => {
+    const html = live("everyone");
+    expect(html).toMatch(/<button[^>]*data-watch-party-mic="everyone"/);
+    expect(html).toContain("Everyone can hear you");
+  });
+
+  it("is only a label when not in the call", () => {
+    const html = live("off");
+    expect(html).toMatch(/<span[^>]*data-watch-party-mic="off"/);
+    expect(html).not.toMatch(/<button[^>]*data-watch-party-mic/);
+  });
+});

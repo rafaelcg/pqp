@@ -172,6 +172,8 @@ export interface WatchPartyPanelProps {
   /** "Meu mic vai no stream", the standing preference, and the switch for it. */
   micInStream?: boolean;
   onMicInStreamChange?: (on: boolean) => void;
+  /** The pill on the bar mutes and unmutes when this is given. */
+  onToggleMute?: () => void;
   /** 60 when this server's HLS ladder names a 60 fps rung. */
   hlsMaxFrameRate?: 30 | 60;
   onShapeChange?: (shape: "expanded" | "none") => void;
@@ -1250,39 +1252,65 @@ function LiveSurface(
           the only hint was the mute icon at the bottom of the sidebar. And
           the answer has a second half people get wrong, so it is stated:
           the room can hear an open mic, the audience outside never can. */}
-      {runsTheShow && props.micState && (
-        <span
-          data-watch-party-mic={props.micState}
-          title={
-            props.micState === "everyone"
-              ? t("watchParty.live.micEveryoneHint")
-              : props.micState === "room"
-                ? t("watchParty.live.micRoomHint")
-                : undefined
-          }
-          className={cn(
-            "flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-            props.micState === "everyone"
-              ? "border-success/40 bg-success/15 text-success"
-              : props.micState === "room"
-                ? "border-warning/40 bg-warning/10 text-warning"
-                : "border-border bg-surface-0 font-normal text-text-tertiary",
-          )}
-        >
-          {props.micState === "everyone" || props.micState === "room" ? (
+      {runsTheShow && props.micState && (() => {
+        const mic = props.micState;
+        const inCall = mic !== "off";
+        const label =
+          mic === "everyone"
+            ? t("watchParty.live.micEveryone")
+            : mic === "room"
+              ? t("watchParty.live.micRoom")
+              : mic === "muted"
+                ? t("watchParty.live.micMuted")
+                : t("watchParty.live.micOff");
+        const hint =
+          mic === "everyone"
+            ? t("watchParty.live.micEveryoneHint")
+            : mic === "room"
+              ? t("watchParty.live.micRoomHint")
+              : undefined;
+        const className = cn(
+          "flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors",
+          mic === "everyone"
+            ? "border-success/40 bg-success/15 text-success"
+            : mic === "room"
+              ? "border-warning/40 bg-warning/10 text-warning"
+              : "border-border bg-surface-0 font-normal text-text-tertiary",
+          inCall && props.onToggleMute && "hover:bg-surface-2",
+        );
+        const icon =
+          mic === "everyone" || mic === "room" ? (
             <Mic className="h-3 w-3" aria-hidden />
           ) : (
             <MicOff className="h-3 w-3" aria-hidden />
-          )}
-          {props.micState === "everyone"
-            ? t("watchParty.live.micEveryone")
-            : props.micState === "room"
-              ? t("watchParty.live.micRoom")
-              : props.micState === "muted"
-                ? t("watchParty.live.micMuted")
-                : t("watchParty.live.micOff")}
-        </span>
-      )}
+          );
+        // THE PILL IS THE MUTE BUTTON. It used to be a label beside a mute
+        // control three panes away; the thing that says whether you are
+        // heard is the thing you press to stop being heard.
+        return inCall && props.onToggleMute ? (
+          <button
+            type="button"
+            data-watch-party-mic={mic}
+            aria-pressed={mic === "muted"}
+            aria-label={
+              mic === "muted"
+                ? t("voice.control.unmute")
+                : t("voice.control.mute")
+            }
+            title={hint ?? (mic === "muted" ? t("voice.control.unmute") : t("voice.control.mute"))}
+            className={className}
+            onClick={props.onToggleMute}
+          >
+            {icon}
+            {label}
+          </button>
+        ) : (
+          <span data-watch-party-mic={mic} title={hint} className={className}>
+            {icon}
+            {label}
+          </span>
+        );
+      })()}
       {/* No `shrink-0`: in a narrow column the buttons wrap onto their own
           line rather than running past the divider, which is how "Encerrar"
           ended up half off the screen the first time. */}

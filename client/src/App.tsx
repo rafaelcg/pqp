@@ -5838,6 +5838,7 @@ function MainAppContent({
             }
             micInStream={voiceState.micInStream}
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
+            onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={hlsCaptureMaxFrameRate(
               liveHlsConfig?.ladder,
@@ -5952,6 +5953,7 @@ function MainAppContent({
             }
             micInStream={voiceState.micInStream}
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
+            onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={hlsCaptureMaxFrameRate(
               liveHlsConfig?.ladder,
@@ -6026,6 +6028,18 @@ function MainAppContent({
           <VoiceChannelStage
             fill={splitState.active}
             onShapeChange={handleStageShape}
+            // Step 1 of docs/plans/WATCH_PARTY_SETUP_UX.md section 10: the
+            // people running a voice-off party get the party bar as their
+            // only bar. An invited guest keeps the strip until step 4 puts
+            // "Sair do palco" on the bar, because Leave is their only way
+            // to give the seat back.
+            watchPartyChrome={
+              splitKind === "watch" &&
+              watchParties.byChannel[selectedChannel.id] !== undefined &&
+              !watchParties.byChannel[selectedChannel.id]!.options.voiceEnabled &&
+              (watchParties.byChannel[selectedChannel.id]!.viewerRole === "host" ||
+                watchParties.byChannel[selectedChannel.id]!.viewerRole === "cohost")
+            }
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
