@@ -1540,3 +1540,93 @@ test("a viewer can put the film on the whole screen, with the chat", async ({
     await second.context.close();
   }
 });
+
+test("a party has no voice until the host turns it on, and the audience follows on the socket", async ({
+  page,
+  browser,
+}) => {
+  /**
+   * THE MODEL, END TO END, THROUGH THE ONE CONTROL THAT SETS IT.
+   *
+   * A watch party has no voice by default: the audience is seatless, the
+   * transcode carries no microphone, and a room of five hundred with open
+   * microphones is not a watch party. The rest of this file proves the
+   * DEFAULT (`a plain viewer is offered no way into the call, anywhere`), and
+   * every one of those assertions is now resting on it. What is missing is
+   * the other half: that a host can turn voice ON, that it is one click, and
+   * that the audience finds out without reloading anything.
+   *
+   * TWO REAL ACCOUNTS AND NO RELOAD BETWEEN THE HALVES. The guest's client
+   * boots once and stays up, so an appearing control is the socket
+   * (`watch-party-update`) carrying an options change to a running page. A
+   * test that reloaded in the middle would pass with no broadcast at all,
+   * which is the failure this repo keeps shipping.
+   *
+   * THE CONTROL IS THE PRODUCT ARGUMENT. Six friends watching a film want to
+   * talk over it and get there in one click, exactly what it cost before this
+   * change; five hundred people watching a presentation pay zero clicks for
+   * the thing they want. That is why it is one select and not a switch plus a
+   * stage picker.
+   */
+  const shared = await seedServer("wp-voz-host", "wp-voz-guest");
+  const party = await createParty("wp-voz-host", shared.serverId, "Cinemoon");
+  await setPartyState("wp-voz-host", party.partyId, "live");
+  const room = `/app/server/${shared.serverId}/channel/${party.channelId}`;
+
+  const guest = page;
+  await openAs(guest, room, "wp-voz-guest");
+  await expect(guest.getByTestId("watch-party-bar")).toBeVisible({
+    timeout: 20_000,
+  });
+  // The default, from the guest's side: nothing offers a seat, anywhere on
+  // the page. Same count as `a plain viewer is offered no way into the call`,
+  // restated here because it is the baseline the two flips below have to
+  // move, and without it an appearing control proves nothing.
+  expect(await joinOffers(guest)).toHaveLength(0);
+  await expect(guest.locator("[data-watch-party-join-call]")).toHaveCount(0);
+
+  const hostClient = await secondClient(browser);
+  try {
+    const host = hostClient.page;
+    await openAs(host, room, "wp-voz-host");
+    await host.locator("[data-watch-party-options-toggle]").click();
+    await expect(host.getByTestId("watch-party-options-drawer")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    // OFF IS WHAT THE HOST SEES, on a party they created with no options at
+    // all. The select carries the server's answer, so this is the stored
+    // default read back through the API rather than a client constant.
+    const voice = host.locator("[data-watch-party-voice]");
+    await expect(voice).toHaveValue("off");
+    // And the stage machinery is not drawn under it: a queue for a party
+    // nobody can speak in is a control with nothing behind it.
+    await expect(host.locator("[data-watch-party-raise-hand]")).toHaveCount(0);
+
+    // ONE CLICK. The film night.
+    await voice.selectOption("everyone");
+
+    // THE GUEST'S PAGE HAS NOT RELOADED. This appearing is the PATCH, the
+    // broadcast and the affordance, in a client that was already open.
+    await expect(guest.locator("[data-watch-party-join-call]")).toHaveCount(1, {
+      timeout: 20_000,
+    });
+
+    // And back off again, which is the path that also has to lift whatever
+    // the party wrote on the channel (`watch-party-options.test.ts` owns that
+    // half; this owns the affordance following it).
+    await voice.selectOption("off");
+    await expect(guest.locator("[data-watch-party-join-call]")).toHaveCount(0, {
+      timeout: 20_000,
+    });
+    expect(await joinOffers(guest)).toHaveLength(0);
+
+    // The stage mode was remembered rather than reset, so a host who changes
+    // their mind twice does not have to pick the floor again.
+    await expect(voice).toHaveValue("off");
+    await voice.selectOption("everyone");
+    await expect(voice).toHaveValue("everyone");
+  } finally {
+    await hostClient.context.close();
+  }
+});

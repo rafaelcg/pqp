@@ -4047,3 +4047,70 @@ ALTER TABLE automod_rules ADD COLUMN IF NOT EXISTS block_pqp_invites BOOLEAN NOT
 -- or without the dedicated bucket, this column cannot turn anything on. See
 -- `resolveLiveHlsForServer` in server/src/voice/hls-egress.ts.
 ALTER TABLE servers ADD COLUMN IF NOT EXISTS live_hls_enabled BOOLEAN;
+
+-- ---------------------------------------------------------------------------
+-- O recado: the line a person writes under their own name
+-- ---------------------------------------------------------------------------
+--
+-- MSN's "personal message". One short string the account wrote about itself,
+-- drawn under the display name in the member list, on the profile card, and in
+-- the DM list.
+--
+-- WHY A COLUMN ON `users` AND NOT `user_preferences.settings`. The manual
+-- status (online / dnd / invisible) lives in the preference JSON because it is
+-- a setting the OWNER reads back, and the one process that needs it fast keeps
+-- its own copy in memory. A recado is the opposite: it is read by everybody
+-- EXCEPT the owner, and it is read in bulk, once per row of every member list
+-- anyone opens. That is a join, so it has to be a column on the row the join
+-- already lands on. Putting it in the preference blob would turn one member
+-- list into a second query over a JSON document for every member in it.
+--
+-- NULL IS THE COMMON VALUE and it means "this person has not written one".
+-- Empty string is deliberately not reachable: the API normalises whitespace and
+-- stores NULL for the empty result, so there is exactly one way for a row to
+-- say "nothing here" and the clients have one thing to test.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_status TEXT;
+
+-- The shape, duplicated from `CUSTOM_STATUS_MAX_LENGTH` and the character rule
+-- in @pqp/shared on purpose, same argument as the handle CHECK above: the
+-- schema is the last line of defence for a value the API is supposed to have
+-- validated, and a constraint that only says "some text" defends nothing.
+-- `custom-status.test.ts` pins the 80 here against the constant so the two
+-- cannot drift silently.
+--
+-- `[:cntrl:]` covers the newline, which is the one that matters for layout: a
+-- recado is drawn on a single line that must never wrap, so a stored newline
+-- would be a value no surface can render honestly.
+--
+-- `char_length` counts CHARACTERS in a UTF-8 database, so an emoji costs one,
+-- which is the same thing `customStatusLength` counts in TypeScript. Had this
+-- been `octet_length` the two would disagree by a factor of four on exactly the
+-- content this field is for.
+--
+-- ADD only if missing. DROP+ADD revalidates every row and takes a strong lock
+-- on `users` — too expensive to pay on every API boot for a CHECK that does
+-- not change. Two machines racing the first add can both see it missing; the
+-- loser hits duplicate_object and that is the only error this swallows.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+      FROM pg_constraint
+     WHERE conname = 'users_custom_status_shape'
+       AND conrelid = 'users'::regclass
+  ) THEN
+    RETURN;
+  END IF;
+  ALTER TABLE users
+    ADD CONSTRAINT users_custom_status_shape
+    CHECK (
+      custom_status IS NULL
+      OR (
+        char_length(custom_status) <= 80
+        AND custom_status ~ '^[^[:cntrl:]]*$'
+      )
+    );
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+

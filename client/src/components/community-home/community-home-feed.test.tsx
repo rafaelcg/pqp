@@ -18,6 +18,7 @@ const me: PublicUser = {
   username: "rafa",
   tag: "rafa#0001",
   avatarUrl: null,
+  customStatus: null,
 };
 
 const author: PublicUser = {
@@ -26,6 +27,7 @@ const author: PublicUser = {
   username: "tues",
   tag: "tues#0002",
   avatarUrl: null,
+  customStatus: null,
 };
 
 function post(overrides: Partial<CommunityHomePost> = {}): CommunityHomePost {

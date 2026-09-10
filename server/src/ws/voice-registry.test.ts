@@ -521,8 +521,15 @@ describeDb("voice registry", () => {
 
       const snapshot = await getVoiceActivitySnapshot();
       expect(snapshot.rooms).toEqual([
-        { voiceChannelId: channel, participants: 1, sharingScreen: 1 },
+        {
+          voiceChannelId: channel,
+          participants: 1,
+          sharingScreen: 1,
+          transport: "livekit",
+          openedAt: expect.any(String),
+        },
       ]);
+      expect(Date.parse(snapshot.rooms[0]!.openedAt!)).not.toBeNaN();
       expect(snapshot.participants).toBe(1);
     });
 
@@ -541,6 +548,28 @@ describeDb("voice registry", () => {
         null,
       );
       expect((await getVoiceActivitySnapshot()).participants).toBe(0);
+    });
+
+    it("still says which transport a locally-held room is on with the flag off, but not when it opened", async () => {
+      // The registry row above (`livekit`) is not consulted with the flag
+      // off: the local map is the source, and this process pinned the room
+      // itself when the peer below joined. Nothing is configured for
+      // LiveKit in this suite, so the pin resolves to mesh.
+      process.env.VOICE_REGISTRY = "off";
+      const channel = randomUUID();
+      const userId = randomUUID();
+      await join(recorder(), userId, channel);
+
+      const snapshot = await getVoiceActivitySnapshot();
+      expect(snapshot.rooms).toEqual([
+        {
+          voiceChannelId: channel,
+          participants: 1,
+          sharingScreen: 0,
+          transport: "mesh",
+          openedAt: null,
+        },
+      ]);
     });
   });
 

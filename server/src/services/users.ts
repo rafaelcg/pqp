@@ -25,7 +25,7 @@ import { bumpPermissionsVersion } from "./permissions.js";
 import { stampTurma1000 } from "./badges.js";
 
 /** Every column of `DbUser`, single-sourced so the reads cannot drift apart. */
-const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains, is_character, handle, handle_changed_at, banner_url, banner_key`;
+const DB_USER_COLUMNS = `id, clerk_id, display_name, username, discriminator, avatar_url, avatar_key, email_domains, is_character, handle, handle_changed_at, banner_url, banner_key, custom_status`;
 
 const DISCRIMINATOR_MAX = 9999;
 /** Random probes tried before falling back to a sweep that cannot miss. */
@@ -268,13 +268,18 @@ export async function toPublicUser(user: DbUser) {
     // the one surface that does — the public profile — reads it by handle from
     // its own endpoint rather than from any user payload.
     bannerUrl: user.banner_url ?? null,
+    // Unlike `handle` and `bannerUrl` directly above, this is NOT owner-only:
+    // it is the same string every other client is shown. It rides here so the
+    // settings form can prefill from what other people see rather than from a
+    // second copy that could drift.
+    customStatus: user.custom_status ?? null,
     preferences: await getPreferences(user.id),
     dmPrivacy: await getDmPrivacy(user.id),
   };
 }
 
 /** Columns every public-shaped read selects. */
-const PUBLIC_USER_COLUMNS = `id, display_name, username, discriminator, avatar_url`;
+const PUBLIC_USER_COLUMNS = `id, display_name, username, discriminator, avatar_url, custom_status`;
 
 interface PublicUserRow {
   id: string;
@@ -282,6 +287,12 @@ interface PublicUserRow {
   username: string | null;
   discriminator: string | null;
   avatar_url: string | null;
+  /**
+   * Optional because a handful of reads build this shape from a narrower
+   * column list of their own. Absent must read as "none", not as a hole to
+   * reserve layout for, which is what the `?? null` below is doing.
+   */
+  custom_status?: string | null;
 }
 
 /**
@@ -299,6 +310,10 @@ export function toPublicUserSummary(row: PublicUserRow): PublicUser {
     username: row.username,
     tag: formatUserTag(row.username, row.discriminator),
     avatarUrl: row.avatar_url,
+    // Public by intent, unlike everything else that had to argue its way onto
+    // this shape: a recado is written to be read by the people around you. See
+    // the note on `publicUserSchema`.
+    customStatus: row.custom_status ?? null,
   };
 }
 
@@ -585,6 +600,20 @@ export async function updateProfile(
      */
     avatarKey?: string | null;
     dmPrivacy?: DmPrivacy;
+    /**
+     * O recado. THREE STATES, and the difference between two of them is the
+     * whole reason this cannot be a COALESCE like `displayName` is:
+     *
+     *   `undefined`  not changing it
+     *   `null`       clear it
+     *   a string     set it
+     *
+     * A form that re-sends every field on save would otherwise be unable to
+     * clear one, and a form that sends only what changed would otherwise wipe
+     * one on an unrelated save. The write below carries an explicit "is this
+     * key present" flag so the SQL can tell the two nulls apart.
+     */
+    customStatus?: string | null;
   },
 ): Promise<DbUser> {
   const current = await getUserById(userId);
@@ -692,12 +721,22 @@ async function writeProfile(
   updates: {
     displayName?: string;
     dmPrivacy?: DmPrivacy;
+    customStatus?: string | null;
   },
   username: string | null,
   discriminator: string | null,
   avatarUrl: string | null,
   avatarKey: string | null,
 ): Promise<DbUser> {
+  // Present-and-null has to mean "clear it" while absent means "leave it", and
+  // one nullable parameter cannot say both. So the flag says whether the key
+  // was there and the value says what it was. `$8` is the flag, `$9` the value.
+  //
+  // An empty string is stored as NULL rather than as `''`. The schema already
+  // says NULL is the only way a row has no recado, and letting both through
+  // would give every client two things to test for one state.
+  const setting = updates.customStatus !== undefined;
+  const customStatus = updates.customStatus ? updates.customStatus : null;
   const result = await getPool().query<DbUser>(
     `UPDATE users SET
        display_name = COALESCE($2, display_name),
@@ -705,7 +744,8 @@ async function writeProfile(
        discriminator = $4,
        avatar_url = $5,
        avatar_key = $6,
-       dm_privacy = COALESCE($7, dm_privacy)
+       dm_privacy = COALESCE($7, dm_privacy),
+       custom_status = CASE WHEN $8 THEN $9 ELSE custom_status END
      WHERE id = $1
      RETURNING ${DB_USER_COLUMNS}`,
     [
@@ -716,6 +756,8 @@ async function writeProfile(
       avatarUrl,
       avatarKey,
       updates.dmPrivacy ?? null,
+      setting,
+      customStatus,
     ],
   );
   return result.rows[0]!;
@@ -868,9 +910,10 @@ export async function listServerMembers(serverId: string) {
     role_ids: string[];
     is_character: boolean;
     handle: string | null;
+    custom_status: string | null;
   }>(
     `SELECT u.id, u.display_name, u.username, u.discriminator, u.avatar_url, sm.role,
-            sm.nickname, u.handle,
+            sm.nickname, u.handle, u.custom_status,
             COALESCE(u.is_character, FALSE) AS is_character,
             COALESCE(
               (
@@ -910,6 +953,11 @@ export async function listServerMembers(serverId: string) {
     // Claimed `pqp.gg/@` name, or null. The profile card offers Ver perfil
     // only from this field. Username and tag must never be turned into a URL.
     handle: row.handle ?? null,
+    // The line under the name. Selected here rather than resolved live like
+    // `status` is, because it is a stored column on a row this query already
+    // joins: it costs nothing extra, and unlike presence it is still true when
+    // the person is offline.
+    customStatus: row.custom_status ?? null,
   }));
 }
 

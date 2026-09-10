@@ -444,7 +444,73 @@ export const profileUpdateSchema = z.object({
   username: z.string().nullable(),
   tag: z.string().nullable(),
   avatarUrl: z.string().nullable(),
+  /**
+   * O recado, the line under the name. Rides this frame rather than getting a
+   * push of its own, and rather than riding the member-list poll that carries
+   * presence.
+   *
+   * NOT THE POLL, because a recado is not presence. Presence is pulled because
+   * it changes on a timer for everybody at once (one idle transition per person
+   * per ten minutes across the whole instance), so pushing it would cost a
+   * fan-out to sockets with no member list open. A recado changes when somebody
+   * decides to type one, which is rarer than a rename and far rarer than an
+   * idle flip, and it is exactly the kind of change whose whole point is that
+   * the people already looking see it happen.
+   *
+   * NOT A NEW FRAME, because this one already goes to every socket for exactly
+   * the same reason a recado has to: the string is drawn in the member list of
+   * a server nobody is viewing, in a conversation row, and on a profile card,
+   * none of which is reachable from a channel id. Adding a second global
+   * fan-out for a second short string about the same person would double the
+   * cost of a profile edit and give a client two orders to reconcile.
+   *
+   * Null means "this person has none", which is a real value here: clearing a
+   * recado has to reach other screens, and an absent key could not say it.
+   *
+   * Optional with NO default: omitted is not null. An older API during a
+   * rolling deploy sends this frame without the key, and treating that as
+   * null would wipe every recado already on screen. Explicit null is "they
+   * cleared it". See `withProfileUpdate`.
+   */
+  customStatus: z.string().nullable().optional(),
 });
+
+/**
+ * Copy a profile-update onto a person the client already has.
+ *
+ * `customStatus` is merged only when the frame actually carries the key.
+ * Omitted keeps the previous recado (rolling-deploy older APIs). Explicit
+ * null is "they cleared it" and has to land as null.
+ */
+export function withProfileUpdate<
+  T extends {
+    displayName: string;
+    username?: string | null;
+    tag: string | null;
+    avatarUrl: string | null;
+    customStatus?: string | null;
+  },
+>(
+  person: T,
+  update: {
+    displayName: string;
+    username: string | null;
+    tag: string | null;
+    avatarUrl: string | null;
+    customStatus?: string | null;
+  },
+): T {
+  return {
+    ...person,
+    displayName: update.displayName,
+    username: update.username,
+    tag: update.tag,
+    avatarUrl: update.avatarUrl,
+    ...(update.customStatus !== undefined
+      ? { customStatus: update.customStatus }
+      : {}),
+  };
+}
 
 /**
  * Watch party scheduling: fires at T-10 minutes and again when the session

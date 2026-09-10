@@ -31,6 +31,7 @@ import {
   buildReplyExcerpt,
   isVoiceRoomChannelType,
   isWatchPartyChannelType,
+  withProfileUpdate,
   type WatchParty,
   type WatchPartyOptions,
 } from "@pqp/shared";
@@ -375,6 +376,7 @@ import { useMemberRosterRefresh } from "@/hooks/use-member-roster-refresh";
 import { useMemberSidebar } from "@/hooks/use-member-sidebar";
 import { mergeMemberStatuses } from "@/lib/member-roster";
 import { useChannelNotifications } from "@/hooks/use-notifications";
+import { useCustomStatus } from "@/hooks/use-custom-status";
 import { useUserStatus } from "@/hooks/use-status";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
@@ -1522,6 +1524,18 @@ function MainAppContent({
     connected: connection === "online",
   });
 
+  /**
+   * O recado, the line under the name. A separate hook from `useUserStatus`
+   * even though the two controls share a popover, because they share nothing
+   * else: the manual status is a preference resolved out of an in-memory
+   * registry and never stored anywhere a member list joins to, while this is a
+   * column on `users` that reaches everybody through `profile-update`.
+   */
+  const customStatus = useCustomStatus({
+    stored: user?.customStatus ?? null,
+    onUserUpdated: setUser,
+  });
+
   const location = useLocation();
   const navigate = useNavigate();
   // Last path this component applied or emitted — guards the deep-link effect
@@ -2062,6 +2076,7 @@ function MainAppContent({
         username: member.username ?? usernameFromTag(member.tag),
         isCharacter: member.isCharacter,
         handle: member.handle ?? null,
+        customStatus: member.customStatus ?? null,
       });
     }
     for (const person of conversationParticipants ?? []) {
@@ -2070,6 +2085,7 @@ function MainAppContent({
       }
       map.set(person.id, {
         username: person.username,
+        customStatus: person.customStatus ?? null,
       });
     }
     return map;
@@ -2828,17 +2844,16 @@ function MainAppContent({
           if (message.type === "profile-update") {
             chat.applyProfileUpdate(message);
             threadChat.applyProfileUpdate(message);
+            // Recado is merged only when the frame carries the key. An older
+            // API during a rolling deploy omits it, and that is not a clear.
+            // Explicit null is "they cleared it" and has to land as null.
+            // applyProfileUpdate above rewrites names on loaded messages;
+            // messages do not carry a recado, so that path does not touch it.
             setServerMembers((prev) =>
               prev.some((one) => one.id === message.userId)
                 ? prev.map((one) =>
                     one.id === message.userId
-                      ? {
-                          ...one,
-                          displayName: message.displayName,
-                          username: message.username,
-                          tag: message.tag,
-                          avatarUrl: message.avatarUrl,
-                        }
+                      ? withProfileUpdate(one, message)
                       : one,
                   )
                 : prev,
@@ -2852,13 +2867,7 @@ function MainAppContent({
                       ...conversation,
                       participants: conversation.participants.map((person) =>
                         person.id === message.userId
-                          ? {
-                              ...person,
-                              displayName: message.displayName,
-                              username: message.username,
-                              tag: message.tag,
-                              avatarUrl: message.avatarUrl,
-                            }
+                          ? withProfileUpdate(person, message)
                           : person,
                       ),
                     }
@@ -2867,13 +2876,7 @@ function MainAppContent({
             );
             setUser((prev) =>
               prev && prev.id === message.userId
-                ? {
-                    ...prev,
-                    displayName: message.displayName,
-                    username: message.username,
-                    tag: message.tag,
-                    avatarUrl: message.avatarUrl,
-                  }
+                ? withProfileUpdate(prev, message)
                 : prev,
             );
             return;
@@ -5273,6 +5276,11 @@ function MainAppContent({
         statusSaving={status.saving}
         statusError={status.error}
         onSetStatus={status.setManual}
+        customStatus={customStatus.value}
+        customStatusSaving={customStatus.saving}
+        customStatusError={customStatus.error}
+        onSetCustomStatus={customStatus.save}
+        onClearCustomStatusError={customStatus.clearError}
         onToggleMute={() => voice.toggleMute()}
         onToggleDeafen={() => voice.toggleDeafen()}
         onOpenSettings={() => {
@@ -6663,6 +6671,7 @@ function MainAppContent({
               username: user.username ?? null,
               tag: user.tag ?? null,
               avatarUrl: user.avatarUrl ?? null,
+              customStatus: user.customStatus ?? null,
             }}
             canManageServer={canManageServer}
             isOwner={selectedServer.role === "owner"}
@@ -6787,6 +6796,7 @@ function MainAppContent({
                   username: user.username,
                   tag: user.tag,
                   avatarUrl: user.avatarUrl,
+                  customStatus: user.customStatus ?? null,
                 }
               : null
           }

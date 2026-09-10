@@ -13,6 +13,7 @@ function friend(name: string, status: Friend["status"]): Friend {
     username: name,
     tag: `${name}#0001`,
     avatarUrl: null,
+    customStatus: null,
     status,
     friendsSince: "2026-01-01T00:00:00.000Z",
   };

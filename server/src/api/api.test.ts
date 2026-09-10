@@ -3218,8 +3218,22 @@ describeDb("API authorization", () => {
   });
 
   describe("user discovery", () => {
-    /** The whole shape a search result may ever have. */
-    const PUBLIC_KEYS = ["avatarUrl", "displayName", "id", "tag", "username"];
+    /**
+     * The whole shape a search result may ever have.
+     *
+     * `customStatus` is on it deliberately: it is the one field an account
+     * writes so that the people around them read it, and it is bounded plain
+     * text. Everything this guard is really for still holds, which is that no
+     * clerk id, email, presence or last-seen may appear here.
+     */
+    const PUBLIC_KEYS = [
+      "avatarUrl",
+      "customStatus",
+      "displayName",
+      "id",
+      "tag",
+      "username",
+    ];
 
     async function tagOf(userId: string): Promise<string> {
       const row = await getPool().query<{ username: string; discrim: string }>(
@@ -3322,6 +3336,7 @@ describeDb("API authorization", () => {
       expect(Object.keys(listed.body.blocked[0]!).sort()).toEqual([
         "avatarUrl",
         "blockedAt",
+        "customStatus",
         "displayName",
         "id",
         "tag",

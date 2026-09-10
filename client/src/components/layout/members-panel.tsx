@@ -411,6 +411,7 @@ function subjectOf(member: ServerMember): ProfileSubject {
     // it instead of starting from blank.
     nickname: member.nickname ?? null,
     handle: member.handle ?? null,
+    customStatus: member.customStatus ?? null,
   };
 }
 

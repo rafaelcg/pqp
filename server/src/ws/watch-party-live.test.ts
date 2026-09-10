@@ -57,11 +57,17 @@ const {
   setWatchPartyLiveListener,
   watchPartyKnownOver,
 } = await import("./watch-party-live.js");
+const {
+  peekWatchPartySeatSnapshot,
+  rememberWatchPartySeatSnapshot,
+  resetWatchPartySeatCacheForTests,
+} = await import("../services/watch-party-seat-cache.js");
 
 const CHANNEL = "11111111-1111-4111-8111-111111111111";
 
 beforeEach(() => {
   resetWatchPartyLiveForTests();
+  resetWatchPartySeatCacheForTests();
   setWatchPartyLiveListener(null);
   rows.current.status = "live";
 });
@@ -122,5 +128,31 @@ describe("a party's state reaches the transcode", () => {
     rows.current.status = "live";
     await broadcastWatchParty("session-1");
     expect(reconciled).toEqual([CHANNEL, CHANNEL]);
+  });
+});
+
+describe("a party's state reaches the seat cache", () => {
+  it("drops a live snapshot so the next join cannot keep a stale Voz setting", async () => {
+    rememberWatchPartySeatSnapshot(CHANNEL, {
+      voiceEnabled: false,
+      hostUserId: "host",
+      cohostIds: [],
+      invitedIds: [],
+    });
+    rows.current.status = "live";
+    await broadcastWatchParty("session-1");
+    expect(peekWatchPartySeatSnapshot(CHANNEL)).toBeUndefined();
+  });
+
+  it("remembers there is no party after it ends", async () => {
+    rememberWatchPartySeatSnapshot(CHANNEL, {
+      voiceEnabled: false,
+      hostUserId: "host",
+      cohostIds: [],
+      invitedIds: [],
+    });
+    rows.current.status = "ended";
+    await broadcastWatchParty("session-1");
+    expect(peekWatchPartySeatSnapshot(CHANNEL)).toBeNull();
   });
 });
