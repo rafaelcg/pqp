@@ -1638,18 +1638,19 @@ export async function connectLiveKit({
       cameraStreams.clear();
       screenAudioStreams.clear();
       qualities.clear();
-      await enqueueScreenOp(async () => {
-        published = null;
-        publishedScreenTrack = null;
-        publishedScreenPlan = null;
-        screenCaptureConstraints = null;
-        appliedScreenCaptureHeight = null;
-        pendingCaptureHeight = null;
-        captureHeightStreak = 0;
-        screenShareEpoch += 1;
-        publishedCameraTrack = null;
-        publishedScreenAudioTrack = null;
-      });
+      // Do not wait on the screen queue: a stalled publishTrack would leave
+      // the room unable to close. Epoch bump is enough for in-flight ops to
+      // drop their result; the LiveKit room going away drops the rest.
+      screenShareEpoch += 1;
+      published = null;
+      publishedScreenTrack = null;
+      publishedScreenPlan = null;
+      screenCaptureConstraints = null;
+      appliedScreenCaptureHeight = null;
+      pendingCaptureHeight = null;
+      captureHeightStreak = 0;
+      publishedCameraTrack = null;
+      publishedScreenAudioTrack = null;
       await room.disconnect();
     },
 

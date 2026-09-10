@@ -1030,6 +1030,24 @@ describe("the presenter as a live ladder's source", () => {
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
     expect(published).toHaveLength(publishesAfterStop);
   });
+
+  it("disconnects even if a screen publish is still in flight", async () => {
+    holdNextPublish();
+    const sfu = await session();
+    void sfu.publishScreen(fakeStream("video", "screen"));
+    await settle();
+
+    await Promise.race([
+      sfu.disconnect(),
+      new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error("disconnect waited on a held screen publish")),
+          50,
+        );
+      }),
+    ]);
+    releasePublish?.();
+  });
 });
 
 describe("ConnectionQualityChanged becomes the same three bars", () => {
