@@ -2901,6 +2901,7 @@
   "watchParty.live.for": "on air for {minutes} min",
   "watchParty.empty.title": "No watch party here right now",
   "watchParty.empty.body": "When somebody starts one it shows up here and at the top of the sidebar.",
+  "watchParty.empty.noPermission": "Only a role with “{permission}” can start one. Ask an admin to turn it on. When somebody starts one, it shows up here and at the top of the sidebar.",
   "watchParty.scheduled.goLiveNow": "Go live now",
   "watchParty.scheduled.hostNote": "Nobody sees anything until you go live.",
   "watchParty.scheduled.startsAt": "Starts {when}",

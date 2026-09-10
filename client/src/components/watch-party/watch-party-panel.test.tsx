@@ -113,6 +113,22 @@ describe("the surface never contradicts itself", () => {
     const html = render({ party: null, hasStream: false, canStart: true });
     expect(html).toContain("watch-party-empty");
   });
+
+  it("tells somebody without the permission what it is called, instead of nothing", () => {
+    const html = render({ party: null, hasStream: false, canStart: false });
+    expect(html).toContain("watch-party-no-permission");
+    expect(html).toContain("Start watch party");
+    expect(html).not.toContain("data-watch-party-create");
+  });
+
+  it("stays out of the way in a call and under a picture", () => {
+    expect(
+      render({ party: null, hasStream: false, canStart: false, inCall: true }),
+    ).not.toContain("watch-party-no-permission");
+    expect(
+      render({ party: null, hasStream: true, canStart: false }),
+    ).not.toContain("watch-party-no-permission");
+  });
 });
 
 describe("the host's transmission readout", () => {

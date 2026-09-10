@@ -4,6 +4,7 @@ import {
   BellOff,
   Check,
   Clapperboard,
+  Lock,
   Crown,
   Hand,
   Mic,
@@ -279,7 +280,17 @@ export function WatchPartyPanel(props: WatchPartyPanelProps) {
       // `WatchChannelStage`) and never the create button.
       return null;
     case "none":
-      return null;
+      // A quiet watch party channel, seen by somebody who may not start one.
+      // Say why the button is missing rather than showing an empty pane:
+      // the permission has a name in the roles menu, and the person who can
+      // grant it is one ask away. Not in a call (the call stage owns that
+      // space) and not while a picture is up (`liveUntitled` covers it).
+      return slot === "surface" &&
+        !props.canStart &&
+        !props.inCall &&
+        !props.hasStream ? (
+        <NoPermissionStage {...props} />
+      ) : null;
   }
 }
 
@@ -613,6 +624,36 @@ function EmptyStage(props: WatchPartyPanelProps) {
         <Clapperboard className="mr-1.5 h-3.5 w-3.5" aria-hidden />
         {t("watchParty.create.button")}
       </Button>
+    </div>
+  );
+}
+
+/**
+ * The same pane, for somebody without START_WATCH_PARTY. "Nothing" was the
+ * previous answer, and nothing teaches nobody: the permission exists, it has
+ * a name in Cargos, and a moderator can tick it in one click if asked.
+ */
+function NoPermissionStage(props: WatchPartyPanelProps) {
+  const { t } = useTranslation();
+  return (
+    <div
+      data-testid="watch-party-no-permission"
+      className={cn(
+        "flex flex-col items-center justify-center gap-2 overflow-hidden border-b border-ink-4/60 bg-ink px-6 py-8 text-center",
+        surfaceHeight(props.fill, "min-h-0"),
+      )}
+    >
+      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-ink-3 text-paper-muted">
+        <Lock className="h-5 w-5" aria-hidden />
+      </span>
+      <p className="text-sm font-semibold text-paper">
+        {t("watchParty.empty.title")}
+      </p>
+      <p className="max-w-sm text-xs text-paper-muted">
+        {t("watchParty.empty.noPermission", {
+          permission: t("roles.perm.START_WATCH_PARTY"),
+        })}
+      </p>
     </div>
   );
 }

@@ -2901,6 +2901,7 @@
   "watchParty.live.for": "no ar há {minutes} min",
   "watchParty.empty.title": "Nenhuma watch party rolando aqui",
   "watchParty.empty.body": "Quando alguém começar uma, ela aparece aqui e no topo da barra.",
+  "watchParty.empty.noPermission": "Só quem tem “{permission}” no cargo pode criar uma. Pede pra um adm liberar. Quando alguém começar, ela aparece aqui e no topo da barra.",
   "watchParty.scheduled.goLiveNow": "Ir ao vivo agora",
   "watchParty.scheduled.hostNote": "Ninguém vê nada até você ir ao vivo.",
   "watchParty.scheduled.startsAt": "Começa {when}",
