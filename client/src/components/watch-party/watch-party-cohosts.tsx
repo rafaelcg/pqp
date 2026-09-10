@@ -3,6 +3,7 @@ import { Crown, UserMinus, UserPlus } from "lucide-react";
 import type { WatchParty } from "@pqp/shared";
 import { canPerformWatchPartyAction } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useTranslation } from "@/lib/i18n";
 
@@ -139,123 +140,110 @@ export function WatchPartyCohosts({
   const shown = offered.slice(0, MAX_OFFERED);
   const hidden = offered.length - shown.length;
 
-  return (
-    <div data-watch-party-cohosts className="flex flex-col gap-2">
-      <p className="text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-        {t("watchParty.cohosts.title")}
-      </p>
-      {/* THE PARAGRAPH IS READ ONCE AND THE CONTROLS ARE USED EVERY SHOW, so
-          it is a detail the host opens rather than four lines of prose above
-          the thing they came for. `<details>` and not a state hook: it is one
-          disclosure with no behaviour, the browser already has the semantics
-          and the keyboard handling, and a `useState` here would be a second
-          way to do what the platform does. */}
-      <details className="text-[11px] text-paper-muted">
-        <summary className="cursor-pointer select-none text-text-tertiary hover:text-text">
-          {t("watchParty.cohosts.summary")}
-        </summary>
-        <p className="mt-1.5">{t("watchParty.cohosts.body")}</p>
-      </details>
-
-      {party.cohosts.length > 0 && (
-        <ul className="flex flex-col gap-1">
-          {party.cohosts.map((person) => (
-            <li
-              key={person.userId}
-              className="flex items-center gap-2"
-              data-watch-party-cohost
-            >
-              <UserAvatar
-                name={person.displayName}
-                avatarUrl={person.avatarUrl}
-                rounded="full"
-                className="h-6 w-6 shrink-0"
-              />
-              <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                {person.displayName}
-              </span>
-              <Crown
-                className="h-3 w-3 shrink-0 text-paper-muted"
-                aria-hidden
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                disabled={busyId === person.userId}
-                onClick={() => void act(person.userId, false)}
-                data-watch-party-cohost-demote={person.userId}
-              >
-                <UserMinus className="mr-1.5 h-3 w-3" aria-hidden />
-                {t("watchParty.cohosts.demote")}
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {showFilter && (
-        <input
-          type="search"
-          className="w-full rounded-md border border-ink-4 bg-ink-3 px-2 py-1.5 text-sm text-paper"
-          placeholder={t("watchParty.cohosts.filterPlaceholder")}
-          aria-label={t("watchParty.cohosts.filterPlaceholder")}
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          data-watch-party-cohost-filter
-        />
-      )}
-
-      {offered.length === 0 ? (
-        <p className="text-[11px] text-paper-muted">
-          {query.trim().length > 0
-            ? t("watchParty.cohosts.noMatch")
-            : t("watchParty.cohosts.nobody")}
-        </p>
+  const personRow = (
+    person: { userId: string; displayName: string; avatarUrl: string | null },
+    action: "promote" | "demote",
+  ) => (
+    <li
+      key={person.userId}
+      className="flex items-center gap-3 px-3 py-2"
+      {...(action === "demote"
+        ? { "data-watch-party-cohost": "" }
+        : { "data-watch-party-cohost-candidate": "" })}
+    >
+      <UserAvatar
+        name={person.displayName}
+        avatarUrl={person.avatarUrl}
+        rounded="full"
+        className="h-7 w-7 shrink-0"
+      />
+      <span className="min-w-0 flex-1 truncate text-sm text-text">
+        {person.displayName}
+      </span>
+      {action === "demote" ? (
+        <>
+          <Crown className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={busyId === person.userId}
+            onClick={() => void act(person.userId, false)}
+            data-watch-party-cohost-demote={person.userId}
+          >
+            <UserMinus className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.cohosts.demote")}
+          </Button>
+        </>
       ) : (
-        <ul className="flex flex-col gap-1">
-          {shown.map((person) => (
-            <li
-              key={person.userId}
-              className="flex items-center gap-2"
-              data-watch-party-cohost-candidate
-            >
-              <UserAvatar
-                name={person.displayName}
-                avatarUrl={person.avatarUrl}
-                rounded="full"
-                className="h-6 w-6 shrink-0"
-              />
-              <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                {person.displayName}
-              </span>
-              <Button
-                type="button"
-                size="sm"
-                disabled={busyId === person.userId}
-                onClick={() => void act(person.userId, true)}
-                data-watch-party-cohost-promote={person.userId}
-              >
-                <UserPlus className="mr-1.5 h-3 w-3" aria-hidden />
-                {t("watchParty.cohosts.promote")}
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {/* NOTHING IS SILENTLY HIDDEN. A cut list with no count reads as a list
-          that ended, and a host looking for somebody who is not in the first
-          five would conclude they are not in the server. This says how many
-          the filter above would reach. */}
-      {hidden > 0 && (
-        <p
-          className="text-[11px] text-paper-muted"
-          data-watch-party-cohost-more={hidden}
+        // Secondary, not the accent: five accent buttons in a list was the
+        // loudest thing in the dialog, for the action taken least.
+        <Button
+          type="button"
+          variant="secondary"
+          size="sm"
+          disabled={busyId === person.userId}
+          onClick={() => void act(person.userId, true)}
+          data-watch-party-cohost-promote={person.userId}
         >
-          {t("watchParty.cohosts.more", { count: hidden })}
-        </p>
+          <UserPlus className="mr-1.5 h-3 w-3" aria-hidden />
+          {t("watchParty.cohosts.promote")}
+        </Button>
       )}
-    </div>
+    </li>
+  );
+
+  return (
+    <section data-watch-party-cohosts className="flex flex-col gap-1.5">
+      <div className="px-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+          {t("watchParty.cohosts.title")}
+        </p>
+        <p className="mt-0.5 text-xs text-text-tertiary">
+          {t("watchParty.cohosts.body")}
+        </p>
+      </div>
+      <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface-0">
+        {party.cohosts.length > 0 && (
+          <ul>{party.cohosts.map((person) => personRow(person, "demote"))}</ul>
+        )}
+        {showFilter && (
+          <div className="px-3 py-2">
+            <Input
+              type="search"
+              className="h-[var(--control-sm)] bg-surface-2"
+              placeholder={t("watchParty.cohosts.filterPlaceholder")}
+              aria-label={t("watchParty.cohosts.filterPlaceholder")}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              data-watch-party-cohost-filter
+            />
+          </div>
+        )}
+        {offered.length === 0 ? (
+          <p className="px-3 py-2.5 text-xs text-text-tertiary">
+            {query.trim().length > 0
+              ? t("watchParty.cohosts.noMatch")
+              : t("watchParty.cohosts.nobody")}
+          </p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {shown.map((person) => personRow(person, "promote"))}
+          </ul>
+        )}
+        {/* NOTHING IS SILENTLY HIDDEN. A cut list with no count reads as a
+            list that ended, and a host looking for somebody who is not in
+            the first five would conclude they are not in the server. This
+            says how many the filter above would reach. */}
+        {hidden > 0 && (
+          <p
+            className="px-3 py-2 text-xs text-text-tertiary"
+            data-watch-party-cohost-more={hidden}
+          >
+            {t("watchParty.cohosts.more", { count: hidden })}
+          </p>
+        )}
+      </div>
+    </section>
   );
 }
