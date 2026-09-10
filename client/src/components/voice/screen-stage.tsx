@@ -8,6 +8,7 @@ import { isLiveReactionsEnabled } from "@/lib/live-reactions";
 import { LiveReactionsBar } from "./live-reactions-bar";
 import { LiveReactionsOverlay } from "./live-reactions-overlay";
 import { bindRemoteVideo } from "@/lib/remote-video-binding";
+import { useHideScreenPreview } from "@/lib/screen-preview-pref";
 import { cn } from "@/lib/utils";
 
 export interface ScreenShareTile {
@@ -150,6 +151,7 @@ export function ScreenStage({
 }: ScreenStageProps) {
   const { t } = useTranslation();
   const wide = useLgUp();
+  const hidePreview = useHideScreenPreview();
   // Which share is filling the viewport in-page, on the platforms with no
   // element fullscreen (an iPhone). Owned here rather than by each view so two
   // shares cannot both cover the screen, one buried under the other. Real
@@ -239,7 +241,13 @@ export function ScreenStage({
                 aria-label={t("voice.share.focus", { name: tile.presenterName })}
                 onClick={() => onFocus(tile.peerId)}
               >
-                <ThumbVideo stream={tile.stream} />
+                {tile.isSelf && hidePreview ? (
+                  <div className="flex h-16 items-center justify-center bg-ink-2 px-1 text-[10px] text-paper-muted">
+                    {t("voice.share.youAreSharing")}
+                  </div>
+                ) : (
+                  <ThumbVideo stream={tile.stream} />
+                )}
                 <span className="truncate px-1 py-0.5 text-[10px] text-paper-muted">
                   {tile.isSelf
                     ? t("voice.share.youPresenting")

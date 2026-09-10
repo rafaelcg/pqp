@@ -3610,7 +3610,10 @@ function MainAppContent({
       });
   }
 
-  async function handleJoinVoice(channelId: string) {
+  async function handleJoinVoice(
+    channelId: string,
+    joinOptions?: { startMuted?: boolean },
+  ) {
     voiceServerIdRef.current = selectedServerId;
     refreshIceServers();
 
@@ -3625,19 +3628,22 @@ function MainAppContent({
     }
 
     // A crowd is joined muted regardless of the preference; see join-muted.ts.
-    // Already in a call: never pass startMuted. A drag is not a fresh join.
+    // Already in a call: never pass startMuted, unless the caller forced it
+    // (watch party go-live always mutes, mute-on-join setting or not).
     const occupantsAlreadyInRoom = current.occupancy[channelId]?.length ?? 0;
+    const startMuted =
+      joinOptions?.startMuted !== undefined
+        ? joinOptions.startMuted
+        : inCall
+          ? undefined
+          : shouldJoinMuted(
+              localSettings.muteOnJoin,
+              occupantsAlreadyInRoom,
+            );
     await voice.join(channelId, {
       inputDeviceId: localSettings.inputDeviceId,
       inputVolume: localSettings.inputVolume,
-      ...(inCall
-        ? {}
-        : {
-            startMuted: shouldJoinMuted(
-              localSettings.muteOnJoin,
-              occupantsAlreadyInRoom,
-            ),
-          }),
+      ...(startMuted !== undefined ? { startMuted } : {}),
       inputMode: localSettings.inputMode,
       vadThreshold: localSettings.vadThreshold,
       processing: localSettings.micProcessing,
@@ -3864,7 +3870,9 @@ function MainAppContent({
       return;
     }
     if (voice.getState().voiceChannelId !== party.channelId) {
-      await handleJoinVoice(party.channelId);
+      // Always muted: Ir ao vivo should not blast the host's mic into the
+      // party, whatever mute-on-join is set to.
+      await handleJoinVoice(party.channelId, { startMuted: true });
     }
     if (!stream) {
       return;

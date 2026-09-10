@@ -55,6 +55,7 @@ interface PublishedTrack {
     screenShareSimulcastLayers?: FakePreset[];
     videoSimulcastLayers?: FakePreset[];
     degradationPreference?: string;
+    videoCodec?: string;
   };
 }
 
@@ -419,6 +420,7 @@ describe("a quality chosen before the track exists", () => {
     expect(encodingFor(Track.Source.Camera)?.degradationPreference).toBe(
       "maintain-framerate",
     );
+    expect(encodingFor(Track.Source.Camera)?.videoCodec).toBeUndefined();
   });
 
   it("publishes the screen at the chosen ceiling, in the field the library reads", async () => {
@@ -432,6 +434,9 @@ describe("a quality chosen before the track exists", () => {
     // share goes up with no ceiling while every test stays green.
     expect(options?.videoEncoding).toBeUndefined();
     expect(options?.degradationPreference).toBe("maintain-framerate");
+    // VP8 software encode sawtoothed on Chromium; H.264 can use hardware on
+    // many Macs and is what egress already re-encodes toward for HLS.
+    expect(options?.videoCodec).toBe("h264");
   });
 
   it("publishes a 60 fps capture at 60, so a 720p60 rung has source", async () => {
