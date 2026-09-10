@@ -1009,7 +1009,8 @@ export async function connectLiveKit({
   async function publishScreenVideo(
     track: MediaStreamTrack,
     plan: ScreenSimulcastPlan,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    const epoch = screenShareEpoch;
     const options = {
       source: Track.Source.ScreenShare,
       simulcast: true,
@@ -1047,6 +1048,19 @@ export async function connectLiveKit({
       );
       await room.localParticipant.publishTrack(track, options);
     }
+    // Stop/disconnect bump the epoch before they await. A publish that
+    // finished after that must not stay on the wire or write the plan.
+    if (screenShareEpoch !== epoch) {
+      try {
+        await room.localParticipant.unpublishTrack(track, false);
+      } catch (err) {
+        console.warn(
+          "[pqp] could not drop a screen publish that outlived stop",
+          err,
+        );
+      }
+      return false;
+    }
     publishedScreenPlan = plan;
     appliedScreenCaptureHeight = plan.topHeight;
     screenShareEpoch += 1;
@@ -1056,6 +1070,7 @@ export async function connectLiveKit({
     if (hlsSource !== null && hlsSource.ladderTopHeight !== null) {
       screenPlanPinned = true;
     }
+    return true;
   }
 
   /**
@@ -1076,12 +1091,18 @@ export async function connectLiveKit({
    * outlives a brief `setHlsSource(null)` during an egress restart on purpose.
    * `force` is the host choosing a quality by name — the only blink allowed.
    */
-  function screenShareStill(track: MediaStreamTrack, epoch: number): boolean {
-    return (
-      publishedScreenTrack === track &&
-      screenShareEpoch === epoch &&
-      publishedScreenPlan !== null
-    );
+  function screenShareStill(
+    track: MediaStreamTrack,
+    epoch: number,
+  ): ScreenSimulcastPlan | null {
+    if (
+      publishedScreenTrack !== track ||
+      screenShareEpoch !== epoch ||
+      publishedScreenPlan === null
+    ) {
+      return null;
+    }
+    return publishedScreenPlan;
   }
 
   function reconcileScreenPlan(options?: { force?: boolean }): Promise<void> {
@@ -1124,14 +1145,14 @@ export async function connectLiveKit({
         ) {
           const want = pendingCaptureHeight;
           await constrainScreenCapture(track, want);
-          if (!screenShareStill(track, epoch)) {
+          const liveAfterConstrain = screenShareStill(track, epoch);
+          if (!liveAfterConstrain) {
             return;
           }
           // Uplink moved while we awaited: do not lock the superseded height.
-          const livePublished = publishedScreenPlan;
           const liveTarget = Math.min(
             currentScreenPlan().topHeight,
-            livePublished.topHeight,
+            liveAfterConstrain.topHeight,
           );
           if (liveTarget !== want) {
             pendingCaptureHeight = liveTarget;
@@ -1142,10 +1163,10 @@ export async function connectLiveKit({
             captureHeightStreak = 0;
           }
         }
-        if (!screenShareStill(track, epoch)) {
+        const livePublished = screenShareStill(track, epoch);
+        if (!livePublished) {
           return;
         }
-        const livePublished = publishedScreenPlan;
         const livePlan = currentScreenPlan();
         if (livePlan.topBitrate !== livePublished.topBitrate) {
           await setSourceMaxBitrate(
@@ -1153,11 +1174,12 @@ export async function connectLiveKit({
             livePlan.topBitrate,
             "screen",
           );
-          if (!screenShareStill(track, epoch) || !publishedScreenPlan) {
+          const liveAfterBitrate = screenShareStill(track, epoch);
+          if (!liveAfterBitrate) {
             return;
           }
           publishedScreenPlan = {
-            ...publishedScreenPlan,
+            ...liveAfterBitrate,
             topBitrate: livePlan.topBitrate,
           };
         }
@@ -1174,8 +1196,10 @@ export async function connectLiveKit({
         if (!screenShareStill(track, epoch)) {
           return;
         }
-        await publishScreenVideo(track, plan);
-        onScreenRepublished?.();
+        const kept = await publishScreenVideo(track, plan);
+        if (kept) {
+          onScreenRepublished?.();
+        }
         return;
       }
       if (plan.topBitrate !== published.topBitrate) {
@@ -1184,11 +1208,12 @@ export async function connectLiveKit({
           plan.topBitrate,
           "screen",
         );
-        if (!screenShareStill(track, epoch) || !publishedScreenPlan) {
+        const liveAfterBitrate = screenShareStill(track, epoch);
+        if (!liveAfterBitrate) {
           return;
         }
         publishedScreenPlan = {
-          ...publishedScreenPlan,
+          ...liveAfterBitrate,
           topBitrate: plan.topBitrate,
         };
       }
@@ -1391,7 +1416,11 @@ export async function connectLiveKit({
       const hasAudio = Boolean(audioTrack);
       const audioChanged = replacing && hadAudio !== hasAudio;
       const plan = currentScreenPlan();
+      const epoch = screenShareEpoch;
       await constrainScreenCapture(videoTrack, plan.topHeight);
+      if (screenShareEpoch !== epoch) {
+        return;
+      }
 
       // Same sid, same egress, same playlist. A host who picks a different
       // window should not rebuffer every viewer. Gaining or losing the
@@ -1411,6 +1440,9 @@ export async function connectLiveKit({
         typeof local.replaceTrack === "function"
       ) {
         await local.replaceTrack(videoTrack);
+        if (screenShareEpoch !== epoch) {
+          return;
+        }
         publishedScreenTrack = videoTrack;
         if (audioTrack && publishedScreenAudioTrack) {
           const audioPub = room.localParticipant.getTrackPublication(
@@ -1429,6 +1461,9 @@ export async function connectLiveKit({
 
       if (publishedScreenTrack) {
         await room.localParticipant.unpublishTrack(publishedScreenTrack);
+        if (screenShareEpoch !== epoch) {
+          return;
+        }
       }
       publishedScreenTrack = videoTrack;
       screenCaptureConstraints = null;
@@ -1436,7 +1471,10 @@ export async function connectLiveKit({
       // the library reads its dimensions, so the layers it declares are the
       // layers that exist. See `screenSimulcastPlan` for why height and not
       // a divisor.
-      await publishScreenVideo(videoTrack, plan);
+      const kept = await publishScreenVideo(videoTrack, plan);
+      if (!kept) {
+        return;
+      }
       if (replacing) {
         onScreenRepublished?.();
       }

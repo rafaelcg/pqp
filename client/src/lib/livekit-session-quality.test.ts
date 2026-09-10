@@ -112,6 +112,15 @@ const publications = new Map<
     };
   }
 >();
+/** Resolves the next `publishTrack` call. Null means publish immediately. */
+let releasePublish: (() => void) | null = null;
+let publishHold: Promise<void> | null = null;
+
+function holdNextPublish() {
+  publishHold = new Promise((resolve) => {
+    releasePublish = resolve;
+  });
+}
 
 interface FakeRemotePublication {
   source: string;
@@ -167,6 +176,11 @@ class FakeRoom {
       track: unknown,
       options: PublishedTrack["options"] = {},
     ) => {
+      const hold = publishHold;
+      publishHold = null;
+      if (hold) {
+        await hold;
+      }
       published.push({ track, options });
       if (options.source) {
         // Per source, exactly as `computeVideoEncodings` reads it: a camera's
@@ -186,6 +200,10 @@ class FakeRoom {
     },
     unpublishTrack: async (track: unknown, stop?: boolean) => {
       unpublished.push({ track, stop });
+      const entry = published.find((item) => item.track === track);
+      if (entry?.options.source) {
+        publications.delete(entry.options.source);
+      }
     },
     getTrackPublication: (source: string) => publications.get(source),
   };
@@ -371,6 +389,8 @@ beforeEach(() => {
   constrained.length = 0;
   publications.clear();
   rooms.length = 0;
+  publishHold = null;
+  releasePublish = null;
 });
 
 function encodingFor(source: string) {
@@ -990,6 +1010,26 @@ describe("the presenter as a live ladder's source", () => {
 
     expect(published).toHaveLength(publishesBefore);
     expect(unpublished).toHaveLength(0);
+  });
+
+  it("drops a screen publish that finishes after the share was stopped", async () => {
+    holdNextPublish();
+    const sfu = await session();
+    const sharing = sfu.publishScreen(fakeStream("video", "screen"));
+    await settle();
+
+    await sfu.unpublishScreen();
+    const unpublishedAtStop = unpublished.length;
+    releasePublish?.();
+    await sharing;
+
+    expect(unpublished.length).toBeGreaterThan(unpublishedAtStop);
+    expect(unpublished.at(-1)?.stop).toBe(false);
+    expect(publications.has(Track.Source.ScreenShare)).toBe(false);
+
+    const publishesAfterStop = published.length;
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    expect(published).toHaveLength(publishesAfterStop);
   });
 });
 
