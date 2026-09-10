@@ -443,3 +443,11 @@ asked for a call and must not be handed a call's furniture.
 Client-only, one PR, about a day. The e2e that pin `call-stage-collapsed`
 in a watch party (`watch-party.spec.ts`, the seat tests) move to the bar's
 controls.
+
+**All five shipped 2026-09-10.** In a channel with a party on it the call
+strip is not drawn for anybody (`CallStage.watchPartyChrome`); the bar
+carries the mic pill as the mute button, Compartilhar tela / Trocar / Parar
+de compartilhar for the people running the show, Sair do palco for a seated
+guest, Copiar link, Opções and Encerrar. Camera and cursor went with the
+strip. Ajustar is Opções, and the channel header's count is hidden while
+the bar has one.

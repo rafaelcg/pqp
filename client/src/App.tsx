@@ -5819,6 +5819,7 @@ function MainAppContent({
             onGoLive={handleWatchPartyGoLive}
             onShareScreen={handleWatchPartyShareScreen}
             onStopShare={handleWatchPartyStopShare}
+            onLeaveSeat={() => voice.leave()}
             onReplaceShare={handleWatchPartyReplaceShare}
             onEnd={handleWatchPartyEnd}
             onDiscard={handleWatchPartyDiscard}
@@ -5936,6 +5937,7 @@ function MainAppContent({
             onGoLive={handleWatchPartyGoLive}
             onShareScreen={handleWatchPartyShareScreen}
             onStopShare={handleWatchPartyStopShare}
+            onLeaveSeat={() => voice.leave()}
             onReplaceShare={handleWatchPartyReplaceShare}
             onEnd={handleWatchPartyEnd}
             onDiscard={handleWatchPartyDiscard}
@@ -6047,17 +6049,14 @@ function MainAppContent({
           <VoiceChannelStage
             fill={splitState.active}
             onShapeChange={handleStageShape}
-            // Step 1 of docs/plans/WATCH_PARTY_SETUP_UX.md section 10: the
-            // people running a voice-off party get the party bar as their
-            // only bar. An invited guest keeps the strip until step 4 puts
-            // "Sair do palco" on the bar, because Leave is their only way
-            // to give the seat back.
+            // Section 10 of docs/plans/WATCH_PARTY_SETUP_UX.md: in a channel
+            // with a party on it, the party bar is the only bar. Mute, the
+            // hand, Sair do palco, the share and Encerrar all live there in
+            // the party's words; the strip's camera and cursor do not apply
+            // to a stream that never carries them.
             watchPartyChrome={
               splitKind === "watch" &&
-              watchParties.byChannel[selectedChannel.id] !== undefined &&
-              !watchParties.byChannel[selectedChannel.id]!.options.voiceEnabled &&
-              (watchParties.byChannel[selectedChannel.id]!.viewerRole === "host" ||
-                watchParties.byChannel[selectedChannel.id]!.viewerRole === "cohost")
+              watchParties.byChannel[selectedChannel.id] !== undefined
             }
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}

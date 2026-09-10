@@ -2915,6 +2915,7 @@
   "watchParty.live.waitingBody": "{name} has not put anything on screen yet.",
   "watchParty.live.waitingHost": "Nothing is on screen yet. Share a window or a tab and the room sees it.",
   "watchParty.live.shareScreen": "Share screen",
+  "watchParty.live.leaveStage": "Leave the stage",
   "watchParty.live.replaceShare": "Change",
   "watchParty.live.stopShare": "Stop sharing",
   "watchParty.live.hostGone": "The host dropped",

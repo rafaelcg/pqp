@@ -174,6 +174,8 @@ export interface WatchPartyPanelProps {
   onMicInStreamChange?: (on: boolean) => void;
   /** The pill on the bar mutes and unmutes when this is given. */
   onToggleMute?: () => void;
+  /** Give the seat back, in the party's words: Sair do palco. */
+  onLeaveSeat?: () => void;
   /** Stop this person's share; the party stays live. */
   onStopShare?: () => Promise<void>;
   /** Pick a different window or tab; the old share stops first. */
@@ -1256,7 +1258,7 @@ function LiveSurface(
           the only hint was the mute icon at the bottom of the sidebar. And
           the answer has a second half people get wrong, so it is stated:
           the room can hear an open mic, the audience outside never can. */}
-      {runsTheShow && props.micState && (() => {
+      {(runsTheShow || props.inCall) && props.micState && (() => {
         const mic = props.micState;
         const inCall = mic !== "off";
         const label =
@@ -1450,6 +1452,22 @@ function LiveSurface(
           >
             <Square className="mr-1.5 h-3 w-3" aria-hidden />
             {t("watchParty.live.stopShare")}
+          </Button>
+        )}
+        {/* THE SEAT'S OWN EXIT, in the party's words. The call strip's red
+            Sair is gone from watch party channels (section 10): a seated
+            guest gives the seat back here, and a host does not leave a seat
+            on purpose, they stop sharing or end the party. */}
+        {props.inCall && !runsTheShow && props.onLeaveSeat && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={props.onLeaveSeat}
+            data-watch-party-leave-stage
+          >
+            <Undo2 className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.live.leaveStage")}
           </Button>
         )}
         <WatchPartyShareButton party={party} />

@@ -2915,6 +2915,7 @@
   "watchParty.live.waitingBody": "{name} ainda não colocou nada na tela.",
   "watchParty.live.waitingHost": "Ainda não tem nada na tela. Compartilha uma janela ou uma aba e a galera vê.",
   "watchParty.live.shareScreen": "Compartilhar tela",
+  "watchParty.live.leaveStage": "Sair do palco",
   "watchParty.live.replaceShare": "Trocar",
   "watchParty.live.stopShare": "Parar de compartilhar",
   "watchParty.live.hostGone": "O host caiu",

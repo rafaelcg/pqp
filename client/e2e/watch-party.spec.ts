@@ -599,9 +599,7 @@ test("a member opens the party from the sidebar, gets the audience surface witho
     // NOBODY WATCHING IS ASKED FOR A MICROPHONE, and nobody watching takes a
     // seat. Both are the same rule and both are asserted: no leave button
     // means no seat, and zero `getUserMedia` calls means no prompt.
-    await expect(
-      viewer.getByRole("button", { name: "Leave", exact: true }),
-    ).toHaveCount(0);
+    await expect(viewer.locator("[data-watch-party-leave-stage]")).toHaveCount(0);
     // -1 would mean the counter itself never installed, so a passing 0 here
     // is a real zero rather than a missing hook.
     expect(await gumCalls(viewer)).toBe(0);
@@ -674,7 +672,10 @@ test("an invited guest takes a seat and does not get the player twice", async ({
     await expect(stage).toHaveCount(0, { timeout: 20_000 });
     await expect(viewer.getByTestId("watch-stage-live")).toHaveCount(0);
 
-    const leave = viewer.getByRole("button", { name: "Leave", exact: true });
+    // The seat's exit is on the party bar, in the party's words; the call
+    // strip and its Leave are not drawn in a watch party channel.
+    await expect(viewer.getByTestId("call-stage-collapsed")).toHaveCount(0);
+    const leave = viewer.locator("[data-watch-party-leave-stage]");
     await expect(leave).toBeVisible({ timeout: 20_000 });
     // AND STILL NO MICROPHONE, EVEN SEATED. A live party's default
     // `stageMode` is `hosts_only`, which denies SPEAK to @everyone on the

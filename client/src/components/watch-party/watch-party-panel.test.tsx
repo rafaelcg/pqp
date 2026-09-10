@@ -595,3 +595,18 @@ describe("the share controls on the live bar", () => {
     expect(html).not.toContain("data-watch-party-bar-share");
   });
 });
+
+/** The seat's exit is on the bar, for the seated guest, never for the host. */
+describe("Sair do palco", () => {
+  const seated = (viewerRole: WatchParty["viewerRole"]) =>
+    render({
+      slot: "chrome",
+      party: { ...PARTY, state: "live", viewerRole },
+      inCall: true,
+      onLeaveSeat: () => {},
+    });
+  it("is offered to a seated guest and not to the host", () => {
+    expect(seated("viewer")).toContain("data-watch-party-leave-stage");
+    expect(seated("host")).not.toContain("data-watch-party-leave-stage");
+  });
+});
