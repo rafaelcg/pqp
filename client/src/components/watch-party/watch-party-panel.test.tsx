@@ -468,3 +468,42 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
 
   });
 });
+
+/**
+ * THE GATHERING SCREEN. A scheduled party is a place to arrive at before there
+ * is a picture: a countdown, a bell, the link, and for the host the way to
+ * start early. A member gets everything but the button.
+ */
+describe("a scheduled party gathers people", () => {
+  const scheduled = (viewerRole: WatchParty["viewerRole"]) => ({
+    party: {
+      ...PARTY,
+      state: "scheduled" as const,
+      viewerRole,
+      startsAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+    },
+    onToggleReminder: async () => {},
+  });
+
+  it("offers a viewer the bell and the link, and no way to start it", () => {
+    const html = render(scheduled("viewer"));
+    expect(html).toContain("watch-party-scheduled-when");
+    expect(html).toContain("data-watch-party-remind");
+    expect(html).toContain("data-watch-party-share");
+    expect(html).not.toContain("data-watch-party-go-live");
+  });
+
+  it("offers the host the same, plus Go live now", () => {
+    const html = render(scheduled("host"));
+    expect(html).toContain("data-watch-party-remind");
+    expect(html).toContain("data-watch-party-go-live");
+  });
+
+  it("reads the bell from the party", () => {
+    const on = render({
+      ...scheduled("viewer"),
+      party: { ...scheduled("viewer").party, reminding: true },
+    });
+    expect(on).toContain('aria-pressed="true"');
+  });
+});

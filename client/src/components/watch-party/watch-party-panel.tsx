@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
+  Bell,
+  BellOff,
   Check,
   Clapperboard,
   Crown,
@@ -103,6 +105,12 @@ export interface WatchPartyPanelProps {
   onOptionsChange: (options: Partial<WatchPartyOptions>) => Promise<void>;
   onRename: (name: string) => Promise<void>;
   onClaimHost: () => Promise<void>;
+  /**
+   * "Me avisa quando começar" on the scheduled screen, bound to the party's
+   * own reminder (a party IS a channel session, so `party.reminding` is the
+   * same row the session card toggles). Absent means the toggle is not drawn.
+   */
+  onToggleReminder?: (wants: boolean) => Promise<void>;
   /**
    * Everybody the host may hand a co-host badge to: this server's members.
    *
@@ -926,42 +934,113 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
 
 // --------------------------------------------------------------- scheduled
 
+/**
+ * THE GATHERING SCREEN. A scheduled party used to be a name, a time and, for
+ * the host, a button. YouTube's scheduled watch page is the model instead: a
+ * place people arrive at before there is a picture, with a countdown, a
+ * reminder bell and the chat already open, so the audience is there when the
+ * host presses the button rather than trickling in ten minutes after. The
+ * chat is the other pane of the split, so this half only has to give them a
+ * reason to stay.
+ *
+ * The clock ticks every 30 s so "em 3 min" is never stale by more than that,
+ * and "ao vivo agora" appears on its own when the time passes even though
+ * the state has not moved (the host has not pressed anything yet).
+ */
 function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { party } = props;
   const canGoLive = canPerformWatchPartyAction({
     action: "goLive",
     role: party.viewerRole,
     state: party.state,
   });
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const [reminding, setReminding] = useState(party.reminding);
+  const [reminderBusy, setReminderBusy] = useState(false);
+  useEffect(() => setReminding(party.reminding), [party.id, party.reminding]);
+  const toggleReminder = async () => {
+    if (!props.onToggleReminder) {
+      return;
+    }
+    const next = !reminding;
+    setReminding(next);
+    setReminderBusy(true);
+    try {
+      await props.onToggleReminder(next);
+    } catch {
+      setReminding(!next);
+    } finally {
+      setReminderBusy(false);
+    }
+  };
+  const when = formatSessionRelativeTime(
+    party.startsAt ?? "",
+    now,
+    locale === "pt-BR" ? "pt-BR" : "en",
+  );
+
   return (
     <div
       data-testid="watch-party-scheduled"
       className={cn(
-        "flex flex-col items-center justify-center gap-2 overflow-hidden border-b border-ink-4/60 bg-ink px-6 py-8 text-center",
+        "flex flex-col items-center justify-center gap-3 overflow-hidden border-b border-ink-4/60 bg-ink px-6 py-8 text-center",
         surfaceHeight(props.fill, "min-h-0"),
       )}
     >
-      <PartyIdentity party={party} onRename={props.onRename} />
-      <p className="text-xs text-paper-muted">
-        {formatSessionRelativeTime(party.startsAt ?? "", new Date(), "pt-BR")}
+      <PartyIdentity
+        party={party}
+        onRename={props.onRename}
+        className="flex-none justify-center"
+      />
+      <p
+        className="text-sm font-semibold text-paper"
+        data-testid="watch-party-scheduled-when"
+      >
+        {t("watchParty.scheduled.startsAt", { when })}
       </p>
-      {canGoLive && (
-        <>
+      <p className="max-w-sm text-xs text-paper-muted">
+        {canGoLive
+          ? t("watchParty.scheduled.hostNote")
+          : t("watchParty.scheduled.viewerNote")}
+      </p>
+      <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+        {props.onToggleReminder && (
           <Button
             type="button"
-            className="mt-1 bg-danger text-paper hover:bg-danger/85"
+            variant={reminding ? "default" : "secondary"}
+            disabled={reminderBusy}
+            aria-pressed={reminding}
+            onClick={() => void toggleReminder()}
+            data-watch-party-remind
+          >
+            {reminding ? (
+              <Bell className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+            ) : (
+              <BellOff className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+            )}
+            {reminding
+              ? t("watchParty.scheduled.reminding")
+              : t("watchParty.scheduled.remind")}
+          </Button>
+        )}
+        <WatchPartyShareButton party={party} size="default" />
+        {canGoLive && (
+          <Button
+            type="button"
+            className="bg-danger text-paper hover:bg-danger/85"
             onClick={() => void props.onGoLive(null)}
             data-watch-party-go-live
           >
             <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
             {t("watchParty.scheduled.goLiveNow")}
           </Button>
-          <p className="text-[11px] text-paper-muted">
-            {t("watchParty.scheduled.hostNote")}
-          </p>
-        </>
-      )}
+        )}
+      </div>
     </div>
   );
 }

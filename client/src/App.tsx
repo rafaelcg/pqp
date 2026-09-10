@@ -3834,6 +3834,20 @@ function MainAppContent({
     startScreenShareGated(false, { preferBrowserTab: true, stream });
   }
 
+  /**
+   * The bell on the scheduled screen. A party IS a channel session, so this
+   * is the same row the session card toggles; the store is patched so the
+   * button reads right on the next render without a refetch.
+   */
+  async function handleWatchPartyReminder(wants: boolean) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    await setChannelSessionReminder(party.id, wants);
+    watchParties.put({ ...party, reminding: wants });
+  }
+
   async function handleWatchPartyEnd() {
     const party = currentWatchParty();
     if (!party) {
@@ -5740,6 +5754,7 @@ function MainAppContent({
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
             onClaimHost={handleWatchPartyClaimHost}
+            onToggleReminder={handleWatchPartyReminder}
             cohostCandidates={cohostCandidates}
             onPromoteCohost={(userId) =>
               handleWatchPartyCohost(userId, true)
@@ -5839,6 +5854,7 @@ function MainAppContent({
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
             onClaimHost={handleWatchPartyClaimHost}
+            onToggleReminder={handleWatchPartyReminder}
             cohostCandidates={cohostCandidates}
             onPromoteCohost={(userId) =>
               handleWatchPartyCohost(userId, true)
