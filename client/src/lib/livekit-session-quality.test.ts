@@ -960,14 +960,18 @@ describe("the presenter as a live ladder's source", () => {
     expect(published).toHaveLength(publishesBefore);
   });
 
-  it("publishes only the 360p sub-layer while the share feeds HLS", async () => {
+  it("publishes the 720p encoding while the share feeds HLS, then deactivates it", async () => {
     const sfu = await session();
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
     await sfu.publishScreen(fakeStream("video", "screen", 1080));
     const options = lastPublish(Track.Source.ScreenShare);
     expect(options?.screenShareSimulcastLayers?.map((layer) => layer.height)).toEqual(
-      [360],
+      [360, 720],
     );
+    const last = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(last?.encodings[1]?.active).toBe(false);
   });
 
   it("deactivates the 720p sub-layer in place when HLS pins a 1080 publish", async () => {
@@ -1009,6 +1013,46 @@ describe("the presenter as a live ladder's source", () => {
       .reverse()
       .find((write) => write.source === Track.Source.ScreenShare);
     expect(retrimmed!.encodings[1]?.active).toBe(false);
+  });
+
+  it("retries restoring the 720p layer if shutdown setParameters fails", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    const original = publication.track.sender as {
+      getParameters: () => RTCRtpSendParameters;
+      setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+    };
+    let failsLeft = 1;
+    publication.track.sender = {
+      getParameters: () => original.getParameters(),
+      setParameters: async (next: RTCRtpSendParameters) => {
+        if (failsLeft > 0) {
+          failsLeft -= 1;
+          throw new Error("nope");
+        }
+        return original.setParameters(next);
+      },
+    };
+    const writesBefore = senderWrites.length;
+
+    await sfu.setHlsSource(null);
+    expect(
+      senderWrites.slice(writesBefore).filter(
+        (write) => write.source === Track.Source.ScreenShare,
+      ),
+    ).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(250);
+    const restored = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(restored?.encodings[1]?.active).not.toBe(false);
+    warn.mockRestore();
+    vi.useRealTimers();
   });
 
   it("retries the HLS trim if the browser refuses the first setParameters", async () => {

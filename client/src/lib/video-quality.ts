@@ -497,7 +497,6 @@ export function screenSimulcastPlan(
           // ceiling rather than Auto's compromise 3 Mbit/s.
           Math.max(screenBitrateFor(quality), SCREEN_BITRATES["1080p"])
         : screenBitrateFor(quality);
-  const hlsLive = hls !== null && hls.ladderTopHeight !== null;
   return {
     topHeight,
     topBitrate,
@@ -505,12 +504,9 @@ export function screenSimulcastPlan(
       if (layer.height >= topHeight) {
         return false;
       }
-      // HLS viewers play the playlist. Sub-layers only starve the top layer
-      // the egress actually subscribes to. Keep 360p for a seated phone that
-      // still takes the LiveKit track; drop the 720p mid-rung.
-      if (hlsLive && layer.height > 360) {
-        return false;
-      }
+      // Keep the 720p encoding even while HLS is live, so shutting the
+      // ladder down can turn it back on without a new sid. BWE cost is
+      // `active: false` on the sender, not omitting the encoding.
       return true;
     }),
     // Only "the room decided" counts. Somebody who chose 720p in a big room

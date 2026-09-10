@@ -433,9 +433,9 @@ describe("the presenter as the ladder's source", () => {
     expect(plan.heldForHls).toBe(false);
   });
 
-  it("does not spend a 720p sub-layer while HLS is transcoding the top", () => {
+  it("still declares the 720p encoding while HLS is live so shutdown can restore it", () => {
     const plan = screenSimulcastPlan("auto", 4, LIVE);
-    expect(plan.lowerLayers.map((layer) => layer.height)).toEqual([360]);
+    expect(plan.lowerLayers.map((layer) => layer.height)).toEqual([360, 720]);
   });
 
   it("leaves an ordinary large call alone", () => {
