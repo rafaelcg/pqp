@@ -4,6 +4,7 @@ import {
   identityMarks,
   rankBadges,
   usernameFromTag,
+  streamNameColor,
 } from "./author-display";
 
 const roles = [
@@ -156,5 +157,14 @@ describe("usernameFromTag", () => {
     expect(usernameFromTag("")).toBeNull();
     expect(usernameFromTag("#1234")).toBeNull();
     expect(usernameFromTag("nobody")).toBeNull();
+  });
+});
+
+describe("streamNameColor", () => {
+  it("is stable per person and different between people", () => {
+    const a = streamNameColor("11111111-1111-4111-8111-111111111111");
+    expect(streamNameColor("11111111-1111-4111-8111-111111111111")).toBe(a);
+    expect(a).toMatch(/^hsl\(\d+ 65% 68%\)$/);
+    expect(streamNameColor("22222222-2222-4222-8222-222222222222")).not.toBe(a);
   });
 });

@@ -6118,6 +6118,19 @@ function MainAppContent({
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}
         channelId={selectedChannel.id}
+        variant={splitKind === "watch" ? "stream" : "default"}
+        streamBadges={
+          splitKind === "watch" && watchParties.byChannel[selectedChannel.id]
+            ? {
+                hostUserId: watchParties.byChannel[selectedChannel.id]!.hostUserId,
+                cohostIds: new Set(
+                  watchParties.byChannel[selectedChannel.id]!.cohosts.map(
+                    (cohost) => cohost.userId,
+                  ),
+                ),
+              }
+            : null
+        }
         isLoading={messagesLoading}
         hasMore={chat.hasMoreHistory()}
         hasNewer={chat.hasNewerHistory()}

@@ -30,6 +30,8 @@ import {
   Reply,
   ShieldCheck,
   SmilePlus,
+  Star,
+  Crown,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
@@ -80,7 +82,13 @@ import { messageRoutePath } from "@/lib/app-route";
 import { QUICK_REACTIONS } from "@/lib/emoji-shortcodes";
 import { messageMentionsYou } from "@/lib/message-mentions-you";
 import { findFirstUnreadMessageId } from "@/lib/unread-divider";
-import { highestRoleColor, identityMarks, rankBadges, usernameFromTag } from "@/lib/author-display";
+import {
+  highestRoleColor,
+  identityMarks,
+  rankBadges,
+  streamNameColor,
+  usernameFromTag,
+} from "@/lib/author-display";
 import { gifMessageMedia, type GifMedia } from "@/lib/gif-media";
 import {
   ANCHORED_PANEL_PAD,
@@ -252,6 +260,17 @@ interface MessageListProps {
   /** Composer ArrowUp: start editing this id, then call `onEditMessageHandled`. */
   editMessageId?: string | null;
   onEditMessageHandled?: () => void;
+  /**
+   * STREAM CHAT, the shape Twitch, YouTube and Kick all use beside a film: no
+   * avatars, every message carries its name, `name: message` on one line,
+   * names always coloured, no timestamps, a badge before the people running
+   * the show. The room decides it (a watch party channel), not a setting.
+   * Anything that is not plain text (attachments, polls, embeds, replies)
+   * keeps its ordinary block under the line, so nothing is lost.
+   */
+  variant?: "default" | "stream";
+  /** Who is running the party, for the badges before their names. */
+  streamBadges?: { hostUserId: string; cohostIds: ReadonlySet<string> } | null;
 }
 
 interface Row {
@@ -369,6 +388,8 @@ export function MessageList({
   unreadSince = null,
   editMessageId = null,
   onEditMessageHandled,
+  variant = "default",
+  streamBadges = null,
 }: MessageListProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1129,6 +1150,8 @@ export function MessageList({
               row={row}
               mentionJoinTop={joinTop}
               mentionJoinBottom={joinBottom}
+              stream={variant === "stream"}
+              streamBadges={streamBadges}
               currentUserId={currentUserId}
               currentUsername={currentUsername}
               serverId={serverId}
@@ -1653,6 +1676,9 @@ interface MessageRowProps {
   mentionJoinTop?: boolean;
   /** This ping sits against the next row's wash. */
   mentionJoinBottom?: boolean;
+  /** See `MessageListProps.variant`. */
+  stream?: boolean;
+  streamBadges?: { hostUserId: string; cohostIds: ReadonlySet<string> } | null;
 }
 
 const MessageRow = memo(function MessageRow({
@@ -1708,6 +1734,8 @@ const MessageRow = memo(function MessageRow({
   unreadDividerRef,
   mentionJoinTop = false,
   mentionJoinBottom = false,
+  stream = false,
+  streamBadges = null,
 }: MessageRowProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
@@ -1777,6 +1805,16 @@ const MessageRow = memo(function MessageRow({
   const roleColor = message.isWebhook
     ? null
     : highestRoleColor(authorInfo?.roleIds, roles);
+  // Stream chat: everybody has a colour, role colour first.
+  const nameColor =
+    roleColor ?? (stream && !message.isWebhook ? streamNameColor(message.authorId) : null);
+  const partyBadge = streamBadges
+    ? streamBadges.hostUserId === message.authorId
+      ? "host"
+      : streamBadges.cohostIds.has(message.authorId)
+        ? "cohost"
+        : null
+    : null;
 
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -2064,11 +2102,13 @@ const MessageRow = memo(function MessageRow({
           // long-press, or the native contextmenu event a focused element
           // gets from the keyboard Menu key / Shift+F10.
           onContextMenu={onMenuOpenRow}
+          data-message-stream={stream ? "" : undefined}
           className={cn(
-            "group relative flex items-start gap-0 px-5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
-            startsGroup ? "mt-[var(--chat-group-gap)] pt-1" : "pt-px",
+            "group relative flex items-start gap-0 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+            stream ? "px-3" : "px-5",
+            stream ? "py-0.5" : startsGroup ? "mt-[var(--chat-group-gap)] pt-1" : "pt-px",
             mentionJoinTop ? "pt-0" : null,
-            mentionJoinBottom ? "pb-0" : startsGroup ? "pb-1" : "pb-px",
+            stream ? null : mentionJoinBottom ? "pb-0" : startsGroup ? "pb-1" : "pb-px",
             mentionsYou && !isFlashing
               ? mentionRowRadius(mentionJoinTop, mentionJoinBottom)
               : null,
@@ -2108,7 +2148,7 @@ const MessageRow = memo(function MessageRow({
               </span>
             </button>
           )}
-          {startsGroup && !compact ? (
+          {stream ? null : startsGroup && !compact ? (
             <div className="flex w-14 shrink-0 items-start justify-end pr-2">
               <div className="relative h-9 w-9 shrink-0">
                 <AuthorButton
@@ -2165,7 +2205,7 @@ const MessageRow = memo(function MessageRow({
                 tabIndex={controlTabIndex}
               />
             )}
-            {startsGroup && (
+            {startsGroup && !stream && (
               <div className="flex flex-wrap items-baseline gap-x-2">
                 <span className="inline-flex items-baseline gap-1">
                   <AuthorButton
@@ -2263,7 +2303,53 @@ const MessageRow = memo(function MessageRow({
                     onClose={() => onClosePoll?.(message.id)}
                   />
                 ) : message.body ? (
-                  <div className="markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90">
+                  <div
+                    className={cn(
+                      "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90",
+                      stream && "[&>p]:inline",
+                    )}
+                  >
+                    {stream && (
+                      <span className="mr-1 inline-flex items-baseline gap-1 align-baseline">
+                        {/* One badge, not two: the party's badge says the
+                            thing that matters in this room, and the host is
+                            usually the owner as well, so the rank crown
+                            would sit right beside it. */}
+                        {partyBadge === "host" ? (
+                          <Crown
+                            className="h-3 w-3 shrink-0 self-center text-accent"
+                            aria-label={t("chat.stream.host")}
+                          />
+                        ) : partyBadge === "cohost" ? (
+                          <Star
+                            className="h-3 w-3 shrink-0 self-center text-accent"
+                            aria-label={t("chat.stream.cohost")}
+                          />
+                        ) : (
+                          <RankMarks
+                            marks={identityMarks({
+                              rank: authorInfo?.rank,
+                              isWebhook: message.isWebhook,
+                              isCharacter: authorInfo?.isCharacter,
+                              ...rankBadges(authorInfo?.roleIds, roles),
+                            })}
+                          />
+                        )}
+                        <span className="inline-flex items-baseline">
+                          <AuthorButton
+                            message={message}
+                            author={authorInfo}
+                            tabIndex={controlTabIndex}
+                            onOpenProfile={openProfile}
+                            className="rounded font-bold"
+                            style={nameColor ? { color: nameColor } : undefined}
+                          >
+                            {message.authorName}
+                          </AuthorButton>
+                          <span className="text-paper-muted">:</span>
+                        </span>
+                      </span>
+                    )}
                     <MessageBody
                       body={message.body}
                       currentUsername={currentUsername}

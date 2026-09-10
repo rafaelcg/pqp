@@ -140,3 +140,21 @@ export function usernameFromTag(
   const username = tag.slice(0, hash).trim();
   return username.length > 0 ? username : null;
 }
+
+/**
+ * A colour for a name with no role colour, in stream chat.
+ *
+ * Twitch hashes the username to a hue so everybody has a colour and the
+ * same person keeps it; a stream chat with half the names in the default
+ * grey reads as a wall. Hue from the id, fixed saturation and lightness so
+ * every result sits at the same contrast on the ink surface. Role colour
+ * wins where there is one: that is a decision somebody made.
+ */
+export function streamNameColor(authorId: string): string {
+  let hash = 0;
+  for (let i = 0; i < authorId.length; i += 1) {
+    hash = (hash * 31 + authorId.charCodeAt(i)) | 0;
+  }
+  const hue = ((hash % 360) + 360) % 360;
+  return `hsl(${hue} 65% 68%)`;
+}

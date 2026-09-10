@@ -2711,6 +2711,8 @@
   "chat.blocked": "Blocked message",
   "chat.showBlocked": "Show",
   "chat.pinned": "Pinned",
+  "chat.stream.host": "Host",
+  "chat.stream.cohost": "Co-host",
   "chat.pinnedBy": "Pinned by {name}",
   "chat.originalDeleted": "Original message was deleted",
   "chat.jumpToReply": "Jump to {name}'s message: {excerpt}",

@@ -1730,4 +1730,16 @@ test("a watch party puts the chat beside the film, and cinema mode clears the re
   await expect(page.locator("[data-member-sidebar]")).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(cinema).toHaveAttribute("aria-pressed", "false");
+
+  // STREAM CHAT. Beside a film the transcript takes the shape every stream
+  // has: no avatar, the name coloured and inline before the words.
+  const composer = page.getByPlaceholder(/^Message /);
+  await composer.click();
+  await composer.fill("que filme é esse");
+  await composer.press("Enter");
+  const row = page
+    .locator("[data-message-stream]", { hasText: "que filme é esse" })
+    .last();
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await expect(row.locator("img")).toHaveCount(0);
 });

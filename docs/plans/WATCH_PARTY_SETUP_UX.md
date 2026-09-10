@@ -180,6 +180,13 @@ Mostly as is. Two changes:
   member column aside without writing the preference; the channel list
   stays, because the live party block lives in it. **Modo cinema** on the
   player folds the channel list to icons as well; Escape undoes it. Shipped.
+- **Stream chat.** Beside a film the transcript takes the shape every
+  stream has: no avatars, every message carries its name, `name: message`
+  on one line, names always coloured (role colour first, a hue hashed from
+  the id otherwise, so the same person keeps it), no timestamps, a crown
+  before the host and a star before a co-host. The room decides it (a
+  `watch_party` channel), not a setting; anything that is not plain text
+  keeps its ordinary block under the line. Shipped.
 
 ## 4. Copy rules (pt-BR)
 
