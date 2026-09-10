@@ -22,7 +22,10 @@ import {
   type WatchParty,
   type WatchPartyOptions,
 } from "@pqp/shared";
-import { WatchPartyOptionsPanel } from "@/components/watch-party/watch-party-options";
+import {
+  WatchPartyOptionsPanel,
+  slowModeKey,
+} from "@/components/watch-party/watch-party-options";
 import {
   canAppointCohosts,
   WatchPartyCohosts,
@@ -31,7 +34,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { FeatureHint } from "@/components/layout/feature-hint";
 import { LivePill } from "@/components/watch-party/live-pill";
@@ -175,8 +177,6 @@ export interface WatchPartyPanelProps {
    * other two stages in the same slot always have.
    */
   fill?: boolean;
-  /** First time this host has reached a setup surface. */
-  showHostHint?: boolean;
   /** First time this person has watched a live party. */
   showViewerHint?: boolean;
 }
@@ -309,6 +309,198 @@ function cohostSection(
   );
 }
 
+// ------------------------------------------------- options: one dialog, one row
+
+/**
+ * THE SAME DIALOG BEFORE AND DURING THE SHOW. The setup surface used to carry
+ * a 72-unit column of every option plus the co-host list beside the preview,
+ * and the live bar opened a dialog with the same controls. Two surfaces for
+ * one set of switches, and the bigger one sat on the screen where a host has
+ * the least reason to touch any of them: every default is already right for a
+ * film night (voice off, reactions on, chat unthrottled). Twitch, YouTube and
+ * TikTok all put the options a click away and keep the picture and the one
+ * button in front. So the draft gets the live dialog, opened from a summary
+ * row, and the column is gone.
+ *
+ * `stage` is the hands queue, which only exists once there is a room with
+ * people in it; a draft has none by construction.
+ */
+function WatchPartyOptionsDialog({
+  props,
+  party,
+  open,
+  onClose,
+  stage,
+}: {
+  props: WatchPartyPanelProps;
+  party: WatchParty;
+  open: boolean;
+  onClose: () => void;
+  stage: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t("watchParty.options.title")}
+      eyebrow={party.name}
+      description={
+        party.state === "live" ? t("watchParty.options.liveNote") : undefined
+      }
+      size="md"
+    >
+      <DialogBody className="flex flex-col gap-4" data-testid="watch-party-options-drawer">
+        <WatchPartyOptionsPanel
+          options={party.options}
+          audienceCount={props.audienceCount}
+          onChange={(patch) => void props.onOptionsChange(patch)}
+        />
+        {/* Mid-show, and it is the same control the setup surface had. A
+            co-host promoted here is granted SPEAK on the spot by the server
+            when the party's floor is closed, so somebody brought in to help
+            can actually talk to the room. */}
+        {cohostSection(props, party, "border-t border-border pt-4")}
+        {/* The queue is a moderation surface and only the people running the
+            party see it: an audience that can watch who asked and was passed
+            over is an audience having a worse time. It is also nonsense in a
+            party with no voice, where nobody is asking for anything, so it
+            follows the Voz control rather than the stored stage mode. */}
+        {stage &&
+          party.options.voiceEnabled &&
+          party.options.stageMode === "invited" && (
+            <div className="border-t border-border pt-4">
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                {t("watchParty.stage.hands")}
+              </p>
+              {party.stage.hands.length === 0 ? (
+                <p className="text-[11px] text-paper-muted">
+                  {t("watchParty.stage.noHands")}
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-1">
+                  {party.stage.hands.map((person) => (
+                    <li
+                      key={person.userId}
+                      className="flex items-center gap-2"
+                      data-watch-party-hand
+                    >
+                      <UserAvatar
+                        name={person.displayName}
+                        avatarUrl={person.avatarUrl}
+                        rounded="full"
+                        className="h-6 w-6 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1 truncate text-xs text-paper">
+                        {person.displayName}
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() =>
+                          void props.onStageAction?.("invite", person.userId)
+                        }
+                        data-watch-party-invite
+                      >
+                        {t("watchParty.stage.invite")}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {party.stage.invited.length > 0 && (
+                <>
+                  <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                    {t("watchParty.stage.title")}
+                  </p>
+                  <ul className="flex flex-col gap-1">
+                    {party.stage.invited.map((person) => (
+                      <li key={person.userId} className="flex items-center gap-2">
+                        <UserAvatar
+                          name={person.displayName}
+                          avatarUrl={person.avatarUrl}
+                          rounded="full"
+                          className="h-6 w-6 shrink-0"
+                        />
+                        <span className="min-w-0 flex-1 truncate text-xs text-paper">
+                          {person.displayName}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            void props.onStageAction?.("remove", person.userId)
+                          }
+                          data-watch-party-stage-remove
+                        >
+                          {t("watchParty.stage.remove")}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          )}
+      </DialogBody>
+    </Dialog>
+  );
+}
+
+/**
+ * One line that says what the switches are set to, with the one control that
+ * changes them. Reads as a sentence ("Voz desligada · Reações ligadas · Chat
+ * normal · Sem co-host") so a host can confirm the defaults at a glance
+ * without opening anything, which is what most of them will do.
+ */
+function WatchPartyOptionsSummary({
+  party,
+  onOpen,
+}: {
+  party: WatchParty;
+  onOpen: () => void;
+}) {
+  const { t } = useTranslation();
+  const { options } = party;
+  const parts = [
+    options.voiceEnabled
+      ? t("watchParty.summary.voiceOn")
+      : t("watchParty.summary.voiceOff"),
+    options.reactionsEnabled
+      ? t("watchParty.summary.reactionsOn")
+      : t("watchParty.summary.reactionsOff"),
+    options.slowModeSeconds > 0
+      ? t("watchParty.summary.slow", {
+          value: t(slowModeKey(options.slowModeSeconds)),
+        })
+      : t("watchParty.summary.chatNormal"),
+    party.cohosts.length > 0
+      ? t("watchParty.summary.cohosts", { count: party.cohosts.length })
+      : t("watchParty.summary.noCohost"),
+  ];
+  return (
+    <div
+      data-testid="watch-party-options-summary"
+      className="flex shrink-0 items-center gap-2 border-t border-ink-4/60 bg-ink px-3 py-1.5"
+    >
+      <p className="min-w-0 flex-1 truncate text-xs text-paper-muted">
+        {parts.join(" · ")}
+      </p>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={onOpen}
+        data-watch-party-options-toggle
+      >
+        <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+        {t("watchParty.summary.adjust")}
+      </Button>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------- no party yet
 
 function EmptyStage(props: WatchPartyPanelProps) {
@@ -375,6 +567,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const [busy, setBusy] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
   // The most common "it doesn't work" from the QA runbook (step 3): the host
   // picked the tab and left "share tab audio" unticked, and nobody hears the
   // film. Say so under the preview, before anyone is watching.
@@ -502,17 +695,35 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
             <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
             {t("watchParty.setup.heading")}
           </span>
-          {stream && (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="absolute right-2 top-2"
-              onClick={() => void pick()}
-            >
-              {t("watchParty.setup.repick")}
-            </Button>
-          )}
+          {/* The name sits on the picture, where the live bar will show it,
+              rather than at the top of a form. Same input the e2e reads. */}
+          <div className="absolute right-2 top-2 flex items-center gap-2">
+            <input
+              type="text"
+              maxLength={120}
+              aria-label={t("watchParty.setup.nameLabel")}
+              className="w-44 rounded-md border border-ink-4/60 bg-surface-0/90 px-2 py-1 text-right text-sm font-semibold text-paper focus:border-ink-4"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onBlur={() => {
+                const next = name.trim();
+                if (next.length > 0 && next !== party.name) {
+                  void props.onRename(next);
+                }
+              }}
+              data-watch-party-name
+            />
+            {stream && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => void pick()}
+              >
+                {t("watchParty.setup.repick")}
+              </Button>
+            )}
+          </div>
           {silentPick && (
             <p
               data-testid="watch-party-no-audio"
@@ -523,65 +734,12 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           )}
         </div>
 
-        {/* THE INTRO PARAGRAPH IS GONE. It said "pick what you are going to
-            share, check it here and go live when it looks right", which is
-            what the not-live bar below now says with the button that does it
-            attached. Two instructional paragraphs on one screen is one too
-            many, and the one that cost the column 44px was the one nobody
-            was reading: it pushed the co-host list past the bottom of the
-            aside, which is where the host's screenshot showed it cut off
-            mid-row. */}
-        <aside className="hidden w-72 shrink-0 border-l border-ink-4/60 sm:block">
-          {/* A REAL SCROLLBAR, because this column scrolls and macOS draws
-              overlay scrollbars, so it showed a row cut in half and nothing
-              at all to say why. `ScrollArea` with `type="always"` is the
-              primitive `docs/DESIGN.md` names for exactly this: a native
-              scrollbar here draws OS chrome over the design, and no
-              scrollbar reads as a broken list. */}
-          <ScrollArea
-            type="always"
-            // The thumb's default `surface-2` is nearly invisible against
-            // this surface's `surface-0`, and an invisible scrollbar is the
-            // thing being fixed. Local, so no other scroller moves.
-            className="h-full [&_[data-radix-scroll-area-thumb]]:bg-surface-3"
-          >
-            <div className="flex flex-col gap-3 p-3">
-              <label className="block text-xs text-paper-muted">
-                <span className="mb-1 block">{t("watchParty.setup.nameLabel")}</span>
-                <input
-                  type="text"
-                  maxLength={120}
-                  className="w-full rounded-md border border-ink-4 bg-ink-3 px-2 py-1.5 text-sm text-paper"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  onBlur={() => {
-                    const next = name.trim();
-                    if (next.length > 0 && next !== party.name) {
-                      void props.onRename(next);
-                    }
-                  }}
-                  data-watch-party-name
-                />
-              </label>
-
-              <p className="mt-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-                {t("watchParty.options.title")}
-              </p>
-              <WatchPartyOptionsPanel
-                options={party.options}
-                audienceCount={props.audienceCount}
-                onChange={(patch) => void props.onOptionsChange(patch)}
-              />
-
-              {/* BEFORE Ir ao vivo is where this belongs. A host who names a
-                  backup here has one for the whole show; a host who only finds
-                  this control after their own connection has already died has
-                  nothing. */}
-              {cohostSection(props, party, "mt-1 border-t border-ink-4/60 pt-3")}
-            </div>
-          </ScrollArea>
-        </aside>
       </div>
+
+      <WatchPartyOptionsSummary
+        party={party}
+        onOpen={() => setOptionsOpen(true)}
+      />
 
       {/* A STATE BAR, NOT A FOOTER, and that is the whole of the third fix.
           A host on production picked a window, watched his own preview and
@@ -647,17 +805,13 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         </div>
       </div>
 
-      {/* The one sentence a first-time host needs, on the surface where it
-          is true. `lib/hints.ts` remembers it; `docs/ONBOARDING.md` has the
-          row. */}
-      <div className="pointer-events-none absolute bottom-16 right-3 z-10 [&>*]:pointer-events-auto">
-        <FeatureHint
-          id="watchPartyHost"
-          enabled={props.showHostHint === true}
-          title={t("watchParty.create.title")}
-          body={t("featureHint.watchPartyHost.body")}
-        />
-      </div>
+      <WatchPartyOptionsDialog
+        props={props}
+        party={party}
+        open={optionsOpen}
+        onClose={() => setOptionsOpen(false)}
+        stage={false}
+      />
 
       <ConfirmDialog
         open={confirmDiscard}
@@ -1000,107 +1154,13 @@ function LiveSurface(
    * where they were.
    */
   const optionsDialog = runsTheShow && (
-    <Dialog
+    <WatchPartyOptionsDialog
+      props={props}
+      party={party}
       open={optionsOpen}
       onClose={() => setOptionsOpen(false)}
-      title={t("watchParty.options.title")}
-      eyebrow={party.name}
-      description={t("watchParty.options.liveNote")}
-      size="md"
-    >
-      <DialogBody className="flex flex-col gap-4" data-testid="watch-party-options-drawer">
-        <WatchPartyOptionsPanel
-          options={party.options}
-          audienceCount={props.audienceCount}
-          onChange={(patch) => void props.onOptionsChange(patch)}
-        />
-        {/* Mid-show, and it is the same control the setup surface had. A
-            co-host promoted here is granted SPEAK on the spot by the server
-            when the party's floor is closed, so somebody brought in to help
-            can actually talk to the room. */}
-        {cohostSection(props, party, "border-t border-border pt-4")}
-        {/* The queue is a moderation surface and only the people running the
-            party see it: an audience that can watch who asked and was passed
-            over is an audience having a worse time. It is also nonsense in a
-            party with no voice, where nobody is asking for anything, so it
-            follows the Voz control rather than the stored stage mode. */}
-        {party.options.voiceEnabled && party.options.stageMode === "invited" && (
-          <div className="border-t border-border pt-4">
-          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-            {t("watchParty.stage.hands")}
-          </p>
-          {party.stage.hands.length === 0 ? (
-            <p className="text-[11px] text-paper-muted">
-              {t("watchParty.stage.noHands")}
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-1">
-              {party.stage.hands.map((person) => (
-                <li
-                  key={person.userId}
-                  className="flex items-center gap-2"
-                  data-watch-party-hand
-                >
-                  <UserAvatar
-                    name={person.displayName}
-                    avatarUrl={person.avatarUrl}
-                    rounded="full"
-                    className="h-6 w-6 shrink-0"
-                  />
-                  <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                    {person.displayName}
-                  </span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() =>
-                      void props.onStageAction?.("invite", person.userId)
-                    }
-                    data-watch-party-invite
-                  >
-                    {t("watchParty.stage.invite")}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {party.stage.invited.length > 0 && (
-            <>
-              <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-                {t("watchParty.stage.title")}
-              </p>
-              <ul className="flex flex-col gap-1">
-                {party.stage.invited.map((person) => (
-                  <li key={person.userId} className="flex items-center gap-2">
-                    <UserAvatar
-                      name={person.displayName}
-                      avatarUrl={person.avatarUrl}
-                      rounded="full"
-                      className="h-6 w-6 shrink-0"
-                    />
-                    <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                      {person.displayName}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        void props.onStageAction?.("remove", person.userId)
-                      }
-                      data-watch-party-stage-remove
-                    >
-                      {t("watchParty.stage.remove")}
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            </>
-            )}
-          </div>
-        )}
-      </DialogBody>
-    </Dialog>
+      stage
+    />
   );
 
   const hostGone = party.hostDisconnectedAt !== null && (

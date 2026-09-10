@@ -54,7 +54,7 @@ const SLOWMODE_KEYS: Record<number, MessageKey> = {
   21600: "channelMeta.slowMode.6h",
 };
 
-function slowModeKey(seconds: number): MessageKey {
+export function slowModeKey(seconds: number): MessageKey {
   return SLOWMODE_KEYS[seconds] ?? "channelMeta.slowMode.custom";
 }
 

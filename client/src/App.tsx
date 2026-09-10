@@ -106,8 +106,7 @@ import { isDesktopApp } from "@/lib/desktop";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
-  shouldOfferWatchPartyHostHint,
-  shouldOfferWatchPartyViewerHint,
+    shouldOfferWatchPartyViewerHint,
   winningFeatureHint,
 } from "@/lib/feature-hints";
 import { canActOnMemberClient } from "@/lib/role-hierarchy";
@@ -5723,12 +5722,6 @@ function MainAppContent({
               voiceState.channelLive[selectedChannel.id],
               voiceState.occupancy[selectedChannel.id],
             )}
-            showHostHint={shouldOfferWatchPartyHostHint({
-              seen: false,
-              automated: false,
-              settingUp:
-                watchParties.byChannel[selectedChannel.id]?.state === "draft",
-            })}
             showViewerHint={shouldOfferWatchPartyViewerHint({
               seen: false,
               automated: false,
@@ -5828,12 +5821,6 @@ function MainAppContent({
               voiceState.channelLive[selectedChannel.id],
               voiceState.occupancy[selectedChannel.id],
             )}
-            showHostHint={shouldOfferWatchPartyHostHint({
-              seen: false,
-              automated: false,
-              settingUp:
-                watchParties.byChannel[selectedChannel.id]?.state === "draft",
-            })}
             showViewerHint={shouldOfferWatchPartyViewerHint({
               seen: false,
               automated: false,
