@@ -837,7 +837,7 @@ test("the three states a real event produces read differently", async ({
   // with a countdown and a way to start early, never a live bar.
   await page.locator("[data-live-party-create]").click();
   await page.locator("[data-create-watch-party-name]").fill("Sessão coruja");
-  await page.locator("[data-create-watch-party-schedule]").check();
+  await page.locator("[data-create-watch-party-schedule]").click();
   await page.locator("[data-create-watch-party-submit]").click();
 
   await expect(page.getByTestId("watch-party-scheduled")).toBeVisible({

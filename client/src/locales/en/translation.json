@@ -2860,6 +2860,8 @@
   "watchParty.create.submit": "Set it up",
   "watchParty.create.scheduleToggle": "Pick a time",
   "watchParty.create.whenLabel": "When ({timezone})",
+  "watchParty.create.scheduleHint": "Without a time it stays private until you go live. With one, everyone sees it and can ask to be reminded.",
+  "watchParty.create.whenLabelShort": "When",
   "watchParty.create.error": "Could not create it. Try again.",
   "watchParty.setup.heading": "Only you can see this",
   "watchParty.setup.pick": "Pick what to share",
