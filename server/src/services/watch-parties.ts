@@ -24,6 +24,11 @@ import {
   deleteChannelOverwrite,
   upsertChannelOverwrite,
 } from "./roles.js";
+import {
+  cachedWatchPartySeatSnapshot,
+  watchPartySeatForUser,
+  type WatchPartySeatSnapshot,
+} from "./watch-party-seat-cache.js";
 
 /**
  * Imported lazily, at the two call sites, and deliberately.
@@ -253,20 +258,18 @@ export async function getActiveWatchPartyRow(
 }
 
 /**
- * What `join-voice-room` needs to know about this channel's party, in ONE
- * query, for one person.
+ * What `join-voice-room` needs to know about this channel's party.
  *
- * ONE QUERY BECAUSE OF WHERE IT RUNS. This is on the join path, which the
- * 2026-09-05 spike ran several hundred times in an evening against a database
- * answering in 80 to 240 ms with the pool pinned; a comment in `ws/voice.ts`
- * already records two dead round trips being removed from it for exactly that
- * reason. So the co-host and the invitation are `EXISTS` subqueries on the
- * same statement rather than the two extra calls `listCohostIds` and the
- * stage loader would have cost, and `ws/voice.ts` skips the call entirely for
- * anybody holding START_WATCH_PARTY, who is allowed in regardless.
+ * THE CACHE SITS IN FRONT. The snapshot is per channel (voice on or off, the
+ * host, the co-host ids, the stage-invite ids) and the per-user fields are
+ * derived from those lists, so a 500-person audience is one query rather
+ * than 500. `ws/voice.ts` still skips the call entirely for anybody holding
+ * START_WATCH_PARTY. A miss, a restart, or a mutation that dropped the
+ * snapshot is the only time this hits the database.
  *
- * `null` means there is no active party here, which is not the same as a
- * closed room: see `mayTakeWatchPartySeat`.
+ * ONE QUERY ON A MISS, not one EXISTS per person. The lists come back on
+ * the same statement. `null` means there is no active party here, which is
+ * not the same as a closed room: see `mayTakeWatchPartySeat`.
  */
 export async function loadWatchPartySeat(
   channelId: string,
@@ -277,20 +280,37 @@ export async function loadWatchPartySeat(
   isCohost: boolean;
   isInvited: boolean;
 } | null> {
+  const snapshot = await cachedWatchPartySeatSnapshot(
+    channelId,
+    fetchWatchPartySeatSnapshot,
+  );
+  return watchPartySeatForUser(snapshot, userId);
+}
+
+/**
+ * The channel-level row the seat cache stores. Kept next to the loader so
+ * the SQL and `parseOptions` (legacy `voiceEnabled` included) cannot drift
+ * from what a cache miss would have returned per user.
+ */
+async function fetchWatchPartySeatSnapshot(
+  channelId: string,
+): Promise<WatchPartySeatSnapshot> {
   const result = await getPool().query<{
     options: unknown;
     host_user_id: string;
-    is_cohost: boolean;
-    is_invited: boolean;
+    cohost_ids: unknown;
+    invited_ids: unknown;
   }>(
     `SELECT s.options, s.host_user_id,
-            EXISTS (SELECT 1 FROM channel_session_cohosts c
-                     WHERE c.session_id = s.id AND c.user_id = $2) AS is_cohost,
-            EXISTS (SELECT 1 FROM channel_session_stage_invites i
-                     WHERE i.session_id = s.id AND i.user_id = $2) AS is_invited
+            COALESCE((SELECT array_agg(c.user_id)
+                        FROM channel_session_cohosts c
+                       WHERE c.session_id = s.id), ARRAY[]::uuid[]) AS cohost_ids,
+            COALESCE((SELECT array_agg(i.user_id)
+                        FROM channel_session_stage_invites i
+                       WHERE i.session_id = s.id), ARRAY[]::uuid[]) AS invited_ids
        FROM channel_sessions s
       WHERE s.channel_id = $1 AND s.status IN ${ACTIVE_STATES}`,
-    [channelId, userId],
+    [channelId],
   );
   const row = result.rows[0];
   if (!row) {
@@ -298,10 +318,14 @@ export async function loadWatchPartySeat(
   }
   return {
     voiceEnabled: parseOptions(row.options).voiceEnabled,
-    isHost: row.host_user_id === userId,
-    isCohost: row.is_cohost,
-    isInvited: row.is_invited,
+    hostUserId: row.host_user_id,
+    cohostIds: asIdList(row.cohost_ids),
+    invitedIds: asIdList(row.invited_ids),
   };
+}
+
+function asIdList(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
 export async function listCohostIds(sessionId: string): Promise<string[]> {

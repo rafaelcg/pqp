@@ -10,6 +10,10 @@ import {
   markWatchPartyHostBack,
   markWatchPartyHostGone,
 } from "../services/watch-parties.js";
+import {
+  invalidateWatchPartySeat,
+  rememberWatchPartySeatSnapshot,
+} from "../services/watch-party-seat-cache.js";
 import { getChannelAudience } from "../services/servers.js";
 import { computeMemberPermissions } from "../services/permissions.js";
 import { canAccessChannel } from "../services/users.js";
@@ -71,6 +75,20 @@ export async function broadcastWatchParty(sessionId: string): Promise<void> {
   if (!row) {
     return;
   }
+  const terminal = row.status === "ended" || row.status === "cancelled";
+  // THE SEAT CACHE. Every mutation fans out through here, including a Voz
+  // toggle that leaves `status` alone (so `noteWatchPartyState` is a no-op
+  // for it). Drop the snapshot so the next join cannot keep a stale "voice
+  // off" after the host turned it on, or a stale "voice on" after they
+  // turned it off. A party that just ended is remembered as "none", which
+  // is what lets the channel join like an ordinary voice room again without
+  // another round trip. Before the audience walk on purpose: a fan-out
+  // that bails must not leave the join gate holding yesterday's answer.
+  if (terminal) {
+    rememberWatchPartySeatSnapshot(row.channel_id, null);
+  } else {
+    invalidateWatchPartySeat(row.channel_id);
+  }
   const audience = await getChannelAudience(row.channel_id).catch(() => null);
   if (!audience) {
     return;
@@ -89,7 +107,6 @@ export async function broadcastWatchParty(sessionId: string): Promise<void> {
   const cohosts = await loadCohostRows(row.id).catch(() => []);
   const cohostIds = cohosts.map((c) => c.user_id);
   const cache: PermissionCache = new Map();
-  const terminal = row.status === "ended" || row.status === "cancelled";
 
   const targets: { socket: import("ws").WebSocket; userId: string }[] = [];
   forEachAuthenticatedSocket((socket, user) => {

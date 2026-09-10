@@ -289,14 +289,18 @@ describe("who gets a seat in a watch party with no voice", () => {
     isInvited: false,
   };
 
-  it("refuses a viewer, and gives them no welcome to work with", async () => {
+  it("refuses a viewer, and tells them so even on a cold join", async () => {
     bits.byUser.set("viewer", PERMISSION_DEFAULT_EVERYONE);
     party.seat = { ...audience };
     const rec = await join(recorder(), "viewer", CINEMA);
     expect(frame(rec, "welcome")).toBeUndefined();
-    // Not a partial join either: nothing at all came back, so there is no
-    // half-seat in the roster for the room to trip over.
-    expect(rec.frames).toEqual([]);
+    // A cold join has no resumePeerId. Android sits on "connecting" until a
+    // watchdog fires unless this frame lands; web hangs up; iOS treats it
+    // as the join being over. Same shape a resume already got.
+    expect(frame(rec, "voice-join-refused")).toEqual({
+      type: "voice-join-refused",
+      voiceChannelId: CINEMA,
+    });
   });
 
   it("lets the host in without asking the database", async () => {
@@ -383,7 +387,8 @@ describe("who gets a seat in a watch party with no voice", () => {
     // Every other refusal on this path sends `voice-join-refused` for a
     // resume, and this one has to as well: a client holding a peer id it can
     // no longer use must be told, or it retries the same refused join with
-    // backoff for the length of the party.
+    // backoff for the length of the party. The cold-join case is pinned
+    // above; this keeps the resume shape from drifting off it.
     bits.byUser.set("viewer", PERMISSION_DEFAULT_EVERYONE);
     party.seat = { ...audience };
     const rec = recorder();

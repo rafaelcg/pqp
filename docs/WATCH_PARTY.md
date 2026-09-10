@@ -463,7 +463,7 @@ the only way into a room. Who is always let in, and why each:
   and have to be able to get into the room to present. This covers the host on
   every path, and it costs nothing: `canStream` in a watch party IS that bit
   (`canStartWatchPartyStream`), already resolved at the join, so the gate skips
-  its query entirely and only people about to be refused pay for one;
+  the snapshot entirely for them;
 - **the host and the co-hosts by name**, because a co-host is any member the
   host promoted and need not hold the bit;
 - **anyone invited up to the stage**, for whom the invitation is precisely the
@@ -487,17 +487,27 @@ own show minutes before it starts. The worst an allowed join costs is one
 seat; the worst a wrongly refused one costs is the party. A refusal is
 `voice.watchPartySeatRefused` in the log.
 
+**The audience does not pay per join.** Presenters (`START_WATCH_PARTY`)
+still skip the snapshot entirely. Everybody else reads a per-channel
+snapshot (whether voice is on, the host, the co-hosts, the stage invites)
+that `loadWatchPartySeat` caches in front of the database, so a 500-person
+film night is one query rather than 500. Per-user fields are derived from
+those id lists. `broadcastWatchParty` drops the snapshot on every mutation
+(Voz on or off, a co-host, a stage invite) so a stale "voice off" cannot
+lock a host's friends out after they turned it on, and a stale "voice on"
+cannot seat the audience after they turned it off.
+
 **What it does to Android, which is the client this touches hardest.**
 `Models.kt` has `isVoice = type == "voice" || type == "watch_party"`, so
 Android treats a party room as an ordinary voice channel and offers a join;
 it has no watch surface, so what it could ever get there was audio from
 whoever was on a microphone. From now on that join is refused in a voiceless
-party, and refused the way every other refusal on this path is refused: a
-cold join gets no frame back at all, so the app sits in "connecting" rather
-than being told. That is not a new failure shape (a timeout, a block and a
-CONNECT deny have always ended the same way) and it is not a good one. The
-fix is a `voice-join-refused` for cold joins as well as resumes, which is a
-wider change than this one and wants the three clients moving together.
+party. The server answers with `voice-join-refused` for a cold join as well
+as a resume, so the app leaves "connecting" instead of sitting there. Other
+refusals on the same path (a timeout, a block, a CONNECT deny) are still
+silent for a cold join; Android's `JoinWatchdog` is the backstop for those.
+iOS copy for this frame still talks about rejoining, which is why the
+blanket send stays off those other gates.
 
 **Legacy rows read as ON.** A party stored before this option existed has no
 `voiceEnabled` key, and it was set up when every watch party was a voice room.

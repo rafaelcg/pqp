@@ -3400,10 +3400,13 @@ export async function handleVoiceMessage(
      * the party goes.
      *
      * SKIPPED ENTIRELY FOR ANYBODY WHO MAY PRESENT HERE, which is the host on
-     * every path, so the query below runs only for people who are about to be
-     * refused, and the common case costs nothing. `canStream` in a watch
-     * party IS `START_WATCH_PARTY` (`canStartWatchPartyStream`), so the two
-     * gates read one resolution and cannot disagree.
+     * every path, so the snapshot below is not even consulted for them.
+     * `canStream` in a watch party IS `START_WATCH_PARTY`
+     * (`canStartWatchPartyStream`), so the two gates read one resolution and
+     * cannot disagree. Everybody else reads a per-channel snapshot (voice
+     * on or off, host, co-hosts, stage invites) that `loadWatchPartySeat`
+     * caches in front of the database: a 500-person audience is one query,
+     * not 500. `broadcastWatchParty` drops that snapshot on every mutation.
      *
      * FAILS OPEN. A database hiccup here must not lock a host out of their
      * own show minutes before it starts; the worst an allowed join can cost
@@ -3427,7 +3430,16 @@ export async function handleVoiceMessage(
         logEvent("voice.watchPartySeatRefused", {
           channelId: payload.voiceChannelId,
         });
-        refuseResume();
+        // A COLD JOIN TOO. `refuseResume` only answers a resume, because the
+        // other gates on this path (no access, a timeout, a block) have
+        // always been silent and iOS treats `voice-join-refused` as "could
+        // not rejoin". A watch-party viewer is different: Android treats the
+        // channel as an ordinary voice room and sits on "connecting" until
+        // a watchdog fires, unless we say so. Same frame shape as a resume.
+        send(socket, {
+          type: "voice-join-refused",
+          voiceChannelId: payload.voiceChannelId,
+        });
         return;
       }
     }
