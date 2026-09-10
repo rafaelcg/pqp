@@ -177,6 +177,7 @@ import {
   isRoomPinnedLocally,
   leaveVoiceByResumeToken,
   notifyVoiceModeration,
+  setVoiceUserHandRaised,
   setVoiceUserServerMuted,
   refreshVoiceIdentity,
   describeChannelVoiceTransport,
@@ -969,7 +970,14 @@ async function requireOutranked(
   serverId: string,
   actorId: string,
   targetUserId: string,
-  action: "kick" | "ban" | "timeout" | "disconnect" | "move" | "mute",
+  action:
+    | "kick"
+    | "ban"
+    | "timeout"
+    | "disconnect"
+    | "move"
+    | "mute"
+    | "lower hand",
 ): Promise<MemberRole | null> {
   const targetRole = await getMemberRole(serverId, targetUserId);
   if (targetRole === "owner") {
@@ -6303,13 +6311,15 @@ async function requireVoiceModeration(
   serverId: string,
   actorId: string,
   targetUserId: string,
-  action: "disconnect" | "move" | "mute",
+  action: "disconnect" | "move" | "mute" | "lower hand",
   voiceChannelId: string,
 ): Promise<void> {
   await requirePermission(
     serverId,
     actorId,
-    action === "mute" ? Permission.MUTE_MEMBERS : Permission.MOVE_MEMBERS,
+    action === "mute" || action === "lower hand"
+      ? Permission.MUTE_MEMBERS
+      : Permission.MOVE_MEMBERS,
     voiceChannelId,
   );
   if (targetUserId === actorId) {
@@ -6506,6 +6516,44 @@ router.post(
         ? "A moderator muted your microphone for everyone in the call. Only a moderator can unmute you."
         : "A moderator unmuted your microphone. You can turn it back on.",
     });
+    return { ok: true };
+  },
+);
+
+/**
+ * Lower somebody else's hand: what happens when they have been called on.
+ *
+ * WHY IT IS A MODERATION ROUTE AND NOT A WS FRAME. Raising is your own hand
+ * and rides the voice socket with the rest of your own state. Lowering
+ * somebody else's is an action taken ON a person, so it goes where the other
+ * three already live, behind the same helper, and inherits the same three
+ * answers: the actor must hold `Permission.MUTE_MEMBERS` in that channel (the
+ * bit the voice moderation actions already use, rather than a fifth bit
+ * nobody would think to grant), must outrank the target, and must not be
+ * aiming at themselves, since a person lowers their own hand from the call.
+ *
+ * NOT AUDITED, and that is a decision rather than an omission. The audit log
+ * is for sanctions somebody may have to answer for weeks later; calling on
+ * the next person in a queue is the ordinary running of a room, forty times
+ * in one stream, and filing each one would bury the rows that matter. The
+ * target sees it happen: their hand comes down on the same roster everyone
+ * else reads.
+ *
+ * Idempotent. Two moderators reaching for the same name is not an error, and
+ * neither is a hand that came down on its own a moment earlier.
+ */
+router.post(
+  "/api/servers/:serverId/members/:userId/voice-lower-hand",
+  async ({ user }, { serverId, userId }) => {
+    const voiceChannelId = await requireVoiceTarget(serverId!, userId!);
+    await requireVoiceModeration(
+      serverId!,
+      user.id,
+      userId!,
+      "lower hand",
+      voiceChannelId,
+    );
+    await setVoiceUserHandRaised(voiceChannelId, userId!, false);
     return { ok: true };
   },
 );

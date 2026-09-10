@@ -1327,6 +1327,17 @@ export const setMemberVoiceMuted = (
     muted,
   });
 
+/**
+ * Lower one person's raised hand in the voice room they are in: what a
+ * moderator does when they call on somebody. `Permission.MUTE_MEMBERS` in
+ * that channel, checked on the server. Idempotent.
+ */
+export const lowerMemberVoiceHand = (serverId: string, userId: string) =>
+  post<{ ok: boolean }>(
+    `/api/servers/${serverId}/members/${userId}/voice-lower-hand`,
+    {},
+  );
+
 /** `before` is the last-loaded entry's own `id` — a bare, ever-increasing
  * cursor, unlike the message list's timestamp-plus-id pair (see the schema
  * comment on `audit_log` for why the simpler cursor is safe here). */

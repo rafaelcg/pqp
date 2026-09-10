@@ -9,6 +9,7 @@ import {
   FolderInput,
   FolderMinus,
   FolderPlus,
+  Hand,
   Lock,
   Mic,
   MicOff,
@@ -210,6 +211,8 @@ interface ChannelListProps {
   onMoveVoiceOccupant?: (userId: string, channelId: string) => void;
   onDisconnectVoiceOccupant?: (userId: string) => void;
   onServerMuteOccupant?: (userId: string, muted: boolean) => void;
+  /** Lower one person's raised hand: "you're up". Same bit as the mute. */
+  onLowerOccupantHand?: (userId: string) => void;
   onKickOccupant?: (userId: string, name: string) => void;
   onSetPeerVolume?: (userId: string, volume: number) => void;
   onSetScreenVolume?: (userId: string, volume: number) => void;
@@ -322,6 +325,7 @@ export function ChannelList({
   onMoveVoiceOccupant,
   onDisconnectVoiceOccupant,
   onServerMuteOccupant,
+  onLowerOccupantHand,
   onKickOccupant,
   onSetPeerVolume,
   onSetScreenVolume,
@@ -704,6 +708,7 @@ export function ChannelList({
       mutedForMe,
       canServerMute: canMuteIn(channel.id),
       serverMuted: person.serverMuted,
+      handRaised: person.handRaisedAt != null,
       canDisconnect: canMoveIn(channel.id),
       canKick: canKickUser(person.userId),
     });
@@ -764,6 +769,13 @@ export function ChannelList({
           label: t("voice.occupant.unmuteForMe"),
           icon: Volume2,
           onSelect: () => onSetPeerVolume?.(person.userId, 1),
+        });
+      } else if (action === "lowerHand") {
+        personal.push({
+          id: "lower-hand",
+          label: t("voice.occupant.lowerHand"),
+          icon: Hand,
+          onSelect: () => onLowerOccupantHand?.(person.userId),
         });
       } else if (action === "serverMute") {
         personal.push({

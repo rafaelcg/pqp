@@ -2832,3 +2832,159 @@ describe("telling the SFU what this listener wants to hear", () => {
     expect(sfuAudioPlans).toEqual([]);
   });
 });
+
+/**
+ * THE HALF OF THE RAISED HAND THAT ONLY THIS MACHINE CAN DO.
+ *
+ * The queue's order is the server's and is tested there. What is here is the
+ * one rule the server cannot enforce, because `speaking` is deliberately not
+ * on the roster (see the fan-out note on `voiceParticipantSchema`): the person
+ * who takes their turn puts their own hand down.
+ *
+ * Plus the optimistic half. A raise button that waits a round trip to look
+ * pressed feels broken, and a button that believes itself forever would hide
+ * a moderator lowering it, so this pins both ends of that trade.
+ */
+describe("raising a hand", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    vi.mocked(connectLiveKit).mockClear();
+  });
+
+  async function connected() {
+    const { transport, sent } = createTransport();
+    const voice = createVoiceController(transport);
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("mesh"));
+    await settle();
+    sent.length = 0;
+    return { voice, sent };
+  }
+
+  /** A roster for our own channel saying what our hand is doing. */
+  function rosterWithSelfHand(
+    handRaisedAt: number | null,
+  ): Extract<VoiceSignalingMessage, { type: "voice-roster" }> {
+    return {
+      type: "voice-roster",
+      voiceChannelId: CHANNEL,
+      participants: [
+        {
+          peerId: PEER,
+          userId: "00000000-0000-4000-8000-0000000000cc",
+          displayName: "Me",
+          avatarUrl: null,
+          sharingScreen: false,
+          muted: false,
+          deafened: false,
+          serverMuted: false,
+          handRaisedAt,
+        },
+      ],
+    };
+  }
+
+  it("declares the raise and looks pressed before the roster comes back", async () => {
+    const { voice, sent } = await connected();
+    voice.toggleRaisedHand();
+    expect(sent).toContainEqual({ type: "set-raised-hand", raised: true });
+    expect(voice.getState().handRaisedAt).not.toBeNull();
+  });
+
+  it("puts your own hand down when you start transmitting", async () => {
+    const { voice, sent } = await connected();
+    voice.setInputMode("push-to-talk");
+    voice.toggleRaisedHand();
+    sent.length = 0;
+
+    // The key goes down: this person is taking their turn, which is what the
+    // queue was for. Nobody else's hand moves, because nobody else's is ours.
+    voice.setPushToTalkActive(true);
+    expect(voice.getState().isTransmitting).toBe(true);
+    expect(sent).toContainEqual({ type: "set-raised-hand", raised: false });
+    expect(voice.getState().handRaisedAt).toBeNull();
+  });
+
+  it("says it once, not on every syllable", async () => {
+    const { voice, sent } = await connected();
+    voice.setInputMode("push-to-talk");
+    voice.toggleRaisedHand();
+    sent.length = 0;
+
+    voice.setPushToTalkActive(true);
+    voice.setPushToTalkActive(false);
+    voice.setPushToTalkActive(true);
+    expect(
+      sent.filter((frame) => frame.type === "set-raised-hand"),
+    ).toHaveLength(1);
+  });
+
+  it("does not lower a hand that was never up", async () => {
+    const { voice, sent } = await connected();
+    voice.setInputMode("push-to-talk");
+    sent.length = 0;
+    voice.setPushToTalkActive(true);
+    expect(sent.filter((f) => f.type === "set-raised-hand")).toHaveLength(0);
+  });
+
+  it("ignores a roster that still describes the hand we just changed", async () => {
+    const { voice } = await connected();
+    voice.toggleRaisedHand();
+
+    // Built by the server before our frame reached it. Adopting it would snap
+    // the button back for a beat and then forward again.
+    voice.handleSignaling(rosterWithSelfHand(null));
+    expect(voice.getState().handRaisedAt).not.toBeNull();
+  });
+
+  it("lets a moderator lowering it reach us, since the roster is the only word", async () => {
+    const { voice } = await connected();
+    voice.toggleRaisedHand();
+    // Our own declaration, echoed: from here the room is the authority again.
+    voice.handleSignaling(rosterWithSelfHand(1_000));
+    expect(voice.getState().handRaisedAt).toBe(1_000);
+
+    voice.handleSignaling(rosterWithSelfHand(null));
+    expect(voice.getState().handRaisedAt).toBeNull();
+  });
+
+  it("applies a moderator lower once the echo window expires, instead of keeping the button pressed", async () => {
+    const { voice } = await connected();
+    vi.useFakeTimers();
+    try {
+      voice.toggleRaisedHand();
+      expect(voice.getState().handRaisedAt).not.toBeNull();
+
+      // Arrives inside the window: keep the optimistic raise, but retain the
+      // null so it is not forgotten.
+      voice.handleSignaling(rosterWithSelfHand(null));
+      expect(voice.getState().handRaisedAt).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(voice.getState().handRaisedAt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reverts a raise that never echoed, so a dropped frame cannot stick forever", async () => {
+    const { voice } = await connected();
+    vi.useFakeTimers();
+    try {
+      voice.toggleRaisedHand();
+      expect(voice.getState().handRaisedAt).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(voice.getState().handRaisedAt).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves the queue behind when the call ends", async () => {
+    const { voice } = await connected();
+    voice.toggleRaisedHand();
+    voice.leave();
+    expect(voice.getState().handRaisedAt).toBeNull();
+  });
+});

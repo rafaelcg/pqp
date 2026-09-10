@@ -694,6 +694,12 @@ export async function listVoiceRoomsByTransport(): Promise<
 export type VoiceRosterPeerRow = VoicePeerRow & {
   /** `voice_server_mutes` has a row for this (room, user): see `setVoiceServerMute`. */
   serverMuted: boolean;
+  /**
+   * `voice_raised_hands.raised_at` for this (room, user) as epoch
+   * milliseconds, or null when the hand is down. The queue's ORDER, read off
+   * the same row on every instance: see `setVoiceRaisedHand`.
+   */
+  handRaisedAt: number | null;
 };
 
 export interface VoiceRoomRoster {
@@ -706,6 +712,7 @@ interface RosterDbRow extends VoicePeerDbRow {
   room_channel_id: string;
   transport: VoiceRoomTransport;
   server_muted: boolean;
+  hand_raised_at: Date | null;
 }
 
 const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport,
@@ -715,7 +722,11 @@ const ROSTER_SELECT = `SELECT r.channel_id AS room_channel_id, r.transport,
        EXISTS (
          SELECT 1 FROM voice_server_mutes m
           WHERE m.channel_id = p.channel_id AND m.user_id = p.user_id
-       ) AS server_muted
+       ) AS server_muted,
+       (
+         SELECT h.raised_at FROM voice_raised_hands h
+          WHERE h.channel_id = p.channel_id AND h.user_id = p.user_id
+       ) AS hand_raised_at
   FROM voice_rooms r
   LEFT JOIN voice_peers p ON p.channel_id = r.channel_id`;
 
@@ -733,7 +744,13 @@ function groupRosters(rows: RosterDbRow[]): VoiceRoomRoster[] {
     }
     // A room row with no peers (the LEFT JOIN's null side) is still a room.
     if (row.peer_id) {
-      room.peers.push({ ...mapRow(row), serverMuted: row.server_muted });
+      room.peers.push({
+        ...mapRow(row),
+        serverMuted: row.server_muted,
+        handRaisedAt: row.hand_raised_at
+          ? row.hand_raised_at.getTime()
+          : null,
+      });
     }
   }
   return [...byRoom.values()];
@@ -809,6 +826,88 @@ export async function isVoiceServerMuted(
     [channelId, userId],
   );
   return (result.rowCount ?? 0) > 0;
+}
+
+// --- raised hands -----------------------------------------------------------
+//
+// The cluster's copy of `roomRaisedHands` (ws/voice.ts): one row per (room,
+// person) whose hand is up, carrying the instant it went up. Written by the
+// instance the raise landed on before it publishes `voice.raisedHand`, read
+// by a join (so a seat minted anywhere comes back holding its place) and by
+// every roster (`hand_raised_at` above). The row cascades away with the room.
+
+/**
+ * Put one person's hand up, or take it down. Returns the instant the hand is
+ * standing at, in epoch milliseconds, or null when it is down.
+ *
+ * IDEMPOTENT, AND THE FIRST RAISE IS THE ONE THAT COUNTS. `DO NOTHING` on
+ * conflict, then the row is read back, so a client that sends `raised: true`
+ * twice (a resend, a redeclaration after a reconnect) keeps the place it
+ * already had instead of going to the back of its own queue.
+ *
+ * A room that has no row any more (everybody left while the request was in
+ * flight) has nothing to raise a hand in: the insert fails its foreign key
+ * and is treated as a hand that is down, since the queue's lifetime was the
+ * room's anyway.
+ */
+export async function setVoiceRaisedHand(
+  channelId: string,
+  userId: string,
+  raised: boolean,
+): Promise<number | null> {
+  const pool = getPool();
+  if (!raised) {
+    await track(
+      pool.query(
+        `DELETE FROM voice_raised_hands WHERE channel_id = $1 AND user_id = $2`,
+        [channelId, userId],
+      ),
+      "raisedHand",
+    );
+    return null;
+  }
+  const work = pool
+    .query<{ raised_at: Date }>(
+      `INSERT INTO voice_raised_hands (channel_id, user_id) VALUES ($1, $2)
+       ON CONFLICT (channel_id, user_id) DO NOTHING`,
+      [channelId, userId],
+    )
+    .then(() =>
+      pool.query<{ raised_at: Date }>(
+        `SELECT raised_at FROM voice_raised_hands
+          WHERE channel_id = $1 AND user_id = $2`,
+        [channelId, userId],
+      ),
+    )
+    .catch((error: unknown) => {
+      if ((error as { code?: string }).code === "23503") {
+        return null;
+      }
+      throw error;
+    });
+  const result = await track(work, "raisedHand");
+  const row = result && "rows" in result ? result.rows[0] : undefined;
+  return row ? row.raised_at.getTime() : null;
+}
+
+/**
+ * When this person's hand went up in this room per the rows, or null.
+ *
+ * Read on the way into a room, so a seat minted on any instance (or after a
+ * restart emptied the map) comes back holding the place the queue already
+ * gave it.
+ */
+export async function getVoiceRaisedHand(
+  channelId: string,
+  userId: string,
+): Promise<number | null> {
+  const result = await getPool().query<{ raised_at: Date }>(
+    `SELECT raised_at FROM voice_raised_hands
+      WHERE channel_id = $1 AND user_id = $2`,
+    [channelId, userId],
+  );
+  const row = result.rows[0];
+  return row ? row.raised_at.getTime() : null;
 }
 
 // --- watch party ------------------------------------------------------------

@@ -3,6 +3,7 @@ import {
   ChevronUp,
   Crop,
   EyeOff,
+  Hand,
   Loader2,
   Maximize2,
   MonitorPlay,
@@ -64,6 +65,7 @@ import {
 } from "@/components/voice/document-fullscreen";
 import { CinemaHint } from "@/components/voice/cinema-hint";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
+import { RaisedHandQueue } from "@/components/voice/raised-hand-queue";
 import { useImmersiveStage } from "@/hooks/use-immersive-stage";
 import {
   chooseFullscreenStrategy,
@@ -533,6 +535,18 @@ export interface CallStageProps {
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
+  /**
+   * Our own hand in the room's queue. Absent leaves the control off the bar
+   * entirely, which is what a mount with no voice controller wants.
+   */
+  onToggleRaisedHand?: () => void;
+  /**
+   * `Permission.MUTE_MEMBERS` in this channel, the bit the other voice
+   * moderation actions already use. Never set in a conversation call, which
+   * has no moderators.
+   */
+  canLowerHands?: boolean;
+  onLowerHand?: (userId: string) => void;
   /** Shrinks the listener chips. Same setting the old lobby grid used. */
   compactPeers?: boolean;
   /**
@@ -584,6 +598,9 @@ export function CallStage({
   onDismissShare,
   onWatchShare,
   onRetryPeer,
+  onToggleRaisedHand,
+  canLowerHands = false,
+  onLowerHand,
   compactPeers = false,
   ringWhenAlone = true,
   fill = false,
@@ -640,6 +657,9 @@ export function CallStage({
       onDismissShare={onDismissShare}
       onWatchShare={onWatchShare}
       onRetryPeer={onRetryPeer}
+      onToggleRaisedHand={onToggleRaisedHand}
+      canLowerHands={canLowerHands}
+      onLowerHand={onLowerHand}
       compactPeers={compactPeers}
       ringWhenAlone={ringWhenAlone}
       fill={fill}
@@ -679,6 +699,9 @@ function ActiveCall({
   onDismissShare,
   onWatchShare,
   onRetryPeer,
+  onToggleRaisedHand,
+  canLowerHands = false,
+  onLowerHand,
   compactPeers = false,
   ringWhenAlone = true,
   fill = false,
@@ -722,6 +745,18 @@ function ActiveCall({
   onDismissShare?: (peerId: string) => void;
   onWatchShare?: (peerId: string) => void;
   onRetryPeer?: (peerId: string) => void;
+  /**
+   * Our own hand in the room's queue. Absent leaves the control off the bar
+   * entirely, which is what a mount with no voice controller wants.
+   */
+  onToggleRaisedHand?: () => void;
+  /**
+   * `Permission.MUTE_MEMBERS` in this channel, the bit the other voice
+   * moderation actions already use. Never set in a conversation call, which
+   * has no moderators.
+   */
+  canLowerHands?: boolean;
+  onLowerHand?: (userId: string) => void;
   compactPeers?: boolean;
   ringWhenAlone?: boolean;
   fill?: boolean;
@@ -1205,6 +1240,10 @@ function ActiveCall({
 
   const pushToTalk = inputMode === "push-to-talk";
   const pushToTalkBlocked = voiceState.isMuted || voiceState.isDeafened;
+  // The room as the roster describes it, which is where the hands are.
+  const roomParticipants = voiceState.voiceChannelId
+    ? (voiceState.occupancy[voiceState.voiceChannelId] ?? [])
+    : [];
   const showMeshWarning =
     !voiceState.usingSfu && voiceState.remotePeers.length >= MESH_VOICE_WARNING;
 
@@ -1246,6 +1285,9 @@ function ActiveCall({
       pushToTalkKeyLabel={pushToTalkKeyLabel}
       windowFocused={windowFocused}
       onPushToTalk={onPushToTalk}
+      onToggleRaisedHand={onToggleRaisedHand}
+      canLowerHands={canLowerHands}
+      onLowerHand={onLowerHand}
     />
   );
 
@@ -1327,6 +1369,14 @@ function ActiveCall({
             </span>
           )}
         </p>
+        {/* The queue on the shape most calls actually have. An audio-only
+            call never opens an expanded stage, so the panel above the
+            controls would never be seen in the ordinary case. */}
+        <RaisedHandQueue
+          compact
+          participants={roomParticipants}
+          selfUserId={voiceState.self?.userId ?? null}
+        />
         {controls}
       </div>
     );
@@ -1914,6 +1964,9 @@ export function CallControls({
   pushToTalkKeyLabel = null,
   windowFocused = true,
   onPushToTalk,
+  onToggleRaisedHand,
+  canLowerHands = false,
+  onLowerHand,
 }: {
   voiceState: VoiceState;
   collapsed: boolean;
@@ -1942,6 +1995,11 @@ export function CallControls({
   pushToTalkKeyLabel?: string | null;
   windowFocused?: boolean;
   onPushToTalk?: (held: boolean) => void;
+  /** Our own hand, up or down. Absent leaves the control off the bar. */
+  onToggleRaisedHand?: () => void;
+  /** `Permission.MUTE_MEMBERS` here: may lower somebody else's hand. */
+  canLowerHands?: boolean;
+  onLowerHand?: (userId: string) => void;
 }) {
   const { t } = useTranslation();
   // Probed once per mount — whether the browser has getDisplayMedia never
@@ -1995,6 +2053,15 @@ export function CallControls({
   // them anyway. One grant, read once, hides both.
   const listenOnly = !voiceState.canSpeak;
   const noVideo = !voiceState.canStream;
+  // The room as the roster describes it, which is where the hands are. Self
+  // included: your own hand is in the same queue as everybody else's.
+  const roomParticipants = voiceState.voiceChannelId
+    ? (voiceState.occupancy[voiceState.voiceChannelId] ?? [])
+    : [];
+  const handRaised = voiceState.handRaisedAt !== null;
+  const handLabel = handRaised
+    ? t("voice.hand.lower")
+    : t("voice.hand.raise");
 
   return (
     <div className={cn("flex flex-col items-center", collapsed ? "gap-0" : "gap-1.5")}>
@@ -2006,6 +2073,20 @@ export function CallControls({
             body={t("featureHint.watchParty.body")}
           />
         </div>
+      )}
+      {/* The queue sits above the bar, where the room is, rather than in a
+          panel somebody has to go and open. Hidden on the slim bar, which has
+          no room for a list: the hands are still on every person's row in the
+          sidebar, and the raise button below survives the squeeze because
+          unlike mute it has nowhere else to live. */}
+      {!collapsed && (
+        <RaisedHandQueue
+          participants={roomParticipants}
+          selfUserId={voiceState.self?.userId ?? null}
+          canLowerHands={canLowerHands}
+          onLowerHand={onLowerHand}
+          className="mb-1.5"
+        />
       )}
       {pushToTalk && (
         <div className={cn("w-full", collapsed ? "mb-1" : "mb-0.5")}>
@@ -2143,6 +2224,31 @@ export function CallControls({
         >
           {t("voice.bar.listenOnly")}
         </span>
+      )}
+      {/* Raising a hand is the one control here that a listen-only seat needs
+          MORE than anyone else, so it is never hidden by `listenOnly` and
+          never disabled: lowering your own hand has to work whatever else the
+          room has decided about you. It also survives the collapsed bar,
+          because unlike mute it has no second home on the user panel. */}
+      {onToggleRaisedHand && (
+        <Tooltip label={handLabel}>
+          <button
+            type="button"
+            aria-pressed={handRaised}
+            aria-label={handLabel}
+            data-raise-hand={handRaised ? "up" : "down"}
+            className={cn(
+              "flex items-center justify-center rounded-full",
+              size,
+              handRaised
+                ? "bg-signal/20 text-signal"
+                : "bg-ink-3 text-paper hover:bg-ink-4",
+            )}
+            onClick={onToggleRaisedHand}
+          >
+            <Hand className={iconSize} />
+          </button>
+        </Tooltip>
       )}
       {!noVideo && (
       <Tooltip

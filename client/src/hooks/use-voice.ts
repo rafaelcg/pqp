@@ -281,6 +281,21 @@ export interface VoiceState {
    * even though its SFU also stopped forwarding the track.
    */
   serverMutedPeerIds: string[];
+  /**
+   * When OUR OWN hand went up, in epoch milliseconds, or null when it is down.
+   *
+   * The room's whole queue is not duplicated here: it is already on the
+   * roster, one `handRaisedAt` per participant, and `raisedHandQueue` in
+   * @pqp/shared turns `occupancy[voiceChannelId]` into the ordered list
+   * wherever one is drawn. Holding a second copy would be a second thing to
+   * keep in sync with the first.
+   *
+   * This one field exists because the raise BUTTON cannot wait for a round
+   * trip to look pressed. It is set the moment the person clicks and
+   * reconciled against the roster (`applySelfHand`), which is also how a
+   * moderator lowering it reaches us: nothing else can change it.
+   */
+  handRaisedAt: number | null;
   /** channelId → participants currently in that voice channel */
   occupancy: Record<string, VoiceParticipant[]>;
   /** userId → 0..1 playback multiplier, persisted for the session. */
@@ -1035,6 +1050,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     self: null,
     speakingPeerIds: [],
     serverMutedPeerIds: [],
+    handRaisedAt: null,
     occupancy: {},
     peerVolumes: {},
     screenVolumes: {},
@@ -1120,18 +1136,42 @@ export function createVoiceController(transport: RealtimeTransport) {
     applyMuteToPipeline();
   }
 
+  /**
+   * Our own hand as it should be DRAWN, given what we believe and what the
+   * roster says.
+   *
+   * Presence is ours: the click has to move the icon now, and the roster
+   * describing us is always at least one round trip behind it. The NUMBER is
+   * the server's, because the number is the queue's order and two clients
+   * guessing at it is exactly the disagreement `handRaisedAt` exists to
+   * prevent. So: down when we believe it is down, and once it is up, the
+   * server's instant as soon as there is one.
+   */
+  function overlaySelfHand(person: VoiceParticipant): number | null {
+    if (state.handRaisedAt === null) {
+      return null;
+    }
+    return person.handRaisedAt ?? state.handRaisedAt;
+  }
+
   function overlayLocalSelfVoice(person: VoiceParticipant): VoiceParticipant {
     const userId = state.self?.userId;
     if (!userId || person.userId !== userId) {
       return person;
     }
-    if (person.muted === state.isMuted && person.deafened === state.isDeafened) {
+    const handRaisedAt = overlaySelfHand(person);
+    if (
+      person.muted === state.isMuted &&
+      person.deafened === state.isDeafened &&
+      (person.handRaisedAt ?? null) === handRaisedAt
+    ) {
       return person;
     }
     return {
       ...person,
       muted: state.isMuted,
       deafened: state.isDeafened,
+      handRaisedAt,
     };
   }
 
@@ -1260,6 +1300,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     state.voiceChannelId = null;
     state.speakingPeerIds = [];
     state.serverMutedPeerIds = [];
+    discardPendingHand();
+    state.handRaisedAt = null;
     state.transportFailure = failure;
     state.error = translateMessage(TRANSPORT_FAILURE_KEY[failure.reason]);
     emit();
@@ -1528,6 +1570,7 @@ export function createVoiceController(transport: RealtimeTransport) {
 
   function applyMuteToPipeline() {
     state.isTransmitting = micShouldBeOpen();
+    lowerHandOnTransmit();
     if (!pipeline) {
       return;
     }
@@ -1779,13 +1822,131 @@ export function createVoiceController(transport: RealtimeTransport) {
     const me = participants.find((p) => p.peerId === state.peerId);
     if (me) {
       applySelfServerMute(me.serverMuted);
+      applySelfHand(me.handRaisedAt ?? null);
     }
+  }
+
+  /**
+   * How long a raise or a lower we sent stays believed while the rosters
+   * disagree with it.
+   *
+   * A roster is built from what the server held when it was built, so the one
+   * that crosses our own frame on the wire still describes the old hand.
+   * Adopting it would snap the button back for a beat and then forward again,
+   * which reads as a bug. Believing it forever would be worse: a frame the
+   * limiter dropped would leave a hand up on our screen that is up nowhere
+   * else. So we hold our belief for a couple of seconds and then let the room
+   * win, which is the only side that can be right about a queue.
+   */
+  const HAND_ECHO_MS = 3_000;
+  /**
+   * Our last unacknowledged raise/lower. `seen` is the latest roster value
+   * that arrived while we were waiting — including a moderator's null —
+   * so a mismatch is retained rather than discarded. `previous` is what to
+   * revert to if the echo never comes (the frame was dropped).
+   */
+  let pendingHand: {
+    raised: boolean;
+    at: number;
+    previous: number | null;
+    seen: number | null | undefined;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
+
+  function discardPendingHand() {
+    if (!pendingHand) {
+      return;
+    }
+    clearTimeout(pendingHand.timer);
+    pendingHand = null;
+  }
+
+  function reconcilePendingHand(
+    pending: NonNullable<typeof pendingHand>,
+  ) {
+    if (pendingHand !== pending) {
+      return;
+    }
+    pendingHand = null;
+    // A roster we held back (moderator lower, or a late echo of the old
+    // state) wins once the window closes. No roster at all means the
+    // frame never landed: revert so a quiet room cannot leave the button
+    // pressed forever.
+    state.handRaisedAt =
+      pending.seen !== undefined ? pending.seen : pending.previous;
+    emit();
+  }
+
+  /**
+   * Take our own hand from a roster (`welcome`, `voice-roster`,
+   * `peer-updated` about us).
+   *
+   * This is also the whole of how a MODERATOR lowering our hand reaches us:
+   * there is no notice frame for it, because the roster is already the thing
+   * everybody in the room is reading, and one of them is us.
+   */
+  function applySelfHand(serverValue: number | null) {
+    if (pendingHand) {
+      pendingHand.seen = serverValue;
+      const agrees = (serverValue !== null) === pendingHand.raised;
+      if (!agrees && Date.now() - pendingHand.at < HAND_ECHO_MS) {
+        return;
+      }
+      discardPendingHand();
+    }
+    state.handRaisedAt = serverValue;
+  }
+
+  /**
+   * SPEAKING LOWERS YOUR OWN HAND, and it can only be done here.
+   *
+   * `speaking` is deliberately not on the roster (see the fan-out note on
+   * `voiceParticipantSchema`), so the server cannot see this happen; the one
+   * machine that knows is the one the microphone is plugged into. That is not
+   * a hole: the only hand this can lower is our own, and a client that
+   * declined to run it would be leaving its OWN hand up in a queue it can see.
+   *
+   * `isTransmitting` and not "unmuted": on voice activity it is the gate
+   * opening on an actual syllable, and on push-to-talk it is the key going
+   * down. Both are the person taking their turn, which is what the queue was
+   * for.
+   */
+  function lowerHandOnTransmit() {
+    if (
+      !state.isTransmitting ||
+      state.handRaisedAt === null ||
+      state.status !== "connected" ||
+      !state.voiceChannelId
+    ) {
+      return;
+    }
+    sendRaisedHand(false);
+  }
+
+  /** Declare our own hand, and believe it until the room says otherwise. */
+  function sendRaisedHand(raised: boolean) {
+    const previous = state.handRaisedAt;
+    discardPendingHand();
+    const pending: NonNullable<typeof pendingHand> = {
+      raised,
+      at: Date.now(),
+      previous,
+      seen: undefined,
+      timer: undefined as unknown as ReturnType<typeof setTimeout>,
+    };
+    pending.timer = setTimeout(() => {
+      reconcilePendingHand(pending);
+    }, HAND_ECHO_MS);
+    pendingHand = pending;
+    state.handRaisedAt = raised ? Date.now() : null;
+    transport.sendVoice({ type: "set-raised-hand", raised });
   }
 
   /** One peer's flag changed (`peer-joined`, `peer-updated`). */
   function applyPeerServerMute(peer: VoiceParticipant) {
     if (peer.peerId === state.peerId) {
       applySelfServerMute(peer.serverMuted);
+      applySelfHand(peer.handRaisedAt ?? null);
       return;
     }
     const listed = state.serverMutedPeerIds.includes(peer.peerId);
@@ -2364,6 +2525,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     pushToTalkHeld = false;
     voiceActivityOpen = false;
     voiceActivityTracker.clear();
+    discardPendingHand();
     state = {
       status: "idle",
       peerId: null,
@@ -2382,6 +2544,9 @@ export function createVoiceController(transport: RealtimeTransport) {
       self: null,
       speakingPeerIds: [],
       serverMutedPeerIds: [],
+      // Leaving lowers your hand, on the server and here. The queue is the
+      // room's, and we are not in it any more.
+      handRaisedAt: null,
       occupancy: state.occupancy,
       peerVolumes: state.peerVolumes,
       screenVolumes: state.screenVolumes,
@@ -3258,6 +3423,10 @@ export function createVoiceController(transport: RealtimeTransport) {
       state.cameraPeerIds = [];
       state.focusedScreenPeerId = null;
       state.audibleScreenPeerIds = [];
+      // A queue belongs to a room. Walking into another one is not a place
+      // in its queue, and the welcome will say so anyway.
+      state.handRaisedAt = null;
+      discardPendingHand();
       // Known from the moment we start, not only once the server says welcome —
       // otherwise the UI cannot tell which channel is connecting.
       state.voiceChannelId = voiceChannelId;
@@ -3559,6 +3728,27 @@ export function createVoiceController(transport: RealtimeTransport) {
         state.isMuted = serverMuted ? true : !state.isMuted;
       }
       applyMute();
+      emit();
+    },
+
+    /**
+     * Put our own hand up or take it down.
+     *
+     * LOWERING IS ALWAYS AVAILABLE. Nothing gates it: not a moderator's mute,
+     * not a listen-only room, not push-to-talk. Raising a hand is asking, and
+     * a person who has changed their mind about asking must be able to say so
+     * without finding a button that has locked itself.
+     *
+     * Deliberately NOT gated on `canSpeak` in the other direction either: a
+     * stage audience with no microphone is the audience this whole feature is
+     * for. It is gated on being in the call, since a queue you are not in the
+     * room for is not a queue you can be called from.
+     */
+    toggleRaisedHand() {
+      if (state.status !== "connected" || !state.voiceChannelId) {
+        return;
+      }
+      sendRaisedHand(state.handRaisedAt === null);
       emit();
     },
 

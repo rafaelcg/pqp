@@ -120,6 +120,36 @@ export const voiceParticipantSchema = z.object({
    * were bundled before the bits were split.
    */
   canStream: z.boolean().optional(),
+  /**
+   * WHEN THIS PERSON RAISED THEIR HAND, in epoch milliseconds, or null when
+   * it is down. A queue, carried as a timestamp per person rather than as a
+   * list.
+   *
+   * THE ORDER IS THE SERVER'S. The number is stamped by the server (from the
+   * `voice_raised_hands` row's `NOW()` when the registry is on, so two
+   * machines read one clock) and never by the raiser, which is the whole
+   * point: "who was first" has to be one answer, not each client's opinion
+   * of its own latency. Clients sort ascending and break ties on `userId`
+   * (see `raisedHandQueue`), so every screen in the room prints the same
+   * list in the same order.
+   *
+   * A TIMESTAMP AND NOT A SEPARATE FRAME. The roster already fans out to
+   * everyone who can see the channel and already diffs per participant, so a
+   * hand rides it for free and cannot disagree with the room it is drawn
+   * over. A `voice-hands` frame beside it would need its own sequence, its
+   * own convergence rule and its own answer for the socket that joined
+   * mid-call, all to say something the roster is already saying.
+   *
+   * Keyed on the PERSON in the room, not on the seat: a socket blip that
+   * reattaches the same peer, and a refresh inside the orphan window that
+   * mints a new one, both come back holding the place in the queue. Leaving
+   * the room drops it, because a queue full of hands belonging to people who
+   * are gone is worse than no queue at all.
+   *
+   * Absent on a server that predates the field, and absent reads as "hand
+   * down", which is also everybody's state on join.
+   */
+  handRaisedAt: z.number().int().nonnegative().nullable().optional(),
 });
 
 export const welcomeMessageSchema = z.object({
@@ -681,6 +711,25 @@ export const setVoiceStateMessageSchema = z.object({
 
 export type SetVoiceStateMessage = z.infer<typeof setVoiceStateMessageSchema>;
 
+/**
+ * Client -> server: put my own hand up, or take it down.
+ *
+ * Only ever about the sender. Lowering somebody ELSE's hand is a moderation
+ * action and goes through the HTTP route that every other voice-moderation
+ * action goes through (`POST /api/servers/:id/members/:userId/voice-lower-hand`,
+ * `Permission.MUTE_MEMBERS`), so there is no shape here that names a target.
+ *
+ * The server answers with the roster, not with an ack: `handRaisedAt` on the
+ * next `voice-roster` (or delta) is what tells the raiser where in the queue
+ * they landed, which is the same number everyone else is reading.
+ */
+export const setRaisedHandMessageSchema = z.object({
+  type: z.literal("set-raised-hand"),
+  raised: z.boolean(),
+});
+
+export type SetRaisedHandMessage = z.infer<typeof setRaisedHandMessageSchema>;
+
 export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   joinVoiceRoomMessageSchema,
   leaveVoiceRoomMessageSchema,
@@ -694,6 +743,8 @@ export const voiceClientMessageSchema = z.discriminatedUnion("type", [
   setCameraMessageSchema,
   // --- voice state ---
   setVoiceStateMessageSchema,
+  // --- raised hands ---
+  setRaisedHandMessageSchema,
   // --- watch party ---
   setWatchPartyMessageSchema,
   // --- live reactions ---

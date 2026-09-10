@@ -23,6 +23,7 @@ export * from "./live-hls.js";
 export * from "./moderation.js";
 export * from "./permissions.js";
 export * from "./profiles.js";
+export * from "./raised-hands.js";
 export * from "./reports.js";
 export * from "./sanctions.js";
 export * from "./search.js";

@@ -741,7 +741,7 @@ describeDb("rings across two instances", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     await pools[0]!
       .getPool()
-      .query(`TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_retired_peers, voice_instances`);
+      .query(`TRUNCATE voice_rooms, voice_peers, voice_server_mutes, voice_raised_hands, voice_retired_peers, voice_instances`);
   });
 
   afterEach(async () => {
