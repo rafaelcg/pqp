@@ -283,9 +283,11 @@ vi.stubGlobal(
   },
 );
 
-const { connectLiveKit, HLS_SOURCE_DROP_SAMPLES } = await import(
-  "./livekit-session"
-);
+const {
+  connectLiveKit,
+  HLS_SOURCE_DROP_SAMPLES,
+  HLS_SOURCE_RAISE_SAMPLES,
+} = await import("./livekit-session");
 
 function fakeTrack(kind: "audio" | "video", id: string, height = 720, frameRate = 30) {
   const settings = { width: Math.round((height * 16) / 9), height, frameRate };
@@ -791,6 +793,16 @@ describe("the large-room cap", () => {
 });
 
 describe("the presenter as a live ladder's source", () => {
+  async function setHlsUplink(
+    sfu: Awaited<ReturnType<typeof session>>,
+    uplinkBps: number,
+    times = 1,
+  ) {
+    for (let i = 0; i < times; i++) {
+      await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps });
+    }
+  }
+
   it("raises the published top past the cap when the ladder needs 1080p", async () => {
     const sfu = await session();
     fillRoom(50);
@@ -801,8 +813,10 @@ describe("the presenter as a live ladder's source", () => {
 
     // An egress starts on this channel and its top rung is 1080p. The
     // egress transcodes from THIS track, so a 720p publish would cap every
-    // playlist viewer at 720p too.
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    // playlist viewer at 720p too. One good reading is not enough: a
+    // borderline uplink used to jump on the first tick and starve the
+    // audience, so the raise waits for a streak.
+    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES);
 
     expect(constrained).toEqual([720, 1080]);
     expect(lastScreenPublish()?.screenShareEncoding?.maxBitrate).toBe(
@@ -810,12 +824,28 @@ describe("the presenter as a live ladder's source", () => {
     );
   });
 
+  it("does not raise to 1080 on one good uplink reading", async () => {
+    const sfu = await session();
+    fillRoom(50);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    const publishesBefore = published.length;
+
+    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES - 1);
+    expect(published).toHaveLength(publishesBefore);
+    expect(constrained).toEqual([720]);
+
+    await setHlsUplink(sfu, 9_000_000);
+    expect(published.length).toBe(publishesBefore + 1);
+    expect(constrained.at(-1)).toBe(1080);
+  });
+
   it("puts the cap back when the stream stops", async () => {
     const sfu = await session();
     fillRoom(50);
     await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES);
     expect(constrained).toEqual([720, 1080]);
 
     await sfu.setHlsSource(null);
@@ -846,23 +876,23 @@ describe("the presenter as a live ladder's source", () => {
    * two seconds, and the server restamps the stream frame every thirty, so
    * this path runs constantly for a party doing nothing unusual. Once
    * `hlsSourceTopHeight` started requiring a MEASURED uplink, a link sitting
-   * near the 5 Mbit/s threshold made `topHeight` a function of a fluctuating
+   * near the 6 Mbit/s threshold made `topHeight` a function of a fluctuating
    * bandwidth estimate, and each crossing republished the track: a new sid, a
    * new egress, a new `startedAt`, and a rebuffer for the entire audience.
    * Production logged six teardowns in sixteen minutes on one continuous
    * party, two of them `screen-track-replaced` with nobody touching the share.
    *
-   * There is no hysteresis worth adding here. The decision is worth making
-   * once.
+   * Drops and raises both wait for a streak. One weak reading is ignored; one
+   * optimistic reading is ignored. The layers stay put through the wobble.
    */
   it("holds the layers through an uplink that keeps changing its mind", async () => {
     const sfu = await session();
     fillRoom(50);
     await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
-    // The one raise the pin is meant to allow: the share was published before
-    // the egress existed, so the first plan was the capped one.
+    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES);
+    // The intended raise: the share was published before the egress existed,
+    // so the first plan was the capped one, and three good ticks let it up.
     expect(constrained).toEqual([720, 1080]);
     const publishesAfterRaise = published.length;
     const unpublishesAfterRaise = unpublished.length;
@@ -884,20 +914,18 @@ describe("the presenter as a live ladder's source", () => {
     fillRoom(50);
     await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES);
     const publishesAfterRaise = published.length;
 
-    for (let i = 0; i < HLS_SOURCE_DROP_SAMPLES - 1; i++) {
-      await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 1_000_000 });
-    }
+    await setHlsUplink(sfu, 1_000_000, HLS_SOURCE_DROP_SAMPLES - 1);
     expect(published).toHaveLength(publishesAfterRaise);
 
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 1_000_000 });
+    await setHlsUplink(sfu, 1_000_000);
     expect(published.length).toBe(publishesAfterRaise + 1);
     expect(constrained.at(-1)).toBe(720);
 
     const afterDrop = published.length;
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    await setHlsUplink(sfu, 9_000_000);
     expect(published).toHaveLength(afterDrop);
   });
 
@@ -911,7 +939,7 @@ describe("the presenter as a live ladder's source", () => {
     fillRoom(50);
     await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES);
     const writesBefore = senderWrites.length;
 
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 1_000_000 });
@@ -933,7 +961,7 @@ describe("the presenter as a live ladder's source", () => {
     fillRoom(50);
     await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES);
     const publishesAfterRaise = published.length;
 
     await sfu.setScreenQuality("720p");
