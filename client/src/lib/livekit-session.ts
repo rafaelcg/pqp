@@ -966,11 +966,11 @@ export async function connectLiveKit({
     source: Parameters<typeof room.localParticipant.getTrackPublication>[0],
     maxBitrate: number,
     label: string,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const publication = room.localParticipant.getTrackPublication(source);
     const sender = publication?.track?.sender;
     if (!sender) {
-      return;
+      return false;
     }
     try {
       const params = sender.getParameters();
@@ -983,21 +983,24 @@ export async function connectLiveKit({
       // HLS always takes the top layer. A 720p mid-rung sitting next to a
       // 1080 top eats BWE bottom-up and the egress transcodes 480p. Keep
       // 360p (first) for a seated phone; deactivate everything in between.
-      const feedingHls =
-        source === Track.Source.ScreenShare &&
-        hlsSource !== null &&
-        hlsSource.ladderTopHeight !== null;
-      if (feedingHls && encodings.length > 2) {
+      // When the ladder stops, turn those mids back on — the share may keep
+      // going as an ordinary SFU picture, and a later HLS session has to be
+      // allowed to trim again (Farol on #463).
+      if (source === Track.Source.ScreenShare && encodings.length > 2) {
+        const feedingHls =
+          hlsSource !== null && hlsSource.ladderTopHeight !== null;
         for (let i = 1; i < encodings.length - 1; i += 1) {
-          encodings[i]!.active = false;
+          encodings[i]!.active = !feedingHls;
         }
       }
       await sender.setParameters(params);
+      return true;
     } catch (err) {
       console.warn(
         `[pqp] SFU ${label} ceiling rejected; keeping the published one`,
         err,
       );
+      return false;
     }
   }
 
@@ -1329,18 +1332,22 @@ export async function connectLiveKit({
         const livePlan = currentScreenPlan();
         const feedingHls =
           hlsSource !== null && hlsSource.ladderTopHeight !== null;
+        const needsHlsLayerSync =
+          (feedingHls && !hlsLayersTrimmed) ||
+          (!feedingHls && hlsLayersTrimmed);
         if (
           livePlan.topBitrate !== livePublished.topBitrate ||
-          (feedingHls && !hlsLayersTrimmed)
+          needsHlsLayerSync
         ) {
-          await setSourceMaxBitrate(
+          const applied = await setSourceMaxBitrate(
             Track.Source.ScreenShare,
             livePlan.topBitrate,
             "screen",
           );
-          if (feedingHls) {
-            hlsLayersTrimmed = true;
+          if (!applied) {
+            return;
           }
+          hlsLayersTrimmed = feedingHls;
           const liveAfterBitrate = screenShareStill(track, epoch);
           if (!liveAfterBitrate) {
             return;
@@ -1370,11 +1377,14 @@ export async function connectLiveKit({
         return;
       }
       if (plan.topBitrate !== published.topBitrate) {
-        await setSourceMaxBitrate(
+        const applied = await setSourceMaxBitrate(
           Track.Source.ScreenShare,
           plan.topBitrate,
           "screen",
         );
+        if (!applied) {
+          return;
+        }
         const liveAfterBitrate = screenShareStill(track, epoch);
         if (!liveAfterBitrate) {
           return;

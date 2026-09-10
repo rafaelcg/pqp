@@ -989,6 +989,64 @@ describe("the presenter as a live ladder's source", () => {
     expect(last!.encodings[2]?.active).not.toBe(false);
   });
 
+  it("restores the 720p sub-layer when the ladder stops and the share continues", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const writesBefore = senderWrites.length;
+
+    await sfu.setHlsSource(null);
+
+    const restored = senderWrites
+      .slice(writesBefore)
+      .filter((write) => write.source === Track.Source.ScreenShare)
+      .at(-1);
+    expect(restored).toBeTruthy();
+    expect(restored!.encodings[1]?.active).not.toBe(false);
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const retrimmed = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(retrimmed!.encodings[1]?.active).toBe(false);
+  });
+
+  it("retries the HLS trim if the browser refuses the first setParameters", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    const original = publication.track.sender as {
+      getParameters: () => RTCRtpSendParameters;
+      setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+    };
+    let failsLeft = 1;
+    publication.track.sender = {
+      getParameters: () => original.getParameters(),
+      setParameters: async (next: RTCRtpSendParameters) => {
+        if (failsLeft > 0) {
+          failsLeft -= 1;
+          throw new Error("nope");
+        }
+        return original.setParameters(next);
+      },
+    };
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    expect(
+      senderWrites.filter((write) => write.source === Track.Source.ScreenShare),
+    ).toHaveLength(0);
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const last = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(last).toBeTruthy();
+    expect(last!.encodings[1]?.active).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   /**
    * THE STALL, and it is the whole of it.
    *

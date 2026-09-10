@@ -568,9 +568,10 @@ export function clampScreenPlanToCapture(
   return {
     topHeight,
     topBitrate: Math.min(plan.topBitrate, topBitrate),
-    lowerLayers: SCREEN_SIMULCAST_RUNGS.filter(
-      (layer) => layer.height < topHeight && (!plan.heldForHls || layer.height <= 360),
-    ),
+    // Keep the plan's own rungs. Rebuilding from SCREEN_SIMULCAST_RUNGS
+    // reintroduces the 720 mid-layer a live HLS plan already dropped
+    // (`heldForHls` is only the 720 hold, not "HLS is transcoding").
+    lowerLayers: plan.lowerLayers.filter((layer) => layer.height < topHeight),
     capped: plan.capped,
     heldForHls: plan.heldForHls,
   };
