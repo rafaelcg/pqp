@@ -962,15 +962,20 @@ export async function connectLiveKit({
    * useful; a 360p layer given a 4 Mbps ceiling stops being a small copy.
    * `livekit-client` orders encodings smallest first, so the top is the last.
    */
+  /**
+   * `applied` — the browser took the encodings (trim flag may flip).
+   * `skipped` — no sender yet; the plan still stands, retry the wire write.
+   * `rejected` — `setParameters` threw; leave the published plan alone.
+   */
   async function setSourceMaxBitrate(
     source: Parameters<typeof room.localParticipant.getTrackPublication>[0],
     maxBitrate: number,
     label: string,
-  ): Promise<boolean> {
+  ): Promise<"applied" | "skipped" | "rejected"> {
     const publication = room.localParticipant.getTrackPublication(source);
     const sender = publication?.track?.sender;
     if (!sender) {
-      return false;
+      return "skipped";
     }
     try {
       const params = sender.getParameters();
@@ -994,13 +999,13 @@ export async function connectLiveKit({
         }
       }
       await sender.setParameters(params);
-      return true;
+      return "applied";
     } catch (err) {
       console.warn(
         `[pqp] SFU ${label} ceiling rejected; keeping the published one`,
         err,
       );
-      return false;
+      return "rejected";
     }
   }
 
@@ -1344,10 +1349,12 @@ export async function connectLiveKit({
             livePlan.topBitrate,
             "screen",
           );
-          if (!applied) {
+          if (applied === "rejected") {
             return;
           }
-          hlsLayersTrimmed = feedingHls;
+          if (applied === "applied") {
+            hlsLayersTrimmed = feedingHls;
+          }
           const liveAfterBitrate = screenShareStill(track, epoch);
           if (!liveAfterBitrate) {
             return;
@@ -1382,7 +1389,7 @@ export async function connectLiveKit({
           plan.topBitrate,
           "screen",
         );
-        if (!applied) {
+        if (applied === "rejected") {
           return;
         }
         const liveAfterBitrate = screenShareStill(track, epoch);
