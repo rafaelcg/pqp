@@ -276,7 +276,7 @@ export function Tooltip({
             // tallest things a tooltipped button can sit next to, and matching
             // the reaction tip in `message-list.tsx` so the two read as one
             // object rather than two house styles.
-            "z-[140] max-w-64 select-none text-text animate-fade-in",
+            "z-[140] max-w-72 whitespace-pre-wrap select-none text-text animate-fade-in",
             rail
               ? "rounded-[var(--radius-card)] border border-surface-2 bg-surface-0 shadow-[var(--shadow-popover)] px-2.5 py-1.5 text-[13px] font-semibold leading-snug"
               : "elevation-3 rounded-[var(--radius-control)] px-2 py-1 text-xs leading-snug",

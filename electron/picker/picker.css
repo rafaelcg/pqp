@@ -187,9 +187,44 @@ h1 {
 .foot {
   flex: none;
   display: flex;
+  align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 16px;
   padding: 12px 20px;
+}
+
+.audio {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+}
+
+.audio[hidden] {
+  display: none;
+}
+
+.audio input {
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.audio .hint {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
 }
 
 .btn {

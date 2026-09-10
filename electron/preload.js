@@ -28,6 +28,16 @@ contextBridge.exposeInMainWorld("pqpDesktop", {
    */
   canShareScreen: true,
 
+  /**
+   * This shell's share picker asks "share this computer's audio?" itself.
+   *
+   * Same kind of version signal as `canShareScreen`. The hosted client runs
+   * inside older binaries: without this key the page must not request audio
+   * unless the person already opted in, because those pickers treat
+   * `audioRequested` as the whole switch and would loop back every share.
+   */
+  sharePickerOffersAudio: true,
+
   /** Subscribe to Cmd/Ctrl+Shift+M mute toggle from the app menu. */
   onToggleMute(callback) {
     if (typeof callback !== "function") {
