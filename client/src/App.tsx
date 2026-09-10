@@ -160,6 +160,7 @@ import {
   canOfferWatchPartyCreate,
   isWatchPartyChannelsEnabled,
 } from "@/lib/watch-party-channels";
+import { shouldReleaseAudienceWatchSeat } from "@/lib/watch-party-seat";
 import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
 import { useWatchParties } from "@/hooks/use-watch-parties";
 import {
@@ -3718,6 +3719,50 @@ function MainAppContent({
   }, [selectedServerId, selectedChannelId, watchParties.byChannel, liveHlsConfig]);
 
   /**
+   * Audience seats die with the stream. Watching is HLS; a leftover
+   * LiveKit participant is leave-voice chrome after Encerrar, and the
+   * host path always `voice.leave()`s itself. This is the backstop for
+   * everybody who only sat down to watch.
+   */
+  useEffect(() => {
+    const channelId = voiceState.voiceChannelId;
+    if (!channelId || voiceState.status === "idle") {
+      return;
+    }
+    const seated = channels.find((channel) => channel.id === channelId);
+    const party = watchParties.byChannel[channelId];
+    const partyState =
+      party?.state === "draft" ||
+      party?.state === "live" ||
+      party?.state === "ended" ||
+      party?.state === "cancelled"
+        ? party.state
+        : undefined;
+    if (
+      !shouldReleaseAudienceWatchSeat({
+        channelType: seated?.type,
+        isAudienceSeat: voiceState.isAudienceSeat,
+        isSharingScreen: voiceState.isSharingScreen,
+        voiceStatus: voiceState.status,
+        partyState,
+        hasLiveStream: voiceState.channelLive[channelId]?.stream != null,
+      })
+    ) {
+      return;
+    }
+    voice.leave();
+  }, [
+    channels,
+    voice,
+    voiceState.channelLive,
+    voiceState.isAudienceSeat,
+    voiceState.isSharingScreen,
+    voiceState.status,
+    voiceState.voiceChannelId,
+    watchParties.byChannel,
+  ]);
+
+  /**
    * A function rather than a `const` because these handlers are declared
    * above `selectedChannel`, and every one of them reads the party at the
    * moment it runs rather than at the moment it was defined.
@@ -3844,6 +3889,12 @@ function MainAppContent({
     watchParties.apply(party.channelId, answer.party ?? null);
     if (voice.getState().isSharingScreen) {
       voice.stopScreenShare();
+    }
+    // Encerrar is the end of the LiveKit pipe, not "stay in the room
+    // without a picture". Leave so the host does not keep leave-voice
+    // chrome after the show.
+    if (voice.getState().voiceChannelId === party.channelId) {
+      voice.leave();
     }
   }
 
@@ -3990,6 +4041,11 @@ function MainAppContent({
   /** Sidebar: open the channel and join, unless already in it. */
   function handleJoinVoiceFromList(channelId: string) {
     void selectChannel(channelId);
+    const listed = channels.find((channel) => channel.id === channelId);
+    if (listed && isWatchPartyChannelType(listed.type)) {
+      // Watching is select + HLS. Seating is host go-live / the party bar.
+      return;
+    }
     if (
       voiceState.voiceChannelId === channelId &&
       voiceState.status !== "idle"
@@ -5921,7 +5977,12 @@ function MainAppContent({
                it is where "not watching any more" lands. */
             onLeaveParty={
               firstTextChannelId
-                ? () => void selectChannel(firstTextChannelId)
+                ? () => {
+                    if (voiceState.voiceChannelId === selectedChannel.id) {
+                      voice.leave();
+                    }
+                    void selectChannel(firstTextChannelId);
+                  }
                 : undefined
             }
             onSetWatchingLive={(channelId, watching) =>

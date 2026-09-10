@@ -166,6 +166,19 @@ describe("watch party channels are not listed (flag on)", () => {
   });
 });
 
+describe("watch_party rows never full-join voice", () => {
+  it("does not offer a join chip or double-click join when the party is not live", () => {
+    flag.on = false;
+    const html = renderList(
+      <ChannelList {...baseProps} channels={[cinema]} />,
+    );
+    expect(html).toContain('data-channel-type="watch_party"');
+    expect(html).not.toContain("data-channel-join");
+    expect(html).not.toContain("Double-click to join");
+    expect(html).not.toContain(">Join<");
+  });
+});
+
 describe("ChannelList watch party row (flag off)", () => {
   it("renders the same channel as a plain voice row, listed as before", () => {
     flag.on = false;
@@ -179,7 +192,8 @@ describe("ChannelList watch party row (flag off)", () => {
     expect(html).not.toContain("data-watch-party-viewers");
     expect(html).not.toContain("data-channel-join");
     expect(html).not.toContain(">Watch party<");
-    // Still a joinable voice room: the seated people nest under it.
+    // Occupants still nest under the listed room; the row itself no
+    // longer full-joins voice (see the suite above).
     expect(html).toContain(">Andre<");
     expect(html).toContain(">Rafa<");
     expect(html).toContain('data-channel-type="watch_party"');

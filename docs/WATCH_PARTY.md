@@ -768,6 +768,11 @@ the first thing to revisit** if the ended conversation turns out to matter.
    Joining the call is a separate button on the stage.
 6. **Encerrar**, or the host's grace window expiring.
 
+Watching is not a call for viewers. Select the channel and the HLS plays; the
+host's LiveKit publish is an invisible pipe while the show is live. Encerrar
+leaves that pipe so leave-voice chrome does not linger. Friends who want to
+talk use a normal voice channel.
+
 ### The layout
 
 The watch stage uses the SAME split machinery as a call: `lib/call-split.ts`
