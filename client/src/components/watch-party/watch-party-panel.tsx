@@ -1029,57 +1029,78 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
     <div
       data-testid="watch-party-scheduled"
       className={cn(
-        "flex flex-col items-center justify-center gap-3 overflow-hidden border-b border-ink-4/60 bg-ink px-6 py-8 text-center",
+        "flex flex-col items-center justify-center overflow-hidden border-b border-ink-4/60 bg-ink px-4 py-6",
         surfaceHeight(props.fill, "min-h-0"),
       )}
     >
-      <PartyIdentity
-        party={party}
-        onRename={props.onRename}
-        className="flex-none justify-center"
-      />
-      <p
-        className="text-sm font-semibold text-paper"
-        data-testid="watch-party-scheduled-when"
-      >
-        {t("watchParty.scheduled.startsAt", { when })}
-      </p>
-      <p className="max-w-sm text-xs text-paper-muted">
-        {canGoLive
-          ? t("watchParty.scheduled.hostNote")
-          : t("watchParty.scheduled.viewerNote")}
-      </p>
-      <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
-        {props.onToggleReminder && (
-          <Button
-            type="button"
-            variant={reminding ? "default" : "secondary"}
-            disabled={reminderBusy}
-            aria-pressed={reminding}
-            onClick={() => void toggleReminder()}
-            data-watch-party-remind
+      {/* A CARD, NOT A VOID. The first cut floated the identity, the time and
+          three buttons of three different weights in the middle of a black
+          pane. The time is what a person came to read, so it is the
+          headline; who and what sit under it; the two quiet actions share
+          a row; and the host's one loud action has a row of its own with
+          the honest sentence beside it (viewers are looking at this screen,
+          so "nobody sees anything" was false). */}
+      <div className="flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-surface-0 px-6 py-6 text-center">
+        <div>
+          <p
+            className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary"
           >
-            {reminding ? (
-              <Bell className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            ) : (
-              <BellOff className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            )}
-            {reminding
-              ? t("watchParty.scheduled.reminding")
-              : t("watchParty.scheduled.remind")}
-          </Button>
-        )}
-        <WatchPartyShareButton party={party} size="default" />
-        {canGoLive && (
-          <Button
-            type="button"
-            className="bg-danger text-paper hover:bg-danger/85"
-            onClick={() => void props.onGoLive(null)}
-            data-watch-party-go-live
+            {t("watchParty.scheduled.eyebrow")}
+          </p>
+          <p
+            className="mt-1 text-xl font-semibold text-paper"
+            data-testid="watch-party-scheduled-when"
           >
-            <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            {t("watchParty.scheduled.goLiveNow")}
-          </Button>
+            {t("watchParty.scheduled.startsAt", { when })}
+          </p>
+        </div>
+        <PartyIdentity
+          party={party}
+          onRename={props.onRename}
+          className="flex-none justify-center"
+        />
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {props.onToggleReminder && (
+            <Button
+              type="button"
+              variant={reminding ? "default" : "secondary"}
+              size="sm"
+              disabled={reminderBusy}
+              aria-pressed={reminding}
+              onClick={() => void toggleReminder()}
+              data-watch-party-remind
+            >
+              {reminding ? (
+                <Bell className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              ) : (
+                <BellOff className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              )}
+              {reminding
+                ? t("watchParty.scheduled.reminding")
+                : t("watchParty.scheduled.remind")}
+            </Button>
+          )}
+          <WatchPartyShareButton party={party} />
+        </div>
+        {canGoLive ? (
+          <div className="flex w-full flex-col items-center gap-2 border-t border-border pt-4">
+            <Button
+              type="button"
+              className="w-full bg-danger text-paper hover:bg-danger/85 sm:w-auto"
+              onClick={() => void props.onGoLive(null)}
+              data-watch-party-go-live
+            >
+              <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {t("watchParty.scheduled.goLiveNow")}
+            </Button>
+            <p className="text-xs text-text-tertiary">
+              {t("watchParty.scheduled.hostNote")}
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-text-tertiary">
+            {t("watchParty.scheduled.viewerNote")}
+          </p>
         )}
       </div>
     </div>
