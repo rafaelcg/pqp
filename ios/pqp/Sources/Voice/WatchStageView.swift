@@ -16,13 +16,11 @@ import SwiftUI
  broken and it is what a viewer sees at the exact moment the host is asking
  whether it works.
 
- WHAT THE SYSTEM OWNS AND WHAT THIS DOES. Inside the video rectangle is
- `AVPlayerViewController` (see `WatchVideoSurface`): the transport bar that
- fades while you watch, the expand button that takes a film fullscreen in
- landscape, AirPlay, Picture in Picture. Under it is a strip this file draws,
- carrying the three things the system has no opinion about and a watch party
- needs: that this is live and how far behind, how many people are here, and
- which rung is being decoded.
+ THE PICTURE IS OURS. `WatchVideoSurface` draws an `AVPlayerLayer`;
+ `WatchOverlay` is the cinema chrome on top of it. There is no system
+ transport bar and no scrubber, because a live window that offers to seek
+ is a control that lies. Tap the film to see the bars, tap again to put
+ them away. Fullscreen is the same overlay in a cover, not a second player.
  */
 struct WatchStageView: View {
     @Environment(SessionStore.self) private var session
@@ -51,6 +49,20 @@ struct WatchStageView: View {
     /// The video rectangle in device pixels, reported by the surface itself.
     @State private var surfacePixels: CGSize = .zero
     @State private var wasPlayingBeforeInterruption = false
+    @State private var isFullscreen = false
+    @State private var isPlaying = false
+    /// What the viewer asked for. Distinct from `player.rate`, which drops
+    /// to 0 on a pause nobody tapped (a rung switch, an interruption the
+    /// notification missed). `WatchLiveEdge` and the unexpected-pause
+    /// resume both read this, so a tap on pause is the only thing that
+    /// stops the film on purpose.
+    @State private var userWantsPlayback = true
+    /// A seek reports a stale position and a brief `.paused` for a moment
+    /// afterwards. Recovery must not fire inside this window or one starve
+    /// becomes a burst of seeks that fight `play()`.
+    @State private var seekingUntil = Date.distantPast
+    @State private var chrome = WatchChromeClock()
+    @State private var pip = WatchPictureInPicture()
 
     /// The pinned rung, in lines. Zero is Auto.
     ///
@@ -92,6 +104,7 @@ struct WatchStageView: View {
         }
         .onChange(of: pinnedLines) { _, _ in applyQuality() }
         .onChange(of: surfacePixels) { _, _ in applyQuality() }
+        .onChange(of: isFullscreen) { _, _ in applyQuality() }
         // THE ONE PAUSE NOBODY ASKED FOR. A call, Siri, an alarm or another
         // app taking the session stops `AVPlayer` dead and leaves it stopped;
         // there is no automatic resume and nothing in the app was listening,
@@ -144,23 +157,38 @@ struct WatchStageView: View {
             delaySeconds = WatchDelay.seconds(
                 pipeline: model.stream?.delaySeconds, position: position, window: window
             )
+            let status = player.timeControlStatus
+            isPlaying = status == .playing || player.rate > 0
+            chrome.tick(playing: isPlaying, at: now)
 
-            let remedy = edge.tick(
-                position: position,
-                window: window,
-                // `rate` is the INTENT. It stays at 1 while the player waits
-                // for media and drops to 0 only when something paused it, so
-                // this is what stops a rejoin fighting a viewer who tapped
-                // pause on the system transport bar.
-                wantsPlayback: player.rate > 0,
-                isWaiting: player.timeControlStatus == .waitingToPlayAtSpecifiedRate,
-                now: now
-            )
-            if case .rejoin(let target) = remedy { seek(to: target) }
+            let seeking = now < seekingUntil
+            if !seeking {
+                let remedy = edge.tick(
+                    position: position,
+                    window: window,
+                    // The VIEWER's intent. Rate is the outcome and it drops
+                    // to 0 on a pause nobody asked for, which is exactly
+                    // the state that has to recover. A tap on pause is the
+                    // only thing that sets this false.
+                    wantsPlayback: userWantsPlayback,
+                    isWaiting: status == .waitingToPlayAtSpecifiedRate,
+                    now: now
+                )
+                if case .rejoin(let target) = remedy {
+                    seek(to: target)
+                } else if userWantsPlayback, status == .paused, player.rate == 0 {
+                    // A pause the viewer did not ask for. `play()` first;
+                    // if the playhead has already slid out of the ten
+                    // second window, only a seek puts it back.
+                    resumeWantedPlayback()
+                }
+            }
 
             let stalled = stall.tick(
                 position: position,
-                isPlaying: player.timeControlStatus == .playing,
+                isPlaying: status == .playing,
+                wantsPlayback: userWantsPlayback,
+                isWaiting: status == .waitingToPlayAtSpecifiedRate,
                 now: now
             )
             if stalled { reconcile(force: true) }
@@ -234,37 +262,98 @@ struct WatchStageView: View {
     /// full tilt to fill a rectangle nobody can see. Taking the surface out
     /// keeps the `AVPlayer` and therefore the sound, which is the whole point
     /// of collapsing it: listen to the film and read the chat.
+    ///
+    /// Fullscreen keeps the 16:9 hole so the transcript does not jump the
+    /// moment the theater opens. The layer itself moves into the cover:
+    /// one `AVPlayer`, one picture, never two.
     private var picture: some View {
         VStack(spacing: 0) {
             if !isMinimised {
-                ZStack {
+                if isFullscreen {
                     Color.black
-                    if let player {
-                        WatchVideoSurface(player: player) { pixels in
-                            surfacePixels = pixels
-                        }
-                    } else {
-                        // Between the frame arriving and the first segment
-                        // decoding. Seconds, and honest about which of the two
-                        // waits this is.
-                        VStack(spacing: 8) {
-                            ProgressView().tint(Palette.signal)
-                            Text("Connecting to the stream")
-                                .font(Typography.callout)
-                                .foregroundStyle(Palette.paperMuted)
-                        }
-                    }
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                } else {
+                    pane(isTheater: false)
+                        .aspectRatio(16 / 9, contentMode: .fit)
                 }
-                .aspectRatio(16 / 9, contentMode: .fit)
             }
-            liveBar
+            if isMinimised {
+                collapsedBar
+            }
         }
         .background(Palette.inkDeep)
+        .fullScreenCover(isPresented: $isFullscreen) {
+            theater
+        }
     }
 
-    // MARK: - The strip
+    private var theater: some View {
+        ZStack {
+            Palette.inkDeep.ignoresSafeArea()
+            pane(isTheater: true)
+                .ignoresSafeArea()
+        }
+        .statusBarHidden()
+        .persistentSystemOverlays(.hidden)
+        .onAppear { chrome.reveal(at: Date()) }
+    }
 
-    private var liveBar: some View {
+    @ViewBuilder
+    private func pane(isTheater: Bool) -> some View {
+        ZStack {
+            Color.black
+            if let player {
+                WatchVideoSurface(player: player, pip: pip) { pixels in
+                    surfacePixels = pixels
+                }
+                .onTapGesture { chrome.tap(at: Date()) }
+                WatchOverlay(
+                    chromeVisible: chrome.visible,
+                    isPlaying: isPlaying,
+                    isTheater: isTheater,
+                    behindLive: behindLive,
+                    delaySeconds: delaySeconds ?? model.stream?.delaySeconds,
+                    audienceCount: model.audienceCount,
+                    audienceLabel: viewerLabel,
+                    pipAvailable: pip.canStart,
+                    onTogglePlay: togglePlay,
+                    onJumpToLive: jumpToLive,
+                    onToggleFullscreen: toggleFullscreen,
+                    onStartPip: { pip.start() },
+                    onCollapse: isTheater ? nil : { isMinimised = true },
+                    qualityMenu: {
+                        if ladder.isWorthOffering { qualityMenu }
+                    }
+                )
+            } else {
+                connecting
+            }
+        }
+        .overlay {
+            Rectangle()
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var connecting: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "movieclapper.fill")
+                .font(.system(size: 22, weight: .light))
+                .foregroundStyle(Palette.paperMuted)
+            ProgressView().tint(Palette.signal)
+            Text("Connecting to the stream")
+                .font(Typography.callout)
+                .foregroundStyle(Palette.paperMuted)
+        }
+    }
+
+    // MARK: - Collapsed strip, and the overlay's quality menu
+
+    /// Sound without picture. The overlay is gone with the layer, so this
+    /// stub is what still says the party is live and how to bring the film
+    /// back.
+    private var collapsedBar: some View {
         HStack(spacing: 8) {
             livePill
             // Shown while behind as well as while live, because that is
@@ -294,12 +383,11 @@ struct WatchStageView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(viewerLabel)
             Spacer(minLength: 4)
-            if ladder.isWorthOffering { qualityMenu }
             collapseButton
         }
         .padding(.horizontal, Metrics.hPadding)
         .padding(.vertical, 9)
-        .background(Palette.surface)
+        .background(Palette.inkDeep)
     }
 
     /// AO VIVO, or an offer to go back to it.
@@ -362,18 +450,18 @@ struct WatchStageView: View {
             }
             .pickerStyle(.inline)
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 5) {
                 Image(systemName: "slider.horizontal.3")
                     .font(.system(size: 11, weight: .semibold))
                 Text(WatchQualityLabel.text(choice: choice, effectiveLines: effectiveLines))
                     .font(Typography.caption)
+                    .monospacedDigit()
             }
-            .foregroundStyle(Palette.paperSubtle)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(
-                Capsule().fill(Palette.surfaceRaised)
-            )
+            .foregroundStyle(Palette.paper)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(Color.black.opacity(0.55)))
+            .overlay(Capsule().strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
         }
         .accessibilityLabel("Broadcast quality")
     }
@@ -486,11 +574,14 @@ struct WatchStageView: View {
         effectiveLines = nil
         ladder = .empty
         next.play()
+        userWantsPlayback = true
+        isPlaying = true
+        chrome.reveal(at: Date())
         WatchNowPlaying.begin(
             title: channel.name,
             subtitle: nil,
-            onPlay: { next.play() },
-            onPause: { next.pause() }
+            onPlay: { playFromUser() },
+            onPause: { pauseFromUser() }
         )
         Task {
             let published = await WatchVariants.load(from: asset)
@@ -508,23 +599,94 @@ struct WatchStageView: View {
     /// Both of these are live properties, so a viewer changing rung mid film
     /// costs a rendition switch and not a re-buffer. Nothing here goes near
     /// `attach`, which is the difference between a quality picker and a
-    /// restart.
+    /// restart. A no-op (same ceiling the item already has) must not touch
+    /// the properties at all: writing `preferredMaximumResolution` is what
+    /// pauses the picture for about a second, even when the number did not
+    /// change.
     private func applyQuality() {
-        guard let item = player?.currentItem else { return }
+        guard let player, let item = player.currentItem else { return }
         // A remembered pin from a broadcast with a different ladder falls back
         // to Auto rather than to the nearest rung. See `WatchLadder.limits`.
         let effective = ladder.contains(choice) ? choice : .auto
-        item.preferredMaximumResolution = ladder.resolutionCap(
+        let resolution = ladder.resolutionCap(
             surfacePixels: surfacePixels, choice: effective
         )
-        item.preferredPeakBitRate = ladder.limits(for: effective).peakBitRate
+        let peak = ladder.limits(for: effective).peakBitRate
+        guard item.preferredMaximumResolution != resolution
+            || item.preferredPeakBitRate != peak
+        else { return }
+        item.preferredMaximumResolution = resolution
+        item.preferredPeakBitRate = peak
+        // The switch itself can drop the player into `.paused` for a second.
+        // `play()` on the same item keeps that from looking like a pause.
+        // Never `attach` from this path.
+        if userWantsPlayback {
+            seekingUntil = Date().addingTimeInterval(2)
+            player.play()
+        }
+    }
+
+    private func togglePlay() {
+        if userWantsPlayback {
+            pauseFromUser()
+        } else {
+            playFromUser()
+        }
+        chrome.reveal(at: Date())
+    }
+
+    /// The chrome, the lock screen and Now Playing all come through here,
+    /// so a tap on pause is one bit of state, not three.
+    private func pauseFromUser() {
+        userWantsPlayback = false
+        player?.pause()
+        isPlaying = false
+    }
+
+    private func playFromUser() {
+        userWantsPlayback = true
+        isPlaying = true
+        resumeWantedPlayback()
+    }
+
+    /// Start the picture again because the viewer still wants it.
+    ///
+    /// `play()` cannot help a playhead the ten second window has already
+    /// slid past, so a position behind the oldest segment (or far enough
+    /// behind live that the badge would offer) seeks first. A tap on pause
+    /// never reaches here: `userWantsPlayback` is false then.
+    private func resumeWantedPlayback() {
+        guard let player, userWantsPlayback else { return }
+        if let item = player.currentItem, let window = Self.liveWindow(of: item) {
+            let position = player.currentTime().seconds
+            if position.isFinite,
+               position < window.start
+                || WatchLiveEdge.isBehindLive(position: position, window: window) {
+                seek(to: WatchLiveEdge.target(in: window))
+                return
+            }
+        }
+        player.play()
+    }
+
+    private func toggleFullscreen() {
+        if isFullscreen {
+            isFullscreen = false
+        } else {
+            isMinimised = false
+            isFullscreen = true
+        }
+        chrome.reveal(at: Date())
     }
 
     private func jumpToLive() {
         guard let item = player?.currentItem,
               let window = Self.liveWindow(of: item)
         else { return }
+        userWantsPlayback = true
+        isPlaying = true
         seek(to: WatchLiveEdge.target(in: window))
+        chrome.reveal(at: Date())
     }
 
     /// Land inside the window and start again.
@@ -536,12 +698,15 @@ struct WatchStageView: View {
     /// nothing and costs a decode from the previous keyframe.
     private func seek(to target: Double) {
         guard let player else { return }
+        let now = Date()
+        guard now >= seekingUntil else { return }
+        seekingUntil = now.addingTimeInterval(2)
         player.seek(
             to: CMTime(seconds: target, preferredTimescale: 600),
             toleranceBefore: .zero,
             toleranceAfter: CMTime(seconds: 2, preferredTimescale: 600)
         )
-        player.play()
+        if userWantsPlayback { player.play() }
     }
 
     /// Resume after the session came back, and only if we were playing when it
@@ -553,18 +718,24 @@ struct WatchStageView: View {
         else { return }
         switch type {
         case .began:
-            wasPlayingBeforeInterruption = (player?.rate ?? 0) > 0
+            wasPlayingBeforeInterruption = userWantsPlayback
         case .ended:
-            guard wasPlayingBeforeInterruption, player != nil else { return }
+            guard wasPlayingBeforeInterruption, userWantsPlayback, player != nil else { return }
             wasPlayingBeforeInterruption = false
             let options = (note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt)
                 .map(AVAudioSession.InterruptionOptions.init(rawValue:))
             // No options key at all is the case where the system has no
             // opinion; a key that says do not resume is one that does, and it
             // outranks ours.
-            guard options?.contains(.shouldResume) ?? true else { return }
+            guard options?.contains(.shouldResume) ?? true else {
+                // The system said stay paused. Do not let the unexpected
+                // pause path unpause it on the next tick.
+                userWantsPlayback = false
+                isPlaying = false
+                return
+            }
             WatchAudioSession.activate()
-            player?.play()
+            resumeWantedPlayback()
         @unknown default:
             break
         }
@@ -582,6 +753,12 @@ struct WatchStageView: View {
         effectiveLines = nil
         surfacePixels = .zero
         wasPlayingBeforeInterruption = false
+        isFullscreen = false
+        isPlaying = false
+        userWantsPlayback = true
+        seekingUntil = .distantPast
+        chrome = WatchChromeClock()
+        pip.attach(nil)
         WatchNowPlaying.end()
         WatchAudioSession.deactivate()
     }

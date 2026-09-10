@@ -84,6 +84,20 @@ interface VoiceTransport {
      */
     fun setCanPublishAudio(allowed: Boolean)
 
+    /**
+     * Whether this seat may put a screen on the stage right now
+     * (`welcome.canStream`, then every `voice-speak-changed`).
+     *
+     * The twin of [setCanPublishAudio], and it exists for a sharper reason. On
+     * the SFU the publish grant lives in a token minted once at connect and
+     * never re-minted, so a moderator revoking the stage mid-party does not
+     * invalidate it. A transport that remembered only the token would let a
+     * revoked presenter press share again and publish anyway, which is a
+     * moderation bypass rather than a stale flag. False must also take down a
+     * share that is already running.
+     */
+    fun setCanPublishScreen(allowed: Boolean)
+
     /** Silences every remote track **and** forces the microphone off. */
     fun setDeafened(value: Boolean, mutedByUser: Boolean)
 

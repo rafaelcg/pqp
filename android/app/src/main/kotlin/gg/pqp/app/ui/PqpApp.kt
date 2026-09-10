@@ -63,6 +63,7 @@ import gg.pqp.app.voice.CallController
 import gg.pqp.app.voice.Refusal
 import gg.pqp.app.voice.VoiceController
 import gg.pqp.app.watch.WatchLiveStore
+import gg.pqp.app.watch.mayTakeWatchPartySeat
 import gg.pqp.app.watch.ui.WatchChannelPane
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.serialization.Serializable
@@ -192,12 +193,16 @@ private fun SignedInNav(
     val unsupported = stringResource(R.string.voice_transport_unsupported)
     val screenDenied = stringResource(R.string.voice_screen_share_denied)
     val backendUnreachable = stringResource(R.string.voice_backend_unreachable)
+    val joinRefused = stringResource(R.string.voice_join_refused)
+    val joinTimedOut = stringResource(R.string.voice_join_timeout)
     LaunchedEffect(voiceState.refusal) {
         val text = when (voiceState.refusal) {
             Refusal.RoomFull -> roomFull
             Refusal.TransportUnsupported -> unsupported
             Refusal.ScreenShareDenied -> screenDenied
             Refusal.VoiceBackendUnreachable -> backendUnreachable
+            Refusal.JoinRefused -> joinRefused
+            Refusal.JoinTimedOut -> joinTimedOut
             null -> return@LaunchedEffect
         }
         android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_LONG).show()
@@ -387,7 +392,27 @@ private fun SignedInNav(
                             // down and rebuild it.
                             val inThisRoom =
                                 voiceState.channelId == route.channelId && voiceState.isActive
-                            if (route.isVoiceChannel && !inThisRoom) {
+                            // AND ONLY TO SOMEBODY WHO MAY HAVE A SEAT.
+                            //
+                            // `Channel.isVoice` answers true for `watch_party`
+                            // as well as `voice`, so this button was offered to
+                            // a watch party's audience: five hundred people
+                            // invited onto the media box for something the pane
+                            // right below them plays for free. Watching is
+                            // already the whole offer on this screen, and it is
+                            // one tap and no seat, so a viewer who is not shown
+                            // this loses nothing and is not sent anywhere else.
+                            //
+                            // The rule is the one the server refuses the join
+                            // with, and it answers TRUE for a channel with no
+                            // active party, so an ordinary voice room is
+                            // untouched. See `WatchPartySeat.kt`.
+                            val seats by watch.seats.collectAsStateWithLifecycle()
+                            val maySit = mayTakeWatchPartySeat(
+                                canStartWatchParty = false,
+                                party = seats[route.channelId],
+                            )
+                            if (route.isVoiceChannel && !inThisRoom && maySit) {
                                 IconButton(
                                     onClick = {
                                         withMicrophone {

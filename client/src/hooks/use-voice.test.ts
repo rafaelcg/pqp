@@ -423,18 +423,17 @@ describe("screen share audio", () => {
     };
   }
 
-  it("does not ask for the machine's audio, and hides our own tab from the picker", async () => {
-    // The 23 Aug 2026 echo report, pinned. `systemAudio: "include"` was what
-    // captured the call off the machine's own mixer and sent it back to the
-    // people who were speaking. Audio is still REQUESTED, because that is what
-    // keeps a Chrome tab share carrying that tab's sound, which cannot echo.
+  it("lets Chrome offer system audio and strips this document from the tap", async () => {
+    // The 23 Aug 2026 echo was `include` without `restrictOwnAudio`. Chrome
+    // 141+ can strip this document, so `include` is how its picker shows one
+    // "Share system audio" box instead of a hidden pre-arm on our bar.
     const { voice } = await connectedMesh();
     await voice.startScreenShare();
 
     expect(displayMediaCalls).toHaveLength(1);
     expect(displayMediaCalls[0]).toMatchObject({
       audio: { echoCancellation: false, restrictOwnAudio: true },
-      systemAudio: "exclude",
+      systemAudio: "include",
       // The anti-feedback rule: sharing the call's own tab would put the call
       // back into the call.
       selfBrowserSurface: "exclude",

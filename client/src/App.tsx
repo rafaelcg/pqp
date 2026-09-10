@@ -393,7 +393,13 @@ import {
   watchAudienceCount,
 } from "@/components/voice/watch-stage";
 import { HlsHostAckSheet } from "@/components/voice/hls-host-ack-sheet";
-import type { ScreenCaptureIntent } from "@/lib/screen-capture-audio";
+import { ShareAudioPrompt } from "@/components/voice/share-audio-prompt";
+import {
+  needsShareAudioPrompt,
+  offersShellSystemAudio,
+  screenCaptureEnvironment,
+  type ScreenCaptureIntent,
+} from "@/lib/screen-capture-audio";
 import {
   gateScreenShareStart,
   type ScreenShareStart,
@@ -1436,17 +1442,13 @@ function MainAppContent({
   const [voiceState, setVoiceState] = useState(voice.getState());
   const [pendingVoiceMoves, setPendingVoiceMoves] = useState<string[]>([]);
   /**
-   * The standing opt-in to sending this machine's whole sound with a share.
-   *
-   * SESSION STATE ON PURPOSE, not a stored preference. Sending system audio is
-   * what re-broadcast everyone's voices back into the call (the 23 Aug 2026
-   * echo report; see `lib/screen-capture-audio.ts`), and the failure is silent
-   * from the presenter's side. A preference remembered across reloads is a
-   * preference somebody set once for one game and then forgot, and the next
-   * time it costs the whole room. Re-arming is one press, in the call, next to
-   * the button it changes.
+   * Audio consent for a Windows desktop shell whose picker cannot ask yet.
+   * Null is the ordinary case. The next desktop binary puts the box on the
+   * picker and this stays null forever.
    */
-  const [shareSystemAudio, setShareSystemAudio] = useState(false);
+  const [shareAudioPrompt, setShareAudioPrompt] = useState<{
+    intent?: ScreenCaptureIntent;
+  } | null>(null);
   /**
    * The cursor preference, in the opposite arrangement, and deliberately.
    *
@@ -1592,6 +1594,38 @@ function MainAppContent({
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [hlsHostAck],
+  );
+  /**
+   * Every "share screen" click lands here. Computer audio is decided in one
+   * place, the same place Discord puts it: the picker, or a short prompt
+   * when this shell's picker cannot ask yet. A hidden icon on the call bar
+   * was how people missed the choice.
+   */
+  const requestScreenShare = useCallback(
+    (intent?: ScreenCaptureIntent) => {
+      const env = screenCaptureEnvironment(
+        isDesktopApp(),
+        getDesktop()?.platform ?? null,
+        {
+          sharePickerOffersAudio:
+            getDesktop()?.sharePickerOffersAudio === true,
+        },
+      );
+      if (
+        needsShareAudioPrompt(env) &&
+        !intent?.preferBrowserTab &&
+        !intent?.stream
+      ) {
+        setShareAudioPrompt({ intent });
+        return;
+      }
+      const audio =
+        intent?.preferBrowserTab
+          ? false
+          : env.sharePickerOffersAudio && offersShellSystemAudio(env);
+      startScreenShareGated(audio, intent);
+    },
+    [startScreenShareGated],
   );
   const perms = usePermissions(selectedServerId);
   const permsRef = useRef(perms);
@@ -3776,7 +3810,12 @@ function MainAppContent({
       stream.getTracks().forEach((track) => track.stop());
       return;
     }
-    startScreenShareGated(stream.getAudioTracks().length > 0, { stream });
+    // `false` is the system-audio opt-in, not "has an audio track". Tab audio
+    // still rides on the already-captured stream; passing track count here
+    // used to look like an opt-in to whole-computer sound. `preferBrowserTab`
+    // matches the setup picker so a retry without a handed stream stays on
+    // the echo-safe path.
+    startScreenShareGated(false, { preferBrowserTab: true, stream });
   }
 
   async function handleWatchPartyEnd() {
@@ -5184,7 +5223,7 @@ function MainAppContent({
               void voice.stopScreenShare();
               return;
             }
-            startScreenShareGated(shareSystemAudio);
+            requestScreenShare();
           }}
           onOpen={() => void openVoiceChannel()}
           shareHintEnabled={
@@ -5868,21 +5907,11 @@ function MainAppContent({
             onToggleMute={() => voice.toggleMute()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
-            onStartScreenShare={(intent) =>
-              startScreenShareGated(
-                intent?.preferBrowserTab ? false : shareSystemAudio,
-                intent,
-              )
-            }
+            onStartScreenShare={requestScreenShare}
             onShareWithoutSound={() => {
-              // Disarm the opt-in too: it is what failed, and the next share
-              // this person starts on their own should not repeat it.
-              setShareSystemAudio(false);
               startScreenShareGated(false);
             }}
             onStopScreenShare={() => void voice.stopScreenShare()}
-            shareSystemAudio={shareSystemAudio}
-            onShareSystemAudioChange={setShareSystemAudio}
             onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
             inputMode={voiceState.inputMode}
             pushToTalkKeyLabel={
@@ -5925,19 +5954,11 @@ function MainAppContent({
           onToggleMute={() => voice.toggleMute()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
-          onStartScreenShare={(intent) =>
-            startScreenShareGated(
-              intent?.preferBrowserTab ? false : shareSystemAudio,
-              intent,
-            )
-          }
+          onStartScreenShare={requestScreenShare}
           onShareWithoutSound={() => {
-            setShareSystemAudio(false);
             startScreenShareGated(false);
           }}
           onStopScreenShare={() => void voice.stopScreenShare()}
-          shareSystemAudio={shareSystemAudio}
-          onShareSystemAudioChange={setShareSystemAudio}
           onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
           compactPeers={localSettings.compactPeers}
         />
@@ -7015,6 +7036,16 @@ function MainAppContent({
           }
         }}
         onClose={() => setPurgeChannel(null)}
+      />
+
+      <ShareAudioPrompt
+        open={shareAudioPrompt !== null}
+        onConfirm={(shareAudio) => {
+          const intent = shareAudioPrompt?.intent;
+          setShareAudioPrompt(null);
+          startScreenShareGated(shareAudio, intent);
+        }}
+        onClose={() => setShareAudioPrompt(null)}
       />
 
       <HlsHostAckSheet

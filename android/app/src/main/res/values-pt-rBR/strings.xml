@@ -172,6 +172,8 @@
     <string name="voice_notification_hang_up">Desligar</string>
     <string name="voice_transport_unsupported">Esta chamada usa um transporte que este app ainda não sabe usar.</string>
     <string name="voice_backend_unreachable">Não foi possível conectar ao servidor de voz desta chamada.</string>
+    <string name="voice_join_refused">Você não pode entrar nesta call.</string>
+    <string name="voice_join_timeout">Não deu para entrar na call. Tenta de novo.</string>
     <string name="voice_participants">%1$d na chamada</string>
     <string name="voice_peer_unreachable">Não foi possível alcançar todo mundo na chamada</string>
     <string name="voice_notification_sharing">Compartilhando sua tela</string>

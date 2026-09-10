@@ -140,6 +140,7 @@ import {
 } from "../voice/hls-playlist-proxy.js";
 import { isHlsAccessRevoked } from "../voice/hls-revocation.js";
 import {
+  describeHlsViewerToken,
   HLS_VIEWER_TOKEN_PARAM,
   stampViewerStream,
 } from "../voice/hls-viewer-token.js";
@@ -2145,6 +2146,108 @@ router.get("/api/live-hls/config", async ({ url }) =>
  * `handleApi`, ahead of the Bearer resolution, and ends in this same
  * function, so the channel-access check runs on both.
  */
+/**
+ * The `?t=` door on the playlist proxy, in ONE place so its two callers
+ * cannot drift.
+ *
+ * Called with no `Authorization` header at all (Safari's native player, iOS),
+ * and again after a Bearer header has failed to resolve, which is the shape
+ * hls.js produces once a minute when its cached Clerk JWT has just expired.
+ * Returns true when it answered the request.
+ */
+async function tryHlsCapabilityDoor(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+): Promise<boolean> {
+  const match = HLS_PLAYLIST_PATH.exec(pathname);
+  if (!match) {
+    return false;
+  }
+  const token = new URL(req.url ?? "/", "http://localhost").searchParams.get(
+    HLS_VIEWER_TOKEN_PARAM,
+  );
+  const channelId = match[1]!;
+  const startedAt = Number(match[2]);
+  const viewer = resolveHlsPlaylistViewer({
+    bearerUserId: null,
+    token,
+    channelId,
+    startedAt,
+  });
+  if (!viewer) {
+    // Say why before handing back to the 401. A rejection here used to be
+    // completely silent, which is why an afternoon went into finding one.
+    logHlsPlaylistRejection(
+      channelId,
+      startedAt,
+      token,
+      req.headers.authorization,
+    );
+    return false;
+  }
+  await serveHlsPlaylistWithToken(
+    req,
+    res,
+    channelId,
+    match[2]!,
+    viewer.userId,
+    viewer.issuedAt ?? 0,
+    { rung: match[3], token },
+  );
+  return true;
+}
+
+/**
+ * A PLAYLIST REJECTION HAS TO SAY WHY.
+ *
+ * The proxy answered 401 and logged nothing, so a stall that hit every web
+ * viewer of every watch party looked, from the server, exactly like a healthy
+ * stream. It took an afternoon and a screenshot of Rafael's network panel to
+ * find that hls.js was attaching an expired Clerk JWT on top of a perfectly
+ * good `?t=`. One log line would have taken minutes.
+ *
+ * RATE LIMITED, because this sits on a path every viewer hits every two
+ * seconds and a broken client must not be able to turn its own bug into a
+ * write amplifier on the log shipper. One line per channel per reason per
+ * window is enough to tell an operator what is happening; the counter says
+ * how much of it there was.
+ */
+const HLS_REJECTION_LOG_WINDOW_MS = 30_000;
+const hlsRejectionLog = new Map<string, { at: number; since: number }>();
+
+function logHlsPlaylistRejection(
+  channelId: string,
+  startedAt: number,
+  token: string | null,
+  authorization: string | undefined,
+): void {
+  const reason = describeHlsViewerToken(token, { channelId, startedAt });
+  if (reason === null) {
+    // The capability verified, so this is not a rejection at all: the caller
+    // took the door. Nothing to say.
+    return;
+  }
+  const key = `${channelId}:${reason}`;
+  const now = Date.now();
+  const seen = hlsRejectionLog.get(key);
+  if (seen && now - seen.at < HLS_REJECTION_LOG_WINDOW_MS) {
+    seen.since += 1;
+    return;
+  }
+  logEvent("voice.hlsPlaylistRejected", {
+    channelId,
+    startedAt,
+    reason,
+    // Whether the caller ALSO sent a header, which is the difference between
+    // "a player that cannot authenticate" and "a player whose header is the
+    // thing that failed". The header itself is never logged.
+    hadAuthorizationHeader: Boolean(authorization),
+    suppressed: seen?.since ?? 0,
+  });
+  hlsRejectionLog.set(key, { at: now, since: 0 });
+}
+
 async function hlsPlaylistResponse(
   res: ServerResponse,
   channelId: string,
@@ -7682,32 +7785,11 @@ export async function handleApi(
   }
 
   // The HLS playlist proxy for players that cannot send a header: a verified
-  // per-viewer `?t=` token stands in for the Bearer. With a header present,
-  // or with no valid token, the request takes the normal route below.
-  const hlsPlaylistMatch =
-    req.method === "GET" && !req.headers.authorization
-      ? HLS_PLAYLIST_PATH.exec(pathname)
-      : null;
-  if (hlsPlaylistMatch) {
-    const token = new URL(req.url ?? "/", "http://localhost").searchParams.get(
-      HLS_VIEWER_TOKEN_PARAM,
-    );
-    const viewer = resolveHlsPlaylistViewer({
-      bearerUserId: null,
-      token,
-      channelId: hlsPlaylistMatch[1]!,
-      startedAt: Number(hlsPlaylistMatch[2]),
-    });
-    if (viewer) {
-      await serveHlsPlaylistWithToken(
-        req,
-        res,
-        hlsPlaylistMatch[1]!,
-        hlsPlaylistMatch[2]!,
-        viewer.userId,
-        viewer.issuedAt ?? 0,
-        { rung: hlsPlaylistMatch[3], token },
-      );
+  // per-viewer `?t=` token stands in for the Bearer. With no header at all
+  // this is the only door; with a header that FAILS it is tried again below,
+  // after the Bearer resolution has had its say (see `tryHlsCapabilityDoor`).
+  if (!req.headers.authorization) {
+    if (await tryHlsCapabilityDoor(req, res, pathname)) {
       return;
     }
   }
@@ -7765,6 +7847,35 @@ export async function handleApi(
   }
 
   if (!resolved) {
+    // A FAILED BEARER MUST NOT VETO A CAPABILITY WE SIGNED OURSELVES.
+    //
+    // This is the stall Rafael chased for an afternoon, and it took a
+    // screenshot of his network panel to find because the server said nothing.
+    // `handleApi` resolves a Bearer ahead of the router, so any header had to
+    // succeed or the request was 401 before the `?t=` in the URL was ever
+    // looked at. hls.js attaches a Clerk JWT on top of the token, refreshes it
+    // every 30 s without `forceRefresh`, and a Clerk JWT lives about 60, so
+    // roughly once a minute a playlist request carried a dead JWT and was
+    // rejected: every web viewer, every watch party, since the feature
+    // shipped. Proved on production with one URL and one valid token: token
+    // alone 200, token plus an expired Bearer 401, token plus garbage 401.
+    //
+    // Nothing could see it. Every server-side test and every curl sent only
+    // `?t=`, the one shape that never fails, and native iOS and Safari send
+    // only `?t=` too. The failure lived solely in the shape hls.js produces.
+    //
+    // HERE rather than ahead of the router, deliberately. Trying the token
+    // first would also let it serve a caller whose Bearer resolves to somebody
+    // ELSE, which is a rule this route already has and keeps (a token naming
+    // another user is not this caller's capability). Reaching it only once the
+    // header has failed means there is no other caller to confuse it with: the
+    // token, which names its user, channel and session, is HMACed by this
+    // server and is minted only after a real access check, is then the
+    // strongest evidence available. Revocation is still checked against its
+    // own issue time.
+    if (req.method === "GET" && (await tryHlsCapabilityDoor(req, res, pathname))) {
+      return;
+    }
     // The metrics route answers 404 to everybody it refuses, whether that is a
     // wrong token, no token, or a signed-in non-moderator. A 401 here would
     // tell a probe that the route exists and only the credential was wrong.

@@ -42,7 +42,26 @@ import {
 const TRACK_FIND_ATTEMPTS = 16;
 const TRACK_FIND_GAP_MS = 400;
 const DEFAULT_DELAY_SECONDS = 10;
-const PLAYLIST_WAIT_ATTEMPTS = 20;
+/**
+ * How long a fresh egress gets to produce its first live playlist.
+ *
+ * WAS 20 SECONDS, AND THAT WAS TOO IMPATIENT. `docs/CAPACITY.md` section 2
+ * measured time-to-first-playlist at 10.8 s for a `720p30`-first ladder on an
+ * idle box and **43.7 s** for `1080p30` on a saturated core, so the old
+ * ceiling sat between the good case and the bad one. Production on 2026-09-09
+ * logged `voice.hlsStarted playlistReady=false` immediately followed by
+ * `voice.hlsStopped reason=playlist-not-ready` on a box that was carrying
+ * leftover transcodes at the time: the session was torn down, one of the three
+ * restarts in the window was spent, and the audience got nothing, when waiting
+ * a little longer would have served them.
+ *
+ * The cost of waiting is the host staring at "preparing" for longer. The cost
+ * of not waiting is that plus a wasted session plus another wait. Forty-five
+ * seconds covers the measured worst case; `voice.hlsStarted` now reports how
+ * long it actually took, so the next revision of this number is measured
+ * rather than argued.
+ */
+const PLAYLIST_WAIT_ATTEMPTS = 45;
 const PLAYLIST_WAIT_GAP_MS = 1000;
 
 /** How often the monitor asks LiveKit whether each egress is still alive. */
@@ -2018,6 +2037,7 @@ async function startRoom(
   // never the viewer-facing URL: a viewer gets the signed master path, which
   // this same process cannot usefully fetch from here. It waits on the
   // PRIMARY rung, because that is the one a viewer is guaranteed to land on.
+  const waitStartedAt = Date.now();
   const ready = await waitForLivePlaylist(
     internalPlaylistUrl(channelId, startedAt, primary.rung.name),
   );
@@ -2025,6 +2045,10 @@ async function startRoom(
     channelId,
     presenterPeerId,
     playlistReady: ready,
+    // How long the first live playlist actually took. The only way to know
+    // whether `PLAYLIST_WAIT_ATTEMPTS` is set anywhere near right, and the
+    // reason the number above can be revised from data instead of argument.
+    playlistWaitMs: Date.now() - waitStartedAt,
     // WHAT THE TRANSCODE IS ACTUALLY CARRYING, not what it was asked for.
     // "screen" is the share's own audio; "none" is a silent stream, which is
     // what a whole-screen or window capture always produces and what a tab
@@ -2125,6 +2149,28 @@ async function reconcileLiveHlsNow(
     return startRoom(channelId, presenterPeerId, tracks);
   }
   if (current) {
+    // A NEW PEER ID IS NOT NECESSARILY A NEW PRESENTER. A reconnect that
+    // reconstructs or cold-joins gets a fresh peer id, and LiveKit identities
+    // are peer ids, so the room reports a different presenter for what is
+    // plainly the same person. If the SFU still holds the very screen track
+    // this session was started on, the media never moved and there is nothing
+    // to restart: adopt the new id onto the running session instead of
+    // rebuffering every viewer to say the same picture again.
+    //
+    // Sids are unique per publication, so this cannot confuse two people: a
+    // genuine second presenter has a track this session was never bound to.
+    const tracks = await probeScreenTracks(channelId, presenterPeerId);
+    if (tracks && tracks.videoTrackId === current.videoTrackId) {
+      const from = current.stream.presenterPeerId;
+      current.stream = { ...current.stream, presenterPeerId };
+      logEvent("voice.hlsPresenterReattached", {
+        channelId,
+        from,
+        to: presenterPeerId,
+        videoTrackId: current.videoTrackId,
+      });
+      return current.stream;
+    }
     await stopRoom(channelId, "presenter-changed");
   }
   return startRoom(channelId, presenterPeerId);

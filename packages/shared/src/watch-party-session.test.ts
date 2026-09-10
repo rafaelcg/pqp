@@ -182,6 +182,13 @@ describe("who may do what", () => {
     expect(allow("schedule", "manager", "draft")).toBe(false);
   });
 
+  it("lets the host and a co-host rename while the party is live", () => {
+    expect(allow("edit", "host", "live")).toBe(true);
+    expect(allow("edit", "cohost", "live")).toBe(true);
+    expect(allow("edit", "viewer", "live")).toBe(false);
+    expect(allow("edit", "host", "ended")).toBe(false);
+  });
+
   it("does not let a viewer touch anything", () => {
     for (const action of WATCH_PARTY_ACTIONS) {
       for (const state of WATCH_PARTY_PHASES) {

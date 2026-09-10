@@ -1649,6 +1649,132 @@ guaranteed present, and the health monitor already tears down a session whose
 playlist stops moving for twenty seconds. Worth adding if a session is ever
 seen serving stale content with an open row.
 
+### The 401 that stalled every web viewer, and said nothing
+
+**Read this first if a stream is stalling.** It was the largest single cause and
+it had no server-side symptom whatsoever.
+
+The playlist proxy takes two credentials: a Bearer header, and a `?t=`
+capability this server signs itself, naming the user, the channel and the
+session, minted only after a real access check. `handleApi` resolves a Bearer
+**before the router**, so any `Authorization` header had to succeed or the
+request was 401 before the token in the URL was looked at, and the token-only
+door was gated on there being no header at all.
+
+`hls.js` attaches a Clerk JWT through `xhrSetup` **on top of** the `?t=`
+already in the URL, caches it in a closure, and refreshes it every 30 s without
+`forceRefresh`, while a Clerk JWT lives about 60 s. So roughly once a minute
+every playlist request carried an expired token and was rejected. The player
+stalled, retried, recovered, and did it again a minute later, for the whole
+film, for every web viewer of every watch party since the feature shipped.
+
+Proved on production, one URL, one valid token:
+
+```
+?t= alone                          200
+?t= + Authorization: expired jwt   401
+?t= + Authorization: garbage       401
+```
+
+**Why nothing caught it.** Every server test and every `curl` sent only `?t=`,
+which is the one request shape that never fails; native iOS and Safari send only
+`?t=` too. There was even a test named "serves hls.js (header AND token)" and it
+used a **valid** header, so it exercised the shape without the failure inside
+it. And the proxy logged nothing on a 401, so every server-side measurement said
+the stream was healthy: it took a screenshot of Rafael's network panel.
+
+**Both halves are fixed.** The server tries the capability again after the
+Bearer resolution has failed, which is late enough that there is no other caller
+to confuse it with. Trying it *first* would be wrong and a test says so: a token
+naming one user must not become a different authenticated caller's capability,
+which is a rule this route already had. And the client stops attaching a header
+when the URL already carries a token, because a second credential is a second
+thing that can fail. Either half fixes today; the pair is what stops the next
+person adding a header "for safety" and bringing it back.
+
+**A rejection now says why.** `voice.hlsPlaylistRejected` carries `missing`,
+`malformed`, `bad-signature`, `expired`, `wrong-channel` or `wrong-session`,
+plus whether an `Authorization` header was also present, rate limited to one
+line per channel per reason per 30 s with a `suppressed` count. `wrong-session`
+is the honest common one, a viewer holding the previous session's token, and it
+should cost one clean refetch rather than repeating.
+
+### The stall, and the four things that were causing it
+
+Rafael reported the stream stopping every few seconds to minutes, on web and
+iOS. It was not one fault. The `reason` field added to `voice.hlsStopped` is
+what made them separable, and production answered within a party:
+
+```
+15:24:49  presenter-changed
+15:25:23  no-share
+15:29:31  screen-track-replaced     nobody touched the share
+15:29:58  playlist-not-ready
+15:34:17  screen-track-replaced     again
+15:40:10  no-share
+```
+
+Six teardowns in sixteen minutes on one continuous party. Every one is a new
+`startedAt`, a new playlist URL and a rebuffer for the whole audience.
+
+**1. The web player re-attached on a restamped URL.** This one hits every
+seatless web viewer of every watch party there has ever been, and it is
+independent of everything else here, which is why choosing 720p by hand did not
+help. `hlsUrl` carries a per-viewer signed `?t=` token and the server restamps
+it on the audience keyframe, every 30 seconds, so the `src` prop changes twice a
+minute for a stream that has not moved. `HlsWatchPlayer` re-attached its
+`<video>` on any change. iOS was given this exact rule when the audience half
+was written (`WatchStreamSwap` swaps on `startedAt`, on a failure and on the
+token clock); the web never was, and because the symptom is identical on both it
+read as the stream being broken rather than as one platform missing a guard.
+`hlsSessionKey` compares the path, which is `.../<channelId>/<startedAt>`, so
+only a genuinely new session moves the player.
+
+**2. The publish plan was recalculated from a fluctuating bandwidth estimate.**
+`use-voice.ts` resamples the presenter's uplink into `setHlsSource` every two
+seconds, and the server restamps the stream frame every thirty, so
+`reconcileScreenPlan` runs constantly. Once `hlsSourceTopHeight` began requiring
+a **measured** uplink (the right fix for a starved 1080p layer, in the section
+below), a link sitting near the 5 Mbit/s threshold made `topHeight` a function
+of that estimate, and a change of height republishes the track: new sid, new
+egress, new session, everyone rebuffers. `screenPlanPinned` decides the layers
+once per broadcast and holds them; a worse uplink still lowers the **ceiling**,
+in place, where nobody sees it. The host picking a quality by name forces past
+the pin, because that is a person rather than an estimate.
+
+There is no hysteresis worth adding instead. The decision is worth making once,
+and `replaceTrack` does not help here either: the declared layers are fixed at
+publish, so swapping the capture cannot change them.
+
+**3. A sharer that vanished for a moment ended the broadcast.**
+`pickHlsSharer` needs `watchParty && sharingScreen && canStream`, and all three
+go false without the presenter doing anything: a reconnect that reconstructs
+starts the peer with `sharingScreen: false` until the client re-declares, and
+`reevaluateVoiceSpeak` clears `sharingScreen` outright for anyone whose
+`canStream` resolves false, which runs on **every** permissions bump, including
+the ones a watch party's own options reconciler causes by writing channel
+overwrites. The first such push used to end the session. It is now held for
+`HLS_NO_SHARER_GRACE_MS` (5 s; `0` is the rollback), and because the sharer
+going away is the last event the channel produces, the grace wakes itself with a
+timer rather than waiting for something else to happen. `voice.hlsSharerVanished`
+dumps every peer's three gate bits, so a persistent cause names itself instead of
+needing another party to reproduce.
+
+**4. A changed peer id read as a changed presenter.** LiveKit identities are peer
+ids, so a reconnect that reconstructs or cold joins looks like somebody else
+taking over. If the SFU still holds the very screen track the session was started
+on, the media never moved: the new id is adopted onto the running session
+(`voice.hlsPresenterReattached`) instead of restarting it. Sids are unique per
+publication, so a genuine second presenter still restarts it.
+
+**And `playlist-not-ready` was the box being slow, not the egress being broken.**
+The readiness probe waited 20 s, between the 10.8 s and 43.7 s that
+`docs/CAPACITY.md` measured for a first playlist on an idle and a saturated box.
+On a box carrying leftover transcodes it timed out, tore the session down and
+spent one of the three restarts in the window. It waits 45 s now, and
+`voice.hlsStarted` reports `playlistWaitMs`, so the next revision of that number
+is measured rather than argued.
+
 ### What the presenter publishes, and why 1080p was making it worse
 
 Measured on the live party, 2026-09-09. The presenter published
@@ -2247,9 +2373,11 @@ later, per app:
   Still to do on iOS: the party OBJECT (`watch-party-update`, the host,
   cohosts, the stage, raise hand), the presenter side, hiding the share
   control unless `welcome.canStream`, and the create sheet offering the type.
-- Android: a distinct icon and the create sheet are still missing, and the
-  share control is still hidden on a LiveKit room, which is every watch party.
-  `WireProtocolTest` mirrors the shared enum and was updated here.
+- Android: a distinct icon and the create sheet are still missing. The share
+  control follows `welcome.canStream` rather than the transport now, so a host
+  can present on a LiveKit room, which is the transport every watch party runs
+  on; nothing about that has been run on a device. `WireProtocolTest` mirrors
+  the shared enum and was updated here.
 
 **Android watches the stream too**, and landed on the same rules as iOS without
 either side reading the other. `voice-stream` and `channel-live` are handled

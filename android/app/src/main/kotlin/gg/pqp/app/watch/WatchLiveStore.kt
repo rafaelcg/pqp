@@ -40,6 +40,19 @@ import kotlinx.serialization.json.put
  * (`!socketIsInRoom`). Joining the call afterwards is a deliberate second act
  * and is somebody else's code.
  *
+ * ## And the same argument, applied to the way IN
+ *
+ * Refusing to join from here is only half of it: the app bar drew a join
+ * button on every voice-room channel, and `watch_party` is one of those, so a
+ * viewer was invited to take the seat this file exists to avoid. Deleting the
+ * button outright would have taken it from the host too, and this client could
+ * not tell them apart before joining because `welcome.canStream` is the answer
+ * and `welcome` arrives after the seat is taken.
+ *
+ * So this store also reads `watch-party-update`, whose `viewerRole` the server
+ * resolves per recipient. See [mayTakeWatchPartySeat] for the rule and [seats] for
+ * what is kept. It is knowledge only; nothing here joins anything.
+ *
  * ## Why a subscription is not a request for a frame
  *
  * The count reaches an audience on the server's own 30 s keyframe clock, never
@@ -72,12 +85,40 @@ class WatchLiveStore(
     private val seatedChannelId: () -> String?,
     /** `GET /api/channels/:id/live`, for the gap before the socket speaks. */
     private val seed: suspend (String) -> ChannelLiveResponse?,
+    /**
+     * This account's own id, or null before the session has resolved.
+     *
+     * Read lazily for the same reason [seatedChannelId] is: the store outlives
+     * the sign-in, and a snapshot taken at construction is the answer from
+     * before there was an account.
+     */
+    private val selfUserId: () -> String?,
     scope: CoroutineScope,
 ) {
     private val _channels = MutableStateFlow<Map<String, ChannelLive>>(emptyMap())
 
     /** What the server last said about every channel it has mentioned. */
     val channels: StateFlow<Map<String, ChannelLive>> = _channels.asStateFlow()
+
+    private val _seats = MutableStateFlow<Map<String, WatchPartySeatRule>>(emptyMap())
+
+    /**
+     * This account's standing in every active watch party it may see.
+     *
+     * KNOWLEDGE, NOT A JOIN. Nothing here takes a seat and nothing here can:
+     * the claim above about this class not being able to reach
+     * [gg.pqp.app.voice.VoiceController] is still structural and still true.
+     * What this map does is let the surface that DOES join stop offering it to
+     * people the server would turn away, which is [mayTakeWatchPartySeat].
+     *
+     * A channel absent from this map has no party this account is part of, and
+     * that reads as an ordinary voice room rather than as a closed one.
+     */
+    val seats: StateFlow<Map<String, WatchPartySeatRule>> = _seats.asStateFlow()
+
+    /** Whether the join control belongs on this channel's app bar at all. */
+    fun mayTakeSeat(channelId: String): Boolean =
+        mayTakeWatchPartySeat(canStartWatchParty = false, party = _seats.value[channelId])
 
     /** The channel this socket has announced a seatless watch on, or null. */
     @Volatile
@@ -109,6 +150,22 @@ class WatchLiveStore(
                     val stream = decodeLiveStream(frame)
                     val watchers = decodeWatching(frame)
                     put(channelId) { it.copy(stream = stream, watching = watchers) }
+                }
+                // The watch party EVENT, resolved per recipient, and the only
+                // thing that tells this phone whether it is running the party
+                // or watching it. It arrives at socket auth for every active
+                // party this account may see (`catchUpWatchParties`) as well
+                // as on every change, so the answer is here before anybody can
+                // tap anything. `party: null` means there is nothing here for
+                // this account any more, and takes the entry away.
+                "watch-party-update" -> {
+                    val channelId = channelIdOf(frame) ?: return@collect
+                    val seat = decodeWatchPartySeat(frame, selfUserId())
+                    _seats.value = if (seat == null) {
+                        _seats.value - channelId
+                    } else {
+                        _seats.value + (channelId to seat)
+                    }
                 }
             }
         }

@@ -20,24 +20,30 @@ import {
 import { useTranslation } from "@/lib/i18n";
 import {
   chooseHlsEngine,
+  hasHlsViewerToken,
+  hlsSessionKey,
   isAutoplayRefusal,
   isOwnHlsPlaylistProxyUrl,
+  resolveHlsUrl,
+  sameHlsSession,
   setHlsPlaybackStats,
+  shouldAdoptHlsSource,
 } from "@/lib/hls-playback";
 import {
   buildMediaSessionMetadata,
   hasSafariPresentationMode,
+  hlsLivePlayerConfig,
   isBehindLive,
   isPipAvailable,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
-import { resolveHlsUrl } from "@/lib/hls-playback";
 import { Tooltip } from "@/components/ui/tooltip";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
 import { HlsStallWatch, channelIdFromHlsUrl } from "@/lib/hls-stall";
 import {
   AUTO_HLS_QUALITY,
+  applyHlsQualityLevel,
   describeHlsLevel,
   levelIndexFor,
   offeredHlsLevels,
@@ -65,8 +71,10 @@ interface HlsHandle {
   destroy: () => void;
   liveSyncPosition: number | null;
   media: HTMLMediaElement | null;
-  /** `-1` is Auto. Assigning pins the rendition; hls.js owns it otherwise. */
+  /** `-1` is Auto. Assigning flushes the buffer; use `nextLevel` mid-stream. */
   currentLevel: number;
+  /** `-1` is Auto. Assigning waits for the next segment, no flush. */
+  nextLevel: number;
   levels: HlsLevelLike[];
 }
 
@@ -178,13 +186,41 @@ export function HlsWatchPlayer({
     setQualityOpen(false);
     const hls = hlsRef.current;
     if (hls) {
-      hls.currentLevel = levelIndexFor(hls.levels, next);
+      // Next segment, not a flush. `currentLevel` pauses the picture for
+      // about a second while hls.js dumps the buffer; Auto stays ABR.
+      applyHlsQualityLevel(
+        hls,
+        levelIndexFor(hls.levels, next),
+        "next-fragment",
+      );
     }
   }, []);
 
   const offered = offeredHlsLevels(levels);
 
+  /**
+   * A RESTAMPED URL IS NOT A NEW STREAM, and treating it as one is what made
+   * every seatless web viewer rebuffer twice a minute for the whole film.
+   *
+   * `hlsUrl` carries a per-viewer `?t=` token and the server restamps it on
+   * the audience keyframe, every 30 seconds while the channel is live, so this
+   * prop changes constantly for a stream that has not moved. Adopting it
+   * re-attaches the element, drops the buffer and starts the whole ladder
+   * negotiation again. Only the path names the session
+   * (`.../<channelId>/<startedAt>`), and only `startedAt` changing means the
+   * viewer genuinely has to move.
+   *
+   * This is the same rule iOS's `WatchStreamSwap` was given when the audience
+   * half was written; the web was never given it, and because the symptom is
+   * identical on both it read as the stream being broken rather than one
+   * platform missing a guard.
+   */
+  const sessionRef = useRef<string | null>(null);
   useEffect(() => {
+    if (!shouldAdoptHlsSource(sessionRef.current, src)) {
+      return;
+    }
+    sessionRef.current = hlsSessionKey(src);
     setActiveSrc(src);
     setPhase("playing");
     watchRef.current.reset(Date.now());
@@ -216,12 +252,26 @@ export function HlsWatchPlayer({
         // URL we have, the watchdog will call it dead if that fails too.
       }
     }
-    if (next && next !== activeSrc) {
+    if (next && !sameHlsSession(next, activeSrc)) {
+      // A genuinely different session: follow it, and remember it so the
+      // `src` prop arriving with the same session a moment later does not
+      // re-attach on top of this one.
+      sessionRef.current = hlsSessionKey(next);
+      setActiveSrc(next);
+    } else if (next && next !== activeSrc) {
+      // Same session, fresher token. Worth taking on a reconnect (the old one
+      // may be what failed) and never worth taking otherwise.
       setActiveSrc(next);
     } else {
       setAttempt((n) => n + 1);
     }
   }, [activeSrc]);
+
+  // Held in a ref so the attach effect does not list `reconnect` as a
+  // dependency. That callback's identity changes with `activeSrc`, and a
+  // changing identity tears hls.js down, drops the buffer, and is a stall.
+  const reconnectRef = useRef(reconnect);
+  reconnectRef.current = reconnect;
 
   const retryFromDead = useCallback(() => {
     watchRef.current.reset(Date.now());
@@ -483,7 +533,7 @@ export function HlsWatchPlayer({
         return;
       }
       console.warn(`[hls] stream stalled (${watch.lastReason}), reconnecting`);
-      void reconnect();
+      void reconnectRef.current();
     }, STALL_TICK_MS);
 
     // A refused play() is a paused element behind the "loading" overlay
@@ -528,7 +578,7 @@ export function HlsWatchPlayer({
         return;
       }
       const player = new Hls({
-        liveSyncDurationCount: 3,
+        ...hlsLivePlayerConfig(),
         enableWorker: true,
         // Playlist is written after the first 2 s segment. Retry the
         // initial 404 instead of giving up while egress is still starting.
@@ -538,18 +588,35 @@ export function HlsWatchPlayer({
         // Every segment/media URL hls.js loads is already an absolute,
         // presigned bucket URL (the signed playlist proxy rewrites them
         // that way) -- only the playlist request itself is our own API,
-        // and only that one gets a Bearer header. Attaching it to every
-        // request would leak the token to R2. hls.js calls this
-        // synchronously per XHR; the token is read from the in-memory
-        // Clerk-backed cache `getAuthToken` keeps, not fetched fresh here.
+        // and only that one could take a Bearer header. Attaching it to
+        // every request would leak the token to R2.
         //
-        // The header is belt and braces now: the playlist URL carries its
-        // own per-viewer token (`?t=`, see `hls-viewer-token.ts` on the
-        // server) which authorizes the request on its own. That is what
-        // lets the native `<video src>` path below and `useLiveHlsReady`'s
-        // plain `fetch` work, since neither can set a header.
+        // NOT SENT WHEN THE URL ALREADY CARRIES `?t=`, and that is the fix
+        // for the stall rather than a tidy-up. The header was called belt and
+        // braces; it was the only strap that could break. `handleApi`
+        // resolves a Bearer ahead of the router, so a header that fails is a
+        // 401 before anything looks at the capability in the URL. This
+        // closure refreshes its Clerk JWT every 30 s without `forceRefresh`
+        // and a Clerk JWT lives about 60, so roughly once a minute a playlist
+        // request went out carrying a dead token and was rejected, and the
+        // player stalled and recovered, over and over, for every web viewer
+        // of every watch party. Proved on production: same URL and same valid
+        // `?t=`, token alone 200, token plus an expired Bearer 401.
+        //
+        // The server no longer lets a failed Bearer veto a good capability
+        // either. Both halves, because either alone fixes today and the pair
+        // is what stops it coming back.
+        //
+        // The header still goes on a playlist URL that has NO token: a
+        // deployment with no `LIVE_HLS_VIEWER_KEY` mints none, and there the
+        // Bearer is the only door. hls.js calls this synchronously per XHR,
+        // so the token has to be in hand already.
         xhrSetup: (xhr, url) => {
-          if (isOwnHlsPlaylistProxyUrl(url) && authToken) {
+          if (
+            isOwnHlsPlaylistProxyUrl(url) &&
+            authToken &&
+            !hasHlsViewerToken(url)
+          ) {
             xhr.setRequestHeader("Authorization", `Bearer ${authToken}`);
           }
         },
@@ -584,9 +651,13 @@ export function HlsWatchPlayer({
           // not in it comes back as -1, which is hls.js's own Auto, so a
           // viewer whose rung was refused for budget gets a working player
           // rather than a stuck one.
-          player.currentLevel = levelIndexFor(
-            data.levels as HlsLevelLike[],
-            qualityPrefRef.current,
+          applyHlsQualityLevel(
+            player as unknown as HlsHandle,
+            levelIndexFor(
+              data.levels as HlsLevelLike[],
+              qualityPrefRef.current,
+            ),
+            "immediate",
           );
         }
         void play();
@@ -594,6 +665,10 @@ export function HlsWatchPlayer({
     }
 
     void attach();
+    // `reconnect` lives on reconnectRef: listing it here re-created hls.js
+    // on every restamp of the callback. `videoRef` is a parent object whose
+    // identity must not tear the session down either; the element is always
+    // on innerRef after the callback ref runs.
     return () => {
       cancelled = true;
       window.clearInterval(authTokenTimer);
@@ -609,7 +684,7 @@ export function HlsWatchPlayer({
       video.load();
       setHlsPlaybackStats(null);
     };
-  }, [activeSrc, attempt, videoRef, reconnect]);
+  }, [activeSrc, attempt]);
 
   return (
     <div className={cn("relative h-full w-full bg-black", className)}>

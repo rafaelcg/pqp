@@ -128,10 +128,12 @@ struct WatchLiveEdge: Equatable {
     /// - Parameters:
     ///   - position: `player.currentTime().seconds`.
     ///   - window: the item's seekable range, or nil before it has one.
-    ///   - wantsPlayback: `player.rate > 0`. THE INTENT, not the outcome.
-    ///     `rate` stays at 1 while a player waits for media and drops to 0
-    ///     only when something paused it, so this is what keeps a rejoin from
-    ///     yanking a viewer who pressed pause back into the broadcast.
+    ///   - wantsPlayback: THE VIEWER'S INTENT, not `player.rate`. Rate
+    ///     drops to 0 on a pause nobody asked for (a rung switch, an
+    ///     interruption the notification missed, AVPlayer giving up), and
+    ///     treating that as a tap on pause is what left build 23 frozen.
+    ///     The chrome, the lock screen and Now Playing set this; a seek
+    ///     here must never run when it is false.
     ///   - isWaiting: `timeControlStatus == .waitingToPlayAtSpecifiedRate`.
     mutating func tick(
         position: Double,

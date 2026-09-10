@@ -85,4 +85,20 @@ describe("attemptElementFullscreen", () => {
       }),
     ).resolves.toBe(false);
   });
+
+  it("treats a request that throws synchronously as a refusal, not a hang", async () => {
+    const onRefusal = vi.fn();
+    const error = new Error("no element fullscreen API");
+    await expect(
+      attemptElementFullscreen({
+        request: () => {
+          throw error;
+        },
+        isActive: () => false,
+        onRefusal,
+        wait: () => pending(),
+      }),
+    ).resolves.toBe(false);
+    expect(onRefusal).toHaveBeenCalledWith(error);
+  });
 });

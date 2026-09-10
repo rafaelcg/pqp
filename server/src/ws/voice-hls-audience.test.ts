@@ -223,6 +223,19 @@ async function claimStage(rec: Recorder, userId: string) {
   );
 }
 
+/**
+ * The sharer stops being one. Indistinguishable, to the server, from what
+ * `reevaluateVoiceSpeak` does to a peer whose `canStream` resolved false, and
+ * from a reconnect that rebuilt the peer before the client re-declared, which
+ * is the point: `pickHlsSharer` sees one absence, not three causes.
+ */
+async function releaseStage(rec: Recorder, userId: string) {
+  await handleVoiceMessage(
+    { socket: rec.socket, user: asUser(userId) },
+    { type: "set-sharing-screen", sharing: false },
+  );
+}
+
 /** `pushLiveHls` is fire-and-forget behind the share; let it settle. */
 async function settle() {
   for (let i = 0; i < 5; i += 1) {
@@ -241,6 +254,13 @@ describe("HLS start reads the stage gate", () => {
     egress.calls.length = 0;
     egress.refuse = false;
     backend.configured = "livekit";
+    // NO GRACE BY DEFAULT IN THIS SUITE. `pushLiveHls` now holds a broadcast
+    // open for `HLS_NO_SHARER_GRACE_MS` after the sharer disappears, because
+    // a reconnect or a permissions bump makes them disappear without anybody
+    // touching the share. Every case here except the one describe that is
+    // about the grace is about what happens when a share genuinely stops, so
+    // they run with it off and keep asserting exactly what they always did.
+    process.env.HLS_NO_SHARER_GRACE_MS = "0";
     resetWatchPartyLiveForTests();
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
@@ -387,6 +407,89 @@ describe("HLS start reads the stage gate", () => {
     });
   });
 
+  /**
+   * A SHARER THAT VANISHES FOR A MOMENT MUST NOT END THE BROADCAST.
+   *
+   * `pickHlsSharer` needs `watchParty && sharingScreen && canStream`, and all
+   * three go false without the presenter doing anything: a reconnect that
+   * reconstructs starts the peer with `sharingScreen: false` until the client
+   * re-declares, and `reevaluateVoiceSpeak` clears `sharingScreen` outright
+   * for anyone whose `canStream` resolves false, which runs on every
+   * permissions bump, including the ones a watch party's own options
+   * reconciler causes by writing channel overwrites.
+   *
+   * Until now the first such push ended the session. Production logged
+   * `voice.hlsStopped reason=no-share` twice in sixteen minutes on one
+   * continuous party where nobody stopped sharing, and each one is a new
+   * `startedAt` and a rebuffer for every seatless viewer.
+   *
+   * Only `Date` is faked below (`toFake`), because the grace is wall clock and
+   * `settle()` needs a real `setImmediate` to drain the fire-and-forget push.
+   */
+  describe("a sharer that disappears for a moment", () => {
+    beforeEach(() => {
+      // The suite's own default is 0 (see the outer `beforeEach`), which is
+      // what keeps every other case pinning the stop rather than the grace.
+      process.env.HLS_NO_SHARER_GRACE_MS = "5000";
+    });
+
+    it("does not end the broadcast inside the grace window", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(true);
+
+      await releaseStage(host, "host");
+      await settle();
+
+      expect(egress.streams.has(CINEMA)).toBe(true);
+    });
+
+    it("comes back with no restart at all when the sharer returns", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+      const started = egress.streams.get(CINEMA)!.startedAt;
+
+      await releaseStage(host, "host");
+      await settle();
+      await claimStage(host, "host");
+      await settle();
+
+      // The SAME session. A blip must cost the audience nothing, not even a
+      // new playlist URL, which is a rebuffer for every one of them.
+      expect(egress.streams.get(CINEMA)?.startedAt).toBe(started);
+      expect(
+        egress.calls.filter(
+          ([channel, presenter]) => channel === CINEMA && presenter === null,
+        ),
+      ).toEqual([]);
+    });
+
+    it("still ends it once the grace has genuinely passed", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+
+      // A real grace, just a short one: the timer that wakes the grace up is
+      // load bearing (the sharer going away is the last event this channel
+      // produces, so nothing else would ever look again) and faking it away
+      // would leave that untested.
+      process.env.HLS_NO_SHARER_GRACE_MS = "50";
+      await releaseStage(host, "host");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(true);
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await settle();
+
+      expect(egress.streams.has(CINEMA)).toBe(false);
+    });
+  });
+
   it("a member's refused claim never reaches the egress with a presenter", async () => {
     bits.byUser.set("member", PERMISSION_DEFAULT_EVERYONE);
     const member = await join(recorder(), "member", CINEMA);
@@ -450,6 +553,9 @@ describe("live HLS reaches the channel", () => {
     egress.calls.length = 0;
     egress.refuse = false;
     backend.configured = "livekit";
+    // Off here too: every case in this describe is about what the CHANNEL
+    // hears when a share stops, not about the grace that now precedes it.
+    process.env.HLS_NO_SHARER_GRACE_MS = "0";
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 

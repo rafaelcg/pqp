@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { WatchParty } from "@pqp/shared";
@@ -269,6 +270,34 @@ describe("the pane owns the surface's height", () => {
   }
 });
 
+describe("renaming from the live identity row", () => {
+  const chrome = (role: WatchParty["viewerRole"]) =>
+    render({
+      slot: "chrome",
+      hasStream: true,
+      inCall: true,
+      party: { ...PARTY, viewerRole: role },
+    });
+
+  it("lets the host, a co-host and a manager tap the name", () => {
+    for (const role of ["host", "cohost", "manager"] as const) {
+      const html = chrome(role);
+      expect([role, html.includes("data-watch-party-rename=")]).toEqual([
+        role,
+        true,
+      ]);
+      expect(html, role).toContain("Cinemoon");
+    }
+  });
+
+  it("leaves a viewer with the name as a label, no pencil", () => {
+    const html = chrome("viewer");
+    expect(html).toContain("data-watch-party-name-label");
+    expect(html).toContain("Cinemoon");
+    expect(html).not.toContain("data-watch-party-rename=");
+  });
+});
+
 describe("a host can tell they are not live", () => {
   const draft: Partial<Parameters<typeof WatchPartyPanel>[0]> = {
     party: { ...PARTY, state: "draft", viewerRole: "host" },
@@ -362,5 +391,45 @@ describe("the way into the room", () => {
         party: { ...PARTY, options: { ...PARTY.options, voiceEnabled: true } },
       }),
     ).toContain(joinControl);
+  });
+});
+
+/**
+ * THE ECHO REGRESSION. Setup used to call
+ * `getDisplayMedia({ video: true, audio: true })` directly, which on Windows
+ * Electron becomes WASAPI loopback of the call and puts every voice back into
+ * the room. Ordinary shares already go through `screenCaptureOptions`; this
+ * scan fails the moment setup bypasses that builder again. Crude, and exactly
+ * the check a reviewer did by hand when the bypass was found.
+ */
+describe("watch party setup capture cannot re-broadcast the call", () => {
+  it("routes the setup picker through screenCaptureOptions", () => {
+    const source = readFileSync(
+      new URL("./watch-party-panel.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("screenCaptureOptions(");
+    expect(source).toContain("preferBrowserTab: true");
+    // The bare shape that caused the echo. A video-only fallback elsewhere is
+    // fine; `{ audio: true }` next to getDisplayMedia is not.
+    expect(source).not.toMatch(
+      /getDisplayMedia\(\s*\{\s*video:\s*true,\s*audio:\s*true/,
+    );
+  });
+
+  it("hands go-live a stream without claiming system-audio opt-in", () => {
+    const source = readFileSync(
+      new URL("../../App.tsx", import.meta.url),
+      "utf8",
+    );
+    const goLive = source.slice(
+      source.indexOf("async function handleWatchPartyGoLive"),
+      source.indexOf("async function handleWatchPartyEnd"),
+    );
+    expect(goLive).toContain(
+      "startScreenShareGated(false, { preferBrowserTab: true, stream })",
+    );
+    expect(goLive).not.toContain("getAudioTracks().length > 0");
+
   });
 });

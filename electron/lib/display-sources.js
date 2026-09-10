@@ -187,14 +187,16 @@ function screenPermission(platform, status) {
  * It is also skipped when the page never asked for audio, so a video-only
  * request cannot be failed by an audio track nobody wanted.
  *
- * `audioRequested` is still the echo switch for *whether* Windows loopback
- * runs. This function must keep returning `"loopback"` when it is true, not a
- * homemade device id: that string is what Electron documents, and from 43.4.0
- * the embedder remaps it to `loopbackWithoutChrome` when the page asked
- * `getDisplayMedia({ audio: { restrictOwnAudio: true } })`. That device is
- * WASAPI process-loopback excluding this app's tree, which is the 23 Aug 2026
- * report (the call playing in this window, sent back into the call). Passing
- * `"loopbackWithoutChrome"` here is not a supported callback value.
+ * `audioRequested` is whether the page asked for a track Chromium will accept.
+ * The picker checkbox is the consent that turns it into loopback; main ANDs
+ * the two before calling this. This function must keep returning `"loopback"`
+ * when it is true, not a homemade device id: that string is what Electron
+ * documents, and from 43.4.0 the embedder remaps it to `loopbackWithoutChrome`
+ * when the page asked `getDisplayMedia({ audio: { restrictOwnAudio: true } })`.
+ * That device is WASAPI process-loopback excluding this app's tree, which is
+ * the 23 Aug 2026 report (the call playing in this window, sent back into the
+ * call). Passing `"loopbackWithoutChrome"` here is not a supported callback
+ * value.
  *
  * The renderer still sends `audio: false` unless the user opted in
  * (`client/src/lib/screen-capture-audio.ts`). A shell that never asked for
