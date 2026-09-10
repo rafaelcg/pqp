@@ -78,8 +78,10 @@ cluster, so 173 ms against a p50 of 22 and a p95 of 171 is 7,9× **and** 2 ms
 over p95 — red by the pair — while `/ready`'s own `listRooms` on the same
 process answers in ~10 ms. The live peek is one probe; the slow mode is a cold
 TLS handshake, not voz falling over. The verdict therefore judges the newest
-~30 min mean when `statusHistory` has enough samples, and when it only has the
-peek, a skewed probe (p95 ≥ 3× p50) has to clear 1,5× its own p95, not 1 ms.
+~30 min mean when `statusHistory` has enough samples **in a contiguous
+newest window** (an empty latest bucket is a stopped sampler, not a licence
+to read yesterday), and when it only has the peek, a skewed probe (p95 ≥ 3×
+p50) has to clear 1,5× its own p95, not 1 ms.
 
 They live in **fixed slots** and there are always three. A slot with no honest
 verdict renders dashed and muted and says what is missing (no history yet, no
