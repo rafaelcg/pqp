@@ -42,9 +42,9 @@ import {
   type VoiceStatsSnapshot,
 } from "./voice-stats-probe";
 
-/** How many weak `setHlsSource` ticks before a pinned 1080 share may drop. */
+/** @deprecated Kept so older tests importing the name still resolve; unused. */
 export const HLS_SOURCE_DROP_SAMPLES = 3;
-/** How many strong ticks before a live 720 share may raise to 1080. */
+/** @deprecated Kept so older tests importing the name still resolve; unused. */
 export const HLS_SOURCE_RAISE_SAMPLES = 3;
 
 function asLiveKitQuality(value: unknown): LiveKitConnectionQuality {
@@ -337,32 +337,20 @@ export async function connectLiveKit({
    * still reported live: it holds until the share itself stops.
    *
    * A better decision arriving later is not worth a rebuffer for the whole
-   * audience, and certainly not repeatedly. Raises and drops while pinned
-   * wait for a streak (`HLS_SOURCE_RAISE_SAMPLES` / `HLS_SOURCE_DROP_SAMPLES`)
-   * so one optimistic or one weak reading cannot republish. The share going
-   * up before the egress exists is still the intended raise; it just has to
-   * stay tall for three ticks first.
+   * audience, and certainly not repeatedly.
+   *
+   * RAISES AND DROPS DO NOT REPUBLISH WHILE PINNED. 2026-09-10 production
+   * proved the "sustained streak then republish" escape was the stall loop
+   * itself: three 2 s uplink ticks (~4–6 s after `hlsStarted`) unpublished
+   * the share, LiveKit minted a new sid, the API tore the ladder down with
+   * `screen-track-replaced`, viewers 404'd the old `startedAt`, and the
+   * next raise/drop did it again. Ceiling moves in place; layers stay put
+   * until the host stops sharing or picks a quality by name (`force`).
    *
    * A deliberate act by the host is not this: `setScreenQuality` forces past
    * it, because somebody who picks 1080p by name has chosen the blink.
    */
   let screenPlanPinned = false;
-  /**
-   * Consecutive `setHlsSource` ticks whose plan is shorter than what is
-   * already on the wire. Three is six seconds at the two-second sample
-   * cadence. One weak reading is the wobble the pin exists to ignore; six
-   * seconds of "this uplink cannot carry 1080" is a starved top layer, and
-   * that is what makes the film drift off its own audio.
-   */
-  let shorterPlanStreak = 0;
-  /**
-   * Consecutive `setHlsSource` ticks whose plan is taller than what is
-   * already on the wire. Three is six seconds at the two-second sample
-   * cadence. One optimistic reading is how a borderline uplink jumps to
-   * 1080 and starves the HLS audience; six seconds of "this uplink can
-   * carry it" is enough to believe.
-   */
-  let tallerPlanStreak = 0;
   /**
    * The capture's constraints as the browser handed them over, so the plan's
    * height can be laid over them and lifted again without losing the frame
@@ -1038,11 +1026,12 @@ export async function connectLiveKit({
       await room.localParticipant.publishTrack(track, options);
     }
     publishedScreenPlan = plan;
-  }
-
-  /** A live HLS ladder is transcoding from this share right now. */
-  function broadcastIsLive(): boolean {
-    return hlsSource !== null && hlsSource.ladderTopHeight !== null;
+    // If the ladder is already live (share restarted mid-party), pin now —
+    // do not wait for the next setHlsSource tick. Farol caught the window
+    // where a room-size change could still republish before that tick.
+    if (hlsSource !== null && hlsSource.ladderTopHeight !== null) {
+      screenPlanPinned = true;
+    }
   }
 
   /**
@@ -1059,13 +1048,9 @@ export async function connectLiveKit({
    * viewers see the picture blink once. A different top CEILING at the same
    * height is moved in place, with no blink.
    *
-   * **While pinned a height change waits for a streak**
-   * (`HLS_SOURCE_RAISE_SAMPLES` up, `HLS_SOURCE_DROP_SAMPLES` down) and a
-   * change of mind at the same height becomes a ceiling change: see
-   * `screenPlanPinned` for the incident. The pin outlives a brief
-   * `setHlsSource(null)` during an egress restart on purpose. `force` is the
-   * host choosing a quality by name, which is a deliberate act and gets the
-   * blink it asked for.
+   * **While pinned, height never republishes.** Bitrate ceiling only. The pin
+   * outlives a brief `setHlsSource(null)` during an egress restart on purpose.
+   * `force` is the host choosing a quality by name — the only blink allowed.
    */
   function reconcileScreenPlan(options?: { force?: boolean }): Promise<void> {
     const run = async () => {
@@ -1076,46 +1061,24 @@ export async function connectLiveKit({
       }
       const plan = currentScreenPlan();
       const heightChanged = plan.topHeight !== published.topHeight;
-      // Pin holds across the restart gap (`setHlsSource(null)`): requiring
-      // `broadcastIsLive()` here is what turned every `screen-track-replaced`
-      // into a loop. Raises before the pin is set (share up, ladder not yet
-      // announced) still wait for a streak so one good uplink reading cannot
-      // jump to 1080.
-      if (
-        heightChanged &&
-        !options?.force &&
-        (screenPlanPinned ||
-          (broadcastIsLive() && plan.topHeight > published.topHeight))
-      ) {
-        const raising = plan.topHeight > published.topHeight;
-        const dropping = plan.topHeight < published.topHeight;
-        const sustainedRaise =
-          raising && tallerPlanStreak >= HLS_SOURCE_RAISE_SAMPLES;
-        const sustainedDrop =
-          dropping && shorterPlanStreak >= HLS_SOURCE_DROP_SAMPLES;
-        if (!sustainedDrop && !sustainedRaise) {
-          // HELD. A single weaker reading is the wobble that used to
-          // restart the egress six times in one party; a single stronger
-          // one is how a borderline uplink jumped to 1080 and starved
-          // the audience. Six seconds of a shorter plan is a starved
-          // 1080 that drifts off its own audio; six seconds of a taller
-          // plan is enough to believe the uplink can carry it.
-          //
-          // When the ladder is briefly gone, the large-room / weak-uplink
-          // plan still wants a lower ceiling: move bitrate in place, never
-          // the layer set (a layer change is a new sid and a torn-down party).
-          if (plan.topBitrate !== published.topBitrate) {
-            await setSourceMaxBitrate(
-              Track.Source.ScreenShare,
-              plan.topBitrate,
-              "screen",
-            );
-            publishedScreenPlan = { ...published, topBitrate: plan.topBitrate };
-          }
-          return;
+      // FREEZE. Any unpublish+publish is a new LiveKit sid and a torn-down
+      // watch party. Uplink / ladder / room-size opinion changes reach the
+      // encoder as a ceiling only.
+      if (screenPlanPinned && !options?.force) {
+        // Same sid, lower capture when the plan wants less height: saves host
+        // encode cost without a Track Composite restart. Declared layers stay.
+        if (plan.topHeight < published.topHeight) {
+          await constrainScreenCapture(track, plan.topHeight);
         }
-        if (sustainedDrop) shorterPlanStreak = 0;
-        if (sustainedRaise) tallerPlanStreak = 0;
+        if (plan.topBitrate !== published.topBitrate) {
+          await setSourceMaxBitrate(
+            Track.Source.ScreenShare,
+            plan.topBitrate,
+            "screen",
+          );
+          publishedScreenPlan = { ...published, topBitrate: plan.topBitrate };
+        }
+        return;
       }
       if (heightChanged) {
         await constrainScreenCapture(track, plan.topHeight);
@@ -1430,8 +1393,6 @@ export async function connectLiveKit({
       // session: somebody who stops and shares a different window gets the
       // plan that window and that room call for.
       screenPlanPinned = false;
-      shorterPlanStreak = 0;
-      tallerPlanStreak = 0;
     },
 
     async publishCamera(stream: MediaStream) {
@@ -1486,21 +1447,10 @@ export async function connectLiveKit({
      */
     async setHlsSource(next: HlsSourceInput | null) {
       hlsSource = next;
-      const published = publishedScreenPlan;
-      if (published && next && next.ladderTopHeight !== null) {
-        // Pin the layers already on the wire the moment a broadcast appears,
-        // even if the share went up before the egress existed. Without this
-        // the first weak uplink reading dropped 1080→720 immediately (pin
-        // still clear), which is a new sid and `screen-track-replaced`.
+      if (publishedScreenPlan && next && next.ladderTopHeight !== null) {
+        // Pin the layers already on the wire the moment a broadcast appears.
+        // Height never republishes after this — see reconcileScreenPlan.
         screenPlanPinned = true;
-        const plan = currentScreenPlan();
-        tallerPlanStreak =
-          plan.topHeight > published.topHeight ? tallerPlanStreak + 1 : 0;
-        shorterPlanStreak =
-          plan.topHeight < published.topHeight ? shorterPlanStreak + 1 : 0;
-      } else {
-        tallerPlanStreak = 0;
-        shorterPlanStreak = 0;
       }
       await reconcileScreenPlan();
     },
