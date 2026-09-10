@@ -4,6 +4,7 @@ import {
   BellOff,
   Check,
   Clapperboard,
+  LayoutPanelTop,
   Lock,
   Crown,
   Hand,
@@ -37,6 +38,7 @@ import {
   type CohostCandidate,
 } from "@/components/watch-party/watch-party-cohosts";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -402,6 +404,187 @@ function WatchPartyShareButton({
   );
 }
 
+/**
+ * The hands queue and who is up: the moderation surface only the people
+ * running the party see. An audience that can watch who asked and was passed
+ * over is an audience having a worse time. Nonsense in a party with no voice,
+ * where nobody is asking for anything, so it follows the Voz control rather
+ * than the stored stage mode. Shared by the options dialog and the host panel.
+ */
+function StageQueue({
+  props,
+  party,
+}: {
+  props: WatchPartyPanelProps;
+  party: WatchParty;
+}) {
+  const { t } = useTranslation();
+  if (!party.options.voiceEnabled || party.options.stageMode !== "invited") {
+    return null;
+  }
+  return (
+    <div data-testid="watch-party-stage-queue">
+      <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+        {t("watchParty.stage.hands")}
+      </p>
+      {party.stage.hands.length === 0 ? (
+        <p className="text-[11px] text-paper-muted">
+          {t("watchParty.stage.noHands")}
+        </p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {party.stage.hands.map((person) => (
+            <li
+              key={person.userId}
+              className="flex items-center gap-2"
+              data-watch-party-hand
+            >
+              <UserAvatar
+                name={person.displayName}
+                avatarUrl={person.avatarUrl}
+                rounded="full"
+                className="h-6 w-6 shrink-0"
+              />
+              <span className="min-w-0 flex-1 truncate text-xs text-paper">
+                {person.displayName}
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() =>
+                  void props.onStageAction?.("invite", person.userId)
+                }
+                data-watch-party-invite
+              >
+                {t("watchParty.stage.invite")}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {party.stage.invited.length > 0 && (
+        <>
+          <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+            {t("watchParty.stage.title")}
+          </p>
+          <ul className="flex flex-col gap-1">
+            {party.stage.invited.map((person) => (
+              <li key={person.userId} className="flex items-center gap-2">
+                <UserAvatar
+                  name={person.displayName}
+                  avatarUrl={person.avatarUrl}
+                  rounded="full"
+                  className="h-6 w-6 shrink-0"
+                />
+                <span className="min-w-0 flex-1 truncate text-xs text-paper">
+                  {person.displayName}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    void props.onStageAction?.("remove", person.userId)
+                  }
+                  data-watch-party-stage-remove
+                >
+                  {t("watchParty.stage.remove")}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * THE HOST PANEL. Twitch's Stream Manager, YouTube's Live Control Room and
+ * Kick's dashboard are the streamer's view of the room: the numbers, and a
+ * row of one-click actions, beside the picture. pqp had the pieces on three
+ * surfaces (the readout on the bar, the options dialog with the hands queue
+ * inside it, moderation on the member card). This puts the ones a host
+ * touches mid-show under the bar, in one place, for host and co-hosts only:
+ * slow mode as three buttons (the full ladder stays in Opções), reactions as
+ * a switch, and the hands queue. The link, Opções and Encerrar stay on the
+ * bar above, once; the readout above it is the "now" line. Step 8 of docs/plans/WATCH_PARTY_SETUP_UX.md.
+ */
+const PANEL_SLOW_MODE_PRESETS = [0, 10, 30] as const;
+
+function HostPanel({
+  props,
+  party,
+}: {
+  props: WatchPartyPanelProps;
+  party: WatchParty;
+}) {
+  const { t } = useTranslation();
+  const { options } = party;
+  const floorOpen = options.voiceEnabled && options.stageMode === "invited";
+  return (
+    <div
+      data-testid="watch-party-host-panel"
+      className="flex flex-col gap-3 border-b border-ink-4/60 bg-ink-2/60 px-3 py-2.5"
+    >
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+        <span className="flex items-center gap-1.5 text-xs text-paper-muted">
+          <span>{t("watchParty.options.slowMode")}</span>
+          <span
+            role="group"
+            aria-label={t("watchParty.options.slowMode")}
+            className="flex overflow-hidden rounded-[var(--radius-control)] border border-border"
+          >
+            {PANEL_SLOW_MODE_PRESETS.map((seconds) => {
+              const active = options.slowModeSeconds === seconds;
+              return (
+                <button
+                  key={seconds}
+                  type="button"
+                  aria-pressed={active}
+                  data-watch-party-panel-slow={seconds}
+                  onClick={() =>
+                    void props.onOptionsChange({ slowModeSeconds: seconds })
+                  }
+                  className={cn(
+                    "px-2.5 py-1 text-xs transition-colors",
+                    active
+                      ? "bg-accent text-on-accent"
+                      : "bg-surface-2 text-text hover:bg-surface-3",
+                  )}
+                >
+                  {t(slowModeKey(seconds), { seconds })}
+                </button>
+              );
+            })}
+          </span>
+        </span>
+        <span className="[&>button]:py-1" data-watch-party-panel-reactions>
+          <Switch
+            label={t("watchParty.options.reactions")}
+            checked={options.reactionsEnabled}
+            onCheckedChange={(checked) =>
+              void props.onOptionsChange({ reactionsEnabled: checked })
+            }
+          />
+        </span>
+      </div>
+      {floorOpen ? (
+        <StageQueue props={props} party={party} />
+      ) : (
+        <p className="text-[11px] text-paper-muted">
+          {options.voiceEnabled
+            ? t("watchParty.panel.floorNotInvited")
+            : t("watchParty.panel.voiceOff")}
+        </p>
+      )}
+      <p className="text-[11px] text-paper-muted">
+        {t("watchParty.panel.moderationHint")}
+      </p>
+    </div>
+  );
+}
+
 // ------------------------------------------------- options: one dialog, one row
 
 /**
@@ -459,83 +642,7 @@ function WatchPartyOptionsDialog({
             over is an audience having a worse time. It is also nonsense in a
             party with no voice, where nobody is asking for anything, so it
             follows the Voz control rather than the stored stage mode. */}
-        {stage &&
-          party.options.voiceEnabled &&
-          party.options.stageMode === "invited" && (
-            <div className="border-t border-border pt-4">
-              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-                {t("watchParty.stage.hands")}
-              </p>
-              {party.stage.hands.length === 0 ? (
-                <p className="text-[11px] text-paper-muted">
-                  {t("watchParty.stage.noHands")}
-                </p>
-              ) : (
-                <ul className="flex flex-col gap-1">
-                  {party.stage.hands.map((person) => (
-                    <li
-                      key={person.userId}
-                      className="flex items-center gap-2"
-                      data-watch-party-hand
-                    >
-                      <UserAvatar
-                        name={person.displayName}
-                        avatarUrl={person.avatarUrl}
-                        rounded="full"
-                        className="h-6 w-6 shrink-0"
-                      />
-                      <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                        {person.displayName}
-                      </span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={() =>
-                          void props.onStageAction?.("invite", person.userId)
-                        }
-                        data-watch-party-invite
-                      >
-                        {t("watchParty.stage.invite")}
-                      </Button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {party.stage.invited.length > 0 && (
-                <>
-                  <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-                    {t("watchParty.stage.title")}
-                  </p>
-                  <ul className="flex flex-col gap-1">
-                    {party.stage.invited.map((person) => (
-                      <li key={person.userId} className="flex items-center gap-2">
-                        <UserAvatar
-                          name={person.displayName}
-                          avatarUrl={person.avatarUrl}
-                          rounded="full"
-                          className="h-6 w-6 shrink-0"
-                        />
-                        <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                          {person.displayName}
-                        </span>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() =>
-                            void props.onStageAction?.("remove", person.userId)
-                          }
-                          data-watch-party-stage-remove
-                        >
-                          {t("watchParty.stage.remove")}
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              )}
-            </div>
-          )}
+        {stage && <StageQueue props={props} party={party} />}
       </DialogBody>
     </Dialog>
   );
@@ -1101,6 +1208,7 @@ function LiveSurface(
   const { party } = props;
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const canEnd = canPerformWatchPartyAction({
     action: "end",
     role: party.viewerRole,
@@ -1285,6 +1393,19 @@ function LiveSurface(
         {runsTheShow && (
           <Button
             type="button"
+            variant={panelOpen ? "secondary" : "ghost"}
+            size="sm"
+            aria-expanded={panelOpen}
+            onClick={() => setPanelOpen((open) => !open)}
+            data-watch-party-host-panel-toggle
+          >
+            <LayoutPanelTop className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.panel.title")}
+          </Button>
+        )}
+        {runsTheShow && (
+          <Button
+            type="button"
             variant="ghost"
             size="sm"
             aria-expanded={optionsOpen}
@@ -1400,6 +1521,9 @@ function LiveSurface(
       <div className="relative shrink-0">
         {bar}
         {transmission}
+        {runsTheShow && panelOpen && (
+          <HostPanel props={props} party={party} />
+        )}
         {/* Portalled by `Dialog`, so it takes no room in this column and the
             split below it never moves. */}
         {optionsDialog}

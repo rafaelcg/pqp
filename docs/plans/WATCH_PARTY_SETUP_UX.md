@@ -266,11 +266,14 @@ Each step is one PR, and the app works after each one.
      new endpoint and a new privacy question (an audience that can be
      enumerated is an audience that can be harassed). Decide separately.
 
-   Client-only except the report count. Two to three days. Its own PR after
-   this one merges, so the setup redesign is not held for it.
+   Client-only except the report count. Shipped in the same PR after all,
+   at Andre's request, as a "Painel" toggle on the live bar that opens a
+   block under the readout rather than swapping the chat header: Chat lento
+   (off, 10 s, 30 s), Reações, and the hands queue when the floor is
+   invited. Copiar link, Opções and Encerrar stay on the bar, once. The
+   report count and the narrow-screen sheet are still open.
 
 Steps 1 to 3 are the "really easy to use" part and can ship this week.
-Steps 1 to 7 shipped in the first PR; step 8 is the follow-up.
 
 ## 6. What the e2e pins, and what changes
 

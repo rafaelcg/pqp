@@ -523,3 +523,22 @@ describe("a scheduled party gathers people", () => {
     expect(on).toContain('aria-pressed="true"');
   });
 });
+
+/**
+ * THE HOST PANEL: the one-click actions a host touches mid-show, under the
+ * bar, for the people running the party only. Closed until asked for.
+ */
+describe("the host panel", () => {
+  const live = (viewerRole: WatchParty["viewerRole"]) =>
+    render({ slot: "chrome", party: { ...PARTY, state: "live", viewerRole } });
+
+  it("is offered to the host and the co-host, and not to a viewer", () => {
+    expect(live("host")).toContain("data-watch-party-host-panel-toggle");
+    expect(live("cohost")).toContain("data-watch-party-host-panel-toggle");
+    expect(live("viewer")).not.toContain("data-watch-party-host-panel-toggle");
+  });
+
+  it("stays closed until the toggle is pressed", () => {
+    expect(live("host")).not.toContain("watch-party-host-panel\"");
+  });
+});

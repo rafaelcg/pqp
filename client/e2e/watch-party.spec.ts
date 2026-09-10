@@ -1695,3 +1695,40 @@ test("the host promotes a co-host from the member card", async ({
     await second.context.close();
   }
 });
+
+test("the host panel changes slow mode in one click, and the options agree", async ({
+  page,
+}) => {
+  /**
+   * Step 8 of the plan: the actions a host touches mid-show, under the bar,
+   * without a dialog. The panel writes the same options the dialog reads, so
+   * the two can never disagree about what is set.
+   */
+  const shared = await seedServer("wp-panel-host");
+  const party = await createParty("wp-panel-host", shared.serverId, "Cinemoon 8");
+  await setPartyState("wp-panel-host", party.partyId, "live");
+  await openAs(
+    page,
+    `/app/server/${shared.serverId}/channel/${party.channelId}`,
+    "wp-panel-host",
+  );
+  const bar = page.getByTestId("watch-party-bar");
+  await expect(bar).toBeVisible({ timeout: 20_000 });
+
+  // Closed until asked for: a viewer's bar has no toggle at all, and a host's
+  // bar does not grow a panel on its own.
+  await expect(page.getByTestId("watch-party-host-panel")).toHaveCount(0);
+  await bar.locator("[data-watch-party-host-panel-toggle]").click();
+  const panel = page.getByTestId("watch-party-host-panel");
+  await expect(panel).toBeVisible();
+
+  // One click, and the option is written.
+  await panel.locator('[data-watch-party-panel-slow="10"]').click();
+  await expect(
+    panel.locator('[data-watch-party-panel-slow="10"]'),
+  ).toHaveAttribute("aria-pressed", "true", { timeout: 20_000 });
+
+  // The dialog reads the same row.
+  await bar.locator("[data-watch-party-options-toggle]").click();
+  await expect(page.locator("[data-watch-party-slow-mode]")).toHaveValue("10");
+});
