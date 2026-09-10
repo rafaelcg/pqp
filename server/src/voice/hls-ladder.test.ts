@@ -138,12 +138,9 @@ describe("rungEncodingOptions", () => {
     expect(options.videoBitrate).toBe(3200);
   });
 
-  it("leaves the keyframe interval to the egress", () => {
-    // Zero means "the segment duration" for a segmented output, which is
-    // what puts every rung's segment boundaries on a keyframe and lets a
-    // player switch between them.
+  it("aligns keyframes with the 2 s segment duration", () => {
     expect(rungEncodingOptions(LADDER_RUNGS["720p30"]!).keyFrameInterval).toBe(
-      0,
+      2,
     );
   });
 });

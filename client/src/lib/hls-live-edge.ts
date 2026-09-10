@@ -33,7 +33,7 @@ export interface HlsLivePlayerConfig {
   liveMaxLatencyDurationCount: number;
   maxBufferLength: number;
   maxMaxBufferLength: number;
-  /** First segments at the lowest rung; ABR climbs from there. */
+  /** Auto: ABR picks from the seed, which is the 720p30 rung. */
   startLevel: number;
 }
 
@@ -43,12 +43,12 @@ export function hlsLivePlayerConfig(): HlsLivePlayerConfig {
     liveMaxLatencyDurationCount: HLS_LIVE_MAX_LATENCY_DURATION_COUNT,
     maxBufferLength: HLS_MAX_BUFFER_LENGTH_SECONDS,
     maxMaxBufferLength: HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
-    startLevel: 0,
+    startLevel: -1,
   };
 }
 
-/** hls.js ABR seed: the 720p30 average, not the library's 500 kbit/s floor. */
-export const HLS_ABR_DEFAULT_ESTIMATE_BPS = 1_800_000;
+/** hls.js ABR seed: above the 720p30 peak so Auto does not start on 480p. */
+export const HLS_ABR_DEFAULT_ESTIMATE_BPS = 2_500_000;
 
 /**
  * Where "jump to live" should land. Seeking onto the exact live edge

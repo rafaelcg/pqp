@@ -1,4 +1,4 @@
-import { sampleVoiceStats } from "@/lib/voice-stats-probe";
+import { describeLimitation, sampleVoiceStats } from "@/lib/voice-stats-probe";
 import type { HlsSourceInput } from "@/lib/video-quality";
 
 /**
@@ -22,7 +22,16 @@ import type { HlsSourceInput } from "@/lib/video-quality";
  * the same reading, already collected for both transports. A second estimate
  * invented here would disagree with the first one on exactly the links where
  * it mattered.
+ *
+ * The SFU sampler used to return `paths: []`, so this reading was always
+ * null on a watch party and the gate held 720p forever. `livekit-session`
+ * now fills paths from the publisher sender's `getStats()`.
  */
+
+export interface PresenterHlsFeed {
+  uplinkBps: number | null;
+  limitedBy: HlsSourceInput["limitedBy"];
+}
 
 /**
  * The best path's estimate, in bit/s, or null when nothing reported one.
@@ -30,23 +39,31 @@ import type { HlsSourceInput } from "@/lib/video-quality";
  * The BEST, not the mean. On the SFU there is one publishing connection and
  * the question is what it can push; a stale or half-open pair reporting a
  * small number alongside it is not evidence about the uplink. Null is
- * "unmeasured", which the caller treats as permission rather than refusal
- * (an unread link is not a bad one).
+ * "unmeasured", which the caller treats as a refusal rather than permission
+ * (an unread link is not a good one).
  */
 export async function readPresenterUplinkBps(): Promise<number | null> {
+  const feed = await readPresenterHlsFeed();
+  return feed.uplinkBps;
+}
+
+export async function readPresenterHlsFeed(): Promise<PresenterHlsFeed> {
   try {
     const snapshot = await sampleVoiceStats();
-    let best: number | null = null;
+    let uplinkBps: number | null = null;
     for (const path of snapshot.paths) {
       const kbps = path.availableOutgoingKbps;
       if (typeof kbps === "number" && Number.isFinite(kbps) && kbps > 0) {
-        best = Math.max(best ?? 0, kbps * 1000);
+        uplinkBps = Math.max(uplinkBps ?? 0, kbps * 1000);
       }
     }
-    return best;
+    const screen = snapshot.senders.find((row) => row.role === "screen");
+    return {
+      uplinkBps,
+      limitedBy: screen ? describeLimitation(screen) : null,
+    };
   } catch {
-    // The room went away mid-sample. Unmeasured, not bad.
-    return null;
+    return { uplinkBps: null, limitedBy: null };
   }
 }
 
@@ -63,6 +80,7 @@ export function hlsSourceFor(input: {
   isSharingScreen: boolean;
   usingSfu: boolean;
   uplinkBps: number | null;
+  limitedBy?: HlsSourceInput["limitedBy"];
 }): HlsSourceInput | null {
   if (
     !input.isSharingScreen ||
@@ -74,5 +92,6 @@ export function hlsSourceFor(input: {
   return {
     ladderTopHeight: input.streamTopHeight,
     uplinkBps: input.uplinkBps,
+    limitedBy: input.limitedBy ?? null,
   };
 }

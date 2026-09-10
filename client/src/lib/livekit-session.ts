@@ -17,6 +17,7 @@ import {
   cameraSimulcastRungs,
   DEFAULT_VIDEO_QUALITY,
   hlsSourceTopHeight,
+  HLS_HELD_720_BITRATE,
   LARGE_ROOM_SCREEN_BITRATE,
   LARGE_ROOM_SCREEN_HEIGHT,
   screenBitrateFor,
@@ -37,16 +38,19 @@ import {
   measureKbps,
   pickActiveVideoSenderLayer,
   registerVoiceStatsSource,
+  statRows,
+  summariseStats,
+  type CandidatePairSample,
   type VideoReceiverSample,
   type VideoSenderRole,
   type VideoSenderSample,
   type VoiceStatsSnapshot,
 } from "./voice-stats-probe";
 
-/** @deprecated Kept so older tests importing the name still resolve; unused. */
 export const HLS_SOURCE_DROP_SAMPLES = 3;
-/** @deprecated Kept so older tests importing the name still resolve; unused. */
 export const HLS_SOURCE_RAISE_SAMPLES = 3;
+/** After a capture-height change, ignore further height moves for this long. */
+export const HLS_SOURCE_HEIGHT_DWELL_MS = 30_000;
 
 function asLiveKitQuality(value: unknown): LiveKitConnectionQuality {
   if (
@@ -388,6 +392,8 @@ export async function connectLiveKit({
    */
   let pendingCaptureHeight: number | null = null;
   let captureHeightStreak = 0;
+  let lastCaptureHeightChangeAt = 0;
+  let hlsLayersTrimmed = false;
   /**
    * Bumped when the share stops or a new one is published. A reconcile that
    * awaited `applyConstraints` must not write height/bitrate onto the next
@@ -807,7 +813,11 @@ export async function connectLiveKit({
     const rows: VideoSenderSample[] = [];
     const sources: [unknown, VideoSenderRole, number][] = [
       [Track.Source.Camera, "camera", cameraMaxBitrate],
-      [Track.Source.ScreenShare, "screen", screenMaxBitrate],
+      [
+        Track.Source.ScreenShare,
+        "screen",
+        publishedScreenPlan?.topBitrate ?? screenMaxBitrate,
+      ],
     ];
     for (const [source, role, ceiling] of sources) {
       const publication = room.localParticipant.getTrackPublication(
@@ -872,15 +882,67 @@ export async function connectLiveKit({
     return rows;
   }
 
+  async function samplePublisherPaths(): Promise<CandidatePairSample[]> {
+    const kinds = [
+      Track.Source.ScreenShare,
+      Track.Source.Camera,
+      Track.Source.Microphone,
+    ];
+    for (const source of kinds) {
+      const publication = room.localParticipant.getTrackPublication(
+        source as Parameters<
+          typeof room.localParticipant.getTrackPublication
+        >[0],
+      );
+      const media = (
+        publication as
+          | { track?: { sender?: RTCRtpSender }; videoTrack?: { sender?: RTCRtpSender } }
+          | undefined
+      );
+      const sender = media?.track?.sender ?? media?.videoTrack?.sender;
+      if (!sender || typeof sender.getStats !== "function") {
+        continue;
+      }
+      try {
+        const report = await sender.getStats();
+        const snapshot = summariseStats(
+          localPeerId,
+          statRows(report),
+          () => "unknown",
+          new Map(),
+        );
+        if (snapshot.paths.length > 0) {
+          return snapshot.paths;
+        }
+      } catch {
+        // Sender went away mid-sample.
+      }
+    }
+    return [];
+  }
+
   async function sampleRoom(): Promise<VoiceStatsSnapshot> {
     if (room.state !== ConnectionState.Connected) {
       return { senders: [], receivers: [], paths: [] };
     }
-    const [senders, receivers] = await Promise.all([
+    const [senders, receivers, paths] = await Promise.all([
       sampleSenders(),
       sampleReceivers(),
+      samplePublisherPaths(),
     ]);
-    return { senders, receivers, paths: [] };
+    if (hlsSource !== null && hlsSource.ladderTopHeight !== null) {
+      const screen = senders.find((row) => row.role === "screen");
+      const path = paths[0];
+      console.debug("[pqp] hls-uplink", {
+        height: screen?.height ?? null,
+        fps: screen?.fps ?? null,
+        targetKbps: screen?.targetKbps ?? null,
+        ceilingKbps: screen?.ceilingKbps ?? null,
+        limitedBy: screen?.limitedBy ?? null,
+        availableOutgoingKbps: path?.availableOutgoingKbps ?? null,
+      });
+    }
+    return { senders, receivers, paths };
   }
 
   const unregisterStats = registerVoiceStatsSource(sampleRoom);
@@ -901,9 +963,6 @@ export async function connectLiveKit({
    * `livekit-client` orders encodings smallest first, so the top is the last.
    */
   async function setSourceMaxBitrate(
-    // Spelled off the method rather than as `Track.Source`, because `Track` is
-    // destructured from a dynamic import in this scope: it is a local value,
-    // not a namespace, so it cannot be used in a type position.
     source: Parameters<typeof room.localParticipant.getTrackPublication>[0],
     maxBitrate: number,
     label: string,
@@ -918,8 +977,21 @@ export async function connectLiveKit({
       if (!params.encodings || params.encodings.length === 0) {
         params.encodings = [{}];
       }
-      const top = params.encodings[params.encodings.length - 1]!;
+      const encodings = params.encodings;
+      const top = encodings[encodings.length - 1]!;
       top.maxBitrate = maxBitrate;
+      // HLS always takes the top layer. A 720p mid-rung sitting next to a
+      // 1080 top eats BWE bottom-up and the egress transcodes 480p. Keep
+      // 360p (first) for a seated phone; deactivate everything in between.
+      const feedingHls =
+        source === Track.Source.ScreenShare &&
+        hlsSource !== null &&
+        hlsSource.ladderTopHeight !== null;
+      if (feedingHls && encodings.length > 2) {
+        for (let i = 1; i < encodings.length - 1; i += 1) {
+          encodings[i]!.active = false;
+        }
+      }
       await sender.setParameters(params);
     } catch (err) {
       console.warn(
@@ -942,12 +1014,23 @@ export async function connectLiveKit({
    * thing set. The cap still binds it.
    */
   function currentScreenPlan(): ScreenSimulcastPlan {
+    const hls =
+      hlsSource === null
+        ? null
+        : {
+            ...hlsSource,
+            currentHeight:
+              appliedScreenCaptureHeight ??
+              publishedScreenPlan?.topHeight ??
+              null,
+            currentCeilingBps: publishedScreenPlan?.topBitrate ?? null,
+          };
     const plan = screenSimulcastPlan(
       screenQuality,
       participantCount(),
-      hlsSource,
+      hls,
     );
-    const hlsTop = hlsSourceTopHeight(screenQuality, hlsSource);
+    const hlsTop = hlsSourceTopHeight(screenQuality, hls);
     if (hlsTop !== null && hlsTop > LARGE_ROOM_SCREEN_HEIGHT) {
       // The share is the ladder's source: the egress transcodes from this
       // track, so holding it at the large-room ceiling would cap every
@@ -959,6 +1042,12 @@ export async function connectLiveKit({
       return {
         ...plan,
         topBitrate: Math.max(plan.topBitrate, screenMaxBitrate),
+      };
+    }
+    if (plan.heldForHls) {
+      return {
+        ...plan,
+        topBitrate: Math.min(screenMaxBitrate, HLS_HELD_720_BITRATE),
       };
     }
     return {
@@ -1191,10 +1280,14 @@ export async function connectLiveKit({
           (pendingCaptureHeight ?? 0) > (appliedScreenCaptureHeight ?? 0)
             ? HLS_SOURCE_RAISE_SAMPLES
             : HLS_SOURCE_DROP_SAMPLES;
+        const dwellOk =
+          lastCaptureHeightChangeAt === 0 ||
+          Date.now() - lastCaptureHeightChangeAt >= HLS_SOURCE_HEIGHT_DWELL_MS;
         if (
           pendingCaptureHeight !== null &&
           pendingCaptureHeight !== appliedScreenCaptureHeight &&
-          captureHeightStreak >= needed
+          captureHeightStreak >= needed &&
+          dwellOk
         ) {
           const want = pendingCaptureHeight;
           await constrainScreenCapture(track, want);
@@ -1214,6 +1307,7 @@ export async function connectLiveKit({
             appliedScreenCaptureHeight = want;
             pendingCaptureHeight = null;
             captureHeightStreak = 0;
+            lastCaptureHeightChangeAt = Date.now();
           }
         }
         const livePublished = screenShareStill(track, epoch);
@@ -1221,12 +1315,20 @@ export async function connectLiveKit({
           return;
         }
         const livePlan = currentScreenPlan();
-        if (livePlan.topBitrate !== livePublished.topBitrate) {
+        const feedingHls =
+          hlsSource !== null && hlsSource.ladderTopHeight !== null;
+        if (
+          livePlan.topBitrate !== livePublished.topBitrate ||
+          (feedingHls && !hlsLayersTrimmed)
+        ) {
           await setSourceMaxBitrate(
             Track.Source.ScreenShare,
             livePlan.topBitrate,
             "screen",
           );
+          if (feedingHls) {
+            hlsLayersTrimmed = true;
+          }
           const liveAfterBitrate = screenShareStill(track, epoch);
           if (!liveAfterBitrate) {
             return;
@@ -1601,6 +1703,8 @@ export async function connectLiveKit({
         nativeScreenCaptureHeight = null;
         pendingCaptureHeight = null;
         captureHeightStreak = 0;
+        lastCaptureHeightChangeAt = 0;
+        hlsLayersTrimmed = false;
       });
     },
 
@@ -1712,6 +1816,8 @@ export async function connectLiveKit({
       nativeScreenCaptureHeight = null;
       pendingCaptureHeight = null;
       captureHeightStreak = 0;
+      lastCaptureHeightChangeAt = 0;
+      hlsLayersTrimmed = false;
       publishedCameraTrack = null;
       publishedScreenAudioTrack = null;
       await room.disconnect();

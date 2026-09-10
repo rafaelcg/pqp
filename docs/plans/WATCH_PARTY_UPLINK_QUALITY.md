@@ -6,7 +6,30 @@ Handoff for a coding agent. Companion (box CPU, 30 fps ceiling, egress placement
 Trigger: parties transmit ~25–30 fps, drop 720p→480p, show "Held back by your
 connection" / "being limited by your connection", stream is choppy / stalled.
 
-## Already landed — do not redo
+## Shipped
+
+Client + a small egress encode/ops change. Remaining: correlate box CPU
+(`WATCH_PARTY_HLS_PERFORMANCE.md` §3), then split egress off `sfu-pqp`.
+
+1. `heldForHls` is distinct from `capped`. HLS-held 720 uses
+   `HLS_HELD_720_BITRATE` (2.25 Mbps), never `LARGE_ROOM_SCREEN_BITRATE` (1.5).
+2. `sampleSenders` reports `publishedScreenPlan.topBitrate`. A healthy link
+   sitting on that ceiling reads `setting`, not `bandwidth`.
+3. Raise is 1.25× the *current* ceiling, not 6 Mbps against 1080. Drop on
+   honest `bandwidth`/`cpu`, unmeasured, or uplink below 2.25 Mbps. 30 s dwell
+   between capture-height changes.
+4. HLS publish keeps only the 360p sub-layer. A 1080 share already on the
+   wire deactivates the 720 mid-rung in place (no new sid).
+5. SFU `sampleRoom` fills `paths` from the publisher sender's `getStats()`.
+   The gate used to see `uplinkBps === null` on every LiveKit party.
+6. ABR seed 2.5 Mbps, `startLevel: -1` (auto).
+7. Egress `keyFrameInterval: 2`. Compose `cpus: 2.5` on the egress container.
+8. `console.debug("[pqp] hls-uplink", …)` every stats sample while presenting.
+
+Skipped without a measurement: `degradationPreference: "balanced"`. Prod
+`LIVE_HLS_LADDER` / `liveHls.orphansStopped` is operator, not code.
+
+## Already landed before this — do not redo
 
 As of `origin/main` 2026-09-10:
 

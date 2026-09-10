@@ -232,9 +232,8 @@ export function parseLadder(input: {
  * The egress encoding for one rung. Advanced `EncodingOptions` rather than a
  * preset because the ladder needs bitrates the presets do not offer (and
  * rungs the presets do not have at all, like 480p). `keyFrameInterval` is
- * left at zero on purpose: for a segmented output egress uses the segment
- * duration, which is what makes segment boundaries land on keyframes in
- * every rung and lets a player switch between them.
+ * 2 seconds, matching `segmentDuration`, so segment boundaries land on
+ * keyframes in every rung and a player can switch between them.
  */
 export function rungEncodingOptions(rung: LadderRung): EncodingOptions {
   return new EncodingOptions({
@@ -244,6 +243,7 @@ export function rungEncodingOptions(rung: LadderRung): EncodingOptions {
     videoCodec: VideoCodec.H264_MAIN,
     videoBitrate: rung.videoKbps,
     audioBitrate: rung.audioKbps,
+    keyFrameInterval: 2,
   });
 }
 
