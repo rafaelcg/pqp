@@ -4487,12 +4487,27 @@ function MainAppContent({
     if (communityHomeOpen) {
       setCommunityHomeUnread(0);
       communityHomeUnreadRef.current = 0;
-      communityHomeUnreadBaselineRef.current = true;
+      // Do not treat "opened the feed" as a successful unread read. A failed
+      // stamp leaving baseline=true and count=0 would toast the backlog the
+      // next time a nudge compared against that zero.
+      communityHomeUnreadBaselineRef.current = false;
       setCommunityHomePostToast(null);
-      void markCommunityHomeRead(selectedServerId).catch(() => {
-        // A failed mark costs one repeated badge, never a wrong feed.
-      });
-      return;
+      const serverId = selectedServerId;
+      let cancelled = false;
+      void markCommunityHomeRead(serverId)
+        .then(() => {
+          if (cancelled || communityHomeUnreadServerRef.current !== serverId) {
+            return;
+          }
+          communityHomeUnreadBaselineRef.current = true;
+          communityHomeUnreadRef.current = 0;
+        })
+        .catch(() => {
+          // Leave the baseline unset so a later nudge cannot toast against 0.
+        });
+      return () => {
+        cancelled = true;
+      };
     }
     const previous = communityHomeUnreadRef.current;
     const hadBaseline = communityHomeUnreadBaselineRef.current;
