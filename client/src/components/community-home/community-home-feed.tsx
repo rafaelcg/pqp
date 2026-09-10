@@ -246,6 +246,7 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
           title={media.name}
           src={src}
           className="aspect-video w-full"
+          loading="lazy"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowFullScreen
         />
@@ -254,8 +255,9 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
   }
 
   if (media.kind === "tiktok") {
-    const src = media.youtubeUrl ? tiktokEmbedSrc(media.youtubeUrl) : null;
-    if (!src) {
+    const watchUrl = media.youtubeUrl;
+    const src = watchUrl ? tiktokEmbedSrc(watchUrl) : null;
+    if (!src && !watchUrl) {
       return null;
     }
     return (
@@ -263,20 +265,35 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
         className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
         data-home-media="tiktok"
       >
-        <iframe
-          title={t("communityHome.media.openTikTok")}
-          src={src}
-          className="mx-auto aspect-[9/16] w-full max-w-[325px]"
-          allow="encrypted-media; fullscreen; picture-in-picture"
-          allowFullScreen
-        />
+        {src ? (
+          <iframe
+            title={t("communityHome.media.openTikTok")}
+            src={src}
+            className="mx-auto aspect-[9/16] w-full max-w-[325px]"
+            loading="lazy"
+            allow="encrypted-media; fullscreen; picture-in-picture"
+            allowFullScreen
+          />
+        ) : null}
+        {watchUrl ? (
+          <a
+            className="block border-t border-ink-4 px-3 py-1.5 text-center text-[11px] text-signal hover:underline"
+            href={watchUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            data-home-media-open
+          >
+            {t("communityHome.media.openTikTok")}
+          </a>
+        ) : null}
       </div>
     );
   }
 
   if (media.kind === "instagram") {
-    const src = media.youtubeUrl ? instagramEmbedSrc(media.youtubeUrl) : null;
-    if (!src) {
+    const watchUrl = media.youtubeUrl;
+    const src = watchUrl ? instagramEmbedSrc(watchUrl) : null;
+    if (!src && !watchUrl) {
       return null;
     }
     return (
@@ -284,13 +301,27 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
         className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
         data-home-media="instagram"
       >
-        <iframe
-          title={t("communityHome.media.openInstagram")}
-          src={src}
-          className="mx-auto min-h-[540px] w-full max-w-[540px]"
-          allow="encrypted-media; clipboard-write; picture-in-picture"
-          allowFullScreen
-        />
+        {src ? (
+          <iframe
+            title={t("communityHome.media.openInstagram")}
+            src={src}
+            className="mx-auto min-h-[540px] w-full max-w-[540px]"
+            loading="lazy"
+            allow="encrypted-media; clipboard-write; picture-in-picture"
+            allowFullScreen
+          />
+        ) : null}
+        {watchUrl ? (
+          <a
+            className="block border-t border-ink-4 px-3 py-1.5 text-center text-[11px] text-signal hover:underline"
+            href={watchUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            data-home-media-open
+          >
+            {t("communityHome.media.openInstagram")}
+          </a>
+        ) : null}
       </div>
     );
   }

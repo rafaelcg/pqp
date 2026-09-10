@@ -3513,6 +3513,9 @@ END $$;
 
 DO $$
 BEGIN
+  -- DROP first so an existing install replaces the old enum (no tiktok /
+  -- instagram) instead of hitting a duplicate-name error that this handler
+  -- would swallow.
   ALTER TABLE community_home_posts DROP CONSTRAINT IF EXISTS community_home_posts_media_kind_check;
   ALTER TABLE community_home_posts
     ADD CONSTRAINT community_home_posts_media_kind_check
@@ -3521,7 +3524,7 @@ BEGIN
       OR media_kind IN ('image', 'video', 'youtube', 'tiktok', 'instagram', 'file')
     );
 EXCEPTION
-  WHEN others THEN NULL;
+  WHEN duplicate_object THEN NULL;
 END $$;
 
 -- Feed: published newest-first per server. Partial so drafts/scheduled stay

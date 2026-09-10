@@ -280,6 +280,11 @@ describe("PostCard", () => {
     expect(html).toContain(
       'src="https://www.tiktok.com/player/v1/6718335390845095173"',
     );
+    expect(html).toContain('loading="lazy"');
+    expect(html).toContain('data-home-media-open');
+    expect(html).toContain(
+      'href="https://www.tiktok.com/@scout2015/video/6718335390845095173"',
+    );
   });
 
   it("embeds an Instagram reel in the official embed iframe", () => {
@@ -305,6 +310,9 @@ describe("PostCard", () => {
     expect(html).toContain(
       'src="https://www.instagram.com/reel/CqK2e0_JXkA/embed/"',
     );
+    expect(html).toContain('loading="lazy"');
+    expect(html).toContain('data-home-media-open');
+    expect(html).toContain('href="https://www.instagram.com/reel/CqK2e0_JXkA/"');
   });
 
   it("offers emoji and GIF on the comment box", () => {
