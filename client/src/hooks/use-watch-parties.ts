@@ -150,7 +150,7 @@ export function applyWatchPartyFrame(
   // A frame for another server DOES land in this map, and it is the rail's
   // dot that needs it: the socket sends every server's live parties on
   // connect and on change, and a member sitting elsewhere learns a show
-  // started only through that. What #455 fixed, a foreign party in THIS
+  // started only through that. What PR 455 fixed, a foreign party in THIS
   // server's sidebar, is kept by `liveWatchParties` filtering on read.
   // `openServerId` stays on the signature so a caller can still say which
   // server it is looking at; nothing is dropped for it.
