@@ -217,8 +217,60 @@ Each step is one PR, and the app works after each one.
 7. **Co-host from the member card.** Adds "Promover a co-host" to the member
    context menu when a party is active and the viewer may appoint. Last,
    because the dialog already covers the need.
+8. **The host panel.** Twitch's Stream Manager, YouTube's Live Control Room
+   and Kick's dashboard are the same thing: the streamer's view of the room,
+   beside the picture, with the numbers, the chat and a row of one-click
+   actions. Not a separate site. pqp has the pieces scattered across three
+   surfaces today (the transmission readout on the bar, the options dialog
+   with the hands queue inside it, moderation on the member card), and a host
+   running a show opens all three. One toggle on the live bar, "Painel", for
+   the host and co-hosts only, swaps the chat pane's header for a host rail:
+
+   ```
+   +--------------------------------------------------------------+
+   | AGORA     12 assistindo · 47 min · 720p · 9 s atraso · ok    |
+   +--------------------------------------------------------------+
+   | AÇÕES     Chat lento [Off | 10 s | 30 s]   Reações [on]      |
+   |           [Copiar link]                        [Encerrar]    |
+   +--------------------------------------------------------------+
+   | PALCO     (voice on, invited mode only)                      |
+   |           ✋ Bia        [Chamar]    ✋ Caio      [Chamar]      |
+   |           🎤 Rafa       [Tirar]                              |
+   +--------------------------------------------------------------+
+   | MODERAÇÃO 2 denúncias neste canal          [Ver]             |
+   |           (per message: "Silenciar 10 min" on the sender)    |
+   +--------------------------------------------------------------+
+   | chat, as today                                               |
+   ```
+
+   - **Agora** is the transmission summary line the bar already computes
+     (`watch-party-transmission.tsx`), plus viewers and uptime from the
+     sidebar card's helpers. Read only.
+   - **Ações** are the three options a host actually touches mid-show, as
+     direct controls instead of a dialog: slow mode as a segmented control
+     (off, 10 s, 30 s; the full ladder stays in Ajustar), reactions as a
+     switch, plus Copiar link and Encerrar. Same `onOptionsChange` as the
+     dialog.
+   - **Palco** is the hands queue moved out of the dialog, shown only when
+     voice is on and the floor is invited (`stageMode === "invited"`).
+   - **Moderação** puts the per-message timeout one click away in the chat
+     (the action exists on the message menu) and shows a count of open
+     reports on this channel. That count is the one server piece: reports
+     are instance-scoped today (`GET /api/reports/instance`), so it needs a
+     server-scoped read filtered to the channel, gated on MODERATE_MEMBERS.
+     Ship the panel without it first.
+   - **Narrow screens:** the panel is a bottom sheet over the chat, opened
+     from the same bar toggle; the Agora line stays visible in the bar.
+   - **Not in the first cut:** a viewer list by name. Seatless viewers are a
+     count on the server (`channelLive.watching`), and a roster would be a
+     new endpoint and a new privacy question (an audience that can be
+     enumerated is an audience that can be harassed). Decide separately.
+
+   Client-only except the report count. Two to three days. Its own PR after
+   this one merges, so the setup redesign is not held for it.
 
 Steps 1 to 3 are the "really easy to use" part and can ship this week.
+Steps 1 to 7 shipped in the first PR; step 8 is the follow-up.
 
 ## 6. What the e2e pins, and what changes
 
