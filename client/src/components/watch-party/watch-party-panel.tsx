@@ -8,6 +8,7 @@ import {
   Crown,
   Hand,
   Mic,
+  MicOff,
   MonitorPlay,
   Pencil,
   Phone,
@@ -159,6 +160,13 @@ export interface WatchPartyPanelProps {
   transport?: VoiceRoomTransport | null;
   /** This seat was taken as audience: no microphone was ever asked for. */
   isAudienceSeat?: boolean;
+  /**
+   * The host's own microphone, for the pill on the bar: nothing on the live
+   * screen said whether it was open. `off` is not in the call at all;
+   * `muted` is in the call with the mic closed; `open` means the room can
+   * hear it (the audience never can: the stream carries the window's audio).
+   */
+  micState?: "off" | "muted" | "open";
   /** 60 when this server's HLS ladder names a 60 fps rung. */
   hlsMaxFrameRate?: 30 | 60;
   onShapeChange?: (shape: "expanded" | "none") => void;
@@ -1205,6 +1213,38 @@ function LiveSurface(
         meta={t("watchParty.live.viewers", { count: props.audienceCount })}
         onRename={props.onRename}
       />
+      {/* WHETHER YOUR MICROPHONE IS OPEN, in words, on the bar. A host live
+          in front of a room asked exactly that and nothing here answered:
+          the only hint was the mute icon at the bottom of the sidebar. And
+          the answer has a second half people get wrong, so it is stated:
+          the room can hear an open mic, the audience outside never can. */}
+      {runsTheShow && props.micState && (
+        <span
+          data-watch-party-mic={props.micState}
+          title={
+            props.micState === "open"
+              ? t("watchParty.live.micOpenHint")
+              : undefined
+          }
+          className={cn(
+            "flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
+            props.micState === "open"
+              ? "border-success/40 bg-success/10 text-success"
+              : "border-border bg-surface-0 text-text-tertiary",
+          )}
+        >
+          {props.micState === "open" ? (
+            <Mic className="h-3 w-3" aria-hidden />
+          ) : (
+            <MicOff className="h-3 w-3" aria-hidden />
+          )}
+          {props.micState === "open"
+            ? t("watchParty.live.micOpen")
+            : props.micState === "muted"
+              ? t("watchParty.live.micMuted")
+              : t("watchParty.live.micOff")}
+        </span>
+      )}
       {/* No `shrink-0`: in a narrow column the buttons wrap onto their own
           line rather than running past the divider, which is how "Encerrar"
           ended up half off the screen the first time. */}

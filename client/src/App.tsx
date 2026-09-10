@@ -5826,6 +5826,14 @@ function MainAppContent({
             onStageAction={handleWatchPartyStage}
             currentUserId={user.id}
             canSpeak={voiceState.canSpeak}
+            micState={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.status !== "idle"
+                ? voiceState.isMuted
+                  ? "muted"
+                  : "open"
+                : "off"
+            }
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={hlsCaptureMaxFrameRate(
               liveHlsConfig?.ladder,
@@ -5928,6 +5936,14 @@ function MainAppContent({
             onStageAction={handleWatchPartyStage}
             currentUserId={user.id}
             canSpeak={voiceState.canSpeak}
+            micState={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.status !== "idle"
+                ? voiceState.isMuted
+                  ? "muted"
+                  : "open"
+                : "off"
+            }
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={hlsCaptureMaxFrameRate(
               liveHlsConfig?.ladder,
