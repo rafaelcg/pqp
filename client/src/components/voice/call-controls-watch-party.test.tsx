@@ -26,6 +26,10 @@ vi.mock("@/lib/screen-capture-cursor", () => ({
   setShareCursor: () => {},
   canControlShareCursor: () => false,
 }));
+vi.mock("@/lib/screen-preview-pref", () => ({
+  useHideScreenPreview: () => false,
+  setHideScreenPreview: () => {},
+}));
 
 const { CallControls } = await import("./call-stage");
 

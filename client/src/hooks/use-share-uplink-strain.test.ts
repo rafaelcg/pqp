@@ -290,4 +290,9 @@ describe("the SFU streak, one upload, no room split", () => {
   it("resets when there is no screen sender yet", () => {
     expect(nextSfuStrainStreak(4, [])).toBe(0);
   });
+
+  it("does not treat a paused layer as a strained uplink", () => {
+    const paused = sender({ fps: 0, kbps: 0, targetKbps: 0, limitedBy: "bandwidth" });
+    expect(nextSfuStrainStreak(4, [paused])).toBe(0);
+  });
 });

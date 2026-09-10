@@ -55,6 +55,7 @@ interface PublishedTrack {
     screenShareSimulcastLayers?: FakePreset[];
     videoSimulcastLayers?: FakePreset[];
     degradationPreference?: string;
+    videoCodec?: string;
   };
 }
 
@@ -111,6 +112,15 @@ const publications = new Map<
     };
   }
 >();
+/** Resolves the next `publishTrack` call. Null means publish immediately. */
+let releasePublish: (() => void) | null = null;
+let publishHold: Promise<void> | null = null;
+
+function holdNextPublish() {
+  publishHold = new Promise((resolve) => {
+    releasePublish = resolve;
+  });
+}
 
 interface FakeRemotePublication {
   source: string;
@@ -166,6 +176,11 @@ class FakeRoom {
       track: unknown,
       options: PublishedTrack["options"] = {},
     ) => {
+      const hold = publishHold;
+      publishHold = null;
+      if (hold) {
+        await hold;
+      }
       published.push({ track, options });
       if (options.source) {
         // Per source, exactly as `computeVideoEncodings` reads it: a camera's
@@ -185,6 +200,10 @@ class FakeRoom {
     },
     unpublishTrack: async (track: unknown, stop?: boolean) => {
       unpublished.push({ track, stop });
+      const entry = published.find((item) => item.track === track);
+      if (entry?.options.source) {
+        publications.delete(entry.options.source);
+      }
     },
     getTrackPublication: (source: string) => publications.get(source),
   };
@@ -283,11 +302,14 @@ vi.stubGlobal(
   },
 );
 
-const { connectLiveKit, HLS_SOURCE_DROP_SAMPLES } = await import(
-  "./livekit-session"
-);
+const {
+  connectLiveKit,
+  HLS_SOURCE_DROP_SAMPLES,
+  HLS_SOURCE_RAISE_SAMPLES,
+} = await import("./livekit-session");
 
 function fakeTrack(kind: "audio" | "video", id: string, height = 720, frameRate = 30) {
+  const nativeHeight = height;
   const settings = { width: Math.round((height * 16) / 9), height, frameRate };
   return {
     kind,
@@ -303,9 +325,13 @@ function fakeTrack(kind: "audio" | "video", id: string, height = 720, frameRate 
       height: { max: 1080 },
     }),
     applyConstraints: async (constraints: MediaTrackConstraints) => {
-      const height = constraints.height;
-      if (typeof height === "object" && typeof height.max === "number") {
-        constrained.push(height.max);
+      const asked = constraints.height;
+      if (typeof asked === "object" && typeof asked.max === "number") {
+        constrained.push(asked.max);
+        // A window cannot grow past its native size. A full display can
+        // shrink. LiveKit then declares the size that actually exists.
+        settings.height = Math.min(nativeHeight, asked.max);
+        settings.width = Math.round((settings.height * 16) / 9);
       }
     },
   } as unknown as MediaStreamTrack;
@@ -314,7 +340,7 @@ function fakeTrack(kind: "audio" | "video", id: string, height = 720, frameRate 
 function fakeStream(
   kind: "audio" | "video",
   id: string,
-  height = 720,
+  height = kind === "video" && id.startsWith("screen") ? 1080 : 720,
   frameRate = 30,
 ): MediaStream {
   const track = fakeTrack(kind, id, height, frameRate);
@@ -368,6 +394,8 @@ beforeEach(() => {
   constrained.length = 0;
   publications.clear();
   rooms.length = 0;
+  publishHold = null;
+  releasePublish = null;
 });
 
 function encodingFor(source: string) {
@@ -417,6 +445,7 @@ describe("a quality chosen before the track exists", () => {
     expect(encodingFor(Track.Source.Camera)?.degradationPreference).toBe(
       "maintain-framerate",
     );
+    expect(encodingFor(Track.Source.Camera)?.videoCodec).toBeUndefined();
   });
 
   it("publishes the screen at the chosen ceiling, in the field the library reads", async () => {
@@ -430,6 +459,9 @@ describe("a quality chosen before the track exists", () => {
     // share goes up with no ceiling while every test stays green.
     expect(options?.videoEncoding).toBeUndefined();
     expect(options?.degradationPreference).toBe("maintain-framerate");
+    // VP8 software encode sawtoothed on Chromium; H.264 can use hardware on
+    // many Macs and is what egress already re-encodes toward for HLS.
+    expect(options?.videoCodec).toBe("h264");
   });
 
   it("publishes a 60 fps capture at 60, so a 720p60 rung has source", async () => {
@@ -791,39 +823,108 @@ describe("the large-room cap", () => {
 });
 
 describe("the presenter as a live ladder's source", () => {
-  it("raises the published top past the cap when the ladder needs 1080p", async () => {
+  async function setHlsUplink(
+    sfu: Awaited<ReturnType<typeof session>>,
+    uplinkBps: number,
+    times = 1,
+  ) {
+    for (let i = 0; i < times; i++) {
+      await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps });
+    }
+  }
+
+  it("does not raise past the large-room cap once the ladder pins the share", async () => {
+    // Large room publishes 720 before egress. Raising to 1080 used to be the
+    // "intended" first blink; production proved that blink is the stall loop.
+    // Layers freeze; the host can still pick 1080 by name.
     const sfu = await session();
     fillRoom(50);
     await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
-    // The cap, as it stands for any large room.
     expect(constrained).toEqual([720]);
+    const publishesBefore = published.length;
 
-    // An egress starts on this channel and its top rung is 1080p. The
-    // egress transcodes from THIS track, so a 720p publish would cap every
-    // playlist viewer at 720p too.
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    await setHlsUplink(sfu, 9_000_000, 10);
 
-    expect(constrained).toEqual([720, 1080]);
-    expect(lastScreenPublish()?.screenShareEncoding?.maxBitrate).toBe(
-      4_000_000,
-    );
+    expect(published).toHaveLength(publishesBefore);
+    expect(constrained).toEqual([720]);
+    expect(unpublished).toHaveLength(0);
   });
 
-  it("puts the cap back when the stream stops", async () => {
+  it("keeps the layers when the stream drops briefly (egress restart gap)", async () => {
     const sfu = await session();
     fillRoom(50);
     await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
-    expect(constrained).toEqual([720, 1080]);
+    await setHlsUplink(sfu, 9_000_000);
+    const publishesAfterPin = published.length;
+    const unpublishesAfterPin = unpublished.length;
+    const writesBefore = senderWrites.length;
 
     await sfu.setHlsSource(null);
 
-    expect(constrained).toEqual([720, 1080, 720]);
-    expect(lastScreenPublish()?.screenShareEncoding?.maxBitrate).toBe(
-      1_500_000,
-    );
+    expect(published).toHaveLength(publishesAfterPin);
+    expect(unpublished).toHaveLength(unpublishesAfterPin);
+    expect(constrained).toEqual([720]);
+    const moved = senderWrites
+      .slice(writesBefore)
+      .filter((write) => write.source === Track.Source.ScreenShare);
+    expect(moved.length).toBeGreaterThan(0);
+    expect(moved[moved.length - 1]!.maxBitrate).toBe(1_500_000);
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    expect(published).toHaveLength(publishesAfterPin);
+    expect(constrained).toEqual([720]);
+  });
+
+  it("never drops a small-room 1080 for a weak uplink while pinned", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    expect(constrained).toEqual([1080]);
+    const publishesBefore = published.length;
+
+    // Two weak ticks: not enough streak to touch capture.
+    await setHlsUplink(sfu, 1_000_000, HLS_SOURCE_DROP_SAMPLES - 1);
+    expect(constrained).toEqual([1080]);
+
+    await setHlsUplink(sfu, 1_000_000);
+    expect(published).toHaveLength(publishesBefore);
+    expect(unpublished).toHaveLength(0);
+    expect(constrained).toEqual([1080, 720]);
+
+    // Further weak ticks must not re-constrain.
+    await setHlsUplink(sfu, 1_000_000, 5);
+    expect(constrained).toEqual([1080, 720]);
+  });
+
+  it("restores capture height when the uplink recovers, without a new sid", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    await setHlsUplink(sfu, 1_000_000, HLS_SOURCE_DROP_SAMPLES);
+    expect(constrained).toEqual([1080, 720]);
+    const publishesBefore = published.length;
+
+    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES - 1);
+    expect(constrained).toEqual([1080, 720]);
+
+    await setHlsUplink(sfu, 9_000_000);
+    expect(published).toHaveLength(publishesBefore);
+    expect(unpublished).toHaveLength(0);
+    expect(constrained).toEqual([1080, 720, 1080]);
+  });
+
+  it("does not thrash capture when the uplink keeps crossing the line", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    await setHlsUplink(sfu, 9_000_000);
+    const before = constrained.length;
+
+    for (const uplinkBps of [1_000_000, 9_000_000, 1_000_000, 9_000_000]) {
+      await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps });
+    }
+
+    expect(constrained).toHaveLength(before);
+    expect(unpublished).toHaveLength(0);
   });
 
   it("does not raise on an uplink that cannot carry it", async () => {
@@ -842,80 +943,41 @@ describe("the presenter as a live ladder's source", () => {
   /**
    * THE STALL, and it is the whole of it.
    *
-   * `use-voice.ts` resamples the presenter's uplink into `setHlsSource` every
-   * two seconds, and the server restamps the stream frame every thirty, so
-   * this path runs constantly for a party doing nothing unusual. Once
-   * `hlsSourceTopHeight` started requiring a MEASURED uplink, a link sitting
-   * near the 5 Mbit/s threshold made `topHeight` a function of a fluctuating
-   * bandwidth estimate, and each crossing republished the track: a new sid, a
-   * new egress, a new `startedAt`, and a rebuffer for the entire audience.
-   * Production logged six teardowns in sixteen minutes on one continuous
-   * party, two of them `screen-track-replaced` with nobody touching the share.
-   *
-   * There is no hysteresis worth adding here. The decision is worth making
-   * once.
+   * Any height republish is a new LiveKit sid and a torn-down HLS session.
+   * Uplink wobble used to cross a threshold, republish, and loop. Layers
+   * freeze for the life of the broadcast; only the bitrate ceiling moves.
    */
   it("holds the layers through an uplink that keeps changing its mind", async () => {
     const sfu = await session();
     fillRoom(50);
     await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
-    // The one raise the pin is meant to allow: the share was published before
-    // the egress existed, so the first plan was the capped one.
-    expect(constrained).toEqual([720, 1080]);
-    const publishesAfterRaise = published.length;
-    const unpublishesAfterRaise = unpublished.length;
+    await setHlsUplink(sfu, 9_000_000);
+    const publishesAfterPin = published.length;
+    const unpublishesAfterPin = unpublished.length;
 
-    // Now the measurement wobbles, as it does for the rest of the film.
     for (const uplinkBps of [2_000_000, 9_000_000, 1_000_000, 9_000_000]) {
       await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps });
     }
 
-    expect(published).toHaveLength(publishesAfterRaise);
-    expect(unpublished).toHaveLength(unpublishesAfterRaise);
-    // The capture is left alone too: shrinking it under a layer set declared
-    // for 1080 would starve the top layer, which is what this exists to stop.
-    expect(constrained).toEqual([720, 1080]);
+    expect(published).toHaveLength(publishesAfterPin);
+    expect(unpublished).toHaveLength(unpublishesAfterPin);
+    expect(constrained).toEqual([720]);
   });
 
-  it("drops a pinned 1080 after the uplink stays too short to carry it", async () => {
-    const sfu = await session();
-    fillRoom(50);
-    await settle();
-    await sfu.publishScreen(fakeStream("video", "screen"));
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
-    const publishesAfterRaise = published.length;
-
-    for (let i = 0; i < HLS_SOURCE_DROP_SAMPLES - 1; i++) {
-      await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 1_000_000 });
-    }
-    expect(published).toHaveLength(publishesAfterRaise);
-
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 1_000_000 });
-    expect(published.length).toBe(publishesAfterRaise + 1);
-    expect(constrained.at(-1)).toBe(720);
-
-    const afterDrop = published.length;
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
-    expect(published).toHaveLength(afterDrop);
-  });
-
-  /**
-   * Held is not frozen. A worse uplink still has to reach the encoder; it just
-   * reaches it as a ceiling, which no viewer sees, rather than as a republish,
-   * which every viewer sees.
-   */
   it("still lowers the ceiling in place while the layers are held", async () => {
+    // Small room: Auto publishes 1080, pin, then weak uplink drops ceiling
+    // to the large-room bitrate without a new sid.
     const sfu = await session();
-    fillRoom(50);
-    await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
     const writesBefore = senderWrites.length;
+    const publishesBefore = published.length;
 
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 1_000_000 });
 
+    expect(published).toHaveLength(publishesBefore);
+    expect(unpublished).toHaveLength(0);
     const moved = senderWrites
       .slice(writesBefore)
       .filter((write) => write.source === Track.Source.ScreenShare);
@@ -924,21 +986,37 @@ describe("the presenter as a live ladder's source", () => {
   });
 
   /**
-   * The host reaching for the quality menu is a deliberate act, and the pin
-   * exists to stop a bandwidth estimate rebuffering an audience, not to
-   * overrule a person.
+   * Picking 1080p by name used to unpublish and mint a new sid. That is the
+   * stall. Capture and bitrate move in place; the LiveKit publication stays.
    */
-  it("lets the host change quality by name even while pinned", async () => {
+  it("does not mint a new sid when the host picks a quality while pinned", async () => {
     const sfu = await session();
     fillRoom(50);
     await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
-    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
-    const publishesAfterRaise = published.length;
+    await setHlsUplink(sfu, 9_000_000);
+    const publishesAfterPin = published.length;
+    const unpublishesAfterPin = unpublished.length;
 
-    await sfu.setScreenQuality("720p");
+    await sfu.setScreenQuality("1080p");
 
-    expect(published.length).toBeGreaterThan(publishesAfterRaise);
+    expect(published).toHaveLength(publishesAfterPin);
+    expect(unpublished).toHaveLength(unpublishesAfterPin);
+  });
+
+  it("declares 480 layers for a 480p window, not 1080", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 480));
+    const layers = lastScreenPublish()?.screenShareSimulcastLayers ?? [];
+    expect(layers.map((layer) => layer.height).sort((a, b) => a - b)).toEqual([
+      360,
+    ]);
+    const publishesBefore = published.length;
+
+    await setHlsUplink(sfu, 9_000_000, 10);
+
+    expect(published).toHaveLength(publishesBefore);
+    expect(unpublished).toHaveLength(0);
   });
 
   it("does not blink the share for a 720p-only ladder", async () => {
@@ -952,6 +1030,43 @@ describe("the presenter as a live ladder's source", () => {
 
     expect(published).toHaveLength(publishesBefore);
     expect(unpublished).toHaveLength(0);
+  });
+
+  it("drops a screen publish that finishes after the share was stopped", async () => {
+    holdNextPublish();
+    const sfu = await session();
+    const sharing = sfu.publishScreen(fakeStream("video", "screen"));
+    await settle();
+
+    // Stop waits for the in-flight publish (one queue), then tears it down.
+    const stopping = sfu.unpublishScreen();
+    releasePublish?.();
+    await sharing;
+    await stopping;
+
+    expect(publications.has(Track.Source.ScreenShare)).toBe(false);
+
+    const publishesAfterStop = published.length;
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    expect(published).toHaveLength(publishesAfterStop);
+  });
+
+  it("disconnects even if a screen publish is still in flight", async () => {
+    holdNextPublish();
+    const sfu = await session();
+    void sfu.publishScreen(fakeStream("video", "screen"));
+    await settle();
+
+    await Promise.race([
+      sfu.disconnect(),
+      new Promise((_, reject) => {
+        setTimeout(
+          () => reject(new Error("disconnect waited on a held screen publish")),
+          50,
+        );
+      }),
+    ]);
+    releasePublish?.();
   });
 });
 

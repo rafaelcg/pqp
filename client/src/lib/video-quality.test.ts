@@ -12,6 +12,7 @@ import {
   CAMERA_SIMULCAST_RUNGS,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
+  HLS_SOURCE_UPLINK_HEADROOM,
   hlsSourceTopHeight,
   isLargeRoomCapped,
   LARGE_ROOM_PARTICIPANTS,
@@ -19,6 +20,7 @@ import {
   screenBitrateFor,
   screenScaleFactor,
   screenSimulcastPlan,
+  clampScreenPlanToCapture,
   VIDEO_QUALITIES,
 } from "./video-quality";
 
@@ -433,7 +435,7 @@ describe("the presenter as the ladder's source", () => {
   });
 
   it("does not raise when the measured uplink cannot carry it", () => {
-    // 4 Mbit/s plus headroom is the bar; 3 Mbit/s is under it.
+    // 4 Mbit/s times 1.5 headroom is 6 Mbit/s; 3 Mbit/s is under it.
     const plan = screenSimulcastPlan("auto", 100, {
       ladderTopHeight: 1080,
       uplinkBps: 3_000_000,
@@ -469,6 +471,15 @@ describe("the presenter as the ladder's source", () => {
   });
 
   it("still raises on a measured uplink that clears the bar", () => {
+    // 1.25× used to let 5 Mbit/s through; a 4 Mbit/s 1080 target now
+    // needs 6 Mbit/s measured (`HLS_SOURCE_UPLINK_HEADROOM`).
+    expect(HLS_SOURCE_UPLINK_HEADROOM).toBe(1.5);
+    expect(
+      screenSimulcastPlan("auto", 100, {
+        ladderTopHeight: 1080,
+        uplinkBps: 5_000_000,
+      }).topHeight,
+    ).toBe(720);
     expect(
       screenSimulcastPlan("auto", 100, {
         ladderTopHeight: 1080,
@@ -506,6 +517,26 @@ describe("the presenter as the ladder's source", () => {
     });
     expect(plan.topHeight).toBe(720);
     expect(plan.topBitrate).toBe(1_500_000);
+  });
+
+  it("does not declare 1080 layers over a 480p capture", () => {
+    const plan = screenSimulcastPlan("auto", 3, LIVE);
+    expect(plan.topHeight).toBe(1080);
+    const clamped = clampScreenPlanToCapture(plan, 480);
+    expect(clamped.topHeight).toBe(480);
+    expect(clamped.topBitrate).toBe(1_000_000);
+    expect(clamped.lowerLayers.map((layer) => layer.height)).toEqual([360]);
+  });
+
+  it("keeps a near-1080 window as 1080", () => {
+    const plan = screenSimulcastPlan("auto", 3, LIVE);
+    expect(clampScreenPlanToCapture(plan, 1078).topHeight).toBe(1080);
+  });
+
+  it("leaves the plan alone when the capture has not reported a size", () => {
+    const plan = screenSimulcastPlan("auto", 3, LIVE);
+    expect(clampScreenPlanToCapture(plan, null).topHeight).toBe(1080);
+    expect(clampScreenPlanToCapture(plan, 0).topHeight).toBe(1080);
   });
 });
 

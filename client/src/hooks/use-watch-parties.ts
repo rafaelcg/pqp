@@ -21,7 +21,11 @@ import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
  *
  * THE MAP IS PER SERVER AND IS CLEARED ON SWITCH. Holding two servers' parties
  * at once would mean the sidebar block could show a party from the server the
- * person just left, which is worse than showing nothing for a beat.
+ * person just left, which is worse than showing nothing for a beat. A
+ * `watch-party-update` for a party on another server is ignored for the same
+ * reason: the socket's catch-up and fan-out can name a party this tab is
+ * not looking at, and writing it in is how a LIVE block for server A
+ * appears while they are looking at server B.
  */
 export interface WatchPartiesState {
   /** channelId -> the party there, as this person may see it. */
@@ -85,7 +89,9 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
   }, [serverId, reloadToken]);
 
   const apply = useCallback((channelId: string, party: WatchParty | null) => {
-    setByChannel((prev) => applyWatchPartyFrame(prev, channelId, party));
+    setByChannel((prev) =>
+      applyWatchPartyFrame(prev, channelId, party, serverRef.current),
+    );
   }, []);
 
   const put = useCallback(
@@ -97,17 +103,11 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
 
   // The sidebar block is the OPEN server's; the rail wants every server.
   const live = useMemo(
-    () =>
-      liveWatchParties(byChannel).filter((party) => party.serverId === serverId),
+    () => liveWatchParties(byChannel, serverId),
     [byChannel, serverId],
   );
   const liveServerIds = useMemo(
-    () =>
-      new Set(
-        liveWatchParties(byChannel)
-          .map((party) => party.serverId)
-          .filter((id): id is string => id !== null),
-      ),
+    () => liveWatchPartyServerIds(byChannel),
     [byChannel],
   );
 
@@ -137,6 +137,7 @@ export function applyWatchPartyFrame(
   prev: Record<string, WatchParty>,
   channelId: string,
   party: WatchParty | null,
+  openServerId: string | null,
 ): Record<string, WatchParty> {
   if (!party) {
     if (!(channelId in prev)) {
@@ -146,14 +147,36 @@ export function applyWatchPartyFrame(
     delete next[channelId];
     return next;
   }
+  // A frame for another server DOES land in this map, and it is the rail's
+  // dot that needs it: the socket sends every server's live parties on
+  // connect and on change, and a member sitting elsewhere learns a show
+  // started only through that. What #455 fixed, a foreign party in THIS
+  // server's sidebar, is kept by `liveWatchParties` filtering on read.
+  // `openServerId` stays on the signature so a caller can still say which
+  // server it is looking at; nothing is dropped for it.
+  void openServerId;
   return { ...prev, [channelId]: party };
+}
+
+/** Every server with a party on air, for the rail's dot. */
+export function liveWatchPartyServerIds(
+  byChannel: Record<string, WatchParty>,
+): ReadonlySet<string> {
+  return new Set(
+    Object.values(byChannel)
+      .filter((party) => party.state === "live" && party.serverId !== null)
+      .map((party) => party.serverId as string),
+  );
 }
 
 /** The live ones, newest first. What the sidebar block draws. */
 export function liveWatchParties(
   byChannel: Record<string, WatchParty>,
+  serverId: string | null,
 ): WatchParty[] {
   return Object.values(byChannel)
-    .filter((party) => party.state === "live")
+    .filter(
+      (party) => party.state === "live" && party.serverId === serverId,
+    )
     .sort((a, b) => (b.wentLiveAt ?? "").localeCompare(a.wentLiveAt ?? ""));
 }

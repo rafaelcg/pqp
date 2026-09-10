@@ -349,8 +349,14 @@ export interface HlsSourceInput {
  * Headroom over the rung's own ceiling before a measured uplink counts as
  * able to carry it. A link measured at exactly the bitrate has none, and a
  * screen share that saturates the uplink is what makes a call stutter.
+ *
+ * 1.5, not 1.25: a 4 Mbit/s 1080 target needs 6 Mbit/s measured. A
+ * starved-1080 party published on one optimistic reading that cleared 1.25×
+ * and then sat under the target; every playlist viewer transcoded that top
+ * layer for about ten seconds. The extra quarter is the difference between
+ * "the estimator once said yes" and "this uplink can actually carry it".
  */
-const HLS_SOURCE_UPLINK_HEADROOM = 1.25;
+export const HLS_SOURCE_UPLINK_HEADROOM = 1.5;
 
 /**
  * Whether the presenter should publish at the ladder's top rather than at
@@ -432,6 +438,60 @@ export function screenSimulcastPlan(
     // is sending what they asked for, and the menu must not tell them the
     // room made them do it.
     capped: capped && topHeight < chosenHeight,
+  };
+}
+
+/**
+ * Same slack as the server's `SOURCE_HEIGHT_SLACK`: a 1078-line window is a
+ * 1080p share, not a reason to drop the top rung.
+ */
+const CAPTURE_HEIGHT_SLACK = 16;
+
+const SCREEN_PLAN_HEIGHTS = [1080, 720, 480, 360] as const;
+
+/**
+ * Declare no LiveKit layer taller than the capture actually is.
+ *
+ * A 480p window cannot invent 1080 pixels. Publishing 1080 layers anyway
+ * makes LiveKit report `track.height = 1080`, the HLS ladder starts 1080
+ * and 720 rungs that upscale, and the encoder then republishes when it
+ * notices — a new sid, a torn-down party. Production 2026-09-10: host
+ * sending 853×480, ladder advertised 1080p30/720p30/480p30, then
+ * `screen-track-replaced` every couple of minutes.
+ */
+export function clampScreenPlanToCapture(
+  plan: ScreenSimulcastPlan,
+  captureHeight: number | null | undefined,
+): ScreenSimulcastPlan {
+  if (
+    captureHeight == null ||
+    captureHeight <= 0 ||
+    captureHeight + CAPTURE_HEIGHT_SLACK >= plan.topHeight
+  ) {
+    return plan;
+  }
+  const topHeight =
+    SCREEN_PLAN_HEIGHTS.find(
+      (height) => height <= captureHeight + CAPTURE_HEIGHT_SLACK,
+    ) ?? 360;
+  if (topHeight === plan.topHeight) {
+    return plan;
+  }
+  const topBitrate =
+    topHeight >= 1080
+      ? SCREEN_BITRATES["1080p"]
+      : topHeight >= 720
+        ? SCREEN_BITRATES["720p"]
+        : topHeight >= 480
+          ? SCREEN_BITRATES["480p"]
+          : SCREEN_BITRATES["360p"];
+  return {
+    topHeight,
+    topBitrate: Math.min(plan.topBitrate, topBitrate),
+    lowerLayers: SCREEN_SIMULCAST_RUNGS.filter(
+      (layer) => layer.height < topHeight,
+    ),
+    capped: plan.capped,
   };
 }
 

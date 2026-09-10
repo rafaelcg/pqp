@@ -63,6 +63,7 @@ import {
 import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
 import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
 import {
+  isVoiceRowJoinable,
   resolveVoiceRowClick,
   resolveVoiceRowDoubleClick,
   resolveVoiceRowKey,
@@ -591,7 +592,9 @@ export function ChannelList({
                   liveState={liveStateFor(channel)}
                   onSelect={() => onSelectChannel(channel.id)}
                   onJoinVoice={
-                    isVoiceRoomChannelType(channel.type) && onJoinVoice
+                    isVoiceRoomChannelType(channel.type) &&
+                    !isWatchPartyChannelType(channel.type) &&
+                    onJoinVoice
                       ? () => onJoinVoice(channel.id)
                       : undefined
                   }
@@ -1007,7 +1010,9 @@ export function ChannelList({
             onMobileClose?.();
           }}
           onJoinVoice={
-            isVoiceRoomChannelType(channel.type) && onJoinVoice
+            isVoiceRoomChannelType(channel.type) &&
+            !isWatchPartyChannelType(channel.type) &&
+            onJoinVoice
               ? () => {
                   onJoinVoice(channel.id);
                   // Same as a select: on a phone the drawer must get out of
@@ -1910,7 +1915,11 @@ export function ChannelRailItem({
   const hasUnread = !selected && unread.count > 0 && !muted;
   const mentions = selected || muted ? 0 : unread.mentions;
   const live = liveState?.live === true;
-  const joinable = onJoinVoice && !connected;
+  const joinable = isVoiceRowJoinable({
+    hasJoinHandler: !!onJoinVoice,
+    connected,
+    liveWatchParty: live,
+  });
   return (
     <Tooltip
       label={
@@ -2057,8 +2066,9 @@ function ChannelRow({
   /**
    * Present only for a watch party room while the flag is on. Turns the row
    * into the watch party shape: topic under the name, the AO VIVO pill and
-   * viewer count while someone is on the stage, an Entrar button for the
-   * rest. Absent (flag off, or any other type) the row is the plain one.
+   * viewer count while someone is on the stage, a Watch chip while live.
+   * Absent (flag off, or any other type) the row is the plain one. A
+   * watch_party row never full-joins voice from this list.
    */
   liveState?: ChannelLiveState;
   isDragging: boolean;
@@ -2265,6 +2275,11 @@ function ChannelRow({
     .join(". ");
   const live = liveState?.live === true;
   const topic = watchParty ? channel.topic?.trim() || null : null;
+  const joinable = isVoiceRowJoinable({
+    hasJoinHandler: !!onJoinVoice,
+    connected,
+    liveWatchParty: live,
+  });
 
   const rowButton = (
     <button
@@ -2272,7 +2287,7 @@ function ChannelRow({
       onClick={() => {
         const action = resolveVoiceRowClick({
           selected,
-          joinable: !!onJoinVoice && !connected,
+          joinable,
         });
         if (action === "join") {
           onJoinVoice?.();
@@ -2283,7 +2298,7 @@ function ChannelRow({
       onDoubleClick={() => {
         if (
           resolveVoiceRowDoubleClick({
-            joinable: !!onJoinVoice && !connected,
+            joinable,
           }) === "join"
         ) {
           onJoinVoice?.();
@@ -2291,7 +2306,7 @@ function ChannelRow({
       }}
       onKeyDown={(event) => {
         const action = resolveVoiceRowKey(event.key, {
-          joinable: !!onJoinVoice && !connected,
+          joinable,
         });
         if (action === null) {
           return;
@@ -2487,43 +2502,34 @@ function ChannelRow({
             double-tap-to-zoom and never synthesize `dblclick`. The header's
             call button is the other phone path, and it is the one iOS and
             Android use.
-            Connected rows never call `onJoinVoice` at all (see `joinable`
-            below), so clicking the room you are in just keeps the view. */}
+            Connected rows and live watch parties never call `onJoinVoice`
+            from a double-click or Enter (see `joinable` below), so clicking
+            the room you are in, or a live party you are watching, just
+            keeps the view. */}
         {/* Always the same element. Rendering a bare button when there is
             no hint would swap the element type the moment `connected`
             flips, and React would drop keyboard focus on the way. */}
         <Tooltip label={joinHint ?? channel.name} name={rowName} side="right">
           {rowButton}
         </Tooltip>
-        {watchParty && onJoinVoice && !connected && (
-          /* The same join the row itself does, spelled out: a watch party is
-             joined by people who have never been in a voice channel here and
-             would not guess that the name is the door. Nobody gets a "start"
-             here; the presenter starts from the Watch party button in the
-             call, which the welcome grant gates. */
+        {watchParty && live && !connected && (
+          /* Watching is select, never a full voice join. The chip is only
+             here while the party is live so a draft room is opened by
+             clicking the row, the way setup and Encerrar expect. */
           <button
             type="button"
             data-channel-join=""
-            data-channel-watch={live ? "" : undefined}
+            data-channel-watch=""
             draggable={false}
-            className={cn(
-              "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold",
-              live
-                ? "bg-danger/15 text-danger hover:bg-danger/25"
-                : "bg-ink-4/70 text-paper-muted hover:bg-ink-4 hover:text-paper",
-            )}
-            title={live ? t("watchParty.live.watchHint") : undefined}
+            className="shrink-0 rounded-md bg-danger/15 px-1.5 py-0.5 text-[10px] font-semibold text-danger hover:bg-danger/25"
+            title={t("watchParty.live.watchHint")}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              if (live) {
-                onSelect();
-                return;
-              }
-              onJoinVoice?.();
+              onSelect();
             }}
           >
-            {live ? t("watchParty.live.watch") : t("chrome.watchPartyJoin")}
+            {t("watchParty.live.watch")}
           </button>
         )}
         {onToggleFavorite && (

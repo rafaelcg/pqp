@@ -493,6 +493,7 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
     expect(goLive).toContain(
       "startScreenShareGated(false, { preferBrowserTab: true, stream })",
     );
+    expect(goLive).toContain("startMuted: true");
     expect(goLive).not.toContain("getAudioTracks().length > 0");
 
   });

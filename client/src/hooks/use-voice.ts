@@ -3976,6 +3976,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       // like a series of stills. Text loses a little crispness; a film stops
       // stuttering. Guarded because the property is read-only on some older
       // implementations rather than merely ignored.
+      // Watch-party measured host fps sawteeth are usually capture surface (tab/YouTube 24fps), not this hint.
       try {
         track.contentHint = "motion";
       } catch {
