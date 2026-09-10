@@ -424,6 +424,57 @@ describe("what an SFU presenter is sending", () => {
     });
   });
 
+  it("does not average a returning layer's bitrate across the time it was paused", async () => {
+    const sfu = await session();
+    await sfu.setScreenMaxBitrate(4_000_000);
+    await sfu.publishScreen(fakeStream());
+    // Own rids: byte marks are process-global, and the cases above already
+    // used q/h.
+    let tick = 0;
+    newestRoom().localPublications.get(Track.Source.ScreenShare)!.videoTrack = {
+      getSenderStats: async () => {
+        tick += 1;
+        const highLive = tick === 1 || tick === 3;
+        const highBytes = tick === 3 ? 1_500_000 : 1_000_000;
+        const midBytes = tick === 1 ? 100_000 : 100_000 + (tick - 1) * 50_000;
+        return [
+          {
+            type: "video",
+            timestamp: tick === 1 ? 1_000 : tick === 2 ? 11_000 : 13_000,
+            bytesSent: highBytes,
+            frameWidth: 1920,
+            frameHeight: 1080,
+            framesPerSecond: highLive ? 30 : 0,
+            framesSent: 100,
+            targetBitrate: highLive ? 2_000_000 : 0,
+            qualityLimitationReason: highLive ? "none" : "bandwidth",
+            rid: "q-resume",
+          },
+          {
+            type: "video",
+            timestamp: tick === 1 ? 1_000 : tick === 2 ? 11_000 : 13_000,
+            bytesSent: midBytes,
+            frameWidth: 1280,
+            frameHeight: 720,
+            framesPerSecond: highLive ? 0 : 26,
+            framesSent: 80,
+            targetBitrate: highLive ? 0 : 1_350_000,
+            qualityLimitationReason: "none",
+            rid: "h-resume",
+          },
+        ];
+      },
+    };
+
+    await sampleVoiceStats();
+    const paused = await sampleVoiceStats();
+    expect(paused.senders[0]).toMatchObject({ height: 720, fps: 26 });
+    const resumed = await sampleVoiceStats();
+    // 500 kB in the 2 s since the paused poll, not 500 kB / 12 s.
+    expect(resumed.senders[0]).toMatchObject({ height: 1080, fps: 30 });
+    expect(resumed.senders[0]?.kbps).toBe(2000);
+  });
+
   it("reports nothing while no video is published", async () => {
     await session();
     const snapshot = await sampleVoiceStats();

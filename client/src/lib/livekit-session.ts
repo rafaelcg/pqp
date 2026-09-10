@@ -774,13 +774,24 @@ export async function connectLiveKit({
       } catch {
         layers = [];
       }
+      // Touch every rid every poll, not only the one we display. A layer
+      // that sat paused would otherwise keep a stale byte mark, and on
+      // return its new bytes would be divided by the whole gap — a fake
+      // trickle, or a first sample of zero. Measuring the quiet ones
+      // here only advances the mark; the row below still uses the live
+      // layer.
+      const rates = new Map<string, number | null>();
+      for (const layer of layers) {
+        const layerKey = `sfu:out:${localPeerId}:${role}:${layer.rid || "0"}`;
+        rates.set(
+          layerKey,
+          measureKbps(layerKey, layer.bytesSent ?? null, layer.timestamp),
+        );
+      }
       const stats = pickActiveVideoSenderLayer(layers);
       if (!stats) {
         continue;
       }
-      // Per rid: one key for the whole source treated a layer switch as a
-      // multi-megabit spike, because two encodings do not share a byte
-      // counter.
       const key = `sfu:out:${localPeerId}:${role}:${stats.rid || "0"}`;
       rows.push({
         peerId: localPeerId,
@@ -788,7 +799,7 @@ export async function connectLiveKit({
         width: stats.frameWidth ?? null,
         height: stats.frameHeight ?? null,
         fps: stats.framesPerSecond ?? null,
-        kbps: measureKbps(key, stats.bytesSent ?? null, stats.timestamp),
+        kbps: rates.get(key) ?? null,
         targetKbps:
           typeof stats.targetBitrate === "number"
             ? Math.round(stats.targetBitrate / 1000)
