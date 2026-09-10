@@ -21,6 +21,7 @@ import {
   LARGE_ROOM_SCREEN_HEIGHT,
   screenBitrateFor,
   screenSimulcastPlan,
+  clampScreenPlanToCapture,
   type CameraLayer,
   type HlsSourceInput,
   type ScreenSimulcastPlan,
@@ -357,10 +358,9 @@ export async function connectLiveKit({
    * the share, LiveKit minted a new sid, the API tore the ladder down with
    * `screen-track-replaced`, viewers 404'd the old `startedAt`, and the
    * next raise/drop did it again. Ceiling moves in place; layers stay put
-   * until the host stops sharing or picks a quality by name (`force`).
-   *
-   * A deliberate act by the host is not this: `setScreenQuality` forces past
-   * it, because somebody who picks 1080p by name has chosen the blink.
+   * until the host stops sharing. Quality by name (`force`) used to be the
+   * one allowed blink; that minting a new sid is the stall, so it also
+   * moves capture and bitrate in place.
    */
   let screenPlanPinned = false;
   /**
@@ -371,6 +371,15 @@ export async function connectLiveKit({
    * or we re-`applyConstraints` every two-second `setHlsSource` tick.
    */
   let appliedScreenCaptureHeight: number | null = null;
+  /**
+   * Pixels the capture actually has, read from getSettings BEFORE the first
+   * `height.max` constrain. After a constrain, getSettings reports the
+   * limited size, so using that as the ceiling would make a 1080 display
+   * that dipped to 720 unable to climb back, and would make a 480 window
+   * look like 1080 if we asked for 1080 first. Reset when the share stops
+   * or a new track is published.
+   */
+  let nativeScreenCaptureHeight: number | null = null;
   /**
    * Pending capture height while pinned, and how many consecutive
    * `setHlsSource` ticks have asked for it. Three ticks (≈6 s) before we
@@ -960,6 +969,35 @@ export async function connectLiveKit({
     };
   }
 
+  function trackCaptureHeight(track: MediaStreamTrack): number | null {
+    try {
+      const height =
+        typeof track.getSettings === "function"
+          ? track.getSettings().height
+          : undefined;
+      return typeof height === "number" && height > 0
+        ? Math.round(height)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  function rememberNativeCapture(track: MediaStreamTrack): number | null {
+    const height = trackCaptureHeight(track);
+    if (height) {
+      nativeScreenCaptureHeight = height;
+    }
+    return nativeScreenCaptureHeight;
+  }
+
+  function planForTrack(track: MediaStreamTrack): ScreenSimulcastPlan {
+    return clampScreenPlanToCapture(
+      currentScreenPlan(),
+      nativeScreenCaptureHeight ?? trackCaptureHeight(track),
+    );
+  }
+
   /**
    * Ask the capture for the plan's height. Resolves whether it took.
    *
@@ -1098,7 +1136,8 @@ export async function connectLiveKit({
    *
    * **While pinned, height never republishes.** Bitrate ceiling only. The pin
    * outlives a brief `setHlsSource(null)` during an egress restart on purpose.
-   * `force` is the host choosing a quality by name — the only blink allowed.
+   * `force` (host quality menu) used to be the exception; that minting a new
+   * sid is the stall, so quality by name also moves in place.
    */
   function screenShareStill(
     track: MediaStreamTrack,
@@ -1114,7 +1153,7 @@ export async function connectLiveKit({
     return publishedScreenPlan;
   }
 
-  function reconcileScreenPlan(options?: { force?: boolean }): Promise<void> {
+  function reconcileScreenPlan(): Promise<void> {
     const run = async () => {
       const track = publishedScreenTrack;
       const published = publishedScreenPlan;
@@ -1122,18 +1161,23 @@ export async function connectLiveKit({
         return;
       }
       const epoch = screenShareEpoch;
-      const plan = currentScreenPlan();
+      const plan = planForTrack(track);
       const heightChanged = plan.topHeight !== published.topHeight;
       // FREEZE. Any unpublish+publish is a new LiveKit sid and a torn-down
       // watch party. Uplink / ladder / room-size opinion changes reach the
-      // encoder as a ceiling only.
-      if (screenPlanPinned && !options?.force) {
+      // encoder as a ceiling only. `force` used to republish; that is the
+      // stall. Quality by name moves capture and bitrate in place.
+      if (screenPlanPinned) {
         // Same sid: shrink or restore capture without touching declared layers.
         // Never ask the capture for more than the pinned layer set. Wait for a
         // stable target before applyConstraints (uplink wobble). After every
         // await, the epoch must still match: a stop mid-constrain must not
         // write onto the next share.
-        const captureTarget = Math.min(plan.topHeight, published.topHeight);
+        const captureTarget = Math.min(
+          plan.topHeight,
+          published.topHeight,
+          nativeScreenCaptureHeight ?? Number.POSITIVE_INFINITY,
+        );
         if (captureTarget === appliedScreenCaptureHeight) {
           pendingCaptureHeight = null;
           captureHeightStreak = 0;
@@ -1160,7 +1204,7 @@ export async function connectLiveKit({
           }
           // Uplink moved while we awaited: do not lock the superseded height.
           const liveTarget = Math.min(
-            currentScreenPlan().topHeight,
+            planForTrack(track).topHeight,
             liveAfterConstrain.topHeight,
           );
           if (liveTarget !== want) {
@@ -1419,9 +1463,21 @@ export async function connectLiveKit({
       const audioChanged = replacing && hadAudio !== hasAudio;
       const plan = currentScreenPlan();
       const epoch = screenShareEpoch;
+      // Read native size before height.max, which makes getSettings lie.
+      rememberNativeCapture(videoTrack);
       await constrainScreenCapture(videoTrack, plan.topHeight);
+      if (!nativeScreenCaptureHeight) {
+        rememberNativeCapture(videoTrack);
+      }
       if (screenShareEpoch !== epoch) {
         return;
+      }
+      const publishPlan = planForTrack(videoTrack);
+      if (publishPlan.topHeight !== plan.topHeight) {
+        await constrainScreenCapture(videoTrack, publishPlan.topHeight);
+        if (screenShareEpoch !== epoch) {
+          return;
+        }
       }
 
       // Same sid, same egress, same playlist. A host who picks a different
@@ -1464,6 +1520,12 @@ export async function connectLiveKit({
         return;
       }
 
+      if (replacing && screenPlanPinned && !audioChanged) {
+        // No replaceTrack on this publication. Keep the live sid rather
+        // than unpublish; a new sid tears the party down.
+        return;
+      }
+
       if (publishedScreenTrack) {
         await room.localParticipant.unpublishTrack(publishedScreenTrack);
         if (screenShareEpoch !== epoch) {
@@ -1476,7 +1538,7 @@ export async function connectLiveKit({
       // the library reads its dimensions, so the layers it declares are the
       // layers that exist. See `screenSimulcastPlan` for why height and not
       // a divisor.
-      const kept = await publishScreenVideo(videoTrack, plan);
+      const kept = await publishScreenVideo(videoTrack, publishPlan);
       if (!kept) {
         return;
       }
@@ -1536,6 +1598,7 @@ export async function connectLiveKit({
         // plan that window and that room call for.
         screenPlanPinned = false;
         appliedScreenCaptureHeight = null;
+        nativeScreenCaptureHeight = null;
         pendingCaptureHeight = null;
         captureHeightStreak = 0;
       });
@@ -1575,10 +1638,9 @@ export async function connectLiveKit({
     async setScreenQuality(quality: VideoQuality) {
       screenQuality = quality;
       screenMaxBitrate = screenBitrateFor(quality);
-      // `force`: the host picked this by name. The pin exists to stop a
-      // resampled measurement rebuffering the audience, not to overrule a
-      // person who reached for the menu.
-      await reconcileScreenPlan({ force: true });
+      // Capture and bitrate move in place. Republishing here used to be
+      // how a quality pick took effect; that minting a new sid is the stall.
+      await reconcileScreenPlan();
     },
 
     /**
@@ -1647,6 +1709,7 @@ export async function connectLiveKit({
       publishedScreenPlan = null;
       screenCaptureConstraints = null;
       appliedScreenCaptureHeight = null;
+      nativeScreenCaptureHeight = null;
       pendingCaptureHeight = null;
       captureHeightStreak = 0;
       publishedCameraTrack = null;

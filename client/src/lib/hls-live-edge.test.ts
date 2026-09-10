@@ -21,6 +21,7 @@ describe("hlsLivePlayerConfig", () => {
       config.liveSyncDurationCount * HLS_LIVE_SEGMENT_SECONDS,
     ).toBeLessThan(HLS_LIVE_WINDOW_SECONDS);
     expect(hlsLiveSyncFitsWindow(config)).toBe(true);
+    expect(config.startLevel).toBe(0);
   });
 
   it("refuses a sync that would join on the oldest segment of the window", () => {
@@ -30,6 +31,7 @@ describe("hlsLivePlayerConfig", () => {
         liveMaxLatencyDurationCount: 6,
         maxBufferLength: 8,
         maxMaxBufferLength: 10,
+        startLevel: 0,
       }),
     ).toBe(false);
   });

@@ -309,6 +309,7 @@ const {
 } = await import("./livekit-session");
 
 function fakeTrack(kind: "audio" | "video", id: string, height = 720, frameRate = 30) {
+  const nativeHeight = height;
   const settings = { width: Math.round((height * 16) / 9), height, frameRate };
   return {
     kind,
@@ -324,9 +325,13 @@ function fakeTrack(kind: "audio" | "video", id: string, height = 720, frameRate 
       height: { max: 1080 },
     }),
     applyConstraints: async (constraints: MediaTrackConstraints) => {
-      const height = constraints.height;
-      if (typeof height === "object" && typeof height.max === "number") {
-        constrained.push(height.max);
+      const asked = constraints.height;
+      if (typeof asked === "object" && typeof asked.max === "number") {
+        constrained.push(asked.max);
+        // A window cannot grow past its native size. A full display can
+        // shrink. LiveKit then declares the size that actually exists.
+        settings.height = Math.min(nativeHeight, asked.max);
+        settings.width = Math.round((settings.height * 16) / 9);
       }
     },
   } as unknown as MediaStreamTrack;
@@ -335,7 +340,7 @@ function fakeTrack(kind: "audio" | "video", id: string, height = 720, frameRate 
 function fakeStream(
   kind: "audio" | "video",
   id: string,
-  height = 720,
+  height = kind === "video" && id.startsWith("screen") ? 1080 : 720,
   frameRate = 30,
 ): MediaStream {
   const track = fakeTrack(kind, id, height, frameRate);
@@ -981,22 +986,37 @@ describe("the presenter as a live ladder's source", () => {
   });
 
   /**
-   * The host reaching for the quality menu is a deliberate act, and the pin
-   * exists to stop a bandwidth estimate rebuffering an audience, not to
-   * overrule a person.
+   * Picking 1080p by name used to unpublish and mint a new sid. That is the
+   * stall. Capture and bitrate move in place; the LiveKit publication stays.
    */
-  it("lets the host change quality by name even while pinned", async () => {
+  it("does not mint a new sid when the host picks a quality while pinned", async () => {
     const sfu = await session();
     fillRoom(50);
     await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
     await setHlsUplink(sfu, 9_000_000);
     const publishesAfterPin = published.length;
+    const unpublishesAfterPin = unpublished.length;
 
     await sfu.setScreenQuality("1080p");
 
-    expect(published.length).toBe(publishesAfterPin + 1);
-    expect(constrained.at(-1)).toBe(1080);
+    expect(published).toHaveLength(publishesAfterPin);
+    expect(unpublished).toHaveLength(unpublishesAfterPin);
+  });
+
+  it("declares 480 layers for a 480p window, not 1080", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 480));
+    const layers = lastScreenPublish()?.screenShareSimulcastLayers ?? [];
+    expect(layers.map((layer) => layer.height).sort((a, b) => a - b)).toEqual([
+      360,
+    ]);
+    const publishesBefore = published.length;
+
+    await setHlsUplink(sfu, 9_000_000, 10);
+
+    expect(published).toHaveLength(publishesBefore);
+    expect(unpublished).toHaveLength(0);
   });
 
   it("does not blink the share for a 720p-only ladder", async () => {

@@ -441,6 +441,60 @@ export function screenSimulcastPlan(
   };
 }
 
+/**
+ * Same slack as the server's `SOURCE_HEIGHT_SLACK`: a 1078-line window is a
+ * 1080p share, not a reason to drop the top rung.
+ */
+const CAPTURE_HEIGHT_SLACK = 16;
+
+const SCREEN_PLAN_HEIGHTS = [1080, 720, 480, 360] as const;
+
+/**
+ * Declare no LiveKit layer taller than the capture actually is.
+ *
+ * A 480p window cannot invent 1080 pixels. Publishing 1080 layers anyway
+ * makes LiveKit report `track.height = 1080`, the HLS ladder starts 1080
+ * and 720 rungs that upscale, and the encoder then republishes when it
+ * notices — a new sid, a torn-down party. Production 2026-09-10: host
+ * sending 853×480, ladder advertised 1080p30/720p30/480p30, then
+ * `screen-track-replaced` every couple of minutes.
+ */
+export function clampScreenPlanToCapture(
+  plan: ScreenSimulcastPlan,
+  captureHeight: number | null | undefined,
+): ScreenSimulcastPlan {
+  if (
+    captureHeight == null ||
+    captureHeight <= 0 ||
+    captureHeight + CAPTURE_HEIGHT_SLACK >= plan.topHeight
+  ) {
+    return plan;
+  }
+  const topHeight =
+    SCREEN_PLAN_HEIGHTS.find(
+      (height) => height <= captureHeight + CAPTURE_HEIGHT_SLACK,
+    ) ?? 360;
+  if (topHeight === plan.topHeight) {
+    return plan;
+  }
+  const topBitrate =
+    topHeight >= 1080
+      ? SCREEN_BITRATES["1080p"]
+      : topHeight >= 720
+        ? SCREEN_BITRATES["720p"]
+        : topHeight >= 480
+          ? SCREEN_BITRATES["480p"]
+          : SCREEN_BITRATES["360p"];
+  return {
+    topHeight,
+    topBitrate: Math.min(plan.topBitrate, topBitrate),
+    lowerLayers: SCREEN_SIMULCAST_RUNGS.filter(
+      (layer) => layer.height < topHeight,
+    ),
+    capped: plan.capped,
+  };
+}
+
 // -------------------------------------------------- SFU simulcast: the camera
 
 /**

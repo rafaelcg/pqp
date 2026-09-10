@@ -33,6 +33,8 @@ export interface HlsLivePlayerConfig {
   liveMaxLatencyDurationCount: number;
   maxBufferLength: number;
   maxMaxBufferLength: number;
+  /** First segments at the lowest rung; ABR climbs from there. */
+  startLevel: number;
 }
 
 export function hlsLivePlayerConfig(): HlsLivePlayerConfig {
@@ -41,6 +43,7 @@ export function hlsLivePlayerConfig(): HlsLivePlayerConfig {
     liveMaxLatencyDurationCount: HLS_LIVE_MAX_LATENCY_DURATION_COUNT,
     maxBufferLength: HLS_MAX_BUFFER_LENGTH_SECONDS,
     maxMaxBufferLength: HLS_MAX_MAX_BUFFER_LENGTH_SECONDS,
+    startLevel: 0,
   };
 }
 
