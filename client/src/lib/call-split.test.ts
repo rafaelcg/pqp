@@ -38,25 +38,25 @@ const STACKED = splitBounds("stacked");
 
 describe("clampSplit", () => {
   it("gives the stage the stored fraction of the usable pane", () => {
-    // 908 of pane, 8 of divider: 900 usable, 60% of it to the stage.
-    expect(clampSplit({ fraction: 0.6, container: 908, ...STACKED })).toBe(540);
+    // 900 usable plus the divider: 60% of the usable to the stage.
+    expect(clampSplit({ fraction: 0.6, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED })).toBe(540);
   });
 
   it("refuses to drag the stage below its minimum", () => {
-    expect(clampSplit({ fraction: 0, container: 908, ...STACKED })).toBe(
+    expect(clampSplit({ fraction: 0, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED })).toBe(
       MIN_STAGE_HEIGHT_PX,
     );
-    expect(clampSplit({ fraction: 0.01, container: 908, ...STACKED })).toBe(
+    expect(clampSplit({ fraction: 0.01, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED })).toBe(
       MIN_STAGE_HEIGHT_PX,
     );
   });
 
   it("refuses to drag the transcript below its minimum", () => {
-    expect(clampSplit({ fraction: 1, container: 908, ...STACKED })).toBe(
+    expect(clampSplit({ fraction: 1, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED })).toBe(
       900 - MIN_CHAT_HEIGHT_PX,
     );
     // And that really does leave the transcript its minimum, divider included.
-    expect(908 - (900 - MIN_CHAT_HEIGHT_PX) - CALL_SPLIT_DIVIDER_PX).toBe(
+    expect(900 + CALL_SPLIT_DIVIDER_PX - (900 - MIN_CHAT_HEIGHT_PX) - CALL_SPLIT_DIVIDER_PX).toBe(
       MIN_CHAT_HEIGHT_PX,
     );
   });
@@ -79,7 +79,7 @@ describe("clampSplit", () => {
 
   it("treats a corrupt fraction as the middle rather than throwing", () => {
     expect(
-      clampSplit({ fraction: Number.NaN, container: 908, ...STACKED }),
+      clampSplit({ fraction: Number.NaN, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED }),
     ).toBe(450);
   });
 
@@ -89,7 +89,7 @@ describe("clampSplit", () => {
       minStage: MIN_STAGE_WIDTH_PX,
       minChat: MIN_CHAT_WIDTH_PX,
     });
-    expect(clampSplit({ fraction: 1, container: 1008, ...side })).toBe(
+    expect(clampSplit({ fraction: 1, container: 1000 + CALL_SPLIT_DIVIDER_PX, ...side })).toBe(
       1000 - MIN_CHAT_WIDTH_PX,
     );
   });
@@ -119,13 +119,13 @@ describe("splitAvailable", () => {
 
 describe("splitFraction", () => {
   it("round-trips a clamped pixel size", () => {
-    const px = clampSplit({ fraction: 0.42, container: 908, ...STACKED });
-    expect(splitFraction(px, 908)).toBeCloseTo(0.42, 2);
+    const px = clampSplit({ fraction: 0.42, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED });
+    expect(splitFraction(px, 900 + CALL_SPLIT_DIVIDER_PX)).toBeCloseTo(0.42, 2);
   });
 
   it("never leaves 0..1, whatever it is handed", () => {
-    expect(splitFraction(5000, 908)).toBe(1);
-    expect(splitFraction(-40, 908)).toBe(0);
+    expect(splitFraction(5000, 900 + CALL_SPLIT_DIVIDER_PX)).toBe(1);
+    expect(splitFraction(-40, 900 + CALL_SPLIT_DIVIDER_PX)).toBe(0);
     expect(splitFraction(100, 0)).toBe(0.5);
   });
 });
@@ -134,7 +134,7 @@ describe("nudgeSplit", () => {
   it("moves by the pixels asked for", () => {
     const next = nudgeSplit({
       fraction: 0.5,
-      container: 908,
+      container: 900 + CALL_SPLIT_DIVIDER_PX,
       orientation: "stacked",
       deltaPx: 16,
     });
@@ -144,7 +144,7 @@ describe("nudgeSplit", () => {
   it("stops at the same ends the pointer stops at", () => {
     const top = nudgeSplit({
       fraction: 1,
-      container: 908,
+      container: 900 + CALL_SPLIT_DIVIDER_PX,
       orientation: "stacked",
       deltaPx: 400,
     });
@@ -152,7 +152,7 @@ describe("nudgeSplit", () => {
 
     const bottom = nudgeSplit({
       fraction: 0,
-      container: 908,
+      container: 900 + CALL_SPLIT_DIVIDER_PX,
       orientation: "stacked",
       deltaPx: -400,
     });

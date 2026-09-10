@@ -482,17 +482,18 @@ function SplitDivider({
           aria-valuemax={maxPercent}
           aria-valuetext={t("call.split.value", { percent })}
           className={cn(
-            // The `::before` is the hit area: 8px is a fine LINE and a poor
-            // TARGET, and a thumb on a phone is nowhere near that accurate. It
-            // reaches 6px into each neighbour without taking any layout, which is
-            // also why the resize cursor appears just before the pointer arrives.
+            // 20px tall (`CALL_SPLIT_DIVIDER_PX`), so the bar reads as a control
+            // rather than a hairline: a host on production could not find the
+            // 8px version. The `::before` still reaches 6px into each neighbour
+            // without taking any layout, which is also why the resize cursor
+            // appears just before the pointer arrives.
             "group relative flex touch-none select-none items-center justify-center border-y border-ink-4/60 bg-ink-2/70 transition-colors before:absolute before:content-[''] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent",
             // `flex-1` rather than `w-full` / `h-full`: the handle shares the
             // boundary with the two collapse buttons now, and a child claiming
             // the whole length of its own parent would push them off the end.
             sideBySide
-              ? "w-2 flex-1 cursor-col-resize border-x border-y-0 before:inset-y-0 before:-inset-x-1.5"
-              : "h-2 flex-1 cursor-row-resize before:inset-x-0 before:-inset-y-1.5",
+              ? "w-5 flex-1 cursor-col-resize border-x border-y-0 before:inset-y-0 before:-inset-x-1.5"
+              : "h-5 flex-1 cursor-row-resize before:inset-x-0 before:-inset-y-1.5",
             dragging ? "bg-accent/25" : "hover:bg-ink-3",
           )}
           onPointerDown={onPointerDown}
@@ -505,8 +506,8 @@ function SplitDivider({
             aria-hidden="true"
             className={cn(
               "rounded-full transition-colors",
-              sideBySide ? "h-10 w-1" : "h-1 w-10",
-              dragging ? "bg-accent" : "bg-ink-4 group-hover:bg-paper-muted",
+              sideBySide ? "h-14 w-1.5" : "h-1.5 w-14",
+              dragging ? "bg-accent" : "bg-paper-muted/60 group-hover:bg-paper",
             )}
           />
         </div>
@@ -535,13 +536,13 @@ function SplitDivider({
  * along an 8px line, and there is no hover at all on a touch screen, so on a
  * phone it did not exist.
  *
- * So it is furniture now: always painted, 48px along the boundary, filled
+ * So it is furniture now: always painted, 56px along the boundary, filled
  * rather than transparent, and with a hit area that reaches 8px into each
- * neighbouring pane. The layout box stays 8px on the cross axis, because
- * `CALL_SPLIT_DIVIDER_PX` is the arithmetic every clamp in `lib/call-split.ts`
- * is done against and a taller button would silently make the divider thicker
- * than the number the maths uses. Hover still brightens it; what changed is
- * that hover is no longer how you learn it is there.
+ * neighbouring pane. The cross axis is 20px, which is `CALL_SPLIT_DIVIDER_PX`:
+ * the arithmetic every clamp in `lib/call-split.ts` is done against, so the
+ * CSS and the constant move together or the divider is thicker than the
+ * number the maths uses. Hover still brightens it; what changed is that
+ * hover is no longer how you learn it is there.
  */
 function SplitCollapseButton({
   sideBySide,
@@ -580,12 +581,12 @@ function SplitCollapseButton({
           // one: the boundary is 8px thick and a thumb is not.
           "relative flex shrink-0 items-center justify-center bg-surface-3 text-text transition-colors before:absolute before:content-[''] hover:bg-accent hover:text-surface-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent motion-reduce:transition-none",
           sideBySide
-            ? "h-12 w-2 before:inset-y-0 before:-inset-x-2"
-            : "h-2 w-12 before:inset-x-0 before:-inset-y-2",
+            ? "h-14 w-5 before:inset-y-0 before:-inset-x-2"
+            : "h-5 w-14 before:inset-x-0 before:-inset-y-2",
         )}
         onClick={() => onCollapse(toward)}
       >
-        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+        <Icon className="h-4 w-4" aria-hidden="true" />
       </button>
     </Tooltip>
   );

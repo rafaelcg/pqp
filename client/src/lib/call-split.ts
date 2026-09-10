@@ -132,8 +132,16 @@ export const MIN_STAGE_WIDTH_PX = 320;
  */
 export const MIN_CHAT_WIDTH_PX = 560;
 
-/** The divider's own thickness, counted against the pane before splitting. */
-export const CALL_SPLIT_DIVIDER_PX = 8;
+/**
+ * The divider's own thickness, counted against the pane before splitting.
+ *
+ * 20, up from 8. The 8px bar was a fine line and a poor control: the grip was
+ * a hair, the two collapse chevrons were 8px tall, and a host running a show
+ * said the line to adjust the call and chat was too small to find. Every
+ * clamp below is computed against this number, so the bar's CSS height and
+ * this constant must agree; `call-split.tsx` uses `h-5` / `w-5` for it.
+ */
+export const CALL_SPLIT_DIVIDER_PX = 20;
 
 /** One arrow-key press. Shift multiplies it; see `CALL_SPLIT_STEP_COARSE_PX`. */
 export const CALL_SPLIT_STEP_PX = 16;
