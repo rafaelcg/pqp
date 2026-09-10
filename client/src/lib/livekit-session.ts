@@ -42,9 +42,9 @@ import {
   type VoiceStatsSnapshot,
 } from "./voice-stats-probe";
 
-/** How many weak `setHlsSource` ticks before a pinned 1080 share may drop. */
+/** @deprecated Kept so older tests importing the name still resolve; unused. */
 export const HLS_SOURCE_DROP_SAMPLES = 3;
-/** How many strong ticks before a live 720 share may raise to 1080. */
+/** @deprecated Kept so older tests importing the name still resolve; unused. */
 export const HLS_SOURCE_RAISE_SAMPLES = 3;
 
 function asLiveKitQuality(value: unknown): LiveKitConnectionQuality {
@@ -269,19 +269,31 @@ export async function connectLiveKit({
   let receiveQuality: ReceiveQuality = "auto";
 
   /**
-   * One reconcile at a time; a second request waits its turn. Declared here,
-   * ahead of the `room.on(...)` registrations below, rather than beside
-   * `reconcileScreenPlan` further down: Firefox can fire `ParticipantConnected`
-   * synchronously inside `room.connect()`, before this function has finished
-   * running past its own later statements, and that handler calls
-   * `reconcileScreenPlan`, which reads this variable. A `let` declared after
-   * that point would still be in its temporal dead zone when the handler
-   * fires, throwing `ReferenceError: can't access lexical declaration
-   * 'reconciling' before initialization` and dropping the connection.
-   * Chromium happens not to fire the event that early, so this only showed up
-   * in Firefox. See the regression test in `livekit-session.test.ts`.
+   * One screen lifecycle op at a time (publish, unpublish, reconcile). A second
+   * request waits its turn. Declared here, ahead of the `room.on(...)`
+   * registrations below, rather than beside `reconcileScreenPlan` further down:
+   * Firefox can fire `ParticipantConnected` synchronously inside
+   * `room.connect()`, before this function has finished running past its own
+   * later statements, and that handler calls `reconcileScreenPlan`, which reads
+   * this variable. A `let` declared after that point would still be in its
+   * temporal dead zone when the handler fires, throwing `ReferenceError: can't
+   * access lexical declaration 'reconciling' before initialization` and
+   * dropping the connection. Chromium happens not to fire the event that early,
+   * so this only showed up in Firefox. See the regression test in
+   * `livekit-session-firefox-join.test.ts`.
    */
   let reconciling: Promise<void> | null = null;
+
+  function enqueueScreenOp<T>(fn: () => Promise<T>): Promise<T> {
+    const result = (reconciling ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(fn);
+    reconciling = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
   /** Track we published, kept so we can replace/mute it later. */
   let published: InstanceType<typeof LocalAudioTrack> | null = null;
   /** Raw screen-share track we published, kept so we can unpublish it later. */
@@ -337,32 +349,42 @@ export async function connectLiveKit({
    * still reported live: it holds until the share itself stops.
    *
    * A better decision arriving later is not worth a rebuffer for the whole
-   * audience, and certainly not repeatedly. Raises and drops while pinned
-   * wait for a streak (`HLS_SOURCE_RAISE_SAMPLES` / `HLS_SOURCE_DROP_SAMPLES`)
-   * so one optimistic or one weak reading cannot republish. The share going
-   * up before the egress exists is still the intended raise; it just has to
-   * stay tall for three ticks first.
+   * audience, and certainly not repeatedly.
+   *
+   * RAISES AND DROPS DO NOT REPUBLISH WHILE PINNED. 2026-09-10 production
+   * proved the "sustained streak then republish" escape was the stall loop
+   * itself: three 2 s uplink ticks (~4–6 s after `hlsStarted`) unpublished
+   * the share, LiveKit minted a new sid, the API tore the ladder down with
+   * `screen-track-replaced`, viewers 404'd the old `startedAt`, and the
+   * next raise/drop did it again. Ceiling moves in place; layers stay put
+   * until the host stops sharing or picks a quality by name (`force`).
    *
    * A deliberate act by the host is not this: `setScreenQuality` forces past
    * it, because somebody who picks 1080p by name has chosen the blink.
    */
   let screenPlanPinned = false;
   /**
-   * Consecutive `setHlsSource` ticks whose plan is shorter than what is
-   * already on the wire. Three is six seconds at the two-second sample
-   * cadence. One weak reading is the wobble the pin exists to ignore; six
-   * seconds of "this uplink cannot carry 1080" is a starved top layer, and
-   * that is what makes the film drift off its own audio.
+   * Height last applied to the capture via `constrainScreenCapture` while the
+   * LiveKit layers stay pinned. Separate from `publishedScreenPlan.topHeight`,
+   * which is the declared layer set and must not move without a new sid.
+   * Farol: without this we either never restore 1080 after a weak-uplink dip,
+   * or we re-`applyConstraints` every two-second `setHlsSource` tick.
    */
-  let shorterPlanStreak = 0;
+  let appliedScreenCaptureHeight: number | null = null;
   /**
-   * Consecutive `setHlsSource` ticks whose plan is taller than what is
-   * already on the wire. Three is six seconds at the two-second sample
-   * cadence. One optimistic reading is how a borderline uplink jumps to
-   * 1080 and starves the HLS audience; six seconds of "this uplink can
-   * carry it" is enough to believe.
+   * Pending capture height while pinned, and how many consecutive
+   * `setHlsSource` ticks have asked for it. Three ticks (≈6 s) before we
+   * `applyConstraints` — uplink wobble must not thrash the capture pipeline
+   * every two seconds (Farol on PR 460).
    */
-  let tallerPlanStreak = 0;
+  let pendingCaptureHeight: number | null = null;
+  let captureHeightStreak = 0;
+  /**
+   * Bumped when the share stops or a new one is published. A reconcile that
+   * awaited `applyConstraints` must not write height/bitrate onto the next
+   * share (Farol: stale state after stop/replace).
+   */
+  let screenShareEpoch = 0;
   /**
    * The capture's constraints as the browser handed them over, so the plan's
    * height can be laid over them and lifted again without losing the frame
@@ -999,7 +1021,8 @@ export async function connectLiveKit({
   async function publishScreenVideo(
     track: MediaStreamTrack,
     plan: ScreenSimulcastPlan,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    const epoch = screenShareEpoch;
     const options = {
       source: Track.Source.ScreenShare,
       simulcast: true,
@@ -1037,12 +1060,26 @@ export async function connectLiveKit({
       );
       await room.localParticipant.publishTrack(track, options);
     }
+    // Stop/disconnect bump the epoch before they await. A publish that
+    // finished after that must not stay on the wire or write the plan.
+    if (screenShareEpoch !== epoch) {
+      // A newer publish of the same track already owns it — do not tear that
+      // one down. Only drop a ghost this call created after stop cleared us.
+      if (publishedScreenTrack !== track) {
+        await room.localParticipant.unpublishTrack(track, false);
+      }
+      return false;
+    }
     publishedScreenPlan = plan;
-  }
-
-  /** A live HLS ladder is transcoding from this share right now. */
-  function broadcastIsLive(): boolean {
-    return hlsSource !== null && hlsSource.ladderTopHeight !== null;
+    appliedScreenCaptureHeight = plan.topHeight;
+    screenShareEpoch += 1;
+    // If the ladder is already live (share restarted mid-party), pin now —
+    // do not wait for the next setHlsSource tick. Farol caught the window
+    // where a room-size change could still republish before that tick.
+    if (hlsSource !== null && hlsSource.ladderTopHeight !== null) {
+      screenPlanPinned = true;
+    }
+    return true;
   }
 
   /**
@@ -1059,14 +1096,24 @@ export async function connectLiveKit({
    * viewers see the picture blink once. A different top CEILING at the same
    * height is moved in place, with no blink.
    *
-   * **While pinned a height change waits for a streak**
-   * (`HLS_SOURCE_RAISE_SAMPLES` up, `HLS_SOURCE_DROP_SAMPLES` down) and a
-   * change of mind at the same height becomes a ceiling change: see
-   * `screenPlanPinned` for the incident. The pin outlives a brief
-   * `setHlsSource(null)` during an egress restart on purpose. `force` is the
-   * host choosing a quality by name, which is a deliberate act and gets the
-   * blink it asked for.
+   * **While pinned, height never republishes.** Bitrate ceiling only. The pin
+   * outlives a brief `setHlsSource(null)` during an egress restart on purpose.
+   * `force` is the host choosing a quality by name — the only blink allowed.
    */
+  function screenShareStill(
+    track: MediaStreamTrack,
+    epoch: number,
+  ): ScreenSimulcastPlan | null {
+    if (
+      publishedScreenTrack !== track ||
+      screenShareEpoch !== epoch ||
+      publishedScreenPlan === null
+    ) {
+      return null;
+    }
+    return publishedScreenPlan;
+  }
+
   function reconcileScreenPlan(options?: { force?: boolean }): Promise<void> {
     const run = async () => {
       const track = publishedScreenTrack;
@@ -1074,59 +1121,94 @@ export async function connectLiveKit({
       if (!track || !published) {
         return;
       }
+      const epoch = screenShareEpoch;
       const plan = currentScreenPlan();
       const heightChanged = plan.topHeight !== published.topHeight;
-      // Pin holds across the restart gap (`setHlsSource(null)`): requiring
-      // `broadcastIsLive()` here is what turned every `screen-track-replaced`
-      // into a loop. Raises before the pin is set (share up, ladder not yet
-      // announced) still wait for a streak so one good uplink reading cannot
-      // jump to 1080.
-      if (
-        heightChanged &&
-        !options?.force &&
-        (screenPlanPinned ||
-          (broadcastIsLive() && plan.topHeight > published.topHeight))
-      ) {
-        const raising = plan.topHeight > published.topHeight;
-        const dropping = plan.topHeight < published.topHeight;
-        const sustainedRaise =
-          raising && tallerPlanStreak >= HLS_SOURCE_RAISE_SAMPLES;
-        const sustainedDrop =
-          dropping && shorterPlanStreak >= HLS_SOURCE_DROP_SAMPLES;
-        if (!sustainedDrop && !sustainedRaise) {
-          // HELD. A single weaker reading is the wobble that used to
-          // restart the egress six times in one party; a single stronger
-          // one is how a borderline uplink jumped to 1080 and starved
-          // the audience. Six seconds of a shorter plan is a starved
-          // 1080 that drifts off its own audio; six seconds of a taller
-          // plan is enough to believe the uplink can carry it.
-          //
-          // When the ladder is briefly gone, the large-room / weak-uplink
-          // plan still wants a lower ceiling: move bitrate in place, never
-          // the layer set (a layer change is a new sid and a torn-down party).
-          if (plan.topBitrate !== published.topBitrate) {
-            await setSourceMaxBitrate(
-              Track.Source.ScreenShare,
-              plan.topBitrate,
-              "screen",
-            );
-            publishedScreenPlan = { ...published, topBitrate: plan.topBitrate };
+      // FREEZE. Any unpublish+publish is a new LiveKit sid and a torn-down
+      // watch party. Uplink / ladder / room-size opinion changes reach the
+      // encoder as a ceiling only.
+      if (screenPlanPinned && !options?.force) {
+        // Same sid: shrink or restore capture without touching declared layers.
+        // Never ask the capture for more than the pinned layer set. Wait for a
+        // stable target before applyConstraints (uplink wobble). After every
+        // await, the epoch must still match: a stop mid-constrain must not
+        // write onto the next share.
+        const captureTarget = Math.min(plan.topHeight, published.topHeight);
+        if (captureTarget === appliedScreenCaptureHeight) {
+          pendingCaptureHeight = null;
+          captureHeightStreak = 0;
+        } else if (captureTarget === pendingCaptureHeight) {
+          captureHeightStreak += 1;
+        } else {
+          pendingCaptureHeight = captureTarget;
+          captureHeightStreak = 1;
+        }
+        const needed =
+          (pendingCaptureHeight ?? 0) > (appliedScreenCaptureHeight ?? 0)
+            ? HLS_SOURCE_RAISE_SAMPLES
+            : HLS_SOURCE_DROP_SAMPLES;
+        if (
+          pendingCaptureHeight !== null &&
+          pendingCaptureHeight !== appliedScreenCaptureHeight &&
+          captureHeightStreak >= needed
+        ) {
+          const want = pendingCaptureHeight;
+          await constrainScreenCapture(track, want);
+          const liveAfterConstrain = screenShareStill(track, epoch);
+          if (!liveAfterConstrain) {
+            return;
           }
+          // Uplink moved while we awaited: do not lock the superseded height.
+          const liveTarget = Math.min(
+            currentScreenPlan().topHeight,
+            liveAfterConstrain.topHeight,
+          );
+          if (liveTarget !== want) {
+            pendingCaptureHeight = liveTarget;
+            captureHeightStreak = 1;
+          } else {
+            appliedScreenCaptureHeight = want;
+            pendingCaptureHeight = null;
+            captureHeightStreak = 0;
+          }
+        }
+        const livePublished = screenShareStill(track, epoch);
+        if (!livePublished) {
           return;
         }
-        if (sustainedDrop) shorterPlanStreak = 0;
-        if (sustainedRaise) tallerPlanStreak = 0;
+        const livePlan = currentScreenPlan();
+        if (livePlan.topBitrate !== livePublished.topBitrate) {
+          await setSourceMaxBitrate(
+            Track.Source.ScreenShare,
+            livePlan.topBitrate,
+            "screen",
+          );
+          const liveAfterBitrate = screenShareStill(track, epoch);
+          if (!liveAfterBitrate) {
+            return;
+          }
+          publishedScreenPlan = {
+            ...liveAfterBitrate,
+            topBitrate: livePlan.topBitrate,
+          };
+        }
+        return;
       }
       if (heightChanged) {
         await constrainScreenCapture(track, plan.topHeight);
-        // `false`: the capture stays alive; it is the same track going back up.
-        await room.localParticipant.unpublishTrack(track, false);
-        if (publishedScreenTrack !== track) {
-          // The share ended while the capture was being resized.
+        if (!screenShareStill(track, epoch)) {
           return;
         }
-        await publishScreenVideo(track, plan);
-        onScreenRepublished?.();
+        appliedScreenCaptureHeight = plan.topHeight;
+        // `false`: the capture stays alive; it is the same track going back up.
+        await room.localParticipant.unpublishTrack(track, false);
+        if (!screenShareStill(track, epoch)) {
+          return;
+        }
+        const kept = await publishScreenVideo(track, plan);
+        if (kept) {
+          onScreenRepublished?.();
+        }
         return;
       }
       if (plan.topBitrate !== published.topBitrate) {
@@ -1135,20 +1217,19 @@ export async function connectLiveKit({
           plan.topBitrate,
           "screen",
         );
-        publishedScreenPlan = plan;
+        const liveAfterBitrate = screenShareStill(track, epoch);
+        if (!liveAfterBitrate) {
+          return;
+        }
+        publishedScreenPlan = {
+          ...liveAfterBitrate,
+          topBitrate: plan.topBitrate,
+        };
       }
     };
-    const next = (reconciling ?? Promise.resolve())
-      .then(run)
-      .catch((err) => {
-        console.warn("[pqp] SFU screen plan could not be applied", err);
-      })
-      .finally(() => {
-        if (reconciling === next) {
-          reconciling = null;
-        }
-      });
-    reconciling = next;
+    const next = enqueueScreenOp(run).catch((err) => {
+      console.warn("[pqp] SFU screen plan could not be applied", err);
+    });
     return next;
   }
 
@@ -1326,6 +1407,7 @@ export async function connectLiveKit({
     },
 
     async publishScreen(stream: MediaStream) {
+      return enqueueScreenOp(async () => {
       const [videoTrack] = stream.getVideoTracks();
       if (!videoTrack) {
         throw new Error("No video track to publish");
@@ -1336,7 +1418,11 @@ export async function connectLiveKit({
       const hasAudio = Boolean(audioTrack);
       const audioChanged = replacing && hadAudio !== hasAudio;
       const plan = currentScreenPlan();
+      const epoch = screenShareEpoch;
       await constrainScreenCapture(videoTrack, plan.topHeight);
+      if (screenShareEpoch !== epoch) {
+        return;
+      }
 
       // Same sid, same egress, same playlist. A host who picks a different
       // window should not rebuffer every viewer. Gaining or losing the
@@ -1356,6 +1442,12 @@ export async function connectLiveKit({
         typeof local.replaceTrack === "function"
       ) {
         await local.replaceTrack(videoTrack);
+        if (screenShareEpoch !== epoch) {
+          if (publishedScreenTrack !== videoTrack) {
+            await room.localParticipant.unpublishTrack(videoTrack, false);
+          }
+          return;
+        }
         publishedScreenTrack = videoTrack;
         if (audioTrack && publishedScreenAudioTrack) {
           const audioPub = room.localParticipant.getTrackPublication(
@@ -1374,6 +1466,9 @@ export async function connectLiveKit({
 
       if (publishedScreenTrack) {
         await room.localParticipant.unpublishTrack(publishedScreenTrack);
+        if (screenShareEpoch !== epoch) {
+          return;
+        }
       }
       publishedScreenTrack = videoTrack;
       screenCaptureConstraints = null;
@@ -1381,7 +1476,10 @@ export async function connectLiveKit({
       // the library reads its dimensions, so the layers it declares are the
       // layers that exist. See `screenSimulcastPlan` for why height and not
       // a divisor.
-      await publishScreenVideo(videoTrack, plan);
+      const kept = await publishScreenVideo(videoTrack, plan);
+      if (!kept) {
+        return;
+      }
       if (replacing) {
         onScreenRepublished?.();
       }
@@ -1404,34 +1502,43 @@ export async function connectLiveKit({
         dtx: false,
         red: false,
       });
+      });
     },
 
     async unpublishScreenAudio() {
-      if (!publishedScreenAudioTrack) {
-        return;
-      }
-      await room.localParticipant.unpublishTrack(publishedScreenAudioTrack);
-      publishedScreenAudioTrack = null;
+      return enqueueScreenOp(async () => {
+        if (!publishedScreenAudioTrack) {
+          return;
+        }
+        await room.localParticipant.unpublishTrack(publishedScreenAudioTrack);
+        publishedScreenAudioTrack = null;
+      });
     },
 
     async unpublishScreen() {
-      if (publishedScreenAudioTrack) {
-        await room.localParticipant.unpublishTrack(publishedScreenAudioTrack);
-        publishedScreenAudioTrack = null;
-      }
-      if (!publishedScreenTrack) {
-        return;
-      }
-      await room.localParticipant.unpublishTrack(publishedScreenTrack);
-      publishedScreenTrack = null;
-      publishedScreenPlan = null;
-      screenCaptureConstraints = null;
-      // A new share is a new decision. The pin is per broadcast, not per
-      // session: somebody who stops and shares a different window gets the
-      // plan that window and that room call for.
-      screenPlanPinned = false;
-      shorterPlanStreak = 0;
-      tallerPlanStreak = 0;
+      return enqueueScreenOp(async () => {
+        // Invalidate in-flight reconcile before any await so it cannot write
+        // height/bitrate onto a share that no longer exists.
+        screenShareEpoch += 1;
+        if (publishedScreenAudioTrack) {
+          await room.localParticipant.unpublishTrack(publishedScreenAudioTrack);
+          publishedScreenAudioTrack = null;
+        }
+        if (!publishedScreenTrack) {
+          return;
+        }
+        await room.localParticipant.unpublishTrack(publishedScreenTrack);
+        publishedScreenTrack = null;
+        publishedScreenPlan = null;
+        screenCaptureConstraints = null;
+        // A new share is a new decision. The pin is per broadcast, not per
+        // session: somebody who stops and shares a different window gets the
+        // plan that window and that room call for.
+        screenPlanPinned = false;
+        appliedScreenCaptureHeight = null;
+        pendingCaptureHeight = null;
+        captureHeightStreak = 0;
+      });
     },
 
     async publishCamera(stream: MediaStream) {
@@ -1486,21 +1593,10 @@ export async function connectLiveKit({
      */
     async setHlsSource(next: HlsSourceInput | null) {
       hlsSource = next;
-      const published = publishedScreenPlan;
-      if (published && next && next.ladderTopHeight !== null) {
-        // Pin the layers already on the wire the moment a broadcast appears,
-        // even if the share went up before the egress existed. Without this
-        // the first weak uplink reading dropped 1080→720 immediately (pin
-        // still clear), which is a new sid and `screen-track-replaced`.
+      if (publishedScreenPlan && next && next.ladderTopHeight !== null) {
+        // Pin the layers already on the wire the moment a broadcast appears.
+        // Height never republishes after this — see reconcileScreenPlan.
         screenPlanPinned = true;
-        const plan = currentScreenPlan();
-        tallerPlanStreak =
-          plan.topHeight > published.topHeight ? tallerPlanStreak + 1 : 0;
-        shorterPlanStreak =
-          plan.topHeight < published.topHeight ? shorterPlanStreak + 1 : 0;
-      } else {
-        tallerPlanStreak = 0;
-        shorterPlanStreak = 0;
       }
       await reconcileScreenPlan();
     },
@@ -1542,10 +1638,17 @@ export async function connectLiveKit({
       cameraStreams.clear();
       screenAudioStreams.clear();
       qualities.clear();
+      // Do not wait on the screen queue: a stalled publishTrack would leave
+      // the room unable to close. Epoch bump is enough for in-flight ops to
+      // drop their result; the LiveKit room going away drops the rest.
+      screenShareEpoch += 1;
       published = null;
       publishedScreenTrack = null;
       publishedScreenPlan = null;
       screenCaptureConstraints = null;
+      appliedScreenCaptureHeight = null;
+      pendingCaptureHeight = null;
+      captureHeightStreak = 0;
       publishedCameraTrack = null;
       publishedScreenAudioTrack = null;
       await room.disconnect();
