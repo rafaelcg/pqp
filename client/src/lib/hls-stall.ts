@@ -48,6 +48,7 @@ export class HlsStallWatch {
   onPlaying(): void {
     this.waitingSince = null;
     this.triedRecover = false;
+    this.pendingFatal = false;
   }
 
   onWaiting(now: number): void {
@@ -115,7 +116,9 @@ export class HlsStallWatch {
     // teardown reseeds ABR at the bottom rung — so try that once first.
     if (reason !== "sequence-stuck" && !this.triedRecover) {
       this.triedRecover = true;
-      this.pendingFatal = false;
+      // Leave pendingFatal set. If recovery works, `onPlaying` clears it.
+      // If it does not (native Safari has no recoverMediaError, or hls.js
+      // stays dead without a second ERROR), the next tick reconnects.
       return "recover";
     }
     this.reconnects = this.reconnects.filter((at) => now - at < this.windowMs);

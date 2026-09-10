@@ -11,10 +11,14 @@ export interface HlsLadderRungFps {
   framerate?: number;
 }
 
-/** 60 when any named rung is 50 fps or above; 30 otherwise. */
+/** 60 when HLS is on for this server and any named rung is 50 fps or above. */
 export function hlsCaptureMaxFrameRate(
   ladder: readonly HlsLadderRungFps[] | null | undefined,
+  enabled?: boolean,
 ): 30 | 60 {
+  if (enabled !== true) {
+    return 30;
+  }
   if (!ladder || ladder.length === 0) {
     return 30;
   }

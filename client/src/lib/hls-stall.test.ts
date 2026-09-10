@@ -54,10 +54,21 @@ describe("HlsStallWatch", () => {
     watch.onError({ fatal: true });
     expect(watch.tick(T0 + 200)).toBe("recover");
     expect(watch.lastReason).toBe("fatal");
-    watch.onError({ fatal: true });
+    // Recovery was a no-op (native player, or hls.js stayed dead without
+    // another ERROR). The fatal flag is still up, so this tick reconnects
+    // instead of sitting on "none" forever.
     expect(watch.tick(T0 + 300)).toBe("reconnect");
     expect(watch.lastReason).toBe("fatal");
     expect(watch.tick(T0 + 400)).toBe("none");
+  });
+
+  it("a recover that actually plays does not reconnect", () => {
+    const watch = new HlsStallWatch();
+    watch.onSourceChanged(T0);
+    watch.onError({ fatal: true });
+    expect(watch.tick(T0 + 200)).toBe("recover");
+    watch.onPlaying();
+    expect(watch.tick(T0 + 300)).toBe("none");
   });
 
   it("declares the stream dead after three reconnects in five minutes, then a reset starts over", () => {

@@ -1598,7 +1598,10 @@ function MainAppContent({
               ...intent,
               maxFrameRate:
                 intent.maxFrameRate ??
-                hlsCaptureMaxFrameRate(liveHlsConfigRef.current?.ladder),
+                hlsCaptureMaxFrameRate(
+                  liveHlsConfigRef.current?.ladder,
+                  liveHlsConfigRef.current?.enabled,
+                ),
             }
           : intent;
       // Every share start in this file goes through here: the sidebar
@@ -5762,7 +5765,10 @@ function MainAppContent({
             currentUserId={user.id}
             canSpeak={voiceState.canSpeak}
             isAudienceSeat={voiceState.isAudienceSeat}
-            hlsMaxFrameRate={hlsCaptureMaxFrameRate(liveHlsConfig?.ladder)}
+            hlsMaxFrameRate={hlsCaptureMaxFrameRate(
+              liveHlsConfig?.ladder,
+              liveHlsConfig?.enabled,
+            )}
             liveStream={
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }
@@ -5864,7 +5870,10 @@ function MainAppContent({
             currentUserId={user.id}
             canSpeak={voiceState.canSpeak}
             isAudienceSeat={voiceState.isAudienceSeat}
-            hlsMaxFrameRate={hlsCaptureMaxFrameRate(liveHlsConfig?.ladder)}
+            hlsMaxFrameRate={hlsCaptureMaxFrameRate(
+              liveHlsConfig?.ladder,
+              liveHlsConfig?.enabled,
+            )}
             liveStream={
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }
