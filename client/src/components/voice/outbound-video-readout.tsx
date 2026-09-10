@@ -3,6 +3,7 @@ import { useTranslation, type MessageKey } from "@/lib/i18n";
 import {
   describeLimitationAgainst,
   sampleVoiceStats,
+  senderIsEncoding,
   type Limitation,
   type VideoSenderSample,
   type VideoSenderRole,
@@ -197,8 +198,10 @@ export function OutboundVideoReadout({
   }
 
   // A sender exists but has not encoded a frame yet, which is the first second
-  // or two of every camera. Saying "0x0" would read as a fault.
-  if (!camera.width || !camera.height) {
+  // or two of every camera — and a paused simulcast layer that still reports
+  // last frame's 1920×1080 at 0 fps. Saying "0x0" or "0 fps, held back by
+  // your connection" would read as a fault.
+  if (!camera.width || !camera.height || !senderIsEncoding(camera)) {
     return (
       <p className="mt-1 text-xs text-paper-muted">
         {t("settings.voice.videoQuality.measuring")}

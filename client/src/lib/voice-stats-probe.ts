@@ -438,6 +438,52 @@ export function summariseStats(
   return { senders, receivers, paths };
 }
 
+/**
+ * One simulcast layer from `getSenderStats()`, which is the only shape this
+ * picker needs. LiveKit reports one entry per encoding; Chrome pauses the
+ * top one under congestion and leaves it in the list at 0 fps with its
+ * lifetime `bytesSent` intact.
+ */
+export interface VideoSenderLayerLike {
+  framesPerSecond?: number | null;
+  bytesSent?: number | null;
+}
+
+/**
+ * Which layer a person means by "what am I sending".
+ *
+ * Lifetime `bytesSent` picks the layer that has *ever* sent the most, which
+ * is the top one even after congestion paused it: 1920×1080 at 0 fps, 0 kbps,
+ * `qualityLimitationReason` still `bandwidth`. The layer still encoding
+ * (often 720 or 360) is what is actually leaving the machine. Prefer current
+ * fps; fall back to bytes only when every layer is quiet, so the first
+ * second of a share still has a row.
+ */
+export function pickActiveVideoSenderLayer<T extends VideoSenderLayerLike>(
+  layers: readonly T[],
+): T | null {
+  if (layers.length === 0) {
+    return null;
+  }
+  const live = layers.filter((layer) => (layer.framesPerSecond ?? 0) > 0);
+  const pool = live.length > 0 ? live : layers;
+  return pool.reduce((best, layer) => {
+    const fps = layer.framesPerSecond ?? 0;
+    const bestFps = best.framesPerSecond ?? 0;
+    if (fps !== bestFps) {
+      return fps > bestFps ? layer : best;
+    }
+    return (layer.bytesSent ?? 0) > (best.bytesSent ?? 0) ? layer : best;
+  });
+}
+
+/** Whether this sample is an encode in flight, not a paused leftover. */
+export function senderIsEncoding(
+  sample: Pick<VideoSenderSample, "fps" | "kbps">,
+): boolean {
+  return (sample.fps ?? 0) > 0 || (sample.kbps ?? 0) > 0;
+}
+
 /** What is actually holding a sender back, once the two rate limits are split. */
 export type Limitation = "bandwidth" | "setting" | "cpu" | "other";
 
@@ -469,8 +515,15 @@ const AT_CEILING = 0.9;
  * Returns null when nothing is limiting the sender, and falls back to the raw
  * reason whenever the ceiling or the target is missing, because a guess with
  * half the numbers is how the wrong sentence got shipped in the first place.
+ *
+ * A paused simulcast layer keeps `qualityLimitationReason: bandwidth` with
+ * 0 fps and 0 kbps. Naming that "your connection" is how the quality menu
+ * accused fibre of a layer Chrome had already stopped encoding.
  */
 export function describeLimitation(sample: VideoSenderSample): Limitation | null {
+  if (!senderIsEncoding(sample)) {
+    return null;
+  }
   const reason = sample.limitedBy;
   if (!reason || reason === "none") {
     return null;

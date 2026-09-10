@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeLimitation,
+  pickActiveVideoSenderLayer,
   statRows,
   summariseStats,
   type RtcStatLike,
@@ -481,5 +482,47 @@ describe("describeLimitation", () => {
   it("falls back to the raw reason when there is no ceiling to compare to", () => {
     expect(describeLimitation(sample({ ceilingKbps: null }))).toBe("bandwidth");
     expect(describeLimitation(sample({ targetKbps: null }))).toBe("bandwidth");
+  });
+
+  it("says nothing when the layer is not encoding, even if Chrome still says bandwidth", () => {
+    // A paused simulcast encoding keeps qualityLimitationReason and last
+    // frame's size. Naming that "your connection" is how the menu accused
+    // fibre of a layer that had already stopped.
+    expect(
+      describeLimitation(
+        sample({ fps: 0, kbps: 0, limitedBy: "bandwidth", targetKbps: 0 }),
+      ),
+    ).toBeNull();
+    expect(
+      describeLimitation(
+        sample({ fps: null, kbps: null, limitedBy: "bandwidth" }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("pickActiveVideoSenderLayer", () => {
+  it("prefers the layer that is producing frames over the one with more lifetime bytes", () => {
+    const pausedTop = {
+      framesPerSecond: 0,
+      bytesSent: 5_000_000,
+      rid: "q",
+    };
+    const liveMid = {
+      framesPerSecond: 26,
+      bytesSent: 800_000,
+      rid: "h",
+    };
+    expect(pickActiveVideoSenderLayer([pausedTop, liveMid])).toEqual(liveMid);
+  });
+
+  it("falls back to lifetime bytes when every layer is quiet", () => {
+    const top = { framesPerSecond: 0, bytesSent: 5_000_000 };
+    const low = { framesPerSecond: 0, bytesSent: 800_000 };
+    expect(pickActiveVideoSenderLayer([top, low])).toEqual(top);
+  });
+
+  it("returns null for an empty list", () => {
+    expect(pickActiveVideoSenderLayer([])).toBeNull();
   });
 });

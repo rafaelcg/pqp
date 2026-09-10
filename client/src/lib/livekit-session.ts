@@ -34,6 +34,7 @@ import {
 } from "./voice-link-quality";
 import {
   measureKbps,
+  pickActiveVideoSenderLayer,
   registerVoiceStatsSource,
   type VideoReceiverSample,
   type VideoSenderRole,
@@ -83,6 +84,7 @@ interface SenderStatsLike {
   qualityLimitationDurations?: Record<string, number>;
   pliCount?: number;
   nackCount?: number;
+  rid?: string;
 }
 
 /** Where a session starts before anybody has chosen a quality. */
@@ -740,10 +742,12 @@ export async function connectLiveKit({
    *
    * One row per published video source. The library reports one entry per
    * simulcast layer; the camera publishes one and the screen publishes up to
-   * three, and the busiest layer is the one a person means by "what am I
-   * sending". The ceiling is the top layer's, which is what lets
-   * `describeLimitation` tell "sitting on your setting" from "starved by your
-   * link" exactly as it does on the mesh.
+   * three. "Busiest" is the layer currently producing frames, not the one
+   * with the most lifetime bytes: a paused 1080p encoding keeps its
+   * cumulative counter and reads as 0 fps / 0 kbps / `bandwidth` forever
+   * while 720 is still leaving the machine. The ceiling is the published
+   * top's, which is what lets `describeLimitation` tell "sitting on your
+   * setting" from "starved by your link" exactly as it does on the mesh.
    */
   async function sampleSenders(): Promise<VideoSenderSample[]> {
     const rows: VideoSenderSample[] = [];
@@ -770,17 +774,14 @@ export async function connectLiveKit({
       } catch {
         layers = [];
       }
-      const stats = layers.reduce<SenderStatsLike | null>(
-        (best, layer) =>
-          best === null || (layer.bytesSent ?? 0) > (best.bytesSent ?? 0)
-            ? layer
-            : best,
-        null,
-      );
+      const stats = pickActiveVideoSenderLayer(layers);
       if (!stats) {
         continue;
       }
-      const key = `sfu:out:${localPeerId}:${role}`;
+      // Per rid: one key for the whole source treated a layer switch as a
+      // multi-megabit spike, because two encodings do not share a byte
+      // counter.
+      const key = `sfu:out:${localPeerId}:${role}:${stats.rid || "0"}`;
       rows.push({
         peerId: localPeerId,
         role,

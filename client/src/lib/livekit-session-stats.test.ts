@@ -379,6 +379,51 @@ describe("what an SFU presenter is sending", () => {
     });
   });
 
+  it("reports the layer that is encoding, not the paused 1080p leftover", async () => {
+    const sfu = await session();
+    await sfu.setScreenMaxBitrate(4_000_000);
+    await sfu.publishScreen(fakeStream());
+    newestRoom().localPublications.get(Track.Source.ScreenShare)!.videoTrack = {
+      getSenderStats: async () => [
+        {
+          type: "video",
+          timestamp: 2_000,
+          bytesSent: 8_000_000,
+          frameWidth: 1920,
+          frameHeight: 1080,
+          framesPerSecond: 0,
+          framesSent: 2_000,
+          targetBitrate: 0,
+          qualityLimitationReason: "bandwidth",
+          rid: "q",
+        },
+        {
+          type: "video",
+          timestamp: 2_000,
+          bytesSent: 400_000,
+          frameWidth: 1280,
+          frameHeight: 720,
+          framesPerSecond: 26,
+          framesSent: 400,
+          targetBitrate: 1_350_000,
+          qualityLimitationReason: "none",
+          rid: "h",
+        },
+      ],
+    };
+
+    const snapshot = await sampleVoiceStats();
+
+    expect(snapshot.senders).toHaveLength(1);
+    expect(snapshot.senders[0]).toMatchObject({
+      role: "screen",
+      width: 1280,
+      height: 720,
+      fps: 26,
+      limitedBy: "none",
+    });
+  });
+
   it("reports nothing while no video is published", async () => {
     await session();
     const snapshot = await sampleVoiceStats();
