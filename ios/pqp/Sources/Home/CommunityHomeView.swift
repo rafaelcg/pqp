@@ -321,8 +321,8 @@ private struct LockedBox: View {
 }
 
 /// One post's media. Every kind opens *out*: the image in the browser, the
-/// video and the file in Safari or a viewer, YouTube in YouTube. A phone has
-/// better players for all four than a chat app does, and a card that plays
+/// video and the file in Safari or a viewer, YouTube or Twitch in their apps. A phone has
+/// better players for all of those than a chat app does, and a card that plays
 /// sound on scroll is the thing the web's `preload="none"` exists to avoid.
 private struct MediaView: View {
     @Environment(\.openURL) private var openURL
@@ -378,6 +378,17 @@ private struct MediaView: View {
             .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
             .accessibilityLabel(Text("Watch on YouTube"))
             .accessibilityIdentifier("bau.media.youtube")
+        } else if media.isTwitch {
+            ZStack {
+                Palette.surfaceRaised
+                PlayBadge(label: String(localized: "Watch on Twitch"))
+            }
+            .frame(maxWidth: .infinity)
+            .aspectRatio(16 / 9, contentMode: .fit)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+            .accessibilityLabel(Text("Watch on Twitch"))
+            .accessibilityIdentifier("bau.media.twitch")
         } else if media.isVideo {
             ZStack {
                 Palette.surfaceRaised

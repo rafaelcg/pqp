@@ -3465,7 +3465,7 @@ $$;
 -- visibility strips body/media on the wire unless the viewer has MANAGE_SERVER
 -- or the VIP cargo. Likes are a unique (post_id, user_id) pair, never a counter
 -- column. Media bytes live in object storage under community-home/{serverId}/;
--- YouTube is URL-only. Schedule is first-class: scheduled_at + IANA timezone,
+-- YouTube / Twitch are URL-only. Schedule is first-class: scheduled_at + IANA timezone,
 -- published by an in-process catch-up on the single Node process (no worker).
 
 CREATE TABLE IF NOT EXISTS community_home_posts (
@@ -3518,7 +3518,7 @@ BEGIN
     ADD CONSTRAINT community_home_posts_media_kind_check
     CHECK (
       media_kind IS NULL
-      OR media_kind IN ('image', 'video', 'youtube', 'file')
+      OR media_kind IN ('image', 'video', 'youtube', 'twitch', 'file')
     );
 EXCEPTION
   WHEN others THEN NULL;

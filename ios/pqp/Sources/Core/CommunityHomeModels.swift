@@ -40,37 +40,42 @@ struct CommunityHomeConfig: Codable, Sendable, Hashable {
 }
 
 /// One post's media, as the viewer may see it. `url` is a presigned GET for
-/// storage-backed kinds and nil for YouTube; a locked viewer gets no media at
+/// storage-backed kinds and nil for YouTube / Twitch; a locked viewer gets no media at
 /// all (the whole object is nil on the post), never a media with the URL
 /// stripped, so nothing here has to guess at a lock.
 struct CommunityHomeMedia: Codable, Sendable, Hashable {
-    /// `image` / `video` / `youtube` / `file`.
+    /// `image` / `video` / `youtube` / `twitch` / `file`.
     let kind: String
     let name: String
     let contentType: String?
     let byteSize: Int?
     let url: String?
     let youtubeUrl: String?
+    let twitchUrl: String?
 
     var isImage: Bool { kind == "image" }
     var isVideo: Bool { kind == "video" }
     var isYoutube: Bool { kind == "youtube" }
+    var isTwitch: Bool { kind == "twitch" }
     var isFile: Bool { kind == "file" }
     var isGif: Bool { contentType?.lowercased() == "image/gif" }
 
-    /// What a tap opens: the object for storage kinds, the watch page for YouTube.
+    /// What a tap opens: the object for storage kinds, the watch page for YouTube / Twitch.
     var openURL: URL? {
-        URL(string: (isYoutube ? youtubeUrl : url) ?? "")
+        if isYoutube { return URL(string: youtubeUrl ?? "") }
+        if isTwitch { return URL(string: twitchUrl ?? "") }
+        return URL(string: url ?? "")
     }
 
     init(kind: String, name: String = "", contentType: String? = nil, byteSize: Int? = nil,
-         url: String? = nil, youtubeUrl: String? = nil) {
+         url: String? = nil, youtubeUrl: String? = nil, twitchUrl: String? = nil) {
         self.kind = kind
         self.name = name
         self.contentType = contentType
         self.byteSize = byteSize
         self.url = url
         self.youtubeUrl = youtubeUrl
+        self.twitchUrl = twitchUrl
     }
 
     init(from decoder: Decoder) throws {
@@ -81,6 +86,7 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
         byteSize = try c.decodeIfPresent(Int.self, forKey: .byteSize)
         url = try c.decodeIfPresent(String.self, forKey: .url)
         youtubeUrl = try c.decodeIfPresent(String.self, forKey: .youtubeUrl)
+        twitchUrl = try c.decodeIfPresent(String.self, forKey: .twitchUrl)
     }
 }
 

@@ -4941,6 +4941,16 @@
         }
       }
     },
+    "Watch on Twitch" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver na Twitch"
+          }
+        }
+      }
+    },
     "Watch on YouTube" : {
       "localizations" : {
         "pt-BR" : {

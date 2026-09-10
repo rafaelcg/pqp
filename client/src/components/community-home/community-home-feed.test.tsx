@@ -122,6 +122,7 @@ describe("PostCard", () => {
       byteSize: 1024,
       url: "https://bucket.example/sessao-11-clip.webm?sig=1",
       youtubeUrl: null,
+      twitchUrl: null,
     };
     const open = render(
       <PostCard post={post({ media })} me={me} locked={false} canManageServer={false} vipEnabled={false} />,
@@ -290,5 +291,31 @@ describe("PostCard", () => {
       <PostCard post={post()} me={me} locked={false} canManageServer={false} vipEnabled={false} />,
     );
     expect(member).not.toContain("data-home-edit");
+  });
+
+  it("a Twitch post embeds the player with the page host as parent", () => {
+    const html = render(
+      <PostCard
+        post={post({
+          media: {
+            kind: "twitch",
+            name: "Twitch",
+            contentType: null,
+            byteSize: null,
+            url: null,
+            youtubeUrl: null,
+            twitchUrl: "https://www.twitch.tv/moonkaselive",
+          },
+        })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+      />,
+    );
+    expect(html).toContain('data-home-media="twitch"');
+    expect(html).toContain("player.twitch.tv/?channel=moonkaselive");
+    expect(html).toContain("parent=localhost");
+    expect(html).toContain("autoplay=false");
   });
 });

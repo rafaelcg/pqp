@@ -59,8 +59,10 @@ import {
   isPostLockedForViewer,
   loadCommunityHomeViewerMode,
   lockedPostSummary,
-  parseYoutubeVideoId,
+  parseCommunityHomeEmbed,
+  communityHomeEmbedUrl,
   saveCommunityHomeViewerMode,
+  twitchEmbedSrc,
   uploadHomeMedia,
   youtubeEmbedSrc,
   type CommunityHomeComment,
@@ -226,6 +228,13 @@ function MediaCaption({ media }: { media: CommunityHomeMedia }) {
   );
 }
 
+function twitchPlayerParent(): string {
+  if (typeof window !== "undefined" && window.location.hostname) {
+    return window.location.hostname;
+  }
+  return "localhost";
+}
+
 function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
   const { t } = useTranslation();
   if (media.kind === "youtube") {
@@ -243,6 +252,29 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
           src={src}
           className="aspect-video w-full"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+        />
+      </div>
+    );
+  }
+
+  if (media.kind === "twitch") {
+    const src = media.twitchUrl
+      ? twitchEmbedSrc(media.twitchUrl, twitchPlayerParent())
+      : null;
+    if (!src) {
+      return null;
+    }
+    return (
+      <div
+        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
+        data-home-media="twitch"
+      >
+        <iframe
+          title={media.name}
+          src={src}
+          className="aspect-video w-full"
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
           allowFullScreen
         />
       </div>
@@ -1017,15 +1049,19 @@ function composeFromPost(post: CommunityHomePost): ComposeState {
     teaser: post.teaser ?? "",
     visibility: post.visibility,
     commentsEnabled: post.commentsEnabled,
-    youtubeUrl: post.media?.kind === "youtube" ? (post.media.youtubeUrl ?? "") : "",
-    existingMedia: post.media && post.media.kind !== "youtube" ? post.media : null,
+    youtubeUrl: post.media ? (communityHomeEmbedUrl(post.media) ?? "") : "",
+    existingMedia:
+      post.media && post.media.kind !== "youtube" && post.media.kind !== "twitch"
+        ? post.media
+        : null,
   };
 }
 
 /** The post the preview renders, built from what is typed so far. */
 function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOwner: boolean): CommunityHomePost {
   let media: CommunityHomeMedia | null = null;
-  if (state.youtubeUrl.trim() && parseYoutubeVideoId(state.youtubeUrl)) {
+  const embedKind = parseCommunityHomeEmbed(state.youtubeUrl);
+  if (embedKind === "youtube") {
     media = {
       kind: "youtube",
       name: "YouTube",
@@ -1033,6 +1069,17 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
       byteSize: null,
       url: null,
       youtubeUrl: state.youtubeUrl.trim(),
+      twitchUrl: null,
+    };
+  } else if (embedKind === "twitch") {
+    media = {
+      kind: "twitch",
+      name: "Twitch",
+      contentType: null,
+      byteSize: null,
+      url: null,
+      youtubeUrl: null,
+      twitchUrl: state.youtubeUrl.trim(),
     };
   } else if (state.upload) {
     media = {
@@ -1042,6 +1089,7 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
       byteSize: state.upload.byteSize,
       url: state.uploadPreviewUrl,
       youtubeUrl: null,
+      twitchUrl: null,
     };
   } else if (state.existingMedia && !state.clearMedia) {
     media = state.existingMedia;
@@ -1188,7 +1236,7 @@ function ComposeCard({
       setError(t("communityHome.compose.needsTitleAndContent"));
       return;
     }
-    if (state.youtubeUrl.trim() && !parseYoutubeVideoId(state.youtubeUrl)) {
+    if (state.youtubeUrl.trim() && !parseCommunityHomeEmbed(state.youtubeUrl)) {
       setError(t("communityHome.compose.badYoutube"));
       return;
     }
@@ -1365,7 +1413,7 @@ function ComposeCard({
           )}
         </div>
 
-        {/* Media: one of file (when storage is on) or YouTube. */}
+        {/* Media: one of file (when storage is on) or YouTube / Twitch. */}
         <div className="mb-2 grid gap-2 sm:grid-cols-2">
           {mediaEnabled ? (
             <label className="block text-xs text-paper-muted">
