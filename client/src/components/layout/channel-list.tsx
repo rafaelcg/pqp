@@ -1355,6 +1355,15 @@ export function ChannelList({
               <LivePartyBlock
                 parties={liveParties ?? []}
                 selectedChannelId={selectedChannelId}
+                audience={Object.fromEntries(
+                  (liveParties ?? []).map((party) => [
+                    party.channelId,
+                    liveStateForChannel(
+                      channelLive[party.channelId],
+                      voiceOccupancy[party.channelId],
+                    ).viewerCount,
+                  ]),
+                )}
                 canStart={canStartWatchParty === true}
                 onWatch={(channelId) => {
                   onWatchLiveParty(channelId);
