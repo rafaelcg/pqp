@@ -20,6 +20,7 @@ import {
   screenBitrateFor,
   screenScaleFactor,
   screenSimulcastPlan,
+  clampScreenPlanToCapture,
   VIDEO_QUALITIES,
 } from "./video-quality";
 
@@ -516,6 +517,26 @@ describe("the presenter as the ladder's source", () => {
     });
     expect(plan.topHeight).toBe(720);
     expect(plan.topBitrate).toBe(1_500_000);
+  });
+
+  it("does not declare 1080 layers over a 480p capture", () => {
+    const plan = screenSimulcastPlan("auto", 3, LIVE);
+    expect(plan.topHeight).toBe(1080);
+    const clamped = clampScreenPlanToCapture(plan, 480);
+    expect(clamped.topHeight).toBe(480);
+    expect(clamped.topBitrate).toBe(1_000_000);
+    expect(clamped.lowerLayers.map((layer) => layer.height)).toEqual([360]);
+  });
+
+  it("keeps a near-1080 window as 1080", () => {
+    const plan = screenSimulcastPlan("auto", 3, LIVE);
+    expect(clampScreenPlanToCapture(plan, 1078).topHeight).toBe(1080);
+  });
+
+  it("leaves the plan alone when the capture has not reported a size", () => {
+    const plan = screenSimulcastPlan("auto", 3, LIVE);
+    expect(clampScreenPlanToCapture(plan, null).topHeight).toBe(1080);
+    expect(clampScreenPlanToCapture(plan, 0).topHeight).toBe(1080);
   });
 });
 

@@ -2032,7 +2032,10 @@ async function startRoom(
     sfuLoadMbps: await currentSfuLoadMbps(),
     ladderBudgetMbps: ladderBudgetMbps(),
     boxBudgetMbps: promotionBudgetMbps(),
-    sourceHeight: tracks.sourceHeight ?? sourceHeight ?? null,
+    // The host's getSettings() height, when announced, is the pixels. LiveKit
+    // `track.height` is the declared layer and can be the frozen 1080 from a
+    // 480p window. An upscale rung is a wasted x264 and a flapping ABR.
+    sourceHeight: sourceHeight ?? tracks.sourceHeight ?? null,
   });
   const startedAt = Date.now();
   const running: RunningRung[] = [];
