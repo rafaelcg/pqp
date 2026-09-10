@@ -56,6 +56,8 @@ enum class MessageRejectReason(val wire: String) {
      */
     Undeliverable("undeliverable"),
     SlowMode("slow-mode"),
+    /** A server AutoMod rule refused the body. The frame may carry the rule's own copy. */
+    Automod("automod"),
     ;
 
     companion object {
@@ -73,7 +75,11 @@ enum class MessageRejectReason(val wire: String) {
  */
 sealed class SendRefusal {
     /** `reason` is null for a token this build has never heard of. The row still comes down. */
-    data class Rejected(val reason: MessageRejectReason?) : SendRefusal()
+    data class Rejected(
+        val reason: MessageRejectReason?,
+        /** `automodMessage` from the frame: the owner's own words, shown verbatim. */
+        val message: String? = null,
+    ) : SendRefusal()
 
     data class Sanctioned(val message: String) : SendRefusal()
 }
@@ -692,9 +698,10 @@ class ChatViewModel(
         val nonce = frame.string("nonce")
         val reason = MessageRejectReason.fromWire(frame.string("reason"))
         val retryAfterMs = (frame["retryAfterMs"] as? JsonPrimitive)?.longOrNull ?: 0L
+        val automodMessage = frame.string("automodMessage")?.takeIf { it.isNotBlank() }
 
         val sent = nonce?.let { pending.remove(it) }
-        retireAndRestore(listOfNotNull(nonce), sent, SendRefusal.Rejected(reason))
+        retireAndRestore(listOfNotNull(nonce), sent, SendRefusal.Rejected(reason, automodMessage))
 
         val waitMs = when (reason) {
             MessageRejectReason.RateLimited -> retryAfterMs

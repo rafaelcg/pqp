@@ -204,7 +204,7 @@ Delete the `.p12` from disk afterwards. It is a signing key.
 Notarization uploads the signed app to Apple, which scans it and issues a
 ticket. Without it, Gatekeeper quarantines the download and the app reads as
 broken (macOS says "damaged", not "unsigned"). Tooling is `xcrun notarytool`
-(the `altool` path is deprecated and being turned off); electron-builder 25 uses
+(the `altool` path is deprecated and being turned off); electron-builder 26 uses
 notarytool via `@electron/notarize`.
 
 **Option A — App Store Connect API key (recommended for CI).**
@@ -436,6 +436,114 @@ To retest the first-run prompt after granting it once:
 ```bash
 tccutil reset Microphone gg.pqp.app
 ```
+
+### 3.8 The keychain unlock failure, and why it looked like a rotated secret
+
+For two days in September 2026 the macOS job failed on every run while Windows
+and Linux stayed green:
+
+```
+electron-builder --mac -c.mac.notarize=true --publish never
+  ⨯ Exit code: 1. Command failed: /usr/bin/security set-key-partition-list -S apple-tool:,apple: -s -k *** <temp>.keychain
+security: SecKeychainUnlock: The user name or passphrase you entered is not correct.
+```
+
+It was read at the time as a stale `CSC_KEY_PASSWORD`, and the response was to
+path-filter the workflow so it ran less often. Both halves were wrong.
+
+**The cause.** `createKeychain` in `app-builder-lib` 25.1.8 makes a throwaway
+keychain with a random password, unlocks it with that password, imports the
+`.p12` with `security import -P <p12 password>`, and then runs:
+
+```
+security set-key-partition-list -S apple-tool:,apple: -s -k <p12 password> <keychain>
+```
+
+`-k` there is the **keychain's own** unlock password, not the password of the
+item that was just imported. It has been the wrong argument since the line was
+written. The `***` in the CI log is GitHub masking `CSC_KEY_PASSWORD`, which is
+the tell: the secret is correct, it is simply being offered to the wrong door.
+
+**Why it was invisible for years.** `set-key-partition-list` only spends the
+`-k` password when the keychain is locked. While the keychain is still unlocked
+from the `unlock-keychain` two lines earlier, the wrong password is never
+checked and the command succeeds. Reproduce both halves on any Mac:
+
+```bash
+security create-keychain -p correctpw /tmp/kctest.keychain
+security unlock-keychain -p correctpw /tmp/kctest.keychain
+security set-keychain-settings /tmp/kctest.keychain
+
+# unlocked: the wrong password is never looked at
+security set-key-partition-list -S apple-tool:,apple: -s -k WRONGPW /tmp/kctest.keychain
+
+# locked: the exact CI failure
+security lock-keychain /tmp/kctest.keychain
+security set-key-partition-list -S apple-tool:,apple: -s -k WRONGPW /tmp/kctest.keychain
+# security: SecKeychainUnlock: The user name or passphrase you entered is not correct.
+
+security delete-keychain /tmp/kctest.keychain
+```
+
+**What changed.** Nothing in this repo and nothing in the Apple account. The
+`macos-26-arm64` runner image rolled from Darwin 25.5.0 to 25.6.0, and on 25.6.0
+the keychain is locked by the time that command runs. GitHub rolls an image
+across the fleet gradually, so for about a day runs landed on either version and
+the failure looked like a coin flip. Every green macOS build in that window
+reported `os=25.5.0` and every red one `os=25.6.0`, seven for seven. The
+`electron-builder` banner line prints that version, so it is the first thing to
+read when this job disagrees with itself between two runs.
+
+**The fix.** `electron-builder` **26.16.1**, published 2026-09-07, passes the
+keychain password, with a comment naming the mistake. `electron/package.json` is
+on `^26.16.1`. Upstream's own trail, which took three releases to land:
+
+| | |
+|---|---|
+| [#10066](https://github.com/electron-userland/electron-builder/issues/10066) | 2026-08-07, the bug reported against a macOS beta |
+| [#10101](https://github.com/electron-userland/electron-builder/pull/10101) | 2026-08-27, fixed on `master` (the v27 line) |
+| [#10167](https://github.com/electron-userland/electron-builder/issues/10167) | 2026-09-03, the fix is missing from 26.16.0 |
+| [#10172](https://github.com/electron-userland/electron-builder/pull/10172) | 2026-09-03, backported to `release/v26` |
+| 26.16.1 | 2026-09-07, first published version that has it |
+
+That caret is load-bearing, not tidiness. npm's `latest` tag for
+`electron-builder` is still **26.15.3**, which does not have the fix, and both
+npm and pnpm prefer the `latest` version whenever it satisfies the range. The
+first attempt at this fix asked for `^26.15.3`, resolved to 26.15.3, and would
+have shipped the same bug under a version number that looks new. `latest` is
+held back on purpose: `master` is a CommonJS to ESM rewrite for v27 and
+publishes under `next`, while the 26 line lives on `release/v26` and publishes
+under the `v26` tag ([#9864](https://github.com/electron-userland/electron-builder/pull/9864)).
+So `latest` is not the newest 26, and 26.16.0 is newer than the fix report but
+older than the fix. Check the resolved version, never the range:
+
+```bash
+grep 'app-builder-lib@' pnpm-lock.yaml | head -1
+grep -A1 set-key-partition-list \
+  node_modules/.pnpm/app-builder-lib@*/node_modules/app-builder-lib/out/codeSign/macCodeSign.js
+```
+
+The second command must print `keychainPassword`. If it prints `password`, the
+bug is installed. Widening the range to `^26` puts it back.
+
+**One other thing the 25 to 26 upgrade required.** `mac.notarize` accepted
+`{ teamId }` up to 25.1.8 and is a plain boolean from 26.0.0
+([#8582](https://github.com/electron-userland/electron-builder/pull/8582)),
+so the Apple ID fallback in the workflow no longer passes
+`-c.mac.notarize.teamId=...`. It passes `-c.mac.notarize=true` and lets
+`@electron/notarize` read `APPLE_TEAM_ID` from the environment, which the step
+already exports. That branch is dormant while the App Store Connect API key
+secrets are set, so nothing would have failed until the day someone fell back to
+the Apple ID path, which is the worst time to find out. The other 26.0.0
+breaking changes do not touch this config: `win.*` signing fields moved under
+`win.signtoolOptions` (this repo signs Windows through `WIN_CSC_*` env vars, not
+config) and `linux.desktop` became an object (this repo does not set it).
+
+**The second-order lesson.** Path-filtering a workflow to quieten it also cuts
+how often a real failure is seen. The filter earns its place here (a macOS
+runner bills at ten times the Linux rate) but it is not a substitute for
+noticing: nothing today alerts when the desktop build has been red for days, and
+that is why this went unnoticed for 48 hours across 48 failed runs.
 
 ---
 

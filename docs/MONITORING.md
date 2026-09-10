@@ -67,6 +67,8 @@ An alert that fires spuriously gets muted, and then the real one is missed. So:
 | `web-app` | `https://pqp.gg` returns 200 | The SPA on Cloudflare Pages. |
 | `websocket` | `wss://api.pqp.gg/ws` upgrades (101) and answers an invalid auth frame with close code 4401 | **The one a plain HTTP check misses.** Chat, presence and voice signalling all ride this socket; `/health` can be green while every WebSocket is dead. That is CLAUDE.md pitfall #9, verbatim. Needs no credential — an invalid token is enough to prove the upgrade, the message loop and the Clerk call all work. |
 | `fly-machines` | exactly **1** machine, `started`, in `gru` | The machine count is a decision (`fly.toml` `min_machines_running`, `docs/deploy-fly.md` 6a-bis), and this is the continuous half of asserting it: the deploy workflow checks the number at release time, this checks it between deploys, because a stray `fly scale count 2` or a machine Fly recreates after a host failure never goes through a deploy. One today by choice, until the two-machine rehearsal in `docs/STAGING.md` passes with `LIVEKIT_*` set; the code can share state (the bus and the registry are on, and mesh crosses the bus since 2026-09-08). When the flip lands, raise the count in `scripts/monitor/availability.mjs` in the same PR as `fly.toml`. |
+| `worker-image-drift` | `pqp-worker`'s started machine(s) run the same image as `pqp-api`'s | **Added 2026-09-08**, after the gap it would have caught: the deploy workflow's "Deploy the worker (same image)" step started failing silently (`FLY_API_TOKEN_WORKER` could not pull the API's image ref — an app-scoped token cannot read another app's registry), CI stayed red on a step everyone had learned to ignore, and `pqp-worker` sat on a two-day-old image while `pqp-api` redeployed two dozen times. Every job merged in that window — watch-party session reminders, the HLS retention sweep, voice occupancy sampling — was shipped and simply not running anywhere. Needs `FLY_ORG_TOKEN` to list a second app; skips (not fails) without it, and skips cleanly on a fork with no `pqp-worker`. |
+| `live-hls` | `/ready`'s `checks.liveHls` is ok, or the feature is off | The **watch-party** bucket (`LIVE_HLS_S3_*`), which nothing else here watches: `api-health` reads the shallow `/health`, and `status-components`' `storage` probe is the **attachment** bucket (`S3_*`). Two buckets, two key pairs, and one being green has never implied the other; production ran a week with the HLS secrets deployed and every check above green. `skip` while `LIVE_HLS_ENABLED` is off, which is the state it merges in, so it opens nothing until somebody flips the flag and starts watching by itself the moment they do. When it fails, no segment can be written and every watch party is a blank pane. Runbook: `docs/WATCH_PARTY.md`, "Turning it on in production". |
 | `status-components` | no component in `/status.json` is `degraded` or `down` | Bridges the app's own probes (`server/src/services/status.ts`, sampled every minute) to a notification. Without it, the status page is something you have to remember to look at. `disabled` components are ignored — off on purpose is not broken. |
 
 > **Detection time is 10–30 minutes, not 10.** GitHub's cron minimum is 5
@@ -98,7 +100,8 @@ ok and `503` otherwise, with a JSON body that names the failing one:
     "postgres": { "ok": true, "ms": 3 },
     "pool":     { "ok": true, "inUse": 2, "max": 10, "queued": 0 },
     "livekit":  { "ok": true, "ms": 41, "host": "sfu.pqp.gg" },
-    "storage":  { "ok": true, "skipped": true }
+    "storage":  { "ok": true, "skipped": true },
+    "liveHls":  { "ok": true, "skipped": true }
   },
   "version": "<deployed commit>"
 }
@@ -109,7 +112,8 @@ ok and `503` otherwise, with a JSON body that names the failing one:
 | `postgres` | One `SELECT 1` through the pool, 2 s timeout. Fails on error or timeout. |
 | `pool` | Sampled every second in-process. Not ok when `queued > 0` **continuously** for more than 10 s, or `inUse == max` continuously for more than 30 s. A momentary queue (cold start, deploy stampede) never flips it; the run has to be unbroken. |
 | `livekit` | `RoomService.listRooms`, 3 s timeout, result cached 30 s, concurrent callers share one probe. Carries `host`, the SFU hostname from `LIVEKIT_URL` (never the key or secret), so a rollback from `sfu.pqp.gg` to LiveKit Cloud is visible to a monitor. `{ ok: true, skipped: true }` when LiveKit is not configured. |
-| `storage` | A signed `HEAD` of a key that cannot exist (a 404 is a success), same timeout and cache as LiveKit. `skipped` when `S3_*` is unset. |
+| `storage` | A signed `HEAD` of a key that cannot exist (a 404 is a success), same timeout and cache as LiveKit. `skipped` when `S3_*` is unset. This is the **attachment** bucket. |
+| `liveHls` | The same probe against the **watch-party** bucket, which is a different bucket with a different key pair (`LIVE_HLS_S3_*`) and is deliberately not the attachment one. `skipped` unless `LIVE_HLS_ENABLED=true`, so a deployment that does not run watch parties never goes 503 over a bucket it has no reason to own. Once the flag is on, an unreachable or forbidding bucket is a real outage: no segment can be written and every watch party is a blank pane. Production ran for a week with `LIVE_HLS_S3_*` deployed and `/ready` green, and neither fact implied the other, which is why this row exists. |
 
 It leaks nothing useful: component names, booleans, counts and milliseconds,
 plus the one hostname every voice client is already handed (the SFU's). No
@@ -161,6 +165,7 @@ third-party monitor:
 |---|---|
 | `/health` | **Fly's own health check** (`fly.toml`, 30s/5s), and it gates every release. Its semantics belong to the deploy, not to us. It also returns `version` — the deployed commit — which is fine for the platform and is not something to hand an anonymous poller forever. |
 | `/status.json` | **Returns 200 while reporting components as down.** The state is in the JSON body, so a status-code monitor never fires. Our own GitHub check reads the body (`status-components` above), which is exactly why nobody noticed. |
+| `latencyMs` on `/status.json` | **Absent is not zero, and a missing field is not a fast probe.** A component whose health is inferred rather than measured omits the field entirely: the API cannot time its own round trip from inside itself, and mesh voice has no server-side media to time. A monitor that reads a missing `latencyMs` as `0` will report the fastest dependency on the instance. Read presence first. |
 
 So `/up` is a third path whose entire contract is the status code.
 
@@ -192,6 +197,27 @@ Things that are **deliberately still 200**:
   deploy.
 - **A degraded optional component** — object storage, GIF search, the SFU.
   Those are on `/status.json` and in the `status-components` check.
+
+**What is measured and what is inferred.** `database` and `storage` are timed
+on every read. `voice` reports the SFU's **last** answer and `gifs` a real
+search against the provider every fifteen minutes; both readings are taken by
+the once-a-minute sampler (`refreshSlowProbes`), never by serving
+`/status.json`, because that endpoint is public and must not be able to make
+the API call a third party or wait on one. A reading older than its window is
+dropped rather than shown, so a stopped sampler degrades to "not measured"
+instead of to an hour-old green. `api` is never measured and never will be.
+
+The GIF probe is **bounded and never awaited**: 8 seconds hard, one probe in
+flight at a time, and the sampler writes its row whatever the provider is
+doing. A probe that runs out of time is recorded as `degraded`, not as
+`operational` — we asked and got nothing back — and is **not** written to
+`status_samples`, so an unknown minute neither inflates nor deflates uptime.
+After a bad probe the next attempt is one minute later rather than fifteen, so
+a recovery shows up quickly and one blip cannot hold the component red for
+long enough to page anybody.
+The operator dashboard additionally reads 24 hours of bucketed latency per
+component (`statusHistory` on `/api/admin/metrics`, behind the machine token):
+a latency curve is a load curve, so it stays off the public page.
 
 **It leaks nothing.** No version, no counts, no hostnames, no timings, no error
 text. An unauthenticated endpoint that says *which* dependency is unhappy is
@@ -349,9 +375,11 @@ most natural way to write the exact claim the check exists to catch.
 
 ## Setup
 
-The uptime workflow needs **nothing new** — it uses the built-in `GITHUB_TOKEN`
-and the existing `FLY_API_TOKEN`. The limits workflow degrades gracefully: each
-unconfigured check reports `SKIP` with the exact credential it wants.
+The uptime workflow needs **nothing new** to run — it uses the built-in
+`GITHUB_TOKEN` and the existing `FLY_API_TOKEN`, and `worker-image-drift`
+degrades to `SKIP` without `FLY_ORG_TOKEN` rather than failing. The limits
+workflow degrades the same way: each unconfigured check reports `SKIP` with
+the exact credential it wants.
 
 To turn the remaining ones on:
 
@@ -370,6 +398,12 @@ gh variable set MONITOR_MPG_CLUSTER --body 9g6y30wdxzmrv5ml   # pqp-db-2, the pr
 *different app* (`pqp-support`), which the app-scoped deploy token cannot see.
 Without `FLY_ORG_TOKEN` that check `SKIP`s — visibly, with the fix in the
 message — and `api-error-rate` still runs on the deploy token.
+
+**So does `worker-image-drift`.** It lists `pqp-worker`'s machines to compare
+against `pqp-api`'s, same cross-app read as the two above. Without
+`FLY_ORG_TOKEN` it `SKIP`s rather than reporting a false pass — the whole
+point of the check is to catch the worker silently not being the app it looks
+like it can see.
 
 ### 2. R2 and Pages — check what the stored Cloudflare token can do
 
@@ -473,7 +507,7 @@ These are printed at the end of every `limits` run as well.
 | **Errors the server never logs** | — | The error heartbeat reads stdout. A route that 500s without a `console.error`, or anything that fails in the browser, is invisible to it. It measures what the server says about itself, which is not what users experience. | n/a |
 | **Scheduled workflows still enabled** | — | **GitHub disables scheduled workflows after 60 days with no repository activity.** A repo that goes quiet loses its monitoring silently. | Monthly: confirm `Monitor (uptime)` has run recently in the Actions tab |
 | **GitHub Actions minutes** | Unlimited | rafaelcg/pqp is a **public** repository and Actions minutes are free and unmetered for public repos. There is no quota to hit, so no alert was built — one would never fire. This becomes real only if the repo is ever made private. | Never, unless the repo goes private |
-| **LiveKit usage (minutes and egress)** | 5 TB/month of transfer on the Vultr plan | **Closed 2026-09-07.** Grafana Alloy on the box exports vnstat's monthly egress and alerts at 60% and 80% of the allowance, alongside CPU, memory, disk, load, room and participant counts, and container state. See "The SFU box" below. | automated |
+| **LiveKit usage (minutes and egress)** | 6 TB/month of transfer on the Vultr plan | **Closed 2026-09-07.** Grafana Alloy on the box exports vnstat's monthly egress and alerts at 60% and 80% of the allowance, alongside CPU, memory, disk, load, room and participant counts, and container state. See "The SFU box" below. | automated |
 
 ---
 
@@ -592,6 +626,7 @@ https://smallkestrel237.grafana.net/d/pqp-api-events
 | WS auth failures, floods | `ws.authFail`, `ws.authTimeout`, `ws.flood`, `ws.heartbeatTerminate`, `ws.backpressureDrop` |
 | Account created | `turma1000.stamped` (see the gap below) |
 | Calls and watch parties | `voice.callRing`, `voice.callEnded`, `voice.watchPartyStart`, `voice.watchPartyEnd` |
+| Voice seat health (hourly) | `voice.seats`, `voice.ghostSeatsSwept`, `voice.staleRowWrite`, `voice.meshHoldRefused`. See the section below: one of these is the signal for a switch that is deliberately waiting to be turned on |
 | Last 50 error lines | the error filter above, newest first |
 
 Alert rules (folder `pqp`, group `pqp-api-logs`, evaluated every minute,
@@ -612,6 +647,75 @@ Gap worth closing: **there is no signup event.** `insertNewUser` in
 emits is `turma1000.stamped`, which stops after the 1000th account. Add
 `logEvent("user.created", { userId })` there when a server change is going out
 anyway (`restarts-api`), then point the "Account created" panel at it.
+
+### Voice seat health, and the one switch that is waiting to be flipped
+
+Once an hour the API writes a `voice.seats` line. It is the only place these
+numbers are written down at all: `GET /api/admin/metrics` is a pull, polled by
+the operator dashboard and stored nowhere, so before this line no panel and no
+alert could be built on any of it.
+
+```
+[pqp] voice.seats idleOverAnHour=3 oldestIdleMinutes=142 ghostsSwept=0 \
+      staleRowWritesRefused=0 meshHoldsRefused=0 meshResumeSockets=41 \
+      sockets=58 requiresCap=false
+```
+
+| Field | Healthy | What a bad reading means |
+|---|---|---|
+| `idleOverAnHour` | small, and it comes back down | Seats nobody has written to in an hour. A seat is written on join, on every state change and on resume, so a row untouched that long is either somebody genuinely silent or a seat with nobody behind it. **Climbs and never falls is the leak shape**: on 2026-09-08 ten of nineteen rooms held exactly one such person, the oldest for fifteen hours |
+| `oldestIdleMinutes` | under a few hundred | The worst of them. Hours is worth a look; a full day is not a person |
+| `ghostsSwept` | **0** | Rows this instance owned with no peer behind them, reclaimed by `sweepOwnStaleVoicePeers`. Anything above zero is a path that got past the guards in `ws/voice.ts`, and it resets on deploy |
+| `staleRowWritesRefused` | **0** | Handlers caught trying to write a seat that was already released. Above zero means the guard is earning its keep and something upstream is racing |
+| `meshHoldsRefused` | 0 until the flip | Mesh seats released at once instead of held. Stays 0 while `requiresCap=false` |
+| `meshResumeSockets` / `sockets` | see below | The flip signal |
+| `requiresCap` | matches what you set | Whether `VOICE_MESH_RESUME_REQUIRES_CAP` is on. If this says `false` when you believe you turned it on, the secret did not land |
+
+#### `VOICE_MESH_RESUME_REQUIRES_CAP` is off, and somebody has to turn it on
+
+**What it is for.** When a socket drops, the server holds its voice seat for 90
+seconds so a refresh mid-call keeps its place. That only helps a client that
+can actually rebuild its media. Browsers can, on mesh and on LiveKit. Phones
+cannot on mesh: they tear the peer connections down and cold rejoin with a new
+id. An iOS build claimed otherwise for every room (it read `GET
+/api/voice/backend`, which answers what a *new* room on this deployment would
+be pinned to, not what *this* room is), and since every conversation call is
+mesh by policy, **every DM call from an iPhone left a phantom participant for
+90 seconds**.
+
+Setting it to `true` makes the server release a mesh seat immediately for any
+socket that did not declare the `mesh-resume` capability. Web and Electron
+declare it; phones do not. LiveKit rooms are untouched either way.
+
+**Why it shipped off.** An API deploy reconnects open tabs without reloading
+them, so on the deploy that carried this every browser in a mesh call was still
+running a bundle that predates the capability. Turning it on in the same breath
+would have traded a cosmetic ghost for a real cold rejoin on live calls.
+
+**When to flip.** Read `meshResumeSockets` against `sockets` over a few days.
+Phones never declare the capability, so it does not converge on the total; it
+converges on the browser share. Flip when it has plateaued, which means the
+browsers still connecting are the ones that are never going to declare it.
+
+```bash
+# the trend, over a week
+{fly_app_name="pqp-api"} |= "voice.seats"
+
+fly secrets set VOICE_MESH_RESUME_REQUIRES_CAP=true --app pqp-api
+```
+
+`restarts-api`, so treat it like any other deploy and pick a quiet moment.
+
+**Afterwards.** `requiresCap=true` on the next hourly line confirms it landed.
+`meshHoldsRefused` should start climbing slowly: that is phones no longer
+leaving ghosts, which is the point. `idleOverAnHour` should trend down. If
+`meshHoldsRefused` climbs *fast* and users report being dropped from calls,
+`fly secrets unset VOICE_MESH_RESUME_REQUIRES_CAP --app pqp-api` is the whole
+rollback.
+
+The client half of the same bug is in the iOS app (#411) and only reaches
+people who update. This switch reaches every build already on a phone, which
+is the reason it exists.
 
 ### Adding a panel
 
@@ -660,8 +764,8 @@ the synthetic HTTP check on `sfu.pqp.gg` (id 6261), which answers "the port is
 open" and nothing else. It could not see a saturated CPU, a full disk, a
 container that exited, or the number that actually costs money: **transfer**.
 
-The plan includes **5 TB of transfer a month**. Organic use measures about
-4 GB a day, so a normal month is roughly 2% of it. One large watch party can
+The plan includes **6 TB of transfer a month** on `vhp-4c-8gb-amd`. Organic
+use measures about 4 GB a day, so a normal month is roughly 2% of it. One large watch party can
 cost several hundred GB, and a load test costs that in minutes. Overage is
 about a cent per GB, so this is not a cliff, it is a bill: the point of the
 alerts is that nobody has to open a dashboard and do arithmetic to find out
@@ -709,7 +813,7 @@ list, so the port is local only. Nothing had to be restarted to turn this on.
 **pqp SFU box**, folder `pqp`, uid `pqp-sfu-box`:
 https://smallkestrel237.grafana.net/d/pqp-sfu-box
 
-Allowance used and egress against the 5 TB line, network throughput, CPU,
+Allowance used and egress against the plan allowance, network throughput, CPU,
 memory, load, disk, LiveKit rooms and participants, packet loss, and the two
 containers' up/down.
 
@@ -720,12 +824,12 @@ contact point `rafael-email`.
 
 | Rule | Fires when | For |
 |---|---|---|
-| egress past 60% of the monthly allowance | 3.0 TB out in the last 30 days | 15m |
-| egress past 80% of the monthly allowance | 4.0 TB out in the last 30 days | 15m |
-| CPU above 85% | 2 vCPU, so this is a room the box cannot serve | 10m |
+| egress past 60% of the monthly allowance | 3.6 TB out in the last 30 days | 15m |
+| egress past 80% of the monthly allowance | 4.8 TB out in the last 30 days | 15m |
+| CPU above 85% | averaged across the 4 vCPU, so this is a load the box cannot serve | 10m |
 | less than 10% memory available | LiveKit gets OOM-killed rather than degrading | 10m |
 | root filesystem above 85% | usually journald or docker images | 15m |
-| load average above 4 | `node_load5` on 2 vCPU: things are queueing | 10m |
+| load average above 6 | `node_load5` on 4 vCPU: past full, so work is queueing. Rescale this with the plan, it is the one rule that counts cores | 10m |
 | **no metrics for 10m** | the box is down, or Alloy on it is. `noDataState = Alerting`, deliberately: silence is the alert | 10m |
 | a docker container is not running | per container, by name | 3m |
 | a docker container restarted | `changes(pqp_sfu_container_started_seconds[10m]) > 0`; catches a policy restart *and* a `docker compose up` recreation, which resets `RestartCount` to 0 | 0s |
@@ -751,9 +855,16 @@ The allowance is a metric, not a threshold, so the alerts stay at 60% and 80%
 whatever the plan is:
 
 1. Edit `PQP_EGRESS_ALLOWANCE_BYTES` in
-   `tools/sfu-monitoring/pqp-box-metrics.py` (default `5_000_000_000_000`,
-   5 TB read as 10^12 bytes, the smaller of the two readings of "TB", so the
+   `tools/sfu-monitoring/pqp-box-metrics.py` (default `6_000_000_000_000`,
+   6 TB read as 10^12 bytes, the smaller of the two readings of "TB", so the
    percentage errs high).
+
+   Resizing the instance changes the included transfer and nothing notices on
+   its own, so this is part of a resize, not an afterthought. Read the true
+   figure from `GET /v2/plans` (`bandwidth`, the full month in GB) rather than
+   the pricing page. `allowed_bandwidth` on the instance is the prorated amount
+   accrued so far this billing period, which is what an overage is measured
+   against and is the stricter number early in a month.
 2. Re-run the installer (below). The next minute's scrape carries the new
    `pqp_sfu_egress_allowance_bytes` and every panel and rule follows.
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { MESSAGE_BULK_DELETE_MAX } from "@pqp/shared";
 import { Button } from "@/components/ui/button";
-import { Dialog } from "@/components/ui/dialog";
+import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
@@ -76,6 +76,7 @@ export function BulkPurgeDialog({
         </div>
       }
     >
+      <DialogBody>
       <fieldset className="min-w-0">
         <legend className="mb-2 text-xs font-medium uppercase tracking-wide text-paper-muted">
           {t("chat.purge.howMany")}
@@ -99,6 +100,7 @@ export function BulkPurgeDialog({
           ))}
         </div>
       </fieldset>
+      </DialogBody>
     </Dialog>
   );
 }

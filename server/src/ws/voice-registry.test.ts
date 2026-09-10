@@ -293,7 +293,11 @@ describeDb("voice registry", () => {
 
       removeVoicePeerBySocket(a.socket);
       await settleVoiceRegistryWrites();
-      expect((await peerRow(peerId))?.orphaned_at).not.toBeNull();
+      // Held, not deleted. `?.orphaned_at` on its own would have passed on a
+      // row that was removed outright, which is the opposite result.
+      const orphaned = await peerRow(peerId);
+      expect(orphaned).toBeDefined();
+      expect(orphaned?.orphaned_at).toBeInstanceOf(Date);
 
       const b = await join(recorder(), userId, channel, {
         resumePeerId: peerId,

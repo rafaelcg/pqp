@@ -163,6 +163,71 @@ export type UplinkSample = number | null;
  * not be read; the count is what says how much of the room the readable ones
  * speak for.
  */
+/**
+ * The paths that are plausibly dividing ONE uplink, out of everything readable.
+ *
+ * ONE BAD PATH IS NOT A SMALL UPLINK, and separating them is the whole
+ * difficulty. A path far narrower than the widest one is bottlenecked
+ * somewhere that is not shared (that viewer's own downlink, or a relay
+ * carrying just that pair), because anything genuinely shared would be
+ * squeezing the others too. Such a path is dropped from the reading, and the
+ * browser goes on throttling it by itself on that one connection, under
+ * whatever ceiling this sets.
+ *
+ * Two earlier models failed here, both measured on the harness. Summing every
+ * path read one 50 kbps viewer as a 50 kbps uplink and walked a fibre room to
+ * its floor in three ticks. Budgeting from the widest path alone read one good
+ * viewer as a wide uplink, and since every reading is bounded by the ceiling
+ * we set, the budget ended up tracking its own past output and sat 2.8x over a
+ * 1 Mbps link forever.
+ *
+ * An outlier is by definition the exception. If dropping the narrow paths
+ * would discard half the room or more, they are not outliers, they are the
+ * room, and what looked like one bad path is a link everybody is dividing
+ * unevenly. Without that second rule, a 1 Mbps uplink split 40/10/10/10/10/10/10
+ * across seven viewers dropped six readings and budgeted 2.8 Mbps from the
+ * seventh.
+ */
+function sharingPaths(readable: readonly number[]): number[] {
+  const bestPath = Math.max(...readable);
+  const candidates = readable.filter((s) => s >= bestPath * OUTLIER_FRACTION);
+  return candidates.length * 2 >= readable.length ? candidates : [...readable];
+}
+
+/**
+ * WHAT THE ROOM'S UPLINK MEASURED, in bit/s, or null when there is nothing to
+ * measure.
+ *
+ * The mean of the paths that are plausibly dividing one link, times the room:
+ * those paths tell us what a copy costs, and there is a copy per viewer. Peers
+ * that could not be read are assumed to look like the ones that could, which
+ * is why this scales the mean rather than adding a sum.
+ *
+ * PULLED OUT OF THE CONTROLLER SO THE SERVER CAN BE TOLD THE SAME NUMBER.
+ * `meshVideoLimit` in `@pqp/shared` decides how many cameras and shares a mesh
+ * room may hold from exactly this reading, and the controller decides what
+ * bitrate each of them gets from exactly this reading, and the two must not be
+ * two different models of the same link. Fewer than two connections returns
+ * null for the reason in `nextScreenUploadBudget`: a 1:1 call is the browser's
+ * to govern and there is nothing here to divide.
+ */
+export function measuredUploadBudgetBps(
+  samples: readonly UplinkSample[],
+): number | null {
+  const peers = samples.length;
+  if (peers < 2) {
+    return null;
+  }
+  const readable = samples.filter(
+    (s): s is number => typeof s === "number" && Number.isFinite(s) && s > 0,
+  );
+  if (readable.length === 0) {
+    return null;
+  }
+  const sharing = sharingPaths(readable);
+  return (sharing.reduce((sum, s) => sum + s, 0) / sharing.length) * peers;
+}
+
 export function nextScreenUploadBudget(
   current: number,
   samples: readonly UplinkSample[],
@@ -193,35 +258,9 @@ export function nextScreenUploadBudget(
   }
 
   const perPeer = current / peers;
+  const measured = measuredUploadBudgetBps(samples)!;
 
-  // ONE BAD PATH IS NOT A SMALL UPLINK, and separating them is the whole
-  // difficulty. A path far narrower than the widest one is bottlenecked
-  // somewhere that is not shared — that viewer's own downlink, or a relay
-  // carrying just that pair — because anything genuinely shared would be
-  // squeezing the others too. Such a path is dropped from the reading, and the
-  // browser goes on throttling it by itself on that one connection, under
-  // whatever ceiling this sets.
-  //
-  // Two earlier models failed here, both measured on the harness. Summing
-  // every path read one 50 kbps viewer as a 50 kbps uplink and walked a fibre
-  // room to its floor in three ticks. Budgeting from the widest path alone
-  // read one good viewer as a wide uplink, and since every reading is bounded
-  // by the ceiling we set, the budget ended up tracking its own past output
-  // and sat 2.8x over a 1 Mbps link forever.
-  const bestPath = Math.max(...readable);
-  const candidates = readable.filter((s) => s >= bestPath * OUTLIER_FRACTION);
-  // An outlier is by definition the exception. If dropping the narrow paths
-  // would discard half the room or more, they are not outliers, they are the
-  // room, and what looked like one bad path is a link everybody is dividing
-  // unevenly. Without this, a 1 Mbps uplink split 40/10/10/10/10/10/10 across
-  // seven viewers dropped six readings and budgeted 2.8 Mbps from the seventh.
-  const sharing = candidates.length * 2 >= readable.length ? candidates : readable;
-
-  // The mean of what is left, times the room: the paths that are plausibly
-  // dividing one link tell us what a copy costs, and there is a copy per
-  // viewer. Peers that could not be read are assumed to look like the ones
-  // that could, which is why this scales the mean rather than adding a sum.
-  const measured = (sharing.reduce((sum, s) => sum + s, 0) / sharing.length) * peers;
+  const sharing = sharingPaths(readable);
 
   if (measured < current * CUT_BELOW) {
     const cut = Math.max(MIN_SCREEN_UPLOAD_BUDGET_BPS, Math.round(measured));

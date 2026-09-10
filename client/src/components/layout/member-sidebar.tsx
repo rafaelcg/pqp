@@ -1,4 +1,20 @@
-import { ChevronDown, ChevronRight, Search, X } from "lucide-react";
+import {
+  AtSign,
+  Ban,
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  Flag,
+  Gavel,
+  Search,
+  TimerOff,
+  TimerReset,
+  UserMinus,
+  UserPen,
+  Users,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import {
   useEffect,
   useMemo,
@@ -143,6 +159,14 @@ interface MemberSidebarProps {
 }
 
 /** A row, as the profile card wants it. */
+
+const MODERATION_ICON: Record<ProfileModerationAction, LucideIcon> = {
+  timeout: TimerOff,
+  endTimeout: TimerReset,
+  kick: UserMinus,
+  ban: Gavel,
+};
+
 function subjectOf(member: ServerMember): ProfileSubject {
   return {
     id: member.id,
@@ -410,6 +434,7 @@ export function MemberSidebar({
       items.push({
         id: "public-profile",
         label: t("profile.viewPublic"),
+        icon: ExternalLink,
         onSelect: () => {
           window.open(publicHref, "_blank", "noopener,noreferrer");
         },
@@ -420,6 +445,7 @@ export function MemberSidebar({
       items.push({
         id: "mention",
         label: t("memberList.mention"),
+        icon: AtSign,
         onSelect: () => onMention(username),
       });
     }
@@ -431,6 +457,7 @@ export function MemberSidebar({
       items.push({
         id: "nickname",
         label: t("member.nickname"),
+        icon: UserPen,
         onSelect: () => void changeNickname(member),
       });
     }
@@ -447,6 +474,7 @@ export function MemberSidebar({
         items.push({
           id: `mod-${rung}`,
           label: moderationActionLabel(rung, t),
+          icon: MODERATION_ICON[rung],
           danger: moderationNeedsConfirmation(rung),
           onSelect: () => {
             if (rung === "endTimeout") {
@@ -473,11 +501,13 @@ export function MemberSidebar({
           ? {
               id: "unblock",
               label: t("profile.unblock"),
+              icon: Ban,
               onSelect: () => onUnblockUser(member.id),
             }
           : {
               id: "block",
               label: t("profile.block"),
+              icon: Ban,
               onSelect: () => onBlockUser(member.id),
               danger: true,
             },
@@ -486,6 +516,7 @@ export function MemberSidebar({
         items.push({
           id: "report",
           label: t("profile.report"),
+          icon: Flag,
           onSelect: () => onReportUser(member),
           danger: true,
         });
@@ -498,6 +529,7 @@ export function MemberSidebar({
       items.push({
         id: "manage",
         label: t("memberList.manage"),
+        icon: Users,
         onSelect: onOpenMembersPanel,
       });
     }

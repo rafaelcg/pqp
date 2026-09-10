@@ -87,19 +87,54 @@ interface MdastNode {
   type: string;
   value?: string;
   children?: MdastNode[];
+  data?: { hName?: string; hProperties?: Record<string, string> };
 }
 
-/** Drop the filler so copy/paste does not carry a zero-width character. */
+/** The class the stylesheet sizes a blank line with. */
+export const CHAT_BLANK_LINE_CLASS = "chat-blank";
+
+function isFiller(node: MdastNode): boolean {
+  return node.type === "text" && node.value === CHAT_NEWLINE_FILLER;
+}
+
+/**
+ * Drop the filler so copy/paste does not carry a zero-width character.
+ *
+ * A blank line arrives as `br, filler, br`: two breaks, so it used to stand a
+ * full line tall. The second break becomes a short spacer instead, so a blank
+ * line reads as a pause rather than a hole. Its height is `.chat-blank` in
+ * the stylesheet. A filler with no break after it (the message ends on a
+ * blank line) is simply dropped.
+ */
 export function remarkStripNewlineFillers() {
   return (tree: MdastNode) => {
     function walk(node: MdastNode) {
       if (!node.children) {
         return;
       }
-      node.children = node.children.filter((child) => {
+      const out: MdastNode[] = [];
+      const children = node.children;
+      for (let i = 0; i < children.length; i += 1) {
+        const child = children[i]!;
         walk(child);
-        return !(child.type === "text" && child.value === CHAT_NEWLINE_FILLER);
-      });
+        if (!isFiller(child)) {
+          out.push(child);
+          continue;
+        }
+        const next = children[i + 1];
+        if (next?.type === "break") {
+          out.push({
+            type: "text",
+            value: "",
+            data: {
+              hName: "span",
+              hProperties: { className: CHAT_BLANK_LINE_CLASS },
+            },
+          });
+          i += 1;
+        }
+      }
+      node.children = out;
     }
     walk(tree);
   };

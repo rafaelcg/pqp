@@ -429,9 +429,16 @@ data class VoiceSessionRequest(
     val peerId: String,
     /**
      * The resume HMAC `welcome` handed out for this peer id. Optional on the
-     * wire; this client does not send it yet (null is not encoded, see
-     * `PqpJson`), and the server then proves ownership against its own peer
-     * map, which is exact on a single instance.
+     * wire, and null is not encoded (see `PqpJson`), so a `welcome` from a
+     * server that predates the field still mints a token: the server then
+     * proves ownership against its own peer map, which is exact on a single
+     * instance.
+     *
+     * Sent when we have one, because the peer map is *not* exact once the API
+     * runs on more than one machine: HTTP is balanced per request and the
+     * socket lives on one of them, so a mint can land on an instance that
+     * never saw this peer. The HMAC already binds user, peer and channel, so
+     * it is the proof that works from anywhere.
      */
     val resumeToken: String? = null,
 )

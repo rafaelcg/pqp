@@ -310,6 +310,15 @@ already draw:
 There is no `lg` button and no `sm` input. Do not add one without a surface that
 needs it.
 
+The message list is the one exception, and it is the user's choice rather than
+the system's. Settings > Appearance sets three root variables that the list and
+the preview block in Settings both read: `--chat-font-size` (12 to 24px, default
+15), `--chat-line-height` (22/15 of the size) and `--chat-group-gap` (0 to 24px
+above a new group, default 8). Compact density is state, not CSS: the message
+row reads it from the store and drops the avatar for a time on every line. The store is `client/src/lib/chat-display.ts`; the
+boot script in `index.html` paints the stored values before the bundle loads,
+and the values follow the account through `preferences.chatDisplay`.
+
 Touch targets: a row control (Switch, CheckRow) makes the whole row the hit
 target rather than shipping a 16px native tick. A tooltip is inert on touch by
 design, so any explanation a phone user needs is said out loud on the surface.
@@ -356,7 +365,9 @@ so a variant and a size are props, not class strings.
 `switch.tsx`. An independent on/off bit, with the whole row as the hit target.
 
 - Props are `checked`, `onCheckedChange`, `label`, and an optional
-  `description` and `title`.
+  `description`, `title` and `hideLabel`. `hideLabel` keeps the label for
+  assistive tech and paints only the track, for a switch that sits beside a
+  row that already names the setting.
 - **States.** Track goes accent when on, surface with an inset ring when off.
   Disabled dims the track and blocks the pointer.
 - **Use it** for a list of independent settings. **Do not** use it for one of

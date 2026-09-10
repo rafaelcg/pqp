@@ -1,10 +1,58 @@
 name: CI
 
+# A docs-only (or Android/iOS/monitor-only) change does not need Playwright.
+# paths-ignore skips the run when EVERY file in the push matches; a mixed PR
+# that also touches client/ or server/ still runs.
+# The two lists are duplicated: GitHub does not expand YAML anchors (an
+# alias here becomes an empty filter and the workflow runs on everything).
+# Do not add tools/support-bot or scripts/monitor — those have tests here.
+# Do not add tools/admin-dashboard or tools/ambient — root `eslint .` lints both,
+# and admin-dashboard has a `node --test` step of its own below.
+# Do not add **/*.md — blog/What's New markdown lives under client/.
+# If branch protection later requires `checks` / `e2e`, a skipped paths-ignore
+# run is treated as pending forever. Do not require those checks without a
+# filter that still reports success.
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "android/**"
+      - "ios/**"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "ARCHITECTURE.md"
+      - "LICENSE"
+      - ".github/FUNDING.yml"
+      - ".github/workflows/android.yml"
+      - ".github/workflows/electron.yml"
+      - ".github/workflows/monitor-*.yml"
+      - ".github/workflows/pr-size-label.yml"
+      - ".github/workflows/provision-turn.yml"
+      - "tools/db-backup/**"
+      - "tools/sfu/**"
+      - "tools/log-shipper/**"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "android/**"
+      - "ios/**"
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "ARCHITECTURE.md"
+      - "LICENSE"
+      - ".github/FUNDING.yml"
+      - ".github/workflows/android.yml"
+      - ".github/workflows/electron.yml"
+      - ".github/workflows/monitor-*.yml"
+      - ".github/workflows/pr-size-label.yml"
+      - ".github/workflows/provision-turn.yml"
+      - "tools/db-backup/**"
+      - "tools/sfu/**"
+      - "tools/log-shipper/**"
   workflow_dispatch:
 
 concurrency:
@@ -78,8 +126,11 @@ jobs:
       - name: Build server
         run: pnpm --filter @pqp/server build
 
+      # Client/shared/electron tests do not need Postgres. Server suites do,
+      # and they run serially (one database). Parallel here overlaps the
+      # cheap packages with the 4-minute server run instead of stacking them.
       - name: Test
-        run: pnpm test
+        run: pnpm run -r --parallel test
 
       # `scripts/` is outside the pnpm workspace, so `pnpm test` never saw it.
       # That was fine while the monitor was only "fetch a URL, look at the
@@ -95,6 +146,13 @@ jobs:
       - name: Test monitor scripts
         run: node --test scripts/monitor/*.test.mjs
 
+      # Same reason as the monitor scripts above, with a sharper edge: this one
+      # decides whether merging drops every live WebSocket. It used to be a
+      # `grep` inside deploy-api-fly.yml, where the only way to learn what it
+      # did was to merge something and watch.
+      - name: Test deploy relevance
+        run: node --test scripts/deploy/*.test.mjs
+
       # `tools/support-bot` is outside the workspace too, for the reason its
       # README gives, so `pnpm test` never saw it either. It is the one thing in
       # this repo that writes into a public channel on its own judgement: the
@@ -103,6 +161,33 @@ jobs:
       # not running. A green PR that touches it should mean something.
       - name: Test support bot
         run: node --test tools/support-bot/test/*.test.js
+
+      # `tools/admin-dashboard` is outside the workspace as well. Almost all of
+      # it is markup and rendering, which CI cannot judge — except the three
+      # verdicts on the "agora" screen, which are sentences an operator acts on
+      # ("storage está a 3x o normal dele") and cannot check by looking at
+      # them. A wrong figure elsewhere on that page is visible; a wrong verdict
+      # is believed. So the arithmetic behind them lives in one file with no
+      # DOM and no fetch, and this runs it.
+      - name: Test dashboard insights
+        run: node --test tools/admin-dashboard/test/*.test.js
+
+      # The one test that opens the desktop app.
+      #
+      # Every other Electron test in this repo is a unit test of a helper, so
+      # none of them can see the failure that is easiest to ship and worst to
+      # miss: the binary starts and shows a white window. A bad require in
+      # main.js, a preload that throws, a nav policy that blocks its own
+      # origin. All of those pass `pnpm test` and are obvious one second after
+      # double-clicking the app.
+      #
+      # Cheap on purpose: it launches the real main.js against a fixture page
+      # on a local port, so no API, no Clerk, no network and no built client.
+      # It uses Electron's own Chromium through Playwright's `_electron`, so
+      # there is no browser to download and no `playwright install` step. Under
+      # xvfb because the shell wants a display; a few seconds, one process.
+      - name: Smoke test the desktop shell
+        run: xvfb-run --auto-servernum pnpm --filter @pqp/electron test:smoke
 
       # Colour-contrast floors and the count of colour literals living outside
       # the token layer. Both are ratchets: they only move the right way.
@@ -117,7 +202,9 @@ jobs:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.VITE_CLERK_PUBLISHABLE_KEY || 'pk_test_ci_placeholder' }}
           # Never ship a CI artifact that accepts the public dev token.
           VITE_DEV_AUTH_BYPASS: "false"
-        run: pnpm --filter @pqp/client build
+        # `package.json` build is `tsc && vite build`. Typecheck already ran
+        # tsc --noEmit for the client; do not pay for it a second time.
+        run: pnpm --filter @pqp/client exec vite build
 
       # The Vite build is NOT enough. Cloudflare Pages bundles
       # `client/functions/` with esbuild, separately and with different rules,
@@ -132,18 +219,48 @@ jobs:
 
   # The Playwright suite runs on one worker (shared DB, computed-colour
   # assertions) and took ~18 minutes serial, which dominated the old single
-  # job's ~24 minutes. Four shards, each with its own postgres service, bring
-  # the wall clock down without touching the worker count. The suite boots the
-  # server via `tsx watch` and the client via `vite dev` (see
-  # client/playwright.config.ts webServer), so only @pqp/shared needs a build
-  # here.
+  # job's ~24 minutes. Sharding across runners brings the wall clock down
+  # without touching the worker count.
+  #
+  # Voice / camera / screen-share files are a separate project (chromium-media)
+  # so Playwright's file-level shard does not dump all of them onto one job.
+  # core = everything else + the Pixel phone spec; media = the slow files.
+  # Three shards each. WebKit is not installed: the iPhone project is
+  # local-only (PW_WEBKIT=1). The suite boots the server via `tsx watch` and
+  # the client via `vite dev` (see client/playwright.config.ts webServer), so
+  # only @pqp/shared needs a build here.
   e2e:
+    name: e2e (${{ matrix.suite }} ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        include:
+          - suite: core
+            projects: --project=chromium --project=mobile-pixel
+            shard: 1
+            shards: 3
+          - suite: core
+            projects: --project=chromium --project=mobile-pixel
+            shard: 2
+            shards: 3
+          - suite: core
+            projects: --project=chromium --project=mobile-pixel
+            shard: 3
+            shards: 3
+          - suite: media
+            projects: --project=chromium-media
+            shard: 1
+            shards: 3
+          - suite: media
+            projects: --project=chromium-media
+            shard: 2
+            shards: 3
+          - suite: media
+            projects: --project=chromium-media
+            shard: 3
+            shards: 3
 
     services:
       postgres:
@@ -196,20 +313,20 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-webkit-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
 
       - name: Install Playwright browser
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: pnpm --filter @pqp/client exec playwright install --with-deps chromium webkit
+        run: pnpm --filter @pqp/client exec playwright install --with-deps chromium
 
       # A cache hit restores the browser binaries but not the apt packages the
       # runner image may be missing; install-deps alone is cheap.
       - name: Install Playwright system deps
         if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: pnpm --filter @pqp/client exec playwright install-deps chromium webkit
+        run: pnpm --filter @pqp/client exec playwright install-deps chromium
 
-      - name: E2E (shard ${{ matrix.shard }}/4)
-        run: pnpm --filter @pqp/client e2e --shard=${{ matrix.shard }}/4
+      - name: E2E (${{ matrix.suite }} ${{ matrix.shard }}/${{ matrix.shards }})
+        run: pnpm --filter @pqp/client e2e ${{ matrix.projects }} --shard=${{ matrix.shard }}/${{ matrix.shards }}
         env:
           E2E_DATABASE_URL: postgres://pqp:pqp@localhost:5432/pqp
 
@@ -218,7 +335,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           # upload-artifact@v4 hard-fails on duplicate names across matrix jobs.
-          name: playwright-report-${{ matrix.shard }}
+          name: playwright-report-${{ matrix.suite }}-${{ matrix.shard }}
           path: |
             client/test-results
             client/e2e-results.json

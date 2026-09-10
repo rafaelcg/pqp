@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -65,6 +66,7 @@ import gg.pqp.app.ui.theme.PqpIcons
 import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.ui.theme.Spacing
 import gg.pqp.app.voice.VoiceController
+import gg.pqp.app.watch.WatchLiveStore
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
@@ -89,6 +91,7 @@ import kotlinx.serialization.json.jsonPrimitive
 fun ChannelsScreen(
     session: SessionStore,
     voice: VoiceController,
+    watch: WatchLiveStore,
     serverId: String,
     serverName: String,
     onBack: () -> Unit,
@@ -110,6 +113,10 @@ fun ChannelsScreen(
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
     val scope = rememberCoroutineScope()
     val voiceState by voice.state.collectAsStateWithLifecycle()
+    // Which rooms have a picture on them. The server pushes a `channel-live`
+    // for every live channel this person may see at socket auth, so this is
+    // usually already answered before the list is drawn.
+    val liveChannels by watch.channels.collectAsStateWithLifecycle()
     // Voice refusals and moderation notices are shown by `PqpApp`, not here:
     // a join now starts from the chat screen, and a screen share from the call
     // bar, so this screen is usually not the one on top when the answer lands.
@@ -252,6 +259,7 @@ fun ChannelsScreen(
                             ChannelRow(
                                 channel = channel,
                                 inCall = voiceState.channelId == channel.id,
+                                live = liveChannels[channel.id]?.live == true,
                                 // A voice channel has a transcript too. Opening
                                 // it must not ask for the microphone or join
                                 // media; the chat header owns that explicit
@@ -384,7 +392,12 @@ private fun SectionHeader(title: String, continued: Boolean) {
 }
 
 @Composable
-private fun ChannelRow(channel: Channel, inCall: Boolean, onClick: () -> Unit) {
+private fun ChannelRow(
+    channel: Channel,
+    inCall: Boolean,
+    live: Boolean,
+    onClick: () -> Unit,
+) {
     val interactions = remember { MutableInteractionSource() }
     val pressed by interactions.collectIsPressedAsState()
 
@@ -463,6 +476,27 @@ private fun ChannelRow(channel: Channel, inCall: Boolean, onClick: () -> Unit) {
             color = content,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
         )
+        // The one thing that tells somebody scrolling a channel list that
+        // there is a show on right now. Red because that is what a live badge
+        // is everywhere, and it is not competing with the lime: the lime means
+        // "the call you are in", this means "something is being broadcast".
+        // No pulse: a list of rows is not the place for a moving object, and
+        // the web's pulse is on a much bigger badge.
+        if (live) {
+            Spacer(Modifier.width(Spacing.sm))
+            Text(
+                text = stringResource(R.string.watch_live),
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onError,
+                modifier = Modifier
+                    .clip(MaterialTheme.shapes.extraSmall)
+                    .background(MaterialTheme.colorScheme.error)
+                    .padding(horizontal = Spacing.xs, vertical = 1.dp)
+                    .testTag("channels.live"),
+            )
+        }
     }
 }

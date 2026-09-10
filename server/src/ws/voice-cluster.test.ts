@@ -317,13 +317,31 @@ async function peerRow(
   return result.rows[0];
 }
 
+/**
+ * A resume, and THE WELCOME IT MUST HAVE PRODUCED.
+ *
+ * This used to return the recorder unchecked while `join` above threw, and
+ * every caller then reached for `frames(again, "welcome")[0]?.peerId`. That
+ * `?.` is the whole problem: a resume that produced NO welcome at all yields
+ * `undefined`, and `expect(undefined).not.toBe(oldPeerId)` passes. Seven
+ * tests across this file and `voice-resume.test.ts` were asserting "the
+ * rejoin got a fresh id" in a way that a total failure to rejoin satisfied
+ * just as well.
+ *
+ * A resume either seats you or refuses you, and every caller here expects the
+ * former (a cold join is still a welcome, with a new id). So the helper is
+ * the place to say so, once, and `peerId` and `resumed` come back as values
+ * that cannot be `undefined` rather than as optional chains at each call
+ * site. The refusal cases in this file assert on `voice-join-refused` and
+ * never come through here.
+ */
 async function resume(
   instance: Instance,
   userId: string,
   channel: string,
   peerId: string,
   resumeToken: string,
-): Promise<Recorder> {
+): Promise<Recorder & { peerId: string; resumed: boolean }> {
   const rec = recorder();
   instance.sockets.setAuthenticatedSocket(rec.socket, asUser(userId));
   await instance.voice.handleVoiceMessage(
@@ -336,7 +354,19 @@ async function resume(
       resumeToken,
     },
   );
-  return rec;
+  const welcome = frames(rec, "welcome")[0];
+  if (!welcome) {
+    throw new Error(
+      `resume produced no welcome: ${JSON.stringify(rec.frames)}`,
+    );
+  }
+  return {
+    ...rec,
+    peerId: welcome.peerId as string,
+    // Absent means "this is a new seat"; the wire omits it rather than
+    // sending false.
+    resumed: welcome.resumed === true,
+  };
 }
 
 function party(rev: number, actorId: string, extra: Partial<WatchPartyState> = {}): WatchPartyState {
@@ -367,6 +397,11 @@ describeDb("voice across two instances", () => {
 
   beforeEach(async () => {
     process.env.VOICE_REGISTRY = "postgres";
+    // Off by default across this file. Almost every group here seats four or
+    // five people to test something else entirely (a camera, a ninth person, a
+    // mute, a resume), and a room that promotes itself at four would change
+    // what all of them measure. The group that owns this trigger turns it on.
+    process.env.VOICE_PROMOTION_ROOM_SIZE = "0";
     hub = createMemoryHub();
     onTheWire = [];
     hub.listeners.add((frame) => onTheWire.push(frame));
@@ -391,6 +426,7 @@ describeDb("voice across two instances", () => {
     }
     booted.length = 0;
     process.env.VOICE_REGISTRY = previousFlag;
+    delete process.env.VOICE_PROMOTION_ROOM_SIZE;
     backend.configured = "mesh";
     backend.profile = null;
     vi.restoreAllMocks();
@@ -826,7 +862,12 @@ describeDb("voice across two instances", () => {
       const first = await b.voice.runVoiceReconcile();
       expect(first).toMatchObject({ orphaned: 1, removed: 0 });
       const row = await peerRow(seat.peerId);
-      expect(row?.orphaned_at).not.toBeNull();
+      // HELD, NOT DELETED, which is the whole contract of the orphan step and
+      // the only place this file proves it. `row?.orphaned_at` alone would
+      // have passed on a row that had been deleted outright, because `?.`
+      // yields `undefined` and `undefined` is not `null`.
+      expect(row).toBeDefined();
+      expect(row?.orphaned_at).toBeInstanceOf(Date);
       // Still on the roster, socket gone, seat held.
       await settle();
       await waitFor(
@@ -896,8 +937,8 @@ describeDb("voice across two instances", () => {
       expect(await peerRow(seat.peerId)).toBeUndefined();
       // Retired: the token cannot rebuild the id on the survivor.
       const again = await resume(b, userId, channel, seat.peerId, seat.resumeToken);
-      expect(frames(again, "welcome")[0]?.peerId).not.toBe(seat.peerId);
-      expect(frames(again, "welcome")[0]?.resumed).toBeUndefined();
+      expect(again.peerId).not.toBe(seat.peerId);
+      expect(again.resumed).toBe(false);
       // And the dead lease is gone.
       const leases = await pools[0]!.getPool().query(
         `SELECT 1 FROM voice_instances WHERE instance_id = $1`,
@@ -934,8 +975,8 @@ describeDb("voice across two instances", () => {
       await settle();
 
       const again = await resume(b, userId, channel, seat.peerId, seat.resumeToken);
-      expect(frames(again, "welcome")[0]?.peerId).not.toBe(seat.peerId);
-      expect(frames(again, "welcome")[0]?.resumed).toBeUndefined();
+      expect(again.peerId).not.toBe(seat.peerId);
+      expect(again.resumed).toBe(false);
     });
 
     it("the beacon on B retires a seat A holds, and A forgets it without a second peer-left", async () => {
@@ -980,7 +1021,7 @@ describeDb("voice across two instances", () => {
       ).resolves.toBe(false);
       // Retired everywhere.
       const again = await resume(a, userId, channel, seat.peerId, seat.resumeToken);
-      expect(frames(again, "welcome")[0]?.peerId).not.toBe(seat.peerId);
+      expect(again.peerId).not.toBe(seat.peerId);
     });
 
     it("the beacon refuses a token that does not match the row", async () => {
@@ -1107,7 +1148,7 @@ describeDb("voice across two instances", () => {
       expect(sfuCalls(b, "evictSfuUser")).toHaveLength(1);
       // A retired id: the kicked seat cannot come back on either machine.
       const again = await resume(b, target, channel, targetOnB.peerId, targetOnB.resumeToken);
-      expect(frames(again, "welcome")[0]?.resumed).toBeUndefined();
+      expect(again.resumed).toBe(false);
     });
 
     it("a disconnect on A tells the target on B before dropping them", async () => {
@@ -1687,6 +1728,41 @@ describeDb("voice across two instances", () => {
       expect(frames(onA[0]!, "peer-left")).toHaveLength(0);
     });
 
+    it("the fourth person, arriving on B, moves the room and A's seats", async () => {
+      // The trigger fires wherever the person lands, and the seats on the
+      // other machine have to move with it or the call is split.
+      process.env.VOICE_PROMOTION_ROOM_SIZE = "4";
+      backend.configured = "livekit";
+      backend.profile = small;
+      const channel = randomUUID();
+      const a = await bootInstance();
+      const b = await bootInstance();
+      await a.registry.heartbeatVoiceInstance();
+      await b.registry.heartbeatVoiceInstance();
+
+      const onA = [await joinFollowing(a, channel), await joinFollowing(a, channel)];
+      const onB = await joinFollowing(b, channel);
+      await settle();
+      expect(await roomRow(channel)).toBe("mesh");
+
+      const fourth = await knockFollowing(b, channel);
+
+      expect(fourth.peerId).not.toBeNull();
+      expect(await roomRow(channel)).toBe("livekit");
+      expect(frames(onB, "voice-transport-changed")).toHaveLength(1);
+      await waitFor(
+        () => onA.every((s) => frames(s, "voice-transport-changed").length === 1),
+        "the promotion on A",
+      );
+      expect(frames(onA[0]!, "voice-transport-changed")[0]).toMatchObject({
+        voiceChannelId: channel,
+        transport: "livekit",
+        reason: "room-size",
+      });
+      expect(a.voice.getRoomTransport(channel)).toBe("livekit");
+      expect(frames(onA[0]!, "peer-left")).toHaveLength(0);
+    });
+
     it("a stale pin noticed on B moves the room and A's seats", async () => {
       // The room opened when the server was small and never emptied. The
       // server grew. Nothing about the room changed, which is the bug.
@@ -1963,10 +2039,12 @@ describeDb("voice across two instances", () => {
         orphaned: 0,
         removed: 0,
         roomsSwept: 0,
+        // The instance's own ghost sweep, also a no-op with the flag off.
+        ghosts: 0,
       });
       const again = await resume(b, "x", channel, peerA.peerId, peerA.resumeToken);
-      expect(frames(again, "welcome")[0]?.peerId).not.toBe(peerA.peerId);
-      expect(frames(again, "welcome")[0]?.resumed).toBeUndefined();
+      expect(again.peerId).not.toBe(peerA.peerId);
+      expect(again.resumed).toBe(false);
       await expect(
         b.voice.leaveVoiceByResumeToken(peerA.peerId, peerA.resumeToken),
       ).resolves.toBe(false);

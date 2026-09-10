@@ -5,21 +5,29 @@ import {
   ChevronRight,
   Copy,
   Eraser,
+  ExternalLink,
   FolderInput,
   FolderMinus,
   FolderPlus,
   Lock,
+  Mic,
+  MicOff,
   PanelLeftOpen,
   Pencil,
   Phone,
+  PhoneOff,
   Pin,
   PinOff,
   Plus,
   Search,
   Settings,
   Trash2,
+  UserMinus,
   UserPlus,
+  UserRound,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import {
@@ -36,6 +44,7 @@ import {
   isWatchPartyChannelType,
   liveStateFromRoster,
   liveStateFromStream,
+  type WatchParty,
   type Channel,
   type ChannelLiveState,
   type ChannelType,
@@ -43,6 +52,7 @@ import {
   type VoiceParticipant,
 } from "@pqp/shared";
 import type { ChannelLive } from "@/hooks/use-voice";
+import { LivePartyBlock } from "@/components/watch-party/live-party-block";
 import { SearchDialog } from "@/components/search/search-dialog";
 import {
   ChannelIcon,
@@ -91,6 +101,7 @@ import {
 } from "@/hooks/use-notifications";
 import { FeatureHint, useFeatureHintEnabled } from "@/components/layout/feature-hint";
 import { ChannelSessionHint } from "@/components/layout/channel-session-hint";
+import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
@@ -106,7 +117,6 @@ const EMPTY_UNREAD: UnreadState = { count: 0, mentions: 0 };
 const PINNED_ZONE = "__pinned__";
 const TEXT_ZONE = "__text__";
 const VOICE_ZONE = "__voice__";
-const WATCH_PARTY_ZONE = "__watch_party__";
 
 /** Apple keyboards label the same chord differently, and the hint is the point. */
 const SEARCH_SHORTCUT_HINT =
@@ -165,6 +175,22 @@ interface ChannelListProps {
    * open the channel and then hit Join. Single click still just selects.
    */
   onJoinVoice?: (channelId: string) => void;
+  /**
+   * Live watch parties in this server, for the block above the categories.
+   * Empty (or absent) draws nothing at all. See
+   * `components/watch-party/live-party-block.tsx`.
+   */
+  liveParties?: readonly WatchParty[];
+  /** One click: select the channel, which is what starts watching. */
+  onWatchLiveParty?: (channelId: string) => void;
+  /**
+   * Whether this person holds `START_WATCH_PARTY` anywhere in this server.
+   * Server-level rather than per channel, because the control creates the
+   * channel it will run in, so there is no channel to ask about yet.
+   */
+  canStartWatchParty?: boolean;
+  /** Opens the setup flow. Absent for anyone who may not start one. */
+  onCreateWatchParty?: () => void;
   /** The signed-in account, for self-drag and "mute for me". */
   currentUserId?: string | null;
   /** Seats with a move in flight: no second drag. */
@@ -280,6 +306,10 @@ export function ChannelList({
   unread,
   onSelectChannel,
   onJoinVoice,
+  liveParties,
+  onWatchLiveParty,
+  canStartWatchParty,
+  onCreateWatchParty,
   currentUserId = null,
   pendingMoveUserIds = [],
   peerVolumes = {},
@@ -327,37 +357,45 @@ export function ChannelList({
     commitWidth: commitSidebarWidth,
   } = useChannelSidebarWidth();
   const channelPinHintEnabled = useFeatureHintEnabled("channelPin");
-  const visibleFavs = visibleFavoriteChannels(channels, favoriteChannelIds);
+  const watchPartyOn = isWatchPartyChannelsEnabled();
+  /**
+   * A WATCH PARTY IS NOT A CHANNEL IN THE LIST, AND THIS IS WHERE THAT IS
+   * ENFORCED.
+   *
+   * The first version gave watch parties a section of their own under Voice,
+   * which is exactly the treatment they were supposed to escape: a live party
+   * then appeared twice, once as the block at the top and again as a row with
+   * its own occupant list, so one event had two representations and the second
+   * one made it look like a voice channel with a badge.
+   *
+   * The channel still exists. It is the party's voice room, the key the HLS
+   * egress and `channel_sessions` are hung on, and the home of the chat during
+   * the show. It is simply never listed: filtering `channels` once, here,
+   * keeps it out of the top-level groups, the categories, the pinned row and
+   * the icons-only rail without four separate filters that could disagree.
+   *
+   * With the flag off nothing is hidden and a `watch_party` channel is still
+   * an ordinary voice row, so a production build that has not flipped the flag
+   * behaves exactly as it did before any of this.
+   */
+  const listed = watchPartyOn
+    ? channels.filter((c) => !isWatchPartyChannelType(c.type))
+    : channels;
+  const visibleFavs = visibleFavoriteChannels(listed, favoriteChannelIds);
   const favoriteIdSet = new Set(visibleFavs.map((c) => c.id));
   const topLevelText = sortByPosition(
-    channels.filter(
+    listed.filter(
       (c) => c.type === "text" && !c.parentId && !favoriteIdSet.has(c.id),
     ),
   );
-  // With the flag off a watch_party channel is just another voice row, so
-  // production sees nothing new until the build says so. With it on, those
-  // channels move to a section of their own under Voice.
-  const watchPartyOn = isWatchPartyChannelsEnabled();
   const topLevelVoice = sortByPosition(
-    channels.filter(
+    listed.filter(
       (c) =>
-        (watchPartyOn
-          ? c.type === "voice"
-          : isVoiceRoomChannelType(c.type)) &&
+        isVoiceRoomChannelType(c.type) &&
         !c.parentId &&
         !favoriteIdSet.has(c.id),
     ),
   );
-  const topLevelWatchParty = watchPartyOn
-    ? sortByPosition(
-        channels.filter(
-          (c) =>
-            isWatchPartyChannelType(c.type) &&
-            !c.parentId &&
-            !favoriteIdSet.has(c.id),
-        ),
-      )
-    : [];
   /**
    * Live state per watch party room: the server's `channel-live` when it has
    * said anything about the channel, the roster otherwise (see @pqp/shared).
@@ -372,7 +410,7 @@ export function ChannelList({
     );
   }
   const categories = sortByPosition(
-    channels.filter((c) => c.type === "category"),
+    listed.filter((c) => c.type === "category"),
   );
   const categoryOptions = categories.map((c) => ({ id: c.id, name: c.name }));
   const childrenByCategory = new Map<string, Channel[]>();
@@ -380,7 +418,7 @@ export function ChannelList({
     childrenByCategory.set(
       category.id,
       sortByPosition(
-        channels.filter(
+        listed.filter(
           (c) => c.parentId === category.id && !favoriteIdSet.has(c.id),
         ),
       ),
@@ -438,7 +476,6 @@ export function ChannelList({
       favorites: visibleFavs,
       text: topLevelText,
       voice: topLevelVoice,
-      watchParty: topLevelWatchParty,
       categories,
       childrenByCategory,
     });
@@ -681,6 +718,7 @@ export function ChannelList({
         profile.push({
           id: "profile",
           label: t("voice.occupant.profile"),
+          icon: UserRound,
           onSelect: () => {
             const anchor = document.querySelector(
               `[data-voice-occupant="${person.userId}"]`,
@@ -707,6 +745,7 @@ export function ChannelList({
           profile.push({
             id: "public-profile",
             label: t("profile.publicUrl", { handle: member.handle }),
+            icon: ExternalLink,
             onSelect: () => {
               window.open(publicHref, "_blank", "noopener,noreferrer");
             },
@@ -716,30 +755,35 @@ export function ChannelList({
         personal.push({
           id: "mute-for-me",
           label: t("voice.occupant.muteForMe"),
+          icon: VolumeX,
           onSelect: () => onSetPeerVolume?.(person.userId, 0),
         });
       } else if (action === "unmuteForMe") {
         personal.push({
           id: "unmute-for-me",
           label: t("voice.occupant.unmuteForMe"),
+          icon: Volume2,
           onSelect: () => onSetPeerVolume?.(person.userId, 1),
         });
       } else if (action === "serverMute") {
         personal.push({
           id: "server-mute",
           label: t("voice.occupant.serverMute"),
+          icon: MicOff,
           onSelect: () => onServerMuteOccupant?.(person.userId, true),
         });
       } else if (action === "serverUnmute") {
         personal.push({
           id: "server-unmute",
           label: t("voice.occupant.serverUnmute"),
+          icon: Mic,
           onSelect: () => onServerMuteOccupant?.(person.userId, false),
         });
       } else if (action === "disconnect") {
         mod.push({
           id: "disconnect",
           label: t("voice.occupant.disconnect"),
+          icon: PhoneOff,
           danger: true,
           onSelect: () => onDisconnectVoiceOccupant?.(person.userId),
         });
@@ -747,6 +791,7 @@ export function ChannelList({
         mod.push({
           id: "kick",
           label: t("voice.occupant.kick"),
+          icon: UserMinus,
           danger: true,
           onSelect: () => onKickOccupant?.(person.userId, person.displayName),
         });
@@ -754,6 +799,7 @@ export function ChannelList({
         copy.push({
           id: "copy-name",
           label: t("voice.occupant.copyName"),
+          icon: Copy,
           onSelect: () => void navigator.clipboard.writeText(person.displayName),
         });
       }
@@ -958,11 +1004,9 @@ export function ChannelList({
               categoryId,
               categoryId
                 ? (childrenByCategory.get(categoryId)?.length ?? 0)
-                : topLevelWatchParty.some((c) => c.id === channel.id)
-                  ? topLevelWatchParty.length
-                  : isVoiceRoomChannelType(channel.type)
-                    ? topLevelVoice.length
-                    : topLevelText.length,
+                : isVoiceRoomChannelType(channel.type)
+                  ? topLevelVoice.length
+                  : topLevelText.length,
             )
           }
           onMoveUp={
@@ -1072,7 +1116,7 @@ export function ChannelList({
           icon: Users,
           onSelect: onOpenMembers,
         },
-        ...(canManage
+        ...(canManage || canManageMessages
           ? [
               { id: "sep", label: "", separator: true },
               {
@@ -1164,7 +1208,9 @@ export function ChannelList({
           <div className="flex shrink-0 items-center gap-1">
             {server && (
               <>
-                {canManage && (
+                {/* Manage Messages too: that rank has Moderação and a
+                    read-only AutoMod in the dialog, which decides the rail. */}
+                {(canManage || canManageMessages) && (
                   <Tooltip label={t("chrome.communitySettings")}>
                     <button
                       type="button"
@@ -1287,6 +1333,32 @@ export function ChannelList({
               </PinnedChannelsSection>
             )}
 
+            {/* THE ONLY PLACE A WATCH PARTY APPEARS IN THIS LIST.
+                Above the categories, above the pins, above everything: a live
+                party is an event and it goes at the top of the room. When
+                none is running this is the button that starts one, for the
+                people who may, and nothing at all for everybody else. There
+                is no section, no row and no empty state. */}
+            {watchPartyOn && onWatchLiveParty && (
+              <LivePartyBlock
+                parties={liveParties ?? []}
+                selectedChannelId={selectedChannelId}
+                canStart={canStartWatchParty === true}
+                onWatch={(channelId) => {
+                  onWatchLiveParty(channelId);
+                  onMobileClose?.();
+                }}
+                onCreate={
+                  onCreateWatchParty
+                    ? () => {
+                        onCreateWatchParty();
+                        onMobileClose?.();
+                      }
+                    : undefined
+                }
+              />
+            )}
+
             {communityHomeEnabled && server && onSelectCommunityHome && (
               <div className="mb-3 px-1">
                 <button
@@ -1406,43 +1478,6 @@ export function ChannelList({
                 renderRow(channel, topLevelVoice),
               )}
             </ChannelSection>
-
-            {watchPartyOn && (
-              <ChannelSection
-                label={t("chrome.watchParty")}
-                canManage={canManage}
-                onAdd={() => onCreateChannel("watch_party", false)}
-                onAddPrivate={() => onCreateChannel("watch_party", true)}
-                isDragOver={
-                  dragOverId === WATCH_PARTY_ZONE && !draggedOccupant
-                }
-                onDragOver={(event) => {
-                  if (draggedOccupant) {
-                    event.dataTransfer.dropEffect = "none";
-                    return;
-                  }
-                  if (draggedId) {
-                    setDragOverId(WATCH_PARTY_ZONE);
-                  }
-                }}
-                onDrop={() => {
-                  if (draggedOccupant) {
-                    clearDrag();
-                    return;
-                  }
-                  const dragged = draggedChannel();
-                  if (dragged && favoriteIdSet.has(dragged.id)) {
-                    handleUnfavoriteDragged();
-                  } else {
-                    clearDrag();
-                  }
-                }}
-              >
-                {topLevelWatchParty.map((channel) =>
-                  renderRow(channel, topLevelWatchParty),
-                )}
-              </ChannelSection>
-            )}
 
             {(categories.length > 0 || canManage) && (
               <div className="mb-4">
@@ -2139,8 +2174,191 @@ function ChannelRow({
   // should pull the eye — that is the whole point of muting it.
   const mentions = selected || muted ? 0 : unread.mentions;
   const watchParty = liveState !== undefined;
+  /* The double-click shortcut is a tooltip, not inline text: the sidebar is
+     narrow and a label rendered in the row ate the channel name on a real
+     rail. It is the shared `Tooltip` rather than a native `title` so it
+     opens in a quarter second instead of one, and on keyboard focus too. */
+  const joinHint =
+    !watchParty && onJoinVoice && !connected
+      ? t("voice.doubleClickToJoin")
+      : null;
+  /* `Tooltip` names its trigger with `aria-label`, which would hide the
+     `sr-only` hints inside the row. Say them here instead. */
+  const rowName = [
+    channel.name,
+    joinHint,
+    channel.isPrivate ? t("chrome.privateChannel") : null,
+    mentions > 0
+      ? t("chrome.unreadMentions", { count: mentions })
+      : hasUnread && !muted
+        ? t("chrome.unreadSr")
+        : null,
+    muted ? t("chrome.mutedSr") : null,
+    sessionHint
+      ? t("watchPartySchedule.sidebarHint", {
+          when: formatSessionRelativeTime(sessionHint, new Date(), "pt-BR"),
+        })
+      : null,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(". ");
   const live = liveState?.live === true;
   const topic = watchParty ? channel.topic?.trim() || null : null;
+
+  const rowButton = (
+    <button
+      type="button"
+      onClick={() => {
+        const action = resolveVoiceRowClick({
+          selected,
+          joinable: !!onJoinVoice && !connected,
+        });
+        if (action === "join") {
+          onJoinVoice?.();
+        } else {
+          onSelect();
+        }
+      }}
+      onDoubleClick={() => {
+        if (
+          resolveVoiceRowDoubleClick({
+            joinable: !!onJoinVoice && !connected,
+          }) === "join"
+        ) {
+          onJoinVoice?.();
+        }
+      }}
+      onKeyDown={(event) => {
+        const action = resolveVoiceRowKey(event.key, {
+          joinable: !!onJoinVoice && !connected,
+        });
+        if (action === null) {
+          return;
+        }
+        event.preventDefault();
+        if (action === "join") {
+          onJoinVoice?.();
+        } else {
+          onSelect();
+        }
+      }}
+      aria-current={announceCurrent ? "page" : undefined}
+      className="flex min-w-0 flex-1 touch-manipulation items-center gap-1.5 text-left"
+    >
+      {/* Private is the glyph, not a word. The pill that used to sit at
+          the end of this row was about 50px of a 256px column, which is
+          what pushed "broder-do-role" down to "broder…" while the pill
+          itself had room to spare, and on a row whose icon was already
+          the padlock it said the same thing twice. The padlock stays, the
+          tooltip and the screen reader say it in words, and the name gets
+          the pixels back. */}
+      {channel.isPrivate ? (
+        <Tooltip label={t("chrome.privateChannel")}>
+          {/* `aria-hidden` because the words are already in the row, in
+              the `sr-only` below. Without it the tooltip's own
+              `aria-label` on this wrapper is a second announcement of the
+              same fact, which is the bug the pill had. */}
+          <span
+            aria-hidden="true"
+            className="flex shrink-0 items-center gap-1"
+          >
+            {icon}
+            {/* Only when the channel carries its own picture or emoji, in
+                which case `ChannelIcon` drew that instead of the padlock
+                and nothing else in the row would say private. */}
+            {!channelIconIsPrivateLock(channel) && (
+              <Lock
+                aria-hidden="true"
+                className="h-3 w-3 shrink-0 text-warning"
+              />
+            )}
+          </span>
+        </Tooltip>
+      ) : (
+        icon
+      )}
+      {watchParty ? (
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span
+            className={cn(
+              "truncate",
+              hasUnread && !muted && "font-semibold",
+            )}
+          >
+            {channel.name}
+          </span>
+          {live ? (
+            <span
+              data-watch-party-viewers=""
+              className="truncate text-[10px] text-paper-muted"
+            >
+              {t("chrome.watchPartyViewers", {
+                count: liveState.viewerCount,
+              })}
+            </span>
+          ) : sessionHint ? (
+            <ChannelSessionHint startsAt={sessionHint} now={new Date()} />
+          ) : (
+            topic && (
+              <span className="truncate text-[10px] text-paper-muted">
+                {topic}
+              </span>
+            )
+          )}
+        </span>
+      ) : (
+        <span className={cn("truncate", hasUnread && !muted && "font-semibold")}>
+          {channel.name}
+        </span>
+      )}
+      {!watchParty && sessionHint && (
+        <ChannelSessionHint startsAt={sessionHint} now={new Date()} />
+      )}
+      {channel.isPrivate && (
+        <span className="sr-only">{t("chrome.privateChannel")}</span>
+      )}
+      {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
+      {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
+      <span className="ml-auto flex shrink-0 items-center gap-1">
+        {/* The shortcut is announced through the row's `title` and its
+            accessible name (see the label built above), never as inline
+            text: the sidebar is narrow, and a `shrink-0` label here ate
+            the channel name on a real 320px rail. */}
+        {live && (
+          /* The pulse is on the dot, never on the text, and only under
+             `motion-safe`: with reduced motion the pill just sits there
+             red, which still reads as live. */
+          <span
+            data-watch-party-live=""
+            className="flex items-center gap-1 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-danger"
+          >
+            <span
+              aria-hidden="true"
+              className="h-1.5 w-1.5 rounded-full bg-danger motion-safe:animate-pulse"
+            />
+            {t("chrome.watchPartyLive")}
+          </span>
+        )}
+        {connected && (
+          <>
+            <span
+              aria-hidden="true"
+              className="h-1.5 w-1.5 rounded-full bg-signal"
+            />
+            <span className="sr-only">{t("chrome.connected")}</span>
+          </>
+        )}
+        {mentions > 0 && (
+          <span
+            className="min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
+            aria-label={t("chrome.unreadMentions", { count: mentions })}
+          >
+            {formatBadgeCount(mentions)}
+          </span>
+        )}
+      </span>
+    </button>
+  );
 
   return (
     <ContextMenu items={items}>
@@ -2210,166 +2428,12 @@ function ChannelRow({
             Android use.
             Connected rows never call `onJoinVoice` at all (see `joinable`
             below), so clicking the room you are in just keeps the view. */}
-        <button
-          type="button"
-          onClick={() => {
-            const action = resolveVoiceRowClick({
-              selected,
-              joinable: !!onJoinVoice && !connected,
-            });
-            if (action === "join") {
-              onJoinVoice?.();
-            } else {
-              onSelect();
-            }
-          }}
-          onDoubleClick={() => {
-            if (
-              resolveVoiceRowDoubleClick({
-                joinable: !!onJoinVoice && !connected,
-              }) === "join"
-            ) {
-              onJoinVoice?.();
-            }
-          }}
-          onKeyDown={(event) => {
-            const action = resolveVoiceRowKey(event.key, {
-              joinable: !!onJoinVoice && !connected,
-            });
-            if (action === null) {
-              return;
-            }
-            event.preventDefault();
-            if (action === "join") {
-              onJoinVoice?.();
-            } else {
-              onSelect();
-            }
-          }}
-          aria-current={announceCurrent ? "page" : undefined}
-          /* The shortcut is discoverable through the native tooltip rather
-             than inline text: the sidebar is narrow and a label rendered in
-             the row ate the channel name on a real rail. */
-          title={
-            !watchParty && onJoinVoice && !connected
-              ? `${channel.name}: ${t("voice.doubleClickToJoin")}`
-              : undefined
-          }
-          className="flex min-w-0 flex-1 touch-manipulation items-center gap-1.5 text-left"
-        >
-          {/* Private is the glyph, not a word. The pill that used to sit at
-              the end of this row was about 50px of a 256px column, which is
-              what pushed "broder-do-role" down to "broder…" while the pill
-              itself had room to spare, and on a row whose icon was already
-              the padlock it said the same thing twice. The padlock stays, the
-              tooltip and the screen reader say it in words, and the name gets
-              the pixels back. */}
-          {channel.isPrivate ? (
-            <Tooltip label={t("chrome.privateChannel")}>
-              {/* `aria-hidden` because the words are already in the row, in
-                  the `sr-only` below. Without it the tooltip's own
-                  `aria-label` on this wrapper is a second announcement of the
-                  same fact, which is the bug the pill had. */}
-              <span
-                aria-hidden="true"
-                className="flex shrink-0 items-center gap-1"
-              >
-                {icon}
-                {/* Only when the channel carries its own picture or emoji, in
-                    which case `ChannelIcon` drew that instead of the padlock
-                    and nothing else in the row would say private. */}
-                {!channelIconIsPrivateLock(channel) && (
-                  <Lock
-                    aria-hidden="true"
-                    className="h-3 w-3 shrink-0 text-warning"
-                  />
-                )}
-              </span>
-            </Tooltip>
-          ) : (
-            icon
-          )}
-          {watchParty ? (
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span
-                className={cn(
-                  "truncate",
-                  hasUnread && !muted && "font-semibold",
-                )}
-              >
-                {channel.name}
-              </span>
-              {live ? (
-                <span
-                  data-watch-party-viewers=""
-                  className="truncate text-[10px] text-paper-muted"
-                >
-                  {t("chrome.watchPartyViewers", {
-                    count: liveState.viewerCount,
-                  })}
-                </span>
-              ) : sessionHint ? (
-                <ChannelSessionHint startsAt={sessionHint} now={new Date()} />
-              ) : (
-                topic && (
-                  <span className="truncate text-[10px] text-paper-muted">
-                    {topic}
-                  </span>
-                )
-              )}
-            </span>
-          ) : (
-            <span className={cn("truncate", hasUnread && !muted && "font-semibold")}>
-              {channel.name}
-            </span>
-          )}
-          {!watchParty && sessionHint && (
-            <ChannelSessionHint startsAt={sessionHint} now={new Date()} />
-          )}
-          {channel.isPrivate && (
-            <span className="sr-only">{t("chrome.privateChannel")}</span>
-          )}
-          {hasUnread && !muted && <span className="sr-only">{t("chrome.unreadSr")}</span>}
-          {muted && <span className="sr-only">{t("chrome.mutedSr")}</span>}
-          <span className="ml-auto flex shrink-0 items-center gap-1">
-            {/* The shortcut is announced through the row's `title` and its
-                accessible name (see the label built above), never as inline
-                text: the sidebar is narrow, and a `shrink-0` label here ate
-                the channel name on a real 320px rail. */}
-            {live && (
-              /* The pulse is on the dot, never on the text, and only under
-                 `motion-safe`: with reduced motion the pill just sits there
-                 red, which still reads as live. */
-              <span
-                data-watch-party-live=""
-                className="flex items-center gap-1 rounded-full bg-danger/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-danger"
-              >
-                <span
-                  aria-hidden="true"
-                  className="h-1.5 w-1.5 rounded-full bg-danger motion-safe:animate-pulse"
-                />
-                {t("chrome.watchPartyLive")}
-              </span>
-            )}
-            {connected && (
-              <>
-                <span
-                  aria-hidden="true"
-                  className="h-1.5 w-1.5 rounded-full bg-signal"
-                />
-                <span className="sr-only">{t("chrome.connected")}</span>
-              </>
-            )}
-            {mentions > 0 && (
-              <span
-                className="min-w-4 rounded-full bg-danger px-1 py-0.5 text-center text-[10px] font-bold leading-none text-paper"
-                aria-label={t("chrome.unreadMentions", { count: mentions })}
-              >
-                {formatBadgeCount(mentions)}
-              </span>
-            )}
-          </span>
-        </button>
+        {/* Always the same element. Rendering a bare button when there is
+            no hint would swap the element type the moment `connected`
+            flips, and React would drop keyboard focus on the way. */}
+        <Tooltip label={joinHint ?? channel.name} name={rowName} side="right">
+          {rowButton}
+        </Tooltip>
         {watchParty && onJoinVoice && !connected && (
           /* The same join the row itself does, spelled out: a watch party is
              joined by people who have never been in a voice channel here and
@@ -2379,6 +2443,7 @@ function ChannelRow({
           <button
             type="button"
             data-channel-join=""
+            data-channel-watch={live ? "" : undefined}
             draggable={false}
             className={cn(
               "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold",
@@ -2386,13 +2451,18 @@ function ChannelRow({
                 ? "bg-danger/15 text-danger hover:bg-danger/25"
                 : "bg-ink-4/70 text-paper-muted hover:bg-ink-4 hover:text-paper",
             )}
+            title={live ? t("watchParty.live.watchHint") : undefined}
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();
-              onJoinVoice();
+              if (live) {
+                onSelect();
+                return;
+              }
+              onJoinVoice?.();
             }}
           >
-            {t("chrome.watchPartyJoin")}
+            {live ? t("watchParty.live.watch") : t("chrome.watchPartyJoin")}
           </button>
         )}
         {onToggleFavorite && (

@@ -209,3 +209,48 @@ describe("a hidden tab", () => {
     expect(pub.calls).toEqual([]);
   });
 });
+
+/**
+ * THE BOUNDED GRID'S HALF OF THE BARGAIN (2026-09-08).
+ *
+ * `stage-layout.ts` draws at most twelve tiles on a laptop and six on a phone,
+ * and hands the rest to the strip as chips. That is only a bandwidth saving
+ * because of this module: a tile the grid does not draw mounts no `<video>`,
+ * so nothing binds, so the server is told to stop forwarding it. If this rule
+ * were removed the grid would still look right and the phone would still be
+ * receiving twenty streams, which is the exact shape of bug this codebase
+ * keeps producing.
+ */
+describe("a camera the bounded grid could not draw", () => {
+  it("stops arriving, and comes straight back if it earns a tile", () => {
+    const delivery = createRemoteVideoDelivery();
+    const pub = publication();
+    // On the stage: a tile mounted a video element for it.
+    delivery.register(pub);
+    delivery.attached(pub);
+    vi.advanceTimersByTime(OFFSCREEN_GRACE_MS * 3);
+    expect(pub.calls).toEqual([]);
+
+    // The room grew past the bound and this camera became a chip, so its tile
+    // unmounted and `bindRemoteVideo`'s cleanup detached the element.
+    delivery.detached(pub);
+    vi.advanceTimersByTime(OFFSCREEN_GRACE_MS);
+    expect(pub.calls).toEqual([false]);
+    expect(delivery.isPaused(pub)).toBe(true);
+
+    // They spoke, so the grid promoted them out of the overflow.
+    delivery.attached(pub);
+    expect(pub.calls).toEqual([false, true]);
+    expect(delivery.isPaused(pub)).toBe(false);
+  });
+
+  it("never starts arriving for a camera the grid never drew", () => {
+    const delivery = createRemoteVideoDelivery();
+    const pub = publication();
+    // Somebody in the overflow from the moment they turned their camera on:
+    // the publication exists and no tile ever binds to it.
+    delivery.register(pub);
+    vi.advanceTimersByTime(OFFSCREEN_GRACE_MS * 10);
+    expect(pub.calls).toEqual([false]);
+  });
+});

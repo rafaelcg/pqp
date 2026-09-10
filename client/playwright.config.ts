@@ -1,4 +1,9 @@
-import { defineConfig, devices } from "@playwright/test";
+import {
+  defineConfig,
+  devices,
+  type PlaywrightTestConfig,
+} from "@playwright/test";
+import { MEDIA_SPEC } from "./e2e/media-spec";
 
 /**
  * E2E runs against the real client and server with the dev auth bypass on, so
@@ -25,6 +30,60 @@ const SERVER_PORT = Number(process.env.E2E_SERVER_PORT ?? 3101);
 const DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
   "postgresql://pqp:pqp@localhost:5432/pqp_test";
+
+type E2EProject = NonNullable<PlaywrightTestConfig["projects"]>[number];
+
+/**
+ * Phone emulation, for the one spec that is about phones. An iPhone is WebKit
+ * with no element fullscreen and Safari's own user agent; a Pixel is Chromium
+ * with `isMobile` and a touch screen. Both start in portrait and the spec
+ * rotates them with `setViewportSize`, which is what flips the
+ * `(orientation: landscape)` media query the immersive rule keys on.
+ *
+ * WebKit on Linux (the CI runner) has no fake display capture, so a screen
+ * share never starts there and every iPhone assertion times out on "You are
+ * presenting". The project is therefore local-only: run it on a Mac with
+ * `PW_WEBKIT=1 npx playwright test --project=mobile-iphone`. The Pixel project
+ * covers the same spec in Chromium everywhere, so CI installs chromium only.
+ *
+ * Typed and named rather than spread inline from a ternary. An untyped
+ * conditional spread inside the `projects` literal has no contextual type, so
+ * `colorScheme: "dark"` widens to `string` here AND in every sibling after it,
+ * and `defineConfig` then rejects the whole array. Annotating this const is
+ * what keeps the literals literal; nothing is cast.
+ *
+ * It only started mattering when `src/lib/e2e-media-spec.test.ts` began
+ * importing this file. `client/tsconfig.json` includes `src`, so the config
+ * had never been part of the typechecked program before.
+ */
+const iphoneProject: E2EProject[] = process.env.PW_WEBKIT
+  ? [
+      {
+        name: "mobile-iphone",
+        use: { ...devices["iPhone 14"], colorScheme: "dark", locale: "en-US" },
+        testMatch: /mobile-immersive-stage/,
+      },
+    ]
+  : [];
+
+const projects: E2EProject[] = [
+  {
+    name: "chromium",
+    use: { ...devices["Desktop Chrome"] },
+    testIgnore: [/mobile-immersive-stage/, MEDIA_SPEC],
+  },
+  {
+    name: "chromium-media",
+    use: { ...devices["Desktop Chrome"] },
+    testMatch: MEDIA_SPEC,
+  },
+  ...iphoneProject,
+  {
+    name: "mobile-pixel",
+    use: { ...devices["Pixel 7"], colorScheme: "dark", locale: "en-US" },
+    testMatch: /mobile-immersive-stage/,
+  },
+];
 
 export default defineConfig({
   testDir: "./e2e",
@@ -54,37 +113,8 @@ export default defineConfig({
     colorScheme: "dark",
   },
 
-  projects: [
-    {
-      name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
-      testIgnore: /mobile-immersive-stage/,
-    },
-    // Phone emulation, for the one spec that is about phones. An iPhone is
-    // WebKit with no element fullscreen and Safari's own user agent; a Pixel is
-    // Chromium with `isMobile` and a touch screen. Both start in portrait and
-    // the spec rotates them with `setViewportSize`, which is what flips the
-    // `(orientation: landscape)` media query the immersive rule keys on.
-    // WebKit on Linux (the CI runner) has no fake display capture, so a screen
-    // share never starts there and every iPhone assertion times out on "You
-    // are presenting". The project is therefore local-only: run it on a Mac
-    // with PW_WEBKIT=1 (`PW_WEBKIT=1 npx playwright test --project=mobile-iphone`).
-    // The Pixel project covers the same spec in Chromium everywhere.
-    ...(process.env.PW_WEBKIT
-      ? [
-          {
-            name: "mobile-iphone",
-            use: { ...devices["iPhone 14"], colorScheme: "dark", locale: "en-US" },
-            testMatch: /mobile-immersive-stage/,
-          },
-        ]
-      : []),
-    {
-      name: "mobile-pixel",
-      use: { ...devices["Pixel 7"], colorScheme: "dark", locale: "en-US" },
-      testMatch: /mobile-immersive-stage/,
-    },
-  ],
+  projects,
+
 
   webServer: [
     {

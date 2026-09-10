@@ -14,7 +14,6 @@ import {
   MousePointerBan,
   ShieldBan,
   Minimize2,
-  MonitorSpeaker,
   PhoneOff,
   Pin,
   Scan,
@@ -37,8 +36,6 @@ import {
 } from "react";
 import { flushSync } from "react-dom";
 import {
-  CAMERA_LIMIT,
-  SCREEN_SHARE_LIMIT,
   MESH_VOICE_WARNING,
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
@@ -58,6 +55,13 @@ import {
   type FullscreenMode,
 } from "@/components/voice/capabilities";
 import { attemptElementFullscreen } from "@/components/voice/element-fullscreen";
+import {
+  currentFullscreenElement,
+  exitDocumentFullscreen,
+  fullscreenDocument,
+  requestElementFullscreen,
+  type WebkitFullscreenElement,
+} from "@/components/voice/document-fullscreen";
 import { CinemaHint } from "@/components/voice/cinema-hint";
 import { CapacityNotice } from "@/components/voice/capacity-notice";
 import { useImmersiveStage } from "@/hooks/use-immersive-stage";
@@ -95,6 +99,8 @@ import {
   planStage,
   stageGridColumns,
   tileClickFullscreens,
+  STAGE_TILE_LIMIT_NARROW,
+  STAGE_TILE_LIMIT_WIDE,
   STRIP_LIMIT_NARROW,
   STRIP_LIMIT_WIDE,
 } from "@/components/voice/stage-layout";
@@ -115,7 +121,12 @@ import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { useLgUp } from "@/hooks/use-lg-up";
 import { useLiveHlsReady } from "@/hooks/use-live-hls-src";
-import { isCameraAtCap, isScreenShareAtCap } from "@/lib/screen-share-roster";
+import {
+  isCameraAtCap,
+  isScreenShareAtCap,
+  meshRoomLinkOf,
+  videoLimitOf,
+} from "@/lib/screen-share-roster";
 import {
   loadParticipantRailOpen,
   saveParticipantRailOpen,
@@ -245,46 +256,6 @@ interface WebkitFullscreenVideo extends HTMLVideoElement {
   webkitExitFullscreen?: () => void;
 }
 
-interface WebkitFullscreenElement extends HTMLElement {
-  webkitRequestFullscreen?: () => Promise<void> | void;
-}
-
-interface WebkitFullscreenDocument extends Document {
-  webkitFullscreenEnabled?: boolean;
-  webkitFullscreenElement?: Element | null;
-  webkitExitFullscreen?: () => Promise<void> | void;
-}
-
-function fullscreenDocument(): WebkitFullscreenDocument {
-  return document as WebkitFullscreenDocument;
-}
-
-function currentFullscreenElement(): Element | null {
-  const doc = fullscreenDocument();
-  return doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
-}
-
-async function requestElementFullscreen(element: HTMLElement): Promise<void> {
-  const webkit = element as WebkitFullscreenElement;
-  if (typeof element.requestFullscreen === "function") {
-    await element.requestFullscreen();
-    return;
-  }
-  if (typeof webkit.webkitRequestFullscreen === "function") {
-    await webkit.webkitRequestFullscreen();
-    return;
-  }
-  throw new Error("no element fullscreen API");
-}
-
-async function exitDocumentFullscreen(): Promise<void> {
-  const doc = fullscreenDocument();
-  if (typeof doc.exitFullscreen === "function") {
-    await doc.exitFullscreen();
-    return;
-  }
-  await doc.webkitExitFullscreen?.();
-}
 
 /**
  * Fullscreen for the stage container, with the iOS in-page fallback.
@@ -546,13 +517,10 @@ export interface CallStageProps {
   ) => void | Promise<void>;
   /**
    * Start the same share with no sound at all. Offered only after sound is
-   * what killed the last attempt, and separate from `onStartScreenShare`
-   * because it must also disarm the toggle: the tick is what failed.
+   * what killed the last attempt.
    */
   onShareWithoutSound?: () => void;
   onStopScreenShare?: () => void;
-  shareSystemAudio?: boolean;
-  onShareSystemAudioChange?: (next: boolean) => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
   pushToTalkKeyLabel?: string | null;
@@ -606,8 +574,6 @@ export function CallStage({
   onStartScreenShare,
   onShareWithoutSound,
   onStopScreenShare,
-  shareSystemAudio = false,
-  onShareSystemAudioChange,
   onFocusScreenShare,
   inputMode = "voice-activity",
   pushToTalkKeyLabel = null,
@@ -663,8 +629,6 @@ export function CallStage({
       onVideoQualityChange={onVideoQualityChange}
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
-      shareSystemAudio={shareSystemAudio}
-      onShareSystemAudioChange={onShareSystemAudioChange}
       onStopScreenShare={onStopScreenShare}
       onFocusScreenShare={onFocusScreenShare}
       inputMode={inputMode}
@@ -705,8 +669,6 @@ function ActiveCall({
   onStartScreenShare,
   onShareWithoutSound,
   onStopScreenShare,
-  shareSystemAudio = false,
-  onShareSystemAudioChange,
   onFocusScreenShare,
   inputMode = "voice-activity",
   pushToTalkKeyLabel = null,
@@ -744,12 +706,9 @@ function ActiveCall({
   ) => void | Promise<void>;
   /**
    * Start the same share with no sound at all. Offered only after sound is
-   * what killed the last attempt, and separate from `onStartScreenShare`
-   * because it must also disarm the toggle: the tick is what failed.
+   * what killed the last attempt.
    */
   onShareWithoutSound?: () => void;
-  shareSystemAudio?: boolean;
-  onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
@@ -999,8 +958,25 @@ function ActiveCall({
     })),
     people: allPeople,
     pinnedTileId,
+    // The grid is bounded, and the bound is the device's, not the room's: a
+    // laptop draws twelve pictures and a phone six. Everything past it becomes
+    // a chip in the strip, and its stream stops arriving a second later
+    // because nothing is bound to it (`remote-video-delivery.ts`).
+    tileLimit: wide ? STAGE_TILE_LIMIT_WIDE : STAGE_TILE_LIMIT_NARROW,
+    speakingKeys: speaking,
   });
-  const listeners = listenersOf(allPeople, screenTiles, voiceState.peerId);
+  const overflowKeys = useMemo(
+    () => new Set(stage.overflowKeys),
+    // The array is rebuilt on every render; only its contents decide.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [stage.overflowKeys.join("|")],
+  );
+  const listeners = listenersOf(
+    allPeople,
+    screenTiles,
+    voiceState.peerId,
+    overflowKeys,
+  );
   const gridColumns = stageGridColumns(stage.tiles.length, wide);
   const clickFullscreens = tileClickFullscreens(stage.tiles.length);
   const anyVideo = hasVideo;
@@ -1261,8 +1237,6 @@ function ActiveCall({
       watchingHls={watchingHls}
       hlsDelaySeconds={voiceState.liveStream?.delaySeconds ?? 10}
       onStartScreenShare={onStartScreenShare}
-      shareSystemAudio={shareSystemAudio}
-      onShareSystemAudioChange={onShareSystemAudioChange}
       onStopScreenShare={onStopScreenShare}
       onToggleCollapsed={() => onSetCollapsed(!userCollapsed)}
       onLeave={onLeave}
@@ -1747,11 +1721,11 @@ function ActiveCall({
                     ({t("voice.share.noAudioShort")})
                   </span>
                 )}
-                {/* Said while it is happening. The presenter's own machine is
-                    playing what they shared, so they are the one person who
-                    cannot hear the echo they are causing. */}
+                {/* Said while it is happening, so the presenter knows the
+                    machine's output is going out. The call itself is kept
+                    out of that tap (`restrictOwnAudio`). */}
                 {voiceState.isSharingSystemAudio && (
-                  <span className="ml-1 block text-warning">
+                  <span className="ml-1 block text-paper-muted">
                     {t("voice.share.systemAudioLive")}
                   </span>
                 )}
@@ -1932,8 +1906,6 @@ export function CallControls({
   hlsDelaySeconds = 10,
   onStartScreenShare,
   onStopScreenShare,
-  shareSystemAudio = false,
-  onShareSystemAudioChange,
   onToggleCollapsed,
   onLeave,
   pushToTalk = false,
@@ -1961,8 +1933,6 @@ export function CallControls({
   onStartScreenShare?: (
     intent?: { preferBrowserTab?: boolean },
   ) => void | Promise<void>;
-  shareSystemAudio?: boolean;
-  onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
   onToggleCollapsed: () => void;
   onLeave: () => void;
@@ -1994,13 +1964,15 @@ export function CallControls({
       setShareHint(null);
     }
   }, [voiceState.isSharingScreen, voiceState.error]);
+  const meshLink = meshRoomLinkOf(voiceState);
   const shareAtCap = isScreenShareAtCap(
     voiceState.screenSharePeerIds,
     voiceState.peerId,
     voiceState.roomTransport,
     voiceState.canPromoteTransport,
+    meshLink,
   );
-  const shareLimit = SCREEN_SHARE_LIMIT[voiceState.roomTransport ?? "mesh"];
+  const shareLimit = videoLimitOf(voiceState, "screens");
   // The cap only bites somebody who is not already one of the shares.
   const shareCappedOut = shareAtCap && !voiceState.isSharingScreen;
   const cameraAtCap = isCameraAtCap(
@@ -2008,8 +1980,9 @@ export function CallControls({
     voiceState.peerId,
     voiceState.roomTransport,
     voiceState.canPromoteTransport,
+    meshLink,
   );
-  const cameraLimit = CAMERA_LIMIT[voiceState.roomTransport ?? "mesh"];
+  const cameraLimit = videoLimitOf(voiceState, "cameras");
   const cameraCappedOut = cameraAtCap && !voiceState.isCameraOn;
   const size = collapsed ? "h-8 w-8" : "h-10 w-10";
   const iconSize = collapsed ? "h-3.5 w-3.5" : "h-4 w-4";
@@ -2180,7 +2153,7 @@ export function CallControls({
         }
         detail={
           cameraCappedOut
-            ? t("voice.control.cameraLimit", { limit: cameraLimit })
+            ? t("voice.control.cameraLimit", { limit: cameraLimit ?? 0 })
             : undefined
         }
       >
@@ -2243,51 +2216,12 @@ export function CallControls({
           iconClassName={iconSize}
         />
       )}
-      {/* The opt-in to sending this machine's sound. Off unless armed, and
-          only while nothing is being shared: it changes the NEXT capture, and
-          a control that looks like it acts on the live share and does not is
-          worse than no control. Sending system audio is what re-broadcast
-          everyone's voices back into the call; see
-          `lib/screen-capture-audio.ts`. */}
-      {canShare &&
-        !noVideo &&
-        onStartScreenShare &&
-        onShareSystemAudioChange &&
-        /* Hidden where the platform cannot deliver it. A dead toggle is not a
-           neutral thing here: arming it used to cost people the whole share. */
-        canShareScreenAudio() &&
-        !voiceState.isSharingScreen && (
-          /* The second line is the same one the channel bar gives this
-             button, because it is the same button and the same consequence.
-             It is the one control on this bar that a person cannot work out
-             by looking at it. Arm it before the share starts: it only
-             changes the next capture. */
-          <Tooltip
-            label={t("voice.control.shareSound")}
-            detail={t("voice.control.shareSoundDetail")}
-          >
-            <button
-              type="button"
-              aria-pressed={shareSystemAudio}
-              className={cn(
-                "flex items-center justify-center rounded-full",
-                size,
-                shareSystemAudio
-                  ? "bg-signal/20 text-signal"
-                  : "bg-ink-3 text-paper hover:bg-ink-4",
-              )}
-              onClick={() => onShareSystemAudioChange(!shareSystemAudio)}
-            >
-              <MonitorSpeaker className={iconSize} />
-            </button>
-          </Tooltip>
-        )}
       {/* Whether your mouse pointer goes out with the share.
           THE REPORT (QG, 5 Sep 2026): a film shared from one window while the
           person plays a game in another, and the pointer drawn over the film
           every time it moves. Presenting wants the opposite: pointing at
           things IS the share. So it is a preference, and it is remembered,
-          which the sound toggle beside it deliberately is not.
+          which a one-off audio opt-in deliberately is not.
           Armed before the share, like that one, and it stays put mid-share
           only where the engine can change a live track. Today no engine
           implements the constraint at all, so what a `hide` actually buys is
@@ -2368,8 +2302,10 @@ export function CallControls({
           }
           detail={
             shareCappedOut
-              ? t("voice.control.shareLimit", { limit: shareLimit })
-              : undefined
+              ? t("voice.control.shareLimit", { limit: shareLimit ?? 0 })
+              : !voiceState.isSharingScreen && canShareScreenAudio()
+                ? t("voice.control.shareDetail", desktopContext())
+                : undefined
           }
         >
           {/* `aria-disabled` rather than `disabled`, matching the channel

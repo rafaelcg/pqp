@@ -215,7 +215,9 @@ test("the divider resizes the call, remembers it, and never starves a pane", asy
   await page.mouse.up();
 
   const bottomed = await paneGeometry(page);
-  expect(bottomed.paneHeight - bottomed.stageHeight).toBeGreaterThanOrEqual(220);
+  expect(bottomed.paneHeight - bottomed.stageHeight).toBeGreaterThanOrEqual(
+    220,
+  );
   await expect(page.getByPlaceholder(/^Message /)).toBeVisible();
 
   // And the other end: the stage keeps a picture rather than a sliver.
@@ -238,6 +240,82 @@ test("the divider resizes the call, remembers it, and never starves a pane", asy
   expect(keyedTo).toBeGreaterThan(keyedFrom);
   await divider.press("ArrowUp");
   expect((await paneGeometry(page)).stageHeight).toBeLessThan(keyedTo);
+
+  await leaveVoiceIfConnected(page);
+});
+
+/**
+ * Asked for in the QG on 8 Sep 2026: "tem como fechar o chat quando ta com a
+ * call aberta?". The drag stops at the minimums by design, so putting a pane
+ * away entirely is a separate, named act with its own way back.
+ *
+ * The invariant at the top of this file applies here more than anywhere: the
+ * collapsed pane is HIDDEN, never unmounted, so the marked `<video>` has to
+ * survive both directions.
+ */
+test("putting a pane away hides it, keeps the picture, and gives it back", async ({
+  page,
+}) => {
+  await ensureVoiceChannel();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openApp(page);
+  await joinLobbyWithCamera(page);
+  await markStageVideo(page);
+
+  const composer = page.getByPlaceholder(/^Message /);
+  await expect(composer).toBeVisible();
+  const divider = page.getByTestId("call-split-divider");
+
+  // The two ends of the drag are buttons on the divider, quiet until the
+  // pointer is near the boundary.
+  const hover = async () => {
+    const grip = (await divider.boundingBox())!;
+    await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  };
+
+  // --- the chat away, which is what was actually asked for -----------------
+  await hover();
+  await page.getByTestId("call-split-collapse-chat").click();
+  await expect(composer).toBeHidden();
+  // The call took the pane, bar the strip that brings the chat back.
+  const filled = await paneGeometry(page);
+  expect(filled.paneHeight - filled.stageHeight).toBeLessThanOrEqual(24);
+  // Same node, still bound, still decoding: the SFU never stopped sending it.
+  expect(await stageVideoState(page)).toMatchObject({
+    sameNode: true,
+    bound: true,
+    paused: false,
+  });
+  expect((await storedSplit(page))!.collapsed).toBe("chat");
+
+  // --- and back, from the strip where the pane used to be ------------------
+  await page.getByTestId("call-split-restore").click();
+  await expect(composer).toBeVisible();
+  await expect(divider).toBeVisible();
+  expect((await storedSplit(page))!.collapsed).toBe("none");
+  expect(await stageVideoState(page)).toMatchObject({
+    sameNode: true,
+    bound: true,
+  });
+
+  // --- the other end of the same divider -----------------------------------
+  await hover();
+  await page.getByTestId("call-split-collapse-stage").click();
+  await expect(page.getByTestId("call-stage")).toBeHidden();
+  await expect(composer).toBeVisible();
+  // Off screen, not gone. Coming back costs no renegotiation.
+  expect(await stageVideoState(page)).toMatchObject({
+    sameNode: true,
+    bound: true,
+  });
+  expect((await storedSplit(page))!.collapsed).toBe("stage");
+
+  await page.getByTestId("call-split-restore").click();
+  await expect(page.getByTestId("call-stage")).toBeVisible();
+  expect(await stageVideoState(page)).toMatchObject({
+    sameNode: true,
+    bound: true,
+  });
 
   await leaveVoiceIfConnected(page);
 });
@@ -616,9 +694,72 @@ test("an empty stage is never given a column of its own", async ({ page }) => {
   expect(
     await page.evaluate(() => {
       const raw = localStorage.getItem("pqp:call-split");
-      return raw ? (JSON.parse(raw) as { orientation: string }).orientation : null;
+      return raw
+        ? (JSON.parse(raw) as { orientation: string }).orientation
+        : null;
     }),
   ).toBe("side-by-side");
 
+  await leaveVoiceIfConnected(page);
+});
+
+/**
+ * The two halves of the same production report, in a browser.
+ *
+ * "btw the hide chat button is so small" and, from the same session, a layout
+ * that broke after hiding the chat. They are one problem: the control that
+ * causes the state was invisible until hovered and 32x8 pixels once found,
+ * and the way back out of the state was the same sliver.
+ *
+ * WHY THIS IS NOT COVERED BY "putting a pane away hides it". That test hovers
+ * the divider first, so it can never see a control that is invisible until
+ * hovered, and it asserts `paneHeight - stageHeight <= 24`, which a stage
+ * OVERFLOWING its pane passes with a negative number. Both blind spots are
+ * assertions that are correct about a scenario that is not the failing one.
+ */
+test("the collapse controls are visible and clickable without hunting", async ({
+  page,
+}) => {
+  await ensureVoiceChannel();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openApp(page);
+  await joinLobbyWithCamera(page);
+
+  const hideChat = page.getByTestId("call-split-collapse-chat");
+  const hideStage = page.getByTestId("call-split-collapse-stage");
+
+  // NOBODY HAS MOVED THE POINTER ANYWHERE NEAR THE DIVIDER. Playwright's
+  // `toBeVisible` is satisfied by a non-empty box, and `opacity: 0` has one,
+  // so the opacity is read directly: that is exactly what was wrong.
+  for (const control of [hideChat, hideStage]) {
+    await expect(control).toBeVisible();
+    expect(
+      await control.evaluate((el) => Number(getComputedStyle(el).opacity)),
+    ).toBe(1);
+    const box = (await control.boundingBox())!;
+    // 48 along the boundary. The 8px cross axis is `CALL_SPLIT_DIVIDER_PX`
+    // and must not grow: every clamp in `lib/call-split.ts` is computed
+    // against it.
+    expect(Math.max(box.width, box.height)).toBeGreaterThanOrEqual(40);
+  }
+
+  // And it works from a cold pointer, with no hover step at all.
+  await hideChat.click();
+  await expect(page.getByPlaceholder(/^Message /)).toBeHidden();
+
+  // THE STAGE IS INSIDE THE PANE, BOTH WAYS. Under-filling leaves a band of
+  // dead pane; over-filling runs the stage out of the bottom, over the
+  // restore strip and over whatever the app draws below it. The pane had no
+  // `overflow-hidden` at all in this state, so only the first was possible
+  // to catch.
+  const collapsed = await paneGeometry(page);
+  expect(collapsed.paneHeight - collapsed.stageHeight).toBeLessThanOrEqual(24);
+  expect(collapsed.stageHeight).toBeLessThanOrEqual(collapsed.paneHeight);
+  expect(collapsed.stageTop + collapsed.stageHeight).toBeLessThanOrEqual(
+    collapsed.paneTop + collapsed.paneHeight + 1,
+  );
+
+  await page.getByTestId("call-split-restore").click();
+  await expect(page.getByPlaceholder(/^Message /)).toBeVisible();
   await leaveVoiceIfConnected(page);
 });

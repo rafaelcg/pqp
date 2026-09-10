@@ -197,6 +197,143 @@ async function checkFlyMachines() {
   };
 }
 
+const WORKER_APP = process.env.MONITOR_WORKER_FLY_APP ?? "pqp-worker";
+
+/** `.image_ref.digest`, falling back the same way deploy-api-fly.yml's own
+ * assertion does, so the two never disagree about what "the image" means. */
+function imagesOf(machines) {
+  return [
+    ...new Set(
+      machines
+        .filter((m) => m.state === "started")
+        .map((m) => m.image_ref?.digest ?? m.image_ref?.tag ?? m.config?.image ?? "unknown"),
+    ),
+  ];
+}
+
+async function listMachines(app) {
+  const { stdout } = await exec("flyctl", ["machines", "list", "--app", app, "--json"], {
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  return JSON.parse(stdout).filter((m) => m.state !== "destroyed");
+}
+
+/**
+ * The check this repo did not have on 2026-09-08. `pqp-worker` runs `jobs.ts`
+ * (docs/plans/COLD_PATHS.md) — the attachment sweeps, retention, the outgoing
+ * webhook outbox, watch-party reminders, the HLS retention sweep, voice
+ * occupancy sampling. `deploy-api-fly.yml` deploys the SAME image to it right
+ * after the API, under the same commit label, so the two are supposed to be
+ * identical at all times.
+ *
+ * The failure this exists for is exactly what happened: the workflow's
+ * "Deploy the worker" step started failing (`FLY_API_TOKEN_WORKER` could not
+ * pull the API's image — an app-scoped deploy token cannot read another app's
+ * registry ref), CI kept going red on a step everyone had already learned to
+ * ignore because of unrelated Electron/size-label noise, and `pqp-worker` sat
+ * on a two-day-old image while `pqp-api` redeployed two dozen times. Every job
+ * merged in that window — watch-party session reminders, the HLS retention
+ * sweep, voice occupancy sampling — was shipped and not running, silently,
+ * because nothing compared the two images. This does, every 10 minutes, and
+ * it alerts the same way `fly-machines` does: a GitHub issue, not a red CI
+ * step nobody reads.
+ *
+ * Needs an ORG-scoped token: `FLY_API_TOKEN` (the one already used by
+ * `fly-machines`) is a deploy token scoped to `pqp-api` alone and cannot list
+ * `pqp-worker`'s machines. Reuses `FLY_ORG_TOKEN` — the same one `postgres-disk`
+ * and `support-bot-alive` already need to read a second app.
+ *
+ * A fork or a fresh clone with no `pqp-worker` app skips, same as the deploy
+ * workflow does: the API runs every job itself (`WORKER_MODE` unset) and
+ * there is nothing to compare.
+ */
+async function checkWorkerImageDrift() {
+  if (!process.env.FLY_API_TOKEN && !process.env.MONITOR_FLY_LOCAL) {
+    return {
+      key: "worker-image-drift",
+      title: "Worker image matches API image",
+      status: "skip",
+      summary:
+        "Skipped: no FLY_API_TOKEN. Set MONITOR_FLY_LOCAL=1 to use your own `fly auth` session when running by hand.",
+    };
+  }
+
+  const result = await untilOk(
+    async () => {
+      let apiMachines;
+      try {
+        apiMachines = await listMachines(FLY_APP);
+      } catch (error) {
+        return { ok: false, skip: true, note: `could not list ${FLY_APP}: ${error.message}` };
+      }
+
+      let workerMachines;
+      try {
+        workerMachines = await listMachines(WORKER_APP);
+      } catch (error) {
+        // Deliberately a skip, not a fail: an app-scoped FLY_API_TOKEN cannot
+        // see pqp-worker at all (the same asymmetry that broke the deploy
+        // step), and a fork with no worker app looks identical from here.
+        return {
+          ok: false,
+          skip: true,
+          note: `could not list ${WORKER_APP}: ${error.message}`,
+        };
+      }
+
+      const apiImages = imagesOf(apiMachines);
+      const workerImages = imagesOf(workerMachines);
+
+      if (apiImages.length === 0) {
+        // fly-machines already reports zero API machines as a fail; nothing to
+        // compare against here.
+        return { ok: false, skip: true, note: `${FLY_APP} has no started machines` };
+      }
+      if (workerImages.length === 0) {
+        return {
+          ok: false,
+          skip: true,
+          note: `${WORKER_APP} has no started machines (worker not deployed, or intentionally unused)`,
+        };
+      }
+
+      const match =
+        apiImages.length === 1 && workerImages.length === 1 && apiImages[0] === workerImages[0];
+      return {
+        ok: match,
+        skip: false,
+        note: `${FLY_APP}: ${apiImages.join(", ")} — ${WORKER_APP}: ${workerImages.join(", ")}`,
+      };
+    },
+    { attempts: 2, delayMs: RETRY.delayMs },
+  );
+
+  if (result.skip) {
+    return {
+      key: "worker-image-drift",
+      title: "Worker image matches API image",
+      status: "skip",
+      summary: `Skipped: ${result.note}. Cross-app listing needs FLY_ORG_TOKEN — see docs/MONITORING.md Setup.`,
+    };
+  }
+
+  return {
+    key: "worker-image-drift",
+    title: "Worker image matches API image",
+    status: result.ok ? "ok" : "fail",
+    summary: result.ok
+      ? `Same image on both apps: ${result.note}`
+      : `${WORKER_APP} is not running the same image as ${FLY_APP}: ${result.note}`,
+    detail: trail(result.tries),
+    runbook: [
+      "The worker is stuck on an old image, which means every cold job in server/src/jobs.ts (docs/plans/COLD_PATHS.md) is running old code, or not running the newest jobs at all.",
+      "1. Check the latest `Deploy API (Fly)` run's \"Deploy the worker (same image)\" step: `gh run list --workflow=deploy-api-fly.yml` then `gh run view <id> --log-failed`.",
+      "2. The usual cause is FLY_API_TOKEN_WORKER: it must be able to pull registry.fly.io/pqp-api:<sha>, which an app-scoped `pqp-worker` deploy token cannot do. Use an org-scoped token: `fly tokens create org -o personal`, then `gh secret set FLY_API_TOKEN_WORKER`.",
+      "3. To fix the running machine directly without waiting on CI: `fly deploy --config fly.worker.toml --app pqp-worker --image registry.fly.io/pqp-api:<api's current sha, from fly status -a pqp-api> --ha=false --strategy rolling`.",
+    ].join("\n"),
+  };
+}
+
 /**
  * Reads the app's own component probes rather than duplicating them.
  *
@@ -255,6 +392,81 @@ async function checkStatusComponents() {
   };
 }
 
+/**
+ * The watch-party bucket, through `/ready`.
+ *
+ * It is deliberately NOT covered by anything above. `api-health` reads
+ * `/health`, which is shallow by design; `status-components` reads
+ * `/status.json`, whose `storage` probe is the ATTACHMENT bucket. Live HLS
+ * writes to a second bucket with a second key pair (`LIVE_HLS_S3_*`), and one
+ * being green has never implied anything about the other: production ran a
+ * week with the HLS secrets deployed and every existing check green.
+ *
+ * `skip` while the feature is off, which is what `/ready` reports as
+ * `{ skipped: true }`. That is the state on merge, so this opens nothing until
+ * somebody sets `LIVE_HLS_ENABLED`, and it starts watching by itself the
+ * moment they do. There is nothing to remember to turn on.
+ */
+async function checkLiveHls() {
+  const result = await untilOk(async () => {
+    const res = await httpGet(`${API_ORIGIN}/ready`, { timeoutMs: 10_000 });
+    let parsed = null;
+    try {
+      parsed = JSON.parse(res.body);
+    } catch {
+      /* reported below */
+    }
+    const check = parsed?.checks?.liveHls;
+    // A 503 for some OTHER dependency still carries a truthful liveHls block,
+    // and blaming the bucket for a Postgres outage would send somebody to the
+    // wrong dashboard. So this reads its own field and ignores the envelope.
+    return {
+      ok: check === undefined || check.skipped === true || check.ok === true,
+      state:
+        check === undefined
+          ? "absent"
+          : check.skipped
+            ? "skipped"
+            : check.ok
+              ? "ok"
+              : "failing",
+      ms: check?.ms,
+      note: `HTTP ${res.status} in ${res.ms}ms, liveHls=${JSON.stringify(check ?? null)}`,
+    };
+  }, RETRY);
+
+  // `absent` is an API older than the check, not an outage.
+  if (result.state === "absent" || result.state === "skipped") {
+    return {
+      key: "live-hls",
+      title: "Watch party HLS bucket (/ready checks.liveHls)",
+      status: "skip",
+      summary:
+        result.state === "absent"
+          ? "The deployed API has no liveHls check yet."
+          : "LIVE_HLS_ENABLED is off, so there is no bucket to watch.",
+    };
+  }
+
+  return {
+    key: "live-hls",
+    title: "Watch party HLS bucket (/ready checks.liveHls)",
+    status: result.ok ? "ok" : "fail",
+    summary: result.ok
+      ? `Bucket reachable and the key pair accepted${result.ms === undefined ? "" : ` (${result.ms}ms)`}.`
+      : "Live HLS is ON and the API cannot reach its bucket. No segment can be written, so every watch party is a blank pane.",
+    detail: trail(result.tries),
+    runbook: [
+      "This is the LIVE_HLS_S3_* bucket, not the attachment S3_* one. `status-components` -> storage watches the other.",
+      "The probe is a signed HEAD of a key that cannot exist, so a 404 passes.",
+      "403 means the key pair was rejected or lost its grant on the bucket: check the R2 API token in the Cloudflare dashboard and `fly secrets list -a pqp-api`.",
+      "A transport failure means R2 or the endpoint is unreachable: check the Cloudflare status page.",
+      "To turn the feature off while fixing it: `fly secrets unset LIVE_HLS_ENABLED -a pqp-api`. Rooms go back to the ordinary transport policy on their next pin.",
+      "Full runbook: docs/WATCH_PARTY.md, 'Turning it on in production'.",
+    ].join("\n"),
+  };
+}
+
 export async function runAvailabilityChecks() {
   // Sequential on purpose. Running five probes in parallel against one small
   // machine means the monitor's own load is part of what it is measuring, and
@@ -264,7 +476,9 @@ export async function runAvailabilityChecks() {
     ["web-app", checkWebsite],
     ["websocket", checkWebsocket],
     ["fly-machines", checkFlyMachines],
+    ["worker-image-drift", checkWorkerImageDrift],
     ["status-components", checkStatusComponents],
+    ["live-hls", checkLiveHls],
   ];
   const results = [];
   for (const [key, check] of checks) {

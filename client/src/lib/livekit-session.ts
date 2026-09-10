@@ -4,16 +4,23 @@ import type { ReceiveQuality } from "./receive-quality";
 import { registerRemoteVideoBinding } from "./remote-video-binding";
 import { sfuIceServers } from "./sfu-ice-servers";
 import {
+  createRemoteAudioDelivery,
+  type RemoteAudioPlan,
+} from "./remote-audio-delivery";
+import {
   createRemoteVideoDelivery,
   type DeliveryPublication,
 } from "./remote-video-delivery";
 import {
   cameraBitrateFor,
+  cameraProfileFor,
+  cameraSimulcastRungs,
   DEFAULT_VIDEO_QUALITY,
   hlsSourceTopHeight,
   LARGE_ROOM_SCREEN_BITRATE,
   screenBitrateFor,
   screenSimulcastPlan,
+  type CameraLayer,
   type HlsSourceInput,
   type ScreenSimulcastPlan,
   type VideoQuality,
@@ -109,6 +116,13 @@ export interface LiveKitSession {
   /** Publish a camera video track (conversation calls). */
   publishCamera(stream: MediaStream): Promise<void>;
   /**
+   * Republish a live camera when its capture size moved across a rung of the
+   * simulcast ladder. A no-op when the ladder is unchanged, which is the
+   * common case; see the implementation for why a blink is only spent on a
+   * genuine change.
+   */
+  reconcileCameraLadder(): Promise<void>;
+  /**
    * Change the camera's bitrate ceiling on an already-published track.
    *
    * The SFU twin of the mesh manager's method of the same name, so the quality
@@ -152,6 +166,15 @@ export interface LiveKitSession {
    * applied to what is subscribed now and to whatever arrives later.
    */
   setReceiveQuality(quality: ReceiveQuality): Promise<void>;
+  /**
+   * Which remote sounds this listener wants at all.
+   *
+   * Deafen, a person turned to zero, a moderator's mute and a share whose
+   * sound is off are all states in which the `<audio>` element already plays
+   * nothing; this is what stops the server sending the bytes as well. See
+   * `remote-audio-delivery.ts`, which owns the rule and the reasoning.
+   */
+  setAudioDelivery(plan: RemoteAudioPlan): void;
   /** Stop publishing the camera video track. */
   unpublishCamera(): Promise<void>;
   disconnect(): Promise<void>;
@@ -256,6 +279,8 @@ export async function connectLiveKit({
   let publishedScreenTrack: MediaStreamTrack | null = null;
   /** Raw camera track we published, kept so we can unpublish it later. */
   let publishedCameraTrack: MediaStreamTrack | null = null;
+  /** The ladder the camera on the wire went up under. Null while off. */
+  let publishedCameraRungs: readonly CameraLayer[] | null = null;
   /** The ceiling the next camera publish will carry. See `setCameraMaxBitrate`. */
   let cameraMaxBitrate = DEFAULT_CAMERA_MAX_BITRATE_BPS;
   /** The ceiling the next screen publish will carry. See `setScreenMaxBitrate`. */
@@ -270,6 +295,36 @@ export async function connectLiveKit({
   let hlsSource: HlsSourceInput | null = null;
   /** The plan the share on the wire was published under. Null while not sharing. */
   let publishedScreenPlan: ScreenSimulcastPlan | null = null;
+  /**
+   * THE DECLARED LAYERS ARE DECIDED ONCE PER BROADCAST AND THEN HELD.
+   *
+   * Set when the share goes up while an HLS ladder is transcoding from it, and
+   * cleared when the share stops. While it is set, `reconcileScreenPlan`
+   * refuses to republish: it moves the ceiling in place instead, which no
+   * viewer sees, and leaves the layer set alone.
+   *
+   * WHY, and it is a production incident rather than a precaution. A republish
+   * is a new track sid, a new Track Composite egress, a new `startedAt` and a
+   * new playlist URL, so it rebuffers EVERY seatless viewer. The plan depends
+   * on `participantCount()` and on `hlsSource`, and `use-voice.ts` resamples
+   * the presenter's uplink into `setHlsSource` every two seconds, so once
+   * `hlsSourceTopHeight` started requiring a MEASURED uplink (the right fix
+   * for a starved 1080p layer) any measurement wobbling across the threshold
+   * could republish the track. Production on 2026-09-09 logged six teardowns
+   * in sixteen minutes on one continuous party, two of them
+   * `screen-track-replaced` with nobody touching the share, and Rafael saw the
+   * stream stop every few seconds to minutes on web and iOS.
+   *
+   * A better decision arriving later is not worth a rebuffer for the whole
+   * audience, and certainly not repeatedly. The one raise this still allows is
+   * the intended one: the share is published before the egress exists, so the
+   * first plan is the large-room 720p one, and the reconcile that runs when
+   * the ladder appears is the only one that finds the pin clear.
+   *
+   * A deliberate act by the host is not this: `setScreenQuality` forces past
+   * it, because somebody who picks 1080p by name has chosen the blink.
+   */
+  let screenPlanPinned = false;
   /**
    * The capture's constraints as the browser handed them over, so the plan's
    * height can be laid over them and lifted again without losing the frame
@@ -311,6 +366,18 @@ export async function connectLiveKit({
       publication.setEnabled(true);
     },
   });
+
+  /**
+   * The same idea for the sounds nobody is listening to.
+   *
+   * NO `release` OVERRIDE HERE, and the asymmetry is the point. The video
+   * module has to hand its pause back to `adaptiveStream`, which has its own
+   * opinion about the same publication; nothing else in the library has an
+   * opinion about whether an audio track is enabled, so a plain
+   * `setEnabled(true)` is the whole of resuming. `isEnabled` reads
+   * `requestedDisabled` for a non-video publication and nothing overwrites it.
+   */
+  const audioDelivery = createRemoteAudioDelivery();
 
   function onVisibilityChange() {
     delivery.setTabHidden(document.visibilityState === "hidden");
@@ -450,11 +517,20 @@ export async function connectLiveKit({
       const stream = new MediaStream([track.mediaStreamTrack]);
       // Audio is labelled by source too, so the presentation's sound never
       // lands in the slot the participant's voice is played and metered from.
-      if (pub.source === Track.Source.ScreenShareAudio) {
+      const screenAudio = pub.source === Track.Source.ScreenShareAudio;
+      if (screenAudio) {
         screenAudioStreams.set(participant.identity, stream);
       } else {
         streams.set(participant.identity, stream);
       }
+      // Delivered until the listener's plan says otherwise. Registered after
+      // the stream is filed so a plan that arrives in the same tick finds a
+      // consistent room.
+      audioDelivery.register(
+        pub,
+        participant.identity,
+        screenAudio ? "screen" : "voice",
+      );
       snapshot();
     })
     .on(RoomEvent.TrackUnsubscribed, (track, pub, participant) => {
@@ -472,6 +548,7 @@ export async function connectLiveKit({
       if (track.kind !== Track.Kind.Audio) {
         return;
       }
+      audioDelivery.unregister(pub);
       if (pub.source === Track.Source.ScreenShareAudio) {
         screenAudioStreams.delete(participant.identity);
       } else {
@@ -897,20 +974,36 @@ export async function connectLiveKit({
       },
     });
     publishedScreenPlan = plan;
+    // PINNED THE MOMENT IT GOES UP UNDER A LIVE BROADCAST. See
+    // `screenPlanPinned` and `reconcileScreenPlan`.
+    screenPlanPinned = broadcastIsLive();
+  }
+
+  /** A live HLS ladder is transcoding from this share right now. */
+  function broadcastIsLive(): boolean {
+    return hlsSource !== null && hlsSource.ladderTopHeight !== null;
   }
 
   /**
    * Bring the share on the wire in line with the plan the room now calls for.
    *
-   * Runs on every quality change and every time the room grows or shrinks. A
-   * different top HEIGHT means a different set of declared layers, and the
+   * Runs on every quality change, every time the room grows or shrinks, and
+   * every two seconds while a watch party is transcoding from this share
+   * (`use-voice.ts` resamples the uplink into `setHlsSource` on that cadence).
+   * That last caller is why the pin below exists.
+   *
+   * A different top HEIGHT means a different set of declared layers, and the
    * only honest way to change those is to publish again, so the track is
    * unpublished without being stopped and published under the new plan; the
-   * viewers see the picture blink once, at the moment the room crosses twenty
-   * people or the presenter picks 1080p by name. A different top CEILING at
-   * the same height is moved in place, with no blink, exactly as before.
+   * viewers see the picture blink once. A different top CEILING at the same
+   * height is moved in place, with no blink.
+   *
+   * **While a broadcast is live the height is pinned** and a change of mind
+   * becomes a ceiling change: see `screenPlanPinned` for the incident. `force`
+   * is the host choosing a quality by name, which is a deliberate act and gets
+   * the blink it asked for.
    */
-  function reconcileScreenPlan(): Promise<void> {
+  function reconcileScreenPlan(options?: { force?: boolean }): Promise<void> {
     const run = async () => {
       const track = publishedScreenTrack;
       const published = publishedScreenPlan;
@@ -918,7 +1011,35 @@ export async function connectLiveKit({
         return;
       }
       const plan = currentScreenPlan();
-      if (plan.topHeight !== published.topHeight) {
+      const heightChanged = plan.topHeight !== published.topHeight;
+      // `broadcastIsLive()` as well as the pin: when the stream STOPS the
+      // large-room cap has to come back, because a 1080p top layer with no
+      // egress behind it is bandwidth per viewer for nothing, which is the
+      // reason the cap exists. Pinned means "while broadcasting", not "for
+      // ever".
+      if (
+        heightChanged &&
+        screenPlanPinned &&
+        broadcastIsLive() &&
+        !options?.force
+      ) {
+        // HELD. The layer set stays exactly as published, and the capture is
+        // NOT reconstrained: shrinking it under a layer set declared for the
+        // old height would starve the top layer, which is the thing this
+        // whole path is trying to stop. What can move without anybody
+        // noticing is the ceiling, so that is what moves. A worse uplink
+        // therefore still gets a lower bitrate; it just gets it in place.
+        if (plan.topBitrate !== published.topBitrate) {
+          await setSourceMaxBitrate(
+            Track.Source.ScreenShare,
+            plan.topBitrate,
+            "screen",
+          );
+          publishedScreenPlan = { ...published, topBitrate: plan.topBitrate };
+        }
+        return;
+      }
+      if (heightChanged) {
         await constrainScreenCapture(track, plan.topHeight);
         // `false`: the capture stays alive; it is the same track going back up.
         await room.localParticipant.unpublishTrack(track, false);
@@ -953,6 +1074,122 @@ export async function connectLiveKit({
     return next;
   }
 
+  /**
+   * What the camera's capture is producing right now, in picture lines.
+   *
+   * A track that has not settled reports nothing, and the honest guess is the
+   * size the capture was asked for, exactly as `screenScaleFactor` guesses the
+   * screen's. Guessing "no ladder" instead would publish one layer to a camera
+   * that turns out to be 720p, and nothing would ever revisit it.
+   */
+  function cameraCaptureHeight(track: MediaStreamTrack): number {
+    // Duck-typed rather than called outright. `getSettings` is on every real
+    // `MediaStreamTrack`, but this path also sees the tracks a virtual camera
+    // or a test hands over, and a camera that will not turn on because a shim
+    // is missing a method is a much worse failure than a ladder built on the
+    // size we asked for.
+    const settings =
+      typeof track.getSettings === "function" ? track.getSettings() : null;
+    const height = settings?.height;
+    return height && height > 0
+      ? height
+      : cameraProfileFor(DEFAULT_VIDEO_QUALITY).height;
+  }
+
+  function sameRungs(
+    a: readonly CameraLayer[],
+    b: readonly CameraLayer[] | null,
+  ): boolean {
+    return (
+      b !== null &&
+      a.length === b.length &&
+      a.every((rung, at) => rung.height === b[at]!.height)
+    );
+  }
+
+  /**
+   * Put a camera on the wire under the ladder its capture size calls for.
+   *
+   * THE CAMERA PUBLISHES A LADDER. It published `simulcast: false` until
+   * 2026-09-08, so there was exactly one copy of a face on the server and
+   * every viewer received it whatever size their tile was. `adaptiveStream`
+   * has been on the whole time and had nothing to choose from: it can only ask
+   * the SFU for a layer the publisher actually encodes. The rungs, and why
+   * they are these rungs, are in `video-quality.ts`.
+   *
+   * `videoEncoding`, NOT `screenShareEncoding`: `computeVideoEncodings` swaps
+   * the two by source, and this is the source the *other* one belongs to.
+   * Getting it backwards is what shipped an uncapped screen share to a hundred
+   * phones on 5 Sep 2026; the same mistake in this direction would put the
+   * camera's ceiling in a field nothing reads.
+   */
+  async function publishCameraVideo(track: MediaStreamTrack): Promise<void> {
+    const rungs = cameraSimulcastRungs(cameraCaptureHeight(track));
+    await room.localParticipant.publishTrack(track, {
+      source: Track.Source.Camera,
+      simulcast: true,
+      videoSimulcastLayers: rungs.map(
+        (layer) =>
+          new VideoPreset(
+            layer.width,
+            layer.height,
+            layer.maxBitrate,
+            layer.maxFramerate,
+          ),
+      ),
+      // The camera half of the argument the screen share has been making since
+      // it was written: without these the encoder holds resolution and spends
+      // framerate, and a face is motion. The encoding is a ceiling, not a
+      // target, so a still person still costs almost nothing.
+      degradationPreference: "maintain-framerate",
+      videoEncoding: {
+        maxBitrate: cameraMaxBitrate,
+        maxFramerate: VIDEO_MAX_FRAMERATE,
+      },
+    });
+    publishedCameraRungs = rungs;
+  }
+
+  /**
+   * Bring a live camera's ladder in line with the size its capture is now.
+   *
+   * WHY IT IS NEEDED AT ALL. `livekit-client` solves each rung's
+   * `scaleResolutionDownBy` against the capture's dimensions **at publish
+   * time** and declares the resulting sizes to the SFU, which routes a
+   * viewer's request against that declaration. Changing the quality mid-call
+   * resizes the same track in place (`applyCameraQuality`), so a camera
+   * published at 360p and moved to 1080p would keep a divisor solved for 360
+   * and hand viewers layers whose declared size is a fiction. Same argument,
+   * and the same fix, as `reconcileScreenPlan`.
+   *
+   * WHY ONLY ON A RUNG CHANGE. Republishing blinks the picture for every
+   * viewer, so it is spent only when the SET of layers actually changes: 720p
+   * to 1080p keeps all three rungs and moves nothing, 360p to 720p gains one
+   * and is worth a blink. A ceiling change alone never comes through here; it
+   * moves the top layer in place through `setCameraMaxBitrate`.
+   */
+  async function reconcileCameraLadder(): Promise<void> {
+    const track = publishedCameraTrack;
+    if (!track) {
+      return;
+    }
+    const wanted = cameraSimulcastRungs(cameraCaptureHeight(track));
+    if (sameRungs(wanted, publishedCameraRungs)) {
+      return;
+    }
+    try {
+      // `false`: the capture stays alive; it is the same track going back up.
+      await room.localParticipant.unpublishTrack(track, false);
+      if (publishedCameraTrack !== track) {
+        // The camera was turned off while this was in flight.
+        return;
+      }
+      await publishCameraVideo(track);
+    } catch (err) {
+      console.warn("[pqp] SFU camera ladder could not be applied", err);
+    }
+  }
+
   async function publish(stream: MediaStream) {
     const [audioTrack] = stream.getAudioTracks();
     if (!audioTrack) {
@@ -970,6 +1207,23 @@ export async function connectLiveKit({
       await published.mute();
     }
     await room.localParticipant.publishTrack(published, {
+      // NOT OPTIONAL, and leaving it off was a live production bug.
+      // `new LocalAudioTrack(raw)` starts at `Track.Source.Unknown` and
+      // `publishTrack` only overwrites that when `source` is passed, so every
+      // microphone this client ever published reached the SFU tagged
+      // `SOURCE_UNKNOWN`. The camera and the screen share were always tagged,
+      // which is why nothing looked wrong.
+      //
+      // What that broke: `liveKitPublishGrant` (server/src/voice/backends.ts)
+      // sends `canPublishSources: ["microphone"]` for a member who holds SPEAK
+      // and not STREAM, and LiveKit refuses any publish whose source is not in
+      // that list (`VideoGrant.GetCanPublishSource`: a non-empty list is an
+      // allowlist and UNKNOWN is not in it). In a `watch_party` channel the
+      // stream bit is START_WATCH_PARTY, which no ordinary member holds, so
+      // exactly that grant is what an invited speaker gets: the microphone was
+      // refused by the media server and the app showed a live, unmuted person
+      // nobody could hear.
+      source: Track.Source.Microphone,
       dtx: true,
       red: true,
     });
@@ -1056,6 +1310,10 @@ export async function connectLiveKit({
       publishedScreenTrack = null;
       publishedScreenPlan = null;
       screenCaptureConstraints = null;
+      // A new share is a new decision. The pin is per broadcast, not per
+      // session: somebody who stops and shares a different window gets the
+      // plan that window and that room call for.
+      screenPlanPinned = false;
     },
 
     async publishCamera(stream: MediaStream) {
@@ -1067,20 +1325,10 @@ export async function connectLiveKit({
         await room.localParticipant.unpublishTrack(publishedCameraTrack);
       }
       publishedCameraTrack = videoTrack;
-      await room.localParticipant.publishTrack(videoTrack, {
-        source: Track.Source.Camera,
-        simulcast: false,
-        // The camera half of the argument the screen share has been making
-        // since it was written: without these the encoder holds resolution and
-        // spends framerate, and a face is motion. The encoding is a ceiling,
-        // not a target, so a still person still costs almost nothing.
-        degradationPreference: "maintain-framerate",
-        videoEncoding: {
-          maxBitrate: cameraMaxBitrate,
-          maxFramerate: VIDEO_MAX_FRAMERATE,
-        },
-      });
+      await publishCameraVideo(videoTrack);
     },
+
+    reconcileCameraLadder,
 
     async setCameraMaxBitrate(maxBitrate: number) {
       cameraMaxBitrate = maxBitrate;
@@ -1102,7 +1350,10 @@ export async function connectLiveKit({
     async setScreenQuality(quality: VideoQuality) {
       screenQuality = quality;
       screenMaxBitrate = screenBitrateFor(quality);
-      await reconcileScreenPlan();
+      // `force`: the host picked this by name. The pin exists to stop a
+      // resampled measurement rebuffering the audience, not to overrule a
+      // person who reached for the menu.
+      await reconcileScreenPlan({ force: true });
     },
 
     /**
@@ -1131,17 +1382,23 @@ export async function connectLiveKit({
       }
     },
 
+    setAudioDelivery(plan: RemoteAudioPlan) {
+      audioDelivery.setPlan(plan);
+    },
+
     async unpublishCamera() {
       if (!publishedCameraTrack) {
         return;
       }
       await room.localParticipant.unpublishTrack(publishedCameraTrack);
       publishedCameraTrack = null;
+      publishedCameraRungs = null;
     },
 
     async disconnect() {
       unregisterStats();
       delivery.dispose();
+      audioDelivery.dispose();
       if (typeof document !== "undefined") {
         document.removeEventListener("visibilitychange", onVisibilityChange);
       }

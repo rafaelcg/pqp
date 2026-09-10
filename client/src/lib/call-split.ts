@@ -29,6 +29,25 @@
 export type CallSplitOrientation = "stacked" | "side-by-side";
 
 /**
+ * WHICH PANE IS PUT AWAY, if either.
+ *
+ * Collapsing is the same preference as the ratio, taken to its end: "the
+ * stage gets none of the pane" and "the stage gets all of it". It lives on
+ * `CallSplitPreference` beside the orientation and the fractions rather than
+ * in a component's state, because it is the same kind of opinion about the
+ * same layout, it is remembered in the same place, and a second store would
+ * be a second thing to keep in step with the first.
+ *
+ * IT IS NOT A FRACTION OF 0 OR 1, though, and that is worth saying because it
+ * is the obvious cheaper design. `clampSplit` forces every fraction inside the
+ * pixel minimums, deliberately, so that a drag can never strand somebody with
+ * a sliver. A collapse is exactly the thing those minimums exist to forbid, so
+ * it has to be said in a different word rather than smuggled through as a
+ * number the clamp would immediately undo.
+ */
+export type CallSplitCollapsed = "none" | "stage" | "chat";
+
+/**
  * What the call surface currently is, reported up by the stage itself.
  *
  * The pane cannot work this out on its own: "expanded" depends on whether
@@ -67,12 +86,20 @@ export interface CallSplitPreference {
    * wider than the transcript is what a shared screen wants.
    */
   side: number;
+  /**
+   * Neither pane, by default. Shared by both orientations on purpose: "put
+   * the chat away" is a wish about what somebody wants to look at, not about
+   * whether the panes are stacked, and having it flip back when they rotate
+   * the layout would read as the app forgetting.
+   */
+  collapsed: CallSplitCollapsed;
 }
 
 export const CALL_SPLIT_DEFAULT: CallSplitPreference = {
   orientation: "stacked",
   stacked: null,
   side: 0.62,
+  collapsed: "none",
 };
 
 /** A stage shorter than this is a letterbox, not a picture. */
@@ -246,6 +273,27 @@ export function resolveOrientation(
   return splitAvailable(paneWidth, "side-by-side") ? "side-by-side" : "stacked";
 }
 
+/**
+ * The collapse actually drawn.
+ *
+ * Same shape as `resolveOrientation`, and for the same reason: what is stored
+ * is what the person asked for, this is what the pane can honour now. A
+ * collapse is only meaningful where there are two panes worth arranging, so
+ * it is honoured exactly where the divider is (`shape === "expanded"`) and
+ * ignored everywhere else. Putting the chat away to make room for a slim call
+ * bar is not a thing anybody means, and hiding a stage that has nothing on it
+ * would take the transcript's full width away from it for no gain.
+ *
+ * Nothing here writes: the stored value survives, so the collapse comes back
+ * on its own when a picture does.
+ */
+export function resolveCollapsed(
+  preferred: CallSplitCollapsed,
+  shape: CallStageShape,
+): CallSplitCollapsed {
+  return shape === "expanded" ? preferred : "none";
+}
+
 const STORAGE_KEY = "pqp:call-split";
 
 /**
@@ -275,6 +323,14 @@ export function loadCallSplit(): CallSplitPreference {
         typeof value.side === "number" && Number.isFinite(value.side)
           ? clamp01(value.side)
           : CALL_SPLIT_DEFAULT.side,
+      // Anything this reader does not recognise, including a preference
+      // written before the field existed, is "neither pane put away". Failing
+      // towards two visible panes is the only safe direction: the opposite is
+      // somebody staring at a layout they never asked for.
+      collapsed:
+        value.collapsed === "stage" || value.collapsed === "chat"
+          ? value.collapsed
+          : "none",
     };
   } catch {
     // Denied storage, or somebody's half-written JSON. The default split is a
@@ -289,4 +345,42 @@ export function saveCallSplit(preference: CallSplitPreference): void {
   } catch {
     // The drag still works for this session; only the memory of it is lost.
   }
+}
+
+/**
+ * WHICH SHAPE THE PANE IS IN WHEN SEVERAL THINGS CLAIM IT AT ONCE.
+ *
+ * `stageShape` drives the divider and the side-by-side toggle, and it used to
+ * be plain last-write-wins from a single `onShapeChange`. That was fine while
+ * one component could ever be mounted. It is not fine now: a watch party
+ * channel mounts the party panel, the watch stage and the call stage together,
+ * each reporting its own shape as it appears and disappears, and any of them
+ * reporting "none" on the way out would flatten the pane while another was
+ * still showing a picture. The split would collapse for no visible reason, and
+ * come back on the next unrelated render.
+ *
+ * So the pane takes the STRONGEST claim rather than the latest one. A stage
+ * that has gone is reporting "none" about itself, not about the pane, and
+ * "none" can never win against a picture that is still there.
+ *
+ * The order is the amount of room the shape is asking for, which is also the
+ * order `resolveOrientation` cares about: only `expanded` is split at all.
+ */
+const STAGE_SHAPE_RANK: Record<CallStageShape, number> = {
+  none: 0,
+  compact: 1,
+  expanded: 2,
+  fullscreen: 3,
+};
+
+export function strongestStageShape(
+  shapes: Iterable<CallStageShape | undefined>,
+): CallStageShape {
+  let best: CallStageShape = "none";
+  for (const shape of shapes) {
+    if (shape && STAGE_SHAPE_RANK[shape] > STAGE_SHAPE_RANK[best]) {
+      best = shape;
+    }
+  }
+  return best;
 }

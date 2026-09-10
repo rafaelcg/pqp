@@ -416,7 +416,7 @@ export function toggleBlockFormatting(
  * node, and a scroll container clips them.
  */
 export const COMPOSER_FORM_CLASS =
-  "safe-pb relative border-t border-border/60 px-3 py-3 sm:px-4";
+  "safe-pb relative px-3 pb-3 pt-1 sm:px-4";
 
 /**
  * Odd ``` before the caret means the user is still inside a fence. Enter

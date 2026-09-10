@@ -333,12 +333,14 @@ export const voiceTransportChangedMessageSchema = z.object({
   /**
    * What asked for the room: a camera or a screen share past the mesh cap
    * (`cameras` / `screens`), a ninth person at the door of a full mesh
-   * (`room-full`), or a pin that no longer matches the policy (`stale-pin`,
-   * a server that grew past ten members during a call that never emptied). A
+   * (`room-full`), a room reaching `MESH_ROOM_PROMOTION_SIZE` so that nobody
+   * meets a mesh cap in the first place (`room-size`), or a pin that no longer
+   * matches the policy (`stale-pin`, a server that grew past ten members
+   * during a call that never emptied). A
    * receiver that does not know the value still follows the move; only the
    * sentence on screen depends on it.
    */
-  reason: z.enum(["cameras", "screens", "room-full", "stale-pin"]),
+  reason: z.enum(["cameras", "screens", "room-full", "room-size", "stale-pin"]),
   /** The room at the moment of the promotion, self included. */
   participants: z.array(voiceParticipantSchema),
 });
@@ -430,6 +432,15 @@ export const callDeclineMessageSchema = z.object({
 export const setCameraMessageSchema = z.object({
   type: z.literal("set-camera"),
   streamId: z.string().nullable(),
+  /**
+   * What this machine's uplink measured, in bit/s, for the mesh limit.
+   *
+   * Optional and clamped on arrival (`clampReportedUplinkBps`); every native
+   * client omits it today and gets the old constant. It is read ONLY on mesh,
+   * where the copies it pays for are the sender's own, and never on the voice
+   * server, where the cost is the box's and the box is priced from the roster.
+   */
+  uplinkBps: z.number().optional(),
 });
 
 /** Server → callee sockets: someone is calling this conversation. */
@@ -652,6 +663,8 @@ export const setSharingScreenMessageSchema = z.object({
    * share is silent, which is what most of them are.
    */
   audioStreamId: z.string().nullable().optional(),
+  /** See `setCameraMessageSchema.uplinkBps`: the mesh limit's measurement. */
+  uplinkBps: z.number().optional(),
 });
 
 // --- voice state ---

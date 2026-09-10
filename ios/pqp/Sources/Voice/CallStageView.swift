@@ -44,6 +44,18 @@ struct CallStageView: View {
                     ServerMuteNotice()
                         .transition(.opacity)
                 }
+                // Not on the danger capsule the error above uses: the room
+                // growing is news, not a fault. It is here to explain the
+                // second of quiet while the media moves to the voice server.
+                if let message = call.transportNotice {
+                    Text(message)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.paperMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.bottom, 10)
+                        .transition(.opacity)
+                        .accessibilityIdentifier("call.transportNotice")
+                }
                 controls
             }
             .padding(.horizontal, Metrics.hPadding)

@@ -9,6 +9,7 @@ import gg.pqp.app.core.Reaction
 import gg.pqp.app.core.ReplyRef
 import gg.pqp.app.core.ServerSummary
 import gg.pqp.app.core.VoiceParticipant
+import gg.pqp.app.watch.LiveStreamPayload
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.descriptors.elementNames
 import org.junit.Assert.assertEquals
@@ -38,6 +39,7 @@ class ModelShapeTest {
     private val api = "packages/shared/src/api.ts"
     private val signaling = "packages/shared/src/signaling.ts"
     private val attachments = "packages/shared/src/attachments.ts"
+    private val liveHls = "packages/shared/src/live-hls.ts"
 
     private fun assertSubsetOfSchema(
         serializer: KSerializer<*>,
@@ -128,6 +130,35 @@ class ModelShapeTest {
             // once it does this entry is dead weight and should be deleted so
             // the subset check covers the field again.
             knownExtras = setOf("serverMuted"),
+        )
+    }
+
+    @Test
+    fun `LiveStreamPayload matches liveHlsStreamSchema`() {
+        assertSubsetOfSchema(LiveStreamPayload.serializer(), liveHls, "liveHlsStreamSchema")
+    }
+
+    /**
+     * The fields the watch party cannot be watched without.
+     *
+     * `hlsUrl` is the playlist and `startedAt` is the session: the proxy path
+     * carries both, the viewer token is signed over both, and the player uses
+     * `startedAt` alone to decide whether a changed URL is a new stream or just
+     * a restamped token. A rename of either is a watch party that shows nothing
+     * on the phone and nothing in any log, because the frame is decoded field
+     * by field and a missing field reads as "nothing live".
+     */
+    @Test
+    fun `the live stream fields the player depends on are all declared`() {
+        val required = setOf("hlsUrl", "startedAt")
+        val modelled = LiveStreamPayload.serializer().descriptor.elementNames.toSet()
+        assertEquals("Live stream fields no longer modelled", emptySet<String>(), required - modelled)
+
+        val declared = RepoSources.objectKeys(liveHls, "liveHlsStreamSchema").toSet()
+        assertEquals(
+            "Live stream fields the shared schema no longer declares",
+            emptySet<String>(),
+            required - declared,
         )
     }
 

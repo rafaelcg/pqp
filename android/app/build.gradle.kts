@@ -275,6 +275,29 @@ android {
             // asserts on an Android framework call.
             isReturnDefaultValues = true
             all { test ->
+                // The protocol tests read the other clients' source off disk
+                // (`RepoSources`). Gradle only knows a task's declared inputs,
+                // so without these a server-side protocol change left the
+                // cached green result of the previous run in place: CI showed
+                // `:app:testDebugUnitTest FROM-CACHE` on the merge that broke
+                // the contract, and the failure surfaced on the next unrelated
+                // Android PR. Every path here is one those tests open.
+                val repo = rootProject.projectDir.parentFile
+                listOf("packages/shared/src", "server/src/ws").forEach { dir ->
+                    test.inputs.dir(File(repo, dir))
+                        .withPropertyName("protocol.$dir")
+                        .withPathSensitivity(PathSensitivity.RELATIVE)
+                }
+                listOf(
+                    "server/src/api/index.ts",
+                    "client/src/lib/peer-connection-manager.ts",
+                    "client/src/lib/realtime.ts",
+                    "client/src/lib/emoji-shortcodes.ts",
+                ).forEach { file ->
+                    test.inputs.file(File(repo, file))
+                        .withPropertyName("protocol.$file")
+                        .withPathSensitivity(PathSensitivity.RELATIVE)
+                }
                 // A contract test's whole value is in its failure message. The
                 // default one-line summary hides it.
                 test.testLogging {
@@ -506,6 +529,13 @@ dependencies {
     // The only thing in the module that can play a video. There is no
     // VideoView and no MediaPlayer here either; see ui/media/VideoPlayer.kt.
     implementation(libs.media3.exoplayer)
+    // HLS is a separate artifact. `media3-exoplayer` alone has no `.m3u8`
+    // parser and no `HlsMediaSource`, so a playlist handed to it fails with an
+    // unrecognised-format error rather than playing: the watch party's whole
+    // media path is this one line plus the player that uses it. Kept explicit
+    // rather than folded into the line above so nobody removes it as a
+    // duplicate.
+    implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.ui)
 
     implementation(libs.clerk.ui)

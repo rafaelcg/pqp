@@ -153,12 +153,45 @@ class WireProtocolTest {
             "voice-roster-delta",
             "voice-room-full",
             "voice-transport-unsupported",
+            // The mid-call promotion. Losing this branch while `WIRE_CAPS`
+            // still asks for the frame is the worst outcome in this file: the
+            // server stops releasing the seat in exchange for the promise, so
+            // the person stays on everybody's roster in a room whose media
+            // they cannot reach. A visible drop became a silent dead call.
+            "voice-transport-changed",
             // The mid-call SPEAK revoke. In a mesh room this client is the
             // only enforcement, so losing the branch is an open microphone.
             "voice-speak-changed",
             "offer",
             "answer",
             "ice-candidate",
+            // The two live-HLS frames, and the reason they are up here rather
+            // than on the ignore list below. `voice-stream` is the playlist
+            // for the room's current screen share; `channel-live` is the same
+            // stream plus the seatless watcher count, sent to everybody who
+            // may VIEW the channel. Losing either branch does not break a
+            // badge: it takes the phone's whole watch party away, because the
+            // player has no other way to learn that a stream exists or that
+            // its URL changed. `channel-live` is also the only thing that
+            // restamps the viewer token, so a client that stopped reading it
+            // would play until the token expired and then stop for good.
+            "voice-stream",
+            "channel-live",
+            // The watch party EVENT, and the reason it is required rather
+            // than ignored. `viewerRole` on this frame is the ONLY thing that
+            // tells this phone whether it is running a party or watching one
+            // before it joins, because `welcome.canStream` is the other
+            // answer and `welcome` arrives after the seat is already taken.
+            // Losing the branch puts the join button back in front of an
+            // audience, which is a seat on the media box per viewer and the
+            // exact cost the seatless design exists to avoid.
+            "watch-party-update",
+            // The server's own "no" to a join. Only ever sent in answer to a
+            // resume today, which this client does not ask for, so the branch
+            // is a floor rather than a live path: `JoinWatchdog` is what
+            // covers the refusals that send nothing. Named here so that it is
+            // deleted deliberately rather than tidied away.
+            "voice-join-refused",
             // the Baú's one live frame
             "community-home-update",
             // handshake
@@ -183,10 +216,6 @@ class WireProtocolTest {
      * branch, so the list cannot go stale in that direction either.
      */
     private val deliberatelyIgnored: Map<String, String> = mapOf(
-        // Sent only in answer to a `join-voice-room` that carried a
-        // `resumePeerId`, and this client never sends one: a socket drop
-        // rebuilds the call from scratch (VoiceController.followConnection).
-        "voice-join-refused" to "Android never resumes a peer id, so this refusal is never addressed to it",
         // Only ever answers a `set-camera`, which Android does not send.
         "camera-denied" to "Android has no camera publishing, so nothing here can be denied",
         // Who is online in the channel. Android draws no member list yet.
@@ -201,37 +230,16 @@ class WireProtocolTest {
         "permissions-update" to "no permission-gated controls on the phone to refresh",
         // Polls render as their message body; votes and closes are web only.
         "poll-update" to "no poll surface on the phone",
-        // Watch party is a desktop feature by design (docs/ANDROID.md).
-        "watch-party" to "no watch party on the phone",
+        // The party's own CHAT frame, which the phone has no panel to put
+        // anywhere. `watch-party-update` is a different frame and IS handled;
+        // see the required list above for what it decides.
+        "watch-party" to "no watch party panel on the phone to render the party in",
         // Watch party scheduling reminder ("T-10 minutes" / "now live"), sent
         // individually per subscriber. No reminders surface on the phone yet.
         "channel-session-reminder" to "no watch party scheduling surface on the phone",
         // Coalesced emoji burst counts for a channel's live reactions. No
         // reaction-overlay surface on the phone yet.
         "live-reactions" to "no live reactions surface on the phone",
-        // The two live-HLS frames. `voice-stream` is the playlist for the
-        // room's current screen share; `channel-live` is the sidebar's "this
-        // room is live" plus its seatless watcher count. Both are behind
-        // LIVE_HLS_ENABLED, both feed a watch surface the phone does not
-        // draw, and Android watches a share over WebRTC when it is in the
-        // call. Neither has ever had a branch here: the entries were missing
-        // rather than the frames being handled, and this test could not say
-        // so because Gradle had cached `testDebugUnitTest` past every change
-        // to `packages/shared`, which is not one of its declared inputs.
-        "voice-stream" to "no HLS watch surface on the phone",
-        "channel-live" to "no live badge or seatless watch surface on the phone",
-        // A mesh room moved onto the voice server mid-call so a fourth camera
-        // would fit. Following it means tearing the mesh down and bringing a
-        // LiveKit session up against the SAME peer id, which this client has
-        // no path for: its own reconnect story is "rebuild, never resume"
-        // (VoiceController.followConnection). The server knows: it only sends
-        // this frame to sockets that declared SOCKET_CAPS.voiceTransportChanged
-        // at auth, which this client does not, and it releases the seats that
-        // did not with `voice-transport-unsupported` instead. So the branch is
-        // missing on purpose and the phone is told, rather than left building
-        // a mesh whose signaling the server has stopped relaying.
-        "voice-transport-changed" to
-            "Android cannot move media mid-call; the server releases its seat with voice-transport-unsupported instead",
     )
 
     /**
@@ -409,53 +417,160 @@ class WireProtocolTest {
     }
 
     /**
-     * THE CAPABILITY THIS BUILD ASKS FOR, against the two places that answer.
+     * The promotion frame, field for field and reason for reason.
      *
-     * `voice-roster-delta` is opt-in per socket: the server sends whole
-     * rosters to anything that does not declare it, so getting the string
-     * wrong, or dropping the array from the handshake, produces no error
-     * anywhere. The app carries on working and the phone quietly keeps paying
-     * for ~99 kB frames it does not need. That is precisely the shape of
-     * CLAUDE.md pitfall 9, where Cloudflare TURN was configured, deployed and
-     * never once used, so the only defence is to pin the string in both
-     * directions rather than trust it.
+     * `VoiceController.onTransportChanged` reads four keys off this frame by
+     * name, out of an undecoded `JsonObject`. A renamed key does not fail to
+     * compile and does not throw: it reads as null, and the plan quietly
+     * declines to move. Since the server has already stopped releasing this
+     * seat, declining is a seat on the roster with no media behind it.
      *
-     * Four hand-copies of one literal: `@pqp/shared`'s schema, the server's
-     * `SOCKET_CAPS`, the web client's `WIRE_CAPS`, and this app's. Three of
-     * them are read off disk here.
+     * The reasons are only the sentence, so a new one is not a failure. It is
+     * checked anyway because `promotionNoticeFor` has an `else` branch, and an
+     * `else` is exactly what makes a new reason invisible.
      */
     @Test
-    fun `the roster delta capability matches the server and the web client`() {
-        val cap = "voice-roster-delta"
+    fun `the promotion frame matches shared`() {
+        val keys = RepoSources.objectKeys(signaling, "voiceTransportChangedMessageSchema")
+        listOf("type", "voiceChannelId", "transport", "reason", "participants").forEach { key ->
+            assertTrue(
+                "voiceTransportChangedMessageSchema no longer carries \"$key\". " +
+                    "VoiceController.onTransportChanged reads it by name off a raw JsonObject, " +
+                    "so a rename reads as null and the promotion is silently not followed.",
+                keys.contains(key),
+            )
+        }
 
-        assertTrue(
-            "$signaling no longer declares the $cap frame, so this app is negotiating " +
-                "a capability that does not exist any more.",
-            RepoSources.frameTypeLiterals(signaling).contains(cap),
+        // Parsed out of the schema's inline `z.enum([...])` rather than a
+        // named const, so the reason list is read where it actually lives.
+        val reasons = Regex("""reason:\s*z\.enum\(\[([^\]]*)]""")
+            .find(RepoSources.stripComments(RepoSources.read(signaling)))
+            ?.groupValues
+            ?.get(1)
+            ?.let { Regex(""""([^"]+)"""").findAll(it).map { m -> m.groupValues[1] }.toSet() }
+            ?: emptySet()
+
+        assertEquals(
+            "The promotion reasons changed. `promotionNoticeFor` in TransportChange.kt maps " +
+                "them onto three sentences and falls back to \"the room grew\", which stays " +
+                "true of any new reason. Check the fallback still reads right, then update " +
+                "this list.",
+            setOf("cameras", "screens", "room-full", "room-size", "stale-pin"),
+            reasons,
         )
-        assertTrue(
-            "server/src/ws/sockets.ts no longer names \"$cap\" in SOCKET_CAPS. The server " +
-                "matches this string exactly; a rename there makes every Android socket " +
-                "silently fall back to whole rosters.",
-            RepoSources.read("server/src/ws/sockets.ts").contains("\"$cap\""),
-        )
+    }
+
+    /**
+     * THE CAPABILITIES THIS BUILD ASKS FOR, against the places that answer.
+     *
+     * Both are opt-in per socket and both fail in silence when the string is
+     * wrong. `voice-roster-delta` fails cheaply: the server keeps sending
+     * whole rosters, the app works, and the phone quietly pays for ~99 kB
+     * frames it does not need. `voice-transport-changed` fails *expensively*
+     * in the other direction: the server stops releasing the seat of a socket
+     * that declared it, so a build whose string is right but whose handler is
+     * missing leaves the person on everybody's roster in a room whose media
+     * they cannot reach.
+     *
+     * That is CLAUDE.md pitfall 9 in both directions, so the strings are
+     * pinned against every other copy rather than trusted. Four hand-copies of
+     * each literal: `@pqp/shared`'s schema, the server's `SOCKET_CAPS`, the
+     * web client's `WIRE_CAPS`, and this app's. Three of them are read off
+     * disk here.
+     *
+     * Exact equality on the list, not `contains`, so adding an entry without
+     * its handler fails here and has to be argued for in the diff.
+     */
+    @Test
+    fun `the capabilities this build negotiates match the server and the web client`() {
+        val caps = listOf("voice-roster-delta", "voice-transport-changed")
+
+        for (cap in caps) {
+            assertTrue(
+                "$signaling no longer declares the $cap frame, so this app is negotiating " +
+                    "a capability that does not exist any more.",
+                RepoSources.frameTypeLiterals(signaling).contains(cap),
+            )
+            assertTrue(
+                "server/src/ws/sockets.ts no longer names \"$cap\" in SOCKET_CAPS. The server " +
+                    "matches this string exactly, and a rename there is silent on both sides.",
+                RepoSources.read("server/src/ws/sockets.ts").contains("\"$cap\""),
+            )
+            assertTrue(
+                "client/src/lib/realtime.ts no longer declares \"$cap\". The two clients must " +
+                    "ask for the same string; a phone left behind is a phone paying for frames " +
+                    "the browser stopped receiving, or sitting in a call it cannot hear.",
+                RepoSources.read("client/src/lib/realtime.ts").contains("\"$cap\""),
+            )
+        }
+
         assertTrue(
             "server/src/ws/index.ts no longer reads `caps` off the auth frame, so nothing " +
                 "this handshake declares is heard at all.",
             RepoSources.stripComments(RepoSources.read(wsIndex)).contains("caps"),
         )
-        assertTrue(
-            "client/src/lib/realtime.ts no longer declares \"$cap\". The two clients must " +
-                "ask for the same string; a phone left behind is a phone on mobile data " +
-                "paying for frames the browser stopped receiving.",
-            RepoSources.read("client/src/lib/realtime.ts").contains("\"$cap\""),
-        )
 
         assertEquals(
             "RealtimeClient.WIRE_CAPS is the promise this build makes about which frames " +
                 "it can apply. Add an entry only alongside its handler.",
-            listOf(cap),
+            caps,
             RealtimeClient.WIRE_CAPS,
+        )
+    }
+
+    /**
+     * The promise and the handler, tied together in the direction that hurts.
+     *
+     * `voice-transport-changed` is the one capability whose absent handler is
+     * worse than never having asked, because the server withholds the
+     * `voice-transport-unsupported` release in exchange for the declaration.
+     * The test above pins the string; this one pins that the branch it
+     * promises exists and still does the two things the promise is made of.
+     *
+     * WHAT THIS CANNOT PROVE, said here rather than left to be discovered.
+     * No JVM test can show that media actually moves: `LiveKitEngine` needs a
+     * `Context`, a token from the API and a real SFU. So the honest shape of
+     * this check is a call-graph assertion, and it has a hole: a handler that
+     * kept both calls but returned before reaching them would still pass. It
+     * catches the two regressions that actually happen, deleting the branch
+     * and stubbing it out, and it does not catch a deliberate adversary. The
+     * device-level verification this stands in for is in `docs/ANDROID.md`,
+     * "A room promoted mid-call is followed".
+     */
+    @Test
+    fun `declaring the promotion capability means the frame is handled`() {
+        val cap = "voice-transport-changed"
+        if (!RealtimeClient.WIRE_CAPS.contains(cap)) return
+        assertTrue(
+            "RealtimeClient.WIRE_CAPS declares \"$cap\" and no Android source has a `when` " +
+                "branch for it. The server answers that declaration by NOT releasing this " +
+                "seat when a room is promoted, so the call becomes a seat on the roster with " +
+                "no media behind it: silent, and invisible from every screen.",
+            RepoSources.frameTypesHandled().contains(cap),
+        )
+
+        val controller = RepoSources.androidSources.getValue("VoiceController.kt")
+        assertTrue(
+            "VoiceController has a branch for \"$cap\" that never consults " +
+                "`transportChangePlan`. Every rule about which promotions to follow lives " +
+                "there and is tested in TransportChangeTest; a branch that skips it is a " +
+                "branch with no rules.",
+            controller.contains("transportChangePlan("),
+        )
+        assertTrue(
+            "VoiceController handles \"$cap\" without calling `swapTransport(plan.transport)`. " +
+                "That call IS the move: it disposes the mesh engine and builds the LiveKit " +
+                "one. Without it this build declares it will follow a promotion, the server " +
+                "keeps its seat instead of releasing it, and the person sits in a room whose " +
+                "media they cannot reach.",
+            controller.contains("swapTransport(plan.transport)"),
+        )
+        assertTrue(
+            "VoiceController handles \"$cap\" without starting the new engine against the " +
+                "peer id it already had. A promotion is not a rejoin: the seat, the peer id " +
+                "and the roster entry are kept, and `engine.start(plan.peerId` is what keeps " +
+                "them.",
+            controller.contains("engine.start(plan.peerId"),
         )
     }
 

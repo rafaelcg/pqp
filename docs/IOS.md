@@ -758,7 +758,37 @@ xcodebuild -project pqp.xcodeproj -scheme pqp \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 ```
 
-They will fail without the server running. That is intentional.
+They will fail without the server running. That is intentional. The unit
+target alone needs nothing (`-only-testing:pqpTests`, minus
+`AttachmentUploadTests`, which wants the API and MinIO).
+
+### A phantom missing-string error from a build you ran months ago
+
+`Scripts/check-localization.py` compares the string catalogue against the
+compiler's `.stringsdata`, and it reads **every architecture directory** under
+`Objects-normal`, unioning the result. Nothing prunes a directory for an
+architecture the current destination does not build.
+
+So a derived-data folder that once built an `x86_64` simulator keeps that
+architecture's `.stringsdata` forever. Build for an Apple Silicon simulator
+today and only `arm64` is regenerated; the check still reads the stale
+`x86_64` copy and reports errors from a version of the source that no longer
+exists. The symptom is specific and very convincing:
+
+```
+CallModel.swift:252: error: "Could not start the camera." is user-facing copy
+with no entry in Localizable.xcstrings
+```
+
+The string IS in the catalogue, and `CallModel.swift:252` is not even a string
+literal any more. The line number belongs to the file as it was on the day of
+the stale build.
+
+Two tells: the reported line does not contain the string, and
+`ls -la <derivedData>/Build/Intermediates.noindex/pqp.build/Debug-iphonesimulator/pqp.build/Objects-normal/`
+shows one architecture dated months before the other. The fix is a fresh
+`-derivedDataPath`, or deleting the stale architecture directory. Do not go
+looking for the string: it is not missing.
 
 ## Your own data: export and deletion
 

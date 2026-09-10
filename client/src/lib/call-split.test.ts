@@ -25,11 +25,13 @@ const {
   clampSplit,
   loadCallSplit,
   nudgeSplit,
+  resolveCollapsed,
   resolveOrientation,
   saveCallSplit,
   splitAvailable,
   splitBounds,
   splitFraction,
+  strongestStageShape,
 } = await import("./call-split");
 
 const STACKED = splitBounds("stacked");
@@ -37,9 +39,7 @@ const STACKED = splitBounds("stacked");
 describe("clampSplit", () => {
   it("gives the stage the stored fraction of the usable pane", () => {
     // 908 of pane, 8 of divider: 900 usable, 60% of it to the stage.
-    expect(
-      clampSplit({ fraction: 0.6, container: 908, ...STACKED }),
-    ).toBe(540);
+    expect(clampSplit({ fraction: 0.6, container: 908, ...STACKED })).toBe(540);
   });
 
   it("refuses to drag the stage below its minimum", () => {
@@ -72,9 +72,9 @@ describe("clampSplit", () => {
 
   it("survives a container of zero, which is what an unmeasured pane reports", () => {
     expect(clampSplit({ fraction: 0.6, container: 0, ...STACKED })).toBe(0);
-    expect(clampSplit({ fraction: 0.6, container: Number.NaN, ...STACKED })).toBe(
-      0,
-    );
+    expect(
+      clampSplit({ fraction: 0.6, container: Number.NaN, ...STACKED }),
+    ).toBe(0);
   });
 
   it("treats a corrupt fraction as the middle rather than throwing", () => {
@@ -97,7 +97,8 @@ describe("clampSplit", () => {
 
 describe("splitAvailable", () => {
   it("is false where the pane cannot hold both minimums plus the divider", () => {
-    const floor = MIN_STAGE_HEIGHT_PX + MIN_CHAT_HEIGHT_PX + CALL_SPLIT_DIVIDER_PX;
+    const floor =
+      MIN_STAGE_HEIGHT_PX + MIN_CHAT_HEIGHT_PX + CALL_SPLIT_DIVIDER_PX;
     expect(splitAvailable(floor - 1, "stacked")).toBe(false);
     expect(splitAvailable(floor, "stacked")).toBe(true);
     // A landscape phone, which is the case that must keep today's layout.
@@ -202,16 +203,27 @@ describe("stored preference", () => {
   });
 
   it("survives a reload", () => {
-    saveCallSplit({ orientation: "side-by-side", stacked: 0.4, side: 0.55 });
+    saveCallSplit({
+      orientation: "side-by-side",
+      stacked: 0.4,
+      side: 0.55,
+      collapsed: "none",
+    });
     expect(loadCallSplit()).toEqual({
       orientation: "side-by-side",
       stacked: 0.4,
       side: 0.55,
+      collapsed: "none",
     });
   });
 
   it("keeps the two orientations' fractions apart", () => {
-    saveCallSplit({ orientation: "stacked", stacked: 0.3, side: 0.8 });
+    saveCallSplit({
+      orientation: "stacked",
+      stacked: 0.3,
+      side: 0.8,
+      collapsed: "none",
+    });
     const loaded = loadCallSplit();
     expect(loaded.stacked).toBe(0.3);
     expect(loaded.side).toBe(0.8);
@@ -229,6 +241,176 @@ describe("stored preference", () => {
       orientation: "stacked",
       stacked: CALL_SPLIT_DEFAULT.stacked,
       side: 1,
+      collapsed: "none",
     });
+  });
+});
+
+describe("collapsing a pane", () => {
+  it("starts with neither pane put away", () => {
+    expect(CALL_SPLIT_DEFAULT.collapsed).toBe("none");
+  });
+
+  it("survives a reload, and is shared by both orientations", () => {
+    // "Put the chat away" is a wish about what somebody wants to look at, not
+    // about whether the panes are stacked. Rotating the layout must not read
+    // as the app forgetting.
+    saveCallSplit({
+      orientation: "stacked",
+      stacked: 0.5,
+      side: 0.6,
+      collapsed: "chat",
+    });
+    const loaded = loadCallSplit();
+    expect(loaded.collapsed).toBe("chat");
+    // And the orientation the pane happens to draw does not change the answer.
+    expect(resolveCollapsed(loaded.collapsed, "expanded")).toBe("chat");
+  });
+
+  it("reads a preference written before this existed as neither", () => {
+    // The shape every account already has in localStorage today. Failing
+    // towards "both panes visible" is the only safe direction: the opposite
+    // is somebody staring at a layout with no way back that they never asked
+    // for.
+    store.set(
+      "pqp:call-split",
+      JSON.stringify({ orientation: "side-by-side", stacked: 0.4, side: 0.7 }),
+    );
+    const loaded = loadCallSplit();
+    expect(loaded.collapsed).toBe("none");
+    // The rest of the older preference is still honoured.
+    expect(loaded.orientation).toBe("side-by-side");
+    expect(loaded.side).toBe(0.7);
+  });
+
+  it("reads an unknown value as neither, rather than hiding a pane", () => {
+    store.set(
+      "pqp:call-split",
+      JSON.stringify({ orientation: "stacked", collapsed: "everything" }),
+    );
+    expect(loadCallSplit().collapsed).toBe("none");
+  });
+
+  it("is only honoured where there are two panes to arrange", () => {
+    // Same rule as the orientation: stored is what they asked for, this is
+    // what the pane can honour now. Putting the chat away to make room for a
+    // slim call bar is not a thing anybody means.
+    expect(resolveCollapsed("chat", "expanded")).toBe("chat");
+    expect(resolveCollapsed("stage", "expanded")).toBe("stage");
+    for (const shape of ["none", "compact", "fullscreen"] as const) {
+      expect([shape, resolveCollapsed("chat", shape)]).toEqual([shape, "none"]);
+    }
+  });
+
+  it("does not write, so the collapse comes back when a picture does", () => {
+    // `resolveCollapsed` is pure. The stored value is untouched by a stage
+    // that happens to be empty right now.
+    saveCallSplit({ ...CALL_SPLIT_DEFAULT, collapsed: "chat" });
+    expect(resolveCollapsed("chat", "none")).toBe("none");
+    expect(loadCallSplit().collapsed).toBe("chat");
+  });
+
+  it("keeps honouring a collapsed stage while the stage still reports itself", () => {
+    // THE LOOP THIS PINS. Hiding the pane rather than unmounting it is what
+    // keeps `shape` at "expanded" while the stage is put away. Unmount it and
+    // the shape falls to "none", this returns "none", and the stage comes
+    // straight back: a click that undoes itself. The component test asserts
+    // the hiding; this asserts why it matters.
+    expect(resolveCollapsed("stage", "expanded")).toBe("stage");
+    expect(resolveCollapsed("stage", "none")).toBe("none");
+  });
+});
+
+describe("strongestStageShape", () => {
+  it("is none when nobody is claiming anything", () => {
+    expect(strongestStageShape([])).toBe("none");
+    expect(strongestStageShape([undefined, "none"])).toBe("none");
+  });
+
+  it("takes the strongest claim, not the latest", () => {
+    // The bug: a watch party channel mounts the party panel, the watch stage
+    // and the call stage together. The one that unmounts reports "none" about
+    // ITSELF, and under last-write-wins that flattened the pane while another
+    // was still showing a picture.
+    expect(strongestStageShape(["expanded", "none"])).toBe("expanded");
+    expect(strongestStageShape(["none", "expanded"])).toBe("expanded");
+    expect(strongestStageShape(["none", "compact", "expanded"])).toBe(
+      "expanded",
+    );
+  });
+
+  it("lets fullscreen beat everything, because it has taken the window", () => {
+    expect(strongestStageShape(["expanded", "fullscreen", "none"])).toBe(
+      "fullscreen",
+    );
+  });
+
+  it("keeps compact above none, so a slim bar still reports itself", () => {
+    expect(strongestStageShape(["none", "compact"])).toBe("compact");
+  });
+});
+
+
+describe("collapsing a pane", () => {
+  it("starts with neither pane put away", () => {
+    expect(CALL_SPLIT_DEFAULT.collapsed).toBe("none");
+  });
+
+  it("survives a reload, and is shared by both orientations", () => {
+    // "Put the chat away" is a wish about what somebody wants to look at, not
+    // about whether the panes are stacked. Rotating the layout must not read
+    // as the app forgetting.
+    saveCallSplit({
+      orientation: "stacked",
+      stacked: 0.5,
+      side: 0.6,
+      collapsed: "chat",
+    });
+    expect(loadCallSplit().collapsed).toBe("chat");
+  });
+
+  it("reads an unknown value as neither, rather than hiding a pane", () => {
+    // Failing towards "both panes visible" is the only safe direction: the
+    // opposite is a person staring at a layout with no way back that they
+    // never asked for.
+    store.set(
+      "pqp:call-split",
+      JSON.stringify({ orientation: "stacked", collapsed: "everything" }),
+    );
+    expect(loadCallSplit().collapsed).toBe("none");
+  });
+
+  it("is only honoured where there are two panes to arrange", () => {
+    // Same rule as the orientation: stored is what they asked for, this is
+    // what the pane can honour now. Putting the chat away to make room for a
+    // slim call bar is not a thing anybody means.
+    expect(resolveCollapsed("chat", "expanded")).toBe("chat");
+    expect(resolveCollapsed("stage", "expanded")).toBe("stage");
+    for (const shape of ["none", "compact", "fullscreen"] as const) {
+      expect([shape, resolveCollapsed("chat", shape)]).toEqual([shape, "none"]);
+    }
+  });
+
+  it("does not write, so the collapse comes back when a picture does", () => {
+    // `resolveCollapsed` is pure. The stored value is untouched by a stage
+    // that happens to be empty right now.
+    saveCallSplit({ ...CALL_SPLIT_DEFAULT, collapsed: "chat" });
+    expect(resolveCollapsed("chat", "none")).toBe("none");
+    expect(loadCallSplit().collapsed).toBe("chat");
+  });
+});
+
+describe("collapsing does not undo itself", () => {
+  it("keeps honouring a collapsed stage while the stage still reports expanded", () => {
+    // THE LOOP THIS PINS. The first cut UNMOUNTED the collapsed pane, which
+    // took its `onShapeChange` reporter with it, so the pane's shape fell to
+    // "none", `resolveCollapsed` stopped honouring the collapse, and the stage
+    // came straight back: a click that undid itself. The component hides the
+    // pane instead, so the shape stays `expanded` and this stays "stage".
+    expect(resolveCollapsed("stage", "expanded")).toBe("stage");
+    // And the failure mode, written down: if the shape ever did fall away,
+    // the collapse is dropped rather than leaving somebody with two hidden
+    // panes and no divider to restore from.
+    expect(resolveCollapsed("stage", "none")).toBe("none");
   });
 });

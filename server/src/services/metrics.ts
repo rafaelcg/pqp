@@ -3,7 +3,15 @@ import { getPool } from "../db.js";
 import { runtimeSnapshot, type RuntimeMetrics } from "../lib/runtime.js";
 import { checkReady, type ReadyReport } from "./ready.js";
 import { readSfuStats, type SfuStats } from "../voice/sfu-stats.js";
+import { readStatusHistory, type StatusHistory } from "./status.js";
 import { getVoiceActivitySnapshot } from "../ws/voice.js";
+import {
+  isLiveHlsEnabled,
+  liveHlsActivity,
+  liveHlsConfig,
+} from "../voice/hls-egress.js";
+import { countDueSessions } from "../voice/hls-cleanup.js";
+import { processRole, runsColdJobs } from "../lib/process-role.js";
 import { getPresenceFanoutStats } from "../ws/chat.js";
 import {
   acquisitionReport,
@@ -90,6 +98,16 @@ export interface AdminMetrics {
    * are meant to be compared, not confused.
    */
   sfu: SfuStats;
+  /**
+   * Per-component latency over the last 24 hours, bucketed, plus each
+   * component's own p50 and p95.
+   *
+   * Deliberately here and not on `/status.json`: a latency curve is a load
+   * curve, and the public page is allowed to say only "up" and "how often".
+   * See services/status.ts. Null when the history query failed, which must
+   * not cost the dashboard its counts.
+   */
+  statusHistory: StatusHistory | null;
   users: {
     total: number;
     last24h: number;
@@ -145,6 +163,47 @@ export interface AdminMetrics {
       framesReceived: number;
     };
     /**
+     * WHETHER ANYBODY IS SITTING IN A CALL THEY LEFT.
+     *
+     * `idleOverAnHour` counts seats nothing has written to in an hour, and
+     * `oldestIdleMinutes` is the worst of them. A seat is written on join, on
+     * every state change and on resume, so a row untouched that long is
+     * either somebody genuinely silent or a seat with nobody behind it. The
+     * night of 2026-09-08 had ten of them, one fifteen hours old, and no
+     * number anywhere on this dashboard said so.
+     *
+     * `staleRowWritesRefused` and `ghostsSwept` are the mechanism, since the
+     * last deploy, on the instance that answered: a write that would have
+     * resurrected a deleted seat, and one that got through and had to be
+     * swept. Both belong at zero.
+     *
+     * Null when `VOICE_REGISTRY` is off: no rows, nothing to read, and a zero
+     * would claim an all-clear the deployment cannot give.
+     */
+    seats: {
+      idleOverAnHour: number;
+      oldestIdleMinutes: number | null;
+      staleRowWritesRefused: number;
+      ghostsSwept: number;
+      /**
+       * Mesh seats released at once instead of held, because the socket never
+       * declared `mesh-resume`. Zero until `VOICE_MESH_RESUME_REQUIRES_CAP`
+       * is on; after the flip it is what says the rule is doing something,
+       * and the `mesh-resume` socket fraction is what says whether it still
+       * needs to.
+       */
+      meshHoldsRefused: number;
+      /**
+       * Sockets declaring `mesh-resume`, against `voice.roster.sockets`. What
+       * an operator reads before flipping `VOICE_MESH_RESUME_REQUIRES_CAP`:
+       * phones never declare it, so this converges on the browser share, not
+       * on the total.
+       */
+      meshResumeSockets: number;
+      /** Authenticated sockets right now: the denominator for the line above. */
+      sockets: number;
+    } | null;
+    /**
      * What the roster fan-out is doing since the last deploy: how many frames
      * went out as a delta against how many went out whole, and how many
      * sockets asked for deltas at all. The second pair is the denominator that
@@ -185,6 +244,68 @@ export interface AdminMetrics {
       /** ISO, or null when this process cannot say cheaply (see voice.ts). */
       openedAt: string | null;
     }[];
+  };
+  /**
+   * LIVE HLS: WHETHER A WATCH PARTY EVER ACTUALLY TRANSCODED, AND WHETHER ITS
+   * RECORDINGS ARE BEING DELETED.
+   *
+   * This block exists because the feature could be fully deployed, fully
+   * configured, and silently doing nothing, with no number anywhere saying so.
+   * `/ready` answers whether the bucket is reachable; this answers whether it
+   * is being used. The three that matter, in the order to read them:
+   *
+   *  - `enabled` / `configured`: the flag, and the flag plus every secret the
+   *    egress needs. `enabled: true, configured: false` is the shape where an
+   *    operator turned it on and nothing can ever start.
+   *  - `sessions` / `rungs`: transcodes running on the instance that
+   *    answered, right now. Zero during a live watch party means the egress
+   *    is not starting and the audience is looking at a blank pane.
+   *  - `uncleaned`: finished sessions past their retention window that still
+   *    hold objects. **This is the one that catches a dead sweep.** It belongs
+   *    at zero and self-corrects within a minute of each party ending. It
+   *    climbs forever, silently, on a deployment where the process that runs
+   *    the sweep cannot reach the bucket, which is exactly what the
+   *    `WORKER_MODE=api` / `pqp-worker` split produced: `pqp-api` has
+   *    `LIVE_HLS_S3_*` and skips every batch job, `pqp-worker` runs them and
+   *    had none of those secrets. Nothing else in this product would have
+   *    shown that except the R2 bill.
+   *
+   * `sweepsHere` says whether the process answering this request is the one
+   * that runs the sweep at all, so a zero can be read as "clean" rather than
+   * "not my job". On the split deployment it is false on `pqp-api`, and the
+   * number to trust for `uncleaned` is still true and shared, because it is a
+   * database count rather than a process counter.
+   */
+  liveHls: {
+    enabled: boolean;
+    configured: boolean;
+    /** Whether `LIVE_HLS_SERVER_ALLOWLIST` confines it to named servers. */
+    allowlisted: boolean;
+    /** Rung names this deployment would encode, lowest first. */
+    ladder: string[];
+    sessions: number;
+    /** `LIVE_HLS_MAX_SESSIONS`: what `sessions` is refused at. */
+    maxSessions: number;
+    rungs: number;
+    oldestSessionMinutes: number | null;
+    /**
+     * Live sessions whose transcode has no audio track at all: the share was
+     * picked without its own audio, so the seatless audience is watching a
+     * silent film while the seated room hears every microphone. Not an error
+     * on its own, and the number to look at during a film night.
+     */
+    silentSessions: number;
+    /**
+     * Leftover transcodes the monitor has stopped since this process started:
+     * handlers still running on the media box for a room whose session this
+     * process had already replaced. Belongs at zero; anything else is a leak
+     * whose only other symptom is the box getting slower.
+     */
+    orphansStopped: number;
+    /** Sessions past retention that still hold objects. Belongs at zero. */
+    uncleaned: number;
+    /** Whether this process runs the retention sweep (`WORKER_MODE`). */
+    sweepsHere: boolean;
   };
   topServers24h: {
     name: string;
@@ -496,6 +617,16 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
   // two calls and render with no name at all.
   const voice = await getVoiceActivitySnapshot();
 
+  // Live HLS. The flag, the ladder and the running transcodes are all
+  // in-process reads; only `uncleaned` costs a query, and it is a COUNT over
+  // an index-shaped predicate on a table with one row per rendition per
+  // party. A failure here must not take the whole dashboard down: a null
+  // would be indistinguishable from zero on the one number that matters, so
+  // it falls back to -1, which reads as "could not ask" rather than "clean".
+  const hlsFlag = liveHlsConfig();
+  const hlsActivity = liveHlsActivity();
+  const hlsUncleaned = await countDueSessions().catch(() => -1);
+
   // The tab detail, in a second round of parallel queries. It is separate from
   // the block above only for readability; both rounds are inside the same
   // 30-second cache entry, so a dashboard switching tabs never touches the API.
@@ -517,6 +648,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     recentFeedback,
     voiceRoomNames,
     productCounts,
+    statusHistory,
   ] = await Promise.all([
     pool.query<{ private_text: string; dm: string; grp: string }>(
       `SELECT COUNT(*) FILTER (
@@ -725,6 +857,9 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
          (SELECT COUNT(*) FROM push_subscriptions WHERE platform = 'web')::text AS push_web,
          (SELECT COUNT(*) FROM push_subscriptions WHERE platform = 'apns')::text AS push_apns`,
     ),
+    // A history that failed to read must not cost the dashboard its counts:
+    // the sparklines vanish, every number stays.
+    readStatusHistory().catch(() => null),
   ]);
 
   const channelCounts = { text: 0, voice: 0, category: 0, thread: 0 };
@@ -744,6 +879,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
     cacheTtlSeconds: CACHE_TTL_MS / 1000,
     version: process.env.APP_VERSION?.trim() || null,
     excludedAccounts: EXCLUDED_ACCOUNTS,
+    statusHistory,
     users: {
       total: Number(users.rows[0]?.total ?? 0),
       last24h: Number(users.rows[0]?.last24h ?? 0),
@@ -772,6 +908,7 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
       peakTrackedSince: voice.peakTrackedSince,
       backend: voice.backend,
       cluster: voice.cluster,
+      seats: voice.seats,
       roster: voice.roster,
       rooms: voice.rooms.map((room) => {
         const named = roomNames.get(room.voiceChannelId);
@@ -784,6 +921,20 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
           openedAt: room.openedAt,
         };
       }),
+    },
+    liveHls: {
+      enabled: hlsFlag.enabled,
+      configured: isLiveHlsEnabled(),
+      allowlisted: hlsFlag.allowlisted,
+      ladder: hlsFlag.ladder.map((rung) => rung.name),
+      sessions: hlsActivity.sessions,
+      maxSessions: hlsActivity.maxSessions,
+      rungs: hlsActivity.rungs,
+      oldestSessionMinutes: hlsActivity.oldestMinutes,
+      silentSessions: hlsActivity.silentSessions,
+      orphansStopped: hlsActivity.orphansStopped,
+      uncleaned: hlsUncleaned,
+      sweepsHere: runsColdJobs(processRole()),
     },
     topServers24h: topServers.rows.map((row) => ({
       name: row.name,

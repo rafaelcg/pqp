@@ -95,6 +95,7 @@ function serverMessage(overrides: Partial<Message> = {}): Message {
     pinnedBy: null,
     embeds: [],
     isWebhook: false,
+    isAutomod: false,
     webhookEmbeds: [],
     mentionEveryone: false,
     mentionHere: false,
@@ -268,6 +269,20 @@ describe("optimistic sending", () => {
     );
     expect(copy.key).toBe("composer.slowMode");
     expect(copy.vars).toEqual({ seconds: 12 });
+  });
+
+  it("names an AutoMod rejection and prefers the owner's own copy", () => {
+    expect(failedSendKey("automod")).toBe("chat.reject.automod");
+    expect(failedSendCopy({ rejectReason: "automod" })).toEqual({
+      key: "chat.reject.automod",
+    });
+    expect(
+      failedSendCopy({ rejectReason: "automod", automodMessage: "Aqui não." }),
+    ).toEqual({ key: "chat.reject.automod", text: "Aqui não." });
+  });
+
+  it("does not offer retry on an AutoMod refusal", () => {
+    expect(messageCanRetry({ failed: true, rejectReason: "automod" })).toBe(false);
   });
 
   it("does not offer retry on a permanent refusal", () => {

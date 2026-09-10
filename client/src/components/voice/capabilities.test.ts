@@ -200,27 +200,52 @@ describe("canShareScreenAudio", () => {
         isDesktopShell: true,
         shellPlatform: "darwin",
         supportsRestrictOwnAudio: false,
+        sharePickerOffersAudio: false,
       }),
     ).toBe(false);
   });
 
-  it("is true in the Windows shell, where loopback is real", () => {
+  it("is true in a Windows shell that can strip its own playback", () => {
     expect(
       canShareScreenAudio({
         isDesktopShell: true,
         shellPlatform: "win32",
         supportsRestrictOwnAudio: true,
+        sharePickerOffersAudio: false,
       }),
     ).toBe(true);
   });
 
-  it("is true in any browser, because there it governs tab audio", () => {
+  it("is false in a Windows shell that cannot strip the call out", () => {
+    expect(
+      canShareScreenAudio({
+        isDesktopShell: true,
+        shellPlatform: "win32",
+        supportsRestrictOwnAudio: false,
+        sharePickerOffersAudio: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("is true in a browser that can strip the call out of the tap", () => {
+    expect(
+      canShareScreenAudio({
+        isDesktopShell: false,
+        shellPlatform: null,
+        supportsRestrictOwnAudio: true,
+        sharePickerOffersAudio: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("is false in a browser that cannot strip the call out", () => {
     expect(
       canShareScreenAudio({
         isDesktopShell: false,
         shellPlatform: null,
         supportsRestrictOwnAudio: false,
+        sharePickerOffersAudio: false,
       }),
-    ).toBe(true);
+    ).toBe(false);
   });
 });

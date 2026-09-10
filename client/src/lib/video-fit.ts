@@ -37,14 +37,29 @@
 
 export type VideoFit = "cover" | "contain";
 
-/** Which kind of picture. The two are remembered separately. */
-export type VideoFitKind = "camera" | "screen";
+/**
+ * Which kind of picture. Each is remembered separately.
+ *
+ * `watch` is the HLS watch stage, and it is deliberately NOT the same value as
+ * `screen` even though both are somebody's monitor. The question is the same
+ * but the context is not: a `screen` tile sits in a grid beside faces, where
+ * a crop eats a toolbar and is almost never wanted, while the watch stage owns
+ * a whole pane and somebody watching a 16:9 film on a 16:10 pane may quite
+ * reasonably want the bars gone. One shared value would make choosing in one
+ * place silently change the other, which is the mistake the two existing kinds
+ * were split to avoid.
+ *
+ * It defaults to `contain` like `screen`, so nothing about a first render
+ * changes.
+ */
+export type VideoFitKind = "camera" | "screen" | "watch";
 
 export type VideoFitPreference = Record<VideoFitKind, VideoFit>;
 
 export const VIDEO_FIT_DEFAULT: VideoFitPreference = {
   camera: "cover",
   screen: "contain",
+  watch: "contain",
 };
 
 const STORAGE_KEY = "pqp:video-fit";
@@ -81,6 +96,7 @@ export function loadVideoFit(): VideoFitPreference {
     return {
       camera: readFit(value.camera, VIDEO_FIT_DEFAULT.camera),
       screen: readFit(value.screen, VIDEO_FIT_DEFAULT.screen),
+      watch: readFit(value.watch, VIDEO_FIT_DEFAULT.watch),
     };
   } catch {
     // Denied storage, or half-written JSON. Both defaults are a working

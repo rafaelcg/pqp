@@ -6,6 +6,8 @@ on:
   workflow_run:
     workflows: [CI]
     types: [completed]
+    # Without this, every PR CI completion starts a skipped deploy job.
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -27,6 +29,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # workflow_run checks out the default branch by default, which is
+          # not necessarily the commit CI just passed. Pin it the same way
+          # deploy-api-fly.yml does so two close merges cannot ship a SHA
+          # whose CI has not finished.
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Setup pnpm
         # Version comes from the root package.json "packageManager" field.
@@ -102,6 +110,24 @@ jobs:
           VITE_SPONSOR_URL: "https://github.com/sponsors/rafaelcg"
           VITE_PIX_KEY: ${{ vars.VITE_PIX_KEY }}
           VITE_PIX_BRCODE: ${{ vars.VITE_PIX_BRCODE }}
+          # Watch parties, live reactions and the schedule hint. BUILD-TIME
+          # flags: `lib/watch-party-channels.ts`, `lib/live-reactions.ts` and
+          # `lib/channel-session-schedule.ts` each read their own env at bundle
+          # time, so a server flag cannot turn any of them on. Until these
+          # lines existed the names were absent from this workflow entirely,
+          # which meant production could not render a watch party whatever
+          # `LIVE_HLS_ENABLED` said on the API. Unset is still off — the
+          # variables do not exist yet, and `${{ vars.X }}` on a name that is
+          # not set is the empty string, which is not "true". Repository
+          # variables rather than secrets: none of the three is a credential,
+          # and each is readable in the shipped bundle. Set one with
+          # `gh variable set VITE_WATCH_PARTY_CHANNELS --body true` and
+          # redeploy web; unset it (or set anything but `true`) to turn it
+          # back off without touching this file. Staging turns all three on by
+          # default; see deploy-staging.yml.
+          VITE_WATCH_PARTY_CHANNELS: ${{ vars.VITE_WATCH_PARTY_CHANNELS }}
+          VITE_WATCH_PARTY_SCHEDULE: ${{ vars.VITE_WATCH_PARTY_SCHEDULE }}
+          VITE_LIVE_REACTIONS: ${{ vars.VITE_LIVE_REACTIONS }}
         run: pnpm --filter @pqp/client build
 
       # Install wrangler outside the pnpm workspace (npm + workspace:* fails in client/)
@@ -129,8 +155,13 @@ jobs:
           TMP="$(mktemp -d)"
           (cd "$TMP" && npm init -y >/dev/null && npm install wrangler@4 --no-fund --no-audit)
           cd "$GITHUB_WORKSPACE/client"
+          # `--branch=main` is what makes this a PRODUCTION deploy. Wrangler
+          # otherwise reads the branch off the checkout, and a workflow_run
+          # checkout pinned to a SHA is a detached HEAD, which it reports as
+          # "head": every deploy after #385 went to the head.pqp-3yr.pages.dev
+          # preview and production sat on the last push-triggered build.
           "$TMP/node_modules/.bin/wrangler" pages deploy dist \
-            --project-name=pqp --commit-dirty=true
+            --project-name=pqp --branch=main --commit-dirty=true
 
       # The middleware is only useful if it is actually in the bundle. A grep is
       # a poor test and a fine tripwire: it fails the deploy on the one mistake

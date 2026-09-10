@@ -2,6 +2,7 @@ import type { VoiceSignalingMessage } from "@pqp/shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTransport } from "@/lib/realtime";
 import type { RemotePeer } from "@/lib/peer-connection-manager";
+import type { RemoteAudioPlan } from "@/lib/remote-audio-delivery";
 
 /**
  * The client obeys the room's transport, or leaves and says so.
@@ -71,6 +72,9 @@ vi.mock("@/lib/peer-connection-manager", () => ({
     managers.push(stub);
     return {
       setLocalStream: () => {},
+      // Null is "nothing measured", which is the old constant: these
+      // fakes hold no peer connections to read an uplink from.
+      measureUplinkBps: async () => null,
       setLocalScreenStream: async (stream: MediaStream | null) => {
         stub.screenStreams.push(stream);
       },
@@ -119,9 +123,18 @@ const sfuScreenPublishes: (MediaStream | null)[] = [];
 const sfuMicPublishes: MediaStream[] = [];
 /** Every LiveKit publication mute the stub was asked for, in order. */
 const sfuMuteCalls: boolean[] = [];
+/** Every remote-audio plan the stub was handed, in order. */
+const sfuAudioPlans: RemoteAudioPlan[] = [];
+/**
+ * The last options `connectLiveKit` was called with, so a test can play the
+ * part of the SFU and hand the hook a roster of remote peers.
+ */
+let sfuConnectOptions: { onPeersChanged: (peers: RemotePeer[]) => void } | null =
+  null;
 
 vi.mock("@/lib/livekit-session", () => ({
-  connectLiveKit: vi.fn(async () => ({
+  connectLiveKit: vi.fn(async (options: unknown) => ({
+    __options: (sfuConnectOptions = options as typeof sfuConnectOptions),
     publish: async (stream: MediaStream) => {
       sfuMicPublishes.push(stream);
     },
@@ -141,6 +154,9 @@ vi.mock("@/lib/livekit-session", () => ({
     setScreenMaxBitrate: async () => {},
     setScreenQuality: async () => {},
     setReceiveQuality: async () => {},
+    setAudioDelivery: (plan: RemoteAudioPlan) => {
+      sfuAudioPlans.push(plan);
+    },
     unpublishCamera: async () => {},
     disconnect: async () => {},
     isConnected: () => false,
@@ -407,18 +423,17 @@ describe("screen share audio", () => {
     };
   }
 
-  it("does not ask for the machine's audio, and hides our own tab from the picker", async () => {
-    // The 23 Aug 2026 echo report, pinned. `systemAudio: "include"` was what
-    // captured the call off the machine's own mixer and sent it back to the
-    // people who were speaking. Audio is still REQUESTED, because that is what
-    // keeps a Chrome tab share carrying that tab's sound, which cannot echo.
+  it("lets Chrome offer system audio and strips this document from the tap", async () => {
+    // The 23 Aug 2026 echo was `include` without `restrictOwnAudio`. Chrome
+    // 141+ can strip this document, so `include` is how its picker shows one
+    // "Share system audio" box instead of a hidden pre-arm on our bar.
     const { voice } = await connectedMesh();
     await voice.startScreenShare();
 
     expect(displayMediaCalls).toHaveLength(1);
     expect(displayMediaCalls[0]).toMatchObject({
       audio: { echoCancellation: false, restrictOwnAudio: true },
-      systemAudio: "exclude",
+      systemAudio: "include",
       // The anti-feedback rule: sharing the call's own tab would put the call
       // back into the call.
       selfBrowserSurface: "exclude",
@@ -730,8 +745,13 @@ describe("screen share audio", () => {
       sharing: true,
       audioStreamId: null,
     });
-    // Re-published without the audio half rather than torn down.
-    expect(managers[0]?.screenStreams.at(-1)).not.toBeNull();
+    // Re-published without the audio half rather than TORN DOWN, and the
+    // difference is the test. Doubly optional before: no manager gave
+    // `undefined`, and `.at(-1)` on an empty `screenStreams` gave `undefined`
+    // too, so a share that was dropped and never re-published passed.
+    expect(managers[0]).toBeDefined();
+    expect(managers[0]!.screenStreams.length).toBeGreaterThan(0);
+    expect(managers[0]!.screenStreams.at(-1)).not.toBeNull();
   });
 
   it("hands the ICE servers this tab already holds to the SFU connection", async () => {
@@ -2730,5 +2750,85 @@ describe("watch mode without a seat", () => {
     });
     voice.seedChannelLive(WATCHED, { stream: null, watching: 0 });
     expect(voice.getState().channelLive[WATCHED]?.watching).toBe(5);
+  });
+});
+
+/**
+ * The listener's audio plan, from the hook's side of the seam.
+ *
+ * `remote-audio-delivery.test.ts` owns the rule and
+ * `livekit-session-audio-delivery.test.ts` owns what the session does with
+ * it. What is left, and what nothing else would notice going wrong, is
+ * whether the hook ever tells the session anything: a plan that is built
+ * correctly and never sent saves nothing, and every other test in this file
+ * would still pass.
+ */
+describe("telling the SFU what this listener wants to hear", () => {
+  beforeEach(() => {
+    installBrowserStubs();
+    managers.length = 0;
+    sfuAudioPlans.length = 0;
+    vi.mocked(connectLiveKit).mockClear();
+  });
+
+  async function connectedSfu() {
+    const { transport } = createTransport();
+    const voice = createVoiceController(transport);
+    voice.setSessionProvider(async () => sfuSession());
+    await voice.join(CHANNEL);
+    voice.handleSignaling(welcome("livekit"));
+    await settle();
+    expect(voice.getState().usingSfu).toBe(true);
+    return voice;
+  }
+
+  it("sends a plan that wants everybody as soon as the session is up", async () => {
+    await connectedSfu();
+    expect(sfuAudioPlans.length).toBeGreaterThan(0);
+    const first = sfuAudioPlans[0]!;
+    expect(first.deafened).toBe(false);
+    expect(first.silentVoicePeerIds).toEqual([]);
+  });
+
+  it("sends a deafened plan when the button is pressed, and takes it back", async () => {
+    const voice = await connectedSfu();
+    sfuAudioPlans.length = 0;
+
+    voice.toggleDeafen();
+    await settle();
+    expect(sfuAudioPlans.at(-1)?.deafened).toBe(true);
+
+    voice.toggleDeafen();
+    await settle();
+    expect(sfuAudioPlans.at(-1)?.deafened).toBe(false);
+  });
+
+  it("names the peer whose voice was turned all the way down", async () => {
+    const voice = await connectedSfu();
+
+    // Play the part of the SFU: somebody's microphone is now in the room.
+    sfuConnectOptions!.onPeersChanged([
+      { peerId: "peer-2", userId: "user-2" } as RemotePeer,
+    ]);
+    await settle();
+    sfuAudioPlans.length = 0;
+
+    voice.setPeerVolume("user-2", 0);
+    await settle();
+    expect(sfuAudioPlans.at(-1)?.silentVoicePeerIds).toEqual(["peer-2"]);
+
+    voice.setPeerVolume("user-2", 0.5);
+    await settle();
+    expect(sfuAudioPlans.at(-1)?.silentVoicePeerIds).toEqual([]);
+  });
+
+  it("does not re-send a plan that says the same thing", async () => {
+    const voice = await connectedSfu();
+    sfuAudioPlans.length = 0;
+    voice.setPeerVolume("somebody-not-here", 0.5);
+    await settle();
+    voice.setPeerVolume("somebody-not-here", 0.6);
+    await settle();
+    expect(sfuAudioPlans).toEqual([]);
   });
 });

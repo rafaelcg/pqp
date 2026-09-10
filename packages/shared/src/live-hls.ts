@@ -26,6 +26,31 @@ export const liveHlsStreamSchema = z.object({
    * predates the ladder, where the client leaves the cap alone.
    */
   topHeight: z.number().int().positive().optional(),
+  /**
+   * Whether this transcode has any audio at all.
+   *
+   * A Track Composite egress carries exactly two tracks: the screen share and
+   * the screen share's OWN audio. A share picked without its audio (every
+   * whole-screen and window capture on macOS, and any tab share where the host
+   * left the audio box unticked) publishes no `SCREEN_SHARE_AUDIO` track, so
+   * the egress has nothing to put in the audio channel and the HLS audience
+   * gets a silent film. The host cannot hear that, because they are playing
+   * the thing locally, and the seated room cannot either, because WebRTC is a
+   * different path and carries every microphone.
+   *
+   * So the server states it and the host's transmission panel says it out
+   * loud. Boolean rather than an enum on purpose: a future mixed-audio egress
+   * makes this `true` and describes itself in a second field, where a new enum
+   * member would fail an older client's parse and take the whole frame with
+   * it.
+   *
+   * Absent means "not stated": a server that predates this, or a session this
+   * process adopted after a restart rather than started (the session row does
+   * not carry the audio track sid, only the video one). The client shows
+   * nothing rather than guessing, because a wrong "no audio" warning during a
+   * film that is playing fine is worse than no warning.
+   */
+  hasAudio: z.boolean().optional(),
 });
 
 export type LiveHlsStream = z.infer<typeof liveHlsStreamSchema>;

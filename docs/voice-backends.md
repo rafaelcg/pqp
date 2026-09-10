@@ -242,9 +242,14 @@ server has fewer than ten members, which is a guess about crowd size and says
 nothing about how many of the five who turned up want their faces on.
 
 **What happens now.** When a `set-camera` (or `set-sharing-screen`) would cross
-the mesh cap and LiveKit is configured, the server moves the whole room to the
-SFU and the camera turns on. `CAMERA_LIMIT.livekit` is 8 and
-`SCREEN_SHARE_LIMIT.livekit` is 4, so the cap after the move is the SFU's.
+the mesh limit and LiveKit is configured, the server moves the whole room to
+the SFU and the camera turns on. **Neither `CAMERA_LIMIT.livekit` nor
+`SCREEN_SHARE_LIMIT.livekit` is a number since 2026-09-08**: both are `null`,
+so after the move there is no count at all, only the box's budget. The mesh
+limit that triggered the move is itself measured now rather than fixed at 3
+cameras and 2 shares. See "Unlimited screens, and a mesh limit that is a
+measurement" and "Cameras: the ladder, the bounded grid and the end of the
+count" below.
 
 **Four triggers, one path (2026-09-08).** The same machinery answers three more
 questions, and the `reason` on every log line and every frame says which:
@@ -254,6 +259,7 @@ questions, and the `reason` on every log line and every frame says which:
 | `cameras` | a camera past `CAMERA_LIMIT.mesh` | `camera-denied` |
 | `screens` | a share past `SCREEN_SHARE_LIMIT.mesh` | `screen-share-denied` |
 | `room-full` | a ninth person at the door of a full mesh | `voice-room-full limit=8` |
+| `room-size` | a room reaching `MESH_ROOM_PROMOTION_SIZE` (4) | nothing; the caps waited to be met |
 | `stale-pin` | a join into a mesh room the policy would now open on the SFU | nothing; the pin won |
 
 `room-full` and `stale-pin` came out of one incident. At 16:13Z on 2026-09-08 a
@@ -276,6 +282,36 @@ decision, not a guess, and the policy answers `mesh` for one anyway, so the
 stale-pin trigger leaves it alone by construction), and a client that cannot
 run LiveKit does not get the room moved on its behalf, because the move would
 still not seat it. The budget applies to all four.
+
+**The threshold (`room-size`, 2026-09-08).** The four triggers above all fire
+when somebody MEETS a limit: a camera refused, a share refused, a join refused,
+a pin caught out. Rafael's framing was that meeting them at all is the problem:
+*"a 2 or 3 person call is fine. 4 or 5 becomes a proper thing. I want people to
+be able to share screen or use webcam."* So a room moves at
+`MESH_ROOM_PROMOTION_SIZE` people (**4**, in `packages/shared/src/voice-backend.ts`),
+before anybody asks for anything, and the mesh caps stop being something anybody
+runs into.
+
+Four is where the mesh arithmetic turns as well as where the social shape does:
+`CAMERA_LIMIT.mesh` is 3, so a room of four is the first size at which somebody
+is told no. **Two and three person calls stay peer to peer deliberately**: one
+hop instead of two is the lowest-latency path there is, it costs the media box
+nothing, and it still works when the box does not. Most calls are that size,
+which is also what keeps the box's load proportional to the calls that need it.
+
+`VOICE_PROMOTION_ROOM_SIZE` overrides it, read per join, so the number is
+tunable live (`fly secrets set`, no deploy); `0` switches the trigger off and
+leaves the other four exactly as they were. Anything below 2 is also off, since
+1 would move a room the moment one person opened it. A typo is the default, the
+same rule as the budget.
+
+Sized against production before it shipped: at that day's peak (40 participants,
+33 of them on mesh across 13 rooms, largest 7) roughly four rooms would have
+crossed the threshold, carrying about 21 people. At the day's observed publish
+rate (8 screen shares across 28 seats, no cameras) that is about 45 Mbit/s; with
+every promoted room at the SFU share cap about 120; with every seat publishing
+about 170. The box is measured clean at 880 to 935 (`docs/CAPACITY.md`) and the
+budget refuses past 600, so the guard, not the threshold, is what bounds it.
 
 There is **no database-only way to move a live room**, which is why this
 mechanism exists rather than an `UPDATE`: rewriting `voice_rooms.transport`
@@ -312,7 +348,8 @@ deploy.
 **Log lines:** `voice.transportPromoted` (room, user, reason, room size,
 `loadMbps`, `addedMbps`, `budgetMbps`), `voice.transportPromotionRefused` (the
 same plus `refusal`: `unconfigured` / `unreachable` / `budget` /
-`mesh-override` / `joiner-cannot-follow`), and
+`mesh-override` / `joiner-cannot-follow`; a refused `room-size` also carries
+`threshold`), and
 `voice.transportPromotionApplied` (per instance: how many seats moved, how many
 were released, how many were orphans left alone).
 
@@ -322,6 +359,40 @@ The local camera and share caps now defer to the server on a mesh room that
 could move (`VoiceState.canPromoteTransport`, `isCameraAtCap`'s fourth
 argument): refusing locally is what made the mesh cap a wall, because the
 click never reached the server and the server never got to move the room.
+
+**The seam with the uplink strain warning.** `useShareUplinkStrain`
+(`client/src/hooks/use-share-uplink-strain.ts`) says "sua conexão está
+segurando esta transmissão" on the share's own status line when the mesh
+upload budget has measured this link and found it short. Promotion removes the
+same pressure a different way, by removing the copies: on the voice server a
+publisher uploads once instead of once per viewer.
+
+They meet at one rule, `shouldMeasureUplink`, and it stops the strain sampler
+the moment the room's transport becomes `livekit`. That rule reads as
+defensive and is not: a room now reaches the voice server at
+`MESH_ROOM_PROMOTION_SIZE` (four), so a share in progress when the fourth person
+walks in is promoted under the presenter, and the hook is then mid-streak on a
+mesh being torn down in the same tick. Left running it would keep reading a
+mesh `PeerConnectionManager.dispose()` has already unregistered, and then read
+the SFU's rows, where a top layer capped at `LARGE_ROOM_SCREEN_BITRATE` under
+an uncapped reported ceiling makes every tick look like `bandwidth`. The
+presenter of a promoted call on fibre would be told their connection was the
+problem, permanently, with nothing on screen to say why. Pinned by the last
+`describe` in `use-share-uplink-strain.test.ts`.
+
+**The uplink measurement itself did become a promotion input.** An earlier
+draft of this section argued it could not: the reading is taken on the client,
+it was not on the wire, and a frame carrying it would let any client spend the
+media box's budget by claiming a bad link. That objection was answered rather
+than avoided. `set-camera` and `set-sharing-screen` now carry `uplinkBps`,
+`clampReportedUplinkBps` believes it only inside the window the budget
+controller itself runs in, the server takes the **narrowest** report in the
+room (so an inflated number buys nothing, because it cannot lower a minimum
+somebody else set), and on the voice server no client number is read at all.
+`meshVideoLimit` derives the mesh camera and share limits from that reading
+and the room size, and reaching the derived limit is one of the promotion
+triggers above. So the same measurement that makes the warning honest also
+makes the limit honest.
 
 **iOS and Android do not follow it yet.** Both support LiveKit rooms, so both
 work perfectly well *in* a promoted room; what neither can do is move an
@@ -346,13 +417,14 @@ conditional pin), `server/src/ws/voice-cluster.test.ts` (two instances),
 
 ### Live HLS (`LIVE_HLS_ENABLED`, staging)
 
-A watch-party screen share can also go out as HLS: a LiveKit Track Composite egress (`server/src/voice/hls-egress.ts`) writes 2 s segments to the dedicated `LIVE_HLS_S3_*` bucket and viewers get the playlist through the signed proxy (`GET /api/voice/hls-playlist/:channelId/:startedAt`, `server/src/voice/hls-playlist-proxy.ts`). The transcode only exists on LiveKit, so a channel with live HLS on is pinned to `livekit` (`reason=hls`) even in a two-person server, ahead of the member-count rows above; the channel override still wins.
+A watch-party screen share can also go out as HLS: a LiveKit Track Composite egress (`server/src/voice/hls-egress.ts`) writes 2 s segments to the dedicated `LIVE_HLS_S3_*` bucket and viewers get the playlist through the signed proxy (`GET /api/voice/hls-playlist/:channelId/:startedAt`, `server/src/voice/hls-playlist-proxy.ts`). The transcode only exists on LiveKit, so a **`watch_party`** channel with live HLS on is pinned to `livekit` (`reason=hls`) even in a two-person server, ahead of the member-count rows above; the channel override still wins. Only that channel type: an ordinary voice channel is decided by the member-count rows exactly as it is with the flag off (`liveHlsForcesSfu` in `transport-policy.ts`), and `pickHlsSharer` refuses to feed a transcode from anywhere but a `watch_party` room. That pair is why `LIVE_HLS_ENABLED` can be set instance-wide without moving unrelated calls onto the media box.
 
 Signed mode (`LIVE_HLS_SIGNED_URLS` unset or `true`) is what production runs: the `pqp-live` bucket is private, the proxy rewrites segment lines into presigned URLs, and the API's own reads (the readiness probe after egress starts, the proxy's playlist fetch) are presigned endpoint-form GETs (`internalPlaylistUrl`). `LIVE_HLS_PUBLIC_BASE_URL` is therefore not part of "configured" in signed mode; it is required only with `LIVE_HLS_SIGNED_URLS=false`, where it is the raw URL a viewer is handed.
 
 - **Per-server gate:** `LIVE_HLS_SERVER_ALLOWLIST`, comma-separated server ids, trimmed. Unset or empty means every server. A server outside the list keeps the normal policy above, `reconcileLiveHls` refuses to start an egress for it (and stops one already running on the next reconcile), and `GET /api/live-hls/config?serverId=<id>` answers `enabled: false` for it. A conversation has no server and is never HLS. `isLiveHlsEnabledForServer` in `hls-egress.ts` is the one function that answers; `decideRoomTransport` in `ws/voice.ts` and `reconcileLiveHls` both call it.
 - **The ladder:** `LIVE_HLS_LADDER`, a comma-separated list of rungs, default `1080p30,720p30`. One egress encodes one profile (`TrackCompositeEgressRequest` carries repeated outputs but a single `options` oneof, protocol 1.50.4 / egress v1.14.1), so a ladder is one egress per rung plus a master playlist listing them. Rungs are `1080p30` (4500 kbit/s), `720p30` (1800), `480p30` (900) and `360p30` (500), each optionally overriding its bitrate (`1080p30@3500`). The bitrates are deliberately not LiveKit's presets: those are 3000 and 4500, a gap of 1.5x, which leaves hls.js only about 1.10x between "switch up" and "switch down" and oscillates. 1800 against 4500 is 2.5x, and makes 720p a real mobile-data rung. `LIVE_HLS_PRESET` still names a one-rung ladder. Anything unreadable logs `voice.hlsLadderInvalid` once per value and is skipped; a list with nothing valid in it falls back to the default.
 - **The master playlist:** `GET /api/voice/hls-playlist/:channelId/:startedAt` now answers the master (one `EXT-X-STREAM-INF` per rendition that actually started, with `BANDWIDTH`, `AVERAGE-BANDWIDTH`, `RESOLUTION`, `FRAME-RATE` and `CODECS`, lowest first), and `.../:rung` answers one rendition's media playlist with its segment lines presigned as before. Variant URIs are root-relative and carry the viewer's own `?t=` token, because relative resolution drops the master's query string but keeps the variant's, which is the only way a header-less player authorises the second request. A session with no rung rows predates the ladder and still gets its single media playlist.
+- **The session cap:** `LIVE_HLS_MAX_SESSIONS`, default 3. The ladder budget below degrades a party and by design never refuses one (the lowest rung always starts), so this is the only thing bounding concurrent transcodes on the media box. The party past the cap gets no HLS, logs `voice.hlsSessionsCapped`, and its WebRTC share still reaches everyone seated in the room. `liveHls.sessions` / `liveHls.maxSessions` on `/api/admin/metrics`.
 - **The budget:** `LIVE_HLS_MAX_LADDER_MBPS`, default 300. A rendition costs roughly one core on moving content and the box is 4 vCPU, so it is priced at a quarter of `VOICE_PROMOTION_MAX_SFU_MBPS` (150 Mbit/s) and checked against both that ladder budget and the promotion budget with the WebRTC already on the box (`estimateSfuLoadMbps`), so the ladder and the cameras cannot each spend the same core. The **lowest rung always starts**: the budget governs the extra renditions, never whether the stream exists. Refusals log `voice.hlsRungRefused` and appear in `voice.hlsStarted`'s `refused` list. A secondary rung that dies mid-stream is dropped from the master and the rest keeps playing (`voice.hlsRungDied`); only the primary dying restarts the session.
 - **The presenter's own picture:** the egress transcodes from the published WebRTC track, so a 720p source cannot produce a 1080p rendition. While a session is live on the channel and the presenter is sharing on the SFU, `screenSimulcastPlan` raises the published top layer to the ladder's top (`stream.topHeight`, post-budget) if the measured uplink can carry it (`availableOutgoingBitrate` off the selected candidate pair, 4 Mbit/s plus 25% headroom; unmeasured allows it). The large-room cap is untouched for an ordinary call with no egress, and the presenter's own smaller pick is never overruled.
 - **The viewer's control:** the player lists the available rungs plus Auto, remembered per browser as a HEIGHT rather than a level index (`client/src/lib/hls-quality.ts`), so a pin survives a restarted egress and falls back to Auto rather than to a neighbour when its rung is gone.
@@ -539,11 +611,11 @@ Neither native mobile client shares the defect: iOS drops every non-video `RPSam
 
 Publish/subscribe works: `publishScreen` tags the track `Track.Source.ScreenShare`, the far side subscribes it into `RemotePeer.screenStream`, and `unpublishScreen` clears it. Verified with two browsers against a live LiveKit.
 
-Concurrent presenters are capped in `ws/voice.ts` on the `set-sharing-screen` frame: **2 on mesh, 4 on LiveKit** (`SCREEN_SHARE_LIMIT`). A claimant past the cap gets `screen-share-denied` and the roster does not add them. Two caveats, both still true under a cap:
+Concurrent presenters are governed in `ws/voice.ts` on the `set-sharing-screen` frame. Since 2026-09-08 there is **no count on the voice server** (`SCREEN_SHARE_LIMIT.livekit` is `null`; the box is priced instead) and the **mesh number is derived from the room's measured uplink** rather than being the constant 2. Both are described under "Unlimited screens, and a mesh limit that is a measurement" below. A claimant past whatever the limit is gets `screen-share-denied` and the roster does not add them. Two caveats, both still true under a limit:
 
 - **The cap binds the roster, not the media.** A client that publishes a `ScreenShare` track without announcing it is not stopped by anything — LiveKit has no such rule and the server cannot see the track. Every other participant subscribes and decodes it. It is never *rendered*, because `ScreenStage` is driven by `screenSharePeerIds` from the roster, so this is a bandwidth-grief vector rather than a way to hijack a slot.
 - **The honest client publishes before it is answered.** `startScreenShare()` sends `set-sharing-screen` and publishes to the SFU without waiting; on a denial, `screen-share-denied` arrives a round trip later and unpublishes. In the simultaneous-click race at the cap a spare screen track is briefly live on the SFU.
-- **Cap 4:** with `adaptiveStream` on (below) a thumbnail share asks for its 360p layer, so four concurrent shares no longer mean four full-rate streams per viewer. Mesh is unchanged: `tuneScreenSender` already budgets per presenter across the peer count, so a second presenter adds no encode cost to the first.
+- **Why a count was safe to drop:** with `adaptiveStream` on (below) a thumbnail share asks for its 360p layer, so concurrent shares do not mean concurrent full-rate streams per viewer. Mesh is different in kind: `tuneScreenSender` budgets per presenter across the peer count, so a second presenter adds no encode cost to the first, but every presenter still uploads one copy per viewer off their own link, which is what the mesh limit is now measured against.
 
 ### Bandwidth: simulcast and receive quality (2026-09-06)
 
@@ -561,6 +633,190 @@ Why: a 100-viewer watch party on 5 Sep 2026 consumed 323 GB of SFU downstream in
 
 **Large-room cap.** Above `LARGE_ROOM_PARTICIPANTS` (20, counted off `room.remoteParticipants` plus self) the top is held at **720p / 1.5 Mbps** unless the presenter picked **1080p by name** in the send menu, which steps around the cap. The menu says so while it acts ("Large room: your screen goes out at 720p to keep it smooth for everyone. Pick 1080p to send it anyway."). A change of top *height* on a live share (crossing 20 people, or choosing 1080p mid-share) republishes the same track with `unpublishTrack(track, false)` so the capture survives; viewers see one blink at that moment. A change of *ceiling* at the same height moves the sender in place, no blink, as before.
 
+### Unlimited screens, and a mesh limit that is a measurement (2026-09-08)
+
+The question was "unlimited webcams and screens for all channels, can we do
+that". The answer is different on each transport and the code now says so in
+both places.
+
+**On the voice server: yes, subject to the box.** `SCREEN_SHARE_LIMIT.livekit`
+was 4, which was Zoom's number rather than this box's. A presenter uploads
+once whatever the room size, so a fifth share costs its publisher exactly what
+the first cost. What it costs the BOX is egress once per viewer, and that is
+already priced per room. So the count is `null` and the price is the rule, the
+same move `CAMERA_LIMIT.livekit` made in the section below. A room already on
+the SFU asks `decideVideoAdmission`; over `VOICE_PROMOTION_MAX_SFU_MBPS` the
+claim comes back as `screen-share-denied` and the client says "no room for
+more screens right now" rather than naming a limit that is about to change.
+
+**A share is charged at a share's bitrate.** `VIDEO_STREAM_MBPS` was 1.5 for
+everything, which is the top of the camera ladder on Auto. Dropping the share
+count without fixing that would have swapped a count that was too strict for a
+price that was too generous by nearly three, which is worse: a count refuses
+one person, a wrong price takes the box down. `estimateRoomMbps` now charges
+`CAMERA_STREAM_MBPS` (1.5) per camera and `screenStreamMbps(participants)` per
+share, which is **4 Mbit/s** (the top rung a presenter can pick by name) in a
+room at or below `LARGE_ROOM_PARTICIPANTS` and **1.5** above it, because that
+is exactly where `screenSimulcastPlan` holds the published top layer. Shares
+have published a simulcast ladder since 2026-09-06, so a small tile of a share
+already receives a small layer the way a camera now does;
+`livekit-session-quality.test.ts` pins that where the count's removal depends
+on it.
+
+**On mesh: no, and the old numbers were wrong in the other direction.** A mesh
+publication is a full copy per viewer off one uplink, so "unlimited" there is
+not a policy anybody can choose, it is a link nobody has. But 2 shares and 3
+cameras were guesses about a typical Brazilian home connection applied to every
+room on every connection: a three-person call on fibre was held to two shares
+with tens of megabits going spare, and an eight-person call on 4G was allowed
+three cameras, which is twenty-one uplink copies. `screen-upload-budget.ts`
+measures the real link. `meshVideoLimit` in `@pqp/shared` is what reads it:
+
+```
+limit = clamp( budget / ((roomSize - 1) x floor), 1, hard ceiling )
+```
+
+`floor` is the smallest copy worth sending (800 kbps for a screen, 500 kbps for
+a camera, both just above the bottom rung of their own SFU ladder). The hard
+ceiling is 4 screens and 6 cameras, and it exists because the derivation reads
+an **uplink** while a fourth share also costs every viewer's **downlink** and
+decode, which no browser reports. Never below one: a weak link is not refused
+its first share, it gets a smaller picture, which is what the budget controller
+has done continuously since PR 340.
+
+**Nothing changes for a client that reports nothing.** `uplinkBps` is an
+optional field on `set-sharing-screen` and `set-camera`; absent, the limit is
+exactly `SCREEN_SHARE_LIMIT.mesh` and `CAMERA_LIMIT.mesh` as before. Every
+native client is in that group today.
+
+**Reaching the limit still promotes.** On a deployment with LiveKit the mesh
+number is not a wall, it is when the room moves. That makes a limit that falls
+on a weak link the better outcome rather than the worse one: on the box that
+camera costs its publisher one uplink instead of four copies.
+
+**What it therefore governs, after the room-size trigger.** A room moves at
+`MESH_ROOM_PROMOTION_SIZE` (4) people on its own, before anybody claims
+anything, so on the hosted deployment the measured mesh limit is only ever
+consulted for **two and three person calls**, which are the ones that stay peer
+to peer deliberately. That is where it earns its keep: three people on fibre can
+all share, where the constant allowed two, and a three-way call on a weak link
+is moved rather than left to fall apart. On a self-host with no voice server it
+governs every room at every size, because there is nowhere to promote to. Both
+scopes are pinned in `voice-promotion.test.ts`.
+
+**What a client cannot gain by lying.** A report is clamped to
+`[MESH_UPLINK_MIN_BPS, MESH_UPLINK_MAX_BPS]` (1 to 16 Mbit/s, the window the
+budget controller itself runs in), so the largest possible lie is what an
+honest person on fibre already reports. The server then takes the
+**narrowest** report in the room (`narrowestUplinkBps`), so a bigger number
+cannot lift a limit somebody else's honest reading has already set. And on
+mesh the copies a report buys are uploaded by the person who sent it and by
+nobody else. On the voice server, where the cost genuinely is shared, no client
+number is read at all: `decideVideoAdmission` prices the room from the roster.
+The measurement is not carried across a resume and is not in the registry row,
+because a measurement is about a link at a moment.
+
+**The stage holds two slots back.** "Every share is kept" was written when
+there could be at most four; with the count gone, twelve shares would take
+every tile and a grid with no faces in it, not even your own, is not a call.
+`stageTileSlots` gives shares at most `limit - STAGE_FACE_SLOTS_HELD` slots
+whenever there is anybody else to draw, and all of them when the call really is
+nothing but screens.
+
+### Cameras: the ladder, the bounded grid and the end of the count (2026-09-08)
+
+The screen share got simulcast on 2026-09-06. The camera did not, and kept
+`simulcast: false`, so there was exactly **one** copy of a face on the voice
+server and every viewer received it whatever size their tile was.
+`adaptiveStream` has been on the whole time and had nothing to choose from: it
+can only ask the SFU for a layer the publisher actually encodes. That is why
+`CAMERA_LIMIT.livekit` was 8. The 8 was ours, not the box's.
+
+**Camera ladder** (`CAMERA_SIMULCAST_RUNGS` / `cameraSimulcastRungs` in
+`client/src/lib/video-quality.ts`, published by `publishCameraVideo` in
+`livekit-session.ts` with `simulcast: true` and `videoSimulcastLayers`):
+
+| Layer | Size | Ceiling | fps |
+|---|---|---|---|
+| top | the capture (720p on auto) | the chosen ceiling: 1.5 Mbps auto | 30 |
+| mid | 640x360 | 400 kbps, the menu's own 360p rung | 30 |
+| low | 320x180 | 160 kbps | 20 |
+
+`videoEncoding` carries the top, not `screenShareEncoding`: livekit-client
+swaps the field by source. A rung at or above the capture is dropped, because
+it would be an upscale. A quality change resizes the capture in place, so
+`reconcileCameraLadder` republishes when (and only when) the SET of rungs
+changes; `livekit-client` solves each rung's `scaleResolutionDownBy` against
+the capture's size at publish time and declares the result to the SFU, so a
+stale divisor would hand viewers layers whose declared size is a fiction.
+
+**Bounded grid** (`stageTileSlots` in `client/src/components/voice/stage-layout.ts`).
+The stage drew every publisher, which was fine at 8 cameras and is not fine at
+24: twenty-four subscriptions, twenty-four decoders, and tiles the size of a
+stamp. The grid now draws at most **12** tiles on a laptop and **6** on a
+phone (`STAGE_TILE_LIMIT_WIDE` / `_NARROW`, chosen off the tile-size table in
+that file). Shares are never cut, the pin and our own camera are always kept,
+and anybody speaking is promoted out of the overflow, exactly as
+`listenerStripSlots` already does for chips. The chosen set is drawn in stage
+order so nothing jumps sideways. A publisher the grid could not fit becomes a
+chip in the listener strip rather than disappearing (`listenersOf` takes the
+overflow keys), and because no `<video>` mounts for them,
+`remote-video-delivery.ts` tells the server to stop forwarding that
+publication a second later. **The bound is a bandwidth control, not only a
+layout one.**
+
+**No count on the voice server.** `CAMERA_LIMIT.livekit` is now `null`: the
+question "does one more camera fit" is about the box's egress, and only the
+server can answer it. `decideVideoAdmission` in `server/src/voice/promotion.ts`
+is the same budget the promotion guard already used, asked by a room that is
+already on the SFU: the asking room is taken out of the box's total and added
+back at what it will cost with the new publication (cameras at 1.5 Mbit/s and
+shares at their own rate, times the participants), and over
+`VOICE_PROMOTION_MAX_SFU_MBPS` (600) the camera is refused with `camera-denied`
+and `voice.videoAdmissionRefused` in the log. **The mesh camera limit is still physics**: a
+mesh camera is a full uplink copy per peer, and the camera past the limit still
+promotes the room. Since 2026-09-08 that limit is measured rather than fixed at
+3, see the section above. A camera that is only re-declaring itself
+(a webcam switch mints a new stream id) is never priced, and turning a camera
+off is never refused.
+
+The estimate is the **worst case** on purpose: it charges every participant
+for every publisher at the top of the ladder, so a modified client that reports
+a huge tile, or ignores the ladder and demands the top layer for everything,
+is already paid for. Nothing in the guard reads a number the client sent. The
+cost of that honesty is that the guard refuses conservatively: with the
+bounded grid a 20-person, 20-camera room really costs about 38 Mbit/s and is
+priced at 600. `VOICE_PROMOTION_MAX_SFU_MBPS` is the lever if that proves
+tight.
+
+**Measured** against a local LiveKit 1.13.6 with this ladder, two publishers
+and one viewer (one viewer's received stream, per tile size):
+
+| video element | simulcast off | simulcast on |
+|---|---|---|
+| 424x490 | 1280x720, 665 kbps, 0.86 ms/frame | 1280x720, 703 kbps, 0.75 ms/frame |
+| 424x360 | 1280x720, 673 kbps, 0.91 ms/frame | 640x360, 317 kbps, 0.26 ms/frame |
+| 160x90 | 1280x720, 675 kbps, 0.81 ms/frame | 320x180, 149 kbps, 0.10 ms/frame |
+| hidden tab | (not measured) | 0 kbps |
+
+And one viewer's total in a grid drawing every tile (`lk load-test`, LiveKit's
+own ladder, which is the same three rungs):
+
+| cameras | simulcast off | simulcast on |
+|---|---|---|
+| 4 | 7.5 Mbit/s | 1.2 Mbit/s |
+| 8 | 14.5 Mbit/s | 2.1 Mbit/s |
+| 16 | 30.2 Mbit/s | 4.2 Mbit/s |
+| 24 | 45.8 Mbit/s | 6.0 Mbit/s |
+
+Verification status: unit-tested
+(`video-quality.test.ts`, `livekit-session-quality.test.ts`,
+`stage-layout.test.ts`, `remote-video-delivery.test.ts`,
+`server/src/voice/promotion.test.ts`, `server/src/ws/voice-promotion.test.ts`),
+and every one of those was broken on purpose and confirmed to fail. The
+numbers above are a laptop and a local SFU, not the production box, and no
+real phone was in any of them.
+
 **Viewer side.** The room is created with `adaptiveStream: true`, and every remote video stream carries a binding (`client/src/lib/remote-video-binding.ts`) so the three `<video>` sites introduce their element to the track via `RemoteVideoTrack.attach`; without that the library measures nothing and, after the first tab switch, tells the server the track is invisible. "Video you receive" gains a selector on the SFU path: **Auto, 1080p, 720p, 360p**, applied with `RemoteTrackPublication.setVideoQuality(VideoQuality.HIGH | MEDIUM | LOW)` to every subscribed video publication (share and camera tiles) and to any that subscribes later. Auto sends `HIGH`, which under adaptive stream means "the element decides".
 
 **Adaptive stream and an explicit choice do not fight.** Verified in livekit-client 2.21.0 (`RemoteTrackPublication.emitTrackUpdate`): when both are set the library requests the **smaller** of the adaptive dimensions and the chosen layer's dimensions. The explicit pick is therefore a ceiling; a small element still saves below it. This is tighter than the docs' "manual overrides adaptive" and it is the behaviour wanted here.
@@ -572,6 +828,103 @@ Why: a 100-viewer watch party on 5 Sep 2026 consumed 323 GB of SFU downstream in
 **Video nobody is drawing** (`client/src/lib/remote-video-delivery.ts`, wired in `livekit-session.ts`). A remote video publication is delivered while at least one `<video>` element is bound to it through `bindRemoteVideo` and the tab is visible; otherwise it is paused with `RemoteTrackPublication.setEnabled(false)`, which stops the server forwarding without tearing down the receiver, so resuming is one signalling message rather than a renegotiation (`setSubscribed` would be the slow one). Losing the last element waits **1 s** before pausing, so a React rebind across a layout change or a tile scrolled just past the rail's edge does not blink; the tab going hidden (`document.visibilityState`) waits **10 s**, so a glance at another window does not stop every picture. Resuming is immediate. This covers the parked `RailTile` (the existing IntersectionObserver unmounts its `<video>`), a closed rail, and any camera no surface draws. Audio publications never pass through the rule. Lifting a pause **clears** the library's private `requestedDisabled` and re-emits the track settings instead of calling `setEnabled(true)`: verified in livekit-client 2.21.0 (`RemoteTrackPublication.isEnabled`), a manual `setEnabled(true)` pins the publication enabled and switches off the library's own adaptive-stream pauses (an attached element scrolled out of view; its five-second background pause) for the rest of the call. A build without that field gets `setEnabled(true)`.
 
 Verification status: unit-tested (`livekit-session-quality.test.ts`, `video-quality.test.ts`, `receive-quality.test.ts`, `remote-video-delivery.test.ts`). The cellular rule and the pause were not observed against a live LiveKit or a real phone on mobile data; the `setEnabled` semantics are pinned on a fake publication shaped after the library's. See the PRs for what was and was not observed.
+
+### Bandwidth: audio nobody is listening to (2026-09-08)
+
+Everything above is video. This is its twin for sound, and the arithmetic is
+why it exists: **audio fans out as the square of the room** while video fans
+out as viewers times publishers. A sample taken off the production box on
+8 Sep 2026 held 3 rooms, 11 published microphones and **58 audio
+subscriptions** against 3 published videos and 14 video subscriptions. In a
+room of twenty every microphone is forwarded nineteen times and the box pays
+for all 380 copies.
+
+**What is stopped, and only this** (`client/src/lib/remote-audio-delivery.ts`,
+wired through `LiveKitSession.setAudioDelivery` and pushed from `use-voice`'s
+`emit`). A remote audio publication is paused with
+`RemoteTrackPublication.setEnabled(false)` when the listener is **deafened**,
+when they have turned that **person's voice to zero**, when a **moderator
+muted** that person for everyone (`resolvePeerPlaybackVolume` already returns
+zero there), or when a **share's sound** is at zero or is not being played at
+all. In every one of those the `<audio>` element in `voice-audio-sinks.tsx`
+was already playing silence, so nothing anybody can hear changes; the bytes
+simply stop leaving Sao Paulo. `remote-audio-delivery.test.ts` asserts the
+plan against the sink's own `resolvePeerPlaybackVolume` rather than a copy of
+it, so a change to one that does not reach the other fails.
+
+`setEnabled` rather than `setSubscribed`, for the reason the video rule gives.
+Verified against livekit-client 2.21.0: `setEnabled` is not gated on track
+kind, `emitTrackUpdate` sends `disabled` for an audio publication the same way
+it does for video, and its only guard is `isDesired`, so an unsubscribed
+publication is a no-op rather than a throw. Silencing waits **750 ms** so a
+volume slider dragged through zero and back does not spend two signalling
+messages; resuming is immediate, because undeafening is the one moment a
+delay would be audible. The rule is a **deny list** throughout: a peer the
+plan has never heard of keeps flowing, because the failure mode of an allow
+list is a room where nobody hears anybody. The push is wrapped in a
+`try`/`catch` for the same reason: it runs inside `emit`, and a bandwidth
+saving must never be able to end a call.
+
+Mesh rooms are untouched. There is no server to stop, and a peer connection
+that stopped sending would have to renegotiate to start again.
+
+**Loudest-N audio was investigated and deliberately not built.** The obvious
+next step, capping each subscriber to the few loudest speakers, does not work
+on this stack and would not pay if it did. Read against the pinned versions,
+livekit-server **v1.13.6** and client-sdk-js **v2.21.0**; `master` has drifted
+from all of this.
+
+- **It is a deadlock, not merely a lossy trade.** livekit-client's
+  `RoomEvent.ActiveSpeakersChanged` is documented in the typedoc
+  (`src/room/events.ts`) as *"Speaker updates are sent only to the publishing
+  participant and their subscribers"*, and the server's
+  `ParticipantImpl.SendSpeakerUpdate` (`pkg/rtc/participant_signal.go`) filters
+  the list to `p.IsSubscribedTo(...)` on the `force=false` path the periodic
+  broadcast uses. A client that has dropped **every** one of somebody's tracks
+  therefore never learns that they started speaking, so it can never subscribe
+  them back. Worse, on unsubscribe the server pushes a `force=true` update with
+  `Level: 0, Active: false` (`pkg/rtc/room.go`), which is indistinguishable
+  from that person genuinely being quiet. You cannot discover who is loud
+  without already being subscribed to them. (The prose docs page omits the
+  caveat and reads as though it works. The typedoc and the source are right.)
+- **The server's own knob is a queue, not a swap.**
+  `limit.subscription_limit_audio` exists in LiveKit 1.13.6
+  (`pkg/config/config.go`) and is first-come-first-served:
+  `SubscriptionManager.hasCapacityForSubscription`
+  (`pkg/rtc/subscriptionmanager.go`) returns false past the cap, the caller
+  answers `ErrSubscriptionLimitExceeded`, and `reconcileSubscription` retries
+  every 3 s **forever** rather than evicting anybody. Upstream's own comment
+  says so: *"wait for the other subscription to be unsubscribed"*. The only
+  thing that frees a slot is somebody else unsubscribing.
+- **And the refusal is silent.** The limit branch never reaches
+  `sendSubscriptionResponse`, and the protocol cannot express it anyway
+  (`SubscriptionError` has only `UNKNOWN`, `CODEC_UNSUPPORTED`,
+  `TRACK_NOTFOUND`), so `RoomEvent.TrackSubscriptionFailed` never fires and
+  the publication sits at `SubscriptionStatus.Desired` with no client-side
+  timeout. Setting this knob buys a permanently silent participant with no
+  error anywhere, which is the exact failure shape `docs/WORKING-NOTES.md`
+  warns about. It is undocumented (zero hits across LiveKit's whole docs
+  corpus, and the PR that added it has an empty body); LiveKit Cloud's
+  equivalent quota is **100** audio tracks, which is a guard rail rather than
+  a loudest-N.
+- **Silence is already almost free.** Opus DTX is on for every microphone, so
+  a silent track collapses to comfort noise. Measured on the box across 20
+  stable windows, the total outgoing packet rate sat between **27% and 60%**
+  (median about 45%) of what the audio subscriptions alone would need if every
+  one were carrying continuous 20 ms Opus, and video packets are inside that
+  total. Under half of audio subscriptions are transmitting at any instant,
+  and the rest, which are what a loudest-N cap would remove, are comfort noise
+  at a couple of kbit/s each. Worked example: at 32 audio subscriptions the
+  box sent 650 to 960 packets per second against the 1600 continuous audio
+  alone would need.
+
+What was **not** separated: the box's Prometheus counters give total bytes and
+packets by direction, with no split by track kind, so audio's exact share of
+egress could not be measured. Two attempts to solve for it from stable
+windows disagreed (the same room shape varied by a factor of two between
+windows as the share's content changed), and the fitted numbers are not
+reported here for that reason. The packet-rate bound above needs no such
+model and is the one figure to trust.
 
 ## Cloudflare Realtime SFU — still a stub
 

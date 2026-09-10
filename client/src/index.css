@@ -163,9 +163,14 @@
    */
   --radius-tick: 0.1875rem;
   --radius-control: 0.375rem;
+
   --radius-card: 0.5rem;
   --radius-panel: 1rem;
   --radius-pill: 999px;
+  /* Message list drawing. Overridden on the root by src/lib/chat-display.ts. */
+  --chat-font-size: 15px;
+  --chat-line-height: 22px;
+  --chat-group-gap: 8px;
 
   /*
    * ELEVATION. Three levels, lowest first. Level 1 lifts a resting card off
@@ -1174,6 +1179,12 @@ h2,
   margin-top: 0.25em;
 }
 
+/* A blank line in a message: half a line, not a full one. */
+.markdown-body .chat-blank {
+  display: block;
+  height: 0.5em;
+}
+
 .markdown-body code {
   background: var(--color-code-bg);
   padding: 0.1rem 0.35rem;
@@ -1718,4 +1729,37 @@ h2,
  */
 html[data-immersive-stage] [data-immersive-hide] {
   display: none !important;
+}
+
+/*
+ * The watch party pane covering the window, when the platform refused element
+ * fullscreen (an Electron shell that answers neither way, an iPhone that has
+ * no element fullscreen at all). `components/voice/watch-fullscreen.ts` sets
+ * the attribute; one rule here so `CallSplit` needs no state of its own for a
+ * mode it is not the one entering.
+ *
+ * It covers the window rather than the pane's own box on purpose: the film is
+ * the point, and the chat rides along inside the same pane, in whatever
+ * arrangement the person had already chosen.
+ */
+[data-call-split][data-watch-expanded] {
+  background: var(--color-surface-0);
+  /*
+   * `inset: 0`, not `100vh`. On an iPhone 100vh is taller than the visible
+   * area and puts the exit control under Safari's toolbar. The native
+   * player (`webkitEnterFullscreen`) is what an iPhone actually uses for
+   * a watch party; this rule is the Electron / no-API floor, and it has
+   * to cover the visual viewport the same way the share tile's expand does.
+   */
+  inset: 0;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  position: fixed;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  z-index: 50;
 }

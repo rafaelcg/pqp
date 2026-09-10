@@ -36,14 +36,17 @@ import { Button } from "@/components/ui/button";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { AvatarPicker } from "@/components/user/avatar-picker";
+import { UserAvatar } from "@/components/user/user-avatar";
 import { ConnectionsSection } from "@/components/connections/connections-section";
 import { useNotificationSettings } from "@/hooks/use-notifications";
 import { useAccentHue } from "@/hooks/use-accent-hue";
 import { useAppearance } from "@/hooks/use-appearance";
+import { useChatDisplay } from "@/hooks/use-chat-display";
 import { useContrast } from "@/hooks/use-contrast";
 import { useTheme } from "@/hooks/use-theme";
 import { ACTION_LABEL, GROUP_LABEL } from "@/components/layout/shortcut-overlay";
 import { KeyBindingField } from "@/components/voice/key-binding-field";
+import { DEFAULT_CHAT_DISPLAY, type ChatDensity } from "@/lib/chat-display";
 import { isApplePlatform } from "@/lib/composer-formatting";
 import {
   findBindingConflict,
@@ -1542,7 +1545,7 @@ function ThemePicker() {
       <div
         role="radiogroup"
         aria-label={t("settings.appearance.theme")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg bg-surface-2 p-0.5"
+        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
         onKeyDown={handleKeyDown}
       >
         {THEME_OPTIONS.map((option) => {
@@ -1623,7 +1626,7 @@ function ContrastPicker() {
       <div
         role="radiogroup"
         aria-label={t("settings.appearance.contrast")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg bg-surface-2 p-0.5"
+        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
         onKeyDown={handleKeyDown}
       >
         {CONTRAST_OPTIONS.map((option) => {
@@ -1693,7 +1696,7 @@ function LanguagePicker() {
       <div
         role="radiogroup"
         aria-label={t("settings.appearance.language")}
-        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg bg-surface-2 p-0.5"
+        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5"
       >
         {SUPPORTED_LOCALES.map((option) => {
           const selected = option === locale;
@@ -1734,18 +1737,274 @@ function AppearanceSection({
       <ContrastPicker />
       <div className="space-y-6 border-t border-border pt-6">
         <LanguagePicker />
-        <SettingBlock label={t("settings.appearance.chat")}>
-          <label className="flex cursor-pointer items-center gap-3 text-sm">
-            <input
-              type="checkbox"
-              checked={showLinkEmbeds}
-              onChange={(e) => onShowLinkEmbeds(e.target.checked)}
-              className="h-4 w-4 accent-[var(--color-accent)]"
-            />
-            <span>{t("settings.appearance.linkPreviews")}</span>
-          </label>
-        </SettingBlock>
+        <ChatDisplayPicker
+          showLinkEmbeds={showLinkEmbeds}
+          onShowLinkEmbeds={onShowLinkEmbeds}
+        />
       </div>
+    </div>
+  );
+}
+
+/**
+ * Preset ladders for the two numeric axes. The store is numeric (a synced
+ * value from an older client may sit between rungs), so a rung is "selected"
+ * when it is the nearest one.
+ */
+const FONT_SIZE_PRESETS: { value: number; label: MessageKey }[] = [
+  { value: 13, label: "settings.appearance.textSize.small" },
+  { value: 15, label: "settings.appearance.textSize.default" },
+  { value: 17, label: "settings.appearance.textSize.large" },
+  { value: 20, label: "settings.appearance.textSize.larger" },
+];
+
+const GROUP_SPACING_PRESETS: { value: number; label: MessageKey }[] = [
+  { value: 0, label: "settings.appearance.spacing.tight" },
+  { value: 8, label: "settings.appearance.spacing.default" },
+  { value: 16, label: "settings.appearance.spacing.roomy" },
+];
+
+const DENSITY_OPTIONS: { value: ChatDensity; label: MessageKey }[] = [
+  { value: "cozy", label: "settings.appearance.density.cozy" },
+  { value: "compact", label: "settings.appearance.density.compact" },
+];
+
+function nearest(presets: { value: number }[], value: number): number {
+  let best = presets[0].value;
+  for (const preset of presets) {
+    if (Math.abs(preset.value - value) < Math.abs(best - value)) {
+      best = preset.value;
+    }
+  }
+  return best;
+}
+
+/**
+ * One labelled row: the name on the left, a segmented control on the right,
+ * stacked on a narrow dialog. Arrow keys move within the group.
+ */
+function ChatOptionRow<T extends string | number>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: { value: T; label: MessageKey }[];
+  value: T;
+  onChange: (next: T) => void;
+}) {
+  const { t } = useTranslation();
+
+  function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
+    const step =
+      event.key === "ArrowRight" || event.key === "ArrowDown"
+        ? 1
+        : event.key === "ArrowLeft" || event.key === "ArrowUp"
+          ? -1
+          : 0;
+    if (step === 0) {
+      return;
+    }
+    event.preventDefault();
+    const current = options.findIndex((option) => option.value === value);
+    const nextIndex = (current + step + options.length) % options.length;
+    onChange(options[nextIndex].value);
+    const radios =
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    radios[nextIndex]?.focus();
+  }
+
+  return (
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <span className="text-sm text-text">{label}</span>
+      <div
+        role="radiogroup"
+        aria-label={label}
+        className="grid auto-cols-fr grid-flow-col gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5 sm:w-auto sm:min-w-[16rem]"
+        onKeyDown={handleKeyDown}
+      >
+        {options.map((option) => {
+          const selected = option.value === value;
+          return (
+            <button
+              key={String(option.value)}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => onChange(option.value)}
+              className={cn(segmentClass(selected), "h-8 px-2.5 text-xs")}
+            >
+              {t(option.label)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ChatDisplayPicker({
+  showLinkEmbeds,
+  onShowLinkEmbeds,
+}: {
+  showLinkEmbeds: boolean;
+  onShowLinkEmbeds: (next: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  const { display, setDisplay } = useChatDisplay();
+  const isDefault =
+    display.density === DEFAULT_CHAT_DISPLAY.density &&
+    display.fontSize === DEFAULT_CHAT_DISPLAY.fontSize &&
+    display.groupSpacing === DEFAULT_CHAT_DISPLAY.groupSpacing;
+
+  return (
+    <SettingBlock
+      label={t("settings.appearance.chat")}
+      hint={t("settings.appearance.chatHint")}
+    >
+      <div className="overflow-hidden rounded-lg border border-border">
+        <ChatDisplayPreview compact={display.density === "compact"} />
+        <div className="space-y-4 border-t border-border bg-surface-1 p-4">
+          <ChatOptionRow
+            label={t("settings.appearance.density")}
+            options={DENSITY_OPTIONS}
+            value={display.density}
+            onChange={(density) => setDisplay({ density }, { immediate: true })}
+          />
+          <ChatOptionRow
+            label={t("settings.appearance.textSize")}
+            options={FONT_SIZE_PRESETS}
+            value={nearest(FONT_SIZE_PRESETS, display.fontSize)}
+            onChange={(fontSize) => setDisplay({ fontSize }, { immediate: true })}
+          />
+          <ChatOptionRow
+            label={t("settings.appearance.spacing")}
+            options={GROUP_SPACING_PRESETS}
+            value={nearest(GROUP_SPACING_PRESETS, display.groupSpacing)}
+            onChange={(groupSpacing) =>
+              setDisplay({ groupSpacing }, { immediate: true })
+            }
+          />
+          <div className="flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <label className="flex cursor-pointer items-center gap-3 text-sm">
+              <input
+                type="checkbox"
+                checked={showLinkEmbeds}
+                onChange={(e) => onShowLinkEmbeds(e.target.checked)}
+                className="h-4 w-4 accent-[var(--color-accent)]"
+              />
+              <span>{t("settings.appearance.linkPreviews")}</span>
+            </label>
+            {!isDefault && (
+              <button
+                type="button"
+                onClick={() =>
+                  setDisplay(DEFAULT_CHAT_DISPLAY, { immediate: true })
+                }
+                className="-my-1 py-1 text-left text-xs text-text-muted underline-offset-2 hover:text-text hover:underline"
+              >
+                {t("settings.appearance.chatReset")}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </SettingBlock>
+  );
+}
+
+/**
+ * Three messages drawn with the message list's own recipe: the same CSS
+ * variables for size, line height and group gap, the same avatar column, the
+ * same timestamp gutter. It reads the variables off the root, so it follows
+ * the sliders live without a save. Keep the class recipe in step with
+ * `MessageRow` in `message-list.tsx`.
+ */
+function ChatDisplayPreview({ compact }: { compact: boolean }) {
+  const { t } = useTranslation();
+  const rows = [
+    {
+      author: t("settings.appearance.preview.author1"),
+      body: t("settings.appearance.preview.message1"),
+      time: t("settings.appearance.preview.time1"),
+      startsGroup: true,
+      mine: false,
+    },
+    {
+      author: t("settings.appearance.preview.author1"),
+      body: t("settings.appearance.preview.message2"),
+      time: t("settings.appearance.preview.time2"),
+      startsGroup: false,
+      mine: false,
+    },
+    {
+      author: t("settings.appearance.preview.author2"),
+      body: t("settings.appearance.preview.message3"),
+      time: t("settings.appearance.preview.time3"),
+      startsGroup: true,
+      mine: true,
+    },
+  ];
+  return (
+    <div
+      aria-hidden
+      className="bg-channel py-3"
+    >
+      {rows.map((row, index) => (
+        <div
+          key={index}
+          className={cn(
+            "flex items-start gap-0 px-5",
+            row.startsGroup ? "mt-[var(--chat-group-gap)] pt-1 pb-1" : "pt-px pb-px",
+            index === 0 && "mt-0",
+          )}
+        >
+          {row.startsGroup && !compact ? (
+            <div className="flex w-14 shrink-0 items-start justify-end pr-2">
+              <UserAvatar
+                name={row.author}
+                avatarUrl={null}
+                rounded="lg"
+                className="h-9 w-9"
+                fallbackClassName="bg-ink-3 text-sm"
+              />
+            </div>
+          ) : (
+            <span
+              className={cn(
+                "w-14 shrink-0 pr-2 text-right text-[12px] leading-[var(--chat-line-height)] whitespace-nowrap tabular-nums text-paper-muted",
+                compact ? "opacity-70" : "opacity-40",
+              )}
+            >
+              {row.time}
+            </span>
+          )}
+          <div className="min-w-0 flex-1">
+            {row.startsGroup && (
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <span
+                  className={cn(
+                    "text-[length:var(--chat-font-size)] font-bold leading-[var(--chat-line-height)]",
+                    row.mine ? "text-signal" : "text-paper",
+                  )}
+                >
+                  {row.author}
+                </span>
+                {!compact && (
+                  <span className="text-[12px] leading-[var(--chat-line-height)] text-paper-muted">
+                    {row.time}
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90">
+              {row.body}
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

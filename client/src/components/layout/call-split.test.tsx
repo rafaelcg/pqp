@@ -110,7 +110,9 @@ describe("CallSplit keeps the stage mounted", () => {
   it("mounts a video on the stage in every layout it can draw", () => {
     for (const html of [
       split(),
-      split({ preference: { ...CALL_SPLIT_DEFAULT, orientation: "side-by-side" } }),
+      split({
+        preference: { ...CALL_SPLIT_DEFAULT, orientation: "side-by-side" },
+      }),
       split({ shape: "compact" }),
       split({ shape: "fullscreen" }),
       // Too short to split: the un-split fallback, which is a phone sideways.
@@ -151,9 +153,11 @@ describe("CallSplit keeps the stage mounted", () => {
   it("keeps the stage ahead of the transcript in the DOM, both ways round", () => {
     for (const html of [
       split(),
-      split({ preference: { ...CALL_SPLIT_DEFAULT, orientation: "side-by-side" } }),
+      split({
+        preference: { ...CALL_SPLIT_DEFAULT, orientation: "side-by-side" },
+      }),
     ]) {
-      expect(html.indexOf('data-call-split-stage')).toBeLessThan(
+      expect(html.indexOf("data-call-split-stage")).toBeLessThan(
         html.indexOf('data-testid="call-split-divider"'),
       );
       expect(html.indexOf('data-testid="call-split-divider"')).toBeLessThan(
@@ -297,4 +301,187 @@ describe("CallSplit's divider", () => {
       new RegExp(`style="height:\\s*${900 - MIN_CHAT_HEIGHT_PX}px`),
     );
   });
+});
+
+describe("CallSplit puts a pane away without unmounting it", () => {
+  const COLLAPSED_CHAT: CallSplitPreference = { ...DRAGGED, collapsed: "chat" };
+  const COLLAPSED_STAGE: CallSplitPreference = {
+    ...DRAGGED,
+    collapsed: "stage",
+  };
+
+  /**
+   * THE BUG THIS PINS, and it is the whole reason the collapse is a `hidden`
+   * attribute rather than a conditional render. Unmounting the collapsed pane
+   * takes the stage's `onShapeChange` reporter with it, the pane's shape falls
+   * to "none", `resolveCollapsed` stops honouring the collapse, and the stage
+   * comes straight back: a click that undid itself. Unmounting the `<video>`
+   * would also make `lib/remote-video-delivery.ts` tear the SFU subscription
+   * down, so coming back would cost a renegotiation.
+   */
+  it("keeps the hidden stage, and its video, in the tree", () => {
+    const html = split({ preference: COLLAPSED_STAGE });
+    expect(html).toContain('data-testid="stage"');
+    expect(html).toContain('data-testid="stage-video"');
+    expect(html).toMatch(/data-call-split-stage[^>]*hidden=""/);
+  });
+
+  it("keeps the hidden transcript in the tree, so it does not lose its place", () => {
+    const html = split({ preference: COLLAPSED_CHAT });
+    expect(html).toContain('data-testid="chat"');
+    // The transcript's own wrapper carries the attribute, not the stage's.
+    expect(html).not.toMatch(/data-call-split-stage[^>]*hidden=""/);
+    // The last element opened before the transcript is the one hidden.
+    expect(html).toMatch(/hidden=""[^>]*>\s*<div data-testid="chat"/);
+  });
+
+  it("hides exactly one pane, and neither by default", () => {
+    const both = split();
+    // `hidden=""`, the attribute. Not `overflow-hidden` or `aria-hidden`,
+    // which the pane is full of.
+    expect(both).not.toMatch(/\shidden=""/);
+    expect(both).not.toContain("data-call-split-collapsed");
+  });
+
+  it("offers the way back from the boundary the pane was on", () => {
+    for (const [preference, which] of [
+      [COLLAPSED_STAGE, "stage"],
+      [COLLAPSED_CHAT, "chat"],
+    ] as const) {
+      const html = split({ preference });
+      expect(html).toContain(`data-call-split-restore="${which}"`);
+      expect(html).toContain(`data-call-split-collapsed="${which}"`);
+      // And no divider, because there are no longer two things to drag apart.
+      expect(html).not.toContain('data-testid="call-split-divider"');
+    }
+  });
+
+  it("offers both ends of the drag as buttons while the divider is there", () => {
+    const html = split();
+    expect(html).toContain('data-testid="call-split-collapse-stage"');
+    expect(html).toContain('data-testid="call-split-collapse-chat"');
+  });
+
+  /**
+   * A collapse is a deliberate, named, reversible act; a drag is not. So the
+   * minimums stop applying to the pane that is put away, and go on protecting
+   * the one that is left: the visible pane simply takes the whole container,
+   * which is by definition at least its own minimum.
+   */
+  it("stops writing a fixed size on a stage that owns the whole pane", () => {
+    const html = split({ preference: COLLAPSED_CHAT });
+    expect(html).not.toMatch(/data-call-split-stage[^>]*style=/);
+    expect(html).toMatch(/data-call-split-stage[^>]*class="[^"]*flex-1/);
+  });
+
+  it("still clamps the visible pane the moment both are back", () => {
+    // Same stored fraction that would starve the transcript, with the
+    // collapse cleared: the minimum is enforced exactly as before.
+    const html = split({
+      preference: { ...CALL_SPLIT_DEFAULT, stacked: 1, collapsed: "none" },
+      paneSize: { width: 1400, height: 908 },
+    });
+    expect(html).toMatch(
+      new RegExp(`style="height:\\s*${900 - MIN_CHAT_HEIGHT_PX}px`),
+    );
+  });
+
+  it("survives an orientation change, because the wish is about the panes", () => {
+    // Rotating the layout must not read as the app forgetting. Both
+    // arrangements honour the same stored collapse.
+    for (const orientation of ["stacked", "side-by-side"] as const) {
+      const html = split({
+        preference: { ...COLLAPSED_CHAT, orientation },
+        paneSize: { width: 1800, height: 900 },
+      });
+      expect(html).toContain('data-call-split-collapsed="chat"');
+      expect(html).toContain('data-call-split-restore="chat"');
+    }
+  });
+
+  it("ignores a collapse where there are not two panes to arrange", () => {
+    // Putting the chat away to make room for a slim call bar is not a thing
+    // anybody means, and the stored wish is left alone so it comes back with
+    // the picture.
+    for (const stageShape of ["none", "compact", "fullscreen"] as const) {
+      const html = split({ shape: stageShape, preference: COLLAPSED_CHAT });
+      expect(html).not.toContain("data-call-split-collapsed");
+      expect(html).not.toContain('data-testid="call-split-restore"');
+    }
+  });
+});
+
+describe("the pane holds the line when it owns the stage's size", () => {
+  /** The stage pane's own class list. */
+  function stagePaneClass(html: string): string {
+    const tag = /<div[^>]*data-call-split-stage[^>]*>/.exec(html)?.[0] ?? "";
+    return /class="([^"]*)"/.exec(tag)?.[1] ?? "";
+  }
+
+  it("clips the stage pane once the chat is put away", () => {
+    /**
+     * WHAT THIS PINS. The clip used to be `sized && "overflow-hidden"`, and
+     * `sized` requires `collapsed === "none"` (through `resizable`). So the
+     * one state in which the stage is handed the WHOLE pane was also the one
+     * state with no guard on it, and a stage that got its own height wrong
+     * ran out of the bottom of the pane, painted over the restore strip and
+     * over whatever the app draws below it. That is what a host saw on
+     * production after hiding the chat in a watch party: the surface
+     * continuing past the pane with the bar overlapping it.
+     */
+    const collapsed = split({
+      preference: { ...CALL_SPLIT_DEFAULT, collapsed: "chat" },
+    });
+    expect(stagePaneClass(collapsed)).toContain("overflow-hidden");
+    expect(stagePaneClass(collapsed)).toContain("flex-1");
+  });
+
+  it("still clips it once somebody has dragged the divider", () => {
+    // The case that always worked, kept so the widening cannot lose it.
+    expect(stagePaneClass(split())).toContain("overflow-hidden");
+  });
+
+  it("leaves a stage that sizes itself alone", () => {
+    // Nobody has dragged and nothing is collapsed: the stage keeps its own
+    // height rule and the transcript keeps the rest, exactly as before. A
+    // clip here would crop a stage the pane never sized.
+    const untouched = split({ preference: CALL_SPLIT_DEFAULT });
+    expect(stagePaneClass(untouched)).not.toContain("overflow-hidden");
+  });
+});
+
+describe("the collapse controls are findable without hovering", () => {
+  /**
+   * Reported from production while hosting: "btw the hide chat button is so
+   * small". It was `opacity-0` until the pointer reached the boundary and
+   * 32x8 CSS pixels once it got there, so it had to be known about to be
+   * found, and on a touch screen there is no hover at all.
+   */
+  function collapseTag(html: string, toward: "stage" | "chat"): string {
+    return (
+      new RegExp(`<button[^>]*call-split-collapse-${toward}[^>]*>`).exec(
+        html,
+      )?.[0] ?? ""
+    );
+  }
+
+  for (const toward of ["stage", "chat"] as const) {
+    it(`paints the ${toward} control before anybody hovers anything`, () => {
+      const tag = collapseTag(split(), toward);
+      expect(tag).not.toBe("");
+      // `opacity-0` plus a `group-hover` reveal is what made it invisible.
+      expect(tag).not.toContain("opacity-0");
+      expect(tag).not.toContain("group-hover");
+    });
+
+    it(`gives the ${toward} control a target rather than a sliver`, () => {
+      const tag = collapseTag(split(), toward);
+      // 48px along the boundary, and a hit area that reaches 8px into each
+      // neighbouring pane. The 8px cross axis is not negotiable: it is
+      // `CALL_SPLIT_DIVIDER_PX`, which every clamp in `lib/call-split.ts` is
+      // computed against.
+      expect(tag).toMatch(/w-12|h-12/);
+      expect(tag).toMatch(/before:-inset-[xy]-2/);
+    });
+  }
 });

@@ -47,6 +47,12 @@ vi.mock("./services/voice-occupancy.js", () => ({
     minutesPruned: 0,
   })),
 }));
+vi.mock("./services/watch-parties.js", () => ({
+  sweepWatchPartyHosts: vi.fn(async () => ({ ended: [] })),
+}));
+vi.mock("./ws/watch-party-events.js", () => ({
+  broadcastWatchParty: vi.fn(async () => undefined),
+}));
 
 import {
   sweepOrphanedAttachments,
@@ -59,6 +65,7 @@ import { sweepMessageRetention } from "./services/retention.js";
 import { sweepSlowModeClocks } from "./services/slow-mode.js";
 import { deliverDueOutgoingWebhooks } from "./services/outgoing-webhooks.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
+import { sweepWatchPartyHosts } from "./services/watch-parties.js";
 import {
   OCCUPANCY_SAMPLE_INTERVAL_MS,
   recordVoiceOccupancySample,
@@ -107,7 +114,11 @@ describe("cold jobs", () => {
 
   it("fires each job on its own cadence", async () => {
     jobs = startColdJobs();
-    expect(jobs.count).toBe(15);
+    // 15 before the watch party host sweep, which runs on the same minute
+    // tick as the session reminders. Bump this when a job is added, and
+    // assert the new job's cadence below rather than only moving the number:
+    // a count on its own passes for a job that is registered and never fires.
+    expect(jobs.count).toBe(16);
 
     await vi.advanceTimersByTimeAsync(OUTGOING_WEBHOOK_TICK_MS);
     expect(deliverDueOutgoingWebhooks).toHaveBeenCalledTimes(1);
@@ -136,6 +147,10 @@ describe("cold jobs", () => {
 
     await vi.advanceTimersByTimeAsync(CHANNEL_SESSION_REMINDER_INTERVAL_MS);
     expect(sendDueChannelSessionReminders).toHaveBeenCalled();
+    // A live watch party whose host never came back is ended by this tick,
+    // not by anything on the media path. Same cadence as the reminders on
+    // purpose: losing a host is a scheduling fact, not a stream one.
+    expect(sweepWatchPartyHosts).toHaveBeenCalled();
   });
 
   it("a failing sweep is logged and the timer survives", async () => {

@@ -79,6 +79,77 @@ class LocalizationTest {
         )
     }
 
+    private fun plurals(file: File): Set<String> =
+        Regex("""<plurals\s+name="([^"]+)"""").findAll(file.readText()).map { it.groupValues[1] }.toSet()
+
+    private fun pluralQuantities(file: File): Map<String, Set<String>> =
+        Regex("""<plurals\s+name="([^"]+)"[^>]*>(.*?)</plurals>""", RegexOption.DOT_MATCHES_ALL)
+            .findAll(file.readText())
+            .associate { match ->
+                match.groupValues[1] to
+                    Regex("""quantity="(\w+)"""").findAll(match.groupValues[2])
+                        .map { it.groupValues[1] }
+                        .toSet()
+            }
+
+    /**
+     * Plurals were invisible to every check above, and there are twelve of them.
+     *
+     * The three tests above parse `<string>` only, so a `<plurals>` added in
+     * English with no Portuguese counterpart fell straight through: Android
+     * falls back to the English form at runtime and says nothing, which is the
+     * exact failure this file exists to make impossible for the other 315
+     * strings. Found while adding the watch party's audience count, which is a
+     * plural.
+     */
+    @Test
+    fun `every English plural has a Portuguese counterpart`() {
+        assertTrue("Parsed no plurals at all", plurals(english).isNotEmpty())
+        assertEquals(
+            "Plurals with no pt-BR translation. They fall back to English at runtime.",
+            emptySet<String>(),
+            plurals(english) - plurals(portuguese),
+        )
+        assertEquals(
+            "pt-BR plurals that no longer exist in English",
+            emptySet<String>(),
+            plurals(portuguese) - plurals(english),
+        )
+    }
+
+    /**
+     * Portuguese may carry MORE quantities than English, never fewer.
+     *
+     * The asymmetry is CLDR's, not ours. English has `one` and `other`;
+     * Brazilian Portuguese also has `many`, which is what makes "1 milhão de
+     * pessoas" read correctly, and `dms_group_people` uses it. So the direction
+     * that is a bug is a form English writes and Portuguese does not: that
+     * count silently renders the English sentence. The other direction is a
+     * translator doing their job.
+     *
+     * `other` is mandatory in both, because it is the form Android falls back
+     * on when nothing else matches, and a plural without it is a
+     * `Resources.NotFoundException` rather than a wrong word.
+     */
+    @Test
+    fun `Portuguese carries every quantity English does`() {
+        val en = pluralQuantities(english)
+        val pt = pluralQuantities(portuguese)
+        val missing = en.keys.intersect(pt.keys)
+            .filter { (en.getValue(it) - pt.getValue(it)).isNotEmpty() }
+        assertEquals(
+            "These plurals have a form in English that pt-BR does not write, so that " +
+                "count renders in English at runtime and nothing says so.",
+            emptyList<String>(),
+            missing,
+        )
+        assertEquals(
+            "Every plural must carry `other`, the form Android falls back on",
+            emptyList<String>(),
+            (en + pt).filterValues { !it.contains("other") }.keys.toList(),
+        )
+    }
+
     /**
      * Every `R.string.x` in the Kotlin sources resolves.
      *

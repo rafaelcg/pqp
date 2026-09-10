@@ -26,6 +26,8 @@ enum VoiceSpeakRule {
     enum Notice: Equatable {
         case listenOnly
         case speakGranted
+        case streamDenied
+        case streamGranted
 
         var text: String {
             switch self {
@@ -33,18 +35,29 @@ enum VoiceSpeakRule {
                 String(localized: "Listening only. You do not have permission to speak in this channel.")
             case .speakGranted:
                 String(localized: "You can speak now. Unmute when you are ready.")
+            case .streamDenied:
+                String(localized: "No camera or screen share in this channel.")
+            case .streamGranted:
+                String(localized: "You can turn on camera or share a screen now.")
             }
         }
     }
 
-    /// What a change of the bit means for the local media.
+    /// What a change of the bits means for the local media.
     struct Outcome: Equatable {
         let canSpeak: Bool
+        /// SPEAK and STREAM are separate grants on the server and they are
+        /// separate here. Folding them together is what told somebody with a
+        /// microphone but no camera grant that the call "already has the
+        /// maximum number of cameras", which sends them to ask why rather than
+        /// to the permission that is actually missing.
+        let canStream: Bool
         /// Force the microphone off. Never the other way round: `true` after
         /// `false` unlocks the control and leaves the unmute to the person.
         let mute: Bool
         /// Drop an outgoing camera and screen share; the roster no longer
-        /// carries them and the SFU has dropped the tracks.
+        /// carries them and the SFU has dropped the tracks. Follows STREAM,
+        /// not SPEAK.
         let stopPublishing: Bool
         let notice: Notice?
     }
@@ -56,20 +69,52 @@ enum VoiceSpeakRule {
         topLevel ?? selfPeer ?? true
     }
 
-    static func apply(canSpeak: Bool, was: Bool, source: Source) -> Outcome {
-        if !canSpeak {
-            return Outcome(
-                canSpeak: false,
-                mute: true,
-                stopPublishing: true,
-                notice: (was || source == .welcome) ? .listenOnly : nil
+    /// The same walk for STREAM, falling back to SPEAK rather than to `true`.
+    ///
+    /// Absent means a server that predates the separate STREAM grant, and on
+    /// one of those the right answer is whatever SPEAK said, because that is
+    /// what gated camera and screen share before the split. Matches
+    /// `message.canStream ?? message.canSpeak` in `use-voice.ts`.
+    static func resolveStream(topLevel: Bool?, selfPeer: Bool?, canSpeak: Bool) -> Bool {
+        topLevel ?? selfPeer ?? canSpeak
+    }
+
+    /// One notice at a time, and SPEAK outranks STREAM: losing the microphone
+    /// is the bigger news, and stacking two sentences under the controls on a
+    /// phone is how both get ignored. Same precedence as `applyPublishRules`.
+    static func apply(
+        canSpeak: Bool,
+        canStream: Bool,
+        wasSpeak: Bool,
+        wasStream: Bool,
+        source: Source
+    ) -> Outcome {
+        Outcome(
+            canSpeak: canSpeak,
+            canStream: canStream,
+            mute: !canSpeak,
+            stopPublishing: !canStream,
+            notice: notice(
+                canSpeak: canSpeak, canStream: canStream,
+                wasSpeak: wasSpeak, wasStream: wasStream, source: source
             )
-        }
-        return Outcome(
-            canSpeak: true,
-            mute: false,
-            stopPublishing: false,
-            notice: (!was && source == .change) ? .speakGranted : nil
         )
+    }
+
+    private static func notice(
+        canSpeak: Bool, canStream: Bool, wasSpeak: Bool, wasStream: Bool, source: Source
+    ) -> Notice? {
+        if source == .welcome {
+            // A seat that walks in restricted is told once, on arrival. It has
+            // no "was" worth comparing against.
+            if !canSpeak { return .listenOnly }
+            if !canStream { return .streamDenied }
+            return nil
+        }
+        if wasSpeak && !canSpeak { return .listenOnly }
+        if !wasSpeak && canSpeak { return .speakGranted }
+        if wasStream && !canStream { return .streamDenied }
+        if !wasStream && canStream { return .streamGranted }
+        return nil
     }
 }

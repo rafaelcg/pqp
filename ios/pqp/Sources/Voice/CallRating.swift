@@ -36,9 +36,13 @@ enum CallRating {
     static let noteWantedAtOrBelow = 3
 }
 
-/// Which media path carried the call. `livekit` is here for the wire's sake;
-/// this app declares `transports: ["mesh"]` on join and refuses a room pinned
-/// to anything else, so it does not currently produce one.
+/// Which media path carried the call.
+///
+/// Both values occur. This app declares `transports: ["mesh", "livekit"]` on
+/// every join (`VoiceRoomTransport.supported`) and joins LiveKit rooms
+/// routinely, so a rating can report either. The comment here used to say the
+/// opposite, which was true for about a week in build 16 and has been read as
+/// current ever since.
 enum CallTransport: String, Codable, Sendable {
     case mesh
     case livekit
