@@ -2,6 +2,7 @@ import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
 import type { VideoQuality } from "@/lib/video-quality";
 import type { ScreenFrameRate } from "@/lib/hls-capture-rate";
+import { CallStage } from "@/components/voice/call-stage";
 
 /**
  * Server voice channel mount of the shared call stage.
