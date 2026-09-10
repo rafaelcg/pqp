@@ -83,7 +83,7 @@ import {
 } from "@/lib/video-quality";
 import {
   hlsSourceFor,
-  readPresenterUplinkBps,
+  readPresenterHlsFeed,
 } from "@/lib/hls-source-quality";
 import {
   createSpeakingTracker,
@@ -918,9 +918,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         void refreshHlsSource();
       }, HLS_SOURCE_SAMPLE_MS);
     }
+    const feed = await readPresenterHlsFeed();
     await sfu?.setHlsSource({
       ...wanted,
-      uplinkBps: await readPresenterUplinkBps(),
+      uplinkBps: feed.uplinkBps,
+      limitedBy: feed.limitedBy,
     });
   }
   let sessionProvider: VoiceSessionProvider | null = null;

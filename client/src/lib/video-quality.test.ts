@@ -12,6 +12,7 @@ import {
   CAMERA_SIMULCAST_RUNGS,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
+  HLS_HELD_720_BITRATE,
   HLS_SOURCE_UPLINK_HEADROOM,
   hlsSourceTopHeight,
   isLargeRoomCapped,
@@ -293,6 +294,7 @@ describe("screenSimulcastPlan", () => {
       [720, 1_400_000],
     ]);
     expect(plan.capped).toBe(false);
+    expect(plan.heldForHls).toBe(false);
   });
 
   it("holds the top at 720p and 1.5 Mbps past the large-room line", () => {
@@ -301,6 +303,7 @@ describe("screenSimulcastPlan", () => {
     expect(plan.topBitrate).toBe(1_500_000);
     expect(plan.lowerLayers.map((l) => l.height)).toEqual([360]);
     expect(plan.capped).toBe(true);
+    expect(plan.heldForHls).toBe(false);
   });
 
   it("does not cap at exactly the line", () => {
@@ -423,6 +426,12 @@ describe("the presenter as the ladder's source", () => {
     expect(plan.topHeight).toBe(1080);
     expect(plan.topBitrate).toBe(4_000_000);
     expect(plan.capped).toBe(false);
+    expect(plan.heldForHls).toBe(false);
+  });
+
+  it("does not spend a 720p sub-layer while HLS is transcoding the top", () => {
+    const plan = screenSimulcastPlan("auto", 4, LIVE);
+    expect(plan.lowerLayers.map((layer) => layer.height)).toEqual([360]);
   });
 
   it("leaves an ordinary large call alone", () => {
@@ -435,13 +444,15 @@ describe("the presenter as the ladder's source", () => {
   });
 
   it("does not raise when the measured uplink cannot carry it", () => {
-    // 4 Mbit/s times 1.5 headroom is 6 Mbit/s; 3 Mbit/s is under it.
+    // Raise is 1.25× the 720 hold ceiling (~2.81 Mbps), not 1.25× 4 Mbps.
     const plan = screenSimulcastPlan("auto", 100, {
       ladderTopHeight: 1080,
-      uplinkBps: 3_000_000,
+      uplinkBps: 2_000_000,
     });
     expect(plan.topHeight).toBe(720);
-    expect(plan.capped).toBe(true);
+    expect(plan.topBitrate).toBe(HLS_HELD_720_BITRATE);
+    expect(plan.capped).toBe(false);
+    expect(plan.heldForHls).toBe(true);
   });
 
   /**
@@ -471,21 +482,46 @@ describe("the presenter as the ladder's source", () => {
   });
 
   it("still raises on a measured uplink that clears the bar", () => {
-    // 1.25× used to let 5 Mbit/s through; a 4 Mbit/s 1080 target now
-    // needs 6 Mbit/s measured (`HLS_SOURCE_UPLINK_HEADROOM`).
-    expect(HLS_SOURCE_UPLINK_HEADROOM).toBe(1.5);
+    expect(HLS_SOURCE_UPLINK_HEADROOM).toBe(1.25);
+    expect(HLS_HELD_720_BITRATE).toBe(2_250_000);
     expect(
       screenSimulcastPlan("auto", 100, {
         ladderTopHeight: 1080,
-        uplinkBps: 5_000_000,
+        uplinkBps: 2_000_000,
       }).topHeight,
     ).toBe(720);
     expect(
       screenSimulcastPlan("auto", 100, {
         ladderTopHeight: 1080,
-        uplinkBps: 6_000_000,
+        uplinkBps: 3_000_000,
       }).topHeight,
     ).toBe(1080);
+  });
+
+  it("stays at 1080 unless the encoder is honestly starved", () => {
+    expect(
+      hlsSourceTopHeight("auto", {
+        ladderTopHeight: 1080,
+        uplinkBps: 9_000_000,
+        currentHeight: 1080,
+        limitedBy: "setting",
+      }),
+    ).toBe(1080);
+    expect(
+      hlsSourceTopHeight("auto", {
+        ladderTopHeight: 1080,
+        uplinkBps: 9_000_000,
+        currentHeight: 1080,
+        limitedBy: "bandwidth",
+      }),
+    ).toBe(720);
+    expect(
+      hlsSourceTopHeight("auto", {
+        ladderTopHeight: 1080,
+        uplinkBps: null,
+        currentHeight: 1080,
+      }),
+    ).toBe(720);
   });
 
   it("never overrules the presenter's own smaller pick", () => {
@@ -516,7 +552,9 @@ describe("the presenter as the ladder's source", () => {
       uplinkBps: 1_500_000,
     });
     expect(plan.topHeight).toBe(720);
-    expect(plan.topBitrate).toBe(1_500_000);
+    expect(plan.topBitrate).toBe(HLS_HELD_720_BITRATE);
+    expect(plan.heldForHls).toBe(true);
+    expect(plan.capped).toBe(false);
   });
 
   it("does not declare 1080 layers over a 480p capture", () => {
