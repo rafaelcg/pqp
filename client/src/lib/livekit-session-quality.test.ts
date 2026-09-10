@@ -284,7 +284,11 @@ vi.stubGlobal(
   },
 );
 
-const { connectLiveKit } = await import("./livekit-session");
+const {
+  connectLiveKit,
+  HLS_SOURCE_DROP_SAMPLES,
+  HLS_SOURCE_RAISE_SAMPLES,
+} = await import("./livekit-session");
 
 function fakeTrack(kind: "audio" | "video", id: string, height = 720, frameRate = 30) {
   const settings = { width: Math.round((height * 16) / 9), height, frameRate };
@@ -854,26 +858,48 @@ describe("the presenter as a live ladder's source", () => {
     expect(constrained).toEqual([1080]);
     const publishesBefore = published.length;
 
-    await setHlsUplink(sfu, 1_000_000, 10);
+    // Two weak ticks: not enough streak to touch capture.
+    await setHlsUplink(sfu, 1_000_000, HLS_SOURCE_DROP_SAMPLES - 1);
+    expect(constrained).toEqual([1080]);
 
-    // Capture shrinks once in place; later ticks must not re-applyConstraints.
+    await setHlsUplink(sfu, 1_000_000);
     expect(published).toHaveLength(publishesBefore);
     expect(unpublished).toHaveLength(0);
+    expect(constrained).toEqual([1080, 720]);
+
+    // Further weak ticks must not re-constrain.
+    await setHlsUplink(sfu, 1_000_000, 5);
     expect(constrained).toEqual([1080, 720]);
   });
 
   it("restores capture height when the uplink recovers, without a new sid", async () => {
     const sfu = await session();
     await sfu.publishScreen(fakeStream("video", "screen"));
-    await setHlsUplink(sfu, 1_000_000);
+    await setHlsUplink(sfu, 1_000_000, HLS_SOURCE_DROP_SAMPLES);
     expect(constrained).toEqual([1080, 720]);
     const publishesBefore = published.length;
 
-    await setHlsUplink(sfu, 9_000_000);
+    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES - 1);
+    expect(constrained).toEqual([1080, 720]);
 
+    await setHlsUplink(sfu, 9_000_000);
     expect(published).toHaveLength(publishesBefore);
     expect(unpublished).toHaveLength(0);
     expect(constrained).toEqual([1080, 720, 1080]);
+  });
+
+  it("does not thrash capture when the uplink keeps crossing the line", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    await setHlsUplink(sfu, 9_000_000);
+    const before = constrained.length;
+
+    for (const uplinkBps of [1_000_000, 9_000_000, 1_000_000, 9_000_000]) {
+      await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps });
+    }
+
+    expect(constrained).toHaveLength(before);
+    expect(unpublished).toHaveLength(0);
   });
 
   it("does not raise on an uplink that cannot carry it", async () => {

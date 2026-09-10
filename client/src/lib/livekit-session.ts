@@ -360,6 +360,14 @@ export async function connectLiveKit({
    */
   let appliedScreenCaptureHeight: number | null = null;
   /**
+   * Pending capture height while pinned, and how many consecutive
+   * `setHlsSource` ticks have asked for it. Three ticks (≈6 s) before we
+   * `applyConstraints` — uplink wobble must not thrash the capture pipeline
+   * every two seconds (Farol on #460).
+   */
+  let pendingCaptureHeight: number | null = null;
+  let captureHeightStreak = 0;
+  /**
    * The capture's constraints as the browser handed them over, so the plan's
    * height can be laid over them and lifted again without losing the frame
    * rate or width the capture was asked for.
@@ -1075,13 +1083,33 @@ export async function connectLiveKit({
       // encoder as a ceiling only.
       if (screenPlanPinned && !options?.force) {
         // Same sid: shrink or restore capture without touching declared layers.
-        // Never ask the capture for more than the pinned layer set — that would
-        // spend CPU the encoder cannot put on the wire. Never re-constrain
-        // when the target is unchanged (Farol: every 2s tick).
+        // Never ask the capture for more than the pinned layer set. Wait for a
+        // stable target before applyConstraints (uplink wobble). Re-check the
+        // track after every await so a stop mid-constrain cannot write stale
+        // state onto the next share.
         const captureTarget = Math.min(plan.topHeight, published.topHeight);
-        if (appliedScreenCaptureHeight !== captureTarget) {
-          await constrainScreenCapture(track, captureTarget);
-          appliedScreenCaptureHeight = captureTarget;
+        if (captureTarget === appliedScreenCaptureHeight) {
+          pendingCaptureHeight = null;
+          captureHeightStreak = 0;
+        } else if (captureTarget === pendingCaptureHeight) {
+          captureHeightStreak += 1;
+        } else {
+          pendingCaptureHeight = captureTarget;
+          captureHeightStreak = 1;
+        }
+        if (
+          pendingCaptureHeight !== null &&
+          pendingCaptureHeight !== appliedScreenCaptureHeight &&
+          captureHeightStreak >= HLS_SOURCE_DROP_SAMPLES
+        ) {
+          const want = pendingCaptureHeight;
+          await constrainScreenCapture(track, want);
+          if (publishedScreenTrack !== track) {
+            return;
+          }
+          appliedScreenCaptureHeight = want;
+          pendingCaptureHeight = null;
+          captureHeightStreak = 0;
         }
         if (plan.topBitrate !== published.topBitrate) {
           await setSourceMaxBitrate(
@@ -1089,7 +1117,13 @@ export async function connectLiveKit({
             plan.topBitrate,
             "screen",
           );
-          publishedScreenPlan = { ...published, topBitrate: plan.topBitrate };
+          if (publishedScreenTrack !== track || !publishedScreenPlan) {
+            return;
+          }
+          publishedScreenPlan = {
+            ...publishedScreenPlan,
+            topBitrate: plan.topBitrate,
+          };
         }
         return;
       }
@@ -1408,6 +1442,8 @@ export async function connectLiveKit({
       // plan that window and that room call for.
       screenPlanPinned = false;
       appliedScreenCaptureHeight = null;
+      pendingCaptureHeight = null;
+      captureHeightStreak = 0;
     },
 
     async publishCamera(stream: MediaStream) {
@@ -1512,6 +1548,8 @@ export async function connectLiveKit({
       publishedScreenPlan = null;
       screenCaptureConstraints = null;
       appliedScreenCaptureHeight = null;
+      pendingCaptureHeight = null;
+      captureHeightStreak = 0;
       publishedCameraTrack = null;
       publishedScreenAudioTrack = null;
       await room.disconnect();
