@@ -359,3 +359,87 @@ voice channel.
 
 Still open: OBS (step 9), via a LiveKit ingress that publishes an RTMP feed
 into the room as the presenter.
+
+## 10. The duplicates, and one control bar per state
+
+Andre, hosting a live party on 2026-09-10: "there's 2 share screen buttons,
+2 end buttons, everything is so confusing." He is right, and the reason is
+structural: a watch party channel stacks THREE control surfaces that were
+designed separately. The channel header (the room), the party bar (the
+event), and the generic call strip (the seat). Each has its own idea of
+sharing and of leaving.
+
+### 10.1 Inventory, host on a live party, voice off
+
+| Surface | Control | What it does | Duplicate of |
+|---|---|---|---|
+| channel header | `1 aqui` | seat count | the bar's "ninguém assistindo" |
+| party bar | name + pencil | rename | setup name field |
+| party bar | AO VIVO pill | state | the sidebar card's pill (fine) |
+| party bar | mic pill | mic state, read only | the mute button bottom-left, the call strip's mute |
+| party bar | Copiar link | share the link | setup status row's Copiar link (same action, one per state: fine) |
+| party bar | Opções | options dialog | setup's "Ajustar" (same dialog, two labels) |
+| party bar | Encerrar | ends the PARTY | the call strip's Sair, which only leaves the seat; setup's Descartar |
+| party bar | Entrar na call | takes a seat | going live, Compartilhar tela and Assumir all seat you; now hidden with voice off |
+| readout row | TRANSMISSÃO | stats | none |
+| waiting surface | Compartilhar tela | joins and opens the picker | the call strip's share icon, the setup's Escolher |
+| call strip | raise hand | asks to speak | meaningless for the host; only for invited-floor parties |
+| call strip | camera | camera to the room | the stream never carries it |
+| call strip | mouse cursor | cursor in the share | a share option, not a bar control |
+| call strip | share icon | opens the picker | the waiting surface's button |
+| call strip | share with sound icon | same, system audio | the tab picker already asks |
+| call strip | Sair (red) | leaves the seat, party stays live | reads as "end"; Encerrar is the end |
+| bottom-left | mic / headphones | mute, deafen | the only mute control, far from the bar |
+| setup surface | Escolher / Trocar | the picker | the strip's share icon |
+| setup status row | Descartar | drops the draft | Encerrar's sibling, different word |
+| setup status row | Ir ao vivo | goes live | none |
+
+Two rows of the same verb three times over, and the red button on the
+strip is the wrong one to press.
+
+### 10.2 The rule
+
+**One control bar per state, and the generic call strip does not appear in a
+watch party channel.** The seat is an implementation detail of the party
+(the host holds one so the SFU can carry their share); the person never
+asked for a call and must not be handed a call's furniture.
+
+- **Draft:** preview, then one row: `Escolher o que compartilhar` /
+  `Trocar`, `Copiar link`, `Opções`, `Descartar`, `Ir ao vivo`. As today,
+  with "Ajustar" renamed to "Opções" so the word is the same before and
+  during.
+- **Live, host:** one row on the party bar: **mic button** (the pill becomes
+  the mute toggle: fora / mutado / só a sala / todo mundo te ouve, click
+  mutes), `Compartilhar tela` / `Trocar` / `Parar de compartilhar`,
+  `Copiar link`, `Opções`, `Encerrar`. The call strip is hidden. Leaving
+  the seat without ending is not a thing a host does on purpose; closing
+  the tab is handled by the host-gone flow and Assumir.
+- **Live, co-host:** the same row minus Encerrar until they take over.
+- **Live, viewer:** the player's own controls, `Copiar link`, and
+  `Entrar na call` only when the party has voice on.
+- **Voice on:** the strip is still hidden; what a seated speaker needs (mute,
+  raise or lower hand, leave the stage) is on the bar, in the party's own
+  words: `Sair do palco`, never `Sair`.
+- **Camera and cursor** leave the watch party entirely. The stream does not
+  carry a camera, and cursor is a share option that belongs in the picker
+  step, not on a bar.
+- **The channel header's `N aqui`** is hidden in a watch party channel; the
+  bar's "N assistindo" is the number that means something.
+
+### 10.3 Steps
+
+1. Hide the call strip (`CallStage` compact controls) in a `watch_party`
+   channel while a party exists, and move mute onto the bar's mic pill as
+   a toggle. The mute button bottom-left keeps working; the bar gets the
+   one that is in front of the host.
+2. Share controls on the bar: `Compartilhar tela` when nothing is going
+   out, `Trocar` and `Parar de compartilhar` while it is. Same handler the
+   waiting surface's button uses; the waiting surface keeps its big button
+   for the empty state, the bar keeps the small one always.
+3. Rename setup's `Ajustar` to `Opções`. Hide the channel header count.
+4. Voice-on parties: `Sair do palco`, hand up and down, on the bar.
+5. Remove camera and cursor from watch party channels.
+
+Client-only, one PR, about a day. The e2e that pin `call-stage-collapsed`
+in a watch party (`watch-party.spec.ts`, the seat tests) move to the bar's
+controls.
