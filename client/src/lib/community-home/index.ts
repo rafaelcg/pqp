@@ -45,11 +45,14 @@ export {
 } from "./new-badges";
 export {
   COMMUNITY_HOME_MAX_BYTES,
+  communityHomeEmbedUrl,
   formatHomeBytes,
   homeMediaKindFromFile,
   isHomeImageFile,
   isHomeVideoFile,
+  parseCommunityHomeEmbed,
   parseYoutubeVideoId,
+  twitchEmbedSrc,
   uploadHomeMedia,
   youtubeEmbedSrc,
   type CommunityHomeMedia,
