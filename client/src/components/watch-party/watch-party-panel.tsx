@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
+  Check,
   Clapperboard,
   Crown,
   Hand,
@@ -8,6 +9,7 @@ import {
   Pencil,
   Phone,
   Radio,
+  Share2,
   SlidersHorizontal,
   Square,
   Undo2,
@@ -37,6 +39,8 @@ import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { FeatureHint } from "@/components/layout/feature-hint";
 import { LivePill } from "@/components/watch-party/live-pill";
+import { browserShareCapabilities, type ShareOutcome } from "@/lib/share-handle";
+import { shareWatchParty, watchPartyShareUrl } from "@/lib/share-watch-party";
 import { WatchPartyTransmission } from "@/components/watch-party/watch-party-transmission";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
 import { getDesktop, isDesktopApp } from "@/lib/desktop";
@@ -306,6 +310,75 @@ function cohostSection(
         onDemote={props.onDemoteCohost}
       />
     </div>
+  );
+}
+
+// ------------------------------------------------------------------- share
+
+/**
+ * "Copiar link", on the draft and on the live bar. The label says what the
+ * device did (a phone opened a sheet, a desktop copied), the way the handle
+ * share does. A party in a conversation has no server and no shareable
+ * address, so the button is absent there rather than dead.
+ */
+function WatchPartyShareButton({
+  party,
+  size = "sm",
+}: {
+  party: WatchParty;
+  size?: "sm" | "default";
+}) {
+  const { t, locale } = useTranslation();
+  const [outcome, setOutcome] = useState<ShareOutcome | null>(null);
+
+  useEffect(() => {
+    if (outcome !== "copied" && outcome !== "failed") {
+      return;
+    }
+    const timer = window.setTimeout(() => setOutcome(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [outcome]);
+
+  if (!party.serverId) {
+    return null;
+  }
+  const serverId = party.serverId;
+  const label =
+    outcome === "copied"
+      ? t("watchParty.share.copied")
+      : outcome === "failed"
+        ? t("watchParty.share.failed")
+        : t("watchParty.share.cta");
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size={size}
+      onClick={() => {
+        const url = watchPartyShareUrl(
+          window.location.origin,
+          serverId,
+          party.channelId,
+        );
+        void shareWatchParty(
+          { name: party.name, url, locale },
+          browserShareCapabilities(),
+        ).then((result) => {
+          if (result !== "dismissed") {
+            setOutcome(result);
+          }
+        });
+      }}
+      data-watch-party-share
+    >
+      {outcome === "copied" ? (
+        <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+      ) : (
+        <Share2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+      )}
+      {label}
+    </Button>
   );
 }
 
@@ -774,6 +847,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <WatchPartyShareButton party={party} size="default" />
           <Button
             type="button"
             variant="ghost"
@@ -1064,6 +1138,7 @@ function LiveSurface(
             {t("watchParty.live.joinCall")}
           </Button>
         )}
+        <WatchPartyShareButton party={party} />
         {runsTheShow && (
           <Button
             type="button"
