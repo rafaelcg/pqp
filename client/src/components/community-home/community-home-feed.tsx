@@ -1,7 +1,6 @@
 import type { Gif, PublicUser } from "@pqp/shared";
 import {
   CalendarClock,
-  Download,
   Eye,
   Heart,
   Lock,
@@ -54,20 +53,19 @@ import {
   COMMUNITY_HOME_MAX_BYTES,
   COMMUNITY_HOME_TEASER_MAX,
   COMMUNITY_HOME_TITLE_MAX,
+  communityHomeEmbedMedia,
   communityHomeEmbedUrl,
   formatHomeBytes,
-  isHomeVideoFile,
   isCommunityHomeEmbedKind,
+  isHomeVideoFile,
   isPostLockedForViewer,
-  instagramEmbedSrc,
   loadCommunityHomeViewerMode,
   lockedPostSummary,
+  loneSupportedEmbedUrl,
   parseCommunityHomeEmbed,
+  resolveComposeEmbedUrl,
   saveCommunityHomeViewerMode,
-  tiktokEmbedSrc,
-  twitchEmbedSrc,
   uploadHomeMedia,
-  youtubeEmbedSrc,
   type CommunityHomeComment,
   type CommunityHomeMedia,
   type CommunityHomePost,
@@ -78,6 +76,8 @@ import {
 import { gifMessageMedia } from "@/lib/gif-media";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { CommunityHomeComposeEmbed } from "./community-home-compose-embed";
+import { UnlockedMedia } from "./community-home-media";
 import {
   CommunityHomeIntroCard,
   CommunityHomeStaffGuide,
@@ -218,193 +218,6 @@ function LockedMedia({ title, teaser }: { title: string; teaser: string }) {
         <p className="font-display text-sm font-semibold text-signal">{title}</p>
         <p className="max-w-xs text-xs text-paper-muted">{teaser}</p>
       </div>
-    </div>
-  );
-}
-
-function MediaCaption({ media }: { media: CommunityHomeMedia }) {
-  return (
-    <div className="border-t border-ink-4 px-3 py-1.5 text-[11px] text-paper-muted">
-      {media.name}
-      {media.byteSize != null ? ` · ${formatHomeBytes(media.byteSize)}` : null}
-    </div>
-  );
-}
-
-function twitchPlayerParent(): string {
-  if (typeof window !== "undefined" && window.location.hostname) {
-    return window.location.hostname;
-  }
-  return "localhost";
-}
-
-function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
-  const { t } = useTranslation();
-  if (media.kind === "youtube") {
-    const src = media.youtubeUrl ? youtubeEmbedSrc(media.youtubeUrl) : null;
-    if (!src) {
-      return null;
-    }
-    return (
-      <div
-        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-        data-home-media="youtube"
-      >
-        <iframe
-          title={media.name}
-          src={src}
-          className="aspect-video w-full"
-          loading="lazy"
-          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-          allowFullScreen
-        />
-      </div>
-    );
-  }
-
-  if (media.kind === "twitch") {
-    const src = media.twitchUrl
-      ? twitchEmbedSrc(media.twitchUrl, twitchPlayerParent())
-      : null;
-    if (!src) {
-      return null;
-    }
-    return (
-      <div
-        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-        data-home-media="twitch"
-      >
-        <iframe
-          title={media.name}
-          src={src}
-          className="aspect-video w-full"
-          loading="lazy"
-          allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-          allowFullScreen
-        />
-      </div>
-    );
-  }
-
-  if (media.kind === "tiktok") {
-    const src = media.youtubeUrl ? tiktokEmbedSrc(media.youtubeUrl) : null;
-    if (!src) {
-      return null;
-    }
-    return (
-      <div
-        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-        data-home-media="tiktok"
-      >
-        <iframe
-          title={t("communityHome.media.openTikTok")}
-          src={src}
-          className="mx-auto aspect-[9/16] w-full max-w-[325px]"
-          loading="lazy"
-          allow="encrypted-media; fullscreen; picture-in-picture"
-          allowFullScreen
-        />
-      </div>
-    );
-  }
-
-  if (media.kind === "instagram") {
-    const src = media.youtubeUrl ? instagramEmbedSrc(media.youtubeUrl) : null;
-    if (!src) {
-      return null;
-    }
-    return (
-      <div
-        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-        data-home-media="instagram"
-      >
-        <iframe
-          title={t("communityHome.media.openInstagram")}
-          src={src}
-          className="mx-auto min-h-[540px] w-full max-w-[540px]"
-          loading="lazy"
-          allow="encrypted-media; clipboard-write; picture-in-picture"
-          allowFullScreen
-        />
-      </div>
-    );
-  }
-
-  if (media.kind === "file") {
-    return (
-      <div
-        className="flex items-center gap-3 rounded-lg border border-ink-4 bg-ink px-3 py-2.5 text-sm"
-        data-home-media="file"
-      >
-        <span className="rounded bg-signal/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-signal">
-          {media.name.toLowerCase().endsWith(".pdf") ? "PDF" : t("communityHome.media.file")}
-        </span>
-        <span className="min-w-0 truncate">{media.name}</span>
-        {media.byteSize != null && (
-          <span className="ml-auto shrink-0 text-xs text-paper-muted">
-            {formatHomeBytes(media.byteSize)}
-          </span>
-        )}
-        {media.url ? (
-          <a
-            className="inline-flex shrink-0 items-center gap-1 text-xs text-signal hover:underline"
-            href={media.url}
-            target="_blank"
-            rel="noreferrer noopener"
-            aria-label={t("communityHome.media.download")}
-          >
-            <Download className="h-3.5 w-3.5" aria-hidden />
-          </a>
-        ) : null}
-      </div>
-    );
-  }
-
-  if (media.kind === "video") {
-    return (
-      <div
-        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-        data-home-media="video"
-      >
-        {media.url ? (
-          <video
-            className="max-h-96 w-full bg-ink"
-            controls
-            playsInline
-            preload="metadata"
-            src={media.url}
-          >
-            <track kind="captions" />
-          </video>
-        ) : (
-          <div className="flex h-44 items-center justify-center text-xs text-paper-muted">
-            {t("communityHome.media.unavailable")}
-          </div>
-        )}
-        <MediaCaption media={media} />
-      </div>
-    );
-  }
-
-  return (
-    <div
-      className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
-      data-home-media="image"
-    >
-      {media.url ? (
-        <img
-          src={media.url}
-          alt={media.name}
-          loading="lazy"
-          decoding="async"
-          className="max-h-[32rem] w-full object-contain"
-        />
-      ) : (
-        <div className="flex h-44 items-center justify-center text-xs text-paper-muted">
-          {t("communityHome.media.unavailable")}
-        </div>
-      )}
-      <MediaCaption media={media} />
     </div>
   );
 }
@@ -1104,26 +917,34 @@ function composeFromPost(post: CommunityHomePost): ComposeState {
   };
 }
 
+function composeHasFileMedia(state: ComposeState): boolean {
+  return Boolean(state.upload) || (Boolean(state.existingMedia) && !state.clearMedia);
+}
+
+function composeEmbedUrl(state: ComposeState): string {
+  if (composeHasFileMedia(state)) {
+    return state.youtubeUrl.trim();
+  }
+  return resolveComposeEmbedUrl(state.youtubeUrl, state.body);
+}
+
+function composeYoutubeUrlForSubmit(state: ComposeState): string | null {
+  const field = state.youtubeUrl.trim();
+  if (field) {
+    return field;
+  }
+  if (state.upload) {
+    return null;
+  }
+  return loneSupportedEmbedUrl(state.body);
+}
+
 /** The post the preview renders, built from what is typed so far. */
 function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOwner: boolean): CommunityHomePost {
   let media: CommunityHomeMedia | null = null;
-  const embedKind = parseCommunityHomeEmbed(state.youtubeUrl);
-  if (embedKind) {
-    const name = {
-      youtube: "YouTube",
-      twitch: "Twitch",
-      tiktok: "TikTok",
-      instagram: "Instagram",
-    }[embedKind];
-    media = {
-      kind: embedKind,
-      name,
-      contentType: null,
-      byteSize: null,
-      url: null,
-      youtubeUrl: embedKind === "twitch" ? null : state.youtubeUrl.trim(),
-      twitchUrl: embedKind === "twitch" ? state.youtubeUrl.trim() : null,
-    };
+  const embed = communityHomeEmbedMedia(composeEmbedUrl(state));
+  if (embed) {
+    media = embed;
   } else if (state.upload) {
     media = {
       kind: state.upload.kind,
@@ -1201,9 +1022,7 @@ function ComposeCard({
   const timezone = useMemo(browserTimezone, []);
 
   const hasMedia =
-    Boolean(state.upload) ||
-    (Boolean(state.existingMedia) && !state.clearMedia) ||
-    Boolean(state.youtubeUrl.trim());
+    composeHasFileMedia(state) || Boolean(composeEmbedUrl(state));
   const canPublish = Boolean(state.title.trim()) && (Boolean(state.body.trim()) || hasMedia);
   const canSaveDraft = Boolean(state.title.trim() || state.body.trim() || hasMedia);
 
@@ -1283,6 +1102,7 @@ function ComposeCard({
       setError(t("communityHome.compose.badYoutube"));
       return;
     }
+    const youtubeUrl = composeYoutubeUrlForSubmit(state);
     let scheduledIso: string | null = null;
     if (action === "schedule") {
       const when = new Date(scheduleAt);
@@ -1310,8 +1130,8 @@ function ComposeCard({
             commentsEnabled: state.commentsEnabled,
             ...(state.upload
               ? { mediaUploadId: state.upload.uploadId }
-              : state.youtubeUrl.trim()
-                ? { youtubeUrl: state.youtubeUrl.trim() }
+              : youtubeUrl
+                ? { youtubeUrl }
                 : state.clearMedia
                   ? { clearMedia: true }
                   : {}),
@@ -1336,7 +1156,7 @@ function ComposeCard({
           visibility,
           commentsEnabled: state.commentsEnabled,
           mediaUploadId: state.upload?.uploadId ?? null,
-          youtubeUrl: state.youtubeUrl.trim() || null,
+          youtubeUrl,
           status:
             action === "publish"
               ? "published"
@@ -1500,20 +1320,28 @@ function ComposeCard({
             <input
               className="w-full rounded-lg border border-ink-4 bg-ink px-3 py-1.5 text-sm placeholder:text-paper-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-signal/60"
               value={state.youtubeUrl}
-              onChange={(event) =>
+              onChange={(event) => {
+                const youtubeUrl = event.target.value;
+                setError(null);
                 setState((prev) => ({
                   ...prev,
-                  youtubeUrl: event.target.value,
-                  upload: event.target.value ? null : prev.upload,
-                  uploadPreviewUrl: event.target.value ? null : prev.uploadPreviewUrl,
-                  clearMedia: event.target.value ? true : prev.clearMedia,
-                }))
-              }
+                  youtubeUrl,
+                  upload: youtubeUrl ? null : prev.upload,
+                  uploadPreviewUrl: youtubeUrl ? null : prev.uploadPreviewUrl,
+                  clearMedia: youtubeUrl ? true : prev.clearMedia,
+                }));
+              }}
               placeholder="https://youtu.be/…"
               data-home-compose-youtube
             />
           </label>
         </div>
+
+        {!composeHasFileMedia(state) && (
+          <div className="mb-2" aria-live="polite">
+            <CommunityHomeComposeEmbed url={composeEmbedUrl(state)} />
+          </div>
+        )}
 
         {(state.upload || (state.existingMedia && !state.clearMedia)) && (
           <p

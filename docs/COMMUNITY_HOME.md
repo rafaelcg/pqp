@@ -109,7 +109,10 @@ See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
   rows, small, until the first post exists.
 - **Composer** (staff tab "Write"): title, body, one media (file when
   `mediaEnabled`, else YouTube / Twitch / TikTok / Instagram only), comments on/off, VIP toggle + teaser
-  when `vipEnabled`. **Preview** renders the card as members will see it, and
+  when `vipEnabled`. Paste a supported link and the same player the feed uses
+  unfurls in the compose card (300 ms debounce, 16:9 skeleton, muted hint
+  after idle if it is not a supported URL — no red error while typing).
+  **Prévia** still renders the whole card as members will see it, and
   the locked version too for a VIP post. **Publish**, **Save draft**, or
   **Schedule** (a `datetime-local` in the browser's timezone; the API stores
   the instant plus the IANA name).
@@ -220,6 +223,9 @@ the expected shape of a self-host without storage, not a bug.
 - `client/src/components/community-home/community-home-feed.test.tsx`: the
   card's contract (no free chip, locked leaks nothing, two comments max,
   Twitch / TikTok / Instagram iframes).
+- `client/src/lib/community-home/embed-preview.test.ts` and
+  `community-home-compose-embed.test.tsx`: composer live unfurl (player after
+  debounce, skeleton while settling, muted hint after idle).
 - `client/src/lib/community-home/*.test.ts`: flag resolution, landing,
   visibility helpers, media helpers, live-post toast gating.
 - `client/src/components/layout/channel-list-community-home.test.tsx`: the

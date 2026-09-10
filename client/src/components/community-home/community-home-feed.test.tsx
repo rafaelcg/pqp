@@ -141,6 +141,29 @@ describe("PostCard", () => {
     expect(shut).not.toContain("sessao-11-clip.webm");
   });
 
+  it("a YouTube post uses the nocookie player the composer live-preview reuses", () => {
+    const html = render(
+      <PostCard
+        post={post({
+          media: {
+            kind: "youtube",
+            name: "YouTube",
+            contentType: null,
+            byteSize: null,
+            url: null,
+            youtubeUrl: "https://youtu.be/jNQXAC9IVRw",
+          },
+        })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+      />,
+    );
+    expect(html).toContain("data-home-media=\"youtube\"");
+    expect(html).toContain("https://www.youtube-nocookie.com/embed/jNQXAC9IVRw");
+  });
+
   it("shows only two card teasers clamped, with detail via see-all", () => {
     const comment = (id: string, body: string) => ({
       id,
