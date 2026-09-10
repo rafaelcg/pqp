@@ -21,7 +21,11 @@ import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
  *
  * THE MAP IS PER SERVER AND IS CLEARED ON SWITCH. Holding two servers' parties
  * at once would mean the sidebar block could show a party from the server the
- * person just left, which is worse than showing nothing for a beat.
+ * person just left, which is worse than showing nothing for a beat. A
+ * `watch-party-update` for a party on another server is ignored for the same
+ * reason: the socket's catch-up and fan-out can name a party this tab is
+ * not looking at, and writing it in is how a LIVE block for server A
+ * appears while they are looking at server B.
  */
 export interface WatchPartiesState {
   /** channelId -> the party there, as this person may see it. */
@@ -73,7 +77,9 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
   }, [serverId, reloadToken]);
 
   const apply = useCallback((channelId: string, party: WatchParty | null) => {
-    setByChannel((prev) => applyWatchPartyFrame(prev, channelId, party));
+    setByChannel((prev) =>
+      applyWatchPartyFrame(prev, channelId, party, serverRef.current),
+    );
   }, []);
 
   const put = useCallback(
@@ -83,7 +89,10 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
-  const live = useMemo(() => liveWatchParties(byChannel), [byChannel]);
+  const live = useMemo(
+    () => liveWatchParties(byChannel, serverId),
+    [byChannel, serverId],
+  );
 
   return { byChannel, live, apply, put, refresh };
 }
@@ -111,6 +120,7 @@ export function applyWatchPartyFrame(
   prev: Record<string, WatchParty>,
   channelId: string,
   party: WatchParty | null,
+  openServerId: string | null,
 ): Record<string, WatchParty> {
   if (!party) {
     if (!(channelId in prev)) {
@@ -120,14 +130,23 @@ export function applyWatchPartyFrame(
     delete next[channelId];
     return next;
   }
+  // A frame for another server must not land in this map. `party: null`
+  // still deletes above: a stale entry has to be able to clear, and a
+  // null has no serverId to compare.
+  if (party.serverId !== openServerId) {
+    return prev;
+  }
   return { ...prev, [channelId]: party };
 }
 
 /** The live ones, newest first. What the sidebar block draws. */
 export function liveWatchParties(
   byChannel: Record<string, WatchParty>,
+  serverId: string | null,
 ): WatchParty[] {
   return Object.values(byChannel)
-    .filter((party) => party.state === "live")
+    .filter(
+      (party) => party.state === "live" && party.serverId === serverId,
+    )
     .sort((a, b) => (b.wentLiveAt ?? "").localeCompare(a.wentLiveAt ?? ""));
 }
