@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { profileUpdateSchema, withProfileUpdate } from "./chat.js";
 import {
   CUSTOM_STATUS_MAX_LENGTH,
   customStatusLength,
@@ -162,5 +163,59 @@ describe("customStatusSchema", () => {
         .success,
     ).toBe(false);
     expect(customStatusSchema.safeParse(`oi${RLO}gente`).success).toBe(false);
+  });
+});
+
+const PROFILE_UPDATE = {
+  type: "profile-update" as const,
+  userId: "00000000-0000-4000-8000-000000000001",
+  displayName: "Ana",
+  username: "ana",
+  tag: "ana#0001",
+  avatarUrl: null as string | null,
+};
+
+describe("profile-update customStatus", () => {
+  it("parses an omitted key as undefined, not as null", () => {
+    // `.default(null)` is the rolling-deploy bug: an older API sends this
+    // frame without the field, Zod fills null, and every recado on screen
+    // disappears. Omitted has to survive parse as "not in the frame".
+    const parsed = profileUpdateSchema.parse(PROFILE_UPDATE);
+    expect(parsed.customStatus).toBeUndefined();
+    expect("customStatus" in parsed).toBe(false);
+  });
+
+  it("does not clobber an existing recado when the key is omitted", () => {
+    const parsed = profileUpdateSchema.parse(PROFILE_UPDATE);
+    const person = withProfileUpdate(
+      { ...PROFILE_UPDATE, customStatus: "no gym, volto as 20h" },
+      parsed,
+    );
+    expect(person.customStatus).toBe("no gym, volto as 20h");
+  });
+
+  it("clears on explicit null", () => {
+    const parsed = profileUpdateSchema.parse({
+      ...PROFILE_UPDATE,
+      customStatus: null,
+    });
+    expect(parsed.customStatus).toBeNull();
+    const person = withProfileUpdate(
+      { ...PROFILE_UPDATE, customStatus: "brb" },
+      parsed,
+    );
+    expect(person.customStatus).toBeNull();
+  });
+
+  it("applies a new recado when the key is present", () => {
+    const parsed = profileUpdateSchema.parse({
+      ...PROFILE_UPDATE,
+      customStatus: "so na call",
+    });
+    const person = withProfileUpdate(
+      { ...PROFILE_UPDATE, customStatus: "no gym" },
+      parsed,
+    );
+    expect(person.customStatus).toBe("so na call");
   });
 });

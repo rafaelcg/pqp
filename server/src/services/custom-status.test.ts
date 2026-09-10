@@ -54,6 +54,16 @@ describe("the cap in schema.sql", () => {
     expect(match).not.toBeNull();
     expect(Number(match![1])).toBe(CUSTOM_STATUS_MAX_LENGTH);
   });
+
+  it("adds users_custom_status_shape only when it is missing", () => {
+    // DROP+ADD on every boot revalidates every row and takes a strong lock
+    // on users. The constraint does not change between deploys, so paying
+    // that on startup is the bug; add-if-missing is the fix.
+    expect(schemaSql).not.toMatch(
+      /DROP CONSTRAINT IF EXISTS users_custom_status_shape/,
+    );
+    expect(schemaSql).toMatch(/conname = 'users_custom_status_shape'/);
+  });
 });
 
 describeDb("custom_status", () => {

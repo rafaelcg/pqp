@@ -28,6 +28,13 @@ import { translateMessage } from "@/lib/i18n";
  * and updates `user`, which is where `stored` comes from. That is a second,
  * slower path to the same value and it is not relied on: a person on a dropped
  * socket must still see their own recado change.
+ *
+ * WRITES ARE SERIALISED. Enter saves and then blurs, and clear stays clickable
+ * while a PATCH is in flight, so two calls can race. A generation counter
+ * ignores a stale response; a one-slot queue keeps the latest intended value
+ * and sends it when the in-flight write settles. Duplicate Enter/blur of the
+ * same normalised string is a no-op against that intended value, not against
+ * React state that has not re-rendered yet.
  */
 
 export interface CustomStatusControls {
@@ -74,19 +81,72 @@ export function useCustomStatus({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const savingRef = useRef(false);
+  const intendedRef = useRef("");
+  const persistedRef = useRef("");
+  const queuedRef = useRef<string | null>(null);
+  const generationRef = useRef(0);
+  const onUserUpdatedRef = useRef(onUserUpdated);
+  onUserUpdatedRef.current = onUserUpdated;
+
   // Adopt the stored value once it lands, and on every later change from
   // another device. Skipped while a write is in flight for the same reason
   // `useUserStatus` skips it: an `/api/me` response that was already on its way
   // must not overwrite what the person just typed.
-  const savingRef = useRef(false);
   useEffect(() => {
     if (!savingRef.current) {
-      setValue(stored ?? "");
+      const next = stored ?? "";
+      setValue(next);
+      intendedRef.current = next;
+      persistedRef.current = next;
     }
   }, [stored]);
 
-  const onUserUpdatedRef = useRef(onUserUpdated);
-  onUserUpdatedRef.current = onUserUpdated;
+  const flush = useCallback((wanted: string) => {
+    const generation = ++generationRef.current;
+    savingRef.current = true;
+    setSaving(true);
+    // Empty is sent as an explicit null rather than as `""`: null is the
+    // documented "clear it" on the wire, and one spelling for one intent is
+    // what keeps the server from having to accept two.
+    void updateMe({ customStatus: wanted === "" ? null : wanted })
+      .then((updated) => {
+        if (generation !== generationRef.current) {
+          return;
+        }
+        persistedRef.current = updated.customStatus ?? "";
+        onUserUpdatedRef.current(updated);
+        const queued = queuedRef.current;
+        if (queued !== null) {
+          queuedRef.current = null;
+          flush(queued);
+          return;
+        }
+        setValue(persistedRef.current);
+        intendedRef.current = persistedRef.current;
+      })
+      .catch(() => {
+        if (generation !== generationRef.current) {
+          return;
+        }
+        const queued = queuedRef.current;
+        if (queued !== null) {
+          queuedRef.current = null;
+          flush(queued);
+          return;
+        }
+        setValue(persistedRef.current);
+        intendedRef.current = persistedRef.current;
+        setError(translateMessage("customStatus.saveFailed"));
+      })
+      .finally(() => {
+        if (generation !== generationRef.current) {
+          return;
+        }
+        savingRef.current = false;
+        setSaving(false);
+      });
+  }, []);
 
   const save = useCallback(
     (next: string) => {
@@ -95,7 +155,10 @@ export function useCustomStatus({
       // made against the value that would actually be stored. Without it,
       // blurring a field whose only change is a trailing space is a round trip.
       const wanted = normalizeCustomStatus(next);
-      if (wanted === value) {
+      // Against the intended value, not React state: Enter saves and then
+      // blurs in the same turn, before the render that would make `value`
+      // match, and that pair must not fire two PATCHes for one string.
+      if (wanted === intendedRef.current) {
         return;
       }
       // Refused before the request rather than after, because the server's
@@ -114,28 +177,15 @@ export function useCustomStatus({
         return;
       }
 
-      const previous = value;
+      intendedRef.current = wanted;
       setValue(wanted);
-      setSaving(true);
-      savingRef.current = true;
-      // Empty is sent as an explicit null rather than as `""`: null is the
-      // documented "clear it" on the wire, and one spelling for one intent is
-      // what keeps the server from having to accept two.
-      void updateMe({ customStatus: wanted === "" ? null : wanted })
-        .then((updated) => {
-          setValue(updated.customStatus ?? "");
-          onUserUpdatedRef.current(updated);
-        })
-        .catch(() => {
-          setValue(previous);
-          setError(translateMessage("customStatus.saveFailed"));
-        })
-        .finally(() => {
-          setSaving(false);
-          savingRef.current = false;
-        });
+      if (savingRef.current) {
+        queuedRef.current = wanted;
+        return;
+      }
+      flush(wanted);
     },
-    [value],
+    [flush],
   );
 
   const clearError = useCallback(() => setError(null), []);

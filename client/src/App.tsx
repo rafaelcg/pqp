@@ -31,6 +31,7 @@ import {
   buildReplyExcerpt,
   isVoiceRoomChannelType,
   isWatchPartyChannelType,
+  withProfileUpdate,
   type WatchParty,
   type WatchPartyOptions,
 } from "@pqp/shared";
@@ -2842,21 +2843,16 @@ function MainAppContent({
           if (message.type === "profile-update") {
             chat.applyProfileUpdate(message);
             threadChat.applyProfileUpdate(message);
+            // Recado is merged only when the frame carries the key. An older
+            // API during a rolling deploy omits it, and that is not a clear.
+            // Explicit null is "they cleared it" and has to land as null.
+            // applyProfileUpdate above rewrites names on loaded messages;
+            // messages do not carry a recado, so that path does not touch it.
             setServerMembers((prev) =>
               prev.some((one) => one.id === message.userId)
                 ? prev.map((one) =>
                     one.id === message.userId
-                      ? {
-                          ...one,
-                          displayName: message.displayName,
-                          username: message.username,
-                          tag: message.tag,
-                          avatarUrl: message.avatarUrl,
-                          // Applied whole, never diffed: the frame is an
-                          // absolute statement, so null here is "they cleared
-                          // it" and has to land as null.
-                          customStatus: message.customStatus,
-                        }
+                      ? withProfileUpdate(one, message)
                       : one,
                   )
                 : prev,
@@ -2870,14 +2866,7 @@ function MainAppContent({
                       ...conversation,
                       participants: conversation.participants.map((person) =>
                         person.id === message.userId
-                          ? {
-                              ...person,
-                              displayName: message.displayName,
-                              username: message.username,
-                              tag: message.tag,
-                              avatarUrl: message.avatarUrl,
-                              customStatus: message.customStatus,
-                            }
+                          ? withProfileUpdate(person, message)
                           : person,
                       ),
                     }
@@ -2886,16 +2875,7 @@ function MainAppContent({
             );
             setUser((prev) =>
               prev && prev.id === message.userId
-                ? {
-                    ...prev,
-                    displayName: message.displayName,
-                    username: message.username,
-                    tag: message.tag,
-                    avatarUrl: message.avatarUrl,
-                    // The account's own copy, so a recado typed in one tab
-                    // shows in this one without a reload.
-                    customStatus: message.customStatus,
-                  }
+                ? withProfileUpdate(prev, message)
                 : prev,
             );
             return;

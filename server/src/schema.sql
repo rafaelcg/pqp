@@ -4066,9 +4066,21 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS custom_status TEXT;
 -- which is the same thing `customStatusLength` counts in TypeScript. Had this
 -- been `octet_length` the two would disagree by a factor of four on exactly the
 -- content this field is for.
+--
+-- ADD only if missing. DROP+ADD revalidates every row and takes a strong lock
+-- on `users` — too expensive to pay on every API boot for a CHECK that does
+-- not change. Two machines racing the first add can both see it missing; the
+-- loser hits duplicate_object and that is the only error this swallows.
 DO $$
 BEGIN
-  ALTER TABLE users DROP CONSTRAINT IF EXISTS users_custom_status_shape;
+  IF EXISTS (
+    SELECT 1
+      FROM pg_constraint
+     WHERE conname = 'users_custom_status_shape'
+       AND conrelid = 'users'::regclass
+  ) THEN
+    RETURN;
+  END IF;
   ALTER TABLE users
     ADD CONSTRAINT users_custom_status_shape
     CHECK (
@@ -4079,6 +4091,6 @@ BEGIN
       )
     );
 EXCEPTION
-  WHEN others THEN NULL;
+  WHEN duplicate_object THEN NULL;
 END $$;
 

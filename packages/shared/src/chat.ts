@@ -466,11 +466,51 @@ export const profileUpdateSchema = z.object({
    *
    * Null means "this person has none", which is a real value here: clearing a
    * recado has to reach other screens, and an absent key could not say it.
-   * Defaulted so a client built against this schema still parses a frame from
-   * an API that predates the field.
+   *
+   * Optional with NO default: omitted is not null. An older API during a
+   * rolling deploy sends this frame without the key, and treating that as
+   * null would wipe every recado already on screen. Explicit null is "they
+   * cleared it". See `withProfileUpdate`.
    */
-  customStatus: z.string().nullable().default(null),
+  customStatus: z.string().nullable().optional(),
 });
+
+/**
+ * Copy a profile-update onto a person the client already has.
+ *
+ * `customStatus` is merged only when the frame actually carries the key.
+ * Omitted keeps the previous recado (rolling-deploy older APIs). Explicit
+ * null is "they cleared it" and has to land as null.
+ */
+export function withProfileUpdate<
+  T extends {
+    displayName: string;
+    username?: string | null;
+    tag: string | null;
+    avatarUrl: string | null;
+    customStatus?: string | null;
+  },
+>(
+  person: T,
+  update: {
+    displayName: string;
+    username: string | null;
+    tag: string | null;
+    avatarUrl: string | null;
+    customStatus?: string | null;
+  },
+): T {
+  return {
+    ...person,
+    displayName: update.displayName,
+    username: update.username,
+    tag: update.tag,
+    avatarUrl: update.avatarUrl,
+    ...(update.customStatus !== undefined
+      ? { customStatus: update.customStatus }
+      : {}),
+  };
+}
 
 /**
  * Watch party scheduling: fires at T-10 minutes and again when the session
