@@ -516,10 +516,18 @@ final class VoiceRosterDeltaTests: XCTestCase {
      */
     func testTheCapabilityMatchesTheServerAndTheWebClient() throws {
         let cap = "voice-roster-delta"
-        XCTAssertEqual(RealtimeClient.wireCaps, [cap])
+        // EXACT, and deliberately not `contains`. This list is the whole of
+        // what this build promises the server, and the promise runs in the
+        // dangerous direction for `voice-transport-changed`: declaring it
+        // stops the server releasing this seat when a room is promoted, so an
+        // entry added here without its handler leaves somebody seated in a
+        // call whose media has moved without them. A `contains` would let the
+        // list grow silently, which is exactly the drift this asserts against.
+        // The promotion capability's own contract is in `VoicePromotionTests`.
+        XCTAssertEqual(RealtimeClient.wireCaps, [cap, "voice-transport-changed", "presence-delta"])
         XCTAssertEqual(
             RealtimeClient.authFrame(token: "t")["caps"] as? [String],
-            [cap],
+            [cap, "voice-transport-changed", "presence-delta"],
             "The handshake must declare exactly RealtimeClient.wireCaps. A correct list "
                 + "that never reaches the socket is the same outcome as no capability at "
                 + "all, and neither the app nor the server would say a word about it."

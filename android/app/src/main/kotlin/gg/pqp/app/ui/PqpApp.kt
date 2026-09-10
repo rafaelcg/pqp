@@ -62,6 +62,9 @@ import gg.pqp.app.ui.theme.Sizes
 import gg.pqp.app.voice.CallController
 import gg.pqp.app.voice.Refusal
 import gg.pqp.app.voice.VoiceController
+import gg.pqp.app.watch.WatchLiveStore
+import gg.pqp.app.watch.mayTakeWatchPartySeat
+import gg.pqp.app.watch.ui.WatchChannelPane
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.serialization.Serializable
 
@@ -108,6 +111,7 @@ fun PqpApp(
     voice: VoiceController,
     push: PushController,
     calls: CallController,
+    watch: WatchLiveStore,
 ) {
     val phase by session.phase.collectAsStateWithLifecycle()
 
@@ -132,7 +136,7 @@ fun PqpApp(
                     reason = (phase as? SessionPhase.Blocked)?.reason.orEmpty(),
                     onRetry = null,
                 )
-                PhaseKey.Ready -> SignedInNav(session, voice, push, calls)
+                PhaseKey.Ready -> SignedInNav(session, voice, push, calls, watch)
             }
         }
     }
@@ -160,6 +164,7 @@ private fun SignedInNav(
     voice: VoiceController,
     push: PushController,
     calls: CallController,
+    watch: WatchLiveStore,
 ) {
     val nav = rememberNavController()
     val voiceState by voice.state.collectAsStateWithLifecycle()
@@ -188,12 +193,16 @@ private fun SignedInNav(
     val unsupported = stringResource(R.string.voice_transport_unsupported)
     val screenDenied = stringResource(R.string.voice_screen_share_denied)
     val backendUnreachable = stringResource(R.string.voice_backend_unreachable)
+    val joinRefused = stringResource(R.string.voice_join_refused)
+    val joinTimedOut = stringResource(R.string.voice_join_timeout)
     LaunchedEffect(voiceState.refusal) {
         val text = when (voiceState.refusal) {
             Refusal.RoomFull -> roomFull
             Refusal.TransportUnsupported -> unsupported
             Refusal.ScreenShareDenied -> screenDenied
             Refusal.VoiceBackendUnreachable -> backendUnreachable
+            Refusal.JoinRefused -> joinRefused
+            Refusal.JoinTimedOut -> joinTimedOut
             null -> return@LaunchedEffect
         }
         android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_LONG).show()
@@ -324,6 +333,7 @@ private fun SignedInNav(
                     ChannelsScreen(
                         session = session,
                         voice = voice,
+                        watch = watch,
                         serverId = route.serverId,
                         serverName = route.serverName,
                         onBack = nav::popBackStack,
@@ -361,6 +371,19 @@ private fun SignedInNav(
                         slowmodeSeconds = route.slowmodeSeconds,
                         onBack = nav::popBackStack,
                         serverId = route.serverId,
+                        // The watch party, above the transcript, for anybody
+                        // who may see the channel. It draws nothing at all
+                        // unless the server says a stream is live, so an
+                        // ordinary voice channel is untouched.
+                        header = {
+                            if (route.isVoiceChannel) {
+                                WatchChannelPane(
+                                    session = session,
+                                    store = watch,
+                                    channelId = route.channelId,
+                                )
+                            }
+                        },
                         actions = {
                             // Offered only while this room is not already the
                             // call. Once joining or connected, the call bar
@@ -369,7 +392,27 @@ private fun SignedInNav(
                             // down and rebuild it.
                             val inThisRoom =
                                 voiceState.channelId == route.channelId && voiceState.isActive
-                            if (route.isVoiceChannel && !inThisRoom) {
+                            // AND ONLY TO SOMEBODY WHO MAY HAVE A SEAT.
+                            //
+                            // `Channel.isVoice` answers true for `watch_party`
+                            // as well as `voice`, so this button was offered to
+                            // a watch party's audience: five hundred people
+                            // invited onto the media box for something the pane
+                            // right below them plays for free. Watching is
+                            // already the whole offer on this screen, and it is
+                            // one tap and no seat, so a viewer who is not shown
+                            // this loses nothing and is not sent anywhere else.
+                            //
+                            // The rule is the one the server refuses the join
+                            // with, and it answers TRUE for a channel with no
+                            // active party, so an ordinary voice room is
+                            // untouched. See `WatchPartySeat.kt`.
+                            val seats by watch.seats.collectAsStateWithLifecycle()
+                            val maySit = mayTakeWatchPartySeat(
+                                canStartWatchParty = false,
+                                party = seats[route.channelId],
+                            )
+                            if (route.isVoiceChannel && !inThisRoom && maySit) {
                                 IconButton(
                                     onClick = {
                                         withMicrophone {
@@ -421,12 +464,21 @@ private suspend fun navigateToPush(
     when (target) {
         is DeepLinkTarget.Channel -> {
             nav.navigate(ChannelsRoute(target.serverId, serverName(target.serverId)))
-            val name = runCatching { session.api.channels(target.serverId) }
+            // The row, not just its name. `isVoiceChannel` is what mounts the
+            // watch party pane, and a tap on a notification about a live party
+            // is exactly the way somebody arrives at one: landing there with no
+            // player would be the one route where the feature is missing.
+            val channel = runCatching { session.api.channels(target.serverId) }
                 .getOrNull()
                 ?.firstOrNull { it.id == target.channelId }
-                ?.name
-                .orEmpty()
-            nav.navigate(ChatRoute(target.channelId, name))
+            nav.navigate(
+                ChatRoute(
+                    target.channelId,
+                    channel?.name.orEmpty(),
+                    serverId = target.serverId,
+                    isVoiceChannel = channel?.isVoice == true,
+                ),
+            )
         }
 
         is DeepLinkTarget.Server ->

@@ -73,12 +73,20 @@ vi.mock("../services/dms.js", () => ({
 
 const SERVER = randomUUID();
 const CINEMA = randomUUID();
+/**
+ * An ORDINARY voice channel in the same server, pinned to the SFU by its
+ * override the way a ten-member server's rooms are pinned by size. A screen
+ * share here is the case the egress must refuse: `LIVE_HLS_ENABLED` is on
+ * (`isLiveHlsEnabledForServer` below answers true for everything), the room
+ * is on LiveKit, and the sharer holds STREAM. Only the channel type differs.
+ */
+const HANGOUT = randomUUID();
 
 vi.mock("../services/servers.js", () => ({
   getChannel: async (id: string) => ({
     id,
     kind: "server",
-    type: "watch_party",
+    type: id === HANGOUT ? "voice" : "watch_party",
     server_id: SERVER,
     voice_transport: "livekit",
   }),
@@ -156,6 +164,9 @@ const { verifyHlsViewerToken, HLS_VIEWER_TOKEN_PARAM } = await import(
   "../voice/hls-viewer-token.js"
 );
 const { pickHlsSharer } = await import("./hls-audience.js");
+const { noteWatchPartyState, resetWatchPartyLiveForTests } = await import(
+  "./watch-party-live.js"
+);
 const { PERMISSION_ALL, PERMISSION_DEFAULT_EVERYONE } = await import(
   "@pqp/shared"
 );
@@ -212,6 +223,19 @@ async function claimStage(rec: Recorder, userId: string) {
   );
 }
 
+/**
+ * The sharer stops being one. Indistinguishable, to the server, from what
+ * `reevaluateVoiceSpeak` does to a peer whose `canStream` resolved false, and
+ * from a reconnect that rebuilt the peer before the client re-declared, which
+ * is the point: `pickHlsSharer` sees one absence, not three causes.
+ */
+async function releaseStage(rec: Recorder, userId: string) {
+  await handleVoiceMessage(
+    { socket: rec.socket, user: asUser(userId) },
+    { type: "set-sharing-screen", sharing: false },
+  );
+}
+
 /** `pushLiveHls` is fire-and-forget behind the share; let it settle. */
 async function settle() {
   for (let i = 0; i < 5; i += 1) {
@@ -230,6 +254,14 @@ describe("HLS start reads the stage gate", () => {
     egress.calls.length = 0;
     egress.refuse = false;
     backend.configured = "livekit";
+    // NO GRACE BY DEFAULT IN THIS SUITE. `pushLiveHls` now holds a broadcast
+    // open for `HLS_NO_SHARER_GRACE_MS` after the sharer disappears, because
+    // a reconnect or a permissions bump makes them disappear without anybody
+    // touching the share. Every case here except the one describe that is
+    // about the grace is about what happens when a share genuinely stops, so
+    // they run with it off and keep asserting exactly what they always did.
+    process.env.HLS_NO_SHARER_GRACE_MS = "0";
+    resetWatchPartyLiveForTests();
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 
@@ -238,11 +270,30 @@ describe("HLS start reads the stage gate", () => {
   });
 
   it("a sharing peer without canStream never feeds the egress", () => {
-    const usurper = { id: "p1", sharingScreen: true, canStream: false };
-    const idle = { id: "p2", sharingScreen: false, canStream: true };
+    const seat = (id: string, sharingScreen: boolean, canStream: boolean) => ({
+      id,
+      sharingScreen,
+      canStream,
+      watchParty: true,
+    });
+    const usurper = seat("p1", true, false);
+    const idle = seat("p2", false, true);
     expect(pickHlsSharer([usurper, idle])).toBeNull();
-    const host = { id: "p3", sharingScreen: true, canStream: true };
+    const host = seat("p3", true, true);
     expect(pickHlsSharer([usurper, host])).toBe(host);
+  });
+
+  it("a sharing peer outside a watch party never feeds the egress", () => {
+    const streamer = {
+      id: "p1",
+      sharingScreen: true,
+      canStream: true,
+      watchParty: false,
+    };
+    expect(pickHlsSharer([streamer])).toBeNull();
+    expect(pickHlsSharer([streamer, { ...streamer, id: "p2" }])).toBeNull();
+    const host = { ...streamer, id: "p3", watchParty: true };
+    expect(pickHlsSharer([streamer, host])).toBe(host);
   });
 
   it("a host with START_WATCH_PARTY starts it, with the channel's server id", async () => {
@@ -254,6 +305,189 @@ describe("HLS start reads the stage gate", () => {
     const starts = egress.calls.filter(([, presenter]) => presenter !== null);
     expect(starts).toEqual([[CINEMA, peerId, SERVER]]);
     expect(egress.streams.get(CINEMA)?.presenterPeerId).toBe(peerId);
+  });
+
+  /**
+   * THE ROOM GATE, end to end and with the flag genuinely on: this suite's
+   * `isLiveHlsEnabledForServer` answers true for every server, and the room
+   * really is pinned to `livekit` (asserted, because a room that fell back to
+   * mesh would make `pushLiveHls` return early and pass this test for the
+   * wrong reason). The share is accepted by the room; only the transcode is
+   * refused, and `reconcileLiveHls` is never even reached with a presenter.
+   */
+  it("a screen share in an ordinary voice channel starts no transcode", async () => {
+    bits.byUser.set("host", PERMISSION_ALL);
+    const streamer = await join(recorder(), "host", HANGOUT);
+    const welcome = lastFrame(streamer, "welcome")!;
+    expect(welcome.transport).toBe("livekit");
+    expect(welcome.canStream).toBe(true);
+    await claimStage(streamer, "host");
+    await settle();
+    expect(frames(streamer, "screen-share-denied")).toHaveLength(0);
+    expect(
+      egress.calls.filter(([, presenter]) => presenter !== null),
+    ).toEqual([]);
+    expect(egress.streams.has(HANGOUT)).toBe(false);
+  });
+
+  /**
+   * THE PARTY GATE. `pickHlsSharer` asks whether somebody is sharing in a
+   * watch-party room with the stage bit, and asked nothing about whether a
+   * party is live, so a host who pressed Encerrar and left their screen share
+   * running kept a two-rung transcode alive with nothing naming it. Observed
+   * in production on 2026-09-09: every `channel_sessions` row for the channel
+   * `ended`, the last of them at 13:24, and a transcode still running at
+   * 13:56 on a four core box that also carries the SFU and the TURN relay.
+   *
+   * The share itself is untouched in all three cases below. It is a voice
+   * room; ending a show is not the same act as stopping a share.
+   */
+  describe("the party gate", () => {
+    it("stops the transcode when the party ends under a running share", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(true);
+
+      // NOTHING ELSE HAPPENS IN THE ROOM. Ending the show has to reconcile
+      // the stream by itself: `pushLiveHls` runs on roster events, and a host
+      // who presses Encerrar and touches nothing else is the ordinary case.
+      noteWatchPartyState(CINEMA, "ended");
+      await settle();
+
+      expect(egress.streams.has(CINEMA)).toBe(false);
+      expect(
+        egress.calls.filter(([channel, presenter]) =>
+          channel === CINEMA && presenter === null,
+        ).length,
+      ).toBeGreaterThan(0);
+    });
+
+    it("refuses to start one again while the party is over", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      noteWatchPartyState(CINEMA, "ended");
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+
+      expect(egress.streams.has(CINEMA)).toBe(false);
+      expect(
+        egress.calls.filter(([, presenter]) => presenter !== null),
+      ).toEqual([]);
+    });
+
+    it("starts again once a party goes live, and a draft does not count", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      noteWatchPartyState(CINEMA, "ended");
+      // A draft is somebody thinking. Nothing is broadcast until Ir ao vivo,
+      // so it must not clear the mark the end set.
+      noteWatchPartyState(CINEMA, "draft");
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(false);
+
+      noteWatchPartyState(CINEMA, "live");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(true);
+    });
+
+    /**
+     * FAIL OPEN, which is the whole design. A process that restarted mid-party
+     * has seen no state change and must transcode exactly as it does today:
+     * refusing a real party costs an event, missing a leak costs a core.
+     */
+    it("transcodes a channel it has heard nothing about", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(true);
+    });
+  });
+
+  /**
+   * A SHARER THAT VANISHES FOR A MOMENT MUST NOT END THE BROADCAST.
+   *
+   * `pickHlsSharer` needs `watchParty && sharingScreen && canStream`, and all
+   * three go false without the presenter doing anything: a reconnect that
+   * reconstructs starts the peer with `sharingScreen: false` until the client
+   * re-declares, and `reevaluateVoiceSpeak` clears `sharingScreen` outright
+   * for anyone whose `canStream` resolves false, which runs on every
+   * permissions bump, including the ones a watch party's own options
+   * reconciler causes by writing channel overwrites.
+   *
+   * Until now the first such push ended the session. Production logged
+   * `voice.hlsStopped reason=no-share` twice in sixteen minutes on one
+   * continuous party where nobody stopped sharing, and each one is a new
+   * `startedAt` and a rebuffer for every seatless viewer.
+   *
+   * Only `Date` is faked below (`toFake`), because the grace is wall clock and
+   * `settle()` needs a real `setImmediate` to drain the fire-and-forget push.
+   */
+  describe("a sharer that disappears for a moment", () => {
+    beforeEach(() => {
+      // The suite's own default is 0 (see the outer `beforeEach`), which is
+      // what keeps every other case pinning the stop rather than the grace.
+      process.env.HLS_NO_SHARER_GRACE_MS = "5000";
+    });
+
+    it("does not end the broadcast inside the grace window", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(true);
+
+      await releaseStage(host, "host");
+      await settle();
+
+      expect(egress.streams.has(CINEMA)).toBe(true);
+    });
+
+    it("comes back with no restart at all when the sharer returns", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+      const started = egress.streams.get(CINEMA)!.startedAt;
+
+      await releaseStage(host, "host");
+      await settle();
+      await claimStage(host, "host");
+      await settle();
+
+      // The SAME session. A blip must cost the audience nothing, not even a
+      // new playlist URL, which is a rebuffer for every one of them.
+      expect(egress.streams.get(CINEMA)?.startedAt).toBe(started);
+      expect(
+        egress.calls.filter(
+          ([channel, presenter]) => channel === CINEMA && presenter === null,
+        ),
+      ).toEqual([]);
+    });
+
+    it("still ends it once the grace has genuinely passed", async () => {
+      bits.byUser.set("host", PERMISSION_ALL);
+      const host = await join(recorder(), "host", CINEMA);
+      await claimStage(host, "host");
+      await settle();
+
+      // A real grace, just a short one: the timer that wakes the grace up is
+      // load bearing (the sharer going away is the last event this channel
+      // produces, so nothing else would ever look again) and faking it away
+      // would leave that untested.
+      process.env.HLS_NO_SHARER_GRACE_MS = "50";
+      await releaseStage(host, "host");
+      await settle();
+      expect(egress.streams.has(CINEMA)).toBe(true);
+
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      await settle();
+
+      expect(egress.streams.has(CINEMA)).toBe(false);
+    });
   });
 
   it("a member's refused claim never reaches the egress with a presenter", async () => {
@@ -319,6 +553,9 @@ describe("live HLS reaches the channel", () => {
     egress.calls.length = 0;
     egress.refuse = false;
     backend.configured = "livekit";
+    // Off here too: every case in this describe is about what the CHANNEL
+    // hears when a share stops, not about the grace that now precedes it.
+    process.env.HLS_NO_SHARER_GRACE_MS = "0";
     vi.spyOn(console, "log").mockImplementation(() => {});
   });
 

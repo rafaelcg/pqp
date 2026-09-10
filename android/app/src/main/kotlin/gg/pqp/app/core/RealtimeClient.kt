@@ -449,8 +449,18 @@ class RealtimeClient(
          * web client declares the identical string in
          * `client/src/lib/realtime.ts`, and the server reads it in
          * `server/src/ws/sockets.ts`.
+         *
+         * `voice-transport-changed`: a mesh room moved onto the voice server
+         * mid-call and this build follows it in place, keeping the same seat
+         * and peer id. Handled by [gg.pqp.app.voice.transportChangePlan] and
+         * `VoiceController.onTransportChanged`. This one is a promise with
+         * teeth: the server stops releasing the seat of a socket that declares
+         * it, so a build that asks for the frame and then does nothing leaves
+         * the person seated in a room whose media they cannot reach, which is
+         * strictly worse than the `voice-transport-unsupported` drop it
+         * replaces.
          */
-        val WIRE_CAPS = listOf("voice-roster-delta")
+        val WIRE_CAPS = listOf("voice-roster-delta", "voice-transport-changed")
 
         /**
          * The handshake, as a value rather than as a side effect.

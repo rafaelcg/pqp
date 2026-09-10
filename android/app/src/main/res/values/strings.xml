@@ -71,6 +71,7 @@
     <string name="chat_reject_cannot_send">You don\'t have permission to send here</string>
     <string name="chat_reject_undeliverable">This message wasn\'t delivered</string>
     <string name="chat_reject_slow_mode">Slow mode is on.</string>
+    <string name="chat_reject_automod">AutoMod blocked this message.</string>
     <string name="chat_reject_generic">Failed to send</string>
     <string name="chat_slow_mode_wait">Slow mode. You can send again in %1$ds.</string>
     <!-- The row between two calendar days. Older days are formatted dates. -->
@@ -181,6 +182,8 @@
     <string name="voice_notification_hang_up">Hang up</string>
     <string name="voice_transport_unsupported">This call runs on a server this app cannot join yet.</string>
     <string name="voice_backend_unreachable">Could not reach the voice server for this call.</string>
+    <string name="voice_join_refused">You cannot join this call.</string>
+    <string name="voice_join_timeout">Could not join the call. Try again.</string>
     <string name="voice_participants">%1$d in this call</string>
     <string name="voice_peer_unreachable">Cannot reach everyone in this call</string>
     <string name="voice_notification_sharing">Sharing your screen</string>
@@ -201,6 +204,9 @@
     <string name="voice_listen_only">Listen only</string>
     <string name="voice_listen_only_locked">Listening only. You do not have permission to speak in this channel.</string>
     <string name="voice_speak_granted">You can speak now. Unmute when you are ready.</string>
+    <string name="voice_promoted_cameras">This call became a large room so more cameras fit</string>
+    <string name="voice_promoted_screens">This call became a large room so more screens fit</string>
+    <string name="voice_promoted_room">This call became a large room so more people fit</string>
 
     <!-- Push notifications -->
     <string name="push_channel_messages">Mentions and messages</string>
@@ -397,4 +403,20 @@
         <item quantity="one">%1$d declined</item>
         <item quantity="other">%1$d declined</item>
     </plurals>
+    <!-- Watch party -->
+    <string name="watch_live">LIVE</string>
+    <string name="watch_audience_none">nobody watching yet</string>
+    <plurals name="watch_audience">
+        <item quantity="one">%1$d watching</item>
+        <item quantity="other">%1$d watching</item>
+    </plurals>
+    <string name="watch_delay">~%1$ds behind</string>
+    <string name="watch_opening">Waiting for the picture</string>
+    <string name="watch_reconnecting">The stream stalled, reconnecting</string>
+    <string name="watch_dead">The stream dropped</string>
+    <string name="watch_ended">The stream ended</string>
+    <string name="watch_ended_hint">Whoever was in the call is still there.</string>
+    <string name="watch_retry">Try again</string>
+    <string name="watch_fullscreen">Fullscreen</string>
+    <string name="watch_exit_fullscreen">Exit fullscreen</string>
 </resources>

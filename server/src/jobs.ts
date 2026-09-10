@@ -48,6 +48,8 @@ import {
   rollUpAndPruneVoiceOccupancy,
 } from "./services/voice-occupancy.js";
 import { sendDueChannelSessionReminders } from "./services/channel-sessions.js";
+import { sweepWatchPartyHosts } from "./services/watch-parties.js";
+import { broadcastWatchParty } from "./ws/watch-party-events.js";
 import { sweepHlsSessions } from "./voice/hls-cleanup.js";
 
 /**
@@ -216,6 +218,20 @@ export function startColdJobs(): ColdJobs {
       recordVoiceOccupancySample,
     ),
     every(DAILY_MS, "voice-occupancy", rollUpAndPruneVoiceOccupancy),
+    // A live watch party whose host has been gone longer than the grace
+    // window ends here. Same minute tick as the reminders on purpose: a party
+    // that has lost its host is a scheduling fact, not a media one, and the
+    // stream (which has its own, much faster, egress monitor) is unaffected
+    // either way.
+    every(CHANNEL_SESSION_REMINDER_INTERVAL_MS, "watch-parties", async () => {
+      const { ended } = await sweepWatchPartyHosts();
+      for (const party of ended) {
+        console.log(
+          `[watch-party] ended ${party.sessionId}: the host never came back`,
+        );
+        await broadcastWatchParty(party.sessionId);
+      }
+    }),
   ];
 
   void sweepAttachments();

@@ -1,5 +1,5 @@
 import { Hash } from "lucide-react";
-import { Dialog } from "@/components/ui/dialog";
+import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { useTranslation } from "@/lib/i18n";
 
 export interface ForwardTarget {
@@ -28,6 +28,7 @@ export function ForwardDialog({
       size="sm"
       onClose={onClose}
     >
+      <DialogBody>
       {targets.length === 0 ? (
         <p className="text-sm text-paper-muted">{t("chat.forward.empty")}</p>
       ) : (
@@ -52,6 +53,7 @@ export function ForwardDialog({
           ))}
         </ul>
       )}
+      </DialogBody>
     </Dialog>
   );
 }

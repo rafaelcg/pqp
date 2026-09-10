@@ -17,6 +17,7 @@ import gg.pqp.app.core.RealtimeState
 import gg.pqp.app.core.SessionStore
 import gg.pqp.app.core.VoiceParticipant
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -69,14 +70,23 @@ data class VoiceState(
     /** This device is capturing and publishing its screen. */
     val sharingScreen: Boolean = false,
     /**
-     * Whether this call's transport can carry a screen from *this* device.
+     * Whether this device may put a screen on this room's stage.
      *
-     * False on LiveKit, where this client publishes audio only. The button is
-     * hidden rather than left to fail: it raises Android's consent dialog, and
-     * taking a projection grant only to publish nothing is a worse answer than
-     * not offering. Mesh is unaffected and still shares screens. Watching
-     * somebody else's share is a separate question with a different answer:
-     * both transports deliver one into [VoiceController.remoteScreens].
+     * IT IS THE PERMISSION, NOT THE TRANSPORT. It used to be
+     * `kind == Mesh`, because this client could only publish a screen over a
+     * peer connection, and that hid the button on exactly the rooms a watch
+     * party runs in: a listed community or a server of ten or more is pinned
+     * to the SFU, so a host on Android could not present at the one event the
+     * feature exists for. LiveKit publishes a screen now, so what is left is
+     * the only question that was ever product: may this person.
+     *
+     * The answer is `welcome.canStream`, which is STREAM in a plain voice
+     * channel and START_WATCH_PARTY in a `watch_party` one. The server decides
+     * which; this client asks one thing.
+     *
+     * Watching somebody else's share is a separate question with a different
+     * answer: both transports deliver one into
+     * [VoiceController.remoteScreens].
      */
     val screenShareSupported: Boolean = true,
     /**
@@ -120,6 +130,32 @@ enum class Refusal {
     RoomFull,
     TransportUnsupported,
     ScreenShareDenied,
+
+    /**
+     * The server said no to the join, in as many words.
+     *
+     * Rare, because `voice-join-refused` is only sent in answer to a join that
+     * carried a `resumePeerId` and this client never sends one. Handled all
+     * the same: the branch costs a line, it turns a twelve second wait into an
+     * immediate answer the day the server starts sending it on a cold join,
+     * and the alternative is a frame this client can see arriving and chooses
+     * to sit through. [JoinTimedOut] is the backstop that covers every refusal
+     * that says nothing at all, which today is all of them.
+     */
+    JoinRefused,
+
+    /**
+     * The join went out and nothing came back inside [VOICE_JOIN_TIMEOUT_MS].
+     *
+     * THE FAILURE THIS ENDS. Most of the ways a join is refused send no frame
+     * at all: `refuseResume()` in `server/src/ws/voice.ts` answers only a join
+     * that asked to resume. So a timed-out account, a lost CONNECT bit, a
+     * blocked DM, a channel that went away, a watch party viewer asking for a
+     * seat, and an ordinary dropped packet all looked the same on this phone,
+     * and what they looked like was a call bar that said Conectando until the
+     * app was killed. There is no state in which that is the right answer.
+     */
+    JoinTimedOut,
 
     /**
      * The room's transport is one this client speaks, and the media leg still
@@ -197,6 +233,15 @@ class VoiceController(
      * longer shares.
      */
     private val rosterTracker = VoiceRosterTracker()
+
+    /**
+     * Whether the join this device is waiting on is still the one it wants.
+     *
+     * `join-voice-room` has no acknowledgement and most refusals send no frame
+     * at all, so without a deadline a refused join is a spinner forever. See
+     * [JoinWatchdog] for the whole argument.
+     */
+    private val joinWatchdog = JoinWatchdog()
 
     /**
      * The media half of the current call, and it changes with the room.
@@ -283,9 +328,17 @@ class VoiceController(
         session = { peerId ->
             val channelId = _state.value.channelId
                 ?: error("No voice channel to mint an SFU token for")
-            session.api.voiceSession(channelId, peerId)
+            // The HMAC `welcome` minted for exactly this peer, when we have
+            // one. It is the only proof that works when the mint lands on an
+            // API instance that never saw the join, which is every promotion
+            // followed on a two-machine deployment.
+            session.api.voiceSession(channelId, peerId, resumeToken)
         },
         onPeerState = ::onPeerMediaState,
+        // Same callback and the same reason as the mesh engine's: the system's
+        // "Stop sharing" chip and a refused publish both have to take the
+        // roster claim down with them.
+        onScreenShareEnded = { scope.launch { stopScreenShare() } },
         onFailed = { reason -> onVoiceBackendUnreachable(reason) },
         onConnected = {
             // Only now is the call actually a call. `welcome` arrived long
@@ -382,17 +435,20 @@ class VoiceController(
     private var pendingIce: List<IceServer> = emptyList()
 
     /**
-     * The peer id and resume token `welcome` handed us, kept for one purpose.
+     * The peer id and resume token `welcome` handed us, kept for two purposes.
      *
      * `POST /api/voice/leave` is the only way to leave a room when the socket
      * has already gone, and this pair is its credential. The route is handled
      * before Clerk resolution precisely so a dying client can still use it.
      *
-     * **This client never asks to resume.** It rebuilds a call after a socket
-     * drop rather than resuming one (see [followConnection]), and claiming
-     * `resume: true` without resuming would make the server hold the seat for
-     * 90 seconds. Holding the token is not the same as sending it back on a
-     * join, and only the leave path ever reads it.
+     * `POST /api/voice/token` is the other: the same HMAC proves this seat is
+     * ours when the mint lands on an API instance that never saw the join.
+     *
+     * **This client still never asks to resume a call.** It rebuilds after a
+     * socket drop rather than resuming one (see [followConnection]), and
+     * claiming `resume: true` without resuming would make the server hold the
+     * seat for 90 seconds. Holding the token, and presenting it to prove who
+     * we are, is not the same as sending it back on a *join*.
      */
     @Volatile private var resumePeerId: String? = null
 
@@ -438,6 +494,15 @@ class VoiceController(
         // other way round, and a call held by a backgrounded process with no
         // notification is killed within a minute regardless of version.
         VoiceService.start(context)
+
+        // Armed before the frame goes out rather than after, because the ICE
+        // fetch below is on this path and a `/api/ice-servers` that hangs is
+        // one of the ways a join never happens.
+        val ticket = joinWatchdog.arm(channelId)
+        scope.launch {
+            delay(VOICE_JOIN_TIMEOUT_MS)
+            joinWatchdog.claim(ticket)?.let { onJoinTimedOut(it) }
+        }
 
         scope.launch {
             pendingIce = resolveIceServers()
@@ -500,6 +565,7 @@ class VoiceController(
      * orphan window expires.
      */
     fun leave() {
+        joinWatchdog.settled()
         wantedChannel = null
         needsRejoin = false
         if (_state.value.channelId != null) {
@@ -540,9 +606,41 @@ class VoiceController(
      * with a sentence about it, which is what [Refusal.VoiceBackendUnreachable]
      * carries to the snackbar.
      */
+    /**
+     * The join went out and the server never answered.
+     *
+     * ENDS THE ATTEMPT RATHER THAN RETRYING IT. A retry would be guessing that
+     * the cause was transient, and the likeliest causes are not: a refusal
+     * this client cannot see, a timeout, a seat in a watch party that is not
+     * this account's to take. A person told what happened can tap the button
+     * again in one gesture; a phone retrying a refusal in a loop cannot be
+     * told to stop.
+     *
+     * `leave-voice-room` goes out first, because "nothing came back" does not
+     * mean "the server never saw it": a `welcome` lost on the way here leaves
+     * a seat on everybody else's roster, and this is the only chance to
+     * release it. The HTTP beacon is not usable, since it needs a resume token
+     * that only `welcome` carries.
+     */
+    private fun onJoinTimedOut(channelId: String) {
+        if (_state.value.channelId != channelId || !_state.value.isActive) return
+        Log.w(TAG, "join timed out after ${VOICE_JOIN_TIMEOUT_MS}ms in $channelId")
+        wantedChannel = null
+        needsRejoin = false
+        session.realtime.send(buildJsonObject { put("type", "leave-voice-room") })
+        teardown()
+        _state.value = VoiceState(
+            stage = VoiceStage.Refused,
+            refusal = Refusal.JoinTimedOut,
+            muted = _state.value.muted,
+            speakerphone = _state.value.speakerphone,
+        )
+    }
+
     private fun onVoiceBackendUnreachable(reason: String) {
         if (!_state.value.isActive) return
         Log.w(TAG, "voice backend unreachable: $reason")
+        joinWatchdog.settled()
         wantedChannel = null
         needsRejoin = false
         val sent = session.realtime.send(buildJsonObject { put("type", "leave-voice-room") })
@@ -704,6 +802,8 @@ class VoiceController(
                 "voice-speak-changed" -> onSpeakChanged(frame)
                 "voice-room-full" -> onRefused(frame, Refusal.RoomFull)
                 "voice-transport-unsupported" -> onRefused(frame, Refusal.TransportUnsupported)
+                "voice-join-refused" -> onRefused(frame, Refusal.JoinRefused)
+                "voice-transport-changed" -> onTransportChanged(frame)
                 "screen-share-denied" -> onScreenShareDenied(frame)
                 "voice-moderation" -> onModeration(frame)
                 "offer" -> frame.str("sdp")?.let { engine.handleOffer(frame.str("from")!!, it) }
@@ -768,6 +868,10 @@ class VoiceController(
      * can rebuild the call.
      */
     private fun holdForRejoin() {
+        // The attempt this deadline belongs to is over; `enter()` arms a fresh
+        // one when the socket comes back. Without this the old deadline fires
+        // during the rebuild and refuses a call nobody refused.
+        joinWatchdog.settled()
         needsRejoin = true
         engine.stop()
         // The seat is gone with the socket, so the resume identity it was
@@ -800,6 +904,12 @@ class VoiceController(
         val channelId = frame.str("voiceChannelId") ?: return
         if (channelId != _state.value.channelId) return
 
+        // The server answered, so the deadline is over whatever it goes on to
+        // say. Cleared before the transport check below rather than after,
+        // because that branch refuses the join and a deadline still armed
+        // would refuse it a second time twelve seconds later.
+        joinWatchdog.settled()
+
         // Binding, not advisory. The server pins a room's transport for the
         // room's lifetime, so this is what the call runs on or the call does
         // not happen; a client that built the other one would be a name on the
@@ -822,7 +932,15 @@ class VoiceController(
         // fresh engine from `swapTransport` starts out allowed, so the rule is
         // told to it on every welcome, not only when it changes.
         val rule = speakRule(canSpeakFrom(frame), was = _state.value.canSpeak, source = SpeakRuleSource.Welcome)
+        // The stage bit, and never inferred from `canSpeak`: a member with
+        // SPEAK and no STREAM is the ordinary case in a watch party, and it is
+        // exactly the person who must not be offered the button.
+        val canStream = rule.canSpeak && canStreamFrom(frame)
         engine.setCanPublishAudio(rule.canSpeak)
+        // The engine gets told too, and not only the UI. On the SFU the publish
+        // grant lives in a token that outlives a revocation, so the transport
+        // has to hold the live answer or a revoked presenter can publish again.
+        engine.setCanPublishScreen(canStream)
 
         val peers = frame.participants("peers")
         // Written **before** the engine is started, not after. On the SFU path
@@ -842,7 +960,7 @@ class VoiceController(
             },
             participants = peers + listOfNotNull(frame.participant("self")),
             localPeerId = peerId,
-            screenShareSupported = kind == VoiceTransportKind.Mesh,
+            screenShareSupported = canStream,
             canSpeak = rule.canSpeak,
             muted = _state.value.muted || rule.mute,
             notice = rule.notice?.let(::noticeText) ?: _state.value.notice,
@@ -872,6 +990,117 @@ class VoiceController(
     }
 
     /**
+     * THE ROOM MOVED ONTO THE VOICE SERVER, MID-CALL, AND WE FOLLOW IT.
+     *
+     * Somebody turned on a fourth camera, or the room simply reached
+     * `MESH_ROOM_PROMOTION_SIZE`, and the server moved the whole room rather
+     * than refusing them. Our seat, our peer id, our mute and our place on the
+     * roster all survive: only the media path changes.
+     *
+     * Deliberately NOT a rejoin, which is what makes it different from every
+     * other way this client rebuilds a call ([followConnection] rebuilds,
+     * never resumes). A rejoin would mint a new peer id and tell the room we
+     * left and arrived; the seat is still ours and the server still holds it,
+     * so this is the media half of [onWelcome]'s SFU branch and nothing else,
+     * run against the peer id we already have.
+     *
+     * Which branches move and which stay put is [transportChangePlan], where a
+     * JVM test can hold them to the rule. Reaching this method at all is the
+     * promise `RealtimeClient.WIRE_CAPS` makes: the server only sends this
+     * frame to a socket that declared `voice-transport-changed`, and it stops
+     * releasing that socket's seat in exchange. A build that declared it and
+     * then did nothing here would leave the person seated in a room whose
+     * media they cannot reach, which is worse than the visible drop it
+     * replaced.
+     *
+     * **Audio does cut, briefly.** The mesh is disposed here and the SFU leg
+     * is an HTTP token mint plus a LiveKit handshake away, so the call goes
+     * quiet for that round trip and the bar says "Joining…" until
+     * [LiveKitEngine] reports it is publishing. The web client has the same
+     * gap for the same reason. It is a pause in a call that continues, rather
+     * than the hang-up this replaces.
+     */
+    private fun onTransportChanged(frame: JsonObject) {
+        val plan = transportChangePlan(
+            frameChannelId = frame.str("voiceChannelId"),
+            frameTransport = frame.str("transport"),
+            reason = frame.str("reason"),
+            frameParticipants = frame.participants("participants"),
+            heldParticipants = _state.value.participants,
+            inChannelId = _state.value.channelId,
+            active = _state.value.isActive,
+            // The engine is the honest reading of where this device's media
+            // actually is, and it is what [swapTransport] keys off.
+            currentTransport = engineKind,
+            localPeerId = _state.value.localPeerId,
+            sharingScreen = _state.value.sharingScreen || engine.isSharingScreen,
+        ) ?: return
+
+        Log.i(TAG, "room moved to ${plan.transport.name}; keeping peer ${plan.peerId}")
+
+        // First, and while the mesh engine that owns the capture is still
+        // alive. It also sends `set-sharing-screen false`, so the roster stops
+        // showing a presenter this device is about to stop being.
+        if (plan.stopScreenShare) stopScreenShare()
+
+        // The mesh goes unconditionally. Every peer connection in it is
+        // addressed to a room whose `offer` / `answer` / `ice-candidate` the
+        // server has stopped relaying, so leaving one up is a dead connection
+        // and a stale tile; disposing it is also what hands the microphone
+        // back before LiveKit's own recorder asks for it.
+        swapTransport(plan.transport)
+        peerMedia.clear()
+
+        // Before any media is built, exactly as on `welcome`: a fresh engine
+        // starts out knowing nothing, so both answers have to be told again.
+        // The screen one matters more here than it looks: the new engine mints
+        // a NEW token, and a presenter whose stage was revoked before the
+        // promotion must not get it back because the room grew.
+        engine.setCanPublishAudio(_state.value.canSpeak)
+        engine.setCanPublishScreen(_state.value.screenShareSupported)
+
+        // Written **before** the engine is started, for the same reason
+        // [onWelcome] does it: `LiveKitEngine.start` hands the join to a
+        // coroutine that reports Connected once the media is up, and a state
+        // write sequenced after it would overwrite that with the Joining it
+        // was already too late to claim.
+        _state.value = _state.value.copy(
+            stage = VoiceStage.Joining,
+            unreachablePeers = 0,
+            // The capture goes, the permission does not. Every mesh peer
+            // connection is disposed with the engine, and Android 15 requires a
+            // fresh projection grant per capture session anyway, so a share
+            // cannot be carried across a promotion and the person has to press
+            // the button again. The button is therefore still there, which is
+            // the whole difference from before: it used to disappear for the
+            // rest of the call, on exactly the rooms a watch party runs in.
+            screenShareSupported = _state.value.screenShareSupported,
+            notice = context.getString(
+                when (plan.notice) {
+                    PromotionNotice.Cameras -> R.string.voice_promoted_cameras
+                    PromotionNotice.Screens -> R.string.voice_promoted_screens
+                    PromotionNotice.Room -> R.string.voice_promoted_room
+                },
+            ),
+        )
+
+        engine.start(plan.peerId, pendingIce)
+        engine.setMuted(_state.value.muted || _state.value.deafened)
+        engine.setDeafened(_state.value.deafened, _state.value.muted)
+        plan.participants.forEach { engine.addPeer(it.peerId) }
+        // The roster's enforcement steps, on the new engine: a moderator's
+        // mute on us or on a peer, and the camera and screen bookkeeping.
+        // Stage is left alone; it stays Joining until the media is up.
+        absorbRoster(plan.participants)
+
+        // The seat is the same one; the publication behind it is brand new.
+        // The SFU built the microphone track from this device's flags and
+        // nobody has told the roster, so both flags go out again, exactly as
+        // on every join.
+        pushVoiceState()
+    }
+
+    /**
      * A role or override edit mid-call. `false` is the safety half: on
      * LiveKit the SFU has already dropped the grant, and in a mesh room this
      * branch is the only thing that closes the microphone. `true` after
@@ -882,15 +1111,32 @@ class VoiceController(
         if (!_state.value.isActive) return
         val next = (frame["canSpeak"] as? JsonPrimitive)?.booleanOrNull ?: return
         val rule = speakRule(next, was = _state.value.canSpeak, source = SpeakRuleSource.Change)
-        if (rule.stopPublishing && (_state.value.sharingScreen || engine.isSharingScreen)) {
+        // The stage half of the same frame. Optional on the wire, so absent
+        // leaves the answer this seat already had rather than inventing one;
+        // present and false has to take the capture down, because losing the
+        // bit mid-party is a moderator stopping a broadcast and the server has
+        // already stopped relaying it.
+        val canStream = streamRule(
+            canSpeak = rule.canSpeak,
+            next = (frame["canStream"] as? JsonPrimitive)?.booleanOrNull,
+            was = _state.value.screenShareSupported,
+        )
+        if (
+            (rule.stopPublishing || !canStream) &&
+            (_state.value.sharingScreen || engine.isSharingScreen)
+        ) {
             stopScreenShare()
         }
         _state.value = _state.value.copy(
             canSpeak = rule.canSpeak,
+            screenShareSupported = canStream,
             muted = _state.value.muted || rule.mute,
             notice = rule.notice?.let(::noticeText) ?: _state.value.notice,
         )
         engine.setCanPublishAudio(rule.canSpeak)
+        // The moderation half. Without this the engine keeps the connect-time
+        // token grant and a revoked presenter can start again.
+        engine.setCanPublishScreen(canStream)
         engine.setMuted(_state.value.muted || _state.value.deafened)
         if (rule.mute) pushVoiceState()
     }
@@ -1047,6 +1293,7 @@ class VoiceController(
 
     private fun onRefused(frame: JsonObject, refusal: Refusal) {
         if (frame.str("voiceChannelId") != _state.value.channelId) return
+        joinWatchdog.settled()
         wantedChannel = null
         needsRejoin = false
         teardown()

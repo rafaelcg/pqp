@@ -605,6 +605,66 @@ logged `CLOSED`, then `socket back; rebuilding the call in <id>`, then a **new**
 peer id reaching `CONNECTED` with audio flowing again, about twenty seconds
 later.
 
+### A room promoted mid-call is followed, and it is the one thing that is not a rebuild
+
+Everything above says a call is rebuilt rather than resumed. There is exactly
+one exception, and it is not a socket drop: the server may move a live mesh
+room onto the voice server, so that a fourth camera, a third screen, a ninth
+person, or simply a fourth seat, fits. `MESH_ROOM_PROMOTION_SIZE` is 4, so an
+ordinary five-friend call meets this.
+
+Before this, the phone was **dropped out of the call** when that happened. The
+server only sends `voice-transport-changed` to a socket that declared
+`SOCKET_CAPS.voiceTransportChanged` at `auth`; every other seat is released and
+told with `voice-transport-unsupported { reason: "promoted" }`. Measured on
+production over 24 hours: five rooms promoted, nine seats followed the move,
+**nine seats were released**, and every one of those was a person whose call
+ended mid-sentence.
+
+Android now declares the capability (`RealtimeClient.WIRE_CAPS`) and follows
+the frame. The seat, the peer id, the mute and the place on the roster are all
+kept: only the media path changes, so nobody sees a leave and a join. The
+branches that decide whether to move are a pure function in
+`voice/TransportChange.kt` and the swap is `VoiceController.onTransportChanged`,
+which stops any outgoing screen share (this client publishes one on mesh only),
+disposes the mesh engine, and brings `LiveKitEngine` up against the same peer
+id.
+
+**Declaring the capability is a promise with teeth.** In exchange for it the
+server stops releasing this seat, so a build that asks for the frame and then
+fails to act on it leaves the person listed in everybody's roster in a room
+whose media they cannot reach: a silent dead call instead of a visible drop.
+That is why the frame is on `WireProtocolTest`'s cannot-work-without list
+rather than its ignore list, and why `declaring the promotion capability means
+the frame is handled` also asserts the branch still reaches
+`transportChangePlan`, still calls `swapTransport(plan.transport)` and still
+starts the engine on `plan.peerId`.
+
+Be clear about what that last test is. It is a **call-graph assertion read off
+the source**, not a behavioural one, because no JVM test can start
+`LiveKitEngine`: it wants a `Context`, a token from the API and a real SFU. It
+catches the two regressions that actually happen, deleting the branch and
+stubbing it out, and it would not catch a handler that kept all three calls
+behind an early return. The first version of this guard was weaker still and
+missed even the stub: the whole 565-test suite passed with the body replaced by
+`if (true) return`, which is exactly the "green without exercising anything"
+shape this repo keeps getting bitten by. The device check below is what the
+assertion stands in for, not a formality.
+
+**Audio does cut, briefly.** The mesh is disposed before the SFU leg exists,
+and that leg is an HTTP token mint plus a LiveKit handshake away, so the call
+goes quiet for that round trip and the bar says "Joining…" until the SFU
+reports it is publishing. The web client has the same gap for the same reason.
+A pause in a call that continues, rather than a hang-up.
+
+**Not verified on hardware.** The decision logic is covered by
+`TransportChangeTest`, and every branch of it was proven by breaking the code
+on purpose. The actual mid-call swap needs a room of four real clients against
+a real LiveKit deployment, which no emulator pair here can produce. What a
+device has to show: the phone stays in the call, the participant count does not
+flicker, audio comes back, and the notice reads *Essa call virou uma sala
+grande…*.
+
 ### Audio goes to the speaker, and that is not a preference
 
 `MODE_IN_COMMUNICATION` on its own routes to the **earpiece**. That is right for
@@ -1057,11 +1117,110 @@ unannounced publication stays silent.
 `screen-share-denied` (the server's `SCREEN_SHARE_LIMIT`, 2 on mesh) tears the
 capture down rather than leaving a live projection nobody can see.
 
-### What screen sharing does not do
+### Sending on the SFU, which is where a watch party actually happens
 
-No **sending on the SFU**. The button is hidden on a LiveKit room rather than
-left to fail: it raises Android's consent dialog, and taking a projection grant
-only to publish nothing is worse than not offering. Mesh sending is untouched.
+The share button used to be hidden on a LiveKit room, and `screenShareSupported`
+was literally `transport == mesh`. That hid it on exactly the rooms a watch
+party runs in: `server/src/voice/transport-policy.ts` pins a listed community
+or a server of ten or more to the SFU, so a host on Android could not present
+at the one event the feature exists for. Both engines publish a screen now.
+
+**The button follows the permission, not the transport.** `welcome.canStream`
+is the answer, and the server has already decided which question it was: STREAM
+in a plain voice channel, START_WATCH_PARTY in a `watch_party` one
+(`canStartWatchPartyStream`). This client asks one thing and never compares
+channel types. Absent on the wire reads as `canSpeak`, which is the shared
+schema's own rule and the safe direction, since a listen-only seat must not be
+offered a share button. `voice-speak-changed` carries the same bit optionally,
+so a moderator can stop a broadcast mid-party; absent there leaves the answer
+alone rather than retiring the button on every self-host whose server predates
+the field.
+
+**Not `setScreenShareEnabled`.** The one-line SDK entry point starts LiveKit's
+own foreground service to carry the `mediaProjection` type, and this app already
+runs one that already juggles that type for the mesh path. Two services fighting
+over one projection is either a duplicate notification or a lost grant. So the
+track is built by hand: `createScreencastTrack`, then `startCapture()`, then
+`publishVideoTrack`. The ordering rule is unchanged and is the same one the mesh
+path obeys: consent, then a foreground service already carrying
+`mediaProjection`, and only then may the projection be created.
+
+**`Track.Source.SCREEN_SHARE` is not cosmetic.** The HLS egress lists the room's
+participants and takes the first track whose source is `SCREEN_SHARE`
+(`defaultFindTracks` in `server/src/voice/hls-egress.ts`). Publishing the same
+pixels under any other source is a share every human in the room can see and no
+watch party can transcode.
+
+**The token is a ceiling, never a permission.** This is the correction that
+matters most, and it was a moderation bypass before review caught it.
+
+`VoiceSessionResponse.stream` is minted once, at connect, and the SFU token
+carrying it is never re-minted. So when a moderator takes the stage away
+mid-party, the server stops relaying the roster claim and stops the egress, but
+the LiveKit grant this phone is holding stays valid. An engine that remembered
+only that grant let the revoked presenter press share again and go straight back
+on air: the revocation was a suggestion they took once. At a hosted event, where
+the host deciding who broadcasts is the entire point, that is the worst place
+for it.
+
+So publishing needs **both** answers, every time (`canPublishScreenNow`): the
+token's ceiling AND the roster's live answer, which arrives on `welcome` and on
+every `voice-speak-changed` through `VoiceTransport.setCanPublishScreen`, the
+twin of `setCanPublishAudio`. Revoking also takes down a share already running,
+because the moderator's decision has to reach the wire rather than only the
+button. A fresh engine starts out refusing until it has been told, so the
+promotion path cannot hand the stage back to somebody who lost it just because
+the room grew.
+
+Mesh implements that method as a no-op, and that is the difference between the
+transports rather than an omission: a mesh share is a track on peer connections
+this device owns, with no server-side grant to outlive a revocation.
+
+**One publish at a time, and the room never keeps what nobody is driving.**
+Publishing is a capture, a track and an awaited publish, and four ordinary
+things can happen in between: the person stops, the room promotes (at four
+participants, which this client follows, so an engine swap mid-share is a
+Saturday event rather than an edge case), the share is restarted quickly, or the
+old capturer's `onStop` arrives late. Each one used to be able to publish a
+stopped track, publish into a room being disconnected, or tear down the share
+that was working. `ScreenPublishGuard` is a generation counter answering one
+question for all four: is the thing that just finished still the thing we are
+doing. A publish that lands stale is undone rather than left in the room.
+
+**A failed unpublish is retried.** It used to be logged and forgotten, which is
+the quietest bad outcome here: the presenter's UI says they stopped, their
+capture really has stopped, and everybody else keeps a frozen rectangle with no
+way to know it is stale. Bounded and short, because by then the local track is
+already stopped and this is chasing a server-side row, not keeping a feature
+alive.
+
+**Simulcast off, `MAINTAIN_RESOLUTION`, 2 Mbps.** The web publishes a screen the
+same way and for the same reason: the egress transcodes from the published
+track, so a second low layer buys the ladder nothing and costs this phone a
+second encoder. The ceiling does not scale with the room, unlike
+`meshScreenBitrate`, because on the SFU the phone uploads exactly once however
+many people watch. `StageRuleTest` pins that difference.
+
+**A promotion still stops the share, and now the button comes back.** The mesh
+engine is disposed with its capture, and from Android 15 a fresh projection
+grant is required per capture session anyway, so a share cannot be carried
+across. What changed is that `screenShareSupported` survives the promotion, so
+the host presses the button again instead of watching it disappear for the rest
+of the call.
+
+**What is not verified: any of it, on a device.** No screen has been published
+to a LiveKit room from this code. The moderation rule, the generation guard and
+the retry policy are pure and tested, and the fact that every permission path
+tells the transport both halves is checked by reading `VoiceController.kt`;
+what none of that proves is the behaviour of a real `MediaProjection`, a real
+SFU and a real moderator pressing the button. It compiles, it is shaped like the web's
+publisher and the LiveKit API it calls was read out of the 2.28.1 bytecode
+rather than from memory, and the pure rules around it are tested. Whether a
+phone's capture actually reaches the SFU, whether the egress finds it, and
+whether the picture that comes out is watchable all need a phone, a LiveKit
+room and somebody looking at the result.
+
+### What screen sharing still does not do
 
 No **screen audio out of this device**. `MediaProjection` can record device
 playback from Android 10, but only from apps that allow it, so a system-audio
@@ -1073,6 +1232,270 @@ answered above, on the SFU.
 No window or app picker of our own: Android's consent dialog offers "one app"
 or "entire screen", and that is the platform's choice to present, not ours. No
 quality menu: there is one rung, and it is 720 lines.
+
+## Watch party, the HLS path
+
+A watch party's audience does not join the call. That is the entire economy of
+the feature: a viewer costs one playlist reader and nothing on the media
+server, so six hundred people can watch a room that seats eight. On 5 September
+a Twitch watch party sent 212 signups in twenty minutes at a mesh room with a
+limit of eight, and every one of them was refused. Android had no watch surface
+at all until this: the two frames arrived and nothing drew them.
+
+### The seam, exactly
+
+The server transcodes the presenter's LiveKit screen share into an HLS
+playlist (`server/src/voice/hls-egress.ts`) and tells clients about it on two
+frames, both defined in `packages/shared/src/live-hls.ts`:
+
+| Frame | Who gets it | Carries |
+|---|---|---|
+| `voice-stream` | seats in the room | `{ channelId, stream \| null }` |
+| `channel-live` | everybody with VIEW on the channel, seat or not | `{ channelId, stream \| null, watching }` |
+
+`channel-live` arrives at socket auth for every live channel this account may
+see, again whenever the egress starts, stops or changes URL, and on the
+server's audience keyframe clock (30 s) while the channel is live or watched.
+`GET /api/channels/:id/live` answers the same thing over HTTP, for a screen
+opened before the socket said anything.
+
+To be counted, a client sends `watch-live { channelId, watching }`. That is the
+**only** frame the audience path sends. No `join-voice-room`, no
+`POST /api/voice/token`, no `PeerConnection`, no LiveKit `Room`, and therefore
+no microphone permission: watching asks for no device at all. The server checks
+VIEW, counts the *socket*, and refuses to double count one that already holds a
+seat. `gg.pqp.app.watch.WatchLiveStore` is that path and it has no reference to
+`VoiceController`, which is what makes "seatless" structural rather than a
+promise. `WatchLiveStoreTest` asserts the exact frames that leave the phone, by
+type, in order, because a regression that quietly joined the call would still
+play a picture on a laptop with two viewers and would only show up at the
+event.
+
+### The URL is a credential, and it changes every thirty seconds
+
+`hlsUrl` is `/api/voice/hls-playlist/<channel>/<startedAt>?t=<token>`, and the
+token is minted **per recipient**, bound to that user, channel and session
+(`server/src/voice/hls-viewer-token.ts`). Two consequences that shape the
+player:
+
+- **No `Authorization` header, anywhere.** The `?t=` exists precisely so no
+  header is needed. A Media3 `DefaultHttpDataSource` applies its default
+  headers to every request it makes, and the segment lines inside the playlist
+  are presigned absolutes on the bucket's own origin, so a bearer set on the
+  data source would send a user's Clerk-derived token to R2. The player sets
+  none.
+- **A new URL is not a new stream.** The audience keyframe restamps the token
+  twice a minute, so `hlsUrl` is a different string every thirty seconds for a
+  stream nobody touched. `watchSourceChanged` compares `startedAt` (the egress
+  session) and nothing else. Re-attaching on the URL would rebuffer every
+  viewer twice a minute for the whole party, and would read as a bad
+  connection rather than as one line of code.
+
+### The player
+
+`media3-exoplayer-hls`, a new artifact: `media3-exoplayer` alone has no `.m3u8`
+parser at all. It is told twice that this is HLS, because the path has no
+`.m3u8` extension for anything to sniff: `MimeTypes.APPLICATION_M3U8` on the
+media item, and an explicit `HlsMediaSource.Factory` on the player.
+
+The second one is the load-bearing half. `DefaultMediaSourceFactory` finds the
+HLS source by **reflection**, so nothing in this module would reference it and
+R8 is entitled to strip it out of the release build: debug plays, the signed
+sideload APK does not, and the only symptom is a playback error. Naming the
+class is a reference. Same reasoning as registering the GIF decoder by hand in
+`PqpApplication` rather than trusting a `META-INF/services` entry through the
+shrinker.
+
+`HlsWatchdog` is a port of the web's `client/src/lib/hls-stall.ts`, with the
+same numbers on purpose, and it exists because Media3's own retry cannot fix
+the failure that actually happens: the *session* changed. Four triggers, each
+one something seen at a party:
+
+- a fatal `PlaybackException`;
+- `STATE_ENDED`, which is `#EXT-X-ENDLIST`. LiveKit writes it when the egress
+  stops, and a reused `live.m3u8` stays that finished VOD until the next share
+  overwrites it. A player handed one plays to the end and freezes on a black
+  frame, which is exactly what the web hit on 7 September;
+- buffering for more than 8 s with nothing playing;
+- the playlist's media sequence not advancing for 15 s, which is what a dead
+  egress looks like while the playlist still answers 200.
+
+Each of those refetches `GET /api/channels/:id/live` for the new session. Three
+inside five minutes and the stream is called dead: a button, not a spinner,
+because a phone retrying forever is somebody's data plan.
+
+**The token is renewed on a clock, not on a failure.** `HLS_VIEWER_TOKEN_TTL_MS`
+is an hour and a film is longer, so the token stamped into the attached URL
+expires mid-party if nothing is done: the proxy answers 401 and the recovery is
+a fatal error plus a reconnect. That recovery works and is not good enough, so
+the swap is scheduled at fifty minutes instead, re-attaching with the URL the
+audience keyframe has already restamped. iOS renews at the same moment for the
+same reason (`WatchStreamSwap`), and the two were written without either side
+reading the other. `WatchSourceTest` pins the margin against the TTL and
+against the keyframe cadence that supplies the replacement.
+
+Backgrounding pauses and coming back seeks to the live edge, rather than
+resuming ten minutes behind everybody else. This app's foreground-service
+exemption is for a *call*; a film does not get one.
+
+### What it looks like
+
+An `AO VIVO` pill on the channel row, so a person scrolling the list can find
+the party. Opening the channel puts a 16:9 player above the transcript with the
+audience count and the delay under it, and a tap on the corner takes it full
+screen. Watching is one tap, costs nobody a seat, and is the whole offer on
+this screen for anybody who is not running the party: the join button in the
+app bar is drawn only for somebody who may actually have a seat. See "The seat,
+and who is offered one" below.
+
+The pane draws **nothing** on a voice channel with no watch party. Not a
+placeholder, not an apology for a stream that was never running.
+
+### What it says when it cannot work
+
+Every state has words, in Portuguese, and none of them is a black rectangle:
+
+| State | pt-BR |
+|---|---|
+| live, no picture yet | Esperando a imagem chegar |
+| stalled, refetching | A transmissão travou, reconectando |
+| given up | A transmissão caiu, plus **Tentar de novo** |
+| the stream stopped | A transmissão acabou / Quem estava na call continua lá. |
+
+A stream the server says is over outranks both trouble states, so nobody is
+offered a retry button for something no retry can bring back.
+
+### What is verified, and what is not
+
+On this machine: the module compiles debug and release, R8 and the resource
+shrinker survive the new artifact, `lintVitalRelease` passes, and the unit
+suite is green including 40 new tests. Every one of those was proven by
+breaking the code it covers and watching it fail by name.
+
+On a Pixel 10 Pro emulator (API 37) against a local API with the dev bypass:
+
+- **The seatless path, measured rather than argued.** Opening the seeded voice
+  channel took `GET /api/channels/:id/live` from
+  `{"watching":0,"participants":0}` to `{"watching":1,"participants":0}`, and
+  leaving it put the count back. A watcher, and no seat.
+- **The player decodes a real HLS playlist.** With a temporary local patch
+  feeding the pane a public test playlist (reverted; not in the branch), video
+  rendered above the transcript with `AO VIVO`, `3 assistindo` and `~10s de
+  atraso` on a device set to pt-BR, and fullscreen handed the same player
+  between two `PlayerView`s without dropping playback.
+- **A channel with nothing live is untouched.** No pane on a plain voice
+  channel and none on a text channel, which is the check that matters for the
+  `ChatScreen` restructure.
+- **No crash.** `logcat` carries nothing from the app across the whole session.
+
+**Not verified: our own stream, end to end.** That test played somebody else's
+playlist. Untested against the real thing: the `?t=` viewer token at the
+playlist proxy, the master playlist and its rungs, ladder switching, whether
+the delay badge is honest about our transcode, and whether a share that dies
+and restarts mid-party is followed (the `startedAt` rule and `HlsWatchdog` are
+unit-tested, and the wiring around them has never seen a real session change).
+Also untested: a real phone on mobile data with the screen off, because an
+emulator's lifecycle and network are not a phone's. Say so rather than
+reporting green.
+
+### The seat, and who is offered one
+
+A watch party's audience is seatless, and until this the phone enforced that on
+the way **out** and not on the way **in**. `Channel.isVoice` answers true for
+`watch_party` as well as `voice`, so `chat.joinVoice` in the app bar was drawn
+for a watch party: a green button putting a viewer on the media box for
+something the pane right above it plays for free. At five hundred viewers that
+is the exact cost the HLS path exists to avoid. The web stopped offering it in
+#436; this client had not followed.
+
+**It could not be a blanket removal.** The host is the reason the screen-share
+work exists, and the phone could not tell a host from a viewer before joining:
+`welcome.canStream` is the answer and `welcome` only arrives once the seat is
+already taken.
+
+`watch-party-update` is what closes that, and it is why the frame came off the
+deliberately-ignored list. It carries `viewerRole`, resolved **per recipient**
+by the server, and `catchUpWatchParties` sends one at socket auth for every
+active party this account may see, so the answer is here before anybody can tap
+anything. `stage.invited` rides along and is public on the wire (who is UP is
+public, who is ASKING is not), so an invited guest recognises themselves with no
+second request.
+
+The rule itself is `mayTakeWatchPartySeat` in
+`android/.../watch/WatchPartySeat.kt`, a transcription of the function of the
+same name in `packages/shared/src/watch-party-session.ts`: the one the server
+refuses `join-voice-room` with, and the one the web panel draws from. Three
+implementations of a permission rule is how they drift, so this one is meant to
+read as a copy: same name, same terms, same order. Who is let in: the host and
+co-hosts by name, anybody invited up to speak, and everybody once a host turns
+voice on. A channel with **no active party is not a closed room** and joins like
+the ordinary voice room it is.
+
+Two things it gets deliberately wrong, both stated rather than hidden:
+
+- **`canStartWatchParty` is always false here.** The phone models no permission
+  bits. Staff who hold `START_WATCH_PARTY` and are neither the host nor a
+  co-host of the party currently running see no join button while it runs. A tap
+  they never get is a smaller failure than a seat sold to five hundred viewers,
+  and the parameter is kept so wiring a real answer in later is one line.
+- **A `draft` party is invisible to a viewer**, so the phone sees no party and
+  offers the button, and the server refuses. That is not new and the web has the
+  same blind spot; what makes it survivable is the deadline below, which turns
+  it into a sentence instead of a spinner.
+
+**`voiceEnabled` arrives with the change that turns voice off by default.** A
+server that has never heard of it sends no such key, and it ran watch parties as
+ordinary voice rooms, so the decoder reads an absent key as **on**
+(`LEGACY_VOICE_ENABLED`). Reading it as off would hide the button on exactly the
+servers that would have honoured the join, which is the mirror of the bug being
+fixed. Pinned by `a party from a server that has never heard of voiceEnabled
+reads as voice on`.
+
+### A join that is refused now says so
+
+`join-voice-room` has no acknowledgement, and **most refusals send no frame at
+all**: `refuseResume()` in `server/src/ws/voice.ts` sends `voice-join-refused`
+only when the join carried a `resumePeerId`, and this client never sends one. So
+a timed-out account, a lost CONNECT bit, a blocked DM, a channel that went away,
+a seat in a watch party that is not yours, and an ordinary dropped packet all
+produced the same thing here: silence, and a call bar reading `Entrando…` until
+somebody killed the app.
+
+`JoinWatchdog` ends every one of them. Twelve seconds, the same
+`JOIN_TIMEOUT_MS` the web client uses and asserted against that file so the two
+cannot drift. It covers the socket leg only; the media leg after `welcome` keeps
+its own 45 s deadline inside `LiveKitEngine`, which ends in
+`Refusal.VoiceBackendUnreachable`. On expiry the app sends `leave-voice-room`
+first, because "nothing came back" is not "the server never saw it" and a lost
+`welcome` leaves a seat on everybody's roster; then it stops and says *Não deu
+para entrar na call. Tenta de novo.*
+
+It does not retry. The likeliest causes are not transient, and a person told
+what happened taps the button again in one gesture, while a phone retrying a
+refusal in a loop cannot be told to stop.
+
+The generation counter is the whole of the correctness argument: a socket drop
+rebuilds the call from scratch, so a second `enter` happens while the first
+attempt's deadline is still asleep, and firing it would hang up the room that
+had just come back. `claim` is one-shot for the same reason a refusal must not
+be delivered twice.
+
+`voice-join-refused` is handled as well, and came off the ignore list with it.
+It is a floor rather than a live path today, and it turns a twelve second wait
+into an immediate answer the day the server starts answering a cold join.
+
+### Still not done
+
+- **Sending a screen on the SFU.** See the section above; the button is still
+  hidden on a LiveKit room, which is the transport every watch party runs on.
+  A host cannot present from Android yet.
+- **The watch party *event*, as a surface.** `watch-party-update` is read now,
+  but only for `viewerRole` and `options` (see below); `watch-party` is still
+  ignored. The phone draws the stream, not the party's name, host, co-hosts or
+  state machine, and has no create surface.
+- **Picture in picture**, and playing on with the screen off. Both want a media
+  session and a service, which is a different piece of work with its own
+  battery argument.
 
 ## Cameras, receiving
 

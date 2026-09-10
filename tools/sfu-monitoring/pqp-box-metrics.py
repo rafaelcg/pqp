@@ -38,10 +38,15 @@ from datetime import date, timedelta
 # The public interface. docker0 and lo are deliberately not counted.
 INTERFACE = os.environ.get("PQP_METRICS_INTERFACE", "enp1s0")
 
-# Vultr plan allowance. 5 TB read as 5 * 10^12 bytes, the smaller of the two
-# readings of "TB", so the percentage is conservative. Change here and in
-# docs/MONITORING.md if the plan changes.
-ALLOWANCE_BYTES = int(os.environ.get("PQP_EGRESS_ALLOWANCE_BYTES", 5_000_000_000_000))
+# Vultr plan allowance. The box runs vhp-4c-8gb-amd, whose plan includes
+# 6144 GB a month; 6 TB is read as 6 * 10^12 bytes, the smaller of the two
+# readings of "TB", so the percentage stays conservative. This does NOT track
+# the plan on its own: resizing the instance changes the included transfer and
+# nothing here notices, so change this line and docs/MONITORING.md whenever the
+# plan changes. Vultr also prorates the allowance over the days an instance has
+# been deployed, so early in a month the real ceiling is lower than this.
+# `GET /v2/instances` reports the accrued figure as `allowed_bandwidth`.
+ALLOWANCE_BYTES = int(os.environ.get("PQP_EGRESS_ALLOWANCE_BYTES", 6_000_000_000_000))
 
 CONTAINERS = os.environ.get("PQP_METRICS_CONTAINERS", "livekit-livekit-1,livekit-caddy-1").split(",")
 

@@ -14,6 +14,12 @@ export interface PqpDesktop {
    * than "unknown" — see `desktopPredatesScreenShare`.
    */
   canShareScreen?: true;
+  /**
+   * Present when the share picker itself asks "share this computer's audio?"
+   * Absence means an older picker that treats `audioRequested` as the whole
+   * switch, so the page must ask first — or not request audio at all.
+   */
+  sharePickerOffersAudio?: true;
   /** Older shells predate theming, so this may be absent. */
   setTheme?(theme: "dark" | "light"): void;
   /** Persist the UI locale in the main process and rebuild the app menu. */

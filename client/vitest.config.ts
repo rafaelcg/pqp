@@ -7,6 +7,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // See the stub's own note: the specifier has to resolve to something for
+      // `lib/register-sw.ts` to be importable at all.
+      "virtual:pwa-register": path.resolve(
+        __dirname,
+        "./src/test/pwa-register-stub.ts",
+      ),
     },
   },
   test: {

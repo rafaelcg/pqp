@@ -529,6 +529,13 @@ dependencies {
     // The only thing in the module that can play a video. There is no
     // VideoView and no MediaPlayer here either; see ui/media/VideoPlayer.kt.
     implementation(libs.media3.exoplayer)
+    // HLS is a separate artifact. `media3-exoplayer` alone has no `.m3u8`
+    // parser and no `HlsMediaSource`, so a playlist handed to it fails with an
+    // unrecognised-format error rather than playing: the watch party's whole
+    // media path is this one line plus the player that uses it. Kept explicit
+    // rather than folded into the line above so nobody removes it as a
+    // duplicate.
+    implementation(libs.media3.exoplayer.hls)
     implementation(libs.media3.ui)
 
     implementation(libs.clerk.ui)

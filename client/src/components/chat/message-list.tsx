@@ -28,6 +28,7 @@ import {
   PinOff,
   Play,
   Reply,
+  ShieldCheck,
   SmilePlus,
   Trash2,
   type LucideIcon,
@@ -1388,7 +1389,7 @@ function FailedSendFooter({
     <div className="mt-1.5">
       <p className="flex items-start gap-2 text-xs text-danger">
         <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-        <span>{t(copy.key, copy.vars)}</span>
+        <span>{copy.text ?? t(copy.key, copy.vars)}</span>
       </p>
       <div
         className={cn(
@@ -2109,13 +2110,22 @@ const MessageRow = memo(function MessageRow({
                   onOpenProfile={openProfile}
                   className="block h-9 w-9 shrink-0 overflow-hidden rounded-lg leading-none hover:no-underline"
                 >
-                  <UserAvatar
-                    name={message.authorName}
-                    avatarUrl={message.authorAvatarUrl}
-                    rounded="lg"
-                    className="h-9 w-9"
-                    fallbackClassName="bg-ink-3 text-sm"
-                  />
+                  {message.isAutomod ? (
+                    <span
+                      className="grid h-9 w-9 place-items-center rounded-lg bg-accent-soft text-on-accent-soft"
+                      title={t("chat.automodPosted")}
+                    >
+                      <ShieldCheck className="h-5 w-5" aria-hidden />
+                    </span>
+                  ) : (
+                    <UserAvatar
+                      name={message.authorName}
+                      avatarUrl={message.authorAvatarUrl}
+                      rounded="lg"
+                      className="h-9 w-9"
+                      fallbackClassName="bg-ink-3 text-sm"
+                    />
+                  )}
                 </AuthorButton>
                 {!message.isWebhook && authorInfo?.status && (
                   <StatusDot
@@ -2175,13 +2185,22 @@ const MessageRow = memo(function MessageRow({
                     })}
                   />
                 </span>
-                {message.isWebhook && (
+                {message.isAutomod ? (
                   <span
-                    className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
-                    title={t("chat.webhookPosted")}
+                    className="rounded bg-accent-soft px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-on-accent-soft"
+                    title={t("chat.automodPosted")}
                   >
-                    Webhook
+                    AutoMod
                   </span>
+                ) : (
+                  message.isWebhook && (
+                    <span
+                      className="rounded bg-ink-4 px-1 py-px text-[10px] font-semibold uppercase tracking-wide text-paper-muted"
+                      title={t("chat.webhookPosted")}
+                    >
+                      Webhook
+                    </span>
+                  )
                 )}
                 {!compact && (
                   <time

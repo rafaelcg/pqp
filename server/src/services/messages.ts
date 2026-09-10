@@ -1,4 +1,5 @@
 import {
+  AUTOMOD_CLERK_ID,
   buildReplyExcerpt,
   chanceResultSchema,
   clampChatNewlines,
@@ -101,6 +102,7 @@ const MESSAGE_SELECT = `SELECT m.id, m.channel_id, m.author_id, m.body, m.create
             u.discriminator as author_discriminator,
             u.avatar_url as author_avatar_url,
             u.is_webhook as author_is_webhook,
+            (u.clerk_id = '${AUTOMOD_CLERK_ID}') as author_is_automod,
             m.webhook_embeds, m.webhook_username, m.webhook_avatar_url,
             m.mention_everyone, m.mention_here,
             m.chance,
@@ -360,6 +362,21 @@ export async function getMessage(
   // legal.
   const attachments = await listAttachmentsForMessages([messageId]);
   return { ...message, attachments: attachments.get(messageId) ?? [] };
+}
+
+/**
+ * One message in the same shape history returns, for a broadcast of a row
+ * that was written outside `createMessage` (an AutoMod alert, say).
+ */
+export async function getHydratedMessage(
+  messageId: string,
+): Promise<HydratedMessage | null> {
+  const result = await getPool().query<DbMessage>(
+    `${MESSAGE_SELECT} WHERE m.id = $1`,
+    [messageId],
+  );
+  const message = result.rows[0];
+  return message ? hydrateOne(message) : null;
 }
 
 /** Just enough of a parent message to validate a reply and quote it. */
@@ -940,6 +957,7 @@ export function mapMessage(
     pinnedAt: m.pinned_at?.toISOString() ?? null,
     pinnedBy: mapPinnedBy(m),
     isWebhook: m.author_is_webhook ?? false,
+    isAutomod: m.author_is_automod ?? false,
     mentionEveryone: m.mention_everyone ?? false,
     mentionHere: m.mention_here ?? false,
     webhookEmbeds: (m.webhook_embeds as WebhookEmbed[] | null) ?? [],

@@ -52,6 +52,72 @@ describe("WatchStage", () => {
   });
 });
 
+describe("WatchStage draws only the controls it was given", () => {
+  const hlsUrl = "https://api.example.test/api/voice/hls-playlist/c1/1?t=tok";
+
+  const render = (props: Partial<Parameters<typeof WatchStage>[0]> = {}) =>
+    renderToStaticMarkup(
+      <WatchStage hlsUrl={hlsUrl} audienceCount={3} ended={false} {...props} />,
+    );
+
+  it("offers no join at all when somebody else already offers it", () => {
+    /**
+     * THE ARITHMETIC THIS EXISTS FOR. With a picture playing, a viewer was
+     * offered the call three times on one screen: the channel header, the
+     * party bar and this. Three components that did not know about each
+     * other, two of them in the app's primary fill. Watching costs a socket;
+     * a seat costs a LiveKit participant and forwarded streams, against a
+     * measured envelope of about 600 interactive users versus an effectively
+     * unbounded HLS audience. So `onJoin` is optional and a watch party room
+     * passes nothing, because the party bar owns it there.
+     */
+    expect(render()).not.toContain('data-testid="watch-stage-join"');
+    // A plain voice channel with a share going out has no party bar, and
+    // there this is still the only way in.
+    expect(render({ onJoin: () => {} })).toContain(
+      'data-testid="watch-stage-join"',
+    );
+  });
+
+  it("keeps the join quiet when it does draw one", () => {
+    // `bg-success` made joining a call the loudest thing on a screen whose
+    // entire point is that you do not have to.
+    const html = render({ onJoin: () => {} });
+    expect(html).not.toContain("bg-success");
+  });
+
+  it("says nothing about what the person is NOT doing", () => {
+    /**
+     * The row was headed "Watching without joining the call". Rafael: "how's
+     * that even a thing in watch party lol". It described the implementation,
+     * a voice room with an HLS audience attached, and framed the thing
+     * everybody came for as an abstention. A playing film is evidence enough;
+     * what is left is the count and the delay, neither of which is derivable
+     * from looking.
+     */
+    const html = render({ delaySeconds: 8, onJoin: () => {} });
+    expect(html).not.toContain("without joining");
+    expect(html).toContain("3 people watching");
+    expect(html).toContain("~8s delay");
+  });
+
+  it("offers a way to stop only when the caller knows where to go", () => {
+    // Stopping means leaving the room, and only the caller can pick the
+    // channel to land on. A button that goes nowhere is worse than none.
+    expect(render()).not.toContain('data-testid="watch-stage-leave"');
+    expect(render({ onLeaveParty: () => {} })).toContain(
+      'data-testid="watch-stage-leave"',
+    );
+  });
+
+  it("offers fullscreen only where a pane can take the screen", () => {
+    expect(render()).not.toContain('data-testid="watch-stage-fullscreen"');
+    const html = render({ fullscreen: { active: false, toggle: () => {} } });
+    expect(html).toContain('data-testid="watch-stage-fullscreen"');
+    expect(html).toContain('aria-pressed="false"');
+  });
+});
+
 describe("watchAudienceCount", () => {
   const stream = {
     hlsUrl: "/api/voice/hls-playlist/c1/1?t=tok",

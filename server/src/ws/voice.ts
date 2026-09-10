@@ -15,6 +15,7 @@ import {
   canStartWatchPartyStream,
   hasPermission,
   isVoiceRoomChannelType,
+  isWatchPartyChannelType,
   Permission,
   callDeclinedMessageSchema,
   callIncomingMessageSchema,
@@ -78,6 +79,7 @@ import {
   setLiveHlsSfuLoadReader,
 } from "../voice/hls-egress.js";
 import {
+  liveHlsForcesSfu,
   resolveVoiceTransport,
   type VoiceTransportDecision,
 } from "../voice/transport-policy.js";
@@ -94,6 +96,7 @@ import { readSfuStats } from "../voice/sfu-stats.js";
 import {
   adoptVoicePeer,
   clearWatchPartyIfEmpty,
+  countIdleVoiceSeats,
   deleteVoicePeer,
   getVoicePeerRow,
   isVoicePeerRetired,
@@ -114,6 +117,8 @@ import {
   retireVoicePeerId,
   setVoiceRaisedHand as setVoiceRaisedHandRow,
   setVoiceServerMute,
+  sweepOwnStaleVoicePeers,
+  trackPendingRegistryWork,
   unpinVoiceRoomIfEmpty,
   upsertVoicePeer,
   type VoicePeerRow,
@@ -133,6 +138,11 @@ import {
   sendEncodedDroppable,
 } from "./fanout.js";
 import { createHlsAudience, pickHlsSharer } from "./hls-audience.js";
+import {
+  logWatchPartyOverStop,
+  setWatchPartyLiveListener,
+  watchPartyKnownOver,
+} from "./watch-party-live.js";
 import { stampViewerStream } from "../voice/hls-viewer-token.js";
 import {
   adoptWatchPartyState,
@@ -188,6 +198,12 @@ interface VoicePeer {
    * `Permission.STREAM`: camera and screen share. Independent of SPEAK.
    */
   canStream: boolean;
+  /**
+   * The seat is in a `watch_party` channel. Resolved from `channel.type` at
+   * join, beside `canStream`, and read by exactly one thing: `pickHlsSharer`,
+   * which will not start an HLS transcode from any other kind of room.
+   */
+  watchParty: boolean;
   /** Set when the socket closed; cleared on resume. Absent = live. */
   orphanedAt?: number;
   orphanTimer?: ReturnType<typeof setTimeout>;
@@ -314,28 +330,112 @@ function clusterOn(): boolean {
 }
 
 /**
- * Registry writes in flight, per channel. The handler never waits for a row
- * (a database blip must not hold up a frame), but a roster built from the
- * rows must not run ahead of the write it is reporting, or the joiner's own
- * audience would see a roster without them. `broadcastRoster` awaits this
- * before reading, which is also what puts the bus hint after the commit.
+ * THE COUNTERS THE SEAT LEAK DID NOT HAVE, both since boot, both on
+ * `GET /api/admin/metrics`.
+ *
+ * `meshHoldsRefused` counts seats released at once rather than held, because
+ * the room runs on mesh and the socket never declared `mesh-resume`. It is
+ * how an operator reads whether `VOICE_MESH_RESUME_REQUIRES_CAP` is doing
+ * anything after the flip: flat zero with the flag on means every client in a
+ * mesh call is declaring the capability, and the rule is costing nothing.
+ *
+ * `staleRowWritesRefused` is `writePeerRow` catching a handler about to
+ * resurrect a deleted seat; `ghostSeatsSwept` is `sweepOwnStaleVoicePeers`
+ * finding one that got through anyway. Zero and zero is the healthy reading.
+ * A climbing first number with a flat second is the guard doing its job; a
+ * climbing second one is a path the guard does not cover, which is exactly
+ * the thing that was invisible for months. Neither is derivable from the
+ * rows after the fact, which is why they are counted rather than queried.
  */
+/**
+ * How long a seat may go unwritten before the dashboard counts it. An hour,
+ * because a call where nobody mutes, unmutes, shares or rejoins for an hour
+ * is rare enough to be worth a look and common enough not to be an alarm.
+ */
+const SEAT_IDLE_ALARM_MS = 60 * 60_000;
+
+let staleRowWritesRefused = 0;
+let ghostSeatsSwept = 0;
+let meshHoldsRefused = 0;
+
+/**
+ * Registry writes, under TWO keys, because the two guarantees they carry are
+ * not the same guarantee and do not want the same scope.
+ *
+ * ORDER IS PER PEER (`pendingPeerWrites`). A peer's own statements run one at
+ * a time, in the order they were asked for. That is the whole of the race
+ * this exists to close: on 2026-09-08 a client sent `set-voice-state` and
+ * `leave-voice-room` back to back, the mute's UPSERT was issued first and the
+ * hangup's DELETE second, and because both were already in flight on two
+ * pooled connections the database ran them the other way round. The row came
+ * back six milliseconds after it was deleted, with `orphaned_at` NULL and this
+ * instance stamped on it, and nothing in the cluster is allowed to sweep a
+ * live instance's rows. That seat sat in a call nobody was in.
+ *
+ * It is per PEER and not per channel for a reason worth writing down: two
+ * people in one room never race each other, they write different rows. Making
+ * a room's writes single-file would put one person's slow query in front of
+ * everybody else's state changes, and, far worse, in front of their hangups,
+ * so a leave could queue behind a backlog while the seat stayed occupied.
+ * That is this very bug, rebuilt out of the fix for it. A peer's own chain is
+ * a handful of statements and is naturally short.
+ *
+ * COMPLETION IS PER CHANNEL (`pendingRowWrites`). The handler never waits for
+ * a row, but a roster built from the rows must not run ahead of the write it
+ * is reporting, or the joiner's own audience would see a roster without them;
+ * the same seam is what makes a resume racing a hangup see the retired id.
+ * So the channel map JOINS every peer chain touching the room rather than
+ * chaining them, and `settledRowWrites` still means "everything asked for in
+ * this room has landed".
+ *
+ * `start` is a thunk, not a promise, and that is the load-bearing part: a
+ * promise handed in has already issued its query, so joining it orders
+ * nothing. Starting the write from inside the chain is what makes "later
+ * frame, later row" true rather than merely likely.
+ */
+const pendingPeerWrites = new Map<string, Promise<void>>();
 const pendingRowWrites = new Map<string, Promise<void>>();
 
-function trackRowWrite(channelId: string, write: Promise<unknown>): void {
-  const previous = pendingRowWrites.get(channelId) ?? Promise.resolve();
-  // Registry promises never reject (`track` swallows into a log), so this
-  // chain cannot break; `catch` is belt and braces against a future caller.
-  const next = Promise.all([previous, write]).then(
+function trackRowWrite(
+  channelId: string,
+  peerId: string,
+  start: () => Promise<unknown>,
+): void {
+  const previous = pendingPeerWrites.get(peerId) ?? Promise.resolve();
+  // Registry promises never reject (`track` swallows into a log), so the
+  // chain cannot break; the `catch` is belt and braces against a future
+  // caller, and it must not be able to skip `start`.
+  const next = previous
+    .catch(() => undefined)
+    .then(start)
+    .then(
+      () => undefined,
+      () => undefined,
+    );
+  pendingPeerWrites.set(peerId, next);
+  void next.then(() => {
+    if (pendingPeerWrites.get(peerId) === next) {
+      pendingPeerWrites.delete(peerId);
+    }
+  });
+
+  // The room's view of the same work: a join, never a chain, so one peer's
+  // slow write delays nobody else's statement and only the readers wait.
+  const roomPrevious = pendingRowWrites.get(channelId) ?? Promise.resolve();
+  const roomNext = Promise.all([roomPrevious, next]).then(
     () => undefined,
     () => undefined,
   );
-  pendingRowWrites.set(channelId, next);
-  void next.then(() => {
-    if (pendingRowWrites.get(channelId) === next) {
+  pendingRowWrites.set(channelId, roomNext);
+  void roomNext.then(() => {
+    if (pendingRowWrites.get(channelId) === roomNext) {
       pendingRowWrites.delete(channelId);
     }
   });
+
+  // The chain, not the query: a write still queued behind another has not
+  // been issued and would otherwise be invisible to `settleVoiceRegistryWrites`.
+  trackPendingRegistryWork(next);
 }
 
 function settledRowWrites(channelId: string): Promise<void> {
@@ -352,8 +452,28 @@ function writePeerRow(peer: VoicePeer): void {
   if (!registryOn()) {
     return;
   }
-  trackRowWrite(
-    peer.voiceChannelId,
+  // THE SEAT MAY BE GONE. Every frame runs as its own promise
+  // (`ws/index.ts` fires `void onMessage(...)` with no per-socket
+  // serialisation), so a handler that awaited anything can arrive here
+  // holding a `VoicePeer` that `removePeer` has already dropped from the
+  // map and deleted the row for. Writing it would INSERT that row back with
+  // `orphaned_at` NULL and this, living, instance stamped on it: a seat no
+  // socket close can orphan, no orphan timer can release, and
+  // `reconcileVoiceRegistry` will not touch because it belongs to an
+  // instance that is alive. Immortal, and on the roster.
+  //
+  // Identity, not `peers.has`: a reconstructed peer reuses the id, and the
+  // stale object must not be allowed to write over the new seat's row.
+  if (peers.get(peer.id) !== peer) {
+    staleRowWritesRefused += 1;
+    logEvent("voice.staleRowWrite", {
+      peerId: peer.id,
+      userId: peer.userId,
+      voiceChannelId: peer.voiceChannelId,
+    });
+    return;
+  }
+  trackRowWrite(peer.voiceChannelId, peer.id, () =>
     upsertVoicePeer({
       peerId: peer.id,
       channelId: peer.voiceChannelId,
@@ -551,12 +671,21 @@ async function decideRoomTransport(
   channel: ChannelRow,
 ): Promise<VoiceTransportDecision> {
   const liveKitConfigured = configuredTransport() === "livekit";
-  const liveHlsEnabled = isLiveHlsEnabledForServer(channel.server_id);
+  const liveHlsEnabled = await isLiveHlsEnabledForServer(channel.server_id);
   const voiceTransport = channel.voice_transport ?? null;
+  // The query is skipped only for the branches that answer without it, and
+  // HLS is one of them ONLY for a watch party. Testing `liveHlsEnabled`
+  // alone here is what used to send an ordinary voice channel down the
+  // `server: null` path and back out as `livekit` / `default`, so the
+  // narrowing in the policy would have been undone by its own caller.
+  const hlsForcesSfu = liveHlsForcesSfu({
+    liveHlsEnabled,
+    channelType: channel.type,
+  });
   let server: { isCommunity: boolean; memberCount: number } | null = null;
   if (
     liveKitConfigured &&
-    !liveHlsEnabled &&
+    !hlsForcesSfu &&
     channel.kind === "server" &&
     channel.server_id &&
     !voiceTransport
@@ -572,7 +701,7 @@ async function decideRoomTransport(
   return resolveVoiceTransport({
     liveKitConfigured,
     liveHlsEnabled,
-    channel: { kind: channel.kind, voiceTransport },
+    channel: { kind: channel.kind, type: channel.type, voiceTransport },
     server,
   });
 }
@@ -1007,10 +1136,11 @@ function cancelOrphan(peer: VoicePeer): void {
 
 function retirePeerId(peerId: string, voiceChannelId: string): void {
   if (registryOn()) {
-    // Tracked on the channel so a resume for this id that arrives right
-    // behind the hangup waits for the row before it asks whether the id is
-    // retired (`settledRowWrites` in the join handler).
-    trackRowWrite(voiceChannelId, retireVoicePeerId(peerId));
+    // Ordered behind this peer's own delete, and joined into the channel's
+    // pending writes, so a resume for this id that arrives right behind the
+    // hangup waits for the row before it asks whether the id is retired
+    // (`settledRowWrites` in the join handler).
+    trackRowWrite(voiceChannelId, peerId, () => retireVoicePeerId(peerId));
     return;
   }
   const existing = retiredPeerIds.get(peerId);
@@ -1198,6 +1328,42 @@ export interface VoiceActivitySnapshot {
     framesReceived: number;
   };
   /**
+   * WHETHER ANYONE IS SITTING IN A CALL THEY LEFT.
+   *
+   * `idleOverAnHour` and `oldestIdleMinutes` read the rows: a seat is written
+   * on join, on every state change and on resume, so a row nobody has
+   * touched in an hour is either a person who has genuinely sat silent that
+   * long or a seat with nobody behind it. On 2026-09-08 ten of nineteen rooms
+   * held exactly one such person, the oldest for fifteen hours, and no number
+   * anywhere said so.
+   *
+   * `staleRowWritesRefused` and `ghostsSwept` are this process since boot, and
+   * they are the mechanism rather than the symptom: the first is a write that
+   * would have resurrected a deleted seat, the second is one that got through
+   * and had to be swept. Both should sit at zero.
+   *
+   * Null when the registry is off: with no rows there is nothing to read, and
+   * a zero would claim an all-clear this deployment cannot give.
+   */
+  seats: {
+    idleOverAnHour: number;
+    oldestIdleMinutes: number | null;
+    staleRowWritesRefused: number;
+    ghostsSwept: number;
+    meshHoldsRefused: number;
+    /**
+     * Sockets that declared `mesh-resume`, against `roster.sockets` for the
+     * denominator. THE NUMBER THAT SAYS WHEN TO FLIP
+     * `VOICE_MESH_RESUME_REQUIRES_CAP`: while it is well short of the total,
+     * turning the rule on would cost browsers still running an older bundle
+     * their seamless mesh resume. Phones never declare it and never will, so
+     * it does not converge on the total; it converges on the browser share.
+     */
+    meshResumeSockets: number;
+    /** Authenticated sockets right now: the denominator for the line above. */
+    sockets: number;
+  } | null;
+  /**
    * What the roster fan-out is actually doing, since boot.
    *
    * `deltas` versus `snapshots` says whether rooms are being described
@@ -1272,6 +1438,87 @@ function localRoomOccupancy(): VoiceActivitySnapshot["rooms"] {
  * than the instance that happened to serve the request. The peak stays
  * per-process, as the payload states. A failed read falls back to the map.
  */
+/**
+ * Seat health, read once and used twice: by the dashboard payload below and
+ * by the hourly log line in `runVoiceReconcile`.
+ *
+ * SHARED ON PURPOSE. Two copies of "how healthy are the seats" is two numbers
+ * that can disagree, and an operator comparing a Grafana panel against the
+ * dashboard would have no way to tell which one was lying.
+ *
+ * Null with the registry off: no rows, nothing to read, and a zero would
+ * claim an all-clear this deployment cannot give.
+ */
+async function readSeatHealth(): Promise<VoiceActivitySnapshot["seats"]> {
+  if (!registryOn()) {
+    return null;
+  }
+  try {
+    const idle = await countIdleVoiceSeats(SEAT_IDLE_ALARM_MS);
+    return {
+      idleOverAnHour: idle.seats,
+      oldestIdleMinutes: idle.oldestIdleMinutes,
+      staleRowWritesRefused,
+      ghostsSwept: ghostSeatsSwept,
+      meshHoldsRefused,
+      meshResumeSockets: countAuthenticatedSockets(SOCKET_CAPS.meshResume)
+        .withCap,
+      sockets: countAuthenticatedSockets(SOCKET_CAPS.meshResume).sockets,
+    };
+  } catch (error) {
+    logEvent("voice.registryReadFailed", {
+      op: "idleSeats",
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/**
+ * The seat numbers, into the LOGS, once an hour.
+ *
+ * `GET /api/admin/metrics` is a pull: nothing writes it down, so nothing in
+ * Loki has ever carried these numbers and no alert or panel could be built on
+ * them. That matters most for exactly one decision, which is when it is safe
+ * to set `VOICE_MESH_RESUME_REQUIRES_CAP`: the answer is a ratio of
+ * `meshResumeSockets` to `sockets`, and reading a ratio off a dashboard that
+ * only shows the current instant, at whatever moment you happen to look, is
+ * not reading a trend. An hour is the right cadence for a number that moves
+ * as browsers cycle onto a new bundle over days.
+ *
+ * Also the counter that proves the rest of this file runs at all:
+ * `ghostsSwept` and `staleRowWritesRefused` sitting at zero forever is the
+ * healthy reading, and until now nobody could have seen it.
+ */
+const SEAT_LOG_INTERVAL_MS = 60 * 60_000;
+let seatsLoggedAt = 0;
+
+async function logSeatHealth(now = Date.now()): Promise<void> {
+  if (now - seatsLoggedAt < SEAT_LOG_INTERVAL_MS) {
+    return;
+  }
+  seatsLoggedAt = now;
+  const seats = await readSeatHealth();
+  if (!seats) {
+    return;
+  }
+  logEvent("voice.seats", {
+    idleOverAnHour: seats.idleOverAnHour,
+    oldestIdleMinutes: seats.oldestIdleMinutes ?? 0,
+    ghostsSwept: seats.ghostsSwept,
+    staleRowWritesRefused: seats.staleRowWritesRefused,
+    meshHoldsRefused: seats.meshHoldsRefused,
+    meshResumeSockets: seats.meshResumeSockets,
+    sockets: seats.sockets,
+    requiresCap: meshResumeRequiresCap(),
+  });
+}
+
+/** Test seam: the hourly seat line is a clock, and a test needs to move it. */
+export function resetSeatHealthLog(): void {
+  seatsLoggedAt = 0;
+}
+
 export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot> {
   rollPeakDay();
   const rosterSocketCensus = countAuthenticatedSockets(
@@ -1296,6 +1543,7 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
       largestRoomNow = room.participants;
     }
   }
+  const seats = await readSeatHealth();
   return {
     activeRooms: rooms.length,
     participants,
@@ -1307,6 +1555,7 @@ export async function getVoiceActivitySnapshot(): Promise<VoiceActivitySnapshot>
       framesRelayed: clusterFrames.relayed,
       framesReceived: clusterFrames.received,
     },
+    seats,
     roster: {
       deltas: rosterFramesSent.deltas,
       snapshots: rosterFramesSent.snapshots,
@@ -1366,7 +1615,12 @@ function broadcastToRoom(
  * The server a voice channel belongs to, for the egress allowlist. The
  * audience cache already holds it for every channel with a roster, so this
  * is a map read on the hot path; the row is only fetched when the cache has
- * nothing (a channel deleted mid-share), and never at all for a stop.
+ * nothing (a channel deleted mid-share).
+ *
+ * It used to be skipped for a stop, which read as a saving and was a lost
+ * distinction: `null` means "not a server channel" to `reconcileLiveHls`, so
+ * an ordinary end of share took the not-allowlisted branch instead of the
+ * no-share one and was torn down without a word. See `pushLiveHls`.
  */
 async function hlsServerIdFor(voiceChannelId: string): Promise<string | null> {
   const audience = await getChannelAudience(voiceChannelId).catch(() => null);
@@ -1378,24 +1632,144 @@ async function hlsServerIdFor(voiceChannelId: string): Promise<string | null> {
 }
 
 /**
- * First sharer in the room gets a Track Composite HLS egress. Nobody
- * sharing stops it. Failures stay in the log: a missed transcode must
+ * First sharer in a WATCH PARTY room gets a Track Composite HLS egress.
+ * Nobody sharing stops it. Failures stay in the log: a missed transcode must
  * not refuse the share itself.
  *
- * The sharer is read through `pickHlsSharer`, so only a peer that holds the
- * stage bit (`canStream`, which in a watch party is START_WATCH_PARTY) can
- * feed the egress. `set-sharing-screen` refuses the claim without it and
- * `reevaluateVoiceSpeak` clears the share when it is revoked; this is the
- * same gate read at the one place a transcode actually starts.
+ * The sharer is read through `pickHlsSharer`, which asks two questions and
+ * this function asks neither of them itself. The stage bit (`canStream`,
+ * which in a watch party is START_WATCH_PARTY): `set-sharing-screen` refuses
+ * the claim without it and `reevaluateVoiceSpeak` clears the share when it is
+ * revoked, and this is the same gate read where a transcode actually starts.
+ * And the room type (`watchParty`): a screen share in an ordinary voice
+ * channel that happens to be on the SFU never starts one.
  */
+/**
+ * How long the sharer may be missing before the broadcast is torn down.
+ *
+ * Five seconds: comfortably longer than a reconnect's re-declare or a
+ * permissions bump's round trip, and short enough that a real "stop sharing"
+ * does not leave a frozen frame up for a noticeable time. It is not the 90 s
+ * seat orphan window: a seat being held is invisible, a transcode being held
+ * costs a core.
+ *
+ * `HLS_NO_SHARER_GRACE_MS=0` restores the old behaviour, which is a stop on
+ * the first push that finds nobody sharing. That is the rollback switch, and
+ * it is also what the stop-path tests in `voice-hls-audience.test.ts` set, so
+ * that what they pin stays "the stop reaches the channel" rather than
+ * accidentally becoming "the grace works".
+ */
+function noSharerGraceMs(): number {
+  const raw = Number(process.env.HLS_NO_SHARER_GRACE_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 5_000;
+}
+
+/** When each channel's sharer went missing, while a stream is still up. */
+const noSharerSince = new Map<string, number>();
+
+/**
+ * WHICH OF THE THREE GATE BITS WENT FALSE, because "no sharer" is three
+ * different faults wearing one name and the log could not tell them apart.
+ *
+ * `pickHlsSharer` needs `watchParty && sharingScreen && canStream`. A
+ * presenter who stopped sharing, a peer rebuilt by a reconnect that has not
+ * re-declared yet, and a permissions bump that cleared `canStream` all arrive
+ * here identically. The peers are dumped with their bits so the next
+ * occurrence names itself instead of needing another party to reproduce.
+ */
+function logNoSharer(voiceChannelId: string, presenterPeerId: string): void {
+  logEvent("voice.hlsSharerVanished", {
+    channelId: voiceChannelId,
+    presenterPeerId,
+    graceMs: noSharerGraceMs(),
+    peers: getRoomPeers(voiceChannelId).map((peer) => ({
+      id: peer.id,
+      watchParty: peer.watchParty,
+      sharingScreen: peer.sharingScreen,
+      canStream: peer.canStream,
+      wasPresenter: peer.id === presenterPeerId,
+    })),
+  });
+}
+
 async function pushLiveHls(voiceChannelId: string): Promise<void> {
   if (getRoomTransport(voiceChannelId) !== "livekit") {
     return;
   }
-  const sharer = pickHlsSharer(getRoomPeers(voiceChannelId));
+  // THE PARTY IS THE BROADCAST, AND ENDING IT ENDS THE BROADCAST.
+  // `pickHlsSharer` asks whether somebody is sharing in a watch-party room
+  // with the stage bit, and never asked whether a party is live, so a host who
+  // pressed Encerrar and left their share running kept a two-rung transcode
+  // alive with nothing naming it: about 1.4 cores of the media box, segments
+  // written for as long as it ran, and a `channel-live` frame telling the
+  // whole server there was something to watch. Seen in production on
+  // 2026-09-09, half an hour after the last party ended.
+  //
+  // Their screen share itself is untouched: it is a voice room, people watch
+  // each other's screens in it, and ending a show is not the same act as
+  // stopping a share. Only the broadcast to people without a seat stops.
+  const over = watchPartyKnownOver(voiceChannelId);
+  const sharing = pickHlsSharer(getRoomPeers(voiceChannelId));
   const prev = liveHlsStreamFor(voiceChannelId);
+  // Once, on the push that tears it down: `prev` is null on every push after.
+  if (over && prev && sharing) {
+    logWatchPartyOverStop(voiceChannelId, sharing.id);
+  }
+  if (sharing) {
+    noSharerSince.delete(voiceChannelId);
+  } else if (!over && prev) {
+    // A SHARER THAT VANISHES FOR A MOMENT MUST NOT END THE BROADCAST.
+    //
+    // `pickHlsSharer` needs `watchParty && sharingScreen && canStream`, and
+    // all three can go false without the presenter doing anything. A
+    // reconnect that reconstructs rather than adopts starts the peer with
+    // `sharingScreen: false` until the client re-declares; and
+    // `reevaluateVoiceSpeak` clears `sharingScreen` outright for anyone whose
+    // `canStream` resolves false, which runs on every permissions bump,
+    // including the ones a watch party's own options reconciler causes by
+    // writing channel overwrites.
+    //
+    // Until now the first such push ended the session, and production logged
+    // `voice.hlsStopped reason=no-share` twice inside sixteen minutes on one
+    // continuous party where nobody stopped sharing. Each one is a new
+    // `startedAt` and a rebuffer for every seatless viewer.
+    //
+    // So a disappearance has to persist before it counts. A genuine stop
+    // costs the audience one grace window of a frozen last frame, which
+    // is nothing; a transient one now costs them nothing at all. Deliberately
+    // NOT applied to `over`: ending the party is somebody pressing a button
+    // and should take effect at once.
+    const grace = noSharerGraceMs();
+    const since = noSharerSince.get(voiceChannelId);
+    if (grace > 0 && since === undefined) {
+      noSharerSince.set(voiceChannelId, Date.now());
+      logNoSharer(voiceChannelId, prev.presenterPeerId);
+      // Nothing else will look again: the sharer going away is the last event
+      // this channel produces until somebody does something. So the grace has
+      // to wake itself up.
+      setTimeout(() => {
+        void pushLiveHls(voiceChannelId);
+      }, grace + 100).unref?.();
+      return;
+    }
+    if (grace > 0 && since !== undefined && Date.now() - since < grace) {
+      return;
+    }
+    noSharerSince.delete(voiceChannelId);
+  } else {
+    noSharerSince.delete(voiceChannelId);
+  }
+  const sharer = over ? null : sharing;
   try {
-    const serverId = sharer ? await hlsServerIdFor(voiceChannelId) : null;
+    // RESOLVED EVEN WITH NO SHARER, and it used to be `sharer ? ... : null`.
+    // That looked like a saved lookup and was a lost distinction: null means
+    // "not a server channel" to `reconcileLiveHls`, so an ordinary end of
+    // share took the not-allowlisted branch, which tore the session down
+    // without a word, instead of the no-share branch, which says so. A live
+    // party then showed two starts nine minutes apart with nothing logged in
+    // between and no way to tell why. It is a map read (see
+    // `hlsServerIdFor`), so the lookup was never worth the ambiguity.
+    const serverId = await hlsServerIdFor(voiceChannelId);
     const next = await reconcileLiveHls(
       voiceChannelId,
       sharer?.id ?? null,
@@ -1425,6 +1799,13 @@ async function pushLiveHls(voiceChannelId: string): Promise<void> {
     });
   }
 }
+
+// A party went live or ended: reconcile the stream on the spot rather than at
+// the next roster event. Ending a show has to end the broadcast even when
+// nobody joins or leaves the room afterwards, which is the ordinary case.
+setWatchPartyLiveListener((channelId) => {
+  void pushLiveHls(channelId);
+});
 
 // The egress monitor (`hls-egress.ts`) found a dead egress, or gave up on
 // one: reconcile again so a still-live share gets a fresh session and every
@@ -2204,8 +2585,7 @@ function removePeer(peerId: string) {
     // One statement: the row goes, and the room row with it if this was the
     // last peer anywhere in the cluster (not only on this instance). Then the
     // party, for the one race that can leave a room row behind.
-    trackRowWrite(
-      voiceChannelId,
+    trackRowWrite(voiceChannelId, peerId, () =>
       deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(voiceChannelId)),
     );
   }
@@ -2487,8 +2867,7 @@ export async function leaveVoiceByResumeToken(
  */
 function releaseForeignPeer(row: VoicePeerRow, reason: string): void {
   const { peerId, channelId } = row;
-  trackRowWrite(
-    channelId,
+  trackRowWrite(channelId, peerId, () =>
     deleteVoicePeer(peerId).then(() => clearWatchPartyIfEmpty(channelId)),
   );
   retirePeerId(peerId, channelId);
@@ -2555,16 +2934,34 @@ export async function runVoiceReconcile(): Promise<{
   orphaned: number;
   removed: number;
   roomsSwept: number;
+  /** Rows this instance owned with no peer behind them. Should be zero. */
+  ghosts: number;
 }> {
   if (!registryOn()) {
-    return { orphaned: 0, removed: 0, roomsSwept: 0 };
+    return { orphaned: 0, removed: 0, roomsSwept: 0, ghosts: 0 };
   }
   const result = await reconcileVoiceRegistry();
   // The SFU re-sweep claims ride on the same beat (plan section 5.4): every
   // instance ticks, and only the rows this tick won are swept.
   await tickSfuResweeps();
+  // And this instance's own rows that this instance's map does not hold.
+  // `reconcileVoiceRegistry` cannot do it (it skips its own rows on purpose,
+  // and must, because another instance's live seat is none of its business),
+  // so the owner has to. The peer ids are read from the map here rather than
+  // in the registry, which is the only place they exist.
+  const ghosts = await sweepOwnStaleVoicePeers([...peers.keys()]);
+  if (ghosts.length > 0) {
+    ghostSeatsSwept += ghosts.length;
+    logEvent("voice.ghostSeatsSwept", {
+      count: ghosts.length,
+      peerIds: ghosts.map((ghost) => ghost.peerId).join(","),
+    });
+  }
+  // Rate-limited to hourly inside; the beat is just the clock that is already
+  // ticking. Never allowed to break the reconcile.
+  await logSeatHealth().catch(() => undefined);
   const touched = new Set<string>();
-  for (const { peerId, channelId } of result.removed) {
+  for (const { peerId, channelId } of [...result.removed, ...ghosts]) {
     broadcastToRoom(channelId, { type: "peer-left", peerId });
     void broadcastRoster(channelId, { kind: "left", peerId });
     touched.add(channelId);
@@ -2594,7 +2991,78 @@ export async function runVoiceReconcile(): Promise<{
     orphaned: result.orphaned.length,
     removed: result.removed.length,
     roomsSwept: result.roomsSwept,
+    ghosts: ghosts.length,
   };
+}
+
+/**
+ * The rollout switch for the mesh hold rule below. Off by default, and that
+ * default is the whole reason it exists.
+ *
+ * The rule refuses to hold a mesh seat for a socket that did not declare
+ * `mesh-resume`. Web and Electron declare it from the bundle this shipped in,
+ * but a Pages deploy does not reload a tab that is already open, and an API
+ * deploy reconnects those tabs without reloading them (pitfall 11). So on the
+ * deploy that carries this change, every browser in a mesh call is by
+ * definition running a bundle that predates the capability, and turning the
+ * rule on in the same breath would cost each of them the seamless resume they
+ * have today: one cold rejoin, a new peer id, a couple of seconds of audio.
+ *
+ * Shipping the mechanism dark and flipping it later is the same pattern
+ * `TURN_PREFER_STATIC` and `WS_COMPRESSION` use. Flip it once tabs have
+ * cycled (the dashboard's `mesh-resume` socket fraction is the number to
+ * read), and from that moment every phone build already in the field stops
+ * leaving mesh ghosts, with no app update and no client deploy.
+ *
+ * Read per call, never cached: a restart is the only other way it changes.
+ */
+function meshResumeRequiresCap(): boolean {
+  return process.env.VOICE_MESH_RESUME_REQUIRES_CAP === "true";
+}
+
+/**
+ * Whether this socket's mesh seat is worth holding.
+ *
+ * The hold exists so a client that still has live media can come back to the
+ * same peer id. In a mesh room that media is a set of peer connections this
+ * client owns, and a client that tears them down on reconnect gains nothing
+ * from the hold while the room pays for it: ninety seconds of a participant
+ * who is not there, a tile nobody can talk to, and a `peer-left` that arrives
+ * long after the person did.
+ *
+ * LiveKit is untouched. Its media is a separate connection that genuinely
+ * survives a signalling drop, which is why iOS keeps a LiveKit call across an
+ * API restart today and must go on doing so.
+ *
+ * WHAT THIS CANNOT DO. The server knows the room's transport exactly; it does
+ * not know whether a given build can rebuild mesh media, and no signal on the
+ * wire tells it. `join-voice-room.resume` is a self-report, and the incident
+ * this comes from is a build that got its own self-report wrong. So this asks
+ * for a narrower promise instead of inferring one, and a client that never
+ * makes it is treated as unable. Guessing from a fingerprint (which caps a
+ * build happens to send, what its user agent says) would work today and rot
+ * silently the first time a client changed, which is pitfall 12 exactly.
+ *
+ * Called from `removeVoicePeerBySocket`, which the close handler runs BEFORE
+ * `deleteAuthenticatedSocket`, so the socket's caps are still readable here.
+ */
+function meshHoldAllowed(peer: VoicePeer, socket: WebSocket): boolean {
+  if (!meshResumeRequiresCap()) {
+    return true;
+  }
+  if (getRoomTransport(peer.voiceChannelId) !== "mesh") {
+    return true;
+  }
+  if (socketHasCap(socket, SOCKET_CAPS.meshResume)) {
+    return true;
+  }
+  meshHoldsRefused += 1;
+  logEvent("voice.meshHoldRefused", {
+    peerId: peer.id,
+    userId: peer.userId,
+    voiceChannelId: peer.voiceChannelId,
+  });
+  return false;
 }
 
 /**
@@ -2617,7 +3085,9 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
     return;
   }
   socketToPeerId.delete(socket);
-  if (!peer.canResume) {
+  // `canResume` is the client's own promise; `meshHoldAllowed` is whether
+  // this room is one where the promise can be kept.
+  if (!peer.canResume || !meshHoldAllowed(peer, socket)) {
     removePeer(peerId);
     return;
   }
@@ -2630,9 +3100,8 @@ export function removeVoicePeerBySocket(socket: WebSocket) {
     }
   }, VOICE_RESUME_TTL_MS);
   if (registryOn()) {
-    trackRowWrite(
-      peer.voiceChannelId,
-      markVoicePeerOrphaned(peerId, new Date(peer.orphanedAt)),
+    trackRowWrite(peer.voiceChannelId, peerId, () =>
+      markVoicePeerOrphaned(peerId, new Date(peer.orphanedAt as number)),
     );
   }
   onLiveRoomMaybeEmpty(peer.voiceChannelId, socket);
@@ -2658,6 +3127,7 @@ export function resetVoicePeers(): void {
   retiredPeerIds.clear();
   roomTransports.clear();
   pendingTransportDecisions.clear();
+  pendingPeerWrites.clear();
   rosterCoalescer.reset();
   pendingRoomEvents.clear();
   remoteTransports.clear();
@@ -3101,6 +3571,9 @@ export async function handleVoiceMessage(
       });
       nickname = resolved.nickname;
     }
+    // THE ROOM GATE for the egress, read off the same row as the stage gate
+    // so the two cannot disagree. See `pickHlsSharer`.
+    const watchParty = isWatchPartyChannelType(channel.type);
 
     // What this room would open on, if this join is the one that opens it. A
     // pinned room never re-decides, so the (at most one) query behind this is
@@ -3667,6 +4140,7 @@ export async function handleVoiceMessage(
       // live path's job (`reevaluateVoiceSpeak`), which ran when it changed.
       resume.peer.canSpeak = canSpeak;
       resume.peer.canStream = canStream;
+      resume.peer.watchParty = watchParty;
       if (!canSpeak) {
         resume.peer.muted = true;
       }
@@ -3724,6 +4198,7 @@ export async function handleVoiceMessage(
       deafened: adopted?.deafened ?? false,
       canSpeak,
       canStream,
+      watchParty,
       canResume: payload.resume === true,
       // Deliberately not carried across a resume and not in the registry row.
       // A measurement is about a link at a moment; a client that reconnects

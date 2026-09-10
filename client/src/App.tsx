@@ -30,6 +30,9 @@ import {
   validateHandle,
   buildReplyExcerpt,
   isVoiceRoomChannelType,
+  isWatchPartyChannelType,
+  type WatchParty,
+  type WatchPartyOptions,
 } from "@pqp/shared";
 import type {
   AgeGateStatus,
@@ -102,6 +105,8 @@ import { isDesktopApp } from "@/lib/desktop";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
+  shouldOfferWatchPartyHostHint,
+  shouldOfferWatchPartyViewerHint,
   winningFeatureHint,
 } from "@/lib/feature-hints";
 import { canActOnMemberClient } from "@/lib/role-hierarchy";
@@ -110,7 +115,11 @@ import {
   moveMembersBit,
   moveOccupantSeat,
 } from "@/lib/voice-occupant-dnd";
-import { useUpdatePromptShowing } from "@/lib/update-prompt-state";
+import {
+  requestUpdatePrompt,
+  useUpdatePromptShowing,
+  useUpdateWaiting,
+} from "@/lib/update-prompt-state";
 import { isAutomatedBrowser } from "@/lib/cargos-hint";
 import { shouldShowMobileBetaHint } from "@/lib/mobile-beta-hint";
 import { isWhatsNewSeen, rememberWhatsNew } from "@/lib/whats-new";
@@ -145,6 +154,21 @@ import { UserPanel } from "@/components/layout/user-panel";
 import { ConnectionCallbackOverlay } from "@/components/connections/connection-callback";
 import { VoiceAudioSinks } from "@/components/voice/voice-audio-sinks";
 import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
+import { CreateWatchPartyDialog } from "@/components/watch-party/create-watch-party-dialog";
+import {
+  canOfferWatchPartyCreate,
+  isWatchPartyChannelsEnabled,
+} from "@/lib/watch-party-channels";
+import { WatchPartyPanel } from "@/components/watch-party/watch-party-panel";
+import { useWatchParties } from "@/hooks/use-watch-parties";
+import {
+  claimWatchPartyHost as apiClaimWatchPartyHost,
+  createServerWatchParty as apiCreateServerWatchParty,
+  setWatchPartyCohost as apiSetWatchPartyCohost,
+  setWatchPartyStage,
+  setWatchPartyState as apiSetWatchPartyState,
+  updateWatchParty as apiUpdateWatchParty,
+} from "@/lib/watch-parties-api";
 import { ScheduleSessionSheet } from "@/components/voice/schedule-session-sheet";
 import { UpcomingSessionCard } from "@/components/voice/upcoming-session-card";
 import { ChannelSessionToasts } from "@/components/voice/channel-session-toasts";
@@ -164,6 +188,7 @@ import {
   CALL_SPLIT_DEFAULT,
   loadCallSplit,
   saveCallSplit,
+  strongestStageShape,
   type CallSplitPreference,
   type CallStageShape,
 } from "@/lib/call-split";
@@ -233,6 +258,7 @@ import {
   lookupUserByHandle,
   markChannelRead,
   markCommunityHomeRead,
+  memberDisplayName,
   moveChannel,
   moveMemberVoice,
   disconnectMemberVoice,
@@ -363,9 +389,18 @@ import { shouldJoinMuted } from "@/lib/join-muted";
 import { setInCall } from "@/lib/in-call-state";
 import { useHlsHostAck } from "@/hooks/use-hls-host-ack";
 import { useLiveHlsConfig } from "@/hooks/use-live-hls-config";
-import { WatchChannelStage } from "@/components/voice/watch-stage";
+import {
+  WatchChannelStage,
+  watchAudienceCount,
+} from "@/components/voice/watch-stage";
 import { HlsHostAckSheet } from "@/components/voice/hls-host-ack-sheet";
-import type { ScreenCaptureIntent } from "@/lib/screen-capture-audio";
+import { ShareAudioPrompt } from "@/components/voice/share-audio-prompt";
+import {
+  needsShareAudioPrompt,
+  offersShellSystemAudio,
+  screenCaptureEnvironment,
+  type ScreenCaptureIntent,
+} from "@/lib/screen-capture-audio";
 import {
   gateScreenShareStart,
   type ScreenShareStart,
@@ -990,7 +1025,8 @@ function MainAppContent({
    */
   const [arrivalServerId, setArrivalServerId] = useState<string | null>(null);
   const [qgHintReady, setQgHintReady] = useState(false);
-  const [qgHintShowing, setQgHintShowing] = useState(false);
+  /** Whether the QG card WANTS the corner. `cornerHint` decides who gets it. */
+  const [qgHintWanted, setQgHintWanted] = useState(false);
   /**
    * Captured once per mount so recording the impression cannot drop the
    * card mid-session (and cannot leave the slot empty while the next card
@@ -1040,10 +1076,42 @@ function MainAppContent({
     // geometry late still gets the same answer.
     setCallSplit(loadCallSplit());
   }, []);
+  /**
+   * The pane's shape, taken from whichever mounted stage is asking for the
+   * most room rather than from whichever reported last.
+   *
+   * A watch party channel mounts three of them at once: the party panel, the
+   * watch stage and the call stage. Each reports its own shape as it appears
+   * and disappears, so under the old single setter the one going away
+   * ("none", about itself) could flatten the pane while another was still
+   * showing a picture, collapsing the split for no visible reason.
+   * `strongestStageShape` is the rule; the ref is so a report from one source
+   * does not have to know what the others last said.
+   */
+  const stageShapesRef = useRef<Record<string, CallStageShape>>({});
   const [stageShape, setStageShape] = useState<CallStageShape>("none");
-  const handleStageShape = useCallback((shape: CallStageShape) => {
-    setStageShape(shape);
-  }, []);
+  const reportStageShape = useCallback(
+    (source: string, shape: CallStageShape) => {
+      if (stageShapesRef.current[source] === shape) {
+        return;
+      }
+      stageShapesRef.current = { ...stageShapesRef.current, [source]: shape };
+      setStageShape(strongestStageShape(Object.values(stageShapesRef.current)));
+    },
+    [],
+  );
+  const handleStageShape = useCallback(
+    (shape: CallStageShape) => reportStageShape("call-stage", shape),
+    [reportStageShape],
+  );
+  const handleWatchStageShape = useCallback(
+    (shape: CallStageShape) => reportStageShape("watch-stage", shape),
+    [reportStageShape],
+  );
+  const handleWatchPartyShape = useCallback(
+    (shape: CallStageShape) => reportStageShape("watch-party", shape),
+    [reportStageShape],
+  );
   const [splitState, setSplitState] = useState<CallSplitState>({
     active: false,
     canSideBySide: false,
@@ -1217,6 +1285,20 @@ function MainAppContent({
       return next;
     });
   };
+  // The watch party EVENT (host, state machine, options), which is a
+  // different object from the schedule above even though they are the same
+  // database row: the schedule surface only ever sees `scheduled` and `live`,
+  // this one also sees `draft`. `docs/WATCH_PARTY.md`.
+  const watchParties = useWatchParties(
+    selection.kind === "server" ? selectionServerId(selection) : null,
+  );
+  const [createWatchPartyOpen, setCreateWatchPartyOpen] = useState(false);
+  // The socket handler is installed once; without a ref it would keep calling
+  // the first render's `apply` and never update anything after a server
+  // switch. Same pattern as `permsRef` above.
+  const watchPartiesRef = useRef(watchParties);
+  watchPartiesRef.current = watchParties;
+
   const [channelSettings, setChannelSettings] = useState<{
     channelId: string;
     section: ChannelSettingsSectionId;
@@ -1361,17 +1443,13 @@ function MainAppContent({
   const [voiceState, setVoiceState] = useState(voice.getState());
   const [pendingVoiceMoves, setPendingVoiceMoves] = useState<string[]>([]);
   /**
-   * The standing opt-in to sending this machine's whole sound with a share.
-   *
-   * SESSION STATE ON PURPOSE, not a stored preference. Sending system audio is
-   * what re-broadcast everyone's voices back into the call (the 23 Aug 2026
-   * echo report; see `lib/screen-capture-audio.ts`), and the failure is silent
-   * from the presenter's side. A preference remembered across reloads is a
-   * preference somebody set once for one game and then forgot, and the next
-   * time it costs the whole room. Re-arming is one press, in the call, next to
-   * the button it changes.
+   * Audio consent for a Windows desktop shell whose picker cannot ask yet.
+   * Null is the ordinary case. The next desktop binary puts the box on the
+   * picker and this stays null forever.
    */
-  const [shareSystemAudio, setShareSystemAudio] = useState(false);
+  const [shareAudioPrompt, setShareAudioPrompt] = useState<{
+    intent?: ScreenCaptureIntent;
+  } | null>(null);
   /**
    * The cursor preference, in the opposite arrangement, and deliberately.
    *
@@ -1482,7 +1560,13 @@ function MainAppContent({
   const hlsHostAck = useHlsHostAck();
   const [pendingHlsHostAck, setHlsHostAck] = useState<{
     serverId: string;
-    request: ScreenShareStart<ScreenCaptureIntent>;
+    /**
+     * The share this person asked for before the sheet, resumed on confirm.
+     * NULL when the sheet was raised by the watch party setup surface, where
+     * confirming starts nothing: the point of moving it there is that the
+     * host reads it while nothing is being sent.
+     */
+    request: ScreenShareStart<ScreenCaptureIntent> | null;
   } | null>(null);
   // Whether this server may go out as HLS at all (the operator's per-server
   // allowlist). A server that cannot has no broadcast to acknowledge, so the
@@ -1511,6 +1595,38 @@ function MainAppContent({
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [hlsHostAck],
+  );
+  /**
+   * Every "share screen" click lands here. Computer audio is decided in one
+   * place, the same place Discord puts it: the picker, or a short prompt
+   * when this shell's picker cannot ask yet. A hidden icon on the call bar
+   * was how people missed the choice.
+   */
+  const requestScreenShare = useCallback(
+    (intent?: ScreenCaptureIntent) => {
+      const env = screenCaptureEnvironment(
+        isDesktopApp(),
+        getDesktop()?.platform ?? null,
+        {
+          sharePickerOffersAudio:
+            getDesktop()?.sharePickerOffersAudio === true,
+        },
+      );
+      if (
+        needsShareAudioPrompt(env) &&
+        !intent?.preferBrowserTab &&
+        !intent?.stream
+      ) {
+        setShareAudioPrompt({ intent });
+        return;
+      }
+      const audio =
+        intent?.preferBrowserTab
+          ? false
+          : env.sharePickerOffersAudio && offersShellSystemAudio(env);
+      startScreenShareGated(audio, intent);
+    },
+    [startScreenShareGated],
   );
   const perms = usePermissions(selectedServerId);
   const permsRef = useRef(perms);
@@ -2017,6 +2133,26 @@ function MainAppContent({
     moderationBits.move ||
     moderationBits.nicknames ||
     moderationBits.manageRoles;
+
+  /**
+   * Who the host may hand a co-host badge to.
+   *
+   * The server's own member list, which this component already holds for the
+   * composer's `@` completion, so appointing a co-host costs no extra request.
+   * `memberDisplayName` rather than the raw display name, because a nickname is
+   * what the rest of this server calls that person and a picker that disagreed
+   * with the member list would be a second name for the same face.
+   */
+  const cohostCandidates = useMemo(
+    () =>
+      serverMembers.map((member) => ({
+        userId: member.id,
+        displayName: memberDisplayName(member),
+        avatarUrl: member.avatarUrl,
+        isCharacter: member.isCharacter,
+      })),
+    [serverMembers],
+  );
 
   /**
    * What the profile card may do to somebody, in the server it was opened in.
@@ -2805,6 +2941,14 @@ function MainAppContent({
             return;
           }
 
+          // The watch party event object changed. Handled here and NOT passed
+          // on: `voice.handleSignaling` types its input as a voice frame, and
+          // this one is a chat frame that happens to be routed per socket.
+          if (message.type === "watch-party-update") {
+            watchPartiesRef.current.apply(message.channelId, message.party);
+            return;
+          }
+
           // --- voice state ---
           // Record each room's transport as rosters pass through (the frame
           // still falls through to the controller). Powers the members
@@ -2933,6 +3077,19 @@ function MainAppContent({
       navigate(path, { replace: true });
     },
     [navigate],
+  );
+
+  /**
+   * Where "stop watching" goes: the server's first ordinary text channel.
+   *
+   * A watch party room is never in the sidebar, so leaving it has to land
+   * somewhere real rather than on "Escolha um canal". Undefined on a server
+   * with no text channel at all, in which case the control is not offered:
+   * a button that goes nowhere is worse than no button.
+   */
+  const firstTextChannelId = useMemo(
+    () => channels.find((one) => one.type === "text")?.id,
+    [channels],
   );
 
   const selectChannel = useCallback(
@@ -3468,6 +3625,350 @@ function MainAppContent({
       vadThreshold: localSettings.vadThreshold,
       processing: localSettings.micProcessing,
     });
+  }
+
+  // ---------------------------------------------------- the watch party event
+
+  /**
+   * THE STREAMING NOTICE, RAISED WHERE IT CAN STILL CHANGE THE DECISION.
+   *
+   * It used to be raised by the share start, which in a watch party meant it
+   * landed after "Ir ao vivo": the party was already live, the room had
+   * already been told, and only then did the host read a notice about being
+   * responsible for what they broadcast. That is the one moment the notice
+   * exists for, and it arrived too late to inform anything.
+   *
+   * So it is raised here instead: the first time a host opens a draft setup
+   * surface on a server that can go out as HLS. Nothing is being sent at that
+   * point (that is the whole meaning of `draft`), so the host can read it,
+   * and change their mind, at no cost to anybody.
+   *
+   * The share-start gate is untouched. Outside a watch party a share IS the
+   * broadcast, so raising it there is still before anything goes out; and by
+   * the time a watch party host presses Ir ao vivo the server already has
+   * their ack, so `gateScreenShareStart` starts directly and nobody sees the
+   * sheet twice.
+   *
+   * `askedRef` is per server and per session: `checkNeedsAck` is a request,
+   * and re-firing it on every render of an open setup surface would be a poll.
+   */
+  const hlsHostAckAskedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const serverId = selectedServerId;
+    const party = selectedChannelId
+      ? watchParties.byChannel[selectedChannelId]
+      : undefined;
+    const settingUp =
+      party?.state === "draft" &&
+      (party.viewerRole === "host" || party.viewerRole === "cohost");
+    if (!serverId || !settingUp) {
+      return;
+    }
+    // Only an explicit `false` means this server has no broadcast to
+    // acknowledge. Null is "not answered yet" and waits rather than skipping
+    // a disclosure by accident, which is the same rule the share gate uses.
+    if (liveHlsConfig?.enabled === false) {
+      return;
+    }
+    if (hlsHostAckAskedRef.current === serverId) {
+      return;
+    }
+    hlsHostAckAskedRef.current = serverId;
+    // NO `cancelled` FLAG AND NO CLEANUP, DELIBERATELY, AND THE OBVIOUS
+    // VERSION OF THIS WAS BROKEN BY EXACTLY THAT.
+    //
+    // The effect's deps include the party map, which changes the moment the
+    // draft is created: the optimistic write, then the server's broadcast. So
+    // the effect tore down while `checkNeedsAck` was still in flight, its
+    // cleanup set `cancelled`, the answer ("yes, they need to see it") was
+    // thrown away, and the re-run hit the `askedRef` guard and never asked
+    // again. The notice simply never appeared. `needs=true cancelled=true` in
+    // the console was the whole story.
+    //
+    // A re-render is not a reason to discard the answer. The only thing worth
+    // guarding is having navigated to a DIFFERENT server while the request was
+    // out, which the ref below answers without fighting the render cycle.
+    void hlsHostAck
+      .checkNeedsAck(serverId)
+      .then((needs) => {
+        if (needs && selectedServerIdRef.current === serverId) {
+          setHlsHostAck({ serverId, request: null });
+        }
+      })
+      .catch(() => {
+        // `checkNeedsAck` already fails open. Nothing to add.
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedServerId, selectedChannelId, watchParties.byChannel, liveHlsConfig]);
+
+  /**
+   * A function rather than a `const` because these handlers are declared
+   * above `selectedChannel`, and every one of them reads the party at the
+   * moment it runs rather than at the moment it was defined.
+   */
+  function currentWatchParty(): WatchParty | null {
+    return selectedChannelId
+      ? (watchParties.byChannel[selectedChannelId] ?? null)
+      : null;
+  }
+
+  /**
+   * Start a party from the sidebar's one control.
+   *
+   * No channel is picked, named, or created by hand: the server finds or makes
+   * the hidden room and opens the draft in it, and the client then selects
+   * that room so the host lands straight on the setup surface. That is the
+   * whole journey the old "make a watch_party channel, then find it in a
+   * section, then press create" flow was hiding.
+   */
+  async function handleCreateWatchParty(input: {
+    name: string;
+    startsAt: string | null;
+  }) {
+    const serverId = selectedServerId;
+    if (!serverId) {
+      return;
+    }
+    const { party, channel } = await apiCreateServerWatchParty(serverId, {
+      name: input.name,
+      startsAt: input.startsAt,
+    });
+    if (party) {
+      // The broadcast is on its way, but a draft reaches only the host and
+      // co-hosts and this client is the host: applying the answer now is what
+      // makes the setup surface appear on the same click.
+      watchParties.put(party);
+    }
+    // The room may have just been created, so it has to go into the channel
+    // list before it can be selected, even though the sidebar will not draw
+    // it. Selecting a channel the client cannot resolve is a blank pane on
+    // the very click that starts the party.
+    if (!channels.some((existing) => existing.id === channel.id)) {
+      setChannels(
+        [...channels, channel].sort((a, b) => a.position - b.position),
+      );
+    }
+    await selectChannel(channel.id);
+  }
+
+  /**
+   * Wait for the room to actually be connected before publishing.
+   *
+   * `voice.join` resolves when the join has been sent, not when the media
+   * session is up, and `startScreenShare` refuses on anything but
+   * `connected`. Without this the very first watch party a host runs goes
+   * live with no picture and no error, which is precisely the failure this
+   * whole surface exists to stop.
+   */
+  async function waitForVoiceConnected(timeoutMs = 15_000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (voice.getState().status === "connected") {
+        return true;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 150));
+    }
+    return false;
+  }
+
+  /**
+   * Ir ao vivo. One press, three things, in this order and no other:
+   *
+   * 1. the party's state changes, so the room's sidebar gets the block;
+   * 2. the host takes a seat in the voice room, because a presenter is a
+   *    participant;
+   * 3. the capture they already approved goes on the stage.
+   *
+   * The state change goes first on purpose. If the share fails (they cancel,
+   * the OS refuses), the party is live with nothing on screen, and the panel
+   * says so in words to everyone. The other order would leave a picture going
+   * out from a party the room has never been told about.
+   */
+  async function handleWatchPartyGoLive(stream: MediaStream | null) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    try {
+      const answer = await apiSetWatchPartyState(party.id, "live");
+      if (answer.party) {
+        watchParties.put(answer.party);
+      }
+    } catch (error) {
+      stream?.getTracks().forEach((track) => track.stop());
+      setAppError(
+        error instanceof Error ? error.message : "Could not go live",
+      );
+      return;
+    }
+    if (voice.getState().voiceChannelId !== party.channelId) {
+      await handleJoinVoice(party.channelId);
+    }
+    if (!stream) {
+      return;
+    }
+    if (!(await waitForVoiceConnected())) {
+      stream.getTracks().forEach((track) => track.stop());
+      return;
+    }
+    // `false` is the system-audio opt-in, not "has an audio track". Tab audio
+    // still rides on the already-captured stream; passing track count here
+    // used to look like an opt-in to whole-computer sound. `preferBrowserTab`
+    // matches the setup picker so a retry without a handed stream stays on
+    // the echo-safe path.
+    startScreenShareGated(false, { preferBrowserTab: true, stream });
+  }
+
+  async function handleWatchPartyEnd() {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await apiSetWatchPartyState(party.id, "ended");
+    watchParties.apply(party.channelId, answer.party ?? null);
+    if (voice.getState().isSharingScreen) {
+      voice.stopScreenShare();
+    }
+  }
+
+  async function handleWatchPartyDiscard() {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    await apiSetWatchPartyState(party.id, "cancelled");
+    watchParties.apply(party.channelId, null);
+  }
+
+  async function handleWatchPartyOptions(options: Partial<WatchPartyOptions>) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    // Optimistic: a select that snaps back while the request is in flight
+    // reads as a broken control.
+    watchParties.put({ ...party, options: { ...party.options, ...options } });
+    const answer = await apiUpdateWatchParty(party.id, { options });
+    if (answer.party) {
+      watchParties.put(answer.party);
+    }
+  }
+
+  async function handleWatchPartyRename(name: string) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await apiUpdateWatchParty(party.id, { name });
+    if (answer.party) {
+      watchParties.put(answer.party);
+    }
+  }
+
+  /**
+   * Take a seat in a watch party's room WITHOUT a microphone.
+   *
+   * The default for anybody who is not running the show. `audienceOnly` opens
+   * no `getUserMedia` at all, so there is no prompt, no device and no "entrou
+   * sem microfone" banner: nothing was asked for, so nothing was refused.
+   * `voice.takeTheMicrophone()` is the deliberate second act.
+   */
+  async function handleWatchPartyJoinAsAudience(channelId: string) {
+    voiceServerIdRef.current = selectedServerId;
+    await voice.join(channelId, {
+      inputDeviceId: localSettings.inputDeviceId,
+      inputVolume: localSettings.inputVolume,
+      inputMode: localSettings.inputMode,
+      vadThreshold: localSettings.vadThreshold,
+      processing: localSettings.micProcessing,
+      audienceOnly: true,
+    });
+  }
+
+  async function handleWatchPartyStage(
+    action: "invite" | "remove" | "raise" | "lower",
+    userId?: string,
+  ) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await setWatchPartyStage(
+      party.id,
+      action === "invite" || action === "remove"
+        ? { action, userId: userId! }
+        : { action },
+    );
+    if (answer.party) {
+      watchParties.put(answer.party);
+    }
+  }
+
+  /**
+   * Promote or demote a co-host.
+   *
+   * THE CALLER `setWatchPartyCohost` NEVER HAD. The route, the table and this
+   * client wrapper all shipped and nothing ever invoked them, so the co-host
+   * role was unreachable and the takeover with it: Assumir renders for
+   * `role === "cohost"` and there was no way to become one.
+   * `docs/WATCH_PARTY.md` has the full account of what that does and does not
+   * fix, and the short version is that it does not save the picture.
+   *
+   * The answer is applied even though `watch-party-update` is also coming: the
+   * broadcast is resolved per recipient and the round trip is what the button
+   * is already waiting on, so applying it here is what makes the row move on
+   * the same press rather than a frame later.
+   */
+  async function handleWatchPartyCohost(userId: string, cohost: boolean) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await apiSetWatchPartyCohost(party.id, userId, cohost);
+    if (answer.party) {
+      watchParties.put(answer.party);
+    }
+  }
+
+  async function handleWatchPartyClaimHost() {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    const answer = await apiClaimWatchPartyHost(party.id);
+    if (answer.party) {
+      watchParties.put(answer.party);
+    }
+  }
+
+  /**
+   * The sidebar's live block, and the one-click entry Rafael could not get.
+   *
+   * Selecting the channel IS watching: `WatchChannelStage` mounts on the
+   * selected channel and plays the HLS stream without a seat, without a
+   * microphone prompt and without a second click. Joining the call is a
+   * separate button on the stage.
+   */
+  async function handleWatchLiveParty(channelId: string) {
+    // THE ROOM MAY BE ONE THIS CLIENT HAS NEVER HEARD OF. It is created on
+    // demand by whoever starts the party and it is never listed, so a viewer
+    // who loaded the app before the party existed has no such channel in
+    // `channels` and selecting it lands on "Escolha um canal". One refetch
+    // fixes it for everybody arriving mid-party, which is most of an
+    // audience.
+    if (!channels.some((existing) => existing.id === channelId)) {
+      const serverId = selectedServerId;
+      if (serverId) {
+        try {
+          const { channels: list } = await fetchChannels(serverId);
+          setChannels(list);
+        } catch {
+          // Nothing to add: the select below will simply do nothing, which is
+          // the same as the click not having landed.
+        }
+      }
+    }
+    await selectChannel(channelId);
   }
 
   /** Sidebar: open the channel and join, unless already in it. */
@@ -4421,15 +4922,20 @@ function MainAppContent({
   }, [conversations, voiceState.occupancy]);
 
   const updatePromptShowing = useUpdatePromptShowing();
+  // The durable half: a build is precached and has not been taken. The rail
+  // keeps a way back to the notice for as long as this is true, so a snooze,
+  // a stray Escape or a three-hour call cannot strand somebody on an old
+  // bundle with no button to press.
+  const updateWaiting = useUpdateWaiting();
   // Let the update card (mounted outside App) know when a reload would end a call.
   useEffect(() => {
     setInCall(voiceState.status !== "idle");
     return () => setInCall(false);
   }, [voiceState.status]);
 
-  const handleQgHintShowingChange = useCallback((showing: boolean) => {
+  const handleQgHintWantedChange = useCallback((wanted: boolean) => {
     setQgHintReady(true);
-    setQgHintShowing(showing);
+    setQgHintWanted(wanted);
   }, []);
 
   useEffect(() => {
@@ -4593,7 +5099,7 @@ function MainAppContent({
   });
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
-    qg: qgHintShowing,
+    qg: qgHintWanted,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,
     cargos: qgHintReady && Boolean(canManageRoles && selectedServerId),
@@ -4734,7 +5240,7 @@ function MainAppContent({
               void voice.stopScreenShare();
               return;
             }
-            startScreenShareGated(shareSystemAudio);
+            requestScreenShare();
           }}
           onOpen={() => void openVoiceChannel()}
           shareHintEnabled={
@@ -4928,6 +5434,16 @@ function MainAppContent({
               start from your phone is a call that does not happen. */}
           {selectedChannel.kind === "server" &&
             isVoiceRoomChannelType(selectedChannel.type) &&
+            // NOT IN A WATCH PARTY ROOM. The party's own bar carries the one
+            // join, and this header button was one of THREE offers of the
+            // same expensive action a viewer counted on one screen with a
+            // party running, two of them in the primary fill. A seat costs a
+            // LiveKit participant and forwarded streams; watching costs a
+            // socket. See `WatchStage`'s `onJoin` for the arithmetic.
+            !(
+              isWatchPartyChannelType(selectedChannel.type) &&
+              isWatchPartyChannelsEnabled()
+            ) &&
             !(
               voiceState.voiceChannelId === selectedChannel.id &&
               voiceState.status !== "idle"
@@ -5150,6 +5666,95 @@ function MainAppContent({
           change, which is what keeps an SFU camera delivered
           (`lib/remote-video-delivery.ts`). With no call, or a call collapsed to
           the slim bar, `CallSplit` draws no divider and sizes nothing. */}
+      {/* THE PARTY'S CHROME, ABOVE THE SPLIT AND OUTSIDE BOTH PANES.
+          The bar with the party's name, the options drawer and the host's
+          transmission readout. It lives here rather than in the stage slot
+          because collapsing the video must not take Encerrar with it: a host
+          who hides the picture to read the chat still has to be able to end
+          their own party. */}
+      {selectedChannel.kind === "server" &&
+        isWatchPartyChannelType(selectedChannel.type) &&
+        isWatchPartyChannelsEnabled() &&
+        user && (
+          <WatchPartyPanel
+            party={watchParties.byChannel[selectedChannel.id] ?? null}
+            channelId={selectedChannel.id}
+            channelName={selectedChannel.name}
+            canStart={perms.can(
+              Permission.START_WATCH_PARTY,
+              selectedChannel.id,
+            )}
+            inCall={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.status !== "idle"
+            }
+            hasStream={
+              voiceState.channelLive[selectedChannel.id]?.stream != null
+            }
+            isPresenting={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.isSharingScreen
+            }
+            someoneIsSharing={(
+              voiceState.occupancy[selectedChannel.id] ?? []
+            ).some((peer) => peer.sharingScreen)}
+            audienceCount={watchAudienceCount(
+              voiceState.channelLive[selectedChannel.id],
+              voiceState.occupancy[selectedChannel.id],
+            )}
+            showHostHint={shouldOfferWatchPartyHostHint({
+              seen: false,
+              automated: false,
+              settingUp:
+                watchParties.byChannel[selectedChannel.id]?.state === "draft",
+            })}
+            showViewerHint={shouldOfferWatchPartyViewerHint({
+              seen: false,
+              automated: false,
+              watching:
+                watchParties.byChannel[selectedChannel.id]?.state === "live" &&
+                voiceState.channelLive[selectedChannel.id]?.stream != null &&
+                !(
+                  voiceState.voiceChannelId === selectedChannel.id &&
+                  voiceState.status !== "idle"
+                ),
+            })}
+            onCreate={() => setCreateWatchPartyOpen(true)}
+            onGoLive={handleWatchPartyGoLive}
+            onEnd={handleWatchPartyEnd}
+            onDiscard={handleWatchPartyDiscard}
+            onOptionsChange={handleWatchPartyOptions}
+            onRename={handleWatchPartyRename}
+            onClaimHost={handleWatchPartyClaimHost}
+            cohostCandidates={cohostCandidates}
+            onPromoteCohost={(userId) =>
+              handleWatchPartyCohost(userId, true)
+            }
+            onDemoteCohost={(userId) =>
+              handleWatchPartyCohost(userId, false)
+            }
+            onJoinCall={() =>
+              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+            }
+            onWatchAsAudience={() =>
+              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+            }
+            onTakeTheMicrophone={() => void voice.takeTheMicrophone()}
+            onStageAction={handleWatchPartyStage}
+            currentUserId={user.id}
+            canSpeak={voiceState.canSpeak}
+            isAudienceSeat={voiceState.isAudienceSeat}
+            liveStream={
+              voiceState.channelLive[selectedChannel.id]?.stream ?? null
+            }
+            videoQuality={localSettings.videoQuality}
+            roomViewers={
+              (voiceState.occupancy[selectedChannel.id] ?? []).length
+            }
+            transport={voiceState.roomTransport}
+            slot="chrome"
+          />
+        )}
       <CallSplit
         shape={stageShape}
         preference={callSplit}
@@ -5163,18 +5768,133 @@ function MainAppContent({
           who opened a live room and did not press Entrar. Nothing at all
           for a quiet room, and nothing once they are in the call (the stage
           above takes over). */}
+      {/* The watch party EVENT: the empty stage with its create button, the
+          host's private setup surface, the scheduled card, and the live bar.
+          It never draws the picture (`WatchChannelStage` below does), but it
+          IS what speaks when a party is live and no picture has started, which
+          is the case that used to render nothing at all. */}
+      {selectedChannel.kind === "server" &&
+        isWatchPartyChannelType(selectedChannel.type) &&
+        isWatchPartyChannelsEnabled() &&
+        user && (
+          <WatchPartyPanel
+            party={watchParties.byChannel[selectedChannel.id] ?? null}
+            channelId={selectedChannel.id}
+            channelName={selectedChannel.name}
+            canStart={perms.can(
+              Permission.START_WATCH_PARTY,
+              selectedChannel.id,
+            )}
+            inCall={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.status !== "idle"
+            }
+            hasStream={
+              voiceState.channelLive[selectedChannel.id]?.stream != null
+            }
+            isPresenting={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.isSharingScreen
+            }
+            someoneIsSharing={(
+              voiceState.occupancy[selectedChannel.id] ?? []
+            ).some((peer) => peer.sharingScreen)}
+            audienceCount={watchAudienceCount(
+              voiceState.channelLive[selectedChannel.id],
+              voiceState.occupancy[selectedChannel.id],
+            )}
+            showHostHint={shouldOfferWatchPartyHostHint({
+              seen: false,
+              automated: false,
+              settingUp:
+                watchParties.byChannel[selectedChannel.id]?.state === "draft",
+            })}
+            showViewerHint={shouldOfferWatchPartyViewerHint({
+              seen: false,
+              automated: false,
+              watching:
+                watchParties.byChannel[selectedChannel.id]?.state === "live" &&
+                voiceState.channelLive[selectedChannel.id]?.stream != null &&
+                !(
+                  voiceState.voiceChannelId === selectedChannel.id &&
+                  voiceState.status !== "idle"
+                ),
+            })}
+            onCreate={() => setCreateWatchPartyOpen(true)}
+            onGoLive={handleWatchPartyGoLive}
+            onEnd={handleWatchPartyEnd}
+            onDiscard={handleWatchPartyDiscard}
+            onOptionsChange={handleWatchPartyOptions}
+            onRename={handleWatchPartyRename}
+            onClaimHost={handleWatchPartyClaimHost}
+            cohostCandidates={cohostCandidates}
+            onPromoteCohost={(userId) =>
+              handleWatchPartyCohost(userId, true)
+            }
+            onDemoteCohost={(userId) =>
+              handleWatchPartyCohost(userId, false)
+            }
+            onJoinCall={() =>
+              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+            }
+            onWatchAsAudience={() =>
+              void handleWatchPartyJoinAsAudience(selectedChannel.id)
+            }
+            onTakeTheMicrophone={() => void voice.takeTheMicrophone()}
+            onStageAction={handleWatchPartyStage}
+            currentUserId={user.id}
+            canSpeak={voiceState.canSpeak}
+            isAudienceSeat={voiceState.isAudienceSeat}
+            liveStream={
+              voiceState.channelLive[selectedChannel.id]?.stream ?? null
+            }
+            videoQuality={localSettings.videoQuality}
+            roomViewers={
+              (voiceState.occupancy[selectedChannel.id] ?? []).length
+            }
+            transport={voiceState.roomTransport}
+            slot="surface"
+            /* The pane owns this surface's height, exactly as it owns
+               `WatchChannelStage`'s and `VoiceChannelStage`'s below. This
+               component was the only one of the three that never got told,
+               which is why hiding the chat left a band of empty pane under
+               the setup surface. */
+            fill={splitState.active}
+            onShapeChange={handleWatchPartyShape}
+          />
+        )}
       {selectedChannel.kind === "server" &&
         isVoiceRoomChannelType(selectedChannel.type) &&
         user && (
           <WatchChannelStage
             fill={splitState.active}
-            onShapeChange={handleStageShape}
+            onShapeChange={handleWatchStageShape}
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
             serverIconUrl={selectedServer?.iconUrl ?? null}
             voiceState={voiceState}
-            onJoin={() => void handleJoinVoice(selectedChannel.id)}
+            /* The party bar owns the join in a watch party room; a plain
+               voice channel with a share going out has no bar, so there this
+               is still the only way in. One control, not three. */
+            onJoin={
+              isWatchPartyChannelType(selectedChannel.type) &&
+              isWatchPartyChannelsEnabled()
+                ? undefined
+                : () => void handleJoinVoice(selectedChannel.id)
+            }
+            /* STOPPING WATCHING IS LEAVING THE ROOM, and only this component
+               knows where to go instead. Watching starts by itself when the
+               channel is opened, which is right; what was missing is any way
+               to stop, so a person could not tell whether they were watching,
+               in the call, both or neither, and could not end any of it. The
+               first text channel is where the server's conversation lives, so
+               it is where "not watching any more" lands. */
+            onLeaveParty={
+              firstTextChannelId
+                ? () => void selectChannel(firstTextChannelId)
+                : undefined
+            }
             onSetWatchingLive={(channelId, watching) =>
               voice.setWatchingLive(channelId, watching)
             }
@@ -5204,21 +5924,11 @@ function MainAppContent({
             onToggleMute={() => voice.toggleMute()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
-            onStartScreenShare={(intent) =>
-              startScreenShareGated(
-                intent?.preferBrowserTab ? false : shareSystemAudio,
-                intent,
-              )
-            }
+            onStartScreenShare={requestScreenShare}
             onShareWithoutSound={() => {
-              // Disarm the opt-in too: it is what failed, and the next share
-              // this person starts on their own should not repeat it.
-              setShareSystemAudio(false);
               startScreenShareGated(false);
             }}
             onStopScreenShare={() => void voice.stopScreenShare()}
-            shareSystemAudio={shareSystemAudio}
-            onShareSystemAudioChange={setShareSystemAudio}
             onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
             inputMode={voiceState.inputMode}
             pushToTalkKeyLabel={
@@ -5267,19 +5977,11 @@ function MainAppContent({
           onToggleMute={() => voice.toggleMute()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
-          onStartScreenShare={(intent) =>
-            startScreenShareGated(
-              intent?.preferBrowserTab ? false : shareSystemAudio,
-              intent,
-            )
-          }
+          onStartScreenShare={requestScreenShare}
           onShareWithoutSound={() => {
-            setShareSystemAudio(false);
             startScreenShareGated(false);
           }}
           onStopScreenShare={() => void voice.stopScreenShare()}
-          shareSystemAudio={shareSystemAudio}
-          onShareSystemAudioChange={setShareSystemAudio}
           onFocusScreenShare={(peerId) => voice.focusScreenShare(peerId)}
           onToggleRaisedHand={() => voice.toggleRaisedHand()}
           compactPeers={localSettings.compactPeers}
@@ -5559,6 +6261,17 @@ function MainAppContent({
         </>
       )}
 
+      {/* No longer gated on standing in a watch party channel: the control
+          is in the sidebar and there may be no such channel yet. The name in
+          the copy is the server's, because that is the room being opened. */}
+      {selection.kind === "server" && (
+        <CreateWatchPartyDialog
+          open={createWatchPartyOpen}
+          onClose={() => setCreateWatchPartyOpen(false)}
+          onSubmit={handleCreateWatchParty}
+        />
+      )}
+
       {/* Also at the root: a call rings you wherever you are in the app. */}
       <IncomingCallOverlay
         calls={voiceState.incomingCalls}
@@ -5610,6 +6323,8 @@ function MainAppContent({
         whatsNewSelected={whatsNewOpen}
         whatsNewUnread={whatsNewUnread}
         onOpenWhatsNew={handleOpenWhatsNew}
+        updateWaiting={updateWaiting}
+        onOpenUpdate={() => requestUpdatePrompt()}
         pinnedConversations={pinnedConversations}
         pinnedUnread={unread}
         selectedPinnedId={selectedPinnedId}
@@ -5705,6 +6420,19 @@ function MainAppContent({
           onMobileClose={() => setMobileNavOpen(false)}
           onSelectChannel={(id) => void selectChannel(id)}
           onJoinVoice={handleJoinVoiceFromList}
+          liveParties={watchParties.live}
+          onWatchLiveParty={(channelId) => void handleWatchLiveParty(channelId)}
+          canStartWatchParty={canOfferWatchPartyCreate({
+            // The rollout gate, not a capability check. See
+            // `canOfferWatchPartyCreate`: the bit alone is on thousands of
+            // roles, so the control also asks whether the OPEN server can
+            // actually run one. `liveHlsConfig` is the same per-server answer
+            // the screen-share disclosure already fetches above, cached for
+            // the page, so this costs no extra request.
+            hlsEnabled: liveHlsConfig?.enabled ?? null,
+            hasPermission: perms.can(Permission.START_WATCH_PARTY),
+          })}
+          onCreateWatchParty={() => setCreateWatchPartyOpen(true)}
           currentUserId={user?.id ?? null}
           pendingMoveUserIds={pendingVoiceMoves}
           peerVolumes={voiceState.peerVolumes}
@@ -6140,6 +6868,7 @@ function MainAppContent({
           moderationBits.ban ||
           moderationBits.timeout
         }
+        canManageMessages={canManageMessages}
         requestedSection={serverSettingsSection}
         onClose={() => {
           setServerSettingsOpen(false);
@@ -6336,14 +7065,35 @@ function MainAppContent({
         onClose={() => setPurgeChannel(null)}
       />
 
+      <ShareAudioPrompt
+        open={shareAudioPrompt !== null}
+        onConfirm={(shareAudio) => {
+          const intent = shareAudioPrompt?.intent;
+          setShareAudioPrompt(null);
+          startScreenShareGated(shareAudio, intent);
+        }}
+        onClose={() => setShareAudioPrompt(null)}
+      />
+
       <HlsHostAckSheet
         open={pendingHlsHostAck !== null}
+        confirmLabel={
+          pendingHlsHostAck?.request === null
+            ? t("voice.hostAck.confirmSetup")
+            : undefined
+        }
         onConfirm={() => {
           const pending = pendingHlsHostAck;
           if (!pending) {
             return;
           }
           void hlsHostAck.confirm(pending.serverId);
+          if (!pending.request) {
+            // Raised by the watch party setup surface. Nothing was waiting on
+            // it; the host goes back to setting the party up, having read the
+            // notice before a single frame could leave the machine.
+            return;
+          }
           // Same audio choice and capture intent the person asked for
           // before the sheet, through the same gate (now acknowledged).
           startScreenShareGated(pending.request.audio, pending.request.intent);
@@ -6425,7 +7175,8 @@ function MainAppContent({
       />
       <MobileBetaHint enabled={cornerHint === "mobileBeta"} />
       <QgHint
-        onShowingChange={handleQgHintShowingChange}
+        enabled={cornerHint === "qg"}
+        onWantedChange={handleQgHintWantedChange}
         onJoined={(result) => {
           if (result.joinedNow) {
             const storage = browserStorage();

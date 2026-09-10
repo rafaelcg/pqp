@@ -28,16 +28,20 @@ final class VoiceSpeakRuleTests: XCTestCase {
 
     /// A listen-only welcome mutes, publishes nothing, and says so once.
     func testDeniedOnWelcomeMutesAndExplains() {
-        let outcome = VoiceSpeakRule.apply(canSpeak: false, was: true, source: .welcome)
+        let outcome = VoiceSpeakRule.apply(
+            canSpeak: false, canStream: false, wasSpeak: true, wasStream: true, source: .welcome
+        )
         XCTAssertEqual(outcome, VoiceSpeakRule.Outcome(
-            canSpeak: false, mute: true, stopPublishing: true, notice: .listenOnly
+            canSpeak: false, canStream: false, mute: true, stopPublishing: true, notice: .listenOnly
         ))
     }
 
     /// A revoke mid-call is the safety half: the mic closes and any share or
     /// camera comes down, because the roster no longer carries them.
     func testRevokedMidCallMutesAndExplains() {
-        let outcome = VoiceSpeakRule.apply(canSpeak: false, was: true, source: .change)
+        let outcome = VoiceSpeakRule.apply(
+            canSpeak: false, canStream: false, wasSpeak: true, wasStream: true, source: .change
+        )
         XCTAssertTrue(outcome.mute)
         XCTAssertTrue(outcome.stopPublishing)
         XCTAssertEqual(outcome.notice, .listenOnly)
@@ -47,7 +51,9 @@ final class VoiceSpeakRuleTests: XCTestCase {
     /// again is harmless; the sentence is not repeated for a rule that did
     /// not change, except on `welcome`, where it is the first thing said.
     func testRepeatedDenialOnChangeIsQuiet() {
-        let outcome = VoiceSpeakRule.apply(canSpeak: false, was: false, source: .change)
+        let outcome = VoiceSpeakRule.apply(
+            canSpeak: false, canStream: false, wasSpeak: false, wasStream: false, source: .change
+        )
         XCTAssertTrue(outcome.mute)
         XCTAssertNil(outcome.notice)
     }
@@ -58,15 +64,19 @@ final class VoiceSpeakRuleTests: XCTestCase {
     /// person. Never an automatic unmute: they were silent a moment ago and
     /// may be mid-sentence to somebody in the room.
     func testGrantedMidCallUnlocksWithoutUnmuting() {
-        let outcome = VoiceSpeakRule.apply(canSpeak: true, was: false, source: .change)
+        let outcome = VoiceSpeakRule.apply(
+            canSpeak: true, canStream: true, wasSpeak: false, wasStream: false, source: .change
+        )
         XCTAssertEqual(outcome, VoiceSpeakRule.Outcome(
-            canSpeak: true, mute: false, stopPublishing: false, notice: .speakGranted
+            canSpeak: true, canStream: true, mute: false, stopPublishing: false, notice: .speakGranted
         ))
     }
 
     /// An ordinary welcome, which is every call today, says nothing at all.
     func testAllowedOnWelcomeIsSilent() {
-        let outcome = VoiceSpeakRule.apply(canSpeak: true, was: true, source: .welcome)
+        let outcome = VoiceSpeakRule.apply(
+            canSpeak: true, canStream: true, wasSpeak: true, wasStream: true, source: .welcome
+        )
         XCTAssertFalse(outcome.mute)
         XCTAssertNil(outcome.notice)
     }

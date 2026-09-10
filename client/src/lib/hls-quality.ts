@@ -127,3 +127,36 @@ export function levelIndexFor(
 export function describeHlsLevel(height: number): string {
   return `${height}p`;
 }
+
+/**
+ * The subset of an hls.js instance a quality pick actually writes.
+ *
+ * `currentLevel` flushes the buffer and the picture pauses for about a
+ * second. `nextLevel` waits for the next segment, so the switch is
+ * seamless. Auto is `-1` on both, which is hls.js's own ABR.
+ */
+export interface HlsQualityHandle {
+  currentLevel: number;
+  nextLevel: number;
+}
+
+export type HlsQualityWhen = "immediate" | "next-fragment";
+
+/**
+ * Pin or unpin a rendition.
+ *
+ * A pick on a running player uses `next-fragment`. A fresh attach uses
+ * `immediate`: there is no buffer to keep, and a stored pin must apply
+ * before the first segment plays rather than after a burst of Auto.
+ */
+export function applyHlsQualityLevel(
+  hls: HlsQualityHandle,
+  index: number,
+  when: HlsQualityWhen,
+): void {
+  if (when === "immediate") {
+    hls.currentLevel = index;
+    return;
+  }
+  hls.nextLevel = index;
+}

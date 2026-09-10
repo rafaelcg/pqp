@@ -12,6 +12,10 @@ export default tseslint.config(
       "**/release/**",
       "client/public/**",
       "**/*.tsbuildinfo",
+      // `wrangler dev` writes a bundled copy of the Worker here. It is
+      // generated, it is git-ignored, and linting it fails the whole run for
+      // anybody who has ever run the admin dashboard locally.
+      "**/.wrangler/**",
     ],
   },
 

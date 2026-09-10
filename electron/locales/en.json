@@ -25,6 +25,8 @@
   "share.noPreview": "No preview",
   "share.cancel": "Cancel",
   "share.confirm": "Share",
+  "share.audio": "Share this computer's audio",
+  "share.audioHint": "Games, music, whatever is playing. The call itself stays out.",
   "share.empty": "Nothing to share on this computer.",
   "share.permissionTitle": "pqp cannot see your screen",
   "share.permissionBody": "macOS has not given pqp permission to record the screen, so there is nothing for it to offer you. Turn pqp on under Privacy & Security > Screen & System Audio Recording, quit pqp, open it again, and share once more.",

@@ -39,3 +39,5 @@ export * from "./outgoing-webhooks.js";
 export * from "./watch-party.js";
 export * from "./live-reactions.js";
 export * from "./watch-party-channel.js";
+export * from "./watch-party-session.js";
+export * from "./automod.js";

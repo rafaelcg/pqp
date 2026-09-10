@@ -187,6 +187,28 @@ export interface VoiceAudioOptions {
   /** Local voice-activity sensitivity. Same 0..1 scale as the speaking tracker. */
   vadThreshold?: number;
   processing?: MicProcessing;
+  /**
+   * TAKE A SEAT AS AUDIENCE: NO MICROPHONE, AND NO ASKING FOR ONE.
+   *
+   * Not the same thing as the listen-only fallback below it. That one asks,
+   * fails, and explains itself ("Entrou sem microfone, então dá pra ouvir mas
+   * não pra falar. O acesso ao microfone foi bloqueado..."). For somebody who
+   * only wants to watch a watch party, every word of that is noise about a
+   * permission they should never have been asked for, and it frames watching
+   * as a broken call. Rafael saw exactly that banner and it is the reason this
+   * option exists.
+   *
+   * So an audience join opens no `getUserMedia` at all: no prompt, no device,
+   * no notice, and no permission failure to report because none was possible.
+   * Speaking becomes a deliberate second act (`takeTheMicrophone`), which is
+   * the only place a microphone question belongs and the only place a
+   * permission problem is worth a sentence.
+   *
+   * Everything downstream already tolerates a null pipeline, because the
+   * listen-only path built that tolerance: mesh skips `addTrack`, the SFU
+   * skips publish, and the mute controls no-op.
+   */
+  audienceOnly?: boolean;
 }
 
 export interface VoiceState {
@@ -205,6 +227,12 @@ export interface VoiceState {
    * true in a conversation call.
    */
   canSpeak: boolean;
+  /**
+   * In this room as audience, with no microphone open and none requested.
+   * The UI shows "Falar" rather than a mute button, and never a permission
+   * complaint: nothing was refused, nothing was asked.
+   */
+  isAudienceSeat: boolean;
   /**
    * Whether the room's rules let this person present: `Permission.STREAM`.
    * False hides camera and screen share. Absent on an older server is
@@ -906,6 +934,12 @@ export function createVoiceController(transport: RealtimeTransport) {
   /** peerId → roster identity, used to label SFU participants. */
   const identities = new Map<string, LiveKitIdentity>();
   let pipeline: MicPipeline | null = null;
+  /**
+   * This seat was taken as audience: deliberately no microphone, and none was
+   * ever asked for. Distinct from `pipeline === null` after a failed open,
+   * which is the listen-only fallback and does owe the person an explanation.
+   */
+  let audienceSeat = false;
   /** Owns the getDisplayMedia() capture; mirrored into state.localScreenStream. */
   let screenCaptureStream: MediaStream | null = null;
   let joinTimeoutId: ReturnType<typeof setTimeout> | null = null;
@@ -1005,6 +1039,7 @@ export function createVoiceController(transport: RealtimeTransport) {
     isDeafened: false,
     canSpeak: true,
     canStream: true,
+    isAudienceSeat: false,
     inputMode: "voice-activity",
     // No mic yet, so nothing is going anywhere. `join` recomputes it.
     isTransmitting: false,
@@ -2448,6 +2483,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       isDeafened: false,
       canSpeak: true,
       canStream: true,
+      isAudienceSeat: false,
       inputMode: state.inputMode,
       isTransmitting: false,
       error: null,
@@ -3217,7 +3253,9 @@ export function createVoiceController(transport: RealtimeTransport) {
     });
   }
 
-  return {
+  // Named, so `takeTheMicrophone` can call the controller's own `join` rather
+  // than a second copy of the join logic.
+  const controller = {
     onStateChange(cb: (next: VoiceState) => void) {
       listener = cb;
     },
@@ -3399,6 +3437,21 @@ export function createVoiceController(transport: RealtimeTransport) {
           sendJoin(voiceChannelId);
           return;
         }
+        if (options?.audienceOnly) {
+          // The audience seat. No prompt, no device, no notice: see
+          // `audienceOnly` above. Muted is the truthful state, not a
+          // punishment, and `takeTheMicrophone` is how it changes.
+          stopMicPipeline(pipeline);
+          pipeline = null;
+          audienceSeat = true;
+          state.isAudienceSeat = true;
+          state.isMuted = true;
+          applyMuteToPipeline();
+          sendJoin(voiceChannelId);
+          return;
+        }
+        audienceSeat = false;
+        state.isAudienceSeat = false;
         stopMicPipeline(pipeline);
         // The missing-device fallback lives in `createMicPipeline` so that the
         // join path and `swapPipeline` cannot drift apart. This used to be an
@@ -3462,7 +3515,53 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     leave() {
+      audienceSeat = false;
       leaveCall();
+    },
+
+    /**
+     * GO FROM WATCHING TO TALKING, AND ASK FOR THE MICROPHONE ONLY HERE.
+     *
+     * The one place in a watch party where a permission prompt is honest:
+     * somebody has decided to speak. A refusal here is worth a sentence,
+     * because they asked for something and did not get it, which is exactly
+     * what was NOT true of the join.
+     *
+     * IT LEAVES AND REJOINS, AND THAT IS DELIBERATE. Adding a microphone to a
+     * seat that has none is not a `replaceTrack`: mesh needs an `addTrack` and
+     * a fresh offer to every peer, and the SFU needs a publish. The join path
+     * already does both, correctly, on both transports, and has done since
+     * before this feature existed. Rebuilding that here as a third negotiation
+     * path is how the mesh and the SFU drift apart. The cost is about a second
+     * of reconnect at the moment somebody presses a button that says Falar,
+     * which is a moment they already expect to take a beat.
+     *
+     * Refused by the server's rule as well as the browser's: `canSpeak` is
+     * SPEAK on the channel, and a party whose stage is closed denies it to
+     * @everyone for the length of the show. The button is hidden for an
+     * audience the host has not let up; this is the backstop for a shortcut.
+     */
+    async takeTheMicrophone() {
+      const channelId = state.voiceChannelId;
+      if (state.status !== "connected" || !audienceSeat || !channelId) {
+        return;
+      }
+      if (!state.canSpeak) {
+        state.notice = translateMessage("voice.notice.speakDenied");
+        emit();
+        return;
+      }
+      audienceSeat = false;
+      state.isAudienceSeat = false;
+      leaveCall();
+      await controller.join(channelId, {
+        ...audioOptions,
+        inputMode: state.inputMode,
+        // Arriving on the stage unmuted is the point: they pressed a button
+        // that says Falar. Mute-on-join is about a room you walked into, not
+        // a stage you asked to be on.
+        startMuted: false,
+      });
     },
 
     /** WS connection lost mid-call: keep media, reattach on the next welcome. */
@@ -3617,11 +3716,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     /**
-     * @param shareSystemAudio The user's explicit opt-in to sending the whole
-     *   machine's sound. Defaults to false at every call site, and false does
-     *   NOT mean a silent share: a Chrome tab share still carries that tab's
-     *   own audio, which is the route that cannot echo. See
-     *   `lib/screen-capture-audio.ts` for why the default moved.
+     * @param shareSystemAudio On a Windows desktop shell whose picker cannot
+     *   ask yet, the user's opt-in to sending the machine's sound. Ignored in
+     *   a browser: Chrome 141+ is offered the box in its own picker, and
+     *   `restrictOwnAudio` keeps the call out of that tap. False does NOT mean
+     *   a silent share: a Chrome tab share still carries that tab's own audio.
      * @param intent Watch party passes `{ preferBrowserTab: true }` so the
      *   picker steers at a tab. That path never takes `shareSystemAudio`.
      */
@@ -3681,7 +3780,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
       const options = screenCaptureOptions(
         shareSystemAudio,
-        screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null),
+        screenCaptureEnvironment(
+          isDesktopApp(),
+          getDesktop()?.platform ?? null,
+          {
+            sharePickerOffersAudio:
+              getDesktop()?.sharePickerOffersAudio === true,
+          },
+        ),
         { ...intent, hideCursor },
       );
       // What was actually asked for, not what was ticked. In a browser this is
@@ -3691,6 +3797,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       const askedForAudio = options.audio !== false;
 
       let stream: MediaStream;
+      // A stream the caller already opened (the watch party preview) is
+      // published as it is. The picker has already run, the host has already
+      // looked at the result, and asking again here would broadcast a
+      // different capture from the one they approved.
+      if (intent.stream) {
+        stream = intent.stream;
+      } else {
       try {
         stream = await navigator.mediaDevices.getDisplayMedia(options);
       } catch (err) {
@@ -3726,6 +3839,7 @@ export function createVoiceController(transport: RealtimeTransport) {
           emit();
           return;
         }
+      }
       }
       const track = stream.getVideoTracks()[0];
       if (!track) {
@@ -4319,6 +4433,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       sendWatchLive(channelId, watching);
     },
   };
+
+  return controller;
 }
 
 export type { PeerConnectionState, RemotePeer };

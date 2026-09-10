@@ -7,6 +7,13 @@ import {
   type FullscreenMode,
 } from "@/components/voice/capabilities";
 import { attemptElementFullscreen } from "@/components/voice/element-fullscreen";
+import {
+  currentFullscreenElement,
+  exitDocumentFullscreen,
+  fullscreenDocument,
+  requestElementFullscreen,
+  type WebkitFullscreenElement,
+} from "@/components/voice/document-fullscreen";
 import { desktopContext } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import { bindRemoteVideo } from "@/lib/remote-video-binding";
@@ -26,56 +33,6 @@ import { cn } from "@/lib/utils";
  * fullscreen it offers is the video element's own webkit method, which is what
  * the `video` mode below is for.
  */
-interface WebkitFullscreenElement extends HTMLElement {
-  webkitRequestFullscreen?: () => Promise<void> | void;
-}
-
-interface WebkitFullscreenDocument extends Document {
-  webkitFullscreenEnabled?: boolean;
-  webkitFullscreenElement?: Element | null;
-  webkitExitFullscreen?: () => Promise<void> | void;
-}
-
-function fullscreenDocument(): WebkitFullscreenDocument {
-  return document as WebkitFullscreenDocument;
-}
-
-/** Whatever is fullscreen right now, under either spelling. */
-function currentFullscreenElement(): Element | null {
-  const doc = fullscreenDocument();
-  return doc.fullscreenElement ?? doc.webkitFullscreenElement ?? null;
-}
-
-/**
- * Ask for fullscreen and *report the answer*.
- *
- * Both spellings return a promise that rejects when the browser refuses —
- * permissions policy, an iframe without `allowfullscreen`, a gesture the
- * browser did not count. The previous version threw that promise away with
- * `void`, which is the difference between "fullscreen is blocked here" and a
- * button that appears broken.
- */
-async function requestElementFullscreen(element: HTMLElement): Promise<void> {
-  const webkit = element as WebkitFullscreenElement;
-  if (typeof element.requestFullscreen === "function") {
-    await element.requestFullscreen();
-    return;
-  }
-  if (typeof webkit.webkitRequestFullscreen === "function") {
-    await webkit.webkitRequestFullscreen();
-    return;
-  }
-  throw new Error("no element fullscreen API");
-}
-
-async function exitDocumentFullscreen(): Promise<void> {
-  const doc = fullscreenDocument();
-  if (typeof doc.exitFullscreen === "function") {
-    await doc.exitFullscreen();
-    return;
-  }
-  await doc.webkitExitFullscreen?.();
-}
 
 interface ScreenShareViewProps {
   stream: MediaStream | null;

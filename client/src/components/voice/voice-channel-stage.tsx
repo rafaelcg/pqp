@@ -24,8 +24,6 @@ export function VoiceChannelStage({
   onStartScreenShare,
   onShareWithoutSound,
   onStopScreenShare,
-  shareSystemAudio = false,
-  onShareSystemAudioChange,
   onFocusScreenShare,
   inputMode,
   pushToTalkKeyLabel,
@@ -63,8 +61,6 @@ export function VoiceChannelStage({
   ) => void | Promise<void>;
   onShareWithoutSound?: () => void;
   onStopScreenShare?: () => void;
-  shareSystemAudio?: boolean;
-  onShareSystemAudioChange?: (next: boolean) => void;
   onFocusScreenShare?: (peerId: string) => void;
   inputMode?: VoiceInputMode;
   pushToTalkKeyLabel?: string | null;
@@ -107,8 +103,6 @@ export function VoiceChannelStage({
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
       onStopScreenShare={onStopScreenShare}
-      shareSystemAudio={shareSystemAudio}
-      onShareSystemAudioChange={onShareSystemAudioChange}
       onFocusScreenShare={onFocusScreenShare}
       inputMode={inputMode}
       pushToTalkKeyLabel={pushToTalkKeyLabel}

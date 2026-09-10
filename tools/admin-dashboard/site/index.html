@@ -785,6 +785,43 @@
     .occ-select { max-width: none; flex: 1 1 auto; }
   }
 
+  /* ---------- controles: the one place on this page that writes ----------
+     Deliberately quiet. Everything here changes production, so nothing is
+     styled to invite a click: the buttons are the same pill the header's
+     "atualizar" uses, the row that is ON is marked with a tag rather than a
+     colour block, and the destructive-looking colour is reserved for the one
+     state that is actually disruptive (a server streaming right now). */
+  .ctl-search { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .ctl-input {
+    appearance: none; font: inherit; font-size: 13px;
+    padding: 7px 12px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text); flex: 1 1 220px; min-width: 0; max-width: 340px;
+  }
+  .ctl-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ctl-btn {
+    appearance: none; font: inherit; font-size: 12px; font-weight: 600;
+    padding: 5px 10px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--muted); cursor: pointer; white-space: nowrap;
+  }
+  .ctl-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+  .ctl-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .ctl-btn:disabled { opacity: 0.5; cursor: default; }
+  .ctl-btn.on { color: var(--accent); border-color: var(--accent-edge); background: var(--accent-dim); }
+  .ctl-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .ctl-name { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .ctl-name b { font-weight: 600; overflow-wrap: anywhere; }
+  .ctl-name .ctl-why { font-size: 11px; color: var(--faint); }
+  .ctl-row.picked { background: var(--hover); }
+  .ctl-msg { font-size: 12px; margin: 10px 0 0; }
+  .ctl-msg.bad { color: var(--danger); }
+  .ctl-msg.ok { color: var(--success); }
+  .ctl-caveat {
+    font-size: 11.5px; color: var(--muted); margin: 14px 0 0;
+    border-left: 2px solid var(--border); padding-left: 10px;
+  }
+
   /* ---------- call ratings ---------- */
   .rating-head {
     display: flex; flex-wrap: wrap; align-items: flex-start;
@@ -1110,6 +1147,7 @@
       <span class="nav-grp">operação</span>
       <button class="nav-item" role="tab" id="tab-agora" aria-controls="pane-agora" aria-selected="true" data-tab="agora"><span class="ico" aria-hidden="true">◉</span>agora</button>
       <button class="nav-item" role="tab" id="tab-tempo" aria-controls="pane-tempo" aria-selected="false" data-tab="tempo"><span class="ico" aria-hidden="true">◷</span>ao longo do tempo</button>
+      <button class="nav-item" role="tab" id="tab-controles" aria-controls="pane-controles" aria-selected="false" data-tab="controles"><span class="ico" aria-hidden="true">⛭</span>controles</button>
       <button class="nav-item" role="tab" id="tab-moderacao" aria-controls="pane-moderacao" aria-selected="false" data-tab="moderacao"><span class="ico" aria-hidden="true">⚑</span>moderação<span class="tcount" id="tabModCount" hidden>0</span></button>
       <span class="nav-grp">produto</span>
       <button class="nav-item" role="tab" id="tab-pessoas" aria-controls="pane-pessoas" aria-selected="false" data-tab="pessoas"><span class="ico" aria-hidden="true">☺</span>pessoas e conteúdo</button>
@@ -1970,6 +2008,116 @@
   </section>
 
   </div><!-- /pane-pessoas -->
+
+  <div class="pane" id="pane-controles" role="tabpanel" aria-labelledby="tab-controles" hidden>
+
+  <div class="pane-head">
+    <h1>controles</h1>
+    <span class="pane-q">o que dá pra ligar e desligar agora, sem deploy e sem derrubar ninguém</span>
+  </div>
+
+  <!-- ============ O QUE ESTÁ NO AR ============ -->
+  <!-- First, because the only reason to open this section during an event is
+       to change something, and changing something without knowing what is on
+       air is how an audience loses the picture. -->
+  <section aria-label="o que está no ar">
+    <div class="sec-head">
+      <h2>o que está no ar</h2>
+      <span class="rule"></span>
+      <span class="note">antes de mexer em qualquer coisa</span>
+    </div>
+    <div class="card pad">
+      <p class="subtle-title">watch party ao vivo</p>
+      <div class="stat-row">
+        <div class="stat-mini" id="ctlSessionsTile">
+          <span class="k">transmissões rodando</span>
+          <span class="v num" id="ctlSessions">—</span>
+          <span class="k" style="color:var(--faint)" id="ctlSessionsNote">—</span>
+        </div>
+        <div class="stat-mini">
+          <span class="k">ligados na mão</span>
+          <span class="v num" id="ctlOverridesOn">—</span>
+          <span class="k" style="color:var(--faint)">servidores</span>
+        </div>
+        <div class="stat-mini">
+          <span class="k">desligados na mão</span>
+          <span class="v num" id="ctlOverridesOff">—</span>
+          <span class="k" style="color:var(--faint)">servidores</span>
+        </div>
+      </div>
+      <p class="m-note" style="font-size:12px;color:var(--muted);margin:14px 0 0" id="ctlMaster">carregando</p>
+    </div>
+  </section>
+
+  <!-- ============ WATCH PARTY POR SERVIDOR ============ -->
+  <section aria-label="watch party por servidor">
+    <div class="sec-head">
+      <h2>watch party por servidor</h2>
+      <span class="rule"></span>
+      <span class="note">vale na hora, sem reiniciar a api</span>
+    </div>
+    <div class="card pad">
+      <div class="ctl-search">
+        <input class="ctl-input" id="ctlQuery" type="search" placeholder="procurar servidor pelo nome" aria-label="procurar servidor pelo nome" autocomplete="off">
+        <button type="button" class="ctl-btn" id="ctlSearchBtn">procurar</button>
+        <span class="note" id="ctlMatched"></span>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>servidor</th>
+              <th class="r">membros</th>
+              <th class="r">canais de watch party</th>
+              <th>estado</th>
+              <th class="r">ação</th>
+            </tr>
+          </thead>
+          <tbody id="ctlServersBody"><!-- injected --></tbody>
+        </table>
+      </div>
+      <p class="ctl-msg" id="ctlServersMsg" hidden></p>
+      <p class="ctl-caveat">
+        <b>ligar</b> e <b>desligar</b> gravam a decisão no servidor e valem na próxima leitura: quem entrar na
+        call, quem começar a compartilhar, quem abrir o canal. <b>seguir a variável</b> apaga a decisão e devolve
+        a resposta pro <span class="mono">LIVE_HLS_SERVER_ALLOWLIST</span>.
+        Quem já está com a aba aberta só vê o botão de transmitir aparecer depois de recarregar: o cliente
+        guarda essa resposta até o fim da sessão. Ligue antes do host abrir o canal, ou peça pra ele dar F5.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ CANAIS DE VOZ ============ -->
+  <section aria-label="canais de voz do servidor escolhido">
+    <div class="sec-head">
+      <h2>canais de voz</h2>
+      <span class="rule"></span>
+      <span class="note" id="ctlChannelsFor">escolha um servidor acima</span>
+    </div>
+    <div class="card pad">
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>canal</th>
+              <th>rodando agora</th>
+              <th>abriria em</th>
+              <th class="r">caminho de mídia</th>
+            </tr>
+          </thead>
+          <tbody id="ctlChannelsBody"><!-- injected --></tbody>
+        </table>
+      </div>
+      <p class="ctl-msg" id="ctlChannelsMsg" hidden></p>
+      <p class="ctl-caveat">
+        O caminho de mídia é lido <b>uma vez</b>, quando a primeira pessoa entra na sala. Mudar aqui não move
+        ninguém que já está em call: vale pra próxima sala que abrir. <b>automático</b> deixa o tamanho do
+        servidor, a comunidade e o watch party decidirem, que é o certo quase sempre.
+      </p>
+    </div>
+  </section>
+
+  </div><!-- /pane-controles -->
 
   <div class="pane" id="pane-moderacao" role="tabpanel" aria-labelledby="tab-moderacao" hidden>
 
@@ -4350,7 +4498,331 @@
      hash is the only state: it survives a reload and can be pasted to
      yourself, and an unknown one falls back to the first pane rather than
      leaving the page with nothing visible. */
-  var TABS = ["agora", "tempo", "pessoas", "moderacao", "infra"];
+  var TABS = ["agora", "tempo", "controles", "pessoas", "moderacao", "infra"];
+
+  /* ================= controles: the only writes on this page =================
+
+     Everything else here reads. These four calls change production, so the
+     rules are different and they are worth stating:
+
+      * Nothing on this section rides the 30-second poll. A list that
+        reshuffles under the cursor while somebody is aiming at a button is
+        how a wrong row gets clicked. It loads when the section is opened,
+        when the operator searches, and after each write.
+      * A write disables its own row's buttons until it answers, so a double
+        tap on a slow link is one request.
+      * The answer replaces the row from the API's own reply rather than from
+        what the page hoped: an optimistic toggle that silently failed would
+        be the exact "working and silently-not-working look identical" bug
+        this dashboard exists to avoid.
+      * Two confirmations, and only two. See ctlConfirmFor / the mesh case.
+  */
+
+  var ctlServers = [];
+  var ctlLastPayload = null;
+  var ctlPickedServer = null;
+  var ctlLoaded = false;
+  var ctlBusy = false;
+
+  function ctlMsg(id, text, cls) {
+    var e = $(id);
+    if (!e) return;
+    if (!text) { e.hidden = true; e.textContent = ""; return; }
+    e.hidden = false;
+    e.className = "ctl-msg " + (cls || "");
+    e.textContent = text;
+  }
+
+  /* Why a server is on or off, in the operator's words rather than the
+     column's. The rule itself is in insights.js, where it is unit tested:
+     this is the one cell on the page that states a conclusion rather than a
+     fact, and a wrong one is believed. */
+  function ctlStateCell(row) {
+    var state = (window.PQPInsights && window.PQPInsights.liveHlsState)
+      ? window.PQPInsights.liveHlsState(row)
+      : { tone: "off", label: "?", why: "" };
+    return [
+      '<span class="tag' + (state.tone === "on" ? " accent" : "") + '">' + esc(state.label) + "</span>",
+      state.why
+    ];
+  }
+
+  function ctlRenderServers(payload) {
+    var body = $("ctlServersBody");
+    if (!body) return;
+    // A re-render with no payload (picking a server, to move the highlight)
+    // redraws from the last real one. Blanking the counters to redraw a
+    // highlight would be this page inventing a number, which is the one
+    // thing it does not do.
+    payload = payload || ctlLastPayload;
+    ctlLastPayload = payload;
+    ctlServers = (payload && payload.servers) || [];
+    setText("ctlOverridesOn", payload && payload.overrides ? fmt(payload.overrides.on) : "—");
+    setText("ctlOverridesOff", payload && payload.overrides ? fmt(payload.overrides.off) : "—");
+
+    var master = $("ctlMaster");
+    if (master && payload && payload.liveHls) {
+      var lh = payload.liveHls;
+      master.textContent = lh.configured
+        ? ("interruptor mestre ligado (LIVE_HLS_ENABLED + bucket). " +
+           (lh.envAllowlist
+             ? ("a variável LIVE_HLS_SERVER_ALLOWLIST ainda existe e nomeia " + lh.envAllowlistSize +
+                " servidor(es); ela decide só onde ninguém decidiu aqui.")
+             : "não há LIVE_HLS_SERVER_ALLOWLIST: onde ninguém decidiu aqui, vale pra todo servidor."))
+        : "interruptor mestre desligado: sem LIVE_HLS_ENABLED, sem LiveKit ou sem o bucket dedicado, nada aqui liga transmissão nenhuma.";
+    }
+
+    setText("ctlMatched", payload
+      ? (payload.matched + " servidor(es) · mostrando " + ctlServers.length)
+      : "");
+
+    if (!ctlServers.length) {
+      body.innerHTML = '<tr><td colspan="5" class="muted">nenhum servidor com esse nome</td></tr>';
+      return;
+    }
+
+    body.innerHTML = "";
+    ctlServers.forEach(function (row) {
+      var state = ctlStateCell(row);
+      var tr = el("tr", "ctl-row" + (ctlPickedServer === row.id ? " picked" : ""));
+      tr.innerHTML =
+        '<td><span class="ctl-name"><b>' + esc(row.name) + "</b>" +
+          '<span class="ctl-why">' + esc(state[1]) +
+          (row.streaming ? " · <b style=\"color:var(--danger)\">transmitindo agora</b>" : "") +
+        "</span></span></td>" +
+        '<td class="r num">' + fmt(row.memberCount) + "</td>" +
+        '<td class="r num">' + fmt(row.watchPartyChannels) + "</td>" +
+        "<td>" + state[0] + "</td>" +
+        '<td class="r"><span class="ctl-actions">' +
+          '<button type="button" class="ctl-btn' + (row.liveHlsOverride === true ? " on" : "") +
+            '" data-act="on" data-id="' + esc(row.id) + '">ligar</button>' +
+          '<button type="button" class="ctl-btn' + (row.liveHlsOverride === false ? " on" : "") +
+            '" data-act="off" data-id="' + esc(row.id) + '">desligar</button>' +
+          '<button type="button" class="ctl-btn" data-act="clear" data-id="' + esc(row.id) +
+            '" title="apagar a decisão e voltar a seguir LIVE_HLS_SERVER_ALLOWLIST">seguir a variável</button>' +
+          '<button type="button" class="ctl-btn" data-act="channels" data-id="' + esc(row.id) + '">canais</button>' +
+        "</span></td>";
+      body.appendChild(tr);
+    });
+  }
+
+  function ctlLoadServers() {
+    var q = $("ctlQuery");
+    var query = q && q.value ? q.value.trim() : "";
+    ctlMsg("ctlServersMsg", "");
+    return fetchJson("/operator/servers" + (query ? "?q=" + encodeURIComponent(query) : ""))
+      .then(function (payload) {
+        ctlLoaded = true;
+        ctlRenderServers(payload);
+      })
+      .catch(function (e) {
+        ctlMsg("ctlServersMsg", "não deu pra ler a lista: " + (e && e.message ? e.message : "erro"), "bad");
+      });
+  }
+
+  /* The one genuinely disruptive click on this page, and the only place a
+     confirmation earns its keep: turning a server OFF while it is streaming
+     stops the egress at the next reconcile, and the audience loses the
+     picture. Turning one ON, or clearing a decision, is reversible in one
+     click and gets no dialog: friction on a harmless control is how people
+     learn to click through the dialog on the harmful one. */
+  function ctlConfirmFor(act, row) {
+    if (act !== "off" || !row || !row.streaming) return true;
+    return window.confirm(
+      "Tem uma transmissão no ar em " + row.name + " agora.\n\n" +
+      "Desligar corta a imagem pra quem está assistindo, na próxima reconciliação. Desligar mesmo assim?"
+    );
+  }
+
+  function ctlSetButtonsDisabled(scope, disabled) {
+    var buttons = scope.querySelectorAll(".ctl-btn");
+    for (var i = 0; i < buttons.length; i++) buttons[i].disabled = disabled;
+  }
+
+  function ctlSetServerLiveHls(serverId, enabled, tr) {
+    if (ctlBusy) return;
+    ctlBusy = true;
+    ctlSetButtonsDisabled(tr, true);
+    ctlMsg("ctlServersMsg", "");
+    fetch("/operator/server-live-hls", {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serverId: serverId, enabled: enabled })
+    }).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    }).then(function (row) {
+      var said = row.name + ": " + (row.liveHlsOverride === null
+        ? "voltou a seguir a variável, e agora está " + (row.liveHlsEffective ? "ligado" : "desligado")
+        : (row.liveHlsOverride ? "ligado" : "desligado"));
+      // Re-read rather than patch in place: the counters at the top and the
+      // channel pane both move with this, and one source beats three. The
+      // sentence is written AFTER the re-read, because the re-read clears the
+      // box on its way in and would otherwise swallow it.
+      return ctlLoadServers().then(function () {
+        ctlMsg("ctlServersMsg", said, "ok");
+        if (ctlPickedServer === serverId) return ctlLoadChannels(serverId);
+      });
+    }).catch(function (e) {
+      ctlMsg("ctlServersMsg", "não deu pra gravar: " + (e && e.message ? e.message : "erro"), "bad");
+      ctlSetButtonsDisabled(tr, false);
+    }).then(function () { ctlBusy = false; });
+  }
+
+  function ctlTransportLabel(t) {
+    if (t === "livekit") return "servidor de mídia";
+    if (t === "mesh") return "ponto a ponto";
+    return "—";
+  }
+
+  var CTL_REASONS = {
+    "no-livekit": "sem livekit configurado",
+    override: "fixado neste canal",
+    hls: "watch party com transmissão",
+    community: "comunidade",
+    large: "servidor grande",
+    small: "servidor pequeno",
+    conversation: "conversa",
+    "default": "padrão da instância"
+  };
+
+  function ctlRenderChannels(payload) {
+    var body = $("ctlChannelsBody");
+    if (!body) return;
+    setText("ctlChannelsFor", payload ? payload.serverName : "escolha um servidor acima");
+    if (!payload || !payload.channels.length) {
+      body.innerHTML = '<tr><td colspan="4" class="muted">' +
+        (payload ? "este servidor não tem canal de voz nem de watch party" : "escolha um servidor acima") +
+        "</td></tr>";
+      return;
+    }
+    body.innerHTML = "";
+    payload.channels.forEach(function (ch) {
+      var tr = el("tr");
+      var reason = CTL_REASONS[ch.wouldOpenOn.reason] || ch.wouldOpenOn.reason;
+      tr.innerHTML =
+        '<td><span class="ctl-name"><b>' + esc(ch.name) + "</b>" +
+          '<span class="ctl-why">' + esc(ch.type === "watch_party" ? "watch party" : "voz") +
+          (ch.streaming ? " · <b style=\"color:var(--danger)\">transmitindo</b>" : "") +
+        "</span></span></td>" +
+        "<td>" + (ch.pinnedTransport
+          ? esc(ctlTransportLabel(ch.pinnedTransport))
+          : '<span class="muted">sala vazia</span>') + "</td>" +
+        "<td>" + esc(ctlTransportLabel(ch.wouldOpenOn.transport)) +
+          ' <span class="ctl-why">· ' + esc(reason) + "</span></td>" +
+        '<td class="r"><span class="ctl-actions">' +
+          '<button type="button" class="ctl-btn' + (ch.voiceTransport === null ? " on" : "") +
+            '" data-tr="auto" data-id="' + esc(ch.id) + '">automático</button>' +
+          '<button type="button" class="ctl-btn' + (ch.voiceTransport === "mesh" ? " on" : "") +
+            '" data-tr="mesh" data-id="' + esc(ch.id) + '" data-type="' + esc(ch.type) + '">ponto a ponto</button>' +
+          '<button type="button" class="ctl-btn' + (ch.voiceTransport === "livekit" ? " on" : "") +
+            '" data-tr="livekit" data-id="' + esc(ch.id) + '">servidor de mídia</button>' +
+        "</span></td>";
+      body.appendChild(tr);
+    });
+  }
+
+  function ctlLoadChannels(serverId) {
+    ctlMsg("ctlChannelsMsg", "");
+    return fetchJson("/operator/channels?serverId=" + encodeURIComponent(serverId))
+      .then(ctlRenderChannels)
+      .catch(function (e) {
+        ctlMsg("ctlChannelsMsg", "não deu pra ler os canais: " + (e && e.message ? e.message : "erro"), "bad");
+      });
+  }
+
+  function ctlSetChannelTransport(channelId, transport, tr, channelType) {
+    if (ctlBusy) return;
+    // The second and last confirmation: peer-to-peer in a watch party channel
+    // means no transcode, so the next party in that room has no stream at all
+    // and nothing on the host's screen says why.
+    if (transport === "mesh" && channelType === "watch_party" &&
+        !window.confirm("Ponto a ponto num canal de watch party mata a transmissão: o transcode só existe no servidor de mídia. Fixar mesmo assim?")) {
+      return;
+    }
+    ctlBusy = true;
+    ctlSetButtonsDisabled(tr, true);
+    ctlMsg("ctlChannelsMsg", "");
+    fetch("/operator/channel-transport", {
+      method: "PUT",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channelId: channelId, transport: transport })
+    }).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    }).then(function (ch) {
+      var said = ch.name + ": " + (ch.voiceTransport === null
+        ? "de volta ao automático"
+        : "fixado em " + ctlTransportLabel(ch.voiceTransport)) +
+        " · vale pra próxima sala que abrir";
+      return ctlLoadChannels(ch.serverId).then(function () {
+        ctlMsg("ctlChannelsMsg", said, "ok");
+      });
+    }).catch(function (e) {
+      ctlMsg("ctlChannelsMsg", "não deu pra gravar: " + (e && e.message ? e.message : "erro"), "bad");
+      ctlSetButtonsDisabled(tr, false);
+    }).then(function () { ctlBusy = false; });
+  }
+
+  (function wireControls() {
+    var servers = $("ctlServersBody");
+    if (servers) {
+      servers.addEventListener("click", function (ev) {
+        var btn = ev.target && ev.target.closest ? ev.target.closest(".ctl-btn") : null;
+        if (!btn || btn.disabled) return;
+        var id = btn.getAttribute("data-id");
+        var act = btn.getAttribute("data-act");
+        var row = null;
+        for (var i = 0; i < ctlServers.length; i++) if (ctlServers[i].id === id) row = ctlServers[i];
+        if (act === "channels") {
+          ctlPickedServer = id;
+          ctlRenderServers(null);
+          ctlLoadChannels(id);
+          var head = $("ctlChannelsFor");
+          if (head && head.scrollIntoView) head.scrollIntoView({ block: "center" });
+          return;
+        }
+        if (!ctlConfirmFor(act, row)) return;
+        ctlSetServerLiveHls(id, act === "on" ? true : act === "off" ? false : null, btn.closest("tr"));
+      });
+    }
+
+    var channels = $("ctlChannelsBody");
+    if (channels) {
+      channels.addEventListener("click", function (ev) {
+        var btn = ev.target && ev.target.closest ? ev.target.closest(".ctl-btn") : null;
+        if (!btn || btn.disabled) return;
+        var which = btn.getAttribute("data-tr");
+        ctlSetChannelTransport(
+          btn.getAttribute("data-id"),
+          which === "auto" ? null : which,
+          btn.closest("tr"),
+          btn.getAttribute("data-type")
+        );
+      });
+    }
+
+    var search = $("ctlSearchBtn");
+    if (search) search.addEventListener("click", function () { ctlLoadServers(); });
+    var input = $("ctlQuery");
+    if (input) {
+      input.addEventListener("keydown", function (ev) {
+        if (ev.key === "Enter") { ev.preventDefault(); ctlLoadServers(); }
+      });
+    }
+  })();
+
+  /* Opening the section is what reads it, once. Re-reading on every visit
+     would fight the operator's own scroll position mid-event; "atualizar" in
+     the header and every write already re-read it. */
+  function ctlOnShown() {
+    if (ctlLoaded) return;
+    ctlLoadServers();
+  }
 
   function showTab(name, opts) {
     if (TABS.indexOf(name) === -1) name = TABS[0];
@@ -4369,6 +4841,7 @@
     // fetched once on load (see wireOccupancy) and refreshed at most every
     // five minutes, whichever section is showing.
     if (name === "tempo") occOnShown();
+    if (name === "controles") ctlOnShown();
     if (!opts || !opts.silent) {
       try {
         if (window.history && history.replaceState) {
@@ -4630,18 +5103,56 @@
     return out;
   }
 
+  /* The "o que está no ar" card. From `/metrics`, which this page already
+     polls, so it moves on the 30-second cadence like everything else. The
+     per-server counters beside it come from `/operator/servers` instead. */
+  function renderControlsLive(hls) {
+    if (!hls) {
+      // An API older than this page. Dashes, never zeros: "0 transmissões"
+      // on an API that never told us reads as a quiet night.
+      setText("ctlSessions", "—");
+      setText("ctlSessionsNote", "esta api não reporta live hls");
+      return;
+    }
+    setText("ctlSessions", fmt(hls.sessions));
+    tone("ctlSessionsTile", hls.sessions > 0 ? "good" : "");
+    setText("ctlSessionsNote",
+      hls.sessions > 0
+        ? (hls.rungs + " rendição(ões) · limite " + hls.maxSessions +
+           (hls.oldestSessionMinutes != null ? " · mais antiga há " + hls.oldestSessionMinutes + " min" : ""))
+        : "ninguém transmitindo agora");
+  }
+
   function applyMetrics(d) {
     // Held for the verdicts on "agora". `runtime` is the live block (sampled
     // per request, never from the 30-second cache); `statusHistory` is the
     // 24 h of latency per component that makes a reading readable.
     lastRuntime = d.runtime || null;
     lastStatusHistory = d.statusHistory || null;
+    renderControlsLive(d.liveHls || null);
     var users = d.users || {}, servers = d.servers || {}, msgs = d.messages || {};
     var ch = d.channels || {}, voice = d.voice || {};
     var usersHourly = Array.isArray(users.byHour) && users.byHour.length ? users.byHour : [0, 0];
     var msgsHourly = Array.isArray(msgs.byHour) && msgs.byHour.length ? msgs.byHour : [0, 0];
     var msgDelta = (msgs.last24h || 0) - (msgs.previous24h || 0);
     var peakSince = voice.peakTrackedSince ? fmtTime(voice.peakTrackedSince) : "";
+    // `seats` é null quando VOICE_REGISTRY está desligado: sem linhas, sem
+    // leitura, e um zero aqui seria um "tudo certo" que a instância não pode dar.
+    var seats = voice.seats || null;
+    var seatDelta = !seats
+      ? "registro desligado"
+      : seats.ghostsSwept
+        ? fmt(seats.ghostsSwept) + " fantasma" + (seats.ghostsSwept === 1 ? "" : "s") + " varrido" + (seats.ghostsSwept === 1 ? "" : "s")
+        : "nenhum fantasma";
+    var seatNote = "sem leitura";
+    if (seats) {
+      var oldest = seats.oldestIdleMinutes;
+      seatNote = oldest
+        ? "o mais parado está há " + (oldest >= 60
+            ? Math.floor(oldest / 60) + "h" + (oldest % 60 ? " " + (oldest % 60) + "min" : "")
+            : oldest + "min")
+        : "ninguém parado há mais de 1h";
+    }
 
     renderMetrics([
       { label: "usuários", val: fmt(users.total || 0),
@@ -4660,7 +5171,13 @@
         note: "pico hoje: " + fmt(voice.peakRoomSizeToday || 0) + " pessoas", spark: null },
       { label: "pico de sala · hoje", val: fmt(voice.peakRoomSizeToday || 0),
         delta: voice.backend === "livekit" ? "livekit" : "mesh", flat: true,
-        note: peakSince ? "contado desde " + peakSince + " (zera no deploy)" : "zera no deploy", spark: null }
+        note: peakSince ? "contado desde " + peakSince + " (zera no deploy)" : "zera no deploy", spark: null },
+      // Assentos parados: quem está numa call sem escrever nada há mais de uma
+      // hora. Em 08/09/2026 dez salas tinham exatamente uma pessoa assim, a
+      // mais velha com quinze horas, e nenhum número aqui dizia isso.
+      { label: "assentos parados", val: fmt(seats ? seats.idleOverAnHour : 0),
+        delta: seatDelta, flat: !seats || !seats.idleOverAnHour,
+        note: seatNote, spark: null }
     ]);
 
     renderCharts(usersHourly, msgsHourly);
@@ -4859,7 +5376,13 @@
   if (typeof fetch === "function") {
     setText("refreshEvery", "atualiza a cada " + (REFRESH_MS / 1000) + " s · fuso são paulo (brt)");
     if (refreshBtn) {
-      refreshBtn.addEventListener("click", function () { occTick(true); refreshOnce(); });
+      refreshBtn.addEventListener("click", function () {
+        occTick(true);
+        // The controls section does not poll, so this button is the only way
+        // to re-read it without a write. Only when it has been opened at all.
+        if (ctlLoaded) ctlLoadServers();
+        refreshOnce();
+      });
     }
     refreshOnce();
     setInterval(function () {

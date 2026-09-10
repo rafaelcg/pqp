@@ -80,7 +80,7 @@ enum RealtimeEvent: Sendable {
     /// False means: join muted, keep the mic locked, offer no share or camera.
     case voiceWelcome(peerId: String, voiceChannelId: String, peers: [VoiceParticipant],
                       selfPeer: VoiceParticipant, transport: String?,
-                      resumed: Bool, resumeToken: String?, canSpeak: Bool)
+                      resumed: Bool, resumeToken: String?, canSpeak: Bool, canStream: Bool)
     case voicePeerJoined(VoiceParticipant)
     /// Somebody already in the room now shows a different name or picture.
     /// Distinct from `voicePeerJoined` on purpose: that one opens a peer
@@ -102,7 +102,17 @@ enum RealtimeEvent: Sendable {
     /// override, a timeout. `false` mutes and locks the controls; `true`
     /// unlocks them and leaves the unmute to the person. Unicast; the roster
     /// frame that follows carries the same bit for everybody else.
-    case voiceSpeakChanged(voiceChannelId: String, canSpeak: Bool)
+    case voiceSpeakChanged(voiceChannelId: String, canSpeak: Bool, canStream: Bool)
+    /// The join was refused after we asked to resume (an ACL change, the
+    /// orphan window elapsed, a block), or a cold mesh join was refused
+    /// because the API is on more than one machine and this one cannot relay
+    /// to the room's peers.
+    ///
+    /// A client that is HOLDING media when this lands has to hang up. It is
+    /// not in the room, nobody can hear it, and it is absent from every
+    /// roster, so sitting on a live microphone and a call screen is the same
+    /// silent broken call a released seat produces.
+    case voiceJoinRefused(voiceChannelId: String, reason: String?)
     case voiceRoomFull(limit: Int)
     /// The call is already at the screen-share cap. Unicast to whoever tried.
     case voiceScreenShareDenied(voiceChannelId: String)
@@ -110,10 +120,49 @@ enum RealtimeEvent: Sendable {
     case voiceCameraDenied(voiceChannelId: String)
     /// The server refused the join because this room is pinned to a transport
     /// we declared we cannot do. Nobody ever saw us in the roster.
-    case voiceTransportUnsupported(voiceChannelId: String, transport: String)
+    ///
+    /// `reason` is `"promoted"` in the one case where this reaches a seat that
+    /// already existed: the room moved to the SFU and this socket did not
+    /// negotiate `voice-transport-changed`, so the server released the seat.
+    /// Since this build DOES negotiate it, `promoted` now only arrives when
+    /// the two ends disagree, which is worth a different sentence.
+    case voiceTransportUnsupported(voiceChannelId: String, transport: String, reason: String?)
+    /// THE ROOM MOVED UNDER US, ON PURPOSE, AND WE KEEP OUR SEAT.
+    ///
+    /// The server promoted this mesh room to the SFU (a fourth person, a
+    /// camera past the mesh cap, a ninth at the door) and is telling every
+    /// seat that negotiated the frame. Deliberately not a rejoin: the peer id
+    /// and the seat are still ours, so nobody sees a leave and an arrival, and
+    /// only the media path is rebuilt.
+    ///
+    /// `participants` is the room as the server holds it at that instant,
+    /// **self included** (unlike `welcome.peers`, which excludes it), so the
+    /// receiver can build its SFU session without waiting for a roster.
+    /// `reason` only decides the sentence on screen. See
+    /// `voicePromotionAction`.
+    case voiceTransportChanged(voiceChannelId: String, transport: String, reason: String?,
+                               participants: [VoiceParticipant])
     case voiceOffer(from: String, sdp: String)
     case voiceAnswer(from: String, sdp: String)
     case voiceCandidate(from: String, candidate: IceCandidatePayload?)
+
+    // The broadcast. Both frames carry the same object and mean two different
+    // things about who is being told.
+    /// The room's current HLS broadcast, to the SEATS only. `nil` is a stop.
+    /// Sent after `welcome` if one is already running, and whenever the egress
+    /// starts, stops or changes URL.
+    case voiceStream(voiceChannelId: String, stream: LiveHlsStream?)
+    /// The channel's current HLS broadcast, to EVERYONE who may view the
+    /// channel, seat or no seat. This is the one a watcher lives on: it
+    /// arrives without joining the voice room, on socket auth for every live
+    /// channel the account can see, on every start and stop, and on the
+    /// audience keyframe clock (30 s) with a freshly stamped URL and the
+    /// current headcount.
+    ///
+    /// `watching` counts seatless viewers ONLY; seats are on the roster. The
+    /// two are disjoint by construction, which is what makes a watch party
+    /// cost one media-server participant no matter how many people watch.
+    case channelLive(channelId: String, stream: LiveHlsStream?, watching: Int)
 
     // Conversation calls. A DM "rings" where a server voice channel is
     // join-when-you-want; these three frames are that whole lifecycle as the
@@ -149,6 +198,8 @@ struct MessageRejection: Hashable, Sendable {
     let nonce: String?
     let reason: String
     let retryAfterMs: Int?
+    /// `automod` only: the rule's own copy, when the owner wrote one.
+    var automodMessage: String? = nil
 }
 
 /// `sanctionNoticeSchema` — currently always a timeout. `message` is the whole
@@ -206,17 +257,24 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
     /// it, and absent has to read as "nobody is muted", not as a failed frame.
     var serverMuted: Bool = false
     /// Set by the server, never self-reported: the channel's SPEAK permission
-    /// resolved for this person. It is the mic grant and also the screen and
-    /// camera grant (`set-sharing-screen` answers `screen-share-denied` when
-    /// it is false). Absent on a server that predates the field, which reads
-    /// as true, exactly as `welcome.canSpeak` does on the web.
+    /// resolved for this person. The MICROPHONE grant, and only that. Absent
+    /// on a server that predates the field, which reads as true, exactly as
+    /// `welcome.canSpeak` does on the web.
     var canSpeak: Bool = true
+    /// The channel's STREAM permission, which is the camera and screen share
+    /// grant and is a SEPARATE bit from `canSpeak`.
+    ///
+    /// Defaulted to `canSpeak` rather than to true, and decoded after it for
+    /// that reason: absent means a server from before the grants were split,
+    /// where SPEAK gated publishing too. See `VoiceSpeakRule.resolveStream`.
+    var canStream: Bool = true
 
     var id: String { peerId }
 
     enum CodingKeys: String, CodingKey {
         case peerId, userId, displayName, avatarUrl, sharingScreen
-        case cameraStreamId, screenAudioStreamId, muted, deafened, serverMuted, canSpeak
+        case cameraStreamId, screenAudioStreamId, muted, deafened, serverMuted
+        case canSpeak, canStream
     }
 
     init(from decoder: Decoder) throws {
@@ -232,6 +290,7 @@ struct VoiceParticipant: Codable, Identifiable, Hashable, Sendable {
         deafened = try c.decodeIfPresent(Bool.self, forKey: .deafened) ?? false
         serverMuted = try c.decodeIfPresent(Bool.self, forKey: .serverMuted) ?? false
         canSpeak = try c.decodeIfPresent(Bool.self, forKey: .canSpeak) ?? true
+        canStream = try c.decodeIfPresent(Bool.self, forKey: .canStream) ?? canSpeak
     }
 }
 
@@ -295,6 +354,11 @@ actor RealtimeClient {
     /// while the phone is merely sitting in a text channel receiving the
     /// rosters this change exists to shrink. See `VoiceRosterTracker`.
     private var rosterTracker = VoiceRosterTracker()
+    /// The baseline every `presence-delta` is applied to. Here for the same
+    /// reason `rosterTracker` is: the sequence belongs to the SOCKET, and this
+    /// client is sent presence for every channel it has open, not only the one
+    /// on screen. See `PresenceTracker`.
+    private var presenceTracker = PresenceTracker()
 
     /**
      OPTIONAL WIRE FEATURES THIS BUILD UNDERSTANDS, declared on `auth`.
@@ -310,8 +374,29 @@ actor RealtimeClient {
      written on `voiceRosterDeltaMessageSchema` in `@pqp/shared`. The web
      client declares the identical string in `client/src/lib/realtime.ts` and
      the server reads it in `server/src/ws/sockets.ts`.
+
+     `voice-transport-changed`: keep the seat when the server moves a mesh room
+     onto the SFU mid call, instead of being released and told to rejoin.
+     Applied by `followPromotion` in `VoiceModel` and `CallModel`, under
+     `voicePromotionAction`.
+
+     THIS ONE IS NOT AN OPTIMISATION, and its failure runs the other way from
+     the roster delta's. Declaring the roster delta and mishandling it costs a
+     stale list. Declaring THIS and mishandling it means the server stops
+     releasing our seat on a promotion, so the person stays seated in a room
+     whose media they cannot reach: a silent broken call rather than a visible
+     drop, which is strictly worse than never asking. It is here only because
+     both models act on it and the SFU half of `welcome` already existed to be
+     reused.
+
+     `presence-delta`: send what changed in a channel's viewer list instead of
+     the whole list. Applied by `PresenceTracker` under the same convergence
+     rule as the roster delta's, on purpose. Bytes only, like the roster
+     delta: the viewer list this app reconstructs is byte for byte the one it
+     was already being sent, and every phone on mobile data was paying for the
+     whole of it every time anybody opened or closed a channel.
      */
-    static let wireCaps = ["voice-roster-delta"]
+    static let wireCaps = ["voice-roster-delta", "voice-transport-changed", "presence-delta"]
 
     /**
      The handshake, as a value rather than as a side effect.
@@ -406,6 +491,7 @@ actor RealtimeClient {
         // has restarted its numbering. The full rosters the server sends right
         // after `auth` are what re-baseline whatever is still live.
         rosterTracker.forgetAll()
+        presenceTracker.forgetAll()
         await send(raw: RealtimeClient.authFrame(token: token))
         listen()
         // The channel re-joins wait for `ready`. The server verifies the token
@@ -610,6 +696,30 @@ actor RealtimeClient {
         await send(raw: ["type": "leave-voice-room"])
     }
 
+    /**
+     "I am watching this channel's broadcast, and I am not in its voice room."
+
+     THIS IS THE SEATLESS PATH, AND IT IS THE WHOLE POINT. It is not a lighter
+     `join-voice-room`; it never touches that code. The server rate-limits it,
+     checks VIEW on the channel, puts this socket in a per-channel `Set` and
+     answers this socket alone with a `channel-live`. No peer is created, no
+     LiveKit token is minted, no row is written, and nothing appears on
+     anybody's roster. So a watcher costs one socket in a set, and six hundred
+     of them cost the media server exactly what one presenter costs.
+
+     Taking a seat is the other path, and the server drops this socket from the
+     count the moment it does, so the two never double count one person.
+
+     `watching: false` on leaving. The server also drops the socket on close,
+     so a killed app is not a stuck viewer, but saying so is a frame and
+     waiting for a close is a timeout.
+     */
+    func watchLive(channelId: String, watching: Bool) async {
+        await send(raw: [
+            "type": "watch-live", "channelId": channelId, "watching": watching,
+        ])
+    }
+
     func sendOffer(to peerId: String, from selfPeerId: String, sdp: String) async {
         await send(raw: ["type": "offer", "from": selfPeerId, "to": peerId, "sdp": sdp])
     }
@@ -748,6 +858,10 @@ actor RealtimeClient {
         /// `welcome` (top level, same value as `self.canSpeak`) and
         /// `voice-speak-changed`.
         let canSpeak: Bool?
+        /// `welcome` (top level, same value as `self.canStream`) and
+        /// `voice-speak-changed`. Absent means a server from before SPEAK and
+        /// STREAM were separate grants.
+        let canStream: Bool?
         /// `permissions-update` only. Optional because the frame is advisory:
         /// the client refetches either way, and a missing version just means
         /// "refetch anyway" (`shouldApplyPermissionsVersion` on the web).
@@ -762,14 +876,17 @@ actor RealtimeClient {
         /// `message-rejected` only: how long the sender must wait, when the
         /// refusal is a temporary one.
         let retryAfterMs: Int?
+        /// `message-rejected` with `reason: automod`: the rule's own copy.
+        let automodMessage: String?
 
         enum CodingKeys: String, CodingKey {
             case type, nonce, message, channelId, messageId, emoji, userId
             case displayName, added, users, serverId, mention
             case peerId, voiceChannelId, peers, participants, peer, sdp, from
-            case candidate, limit, transport, version, resumed, resumeToken, canSpeak
+            case candidate, limit, transport, version, resumed, resumeToken
+            case canSpeak, canStream
             case seq, size, joined, updated, left
-            case conversationId, kind, caller, reason, thread, retryAfterMs
+            case conversationId, kind, caller, reason, thread, retryAfterMs, automodMessage
             // `self` is a Swift keyword, so the wire key is remapped.
             case selfPeer = "self"
         }
@@ -785,6 +902,49 @@ actor RealtimeClient {
         let expiresAt: Date
         let reason: String?
         let message: String
+    }
+
+    /**
+     `presence-delta`, decoded on its own rather than through `Envelope`.
+
+     It has to be, and the reason is a live trap in this file. `Envelope.joined`
+     is `[VoiceParticipant]?`, because the voice roster delta got there first
+     and the two frames happen to share a key name. A `PresenceUser` is
+     `{id, name, avatarUrl}` and a `VoiceParticipant` needs `peerId`,
+     `userId` and `displayName`, so decoding a presence delta through
+     `Envelope` THROWS on that one field, `try?` swallows it, and every frame
+     is dropped with nothing anywhere saying so. That would look exactly like
+     the capability having no effect, which is the failure shape this repo
+     keeps getting bitten by. `SanctionFrame` exists for the same reason.
+     */
+    private struct PresenceDeltaFrame: Decodable {
+        let channelId: String
+        let seq: Int
+        let size: Int
+        let joined: [PresenceUser]?
+        let left: [String]?
+    }
+
+    /**
+     `voice-stream` and `channel-live`, decoded on their own.
+
+     Not because `Envelope` would throw on them, which is why `SanctionFrame`
+     and `PresenceDeltaFrame` exist, but because it would do something worse:
+     decode CLEANLY and silently drop the payload. `stream` and `watching` are
+     not among its `CodingKeys`, and an unlisted key is ignored, so routing
+     these through the envelope yields a frame that arrived, parsed and said
+     nothing. That is the failure this repo keeps paying for, and the fix is a
+     type whose fields ARE the frame.
+
+     `watching` is absent on `voice-stream`, which addresses the room rather
+     than the channel and carries no headcount.
+     */
+    private struct LiveStreamFrame: Decodable {
+        let channelId: String
+        /// Present-and-null is a stop; the whole point of the frame. Absent
+        /// would be a server that does not send this, and reads the same way.
+        let stream: LiveHlsStream?
+        let watching: Int?
     }
 
     private struct TypeProbe: Decodable { let type: String }
@@ -812,6 +972,28 @@ actor RealtimeClient {
                 reason: frame.reason,
                 message: frame.message
             )))
+            return
+        }
+
+        // BEFORE `Envelope`, and it has to be: see `PresenceDeltaFrame` for the
+        // key collision that makes decoding this frame through the shared
+        // envelope throw and vanish.
+        //
+        // Only ever sent to a socket that asked for it on `auth`. A frame the
+        // tracker refuses is not an error and is deliberately silent: nothing
+        // is emitted, whoever is reading keeps the list they had, and the
+        // server's next whole list repairs it wholesale.
+        if probe.type == "presence-delta" {
+            guard let frame = try? Coding.decoder.decode(PresenceDeltaFrame.self, from: data),
+                  let users = presenceTracker.apply(
+                      deltaFor: frame.channelId,
+                      seq: frame.seq,
+                      size: frame.size,
+                      joined: frame.joined ?? [],
+                      left: frame.left ?? []
+                  )
+            else { return }
+            continuation?.yield(.presence(channelId: frame.channelId, users: users))
             return
         }
 
@@ -852,7 +1034,8 @@ actor RealtimeClient {
                 channelId: channelId,
                 nonce: envelope.nonce,
                 reason: reason,
-                retryAfterMs: envelope.retryAfterMs
+                retryAfterMs: envelope.retryAfterMs,
+                automodMessage: envelope.automodMessage
             ))
         // Two spellings on the wire — `message-deleted` is a legacy duplicate
         // that is still emitted, so both are handled.
@@ -872,7 +1055,12 @@ actor RealtimeClient {
             event = .typing(channelId: channelId, userId: userId, displayName: displayName)
         case "presence-update":
             guard let channelId = envelope.channelId else { return }
-            event = .presence(channelId: channelId, users: envelope.users ?? [])
+            let users = envelope.users ?? []
+            // Recorded even though the list is passed on verbatim: a snapshot
+            // is the baseline every following delta is measured against, and
+            // its `seq` is the number they have to follow on from.
+            presenceTracker.apply(snapshot: users, channelId: channelId, seq: envelope.seq)
+            event = .presence(channelId: channelId, users: users)
         case "channel-activity":
             guard let channelId = envelope.channelId else { return }
             event = .activity(channelId: channelId, serverId: envelope.serverId,
@@ -907,6 +1095,14 @@ actor RealtimeClient {
                                   canSpeak: VoiceSpeakRule.resolve(
                                       topLevel: envelope.canSpeak,
                                       selfPeer: selfPeer.canSpeak
+                                  ),
+                                  canStream: VoiceSpeakRule.resolveStream(
+                                      topLevel: envelope.canStream,
+                                      selfPeer: selfPeer.canStream,
+                                      canSpeak: VoiceSpeakRule.resolve(
+                                          topLevel: envelope.canSpeak,
+                                          selfPeer: selfPeer.canSpeak
+                                      )
                                   ))
         case "peer-joined":
             guard let peer = envelope.peer else { return }
@@ -957,7 +1153,17 @@ actor RealtimeClient {
         case "voice-speak-changed":
             guard let voiceChannelId = envelope.voiceChannelId,
                   let canSpeak = envelope.canSpeak else { return }
-            event = .voiceSpeakChanged(voiceChannelId: voiceChannelId, canSpeak: canSpeak)
+            // `canStream` absent means a server from before the grants were
+            // split, where SPEAK carried both. Never `true`: defaulting a
+            // missing permission open is the wrong direction to be wrong in.
+            event = .voiceSpeakChanged(
+                voiceChannelId: voiceChannelId,
+                canSpeak: canSpeak,
+                canStream: envelope.canStream ?? canSpeak
+            )
+        case "voice-join-refused":
+            guard let voiceChannelId = envelope.voiceChannelId else { return }
+            event = .voiceJoinRefused(voiceChannelId: voiceChannelId, reason: envelope.reason)
         case "voice-room-full":
             event = .voiceRoomFull(limit: envelope.limit ?? 0)
         case "screen-share-denied":
@@ -969,7 +1175,39 @@ actor RealtimeClient {
         case "voice-transport-unsupported":
             guard let voiceChannelId = envelope.voiceChannelId,
                   let transport = envelope.transport else { return }
-            event = .voiceTransportUnsupported(voiceChannelId: voiceChannelId, transport: transport)
+            event = .voiceTransportUnsupported(voiceChannelId: voiceChannelId,
+                                               transport: transport,
+                                               reason: envelope.reason)
+        case "voice-transport-changed":
+            // `participants` is required rather than defaulted to empty. The
+            // whole point of the frame carrying the room is that the follower
+            // does not have to wait for a roster, and an empty list would move
+            // this session to the SFU holding a roster of nobody, so everyone
+            // else in the call would vanish from the screen until a keyframe
+            // arrived. A frame without it is one this build does not
+            // understand, and dropping it leaves the seat exactly where it is
+            // rather than half moving it.
+            guard let voiceChannelId = envelope.voiceChannelId,
+                  let transport = envelope.transport,
+                  let participants = envelope.participants else { return }
+            event = .voiceTransportChanged(voiceChannelId: voiceChannelId,
+                                           transport: transport,
+                                           reason: envelope.reason,
+                                           participants: participants)
+        // Decoded from `data` rather than from `envelope`: see `LiveStreamFrame`
+        // for why the envelope parses these and throws the payload away.
+        case "voice-stream":
+            guard let frame = try? Coding.decoder.decode(LiveStreamFrame.self, from: data)
+            else { return }
+            event = .voiceStream(voiceChannelId: frame.channelId, stream: frame.stream)
+        case "channel-live":
+            guard let frame = try? Coding.decoder.decode(LiveStreamFrame.self, from: data)
+            else { return }
+            // A count the server did not send is 0 watchers, not "unknown":
+            // the frame's whole job is to state the current audience.
+            event = .channelLive(channelId: frame.channelId,
+                                 stream: frame.stream,
+                                 watching: frame.watching ?? 0)
         case "offer":
             guard let from = envelope.from, let sdp = envelope.sdp else { return }
             event = .voiceOffer(from: from, sdp: sdp)

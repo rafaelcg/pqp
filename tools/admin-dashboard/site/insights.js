@@ -300,6 +300,44 @@
     };
   }
 
+  /**
+   * Why one server on **controles** is on or off, in the operator's words.
+   *
+   * IT LIVES HERE FOR RULE 1 ABOVE. Every other cell in that table is a fact
+   * next to its label; this one is a sentence somebody acts on before an
+   * event, and getting it backwards ("está na variável" on a server the
+   * variable does not name) would be read as truth and cannot be checked by
+   * looking at it. It is a pure function of the row the API sends, and the
+   * API sends `liveHlsSource` precisely so this never re-derives the rule.
+   *
+   * The four sources, from `resolveLiveHlsForServer` on the API:
+   *   master-off  LIVE_HLS_ENABLED, LiveKit or the bucket is missing
+   *   server      `servers.live_hls_enabled` decided, either way
+   *   allowlist   nobody decided; LIVE_HLS_SERVER_ALLOWLIST did
+   *   open        nobody decided and there is no allowlist at all
+   *
+   * Returns { tone: "on" | "off", label, why }.
+   */
+  function liveHlsState(row) {
+    var source = row && row.liveHlsSource;
+    if (!row || !row.liveHlsEffective) {
+      if (source === "master-off") {
+        return { tone: "off", label: "api sem hls", why: "LIVE_HLS_ENABLED ou o bucket faltando" };
+      }
+      if (source === "server") {
+        return { tone: "off", label: "desligado", why: "decisão desta página" };
+      }
+      return { tone: "off", label: "desligado", why: "não está na variável" };
+    }
+    if (source === "server") {
+      return { tone: "on", label: "ligado", why: "decisão desta página" };
+    }
+    if (source === "open") {
+      return { tone: "on", label: "ligado", why: "sem allowlist: todo servidor" };
+    }
+    return { tone: "on", label: "ligado", why: "está na variável" };
+  }
+
   /** The three, in incident order, always three, always in these slots. */
   function buildInsights(input) {
     return [
@@ -317,6 +355,7 @@
     latencyInsight: latencyInsight,
     poolInsight: poolInsight,
     voiceInsight: voiceInsight,
-    buildInsights: buildInsights
+    buildInsights: buildInsights,
+    liveHlsState: liveHlsState
   };
 })(typeof globalThis !== "undefined" ? globalThis : this);

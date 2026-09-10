@@ -308,12 +308,13 @@ test("a share does not ask for the machine's audio, and says so when a whole scr
       .toBe(1);
     const first = (await captureRequests(page))[0]!;
 
-    // The bug, pinned against the real app. `include` is what put the call
-    // back into the call.
-    expect(first.systemAudio).toBe("exclude");
-    // Audio is still REQUESTED. `systemAudio: "exclude"` is scoped to monitor
-    // surfaces, so this is what keeps a tab share carrying the tab's sound;
-    // dropping the audio constraint entirely would silence the good path too.
+    // Chrome 141+ can strip this document from the tap, so `include` is how
+    // its picker shows one "Share system audio" box. The echo was `include`
+    // *without* `restrictOwnAudio`.
+    expect(first.systemAudio).toBe("include");
+    expect(first.audio).toMatchObject({ restrictOwnAudio: true });
+    // Audio is still REQUESTED. Dropping the constraint would silence a tab
+    // share's own sound, which is the path that never needed this opt-in.
     expect(first.audio).not.toBe(false);
     expect(first.audio).toBeTruthy();
     // Sharing our own tab would put the call's picture back into the call.
@@ -342,35 +343,8 @@ test("a share does not ask for the machine's audio, and says so when a whole scr
     // person who cannot hear it, and a sentence at the picker they have
     // already dismissed would be a sentence nobody reads.
     await expect(
-      page.getByText(
-        "You are sending this computer's sound. Everyone in the call hears themselves back.",
-      ),
+      page.getByText("You are sending this computer's audio."),
     ).toBeVisible({ timeout: 20_000 });
-
-    // ---- opting in is what asks for it -----------------------------------
-    await wakeControls(page);
-    await page
-      .getByRole("button", { name: "Stop sharing your screen", exact: true })
-      .click();
-    await wakeControls(page);
-    await page
-      .getByRole("button", {
-        name: "Send this computer's sound with the share",
-        exact: true,
-      })
-      .click();
-    await wakeControls(page);
-    await page
-      .getByRole("button", { name: "Share your screen", exact: true })
-      .click();
-
-    await expect
-      .poll(async () => (await captureRequests(page)).length, {
-        timeout: 20_000,
-      })
-      .toBe(2);
-    const second = (await captureRequests(page))[1]!;
-    expect(second.systemAudio).toBe("include");
   } finally {
     await watcher.context.close();
   }

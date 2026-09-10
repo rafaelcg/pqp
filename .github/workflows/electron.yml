@@ -1,9 +1,15 @@
 name: Electron
 
-# Packaging is for a desktop artifact, not a merge gate. A docs-only push
-# to main used to start three runners (including a signed macOS build) and
-# fail on a stale CSC_KEY_PASSWORD. workflow_dispatch always runs. On main
-# (and on a v* tag), only a change that can affect the binary does.
+# Packaging is for a desktop artifact, not a merge gate. A docs-only push to
+# main used to start three runners, one of them a macOS runner billed at ten
+# times the Linux rate. workflow_dispatch always runs. On main (and on a v*
+# tag), only a change that can affect the binary does.
+#
+# The filter is about runner minutes and nothing else. It was first described
+# here as dodging "a stale CSC_KEY_PASSWORD"; that reading was wrong, and the
+# real cause is written up next to the Package Electron step below. Filtering a
+# workflow to cut noise also cuts how often a genuine failure is seen, so the
+# macOS job needs a watcher rather than a quieter schedule.
 #
 # tags and paths both apply: a `v*` tag on a commit that touches none of
 # these paths will not run — bump electron/package.json (the version) when
@@ -86,6 +92,26 @@ jobs:
       # macOS only: CSC_LINK / CSC_KEY_PASSWORD are also read by the Windows
       # signer, so they are scoped to the mac job and unset elsewhere. Windows
       # signing, when it happens, uses WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD.
+      #
+      # electron-builder must stay at 26.16.1 or newer, and `^26.16.1` in
+      # electron/package.json is load-bearing rather than tidy. Every release up
+      # to and including 26.16.0 handed the .p12 export password to
+      # `security set-key-partition-list -k`, which wants the temporary
+      # keychain's own unlock password instead, and this job died on
+      #   security: SecKeychainUnlock: The user name or passphrase you entered
+      #   is not correct.
+      # The wrong password is only ever checked when the keychain happens to be
+      # locked at that moment, which is why the bug sat latent for years and
+      # then fired on every run at once when the macos-26-arm64 image moved from
+      # Darwin 25.5.0 to 25.6.0. Every green macOS build in that window ran
+      # 25.5.0 and every red one ran 25.6.0, seven for seven. The secrets were
+      # never stale.
+      #
+      # The trap for the next person: npm's `latest` tag for electron-builder is
+      # still 26.15.3, which does NOT have the fix. 26.16.1 is published under
+      # the `v26` tag, and a range that `latest` also satisfies resolves to
+      # `latest`. Widening the caret to `^26` would quietly reinstall the bug.
+      # Full write-up: docs/DESKTOP.md 3.8.
       - name: Package Electron
         working-directory: electron
         shell: bash
@@ -130,7 +156,14 @@ jobs:
                 echo "MAC_NOTARIZED=true" >> "$GITHUB_ENV"
                 echo "::notice::Notarizing with an App Store Connect API key."
               elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
-                args+=("-c.mac.notarize.teamId=${APPLE_TEAM_ID}")
+                # `mac.notarize` is a boolean in electron-builder 26. Up to
+                # 25.1.8 it also accepted `{ teamId }`, and this line used to
+                # pass `-c.mac.notarize.teamId=...`; that shape was removed in
+                # 26.0.0 (PR #8582) and would now be an object where the schema
+                # wants a boolean. The team id was never needed as config
+                # anyway: @electron/notarize reads APPLE_TEAM_ID straight from
+                # the environment, and it is already exported on this step.
+                args+=("-c.mac.notarize=true")
                 echo "MAC_NOTARIZED=true" >> "$GITHUB_ENV"
                 echo "::notice::Notarizing with an Apple ID app-specific password."
               else

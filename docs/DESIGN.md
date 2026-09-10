@@ -365,7 +365,9 @@ so a variant and a size are props, not class strings.
 `switch.tsx`. An independent on/off bit, with the whole row as the hit target.
 
 - Props are `checked`, `onCheckedChange`, `label`, and an optional
-  `description` and `title`.
+  `description`, `title` and `hideLabel`. `hideLabel` keeps the label for
+  assistive tech and paints only the track, for a switch that sits beside a
+  row that already names the setting.
 - **States.** Track goes accent when on, surface with an inset ring when off.
   Disabled dims the track and blocks the pointer.
 - **Use it** for a list of independent settings. **Do not** use it for one of

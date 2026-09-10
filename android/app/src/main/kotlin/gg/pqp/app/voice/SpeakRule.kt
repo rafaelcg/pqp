@@ -50,6 +50,44 @@ internal fun canSpeakFrom(welcome: JsonObject): Boolean {
     return (self["canSpeak"] as? JsonPrimitive)?.booleanOrNull ?: true
 }
 
+/**
+ * `welcome.canStream`, then `self.canStream`, then `canSpeak`.
+ *
+ * The stage bit, which is STREAM in a plain voice channel and
+ * START_WATCH_PARTY in a `watch_party` one; the server has already decided
+ * which question it answered (`canStartWatchPartyStream`), so this client asks
+ * one thing and never compares channel types.
+ *
+ * Falling back to `canSpeak` rather than to true is the shared schema's own
+ * rule ("Absent reads as `canSpeak`"), and it is the safe direction: a
+ * listen-only seat must not be offered a share button.
+ */
+internal fun canStreamFrom(welcome: JsonObject): Boolean {
+    (welcome["canStream"] as? JsonPrimitive)?.booleanOrNull?.let { return it }
+    val self = runCatching { welcome["self"]?.jsonObject }.getOrNull()
+    (self?.get("canStream") as? JsonPrimitive)?.booleanOrNull?.let { return it }
+    return canSpeakFrom(welcome)
+}
+
+/**
+ * Whether the share button stands, after a `voice-speak-changed`.
+ *
+ * Three inputs and one rule, pulled out of the controller because it is the
+ * whole of what decides whether a host can present and it is otherwise buried
+ * in a frame handler with a `MediaProjection` on one side of it.
+ *
+ * - **SPEAK gone takes the stage with it.** A listen-only seat cannot publish
+ *   anything, and the server has already stopped relaying it.
+ * - **`canStream` absent leaves the answer alone.** The field is optional on
+ *   the wire, so an older server sending only `canSpeak` must not be read as
+ *   "and no stage either": that would silently retire the button for every
+ *   self-host the moment a moderator touched anybody's microphone.
+ * - **`canStream` present is the answer**, in both directions. Losing it
+ *   mid-party is a moderator stopping a broadcast.
+ */
+internal fun streamRule(canSpeak: Boolean, next: Boolean?, was: Boolean): Boolean =
+    canSpeak && (next ?: was)
+
 internal fun speakRule(canSpeak: Boolean, was: Boolean, source: SpeakRuleSource): SpeakRuleOutcome {
     if (!canSpeak) {
         return SpeakRuleOutcome(

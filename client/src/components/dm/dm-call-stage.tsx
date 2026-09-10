@@ -32,8 +32,6 @@ export function DmCallStage({
   onStartScreenShare,
   onShareWithoutSound,
   onStopScreenShare,
-  shareSystemAudio = false,
-  onShareSystemAudioChange,
   onFocusScreenShare,
   onToggleRaisedHand,
   compactPeers = false,
@@ -57,8 +55,6 @@ export function DmCallStage({
     intent?: { preferBrowserTab?: boolean },
   ) => void | Promise<void>;
   onShareWithoutSound?: () => void;
-  shareSystemAudio?: boolean;
-  onShareSystemAudioChange?: (next: boolean) => void;
   onStopScreenShare?: () => void;
   onFocusScreenShare?: (peerId: string) => void;
   /**
@@ -135,8 +131,6 @@ export function DmCallStage({
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
       onStopScreenShare={onStopScreenShare}
-      shareSystemAudio={shareSystemAudio}
-      onShareSystemAudioChange={onShareSystemAudioChange}
       onFocusScreenShare={onFocusScreenShare}
       onToggleRaisedHand={onToggleRaisedHand}
       compactPeers={compactPeers}
