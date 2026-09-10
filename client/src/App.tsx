@@ -5831,9 +5831,13 @@ function MainAppContent({
               voiceState.status !== "idle"
                 ? voiceState.isMuted
                   ? "muted"
-                  : "open"
+                  : voiceState.isSharingMic
+                    ? "everyone"
+                    : "room"
                 : "off"
             }
+            micInStream={voiceState.micInStream}
+            onMicInStreamChange={(on) => voice.setMicInStream(on)}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={hlsCaptureMaxFrameRate(
               liveHlsConfig?.ladder,
@@ -5941,9 +5945,13 @@ function MainAppContent({
               voiceState.status !== "idle"
                 ? voiceState.isMuted
                   ? "muted"
-                  : "open"
+                  : voiceState.isSharingMic
+                    ? "everyone"
+                    : "room"
                 : "off"
             }
+            micInStream={voiceState.micInStream}
+            onMicInStreamChange={(on) => voice.setMicInStream(on)}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={hlsCaptureMaxFrameRate(
               liveHlsConfig?.ladder,

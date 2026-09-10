@@ -1,6 +1,7 @@
 # Getting the host into the stream: options, costs, recommendation
 
-**Status: a proposal. Nothing in this document is built.** What IS built is
+**Status: option 1 is built (2026-09-10, `client/src/lib/screen-mix.ts`).** The
+rest of this document is the reasoning that chose it. What IS built is
 everything in "The floor", below: the host is now told what the stream is
 carrying, and the microphone bug that made an invited speaker inaudible to the
 *room* is fixed. Read `docs/WATCH_PARTY.md`, "What the stream carries", first;

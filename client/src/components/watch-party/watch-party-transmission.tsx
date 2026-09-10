@@ -46,6 +46,7 @@ export function WatchPartyTransmission({
   isPresenting,
   quality,
   roomViewers,
+  micInStream = false,
   transport,
   now,
   className,
@@ -59,6 +60,8 @@ export function WatchPartyTransmission({
   quality: VideoQuality;
   /** People in the room, for the outbound readout's room-vs-link reasoning. */
   roomViewers: number;
+  /** The share's audio track carries the host's microphone (`screen-mix`). */
+  micInStream?: boolean;
   transport: VoiceRoomTransport | null;
   /** Injected so the minutes tick on the caller's clock and a test can fix it. */
   now: Date;
@@ -204,7 +207,9 @@ export function WatchPartyTransmission({
                 ? t("watchParty.tx.na")
                 : audioState === "none"
                   ? t("watchParty.tx.audioNone")
-                  : t("watchParty.tx.audioScreen")}
+                  : micInStream
+                    ? t("watchParty.tx.audioScreenAndMic")
+                    : t("watchParty.tx.audioScreen")}
             </TxTile>
             <TxTile label={t("watchParty.tx.audience")}>{audienceCount}</TxTile>
             <TxTile label={t("watchParty.tx.uptime")}>
@@ -237,7 +242,9 @@ export function WatchPartyTransmission({
             data-testid="watch-party-tx-carries"
             className="text-[11px] text-text-tertiary"
           >
-            {t("watchParty.tx.carries")}{" "}
+            {micInStream
+              ? t("watchParty.tx.carriesWithMic")
+              : t("watchParty.tx.carries")}{" "}
             {t("watchParty.tx.behind", { seconds: stream?.delaySeconds ?? 10 })}
           </p>
         </div>

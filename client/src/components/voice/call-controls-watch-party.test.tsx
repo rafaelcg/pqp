@@ -58,6 +58,8 @@ const idle: VoiceState = {
   canPromoteTransport: false,
   capacityRoseFrom: null,
   isSharingScreen: false,
+  isSharingMic: false,
+  micInStream: true,
   screenSharePeerIds: [],
   cameraPeerIds: [],
   focusedScreenPeerId: null,

@@ -341,3 +341,21 @@ behaviour and worth pinning.
 - Prime Video Watch Party shutdown: https://www.howtogeek.com/prime-video-watch-party-shutdown/
 - Disney+ GroupWatch removal: https://www.howtogeek.com/disney-quietly-removed-its-groupwatch-feature/
 - Hulu Watch Party: https://help.hulu.com/article/hulu-watch-party
+
+## 8b. The host's voice in the stream, and the seat button
+
+Built 2026-09-10, after Andre asked whether the audience could hear him. They
+could not: the transcode carried the window's audio only. Option 1 of
+`WATCH_PARTY_STREAM_AUDIO.md` is now in: the browser mixes the host's mic
+into the share's audio track (`lib/screen-mix.ts`), a per-computer switch
+"Meu mic vai no stream" defaults on, and the live bar's mic pill says one of
+four things: fora da call, mutado, só a sala ouve, todo mundo te ouve.
+
+The seat button went with it for the people running the show: a watch party
+is not a lobby. With voice off the host is seated by going live or sharing,
+a co-host by Assumir; "Entrar na call" is only offered once the party has
+voice on. A host who wants to chat with friends while the film plays uses a
+voice channel.
+
+Still open: OBS (step 9), via a LiveKit ingress that publishes an RTMP feed
+into the room as the presenter.

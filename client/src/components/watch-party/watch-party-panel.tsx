@@ -29,6 +29,7 @@ import {
   type WatchPartyOptions,
 } from "@pqp/shared";
 import {
+  OptionGroup,
   WatchPartyOptionsPanel,
   slowModeKey,
 } from "@/components/watch-party/watch-party-options";
@@ -38,6 +39,7 @@ import {
   type CohostCandidate,
 } from "@/components/watch-party/watch-party-cohosts";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { UserAvatar } from "@/components/user/user-avatar";
@@ -166,7 +168,10 @@ export interface WatchPartyPanelProps {
    * `muted` is in the call with the mic closed; `open` means the room can
    * hear it (the audience never can: the stream carries the window's audio).
    */
-  micState?: "off" | "muted" | "open";
+  micState?: "off" | "muted" | "room" | "everyone";
+  /** "Meu mic vai no stream", the standing preference, and the switch for it. */
+  micInStream?: boolean;
+  onMicInStreamChange?: (on: boolean) => void;
   /** 60 when this server's HLS ladder names a 60 fps rung. */
   hlsMaxFrameRate?: 30 | 60;
   onShapeChange?: (shape: "expanded" | "none") => void;
@@ -463,6 +468,23 @@ function WatchPartyOptionsDialog({
           audienceCount={props.audienceCount}
           onChange={(patch) => void props.onOptionsChange(patch)}
         />
+        {/* THIS COMPUTER'S SWITCH, not the party's: whether the share carries
+            the host's own voice to the people watching from outside. Off,
+            the stream carries the window's audio only and the mic stays with
+            the seated room, which is what a host who wants to chat with
+            friends in a separate lobby while the film plays wants. */}
+        {props.onMicInStreamChange && (
+          <OptionGroup title={t("watchParty.options.streamTitle")}>
+            <div className="px-1 py-0.5" data-watch-party-mic-in-stream>
+              <Switch
+                label={t("watchParty.options.micInStream")}
+                description={t("watchParty.options.micInStreamBody")}
+                checked={props.micInStream !== false}
+                onCheckedChange={(on) => props.onMicInStreamChange?.(on)}
+              />
+            </div>
+          </OptionGroup>
+        )}
         {/* Mid-show, and it is the same control the setup surface had. A
             co-host promoted here is granted SPEAK on the spot by the server
             when the party's floor is closed, so somebody brought in to help
@@ -563,9 +585,11 @@ function WatchPartyOptionsDialog({
  */
 function WatchPartyOptionsSummary({
   party,
+  micInStream,
   onOpen,
 }: {
   party: WatchParty;
+  micInStream?: boolean;
   onOpen: () => void;
 }) {
   const { t } = useTranslation();
@@ -585,6 +609,13 @@ function WatchPartyOptionsSummary({
     party.cohosts.length > 0
       ? t("watchParty.summary.cohosts", { count: party.cohosts.length })
       : t("watchParty.summary.noCohost"),
+    ...(micInStream === undefined
+      ? []
+      : [
+          micInStream
+            ? t("watchParty.summary.micInStream")
+            : t("watchParty.summary.micRoomOnly"),
+        ]),
   ];
   return (
     <div
@@ -874,6 +905,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
 
       <WatchPartyOptionsSummary
         party={party}
+        micInStream={props.onMicInStreamChange ? props.micInStream !== false : undefined}
         onOpen={() => setOptionsOpen(true)}
       />
 
@@ -1222,27 +1254,33 @@ function LiveSurface(
         <span
           data-watch-party-mic={props.micState}
           title={
-            props.micState === "open"
-              ? t("watchParty.live.micOpenHint")
-              : undefined
+            props.micState === "everyone"
+              ? t("watchParty.live.micEveryoneHint")
+              : props.micState === "room"
+                ? t("watchParty.live.micRoomHint")
+                : undefined
           }
           className={cn(
-            "flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]",
-            props.micState === "open"
-              ? "border-success/40 bg-success/10 text-success"
-              : "border-border bg-surface-0 text-text-tertiary",
+            "flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+            props.micState === "everyone"
+              ? "border-success/40 bg-success/15 text-success"
+              : props.micState === "room"
+                ? "border-warning/40 bg-warning/10 text-warning"
+                : "border-border bg-surface-0 font-normal text-text-tertiary",
           )}
         >
-          {props.micState === "open" ? (
+          {props.micState === "everyone" || props.micState === "room" ? (
             <Mic className="h-3 w-3" aria-hidden />
           ) : (
             <MicOff className="h-3 w-3" aria-hidden />
           )}
-          {props.micState === "open"
-            ? t("watchParty.live.micOpen")
-            : props.micState === "muted"
-              ? t("watchParty.live.micMuted")
-              : t("watchParty.live.micOff")}
+          {props.micState === "everyone"
+            ? t("watchParty.live.micEveryone")
+            : props.micState === "room"
+              ? t("watchParty.live.micRoom")
+              : props.micState === "muted"
+                ? t("watchParty.live.micMuted")
+                : t("watchParty.live.micOff")}
         </span>
       )}
       {/* No `shrink-0`: in a narrow column the buttons wrap onto their own
@@ -1323,7 +1361,15 @@ function LiveSurface(
             The listen-only label went with the control. Everybody who can
             still see this button can speak once they are in, so a warning
             about a seat that cannot would now be false. */}
-        {!props.inCall && mayTakeASeat && (
+        {/* A WATCH PARTY IS NOT A LOBBY. The host is seated by going live
+            or sharing, never by this button, and a co-host takes over with
+            Assumir and shares. So with voice off, nobody running the show
+            is offered a seat here; a host who wants to chat with friends
+            while the film plays uses a voice channel. With voice on, the
+            floor is a thing and the door stays. */}
+        {!props.inCall &&
+          mayTakeASeat &&
+          (party.options.voiceEnabled || !runsTheShow) && (
           <Button
             type="button"
             variant="ghost"
@@ -1397,6 +1443,7 @@ function LiveSurface(
      presenter's encoder. */
   const transmission = runsTheShow && (
     <WatchPartyTransmission
+      micInStream={props.micState === "everyone"}
       stream={props.liveStream ?? null}
       wentLiveAt={party.wentLiveAt}
       audienceCount={props.audienceCount}

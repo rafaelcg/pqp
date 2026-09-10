@@ -42,6 +42,8 @@ import {
   getShareCursor,
   type ShareCursor,
 } from "@/lib/screen-capture-cursor";
+import { createScreenMix, type ScreenMix } from "@/lib/screen-mix";
+import { getMicInStream, saveMicInStream } from "@/lib/mic-in-stream";
 import { translateMessage, type MessageKey } from "@/lib/i18n";
 import {
   buildAudioConstraints,
@@ -355,6 +357,14 @@ export interface VoiceState {
   capacityRoseFrom: VoiceRoomTransport | null;
   /** True when this client is the one presenting. */
   isSharingScreen: boolean;
+  /**
+   * The share going out carries this person's microphone, mixed into its
+   * audio track, so the people watching from outside hear them. See
+   * `lib/screen-mix.ts`.
+   */
+  isSharingMic: boolean;
+  /** The standing preference behind `isSharingMic` (`lib/mic-in-stream.ts`). */
+  micInStream: boolean;
   /** peerIds currently sharing, in roster order. */
   screenSharePeerIds: string[];
   /**
@@ -1060,6 +1070,8 @@ export function createVoiceController(transport: RealtimeTransport) {
     canPromoteTransport: false,
     capacityRoseFrom: null,
     isSharingScreen: false,
+    isSharingMic: false,
+    micInStream: getMicInStream(),
     screenSharePeerIds: [],
     liveStream: null,
     channelLive: {},
@@ -1593,6 +1605,13 @@ export function createVoiceController(transport: RealtimeTransport) {
     if (!state.canSpeak || state.isDeafened || state.isMuted) {
       return true;
     }
+    // The mic is already in the share's audio track: publishing it a second
+    // time would have every seated listener hear the host twice, out of two
+    // jitter buffers, which is flanging. Moderation still reaches the mix
+    // (`muteSfuUser` walks `type === AUDIO`).
+    if (screenMix && state.isSharingMic) {
+      return true;
+    }
     if (state.inputMode === "voice-activity") {
       return false;
     }
@@ -1674,6 +1693,9 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Carries mute, deafen and the push-to-talk gate onto the new track: a
       // swap must never be a way to end up transmitting when you were not.
       applyMuteToPipeline();
+      if (screenMix && state.isSharingMic) {
+        screenMix.setMic(pipeline.processedStream);
+      }
 
       if (manager) {
         await manager.replaceLocalTrack(pipeline.processedStream);
@@ -2001,6 +2023,11 @@ export function createVoiceController(transport: RealtimeTransport) {
   }
 
   /** Stops the capture tracks only — no network call, no peer teardown. */
+  /** The mic-into-share mix while a watch party share is up. */
+  let screenMix: ScreenMix | null = null;
+  /** The raw display capture behind `screenMix`, stopped with it. */
+  let screenCaptureSource: MediaStream | null = null;
+
   function releaseScreenCapture() {
     if (!screenCaptureStream) {
       return;
@@ -2008,8 +2035,17 @@ export function createVoiceController(transport: RealtimeTransport) {
     for (const track of screenCaptureStream.getTracks()) {
       track.stop();
     }
+    if (screenCaptureSource) {
+      for (const track of screenCaptureSource.getTracks()) {
+        track.stop();
+      }
+      screenCaptureSource = null;
+    }
+    screenMix?.close();
+    screenMix = null;
     screenCaptureStream = null;
     state.isSharingScreen = false;
+    state.isSharingMic = false;
     state.localScreenStream = null;
     state.isSharingScreenAudio = false;
     state.isSharingSystemAudio = false;
@@ -2570,6 +2606,8 @@ export function createVoiceController(transport: RealtimeTransport) {
       canPromoteTransport: false,
       capacityRoseFrom: null,
       isSharingScreen: false,
+      isSharingMic: false,
+      micInStream: state.micInStream,
       screenSharePeerIds: [],
       liveStream: null,
       // Channel-level, not room-level: hanging up does not make the sidebar
@@ -3707,6 +3745,22 @@ export function createVoiceController(transport: RealtimeTransport) {
       leaveCall();
     },
 
+    /**
+     * "Meu mic vai no stream". Takes effect on the running share at once
+     * (the mic branch is connected or dropped) and is remembered for the
+     * next one.
+     */
+    setMicInStream(on: boolean) {
+      saveMicInStream(on);
+      state.micInStream = on;
+      if (screenMix && pipeline) {
+        screenMix.setMic(on ? pipeline.processedStream : null);
+        state.isSharingMic = on;
+        sfuPublicationMuted = null;
+        void applyPublicationMute();
+      }
+      emit();
+    },
     setMuted(muted: boolean) {
       if (!pipeline) {
         return;
@@ -3931,6 +3985,30 @@ export function createVoiceController(transport: RealtimeTransport) {
       // whenever the "share audio" box was left unticked. It is the common
       // case, not a failure: the share goes ahead silent, exactly as every
       // share did before this existed.
+      // THE HOST'S VOICE IN THE STREAM. A watch party share (the tab
+      // picker, `preferBrowserTab`) on the SFU mixes the microphone into
+      // the share's audio track before it is published, so the transcode
+      // carries it to the people watching from outside. Scoped to LiveKit:
+      // a mesh room hands the share's audio to each peer separately and
+      // has no seatless audience to reach. The processed mic stream is
+      // tapped, so mute stays mute. `lib/screen-mix.ts`.
+      if (
+        intent.preferBrowserTab &&
+        state.roomTransport === "livekit" &&
+        pipeline &&
+        state.micInStream
+      ) {
+        try {
+          screenMix = createScreenMix(stream, pipeline.processedStream);
+          screenCaptureSource = stream;
+          stream = screenMix.stream;
+          state.isSharingMic = true;
+        } catch {
+          // No WebAudio here: the share goes out as it is, room-only mic.
+          screenMix = null;
+          screenCaptureSource = null;
+        }
+      }
       const hasAudio = stream.getAudioTracks().length > 0;
       watchScreenCapture(stream);
       screenCaptureStream = stream;

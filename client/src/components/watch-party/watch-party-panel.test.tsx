@@ -405,9 +405,22 @@ describe("the way into the room", () => {
     expect(inBar()).not.toContain(joinControl);
   });
 
-  it("offers it to the people running the show, voice or no voice", () => {
+  it("offers it to the people running the show only once the party has voice", () => {
+    // A WATCH PARTY IS NOT A LOBBY. With voice off the host is seated by
+    // going live or sharing, and a co-host by Assumir; a seat button for
+    // them here would make the room read as a call. With voice on, the floor
+    // is a thing and the door stays.
     for (const viewerRole of ["host", "cohost"] as const) {
-      expect(inBar({ party: { ...PARTY, viewerRole } })).toContain(joinControl);
+      expect(inBar({ party: { ...PARTY, viewerRole } })).not.toContain(joinControl);
+      expect(
+        inBar({
+          party: {
+            ...PARTY,
+            viewerRole,
+            options: { ...PARTY.options, voiceEnabled: true },
+          },
+        }),
+      ).toContain(joinControl);
     }
   });
 
