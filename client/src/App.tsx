@@ -10,8 +10,6 @@ import {
   Columns2,
   Lock,
   Menu,
-  PanelLeftClose,
-  PanelLeftOpen,
   Phone,
   Pin,
   Rows2,
@@ -5462,58 +5460,9 @@ function MainAppContent({
         >
           <Menu className="h-5 w-5" />
         </button>
-        {/* THE CHANNEL LIST'S SWITCH, and the first thing in the header on
-            purpose.
-            It used to live at the other end of this row, among the call's
-            controls, and only while a stage was up. The only way to a narrower
-            channel list with no call on was therefore to wait for somebody to
-            share and let the automation do it, which is a preference you can
-            only express by getting lucky. Wanting the width back in a plain
-            text channel makes this window furniture, not a call control.
-            LEFT, because that is where the thing it controls is: the column
-            immediately to its left, and this header is the first row to the
-            right of it. It also lands in the slot the drawer's hamburger holds
-            below `md`, which already means "the navigation column", and it
-            mirrors the roster toggle at the far right of this same row, which
-            hides the column on THAT side. Left switch, left column; right
-            switch, right column.
-            Not in the channel list's own header: that row is 256px holding a
-            server icon, the name, and three buttons, and a fourth is what
-            turned "QG do pqp" into "QG..." the last time (see `channel-list`).
-            The strip keeps its own expand button, so this control disappearing
-            with the column can strand nobody. Desktop only: under `md` the
-            list is a drawer that is already fully hidden. */}
-        {columnLayout && selection.kind === "server" && (
-          <Tooltip
-            label={
-              sidebarIconsOnly
-                ? t("chrome.expandChannelList")
-                : t("chrome.collapseChannelList")
-            }
-            detail={t("chrome.collapseChannelListHint")}
-          >
-            <button
-              type="button"
-              data-channel-sidebar-toggle=""
-              aria-pressed={sidebarIconsOnly}
-              className={cn(
-                // The same tile as the roster toggle at the other end of this
-                // row: they are a pair, and a pair that is two sizes reads as
-                // two unrelated buttons.
-                HEADER_ACTION_TILE,
-                "mr-2 hidden md:flex",
-                sidebarIconsOnly && "text-paper",
-              )}
-              onClick={toggleChannelSidebar}
-            >
-              {sidebarIconsOnly ? (
-                <PanelLeftOpen className="h-4 w-4" />
-              ) : (
-                <PanelLeftClose className="h-4 w-4" />
-              )}
-            </button>
-          </Tooltip>
-        )}
+        {/* The channel list's own fold control lives in ITS header now,
+            beside settings, members and invite (see `channelSidebarToggle`
+            on `ChannelList`). */}
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 truncate font-display text-base font-bold">
             {selectedChannel.imageUrl ? (
@@ -6432,6 +6381,7 @@ function MainAppContent({
       )}
 
       <ServerRail
+        liveServerIds={watchParties.liveServerIds}
         servers={servers}
         selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}
@@ -6531,6 +6481,11 @@ function MainAppContent({
         />
       ) : (
         <ChannelList
+          channelSidebarToggle={
+            columnLayout
+              ? { iconsOnly: sidebarIconsOnly, onToggle: toggleChannelSidebar }
+              : undefined
+          }
           server={selectedServer ?? null}
           channels={channels}
           selectedChannelId={selectedChannelId}

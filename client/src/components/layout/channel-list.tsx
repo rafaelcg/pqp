@@ -30,6 +30,7 @@ import {
   Volume2,
   VolumeX,
   X,
+  PanelLeftClose,
 } from "lucide-react";
 import {
   useEffect,
@@ -245,6 +246,12 @@ interface ChannelListProps {
   onInvite: () => void;
   onOpenMembers: () => void;
   onOpenServerSettings: () => void;
+  /**
+   * Fold this list to a strip of icons. Lives in THIS header, beside the
+   * other controls about this server, rather than in the channel header: a
+   * control that hides the column belongs on the column.
+   */
+  channelSidebarToggle?: { iconsOnly: boolean; onToggle: () => void };
   footer?: ReactNode;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
@@ -339,6 +346,7 @@ export function ChannelList({
   onFavoriteChannelIdsChange,
   onInvite,
   onOpenMembers,
+  channelSidebarToggle,
   onOpenServerSettings,
   footer,
   mobileOpen = false,
@@ -492,9 +500,14 @@ export function ChannelList({
       >
         <div className="flex flex-col items-center gap-1 border-b border-ink-4/60 px-2 py-2">
           <Tooltip label={t("chrome.expandChannelList")} side="right">
+            {/* The same control as the header's fold button, in its other
+                state: one identity per boundary, pressed while folded. */}
             <button
               type="button"
               data-channel-rail-expand=""
+              data-channel-sidebar-toggle=""
+              aria-pressed="true"
+              aria-label={t("chrome.expandChannelList")}
               className="flex h-9 w-9 items-center justify-center rounded-lg text-paper-muted hover:bg-ink-3 hover:text-paper"
               onClick={onExpand}
             >
@@ -1217,16 +1230,18 @@ export function ChannelList({
           {/* `shrink-0`: these are all fixed-width controls, so letting flex
               compress them only squeezes their tap targets while the name is
               already truncating anyway. */}
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="flex shrink-0 items-center gap-0.5">
             {server && (
               <>
                 {/* Manage Messages too: that rank has Moderação and a
-                    read-only AutoMod in the dialog, which decides the rail. */}
+                    read-only AutoMod in the dialog, which decides the rail.
+                    Four controls now, at p-1 rather than p-1.5 so the name
+                    keeps the pixels the fourth would have taken. */}
                 {(canManage || canManageMessages) && (
                   <Tooltip label={t("chrome.communitySettings")}>
                     <button
                       type="button"
-                      className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                      className="rounded-md p-1 text-paper-muted hover:bg-ink-3 hover:text-paper"
                       onClick={onOpenServerSettings}
                     >
                       <Settings className="h-4 w-4" />
@@ -1236,7 +1251,7 @@ export function ChannelList({
                 <Tooltip label={t("chrome.members")}>
                   <button
                     type="button"
-                    className="rounded-md p-1.5 text-paper-muted hover:bg-ink-3 hover:text-paper"
+                    className="rounded-md p-1 text-paper-muted hover:bg-ink-3 hover:text-paper"
                     onClick={onOpenMembers}
                   >
                     <Users className="h-4 w-4" />
@@ -1255,12 +1270,33 @@ export function ChannelList({
                 <Tooltip label={t("chrome.invitePeople")}>
                   <button
                     type="button"
-                    className="rounded-md p-1.5 text-signal hover:bg-ink-3"
+                    className="rounded-md p-1 text-signal hover:bg-ink-3"
                     onClick={onInvite}
                   >
                     <UserPlus className="h-4 w-4" />
                   </button>
                 </Tooltip>
+                {channelSidebarToggle && (
+                  <Tooltip
+                    label={
+                      channelSidebarToggle.iconsOnly
+                        ? t("chrome.expandChannelList")
+                        : t("chrome.collapseChannelList")
+                    }
+                    detail={t("chrome.collapseChannelListHint")}
+                  >
+                    <button
+                      type="button"
+                      data-channel-sidebar-toggle=""
+                      aria-pressed={channelSidebarToggle.iconsOnly}
+                      className="hidden rounded-md p-1 text-paper-muted hover:bg-ink-3 hover:text-paper md:block"
+                      onClick={channelSidebarToggle.onToggle}
+                    >
+                      <PanelLeftClose className="h-4 w-4" />
+                    </button>
+                  </Tooltip>
+                )}
+
               </>
             )}
             {onMobileClose && (

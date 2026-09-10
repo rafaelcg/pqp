@@ -1810,6 +1810,7 @@
   "chrome.closeChannelList": "Close channel list",
   "chrome.collapseChannelList": "Collapse the channel list",
   "chrome.collapseChannelListHint": "Icons only, and everything on the right gets the width.",
+  "chrome.livePartySr": "Watch party live",
   "chrome.expandChannelList": "Expand the channel list",
   "chrome.inCall_one": "{count} in the call",
   "chrome.inCall_other": "{count} in the call",

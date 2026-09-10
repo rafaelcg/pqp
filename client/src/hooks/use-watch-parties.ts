@@ -26,8 +26,10 @@ import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
 export interface WatchPartiesState {
   /** channelId -> the party there, as this person may see it. */
   byChannel: Record<string, WatchParty>;
-  /** The live ones, newest first. What the sidebar block draws. */
+  /** The live ones in the open server, newest first. What the sidebar block draws. */
   live: WatchParty[];
+  /** Every server with a live party, for the rail's dot. */
+  liveServerIds: ReadonlySet<string>;
   /** Apply a `watch-party-update` frame. */
   apply: (channelId: string, party: WatchParty | null) => void;
   /** After a mutation whose broadcast this client may not be in scope for. */
@@ -42,7 +44,6 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
 
   useEffect(() => {
     serverRef.current = serverId;
-    setByChannel({});
     if (!serverId || !isWatchPartyChannelsEnabled()) {
       return;
     }
@@ -56,11 +57,22 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
         if (cancelled || serverRef.current !== serverId) {
           return;
         }
-        const next: Record<string, WatchParty> = {};
-        for (const party of answer.parties) {
-          next[party.channelId] = party;
-        }
-        setByChannel(next);
+        // Authoritative for THIS server only. Other servers' parties stay:
+        // they arrived on the socket (`catchUpWatchParties` sends every
+        // server's live ones on connect, and updates follow), and they are
+        // what lights the rail's dot on a server you are not looking at.
+        setByChannel((prev) => {
+          const next: Record<string, WatchParty> = {};
+          for (const party of Object.values(prev)) {
+            if (party.serverId !== serverId) {
+              next[party.channelId] = party;
+            }
+          }
+          for (const party of answer.parties) {
+            next[party.channelId] = party;
+          }
+          return next;
+        });
       })
       .catch(() => {
         // No answer reads as no parties. A frame will say otherwise the
@@ -83,9 +95,23 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
 
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
-  const live = useMemo(() => liveWatchParties(byChannel), [byChannel]);
+  // The sidebar block is the OPEN server's; the rail wants every server.
+  const live = useMemo(
+    () =>
+      liveWatchParties(byChannel).filter((party) => party.serverId === serverId),
+    [byChannel, serverId],
+  );
+  const liveServerIds = useMemo(
+    () =>
+      new Set(
+        liveWatchParties(byChannel)
+          .map((party) => party.serverId)
+          .filter((id): id is string => id !== null),
+      ),
+    [byChannel],
+  );
 
-  return { byChannel, live, apply, put, refresh };
+  return { byChannel, live, liveServerIds, apply, put, refresh };
 }
 
 
