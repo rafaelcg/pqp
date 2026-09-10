@@ -11,8 +11,7 @@ import { openApp } from "./fixtures";
  * `server/src/services/community-home.test.ts`.
  *
  * Row: flag on shows Baú on any server (including private halls).
- * Landing: flag on + isCommunity lands on Baú; private halls still land on
- * the first text channel.
+ * Landing: flag on + this server opted in lands on Baú, community or hall.
  */
 
 const API = process.env.E2E_API_URL ?? "http://localhost:3101";
@@ -56,7 +55,7 @@ async function ensureAccount(suffix?: string): Promise<void> {
   });
 }
 
-async function seedCommunity(name: string): Promise<string> {
+async function seedHall(name: string): Promise<string> {
   await ensureAccount(OWNER);
   await ensureAccount(MEMBER);
   const created = await fetch(`${API}/api/servers`, {
@@ -82,7 +81,20 @@ async function seedCommunity(name: string): Promise<string> {
     headers: headers(MEMBER),
   });
 
-  const patched = await fetch(`${API}/api/servers/${server.id}/community`, {
+  const opted = await fetch(`${API}/api/servers/${server.id}/home/config`, {
+    method: "PATCH",
+    headers: headers(OWNER),
+    body: JSON.stringify({ enabled: true }),
+  });
+  if (!opted.ok) {
+    throw new Error(`could not enable Baú on ${name}: ${opted.status}`);
+  }
+  return server.id;
+}
+
+async function seedCommunity(name: string): Promise<string> {
+  const serverId = await seedHall(name);
+  const patched = await fetch(`${API}/api/servers/${serverId}/community`, {
     method: "PATCH",
     headers: headers(OWNER),
     body: JSON.stringify({
@@ -97,17 +109,7 @@ async function seedCommunity(name: string): Promise<string> {
       `could not list ${name}: ${patched.status} ${detail.slice(0, 200)}`,
     );
   }
-  // The owner's own opt-in (Server settings); the instance flag alone shows
-  // nothing.
-  const opted = await fetch(`${API}/api/servers/${server.id}/home/config`, {
-    method: "PATCH",
-    headers: headers(OWNER),
-    body: JSON.stringify({ enabled: true }),
-  });
-  if (!opted.ok) {
-    throw new Error(`could not enable Baú on ${name}: ${opted.status}`);
-  }
-  return server.id;
+  return serverId;
 }
 
 async function seedPost(
@@ -326,10 +328,29 @@ test.describe("Baú", () => {
     await expect(badge).toBeVisible({ timeout: 20_000 });
     await expect(badge).toHaveText("1");
 
-    // Opening the Baú clears it.
-    await page.locator("[data-community-home-row]").click();
+    // Corner card for everyone but the author; click it to open Baú.
+    const toast = page.locator('[data-corner-card="community-home-post"]');
+    await expect(toast).toBeVisible({ timeout: 20_000 });
+    await toast.getByRole("button", { name: "Open Baú" }).click();
     await expect(page.locator("[data-community-home-feed]")).toBeVisible();
     await expect(badge).toHaveCount(0);
+    await expect(toast).toHaveCount(0);
+  });
+
+  test("private hall with Baú on lands on the feed every time", async ({
+    page,
+  }) => {
+    const serverId = await seedHall(`Mesa Hall ${Date.now()}`);
+    await openAs(page, MEMBER, serverId, { communityHome: "1" });
+    const feed = page.locator("[data-community-home-feed]");
+    await expect(feed).toBeVisible({ timeout: 20_000 });
+
+    // Step off, then reopen the server URL with no channel. Used to land on
+    // #general after the first visit; now the Baú is the front door.
+    await page.getByRole("button", { name: "general" }).first().click();
+    await expect(feed).toHaveCount(0);
+    await page.goto(`/app/server/${serverId}?lang=en&communityHome=1`);
+    await expect(feed).toBeVisible({ timeout: 20_000 });
   });
 
   test("server that never opted in: no Baú row even with the flag on", async ({
