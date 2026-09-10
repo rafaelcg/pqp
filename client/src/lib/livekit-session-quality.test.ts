@@ -845,20 +845,53 @@ describe("the presenter as a live ladder's source", () => {
     expect(constrained.at(-1)).toBe(1080);
   });
 
-  it("puts the cap back when the stream stops", async () => {
+  it("keeps the layers when the stream drops briefly (egress restart gap)", async () => {
     const sfu = await session();
     fillRoom(50);
     await settle();
     await sfu.publishScreen(fakeStream("video", "screen"));
     await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES);
     expect(constrained).toEqual([720, 1080]);
+    const publishesAfterRaise = published.length;
+    const unpublishesAfterRaise = unpublished.length;
+    const writesBefore = senderWrites.length;
 
+    // Egress tear-down clears liveStream for a few seconds. The old pin guard
+    // asked broadcastIsLive() and then immediately republished 1080→720 —
+    // which is the screen-track-replaced loop on PQPTV.
     await sfu.setHlsSource(null);
 
-    expect(constrained).toEqual([720, 1080, 720]);
-    expect(lastScreenPublish()?.screenShareEncoding?.maxBitrate).toBe(
-      1_500_000,
-    );
+    expect(published).toHaveLength(publishesAfterRaise);
+    expect(unpublished).toHaveLength(unpublishesAfterRaise);
+    expect(constrained).toEqual([720, 1080]);
+    // Ceiling only: large-room bitrate without a new sid.
+    const moved = senderWrites
+      .slice(writesBefore)
+      .filter((write) => write.source === Track.Source.ScreenShare);
+    expect(moved.length).toBeGreaterThan(0);
+    expect(moved[moved.length - 1]!.maxBitrate).toBe(1_500_000);
+
+    // Ladder returns on the same capture. Still no republish.
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    expect(published).toHaveLength(publishesAfterRaise);
+    expect(constrained).toEqual([720, 1080]);
+  });
+
+  it("does not drop a small-room 1080 on the first weak uplink reading", async () => {
+    // Small room: Auto publishes 1080 before the egress exists. The first
+    // setHlsSource used to drop immediately because the pin was still clear.
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    expect(constrained).toEqual([1080]);
+    const publishesBefore = published.length;
+
+    await setHlsUplink(sfu, 1_000_000, HLS_SOURCE_DROP_SAMPLES - 1);
+    expect(published).toHaveLength(publishesBefore);
+    expect(constrained).toEqual([1080]);
+
+    await setHlsUplink(sfu, 1_000_000);
+    expect(published.length).toBe(publishesBefore + 1);
+    expect(constrained.at(-1)).toBe(720);
   });
 
   it("does not raise on an uplink that cannot carry it", async () => {
