@@ -168,6 +168,22 @@ describe("screenCaptureOptions", () => {
     });
   });
 
+  it("asks for 60 fps only when the caller opted the HLS rung in", () => {
+    expect(
+      screenCaptureOptions(false, browser, { maxFrameRate: 60 }).video,
+    ).toMatchObject({
+      frameRate: { ideal: 60, max: 60 },
+    });
+    expect(
+      screenCaptureOptions(false, browser, {
+        preferBrowserTab: true,
+        maxFrameRate: 60,
+      }).video,
+    ).toMatchObject({
+      frameRate: { ideal: 60, max: 60 },
+    });
+  });
+
   it("steers a Watch party toward a tab and that tab's sound", () => {
     // The product meaning of Watch party: share the player tab, with its
     // sound, not the whole desktop. System audio is the echo path and stays

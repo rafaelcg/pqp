@@ -9,6 +9,7 @@ import {
   hlsLiveSyncFitsWindow,
   isBehindLive,
   isPipAvailable,
+  jumpToLiveTime,
   secondsBehindLive,
 } from "./hls-live-edge";
 
@@ -42,6 +43,13 @@ describe("secondsBehindLive", () => {
 
   it("is the gap when behind", () => {
     expect(secondsBehindLive(0, 15)).toBe(15);
+  });
+});
+
+describe("jumpToLiveTime", () => {
+  it("lands one segment behind the live edge", () => {
+    expect(jumpToLiveTime(20, 2)).toBe(18);
+    expect(jumpToLiveTime(1, 2)).toBe(0);
   });
 });
 

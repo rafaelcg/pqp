@@ -7,6 +7,7 @@ import {
   isOwnHlsPlaylistProxyUrl,
   resolveHlsUrl,
   sameHlsSession,
+  sampleVideoPlaybackQuality,
   shouldAdoptHlsSource,
 } from "./hls-playback";
 
@@ -218,5 +219,19 @@ describe("hasHlsViewerToken", () => {
   it("is not fooled by a parameter that merely starts with t", () => {
     expect(hasHlsViewerToken(`${PROXY}?token=abc`)).toBe(false);
     expect(hasHlsViewerToken(`${PROXY}?tt=abc`)).toBe(false);
+  });
+});
+
+describe("sampleVideoPlaybackQuality", () => {
+  it("reads dropped and total frames when the engine reports them", () => {
+    expect(
+      sampleVideoPlaybackQuality({
+        getVideoPlaybackQuality: () => ({
+          droppedVideoFrames: 3,
+          totalVideoFrames: 180,
+        }),
+      }),
+    ).toEqual({ droppedVideoFrames: 3, totalVideoFrames: 180 });
+    expect(sampleVideoPlaybackQuality({})).toBeNull();
   });
 });

@@ -55,6 +55,7 @@ export interface LadderRung {
  */
 const AAC_LC = "mp4a.40.2";
 const H264_MAIN_L40 = "avc1.4d0028";
+const H264_MAIN_L32 = "avc1.4d0020";
 const H264_MAIN_L31 = "avc1.4d001f";
 const H264_MAIN_L30 = "avc1.4d001e";
 
@@ -82,6 +83,23 @@ export const LADDER_RUNGS: Readonly<Record<string, LadderRung>> = {
     audioKbps: 128,
     codecs: `${H264_MAIN_L31},${AAC_LC}`,
   },
+  /**
+   * Opt-in smoothness rung. Not in the default ladder: 60 fps encode is
+   * roughly 1.6–2× the 720p30 core cost on this box, and capture/publish
+   * stay at 30 unless this name is in `LIVE_HLS_LADDER`. Do not stack it
+   * next to `720p30` — same height, and the viewer's pin is by height.
+   * `1080p30,720p60` is a tight ABR gap (1.41×); prefer `720p60,480p30`
+   * when the party is a game, or keep the 30 fps default for films.
+   */
+  "720p60": {
+    name: "720p60",
+    width: 1280,
+    height: 720,
+    framerate: 60,
+    videoKbps: 3200,
+    audioKbps: 128,
+    codecs: `${H264_MAIN_L32},${AAC_LC}`,
+  },
   "480p30": {
     name: "480p30",
     width: 854,
@@ -108,9 +126,15 @@ export const LADDER_RUNGS: Readonly<Record<string, LadderRung>> = {
  * desktop should still enjoy, 480p because a phone on mobile data cannot
  * hold 1800 kbit/s and used to buffer on the old two-rung default. A viewer
  * whose link cannot hold 900 kbit/s still has no lower rung: add `360p30`
- * by configuration for that audience.
+ * by configuration for that audience. `720p60` is a named option, not a
+ * default: see `LADDER_RUNGS` and `docs/WATCH_PARTY_HLS_PERFORMANCE.md`.
  */
 export const DEFAULT_LADDER = "1080p30,720p30,480p30";
+
+/** Highest fps any of these rungs asks for. 30 when the list is empty. */
+export function ladderMaxFramerate(rungs: readonly LadderRung[]): number {
+  return rungs.reduce((max, rung) => Math.max(max, rung.framerate), 30);
+}
 
 /**
  * BANDWIDTH in a master playlist is the PEAK segment bitrate, not the

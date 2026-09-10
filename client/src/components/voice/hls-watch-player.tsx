@@ -26,15 +26,18 @@ import {
   isOwnHlsPlaylistProxyUrl,
   resolveHlsUrl,
   sameHlsSession,
+  sampleVideoPlaybackQuality,
   setHlsPlaybackStats,
   shouldAdoptHlsSource,
 } from "@/lib/hls-playback";
 import {
   buildMediaSessionMetadata,
   hasSafariPresentationMode,
+  HLS_ABR_DEFAULT_ESTIMATE_BPS,
   hlsLivePlayerConfig,
   isBehindLive,
   isPipAvailable,
+  jumpToLiveTime,
 } from "@/lib/hls-live-edge";
 import { fetchChannelLive, getAuthToken } from "@/lib/api";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -64,6 +67,9 @@ import { cn } from "@/lib/utils";
 
 const STALL_TICK_MS = 1_000;
 
+/** Survives a teardown so the next instance does not reseed ABR at 500 kbit/s. */
+let lastHlsBandwidthEstimate = HLS_ABR_DEFAULT_ESTIMATE_BPS;
+
 type StreamPhase = "playing" | "reconnecting" | "dead";
 
 /** hls.js instance shape this file actually touches. */
@@ -76,6 +82,9 @@ interface HlsHandle {
   /** `-1` is Auto. Assigning waits for the next segment, no flush. */
   nextLevel: number;
   levels: HlsLevelLike[];
+  recoverMediaError?: () => void;
+  startLoad?: (startPosition?: number) => void;
+  bandwidthEstimate?: number;
 }
 
 /** Safari's non-standard presentation-mode video element. */
@@ -320,7 +329,7 @@ export function HlsWatchPlayer({
     const hls = hlsRef.current;
     const liveEdge = hls?.liveSyncPosition ?? video.duration;
     if (Number.isFinite(liveEdge)) {
-      video.currentTime = liveEdge as number;
+      video.currentTime = jumpToLiveTime(liveEdge as number);
     }
   }, [getVideo]);
 
@@ -488,9 +497,11 @@ export function HlsWatchPlayer({
       if (cancelled || video.videoWidth === 0 || video.videoHeight === 0) {
         return;
       }
+      const quality = sampleVideoPlaybackQuality(video);
       setHlsPlaybackStats({
         width: video.videoWidth,
         height: video.videoHeight,
+        ...(quality ?? {}),
       });
     };
     const watch = watchRef.current;
@@ -530,6 +541,19 @@ export function HlsWatchPlayer({
       }
       if (decision === "dead") {
         setPhase("dead");
+        return;
+      }
+      if (decision === "recover") {
+        const hls = hlsRef.current;
+        console.warn(`[hls] stream stalled (${watch.lastReason}), recovering`);
+        if (watch.lastReason === "fatal") {
+          hls?.recoverMediaError?.();
+        }
+        hls?.startLoad?.();
+        const liveEdge = hls?.liveSyncPosition ?? video.duration;
+        if (Number.isFinite(liveEdge)) {
+          video.currentTime = jumpToLiveTime(liveEdge as number);
+        }
         return;
       }
       console.warn(`[hls] stream stalled (${watch.lastReason}), reconnecting`);
@@ -580,6 +604,9 @@ export function HlsWatchPlayer({
       const player = new Hls({
         ...hlsLivePlayerConfig(),
         enableWorker: true,
+        capLevelToPlayerSize: true,
+        maxLiveSyncPlaybackRate: 1.5,
+        abrEwmaDefaultEstimate: lastHlsBandwidthEstimate,
         // Playlist is written after the first 2 s segment. Retry the
         // initial 404 instead of giving up while egress is still starting.
         manifestLoadingMaxRetry: 12,
@@ -678,6 +705,13 @@ export function HlsWatchPlayer({
       video.removeEventListener("stalled", onWaiting);
       video.removeEventListener("error", onMediaError);
       video.removeEventListener("loadedmetadata", reportSize);
+      if (
+        hls &&
+        typeof hls.bandwidthEstimate === "number" &&
+        hls.bandwidthEstimate > 0
+      ) {
+        lastHlsBandwidthEstimate = hls.bandwidthEstimate;
+      }
       hls?.destroy();
       hlsRef.current = null;
       video.removeAttribute("src");
@@ -819,9 +853,17 @@ export function HlsWatchPlayer({
                   ? autoHeight === null
                     ? t("voice.hls.qualityAuto")
                     : t("voice.hls.qualityAutoAt", {
-                        quality: describeHlsLevel(autoHeight),
+                        quality: describeHlsLevel(
+                          autoHeight,
+                          levels.find((level) => level.height === autoHeight)
+                            ?.frameRate,
+                        ),
                       })
-                  : describeHlsLevel(qualityPref.height)}
+                  : describeHlsLevel(
+                      qualityPref.height,
+                      levels.find((level) => level.height === qualityPref.height)
+                        ?.frameRate,
+                    )}
               </button>
               {qualityOpen ? (
                 <div
@@ -863,7 +905,7 @@ export function HlsWatchPlayer({
                             : "opacity-0",
                         )}
                       />
-                      {describeHlsLevel(level.height)}
+                      {describeHlsLevel(level.height, level.frameRate)}
                     </button>
                   ))}
                 </div>

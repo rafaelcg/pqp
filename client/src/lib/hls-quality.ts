@@ -36,6 +36,7 @@ export interface HlsLevelLike {
   height?: number;
   width?: number;
   bitrate?: number;
+  frameRate?: number;
 }
 
 /** Tolerant on purpose: a corrupt or half-written entry is not worth an error. */
@@ -86,16 +87,23 @@ export function writeHlsQuality(pref: HlsQualityPref): void {
  */
 export function offeredHlsLevels(
   levels: readonly HlsLevelLike[],
-): { height: number; index: number }[] {
+): { height: number; index: number; frameRate?: number }[] {
   const seen = new Set<number>();
-  const offered: { height: number; index: number }[] = [];
+  const offered: { height: number; index: number; frameRate?: number }[] = [];
   levels.forEach((level, index) => {
     const height = level.height;
     if (typeof height !== "number" || height <= 0 || seen.has(height)) {
       return;
     }
     seen.add(height);
-    offered.push({ height, index });
+    offered.push({
+      height,
+      index,
+      frameRate:
+        typeof level.frameRate === "number" && level.frameRate > 0
+          ? level.frameRate
+          : undefined,
+    });
   });
   return offered.sort((a, b) => b.height - a.height);
 }
@@ -123,8 +131,11 @@ export function levelIndexFor(
   return match ? match.index : -1;
 }
 
-/** `720` becomes `720p`. What the button and the menu rows say. */
-export function describeHlsLevel(height: number): string {
+/** `720` becomes `720p`. A 60 fps rung says `720p60`. */
+export function describeHlsLevel(height: number, frameRate?: number): string {
+  if (typeof frameRate === "number" && frameRate >= 50) {
+    return `${height}p${Math.round(frameRate)}`;
+  }
   return `${height}p`;
 }
 

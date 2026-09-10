@@ -26,6 +26,7 @@ import {
   type ScreenSimulcastPlan,
   type VideoQuality,
 } from "./video-quality";
+import { publishMaxFrameRateFromTrack } from "./hls-capture-rate";
 import {
   qualityFromLiveKit,
   type LiveKitConnectionQuality,
@@ -983,7 +984,7 @@ export async function connectLiveKit({
       degradationPreference: "maintain-framerate",
       screenShareEncoding: {
         maxBitrate: plan.topBitrate,
-        maxFramerate: VIDEO_MAX_FRAMERATE,
+        maxFramerate: publishMaxFrameRateFromTrack(track),
       },
     });
     publishedScreenPlan = plan;
