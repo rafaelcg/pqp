@@ -5,6 +5,11 @@ import {
   communityHomeMediaKindFromContentType,
   parseYoutubeVideoId,
   youtubeEmbedSrc,
+  tiktokEmbedSrc,
+  instagramEmbedSrc,
+  parseCommunityHomeEmbed,
+  isCommunityHomeEmbedKind,
+  communityHomeEmbedUrl,
   type CommunityHomeContentType,
 } from "@pqp/shared";
 import {
@@ -22,7 +27,16 @@ import {
  * but it is never a production media representation.
  */
 
-export { COMMUNITY_HOME_MAX_BYTES, parseYoutubeVideoId, youtubeEmbedSrc };
+export {
+  COMMUNITY_HOME_MAX_BYTES,
+  parseYoutubeVideoId,
+  youtubeEmbedSrc,
+  tiktokEmbedSrc,
+  instagramEmbedSrc,
+  parseCommunityHomeEmbed,
+  isCommunityHomeEmbedKind,
+  communityHomeEmbedUrl,
+};
 export type {
   CommunityHomeMedia,
   CommunityHomeMediaKind,

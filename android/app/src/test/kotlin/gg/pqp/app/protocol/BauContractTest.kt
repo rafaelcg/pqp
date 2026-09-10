@@ -92,7 +92,7 @@ class BauContractTest {
     fun `the media kinds and visibilities are the ones shared publishes`() {
         assumeSharedModule()
         assertEquals(
-            listOf("image", "video", "youtube", "file"),
+            listOf("image", "video", "youtube", "tiktok", "instagram", "file"),
             RepoSources.enumValues(shared, "communityHomeMediaKindSchema"),
         )
         assertEquals(

@@ -101,6 +101,31 @@ class BauModelsTest {
     }
 
     @Test
+    fun `TikTok media opens the original watch URL`() {
+        val media = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"tiktok","name":"TikTok","contentType":null,"byteSize":null,"url":null,
+                "youtubeUrl":"https://www.tiktok.com/@scout2015/video/6718335390845095173"}""",
+        )
+        assertTrue(media.isTiktok)
+        assertEquals(
+            "https://www.tiktok.com/@scout2015/video/6718335390845095173",
+            media.openUrl,
+        )
+    }
+
+    @Test
+    fun `Instagram media opens the original watch URL`() {
+        val media = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"instagram","name":"Instagram","contentType":null,"byteSize":null,"url":null,
+                "youtubeUrl":"https://www.instagram.com/reel/CqK2e0_JXkA/"}""",
+        )
+        assertTrue(media.isInstagram)
+        assertEquals("https://www.instagram.com/reel/CqK2e0_JXkA/", media.openUrl)
+    }
+
+    @Test
     fun `a post the server has grown fields on still decodes`() {
         val grown = PqpJson.decodeFromString(
             BauPost.serializer(),

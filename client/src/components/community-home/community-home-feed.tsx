@@ -59,10 +59,14 @@ import {
   isPostLockedForViewer,
   loadCommunityHomeViewerMode,
   lockedPostSummary,
-  parseYoutubeVideoId,
   saveCommunityHomeViewerMode,
   uploadHomeMedia,
   youtubeEmbedSrc,
+  tiktokEmbedSrc,
+  instagramEmbedSrc,
+  parseCommunityHomeEmbed,
+  isCommunityHomeEmbedKind,
+  communityHomeEmbedUrl,
   type CommunityHomeComment,
   type CommunityHomeMedia,
   type CommunityHomePost,
@@ -243,6 +247,44 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
           src={src}
           className="aspect-video w-full"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+        />
+      </div>
+    );
+  }
+
+  if (media.kind === "tiktok") {
+    const src = media.youtubeUrl ? tiktokEmbedSrc(media.youtubeUrl) : null;
+    if (!src) {
+      return null;
+    }
+    return (
+      <div
+        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
+        data-home-media="tiktok"
+      >
+        <iframe
+          title={t("communityHome.media.openTikTok")}
+          allow="encrypted-media; fullscreen; picture-in-picture"
+          allowFullScreen
+        />
+      </div>
+    );
+  }
+
+  if (media.kind === "instagram") {
+    const src = media.youtubeUrl ? instagramEmbedSrc(media.youtubeUrl) : null;
+    if (!src) {
+      return null;
+    }
+    return (
+      <div
+        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
+        data-home-media="instagram"
+      >
+        <iframe
+          title={t("communityHome.media.openInstagram")}
+          allow="encrypted-media; clipboard-write; picture-in-picture"
           allowFullScreen
         />
       </div>
@@ -1017,18 +1059,26 @@ function composeFromPost(post: CommunityHomePost): ComposeState {
     teaser: post.teaser ?? "",
     visibility: post.visibility,
     commentsEnabled: post.commentsEnabled,
-    youtubeUrl: post.media?.kind === "youtube" ? (post.media.youtubeUrl ?? "") : "",
-    existingMedia: post.media && post.media.kind !== "youtube" ? post.media : null,
+    youtubeUrl: (post.media && communityHomeEmbedUrl(post.media)) || "",
+    existingMedia:
+      post.media && !isCommunityHomeEmbedKind(post.media.kind) ? post.media : null,
   };
 }
 
 /** The post the preview renders, built from what is typed so far. */
 function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOwner: boolean): CommunityHomePost {
   let media: CommunityHomeMedia | null = null;
-  if (state.youtubeUrl.trim() && parseYoutubeVideoId(state.youtubeUrl)) {
+  const embedKind = parseCommunityHomeEmbed(state.youtubeUrl);
+  if (embedKind) {
+    const name =
+      embedKind === "tiktok"
+        ? "TikTok"
+        : embedKind === "instagram"
+          ? "Instagram"
+          : "YouTube";
     media = {
-      kind: "youtube",
-      name: "YouTube",
+      kind: embedKind,
+      name,
       contentType: null,
       byteSize: null,
       url: null,
@@ -1188,7 +1238,7 @@ function ComposeCard({
       setError(t("communityHome.compose.needsTitleAndContent"));
       return;
     }
-    if (state.youtubeUrl.trim() && !parseYoutubeVideoId(state.youtubeUrl)) {
+    if (state.youtubeUrl.trim() && !parseCommunityHomeEmbed(state.youtubeUrl)) {
       setError(t("communityHome.compose.badYoutube"));
       return;
     }
@@ -1365,7 +1415,7 @@ function ComposeCard({
           )}
         </div>
 
-        {/* Media: one of file (when storage is on) or YouTube. */}
+        {/* Media: one of file (when storage is on) or a YouTube / TikTok / Instagram URL. */}
         <div className="mb-2 grid gap-2 sm:grid-cols-2">
           {mediaEnabled ? (
             <label className="block text-xs text-paper-muted">

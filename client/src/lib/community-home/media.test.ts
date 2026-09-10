@@ -4,6 +4,9 @@ import {
   formatHomeBytes,
   parseYoutubeVideoId,
   youtubeEmbedSrc,
+  tiktokEmbedSrc,
+  instagramEmbedSrc,
+  parseCommunityHomeEmbed,
 } from "./media";
 
 describe("community home media helpers", () => {
@@ -25,6 +28,24 @@ describe("community home media helpers", () => {
       "https://www.youtube-nocookie.com/embed/jNQXAC9IVRw",
     );
     expect(youtubeEmbedSrc("not-a-url")).toBeNull();
+  });
+
+  it("classifies TikTok and Instagram paste URLs and builds their iframes", () => {
+    const tiktok = "https://www.tiktok.com/@scout2015/video/6718335390845095173";
+    expect(parseCommunityHomeEmbed(tiktok)).toBe("tiktok");
+    expect(tiktokEmbedSrc(tiktok)).toBe(
+      "https://www.tiktok.com/player/v1/6718335390845095173",
+    );
+    expect(parseCommunityHomeEmbed("https://vm.tiktok.com/ZMh3xYd/")).toBeNull();
+
+    const ig = "https://www.instagram.com/reel/CqK2e0_JXkA/";
+    expect(parseCommunityHomeEmbed(ig)).toBe("instagram");
+    expect(instagramEmbedSrc(ig)).toBe(
+      "https://www.instagram.com/reel/CqK2e0_JXkA/embed/",
+    );
+    expect(
+      parseCommunityHomeEmbed("https://www.instagram.com/stories/rafa/1"),
+    ).toBeNull();
   });
 
   it("formats bytes and keeps the 100 MiB ceiling", () => {

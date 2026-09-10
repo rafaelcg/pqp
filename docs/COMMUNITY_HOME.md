@@ -30,7 +30,7 @@ feed. There is no `VITE_` flag: the client asks `GET /api/community-home/config`
 (`{ enabled, vipEnabled, mediaEnabled }`, always 200) and follows it, the way
 it follows the attachments and communities configs. `mediaEnabled` is the
 `S3_*` probe folded in, so a deployment without storage still gets the feed
-with YouTube links and text.
+with YouTube / TikTok / Instagram links and text.
 
 **Local override, dev bypass only.** With `DEV_AUTH_BYPASS=true`,
 `?communityHome=1|0` on `/app` forces the answer for that tab and latches it
@@ -98,7 +98,7 @@ See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
   the file) whenever the card design changes. The compose tab repeats the
   rows, small, until the first post exists.
 - **Composer** (staff tab "Write"): title, body, one media (file when
-  `mediaEnabled`, else YouTube only), comments on/off, VIP toggle + teaser
+  `mediaEnabled`, else YouTube / TikTok / Instagram only), comments on/off, VIP toggle + teaser
   when `vipEnabled`. **Preview** renders the card as members will see it, and
   the locked version too for a VIP post. **Publish**, **Save draft**, or
   **Schedule** (a `datetime-local` in the browser's timezone; the API stores
@@ -160,7 +160,16 @@ Image, native video (`mp4`/`webm`), PDF, up to 100 MiB each (`COMMUNITY_HOME_MAX
 mint / PUT / claim dance as attachments (`client/src/lib/community-home/media.ts`,
 `POST …/home/media`, `POST …/home/media/claim`). Bytes never pass through the
 Node process. YouTube is URL only (`watch`, `youtu.be`, `shorts`, `embed`,
-`live`), embedded from `youtube-nocookie.com`. Over-limit video is refused
+`live`), embedded from `youtube-nocookie.com`. TikTok is the same paste box
+(`tiktok.com/@user/video/{id}`, `m.tiktok.com/v/{id}`; short `vm.` / `vt.` /
+`/t/` links are refused because they only resolve after a redirect),
+embedded from `tiktok.com/player/v1/{id}` (TikTok's current Embed Player URL;
+`embed/v2` 504s from some edges). Instagram is `/p/{shortcode}`, `/reel/`,
+`/reels/`, embedded from `instagram.com/p/{shortcode}/embed/` (reels use
+`/reel/…/embed/`). That embed path answers with no `X-Frame-Options`, unlike
+the watch page which sends `DENY`. Profiles, tags, discover, stories and
+explore are refused. The original URL lives in `media_youtube_url` for all
+three; the server classifies `kind` from the paste. Over-limit video is refused
 with "upload it to YouTube". Files are signed as downloads, never inline.
 
 Orphans (minted, never claimed onto a post) are swept after an hour; deleting
@@ -179,7 +188,7 @@ relay) and clients refetch. Likes deliberately do **not** fan out.
 `fly secrets set COMMUNITY_HOME_ENABLED=true COMMUNITY_HOME_VIP_ENABLED=true -a pqp-api-staging`
 then push to `staging`. Media needs the staging R2 credentials on the app
 (see `docs/STAGING.md`); without them `mediaEnabled` is false and the
-composer offers YouTube and text only, which is the expected shape of a
+composer offers YouTube / TikTok / Instagram and text only, which is the expected shape of a
 self-host without storage, not a bug.
 
 ## Tests
@@ -190,8 +199,11 @@ self-host without storage, not a bug.
   config answers 200, member vs staff vs VIP visibility (including comment words), VIP flag
   off refuses and hides, drafts never reach members, schedule sweep, teaser
   survives an edit, comments and likes.
+- `packages/shared/src/community-home.test.ts`: YouTube / TikTok / Instagram URL
+  classifiers (profiles, stories, short links refused).
 - `client/src/components/community-home/community-home-feed.test.tsx`: the
-  card's contract (no free chip, locked leaks nothing, two comments max).
+  card's contract (no free chip, locked leaks nothing, two comments max,
+  TikTok / Instagram iframes).
 - `client/src/lib/community-home/*.test.ts`: flag resolution, landing,
   visibility helpers, media helpers.
 - `client/e2e/community-home.spec.ts`: forced-off chrome, owner write →

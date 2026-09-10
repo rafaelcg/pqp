@@ -257,6 +257,56 @@ describe("PostCard", () => {
     expect(plain).toContain(elsewhere);
   });
 
+  it("embeds a TikTok watch URL in the player iframe", () => {
+    const html = render(
+      <PostCard
+        post={post({
+          media: {
+            kind: "tiktok",
+            name: "TikTok",
+            contentType: null,
+            byteSize: null,
+            url: null,
+            youtubeUrl: "https://www.tiktok.com/@scout2015/video/6718335390845095173",
+          },
+        })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+      />,
+    );
+    expect(html).toContain('data-home-media="tiktok"');
+    expect(html).toContain(
+      'src="https://www.tiktok.com/player/v1/6718335390845095173"',
+    );
+  });
+
+  it("embeds an Instagram reel in the official embed iframe", () => {
+    const html = render(
+      <PostCard
+        post={post({
+          media: {
+            kind: "instagram",
+            name: "Instagram",
+            contentType: null,
+            byteSize: null,
+            url: null,
+            youtubeUrl: "https://www.instagram.com/reel/CqK2e0_JXkA/",
+          },
+        })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+      />,
+    );
+    expect(html).toContain('data-home-media="instagram"');
+    expect(html).toContain(
+      'src="https://www.instagram.com/reel/CqK2e0_JXkA/embed/"',
+    );
+  });
+
   it("offers emoji and GIF on the comment box", () => {
     const html = render(
       <PostCard

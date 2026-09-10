@@ -87,6 +87,30 @@ final class CommunityHomeDecodingTests: XCTestCase {
         )
     }
 
+    func testTikTokMediaOpensTheWatchPage() throws {
+        let media = try Coding.decoder.decode(CommunityHomeMedia.self, from: Data("""
+            {"kind":"tiktok","name":"TikTok","contentType":null,"byteSize":null,"url":null,
+             "youtubeUrl":"https://www.tiktok.com/@scout2015/video/6718335390845095173"}
+            """.utf8))
+        XCTAssertTrue(media.isTiktok)
+        XCTAssertEqual(
+            media.openURL?.absoluteString,
+            "https://www.tiktok.com/@scout2015/video/6718335390845095173"
+        )
+    }
+
+    func testInstagramMediaOpensTheWatchPage() throws {
+        let media = try Coding.decoder.decode(CommunityHomeMedia.self, from: Data("""
+            {"kind":"instagram","name":"Instagram","contentType":null,"byteSize":null,"url":null,
+             "youtubeUrl":"https://www.instagram.com/reel/CqK2e0_JXkA/"}
+            """.utf8))
+        XCTAssertTrue(media.isInstagram)
+        XCTAssertEqual(
+            media.openURL?.absoluteString,
+            "https://www.instagram.com/reel/CqK2e0_JXkA/"
+        )
+    }
+
     func testAPostTheServerHasGrownFieldsOnStillDecodes() throws {
         let grown = try Coding.decoder.decode(
             CommunityHomePost.self,

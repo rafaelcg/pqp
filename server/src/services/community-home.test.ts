@@ -578,6 +578,52 @@ describeDb("community home (Baú)", () => {
     expect(res.status).toBe(400);
   });
 
+  it("a TikTok watch URL is stored as kind tiktok on the YouTube field", async () => {
+    const url = "https://www.tiktok.com/@scout2015/video/6718335390845095173";
+    const post = await publish({
+      title: "clip",
+      body: "do tiktok",
+      youtubeUrl: url,
+    });
+    expect(post.media?.kind).toBe("tiktok");
+    expect(post.media?.youtubeUrl).toBe(url);
+  });
+
+  it("an Instagram reel URL is stored as kind instagram", async () => {
+    const url = "https://www.instagram.com/reel/CqK2e0_JXkA/";
+    const post = await publish({
+      title: "reel",
+      body: "do insta",
+      youtubeUrl: url,
+    });
+    expect(post.media?.kind).toBe("instagram");
+    expect(post.media?.youtubeUrl).toBe(url);
+  });
+
+  it("TikTok profiles and Instagram stories are a 400", async () => {
+    const profile = await call(owner, "POST", `${base()}/posts`, {
+      title: "x",
+      body: "y",
+      status: "published",
+      youtubeUrl: "https://www.tiktok.com/@scout2015",
+    });
+    expect(profile.status).toBe(400);
+    const story = await call(owner, "POST", `${base()}/posts`, {
+      title: "x",
+      body: "y",
+      status: "published",
+      youtubeUrl: "https://www.instagram.com/stories/rafa/123",
+    });
+    expect(story.status).toBe(400);
+    const short = await call(owner, "POST", `${base()}/posts`, {
+      title: "x",
+      body: "y",
+      status: "published",
+      youtubeUrl: "https://vm.tiktok.com/ZMh3xYd/",
+    });
+    expect(short.status).toBe(400);
+  });
+
   // ------------------------------------------------- comments and likes
 
   it("comments are a flat list; the card teases the oldest two", async () => {

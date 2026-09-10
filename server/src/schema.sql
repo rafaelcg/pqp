@@ -3518,7 +3518,7 @@ BEGIN
     ADD CONSTRAINT community_home_posts_media_kind_check
     CHECK (
       media_kind IS NULL
-      OR media_kind IN ('image', 'video', 'youtube', 'file')
+      OR media_kind IN ('image', 'video', 'youtube', 'tiktok', 'instagram', 'file')
     );
 EXCEPTION
   WHEN others THEN NULL;
