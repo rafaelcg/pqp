@@ -1048,7 +1048,7 @@ test("a host who has not gone live is told so, in words", async ({ page }) => {
 
   const notLive = page.getByTestId("watch-party-not-live");
   await expect(notLive).toBeVisible({ timeout: 20_000 });
-  await expect(notLive.getByText("Not live yet")).toBeVisible();
+  await expect(notLive.getByText("Only you can see this")).toBeVisible();
   // The state and the control that changes it are the same row, so reading
   // one puts the other under the pointer.
   await expect(notLive.locator("[data-watch-party-go-live]")).toBeVisible();

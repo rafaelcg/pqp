@@ -2875,7 +2875,6 @@
   "watchParty.setup.pickError": "Não deu pra abrir o seletor. Tenta de novo.",
   "watchParty.setup.goLive": "Ir ao vivo",
   "watchParty.setup.goLiveHint": "Na hora que você clicar, a watch party aparece no topo da barra pra galera daqui e todo mundo pode assistir.",
-  "watchParty.setup.notLive": "Ainda não tá no ar.",
   "watchParty.setup.pickFirst": "Escolhe o que compartilhar primeiro.",
   "watchParty.setup.noAudio": "Sem áudio. Clica em Trocar e marca compartilhar áudio da aba.",
   "watchParty.setup.phoneHost": "Pra transmitir, abre o pqp no computador. Daqui você marca a hora, ajusta as opções e manda o link.",

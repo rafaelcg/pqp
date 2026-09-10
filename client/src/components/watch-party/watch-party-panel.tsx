@@ -817,25 +817,6 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
               )}
             </div>
           )}
-          {/* NOT A CAPTION. A HOST READ THE OLD ONE AND SAID "im live".
-              This used to be 10px uppercase grey in the corner of the
-              preview, which is the visual language of a watermark, and on
-              12 Sep 2026 a host on production announced he was live to a
-              room while the server reported `sharingScreen: 0` and no
-              transcode running. He had picked a window, he could see his own
-              picture, and the only thing telling him it was going nowhere
-              was that badge.
-              So it says what state this is, in a sentence, in the warning
-              tone this app uses for "careful", with a dot that reads as a
-              status light and never as decoration. It is deliberately the
-              same shape as the LIVE pill it is the opposite of. */}
-          <span
-            data-testid="watch-party-preview-state"
-            className="pointer-events-none absolute left-3 top-3 flex items-center gap-1.5 rounded-full border border-warning/40 bg-surface-0/90 px-2.5 py-1 text-xs font-semibold text-warning"
-          >
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
-            {t("watchParty.setup.heading")}
-          </span>
           {/* The name sits on the picture, where the live bar will show it,
               rather than at the top of a form. Same input the e2e reads. */}
           <div className="absolute right-2 top-2 flex items-center gap-2">
@@ -904,8 +885,15 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <span className="h-2 w-2 shrink-0 rounded-full bg-warning" />
           <p className="min-w-0 text-xs">
+            {/* ONE WARNING, NOT TWO. The preview used to carry a pill ("Só
+                você tá vendo isso") and this row said "Ainda não tá no ar"
+                with the next step after it: the same fact in two places, in
+                two tones. The row says it once: whose eyes are on this, then
+                what to do about it. The bar is why a host on production once
+                announced "im live" to a room with nothing going out; it
+                stays the sentence, and the pill goes. */}
             <span className="font-semibold text-warning">
-              {t("watchParty.setup.notLive")}
+              {t("watchParty.setup.heading")}
             </span>{" "}
             <span className="text-text-tertiary">
               {stream

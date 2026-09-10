@@ -345,9 +345,9 @@ describe("a host can tell they are not live", () => {
      */
     const html = render(draft);
     expect(html).toContain("watch-party-not-live");
-    expect(html).toContain("Not live yet");
-    // And the badge on the preview is a status light now, not a caption.
-    expect(html).toContain("watch-party-preview-state");
+    expect(html).toContain("Only you can see this");
+    // One warning: the pill that used to sit on the preview is gone.
+    expect(html).not.toContain("watch-party-preview-state");
   });
 
   it("keeps Go live in the row pinned to the bottom of the surface", () => {
