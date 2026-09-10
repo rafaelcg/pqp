@@ -36,6 +36,7 @@ function friend(id: string, status: Friend["status"] = "online"): Friend {
     username: "them",
     tag: "them#0001",
     avatarUrl: null,
+    customStatus: null,
     status,
     friendsSince: "2026-01-05T00:00:00.000Z",
   };
@@ -48,6 +49,7 @@ function request(id: string): FriendRequestEntry {
     username: "them",
     tag: "them#0001",
     avatarUrl: null,
+    customStatus: null,
     requestedAt: "2026-02-01T00:00:00.000Z",
   };
 }

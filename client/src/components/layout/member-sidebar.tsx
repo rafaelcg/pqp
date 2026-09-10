@@ -179,6 +179,7 @@ function subjectOf(member: ServerMember): ProfileSubject {
     rank: member.role,
     isCharacter: member.isCharacter,
     handle: member.handle ?? null,
+    customStatus: member.customStatus ?? null,
   };
 }
 
@@ -195,6 +196,11 @@ function asRosterRow(person: PublicUser): ServerMember {
     tag: person.tag,
     role: "member",
     avatarUrl: person.avatarUrl,
+    // A group conversation carries no roster read and no presence, but it does
+    // carry the recado: it is on `publicUserSchema`, so the participant list
+    // already has it and the row can draw the same second line it draws in a
+    // server. Presence stays absent here on purpose (see the note on the pip).
+    customStatus: person.customStatus ?? null,
   };
 }
 
@@ -569,6 +575,7 @@ export function MemberSidebar({
           <MemberRow
             key={member.id}
             member={member}
+            blocked={blockedUserIds.has(member.id)}
             dim={!isAround(member.status)}
             voiceChannelName={voiceByUser.get(member.id) ?? null}
             items={menuFor(member)}
@@ -738,6 +745,13 @@ export function MemberSidebar({
 
 interface MemberRowProps {
   member: ServerMember;
+  /**
+   * The viewer has blocked this person. Only the recado cares: a block is the
+   * reader saying they do not want this account's writing, and a status line is
+   * the one thing on this row that this account wrote. The name and the picture
+   * stay, because the row still has to be identifiable enough to unblock.
+   */
+  blocked: boolean;
   /** Offline rows are drawn back, the way every member list does it. */
   dim: boolean;
   voiceChannelName: string | null;
@@ -751,13 +765,20 @@ interface MemberRowProps {
  * One person: picture, pip, name, and a second line when there is something true
  * to put on it.
  *
- * THE SECOND LINE IS NOT A CUSTOM STATUS. Discord and Stoat put a person's own
- * status text there; this product has no such field anywhere — not on `users`,
- * not in `user_preferences`, not in `publicUserSchema` — so there is nothing to
- * render and inventing a placeholder would be worse than the blank. What *is*
- * true and live is where somebody is in voice, which is the same fact the
- * channel list already shows, so it takes the slot. When a custom status does
- * land, it belongs here, above the voice line.
+ * THE SECOND LINE IS THE RECADO, and the third is voice.
+ *
+ * That order was decided when there was no recado to draw and the voice line
+ * had the slot to itself: a person's own line about themselves outranks a fact
+ * the channel list is already showing two inches to the left. Both can be true
+ * at once, so both are drawn when both are, and each is capped at one line.
+ *
+ * NEITHER LINE WRAPS. A member list whose rows are different heights stops
+ * being scannable, and a recado is the one field here whose length somebody
+ * else chooses. Eighty characters is roughly twice what fits at this width, so
+ * `truncate` is the normal case rather than the edge case, and the `title`
+ * carries the rest for anybody who wants it. The tooltip is on the text and not
+ * on the row: the row's own title says "open profile", and two nested titles
+ * would make which one appears a matter of where the pointer stopped.
  *
  * `data-member-sidebar-trigger` rather than `members-panel`'s
  * `data-member-trigger`: both can be on screen at once (the panel opens over
@@ -766,6 +787,7 @@ interface MemberRowProps {
  */
 function MemberRow({
   member,
+  blocked,
   dim,
   voiceChannelName,
   items,
@@ -776,6 +798,11 @@ function MemberRow({
   const { t } = useTranslation();
   const status = member.status ?? null;
   const shown = memberDisplayName(member);
+  // Absent and empty are the same thing here. The API stores NULL for a recado
+  // that normalises to nothing, but a client must not depend on that being the
+  // only shape it will ever see: an empty string would draw a blank line that
+  // makes one row taller than its neighbours for no visible reason.
+  const recado = blocked ? null : member.customStatus?.trim() || null;
 
   return (
     <ContextMenu items={items}>
@@ -833,6 +860,15 @@ function MemberRow({
                 })}
               />
             </span>
+            {recado && (
+              <span
+                className="block truncate text-[11px] text-paper-muted"
+                title={recado}
+                data-member-custom-status={member.id}
+              >
+                {recado}
+              </span>
+            )}
             {voiceChannelName && (
               <span className="block truncate text-[11px] text-signal">
                 {t("memberList.inVoice", { channel: voiceChannelName })}

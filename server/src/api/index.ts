@@ -1151,6 +1151,9 @@ router.patch("/api/me", async ({ req, user, ageGate }) => {
     // Tightening this closes the door on people who have not knocked yet; it
     // deliberately does not touch conversations that are already open.
     dmPrivacy: body.dmPrivacy,
+    // Passed straight through, undefined and all. `updateProfile` needs the
+    // three-state value intact: absent leaves the recado alone, null clears it.
+    customStatus: body.customStatus,
   });
   invalidateUserCache(updated.clerk_id);
   announceProfile(updated);
@@ -1364,6 +1367,12 @@ function announceProfile(updated: DbUser): void {
     username: updated.username,
     tag: formatUserTag(updated.username, updated.discriminator),
     avatarUrl: updated.avatar_url,
+    // Sent on EVERY profile announcement, not only when it changed, and sent as
+    // the row's current value rather than as the request's. This frame is an
+    // absolute statement about a person, the way a presence delta's `joined`
+    // entry is: a receiver applies it whole and never diffs it, so leaving the
+    // field off an avatar change would read as "cleared" on the other side.
+    customStatus: updated.custom_status ?? null,
   });
   // The frame above repaints chat, the member list and the person's own
   // panel. A call they are already in copied their label when they joined,

@@ -55,6 +55,12 @@ export interface ProfileSubject {
    * claimed one. The card must not invent a URL from username or tag.
    */
   handle?: string | null;
+  /**
+   * O recado, drawn under the tag on the card. Absent means the opener did not
+   * know one, which draws nothing, exactly like an absent handle: the card must
+   * never reserve blank space for a line it has no content for.
+   */
+  customStatus?: string | null;
 }
 
 /**

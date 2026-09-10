@@ -363,6 +363,7 @@ describeDb("conversations", () => {
     expect(summary?.channelId).toBe(channelId);
     expect(Object.keys(summary!.participants[0]!).sort()).toEqual([
       "avatarUrl",
+      "customStatus",
       "displayName",
       "id",
       "tag",

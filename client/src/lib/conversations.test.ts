@@ -18,6 +18,7 @@ function person(name: string, id = name): PublicUser {
     username: name.toLowerCase(),
     tag: `${name.toLowerCase()}#0001`,
     avatarUrl: null,
+    customStatus: null,
   };
 }
 
