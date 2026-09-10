@@ -307,10 +307,11 @@ export async function connectLiveKit({
   /**
    * THE DECLARED LAYERS ARE DECIDED ONCE PER BROADCAST AND THEN HELD.
    *
-   * Set when the share goes up while an HLS ladder is transcoding from it, and
-   * cleared when the share stops. While it is set, `reconcileScreenPlan`
-   * refuses to republish: it moves the ceiling in place instead, which no
-   * viewer sees, and leaves the layer set alone.
+   * Set the moment `setHlsSource` first sees a live ladder (and kept through
+   * the restart gap when that source goes null), and cleared when the share
+   * stops. While it is set, `reconcileScreenPlan` refuses to republish: it
+   * moves the ceiling in place instead, which no viewer sees, and leaves the
+   * layer set alone.
    *
    * WHY, and it is a production incident rather than a precaution. A republish
    * is a new track sid, a new Track Composite egress, a new `startedAt` and a
@@ -324,12 +325,23 @@ export async function connectLiveKit({
    * `screen-track-replaced` with nobody touching the share, and Rafael saw the
    * stream stop every few seconds to minutes on web and iOS.
    *
+   * THE RESTART GAP IS THE SAME INCIDENT, STILL OPEN ON 2026-09-10. Every
+   * `screen-track-replaced` stop clears `liveStream` for a few seconds while
+   * egress rebuilds. The client then calls `setHlsSource(null)`, which used
+   * to make `broadcastIsLive()` false and **skip the pin guard entirely**,
+   * so a large-room (or weak-uplink) plan immediately republished 1080→720
+   * (new sid) the moment the previous egress had died — and the next
+   * `hlsStarted` saw that new sid and tore down again. PQPTV looped that
+   * for minutes; viewers 404'd on the previous `startedAt` while the LIVE
+   * pill stayed up. The pin therefore does NOT ask whether the ladder is
+   * still reported live: it holds until the share itself stops.
+   *
    * A better decision arriving later is not worth a rebuffer for the whole
-   * audience, and certainly not repeatedly. Raises and drops while the
-   * broadcast is live wait for a streak (`HLS_SOURCE_RAISE_SAMPLES` /
-   * `HLS_SOURCE_DROP_SAMPLES`) so one optimistic or one weak reading cannot
-   * republish. The share going up before the egress exists is still the
-   * intended raise; it just has to stay tall for three ticks first.
+   * audience, and certainly not repeatedly. Raises and drops while pinned
+   * wait for a streak (`HLS_SOURCE_RAISE_SAMPLES` / `HLS_SOURCE_DROP_SAMPLES`)
+   * so one optimistic or one weak reading cannot republish. The share going
+   * up before the egress exists is still the intended raise; it just has to
+   * stay tall for three ticks first.
    *
    * A deliberate act by the host is not this: `setScreenQuality` forces past
    * it, because somebody who picks 1080p by name has chosen the blink.
@@ -1026,9 +1038,6 @@ export async function connectLiveKit({
       await room.localParticipant.publishTrack(track, options);
     }
     publishedScreenPlan = plan;
-    // PINNED THE MOMENT IT GOES UP UNDER A LIVE BROADCAST. See
-    // `screenPlanPinned` and `reconcileScreenPlan`.
-    screenPlanPinned = broadcastIsLive();
   }
 
   /** A live HLS ladder is transcoding from this share right now. */
@@ -1050,12 +1059,13 @@ export async function connectLiveKit({
    * viewers see the picture blink once. A different top CEILING at the same
    * height is moved in place, with no blink.
    *
-   * **While a broadcast is live a height change waits for a streak**
+   * **While pinned a height change waits for a streak**
    * (`HLS_SOURCE_RAISE_SAMPLES` up, `HLS_SOURCE_DROP_SAMPLES` down) and a
    * change of mind at the same height becomes a ceiling change: see
-   * `screenPlanPinned` for the incident. `force` is the host choosing a
-   * quality by name, which is a deliberate act and gets the blink it asked
-   * for.
+   * `screenPlanPinned` for the incident. The pin outlives a brief
+   * `setHlsSource(null)` during an egress restart on purpose. `force` is the
+   * host choosing a quality by name, which is a deliberate act and gets the
+   * blink it asked for.
    */
   function reconcileScreenPlan(options?: { force?: boolean }): Promise<void> {
     const run = async () => {
@@ -1066,20 +1076,16 @@ export async function connectLiveKit({
       }
       const plan = currentScreenPlan();
       const heightChanged = plan.topHeight !== published.topHeight;
-      // `broadcastIsLive()` as well as the pin: when the stream STOPS the
-      // large-room cap has to come back, because a 1080p top layer with no
-      // egress behind it is bandwidth per viewer for nothing, which is the
-      // reason the cap exists. Pinned means "while broadcasting", not "for
-      // ever".
+      // Pin holds across the restart gap (`setHlsSource(null)`): requiring
+      // `broadcastIsLive()` here is what turned every `screen-track-replaced`
+      // into a loop. Raises before the pin is set (share up, ladder not yet
+      // announced) still wait for a streak so one good uplink reading cannot
+      // jump to 1080.
       if (
         heightChanged &&
-        broadcastIsLive() &&
         !options?.force &&
-        // Drops stay behind the pin (share already published under this
-        // broadcast). Raises enter even when the pin is still clear: the
-        // share went up before the egress existed, and one good reading
-        // must not jump to 1080.
-        (screenPlanPinned || plan.topHeight > published.topHeight)
+        (screenPlanPinned ||
+          (broadcastIsLive() && plan.topHeight > published.topHeight))
       ) {
         const raising = plan.topHeight > published.topHeight;
         const dropping = plan.topHeight < published.topHeight;
@@ -1094,7 +1100,11 @@ export async function connectLiveKit({
           // the audience. Six seconds of a shorter plan is a starved
           // 1080 that drifts off its own audio; six seconds of a taller
           // plan is enough to believe the uplink can carry it.
-          if (dropping && plan.topBitrate !== published.topBitrate) {
+          //
+          // When the ladder is briefly gone, the large-room / weak-uplink
+          // plan still wants a lower ceiling: move bitrate in place, never
+          // the layer set (a layer change is a new sid and a torn-down party).
+          if (plan.topBitrate !== published.topBitrate) {
             await setSourceMaxBitrate(
               Track.Source.ScreenShare,
               plan.topBitrate,
@@ -1478,6 +1488,11 @@ export async function connectLiveKit({
       hlsSource = next;
       const published = publishedScreenPlan;
       if (published && next && next.ladderTopHeight !== null) {
+        // Pin the layers already on the wire the moment a broadcast appears,
+        // even if the share went up before the egress existed. Without this
+        // the first weak uplink reading dropped 1080→720 immediately (pin
+        // still clear), which is a new sid and `screen-track-replaced`.
+        screenPlanPinned = true;
         const plan = currentScreenPlan();
         tallerPlanStreak =
           plan.topHeight > published.topHeight ? tallerPlanStreak + 1 : 0;
