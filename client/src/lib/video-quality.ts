@@ -349,8 +349,14 @@ export interface HlsSourceInput {
  * Headroom over the rung's own ceiling before a measured uplink counts as
  * able to carry it. A link measured at exactly the bitrate has none, and a
  * screen share that saturates the uplink is what makes a call stutter.
+ *
+ * 1.5, not 1.25: a 4 Mbit/s 1080 target needs 6 Mbit/s measured. A
+ * starved-1080 party published on one optimistic reading that cleared 1.25×
+ * and then sat under the target; every playlist viewer transcoded that top
+ * layer for about ten seconds. The extra quarter is the difference between
+ * "the estimator once said yes" and "this uplink can actually carry it".
  */
-const HLS_SOURCE_UPLINK_HEADROOM = 1.25;
+export const HLS_SOURCE_UPLINK_HEADROOM = 1.5;
 
 /**
  * Whether the presenter should publish at the ladder's top rather than at

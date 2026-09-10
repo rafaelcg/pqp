@@ -43,7 +43,9 @@ import {
 } from "./voice-stats-probe";
 
 /** How many weak `setHlsSource` ticks before a pinned 1080 share may drop. */
-export const HLS_SOURCE_DROP_SAMPLES = 5;
+export const HLS_SOURCE_DROP_SAMPLES = 3;
+/** How many strong ticks before a live 720 share may raise to 1080. */
+export const HLS_SOURCE_RAISE_SAMPLES = 3;
 
 function asLiveKitQuality(value: unknown): LiveKitConnectionQuality {
   if (
@@ -323,10 +325,11 @@ export async function connectLiveKit({
    * stream stop every few seconds to minutes on web and iOS.
    *
    * A better decision arriving later is not worth a rebuffer for the whole
-   * audience, and certainly not repeatedly. The one raise this still allows is
-   * the intended one: the share is published before the egress exists, so the
-   * first plan is the large-room 720p one, and the reconcile that runs when
-   * the ladder appears is the only one that finds the pin clear.
+   * audience, and certainly not repeatedly. Raises and drops while the
+   * broadcast is live wait for a streak (`HLS_SOURCE_RAISE_SAMPLES` /
+   * `HLS_SOURCE_DROP_SAMPLES`) so one optimistic or one weak reading cannot
+   * republish. The share going up before the egress exists is still the
+   * intended raise; it just has to stay tall for three ticks first.
    *
    * A deliberate act by the host is not this: `setScreenQuality` forces past
    * it, because somebody who picks 1080p by name has chosen the blink.
@@ -334,12 +337,20 @@ export async function connectLiveKit({
   let screenPlanPinned = false;
   /**
    * Consecutive `setHlsSource` ticks whose plan is shorter than what is
-   * already on the wire. Five is ten seconds at the two-second sample
-   * cadence. One weak reading is the wobble the pin exists to ignore; ten
+   * already on the wire. Three is six seconds at the two-second sample
+   * cadence. One weak reading is the wobble the pin exists to ignore; six
    * seconds of "this uplink cannot carry 1080" is a starved top layer, and
    * that is what makes the film drift off its own audio.
    */
   let shorterPlanStreak = 0;
+  /**
+   * Consecutive `setHlsSource` ticks whose plan is taller than what is
+   * already on the wire. Three is six seconds at the two-second sample
+   * cadence. One optimistic reading is how a borderline uplink jumps to
+   * 1080 and starves the HLS audience; six seconds of "this uplink can
+   * carry it" is enough to believe.
+   */
+  let tallerPlanStreak = 0;
   /**
    * The capture's constraints as the browser handed them over, so the plan's
    * height can be laid over them and lifted again without losing the frame
@@ -1024,10 +1035,12 @@ export async function connectLiveKit({
    * viewers see the picture blink once. A different top CEILING at the same
    * height is moved in place, with no blink.
    *
-   * **While a broadcast is live the height is pinned** and a change of mind
-   * becomes a ceiling change: see `screenPlanPinned` for the incident. `force`
-   * is the host choosing a quality by name, which is a deliberate act and gets
-   * the blink it asked for.
+   * **While a broadcast is live a height change waits for a streak**
+   * (`HLS_SOURCE_RAISE_SAMPLES` up, `HLS_SOURCE_DROP_SAMPLES` down) and a
+   * change of mind at the same height becomes a ceiling change: see
+   * `screenPlanPinned` for the incident. `force` is the host choosing a
+   * quality by name, which is a deliberate act and gets the blink it asked
+   * for.
    */
   function reconcileScreenPlan(options?: { force?: boolean }): Promise<void> {
     const run = async () => {
@@ -1045,19 +1058,28 @@ export async function connectLiveKit({
       // ever".
       if (
         heightChanged &&
-        screenPlanPinned &&
         broadcastIsLive() &&
-        !options?.force
+        !options?.force &&
+        // Drops stay behind the pin (share already published under this
+        // broadcast). Raises enter even when the pin is still clear: the
+        // share went up before the egress existed, and one good reading
+        // must not jump to 1080.
+        (screenPlanPinned || plan.topHeight > published.topHeight)
       ) {
+        const raising = plan.topHeight > published.topHeight;
+        const dropping = plan.topHeight < published.topHeight;
+        const sustainedRaise =
+          raising && tallerPlanStreak >= HLS_SOURCE_RAISE_SAMPLES;
         const sustainedDrop =
-          plan.topHeight < published.topHeight &&
-          shorterPlanStreak >= HLS_SOURCE_DROP_SAMPLES;
-        if (!sustainedDrop) {
+          dropping && shorterPlanStreak >= HLS_SOURCE_DROP_SAMPLES;
+        if (!sustainedDrop && !sustainedRaise) {
           // HELD. A single weaker reading is the wobble that used to
-          // restart the egress six times in one party. Ten seconds of a
-          // shorter plan is a starved 1080 that drifts off its own audio,
-          // and that drop is allowed to republish once.
-          if (plan.topBitrate !== published.topBitrate) {
+          // restart the egress six times in one party; a single stronger
+          // one is how a borderline uplink jumped to 1080 and starved
+          // the audience. Six seconds of a shorter plan is a starved
+          // 1080 that drifts off its own audio; six seconds of a taller
+          // plan is enough to believe the uplink can carry it.
+          if (dropping && plan.topBitrate !== published.topBitrate) {
             await setSourceMaxBitrate(
               Track.Source.ScreenShare,
               plan.topBitrate,
@@ -1067,7 +1089,8 @@ export async function connectLiveKit({
           }
           return;
         }
-        shorterPlanStreak = 0;
+        if (sustainedDrop) shorterPlanStreak = 0;
+        if (sustainedRaise) tallerPlanStreak = 0;
       }
       if (heightChanged) {
         await constrainScreenCapture(track, plan.topHeight);
@@ -1383,6 +1406,7 @@ export async function connectLiveKit({
       // plan that window and that room call for.
       screenPlanPinned = false;
       shorterPlanStreak = 0;
+      tallerPlanStreak = 0;
     },
 
     async publishCamera(stream: MediaStream) {
@@ -1440,9 +1464,12 @@ export async function connectLiveKit({
       const published = publishedScreenPlan;
       if (published && next && next.ladderTopHeight !== null) {
         const plan = currentScreenPlan();
+        tallerPlanStreak =
+          plan.topHeight > published.topHeight ? tallerPlanStreak + 1 : 0;
         shorterPlanStreak =
           plan.topHeight < published.topHeight ? shorterPlanStreak + 1 : 0;
       } else {
+        tallerPlanStreak = 0;
         shorterPlanStreak = 0;
       }
       await reconcileScreenPlan();
