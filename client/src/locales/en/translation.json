@@ -2858,6 +2858,8 @@
   "watchParty.setup.saving": "Saving",
   "watchParty.live.badge": "LIVE",
   "watchParty.live.hostedBy": "with {name}",
+  "watchParty.live.rename": "Rename",
+  "watchParty.live.renameLabel": "Watch party name",
   "watchParty.live.viewers_zero": "nobody watching yet",
   "watchParty.live.viewers_one": "{count} watching",
   "watchParty.live.viewers_other": "{count} watching",
