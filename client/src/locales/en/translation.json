@@ -2866,6 +2866,8 @@
   "watchParty.setup.goLive": "Go live",
   "watchParty.setup.goLiveHint": "The moment you press it, the watch party appears at the top of the sidebar for everyone here, and they can watch.",
   "watchParty.setup.notLive": "Not live yet.",
+  "watchParty.setup.pickFirst": "Pick what to share first.",
+  "watchParty.setup.noAudio": "No audio. Click Change and tick share tab audio.",
   "watchParty.setup.discard": "Discard",
   "watchParty.setup.discardConfirmTitle": "Discard the watch party?",
   "watchParty.setup.discardConfirmBody": "\"{name}\" disappears. Nobody ever saw it.",

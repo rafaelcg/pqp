@@ -375,6 +375,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const [busy, setBusy] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // The most common "it doesn't work" from the QA runbook (step 3): the host
+  // picked the tab and left "share tab audio" unticked, and nobody hears the
+  // film. Say so under the preview, before anyone is watching.
+  const silentPick = stream !== null && stream.getAudioTracks().length === 0;
 
   useEffect(() => setName(party.name), [party.id, party.name]);
 
@@ -509,6 +513,14 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
               {t("watchParty.setup.repick")}
             </Button>
           )}
+          {silentPick && (
+            <p
+              data-testid="watch-party-no-audio"
+              className="pointer-events-none absolute bottom-3 left-3 right-3 rounded-md border border-warning/40 bg-surface-0/90 px-2.5 py-1.5 text-xs text-warning"
+            >
+              {t("watchParty.setup.noAudio")}
+            </p>
+          )}
         </div>
 
         {/* THE INTRO PARAGRAPH IS GONE. It said "pick what you are going to
@@ -597,7 +609,9 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
               {t("watchParty.setup.notLive")}
             </span>{" "}
             <span className="text-text-tertiary">
-              {t("watchParty.setup.goLiveHint")}
+              {stream
+                ? t("watchParty.setup.goLiveHint")
+                : t("watchParty.setup.pickFirst")}
             </span>
           </p>
         </div>
@@ -611,9 +625,18 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
             <Undo2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
             {t("watchParty.setup.discard")}
           </Button>
+          {/* NO PICTURE, NO BUTTON. Discord's Go Live and YouTube's "Ready to
+              go live?" both refuse to start until there is a source, and the
+              one production incident this surface has had was a host going
+              live to a black pane. The party and the picture stay separable
+              on the server (a share that dies mid-show does not end the
+              party); the setup surface just will not START one without a
+              picture. The scheduled card keeps its own unconditional button
+              for the host who set a time and shares once they are in. */}
           <Button
             type="button"
-            disabled={busy}
+            disabled={busy || !stream}
+            title={stream ? undefined : t("watchParty.setup.pickFirst")}
             onClick={() => void goLive()}
             data-watch-party-go-live
             className="bg-danger text-paper hover:bg-danger/85"

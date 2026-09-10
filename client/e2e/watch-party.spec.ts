@@ -66,9 +66,13 @@ test.use({
       // `Join the call` from the watch stage is the ORDINARY join, which opens
       // a microphone. Without a fake device it falls back to listen-only,
       // which still works but adds a banner and a real permission timeout to
-      // every run. Nothing here captures a display.
+      // every run.
       "--use-fake-device-for-media-stream",
       "--use-fake-ui-for-media-stream",
+      // The setup surface will not go live without a picture, so the host
+      // journey picks one. These answer getDisplayMedia without a picker.
+      "--auto-select-desktop-capture-source=Entire screen",
+      "--auto-accept-this-tab-capture",
     ],
   },
   permissions: ["microphone"],
@@ -430,10 +434,17 @@ test("a host creates a watch party from the sidebar, names it, and goes live", a
   await ack.getByRole("button", { name: "Got it", exact: true }).click();
   await expect(ack).toBeHidden({ timeout: 20_000 });
 
-  // Step three: Ir ao vivo. Deliberately with nothing picked, which is the
-  // documented order (the party goes live first, the picture second) and the
-  // case a host hits when the share fails. The room must still be told.
-  await page.locator("[data-watch-party-go-live]").click();
+  // Step three: pick, then Ir ao vivo. The button refuses with nothing
+  // picked (a host went live to a black pane once); the party still goes
+  // live BEFORE the picture reaches anyone, which is the documented order.
+  const goLive = page.locator("[data-watch-party-go-live]");
+  await expect(goLive).toBeDisabled();
+  await setup.getByRole("button", { name: "Pick what to share" }).click();
+  await expect(page.getByTestId("watch-party-preview")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(goLive).toBeEnabled();
+  await goLive.click();
 
   const bar = page.getByTestId("watch-party-bar");
   await expect(bar).toBeVisible({ timeout: 20_000 });
@@ -1045,7 +1056,12 @@ test("a host who has not gone live is told so, in words", async ({ page }) => {
   }
 
   // And it goes the moment it stops being true, which is the half that makes
-  // it a state rather than decoration.
+  // it a state rather than decoration. A picture first: the row says so.
+  await expect(notLive.getByText("Pick what to share first.")).toBeVisible();
+  await page.getByRole("button", { name: "Pick what to share" }).click();
+  await expect(page.getByTestId("watch-party-preview")).toBeVisible({
+    timeout: 20_000,
+  });
   await page.locator("[data-watch-party-go-live]").click();
   await expect(page.getByTestId("watch-party-bar")).toBeVisible({
     timeout: 20_000,
