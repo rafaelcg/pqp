@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  communityHomeMediaSchema,
   parseCommunityHomeEmbed,
   parseTwitchEmbed,
   parseYoutubeVideoId,
@@ -112,5 +113,23 @@ describe("parseCommunityHomeEmbed", () => {
       parseCommunityHomeEmbed("https://www.twitch.tv/moonkaselive"),
     ).toBe("twitch");
     expect(parseCommunityHomeEmbed("https://example.com/watch")).toBeNull();
+  });
+});
+
+describe("communityHomeMediaSchema", () => {
+  const youtube = {
+    kind: "youtube" as const,
+    name: "YouTube",
+    contentType: null,
+    byteSize: null,
+    url: null,
+    youtubeUrl: "https://youtu.be/jNQXAC9IVRw",
+  };
+
+  it("treats a missing twitchUrl as null so an older API still loads the feed", () => {
+    expect(communityHomeMediaSchema.parse(youtube)).toEqual({
+      ...youtube,
+      twitchUrl: null,
+    });
   });
 });

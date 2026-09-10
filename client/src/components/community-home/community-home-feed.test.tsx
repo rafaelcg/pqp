@@ -317,5 +317,6 @@ describe("PostCard", () => {
     expect(html).toContain("player.twitch.tv/?channel=moonkaselive");
     expect(html).toContain("parent=localhost");
     expect(html).toContain("autoplay=false");
+    expect(html).toContain('loading="lazy"');
   });
 });

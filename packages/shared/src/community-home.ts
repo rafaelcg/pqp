@@ -383,7 +383,16 @@ export const communityHomeMediaSchema = z.object({
   /** Presigned GET when storage-backed; null for YouTube / Twitch. */
   url: z.string().nullable(),
   youtubeUrl: z.string().nullable(),
-  twitchUrl: z.string().nullable(),
+  /**
+   * Absent on an older API during a rolling deploy. Treat missing as null
+   * so a YouTube or file card still parses instead of taking the whole feed
+   * down.
+   */
+  twitchUrl: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((value) => value ?? null),
 });
 
 export type CommunityHomeMedia = z.infer<typeof communityHomeMediaSchema>;

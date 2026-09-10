@@ -251,6 +251,7 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
           title={media.name}
           src={src}
           className="aspect-video w-full"
+          loading="lazy"
           allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
           allowFullScreen
         />
@@ -274,6 +275,7 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
           title={media.name}
           src={src}
           className="aspect-video w-full"
+          loading="lazy"
           allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
           allowFullScreen
         />
