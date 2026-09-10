@@ -102,7 +102,15 @@ function fakeSender(source: string, layers: number) {
 }
 
 /** Publications the local participant currently holds, keyed by source. */
-const publications = new Map<string, { track: { sender: unknown } }>();
+const publications = new Map<
+  string,
+  {
+    track: {
+      sender: unknown;
+      replaceTrack?: (next: unknown) => Promise<void>;
+    };
+  }
+>();
 
 interface FakeRemotePublication {
   source: string;
