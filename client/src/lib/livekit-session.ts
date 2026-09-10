@@ -1491,16 +1491,6 @@ export async function connectLiveKit({
       const local = publication?.track as
         | { replaceTrack?: (track: MediaStreamTrack) => Promise<void> }
         | undefined;
-      if (replacing && screenPlanPinned) {
-        if (local && typeof local.replaceTrack === "function") {
-          await local.replaceTrack(videoTrack);
-          if (screenShareEpoch !== epoch) {
-            return;
-          }
-          publishedScreenTrack = videoTrack;
-        }
-        return;
-      }
       if (
         replacing &&
         !audioChanged &&
@@ -1527,6 +1517,12 @@ export async function connectLiveKit({
             publishedScreenAudioTrack = audioTrack;
           }
         }
+        return;
+      }
+
+      if (replacing && screenPlanPinned && !audioChanged) {
+        // No replaceTrack on this publication. Keep the live sid rather
+        // than unpublish; a new sid tears the party down.
         return;
       }
 
