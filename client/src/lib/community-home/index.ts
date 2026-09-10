@@ -31,6 +31,10 @@ export {
 } from "./visibility";
 export { pickServerLandingTarget } from "./landing";
 export {
+  COMMUNITY_HOME_POST_TOAST_MS,
+  shouldOfferCommunityHomePostToast,
+} from "./post-toast";
+export {
   COMMUNITY_HOME_SETTINGS_SEEN_KEY,
   communityHomeRowSeenKey,
   isCommunityHomeRowNew,

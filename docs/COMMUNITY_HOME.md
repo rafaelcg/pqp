@@ -79,11 +79,21 @@ See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
   matches the feed so the badge cannot promise a post the feed will not
   show). Opening the feed stamps `community_home_reads` and clears it. The
   count outranks the "New" chip: a number says more.
-  Landing (`client/src/lib/community-home/landing.ts`): a community opens on
-  the feed every time; any other server with Baú on opens on it **once**, the
-  first time that person has never opened its Baú (the same localStorage mark
-  that drives the "New" chip), then goes back to the first text channel. That
-  first landing is what makes a new member meet the pinned post.
+  Landing (`client/src/lib/community-home/landing.ts`): if Baú is on for this
+  server, opening it (no channel in the URL, clicking the server in the rail,
+  first load) lands on the feed every time — community or private hall. A
+  URL that already names a channel still opens that channel. The unread
+  stamp and the "New" chip are unchanged: opening the feed still writes
+  `community_home_reads` and still clears the discovery chip.
+- **Live corner card** when a post is published while you are in that
+  server, looking at another channel (`community-home-update` plus unread
+  going up). Not the author: own posts never count as unread. Not if you
+  are already on the feed (the feed is the notice). Not if you are in DMs
+  or another server — the badge is waiting when you open this one, and
+  opening it lands on Baú. Same `CornerCard` shell as the other corner
+  hints, after the update notice in `CORNER_HINT_ORDER`. Click **Abrir o
+  Baú**, or wait 8 s / hit Escape. See
+  [`ONBOARDING.md`](./ONBOARDING.md).
 - **Intro card** for members, once per account
   (`preferences.communityHomeIntroDismissedAt`, not `localStorage`, so a new
   browser does not re-offer it). Says what the Baú is, that likes and comments
@@ -193,10 +203,12 @@ self-host without storage, not a bug.
 - `client/src/components/community-home/community-home-feed.test.tsx`: the
   card's contract (no free chip, locked leaks nothing, two comments max).
 - `client/src/lib/community-home/*.test.ts`: flag resolution, landing,
-  visibility helpers, media helpers.
+  visibility helpers, media helpers, live-post toast gating.
+- `client/src/components/layout/channel-list-community-home.test.tsx`: the
+  row, the unread number, the New chip yielding to it.
 - `client/e2e/community-home.spec.ts`: forced-off chrome, owner write →
-  preview → publish → like, member intro + lock + comments, private-hall
-  landing.
+  preview → publish → like, member intro + lock + comments, unread badge +
+  live corner card, private-hall landing.
 
 ## Not here yet (see the strategy doc)
 

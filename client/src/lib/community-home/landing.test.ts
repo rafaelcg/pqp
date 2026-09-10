@@ -9,30 +9,17 @@ const channels = [
 ];
 
 describe("pickServerLandingTarget", () => {
-  it("opens the first text channel when Baú is off, whatever else is true", () => {
-    expect(pickServerLandingTarget(channels, false, true, true)).toEqual({
+  it("opens the first text channel when Baú is off", () => {
+    expect(pickServerLandingTarget(channels, false)).toEqual({
       kind: "channel",
       id: "geral",
     });
   });
 
-  it("opens the Baú on a community every time", () => {
-    expect(pickServerLandingTarget(channels, true, true, false)).toEqual({
+  it("opens the Baú whenever it is on, community or hall, first visit or not", () => {
+    expect(pickServerLandingTarget(channels, true)).toEqual({
       kind: "home",
       id: COMMUNITY_HOME_CHANNEL_ID,
-    });
-  });
-
-  it("opens the Baú once on a hall nobody has opened it in, then stops", () => {
-    // The whole point of the pinned welcome post: a new member meets it.
-    expect(pickServerLandingTarget(channels, true, false, true)).toEqual({
-      kind: "home",
-      id: COMMUNITY_HOME_CHANNEL_ID,
-    });
-    // Been there: the conversation is what they came back for.
-    expect(pickServerLandingTarget(channels, true, false, false)).toEqual({
-      kind: "channel",
-      id: "geral",
     });
   });
 
