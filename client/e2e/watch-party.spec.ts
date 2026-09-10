@@ -653,10 +653,10 @@ test("an invited guest takes a seat and does not get the player twice", async ({
     await openAs(viewer, here, "wp-seat");
 
     await viewer.getByTestId("live-party-block").waitFor({ timeout: 20_000 });
-    // By name: this account is a member of every server the suite seeds it
-    // into, and the block lists every live party across them.
+    // By channel: this account is a member of every server the suite has
+    // ever seeded it into, and the block lists every live party across them.
     await viewer
-      .locator("[data-live-party-row]", { hasText: "Cinemoon 3" })
+      .locator(`[data-live-party-row][data-channel-id="${party.channelId}"]`)
       .click();
 
     // THE PICTURE, WITHOUT A SEAT. The stage mounts on the selection alone.

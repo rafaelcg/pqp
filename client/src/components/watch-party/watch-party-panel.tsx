@@ -43,6 +43,7 @@ import { browserShareCapabilities, type ShareOutcome } from "@/lib/share-handle"
 import { shareWatchParty, watchPartyShareUrl } from "@/lib/share-watch-party";
 import { WatchPartyTransmission } from "@/components/watch-party/watch-party-transmission";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
+import { supportsScreenShare } from "@/components/voice/capabilities";
 import { getDesktop, isDesktopApp } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -641,6 +642,13 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const [pickError, setPickError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  // A PHONE CANNOT PUT A PICTURE UP. `getDisplayMedia` does not exist on iOS
+  // Safari at all and is refused on Android Chrome, so the empty state says
+  // where to go instead of offering a button that opens nothing, and the
+  // Ir ao vivo it could never enable is not drawn. Everything else on this
+  // surface (the name, the options, the link, discarding) still works from
+  // the phone, which is where a host is when they set a time on the bus.
+  const canPutPictureUp = supportsScreenShare();
   // The most common "it doesn't work" from the QA runbook (step 3): the host
   // picked the tab and left "share tab audio" unticked, and nobody hears the
   // film. Say so under the preview, before anyone is watching.
@@ -738,14 +746,25 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                 className="h-7 w-7 text-paper-muted"
                 aria-hidden
               />
-              <p className="text-sm text-paper-muted">
-                {t("watchParty.setup.noSource")}
-              </p>
-              <Button type="button" variant="secondary" onClick={() => void pick()}>
-                {t("watchParty.setup.pick")}
-              </Button>
-              {pickError && (
-                <p className="text-xs text-danger">{pickError}</p>
+              {canPutPictureUp ? (
+                <>
+                  <p className="text-sm text-paper-muted">
+                    {t("watchParty.setup.noSource")}
+                  </p>
+                  <Button type="button" variant="secondary" onClick={() => void pick()}>
+                    {t("watchParty.setup.pick")}
+                  </Button>
+                  {pickError && (
+                    <p className="text-xs text-danger">{pickError}</p>
+                  )}
+                </>
+              ) : (
+                <p
+                  className="max-w-xs text-sm text-paper-muted"
+                  data-testid="watch-party-phone-host"
+                >
+                  {t("watchParty.setup.phoneHost")}
+                </p>
               )}
             </div>
           )}
@@ -775,7 +794,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
               type="text"
               maxLength={120}
               aria-label={t("watchParty.setup.nameLabel")}
-              className="w-44 rounded-md border border-ink-4/60 bg-surface-0/90 px-2 py-1 text-right text-sm font-semibold text-paper focus:border-ink-4"
+              className="w-32 rounded-md border border-ink-4/60 sm:w-44 bg-surface-0/90 px-2 py-1 text-right text-sm font-semibold text-paper focus:border-ink-4"
               value={name}
               onChange={(event) => setName(event.target.value)}
               onBlur={() => {
@@ -842,11 +861,13 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
             <span className="text-text-tertiary">
               {stream
                 ? t("watchParty.setup.goLiveHint")
-                : t("watchParty.setup.pickFirst")}
+                : canPutPictureUp
+                  ? t("watchParty.setup.pickFirst")
+                  : t("watchParty.setup.phoneHint")}
             </span>
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           <WatchPartyShareButton party={party} size="default" />
           <Button
             type="button"
@@ -865,17 +886,19 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
               party); the setup surface just will not START one without a
               picture. The scheduled card keeps its own unconditional button
               for the host who set a time and shares once they are in. */}
-          <Button
-            type="button"
-            disabled={busy || !stream}
-            title={stream ? undefined : t("watchParty.setup.pickFirst")}
-            onClick={() => void goLive()}
-            data-watch-party-go-live
-            className="bg-danger text-paper hover:bg-danger/85"
-          >
-            <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            {t("watchParty.setup.goLive")}
-          </Button>
+          {canPutPictureUp && (
+            <Button
+              type="button"
+              disabled={busy || !stream}
+              title={stream ? undefined : t("watchParty.setup.pickFirst")}
+              onClick={() => void goLive()}
+              data-watch-party-go-live
+              className="bg-danger text-paper hover:bg-danger/85"
+            >
+              <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {t("watchParty.setup.goLive")}
+            </Button>
+          )}
         </div>
       </div>
 

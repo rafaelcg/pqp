@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WatchParty } from "@pqp/shared";
 import { WatchPartyPanel } from "./watch-party-panel";
 
@@ -303,6 +303,22 @@ describe("a host can tell they are not live", () => {
     party: { ...PARTY, state: "draft", viewerRole: "host" },
   };
 
+  // Node has a `navigator` with no `mediaDevices`, which is exactly what an
+  // iPhone looks like to `supportsScreenShare`. These tests are about a
+  // computer, so give it the API; the phone case has its own test below.
+  beforeEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getDisplayMedia: () => Promise.reject(new Error("test")) },
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: undefined,
+      configurable: true,
+    });
+  });
+
   it("says it in a sentence, not in a 10px watermark", () => {
     /**
      * On 12 Sep 2026 a host on production announced "im live" to a room while
@@ -327,6 +343,25 @@ describe("a host can tell they are not live", () => {
     const bar = html.slice(html.indexOf("watch-party-not-live"));
     expect(bar).toContain("data-watch-party-go-live");
     expect(bar).toContain("data-watch-party-discard");
+  });
+});
+
+describe("a host on a phone", () => {
+  const draft: Partial<Parameters<typeof WatchPartyPanel>[0]> = {
+    party: { ...PARTY, state: "draft", viewerRole: "host" },
+  };
+
+  it("is told to open a computer, and is not offered a picker or Go live", () => {
+    // `getDisplayMedia` does not exist on iOS Safari at all. A button that
+    // opens nothing and a Go live that can never enable are worse than a
+    // sentence; the name, the options, the link and Discard still work.
+    const html = render(draft);
+    expect(html).toContain("watch-party-phone-host");
+    expect(html).not.toContain("Pick what to share");
+    expect(html).not.toContain("data-watch-party-go-live");
+    expect(html).toContain("data-watch-party-discard");
+    expect(html).toContain("data-watch-party-share");
+    expect(html).toContain("data-watch-party-options-toggle");
   });
 });
 

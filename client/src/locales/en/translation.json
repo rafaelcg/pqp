@@ -2868,6 +2868,8 @@
   "watchParty.setup.notLive": "Not live yet.",
   "watchParty.setup.pickFirst": "Pick what to share first.",
   "watchParty.setup.noAudio": "No audio. Click Change and tick share tab audio.",
+  "watchParty.setup.phoneHost": "To stream, open pqp on a computer. From here you can set the time, adjust the options and send the link.",
+  "watchParty.setup.phoneHint": "Open it on a computer to put the picture up.",
   "watchParty.setup.discard": "Discard",
   "watchParty.setup.discardConfirmTitle": "Discard the watch party?",
   "watchParty.setup.discardConfirmBody": "\"{name}\" disappears. Nobody ever saw it.",
