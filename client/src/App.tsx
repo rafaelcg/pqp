@@ -3937,6 +3937,16 @@ function MainAppContent({
     startScreenShareGated(false, { preferBrowserTab: true });
   }
 
+  async function handleWatchPartyStopShare() {
+    await voice.stopScreenShare();
+  }
+
+  /** Trocar: the old share comes down first, then the picker. */
+  async function handleWatchPartyReplaceShare() {
+    await voice.stopScreenShare();
+    await handleWatchPartyShareScreen();
+  }
+
   async function handleWatchPartyEnd() {
     const party = currentWatchParty();
     if (!party) {
@@ -5803,6 +5813,8 @@ function MainAppContent({
             onCreate={() => setCreateWatchPartyOpen(true)}
             onGoLive={handleWatchPartyGoLive}
             onShareScreen={handleWatchPartyShareScreen}
+            onStopShare={handleWatchPartyStopShare}
+            onReplaceShare={handleWatchPartyReplaceShare}
             onEnd={handleWatchPartyEnd}
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}
@@ -5918,6 +5930,8 @@ function MainAppContent({
             onCreate={() => setCreateWatchPartyOpen(true)}
             onGoLive={handleWatchPartyGoLive}
             onShareScreen={handleWatchPartyShareScreen}
+            onStopShare={handleWatchPartyStopShare}
+            onReplaceShare={handleWatchPartyReplaceShare}
             onEnd={handleWatchPartyEnd}
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}

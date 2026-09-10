@@ -564,3 +564,34 @@ describe("the mic pill on the live bar", () => {
     expect(html).not.toMatch(/<button[^>]*data-watch-party-mic/);
   });
 });
+
+/** The share lives on the bar, in the party's words, for the people running it. */
+describe("the share controls on the live bar", () => {
+  const live = (isPresenting: boolean, viewerRole: WatchParty["viewerRole"] = "host") =>
+    render({
+      slot: "chrome",
+      party: { ...PARTY, state: "live", viewerRole },
+      isPresenting,
+      onShareScreen: async () => {},
+      onStopShare: async () => {},
+      onReplaceShare: async () => {},
+    });
+
+  it("offers Compartilhar tela while nothing of theirs is going out", () => {
+    const html = live(false);
+    expect(html).toContain("data-watch-party-bar-share");
+    expect(html).not.toContain("data-watch-party-bar-stop-share");
+  });
+
+  it("offers Trocar and Parar while they present", () => {
+    const html = live(true);
+    expect(html).toContain("data-watch-party-bar-replace-share");
+    expect(html).toContain("data-watch-party-bar-stop-share");
+    expect(html).not.toContain("data-watch-party-bar-share");
+  });
+
+  it("offers none of it to a viewer", () => {
+    const html = live(false, "viewer");
+    expect(html).not.toContain("data-watch-party-bar-share");
+  });
+});

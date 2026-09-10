@@ -174,6 +174,10 @@ export interface WatchPartyPanelProps {
   onMicInStreamChange?: (on: boolean) => void;
   /** The pill on the bar mutes and unmutes when this is given. */
   onToggleMute?: () => void;
+  /** Stop this person's share; the party stays live. */
+  onStopShare?: () => Promise<void>;
+  /** Pick a different window or tab; the old share stops first. */
+  onReplaceShare?: () => Promise<void>;
   /** 60 when this server's HLS ladder names a 60 fps rung. */
   hlsMaxFrameRate?: 30 | 60;
   onShapeChange?: (shape: "expanded" | "none") => void;
@@ -1408,6 +1412,44 @@ function LiveSurface(
           >
             <Phone className="mr-1.5 h-3 w-3" aria-hidden />
             {t("watchParty.live.joinCall")}
+          </Button>
+        )}
+        {/* THE SHARE, IN ONE PLACE, IN THE PARTY'S WORDS. The call strip's
+            share icons are gone for the host (section 10 of the plan);
+            this is where a picture goes up, changes, or comes down. */}
+        {runsTheShow && props.onShareScreen && !props.isPresenting && (
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void props.onShareScreen?.()}
+            data-watch-party-bar-share
+          >
+            <MonitorPlay className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.live.shareScreen")}
+          </Button>
+        )}
+        {runsTheShow && props.isPresenting && props.onReplaceShare && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => void props.onReplaceShare?.()}
+            data-watch-party-bar-replace-share
+          >
+            <MonitorPlay className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.live.replaceShare")}
+          </Button>
+        )}
+        {runsTheShow && props.isPresenting && props.onStopShare && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => void props.onStopShare?.()}
+            data-watch-party-bar-stop-share
+          >
+            <Square className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.live.stopShare")}
           </Button>
         )}
         <WatchPartyShareButton party={party} />
