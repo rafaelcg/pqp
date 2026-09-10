@@ -35,13 +35,13 @@ it still needs a measurement to confirm.
    cost of the ladder landing on the wrong box — not a runaway bug. The fix is
    placement (a separate small egress box, already our standing recommendation
    in `docs/CAPACITY.md`), not flag-tuning.
-2. **The "~25 fps" is real and has three stacked causes.** (a) the whole
-   pipeline is hard-capped at **30 fps** end to end — capture, publish, and
-   every ladder rung — so a 60/120 fps source is decimated at capture;
+2. **The "~25 fps" is real and had three stacked causes.** (a) **landed:**
+   the pipeline was hard-capped at 30 fps; the default ladder is now
+   `1080p60` and capture Auto follows it (see the follow-up above);
    (b) episodically, the presenter's uplink starves the top simulcast layer and
    the egress transcodes that starved layer for the entire audience (the
    documented ~20 fps party of 2026-09-09); (c) under CPU contention on the
-   box, x264 falls behind realtime and `videorate` pads to a nominal 30 fps
+   box, x264 falls behind realtime and `videorate` pads to a nominal cadence
    with uneven pacing *(inference — needs the ffprobe check in §5)*.
 3. **A 2→3-rung default-ladder bump is sitting uncommitted** on
    `ios/watch-player-chrome` (raises ladder budget from half to three-quarters
@@ -85,7 +85,7 @@ web viewer: hls.js 1.7.2 (client/src/components/voice/hls-watch-player.tsx)
 
 ## 2. Symptom A: "~25 fps" on web
 
-### A1. HIGH — 30 fps is a hard ceiling across the whole chain *(verified)*
+### A1. HIGH — 30 fps was a hard ceiling across the whole chain *(verified; 60 fps path shipped)*
 
 - Capture: `frameRate: { ideal: 30, max: 30 }`
   (`client/src/lib/screen-capture-audio.ts:325`). A 60/120 fps game or sports
@@ -277,9 +277,10 @@ box, not a bigger SFU.**
 10. Publish-side uplink gating hardening (A2): bigger headroom factor and/or
     faster sustained-drop, since the egress can't be told to take a lower
     layer.
-11. Only after 9 lands: evaluate a **60 fps path** (capture `ideal: 60` for
-    watch-party shares + 60 fps rungs) — that's what closes the
-    "feels like 25 fps" gap against Twitch/YouTube for good (A1).
+11. **Landed (ahead of 9):** the default ladder is `1080p60,720p30,480p30`,
+    capture Auto follows it, and presenters can pin 30 or 60. Rollback is
+    `LIVE_HLS_LADDER=1080p30,720p30,480p30`. The media box still wants item 9;
+    1080p60 costs ~1.6–2× a 1080p30 encode on the 4 vCPU box.
 
 ## 5. How to verify the open points
 
