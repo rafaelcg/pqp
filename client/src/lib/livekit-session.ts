@@ -368,6 +368,12 @@ export async function connectLiveKit({
   let pendingCaptureHeight: number | null = null;
   let captureHeightStreak = 0;
   /**
+   * Bumped when the share stops or a new one is published. A reconcile that
+   * awaited `applyConstraints` must not write height/bitrate onto the next
+   * share (Farol: stale state after stop/replace).
+   */
+  let screenShareEpoch = 0;
+  /**
    * The capture's constraints as the browser handed them over, so the plan's
    * height can be laid over them and lifted again without losing the frame
    * rate or width the capture was asked for.
@@ -1043,6 +1049,7 @@ export async function connectLiveKit({
     }
     publishedScreenPlan = plan;
     appliedScreenCaptureHeight = plan.topHeight;
+    screenShareEpoch += 1;
     // If the ladder is already live (share restarted mid-party), pin now —
     // do not wait for the next setHlsSource tick. Farol caught the window
     // where a room-size change could still republish before that tick.
@@ -1069,6 +1076,14 @@ export async function connectLiveKit({
    * outlives a brief `setHlsSource(null)` during an egress restart on purpose.
    * `force` is the host choosing a quality by name — the only blink allowed.
    */
+  function screenShareStill(track: MediaStreamTrack, epoch: number): boolean {
+    return (
+      publishedScreenTrack === track &&
+      screenShareEpoch === epoch &&
+      publishedScreenPlan !== null
+    );
+  }
+
   function reconcileScreenPlan(options?: { force?: boolean }): Promise<void> {
     const run = async () => {
       const track = publishedScreenTrack;
@@ -1076,6 +1091,7 @@ export async function connectLiveKit({
       if (!track || !published) {
         return;
       }
+      const epoch = screenShareEpoch;
       const plan = currentScreenPlan();
       const heightChanged = plan.topHeight !== published.topHeight;
       // FREEZE. Any unpublish+publish is a new LiveKit sid and a torn-down
@@ -1084,9 +1100,9 @@ export async function connectLiveKit({
       if (screenPlanPinned && !options?.force) {
         // Same sid: shrink or restore capture without touching declared layers.
         // Never ask the capture for more than the pinned layer set. Wait for a
-        // stable target before applyConstraints (uplink wobble). Re-check the
-        // track after every await so a stop mid-constrain cannot write stale
-        // state onto the next share.
+        // stable target before applyConstraints (uplink wobble). After every
+        // await, the epoch must still match: a stop mid-constrain must not
+        // write onto the next share.
         const captureTarget = Math.min(plan.topHeight, published.topHeight);
         if (captureTarget === appliedScreenCaptureHeight) {
           pendingCaptureHeight = null;
@@ -1097,46 +1113,65 @@ export async function connectLiveKit({
           pendingCaptureHeight = captureTarget;
           captureHeightStreak = 1;
         }
+        const needed =
+          (pendingCaptureHeight ?? 0) > (appliedScreenCaptureHeight ?? 0)
+            ? HLS_SOURCE_RAISE_SAMPLES
+            : HLS_SOURCE_DROP_SAMPLES;
         if (
           pendingCaptureHeight !== null &&
           pendingCaptureHeight !== appliedScreenCaptureHeight &&
-          captureHeightStreak >=
-            (pendingCaptureHeight > (appliedScreenCaptureHeight ?? 0)
-              ? HLS_SOURCE_RAISE_SAMPLES
-              : HLS_SOURCE_DROP_SAMPLES)
+          captureHeightStreak >= needed
         ) {
           const want = pendingCaptureHeight;
           await constrainScreenCapture(track, want);
-          if (publishedScreenTrack !== track) {
+          if (!screenShareStill(track, epoch)) {
             return;
           }
-          appliedScreenCaptureHeight = want;
-          pendingCaptureHeight = null;
-          captureHeightStreak = 0;
+          // Uplink moved while we awaited: do not lock the superseded height.
+          const livePublished = publishedScreenPlan;
+          const liveTarget = Math.min(
+            currentScreenPlan().topHeight,
+            livePublished.topHeight,
+          );
+          if (liveTarget !== want) {
+            pendingCaptureHeight = liveTarget;
+            captureHeightStreak = 1;
+          } else {
+            appliedScreenCaptureHeight = want;
+            pendingCaptureHeight = null;
+            captureHeightStreak = 0;
+          }
         }
-        if (plan.topBitrate !== published.topBitrate) {
+        if (!screenShareStill(track, epoch)) {
+          return;
+        }
+        const livePublished = publishedScreenPlan;
+        const livePlan = currentScreenPlan();
+        if (livePlan.topBitrate !== livePublished.topBitrate) {
           await setSourceMaxBitrate(
             Track.Source.ScreenShare,
-            plan.topBitrate,
+            livePlan.topBitrate,
             "screen",
           );
-          if (publishedScreenTrack !== track || !publishedScreenPlan) {
+          if (!screenShareStill(track, epoch) || !publishedScreenPlan) {
             return;
           }
           publishedScreenPlan = {
             ...publishedScreenPlan,
-            topBitrate: plan.topBitrate,
+            topBitrate: livePlan.topBitrate,
           };
         }
         return;
       }
       if (heightChanged) {
         await constrainScreenCapture(track, plan.topHeight);
+        if (!screenShareStill(track, epoch)) {
+          return;
+        }
         appliedScreenCaptureHeight = plan.topHeight;
         // `false`: the capture stays alive; it is the same track going back up.
         await room.localParticipant.unpublishTrack(track, false);
-        if (publishedScreenTrack !== track) {
-          // The share ended while the capture was being resized.
+        if (!screenShareStill(track, epoch)) {
           return;
         }
         await publishScreenVideo(track, plan);
@@ -1149,7 +1184,13 @@ export async function connectLiveKit({
           plan.topBitrate,
           "screen",
         );
-        publishedScreenPlan = plan;
+        if (!screenShareStill(track, epoch) || !publishedScreenPlan) {
+          return;
+        }
+        publishedScreenPlan = {
+          ...publishedScreenPlan,
+          topBitrate: plan.topBitrate,
+        };
       }
     };
     const next = (reconciling ?? Promise.resolve())
@@ -1429,6 +1470,9 @@ export async function connectLiveKit({
     },
 
     async unpublishScreen() {
+      // Invalidate in-flight reconcile before any await so it cannot write
+      // height/bitrate onto a share that no longer exists.
+      screenShareEpoch += 1;
       if (publishedScreenAudioTrack) {
         await room.localParticipant.unpublishTrack(publishedScreenAudioTrack);
         publishedScreenAudioTrack = null;
@@ -1553,6 +1597,7 @@ export async function connectLiveKit({
       appliedScreenCaptureHeight = null;
       pendingCaptureHeight = null;
       captureHeightStreak = 0;
+      screenShareEpoch += 1;
       publishedCameraTrack = null;
       publishedScreenAudioTrack = null;
       await room.disconnect();
