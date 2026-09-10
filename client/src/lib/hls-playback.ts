@@ -99,6 +99,32 @@ export function isOwnHlsPlaylistProxyUrl(url: string): boolean {
 export interface HlsPlaybackStats {
   width: number;
   height: number;
+  droppedVideoFrames?: number;
+  totalVideoFrames?: number;
+}
+
+/** `HTMLVideoElement.getVideoPlaybackQuality()`, when the engine has it. */
+export function sampleVideoPlaybackQuality(video: {
+  getVideoPlaybackQuality?: () => {
+    droppedVideoFrames: number;
+    totalVideoFrames: number;
+  };
+}): { droppedVideoFrames: number; totalVideoFrames: number } | null {
+  if (typeof video.getVideoPlaybackQuality !== "function") {
+    return null;
+  }
+  const quality = video.getVideoPlaybackQuality();
+  if (
+    !quality ||
+    typeof quality.droppedVideoFrames !== "number" ||
+    typeof quality.totalVideoFrames !== "number"
+  ) {
+    return null;
+  }
+  return {
+    droppedVideoFrames: quality.droppedVideoFrames,
+    totalVideoFrames: quality.totalVideoFrames,
+  };
 }
 
 let stats: HlsPlaybackStats | null = null;

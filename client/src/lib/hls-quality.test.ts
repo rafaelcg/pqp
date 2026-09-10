@@ -92,6 +92,8 @@ describe("describeHlsLevel", () => {
   it("names the rung the way a player names it", () => {
     expect(describeHlsLevel(1080)).toBe("1080p");
     expect(describeHlsLevel(480)).toBe("480p");
+    expect(describeHlsLevel(720, 60)).toBe("720p60");
+    expect(describeHlsLevel(720, 30)).toBe("720p");
   });
 });
 

@@ -6,6 +6,7 @@ import {
   HLS_RUNG_MBPS,
   LADDER_RUNGS,
   ladderBudgetMbps,
+  ladderMaxFramerate,
   parseLadder,
   rungEncodingOptions,
   type LadderRung,
@@ -32,6 +33,20 @@ describe("parseLadder", () => {
       "720p30",
       "1080p30",
     ]);
+    expect(names(parseLadder({}).rungs)).not.toContain("720p60");
+  });
+
+  it("720p60 is a named option an operator can turn on without a deploy", () => {
+    expect(names(parseLadder({ ladder: "720p60,480p30" }).rungs)).toEqual([
+      "480p30",
+      "720p60",
+    ]);
+    expect(LADDER_RUNGS["720p60"]?.framerate).toBe(60);
+    expect(LADDER_RUNGS["720p60"]?.height).toBe(720);
+    expect(ladderMaxFramerate(parseLadder({}).rungs)).toBe(30);
+    expect(
+      ladderMaxFramerate(parseLadder({ ladder: "1080p30,720p60" }).rungs),
+    ).toBe(60);
   });
 
   it("sorts by bitrate whatever order the operator wrote", () => {
@@ -113,6 +128,14 @@ describe("rungEncodingOptions", () => {
     expect(options.height).toBe(1080);
     expect(options.framerate).toBe(30);
     expect(options.videoBitrate).toBe(4500);
+  });
+
+  it("720p60 asks the egress for 60 fps", () => {
+    const options = rungEncodingOptions(LADDER_RUNGS["720p60"]!);
+    expect(options.width).toBe(1280);
+    expect(options.height).toBe(720);
+    expect(options.framerate).toBe(60);
+    expect(options.videoBitrate).toBe(3200);
   });
 
   it("leaves the keyframe interval to the egress", () => {
@@ -315,6 +338,11 @@ describe("buildMasterPlaylist", () => {
     expect(body).toContain("AVERAGE-BANDWIDTH=4628000");
     expect(body).toContain("RESOLUTION=1920x1080");
     expect(body).toContain("FRAME-RATE=30.000");
+    expect(
+      buildMasterPlaylist([
+        { rung: LADDER_RUNGS["720p60"]!, uri: "/sixty?t=abc" },
+      ]),
+    ).toContain("FRAME-RATE=60.000");
     expect(body).toContain('CODECS="avc1.4d0028,mp4a.40.2"');
   });
 

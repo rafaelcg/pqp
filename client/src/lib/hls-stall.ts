@@ -23,7 +23,7 @@ export interface HlsStallOptions {
   windowMs?: number;
 }
 
-export type HlsStallDecision = "none" | "reconnect" | "dead";
+export type HlsStallDecision = "none" | "recover" | "reconnect" | "dead";
 
 export class HlsStallWatch {
   private readonly stallMs: number;
@@ -35,6 +35,7 @@ export class HlsStallWatch {
   private sequenceSeenAt: number | null = null;
   private reconnects: number[] = [];
   private pendingFatal = false;
+  private triedRecover = false;
 
   constructor(options: HlsStallOptions = {}) {
     this.stallMs = options.stallMs ?? 8_000;
@@ -46,6 +47,8 @@ export class HlsStallWatch {
   /** The element started or resumed rendering: every stall clock resets. */
   onPlaying(): void {
     this.waitingSince = null;
+    this.triedRecover = false;
+    this.pendingFatal = false;
   }
 
   onWaiting(now: number): void {
@@ -75,6 +78,7 @@ export class HlsStallWatch {
     this.lastSequence = null;
     this.sequenceSeenAt = now;
     this.pendingFatal = false;
+    this.triedRecover = false;
   }
 
   /** The person pressed "try again": a clean slate. */
@@ -106,6 +110,17 @@ export class HlsStallWatch {
       return "none";
     }
     this.lastReason = reason;
+    // A stuck media sequence is a dead egress: the playlist still answers
+    // and in-place recovery cannot invent new segments. Stall and fatal
+    // media errors often recover without tearing hls.js down, and a
+    // teardown reseeds ABR at the bottom rung — so try that once first.
+    if (reason !== "sequence-stuck" && !this.triedRecover) {
+      this.triedRecover = true;
+      // Leave pendingFatal set. If recovery works, `onPlaying` clears it.
+      // If it does not (native Safari has no recoverMediaError, or hls.js
+      // stays dead without a second ERROR), the next tick reconnects.
+      return "recover";
+    }
     this.reconnects = this.reconnects.filter((at) => now - at < this.windowMs);
     if (this.reconnects.length >= this.maxReconnects) {
       return "dead";

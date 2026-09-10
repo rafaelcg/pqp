@@ -103,10 +103,17 @@ export interface ScreenCaptureOptions
  * (`lib/screen-capture-cursor.ts`). It rides on the intent rather than on its
  * own parameter because it is the same kind of thing: a steer on the capture
  * we are about to ask for, decided before the picker opens.
+ *
+ * `maxFrameRate` is 60 only when the HLS ladder names a 60 fps rung. Capture
+ * and publish stay at 30 otherwise: a 60 fps getDisplayMedia of a 1080p
+ * tab with a 30 fps ladder just makes the egress drop frames, and the
+ * presenter's uplink pays for motion nobody transcodes.
  */
 export interface ScreenCaptureIntent {
   preferBrowserTab?: boolean;
   hideCursor?: boolean;
+  /** 60 when a 60 fps HLS rung is configured; 30 otherwise. */
+  maxFrameRate?: 30 | 60;
   /**
    * A display stream the caller already has, to publish instead of opening
    * the picker again.
@@ -313,6 +320,7 @@ export function screenCaptureOptions(
     (env.sharePickerOffersAudio || shareSystemAudio) &&
     !intent.preferBrowserTab;
   const carriesAudio = browserOffersCheckbox || shellWantsAudio;
+  const maxFrameRate = intent.maxFrameRate === 60 ? 60 : 30;
   return {
     // `video: true` used to be the whole of this, and it is why a share arrived
     // as a slideshow. With no frameRate asked for, a capture of a large surface
@@ -320,9 +328,10 @@ export function screenCaptureOptions(
     // ceiling on size a 4K or Retina display is captured at its full pixel count
     // and then has to be scaled down inside the encoder every frame. 1080p30 is
     // the shape of the thing people actually share, and asking for it is cheaper
-    // than paying for pixels nobody in the call can see.
+    // than paying for pixels nobody in the call can see. 60 fps is opt-in via
+    // `maxFrameRate` when the HLS ladder names a 60 rung.
     video: {
-      frameRate: { ideal: 30, max: 30 },
+      frameRate: { ideal: maxFrameRate, max: maxFrameRate },
       width: { max: 1920 },
       height: { max: 1080 },
       // Asked for unconditionally, not feature-detected like `restrictOwnAudio`

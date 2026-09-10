@@ -102,7 +102,15 @@ function fakeSender(source: string, layers: number) {
 }
 
 /** Publications the local participant currently holds, keyed by source. */
-const publications = new Map<string, { track: { sender: unknown } }>();
+const publications = new Map<
+  string,
+  {
+    track: {
+      sender: unknown;
+      replaceTrack?: (next: unknown) => Promise<void>;
+    };
+  }
+>();
 
 interface FakeRemotePublication {
   source: string;
@@ -279,8 +287,8 @@ const { connectLiveKit, HLS_SOURCE_DROP_SAMPLES } = await import(
   "./livekit-session"
 );
 
-function fakeTrack(kind: "audio" | "video", id: string, height = 720) {
-  const settings = { width: Math.round((height * 16) / 9), height };
+function fakeTrack(kind: "audio" | "video", id: string, height = 720, frameRate = 30) {
+  const settings = { width: Math.round((height * 16) / 9), height, frameRate };
   return {
     kind,
     id,
@@ -307,8 +315,9 @@ function fakeStream(
   kind: "audio" | "video",
   id: string,
   height = 720,
+  frameRate = 30,
 ): MediaStream {
-  const track = fakeTrack(kind, id, height);
+  const track = fakeTrack(kind, id, height, frameRate);
   return {
     id: `stream-${id}`,
     getTracks: () => [track],
@@ -421,6 +430,14 @@ describe("a quality chosen before the track exists", () => {
     // share goes up with no ceiling while every test stays green.
     expect(options?.videoEncoding).toBeUndefined();
     expect(options?.degradationPreference).toBe("maintain-framerate");
+  });
+
+  it("publishes a 60 fps capture at 60, so a 720p60 rung has source", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen60", 720, 60));
+    expect(
+      encodingFor(Track.Source.ScreenShare)?.screenShareEncoding?.maxFramerate,
+    ).toBe(60);
   });
 
   it("gives the two sources different numbers for the same choice", async () => {

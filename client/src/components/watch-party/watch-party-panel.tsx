@@ -137,6 +137,8 @@ export interface WatchPartyPanelProps {
   transport?: VoiceRoomTransport | null;
   /** This seat was taken as audience: no microphone was ever asked for. */
   isAudienceSeat?: boolean;
+  /** 60 when this server's HLS ladder names a 60 fps rung. */
+  hlsMaxFrameRate?: 30 | 60;
   onShapeChange?: (shape: "expanded" | "none") => void;
   /**
    * WHICH HALF OF THE PANEL TO DRAW, and it is rendered twice.
@@ -408,7 +410,7 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
           isDesktopApp(),
           getDesktop()?.platform ?? null,
         ),
-        { preferBrowserTab: true },
+        { preferBrowserTab: true, maxFrameRate: props.hlsMaxFrameRate },
       );
       const picked = await navigator.mediaDevices.getDisplayMedia(options);
       stream?.getTracks().forEach((track) => track.stop());

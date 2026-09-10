@@ -208,7 +208,7 @@ export function nextSfuStrainStreak(
 
 export function shouldMeasureUplink(
   isSharing: boolean,
-  transport: VoiceRoomTransport | null,
+  _transport: VoiceRoomTransport | null,
 ): boolean {
   return isSharing;
 }

@@ -240,8 +240,9 @@ let warnedLadder: string | null = null;
 
 /**
  * `LIVE_HLS_LADDER`: the renditions this deployment encodes, lowest first.
- * A comma-separated list of rung names (`1080p30,720p30`, the default), each
- * optionally carrying a bitrate override (`1080p30@3500`). `LIVE_HLS_PRESET`
+ * A comma-separated list of rung names (`1080p30,720p30,480p30`, the default),
+ * each optionally carrying a bitrate override (`1080p30@3500`). `720p60` is a
+ * named option, not a default. `LIVE_HLS_PRESET`
  * is still read as the name of a ONE-RUNG ladder, so a deployment that
  * already sets it keeps exactly the behaviour it has.
  *
@@ -692,7 +693,13 @@ export interface LiveHlsConfig {
    * in the client means an operator who runs a 720p-only ladder does not get
    * a presenter uploading 4 Mbit/s for nothing.
    */
-  ladder: { name: string; width: number; height: number; videoKbps: number }[];
+  ladder: {
+    name: string;
+    width: number;
+    height: number;
+    framerate: number;
+    videoKbps: number;
+  }[];
 }
 
 /**
@@ -710,6 +717,7 @@ export function liveHlsConfig(): LiveHlsConfig {
       name: rung.name,
       width: rung.width,
       height: rung.height,
+      framerate: rung.framerate,
       videoKbps: rung.videoKbps,
     })),
   };
@@ -1503,6 +1511,7 @@ export function adoptLiveHlsSession(input: {
     presenterPeerId: input.presenterPeerId,
     delaySeconds: delaySeconds(),
     topHeight: Math.max(...rungs.map((r) => r.rung.height)),
+    topFramerate: Math.max(...rungs.map((r) => r.rung.framerate)),
   };
   rooms.set(input.channelId, {
     rungs,
@@ -2076,6 +2085,7 @@ async function startRoom(
     // What actually started, not what was configured: a rung refused for
     // budget must not tell the presenter to upload for it.
     topHeight: Math.max(...running.map((entry) => entry.rung.height)),
+    topFramerate: Math.max(...running.map((entry) => entry.rung.framerate)),
     // The one fact the host cannot check for themselves. They hear the film
     // out of their own speakers whether or not its audio was ever captured.
     hasAudio: Boolean(tracks.audioTrackId),

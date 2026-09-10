@@ -27,6 +27,12 @@ export const liveHlsStreamSchema = z.object({
    */
   topHeight: z.number().int().positive().optional(),
   /**
+   * Highest framerate a started rung actually encodes. The presenter
+   * captures and publishes at 60 only when this is 60; a 30 fps source
+   * fed to a 60 fps rung is duplicated frames, not smoothness.
+   */
+  topFramerate: z.number().int().positive().optional(),
+  /**
    * Whether this transcode has any audio at all.
    *
    * A Track Composite egress carries exactly two tracks: the screen share and

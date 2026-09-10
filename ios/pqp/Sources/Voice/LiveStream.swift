@@ -32,6 +32,8 @@ struct LiveHlsStream: Decodable, Equatable, Sendable {
     /// side only; a viewer has no use for it and decodes it so the shape does
     /// not drift.
     let topHeight: Int?
+    /// Highest fps a started rung encodes. Presenter-side; ignored by the player.
+    let topFramerate: Int?
 }
 
 /**

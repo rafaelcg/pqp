@@ -44,6 +44,23 @@ export function hlsLivePlayerConfig(): HlsLivePlayerConfig {
   };
 }
 
+/** hls.js ABR seed: the 720p30 average, not the library's 500 kbit/s floor. */
+export const HLS_ABR_DEFAULT_ESTIMATE_BPS = 1_800_000;
+
+/**
+ * Where "jump to live" should land. Seeking onto the exact live edge
+ * sits inside the newest segment and often `waiting` immediately.
+ */
+export function jumpToLiveTime(
+  liveSyncPosition: number,
+  segmentSeconds: number = HLS_LIVE_SEGMENT_SECONDS,
+): number {
+  if (!Number.isFinite(liveSyncPosition)) {
+    return liveSyncPosition;
+  }
+  return Math.max(0, liveSyncPosition - segmentSeconds);
+}
+
 /**
  * True when a live-sync / max-latency pair still sits inside the production
  * window. The attach path must not start so far from the edge that the

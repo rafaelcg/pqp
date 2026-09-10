@@ -403,6 +403,7 @@ import {
   screenCaptureEnvironment,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
+import { hlsCaptureMaxFrameRate } from "@/lib/hls-capture-rate";
 import {
   gateScreenShareStart,
   type ScreenShareStart,
@@ -1591,11 +1592,23 @@ function MainAppContent({
   liveHlsConfigRef.current = liveHlsConfig;
   const startScreenShareGated = useCallback(
     (audio: boolean, intent?: ScreenCaptureIntent) => {
+      const withFps =
+        intent?.preferBrowserTab
+          ? {
+              ...intent,
+              maxFrameRate:
+                intent.maxFrameRate ??
+                hlsCaptureMaxFrameRate(
+                  liveHlsConfigRef.current?.ladder,
+                  liveHlsConfigRef.current?.enabled,
+                ),
+            }
+          : intent;
       // Every share start in this file goes through here: the sidebar
       // button, the call stage, the "share without sound" retry, and the DM
       // stage. `screen-share-gate.test.ts` scans this file to keep it so.
       void gateScreenShareStart<ScreenCaptureIntent>({
-        request: { audio, intent },
+        request: { audio, intent: withFps },
         serverId: selectedServerIdRef.current,
         hlsEnabled: liveHlsConfigRef.current?.enabled ?? null,
         checkNeedsAck: (serverId) => hlsHostAck.checkNeedsAck(serverId),
@@ -5752,6 +5765,10 @@ function MainAppContent({
             currentUserId={user.id}
             canSpeak={voiceState.canSpeak}
             isAudienceSeat={voiceState.isAudienceSeat}
+            hlsMaxFrameRate={hlsCaptureMaxFrameRate(
+              liveHlsConfig?.ladder,
+              liveHlsConfig?.enabled,
+            )}
             liveStream={
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }
@@ -5853,6 +5870,10 @@ function MainAppContent({
             currentUserId={user.id}
             canSpeak={voiceState.canSpeak}
             isAudienceSeat={voiceState.isAudienceSeat}
+            hlsMaxFrameRate={hlsCaptureMaxFrameRate(
+              liveHlsConfig?.ladder,
+              liveHlsConfig?.enabled,
+            )}
             liveStream={
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }

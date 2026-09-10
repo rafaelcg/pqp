@@ -20,7 +20,9 @@ describe("HlsStallWatch", () => {
     watch.onSourceChanged(T0);
     watch.onWaiting(T0 + 1_000);
     expect(watch.tick(T0 + 8_000)).toBe("none");
-    expect(watch.tick(T0 + 9_000)).toBe("reconnect");
+    expect(watch.tick(T0 + 9_000)).toBe("recover");
+    expect(watch.lastReason).toBe("stall");
+    expect(watch.tick(T0 + 9_500)).toBe("reconnect");
     expect(watch.lastReason).toBe("stall");
   });
 
@@ -44,15 +46,28 @@ describe("HlsStallWatch", () => {
     expect(watch.lastReason).toBe("sequence-stuck");
   });
 
-  it("reconnects on the next tick after a fatal hls.js error, ignores non-fatal ones", () => {
+  it("tries in-place recovery once on a fatal hls.js error, then reconnects", () => {
     const watch = new HlsStallWatch();
     watch.onSourceChanged(T0);
     watch.onError({ fatal: false });
     expect(watch.tick(T0 + 100)).toBe("none");
     watch.onError({ fatal: true });
-    expect(watch.tick(T0 + 200)).toBe("reconnect");
+    expect(watch.tick(T0 + 200)).toBe("recover");
     expect(watch.lastReason).toBe("fatal");
-    // consumed: the new source starts clean
+    // Recovery was a no-op (native player, or hls.js stayed dead without
+    // another ERROR). The fatal flag is still up, so this tick reconnects
+    // instead of sitting on "none" forever.
+    expect(watch.tick(T0 + 300)).toBe("reconnect");
+    expect(watch.lastReason).toBe("fatal");
+    expect(watch.tick(T0 + 400)).toBe("none");
+  });
+
+  it("a recover that actually plays does not reconnect", () => {
+    const watch = new HlsStallWatch();
+    watch.onSourceChanged(T0);
+    watch.onError({ fatal: true });
+    expect(watch.tick(T0 + 200)).toBe("recover");
+    watch.onPlaying();
     expect(watch.tick(T0 + 300)).toBe("none");
   });
 
@@ -61,30 +76,29 @@ describe("HlsStallWatch", () => {
     watch.onSourceChanged(T0);
     let now = T0;
     for (let i = 0; i < 3; i += 1) {
-      watch.onError({ fatal: true });
-      now += 10_000;
+      watch.onMediaSequence(1, now);
+      now += 15_000;
       expect(watch.tick(now)).toBe("reconnect");
     }
-    watch.onError({ fatal: true });
-    now += 10_000;
+    watch.onMediaSequence(1, now);
+    now += 15_000;
     expect(watch.tick(now)).toBe("dead");
-    // still dead on the next tick, no fourth attempt is counted
     expect(watch.tick(now + 1_000)).toBe("dead");
 
     watch.reset(now + 2_000);
-    watch.onError({ fatal: true });
-    expect(watch.tick(now + 3_000)).toBe("reconnect");
+    watch.onMediaSequence(1, now + 2_000);
+    expect(watch.tick(now + 17_000)).toBe("reconnect");
   });
 
   it("forgets reconnects older than the window", () => {
     const watch = new HlsStallWatch({ windowMs: 60_000 });
     let now = T0;
     for (let i = 0; i < 3; i += 1) {
-      watch.onError({ fatal: true });
-      now += 1_000;
+      watch.onMediaSequence(1, now);
+      now += 15_000;
       expect(watch.tick(now)).toBe("reconnect");
     }
-    watch.onError({ fatal: true });
+    watch.onMediaSequence(1, now);
     expect(watch.tick(now + 61_000)).toBe("reconnect");
   });
 });

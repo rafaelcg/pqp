@@ -585,6 +585,13 @@ export const fetchVoiceBackend = () =>
 export interface LiveHlsConfig {
   enabled: boolean;
   delaySeconds: number;
+  ladder?: {
+    name: string;
+    width: number;
+    height: number;
+    framerate: number;
+    videoKbps: number;
+  }[];
 }
 
 export const fetchLiveHlsConfig = (serverId?: string) =>

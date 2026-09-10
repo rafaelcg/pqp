@@ -129,7 +129,7 @@ describe("live HLS egress", () => {
       // The presenter's client reads the top of this to decide whether to
       // publish past the large-room cap.
       ladder: [
-        { name: "720p30", width: 1280, height: 720, videoKbps: 1800 },
+        { name: "720p30", width: 1280, height: 720, framerate: 30, videoKbps: 1800 },
       ],
       allowlisted: false,
     });
