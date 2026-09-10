@@ -52,24 +52,33 @@
   var RECENT_MIN_SAMPLES = 10;
 
   /**
-   * Mean latency of the newest buckets that together hold
+   * Mean latency of the newest *contiguous* buckets that together hold
    * `RECENT_MIN_SAMPLES` probes. Null when the history has no points (tests,
-   * an API older than this field) or when the sampler has not written enough
-   * yet — the caller then falls back to the live peek.
+   * an API older than this field), when the newest bucket is empty, or when
+   * the sampler has not written enough yet — the caller then falls back to
+   * the live peek.
    *
-   * `points` are oldest-first, one per 30 minutes; `ms` is already the mean
-   * of that bucket, so this re-weights by `samples`.
+   * `points` are oldest-first, one per 30 minutes, with gaps filled as
+   * `{ ms: null, samples: 0 }`. An empty newest bucket is what a stopped
+   * sampler looks like, and walking past it into yesterday's healthy
+   * buckets would hide a live slowdown. Skip nothing: a gap ends the
+   * window. `ms` is already the mean of that bucket, so this re-weights
+   * by `samples`.
    */
   function recentMeanMs(componentHistory) {
     if (!componentHistory || !Array.isArray(componentHistory.points)) {
       return null;
     }
+    var points = componentHistory.points;
+    if (points.length === 0) {
+      return null;
+    }
     var weighted = 0;
     var samples = 0;
-    for (var i = componentHistory.points.length - 1; i >= 0; i--) {
-      var point = componentHistory.points[i];
+    for (var i = points.length - 1; i >= 0; i--) {
+      var point = points[i];
       if (!point || typeof point.ms !== "number" || !(point.samples > 0)) {
-        continue;
+        break;
       }
       weighted += point.ms * point.samples;
       samples += point.samples;

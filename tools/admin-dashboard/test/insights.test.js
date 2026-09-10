@@ -233,6 +233,36 @@ test("too few recent samples fall back to the live peek rather than a 1-probe me
   assert.deepEqual(i.figs.map((f) => f[0]), ["agora", "p50 24 h", "p95 24 h"]);
 });
 
+test("an empty newest bucket is not filled in from older healthy ones", () => {
+  // A stopped sampler and a quiet night both look like empty recent buckets.
+  // Walking past the gap into yesterday's 22 ms would hide a live 400 ms
+  // slowdown, which is the shape this function is forbidden from drawing.
+  const points = voiceBuckets(22, 30);
+  points[points.length - 1] = { ms: null, fails: 0, samples: 0 };
+  const i = latencyInsight({
+    components: [{ key: "voice", label: "Voice", state: "operational", latencyMs: 400 }],
+    history: { components: [{ key: "voice", p50: 22, p95: 171, points }] },
+    names: NAMES
+  });
+  assert.equal(i.state, "bad");
+  assert.match(i.body, /400 ms agora/);
+  assert.deepEqual(i.figs.map((f) => f[0]), ["agora", "p50 24 h", "p95 24 h"]);
+});
+
+test("a gap inside the window stops the mean rather than skipping to older buckets", () => {
+  const points = voiceBuckets(22, 30);
+  points[points.length - 1] = { ms: 24, fails: 0, samples: 4 };
+  points[points.length - 2] = { ms: null, fails: 0, samples: 0 };
+  const i = latencyInsight({
+    components: [{ key: "voice", label: "Voice", state: "operational", latencyMs: 400 }],
+    history: { components: [{ key: "voice", p50: 22, p95: 171, points }] },
+    names: NAMES
+  });
+  // 4 samples in the newest bucket, then a gap: not a window. Live peek.
+  assert.equal(i.state, "bad");
+  assert.match(i.body, /400 ms agora/);
+});
+
 /* ------------------------------------------------------------------ *
  * pool: a burst absorbed against the ceiling
  * ------------------------------------------------------------------ */
