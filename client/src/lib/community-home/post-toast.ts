@@ -10,13 +10,20 @@
  * The caller only asks this for the server whose channel list is on screen;
  * a member sitting in DMs or another server is not "in" this one, and the
  * badge is waiting when they open it (which lands on Baú).
+ *
+ * `hasUnreadBaseline` is a successful unread read for *this* server. Without
+ * it, a nudge during the first fetch would compare against 0 and toast for
+ * posts that were already waiting, or for a pin/delete that did not raise
+ * unread.
  */
 export function shouldOfferCommunityHomePostToast(input: {
   lookingAtFeed: boolean;
+  hasUnreadBaseline: boolean;
+  fromNudge: boolean;
   unreadBefore: number;
   unreadAfter: number;
 }): boolean {
-  if (input.lookingAtFeed) {
+  if (!input.fromNudge || !input.hasUnreadBaseline || input.lookingAtFeed) {
     return false;
   }
   return input.unreadAfter > input.unreadBefore;

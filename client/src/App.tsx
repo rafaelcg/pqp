@@ -1188,6 +1188,8 @@ function MainAppContent({
   const communityHomeUnreadRef = useRef(0);
   const communityHomeUnreadServerRef = useRef<string | null>(null);
   const communityHomeUpdateNudgeRef = useRef(0);
+  /** A successful unread read for `communityHomeUnreadServerRef`. */
+  const communityHomeUnreadBaselineRef = useRef(false);
   /** Live corner card for a publish in the open server, not the author. */
   const [communityHomePostToast, setCommunityHomePostToast] = useState<{
     serverId: string;
@@ -4457,7 +4459,7 @@ function MainAppContent({
   const openCommunityHomePostToast = useCallback(() => {
     const current = communityHomePostToastRef.current;
     setCommunityHomePostToast(null);
-    if (current) {
+    if (current && current.serverId === selectedServerIdRef.current) {
       void selectChannel(COMMUNITY_HOME_CHANNEL_ID, current.serverId);
     }
   }, [selectChannel]);
@@ -4470,34 +4472,42 @@ function MainAppContent({
       setCommunityHomeUnread(0);
       communityHomeUnreadRef.current = 0;
       communityHomeUnreadServerRef.current = null;
+      communityHomeUnreadBaselineRef.current = false;
+      setCommunityHomePostToast(null);
       return;
     }
     if (communityHomeUnreadServerRef.current !== selectedServerId) {
       communityHomeUnreadServerRef.current = selectedServerId;
       communityHomeUnreadRef.current = 0;
+      communityHomeUnreadBaselineRef.current = false;
+      setCommunityHomePostToast((current) =>
+        current?.serverId === selectedServerId ? current : null,
+      );
     }
     if (communityHomeOpen) {
       setCommunityHomeUnread(0);
       communityHomeUnreadRef.current = 0;
-      setCommunityHomePostToast((current) =>
-        current?.serverId === selectedServerId ? null : current,
-      );
+      communityHomeUnreadBaselineRef.current = true;
+      setCommunityHomePostToast(null);
       void markCommunityHomeRead(selectedServerId).catch(() => {
         // A failed mark costs one repeated badge, never a wrong feed.
       });
       return;
     }
     const previous = communityHomeUnreadRef.current;
+    const hadBaseline = communityHomeUnreadBaselineRef.current;
     let cancelled = false;
     void fetchCommunityHomeUnread(selectedServerId)
       .then(({ count }) => {
         if (!cancelled) {
           setCommunityHomeUnread(count);
           communityHomeUnreadRef.current = count;
+          communityHomeUnreadBaselineRef.current = true;
           if (
-            fromNudge &&
             shouldOfferCommunityHomePostToast({
               lookingAtFeed: false,
+              hasUnreadBaseline: hadBaseline,
+              fromNudge,
               unreadBefore: previous,
               unreadAfter: count,
             })
@@ -4514,6 +4524,7 @@ function MainAppContent({
       })
       .catch(() => {
         // Flag off, or a blip: no badge is better than a wrong one.
+        // Leave the baseline unset so a later nudge cannot toast against 0.
       });
     return () => {
       cancelled = true;
@@ -5232,7 +5243,10 @@ function MainAppContent({
   });
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
-    communityHomePost: Boolean(communityHomePostToast),
+    communityHomePost: Boolean(
+      communityHomePostToast &&
+        communityHomePostToast.serverId === selectedServerId,
+    ),
     qg: qgHintWanted,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,
