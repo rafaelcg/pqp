@@ -88,7 +88,10 @@ import {
 import { InvitePanel } from "@/components/layout/invite-panel";
 import { MemberSidebar } from "@/components/layout/member-sidebar";
 import { MembersPanel } from "@/components/layout/members-panel";
-import { ProfilePopoverProvider } from "@/components/user/user-profile-popover";
+import {
+  ProfilePopoverProvider,
+  type ProfileWatchPartyContext,
+} from "@/components/user/user-profile-popover";
 import type { ProfileModerationContext } from "@/components/user/profile-relations";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
@@ -2189,6 +2192,24 @@ function MainAppContent({
    * account holds none of the staff bits, which is why the bits are checked
    * here rather than inside the card.
    */
+  // The party on the open channel, for the member card's co-host rung. The
+  // card itself decides whether the viewer may promote this person.
+  const cardWatchParty = useMemo<ProfileWatchPartyContext | null>(() => {
+    const party = selectedChannelId
+      ? (watchParties.byChannel[selectedChannelId] ?? null)
+      : null;
+    if (!party) {
+      return null;
+    }
+    return {
+      party,
+      onPromote: (userId) => handleWatchPartyCohost(userId, true),
+      onDemote: (userId) => handleWatchPartyCohost(userId, false),
+    };
+    // `handleWatchPartyCohost` is a function declaration on this component
+    // and reads its party at call time; listing it would rebuild on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChannelId, watchParties.byChannel]);
   const cardModeration = useMemo<ProfileModerationContext | null>(
     () =>
       canStaff && manageableServer && selection.kind === "server"
@@ -6174,6 +6195,7 @@ function MainAppContent({
       currentUserId={user?.id ?? null}
       blockedUserIds={blockedUserIds}
       moderation={cardModeration}
+      watchParty={cardWatchParty}
       onOpenConversation={(conversation) => {
         setConversations((prev) => upsertConversation(prev, conversation));
         void selectConversation(conversation.channelId);

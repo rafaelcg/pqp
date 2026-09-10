@@ -1168,6 +1168,8 @@
   "profile.call": "Call",
   "profile.more": "More",
   "profile.mod.section": "This community",
+  "profile.cohost.promote": "Make co-host of {name}",
+  "profile.cohost.demote": "Remove co-host",
   "profile.about.accounts": "Accounts",
   "profile.about.tabs": "About",
   "profile.isYou": "This is you.",

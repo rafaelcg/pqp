@@ -1168,6 +1168,8 @@
   "profile.call": "Ligar",
   "profile.more": "Mais",
   "profile.mod.section": "Nesta comunidade",
+  "profile.cohost.promote": "Promover a co-host de {name}",
+  "profile.cohost.demote": "Tirar co-host",
   "profile.about.accounts": "Contas",
   "profile.about.tabs": "Sobre",
   "profile.isYou": "Esse é você.",

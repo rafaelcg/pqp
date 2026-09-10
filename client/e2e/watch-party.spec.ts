@@ -1650,3 +1650,48 @@ test("a party has no voice until the host turns it on, and the audience follows 
     await hostClient.context.close();
   }
 });
+
+test("the host promotes a co-host from the member card", async ({
+  page,
+  browser,
+}) => {
+  /**
+   * The options dialog keeps its list; this is the same action where a host
+   * is already looking at somebody, which is how Twitch adds a moderator.
+   * The rung reads the party from the store, so the same card offers the
+   * demotion once the promotion has landed.
+   */
+  const shared = await seedServer("wp-card-host", "wp-card-guest");
+  const guestId = await materialiseAccount("wp-card-guest");
+  const party = await createParty("wp-card-host", shared.serverId, "Cinemoon 5");
+  await setPartyState("wp-card-host", party.partyId, "live");
+  const here = `/app/server/${shared.serverId}/channel/${party.channelId}`;
+
+  // The guest is in the sidebar once they have been seen: open their client.
+  const second = await secondClient(browser);
+  try {
+    await openAs(second.page, here, "wp-card-guest");
+    await openAs(page, here, "wp-card-host");
+    await expect(page.getByTestId("watch-party-bar")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    const trigger = page.locator(`[data-member-sidebar-trigger="${guestId}"]`);
+    await expect(trigger).toBeVisible({ timeout: 20_000 });
+    await trigger.click();
+    const card = page.locator("[data-profile-card]");
+    await expect(card).toBeVisible();
+    await card.locator('[data-profile-cohost="promote"]').click();
+    await expect(card.locator('[data-profile-cohost="demote"]')).toBeVisible({
+      timeout: 20_000,
+    });
+
+    // And the promotion reached the guest's running client on the socket:
+    // Encerrar is a co-host's control.
+    await expect(second.page.locator("[data-watch-party-end]")).toBeVisible({
+      timeout: 20_000,
+    });
+  } finally {
+    await second.context.close();
+  }
+});
