@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { randomUUID } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import {
   afterAll,
@@ -52,6 +53,7 @@ const { upsertUser } = await import("../services/users.js");
 const { resetAdminMetricsCache, isAdminMetricsTokenValid } = await import(
   "../services/metrics.js"
 );
+const { pinVoiceRoom } = await import("../voice/registry.js");
 
 let server: Server;
 let baseUrl: string;
@@ -114,6 +116,14 @@ interface MetricsBody {
     peakRoomSizeToday: number;
     peakTrackedSince: string;
     backend: string;
+    rooms: {
+      channel: string | null;
+      server: string | null;
+      participants: number;
+      sharingScreen: number;
+      transport: string;
+      openedAt: string | null;
+    }[];
   };
   topServers24h: {
     name: string;
@@ -179,6 +189,7 @@ describeDb("GET /api/admin/metrics", () => {
   let operator: Actor;
   let webhook: Actor;
   let textChannelId: string;
+  let voiceChannelId: string;
 
   beforeAll(async () => {
     await initDb();
@@ -236,6 +247,7 @@ describeDb("GET /api/admin/metrics", () => {
       [serverId],
     );
     textChannelId = channels.rows.find((c) => c.type === "text")!.id;
+    voiceChannelId = channels.rows.find((c) => c.type === "voice")!.id;
     await pool.query(
       `INSERT INTO messages (channel_id, author_id, body, created_at) VALUES
          ($1, $2, 'oi', now()),
@@ -376,6 +388,48 @@ describeDb("GET /api/admin/metrics", () => {
     for (const secret of [ana.id, operator.id, webhook.id, "clerk-", "Ana", "Operator", "Deploy bot"]) {
       expect(text).not.toContain(secret);
     }
+  });
+
+  it("names the room's transport and open time in the rooms table, from the registry pin", async () => {
+    // Registry on: the source of truth is `voice_rooms`, cluster-wide. Two
+    // peers so `participants` also exercises the join, not just a single row.
+    process.env.VOICE_REGISTRY = "postgres";
+    const pool = getPool();
+    try {
+      await pinVoiceRoom(voiceChannelId, "livekit");
+      await pool.query(
+        `INSERT INTO voice_peers (peer_id, channel_id, user_id, instance_id, display_name, sharing_screen)
+         VALUES ($1, $2, $3, $4, 'Ana', TRUE), ($5, $2, $6, $4, 'Operator', FALSE)`,
+        [randomUUID(), voiceChannelId, ana.id, randomUUID(), randomUUID(), operator.id],
+      );
+      resetAdminMetricsCache();
+
+      const result = await call<MetricsBody>(operator, "/api/admin/metrics");
+      expect(result.status).toBe(200);
+      const room = result.body.voice.rooms.find((r) => r.channel === "voz");
+      expect(room).toMatchObject({
+        server: "Clube",
+        participants: 2,
+        sharingScreen: 1,
+        transport: "livekit",
+      });
+      expect(Date.parse(room!.openedAt!)).not.toBeNaN();
+    } finally {
+      delete process.env.VOICE_REGISTRY;
+      await pool.query(`DELETE FROM voice_rooms WHERE channel_id = $1`, [voiceChannelId]);
+    }
+  });
+
+  it("falls back to the process's own map with the registry off, and cannot say when the room opened", async () => {
+    // Registry off (the flag's default): no rows to read, so the rooms
+    // array reflects only what this process's local peer map holds — empty
+    // in this suite, which has no live WebSocket. The field must still be
+    // present and typed, never throw for its absence.
+    delete process.env.VOICE_REGISTRY;
+    resetAdminMetricsCache();
+    const result = await call<MetricsBody>(operator, "/api/admin/metrics");
+    expect(result.status).toBe(200);
+    expect(result.body.voice.rooms).toEqual([]);
   });
 
   it("serves the cached counts for 30 seconds", async () => {

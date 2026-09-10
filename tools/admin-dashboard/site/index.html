@@ -3654,7 +3654,17 @@
      The snapshot is process state, so this is the calls that exist right now
      and never a history. A DM call has no server channel behind it: the API
      sends null for both names rather than guessing, and it renders as a
-     conversation instead of as a blank row. */
+     conversation instead of as a blank row.
+
+     `transport` and `openedAt` are additive fields: an API still on the
+     previous payload shape simply omits them, and the row renders exactly as
+     it did before (no badge, no open-time note). Neither earns its own
+     column — the badge rides on the channel name so the table keeps the
+     width it already has. */
+  var TRANSPORT_TAG = {
+    livekit: { cls: "tag accent", label: "servidor de mídia", title: "esta call passa pelo servidor de mídia (livekit) — aguenta sala cheia" },
+    mesh: { cls: "tag", label: "ponto a ponto", title: "esta call vai direto entre os participantes, sem servidor de mídia" }
+  };
   function renderVoiceRooms(rooms) {
     var vb = $("voiceBody");
     if (!vb) return;
@@ -3673,6 +3683,18 @@
       var name = isConversation
         ? '<span class="srv-name">conversa direta</span>'
         : '<span class="srv-name">' + esc(r.channel) + '</span>';
+      var t = TRANSPORT_TAG[r.transport];
+      var transportTag = t
+        ? ' <span class="' + t.cls + '" title="' + esc(t.title) + '">' + t.label + '</span>'
+        : "";
+      var openNote = "";
+      if (typeof r.openedAt === "string" && r.openedAt) {
+        var rel = fmtRelative(r.openedAt);
+        if (rel) {
+          openNote = ' <span style="color:var(--faint);font-size:11px" title="sala aberta desde ' +
+            esc(r.openedAt) + '">· aberta ' + esc(rel) + '</span>';
+        }
+      }
       var where = isConversation
         ? '<span style="color:var(--faint)">fora de servidor</span>'
         : esc(r.server || "—");
@@ -3691,7 +3713,7 @@
           : '<span style="color:var(--faint)">—</span>';
       var opened = r.openedAt ? fmtElapsed(r.openedAt) : null;
       tr.innerHTML =
-        '<td>' + name + '</td>' +
+        '<td>' + name + transportTag + openNote + '</td>' +
         '<td>' + where + '</td>' +
         '<td>' + path + '</td>' +
         '<td class="r num cell-strong">' + fmt(Number(r.participants) || 0) + '</td>' +

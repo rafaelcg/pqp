@@ -22,7 +22,7 @@ import {
 import { callRatingSummary } from "./call-ratings.js";
 import { isCommunitiesEnabled } from "./communities.js";
 import { connectionAdoption, type ConnectionAdoption } from "./connections.js";
-import type { CallRatingSummary } from "@pqp/shared";
+import type { CallRatingSummary, VoiceRoomTransport } from "@pqp/shared";
 
 /**
  * The operator dashboard's one read: `GET /api/admin/metrics`.
@@ -235,6 +235,14 @@ export interface AdminMetrics {
       server: string | null;
       participants: number;
       sharingScreen: number;
+      /**
+       * The room's media path, mesh or livekit. Absent only when a caller is
+       * still on the previous shape of this payload — added additively so the
+       * currently deployed dashboard, which does not read it, keeps working.
+       */
+      transport: VoiceRoomTransport;
+      /** ISO, or null when this process cannot say cheaply (see voice.ts). */
+      openedAt: string | null;
     }[];
   };
   /**
@@ -909,6 +917,8 @@ async function computeAdminMetrics(): Promise<CachedMetrics> {
           server: named?.server ?? null,
           participants: room.participants,
           sharingScreen: room.sharingScreen,
+          transport: room.transport,
+          openedAt: room.openedAt,
         };
       }),
     },

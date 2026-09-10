@@ -608,26 +608,48 @@ export async function listVoicePeersInRoom(
   return result.rows.map(mapRow);
 }
 
-/** Every occupied room in the cluster, largest first. For the operator snapshot. */
+/**
+ * Every occupied room in the cluster, largest first. For the operator
+ * snapshot.
+ *
+ * Joined against `voice_rooms` for `transport` and `openedAt` (its
+ * `created_at`) so the dashboard's rooms table can say which media path a
+ * room is on and how long it has been open without a second query per row —
+ * one row per occupied room either way, since a room with peers always has
+ * exactly one `voice_rooms` row.
+ */
 export async function listVoiceRoomOccupancy(): Promise<
-  { voiceChannelId: string; participants: number; sharingScreen: number }[]
+  {
+    voiceChannelId: string;
+    participants: number;
+    sharingScreen: number;
+    transport: VoiceRoomTransport;
+    openedAt: string;
+  }[]
 > {
   const result = await getPool().query<{
     channel_id: string;
     participants: string;
     sharing_screen: string;
+    transport: VoiceRoomTransport;
+    created_at: Date;
   }>(
-    `SELECT channel_id,
+    `SELECT p.channel_id,
+            r.transport,
+            r.created_at,
             COUNT(*)::text AS participants,
-            COUNT(*) FILTER (WHERE sharing_screen)::text AS sharing_screen
-       FROM voice_peers
-      GROUP BY channel_id
-      ORDER BY COUNT(*) DESC, channel_id`,
+            COUNT(*) FILTER (WHERE p.sharing_screen)::text AS sharing_screen
+       FROM voice_peers p
+       JOIN voice_rooms r ON r.channel_id = p.channel_id
+      GROUP BY p.channel_id, r.transport, r.created_at
+      ORDER BY COUNT(*) DESC, p.channel_id`,
   );
   return result.rows.map((row) => ({
     voiceChannelId: row.channel_id,
     participants: Number(row.participants),
     sharingScreen: Number(row.sharing_screen),
+    transport: row.transport,
+    openedAt: row.created_at.toISOString(),
   }));
 }
 
