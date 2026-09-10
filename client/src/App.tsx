@@ -5514,13 +5514,18 @@ function MainAppContent({
               : ""}
             {selectedChannel.name}
           </p>
-          <p className="truncate text-[11px] text-paper-muted">
-            {activeConversation
-              ? conversationSubtitle(activeConversation)
-              : selectedChannel.topic
-                ? selectedChannel.topic
-                : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
-          </p>
+          {/* A watch party channel with a party on it has its own count on
+              the bar ("N assistindo"); a second one here, of the seated
+              room, says a different number about the same show. */}
+          {!(splitKind === "watch" && watchParties.byChannel[selectedChannel.id]) && (
+            <p className="truncate text-[11px] text-paper-muted">
+              {activeConversation
+                ? conversationSubtitle(activeConversation)
+                : selectedChannel.topic
+                  ? selectedChannel.topic
+                  : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
+            </p>
+          )}
         </div>
         <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
           {/* The call entry points live here, always visible — the sidebar's

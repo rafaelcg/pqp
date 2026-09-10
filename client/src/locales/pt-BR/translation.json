@@ -2964,7 +2964,7 @@
   "watchParty.summary.noCohost": "Sem co-host",
   "watchParty.summary.cohosts_one": "{count} co-host",
   "watchParty.summary.cohosts_other": "{count} co-hosts",
-  "watchParty.summary.adjust": "Ajustar",
+  "watchParty.summary.adjust": "Opções",
   "watchParty.share.cta": "Copiar link",
   "watchParty.share.copied": "Link copiado. Manda no grupo.",
   "watchParty.share.failed": "Não deu pra copiar. Copia da barra de endereço.",
