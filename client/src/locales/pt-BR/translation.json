@@ -930,6 +930,7 @@
   "voice.hls.quality": "Qualidade da transmissão",
   "voice.hls.qualityAuto": "Automático",
   "voice.hls.qualityAutoAt": "Automático ({quality})",
+  "voice.hls.slowStart": "Começou em {quality} pra não travar. Muda em Qualidade.",
   "voice.watch.leave": "Parar de assistir",
   "voice.watch.fullscreen": "Tela cheia",
   "voice.watch.exitFullscreen": "Sair da tela cheia",

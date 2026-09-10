@@ -930,6 +930,7 @@
   "voice.hls.quality": "Broadcast quality",
   "voice.hls.qualityAuto": "Auto",
   "voice.hls.qualityAutoAt": "Auto ({quality})",
+  "voice.hls.slowStart": "Started at {quality} so it does not stall. Change it under Quality.",
   "voice.watch.leave": "Stop watching",
   "voice.watch.fullscreen": "Fullscreen",
   "voice.watch.exitFullscreen": "Leave fullscreen",

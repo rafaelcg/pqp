@@ -44,6 +44,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
 import { HlsStallWatch, channelIdFromHlsUrl } from "@/lib/hls-stall";
+import { browserConnection, hlsStartPlan } from "@/lib/hls-slow-start";
 import {
   AUTO_HLS_QUALITY,
   applyHlsQualityLevel,
@@ -69,6 +70,8 @@ const STALL_TICK_MS = 1_000;
 
 /** Survives a teardown so the next instance does not reseed ABR at 500 kbit/s. */
 let lastHlsBandwidthEstimate = HLS_ABR_DEFAULT_ESTIMATE_BPS;
+/** True once a stream in this tab has actually measured the link. */
+let hlsBandwidthMeasured = false;
 
 type StreamPhase = "playing" | "reconnecting" | "dead";
 
@@ -143,6 +146,16 @@ export function HlsWatchPlayer({
   // Autoplay with sound was refused (a tab that resumed the call without a
   // click, Safari's default). The picture runs muted and one tap fixes it.
   const [needsUnmute, setNeedsUnmute] = useState(false);
+  // "Começou em 480p pra não travar": shown once per attach on a slow link,
+  // gone on its own, and never again for the session once dismissed.
+  const [slowStartNotice, setSlowStartNotice] = useState(false);
+  useEffect(() => {
+    if (!slowStartNotice) {
+      return;
+    }
+    const timer = window.setTimeout(() => setSlowStartNotice(false), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [slowStartNotice]);
   const [pipAvailable, setPipAvailable] = useState(false);
   const [isPip, setIsPip] = useState(false);
   const [behindLive, setBehindLive] = useState(false);
@@ -601,12 +614,23 @@ export function HlsWatchPlayer({
       if (engine === "none") {
         return;
       }
+      // On a link the browser calls slow, start on the lowest rung rather
+      // than on the 720p guess. See `lib/hls-slow-start.ts`.
+      const start = hlsStartPlan({
+        connection: browserConnection(),
+        rememberedEstimateBps: lastHlsBandwidthEstimate,
+        measuredBefore: hlsBandwidthMeasured,
+      });
+      if (start.slowStart && !cancelled) {
+        setSlowStartNotice(true);
+      }
       const player = new Hls({
         ...hlsLivePlayerConfig(),
         enableWorker: true,
         capLevelToPlayerSize: true,
         maxLiveSyncPlaybackRate: 1.5,
-        abrEwmaDefaultEstimate: lastHlsBandwidthEstimate,
+        startLevel: start.startLevel,
+        abrEwmaDefaultEstimate: start.abrEwmaDefaultEstimate,
         // Playlist is written after the first 2 s segment. Retry the
         // initial 404 instead of giving up while egress is still starting.
         manifestLoadingMaxRetry: 12,
@@ -711,6 +735,7 @@ export function HlsWatchPlayer({
         hls.bandwidthEstimate > 0
       ) {
         lastHlsBandwidthEstimate = hls.bandwidthEstimate;
+        hlsBandwidthMeasured = true;
       }
       hls?.destroy();
       hlsRef.current = null;
@@ -762,6 +787,20 @@ export function HlsWatchPlayer({
           {t("voice.hls.delay", { seconds: delaySeconds })}
         </span>
       </div>
+      {slowStartNotice && hasFrame ? (
+        <p
+          data-testid="hls-slow-start"
+          className="pointer-events-none absolute left-2 top-9 max-w-[85%] rounded bg-black/70 px-1.5 py-0.5 text-[11px] text-paper"
+        >
+          {t("voice.hls.slowStart", {
+            quality: describeHlsLevel(
+              offered.length > 0
+                ? offered[offered.length - 1].height
+                : 480,
+            ),
+          })}
+        </p>
+      ) : null}
       {pipAvailable && hasFrame ? (
         <button
           type="button"
