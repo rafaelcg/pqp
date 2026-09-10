@@ -1,4 +1,5 @@
 import AVFoundation
+import UIKit
 import XCTest
 
 @testable import pqp
@@ -34,13 +35,16 @@ final class WatchLivePlayerTests: XCTestCase {
         XCTAssertEqual(remedy, .rejoin(104))
     }
 
-    /// The landing place is three target durations back from the LIVE EDGE,
-    /// which is where RFC 8216 says a client should join a live playlist and
-    /// therefore where `AVPlayer` puts itself unprompted. Not the edge, which
-    /// has no media in front of it, and not the front of the window either.
-    func testTheTargetIsThreeSegmentsBackFromTheLiveEdge() {
+    /// On a ten second window, eight seconds back from the edge is only
+    /// two seconds from the back. That is the one-frame stall: land, fall
+    /// out, seek, one frame. Four seconds of runway from the back wins.
+    func testTheTargetLeavesRunwayOnAShortWindow() {
         XCTAssertEqual(WatchLiveEdge.target(in: window), 104)
         XCTAssertNotEqual(WatchLiveEdge.target(in: window), window.end)
+        XCTAssertNotEqual(
+            WatchLiveEdge.target(in: window), window.end - WatchLiveEdge.liveTargetOffset,
+            "end-minus-offset alone sits on the last two seconds of a ten second playlist"
+        )
     }
 
     /// MEASURED FROM THE END, NOT FROM THE START, and this is the case that
@@ -49,7 +53,14 @@ final class WatchLivePlayerTests: XCTestCase {
     /// measured from the front is a seek back to the opening credits.
     func testTheTargetIsMeasuredFromTheEndSoAGrowingRangeStillLandsNearLive() {
         let union = WatchLiveWindow(start: 0, end: 3600)
-        XCTAssertEqual(WatchLiveEdge.target(in: union), 3594)
+        XCTAssertEqual(WatchLiveEdge.target(in: union), 3592)
+    }
+
+    /// Once the playlist holds half a minute, eight seconds from the edge
+    /// already leaves runway, so the offset wins over the floor.
+    func testAWideWindowLandsAtTheOffset() {
+        let wide = WatchLiveWindow(start: 100, end: 130)
+        XCTAssertEqual(WatchLiveEdge.target(in: wide), 122)
     }
 
     /// The first seconds of a broadcast are a window shorter than the offset.
@@ -94,7 +105,7 @@ final class WatchLivePlayerTests: XCTestCase {
                 isWaiting: false,
                 now: now
             ),
-            .rejoin(594)
+            .rejoin(592)
         )
     }
 
@@ -119,7 +130,7 @@ final class WatchLivePlayerTests: XCTestCase {
 
     func testHowFarBehindIsMeasuredAndNeverNegative() {
         XCTAssertEqual(
-            WatchLiveEdge.secondsBehindLive(position: 104, window: window), 6
+            WatchLiveEdge.secondsBehindLive(position: 102, window: window), 8
         )
         XCTAssertEqual(
             WatchLiveEdge.secondsBehindLive(position: 120, window: window), 0,
@@ -140,8 +151,8 @@ final class WatchLivePlayerTests: XCTestCase {
      */
     func testTheDelayShownIsThePipelinePlusThisViewersOwnDrift() {
         XCTAssertEqual(
-            WatchDelay.seconds(pipeline: 10, position: 104, window: window), 16,
-            "ten of pipeline plus six of distance from the live edge"
+            WatchDelay.seconds(pipeline: 10, position: 102, window: window), 18,
+            "ten of pipeline plus eight of distance from the live edge"
         )
         XCTAssertEqual(
             WatchDelay.seconds(
@@ -179,15 +190,18 @@ final class WatchLivePlayerTests: XCTestCase {
         }
     }
 
-    /// Buffering is not a fault. A player waiting for media inside the window
-    /// is doing the right thing and seeking it would make the buffering worse,
-    /// so the clock has to run out first.
+    /// Buffering is not a fault. A player waiting for media DEEP in the
+    /// window is doing the right thing and seeking it would make the
+    /// buffering worse, so the clock has to run out first. The tip has its
+    /// own, shorter, clock — see `testAStarveOnTheLiveTipRejoinsQuickly`.
     func testAShortStarveIsPatienceAndALongOneIsARejoin() {
         var edge = WatchLiveEdge()
         var last = WatchLiveRemedy.none
+        // Five seconds behind live: inside the window, not on the tip.
+        let deep: Double = 105
         for second in 0...11 {
             last = edge.tick(
-                position: 109,
+                position: deep,
                 window: window,
                 wantsPlayback: true,
                 isWaiting: true,
@@ -201,10 +215,63 @@ final class WatchLivePlayerTests: XCTestCase {
         // and the whole suite stayed green. A test parameterised by the thing
         // it is meant to pin does not pin it.
         last = edge.tick(
-            position: 109, window: window, wantsPlayback: true, isWaiting: true,
+            position: deep, window: window, wantsPlayback: true, isWaiting: true,
             now: now.addingTimeInterval(12)
         )
         XCTAssertEqual(last, .rejoin(104))
+    }
+
+    /// THE iOS STALL, on a window wide enough that a seek still leaves
+    /// runway. Waiting one second from the live edge is waiting for a
+    /// segment that has not been written. Two and a half seconds is one
+    /// late segment, then a seek back to the landing place.
+    func testAStarveOnTheLiveTipRejoinsQuicklyWhenTheWindowIsWide() {
+        let wide = WatchLiveWindow(start: 100, end: 130)
+        var edge = WatchLiveEdge()
+        XCTAssertEqual(
+            edge.tick(
+                position: 129, window: wide, wantsPlayback: true, isWaiting: true,
+                now: now
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            edge.tick(
+                position: 129, window: wide, wantsPlayback: true, isWaiting: true,
+                now: now.addingTimeInterval(2)
+            ),
+            .none,
+            "still inside one late segment"
+        )
+        XCTAssertEqual(
+            edge.tick(
+                position: 129, window: wide, wantsPlayback: true, isWaiting: true,
+                now: now.addingTimeInterval(2.5)
+            ),
+            .rejoin(122)
+        )
+    }
+
+    /// Build 25 on a ten second playlist: tip-starve at 2.5 s, seek to
+    /// two seconds from the back, fall out, one frame. The short clock
+    /// must not run on a window that cannot honour the landing place.
+    func testAStarveOnAShortWindowDoesNotTipSeek() {
+        var edge = WatchLiveEdge()
+        XCTAssertEqual(
+            edge.tick(
+                position: 109, window: window, wantsPlayback: true, isWaiting: true,
+                now: now
+            ),
+            .none
+        )
+        XCTAssertEqual(
+            edge.tick(
+                position: 109, window: window, wantsPlayback: true, isWaiting: true,
+                now: now.addingTimeInterval(2.5)
+            ),
+            .none,
+            "a ten second window is not wide enough for the tip clock"
+        )
     }
 
     /// And the allowance itself has to stay in the range the rule was designed
@@ -228,18 +295,18 @@ final class WatchLivePlayerTests: XCTestCase {
         var edge = WatchLiveEdge()
         for second in 0..<10 {
             _ = edge.tick(
-                position: 109, window: window, wantsPlayback: true, isWaiting: true,
+                position: 105, window: window, wantsPlayback: true, isWaiting: true,
                 now: now.addingTimeInterval(Double(second))
             )
         }
         // One tick of honest playback.
         _ = edge.tick(
-            position: 109.5, window: window, wantsPlayback: true, isWaiting: false,
+            position: 105.5, window: window, wantsPlayback: true, isWaiting: false,
             now: now.addingTimeInterval(10)
         )
         // And the clock starts again from there rather than firing at 12.
         let remedy = edge.tick(
-            position: 109.5, window: window, wantsPlayback: true, isWaiting: true,
+            position: 105.5, window: window, wantsPlayback: true, isWaiting: true,
             now: now.addingTimeInterval(13)
         )
         XCTAssertEqual(remedy, .none)
@@ -327,7 +394,7 @@ final class WatchLivePlayerTests: XCTestCase {
     /// start offering the way back.
     func testBehindLiveIsAboutTheBadgeAndNotTheRemedy() {
         XCTAssertFalse(
-            WatchLiveEdge.isBehindLive(position: 104, window: window),
+            WatchLiveEdge.isBehindLive(position: 102, window: window),
             "the place a rejoin lands is normal viewing and must not read as behind"
         )
         XCTAssertTrue(
@@ -617,5 +684,51 @@ final class WatchLivePlayerTests: XCTestCase {
         clock.reveal(at: now)
         clock.tick(playing: false, at: now.addingTimeInterval(WatchChromeClock.hideAfter + 10))
         XCTAssertTrue(clock.visible, "hiding the play button on a still frame is how you lose it")
+    }
+
+    // MARK: - Theater rotation
+
+    /// The app is portrait on a phone. Fullscreen has to be allowed to
+    /// follow the device, and leaving it has to put the rest of the app
+    /// back. iPad already rotates and is left alone.
+    @MainActor
+    func testTheaterUnlocksLandscapeAndLeavingLocksThePhoneBack() {
+        WatchOrientation.leaveTheater()
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCTAssertEqual(WatchOrientation.allowed, .portrait)
+        }
+        WatchOrientation.enterTheater()
+        XCTAssertTrue(WatchOrientation.allowed.contains(.landscapeLeft))
+        XCTAssertTrue(WatchOrientation.allowed.contains(.landscapeRight))
+        WatchOrientation.leaveTheater()
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCTAssertEqual(WatchOrientation.allowed, .portrait)
+        }
+    }
+
+    func testAutoMustNotRewriteCeilingsAfterTheItemHasStarted() {
+        XCTAssertFalse(
+            WatchQualityRetune.shouldWrite(alreadyPlaying: true, trigger: .variants),
+            "the master finishing is what froze build 26 after a few seconds"
+        )
+        XCTAssertFalse(
+            WatchQualityRetune.shouldWrite(alreadyPlaying: true, trigger: .surface)
+        )
+        XCTAssertTrue(
+            WatchQualityRetune.shouldWrite(alreadyPlaying: false, trigger: .variants)
+        )
+        XCTAssertTrue(
+            WatchQualityRetune.shouldWrite(alreadyPlaying: true, trigger: .pin),
+            "a person picking a rung is allowed the switch"
+        )
+        XCTAssertTrue(
+            WatchQualityRetune.shouldWrite(alreadyPlaying: true, trigger: .fullscreen)
+        )
+    }
+
+    func testTheTipAllowanceIsInsideOneLateSegmentNotTheWholeWindow() {
+        XCTAssertLessThan(WatchLiveEdge.tipStarveAfter, 4)
+        XCTAssertLessThan(WatchLiveEdge.tipBehind, WatchLiveEdge.liveTargetOffset)
+        XCTAssertLessThan(WatchLiveEdge.tipStarveAfter, WatchLiveEdge.starvedAfter)
     }
 }

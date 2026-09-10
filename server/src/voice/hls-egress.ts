@@ -41,7 +41,7 @@ import {
 
 const TRACK_FIND_ATTEMPTS = 16;
 const TRACK_FIND_GAP_MS = 400;
-const DEFAULT_DELAY_SECONDS = 10;
+const DEFAULT_DELAY_SECONDS = 30;
 /**
  * How long a fresh egress gets to produce its first live playlist.
  *
@@ -104,6 +104,8 @@ export interface EgressListing {
 export interface LiveHlsScreenTracks {
   videoTrackId: string;
   audioTrackId?: string;
+  /** Published capture height, when LiveKit stated it. */
+  sourceHeight?: number;
 }
 
 export interface LiveHlsEgressApi {
@@ -465,6 +467,63 @@ async function recordSessionEnded(
       rung: rung ?? null,
       error: error instanceof Error ? error.message : String(error),
     });
+  }
+}
+
+/**
+ * A new start for this channel makes every earlier session for it finished,
+ * including ones this process never had in `rooms` (a previous API, a
+ * share that outlived its watch party). Ending the rows is what lets
+ * retention delete their objects; stopping leftover LiveKit egresses is
+ * what stops them writing a second live playlist next to the real one.
+ *
+ * `keepStartedAt` / `keepEgressIds` are THIS start. Without them a
+ * concurrent list would stop the rungs we just asked for.
+ */
+async function endSupersededSessions(
+  channelId: string,
+  keepStartedAt: number,
+  keepEgressIds: ReadonlySet<string>,
+): Promise<void> {
+  try {
+    const ended = await getPool().query(
+      `UPDATE hls_sessions SET ended_at = NOW()
+       WHERE channel_id = $1
+         AND ended_at IS NULL
+         AND started_at <> to_timestamp($2 / 1000.0)`,
+      [channelId, keepStartedAt],
+    );
+    if ((ended.rowCount ?? 0) > 0) {
+      logEvent("voice.hlsSupersededSessionsEnded", {
+        channelId,
+        keepStartedAt,
+        ended: ended.rowCount,
+      });
+    }
+  } catch (error) {
+    logEvent("voice.hlsSupersededSessionEndFailed", {
+      channelId,
+      keepStartedAt,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const active = await listActiveEgresses();
+  if (!active) {
+    return;
+  }
+  for (const info of active) {
+    if (info.roomName !== channelId || keepEgressIds.has(info.egressId)) {
+      continue;
+    }
+    const stopped = await stopEgressById(info.egressId, channelId);
+    if (stopped) {
+      logEvent("voice.hlsSupersededEgressStopped", {
+        channelId,
+        egressId: info.egressId,
+        keepStartedAt,
+      });
+    }
   }
 }
 
@@ -1470,6 +1529,8 @@ function isTrackSource(source: unknown, wanted: TrackSource): boolean {
 export interface EgressCandidateTrack {
   source?: unknown;
   sid?: string;
+  width?: number;
+  height?: number;
 }
 
 export interface EgressCandidateParticipant {
@@ -1522,18 +1583,28 @@ export function pickScreenTracks(
   }
   let videoTrackId: string | undefined;
   let audioTrackId: string | undefined;
+  let sourceHeight: number | undefined;
   for (const track of sharer.tracks ?? []) {
     if (!track.sid) {
       continue;
     }
     if (isTrackSource(track.source, TrackSource.SCREEN_SHARE)) {
       videoTrackId ??= track.sid;
+      if (typeof track.height === "number" && track.height > 0) {
+        sourceHeight ??= track.height;
+      }
     }
     if (isTrackSource(track.source, TrackSource.SCREEN_SHARE_AUDIO)) {
       audioTrackId ??= track.sid;
     }
   }
-  return videoTrackId ? { videoTrackId, audioTrackId } : null;
+  return videoTrackId
+    ? {
+        videoTrackId,
+        audioTrackId,
+        ...(sourceHeight ? { sourceHeight } : {}),
+      }
+    : null;
 }
 
 async function defaultFindTracks(
@@ -1905,6 +1976,7 @@ async function startRoom(
   channelId: string,
   presenterPeerId: string,
   knownTracks?: LiveHlsScreenTracks,
+  sourceHeight?: number | null,
 ): Promise<LiveHlsStream | null> {
   const egress = getEgress();
   if (!egress || !isLiveHlsEnabled()) {
@@ -1951,6 +2023,7 @@ async function startRoom(
     sfuLoadMbps: await currentSfuLoadMbps(),
     ladderBudgetMbps: ladderBudgetMbps(),
     boxBudgetMbps: promotionBudgetMbps(),
+    sourceHeight: tracks.sourceHeight ?? sourceHeight ?? null,
   });
   const startedAt = Date.now();
   const running: RunningRung[] = [];
@@ -2033,6 +2106,11 @@ async function startRoom(
       ),
     ),
   );
+  await endSupersededSessions(
+    channelId,
+    startedAt,
+    new Set(running.map((entry) => entry.egressId)),
+  );
   // The readiness probe reads the bucket itself (presigned, endpoint form),
   // never the viewer-facing URL: a viewer gets the signed master path, which
   // this same process cannot usefully fetch from here. It waits on the
@@ -2093,11 +2171,14 @@ export function reconcileLiveHls(
   channelId: string,
   presenterPeerId: string | null,
   serverId: string | null,
+  sourceHeight?: number | null,
 ): Promise<LiveHlsStream | null> {
   const previous = reconcileQueue.get(channelId) ?? Promise.resolve();
   const run = previous
     .catch(() => undefined)
-    .then(() => reconcileLiveHlsNow(channelId, presenterPeerId, serverId));
+    .then(() =>
+      reconcileLiveHlsNow(channelId, presenterPeerId, serverId, sourceHeight),
+    );
   reconcileQueue.set(channelId, run);
   void run.finally(() => {
     if (reconcileQueue.get(channelId) === run) {
@@ -2111,6 +2192,7 @@ async function reconcileLiveHlsNow(
   channelId: string,
   presenterPeerId: string | null,
   serverId: string | null,
+  sourceHeight?: number | null,
 ): Promise<LiveHlsStream | null> {
   if (!(await isLiveHlsEnabledForServer(serverId))) {
     // "not allowlisted" and "nobody is sharing" used to arrive here as the
@@ -2146,7 +2228,7 @@ async function reconcileLiveHlsNow(
       to: tracks.videoTrackId,
     });
     await stopRoom(channelId, "screen-track-replaced");
-    return startRoom(channelId, presenterPeerId, tracks);
+    return startRoom(channelId, presenterPeerId, tracks, sourceHeight);
   }
   if (current) {
     // A NEW PEER ID IS NOT NECESSARILY A NEW PRESENTER. A reconnect that
@@ -2173,5 +2255,5 @@ async function reconcileLiveHlsNow(
     }
     await stopRoom(channelId, "presenter-changed");
   }
-  return startRoom(channelId, presenterPeerId);
+  return startRoom(channelId, presenterPeerId, undefined, sourceHeight);
 }

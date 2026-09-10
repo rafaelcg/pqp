@@ -275,7 +275,9 @@ vi.stubGlobal(
   },
 );
 
-const { connectLiveKit } = await import("./livekit-session");
+const { connectLiveKit, HLS_SOURCE_DROP_SAMPLES } = await import(
+  "./livekit-session"
+);
 
 function fakeTrack(kind: "audio" | "video", id: string, height = 720) {
   const settings = { width: Math.round((height * 16) / 9), height };
@@ -482,6 +484,27 @@ describe("a quality chosen while the track is already up", () => {
     expect(write.encodings[2]?.maxBitrate).toBe(4_000_000);
     expect(write.encodings[0]?.maxBitrate).toBeUndefined();
     expect(write.encodings[1]?.maxBitrate).toBeUndefined();
+  });
+
+  it("swaps a second share in place so the HLS sid does not change", async () => {
+    const replaced: unknown[] = [];
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    publication.track = {
+      ...publication.track,
+      replaceTrack: async (next: unknown) => {
+        replaced.push(next);
+      },
+    };
+    unpublished.length = 0;
+    published.length = 0;
+
+    await sfu.publishScreen(fakeStream("video", "screen-again"));
+
+    expect(replaced).toHaveLength(1);
+    expect(unpublished).toEqual([]);
+    expect(published).toEqual([]);
   });
 
   it("also stores the new ceiling for the next publish after a reconnect", async () => {
@@ -837,6 +860,28 @@ describe("the presenter as a live ladder's source", () => {
     // The capture is left alone too: shrinking it under a layer set declared
     // for 1080 would starve the top layer, which is what this exists to stop.
     expect(constrained).toEqual([720, 1080]);
+  });
+
+  it("drops a pinned 1080 after the uplink stays too short to carry it", async () => {
+    const sfu = await session();
+    fillRoom(50);
+    await settle();
+    await sfu.publishScreen(fakeStream("video", "screen"));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const publishesAfterRaise = published.length;
+
+    for (let i = 0; i < HLS_SOURCE_DROP_SAMPLES - 1; i++) {
+      await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 1_000_000 });
+    }
+    expect(published).toHaveLength(publishesAfterRaise);
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 1_000_000 });
+    expect(published.length).toBe(publishesAfterRaise + 1);
+    expect(constrained.at(-1)).toBe(720);
+
+    const afterDrop = published.length;
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    expect(published).toHaveLength(afterDrop);
   });
 
   /**

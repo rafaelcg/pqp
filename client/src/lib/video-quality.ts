@@ -389,8 +389,14 @@ export function hlsSourceTopHeight(
   const needed = SCREEN_BITRATES["1080p"] * HLS_SOURCE_UPLINK_HEADROOM;
   // Measured, and measured to clear the bar. See `uplinkBps` above for why an
   // unmeasured link is a refusal here and a permission almost everywhere else.
+  //
+  // Return 720 rather than null. Null used to mean "do not raise past the
+  // large-room cap", which is a no-op in a small room: Auto still publishes
+  // 1080, the egress still takes that top layer, and a 1.5 Mbit/s uplink
+  // produces the starved picture that drifts off the audio. Holding at 720
+  // is the same decision in a two-seat watch party as in a hundred-seat one.
   if (hls.uplinkBps === null || hls.uplinkBps < needed) {
-    return null;
+    return LARGE_ROOM_SCREEN_HEIGHT;
   }
   return wanted;
 }
@@ -403,7 +409,9 @@ export function screenSimulcastPlan(
   const chosenHeight =
     quality === "auto" ? SCREEN_CAPTURE_HEIGHT : SCREEN_HEIGHTS[quality];
   const hlsTop = hlsSourceTopHeight(quality, hls);
-  const capped = hlsTop === null && isLargeRoomCapped(quality, participantCount);
+  const holdAt720 = hlsTop === LARGE_ROOM_SCREEN_HEIGHT;
+  const capped =
+    holdAt720 || (hlsTop === null && isLargeRoomCapped(quality, participantCount));
   const topHeight = capped
     ? Math.min(chosenHeight, LARGE_ROOM_SCREEN_HEIGHT)
     : chosenHeight;

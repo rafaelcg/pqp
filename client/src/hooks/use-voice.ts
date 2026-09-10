@@ -2074,6 +2074,19 @@ export function createVoiceController(transport: RealtimeTransport) {
       : meshVideoLimit({ kind: "cameras", ...meshRoomLink() });
   }
 
+  /** Published capture height, for the HLS ladder to refuse an upscale. */
+  function screenSourceHeight(): number | undefined {
+    const track = screenCaptureStream?.getVideoTracks()[0];
+    try {
+      const height = track?.getSettings?.().height;
+      return typeof height === "number" && height > 0
+        ? Math.round(height)
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Announce the share (and whether it has sound) to the room. */
   function announceSharing() {
     transport.sendVoice({
@@ -2081,6 +2094,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       sharing: true,
       audioStreamId: screenAudioStreamId(),
       uplinkBps: state.uplinkBps ?? undefined,
+      sourceHeight: screenSourceHeight(),
     });
   }
 

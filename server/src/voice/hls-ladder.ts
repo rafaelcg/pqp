@@ -105,12 +105,12 @@ export const LADDER_RUNGS: Readonly<Record<string, LadderRung>> = {
 /**
  * The default ladder. 1080p because the point of the exercise is that people
  * get the best picture their link can carry, 720p because it is the floor a
- * phone on mobile data should still enjoy. A viewer whose link cannot hold
- * 1800 kbit/s has no lower rung to fall to and will buffer: add a third rung
- * by configuration (`LIVE_HLS_LADDER=1080p30,720p30,480p30`) for an event
- * that expects that audience, and raise `LIVE_HLS_MAX_LADDER_MBPS` with it.
+ * desktop should still enjoy, 480p because a phone on mobile data cannot
+ * hold 1800 kbit/s and used to buffer on the old two-rung default. A viewer
+ * whose link cannot hold 900 kbit/s still has no lower rung: add `360p30`
+ * by configuration for that audience.
  */
-export const DEFAULT_LADDER = "1080p30,720p30";
+export const DEFAULT_LADDER = "1080p30,720p30,480p30";
 
 /**
  * BANDWIDTH in a master playlist is the PEAK segment bitrate, not the
@@ -243,10 +243,11 @@ export const MEDIA_BOX_CORES = 4;
 export const HLS_RUNG_MBPS = VOICE_PROMOTION_DEFAULT_MAX_MBPS / MEDIA_BOX_CORES;
 
 /**
- * Default ceiling for the ladder ALONE: half the box, which is exactly two
- * rungs. A third rung needs the operator to say so, which is the point.
+ * Default ceiling for the ladder ALONE: three quarters of the box, which
+ * is the three-rung default. A fourth rung still needs the operator to
+ * say so.
  */
-export const DEFAULT_MAX_LADDER_MBPS = HLS_RUNG_MBPS * 2;
+export const DEFAULT_MAX_LADDER_MBPS = HLS_RUNG_MBPS * 3;
 
 /**
  * `LIVE_HLS_MAX_LADDER_MBPS`, read per call like `promotionBudgetMbps()` so
@@ -265,7 +266,15 @@ export function ladderBudgetMbps(): number {
   return value;
 }
 
-export type RungRefusal = "ladder-budget" | "box-budget";
+export type RungRefusal = "ladder-budget" | "box-budget" | "source-height";
+
+/**
+ * How many lines taller than the published source a rung may still start.
+ * A 1670×1078 window is a 1080p share that missed by two pixels; treating
+ * that as "not 1080" would refuse the top rung every time someone shares
+ * a window instead of a 16:9 screen.
+ */
+export const SOURCE_HEIGHT_SLACK = 16;
 
 export interface RungDecision {
   rung: LadderRung;
@@ -285,6 +294,14 @@ export interface LadderDecisionInput {
   sfuLoadMbps: number;
   ladderBudgetMbps: number;
   boxBudgetMbps: number;
+  /**
+   * Published capture height, in lines. Extra rungs taller than this
+   * (plus `SOURCE_HEIGHT_SLACK`) are an upscale and are refused. The
+   * lowest rung still starts: a watch party with no rendition is a
+   * watch party nobody can see. Absent / null is an older client, and
+   * the configured ladder runs as before.
+   */
+  sourceHeight?: number | null;
 }
 
 /**
@@ -297,9 +314,10 @@ export interface LadderDecisionInput {
  *    this file existed. The budget governs the EXTRA rungs, never the
  *    existence of the stream. Its cost is still counted, so the rungs above
  *    it see an honest running total.
- * 2. Every rung above it is refused when it would push the ladder past
+ * 2. Every rung above it is refused when it is taller than the published
+ *    source (an upscale), or when it would push the ladder past
  *    `LIVE_HLS_MAX_LADDER_MBPS`, or the ladder plus the WebRTC already on the
- *    box past the promotion budget. The second check is the one that matters
+ *    box past the promotion budget. The last check is the one that matters
  *    during a busy evening: the cameras and screen shares on the same box are
  *    priced by `promotion.ts` and this must not pretend they are free.
  *
@@ -325,7 +343,13 @@ export function decideLadder(input: LadderDecisionInput): RungDecision[] {
       continue;
     }
     let refusal: RungRefusal | null = null;
-    if (nextLadder > input.ladderBudgetMbps) {
+    if (
+      input.sourceHeight != null &&
+      input.sourceHeight > 0 &&
+      rung.height > input.sourceHeight + SOURCE_HEIGHT_SLACK
+    ) {
+      refusal = "source-height";
+    } else if (nextLadder > input.ladderBudgetMbps) {
       refusal = "ladder-budget";
     } else if (nextBox > input.boxBudgetMbps) {
       refusal = "box-budget";

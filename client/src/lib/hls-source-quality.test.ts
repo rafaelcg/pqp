@@ -32,8 +32,8 @@ describe("hlsSourceFor", () => {
   });
 
   it("passes an unmeasured uplink through rather than inventing one", () => {
-    // Null means unmeasured, and `hlsSourceTopHeight` treats that as
-    // permission. Substituting a number here would turn "we have not looked"
+    // Null means unmeasured, and `hlsSourceTopHeight` treats that as a
+    // refusal. Substituting a number here would turn "we have not looked"
     // into a claim.
     expect(hlsSourceFor({ ...live, uplinkBps: null })).toEqual({
       ladderTopHeight: 1080,

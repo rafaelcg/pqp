@@ -51,6 +51,15 @@ describe("screen-share audio is an optional addition to the wire", () => {
     expect(parsed.audioStreamId).toBeUndefined();
   });
 
+  it("accepts a published source height from a current client", () => {
+    const parsed = setSharingScreenMessageSchema.parse({
+      type: "set-sharing-screen",
+      sharing: true,
+      sourceHeight: 1078,
+    });
+    expect(parsed.sourceHeight).toBe(1078);
+  });
+
   it("rejects an id that is not a string, rather than passing it through", () => {
     expect(() =>
       setSharingScreenMessageSchema.parse({

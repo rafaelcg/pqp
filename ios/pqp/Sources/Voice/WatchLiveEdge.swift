@@ -96,11 +96,17 @@ struct WatchLiveEdge: Equatable {
 
     /// How far back from the LIVE EDGE to land, in seconds.
     ///
-    /// Three two second segments, which is where RFC 8216 says a client should
-    /// start playing a live playlist and therefore where `AVPlayer` puts
-    /// itself when it joins one. Landing anywhere closer is landing on media
-    /// that does not exist yet.
-    static let liveTargetOffset: Double = 6
+    /// Four two second segments, matching the web player's live sync. Fine
+    /// once the playlist holds ~30 s. On a ten second window (five segments,
+    /// what production still published when this was written) `end - 8` is
+    /// only two seconds from the back: one late segment and the playhead is
+    /// gone. `target(in:)` therefore also honours `minRunway`.
+    static let liveTargetOffset: Double = 8
+
+    /// Never land closer to the back of the window than this, in seconds.
+    /// Two segments. Combined with `liveTargetOffset` a ten second window
+    /// lands six seconds from the edge (four from the back), not eight.
+    static let minRunway: Double = 4
 
     /// The drift a viewer is not asked about.
     ///
@@ -111,6 +117,15 @@ struct WatchLiveEdge: Equatable {
     /// left there. Deliberately far above the offer, because a jump mid
     /// sentence is jarring and should be rare.
     static let catchUpAfter: Double = 45
+
+    /// Sitting closer than this, in seconds, is sitting on the tip. A player
+    /// waiting here is waiting for a segment that has not been written yet.
+    /// Only applied when the window is wide enough that a seek to
+    /// `liveTargetOffset` still leaves `minRunway` behind the playhead.
+    /// On a ten second window the seek would land near the back and this
+    /// clock would fire again: one frame, then dead. That was build 25.
+    static let tipBehind: Double = 4
+    static let tipStarveAfter: TimeInterval = 2.5
 
     /// A rejoin may not be answered again this soon. A seek is not instant and
     /// the position reads stale for a moment afterwards. Without this, one
@@ -169,7 +184,19 @@ struct WatchLiveEdge: Equatable {
             waitingSince = now
             return .none
         }
-        guard now.timeIntervalSince(since) >= Self.starvedAfter else { return .none }
+        // On a WIDE window, sitting on the tip is waiting for a segment
+        // that has not been written yet, and twelve seconds of patience
+        // there is a freeze for the whole show. On a short window the
+        // same clock is a seek loop: land, wait 2.5 s, seek again, one
+        // decoded frame in between. Build 25 did that on a ten second
+        // playlist. So the short allowance only runs when a seek to
+        // `liveTargetOffset` still leaves `minRunway` of media behind it.
+        let behind = Self.secondsBehindLive(position: position, window: window)
+        let tipSensitive = window.span >= Self.liveTargetOffset + Self.minRunway
+        let allowance =
+            tipSensitive && behind < Self.tipBehind
+            ? Self.tipStarveAfter : Self.starvedAfter
+        guard now.timeIntervalSince(since) >= allowance else { return .none }
         return rejoin(window, now: now)
     }
 
@@ -179,12 +206,14 @@ struct WatchLiveEdge: Equatable {
         return .rejoin(Self.target(in: window))
     }
 
-    /// Three target durations back from the live edge, clamped into the
-    /// window. The clamp is what the first seconds of a broadcast need: a
-    /// window shorter than the offset has no such position, and seeking before
-    /// the start of everything that exists is a seek to nowhere.
+    /// Back from the live edge, but never onto the last two seconds of a
+    /// short playlist. A window shorter than `minRunway` has no such
+    /// position and lands at the start of everything that exists.
     static func target(in window: WatchLiveWindow) -> Double {
-        max(window.start, window.end - liveTargetOffset)
+        if window.span <= minRunway {
+            return window.start
+        }
+        return max(window.start + minRunway, window.end - liveTargetOffset)
     }
 
     /// How far behind the playlist's newest segment the picture is. Never

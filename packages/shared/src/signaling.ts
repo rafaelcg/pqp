@@ -695,6 +695,13 @@ export const setSharingScreenMessageSchema = z.object({
   audioStreamId: z.string().nullable().optional(),
   /** See `setCameraMessageSchema.uplinkBps`: the mesh limit's measurement. */
   uplinkBps: z.number().optional(),
+  /**
+   * Published capture height, in lines. The HLS ladder refuses a rung
+   * taller than this (a 720p window must not spend a core inventing 1080p).
+   * Absent on older clients: the server then asks LiveKit, or starts the
+   * configured ladder as before.
+   */
+  sourceHeight: z.number().int().positive().optional(),
 });
 
 // --- voice state ---

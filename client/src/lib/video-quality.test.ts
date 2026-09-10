@@ -465,7 +465,7 @@ describe("the presenter as the ladder's source", () => {
     ).toBe(720);
     expect(
       hlsSourceTopHeight("auto", { ladderTopHeight: 1080, uplinkBps: null }),
-    ).toBeNull();
+    ).toBe(720);
   });
 
   it("still raises on a measured uplink that clears the bar", () => {
@@ -494,6 +494,18 @@ describe("the presenter as the ladder's source", () => {
   it("a small room is unchanged either way", () => {
     expect(screenSimulcastPlan("auto", 3).topHeight).toBe(1080);
     expect(screenSimulcastPlan("auto", 3, LIVE).topHeight).toBe(1080);
+  });
+
+  it("holds a small-room watch party at 720 when the uplink cannot carry 1080", () => {
+    // The HLS audience is not in participantCount. Two seats plus an
+    // egress used to publish 1080 on a 1.5 Mbit/s uplink, and that is the
+    // starved top layer whose audio drifts off the picture.
+    const plan = screenSimulcastPlan("auto", 3, {
+      ladderTopHeight: 1080,
+      uplinkBps: 1_500_000,
+    });
+    expect(plan.topHeight).toBe(720);
+    expect(plan.topBitrate).toBe(1_500_000);
   });
 });
 

@@ -1750,7 +1750,11 @@ of that estimate, and a change of height republishes the track: new sid, new
 egress, new session, everyone rebuffers. `screenPlanPinned` decides the layers
 once per broadcast and holds them; a worse uplink still lowers the **ceiling**,
 in place, where nobody sees it. The host picking a quality by name forces past
-the pin, because that is a person rather than an estimate.
+the pin, because that is a person rather than an estimate. A **sustained**
+short plan (ten seconds of uplink under the 1080 bar) is also allowed to
+drop the height once: sitting on a starved 1080 is what makes the film
+drift off its own audio, and a small watch-party room used to publish
+1080 regardless because the HLS audience does not count as seats.
 
 There is no hysteresis worth adding instead. The decision is worth making once,
 and `replaceTrack` does not help here either: the declared layers are fixed at
@@ -1812,23 +1816,18 @@ costs the box some headroom, and this one costs every viewer the picture. A
 cleanly delivered 720p is better television than a starving 1080p and costs the
 presenter less than half the uplink.
 
-Two things this leaves open, both worth doing and neither in that change.
+Two things that change shipped later, on the same facts.
 
-- **A rung taller than the source is an upscale.** With the source held at
-  720p, the ladder's `1080p30` rung burns 0.88 of a core to invent detail that
-  is not in its input. `decideLadder` cannot see the source height today;
-  `set-sharing-screen` already carries `uplinkBps`, so carrying the published
-  top height beside it would let the server refuse a rung it cannot honestly
-  fill. That is a shared-schema change, so it is its own PR.
-- **The host is not told their uplink is short.** This is the same requirement
-  as the silent-audio warning and it wants the same panel. The signal to read
-  is the screen sender's `qualityLimitationReason === "bandwidth"` plus
-  `targetBitrate` against what is actually going out, which
-  `voice-stats-probe.ts` already samples. Note that `useShareUplinkStrain` is
-  **not** the thing to reuse: it is mesh-only by design (PR 370), because the
-  stats it reads mean something else on the SFU, and a watch party big enough
-  to matter is always on the SFU. One sender, one reason code, one line in the
-  panel.
+- **A rung taller than the source is refused.** `set-sharing-screen` now
+  carries `sourceHeight`, and `pickScreenTracks` reads LiveKit's own
+  dimensions when the client is older. `decideLadder` refuses extra rungs
+  more than 16 lines taller than that source, so a 720p window does not
+  spend a core inventing 1080p. A 1670×1078 window still gets 1080p.
+- **The host is told their uplink is short.** The TRANSMISSION panel
+  already had the line. `useShareUplinkStrain` now measures on LiveKit
+  too: one upload, `describeLimitation` against the published plan
+  ceiling. Fibre sitting on 4 Mbps stays quiet; a starving uplink
+  speaks.
 
 ### The restart that should not happen at all: swapping the share in place
 
@@ -1837,13 +1836,11 @@ party the share control should offer to **change** what is being shared rather
 than stop and start. Not shipped; written down here because the mechanism is
 already available and the caveats are the whole of the design.
 
-**The client can do it.** `LocalTrack.replaceTrack(newMediaStreamTrack)` in
-livekit-client 2.21.0 swaps the `RTCRtpSender`'s track and leaves the
-publication alone: same track sid, same SFU-side track, same RTP stream. Today
-`publishScreen` unpublishes and republishes instead, which is a new sid every
-time, which `probeScreenTracks` sees as `screen-track-replaced`, which is a new
-egress, a new playlist URL and a rebuffer for everybody watching. With
-`replaceTrack` the server sees nothing change and there is nothing to survive.
+**The client does it.** `publishScreen` calls `LocalTrack.replaceTrack` when
+a share is already up and the audio half did not appear or disappear. Same
+track sid, same SFU-side track, same RTP stream, no new egress. Gaining or
+losing the share's audio still unpublishes and republishes, because a
+running Track Composite egress is bound to the sids it started with.
 
 Three caveats, and the third is the one that would bite.
 
@@ -2314,22 +2311,17 @@ later, per app:
 
   What the phone did own, measured against production on 2026-09-09:
 
-  - **The live window is ten seconds.** The egress publishes five two second
-    segments and slides them, on both rungs. `AVPlayer` joins a live playlist
-    three target durations from the end (RFC 8216, 6.3.3), so it holds about
-    four seconds of runway with the back edge five seconds behind. A player
-    stopped for longer than the window, for any reason at all, has the
-    playlist slide past the position it stopped at: the playhead then names a
-    time nothing can serve, and `play()` is powerless there. That is the
-    literal mechanism of "pressing play doesn't necessarily work", and only a
-    seek fixes it. `WatchLiveEdge` is that seek, and it lands three target
-    durations back from the live edge, which is where RFC 8216 says a client
-    should join a live playlist and therefore where `AVPlayer` puts itself
-    unprompted. Measured from the END rather than the front, because
-    `seekableTimeRanges` is not guaranteed to be only the current window: on a
-    ten second window the two are the same point, and on a range that grows
-    with the session a target measured from the front is a seek to the opening
-    credits.
+  - **The live window default is thirty seconds** (`LIVE_HLS_DELAY_SECONDS`).
+    A ten second window (five two-second segments) is what production
+    published when the iOS stalls were measured: `AVPlayer` joins three
+    target durations from the end, so it holds about four seconds of runway.
+    A player stopped longer than the window has the playlist slide past the
+    playhead, and `play()` is powerless there. `WatchLiveEdge` is the seek
+    back in. It lands eight seconds from the live edge on a wide window, and
+    four seconds from the back on a short one — build 25 landed eight
+    seconds back on a ten second playlist, decoded one frame, and sat.
+    Measured from the END rather than the front, because
+    `seekableTimeRanges` is not guaranteed to be only the current window.
   - **A stall is not free once it ends.** "It's so choppy it got very
     delayed" is a second bug, not a restatement of the first. `AVPlayer`
     resumes where it stopped, which is right for a recording and wrong for a

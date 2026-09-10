@@ -408,7 +408,7 @@ final class WatchPartyTests: XCTestCase {
         // dressed up as a quality picker. The same write of an unchanged
         // ceiling also pauses the picture, so a no-op must not touch the item.
         XCTAssertTrue(stage.contains("preferredMaximumResolution != resolution"))
-        if let apply = stage.range(of: "private func applyQuality()") {
+        if let apply = stage.range(of: "private func applyQuality(trigger") {
             let rest = stage[apply.lowerBound...]
             if let end = rest.range(of: "\n    private func ") {
                 XCTAssertFalse(
@@ -421,6 +421,18 @@ final class WatchPartyTests: XCTestCase {
         } else {
             XCTFail("applyQuality is gone")
         }
+        XCTAssertTrue(
+            stage.contains("automaticallyWaitsToMinimizeStalling = true"),
+            "waiting off is the one-frame freeze: decode, sit, never recover"
+        )
+        XCTAssertTrue(
+            stage.contains("WatchOrientation.enterTheater()"),
+            "fullscreen has to unlock landscape; the app is portrait everywhere else"
+        )
+        XCTAssertTrue(
+            stage.contains("chromeInsets: isTheater ? chromeInsets"),
+            "theater chrome has to clear the island, not sit under it"
+        )
     }
 
     // MARK: - Telling a watch party apart from a voice channel
