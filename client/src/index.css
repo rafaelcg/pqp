@@ -285,6 +285,10 @@
      the hue math lives with the card. */
   --community-tint-near: color-mix(in oklab, oklch(0.72 0.17 var(--community-hue, 140)) var(--community-tint-strength, 30%), var(--color-surface-2));
   --community-tint-far: color-mix(in oklab, oklch(0.62 0.16 var(--community-hue-far, 188)) var(--community-tint-strength-far, 18%), var(--color-surface-1));
+  /* A stream chat name with no role colour: the row sets --stream-name-hue
+     (hashed from the author id, see `streamNameHue`), the literal lives
+     here. Light enough to read on ink; the light theme overrides it. */
+  --stream-name: oklch(0.78 0.14 var(--stream-name-hue, 200));
   --scrim-media: rgba(0, 0, 0, 0.42);
 
   /*
@@ -406,6 +410,7 @@
  * it in both themes, so a light scrim would be a bug rather than a theme.
  */
 :root[data-theme="light"] {
+  --stream-name: oklch(0.52 0.16 var(--stream-name-hue, 200));
   color-scheme: light;
 
   --color-surface-0: oklch(0.98 0.005 95);

@@ -86,7 +86,7 @@ import {
   highestRoleColor,
   identityMarks,
   rankBadges,
-  streamNameColor,
+  streamNameHue,
   usernameFromTag,
 } from "@/lib/author-display";
 import { gifMessageMedia, type GifMedia } from "@/lib/gif-media";
@@ -1805,9 +1805,17 @@ const MessageRow = memo(function MessageRow({
   const roleColor = message.isWebhook
     ? null
     : highestRoleColor(authorInfo?.roleIds, roles);
-  // Stream chat: everybody has a colour, role colour first.
-  const nameColor =
-    roleColor ?? (stream && !message.isWebhook ? streamNameColor(message.authorId) : null);
+  // Stream chat: everybody has a colour, role colour first. The hashed one
+  // is a hue on a CSS variable; the colour itself is the `--stream-name`
+  // token, so no literal lives here.
+  const nameStyle: CSSProperties | undefined = roleColor
+    ? { color: roleColor }
+    : stream && !message.isWebhook
+      ? ({
+          "--stream-name-hue": String(streamNameHue(message.authorId)),
+          color: "var(--stream-name)",
+        } as CSSProperties)
+      : undefined;
   const partyBadge = streamBadges
     ? streamBadges.hostUserId === message.authorId
       ? "host"
@@ -2342,7 +2350,7 @@ const MessageRow = memo(function MessageRow({
                             tabIndex={controlTabIndex}
                             onOpenProfile={openProfile}
                             className="rounded font-bold"
-                            style={nameColor ? { color: nameColor } : undefined}
+                            style={nameStyle}
                           >
                             {message.authorName}
                           </AuthorButton>
