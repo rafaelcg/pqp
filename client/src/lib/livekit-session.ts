@@ -988,7 +988,7 @@ export async function connectLiveKit({
     track: MediaStreamTrack,
     plan: ScreenSimulcastPlan,
   ): Promise<void> {
-    await room.localParticipant.publishTrack(track, {
+    const options = {
       source: Track.Source.ScreenShare,
       simulcast: true,
       screenShareSimulcastLayers: plan.lowerLayers.map(
@@ -1004,12 +1004,27 @@ export async function connectLiveKit({
       // encoder holds resolution and spends framerate, which turns a film
       // into stills. `degradationPreference` is the lever; the encoding is a
       // ceiling, not a target, so a still screen still costs almost nothing.
-      degradationPreference: "maintain-framerate",
+      degradationPreference: "maintain-framerate" as const,
       screenShareEncoding: {
         maxBitrate: plan.topBitrate,
         maxFramerate: publishMaxFrameRateFromTrack(track),
       },
-    });
+    };
+    // VP8 software encode is what we measured sawtoothing on Chromium. H.264
+    // can use hardware on many Macs and is what egress already re-encodes
+    // toward for HLS. AV1 is skipped: too heavy on host CPU for screen publish.
+    try {
+      await room.localParticipant.publishTrack(track, {
+        ...options,
+        videoCodec: "h264",
+      });
+    } catch (err) {
+      console.warn(
+        "[pqp] H.264 screen publish refused; retrying without a codec pin",
+        err,
+      );
+      await room.localParticipant.publishTrack(track, options);
+    }
     publishedScreenPlan = plan;
     // PINNED THE MOMENT IT GOES UP UNDER A LIVE BROADCAST. See
     // `screenPlanPinned` and `reconcileScreenPlan`.

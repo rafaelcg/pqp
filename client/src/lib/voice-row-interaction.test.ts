@@ -1,9 +1,67 @@
 import { describe, expect, it } from "vitest";
 import {
+  isVoiceRowJoinable,
   resolveVoiceRowClick,
   resolveVoiceRowDoubleClick,
   resolveVoiceRowKey,
 } from "./voice-row-interaction";
+
+describe("isVoiceRowJoinable", () => {
+  it("is true for an ordinary voice room you are not in", () => {
+    expect(
+      isVoiceRowJoinable({ hasJoinHandler: true, connected: false }),
+    ).toBe(true);
+  });
+
+  it("is false when there is no join handler, or you are already in", () => {
+    expect(
+      isVoiceRowJoinable({ hasJoinHandler: false, connected: false }),
+    ).toBe(false);
+    expect(
+      isVoiceRowJoinable({ hasJoinHandler: true, connected: true }),
+    ).toBe(false);
+  });
+
+  it("is false for a live watch party, so double-click and Enter only select", () => {
+    // The Watch pill already selects. Accidental join with the mic open was
+    // the bug; watching is the gesture this row is for while the party is live.
+    expect(
+      isVoiceRowJoinable({
+        hasJoinHandler: true,
+        connected: false,
+        liveWatchParty: true,
+      }),
+    ).toBe(false);
+    expect(
+      resolveVoiceRowDoubleClick({
+        joinable: isVoiceRowJoinable({
+          hasJoinHandler: true,
+          connected: false,
+          liveWatchParty: true,
+        }),
+      }),
+    ).toBeNull();
+    expect(
+      resolveVoiceRowKey("Enter", {
+        joinable: isVoiceRowJoinable({
+          hasJoinHandler: true,
+          connected: false,
+          liveWatchParty: true,
+        }),
+      }),
+    ).toBe("select");
+  });
+
+  it("still joins a watch party that is not live", () => {
+    expect(
+      isVoiceRowJoinable({
+        hasJoinHandler: true,
+        connected: false,
+        liveWatchParty: false,
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("resolveVoiceRowClick", () => {
   it("selects an unselected voice row instead of joining", () => {

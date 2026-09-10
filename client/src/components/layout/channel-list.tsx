@@ -62,6 +62,7 @@ import {
 import { SidebarResizeHandle } from "@/components/layout/sidebar-resize-handle";
 import { useChannelSidebarWidth } from "@/hooks/use-channel-sidebar-width";
 import {
+  isVoiceRowJoinable,
   resolveVoiceRowClick,
   resolveVoiceRowDoubleClick,
   resolveVoiceRowKey,
@@ -1865,7 +1866,11 @@ export function ChannelRailItem({
   const hasUnread = !selected && unread.count > 0 && !muted;
   const mentions = selected || muted ? 0 : unread.mentions;
   const live = liveState?.live === true;
-  const joinable = onJoinVoice && !connected;
+  const joinable = isVoiceRowJoinable({
+    hasJoinHandler: !!onJoinVoice,
+    connected,
+    liveWatchParty: live,
+  });
   return (
     <Tooltip
       label={
@@ -2221,6 +2226,11 @@ function ChannelRow({
     .join(". ");
   const live = liveState?.live === true;
   const topic = watchParty ? channel.topic?.trim() || null : null;
+  const joinable = isVoiceRowJoinable({
+    hasJoinHandler: !!onJoinVoice,
+    connected,
+    liveWatchParty: live,
+  });
 
   const rowButton = (
     <button
@@ -2228,7 +2238,7 @@ function ChannelRow({
       onClick={() => {
         const action = resolveVoiceRowClick({
           selected,
-          joinable: !!onJoinVoice && !connected,
+          joinable,
         });
         if (action === "join") {
           onJoinVoice?.();
@@ -2239,7 +2249,7 @@ function ChannelRow({
       onDoubleClick={() => {
         if (
           resolveVoiceRowDoubleClick({
-            joinable: !!onJoinVoice && !connected,
+            joinable,
           }) === "join"
         ) {
           onJoinVoice?.();
@@ -2247,7 +2257,7 @@ function ChannelRow({
       }}
       onKeyDown={(event) => {
         const action = resolveVoiceRowKey(event.key, {
-          joinable: !!onJoinVoice && !connected,
+          joinable,
         });
         if (action === null) {
           return;
@@ -2443,8 +2453,10 @@ function ChannelRow({
             double-tap-to-zoom and never synthesize `dblclick`. The header's
             call button is the other phone path, and it is the one iOS and
             Android use.
-            Connected rows never call `onJoinVoice` at all (see `joinable`
-            below), so clicking the room you are in just keeps the view. */}
+            Connected rows and live watch parties never call `onJoinVoice`
+            from a double-click or Enter (see `joinable` below), so clicking
+            the room you are in, or a live party you are watching, just
+            keeps the view. */}
         {/* Always the same element. Rendering a bare button when there is
             no hint would swap the element type the moment `connected`
             flips, and React would drop keyboard focus on the way. */}

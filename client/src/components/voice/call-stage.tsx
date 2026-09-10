@@ -2,6 +2,7 @@ import {
   ChevronDown,
   ChevronUp,
   Crop,
+  Eye,
   EyeOff,
   Hand,
   Loader2,
@@ -48,6 +49,10 @@ import {
   setShareCursor,
   useShareCursor,
 } from "@/lib/screen-capture-cursor";
+import {
+  setHideScreenPreview,
+  useHideScreenPreview,
+} from "@/lib/screen-preview-pref";
 import {
   canShareScreenAudio,
   detectFullscreenMode,
@@ -2014,6 +2019,7 @@ export function CallControls({
   // still useful mid-share where the engine can change a live track, which is
   // nowhere today: see `lib/screen-capture-cursor.ts`.
   const shareCursor = useShareCursor();
+  const hidePreviewPref = useHideScreenPreview();
   const cursorLiveControl = useMemo(() => canControlShareCursor(), []);
   const watchPartyHintEnabled = useFeatureHintEnabled("watchParty");
   const [shareHint, setShareHint] = useState<string | null>(null);
@@ -2446,6 +2452,32 @@ export function CallControls({
               <ScreenShareOff className={iconSize} />
             ) : (
               <ScreenShare className={iconSize} />
+            )}
+          </button>
+        </Tooltip>
+      )}
+      {canShare && !noVideo && voiceState.isSharingScreen && (
+        <Tooltip
+          label={
+            hidePreviewPref
+              ? t("voice.share.showPreview")
+              : t("voice.share.hidePreview")
+          }
+        >
+          <button
+            type="button"
+            data-testid="hide-screen-preview"
+            aria-pressed={hidePreviewPref}
+            className={cn(
+              "flex items-center justify-center rounded-full bg-ink-3 text-paper hover:bg-ink-4",
+              size,
+            )}
+            onClick={() => setHideScreenPreview(!hidePreviewPref)}
+          >
+            {hidePreviewPref ? (
+              <Eye className={iconSize} />
+            ) : (
+              <EyeOff className={iconSize} />
             )}
           </button>
         </Tooltip>
@@ -3359,6 +3391,8 @@ export function ScreenTileFrame({
   const { t } = useTranslation();
   const menu = usePeerAudioMenu();
   const fit = useVideoFit("screen");
+  const hidePreviewPref = useHideScreenPreview();
+  const hideSelfPreview = tile.isSelf && hidePreviewPref;
   const hasAudio = Boolean(audio?.voice || audio?.share);
   const label = isFullscreen
     ? t("voice.share.exitFullscreen")
@@ -3396,7 +3430,16 @@ export function ScreenTileFrame({
 
   return (
     <div className={cn("group relative", className)}>
-      {useHls && tile.hlsUrl ? (
+      {hideSelfPreview ? (
+        <div
+          data-self-preview-hidden=""
+          className="flex h-full w-full items-center justify-center bg-ink-2 px-3"
+        >
+          <p className="text-sm text-paper-muted">
+            {t("voice.share.youAreSharing")}
+          </p>
+        </div>
+      ) : useHls && tile.hlsUrl ? (
         <HlsWatchPlayer
           src={tile.hlsUrl}
           delaySeconds={tile.delaySeconds}
@@ -3419,7 +3462,7 @@ export function ScreenTileFrame({
         />
       )}
       <TileClickTarget
-        enabled={clickToFullscreen}
+        enabled={Boolean(clickToFullscreen) && !hideSelfPreview}
         label={label}
         onClick={onToggleFullscreen}
       />
@@ -3432,7 +3475,7 @@ export function ScreenTileFrame({
         ref={menu.rootRef}
         className={cn(
           "absolute left-2 top-2 z-20 flex max-w-[80%] items-center gap-1.5",
-          menu.open
+          menu.open || hideSelfPreview
             ? "opacity-100"
             : "opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 [@media(hover:hover)]:group-focus-within:opacity-100",
         )}
@@ -3457,7 +3500,36 @@ export function ScreenTileFrame({
             </button>
           </Tooltip>
         )}
-        {onToggleFullscreen && (
+        {tile.isSelf && (
+          <Tooltip
+            label={
+              hideSelfPreview
+                ? t("voice.share.showPreview")
+                : t("voice.share.hidePreview")
+            }
+            side="bottom"
+            align="start"
+          >
+            <button
+              type="button"
+              aria-pressed={hideSelfPreview}
+              aria-label={
+                hideSelfPreview
+                  ? t("voice.share.showPreview")
+                  : t("voice.share.hidePreview")
+              }
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink/70 text-paper hover:bg-ink-4"
+              onClick={() => setHideScreenPreview(!hidePreviewPref)}
+            >
+              {hideSelfPreview ? (
+                <Eye className="h-3.5 w-3.5" />
+              ) : (
+                <EyeOff className="h-3.5 w-3.5" />
+              )}
+            </button>
+          </Tooltip>
+        )}
+        {!hideSelfPreview && onToggleFullscreen && (
           /* `side="bottom"`: this sits on the top edge of the share, so a
              bubble above it would be off the tile. */
           <Tooltip label={label} side="bottom" align="start">
@@ -3478,7 +3550,7 @@ export function ScreenTileFrame({
             </button>
           </Tooltip>
         )}
-        <TileFitButton fit={fit} kind="screen" />
+        {!hideSelfPreview && <TileFitButton fit={fit} kind="screen" />}
         {onPin && (
           <Tooltip
             label={

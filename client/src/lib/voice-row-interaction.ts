@@ -19,12 +19,30 @@
  * same gesture and firing again here would have joined twice. With the click
  * branch gone there is nothing to double up on.
  *
- * `joinable` is `onJoinVoice && !connected` at the call site: no join handler
- * (a text channel), or a channel the caller is already in, and every branch
- * here degrades to "select" or "do nothing" — the same shape a plain text row
- * has always had.
+ * `joinable` is `isVoiceRowJoinable` at the call site: no join handler (a
+ * text channel), a channel the caller is already in, or a *live* watch party
+ * (the Watch pill already selects; a double-click that dropped you into the
+ * call with your mic was the bug). Every branch here degrades to "select" or
+ * "do nothing" — the same shape a plain text row has always had. Join on a
+ * live party still lives on the header call button and the context menu.
  */
 export type VoiceRowAction = "select" | "join" | null;
+
+/**
+ * Whether a double-click or Enter on this row should join the voice room.
+ *
+ * A live watch party is watched from the row, not joined. The Entrar button
+ * (when the party is not live) and the header call button stay deliberate.
+ */
+export function isVoiceRowJoinable(options: {
+  hasJoinHandler: boolean;
+  connected: boolean;
+  liveWatchParty?: boolean;
+}): boolean {
+  return (
+    options.hasJoinHandler && !options.connected && !options.liveWatchParty
+  );
+}
 
 export function resolveVoiceRowClick(_options: {
   selected: boolean;

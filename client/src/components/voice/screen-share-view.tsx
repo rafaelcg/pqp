@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2, Maximize2, Minimize2, ScreenShareOff } from "lucide-react";
+import { Eye, EyeOff, Loader2, Maximize2, Minimize2, ScreenShareOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import {
@@ -17,6 +17,10 @@ import {
 import { desktopContext } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import { bindRemoteVideo } from "@/lib/remote-video-binding";
+import {
+  setHideScreenPreview,
+  useHideScreenPreview,
+} from "@/lib/screen-preview-pref";
 import { cn } from "@/lib/utils";
 
 /**
@@ -66,6 +70,8 @@ export function ScreenShareView({
   onExpandedChange,
 }: ScreenShareViewProps) {
   const { t } = useTranslation();
+  const hidePreviewPref = useHideScreenPreview();
+  const hidePreview = isSelf && hidePreviewPref;
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   // Two separate truths. `elementFullscreen` belongs to the browser and only
@@ -85,6 +91,9 @@ export function ScreenShareView({
     fullscreenMode === "element" ? elementFullscreen : isExpanded;
 
   useEffect(() => {
+    if (hidePreview) {
+      return;
+    }
     const video = videoRef.current;
     if (!video) {
       return;
@@ -101,7 +110,7 @@ export function ScreenShareView({
       });
     }
     return unbind;
-  }, [stream]);
+  }, [stream, hidePreview]);
 
   useEffect(() => {
     const doc = fullscreenDocument();
@@ -277,6 +286,31 @@ export function ScreenShareView({
               {t("voice.share.fullscreenBlocked", desktopContext())}
             </span>
           )}
+          {isSelf && (
+            <Tooltip
+              label={
+                hidePreview
+                  ? t("voice.share.showPreview")
+                  : t("voice.share.hidePreview")
+              }
+              side="bottom"
+            >
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6"
+                aria-pressed={hidePreview}
+                data-testid="hide-screen-preview"
+                onClick={() => setHideScreenPreview(!hidePreviewPref)}
+              >
+                {hidePreview ? (
+                  <Eye className="h-3.5 w-3.5" />
+                ) : (
+                  <EyeOff className="h-3.5 w-3.5" />
+                )}
+              </Button>
+            </Tooltip>
+          )}
           {isSelf && onStopSharing && (
             <Button
               variant="ghost"
@@ -288,9 +322,9 @@ export function ScreenShareView({
               {t("voice.share.stop")}
             </Button>
           )}
-          {/* Always rendered: `expand` needs no platform support, so there is
-              no browser left where this button would do nothing. */}
-          {(
+          {/* `expand` needs no platform support; withheld only when there is
+              no picture to enlarge, which is the hidden-preview placeholder. */}
+          {!hidePreview && (
             /* `side="bottom"`: this row sits on the top edge of the stage, and
                a bubble above it would be off the stage or, in fullscreen, off
                the screen. The bubble follows the document into fullscreen
@@ -322,19 +356,30 @@ export function ScreenShareView({
         </div>
       </div>
       <div className="relative min-h-0 flex-1 bg-black">
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          onDoubleClick={toggleFullscreen}
-          className="h-full w-full object-contain"
-        />
-        {!stream && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-paper-muted">
-            <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
-            <span className="text-xs">{t("voice.share.waiting")}</span>
+        {hidePreview ? (
+          <div
+            data-self-preview-hidden=""
+            className="flex h-full min-h-[72px] items-center justify-center px-3 text-paper-muted"
+          >
+            <span className="text-xs">{t("voice.share.youAreSharing")}</span>
           </div>
+        ) : (
+          <>
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              onDoubleClick={toggleFullscreen}
+              className="h-full w-full object-contain"
+            />
+            {!stream && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-paper-muted">
+                <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+                <span className="text-xs">{t("voice.share.waiting")}</span>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
