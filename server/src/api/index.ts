@@ -1,8 +1,18 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  AUTOMOD_MENTION_LIMIT_DEFAULT,
+  createAutomodRuleSchema,
+  updateAutomodRuleSchema,
   addChannelMemberSchema,
   ageDeclarationSchema,
   createChannelSessionSchema,
+  createWatchPartySchema,
+  updateWatchPartySchema,
+  watchPartyCohostRequestSchema,
+  watchPartyHostRequestSchema,
+  watchPartyStageRequestSchema,
+  watchPartyStateRequestSchema,
+  type WatchPartyAction,
   updateChannelSessionSchema,
   AUDIT_LOG_PAGE_MAX,
   AUDIT_LOG_PAGE_SIZE,
@@ -120,7 +130,7 @@ import {
   getServerVoiceBackend,
   isLiveKitConfigured,
 } from "../voice/backends.js";
-import { liveHlsConfig } from "../voice/hls-egress.js";
+import { liveHlsConfigForServer } from "../voice/hls-egress.js";
 import {
   buildMasterPlaylistFor,
   buildSignedPlaylist,
@@ -130,6 +140,7 @@ import {
 } from "../voice/hls-playlist-proxy.js";
 import { isHlsAccessRevoked } from "../voice/hls-revocation.js";
 import {
+  describeHlsViewerToken,
   HLS_VIEWER_TOKEN_PARAM,
   stampViewerStream,
 } from "../voice/hls-viewer-token.js";
@@ -149,6 +160,7 @@ import {
   forEachAuthenticatedSocket,
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
+  applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,
   resolveStatuses,
@@ -221,6 +233,15 @@ import {
 } from "../services/account.js";
 import { listAuditLog, logAudit } from "../services/audit.js";
 import {
+  checkAutomod,
+  createAutomodRule,
+  deleteAutomodRule,
+  getAutomodRule,
+  listAutomodRules,
+  recordAutomodHit,
+  updateAutomodRule,
+} from "../services/automod.js";
+import {
   avatarUrlForKey,
   createAvatarUpload,
   createUserBannerUpload,
@@ -277,6 +298,27 @@ import {
   setChannelSessionReminder,
   updateChannelSession,
 } from "../services/channel-sessions.js";
+import {
+  addWatchPartyCohost,
+  applyWatchPartyOptions,
+  authoriseWatchParty,
+  createWatchParty,
+  findOrCreateWatchPartyRoom,
+  getActiveWatchPartyRow,
+  getWatchPartyRow,
+  listActiveWatchPartiesForServer,
+  presentWatchParty,
+  inviteToWatchPartyStage,
+  reconcileLiveWatchPartyOptions,
+  removeFromWatchPartyStage,
+  removeWatchPartyCohost,
+  setWatchPartyRaisedHand,
+  transferWatchPartyHost,
+  transitionWatchParty,
+  updateWatchParty,
+  WatchPartyError,
+} from "../services/watch-parties.js";
+import { broadcastWatchParty } from "../ws/watch-party-events.js";
 import { buildServerExport } from "../services/export.js";
 import {
   CommunityListingForbiddenError,
@@ -453,6 +495,19 @@ import {
   getAdminMetrics,
   isAdminMetricsTokenValid,
 } from "../services/metrics.js";
+import {
+  OPERATOR_CHANNELS_PATH,
+  OPERATOR_CHANNEL_TRANSPORT_PATH,
+  OPERATOR_SERVERS_PATH,
+  OPERATOR_SERVER_LIVE_HLS_PATH,
+  OperatorTargetMissing,
+  listOperatorChannels,
+  listOperatorServers,
+  setChannelVoiceTransport,
+  setChannelVoiceTransportSchema,
+  setServerLiveHls,
+  setServerLiveHlsSchema,
+} from "../services/operator.js";
 import {
   claimHandle,
   findUserIdByHandle,
@@ -789,6 +844,10 @@ export function resetApiRateLimits(): void {
   publicCommunityLimiter.reset();
   voiceLeaveLimiter.reset();
   bulkDeleteLimiter.reset();
+  // Keyed on the string "machine" rather than a user id, so unlike every
+  // bucket above it is shared by every test in a file and would otherwise
+  // drain across them.
+  operatorLimiter.reset();
 }
 
 class Forbidden extends HttpError {
@@ -1716,6 +1775,180 @@ router.get(ADMIN_METRICS_PATH, async ({ user }) => {
   return getAdminMetrics();
 });
 
+// ------------------------------------------------- the operator's two levers
+//
+// Watch party availability per server, and a voice channel's transport pin.
+// Same gate and the same two ways in as the reads above: an instance
+// moderator's Clerk session here, or the dashboard's machine token, resolved
+// in `handleApi` against `ADMIN_MACHINE_ROUTES` before Clerk runs.
+//
+// These are the FIRST WRITES on that token. What each one costs when it is
+// wrong is argued in services/operator.ts; the short version is that neither
+// is destructive and both are one click to undo, so neither carries a
+// server-side confirmation. The one genuinely disruptive case, turning a
+// server off while it is streaming to an audience, is confirmed in the
+// dashboard, which is the only place that knows a human is about to do it.
+
+router.get(OPERATOR_SERVERS_PATH, async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return listOperatorServers(url.searchParams.get("q") ?? "");
+});
+
+router.get(OPERATOR_CHANNELS_PATH, async ({ url, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  return operatorChannels(url.searchParams.get("serverId"));
+});
+
+router.put(OPERATOR_SERVER_LIVE_HLS_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  const body = setServerLiveHlsSchema.parse(await readJsonBody(req));
+  return operatorSetServerLiveHls(body.serverId, body.enabled, user.id);
+});
+
+router.put(OPERATOR_CHANNEL_TRANSPORT_PATH, async ({ req, user }) => {
+  if (!isInstanceModerator(user)) {
+    throw new NotFound("Not found");
+  }
+  const body = setChannelVoiceTransportSchema.parse(await readJsonBody(req));
+  return operatorSetChannelTransport(body.channelId, body.transport, user.id);
+});
+
+/**
+ * EVERYTHING the operator dashboard's machine token can reach, and nothing
+ * else, as a flat table of exact (method, pathname) pairs.
+ *
+ * This is the entire blast radius of `ADMIN_METRICS_TOKEN`. It is a table
+ * rather than a chain of `if`s so that adding a route is a visible line in a
+ * diff and widening the token by accident is not a thing a refactor can do:
+ * there is no pattern here to loosen, no prefix to extend, and a path that is
+ * not spelled out below falls through to the ordinary Clerk resolution and
+ * ends in the same 404 as a route that does not exist.
+ *
+ * `DELETE /api/admin/users/:id` is the reason this shape matters. It is on
+ * the same `isInstanceModerator` gate as the reads above and is deliberately
+ * absent here: terminating somebody's account is not something a token in a
+ * Cloudflare Worker behind an HTTP Basic password gets to do.
+ *
+ * The machine caller has no account, so every write it makes is audited with
+ * a NULL actor. See services/operator.ts.
+ */
+const ADMIN_MACHINE_ROUTES: {
+  method: string;
+  path: string;
+  run: (req: IncomingMessage, query: URLSearchParams) => Promise<unknown>;
+}[] = [
+  {
+    method: "GET",
+    path: ADMIN_METRICS_PATH,
+    run: async () => getAdminMetrics(),
+  },
+  {
+    method: "GET",
+    path: ADMIN_VOICE_OCCUPANCY_PATH,
+    run: async (_req, query) => voiceOccupancyReport(occupancyQuery(query)),
+  },
+  {
+    method: "GET",
+    path: OPERATOR_SERVERS_PATH,
+    run: async (_req, query) => listOperatorServers(query.get("q") ?? ""),
+  },
+  {
+    method: "GET",
+    path: OPERATOR_CHANNELS_PATH,
+    run: async (_req, query) => operatorChannels(query.get("serverId")),
+  },
+  {
+    method: "PUT",
+    path: OPERATOR_SERVER_LIVE_HLS_PATH,
+    run: async (req) => {
+      const body = setServerLiveHlsSchema.parse(await readJsonBody(req));
+      return operatorSetServerLiveHls(body.serverId, body.enabled, null);
+    },
+  },
+  {
+    method: "PUT",
+    path: OPERATOR_CHANNEL_TRANSPORT_PATH,
+    run: async (req) => {
+      const body = setChannelVoiceTransportSchema.parse(await readJsonBody(req));
+      return operatorSetChannelTransport(body.channelId, body.transport, null);
+    },
+  },
+];
+
+export function matchAdminMachineRoute(
+  method: string,
+  pathname: string,
+): (typeof ADMIN_MACHINE_ROUTES)[number] | null {
+  return (
+    ADMIN_MACHINE_ROUTES.find(
+      (route) => route.method === method && route.path === pathname,
+    ) ?? null
+  );
+}
+
+/**
+ * The machine caller's request budget, keyed on the caller rather than on an
+ * identity it does not have. Wide enough for a dashboard that polls every 30
+ * seconds and an operator clicking, narrow enough that a runaway loop in the
+ * page is a 429 rather than a load test against production.
+ */
+const operatorLimiter = createRateLimiter({
+  capacity: limitFromEnv("RATE_LIMIT_OPERATOR_CAPACITY", 60),
+  refillPerSecond: limitFromEnv("RATE_LIMIT_OPERATOR_REFILL", 1),
+});
+
+/**
+ * The four handlers, once, so the session route above and the machine-token
+ * dispatch below cannot drift. Every one of them turns a missing target into
+ * the same 404 the router would have produced.
+ */
+async function operatorChannels(serverId: string | null) {
+  if (!serverId) {
+    throw new HttpError(400, "serverId is required");
+  }
+  const list = await listOperatorChannels(serverId);
+  if (!list) {
+    throw new NotFound("Server not found");
+  }
+  return list;
+}
+
+async function operatorSetServerLiveHls(
+  serverId: string,
+  enabled: boolean | null,
+  actorId: string | null,
+) {
+  try {
+    return await setServerLiveHls(serverId, enabled, actorId);
+  } catch (error) {
+    if (error instanceof OperatorTargetMissing) {
+      throw new NotFound(error.message);
+    }
+    throw error;
+  }
+}
+
+async function operatorSetChannelTransport(
+  channelId: string,
+  transport: "mesh" | "livekit" | null,
+  actorId: string | null,
+) {
+  try {
+    return await setChannelVoiceTransport(channelId, transport, actorId);
+  } catch (error) {
+    if (error instanceof OperatorTargetMissing) {
+      throw new NotFound(error.message);
+    }
+    throw error;
+  }
+}
+
 // --------------------------------------------------------- user discovery
 
 /**
@@ -1902,10 +2135,12 @@ router.get("/api/voice/backend", async () => {
   };
 });
 
-// `?serverId=` answers for that server (the allowlist applies); without it,
-// the global flag, which is what a client asks before it knows the server.
+// `?serverId=` answers for that server (its `live_hls_enabled` row, else the
+// allowlist); without it, the global flag, which is what a client asks before
+// it knows the server. Read per request, so an operator flipping a server on
+// the dashboard is answered correctly by the very next call.
 router.get("/api/live-hls/config", async ({ url }) =>
-  liveHlsConfig(url.searchParams.get("serverId")),
+  liveHlsConfigForServer(url.searchParams.get("serverId")),
 );
 
 /**
@@ -1920,6 +2155,108 @@ router.get("/api/live-hls/config", async ({ url }) =>
  * `handleApi`, ahead of the Bearer resolution, and ends in this same
  * function, so the channel-access check runs on both.
  */
+/**
+ * The `?t=` door on the playlist proxy, in ONE place so its two callers
+ * cannot drift.
+ *
+ * Called with no `Authorization` header at all (Safari's native player, iOS),
+ * and again after a Bearer header has failed to resolve, which is the shape
+ * hls.js produces once a minute when its cached Clerk JWT has just expired.
+ * Returns true when it answered the request.
+ */
+async function tryHlsCapabilityDoor(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+): Promise<boolean> {
+  const match = HLS_PLAYLIST_PATH.exec(pathname);
+  if (!match) {
+    return false;
+  }
+  const token = new URL(req.url ?? "/", "http://localhost").searchParams.get(
+    HLS_VIEWER_TOKEN_PARAM,
+  );
+  const channelId = match[1]!;
+  const startedAt = Number(match[2]);
+  const viewer = resolveHlsPlaylistViewer({
+    bearerUserId: null,
+    token,
+    channelId,
+    startedAt,
+  });
+  if (!viewer) {
+    // Say why before handing back to the 401. A rejection here used to be
+    // completely silent, which is why an afternoon went into finding one.
+    logHlsPlaylistRejection(
+      channelId,
+      startedAt,
+      token,
+      req.headers.authorization,
+    );
+    return false;
+  }
+  await serveHlsPlaylistWithToken(
+    req,
+    res,
+    channelId,
+    match[2]!,
+    viewer.userId,
+    viewer.issuedAt ?? 0,
+    { rung: match[3], token },
+  );
+  return true;
+}
+
+/**
+ * A PLAYLIST REJECTION HAS TO SAY WHY.
+ *
+ * The proxy answered 401 and logged nothing, so a stall that hit every web
+ * viewer of every watch party looked, from the server, exactly like a healthy
+ * stream. It took an afternoon and a screenshot of Rafael's network panel to
+ * find that hls.js was attaching an expired Clerk JWT on top of a perfectly
+ * good `?t=`. One log line would have taken minutes.
+ *
+ * RATE LIMITED, because this sits on a path every viewer hits every two
+ * seconds and a broken client must not be able to turn its own bug into a
+ * write amplifier on the log shipper. One line per channel per reason per
+ * window is enough to tell an operator what is happening; the counter says
+ * how much of it there was.
+ */
+const HLS_REJECTION_LOG_WINDOW_MS = 30_000;
+const hlsRejectionLog = new Map<string, { at: number; since: number }>();
+
+function logHlsPlaylistRejection(
+  channelId: string,
+  startedAt: number,
+  token: string | null,
+  authorization: string | undefined,
+): void {
+  const reason = describeHlsViewerToken(token, { channelId, startedAt });
+  if (reason === null) {
+    // The capability verified, so this is not a rejection at all: the caller
+    // took the door. Nothing to say.
+    return;
+  }
+  const key = `${channelId}:${reason}`;
+  const now = Date.now();
+  const seen = hlsRejectionLog.get(key);
+  if (seen && now - seen.at < HLS_REJECTION_LOG_WINDOW_MS) {
+    seen.since += 1;
+    return;
+  }
+  logEvent("voice.hlsPlaylistRejected", {
+    channelId,
+    startedAt,
+    reason,
+    // Whether the caller ALSO sent a header, which is the difference between
+    // "a player that cannot authenticate" and "a player whose header is the
+    // thing that failed". The header itself is never logged.
+    hadAuthorizationHeader: Boolean(authorization),
+    suppressed: seen?.since ?? 0,
+  });
+  hlsRejectionLog.set(key, { at: now, since: 0 });
+}
+
 async function hlsPlaylistResponse(
   res: ServerResponse,
   channelId: string,
@@ -4099,12 +4436,16 @@ router.post(
   "/api/channels/:channelId/sessions",
   async ({ req, user }, { channelId }) => {
     const channel = await requireServerChannel(channelId!);
-    // REPLACE-WHEN-READY: swap for START_WATCH_PARTY once
-    // `feat/watch-party-channel` lands that permission bit.
+    // The REPLACE-WHEN-READY from PR #352, honoured: START_WATCH_PARTY is
+    // what says "you may run a show here", and it is the same bit the stage
+    // asks for, so a mod who can put a screen up can also announce it.
+    // MANAGE_CHANNELS is not asked for and is not enough on its own; a
+    // manager holds every bit anyway.
     await requirePermission(
       channel.server_id,
       user.id,
-      Permission.MANAGE_CHANNELS,
+      Permission.START_WATCH_PARTY,
+      channelId!,
     );
     const body = createChannelSessionSchema.parse(await readJsonBody(req));
     if (new Date(body.startsAt).getTime() <= Date.now()) {
@@ -4166,7 +4507,17 @@ router.patch("/api/sessions/:sessionId", async ({ req, user }, { sessionId }) =>
     throw new NotFound("Session not found");
   }
   const channel = await requireServerChannel(existing.channel_id);
-  await requirePermission(channel.server_id, user.id, Permission.MANAGE_CHANNELS);
+  // The host of the session edits their own; MANAGE_CHANNELS edits anyone's.
+  // Before this only the second half existed, so a mod who scheduled a
+  // session on a channel they did not manage could not fix its time.
+  if (existing.host_user_id !== user.id) {
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.MANAGE_CHANNELS,
+      existing.channel_id,
+    );
+  }
   const body = updateChannelSessionSchema.parse(await readJsonBody(req));
   if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
     throw new HttpError(400, "startsAt must be in the future");
@@ -4186,11 +4537,14 @@ router.post(
       throw new NotFound("Session not found");
     }
     const channel = await requireServerChannel(existing.channel_id);
-    await requirePermission(
-      channel.server_id,
-      user.id,
-      Permission.MANAGE_CHANNELS,
-    );
+    if (existing.host_user_id !== user.id) {
+      await requirePermission(
+        channel.server_id,
+        user.id,
+        Permission.MANAGE_CHANNELS,
+        existing.channel_id,
+      );
+    }
     try {
       await cancelChannelSession(sessionId!);
     } catch (error) {
@@ -4223,6 +4577,400 @@ router.delete(
     await requireChannelAccess(existing.channel_id, user.id);
     await setChannelSessionReminder(sessionId!, user.id, false);
     return { ok: true as const, reminding: false as const };
+  },
+);
+
+
+// ------------------------------------------------------- watch parties (event)
+/**
+ * The stage: the host putting somebody up or taking them down, and a viewer
+ * raising or lowering their own hand.
+ *
+ * TWO DIFFERENT AUTHORISATIONS IN ONE ROUTE, which is why the body is a union
+ * rather than one shape with an optional field. `invite` and `remove` are the
+ * host's, and go through `promoteCohost`'s rule because putting somebody on
+ * the stage is the same kind of act as promoting them, one show long.
+ * `raise` and `lower` are the viewer's own and need nothing but the ability
+ * to see the party, because a hand is a request and not a permission.
+ */
+router.post(
+  "/api/watch-parties/:sessionId/stage",
+  async ({ req, user }, { sessionId }) => {
+    const body = watchPartyStageRequestSchema.parse(await readJsonBody(req));
+    const hostSide = body.action === "invite" || body.action === "remove";
+    const { row, actor } = await requireWatchParty(
+      sessionId!,
+      user.id,
+      hostSide ? "promoteCohost" : "view",
+    );
+    if (hostSide) {
+      if (body.action === "invite") {
+        if (!(await canAccessChannel(row.channel_id, body.userId))) {
+          throw new HttpError(400, "That person cannot see this channel");
+        }
+        await inviteToWatchPartyStage(row, body.userId, user.id);
+      } else {
+        await removeFromWatchPartyStage(row, body.userId);
+      }
+    } else {
+      // A hand is only meaningful while a show is running.
+      if (row.status !== "live") {
+        throw new HttpError(409, "This watch party is not live");
+      }
+      await setWatchPartyRaisedHand(
+        sessionId!,
+        user.id,
+        body.action === "raise",
+      );
+    }
+    void broadcastWatchParty(sessionId!);
+    const updated = await getWatchPartyRow(sessionId!);
+    return { party: updated ? await presentWatchParty(updated, actor) : null };
+  },
+);
+
+
+
+/**
+ * The watch party journey. `docs/WATCH_PARTY.md` has the ownership rules; the
+ * state machine and the role table live in
+ * `packages/shared/src/watch-party-session.ts` and are imported by both sides
+ * so a button the client renders and a route the server allows cannot drift.
+ *
+ * A party is a `channel_sessions` row. These routes are the only ones that
+ * know about `draft`, co-hosts and options; the `/api/sessions/...` routes
+ * above stay exactly what PR #352 shipped, for the schedule card.
+ */
+function mapWatchPartyError(error: unknown): never {
+  if (error instanceof WatchPartyError) {
+    if (error.code === "not_found") {
+      throw new NotFound(error.message);
+    }
+    if (error.code === "forbidden") {
+      throw new HttpError(403, error.message);
+    }
+    throw new HttpError(409, error.message);
+  }
+  throw error;
+}
+
+/** The actor's effective permissions on the party's channel. */
+async function watchPartyActor(
+  channel: { server_id: string; id: string },
+  userId: string,
+): Promise<{ userId: string; permissions: bigint }> {
+  return {
+    userId,
+    permissions: await computeMemberPermissions(
+      channel.server_id,
+      userId,
+      channel.id,
+    ),
+  };
+}
+
+/**
+ * Load the party, check the actor may do this to it, and hand back everything
+ * the route needs. Every mutating route starts here, so "who may" is asked in
+ * one place and asked before anything is written.
+ */
+async function requireWatchParty(
+  sessionId: string,
+  userId: string,
+  action: WatchPartyAction,
+) {
+  const row = await getWatchPartyRow(sessionId);
+  if (!row) {
+    throw new NotFound("Watch party not found");
+  }
+  const channel = await requireServerChannel(row.channel_id);
+  if (!(await canAccessChannel(row.channel_id, userId))) {
+    throw new NotFound("Watch party not found");
+  }
+  const actor = await watchPartyActor(channel, userId);
+  try {
+    const { role } = await authoriseWatchParty(row, actor, action);
+    return { row, channel, actor, role };
+  } catch (error) {
+    mapWatchPartyError(error);
+  }
+}
+
+/**
+ * START A WATCH PARTY, without first making a channel for it.
+ *
+ * The action Rafael asked for: one control for people who hold
+ * START_WATCH_PARTY, no channel type to pick, no room to name. This finds or
+ * makes the server's hidden party room and opens a draft in it, so the client
+ * needs one call rather than a create-channel followed by a create-party.
+ *
+ * ASKED OF THE SERVER, NOT A CHANNEL, because there may be no channel yet. A
+ * per-channel deny on the room that already exists is still honoured: the
+ * draft is created through the same service the per-channel route uses, and
+ * everything after this point (going live, the stage, the egress) re-resolves
+ * the bit against the actual channel.
+ */
+router.post(
+  "/api/servers/:serverId/watch-parties",
+  async ({ req, user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    await requirePermission(serverId!, user.id, Permission.START_WATCH_PARTY);
+    const body = createWatchPartySchema.parse(await readJsonBody(req));
+    if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
+      throw new HttpError(400, "startsAt must be in the future");
+    }
+    const channelId = await findOrCreateWatchPartyRoom(serverId!);
+    const channel = await requireServerChannel(channelId);
+    // The room may have just been created, so the client has never seen it.
+    // Handing it back whole lets the caller put it in its channel list and
+    // select it in one go, the same way the create-channel route does; a bare
+    // id would select a channel the client cannot resolve, which is a blank
+    // "Escolha um canal" pane on the very click that starts the party.
+    const room = mapChannel(channel);
+    try {
+      const row = await createWatchParty({
+        channelId,
+        serverId: channel.server_id,
+        name: body.name,
+        description: body.description ?? null,
+        startsAt: body.startsAt ?? null,
+        options: body.options ?? {},
+        hostUserId: user.id,
+      });
+      const actor = await watchPartyActor(channel, user.id);
+      const party = await presentWatchParty(row, actor);
+      void broadcastWatchParty(row.id);
+      return { party, channel: room };
+    } catch (error) {
+      mapWatchPartyError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/channels/:channelId/watch-parties",
+  async ({ req, user }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requirePermission(
+      channel.server_id,
+      user.id,
+      Permission.START_WATCH_PARTY,
+      channelId!,
+    );
+    const body = createWatchPartySchema.parse(await readJsonBody(req));
+    if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
+      throw new HttpError(400, "startsAt must be in the future");
+    }
+    try {
+      const row = await createWatchParty({
+        channelId: channelId!,
+        serverId: channel.server_id,
+        name: body.name,
+        description: body.description ?? null,
+        startsAt: body.startsAt ?? null,
+        options: body.options ?? {},
+        hostUserId: user.id,
+      });
+      const actor = await watchPartyActor(channel, user.id);
+      const party = await presentWatchParty(row, actor);
+      // A draft is announced to nobody. `broadcastWatchParty` re-resolves the
+      // audience per socket and drops anyone who may not see this state, so
+      // calling it here is safe as well as correct for a scheduled party.
+      void broadcastWatchParty(row.id);
+      return { party };
+    } catch (error) {
+      mapWatchPartyError(error);
+    }
+  },
+);
+
+/** The channel's active party as this person may see it, or null. */
+router.get(
+  "/api/channels/:channelId/watch-party",
+  async ({ user }, { channelId }) => {
+    const channel = await requireServerChannel(channelId!);
+    await requireChannelAccess(channelId!, user.id);
+    const row = await getActiveWatchPartyRow(channelId!);
+    if (!row) {
+      return { party: null };
+    }
+    const actor = await watchPartyActor(channel, user.id);
+    return { party: await presentWatchParty(row, actor) };
+  },
+);
+
+/**
+ * Every party in the server this person may see, for the sidebar's live
+ * block. One request per server rather than one per channel: the block sits
+ * above the categories and has to know before any channel is opened.
+ */
+router.get(
+  "/api/servers/:serverId/watch-parties",
+  async ({ user }, { serverId }) => {
+    await requireServerMember(serverId!, user.id);
+    const cache = new Map<string, bigint>();
+    const parties = await listActiveWatchPartiesForServer(serverId!, {
+      userId: user.id,
+      permissionsFor: async (channelId) => {
+        const hit = cache.get(channelId);
+        if (hit !== undefined) {
+          return hit;
+        }
+        const perms = await computeMemberPermissions(
+          serverId!,
+          user.id,
+          channelId,
+        );
+        cache.set(channelId, perms);
+        return perms;
+      },
+    });
+    // A party on a channel this person cannot see must not leak through the
+    // server-wide list, which is why VIEW is re-checked per channel here and
+    // not trusted to the party's own row.
+    const visible: typeof parties = [];
+    for (const party of parties) {
+      if (await canAccessChannel(party.channelId, user.id)) {
+        visible.push(party);
+      }
+    }
+    return { parties: visible };
+  },
+);
+
+router.patch("/api/watch-parties/:sessionId", async ({ req, user }, { sessionId }) => {
+  const { row, actor } = await requireWatchParty(sessionId!, user.id, "edit");
+  const body = updateWatchPartySchema.parse(await readJsonBody(req));
+  if (body.startsAt && new Date(body.startsAt).getTime() <= Date.now()) {
+    throw new HttpError(400, "startsAt must be in the future");
+  }
+  try {
+    const updated = await updateWatchParty(sessionId!, {
+      name: body.name,
+      description: body.description,
+      startsAt: body.startsAt,
+      options: body.options,
+    });
+    // The options are editable WHILE the party runs, and a host moving "quem
+    // pode falar" from `everyone` to `hosts_only` mid-show has to take effect
+    // for the people already in the room. The reconciler is idempotent, so
+    // calling it for a rename costs one read and writes nothing.
+    if (body.options) {
+      await reconcileLiveWatchPartyOptions(sessionId!).catch((error) => {
+        console.error("[watch-party] option reconcile failed:", error);
+      });
+    }
+    void broadcastWatchParty(row.id);
+    return { party: await presentWatchParty(updated, actor) };
+  } catch (error) {
+    mapWatchPartyError(error);
+  }
+});
+
+/**
+ * The one route that moves a party: Ir ao vivo, Encerrar, Cancelar, and
+ * publishing a draft.
+ *
+ * ONE ROUTE RATHER THAN FOUR because the transition table already says which
+ * moves exist and the role table already says who may make them. Four routes
+ * would be four places to forget one of those two checks.
+ */
+router.post(
+  "/api/watch-parties/:sessionId/state",
+  async ({ req, user }, { sessionId }) => {
+    const body = watchPartyStateRequestSchema.parse(await readJsonBody(req));
+    const action: WatchPartyAction =
+      body.state === "live"
+        ? "goLive"
+        : body.state === "ended"
+          ? "end"
+          : body.state === "cancelled"
+            ? "cancel"
+            : "schedule";
+    const { row, actor } = await requireWatchParty(sessionId!, user.id, action);
+    try {
+      const moved = await transitionWatchParty(
+        sessionId!,
+        body.state,
+        row.status,
+      );
+      // Going live is the moment the host's setup choices become the room's
+      // rules. Slow mode is a channel field owned by the chat feature; the
+      // party only carries what the host picked in the sheet so one press
+      // applies it, and ending puts it back.
+      await applyWatchPartyOptions(moved, body.state);
+      void broadcastWatchParty(sessionId!);
+      return { party: await presentWatchParty(moved, actor) };
+    } catch (error) {
+      mapWatchPartyError(error);
+    }
+  },
+);
+
+router.post(
+  "/api/watch-parties/:sessionId/cohosts",
+  async ({ req, user }, { sessionId }) => {
+    const body = watchPartyCohostRequestSchema.parse(await readJsonBody(req));
+    const { row, actor, channel } = await requireWatchParty(
+      sessionId!,
+      user.id,
+      body.cohost ? "promoteCohost" : "demoteCohost",
+    );
+    if (body.userId === row.host_user_id) {
+      throw new HttpError(409, "The host is already running this party");
+    }
+    if (body.cohost) {
+      // A co-host has to be able to reach the channel in the first place;
+      // promoting someone who cannot see the room produces a person with
+      // authority over a party they cannot open.
+      if (!(await canAccessChannel(row.channel_id, body.userId))) {
+        throw new HttpError(400, "That person cannot see this channel");
+      }
+      await requireServerMember(channel.server_id, body.userId);
+      await addWatchPartyCohost(row, body.userId, user.id);
+    } else {
+      await removeWatchPartyCohost(row, body.userId);
+    }
+    void broadcastWatchParty(sessionId!);
+    const updated = await getWatchPartyRow(sessionId!);
+    return { party: updated ? await presentWatchParty(updated, actor) : null };
+  },
+);
+
+/**
+ * Hand the party over, or take it after the host dropped.
+ *
+ * Both live here because they are the same write with different authority:
+ * `{ userId }` is the host delegating, `{ claim: true }` is a co-host
+ * succeeding. Splitting them would duplicate the transfer transaction.
+ */
+router.post(
+  "/api/watch-parties/:sessionId/host",
+  async ({ req, user }, { sessionId }) => {
+    const body = watchPartyHostRequestSchema.parse(await readJsonBody(req));
+    const claiming = body.claim === true;
+    const { row, actor, channel } = await requireWatchParty(
+      sessionId!,
+      user.id,
+      claiming ? "claimHost" : "transferHost",
+    );
+    const newHostId = claiming ? user.id : body.userId;
+    if (!newHostId) {
+      throw new HttpError(400, "userId is required to hand the party over");
+    }
+    if (!claiming) {
+      await requireServerMember(channel.server_id, newHostId);
+      if (!(await canAccessChannel(row.channel_id, newHostId))) {
+        throw new HttpError(400, "That person cannot see this channel");
+      }
+    }
+    try {
+      const moved = await transferWatchPartyHost(sessionId!, newHostId);
+      void broadcastWatchParty(sessionId!);
+      return { party: await presentWatchParty(moved, actor) };
+    } catch (error) {
+      mapWatchPartyError(error);
+    }
   },
 );
 
@@ -4459,6 +5207,11 @@ router.post(
             );
           }
           throw new HttpError(429, "Slow down");
+        case "automod":
+          throw new HttpError(
+            422,
+            posted.automodMessage ?? "This message was blocked by AutoMod",
+          );
         case "bad-reply":
           throw new HttpError(400, "Reply is not in this channel");
         case "empty":
@@ -4556,6 +5309,37 @@ router.patch("/api/messages/:messageId", async ({ req, user }, { messageId }) =>
   const schema =
     existing.attachments.length > 0 ? captionEditSchema : updateMessageSchema;
   const body = schema.parse(await readJsonBody(req));
+
+  // Same reasoning as the block guard above: an edit is a send. Without this
+  // a member posts "hi", edits it into the blocked word, and AutoMod never
+  // saw it. The check reads the same rules with the same exemptions as
+  // `postChannelMessage`, and a hit is recorded the same way.
+  if (existing.server_id) {
+    const automodInput = {
+      serverId: existing.server_id,
+      channelId: existing.channel_id,
+      authorId: user.id,
+      memberPerms: await computeMemberPermissions(
+        existing.server_id,
+        user.id,
+        existing.channel_id,
+      ),
+      body: body.body,
+    };
+    const verdict = await checkAutomod(automodInput);
+    if (verdict) {
+      void recordAutomodHit(automodInput, verdict)
+        .then(applyAutomodEffects)
+        .catch((error: unknown) => {
+          console.error("[automod] hit effects failed:", error);
+        });
+      throw new HttpError(
+        422,
+        verdict.customMessage ?? "This message was blocked by AutoMod",
+      );
+    }
+  }
+
   const updated = await updateMessageBody(messageId!, body.body);
   if (!updated) {
     throw new NotFound("Message not found");
@@ -5728,6 +6512,143 @@ router.post(
 
 // ----------------------------------------------------- end voice moderation
 
+/**
+ * An alert channel must be a text channel of this very server: a rule that
+ * posted into another hall's channel would be a cross-server write with the
+ * owner's fingerprints nowhere on it.
+ */
+async function requireAutomodAlertChannel(
+  serverId: string,
+  channelId: string | null,
+): Promise<void> {
+  if (!channelId) {
+    return;
+  }
+  const channel = await getChannel(channelId);
+  if (
+    !channel ||
+    channel.kind !== "server" ||
+    channel.server_id !== serverId ||
+    channel.type !== "text"
+  ) {
+    throw new HttpError(400, "The alert channel must be a text channel in this server");
+  }
+}
+
+// AutoMod rules. Reading needs MANAGE_MESSAGES (a moderator may see what the
+// filter does), writing needs MANAGE_SERVER (the owner's list, like the
+// server's other settings). Matching itself is in @pqp/shared and runs on
+// every send in `postChannelMessage`; the client's settings page runs the
+// same code for its preview, so there is no test endpoint.
+router.get(
+  "/api/servers/:serverId/automod/rules",
+  async ({ user }, { serverId }) => {
+    await requireAnyPermission(serverId!, user.id, [
+      Permission.MANAGE_SERVER,
+      Permission.MANAGE_MESSAGES,
+    ]);
+    return { rules: await listAutomodRules(serverId!) };
+  },
+);
+
+router.post(
+  "/api/servers/:serverId/automod/rules",
+  async ({ req, user }, { serverId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    const body = createAutomodRuleSchema.parse(await readJsonBody(req));
+    await requireAutomodAlertChannel(serverId!, body.alertChannelId ?? null);
+    const rule = await createAutomodRule(serverId!, {
+      kind: body.kind,
+      enabled: body.enabled ?? true,
+      keywords: body.keywords ?? [],
+      allowList: body.allowList ?? [],
+      mentionLimit: body.mentionLimit ?? AUTOMOD_MENTION_LIMIT_DEFAULT,
+      exemptRoleIds: body.exemptRoleIds ?? [],
+      exemptChannelIds: body.exemptChannelIds ?? [],
+      customMessage: body.customMessage ?? "",
+      alertChannelId: body.alertChannelId ?? null,
+      timeoutMinutes: body.timeoutMinutes ?? 0,
+      blockPqpInvites: body.blockPqpInvites ?? false,
+    });
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "automod.rule_create",
+      targetType: "automod_rule",
+      targetId: rule.id,
+      changes: [{ key: "kind", old: null, new: rule.kind }],
+    });
+    return created({ rule });
+  },
+);
+
+router.patch(
+  "/api/servers/:serverId/automod/rules/:ruleId",
+  async ({ req, user }, { serverId, ruleId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    if (!isUuid(ruleId)) {
+      throw new NotFound("Rule not found");
+    }
+    const body = updateAutomodRuleSchema.parse(await readJsonBody(req));
+    if (body.alertChannelId !== undefined) {
+      await requireAutomodAlertChannel(serverId!, body.alertChannelId);
+    }
+    const before = await getAutomodRule(serverId!, ruleId);
+    if (!before) {
+      throw new NotFound("Rule not found");
+    }
+    const rule = await updateAutomodRule(serverId!, ruleId, body);
+    if (!rule) {
+      throw new NotFound("Rule not found");
+    }
+    const changes = (
+      [
+        ["enabled", before.enabled, rule.enabled],
+        ["keywords", before.keywords.length, rule.keywords.length],
+        ["allowList", before.allowList.length, rule.allowList.length],
+        ["mentionLimit", before.mentionLimit, rule.mentionLimit],
+        ["alertChannelId", before.alertChannelId, rule.alertChannelId],
+        ["timeoutMinutes", before.timeoutMinutes, rule.timeoutMinutes],
+        ["blockPqpInvites", before.blockPqpInvites, rule.blockPqpInvites],
+      ] as const
+    )
+      .filter(([, oldValue, newValue]) => oldValue !== newValue)
+      .map(([key, oldValue, newValue]) => ({ key, old: oldValue, new: newValue }));
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "automod.rule_update",
+      targetType: "automod_rule",
+      targetId: rule.id,
+      changes: [{ key: "kind", old: null, new: rule.kind }, ...changes],
+    });
+    return { rule };
+  },
+);
+
+router.delete(
+  "/api/servers/:serverId/automod/rules/:ruleId",
+  async ({ user }, { serverId, ruleId }) => {
+    await requirePermission(serverId!, user.id, Permission.MANAGE_SERVER);
+    if (!isUuid(ruleId)) {
+      throw new NotFound("Rule not found");
+    }
+    const before = await getAutomodRule(serverId!, ruleId);
+    if (!before || !(await deleteAutomodRule(serverId!, ruleId))) {
+      throw new NotFound("Rule not found");
+    }
+    await logAudit({
+      serverId: serverId!,
+      actorId: user.id,
+      action: "automod.rule_delete",
+      targetType: "automod_rule",
+      targetId: ruleId,
+      changes: [{ key: "kind", old: before.kind, new: null }],
+    });
+    return { ok: true };
+  },
+);
+
 router.get("/api/servers/:serverId/bans", async ({ user }, { serverId }) => {
   await requirePermission(serverId!, user.id, Permission.BAN_MEMBERS);
   return { bans: await listBans(serverId!) };
@@ -6873,32 +7794,11 @@ export async function handleApi(
   }
 
   // The HLS playlist proxy for players that cannot send a header: a verified
-  // per-viewer `?t=` token stands in for the Bearer. With a header present,
-  // or with no valid token, the request takes the normal route below.
-  const hlsPlaylistMatch =
-    req.method === "GET" && !req.headers.authorization
-      ? HLS_PLAYLIST_PATH.exec(pathname)
-      : null;
-  if (hlsPlaylistMatch) {
-    const token = new URL(req.url ?? "/", "http://localhost").searchParams.get(
-      HLS_VIEWER_TOKEN_PARAM,
-    );
-    const viewer = resolveHlsPlaylistViewer({
-      bearerUserId: null,
-      token,
-      channelId: hlsPlaylistMatch[1]!,
-      startedAt: Number(hlsPlaylistMatch[2]),
-    });
-    if (viewer) {
-      await serveHlsPlaylistWithToken(
-        req,
-        res,
-        hlsPlaylistMatch[1]!,
-        hlsPlaylistMatch[2]!,
-        viewer.userId,
-        viewer.issuedAt ?? 0,
-        { rung: hlsPlaylistMatch[3], token },
-      );
+  // per-viewer `?t=` token stands in for the Bearer. With no header at all
+  // this is the only door; with a header that FAILS it is tried again below,
+  // after the Bearer resolution has had its say (see `tryHlsCapabilityDoor`).
+  if (!req.headers.authorization) {
+    if (await tryHlsCapabilityDoor(req, res, pathname)) {
       return;
     }
   }
@@ -6913,18 +7813,36 @@ export async function handleApi(
   // deliberately: it is the same reader, the same dashboard and the same
   // sensitivity (aggregate counts, no id, no name), and a second secret to
   // rotate would be a second secret to forget.
-  const isAdminMetricsRequest =
-    req.method === "GET" && pathname === ADMIN_METRICS_PATH;
-  const isAdminOccupancyRequest =
-    req.method === "GET" && pathname === ADMIN_VOICE_OCCUPANCY_PATH;
-  const isAdminMachineRequest = isAdminMetricsRequest || isAdminOccupancyRequest;
-  if (isAdminMachineRequest && isAdminMetricsTokenValid(req.headers.authorization)) {
-    if (isAdminOccupancyRequest) {
-      const query = new URL(req.url ?? "/", "http://localhost").searchParams;
-      sendJson(res, 200, await voiceOccupancyReport(occupancyQuery(query)), req);
+  const machineRoute = matchAdminMachineRoute(req.method ?? "GET", pathname);
+  const isAdminMachineRequest = machineRoute !== null;
+  if (machineRoute && isAdminMetricsTokenValid(req.headers.authorization)) {
+    // The operator's own bucket. The per-identity limiters below are keyed on
+    // a user id and this caller has none, so without this a loop in the
+    // dashboard's own JavaScript would hit the database as fast as the Worker
+    // could forward it. One dashboard, generous; a script, not.
+    if (!operatorLimiter.take("machine")) {
+      res.setHeader("Retry-After", String(operatorLimiter.retryAfter("machine")));
+      sendError(res, 429, "Slow down", req);
       return;
     }
-    sendJson(res, 200, await getAdminMetrics(), req);
+    const query = new URL(req.url ?? "/", "http://localhost").searchParams;
+    try {
+      sendJson(res, 200, await machineRoute.run(req, query), req);
+    } catch (error) {
+      if (error instanceof HttpError) {
+        sendError(res, error.status, error.message, req);
+      } else if (
+        error &&
+        typeof error === "object" &&
+        "name" in error &&
+        error.name === "ZodError"
+      ) {
+        sendError(res, 400, "Invalid request", req);
+      } else {
+        console.error("[operator] machine route failed:", error);
+        sendError(res, 500, "Internal server error", req);
+      }
+    }
     return;
   }
 
@@ -6938,6 +7856,35 @@ export async function handleApi(
   }
 
   if (!resolved) {
+    // A FAILED BEARER MUST NOT VETO A CAPABILITY WE SIGNED OURSELVES.
+    //
+    // This is the stall Rafael chased for an afternoon, and it took a
+    // screenshot of his network panel to find because the server said nothing.
+    // `handleApi` resolves a Bearer ahead of the router, so any header had to
+    // succeed or the request was 401 before the `?t=` in the URL was ever
+    // looked at. hls.js attaches a Clerk JWT on top of the token, refreshes it
+    // every 30 s without `forceRefresh`, and a Clerk JWT lives about 60, so
+    // roughly once a minute a playlist request carried a dead JWT and was
+    // rejected: every web viewer, every watch party, since the feature
+    // shipped. Proved on production with one URL and one valid token: token
+    // alone 200, token plus an expired Bearer 401, token plus garbage 401.
+    //
+    // Nothing could see it. Every server-side test and every curl sent only
+    // `?t=`, the one shape that never fails, and native iOS and Safari send
+    // only `?t=` too. The failure lived solely in the shape hls.js produces.
+    //
+    // HERE rather than ahead of the router, deliberately. Trying the token
+    // first would also let it serve a caller whose Bearer resolves to somebody
+    // ELSE, which is a rule this route already has and keeps (a token naming
+    // another user is not this caller's capability). Reaching it only once the
+    // header has failed means there is no other caller to confuse it with: the
+    // token, which names its user, channel and session, is HMACed by this
+    // server and is minted only after a real access check, is then the
+    // strongest evidence available. Revocation is still checked against its
+    // own issue time.
+    if (req.method === "GET" && (await tryHlsCapabilityDoor(req, res, pathname))) {
+      return;
+    }
     // The metrics route answers 404 to everybody it refuses, whether that is a
     // wrong token, no token, or a signed-in non-moderator. A 401 here would
     // tell a probe that the route exists and only the credential was wrong.

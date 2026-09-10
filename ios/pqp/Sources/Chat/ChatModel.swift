@@ -367,6 +367,7 @@ final class ChatModel {
         case "cannot-send": String(localized: "You don't have permission to send here")
         case "undeliverable": String(localized: "This message wasn't delivered")
         case "slow-mode": String(localized: "Slow mode is on.")
+        case "automod": String(localized: "AutoMod blocked this message.")
         default: String(localized: "This message wasn't sent.")
         }
     }
@@ -615,7 +616,8 @@ final class ChatModel {
             if !body.isEmpty {
                 draft = draft.isEmpty ? body : body + "\n" + draft
             }
-            error = ChatModel.rejectionCopy(for: rejection.reason)
+            // An AutoMod refusal may carry the owner's own words; they win.
+            error = rejection.automodMessage ?? ChatModel.rejectionCopy(for: rejection.reason)
             // A temporary refusal names its wait; the composer counts it
             // down. A `slow-mode` without one falls back to the channel's
             // interval, which is the most the server would charge.
@@ -650,7 +652,11 @@ final class ChatModel {
         case .friendActivity, .permissionsUpdate, .communityHomeUpdate,
              .presence, .activity, .other,
              .voiceWelcome, .voicePeerJoined, .voicePeerUpdated, .voicePeerLeft, .voiceRoster,
-             .voiceSpeakChanged, .voiceRoomFull, .voiceTransportUnsupported, .voiceScreenShareDenied,
+             .voiceSpeakChanged, .voiceRoomFull, .voiceTransportUnsupported,
+             .voiceTransportChanged, .voiceJoinRefused, .voiceScreenShareDenied,
+             // The broadcast belongs to the stage above this transcript, not
+             // to the transcript. `WatchModel` is what reads these.
+             .voiceStream, .channelLive,
              .voiceCameraDenied,
              .voiceOffer, .voiceAnswer, .voiceCandidate,
              // Ringing is `CallModel`'s, and deliberately not this model's: a

@@ -55,9 +55,12 @@ process.env.LIVE_HLS_S3_ENDPOINT = "https://s3.example.test";
 
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
-const { reconcileStaleHlsSessions, sweepHlsSessions } = await import(
-  "./hls-cleanup.js"
-);
+const {
+  countDueSessions,
+  reconcileStaleHlsSessions,
+  resetHlsSweepWarningsForTests,
+  sweepHlsSessions,
+} = await import("./hls-cleanup.js");
 const {
   resetLiveHlsForTests,
   setLiveHlsTestHooks,
@@ -87,6 +90,21 @@ describeDb("sweepHlsSessions", () => {
     bucket.leakedKeys.length = 0;
     delete process.env.LIVE_HLS_RETENTION_MINUTES;
     delete process.env.LIVE_HLS_REPLAY_HOURS;
+    // A REACHABLE MEDIA SERVER WITH NOTHING RUNNING, which is what every
+    // sweep test below means by "this session is finished". It has to be said
+    // out loud now: `listActiveEgresses()` used to answer `[]` when no LiveKit
+    // was configured at all, so these tests passed through the very branch
+    // that made "could not ask" indistinguishable from "nothing is running" —
+    // the rubber stamp that would let the sweep delete a live party's
+    // segments. It answers null there now, so a test that wants a finished
+    // session has to provide a media server that says so.
+    setLiveHlsTestHooks({
+      egress: {
+        startTrackCompositeEgress: async () => ({ egressId: "unused" }),
+        stopEgress: async () => {},
+        listEgress: async () => [],
+      },
+    });
 
     const user = await upsertUser({
       clerkId: "clerk_hls_cleanup",
@@ -284,6 +302,90 @@ describeDb("sweepHlsSessions", () => {
     } finally {
       process.env.LIVE_HLS_S3_BUCKET = bucketEnv;
     }
+  });
+
+  /**
+   * THE SHAPE PRODUCTION IS ACTUALLY IN. `pqp-api` carries `LIVE_HLS_S3_*` and
+   * runs `WORKER_MODE=api`, so it skips every batch job; `pqp-worker` runs
+   * them and has none of those secrets. So the sweep runs in a process that
+   * cannot reach the bucket, returns 0, and says nothing at all. Every watch
+   * party's segments then sit in R2 for good and the only evidence is the
+   * bill. Returning 0 is still correct; being silent about it is not.
+   */
+  it("says so when it is the process running the sweep and cannot reach the bucket", async () => {
+    const bucketEnv = process.env.LIVE_HLS_S3_BUCKET;
+    delete process.env.LIVE_HLS_S3_BUCKET;
+    resetHlsSweepWarningsForTests();
+    const logged: Record<string, unknown>[] = [];
+    const spy = vi
+      .spyOn(console, "log")
+      .mockImplementation((line: unknown) => {
+        if (typeof line === "string" && line.includes("hlsSweepMisconfigured")) {
+          logged.push({ line });
+        }
+      });
+    try {
+      await makeSession({
+        channelId: channelA,
+        prefix: `live/${channelA}/6100`,
+        endedMinutesAgo: 20,
+      });
+      await expect(sweepHlsSessions()).resolves.toBe(0);
+      expect(logged).toHaveLength(1);
+      // A standing condition on a 60 s tick: one line, not 1,440 a day.
+      await sweepHlsSessions();
+      expect(logged).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+      process.env.LIVE_HLS_S3_BUCKET = bucketEnv;
+      resetHlsSweepWarningsForTests();
+    }
+  });
+
+  /**
+   * `countDueSessions` is what the misconfiguration branch and the operator
+   * dashboard both read. On a healthy deployment it self-corrects to zero
+   * within a sweep tick of a party ending; climbing on its own is the one
+   * symptom a dead sweep has.
+   */
+  it("counts the sessions a sweep still owes, and stops counting one it cleaned", async () => {
+    process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+    await makeSession({
+      channelId: channelA,
+      prefix: `live/${channelA}/6200`,
+      endedMinutesAgo: 60,
+      egressId: "EG_done",
+    });
+    seedObjects(`live/${channelA}/6200`, 2);
+    // Still inside its window: owed by nobody yet.
+    await makeSession({
+      channelId: channelB,
+      prefix: `live/${channelB}/6300`,
+      endedMinutesAgo: 1,
+    });
+    await expect(countDueSessions()).resolves.toBe(1);
+    await expect(sweepHlsSessions()).resolves.toBe(1);
+    await expect(countDueSessions()).resolves.toBe(0);
+  });
+
+  /**
+   * The rubber stamp, pinned. Without a media server to ask, a due session's
+   * objects must survive: "could not ask" is not permission to delete, and
+   * on the split deployment (`pqp-worker` with the bucket but no `LIVEKIT_*`)
+   * it is the only answer available.
+   */
+  it("REFUSES to sweep when there is no media server to ask at all", async () => {
+    process.env.LIVE_HLS_RETENTION_MINUTES = "10";
+    resetLiveHlsForTests();
+    await makeSession({
+      channelId: channelA,
+      prefix: `live/${channelA}/6400`,
+      endedMinutesAgo: 60,
+      egressId: "EG_maybe_still_writing",
+    });
+    seedObjects(`live/${channelA}/6400`, 3);
+    await expect(sweepHlsSessions()).resolves.toBe(0);
+    expect(bucket.deleted).toHaveLength(0);
   });
 
   it("deletes the egress manifest that sits beside the prefix, not under it", async () => {

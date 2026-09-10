@@ -85,6 +85,9 @@ import type {
   Webhook,
   RoleSystemKey,
   OutgoingWebhook,
+  AutomodRule,
+  CreateAutomodRuleInput,
+  UpdateAutomodRuleInput,
 } from "@pqp/shared";
 import { getApiBaseUrl } from "./utils";
 
@@ -1189,6 +1192,29 @@ export const deleteRole = (roleId: string) =>
 
 export const reorderRoles = (serverId: string, roleIds: string[]) =>
   patch<{ ok: boolean }>(`/api/servers/${serverId}/roles/order`, { roleIds });
+
+// ------------------------------------------------------------------ automod
+
+export const fetchAutomodRules = (serverId: string) =>
+  apiFetch<{ rules: AutomodRule[] }>(`/api/servers/${serverId}/automod/rules`);
+
+export const createAutomodRule = (
+  serverId: string,
+  body: CreateAutomodRuleInput,
+) => post<{ rule: AutomodRule }>(`/api/servers/${serverId}/automod/rules`, body);
+
+export const updateAutomodRule = (
+  serverId: string,
+  ruleId: string,
+  body: UpdateAutomodRuleInput,
+) =>
+  patch<{ rule: AutomodRule }>(
+    `/api/servers/${serverId}/automod/rules/${ruleId}`,
+    body,
+  );
+
+export const deleteAutomodRule = (serverId: string, ruleId: string) =>
+  del<{ ok: boolean }>(`/api/servers/${serverId}/automod/rules/${ruleId}`);
 
 export const assignMemberRole = (
   serverId: string,

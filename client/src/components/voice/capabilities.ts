@@ -171,24 +171,25 @@ export function supportsAudioOutputRouting(probe: {
 }
 
 /**
- * Should the "send this computer's sound" toggle be offered at all?
+ * Can this surface send computer audio without putting the call back into it?
  *
  * False in a desktop shell that cannot capture sound, which is every platform
- * but Windows: `electron/lib/display-sources.js` answers macOS and Linux with
- * video alone, so the toggle there arms nothing. Worse than nothing, before
- * `shellCarriesScreenAudio` existed: the request still reached Chromium via
- * the system picker, which skips our handler, and an audio request macOS
- * cannot honour rejects the whole capture. The person ticked a box and their
- * screen share stopped working.
- *
- * True in every browser, including on macOS, because there the toggle governs
- * tab audio, which every platform can hand over.
+ * but Windows, and false on a Windows shell too old to strip its own playback.
+ * True in a modern browser: Chrome shows "Share system audio" in its picker
+ * and `restrictOwnAudio` keeps the call out of that tap. Tab audio is a
+ * separate path and does not go through this.
  */
 export function canShareScreenAudio(
   env: ScreenCaptureEnvironment = screenCaptureEnvironment(
     isDesktopApp(),
     getDesktop()?.platform ?? null,
+    {
+      sharePickerOffersAudio: getDesktop()?.sharePickerOffersAudio === true,
+    },
   ),
 ): boolean {
-  return !env.isDesktopShell || shellCarriesScreenAudio(env);
+  return (
+    (!env.isDesktopShell && env.supportsRestrictOwnAudio) ||
+    (shellCarriesScreenAudio(env) && env.supportsRestrictOwnAudio)
+  );
 }

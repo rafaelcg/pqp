@@ -346,3 +346,41 @@ export function saveCallSplit(preference: CallSplitPreference): void {
     // The drag still works for this session; only the memory of it is lost.
   }
 }
+
+/**
+ * WHICH SHAPE THE PANE IS IN WHEN SEVERAL THINGS CLAIM IT AT ONCE.
+ *
+ * `stageShape` drives the divider and the side-by-side toggle, and it used to
+ * be plain last-write-wins from a single `onShapeChange`. That was fine while
+ * one component could ever be mounted. It is not fine now: a watch party
+ * channel mounts the party panel, the watch stage and the call stage together,
+ * each reporting its own shape as it appears and disappears, and any of them
+ * reporting "none" on the way out would flatten the pane while another was
+ * still showing a picture. The split would collapse for no visible reason, and
+ * come back on the next unrelated render.
+ *
+ * So the pane takes the STRONGEST claim rather than the latest one. A stage
+ * that has gone is reporting "none" about itself, not about the pane, and
+ * "none" can never win against a picture that is still there.
+ *
+ * The order is the amount of room the shape is asking for, which is also the
+ * order `resolveOrientation` cares about: only `expanded` is split at all.
+ */
+const STAGE_SHAPE_RANK: Record<CallStageShape, number> = {
+  none: 0,
+  compact: 1,
+  expanded: 2,
+  fullscreen: 3,
+};
+
+export function strongestStageShape(
+  shapes: Iterable<CallStageShape | undefined>,
+): CallStageShape {
+  let best: CallStageShape = "none";
+  for (const shape of shapes) {
+    if (shape && STAGE_SHAPE_RANK[shape] > STAGE_SHAPE_RANK[best]) {
+      best = shape;
+    }
+  }
+  return best;
+}

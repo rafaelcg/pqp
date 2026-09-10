@@ -163,6 +163,16 @@ fun ChatScreen(
      * flag, so that this screen does not have to know what a call is.
      */
     actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+    /**
+     * Drawn above the transcript, inside the scaffold. A voice room with a
+     * watch party going puts the picture here; every other channel passes
+     * nothing and the layout is byte for byte what it was.
+     *
+     * A slot rather than a flag, for the same reason [actions] is one: this
+     * screen does not have to know what a watch party is, and the one place
+     * that does (`PqpApp`) already knows which channels open a voice room.
+     */
+    header: @Composable () -> Unit = {},
 ) {
     val context = LocalContext.current
     // Built from the application context, so the reader outlives this
@@ -394,83 +404,86 @@ fun ChatScreen(
             }
         },
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when {
-                state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                    CircularProgressIndicator()
-                }
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            header()
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                when {
+                    state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
 
-                // A history fetch that failed is not an empty channel, and
-                // saying "Nothing here yet. Say something." to somebody whose
-                // transcript just failed to load invites them to retype a
-                // conversation that is still there. `loadInitial` has recorded
-                // the reason since it was written and nothing read it, so the
-                // one screen that could tell the truth showed the one sentence
-                // guaranteed to be wrong. The alert icon carries the same
-                // distinction to anyone reading the shape before the words.
-                state.messages.isEmpty() && state.error != null -> EmptyState(
-                    text = stringResource(R.string.chat_load_failed, state.error.orEmpty()),
-                    icon = PqpIcons.Warning,
-                )
+                    // A history fetch that failed is not an empty channel, and
+                    // saying "Nothing here yet. Say something." to somebody whose
+                    // transcript just failed to load invites them to retype a
+                    // conversation that is still there. `loadInitial` has recorded
+                    // the reason since it was written and nothing read it, so the
+                    // one screen that could tell the truth showed the one sentence
+                    // guaranteed to be wrong. The alert icon carries the same
+                    // distinction to anyone reading the shape before the words.
+                    state.messages.isEmpty() && state.error != null -> EmptyState(
+                        text = stringResource(R.string.chat_load_failed, state.error.orEmpty()),
+                        icon = PqpIcons.Warning,
+                    )
 
-                state.messages.isEmpty() -> EmptyState(
-                    text = stringResource(R.string.chat_empty),
-                    icon = PqpIcons.Messages,
-                )
+                    state.messages.isEmpty() -> EmptyState(
+                        text = stringResource(R.string.chat_empty),
+                        icon = PqpIcons.Messages,
+                    )
 
-                else -> {
-                    // Reversed so the newest message is index 0 and the list
-                    // starts pinned to the bottom without measuring anything.
-                    val rows = remember(state.messages) { state.messages.asReversed() }
+                    else -> {
+                        // Reversed so the newest message is index 0 and the list
+                        // starts pinned to the bottom without measuring anything.
+                        val rows = remember(state.messages) { state.messages.asReversed() }
 
-                    LazyColumn(
-                        state = listState,
-                        reverseLayout = true,
-                        contentPadding = PaddingValues(vertical = Spacing.md),
-                        modifier = Modifier.fillMaxSize(),
-                    ) {
-                        items(rows.size, key = { rows[it].id }) { index ->
-                            val message = rows[index]
-                            // The list is reversed, so the *previous* message in
-                            // reading order is the next one in this list.
-                            val previous = rows.getOrNull(index + 1)
-                            // A new calendar day opens with a row that says
-                            // which day, the way the web transcript does. The
-                            // oldest loaded message always opens one: the day
-                            // has to be named somewhere above the first thing
-                            // said in it, and the row moves up when older
-                            // history arrives.
-                            val startsDay = previous == null ||
-                                !DayLabels.isSameDay(previous.createdAt, message.createdAt)
-                            // One item, not two: the separator belongs to the
-                            // message that opens the day, and keying it on the
-                            // message keeps it from being recycled apart from it.
-                            Column {
-                                if (startsDay) DaySeparator(message.createdAt)
-                                MessageRow(
-                                    message = message,
-                                    grouped = !startsDay && shouldGroup(previous, message),
-                                    selfUsername = me?.username,
-                                    onOpenActions = { acting = message },
-                                    onToggleReaction = { emoji ->
-                                        model.toggleReaction(message.id, emoji, me)
-                                    },
-                                    // Only reached when a video attachment's
-                                    // presigned URL has expired, which is why it is
-                                    // the client and not a callback: nothing here
-                                    // knows the id to re-mint until a player fails.
-                                    api = session.api,
-                                )
+                        LazyColumn(
+                            state = listState,
+                            reverseLayout = true,
+                            contentPadding = PaddingValues(vertical = Spacing.md),
+                            modifier = Modifier.fillMaxSize(),
+                        ) {
+                            items(rows.size, key = { rows[it].id }) { index ->
+                                val message = rows[index]
+                                // The list is reversed, so the *previous* message in
+                                // reading order is the next one in this list.
+                                val previous = rows.getOrNull(index + 1)
+                                // A new calendar day opens with a row that says
+                                // which day, the way the web transcript does. The
+                                // oldest loaded message always opens one: the day
+                                // has to be named somewhere above the first thing
+                                // said in it, and the row moves up when older
+                                // history arrives.
+                                val startsDay = previous == null ||
+                                    !DayLabels.isSameDay(previous.createdAt, message.createdAt)
+                                // One item, not two: the separator belongs to the
+                                // message that opens the day, and keying it on the
+                                // message keeps it from being recycled apart from it.
+                                Column {
+                                    if (startsDay) DaySeparator(message.createdAt)
+                                    MessageRow(
+                                        message = message,
+                                        grouped = !startsDay && shouldGroup(previous, message),
+                                        selfUsername = me?.username,
+                                        onOpenActions = { acting = message },
+                                        onToggleReaction = { emoji ->
+                                            model.toggleReaction(message.id, emoji, me)
+                                        },
+                                        // Only reached when a video attachment's
+                                        // presigned URL has expired, which is why it is
+                                        // the client and not a callback: nothing here
+                                        // knows the id to re-mint until a player fails.
+                                        api = session.api,
+                                    )
+                                }
                             }
-                        }
 
-                        if (state.hasMore) {
-                            item(key = "older") {
-                                LaunchedEffect(Unit) { model.loadOlder() }
-                                Box(
-                                    Modifier.fillMaxWidth().padding(Spacing.gutter),
-                                    contentAlignment = Alignment.Center,
-                                ) { CircularProgressIndicator(Modifier.width(24.dp)) }
+                            if (state.hasMore) {
+                                item(key = "older") {
+                                    LaunchedEffect(Unit) { model.loadOlder() }
+                                    Box(
+                                        Modifier.fillMaxWidth().padding(Spacing.gutter),
+                                        contentAlignment = Alignment.Center,
+                                    ) { CircularProgressIndicator(Modifier.width(24.dp)) }
+                                }
                             }
                         }
                     }
@@ -1223,6 +1236,7 @@ private fun SendRefusalLine(refusal: SendRefusal?, waitSeconds: Int) {
             MessageRejectReason.CannotSend -> stringResource(R.string.chat_reject_cannot_send)
             MessageRejectReason.Undeliverable -> stringResource(R.string.chat_reject_undeliverable)
             MessageRejectReason.SlowMode -> stringResource(R.string.chat_reject_slow_mode)
+            MessageRejectReason.Automod -> refusal.message ?: stringResource(R.string.chat_reject_automod)
             null -> stringResource(R.string.chat_reject_generic)
         }
         else -> ""

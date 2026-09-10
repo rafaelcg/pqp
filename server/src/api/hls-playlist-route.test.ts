@@ -78,6 +78,30 @@ async function get(
   };
 }
 
+/**
+ * A request that SENDS a header the auth layer will reject: `actor` is null,
+ * so the mocked `resolveAuthSession` answers null for any header, which is
+ * exactly what an expired or malformed Clerk JWT does in production.
+ *
+ * `get` above cannot express this, because it ties "send a header" to "and it
+ * works". That coupling is why every test in this file passed while the
+ * product was broken.
+ */
+async function getWithDeadHeader(
+  path: string,
+  authorization = "Bearer expired.jwt.value",
+): Promise<{ status: number; text: string; contentType: string | null }> {
+  actor = null;
+  const response = await fetch(`${baseUrl}${path}`, {
+    headers: { Authorization: authorization },
+  });
+  return {
+    status: response.status,
+    text: await response.text(),
+    contentType: response.headers.get("content-type"),
+  };
+}
+
 describeDb("hls playlist route", () => {
   let owner: { id: string; clerk_id: string };
   let stranger: { id: string; clerk_id: string };
@@ -203,6 +227,85 @@ describeDb("hls playlist route", () => {
     expect(r.status).toBe(200);
     expect(r.contentType).toBe("application/vnd.apple.mpegurl");
     expect(r.text.split("\n")[3]).toMatch(/^https:\/\/live\.example\.test\//);
+  });
+
+  /**
+   * THE SHAPE hls.js ACTUALLY SENDS, WITH THE HEADER FAILING.
+   *
+   * This is the stall that took an afternoon and a screenshot of Rafael's
+   * network panel to find, and the reason it survived every test in this file
+   * is that the file could not express it: `get` ties "send a header" to "and
+   * it works", so the one shape that fails was unreachable.
+   *
+   * `handleApi` resolves a Bearer ahead of the router, so ANY `Authorization`
+   * header had to succeed or the request was 401 before the capability in the
+   * URL was ever looked at. hls.js attaches a Clerk JWT on top of `?t=`,
+   * refreshes it every 30 s without `forceRefresh`, and a Clerk JWT lives
+   * about 60, so roughly once a minute a playlist request carried a dead token
+   * and was rejected. Every web viewer, every watch party, since the feature
+   * shipped. Proved on production with the same URL and the same valid token:
+   * token alone 200, token plus an expired Bearer 401, token plus garbage 401.
+   *
+   * A capability this server signed itself, naming its user, channel and
+   * session, and minted only after a real access check, is strictly stronger
+   * evidence than the header that was overruling it.
+   */
+  describe("a failed Bearer beside a valid capability", () => {
+    it("serves the playlist, because the token is the stronger evidence", async () => {
+      const t = mintHlsViewerToken({
+        userId: owner.id,
+        channelId,
+        startedAt: STARTED_AT,
+      });
+      const r = await getWithDeadHeader(`${path(channelId)}?t=${t}`);
+      expect(r.status).toBe(200);
+      expect(r.contentType).toBe("application/vnd.apple.mpegurl");
+      expect(r.text).toContain("#EXTM3U");
+    });
+
+    it("does the same for a header that is not even a JWT", async () => {
+      const t = mintHlsViewerToken({
+        userId: owner.id,
+        channelId,
+        startedAt: STARTED_AT,
+      });
+      expect(
+        (await getWithDeadHeader(`${path(channelId)}?t=${t}`, "Bearer nonsense"))
+          .status,
+      ).toBe(200);
+    });
+
+    /**
+     * The other direction, which must not have moved: without a capability
+     * the header IS the only evidence, and a failed one is still a 401. The
+     * fix widens exactly one door and nothing else.
+     */
+    it("is still 401 with a dead header and no token at all", async () => {
+      expect((await getWithDeadHeader(path(channelId))).status).toBe(401);
+    });
+
+    it("is still 401 when the token names a different session", async () => {
+      const t = mintHlsViewerToken({
+        userId: owner.id,
+        channelId,
+        startedAt: STARTED_AT + 1,
+      });
+      expect(
+        (await getWithDeadHeader(`${path(channelId)}?t=${t}`)).status,
+      ).toBe(401);
+    });
+
+    it("is still 401 when the token is forged", async () => {
+      const t = mintHlsViewerToken({
+        userId: owner.id,
+        channelId,
+        startedAt: STARTED_AT,
+      })!;
+      const forged = `${t.slice(0, t.lastIndexOf(".") + 1)}deadbeef`;
+      expect(
+        (await getWithDeadHeader(`${path(channelId)}?t=${forged}`)).status,
+      ).toBe(401);
+    });
   });
 
   it("a token for another channel or another session is 401", async () => {

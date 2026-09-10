@@ -541,6 +541,16 @@
         }
       }
     },
+    "Auto (%lldp)" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automático (%lldp)"
+          }
+        }
+      }
+    },
     "Back to the voice channel" : {
       "localizations" : {
         "pt-BR" : {
@@ -627,6 +637,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Baú"
+          }
+        }
+      }
+    },
+    "Broadcast quality" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qualidade da transmissão"
           }
         }
       }
@@ -1207,6 +1227,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Não deu para ler a resposta do servidor. %@"
+          }
+        }
+      }
+    },
+    "Could not rejoin this call. Join again to come back." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra voltar pra essa call. Entre de novo."
           }
         }
       }
@@ -2131,6 +2161,16 @@
         }
       }
     },
+    "Jump to live" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pular pro ao vivo"
+          }
+        }
+      }
+    },
     "Keep chatting" : {
       "localizations" : {
         "pt-BR" : {
@@ -2597,6 +2637,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sem resposta"
+          }
+        }
+      }
+    },
+    "No camera or screen share in this channel." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Neste canal você não liga câmera nem compartilha tela."
           }
         }
       }
@@ -3951,6 +4001,16 @@
         }
       }
     },
+    "AutoMod blocked this message." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "O AutoMod bloqueou essa mensagem."
+          }
+        }
+      }
+    },
     "Slow mode is on." : {
       "localizations" : {
         "pt-BR" : {
@@ -4347,6 +4407,56 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Essa call já chegou no máximo de telas compartilhadas."
+          }
+        }
+      }
+    },
+    "This call became a large room and the voice server could not be reached, so the call ended. Join again to come back." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa call virou uma sala grande e o servidor de voz não respondeu, então a call caiu. Entre de novo pra voltar."
+          }
+        }
+      }
+    },
+    "This call became a large room and this app could not follow it. Join again to come back." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa call virou uma sala grande e esta versão do app não conseguiu acompanhar. Entre de novo pra voltar."
+          }
+        }
+      }
+    },
+    "This call became a large room so more cameras fit" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa call virou uma sala grande pra caber mais câmeras"
+          }
+        }
+      }
+    },
+    "This call became a large room so more people fit" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa call virou uma sala grande pra caber mais gente"
+          }
+        }
+      }
+    },
+    "This call became a large room so more screens fit" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Essa call virou uma sala grande pra caber mais telas"
           }
         }
       }
@@ -5011,6 +5121,16 @@
         }
       }
     },
+    "You can turn on camera or share a screen now." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agora você pode ligar a câmera ou compartilhar a tela."
+          }
+        }
+      }
+    },
     "You can speak now. Unmute when you are ready." : {
       "localizations" : {
         "pt-BR" : {
@@ -5547,6 +5667,206 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "· expira %@"
+          }
+        }
+      }
+    },
+    "The watch party ended" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A watch party acabou"
+          }
+        }
+      }
+    },
+    "The stream is over." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A transmissão acabou."
+          }
+        }
+      }
+    },
+    "The picture stopped" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A imagem parou"
+          }
+        }
+      }
+    },
+    "Connecting to the stream" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conectando na transmissão"
+          }
+        }
+      }
+    },
+    "LIVE" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AO VIVO"
+          }
+        }
+      }
+    },
+    "Show the stream" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar a transmissão"
+          }
+        }
+      }
+    },
+    "Hide the stream" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esconder a transmissão"
+          }
+        }
+      }
+    },
+    "1 watching" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 assistindo"
+          }
+        }
+      }
+    },
+    "%lld watching" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld assistindo"
+          }
+        }
+      }
+    },
+    "~%llds delay" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "~%llds de atraso"
+          }
+        }
+      }
+    },
+    "The stream address was not readable." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Não deu pra ler o endereço da transmissão."
+          }
+        }
+      }
+    },
+    "The connection to the stream dropped." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A conexão com a transmissão caiu."
+          }
+        }
+      }
+    },
+    "Watch party" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Watch party"
+          }
+        }
+      }
+    },
+    "Nobody is streaming yet. When it starts, it shows up here." : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguém começou a transmitir ainda. Quando começar, aparece aqui."
+          }
+        }
+      }
+    },
+    "Play the stream" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dar play"
+          }
+        }
+      }
+    },
+    "Pause the stream" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausar"
+          }
+        }
+      }
+    },
+    "AirPlay" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "AirPlay"
+          }
+        }
+      }
+    },
+    "Picture in Picture" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "PiP"
+          }
+        }
+      }
+    },
+    "Fullscreen" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tela cheia"
+          }
+        }
+      }
+    },
+    "Leave fullscreen" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sair da tela cheia"
           }
         }
       }

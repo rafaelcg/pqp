@@ -15,6 +15,11 @@ import {
   unregisterStatusSocket,
 } from "./status.js";
 import {
+  catchUpWatchParties,
+  onHostSocketClosed,
+  onHostSocketOpened,
+} from "./watch-party-events.js";
+import {
   handleVoiceMessage,
   isSocketInVoice,
   removeVoicePeerBySocket,
@@ -30,6 +35,7 @@ export {
   evictUserFromChannels,
   notifyPermissionsUpdate,
   notifyCommunityHomeUpdate,
+  applyAutomodEffects,
   postChannelMessage,
   resolveEmbedInBackground,
   startClusterPresenceRefresh,
@@ -267,6 +273,16 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
       void registerStatusSocket(socket, resolved.user.id).catch((error) => {
         console.error("[ws] status registration failed:", error);
       });
+      // A host reconnecting stops the grace clock on their live party, and a
+      // client connecting mid-show is told about every party it may see. Both
+      // are fire and forget: `ready` must not wait on either, and the worst
+      // case is a sidebar block that arrives with the next state change.
+      void onHostSocketOpened(resolved.user.id).catch((error) => {
+        console.error("[watch-party] host reconnect failed:", error);
+      });
+      void catchUpWatchParties(socket, resolved.user.id).catch((error) => {
+        console.error("[watch-party] catch-up failed:", error);
+      });
       socket.send(JSON.stringify({ type: "ready" }));
       await sendAllVoiceRosters(socket, resolved.user);
       return;
@@ -329,18 +345,39 @@ export function handleWsConnection(socket: WebSocket, remoteKey: string) {
     // forgotten first.
     unregisterStatusSocket(socket);
     deleteAuthenticatedSocket(socket);
+    // AFTER the delete, and it has to be: the check is "does this person have
+    // any socket left", and the one that just closed must already be out of
+    // the map or a host closing their last tab looks like a host with a tab
+    // open. Only a live party they host is affected.
+    if (user) {
+      void onHostSocketClosed(user.id).catch((error) => {
+        console.error("[watch-party] host disconnect failed:", error);
+      });
+    }
   });
 }
 
 /**
  * Proxies (Railway, Cloudflare) drop idle WebSocket connections. Pinging keeps
  * them open and detects half-open sockets that never fired `close`.
+ *
+ * THIS IS THE REAPER THE PROCESS ACTUALLY RUNS, and saying so is not
+ * decoration: until 2026-09-08 it was not. `index.ts` carried its own inline
+ * copy of this loop with a one-strike rule, and this function, along with
+ * `MAX_MISSED_PONGS`, `trackSocketLiveness` and the whole of
+ * `heartbeat.test.ts`, was dead code. The two-strike fix written the night of
+ * the moonkase stream was tested, merged, and never once executed in
+ * production. Anything that changes reaping belongs here, and here only.
  */
 export function startHeartbeat(
   clients: Iterable<WebSocket>,
   intervalMs = HEARTBEAT_INTERVAL_MS,
+  onTick: () => void = () => {},
 ): () => void {
   const timer = setInterval(() => {
+    // A free ride on a loop that already runs: `index.ts` samples the pool
+    // high-water marks here, because on a quiet server nothing else does.
+    onTick();
     for (const socket of clients) {
       if (alive.get(socket) === false) {
         const missed = (missedPongs.get(socket) ?? 0) + 1;

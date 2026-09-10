@@ -61,6 +61,10 @@ final class CallModel {
     private(set) var startedAt: Date?
     private(set) var selfPeerId: String?
     private(set) var errorMessage: String?
+    /// The room moved onto the voice server mid call, and this says why.
+    /// See `VoiceModel.transportNotice`; a group call promotes at four people
+    /// exactly like a voice channel does.
+    private(set) var transportNotice: String?
     private(set) var isCameraOn = false
     /// The roster, by peer id: mute badges and the screen-share flag.
     private(set) var roster: [String: VoiceParticipant] = [:]
@@ -70,9 +74,14 @@ final class CallModel {
     /// this is true in practice; it is read all the same so the two rooms
     /// obey one rule (`screenShareIsOffered`).
     private(set) var canSpeak = true
+    /// The STREAM grant, separate from SPEAK. Always true in a conversation
+    /// call today (`transport-policy.ts` gives one no roles), and read off the
+    /// wire rather than assumed so that stays true by evidence.
+    private(set) var canStream = true
 
     var offersScreenShare: Bool {
-        screenShareIsOffered(isAvailable: screenShare.isAvailable, canSpeak: canSpeak)
+        // STREAM, not SPEAK. See `VoiceModel.offersScreenShare`.
+        screenShareIsOffered(isAvailable: screenShare.isAvailable, canSpeak: canStream)
     }
 
     var isMuted = false {
@@ -127,7 +136,23 @@ final class CallModel {
     /// SFU room built later in the same join gets the same list the mesh
     /// would, with no second fetch.
     private var iceServers: [IceServerConfig] = []
-    private var declaresResume = false
+    /// Whether this DEPLOYMENT has an SFU. Kept for symmetry with
+    /// `VoiceModel`, and deliberately not the answer on its own.
+    private var deploymentRunsLiveKit = false
+    /// What this build promises the server about holding its seat.
+    ///
+    /// FALSE ON A COLD JOIN, ALWAYS, and that is the fix rather than an
+    /// oversight: `transport-policy.ts` pins every conversation call to mesh
+    /// before it looks at anything else, and this client cannot resume a mesh
+    /// room. Reading the deployment's backend here is what left a seat nobody
+    /// was in behind every DM call on production for 90 seconds.
+    private var declaresResume: Bool {
+        declaresVoiceResume(
+            roomKind: .conversation,
+            knownTransport: transport,
+            deploymentRunsLiveKit: deploymentRunsLiveKit
+        )
+    }
     private var resumeClaim: VoiceResumeClaim?
     private var session: SessionStore?
     private static let handlerKey = "dm-call"
@@ -251,7 +276,7 @@ final class CallModel {
             isOn: isCameraOn, isBusy: isCameraBusy,
             isLive: phase == .active || phase == .ringing,
             // A DM call has no roles, so the seat can always publish.
-            canPublish: true
+            canPublish: canStream
         ) {
         case .start: await enableCamera()
         case .stop: await disableCamera()
@@ -431,9 +456,11 @@ final class CallModel {
         do {
             let ice: IceServersResponse = try await session.api.get("/api/ice-servers")
             iceServers = ice.iceServers
-            // Advisory only; see `VoiceModel.join` for what it decides.
+            // Advisory only; see `declaresVoiceResume` for what it decides,
+            // which for a conversation call is nothing at all until `welcome`
+            // has spoken.
             let backend: VoiceBackendInfo? = try? await session.api.get("/api/voice/backend")
-            declaresResume = backend?.declaresResume ?? false
+            deploymentRunsLiveKit = backend?.runsLiveKit ?? false
             try await voice.startAudio()
             // "Mute microphone when joining voice" covers a DM call too, which
             // is how the web client reads it: `handleConversationCall` passes
@@ -629,7 +656,7 @@ final class CallModel {
         // `canSpeak` is ignored on purpose: a conversation call has no roles,
         // so the server always resolves it true there.
         case .voiceWelcome(let peerId, let voiceChannelId, let existing, let selfPeer, let transport,
-                           let resumed, let resumeToken, _):
+                           let resumed, let resumeToken, _, _):
             guard voiceChannelId == conversationId else {
                 // A `welcome` for somewhere else means this socket joined
                 // another voice room, and the server keeps exactly one peer per
@@ -664,6 +691,7 @@ final class CallModel {
             self.transport = plan.transport
             selfPeerId = peerId
             canSpeak = selfPeer.canSpeak
+            canStream = selfPeer.canStream
             // On the mesh the media is up the moment the first peer connects,
             // so the bridge can listen now. On LiveKit it waits for the room
             // (`startSfuSession`): armed before that, it would announce a
@@ -816,9 +844,30 @@ final class CallModel {
                 )
             }
 
-        case .voiceTransportUnsupported(let voiceChannelId, let transport):
+        // The rejoin was refused and we are holding live media. Not in the
+        // room, in nobody's roster, audible to nobody. See `VoiceModel`.
+        case .voiceJoinRefused(let voiceChannelId, _):
+            guard phase.isLive, voiceChannelId == conversationId else { return }
+            resumeClaim = nil
+            fail(String(localized: "Could not rejoin this call. Join again to come back."))
+
+        case .voiceTransportUnsupported(let voiceChannelId, let transport, let reason):
             guard voiceChannelId == conversationId else { return }
-            fail(String(localized: "This call runs on \(transport), which the iOS app cannot join yet."))
+            // See `VoiceModel`: `promoted` means we WERE in this call and the
+            // seat was released because we did not follow the move, which this
+            // build declares it can do. Saying the app "cannot join" a call it
+            // was in a second ago reads as a bug rather than as an explanation.
+            fail(
+                reason == "promoted"
+                    ? String(localized: "This call became a large room and this app could not follow it. Join again to come back.")
+                    : String(localized: "This call runs on \(transport), which the iOS app cannot join yet.")
+            )
+
+        case .voiceTransportChanged(let voiceChannelId, let transport, let reason, let participants):
+            followPromotion(
+                voiceChannelId: voiceChannelId, transport: transport,
+                reason: reason, participants: participants
+            )
 
         // Mesh signalling, dropped in an SFU room by the server and by us.
         case .voiceOffer(let from, let sdp):
@@ -843,7 +892,17 @@ final class CallModel {
     /// The media half of a LiveKit join. See `VoiceModel.startSfuSession` for
     /// the contract; the one difference here is the ending, which is a hang-up
     /// with the failure as its reason rather than a `.failed` status.
-    private func startSfuSession(peerId: String, channelId: String) {
+    ///
+    /// `promoted` is the mid-call version (`followPromotion`). The status guard
+    /// needs no adjusting here, unlike `VoiceModel`'s, because `phase.isLive`
+    /// is already true on both paths: a promotion never left the call. What it
+    /// adds is restarting the screen capture on the new transport, and the
+    /// failure sentence, which cannot say "you have not joined this call"
+    /// about a call somebody was in.
+    private func startSfuSession(peerId: String, channelId: String, promoted: Bool = false) {
+        // Read before `connectSfu` tears the mesh down and the bridge starts
+        // pushing frames at an SFU with no screen track to put them in.
+        let wasSharing = promoted && screenShare.isSharing
         sfuJoin?.cancel()
         sfuJoin = Task { [weak self] in
             guard let self else { return }
@@ -865,17 +924,82 @@ final class CallModel {
             switch outcome {
             case .success:
                 self.sfuIsConnected = true
+                // Idempotent, and on the promoted path deliberately so: the
+                // bridge was already armed for the mesh, and re-arming it
+                // would be what interrupted a live broadcast.
                 self.screenShare.arm()
+                if wasSharing {
+                    // The broadcast never stopped; only the track its frames
+                    // were going into did. `pushScreenFrame` publishes on the
+                    // next frame, which is milliseconds away.
+                    _ = await self.sfu.startScreenShare(
+                        quality: VideoQualitySettings.shared.quality
+                    )
+                    await self.session?.realtime.setSharingScreen(true)
+                }
+                // Covers both the camera somebody asked for before the media
+                // existed and, on the promoted path, the one that was running
+                // on the mesh: `followPromotion` puts it back into this same
+                // intent rather than adding a second way to say it.
                 if self.wantsCamera, !self.isCameraOn {
                     self.wantsCamera = false
                     await self.enableCamera()
                 }
             case .failure(let error):
                 guard let message = sfuFailureMessage(error) else { return }
+                // The behaviour this app had before it followed promotions:
+                // the call ends rather than falling back to a mesh the rest of
+                // the room has left.
                 self.sfuIsConnected = false
-                self.fail(message)
+                self.transportNotice = nil
+                self.fail(promoted ? sfuPromotionFailureMessage() : message)
             }
         }
+    }
+
+    /**
+     THE CALL MOVED ONTO THE VOICE SERVER AND WE KEEP OUR SEAT.
+
+     A group call promotes at `MESH_ROOM_PROMOTION_SIZE` people exactly like a
+     server voice channel, so this frame reaches a DM call too and the handling
+     has to exist in both places. See `VoiceModel.followPromotion` for why the
+     order is what it is; the only differences here are that the liveness test
+     is `phase` and that a camera is restarted through `wantsCamera`, which is
+     the intent this model already had for "turn it on once media is up".
+     */
+    private func followPromotion(
+        voiceChannelId: String, transport: String, reason: String?,
+        participants: [VoiceParticipant]
+    ) {
+        guard case .follow(let next) = voicePromotionAction(
+            frameChannelId: voiceChannelId,
+            frameTransport: transport,
+            currentChannelId: conversationId,
+            currentTransport: self.transport,
+            isLive: phase.isLive,
+            selfPeerId: selfPeerId
+        ) else { return }
+        guard let peerId = selfPeerId else { return }
+        self.transport = next
+        transportNotice = voicePromotionNotice(reason: reason)
+        // Self included in this frame, unlike `welcome.peers`.
+        let others = participants.filter { $0.peerId != peerId }
+        knownPeerIds = Set(others.map(\.peerId))
+        for participant in others { roster[participant.peerId] = participant }
+        // The mesh capture dies with the mesh inside `connectSfu`, so the
+        // button goes back to off and the intent is handed to the SFU join.
+        //
+        // ORDER IS LOAD BEARING: the intent has to be recorded before the flag
+        // it is read from is cleared, or the camera goes off and never comes
+        // back and nothing says so. `VoiceModel` keeps the same pair adjacent
+        // inside `startSfuSession` for exactly this reason.
+        if isCameraOn { wantsCamera = true }
+        cameraWatchdog?.cancel()
+        cameraWatchdog = nil
+        localCamera = nil
+        isCameraOn = false
+        Task { await sfu.setRoster(others) }
+        startSfuSession(peerId: peerId, channelId: voiceChannelId, promoted: true)
     }
 
     private func connectSfu(peerId: String, channelId: String) async throws {
@@ -936,6 +1060,7 @@ final class CallModel {
         sfuIsConnected = false
         knownPeerIds = []
         declinedUserIds = []
+        transportNotice = nil
         startedAt = nil
         isCollapsed = false
         isMuted = false

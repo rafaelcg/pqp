@@ -172,6 +172,81 @@ export function verifyHlsViewerToken(
 }
 
 /**
+ * WHY A CAPABILITY TOKEN DID NOT OPEN THE DOOR, in one word.
+ *
+ * `verifyHlsViewerToken` answers null for six unrelated reasons and the proxy
+ * could not tell them apart, so a 401 said nothing at all. Finding the
+ * hls.js/Clerk interaction that stalled every web viewer took an afternoon and
+ * ended with a screenshot of somebody's browser, because the server had
+ * nothing to say. These are the words it says now.
+ *
+ * Never includes the token, the signature or the user id: this exists to
+ * explain a rejection in a log, not to help anybody reproduce one.
+ */
+export type HlsViewerTokenFailure =
+  | "missing"
+  | "unconfigured"
+  | "malformed"
+  | "bad-signature"
+  | "expired"
+  | "wrong-channel"
+  | "wrong-session";
+
+export function describeHlsViewerToken(
+  token: string | null | undefined,
+  expected: { channelId: string; startedAt: number },
+  now = Date.now(),
+): HlsViewerTokenFailure | null {
+  if (!token) {
+    return "missing";
+  }
+  const secret = viewerSecret();
+  if (!secret) {
+    // No key configured at all: every token fails and the Bearer path is the
+    // only one that works. Worth its own word, because from the outside it
+    // looks exactly like a signing bug.
+    return "unconfigured";
+  }
+  const dot = token.lastIndexOf(".");
+  if (dot <= 0) {
+    return "malformed";
+  }
+  const payload = token.slice(0, dot);
+  if (!equal(token.slice(dot + 1), sign(payload, secret))) {
+    return "bad-signature";
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+  } catch {
+    return "malformed";
+  }
+  const claims = parsed as ViewerClaims | null;
+  if (
+    !claims ||
+    typeof claims !== "object" ||
+    claims.v !== 1 ||
+    typeof claims.u !== "string" ||
+    typeof claims.e !== "number"
+  ) {
+    return "malformed";
+  }
+  if (claims.c !== expected.channelId) {
+    return "wrong-channel";
+  }
+  if (claims.s !== expected.startedAt) {
+    // The common honest one: the egress restarted and this viewer is still
+    // holding the previous session's capability. That should cost one clean
+    // refetch, never a repeating rejection.
+    return "wrong-session";
+  }
+  if (claims.e < now) {
+    return "expired";
+  }
+  return null;
+}
+
+/**
  * The stream as one recipient should see it: the API-relative proxy path
  * with this user's token appended. A full public URL
  * (`LIVE_HLS_SIGNED_URLS=false`) is passed through untouched, and so is the

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveWatchPartyChannelsFlag,
   setWatchPartyChannelsEnabled,
+  canOfferWatchPartyCreate,
 } from "./watch-party-channels";
 
 function memoryStorage(seed: Record<string, string> = {}) {
@@ -146,5 +147,61 @@ describe("resolveWatchPartyChannelsFlag", () => {
     const storage = memoryStorage({ "pqp:watch-party-channels": "1" });
     setWatchPartyChannelsEnabled(null, storage);
     expect(storage.dump()).toEqual({});
+  });
+});
+
+/**
+ * THE QUIET LAUNCH. `START_WATCH_PARTY` was backfilled onto 2753 roles across
+ * 908 servers, so the permission bit alone is not a rollout: with the build
+ * flag on it would put a create button in front of every one of those
+ * moderators, on servers where the feature cannot run. The control therefore
+ * also asks the server, and the server's answer is the operator's allowlist.
+ */
+describe("canOfferWatchPartyCreate", () => {
+  it("offers it only where the server says live HLS is on", () => {
+    expect(
+      canOfferWatchPartyCreate({ hlsEnabled: true, hasPermission: true }),
+    ).toBe(true);
+    // The 908-server case: the bit is held, the server is not allowlisted.
+    expect(
+      canOfferWatchPartyCreate({ hlsEnabled: false, hasPermission: true }),
+    ).toBe(false);
+  });
+
+  it("still needs the permission on an allowlisted server", () => {
+    expect(
+      canOfferWatchPartyCreate({ hlsEnabled: true, hasPermission: false }),
+    ).toBe(false);
+  });
+
+  it("treats an unanswered config as no", () => {
+    // Opposite of `gateScreenShareStart`, on purpose: a create button that
+    // appears a beat late costs nothing, a missed disclosure costs a lot.
+    expect(
+      canOfferWatchPartyCreate({ hlsEnabled: null, hasPermission: true }),
+    ).toBe(false);
+  });
+});
+
+/**
+ * The wiring, scanned rather than rendered, the way
+ * `screen-share-gate.test.ts` scans the same file: there is no harness that
+ * mounts `App.tsx`, and the regression to catch is somebody passing the raw
+ * permission bit to `canStartWatchParty` again, which is exactly what the
+ * quiet launch cannot have.
+ */
+describe("App.tsx gates the create control on the server's answer", () => {
+  it("passes canOfferWatchPartyCreate, never the bare permission bit", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(
+      new URL("../App.tsx", import.meta.url),
+      "utf8",
+    );
+    const prop = source.match(/canStartWatchParty=\{([\s\S]*?)\n\s*onCreateWatchParty/);
+    expect(prop).not.toBeNull();
+    const value = prop![1];
+    expect(value).toContain("canOfferWatchPartyCreate");
+    expect(value).toContain("hlsEnabled");
+    expect(value).toContain("liveHlsConfig");
   });
 });

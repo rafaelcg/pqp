@@ -12,7 +12,8 @@ import "../site/insights.js";
  * pool queue alone means exhaustion, and that the three daily voice maxima
  * are a split of one another.
  */
-const { latencyInsight, poolInsight, voiceInsight, buildInsights } = globalThis.PQPInsights;
+const { latencyInsight, poolInsight, voiceInsight, buildInsights, liveHlsState } =
+  globalThis.PQPInsights;
 
 const NAMES = { api: "api", database: "postgres", storage: "storage (r2)", voice: "voz", gifs: "gifs" };
 
@@ -334,4 +335,77 @@ test("no verdict mentions money, which has no source in this payload", () => {
   for (const i of all) {
     assert.doesNotMatch(i.head + " " + i.body, /custo|custou|R\$|fatura|reais|dólar/i);
   }
+});
+
+/**
+ * The one sentence on **controles** that is a conclusion rather than a fact.
+ *
+ * Getting it backwards is not a cosmetic bug: "está na variável" on a server
+ * the variable does not name sends an operator off to edit a Fly secret an
+ * hour before a show, and nothing on screen contradicts it. So every one of
+ * the four sources the API can report is pinned, in both directions.
+ *
+ * The sources come from `resolveLiveHlsForServer` on the API; this function
+ * is forbidden from re-deriving the rule from the environment, because the
+ * page has no idea what the environment says.
+ */
+test("a server that is ON says which of the three inputs turned it on", () => {
+  assert.deepEqual(liveHlsState({ liveHlsEffective: true, liveHlsSource: "server" }), {
+    tone: "on",
+    label: "ligado",
+    why: "decisão desta página"
+  });
+  assert.deepEqual(liveHlsState({ liveHlsEffective: true, liveHlsSource: "allowlist" }), {
+    tone: "on",
+    label: "ligado",
+    why: "está na variável"
+  });
+  assert.deepEqual(liveHlsState({ liveHlsEffective: true, liveHlsSource: "open" }), {
+    tone: "on",
+    label: "ligado",
+    why: "sem allowlist: todo servidor"
+  });
+});
+
+test("a server that is OFF says WHY, and the three whys are different actions", () => {
+  // The master switch: a deploy. Nothing on this page can fix it.
+  assert.deepEqual(liveHlsState({ liveHlsEffective: false, liveHlsSource: "master-off" }), {
+    tone: "off",
+    label: "api sem hls",
+    why: "LIVE_HLS_ENABLED ou o bucket faltando"
+  });
+  // Somebody turned it off here. The fix is the button next to it.
+  assert.deepEqual(liveHlsState({ liveHlsEffective: false, liveHlsSource: "server" }), {
+    tone: "off",
+    label: "desligado",
+    why: "decisão desta página"
+  });
+  // Nobody decided, and the variable does not name it. Also the button.
+  assert.deepEqual(liveHlsState({ liveHlsEffective: false, liveHlsSource: "allowlist" }), {
+    tone: "off",
+    label: "desligado",
+    why: "não está na variável"
+  });
+});
+
+test("effective decides the tone, never the source", () => {
+  // A FALSE row on a server the variable names: the API resolved it to off,
+  // and the page must say off. Reading `liveHlsSource` first would print
+  // "ligado · está na variável" over a server that cannot stream.
+  assert.equal(
+    liveHlsState({ liveHlsEffective: false, liveHlsSource: "server" }).tone,
+    "off"
+  );
+  // And the mirror: a TRUE row on a server the variable leaves out.
+  assert.equal(
+    liveHlsState({ liveHlsEffective: true, liveHlsSource: "server" }).tone,
+    "on"
+  );
+});
+
+test("a row from an API that does not send the field is off, not on", () => {
+  // An API older than this page. Same rule as everywhere else here: what is
+  // not known is never drawn as the reassuring answer.
+  assert.equal(liveHlsState(null).tone, "off");
+  assert.equal(liveHlsState({}).tone, "off");
 });

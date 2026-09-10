@@ -55,6 +55,12 @@ import {
   listServerMemberIds,
 } from "../services/permissions.js";
 import { chargeSlowMode, refundSlowMode } from "../services/slow-mode.js";
+import {
+  checkAutomod,
+  recordAutomodHit,
+  type AutomodHitEffects,
+} from "../services/automod.js";
+import { listServerChannelIds } from "../services/servers.js";
 // --- threads ---
 import { getThreadInfo } from "../services/threads.js";
 import { canAccessChannel } from "../services/users.js";
@@ -1155,6 +1161,31 @@ async function notifyChannelActivity(
 }
 
 /**
+ * Make a hit's after-effects live: fan the alert post out to the channel the
+ * moderators chose, and take a timed-out author out of this server's voice
+ * rooms the way the moderator route does. Shared by the socket send and the
+ * HTTP edit, and safe to call with nothing to do.
+ */
+export async function applyAutomodEffects(
+  effects: AutomodHitEffects,
+): Promise<void> {
+  if (effects.alert) {
+    broadcastToChannel(effects.alert.channel_id, {
+      type: "message-broadcast",
+      message: mapMessage(effects.alert),
+    });
+  }
+  if (effects.timeout) {
+    // voice.ts imports this module, so the eviction is resolved at call time
+    // rather than at load: a static import here is a cycle that leaves
+    // `permissionsListeners` uninitialised when voice.ts subscribes to it.
+    const { evictVoiceUser } = await import("./voice.js");
+    const channelIds = await listServerChannelIds(effects.timeout.serverId);
+    evictVoiceUser(effects.timeout.userId, channelIds);
+  }
+}
+
+/**
  * Tell a timed-out sender why their frame went nowhere.
  *
  * A WebSocket frame has no status code, so a refusal that is not answered
@@ -1201,6 +1232,7 @@ function sendMessageRejected(
   nonce: string | undefined,
   reason: MessageRejectReason,
   retryAfterMs?: number,
+  automodMessage?: string,
 ): void {
   if (socket.readyState !== 1) {
     return;
@@ -1212,6 +1244,7 @@ function sendMessageRejected(
       reason,
       ...(nonce ? { nonce } : {}),
       ...(retryAfterMs && retryAfterMs > 0 ? { retryAfterMs } : {}),
+      ...(automodMessage ? { automodMessage } : {}),
     }),
   );
 }
@@ -1248,6 +1281,8 @@ export type PostChannelMessageResult =
       ok: false;
       reason: MessageRejectReason | "bad-reply" | "empty";
       retryAfterMs?: number;
+      /** With `automod`: the rule's own copy, when the owner wrote one. */
+      automodMessage?: string;
     };
 
 export async function postChannelMessage(
@@ -1316,6 +1351,34 @@ export async function postChannelMessage(
     !hasPermission(memberPerms, Permission.MANAGE_CHANNELS)
       ? (channel.slowmode_seconds ?? 0)
       : 0;
+
+  // AutoMod runs after every access refusal and before the slow-mode charge,
+  // so a blocked message costs the author nothing but the message. It is a
+  // server-channel thing only: a DM has no owner to write a rule.
+  if (channel?.kind === "server" && channel.server_id) {
+    const automodInput = {
+      serverId: channel.server_id,
+      channelId: input.channelId,
+      authorId: input.author.id,
+      memberPerms,
+      body: input.body,
+    };
+    const verdict = await checkAutomod(automodInput);
+    if (verdict) {
+      void recordAutomodHit(automodInput, verdict)
+        .then(applyAutomodEffects)
+        .catch((error: unknown) => {
+          console.error("[automod] hit effects failed:", error);
+        });
+      return {
+        ok: false,
+        reason: "automod",
+        ...(verdict.customMessage
+          ? { automodMessage: verdict.customMessage }
+          : {}),
+      };
+    }
+  }
 
   await input.beforeCreate?.();
 
@@ -1672,6 +1735,7 @@ export async function handleChatMessage(
         payload.nonce,
         posted.reason,
         posted.retryAfterMs,
+        posted.automodMessage,
       );
     }
     return;

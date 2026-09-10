@@ -35,11 +35,11 @@ contextBridge.exposeInMainWorld("pqpPicker", {
     ipcRenderer.send("pqp:picker-ready");
   },
 
-  choose(sourceId) {
+  choose(sourceId, shareAudio) {
     if (typeof sourceId !== "string" || !sourceId) {
       return;
     }
-    ipcRenderer.send("pqp:picker-choose", sourceId);
+    ipcRenderer.send("pqp:picker-choose", sourceId, shareAudio === true);
   },
 
   cancel() {

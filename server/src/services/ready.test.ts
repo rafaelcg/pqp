@@ -26,6 +26,7 @@ interface Harness {
   setPostgres(mode: "ok" | "fail" | "hang"): void;
   setPool(stats: Partial<PoolStats> | null): void;
   setLivekit(mode: "unconfigured" | "ok" | "fail" | "hang"): void;
+  setLiveHls(mode: "off" | "ok" | "fail"): void;
   livekitProbes(): number;
   report(): Promise<ReadyReport>;
 }
@@ -35,6 +36,8 @@ function harness(): Harness {
   let postgres: "ok" | "fail" | "hang" = "ok";
   let livekit: "unconfigured" | "ok" | "fail" | "hang" = "unconfigured";
   let livekitProbes = 0;
+  /** `off` is `LIVE_HLS_ENABLED` unset: probed as skipped, never a 503. */
+  let liveHls: "off" | "ok" | "fail" = "off";
   let pool: PoolStats | null = { max: 10, total: 2, idle: 2, waiting: 0 };
   const hang = () => new Promise<never>(() => {});
   const checker = createReadyChecker({
@@ -57,6 +60,13 @@ function harness(): Harness {
           },
     livekitHost: () => (livekit === "unconfigured" ? null : "sfu.pqp.gg"),
     probeStorage: () => null,
+    probeLiveHls: () =>
+      liveHls === "off"
+        ? null
+        : async () => {
+            if (liveHls === "fail") throw new Error("bucket unreachable");
+            return "ok";
+          },
     // Real timeouts would make the suite slow; the behaviour is the same.
     postgresTimeoutMs: 5,
     remoteTimeoutMs: 5,
@@ -74,6 +84,9 @@ function harness(): Harness {
     },
     setLivekit: (mode) => {
       livekit = mode;
+    },
+    setLiveHls: (mode) => {
+      liveHls = mode;
     },
     livekitProbes: () => livekitProbes,
     report: () => checker.check(),
@@ -217,6 +230,42 @@ describe("ready checker", () => {
     h.checker.reset();
     expect((await h.report()).ok).toBe(true);
   });
+
+  /**
+   * The live-HLS bucket is a SECOND bucket with a SECOND key pair
+   * (`LIVE_HLS_S3_*`), so the existing `storage` check says nothing about it.
+   * Production ran with the HLS secrets deployed and `/ready` green for a
+   * week, and neither fact implied the other.
+   */
+  describe("the live HLS bucket", () => {
+    it("is skipped, and never a 503, while the feature is off", async () => {
+      const h = harness();
+      h.setLiveHls("off");
+      const report = await h.report();
+      expect(report.checks.liveHls).toEqual({ ok: true, skipped: true });
+      expect(report.ok).toBe(true);
+    });
+
+    it("fails the whole check when the feature is on and the bucket is not reachable", async () => {
+      const h = harness();
+      h.setLiveHls("fail");
+      const report = await h.report();
+      expect(report.checks.liveHls.ok).toBe(false);
+      // The point of the check: a watch party cannot write a segment, and
+      // every other dependency in this report is green.
+      expect(report.checks.postgres.ok).toBe(true);
+      expect(report.checks.storage).toEqual({ ok: true, skipped: true });
+      expect(report.ok).toBe(false);
+    });
+
+    it("passes when the feature is on and the bucket answers", async () => {
+      const h = harness();
+      h.setLiveHls("ok");
+      const report = await h.report();
+      expect(report.checks.liveHls.ok).toBe(true);
+      expect(report.ok).toBe(true);
+    });
+  });
 });
 
 describe("GET /ready over HTTP", () => {
@@ -244,6 +293,7 @@ describe("GET /ready over HTTP", () => {
       pool: { ok: true, inUse: 1, max: 10, queued: 0 },
       livekit: { ok: true, skipped: true },
       storage: { ok: true, skipped: true },
+      liveHls: { ok: true, skipped: true },
     },
     version: "abc",
   });

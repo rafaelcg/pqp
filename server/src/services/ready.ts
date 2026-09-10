@@ -5,6 +5,7 @@ import { clientAddress, createRateLimiter } from "../lib/rate-limit.js";
 import { currentPoolStats, type PoolStats } from "../lib/runtime.js";
 import { headObject, isStorageConfigured } from "../lib/s3.js";
 import { isLiveKitConfigured } from "../voice/backends.js";
+import { isLiveHlsEnabled, probeLiveHlsStorage } from "../voice/hls-egress.js";
 import { pingSfu } from "../voice/admin.js";
 import { sfuHost } from "../voice/sfu-stats.js";
 
@@ -22,8 +23,11 @@ import { sfuHost } from "../voice/sfu-stats.js";
  * more query can be answered, and it says which dependency is the problem.
  *
  * WHAT IT SAYS. `{ ok, checks, version }`, with one entry per dependency
- * (`postgres`, `pool`, `livekit`, `storage`) carrying `ok` and, where probed,
- * `ms`. HTTP 200 only when every check is ok, 503 otherwise. Component
+ * (`postgres`, `pool`, `livekit`, `storage`, `liveHls`) carrying `ok` and,
+ * where probed, `ms`. `storage` and `liveHls` are two different buckets with
+ * two different key pairs and neither implies the other; `liveHls` is skipped
+ * unless `LIVE_HLS_ENABLED=true`.
+ * HTTP 200 only when every check is ok, 503 otherwise. Component
  * labels, booleans, counts and latencies, plus one hostname: the SFU's (see
  * `LivekitCheck` for why). No provider names, no error strings. A stranger
  * learns that "the database is unhappy", which the app being broken already
@@ -95,6 +99,15 @@ export interface ReadyReport {
     pool: PoolCheck;
     livekit: LivekitCheck;
     storage: RemoteCheck;
+    /**
+     * The live-HLS bucket, which is NOT `storage`. Watch-party segments go to
+     * a second bucket with a second key pair (`LIVE_HLS_S3_*`), on purpose, so
+     * `storage: ok` never implied this one. `skipped` while
+     * `LIVE_HLS_ENABLED` is not `"true"`, which is every self-host and was
+     * production until the flag was flipped: a deployment that does not run
+     * watch parties must not go 503 over a bucket it has no reason to own.
+     */
+    liveHls: RemoteCheck;
   };
   version: string;
 }
@@ -120,6 +133,11 @@ export interface ReadyCheckerOptions {
   /** The SFU hostname to name in the report; null when not configured. */
   livekitHost?: () => string | null;
   probeStorage: () => (() => Promise<unknown>) | null;
+  /**
+   * The live-HLS bucket. Null (reported as skipped) unless the deployment
+   * actually runs live HLS, so the flag being off is not a 503.
+   */
+  probeLiveHls: () => (() => Promise<unknown>) | null;
   version?: () => string;
   now?: () => number;
   postgresTimeoutMs?: number;
@@ -252,17 +270,18 @@ export function createReadyChecker(options: ReadyCheckerOptions): ReadyChecker {
 
   return {
     async check(): Promise<ReadyReport> {
-      const [postgres, livekitProbe, storage] = await Promise.all([
+      const [postgres, livekitProbe, storage, liveHls] = await Promise.all([
         timed(options.probePostgres, postgresTimeoutMs, now),
         remoteCheck("livekit", options.probeLivekit()),
         remoteCheck("storage", options.probeStorage()),
+        remoteCheck("liveHls", options.probeLiveHls()),
       ]);
       const pool = poolCheck();
       const host = "skipped" in livekitProbe ? null : (options.livekitHost?.() ?? null);
       const livekit: LivekitCheck = host ? { ...livekitProbe, host } : livekitProbe;
       return {
-        ok: postgres.ok && pool.ok && livekit.ok && storage.ok,
-        checks: { postgres, pool, livekit, storage },
+        ok: postgres.ok && pool.ok && livekit.ok && storage.ok && liveHls.ok,
+        checks: { postgres, pool, livekit, storage, liveHls },
         version: version(),
       };
     },
@@ -297,6 +316,13 @@ const checker = createReadyChecker({
   livekitHost: sfuHost,
   probeStorage: () =>
     isStorageConfigured() ? () => headObject(STORAGE_PROBE_KEY) : null,
+  // Gated on the flag rather than on the bucket being configured: production
+  // carried `LIVE_HLS_S3_*` for a week with `LIVE_HLS_ENABLED` unset, and a
+  // 503 for a feature nobody has turned on would be a false alarm. Once the
+  // flag is on, an unreachable bucket IS the outage: no segment can be
+  // written and every watch party is a blank pane.
+  probeLiveHls: () =>
+    isLiveHlsEnabled() ? () => probeLiveHlsStorage() : null,
 });
 
 export function checkReady(): Promise<ReadyReport> {

@@ -42,7 +42,26 @@ import {
 const TRACK_FIND_ATTEMPTS = 16;
 const TRACK_FIND_GAP_MS = 400;
 const DEFAULT_DELAY_SECONDS = 10;
-const PLAYLIST_WAIT_ATTEMPTS = 20;
+/**
+ * How long a fresh egress gets to produce its first live playlist.
+ *
+ * WAS 20 SECONDS, AND THAT WAS TOO IMPATIENT. `docs/CAPACITY.md` section 2
+ * measured time-to-first-playlist at 10.8 s for a `720p30`-first ladder on an
+ * idle box and **43.7 s** for `1080p30` on a saturated core, so the old
+ * ceiling sat between the good case and the bad one. Production on 2026-09-09
+ * logged `voice.hlsStarted playlistReady=false` immediately followed by
+ * `voice.hlsStopped reason=playlist-not-ready` on a box that was carrying
+ * leftover transcodes at the time: the session was torn down, one of the three
+ * restarts in the window was spent, and the audience got nothing, when waiting
+ * a little longer would have served them.
+ *
+ * The cost of waiting is the host staring at "preparing" for longer. The cost
+ * of not waiting is that plus a wasted session plus another wait. Forty-five
+ * seconds covers the measured worst case; `voice.hlsStarted` now reports how
+ * long it actually took, so the next revision of this number is measured
+ * rather than argued.
+ */
+const PLAYLIST_WAIT_ATTEMPTS = 45;
 const PLAYLIST_WAIT_GAP_MS = 1000;
 
 /** How often the monitor asks LiveKit whether each egress is still alive. */
@@ -176,6 +195,13 @@ const failedUntil = new Map<string, number>();
 const pendingRestarts = new Map<string, ReturnType<typeof setTimeout>>();
 /** Per-channel serialisation of `reconcileLiveHls`: the monitor and the room can race. */
 const reconcileQueue = new Map<string, Promise<unknown>>();
+/**
+ * Leftover transcodes this process has stopped since it started, from
+ * `reapForeignEgresses`. Belongs at zero. Anything else is a session that
+ * leaked handlers onto the media box, and the number is the only evidence a
+ * leak ever happened, because the leak itself is silent.
+ */
+let orphansStopped = 0;
 let changeListener: LiveHlsChangeListener | null = null;
 let sfuLoadReader: LiveHlsSfuLoadReader | null = null;
 let monitorTimer: ReturnType<typeof setInterval> | null = null;
@@ -264,6 +290,49 @@ export function hlsReplayHours(): number {
 /** TTL for a viewer's presigned segment URLs and playlist-proxy access. */
 export function hlsUrlTtlSeconds(): number {
   return positiveIntFromEnv("LIVE_HLS_URL_TTL_SECONDS", DEFAULT_URL_TTL_SECONDS);
+}
+
+/**
+ * How many parties this process will transcode at once. Three.
+ *
+ * WHY THERE HAS TO BE ONE. `decideLadder` already prices the box, but read
+ * its first rule: the lowest rung ALWAYS starts, because a party with no
+ * rendition is a party nobody can see. That is right per party and unbounded
+ * across parties: the fourth, tenth and fortieth simultaneous party each get
+ * their floor rung whatever the budget says, and the budget only ever refuses
+ * the rungs above it. So the ladder guard degrades quality and never refuses
+ * a session, and something has to refuse the session.
+ *
+ * WHY THREE. Measured on the box production runs (`docs/CAPACITY.md`,
+ * 2026-09-09): `1080p30` costs 0.88 of a core and `720p30` costs 0.51. The
+ * first party gets the default two-rung ladder, 1.39 cores; every party after
+ * it finds the ladder budget already spent and gets its floor rung alone,
+ * 0.51. Three parties is therefore about 2.4 of the box's 4 cores, which
+ * leaves the SFU, the TURN relay and everything else on the same machine the
+ * rest. An operator with a bigger box says so with a bigger number; there is
+ * no sentinel for "unlimited", because a value that turns the guard off is
+ * the value somebody sets by accident.
+ */
+export const DEFAULT_MAX_HLS_SESSIONS = 3;
+
+export function maxLiveHlsSessions(): number {
+  return positiveIntFromEnv("LIVE_HLS_MAX_SESSIONS", DEFAULT_MAX_HLS_SESSIONS);
+}
+
+/**
+ * ON BY DEFAULT, and `LIVE_HLS_REAP_ORPHANS=false` is the rollback switch.
+ *
+ * `reapForeignEgresses` is the only mechanism here that STOPS something it
+ * did not start, and it is landing days before a large event. Its scope is
+ * deliberately narrow (see the function), but "one command, no deploy" is how
+ * this repo lands anything that can go wrong on a night that matters, the way
+ * `TURN_PREFER_STATIC` and `WS_COMPRESSION` do. Turning it off restores the
+ * pre-2026-09-09 behaviour: leftovers accumulate and `liveHls.orphansStopped`
+ * stays at zero because nothing is looking.
+ */
+export function reapOrphansEnabled(): boolean {
+  const raw = process.env.LIVE_HLS_REAP_ORPHANS?.trim().toLowerCase();
+  return raw !== "false" && raw !== "0" && raw !== "off";
 }
 
 /**
@@ -456,15 +525,69 @@ export function liveHlsServerAllowlist(): Set<string> | null {
 }
 
 /**
- * The per-server answer: the global flag, and the server is on the allowlist
- * (or there is no allowlist). A conversation has no server id and is never
- * HLS, whatever the list says.
+ * `servers.live_hls_enabled` for one server: TRUE / FALSE when an operator
+ * has decided, NULL when nobody has.
+ *
+ * Read per call, never cached, for the same reason the flag is: the whole
+ * point of moving this out of the environment is that a change takes effect
+ * without a deploy and without restarting `pqp-api`. One indexed primary-key
+ * lookup, on paths that run once per room pin and once per share, not per
+ * frame.
+ *
+ * A failed read answers NULL, which falls back to the environment. A database
+ * hiccup must not silently revoke a running event's stream, and the
+ * environment is exactly the answer this deployment had before the column
+ * existed.
  */
-export function isLiveHlsEnabledForServer(
+export async function liveHlsServerOverride(
+  serverId: string,
+): Promise<boolean | null> {
+  try {
+    const result = await getPool().query<{ live_hls_enabled: boolean | null }>(
+      `SELECT live_hls_enabled FROM servers WHERE id = $1`,
+      [serverId],
+    );
+    return result.rows[0]?.live_hls_enabled ?? null;
+  } catch (error) {
+    logEvent("voice.hlsOverrideReadFailed", {
+      serverId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
+  }
+}
+
+/**
+ * The per-server answer, given the row this server carries. Pure, so the
+ * whole resolution matrix is testable without a database.
+ *
+ * ORDER, AND WHY. The master switch first: `LIVE_HLS_ENABLED` plus LiveKit
+ * plus the dedicated bucket. Nothing below can turn on a deployment that
+ * cannot encode. Then the per-server row, TRUE or FALSE alike, because it is
+ * a decision a person made about this one server, from the dashboard, after
+ * whoever set the environment variable had left the building; it is also the
+ * only kill switch that does not need a deploy, which is worth more during a
+ * live event than consistency with a Fly secret. Only a NULL row falls
+ * through to `LIVE_HLS_SERVER_ALLOWLIST`, which keeps behaving exactly as it
+ * always did: on the list is on, no list at all is every server.
+ *
+ * The last two lines are the previous function verbatim, INCLUDING the case
+ * where there is no allowlist and no server id: a deployment that confines
+ * nothing answers true for a conversation too. That is not obviously right
+ * (nothing starts an egress outside a `watch_party` channel, which is always
+ * in a server), and it is deliberately left alone here: production runs with
+ * an allowlist, so it already answers false, and widening or narrowing it is
+ * a separate decision from moving the list into a table.
+ */
+export function resolveLiveHlsForServer(
   serverId: string | null | undefined,
+  override: boolean | null,
 ): boolean {
   if (!isLiveHlsEnabled()) {
     return false;
+  }
+  if (override !== null) {
+    return override;
   }
   const allowlist = liveHlsServerAllowlist();
   if (allowlist === null) {
@@ -473,11 +596,34 @@ export function isLiveHlsEnabledForServer(
   return Boolean(serverId) && allowlist.has(serverId!);
 }
 
+/**
+ * The per-server answer, reading the row. Async since the source of truth
+ * moved into the database; every caller was already on an async path.
+ */
+export async function isLiveHlsEnabledForServer(
+  serverId: string | null | undefined,
+): Promise<boolean> {
+  if (!isLiveHlsEnabled()) {
+    return false;
+  }
+  return resolveLiveHlsForServer(
+    serverId,
+    serverId ? await liveHlsServerOverride(serverId) : null,
+  );
+}
+
 export interface LiveHlsConfig {
   /** Per-server when a `serverId` is given, the global flag otherwise. */
   enabled: boolean;
   delaySeconds: number;
-  /** Whether an allowlist exists at all; the client may say why it is off. */
+  /**
+   * Whether live HLS is confined to named servers rather than open to all.
+   *
+   * True when `LIVE_HLS_SERVER_ALLOWLIST` is set, and, for a per-server
+   * answer, also when this server's own `live_hls_enabled` row decided it.
+   * The client only ever reads it to say why streaming is off, so "somebody
+   * chose, per server" is the same sentence as "there is a list".
+   */
   allowlisted: boolean;
   /**
    * The renditions this deployment encodes, lowest first. The presenter's
@@ -490,13 +636,15 @@ export interface LiveHlsConfig {
   ladder: { name: string; width: number; height: number; videoKbps: number }[];
 }
 
-export function liveHlsConfig(serverId?: string | null): LiveHlsConfig {
+/**
+ * The deployment-wide answer, with no server in hand. Still synchronous:
+ * nothing here reads a row, and the dashboard's metrics payload wants it on
+ * the hot path with the rest of the process counters.
+ */
+export function liveHlsConfig(): LiveHlsConfig {
   const allowlist = liveHlsServerAllowlist();
   return {
-    enabled:
-      serverId === undefined || serverId === null
-        ? isLiveHlsEnabled()
-        : isLiveHlsEnabledForServer(serverId),
+    enabled: isLiveHlsEnabled(),
     delaySeconds: delaySeconds(),
     allowlisted: allowlist !== null,
     ladder: liveHlsLadder().map((rung) => ({
@@ -506,6 +654,31 @@ export function liveHlsConfig(serverId?: string | null): LiveHlsConfig {
       videoKbps: rung.videoKbps,
     })),
   };
+}
+
+/**
+ * The answer for one server, or the deployment-wide one when there is no
+ * server (`GET /api/live-hls/config` with no `?serverId=`, which is what a
+ * client asks before it knows where it is).
+ */
+export async function liveHlsConfigForServer(
+  serverId: string | null,
+): Promise<LiveHlsConfig> {
+  const base = liveHlsConfig();
+  if (!serverId) {
+    return base;
+  }
+  const override = await liveHlsServerOverride(serverId);
+  return {
+    ...base,
+    enabled: resolveLiveHlsForServer(serverId, override),
+    allowlisted: base.allowlisted || override !== null,
+  };
+}
+
+/** The channels this process is currently running an egress for. */
+export function liveHlsRunningChannelIds(): string[] {
+  return [...rooms.keys()];
 }
 
 export function liveHlsStreamFor(channelId: string): LiveHlsStream | null {
@@ -543,6 +716,7 @@ export function resetLiveHlsForTests(): void {
   }
   pendingRestarts.clear();
   reconcileQueue.clear();
+  orphansStopped = 0;
   changeListener = null;
   sfuLoadReader = null;
   stopLiveHlsMonitor();
@@ -582,6 +756,73 @@ export function runningRungCount(): number {
  */
 export function liveHlsRungsFor(channelId: string): LadderRung[] {
   return (rooms.get(channelId)?.rungs ?? []).map((entry) => entry.rung);
+}
+
+export interface LiveHlsActivity {
+  /** Sessions this process is running an egress for, right now. */
+  sessions: number;
+  /**
+   * `LIVE_HLS_MAX_SESSIONS`. The number `sessions` is refused at, so the
+   * dashboard can show "2 of 3" rather than a count with no ceiling, and so
+   * an operator raising the cap can read back that the process took it.
+   */
+  maxSessions: number;
+  /** Renditions across all of them: what the media box is actually encoding. */
+  rungs: number;
+  /** Longest-running session, in minutes, or null when none is live. */
+  oldestMinutes: number | null;
+  /**
+   * Sessions this process started whose transcode has NO audio track: the
+   * share was picked without its own audio, so the seatless audience is
+   * watching a silent film while the seated room hears everything.
+   *
+   * It is not an error and it is not always wrong (a silent slideshow is a
+   * legitimate share), which is exactly why it needs a number rather than an
+   * alert. Sitting at `sessions` during a film night is the thing to look at.
+   * Adopted sessions never count: a process that inherited an egress across a
+   * restart knows the video track sid from the row and nothing about the
+   * audio, and guessing "silent" there would invent an incident.
+   */
+  silentSessions: number;
+  /**
+   * Leftover transcodes stopped by `reapForeignEgresses` since this process
+   * started. **Belongs at zero**, and anything else is the number that proves
+   * a session leaked handlers onto the media box, which is otherwise silent:
+   * the box just gets slower and the parties on it start stalling. Per
+   * process, so it resets on deploy like every counter here.
+   */
+  orphansStopped: number;
+}
+
+/**
+ * WHAT THE DASHBOARD READS TO KNOW A TRANSCODE EVER RAN.
+ *
+ * In-process, so it is the number for the instance that answered, the same
+ * way `voice.rooms` is. Zero on a machine that is not the one presenting;
+ * zero everywhere for a deployment where the flag is on and the egress
+ * silently never starts, which is the case worth being able to see. Pair it
+ * with `retention.uncleaned` below: sessions climbing with `uncleaned` flat
+ * is healthy, `uncleaned` climbing on its own is a sweep that is not running.
+ */
+export function liveHlsActivity(now = Date.now()): LiveHlsActivity {
+  let rungs = 0;
+  let oldest: number | null = null;
+  let silentSessions = 0;
+  for (const room of rooms.values()) {
+    rungs += room.rungs.length;
+    oldest = oldest === null ? room.startedAtMs : Math.min(oldest, room.startedAtMs);
+    if (room.stream.hasAudio === false) {
+      silentSessions += 1;
+    }
+  }
+  return {
+    sessions: rooms.size,
+    maxSessions: maxLiveHlsSessions(),
+    rungs,
+    oldestMinutes: oldest === null ? null : Math.floor((now - oldest) / 60_000),
+    silentSessions,
+    orphansStopped,
+  };
 }
 
 function notifyChanged(channelId: string, reason: string): void {
@@ -785,7 +1026,7 @@ async function rungHealth(
   startedAt: number,
   entry: RunningRung,
   now: number,
-): Promise<{ health: EgressHealth; detail?: string }> {
+): Promise<{ health: EgressHealth; detail?: string; stillRunning: boolean }> {
   let health: EgressHealth = "unknown";
   let detail: string | undefined;
   if (egress.listEgress) {
@@ -807,9 +1048,103 @@ async function rungHealth(
     if (playlist === "ended") {
       health = "ended";
       detail = detail ?? `playlist stuck for ${PLAYLIST_STUCK_MS} ms`;
+      // THE DISTINCTION THAT COST A CORE. "Ended" here means the playlist has
+      // not moved for `PLAYLIST_STUCK_MS`, and the whole reason that rule
+      // exists (see the constant's comment) is that LiveKit goes on reporting
+      // a dead node's egress as ACTIVE forever. The converse is the case that
+      // was never handled: a transcode whose playlist stalled while the
+      // handler is genuinely still running and still burning a core. The
+      // monitor used to drop such a rung from its bookkeeping and never stop
+      // it, so it transcoded until somebody restarted the media box, and the
+      // restart started a second ladder beside it.
+      return { health, detail, stillRunning: true };
     }
   }
-  return { health, detail };
+  // LiveKit itself said it is over, so there is nothing left to stop and
+  // asking would only log a failure about an egress that finished normally.
+  return { health, detail, stillRunning: false };
+}
+
+/**
+ * ANY OTHER TRANSCODE RUNNING ON THIS ROOM IS A LEFTOVER. Stop it.
+ *
+ * The safety net, and the reason it exists is that every path that leaks one
+ * looks identical to a healthy party from the API's side. A live production
+ * watch party on 2026-09-09 showed two `voice.hlsStarted` for one channel nine
+ * minutes apart with the same presenter and **nothing at all logged in
+ * between**, and the earlier pair's handlers were still on the media box two
+ * minutes after the later pair started: four transcoders on one room, on a
+ * four core box that also carries the SFU and the TURN relay.
+ *
+ * The individual leaks are worth fixing one at a time and are (the stuck-but-
+ * running rung directly above, the silent teardowns in `reconcileLiveHlsNow`).
+ * This is the net under them, because `LIVE_HLS_MAX_SESSIONS` counts SESSIONS
+ * and a session that can transiently be four handlers instead of two makes the
+ * cap of 3 mean twelve.
+ *
+ * SCOPED TO ROOMS THIS PROCESS HAS A SESSION FOR, deliberately. "Stop every
+ * active egress I do not recognise" would kill the ones `adoptLiveHlsSession`
+ * exists to inherit across a deploy, which is the opposite of the promise that
+ * a party does not notice a restart. Within a room we are already presenting,
+ * an egress that is not one of our rungs cannot be anything but ours from
+ * before. The 15 s health grace covers the boot window in which a ladder's
+ * rungs are still being adopted one at a time.
+ *
+ * A listing we could not fetch is never a reason to act, the same rule
+ * `listActiveEgresses` states for the retention sweep: "could not ask" is not
+ * "nothing is running".
+ */
+async function reapForeignEgresses(
+  egress: LiveHlsEgressApi,
+  channelId: string,
+  room: RoomHls,
+): Promise<void> {
+  if (!egress.listEgress || !reapOrphansEnabled()) {
+    return;
+  }
+  let listing: EgressListing[];
+  try {
+    listing = await egress.listEgress({ roomName: channelId, active: true });
+  } catch (error) {
+    logEvent("voice.hlsReapListFailed", {
+      channelId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+  const ours = new Set(room.rungs.map((entry) => entry.egressId));
+  for (const info of listing) {
+    if (ours.has(info.egressId)) {
+      continue;
+    }
+    // THE FILTER IS RE-CHECKED HERE, and it is not paranoia about our own
+    // code. `roomName` went into the request; if a LiveKit version, a proxy or
+    // a future SDK ignored it, this loop would stop every other party's live
+    // transcode across the instance, which is the worst outcome available to
+    // anything in this file. A listing entry that does not name its room is
+    // left alone rather than assumed to be this one.
+    if (info.roomName !== channelId) {
+      continue;
+    }
+    if (healthFromListing(info.egressId, listing) !== "alive") {
+      continue;
+    }
+    try {
+      await egress.stopEgress(info.egressId);
+      orphansStopped += 1;
+      logEvent("voice.hlsOrphanStopped", {
+        channelId,
+        egressId: info.egressId,
+        ours: [...ours],
+      });
+    } catch (error) {
+      logEvent("voice.hlsOrphanStopFailed", {
+        channelId,
+        egressId: info.egressId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 /**
@@ -839,12 +1174,19 @@ export async function checkLiveHlsHealth(
     if (!primary) {
       continue;
     }
+    // BEFORE the health checks, not after: a leftover ladder is what makes the
+    // box slow enough for the live one's playlist to stall, which is the
+    // stuck-playlist verdict, which schedules a restart, which starts a third.
+    await reapForeignEgresses(egress, channelId, room);
+    if (rooms.get(channelId) !== room) {
+      continue;
+    }
     // Secondary rungs first, and one at a time: a dead extra rendition is
     // dropped from the ladder and the viewers on it fall to the primary,
     // which is what a master playlist is for. Only the primary dying is a
     // dead stream, because it is the one every viewer can always reach.
     for (const entry of [...room.rungs.slice(1)]) {
-      const { health, detail } = await rungHealth(
+      const { health, detail, stillRunning } = await rungHealth(
         egress,
         channelId,
         startedAt,
@@ -855,6 +1197,12 @@ export async function checkLiveHlsHealth(
         continue;
       }
       room.rungs = room.rungs.filter((item) => item !== entry);
+      // BEFORE forgetting it, not after. A rung dropped from `room.rungs` is
+      // unreachable from `stopRoom`, so anything not stopped here is an
+      // orphan for the life of the media box.
+      if (stillRunning) {
+        await stopRungs(channelId, [entry]);
+      }
       await recordSessionEnded(channelId, startedAt, entry.rung.name);
       logEvent("voice.hlsRungDied", {
         channelId,
@@ -871,7 +1219,7 @@ export async function checkLiveHlsHealth(
     if (rooms.get(channelId) !== room) {
       continue;
     }
-    const { health, detail } = await rungHealth(
+    const { health, detail, stillRunning } = await rungHealth(
       egress,
       channelId,
       startedAt,
@@ -886,7 +1234,19 @@ export async function checkLiveHlsHealth(
       continue;
     }
     rooms.delete(channelId);
-    await stopRungs(channelId, room.rungs.slice(1));
+    // EVERY RUNG, INCLUDING THE PRIMARY. This used to be `slice(1)`, on the
+    // reasoning that a primary judged "ended" has already ended. That is true
+    // of the LiveKit-said-so half and false of the other half: a primary whose
+    // playlist stalled while its handler is still running was deleted from
+    // `rooms` and never stopped, and `scheduleRestart` immediately below then
+    // started a whole fresh ladder beside the one still transcoding. Two
+    // restarts inside the window make three ladders on a four core box that
+    // also carries the SFU and the TURN relay. `stillRunning` is what tells
+    // the two halves apart, so a clean end still costs no pointless RPC.
+    await stopRungs(
+      channelId,
+      stillRunning ? room.rungs : room.rungs.slice(1),
+    );
     await recordSessionEnded(channelId, startedAt);
     logEvent("voice.hlsEgressDied", {
       channelId,
@@ -976,8 +1336,22 @@ function getEgress(): LiveHlsEgressApi | null {
 export async function listActiveEgresses(): Promise<EgressListing[] | null> {
   const egress = getEgress();
   if (!egress) {
-    // No LiveKit configured at all: there is genuinely nothing running.
-    return [];
+    // NO LIVEKIT HERE. This used to answer `[]` — "there is genuinely nothing
+    // running" — which is true of the process that would have started an
+    // egress and false of any OTHER process asking about one. The retention
+    // sweep's whole safety rule is "ask the media server, do not trust the
+    // row", and `[]` turns that into a rubber stamp: a session whose egress is
+    // still writing segments reads as finished and its objects get deleted
+    // underneath a live watch party.
+    //
+    // That is reachable on the split deployment. `pqp-worker` is where the
+    // sweep runs and it holds neither `LIVEKIT_*` nor `LIVE_HLS_S3_*`; the
+    // moment somebody fixes half of that by giving it the bucket, this
+    // function starts saying "nothing is running" about a box that is running
+    // everything. `null` means "could not ask", every caller already treats
+    // that as "leave it alone", and the log line names the reason.
+    logEvent("voice.hlsListEgressUnavailable", { reason: "no-livekit" });
+    return null;
   }
   if (!egress.listEgress) {
     return null;
@@ -1092,9 +1466,80 @@ function isTrackSource(source: unknown, wanted: TrackSource): boolean {
   return source === wanted || source === TrackSource[wanted];
 }
 
+/** The two fields of a LiveKit `TrackInfo` this picker reads. */
+export interface EgressCandidateTrack {
+  source?: unknown;
+  sid?: string;
+}
+
+export interface EgressCandidateParticipant {
+  identity?: string;
+  tracks?: readonly EgressCandidateTrack[];
+}
+
+/**
+ * WHICH TWO TRACKS THE TRANSCODE IS BOUND TO. Exported because this is the
+ * whole of what the HLS audience receives, and until it was pulled out of
+ * `defaultFindTracks` no test could reach it: every case in
+ * `hls-egress.test.ts` injects `findTracks`, so the real selection ran only in
+ * production.
+ *
+ * A Track Composite egress takes ONE video sid and ONE audio sid
+ * (`TrackCompositeEgressRequest` has singular fields, not repeated ones), so
+ * this is a choice and not a mix. It picks the screen share and that same
+ * share's own audio. **No microphone and no camera reaches the HLS audience**,
+ * whatever the seated room can hear; `docs/WATCH_PARTY.md`, "What the stream
+ * carries", is the product statement of that and
+ * `docs/plans/WATCH_PARTY_STREAM_AUDIO.md` is what it would cost to change.
+ *
+ * PER PARTICIPANT, which the first version was not. It scanned every
+ * participant's tracks into two variables, so with two people sharing at once
+ * (two holders of START_WATCH_PARTY, which a party with co-hosts has) the
+ * video could come from one and the audio from the other, in whatever order
+ * `listParticipants` happened to answer. Now one participant supplies both or
+ * the audio is dropped.
+ *
+ * `presenterIdentity` is the peer id `reconcileLiveHls` already decided to
+ * follow, and LiveKit identities are peer ids, so it is the right sharer by
+ * construction rather than the first one found. A presenter who is not in the
+ * answer yet (the listing races the publish) falls back to any sharer, which
+ * is the old behaviour and never worse than it.
+ */
+export function pickScreenTracks(
+  participants: readonly EgressCandidateParticipant[],
+  presenterIdentity?: string,
+): LiveHlsScreenTracks | null {
+  const sharers = participants.filter((participant) =>
+    (participant.tracks ?? []).some(
+      (track) => isTrackSource(track.source, TrackSource.SCREEN_SHARE) && track.sid,
+    ),
+  );
+  const sharer =
+    sharers.find((participant) => participant.identity === presenterIdentity) ??
+    sharers[0];
+  if (!sharer) {
+    return null;
+  }
+  let videoTrackId: string | undefined;
+  let audioTrackId: string | undefined;
+  for (const track of sharer.tracks ?? []) {
+    if (!track.sid) {
+      continue;
+    }
+    if (isTrackSource(track.source, TrackSource.SCREEN_SHARE)) {
+      videoTrackId ??= track.sid;
+    }
+    if (isTrackSource(track.source, TrackSource.SCREEN_SHARE_AUDIO)) {
+      audioTrackId ??= track.sid;
+    }
+  }
+  return videoTrackId ? { videoTrackId, audioTrackId } : null;
+}
+
 async function defaultFindTracks(
   roomName: string,
   logInventory: boolean,
+  presenterIdentity?: string,
 ): Promise<LiveHlsScreenTracks | null> {
   if (!isLiveKitConfigured()) {
     return null;
@@ -1105,31 +1550,20 @@ async function defaultFindTracks(
     process.env.LIVEKIT_API_SECRET,
   );
   const participants = await client.listParticipants(roomName);
-  let videoTrackId: string | undefined;
-  let audioTrackId: string | undefined;
-  const inventory: { source: unknown; sid: string | undefined }[] = [];
-  for (const participant of participants) {
-    for (const track of participant.tracks) {
-      inventory.push({ source: track.source, sid: track.sid });
-      if (isTrackSource(track.source, TrackSource.SCREEN_SHARE) && track.sid) {
-        videoTrackId = track.sid;
-      }
-      if (
-        isTrackSource(track.source, TrackSource.SCREEN_SHARE_AUDIO) &&
-        track.sid
-      ) {
-        audioTrackId = track.sid;
-      }
-    }
-  }
-  if (!videoTrackId && logInventory) {
+  const picked = pickScreenTracks(participants, presenterIdentity);
+  if (!picked && logInventory) {
     logEvent("voice.hlsTrackInventory", {
       room: roomName,
       participants: participants.length,
-      tracks: inventory,
+      tracks: participants.flatMap((participant) =>
+        participant.tracks.map((track) => ({
+          source: track.source,
+          sid: track.sid,
+        })),
+      ),
     });
   }
-  return videoTrackId ? { videoTrackId, audioTrackId } : null;
+  return picked;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1165,6 +1599,7 @@ async function waitForLivePlaylist(url: string): Promise<boolean> {
 
 async function findScreenTracks(
   roomName: string,
+  presenterIdentity?: string,
 ): Promise<LiveHlsScreenTracks | null> {
   if (injectedFinder) {
     return injectedFinder(roomName);
@@ -1172,7 +1607,7 @@ async function findScreenTracks(
   for (let attempt = 0; attempt < TRACK_FIND_ATTEMPTS; attempt += 1) {
     try {
       const last = attempt + 1 === TRACK_FIND_ATTEMPTS;
-      const tracks = await defaultFindTracks(roomName, last);
+      const tracks = await defaultFindTracks(roomName, last, presenterIdentity);
       if (tracks) {
         return tracks;
       }
@@ -1196,12 +1631,13 @@ async function findScreenTracks(
  */
 async function probeScreenTracks(
   roomName: string,
+  presenterIdentity?: string,
 ): Promise<LiveHlsScreenTracks | null> {
   try {
     if (injectedFinder) {
       return await injectedFinder(roomName);
     }
-    return await defaultFindTracks(roomName, false);
+    return await defaultFindTracks(roomName, false, presenterIdentity);
   } catch (error) {
     logEvent("voice.hlsTrackProbeFailed", {
       room: roomName,
@@ -1237,6 +1673,49 @@ export function internalPlaylistUrl(
     forRead: false,
     config,
   }).url;
+}
+
+/**
+ * Can this process reach the live-HLS bucket, with credentials it is allowed
+ * to use? For `/ready`.
+ *
+ * WHY IT IS NOT COVERED BY THE EXISTING `storage` CHECK. That one probes the
+ * ATTACHMENT bucket (`S3_*`). Live HLS deliberately uses a second, separate
+ * set (`LIVE_HLS_S3_*`) with its own bucket and its own key pair, so
+ * `storage: ok` says nothing whatsoever about whether a watch party can
+ * write a segment. Production had `LIVE_HLS_S3_*` deployed and `/ready`
+ * green for a week without either fact implying the other.
+ *
+ * A 404 is a PASS: the key cannot exist, and answering "not found" with a
+ * valid signature is exactly the proof wanted — the endpoint resolves, the
+ * bucket is there, and the credentials are accepted. Only a transport
+ * failure or a non-404 error status is a failure. Same trick as the
+ * attachment probe and the status page.
+ */
+const LIVE_HLS_PROBE_KEY = "__ready_probe__/does-not-exist";
+
+export async function probeLiveHlsStorage(): Promise<void> {
+  const config = liveHlsStorageConfig();
+  if (!config) {
+    throw new Error("live HLS storage is not configured");
+  }
+  const url = signRequest({
+    method: "HEAD",
+    key: LIVE_HLS_PROBE_KEY,
+    ttlSeconds: 60,
+    forRead: false,
+    config,
+  }).url;
+  const response = await fetch(url, {
+    method: "HEAD",
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (response.status === 404 || response.ok) {
+    return;
+  }
+  // 403 here is the one worth having: the bucket answers and the key pair is
+  // wrong or has lost its grant, which is invisible until a party starts.
+  throw new Error(`live HLS storage answered HTTP ${response.status}`);
 }
 
 /**
@@ -1328,12 +1807,32 @@ async function stopRungs(
   }
 }
 
-async function stopRoom(channelId: string): Promise<void> {
+/**
+ * `reason` IS NOT OPTIONAL, and that is the whole point of it.
+ *
+ * A live party on 2026-09-09 produced two `voice.hlsStarted` nine minutes
+ * apart for one channel, same presenter, with **not one line between them**,
+ * because three of this function's five callers logged nothing and the fourth
+ * logged only in a branch the third one pre-empted. An operator reading that
+ * log cannot tell a host re-picking their share from a transcode dying, and
+ * those two want completely different responses during an event.
+ *
+ * The stop is now always narrated, and `voice.hlsStopped` is the one line to
+ * grep for when a stream restarted and nobody knows why.
+ */
+async function stopRoom(channelId: string, reason: string): Promise<void> {
   const current = rooms.get(channelId);
   if (!current) {
     return;
   }
   rooms.delete(channelId);
+  logEvent("voice.hlsStopped", {
+    channelId,
+    reason,
+    presenterPeerId: current.stream.presenterPeerId,
+    startedAt: current.stream.startedAt,
+    egressIds: current.rungs.map((entry) => entry.egressId),
+  });
   await recordSessionEnded(channelId, current.stream.startedAt);
   await stopRungs(channelId, current.rungs);
 }
@@ -1415,7 +1914,32 @@ async function startRoom(
     logEvent("voice.hlsStartSuppressed", { channelId, presenterPeerId });
     return null;
   }
-  const tracks = knownTracks ?? (await findScreenTracks(channelId));
+  // The concurrency guard, and it comes BEFORE the track probe on purpose:
+  // `findScreenTracks` polls LiveKit up to sixteen times over six seconds,
+  // and spending that on a session that is going to be refused is the wrong
+  // work to be doing on precisely the box that is already full.
+  //
+  // Deliberately here rather than inside `decideLadder`: that one degrades a
+  // party (it refuses the rungs above the lowest and never the lowest), this
+  // one refuses a session, and nothing else bounds the count.
+  //
+  // `rooms.size` is the count of OTHER sessions without having to subtract
+  // one, because every caller that reaches here for a channel that was
+  // already running stopped that room first (the three `stopRoom` calls in
+  // `reconcileLiveHlsNow`, and the restart path, which stops before it
+  // schedules). A restart is therefore judged on the same terms as a first
+  // start: if three other parties have filled the box meanwhile, it waits.
+  const maxSessions = maxLiveHlsSessions();
+  if (rooms.size >= maxSessions) {
+    logEvent("voice.hlsSessionsCapped", {
+      channelId,
+      presenterPeerId,
+      sessions: rooms.size,
+      maxSessions,
+    });
+    return null;
+  }
+  const tracks = knownTracks ?? (await findScreenTracks(channelId, presenterPeerId));
   if (!tracks) {
     logEvent("voice.hlsNoScreenTrack", { channelId, presenterPeerId });
     return null;
@@ -1479,6 +2003,9 @@ async function startRoom(
     // What actually started, not what was configured: a rung refused for
     // budget must not tell the presenter to upload for it.
     topHeight: Math.max(...running.map((entry) => entry.rung.height)),
+    // The one fact the host cannot check for themselves. They hear the film
+    // out of their own speakers whether or not its audio was ever captured.
+    hasAudio: Boolean(tracks.audioTrackId),
   };
   const room: RoomHls = {
     rungs: running,
@@ -1510,6 +2037,7 @@ async function startRoom(
   // never the viewer-facing URL: a viewer gets the signed master path, which
   // this same process cannot usefully fetch from here. It waits on the
   // PRIMARY rung, because that is the one a viewer is guaranteed to land on.
+  const waitStartedAt = Date.now();
   const ready = await waitForLivePlaylist(
     internalPlaylistUrl(channelId, startedAt, primary.rung.name),
   );
@@ -1517,6 +2045,18 @@ async function startRoom(
     channelId,
     presenterPeerId,
     playlistReady: ready,
+    // How long the first live playlist actually took. The only way to know
+    // whether `PLAYLIST_WAIT_ATTEMPTS` is set anywhere near right, and the
+    // reason the number above can be revised from data instead of argument.
+    playlistWaitMs: Date.now() - waitStartedAt,
+    // WHAT THE TRANSCODE IS ACTUALLY CARRYING, not what it was asked for.
+    // "screen" is the share's own audio; "none" is a silent stream, which is
+    // what a whole-screen or window capture always produces and what a tab
+    // share produces when the host leaves the audio box unticked. `grep`ping
+    // for `"audio":"none"` is how an operator answers "could they hear it?"
+    // after the fact, and `liveHls.silentSessions` on /api/admin/metrics is
+    // how they answer it during.
+    audio: tracks.audioTrackId ? "screen" : "none",
     started: running.map((entry) => entry.rung.name),
     refused: decisions
       .filter((decision) => !decision.start)
@@ -1529,7 +2069,7 @@ async function startRoom(
     // "loading" for the whole share (the pre-fix behaviour). Tear it
     // down and let the restart path try again, under the same cap.
     if (rooms.get(channelId) === room) {
-      await stopRoom(channelId);
+      await stopRoom(channelId, "playlist-not-ready");
       scheduleRestart(channelId, "playlist-not-ready");
     }
     return null;
@@ -1543,9 +2083,11 @@ async function startRoom(
  * same presenter re-declaring is a no-op unless their screen track is a new
  * sid, in which case the egress is bound to a dead track and is restarted
  * (new playlist URL, so the caller broadcasts it and viewers reload).
- * `serverId` is the channel's server: a server outside
- * `LIVE_HLS_SERVER_ALLOWLIST` (or a conversation, null) never starts an
- * egress, and one already running for it is stopped.
+ * `serverId` is the channel's server: a server whose `live_hls_enabled` row
+ * (or, with no row, `LIVE_HLS_SERVER_ALLOWLIST`) says no never starts an
+ * egress, and one already running for it is stopped. Read here, per share,
+ * so turning a server off from the dashboard ends its stream at the next
+ * reconcile rather than at the next deploy.
  */
 export function reconcileLiveHls(
   channelId: string,
@@ -1570,9 +2112,15 @@ async function reconcileLiveHlsNow(
   presenterPeerId: string | null,
   serverId: string | null,
 ): Promise<LiveHlsStream | null> {
-  if (!isLiveHlsEnabledForServer(serverId)) {
+  if (!(await isLiveHlsEnabledForServer(serverId))) {
+    // "not allowlisted" and "nobody is sharing" used to arrive here as the
+    // same thing, because `pushLiveHls` resolved the server id only when it
+    // had a sharer and passed null otherwise. So an ordinary end of share was
+    // torn down by this branch, which logs nothing, instead of the branch
+    // below, which does. The caller resolves the id either way now; this one
+    // is the genuine allowlist case again and says so.
     if (rooms.has(channelId)) {
-      await stopRoom(channelId);
+      await stopRoom(channelId, "not-allowlisted");
     }
     return null;
   }
@@ -1582,13 +2130,12 @@ async function reconcileLiveHlsNow(
     // clean rather than inheriting the last one's failures.
     clearFailure(channelId);
     if (current) {
-      await stopRoom(channelId);
-      logEvent("voice.hlsStopped", { channelId, reason: "no-share" });
+      await stopRoom(channelId, "no-share");
     }
     return null;
   }
   if (current && current.stream.presenterPeerId === presenterPeerId) {
-    const tracks = await probeScreenTracks(channelId);
+    const tracks = await probeScreenTracks(channelId, presenterPeerId);
     if (!tracks || tracks.videoTrackId === current.videoTrackId) {
       return current.stream;
     }
@@ -1598,11 +2145,33 @@ async function reconcileLiveHlsNow(
       from: current.videoTrackId,
       to: tracks.videoTrackId,
     });
-    await stopRoom(channelId);
+    await stopRoom(channelId, "screen-track-replaced");
     return startRoom(channelId, presenterPeerId, tracks);
   }
   if (current) {
-    await stopRoom(channelId);
+    // A NEW PEER ID IS NOT NECESSARILY A NEW PRESENTER. A reconnect that
+    // reconstructs or cold-joins gets a fresh peer id, and LiveKit identities
+    // are peer ids, so the room reports a different presenter for what is
+    // plainly the same person. If the SFU still holds the very screen track
+    // this session was started on, the media never moved and there is nothing
+    // to restart: adopt the new id onto the running session instead of
+    // rebuffering every viewer to say the same picture again.
+    //
+    // Sids are unique per publication, so this cannot confuse two people: a
+    // genuine second presenter has a track this session was never bound to.
+    const tracks = await probeScreenTracks(channelId, presenterPeerId);
+    if (tracks && tracks.videoTrackId === current.videoTrackId) {
+      const from = current.stream.presenterPeerId;
+      current.stream = { ...current.stream, presenterPeerId };
+      logEvent("voice.hlsPresenterReattached", {
+        channelId,
+        from,
+        to: presenterPeerId,
+        videoTrackId: current.videoTrackId,
+      });
+      return current.stream;
+    }
+    await stopRoom(channelId, "presenter-changed");
   }
   return startRoom(channelId, presenterPeerId);
 }

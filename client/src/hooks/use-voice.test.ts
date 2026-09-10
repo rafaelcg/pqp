@@ -423,18 +423,17 @@ describe("screen share audio", () => {
     };
   }
 
-  it("does not ask for the machine's audio, and hides our own tab from the picker", async () => {
-    // The 23 Aug 2026 echo report, pinned. `systemAudio: "include"` was what
-    // captured the call off the machine's own mixer and sent it back to the
-    // people who were speaking. Audio is still REQUESTED, because that is what
-    // keeps a Chrome tab share carrying that tab's sound, which cannot echo.
+  it("lets Chrome offer system audio and strips this document from the tap", async () => {
+    // The 23 Aug 2026 echo was `include` without `restrictOwnAudio`. Chrome
+    // 141+ can strip this document, so `include` is how its picker shows one
+    // "Share system audio" box instead of a hidden pre-arm on our bar.
     const { voice } = await connectedMesh();
     await voice.startScreenShare();
 
     expect(displayMediaCalls).toHaveLength(1);
     expect(displayMediaCalls[0]).toMatchObject({
       audio: { echoCancellation: false, restrictOwnAudio: true },
-      systemAudio: "exclude",
+      systemAudio: "include",
       // The anti-feedback rule: sharing the call's own tab would put the call
       // back into the call.
       selfBrowserSurface: "exclude",
@@ -746,8 +745,13 @@ describe("screen share audio", () => {
       sharing: true,
       audioStreamId: null,
     });
-    // Re-published without the audio half rather than torn down.
-    expect(managers[0]?.screenStreams.at(-1)).not.toBeNull();
+    // Re-published without the audio half rather than TORN DOWN, and the
+    // difference is the test. Doubly optional before: no manager gave
+    // `undefined`, and `.at(-1)` on an empty `screenStreams` gave `undefined`
+    // too, so a share that was dropped and never re-published passed.
+    expect(managers[0]).toBeDefined();
+    expect(managers[0]!.screenStreams.length).toBeGreaterThan(0);
+    expect(managers[0]!.screenStreams.at(-1)).not.toBeNull();
   });
 
   it("hands the ICE servers this tab already holds to the SFU connection", async () => {

@@ -72,11 +72,12 @@ import {
   recordStatusSamples,
 } from "./services/status.js";
 import {
-  getSocketUser,
   handleWsConnection,
+  HEARTBEAT_INTERVAL_MS,
   notifyCommunityHomeUpdate,
   startClusterPresenceRefresh,
   startClusterStatusRefresh,
+  startHeartbeat,
 } from "./ws/index.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
@@ -322,12 +323,6 @@ const wss = new WebSocketServer({
   perMessageDeflate: wsPerMessageDeflate(),
 });
 
-// Protocol-level heartbeat: browsers auto-reply pong, so this both reaps dead
-// connections and keeps proxy idle timers (e.g. Railway edge) from closing
-// quiet sockets.
-const HEARTBEAT_INTERVAL_MS = 30_000;
-const socketLiveness = new WeakMap<import("ws").WebSocket, boolean>();
-
 // One live number for the operator dashboard: every signed-in client holds a
 // socket open for its whole session, so this is the closest thing the process
 // has to "people connected". A Set's `size`, read only when the dashboard asks.
@@ -358,10 +353,8 @@ wss.on("connection", (socket, req) => {
   // concurrent sockets is always reached immediately after one opens, so
   // sampling on this event makes `peakSockets` exact rather than sampled.
   noteRuntimeSample();
-  socketLiveness.set(socket, true);
-  socket.on("pong", () => {
-    socketLiveness.set(socket, true);
-  });
+  // Liveness bookkeeping lives in `handleWsConnection`
+  // (`trackSocketLiveness`), which is the half `startHeartbeat` below reads.
   handleWsConnection(socket, clientAddress(req as never));
 });
 
@@ -369,25 +362,25 @@ wss.on("error", (error) => {
   console.error("[ws] server error:", error);
 });
 
-const heartbeat = setInterval(() => {
-  // Free ride on a loop that already runs: keeps the pool high-water marks
-  // moving on a quiet server, where nothing else is sampling them.
-  noteRuntimeSample();
-  for (const client of wss.clients) {
-    if (socketLiveness.get(client) === false) {
-      // Reaping a socket that missed the previous heartbeat — log it so a
-      // mystery "kicked out" can be traced to a missed pong vs a real close.
-      const user = getSocketUser(client);
-      logEvent("ws.heartbeatTerminate", { userId: user?.id });
-      client.terminate();
-      continue;
-    }
-    socketLiveness.set(client, false);
-    client.ping();
-  }
-}, HEARTBEAT_INTERVAL_MS);
+// Protocol-level heartbeat: browsers auto-reply pong, so this both reaps dead
+// connections and keeps proxy idle timers (e.g. Railway edge) from closing
+// quiet sockets. Reaping a socket is what eventually frees a voice seat, so
+// this is the first link in that chain.
+//
+// IT IS ONE FUNCTION NOW. This used to be a second, inline copy of the loop
+// in `ws/index.ts`, and the copy is the one that ran: the two-strike rule
+// written after the moonkase stream reaped live users, together with its
+// whole test file, sat in `ws/index.ts` being imported by nobody. A reaper
+// with two implementations has one that is tested and one that is true. The
+// tick callback keeps the pool high-water marks moving on a quiet server,
+// which is the only thing the inline copy did that the shared one did not.
+const stopHeartbeat = startHeartbeat(
+  wss.clients,
+  HEARTBEAT_INTERVAL_MS,
+  noteRuntimeSample,
+);
 
-wss.on("close", () => clearInterval(heartbeat));
+wss.on("close", () => stopHeartbeat());
 
 // Drop expired rate-limit windows so the map doesn't grow unbounded.
 const rateLimitSweep = setInterval(() => {
@@ -660,7 +653,7 @@ async function shutdown(signal: string) {
   // fly-proxy stops routing new connections to this machine and the
   // reconnects that the closes below produce land on the sibling.
   beginDrain();
-  clearInterval(heartbeat);
+  stopHeartbeat();
   stopReadySampler();
   clearInterval(rateLimitSweep);
   clearInterval(communityHomeSweep);

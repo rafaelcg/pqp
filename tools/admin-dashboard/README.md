@@ -4,8 +4,8 @@ One static page (`site/index.html`) and one small Cloudflare Worker
 (`src/index.ts`) in front of it, deployed as the existing `pqp-admin` Worker at
 `https://pqp-admin.rafaelcg-a0a.workers.dev/`.
 
-It is a read-only view of the hosted instance for the person running it. It is
-not part of the product and it is not linked from anywhere.
+A view of the hosted instance for the person running it, plus **two controls**
+that write. It is not part of the product and it is not linked from anywhere.
 
 ## What it shows
 
@@ -19,7 +19,7 @@ Under it, one line of provenance: which account kinds the numbers exclude, the
 server's cache window (and that the capacity card sits outside it), and the
 page's own refresh interval.
 
-Then a **rail** on the left with five sections. The whole payload still arrives
+Then a **rail** on the left with six sections. The whole payload still arrives
 in one read, so choosing a section is a pane toggle and never a request; the
 choice lives in the URL hash, so a reload or a link to yourself opens where you
 left off, and arrow keys move between them.
@@ -37,6 +37,7 @@ one screen.
 |---|---|
 | **agora** | Is something on fire, and what is happening this minute |
 | **ao longo do tempo** | What has been changing (the only part of the page with a memory) |
+| **controles** | What can I turn on and off, right now, without a deploy |
 | **pessoas e conteúdo** | Who showed up, who came back, what they wrote |
 | **moderação** | What is queued |
 | **infra** | What is deployed, where, and how available it has been |
@@ -122,6 +123,70 @@ read as nine equals.
 | **pessoas e conteúdo** | who is actually active (24h and 7d), the returning-writer share, what people filled in (handle / avatar / banner / game account / age check), first-touch acquisition, game connections, text-vs-voice composition, the busiest text channels, the shape of the instance (direct and group conversations, private channels, channels that never received a message), the community directory (off by default, and it says so), the five most active servers, the full call-quality distribution with notes, and **apps e produto** (Android APK clicks + GitHub downloads, friendships, attachments, invites, push) |
 | **moderação** | the report queue (open / actioned / dismissed / new today), bans, timeouts in force, and the feedback queue with the last eight entries. The rail carries a count badge when anything is open |
 | **infra** | the deployed commit, region, database latency, worst-component uptime over 24h and 7d, and availability per component |
+
+### controles: the only part of this page that writes
+
+Two levers, and deliberately only two. Both existed before and neither could
+be reached by the person running the event: one was a Fly environment
+variable, the other was a column you changed with hand-written SQL against
+production.
+
+| Control | What it writes | When it takes effect |
+|---|---|---|
+| **watch party por servidor** | `servers.live_hls_enabled` | the next join, the next share, the next config read. No deploy, no restart, no socket closed |
+| **caminho de mídia por canal** | `channels.voice_transport` | the next room that opens in that channel. A call already running is not moved |
+
+Above them, **o que está no ar**: how many transcodes this process is running
+(from `/metrics`, so it moves on the 30-second poll), and how many servers
+have been decided either way (from `/operator/servers`).
+
+**The three states of watch party availability**, and the sentence the row
+shows for each, are in `docs/WATCH_PARTY.md` §"Widening it is a click now".
+Short version: the column beats `LIVE_HLS_SERVER_ALLOWLIST` in both
+directions, and **seguir a variável** clears it so the variable decides again.
+`LIVE_HLS_ENABLED` is above all of it and is not on this page: it is the
+master switch and it is a deploy either way.
+
+**What a wrong click costs.**
+
+| Click | Cost | Guarded |
+|---|---|---|
+| **ligar** a server | a host there can run a party; the SFU carries those bytes | no. One click to undo, and friction on a harmless control teaches people to click through the dialog on the harmful one |
+| **desligar** a server with no party live | the create control goes away on the next page load | no |
+| **desligar** a server **that is streaming right now** | the egress stops at the next reconcile and **the audience loses the picture** | **yes**, a confirmation naming the server. This is the only genuinely disruptive click here |
+| **seguir a variável** | back to whatever the environment said | no |
+| pin a channel to **ponto a ponto** | the next room there is peer-to-peer | no, except: |
+| pin a **watch party** channel to **ponto a ponto** | the next party in that room has no stream at all, and nothing on the host's screen says why | **yes**, a confirmation |
+| pin a channel to **servidor de mídia** | the next room there is on the SFU | no |
+
+Nothing on this page deletes anything, and there is no account, ban or
+moderation action on it. That is not an oversight: the machine token that
+reaches these routes lives in a Cloudflare Worker behind an HTTP Basic
+password, and `DELETE /api/admin/users/:id` is deliberately absent from
+`ADMIN_MACHINE_ROUTES` (`server/src/api/index.ts`) for exactly that reason.
+Terminating an account stays something a signed-in instance moderator does.
+
+**Every write is audited.** `audit_log` is server-scoped and both of these
+writes are about one server, so they land in that server's own log as
+`server.live_hls_update` and `channel.voice_transport_update`, with the old
+value and the new one in `changes`. The actor is **NULL** when the write came
+from this dashboard (the machine token has no account, and the schema already
+means NULL as "the system did it"); an instance moderator writing with their
+own Clerk session is recorded by id. The server's owner sees the entry, which
+is the point: it is a change to their server made from outside their staff.
+
+**How the section behaves.** It does not ride the 30-second poll, because a list
+that reshuffles under the cursor is how a wrong row gets clicked. It reads
+when the section is opened, when you search, after every write, and when you
+press **atualizar**. A write disables its own row until it answers, and the
+row is redrawn from the API's reply rather than from what the page hoped, so
+a write that silently failed cannot look like one that worked.
+
+**One caveat the page states out loud.** Turning a server on does not make
+the create button appear in a tab that is already open: the client caches
+`GET /api/live-hls/config?serverId=` for the page's lifetime. The server-side
+capability is immediate either way. Flip it before the host opens the channel,
+or tell them to reload.
 
 ### The SFU card names the host, because a rollback is invisible otherwise
 
@@ -365,6 +430,23 @@ Live, from `GET https://api.pqp.gg/api/admin/voice-occupancy` (proxied as
 - Server side: `server/src/services/voice-occupancy.ts`, retention 21 days at
   minute resolution and forever for the daily peaks
 
+Live, from `GET /api/admin/servers` and `GET /api/admin/server-channels`
+(proxied as `/operator/servers` and `/operator/channels`, same machine token),
+and written back through `PUT /operator/server-live-hls` and
+`PUT /operator/channel-transport`:
+
+- **servers**, searched by name (`?q=`, `ILIKE`, 25 at a time): member count,
+  watch party channels, the `live_hls_enabled` row, the **effective** answer
+  and which of the three inputs produced it, and whether this process is
+  running an egress for that server right now
+- **a server's voice and watch party channels**: the `voice_transport`
+  override, the transport this process has **pinned** for a room that is open,
+  and what a room opening now **would** be pinned to plus the reason, computed
+  by `resolveVoiceTransport`, the same function the join path calls, so the
+  page cannot drift from what actually happens
+- Server side: `server/src/services/operator.ts`, the route table in
+  `server/src/api/index.ts`, tests in `server/src/api/operator.test.ts`
+
 Live, from this Worker (merged onto `/metrics`, never stored on the API):
 
 - **Android APK button clicks**: `POST /apk-click` from the hosted `/android`
@@ -419,8 +501,14 @@ The repo is open source and a `workers.dev` hostname is guessable. The page is
 aggregate counts and holds no id, handle or email, but it is not *only* counts:
 the "most active" tables carry the **names of private servers and channels**,
 and the call-rating notes and feedback entries are **free text people wrote**.
-All of that is more than the public status page is ever allowed to say. So the Worker gates the page, `/metrics`, `/occupancy` and `/health` behind HTTP Basic Auth, compared in constant time, and refuses to
-serve anything at all (503) while the password is unset. The one public path is
+All of that is more than the public status page is ever allowed to say, and
+since the **controles** section landed the password also guards two writes. So
+the Worker gates the page, `/metrics`, `/occupancy`, `/health` and every
+`/operator/*` route behind HTTP Basic Auth, compared in constant time, and
+refuses to serve anything at all (503) while the password is unset. The
+`/operator/*` routes are an exact (method, path) table in `src/index.ts`, not a
+prefix: `POST` and `DELETE` on one of those paths are a 404, and every other
+path stays GET-only as it always was. The one public path is
 `POST /apk-click`: it increments a counter and cannot read one. Every response is
 `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Robots-Tag:
 noindex`, and `/robots.txt` disallows everything.
@@ -440,7 +528,7 @@ Nothing secret lives in this directory, in `wrangler.jsonc`, or in the HTML.
 |---|---|---|---|
 | Worker | `ADMIN_DASH_PASSWORD` | secret | Basic Auth password. Unset: the Worker serves nothing. |
 | Worker | `ADMIN_DASH_USER` | var (in `wrangler.jsonc`) | Basic Auth username, default `operador`. |
-| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics` and `/occupancy`. Never reaches the page. |
+| Worker | `ADMIN_METRICS_TOKEN` | secret | Bearer token sent to the API on `/metrics`, `/occupancy` and the four `/operator/*` routes. Never reaches the page. Since the controls landed it can WRITE two columns; what it can reach is the table in `server/src/api/index.ts`. |
 | Worker | `API_ORIGIN` | var (in `wrangler.jsonc`) | `https://api.pqp.gg` |
 | Worker | `APK_CLICKS` | KV | Click counter for `POST /apk-click`. Binding in `wrangler.jsonc`. |
 | Worker | `GITHUB_REPO` | var | `rafaelcg/pqp` — release looked up for the APK download count. |
@@ -523,8 +611,19 @@ Test the API side directly, with the token:
 ```bash
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" https://api.pqp.gg/api/admin/metrics | jq .
 curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/voice-occupancy?days=30" | jq .
+curl -s -H "Authorization: Bearer $ADMIN_METRICS_TOKEN" "https://api.pqp.gg/api/admin/servers?q=cine" | jq .
 # without it: 404
 ```
+
+To run the whole thing locally, including the writes: a local API with
+`DEV_AUTH_BYPASS=true` and an `ADMIN_METRICS_TOKEN`, then
+
+```bash
+cd tools/admin-dashboard
+npx wrangler dev --var API_ORIGIN:http://127.0.0.1:3001
+```
+
+with the two secrets in `.dev.vars` (git-ignored).
 
 ## Not in the pnpm workspace
 

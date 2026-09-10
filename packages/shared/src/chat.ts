@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { watchPartySchema } from "./watch-party-session.js";
 import {
   channelKindSchema,
   MESSAGE_BULK_DELETE_MAX,
@@ -29,6 +30,7 @@ import {
 import { webhookEmbedSchema } from "./webhooks.js";
 import { chanceRequestSchema, chanceResultSchema } from "./chance.js";
 import { pollRequestSchema, pollSchema } from "./polls.js";
+import { AUTOMOD_CUSTOM_MESSAGE_MAX } from "./automod.js";
 
 export const joinChannelMessageSchema = z.object({
   type: z.literal("join-channel"),
@@ -159,6 +161,7 @@ const broadcastMessageSchema = z.object({
   pinnedBy: messagePinnedBySchema.nullable().default(null),
   embeds: z.array(embedSchema).default([]),
   isWebhook: z.boolean().default(false),
+  isAutomod: z.boolean().default(false),
   mentionEveryone: z.boolean().default(false),
   mentionHere: z.boolean().default(false),
   webhookEmbeds: z.array(webhookEmbedSchema).default([]),
@@ -227,6 +230,12 @@ export const messageRejectReasonSchema = z.enum([
   "undeliverable",
   /** Channel slow mode: this sender must wait before the next create. */
   "slow-mode",
+  /**
+   * An AutoMod rule on the server refused the body. `automodMessage` carries
+   * the rule's own copy when the owner wrote one; the client shows its
+   * default otherwise. The matched term is never echoed back.
+   */
+  "automod",
 ]);
 export type MessageRejectReason = z.infer<typeof messageRejectReasonSchema>;
 
@@ -243,6 +252,8 @@ export const messageRejectedSchema = z.object({
     .min(0)
     .max(SLOWMODE_SECONDS_MAX * 1000)
     .optional(),
+  /** May be present when `reason` is `automod`: the rule's custom copy. */
+  automodMessage: z.string().max(AUTOMOD_CUSTOM_MESSAGE_MAX).optional(),
 });
 export type MessageRejected = z.infer<typeof messageRejectedSchema>;
 
@@ -480,6 +491,29 @@ export type ChannelSessionReminderMessage = z.infer<
   typeof channelSessionReminderSchema
 >;
 
+/**
+ * The watch party event object changed: created, published, live, ended, or a
+ * co-host list edited. Sent to every socket that may see the party in its
+ * current state (a `draft` reaches only the host and co-hosts), so a client
+ * that gets one may render it without a second opinion.
+ *
+ * `party: null` means "there is nothing here for you any more", which covers
+ * an end, a cancel, and the party leaving the states you may see.
+ *
+ * ROUTED PER SOCKET, NOT PER CHANNEL, which is why it is out of
+ * `CHAT_SERVER_MESSAGE_TYPES` alongside the reminder above: whether a person
+ * may see a draft depends on their role in it, so the sender resolves the
+ * frame per recipient rather than fanning one encoded copy through the
+ * channel relay.
+ */
+export const watchPartyUpdateSchema = z.object({
+  type: z.literal("watch-party-update"),
+  channelId: z.string().uuid(),
+  party: watchPartySchema.nullable(),
+});
+
+export type WatchPartyUpdateBroadcast = z.infer<typeof watchPartyUpdateSchema>;
+
 export const chatServerMessageSchema = z.discriminatedUnion("type", [
   messageBroadcastSchema,
   messageUpdateBroadcastSchema,
@@ -515,6 +549,7 @@ export const chatServerMessageSchema = z.discriminatedUnion("type", [
   communityHomeUpdateSchema,
   pollUpdateBroadcastSchema,
   channelSessionReminderSchema,
+  watchPartyUpdateSchema,
 ]);
 
 /**

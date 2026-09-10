@@ -107,7 +107,22 @@ function track<T>(work: Promise<T>, event: string): Promise<T | null> {
   return guarded;
 }
 
-/** Test seam: resolves once every registry write started so far has settled. */
+/**
+ * Put work that is not itself a query into the same in-flight set, so the
+ * settle seam below can see it.
+ *
+ * `ws/voice.ts` chains a channel's row writes one after another, which means
+ * the second write has not been ISSUED yet while the first is running and so
+ * is in no set at all. Registering the chain rather than each query is what
+ * keeps "every write asked for so far has landed" true; without it a test
+ * drains the first write, returns through the gap, and reads the rows a
+ * statement early.
+ */
+export function trackPendingRegistryWork(work: Promise<unknown>): void {
+  track(work, "chain");
+}
+
+/** Test seam: resolves once every registry write asked for so far has settled. */
 export async function settleVoiceRegistryWrites(): Promise<void> {
   while (inFlight.size > 0) {
     await Promise.allSettled([...inFlight]);
@@ -383,31 +398,167 @@ async function writePeer(peer: VoicePeerWrite): Promise<void> {
 }
 
 /**
- * Remove a peer and, if it was the room's last, the room row with it, in one
- * statement. The CTE's delete is not visible to the `NOT EXISTS` (every part
- * of a data-modifying statement runs on the same snapshot), hence the explicit
- * `peer_id <> $1`. Two *exactly* concurrent last-leaves can each still see the
- * other's row and leave the room row behind; the M3 reconcile sweeps rooms
- * with no peers, and until then `pinVoiceRoom` treats such a row as a pin the
- * next joiner adopts, which is the same transport the room just had.
+ * Remove a peer and, if it was the room's last, the room row with it.
+ *
+ * TWO STATEMENTS, NOT ONE, AND THAT IS THE FIX FOR AN OLD RACE. This was a
+ * single CTE, and every part of a data-modifying statement runs on the same
+ * snapshot: the CTE's delete was invisible to its own `NOT EXISTS`, and a
+ * concurrent last-leave's delete was invisible too. Two people leaving a
+ * two-person room at the same moment therefore each saw the other still
+ * seated and neither dropped the room row. That was written down as tolerable
+ * because it was rare and the reconcile's room sweep tidied it up 30s later.
+ * It stopped being rare when `ws/voice.ts` narrowed its write chain from the
+ * channel to the peer, which is what a channel eviction needs (one slow seat
+ * must not hold up anybody else's) and which lets a room's deletes genuinely
+ * overlap.
+ *
+ * Splitting it removes the race rather than shrinking it. The room check runs
+ * after this connection's own peer delete has committed, so of two concurrent
+ * leaves the later check always sees an empty room and clears it; the delete
+ * is idempotent, so both clearing it is fine too. The window in between is a
+ * room row with no peers, which `pinVoiceRoom` already treats as a pin the
+ * next joiner adopts, at the same transport the room just had.
  */
 export function deleteVoicePeer(peerId: string): Promise<unknown> {
   return track(
-    getPool().query(
-      `WITH gone AS (
-         DELETE FROM voice_peers WHERE peer_id = $1 RETURNING channel_id
-       )
+    (async () => {
+      const gone = await getPool().query<{ channel_id: string }>(
+        `DELETE FROM voice_peers WHERE peer_id = $1 RETURNING channel_id`,
+        [peerId],
+      );
+      const channelId = gone.rows[0]?.channel_id;
+      if (!channelId) {
+        return;
+      }
+      await getPool().query(
+        `DELETE FROM voice_rooms r
+          WHERE r.channel_id = $1
+            AND NOT EXISTS (
+              SELECT 1 FROM voice_peers p WHERE p.channel_id = $1
+            )`,
+        [channelId],
+      );
+    })(),
+    "deletePeer",
+  );
+}
+
+/**
+ * How long a row this instance owns may exist without a peer in this
+ * instance's map before the sweep below reclaims it.
+ *
+ * The legitimate window is the join handler's: `adoptVoicePeer` stamps this
+ * instance on a row before `peers.set` runs a few awaited reads later, and a
+ * join that bails between the two (a socket that closed mid-handshake) leaves
+ * the row behind. Sixty seconds is far longer than any of that and far
+ * shorter than the fifteen hours a leaked seat used to last.
+ */
+export const VOICE_OWN_ROW_GRACE_MS = 60_000;
+
+/**
+ * THE BACKSTOP THIS TABLE DID NOT HAVE: rows THIS instance owns that this
+ * instance's peer map does not hold.
+ *
+ * `reconcileVoiceRegistry` deliberately never touches its own rows, on the
+ * reasoning that an instance is the authority on its own seats and its own
+ * orphan timers will release them. That is true right up until a row exists
+ * without a peer behind it, and then it is exactly backwards: nothing else in
+ * the cluster is allowed to clean it, and the owner has nothing left to clean
+ * it with. The result is a seat with `orphaned_at` NULL, a live `instance_id`
+ * and no socket, on the roster until the process restarts. It happened, for
+ * fifteen hours, in production.
+ *
+ * Two ways in, both real:
+ *  * a peer row write that lands after the DELETE of the same peer, because
+ *    the two statements were issued on different pooled connections (fixed at
+ *    the source in `ws/voice.ts`, but a guard is not a proof);
+ *  * a join that stamped the row (`adoptVoicePeer`) and then returned before
+ *    it seated the peer.
+ *
+ * `orphaned_at IS NULL` IS NOT AN OPTIMISATION, IT IS THE DEFINITION. A ghost
+ * is a row the close path never stamped: nobody marked it orphaned because
+ * nobody had a peer to lose. An orphan is the opposite, and it is the one
+ * thing this codebase has worked hardest to protect: a seat deliberately held
+ * for `VOICE_RESUME_TTL_MS` so a refresh mid-call keeps its place, expired by
+ * its own timer (or, for a dead instance, by `reconcileVoiceRegistry`). Those
+ * two windows overlap, so without this clause the sweep would delete and
+ * retire a resumable seat somewhere between sixty and ninety seconds in, and
+ * the person coming back would find their place gone. Own orphans are held in
+ * `peers` and would be spared by `heldPeerIds` anyway; that is an invariant
+ * of another file, and this row is not the place to depend on it.
+ *
+ * `heldPeerIds` is what the caller actually holds. An empty list is not a
+ * refusal to act: an instance holding no peers legitimately owns no rows.
+ * The delete retires the ids, because a resume naming one must cold-join
+ * rather than reconstruct itself back into a ghost, and takes the room row
+ * with the last peer exactly as `deleteVoicePeer` does.
+ */
+export async function sweepOwnStaleVoicePeers(
+  heldPeerIds: string[],
+  options: { instanceId?: string; graceMs?: number } = {},
+): Promise<{ peerId: string; channelId: string }[]> {
+  const me = options.instanceId ?? INSTANCE_ID;
+  const graceMs = options.graceMs ?? VOICE_OWN_ROW_GRACE_MS;
+  const result = await getPool().query<{ peer_id: string; channel_id: string }>(
+    `WITH gone AS (
+       DELETE FROM voice_peers p
+        WHERE p.instance_id = $1
+          AND p.orphaned_at IS NULL
+          AND p.updated_at < NOW() - ($2::bigint * INTERVAL '1 millisecond')
+          AND NOT (p.peer_id = ANY ($3::uuid[]))
+        RETURNING p.peer_id, p.channel_id
+     ),
+     retired AS (
+       INSERT INTO voice_retired_peers (peer_id)
+       SELECT peer_id FROM gone
+       ON CONFLICT (peer_id) DO UPDATE SET retired_at = NOW()
+     ),
+     unpinned AS (
        DELETE FROM voice_rooms r
         USING gone
         WHERE r.channel_id = gone.channel_id
           AND NOT EXISTS (
             SELECT 1 FROM voice_peers p
-             WHERE p.channel_id = gone.channel_id AND p.peer_id <> $1
-          )`,
-      [peerId],
-    ),
-    "deletePeer",
+             WHERE p.channel_id = gone.channel_id
+               AND p.peer_id <> ALL (SELECT peer_id FROM gone)
+          )
+     )
+     SELECT peer_id, channel_id FROM gone`,
+    [me, graceMs, heldPeerIds],
   );
+  return result.rows.map((row) => ({
+    peerId: row.peer_id,
+    channelId: row.channel_id,
+  }));
+}
+
+/**
+ * Seats nobody has written to in `idleMs`, cluster-wide, and the age of the
+ * oldest.
+ *
+ * The number that would have made this obvious months ago. A seat is written
+ * on join, on every state change and on resume, so a row untouched for an
+ * hour is either somebody who has genuinely sat silent in a call for an hour
+ * or a seat with nobody behind it. Either way it is the number an operator
+ * wants on the dashboard, and "it climbs and never comes down" is the shape
+ * of the leak.
+ */
+export async function countIdleVoiceSeats(
+  idleMs: number,
+): Promise<{ seats: number; oldestIdleMinutes: number | null }> {
+  const result = await getPool().query<{ n: string; oldest: string | null }>(
+    `SELECT COUNT(*)::text AS n,
+            MAX(EXTRACT(EPOCH FROM (NOW() - updated_at)) / 60)::text AS oldest
+       FROM voice_peers
+      WHERE updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')`,
+    [idleMs],
+  );
+  const row = result.rows[0];
+  return {
+    seats: Number(row?.n ?? 0),
+    oldestIdleMinutes:
+      row?.oldest == null ? null : Math.round(Number(row.oldest)),
+  };
 }
 
 /** Socket gone, seat held (or the reverse on resume). */

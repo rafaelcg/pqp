@@ -110,6 +110,24 @@ jobs:
           VITE_SPONSOR_URL: "https://github.com/sponsors/rafaelcg"
           VITE_PIX_KEY: ${{ vars.VITE_PIX_KEY }}
           VITE_PIX_BRCODE: ${{ vars.VITE_PIX_BRCODE }}
+          # Watch parties, live reactions and the schedule hint. BUILD-TIME
+          # flags: `lib/watch-party-channels.ts`, `lib/live-reactions.ts` and
+          # `lib/channel-session-schedule.ts` each read their own env at bundle
+          # time, so a server flag cannot turn any of them on. Until these
+          # lines existed the names were absent from this workflow entirely,
+          # which meant production could not render a watch party whatever
+          # `LIVE_HLS_ENABLED` said on the API. Unset is still off — the
+          # variables do not exist yet, and `${{ vars.X }}` on a name that is
+          # not set is the empty string, which is not "true". Repository
+          # variables rather than secrets: none of the three is a credential,
+          # and each is readable in the shipped bundle. Set one with
+          # `gh variable set VITE_WATCH_PARTY_CHANNELS --body true` and
+          # redeploy web; unset it (or set anything but `true`) to turn it
+          # back off without touching this file. Staging turns all three on by
+          # default; see deploy-staging.yml.
+          VITE_WATCH_PARTY_CHANNELS: ${{ vars.VITE_WATCH_PARTY_CHANNELS }}
+          VITE_WATCH_PARTY_SCHEDULE: ${{ vars.VITE_WATCH_PARTY_SCHEDULE }}
+          VITE_LIVE_REACTIONS: ${{ vars.VITE_LIVE_REACTIONS }}
         run: pnpm --filter @pqp/client build
 
       # Install wrangler outside the pnpm workspace (npm + workspace:* fails in client/)

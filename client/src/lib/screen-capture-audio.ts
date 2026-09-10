@@ -107,6 +107,23 @@ export interface ScreenCaptureOptions
 export interface ScreenCaptureIntent {
   preferBrowserTab?: boolean;
   hideCursor?: boolean;
+  /**
+   * A display stream the caller already has, to publish instead of opening
+   * the picker again.
+   *
+   * The watch party setup surface exists so a host can see exactly what the
+   * room will see BEFORE anybody sees it, which means the picker has to run
+   * during setup rather than at "Ir ao vivo". Handing that same stream to the
+   * call is what makes the preview a preview rather than a rehearsal: without
+   * it the host picks a window, looks at it, presses go live, and is asked to
+   * pick a window a second time, at which point the thing they approved and
+   * the thing that goes out are two different captures.
+   *
+   * Everything downstream of the capture is unchanged: the same track
+   * bookkeeping, the same "share ended" listener, the same audio handling.
+   * Only the two lines that would have called `getDisplayMedia` are skipped.
+   */
+  stream?: MediaStream;
 }
 
 /** `MediaTrackConstraintSet` plus the screen-audio member TypeScript lacks. */
@@ -139,6 +156,13 @@ export interface ScreenCaptureEnvironment {
    * `navigator.mediaDevices.getSupportedConstraints().restrictOwnAudio`.
    */
   supportsRestrictOwnAudio: boolean;
+  /**
+   * True when the desktop share picker itself asks about computer audio.
+   * Absence means an older shell that treats `audioRequested` as the whole
+   * switch, so the page must not request audio unless the person already
+   * opted in somewhere the page owns.
+   */
+  sharePickerOffersAudio: boolean;
 }
 
 /**
@@ -168,6 +192,7 @@ export function shellCarriesScreenAudio(env: ScreenCaptureEnvironment): boolean 
 export function screenCaptureEnvironment(
   isDesktopShell: boolean,
   shellPlatform: string | null = null,
+  extras: { sharePickerOffersAudio?: boolean } = {},
 ): ScreenCaptureEnvironment {
   let supportsRestrictOwnAudio = false;
   try {
@@ -178,16 +203,74 @@ export function screenCaptureEnvironment(
     // No `mediaDevices` at all. The caller is about to fail for a much larger
     // reason than a missing constraint; answering "no" is the safe shape.
   }
-  return { isDesktopShell, shellPlatform, supportsRestrictOwnAudio };
+  return {
+    isDesktopShell,
+    shellPlatform,
+    supportsRestrictOwnAudio,
+    sharePickerOffersAudio: extras.sharePickerOffersAudio === true,
+  };
+}
+
+/**
+ * Can this capture strip the call out of a system-audio tap?
+ *
+ * Without that, offering "share this computer's sound" is offering the
+ * 23 Aug 2026 echo. Chrome 141+ and Electron 43.4+ can; older engines cannot,
+ * so they keep the exclude default and a tab share is the only clean path.
+ */
+export function canExcludeCallFromSystemAudio(
+  env: ScreenCaptureEnvironment,
+): boolean {
+  return env.supportsRestrictOwnAudio;
+}
+
+/**
+ * Chrome / Edge will show their own "Share system audio" box when we include.
+ *
+ * That is the one-checkbox path on the web: we unlock the option, they tick
+ * it in the same picker where they pick the screen. Watch party never wants
+ * this — it is a tab share of the player.
+ */
+export function offersBrowserSystemAudio(
+  env: ScreenCaptureEnvironment,
+  intent: ScreenCaptureIntent = {},
+): boolean {
+  return (
+    !env.isDesktopShell &&
+    canExcludeCallFromSystemAudio(env) &&
+    !intent.preferBrowserTab
+  );
+}
+
+/**
+ * The desktop app can tap Windows loopback AND strip its own playback.
+ *
+ * Old shells (Electron 34 / v0.1.3) can tap and cannot strip, so they are
+ * treated as unable: asking for audio there is how every share echoed.
+ */
+export function offersShellSystemAudio(env: ScreenCaptureEnvironment): boolean {
+  return shellCarriesScreenAudio(env) && canExcludeCallFromSystemAudio(env);
+}
+
+/**
+ * The page has to ask about computer audio before `getDisplayMedia`.
+ *
+ * True only on a Windows shell that can exclude the call but whose picker
+ * does not ask yet. The next desktop binary puts the box in the picker and
+ * advertises `sharePickerOffersAudio`, and this becomes false.
+ */
+export function needsShareAudioPrompt(env: ScreenCaptureEnvironment): boolean {
+  return offersShellSystemAudio(env) && !env.sharePickerOffersAudio;
 }
 
 /**
  * What we ask a screen capture for.
  *
- * `shareSystemAudio` is the user's explicit opt-in and it defaults to false at
- * every call site. False does not mean "silent share": a Chrome tab share still
- * carries that tab's own sound, which is the route this product recommends and
- * the only one that cannot echo.
+ * `shareSystemAudio` is the user's explicit opt-in on a desktop shell whose
+ * picker cannot ask yet. On the web it is ignored: Chrome 141+ gets
+ * `systemAudio: "include"` so its own picker shows one checkbox, and
+ * `restrictOwnAudio` keeps the call out of that tap. False does not mean
+ * "silent share": a Chrome tab share still carries that tab's own sound.
  *
  * The mic's processing chain stays off in both modes. Echo cancellation and
  * noise suppression exist for a person talking into a laptop and would chew
@@ -211,16 +294,25 @@ export function screenCaptureOptions(
   if (env.supportsRestrictOwnAudio) {
     audio.restrictOwnAudio = true;
   }
-  // An opt-in the platform cannot honour is worse than no opt-in: it does not
-  // degrade to a silent share, it fails the capture. In the shell the tick only
-  // counts on Windows; in a browser it always counts, because there the audio
-  // the tick governs is a tab's own sound, which every platform can hand over.
-  // Watch party never takes this opt-in: it wants the player tab's sound, not
-  // the machine's mixer.
-  const carriesAudio =
-    shareSystemAudio &&
-    !intent.preferBrowserTab &&
-    (!env.isDesktopShell || shellCarriesScreenAudio(env));
+  // Three doors, one rule: never offer the machine's mixer unless this
+  // document can be kept out of it.
+  //
+  // 1. Browser + restrictOwnAudio: `include` so Chrome shows *its* checkbox
+  //    in the same picker. The old pre-arm toggle was a second box for the
+  //    same question and is why people could not find the control.
+  // 2. Windows shell whose picker asks: request audio so the handler can
+  //    attach loopback when they tick it. The picker is the consent.
+  // 3. Windows shell whose picker cannot ask: the page dialog is the consent,
+  //    and `shareSystemAudio` is its answer. Off means `audio: false`, which
+  //    is still the only lever a v0.1.3 install honours.
+  //
+  // Watch party never takes the machine's mixer: it wants the player tab.
+  const browserOffersCheckbox = offersBrowserSystemAudio(env, intent);
+  const shellWantsAudio =
+    offersShellSystemAudio(env) &&
+    (env.sharePickerOffersAudio || shareSystemAudio) &&
+    !intent.preferBrowserTab;
+  const carriesAudio = browserOffersCheckbox || shellWantsAudio;
   return {
     // `video: true` used to be the whole of this, and it is why a share arrived
     // as a slideshow. With no frameRate asked for, a capture of a large surface

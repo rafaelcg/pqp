@@ -8,7 +8,12 @@ import {
   type ServiceWorkerControls,
 } from "@/lib/register-sw";
 import { snoozeRemainingMs } from "@/lib/update-snooze";
-import { setUpdatePromptShowing } from "@/lib/update-prompt-state";
+import {
+  setUpdatePromptShowing,
+  setUpdateWaiting,
+  shouldShowUpdateCard,
+  useUpdateRequestedAt,
+} from "@/lib/update-prompt-state";
 import { useInCall } from "@/lib/in-call-state";
 
 /**
@@ -24,8 +29,26 @@ import { useInCall } from "@/lib/in-call-state";
  * permanent dismissal was the difference between "running yesterday's build for
  * another minute" and running it until every tab of the origin is closed. See
  * `update-snooze.ts` for the incident that made the distinction matter.
+ *
+ * ESCAPE DOES NOT CLOSE THIS ONE, and it is the only corner card that opts out.
+ * Escape means "get the thing I just opened out of my way"; nobody opened this.
+ * Every corner card listens on `document`, this one is mounted first and so
+ * registers first, and the result was that one Escape aimed at an onboarding
+ * card silenced the update and left the onboarding card standing. Reported from
+ * production on 9 Sep 2026 as "other onboarding popups are making the update
+ * one disappear so im stuck on an old version".
  */
-export function UpdatePrompt() {
+export function UpdatePrompt({
+  /**
+   * Test seam. `virtual:pwa-register` only exists after vite-plugin-pwa has
+   * run, so nothing outside a real build can make a build "arrive"; without
+   * this the only observable state of this component is the empty one, and
+   * every rule above it would be unpinned.
+   */
+  register = registerServiceWorker,
+}: {
+  register?: typeof registerServiceWorker;
+} = {}) {
   const { t } = useTranslation();
   const [needsRefresh, setNeedsRefresh] = useState(false);
   const [snoozedAt, setSnoozedAt] = useState<number | null>(null);
@@ -33,10 +56,16 @@ export function UpdatePrompt() {
   const controlsRef = useRef<ServiceWorkerControls | null>(null);
 
   useEffect(() => {
-    const controls = registerServiceWorker(() => setNeedsRefresh(true));
+    const controls = register(() => setNeedsRefresh(true));
     controlsRef.current = controls;
     return () => controls.dispose();
-  }, []);
+  }, [register]);
+
+  // The durable fact, published for the rail: it draws the way back to this
+  // card and must keep drawing it through a snooze and through a call.
+  useEffect(() => {
+    setUpdateWaiting(needsRefresh);
+  }, [needsRefresh]);
 
   useEffect(() => {
     if (snoozedAt === null) {
@@ -49,10 +78,18 @@ export function UpdatePrompt() {
     return () => clearTimeout(timer);
   }, [snoozedAt]);
 
-  // Never ask someone in a call to reload: a reload ends their screen share
-  // and drops them out of the room. The card waits until they hang up.
+  // Never ask someone in a call to reload unprompted: a reload ends their
+  // screen share and drops them out of the room. The card waits until they
+  // hang up, or until they ask for it from the rail, which is what
+  // `requestedAt` is.
   const inCall = useInCall();
-  const show = needsRefresh && snoozedAt === null && !inCall;
+  const requestedAt = useUpdateRequestedAt();
+  const show = shouldShowUpdateCard({
+    waiting: needsRefresh,
+    snoozedAt,
+    requestedAt,
+    inCall,
+  });
 
   // Tell the corner-hint queue inside App to yield while this is up.
   useEffect(() => {
@@ -68,12 +105,18 @@ export function UpdatePrompt() {
       dismissLabel={t("update.dismiss")}
       dataAttribute="update"
       tone="status"
+      // A waiting build outranks every campaign card in `CORNER_HINT_ORDER`,
+      // and this is the same claim expressed in pixels: should a card ever
+      // forget to yield, the update is still the one you can click.
+      elevated
+      dismissOnEscape={false}
       title={
         <span className="flex items-center gap-2">
           <RefreshCw className="h-4 w-4 shrink-0 text-signal" aria-hidden="true" />
           {t("update.ready")}
         </span>
       }
+      body={inCall ? t("update.inCall") : undefined}
       footer={
         <div className="flex items-center gap-2">
           <Button

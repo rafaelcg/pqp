@@ -35,6 +35,8 @@ export interface ChatMessage extends Message {
   nonce?: string;
   /** Set when the server answered `message-create` with `message-rejected`. */
   rejectReason?: MessageRejectReason;
+  /** With `automod`: the rule's own copy, when the owner wrote one. */
+  automodMessage?: string;
   /** Epoch ms after which Retry is allowed again. */
   retryAvailableAt?: number;
 }
@@ -47,6 +49,7 @@ export function failedSendKey(
   | "chat.reject.cannotSend"
   | "chat.reject.undeliverable"
   | "chat.reject.slowMode"
+  | "chat.reject.automod"
   | "chat.failedSend" {
   switch (reason) {
     case "rate-limited":
@@ -59,6 +62,8 @@ export function failedSendKey(
       return "chat.reject.undeliverable";
     case "slow-mode":
       return "chat.reject.slowMode";
+    case "automod":
+      return "chat.reject.automod";
     default:
       return "chat.failedSend";
   }
@@ -68,6 +73,8 @@ const PERMANENT_REJECT_REASONS = new Set<MessageRejectReason>([
   "no-access",
   "cannot-send",
   "undeliverable",
+  // Retrying the same body hits the same rule. The author edits instead.
+  "automod",
 ]);
 
 export function isPermanentRejectReason(
@@ -109,12 +116,17 @@ export function messageRetryReady(
  * row and Send tell the same remaining seconds.
  */
 export function failedSendCopy(
-  message: Pick<ChatMessage, "rejectReason" | "retryAvailableAt">,
+  message: Pick<ChatMessage, "rejectReason" | "retryAvailableAt" | "automodMessage">,
   now = Date.now(),
 ): {
   key: ReturnType<typeof failedSendKey> | "composer.slowMode";
   vars?: { seconds: number };
+  /** The owner's own words for an AutoMod refusal; shown as-is, untranslated. */
+  text?: string;
 } {
+  if (message.rejectReason === "automod" && message.automodMessage) {
+    return { key: "chat.reject.automod", text: message.automodMessage };
+  }
   if (message.rejectReason === "slow-mode") {
     const seconds = remainingWaitSeconds(message.retryAvailableAt, now);
     if (seconds > 0) {
@@ -298,6 +310,7 @@ function toChatMessage(message: MessageBroadcast["message"]): ChatMessage {
     attachments: message.attachments ?? [],
     mentionEveryone: message.mentionEveryone ?? false,
     mentionHere: message.mentionHere ?? false,
+    isAutomod: message.isAutomod ?? false,
     chance: message.chance ?? null,
     poll: message.poll ?? null,
   };
@@ -501,6 +514,7 @@ export function createChatController(
     nonce: string,
     reason: MessageRejectReason,
     retryAfterMs?: number,
+    automodMessage?: string,
   ) {
     clearSendTimer(nonce);
     clearRetryUnlock(nonce);
@@ -525,6 +539,7 @@ export function createChatController(
         failed: true,
         rejectReason: reason,
         retryAvailableAt,
+        ...(automodMessage ? { automodMessage } : {}),
       };
     });
     if (changed) {
@@ -979,6 +994,7 @@ export function createChatController(
         // The composer only ever sends as the signed-in user, never as a
         // webhook — an optimistic bubble is never one.
         isWebhook: false,
+        isAutomod: false,
         webhookEmbeds: [],
         mentionEveryone: false,
         mentionHere: false,
@@ -1475,7 +1491,12 @@ export function createChatController(
           if (message.channelId !== channelId || !message.nonce) {
             return;
           }
-          markRejected(message.nonce, message.reason, message.retryAfterMs);
+          markRejected(
+            message.nonce,
+            message.reason,
+            message.retryAfterMs,
+            message.automodMessage,
+          );
           return;
         }
 

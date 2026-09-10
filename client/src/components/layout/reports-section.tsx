@@ -126,13 +126,10 @@ export function ReportsSection({ serverId }: { serverId: string }) {
 
   return (
     <section className="space-y-3 border-t border-ink-4 pt-5">
-      <h3 className="font-display text-sm font-bold uppercase tracking-wider text-paper-muted">
-        Reports
+      <h3 className="font-display text-sm font-bold uppercase tracking-wider text-text-tertiary">
+        {t("reports.title")}
       </h3>
-      <p className="text-sm text-paper-muted">
-        What members have flagged in this server. Reports about direct messages
-        are never shown here — nobody administers a conversation.
-      </p>
+      <p className="text-sm text-text-secondary">{t("reports.description")}</p>
 
       <div className="flex flex-wrap gap-1.5" role="tablist">
         {STATUS_TABS.map((tab) => (

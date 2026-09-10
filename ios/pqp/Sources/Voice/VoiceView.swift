@@ -74,6 +74,17 @@ struct VoiceView: View {
                         .padding(.bottom, 6)
                         .accessibilityIdentifier("voice.speakNotice")
                 }
+                // Same treatment as the speak notice, and for the same reason:
+                // the room growing is news, not a fault, and the sentence is
+                // there to explain the second of quiet while the media moves.
+                if let message = model.transportNotice {
+                    Text(message)
+                        .font(Typography.caption)
+                        .foregroundStyle(Palette.paperMuted)
+                        .multilineTextAlignment(.center)
+                        .padding(.bottom, 6)
+                        .accessibilityIdentifier("voice.transportNotice")
+                }
                 ScreenSharePresenterBanner(
                     isSharing: model.screenShare.isSharing,
                     errorMessage: model.screenShare.errorMessage
