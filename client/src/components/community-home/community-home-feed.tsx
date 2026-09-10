@@ -55,13 +55,13 @@ import {
   COMMUNITY_HOME_TITLE_MAX,
   communityHomeEmbedMedia,
   communityHomeEmbedUrl,
+  composeSubmitEmbedUrl,
   formatHomeBytes,
   isCommunityHomeEmbedKind,
   isHomeVideoFile,
   isPostLockedForViewer,
   loadCommunityHomeViewerMode,
   lockedPostSummary,
-  loneSupportedEmbedUrl,
   parseCommunityHomeEmbed,
   resolveComposeEmbedUrl,
   saveCommunityHomeViewerMode,
@@ -929,14 +929,11 @@ function composeEmbedUrl(state: ComposeState): string {
 }
 
 function composeYoutubeUrlForSubmit(state: ComposeState): string | null {
-  const field = state.youtubeUrl.trim();
-  if (field) {
-    return field;
-  }
-  if (state.upload) {
-    return null;
-  }
-  return loneSupportedEmbedUrl(state.body);
+  return composeSubmitEmbedUrl({
+    linkField: state.youtubeUrl,
+    body: state.body,
+    hasFileMedia: composeHasFileMedia(state),
+  });
 }
 
 /** The post the preview renders, built from what is typed so far. */

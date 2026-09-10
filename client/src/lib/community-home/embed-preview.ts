@@ -44,6 +44,26 @@ export function resolveComposeEmbedUrl(
   return loneSupportedEmbedUrl(body) ?? "";
 }
 
+/**
+ * Embed URL to send on create/update. A selected file (upload or existing)
+ * wins: the preview already treats that file as authoritative, so submit
+ * must not fall back to a body that happens to be a watch URL.
+ */
+export function composeSubmitEmbedUrl(input: {
+  linkField: string;
+  body: string;
+  hasFileMedia: boolean;
+}): string | null {
+  if (input.hasFileMedia) {
+    return null;
+  }
+  const field = input.linkField.trim();
+  if (field) {
+    return field;
+  }
+  return loneSupportedEmbedUrl(input.body);
+}
+
 /** Media the feed player already knows how to render, from a classified URL. */
 export function communityHomeEmbedMedia(
   raw: string,

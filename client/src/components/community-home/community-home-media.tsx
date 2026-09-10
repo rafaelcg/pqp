@@ -7,6 +7,7 @@ import {
   twitchEmbedSrc,
   youtubeEmbedSrc,
 } from "@/lib/community-home/media";
+import { useTranslation } from "@/lib/i18n";
 
 function twitchPlayerParent(): string {
   if (typeof window !== "undefined" && window.location.hostname) {
@@ -14,7 +15,6 @@ function twitchPlayerParent(): string {
   }
   return "localhost";
 }
-import { useTranslation } from "@/lib/i18n";
 
 function MediaCaption({ media }: { media: CommunityHomeMedia }) {
   return (

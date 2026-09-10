@@ -67,6 +67,7 @@ export {
 export {
   COMPOSE_EMBED_DEBOUNCE_MS,
   communityHomeEmbedMedia,
+  composeSubmitEmbedUrl,
   loneSupportedEmbedUrl,
   resolveComposeEmbedUrl,
 } from "./embed-preview";

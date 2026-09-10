@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseCommunityHomeEmbed } from "./media";
 import {
   communityHomeEmbedMedia,
+  composeSubmitEmbedUrl,
   loneSupportedEmbedUrl,
   resolveComposeEmbedUrl,
 } from "./embed-preview";
@@ -58,6 +59,42 @@ describe("resolveComposeEmbedUrl", () => {
     expect(resolveComposeEmbedUrl("https://example.com/x", youtube)).toBe(
       "https://example.com/x",
     );
+  });
+});
+
+describe("composeSubmitEmbedUrl", () => {
+  it("does not send a body URL while a file is still selected", () => {
+    expect(
+      composeSubmitEmbedUrl({
+        linkField: "",
+        body: youtube,
+        hasFileMedia: true,
+      }),
+    ).toBeNull();
+    expect(
+      composeSubmitEmbedUrl({
+        linkField: watch,
+        body: youtube,
+        hasFileMedia: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("sends the link field, or a lone body URL when the field is empty", () => {
+    expect(
+      composeSubmitEmbedUrl({
+        linkField: watch,
+        body: youtube,
+        hasFileMedia: false,
+      }),
+    ).toBe(watch);
+    expect(
+      composeSubmitEmbedUrl({
+        linkField: "",
+        body: tiktok,
+        hasFileMedia: false,
+      }),
+    ).toBe(tiktok);
   });
 });
 
