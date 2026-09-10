@@ -33,8 +33,17 @@
     </main>
 
     <footer class="foot">
-      <button type="button" id="cancel" class="btn"></button>
-      <button type="button" id="confirm" class="btn primary" disabled></button>
+      <label id="audio-row" class="audio" hidden>
+        <input type="checkbox" id="share-audio" />
+        <span>
+          <span id="audio-label"></span>
+          <span id="audio-hint" class="hint"></span>
+        </span>
+      </label>
+      <div class="actions">
+        <button type="button" id="cancel" class="btn"></button>
+        <button type="button" id="confirm" class="btn primary" disabled></button>
+      </div>
     </footer>
 
     <script src="picker.js"></script>

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   capturesSystemAudio,
+  needsShareAudioPrompt,
+  offersBrowserSystemAudio,
+  offersShellSystemAudio,
   screenCaptureOptions,
   shareStreamHasAudio,
   shellCarriesScreenAudio,
@@ -11,38 +14,56 @@ const browser: ScreenCaptureEnvironment = {
   isDesktopShell: false,
   shellPlatform: null,
   supportsRestrictOwnAudio: true,
+  sharePickerOffersAudio: false,
 };
 const oldBrowser: ScreenCaptureEnvironment = {
   isDesktopShell: false,
   shellPlatform: null,
   supportsRestrictOwnAudio: false,
+  sharePickerOffersAudio: false,
 };
 /** The installed v0.1.3 build on Windows: loopback is real there. */
 const shell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: false,
+  sharePickerOffersAudio: false,
 };
 const newShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "win32",
   supportsRestrictOwnAudio: true,
+  sharePickerOffersAudio: false,
+};
+const pickerShell: ScreenCaptureEnvironment = {
+  isDesktopShell: true,
+  shellPlatform: "win32",
+  supportsRestrictOwnAudio: true,
+  sharePickerOffersAudio: true,
 };
 /** The same build on macOS, where no capture can carry the machine's sound. */
 const macShell: ScreenCaptureEnvironment = {
   isDesktopShell: true,
   shellPlatform: "darwin",
   supportsRestrictOwnAudio: false,
+  sharePickerOffersAudio: false,
 };
 
 describe("screenCaptureOptions", () => {
-  it("does not ask for the machine's audio unless the user opted in", () => {
-    // The whole bug in one assertion. `include` is what put every participant's
-    // voice back into the call on a Windows whole-screen share.
-    expect(screenCaptureOptions(false, browser).systemAudio).toBe("exclude");
+  it("lets Chrome offer system audio when it can strip the call out", () => {
+    // One checkbox, in Chrome's picker. `include` is what unlocks that box;
+    // `restrictOwnAudio` is what keeps the 23 Aug 2026 echo from coming back.
+    expect(screenCaptureOptions(false, browser).systemAudio).toBe("include");
+    expect(screenCaptureOptions(false, browser).audio).toMatchObject({
+      restrictOwnAudio: true,
+    });
   });
 
-  it("asks for it when the user opted in", () => {
+  it("keeps the machine's mixer off on a browser that cannot strip the call", () => {
+    expect(screenCaptureOptions(true, oldBrowser).systemAudio).toBe("exclude");
+  });
+
+  it("still includes when the caller also opted in", () => {
     expect(screenCaptureOptions(true, browser).systemAudio).toBe("include");
   });
 
@@ -84,11 +105,27 @@ describe("screenCaptureOptions", () => {
     // true. False is therefore the only lever the web client has over an
     // already-installed v0.1.3 build, and it is the one that matters.
     expect(screenCaptureOptions(false, shell).audio).toBe(false);
+    expect(screenCaptureOptions(false, newShell).audio).toBe(false);
   });
 
-  it("lets the shell have loopback once the user opts in", () => {
-    expect(screenCaptureOptions(true, shell).audio).toMatchObject({
+  it("lets a current shell have loopback once the user opts in", () => {
+    expect(screenCaptureOptions(true, newShell).audio).toMatchObject({
       echoCancellation: false,
+      restrictOwnAudio: true,
+    });
+  });
+
+  it("refuses loopback on a v0.1.3 shell even when the page opted in", () => {
+    // That build cannot strip its own playback. Offering the tap is offering
+    // the echo, so the page never asks.
+    expect(screenCaptureOptions(true, shell).audio).toBe(false);
+  });
+
+  it("asks a picker-capable shell for audio so the picker can attach it", () => {
+    // The box lives in the picker. The page has to request audio or Chromium
+    // will ignore a loopback track the handler adds after the fact.
+    expect(screenCaptureOptions(false, pickerShell).audio).toMatchObject({
+      restrictOwnAudio: true,
     });
   });
 
@@ -206,6 +243,31 @@ describe("screenCaptureOptions", () => {
     expect(options.preferCurrentTab).toBeUndefined();
     expect(options.monitorTypeSurfaces).toBeUndefined();
     expect(options.video).not.toHaveProperty("displaySurface");
+  });
+});
+
+describe("where the audio checkbox lives", () => {
+  it("lets Chrome show its own box, and not an old browser", () => {
+    expect(offersBrowserSystemAudio(browser)).toBe(true);
+    expect(offersBrowserSystemAudio(oldBrowser)).toBe(false);
+    expect(offersBrowserSystemAudio(browser, { preferBrowserTab: true })).toBe(
+      false,
+    );
+  });
+
+  it("lets a current Windows shell offer computer audio", () => {
+    expect(offersShellSystemAudio(newShell)).toBe(true);
+    expect(offersShellSystemAudio(pickerShell)).toBe(true);
+    expect(offersShellSystemAudio(shell)).toBe(false);
+    expect(offersShellSystemAudio(macShell)).toBe(false);
+    expect(offersShellSystemAudio(browser)).toBe(false);
+  });
+
+  it("prompts in the page only when the picker cannot ask yet", () => {
+    expect(needsShareAudioPrompt(newShell)).toBe(true);
+    expect(needsShareAudioPrompt(pickerShell)).toBe(false);
+    expect(needsShareAudioPrompt(shell)).toBe(false);
+    expect(needsShareAudioPrompt(browser)).toBe(false);
   });
 });
 

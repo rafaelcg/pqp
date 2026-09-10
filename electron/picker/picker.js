@@ -30,9 +30,17 @@ const el = {
   windowsLabel: document.getElementById("windows-label"),
   windowsGrid: document.getElementById("windows-grid"),
   empty: document.getElementById("empty"),
+  audioRow: document.getElementById("audio-row"),
+  shareAudio: document.getElementById("share-audio"),
+  audioLabel: document.getElementById("audio-label"),
+  audioHint: document.getElementById("audio-hint"),
   cancel: document.getElementById("cancel"),
   confirm: document.getElementById("confirm"),
 };
+
+function shareAudioChecked() {
+  return Boolean(el.shareAudio && el.shareAudio.checked);
+}
 
 function cancel() {
   if (answered) {
@@ -47,7 +55,7 @@ function shareSelected() {
     return;
   }
   answered = true;
-  bridge.choose(selectedId);
+  bridge.choose(selectedId, shareAudioChecked());
 }
 
 function select(id) {
@@ -136,6 +144,10 @@ function render(payload) {
   el.cancel.textContent = strings.cancel;
   el.confirm.textContent = strings.confirm;
   el.empty.textContent = strings.empty;
+  el.audioLabel.textContent = strings.shareAudio;
+  el.audioHint.textContent = strings.shareAudioHint;
+  el.audioRow.hidden = payload.offersAudio !== true;
+  el.shareAudio.checked = false;
 
   const screens = sources.filter((s) => s.kind === "screen");
   const windows = sources.filter((s) => s.kind === "window");

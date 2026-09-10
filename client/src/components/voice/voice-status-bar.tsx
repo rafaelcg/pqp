@@ -12,7 +12,11 @@ import {
 import { FeatureHint } from "@/components/layout/feature-hint";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
-import { supportsScreenShare } from "@/components/voice/capabilities";
+import {
+  canShareScreenAudio,
+  supportsScreenShare,
+} from "@/components/voice/capabilities";
+import { desktopContext } from "@/lib/desktop";
 import { VoiceQualityMeter } from "@/components/voice/voice-quality-meter";
 import { useVoiceLinkQuality } from "@/hooks/use-voice-link-quality";
 import { useTranslation } from "@/lib/i18n";
@@ -336,7 +340,9 @@ export function VoiceStatusBar({
               detail={
                 shareCappedOut
                   ? t("voice.control.shareLimit", { limit: shareLimit ?? 0 })
-                  : undefined
+                  : !isSharingScreen && canShareScreenAudio()
+                    ? t("voice.control.shareDetail", desktopContext())
+                    : undefined
               }
               pressed={isSharingScreen}
               disabled={shareCappedOut}

@@ -3577,11 +3577,11 @@ export function createVoiceController(transport: RealtimeTransport) {
     },
 
     /**
-     * @param shareSystemAudio The user's explicit opt-in to sending the whole
-     *   machine's sound. Defaults to false at every call site, and false does
-     *   NOT mean a silent share: a Chrome tab share still carries that tab's
-     *   own audio, which is the route that cannot echo. See
-     *   `lib/screen-capture-audio.ts` for why the default moved.
+     * @param shareSystemAudio On a Windows desktop shell whose picker cannot
+     *   ask yet, the user's opt-in to sending the machine's sound. Ignored in
+     *   a browser: Chrome 141+ is offered the box in its own picker, and
+     *   `restrictOwnAudio` keeps the call out of that tap. False does NOT mean
+     *   a silent share: a Chrome tab share still carries that tab's own audio.
      * @param intent Watch party passes `{ preferBrowserTab: true }` so the
      *   picker steers at a tab. That path never takes `shareSystemAudio`.
      */
@@ -3641,7 +3641,14 @@ export function createVoiceController(transport: RealtimeTransport) {
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
       const options = screenCaptureOptions(
         shareSystemAudio,
-        screenCaptureEnvironment(isDesktopApp(), getDesktop()?.platform ?? null),
+        screenCaptureEnvironment(
+          isDesktopApp(),
+          getDesktop()?.platform ?? null,
+          {
+            sharePickerOffersAudio:
+              getDesktop()?.sharePickerOffersAudio === true,
+          },
+        ),
         { ...intent, hideCursor },
       );
       // What was actually asked for, not what was ticked. In a browser this is

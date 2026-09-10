@@ -25,6 +25,8 @@
   "share.noPreview": "Sem prévia",
   "share.cancel": "Cancelar",
   "share.confirm": "Compartilhar",
+  "share.audio": "Compartilhar o som do computador",
+  "share.audioHint": "Jogo, música, o que estiver tocando. A call em si não vai junto.",
   "share.empty": "Nada para compartilhar neste computador.",
   "share.permissionTitle": "O pqp não consegue ver a sua tela",
   "share.permissionBody": "O macOS não deu ao pqp permissão para gravar a tela, então não há o que oferecer. Ative o pqp em Privacidade e Segurança > Gravação de Tela e Áudio do Sistema, feche o pqp, abra de novo e tente compartilhar outra vez.",

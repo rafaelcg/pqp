@@ -680,8 +680,10 @@ async function explainNoSources() {
  * in exactly the shells that most need the fix. A `file://` page inside the
  * bundle cannot skew away from the main process that talks to it.
  *
- * Resolves with a source id, or null for every way of saying no: the Cancel
- * button, Escape, closing the window, a page that never loads.
+ * Resolves with `{ id, shareAudio }`, or null for every way of saying no: the
+ * Cancel button, Escape, closing the window, a page that never loads.
+ * `shareAudio` is only meaningful on Windows; the handler still ignores it
+ * everywhere else.
  */
 function showSourcePicker(labeled) {
   // One at a time. A second voice channel asking mid-decision would stack two
@@ -734,6 +736,7 @@ function showSourcePicker(labeled) {
         ? {
             sources: labeled,
             dark,
+            offersAudio: process.platform === "win32",
             strings: {
               title: t("share.title"),
               subtitle: t("share.subtitle"),
@@ -743,6 +746,8 @@ function showSourcePicker(labeled) {
               cancel: t("share.cancel"),
               confirm: t("share.confirm"),
               empty: t("share.empty"),
+              shareAudio: t("share.audio"),
+              shareAudioHint: t("share.audioHint"),
             },
           }
         : null;
@@ -755,11 +760,11 @@ function showSourcePicker(labeled) {
       loadTimer = null;
     };
 
-    const onChoose = (event, sourceId) => {
+    const onChoose = (event, sourceId, shareAudio) => {
       if (!fromPicker(event) || typeof sourceId !== "string") {
         return;
       }
-      finish(sourceId);
+      finish({ id: sourceId, shareAudio: shareAudio === true });
     };
 
     const onCancel = (event) => {
@@ -769,7 +774,7 @@ function showSourcePicker(labeled) {
       finish(null);
     };
 
-    function finish(sourceId) {
+    function finish(choice) {
       if (settled) {
         return;
       }
@@ -782,7 +787,7 @@ function showSourcePicker(labeled) {
       ipcMain.removeListener("pqp:picker-ready", onReady);
       ipcMain.removeListener("pqp:picker-choose", onChoose);
       ipcMain.removeListener("pqp:picker-cancel", onCancel);
-      resolve(sourceId);
+      resolve(choice);
       if (!win.isDestroyed()) {
         win.close();
       }
@@ -883,18 +888,28 @@ async function chooseDisplaySource(audioRequested) {
     return null;
   }
 
-  const chosenId = pickAutomatically(labeled) ?? (await showSourcePicker(labeled));
-  if (!chosenId) {
+  const autoId = pickAutomatically(labeled);
+  const choice = autoId
+    ? { id: autoId, shareAudio: false }
+    : await showSourcePicker(labeled);
+  if (!choice) {
     return null;
   }
 
   // Back to the object Electron handed us: the normalized copy is plain data
   // for IPC and is not what the callback accepts.
-  const source = raw.find((candidate) => candidate.id === chosenId);
+  const source = raw.find((candidate) => candidate.id === choice.id);
   if (!source) {
     return null;
   }
-  return captureResponse(source, platform, audioRequested);
+  // The picker checkbox is the consent. `audioRequested` is only whether the
+  // page asked for a track Chromium will accept; an auto-pick (one surface,
+  // no dialog) never attaches loopback, because nobody ticked anything.
+  return captureResponse(
+    source,
+    platform,
+    audioRequested && choice.shareAudio === true,
+  );
 }
 
 function configureSessionSecurity(appOrigin) {
