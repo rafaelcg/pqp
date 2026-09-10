@@ -219,6 +219,17 @@ function twitchVideoId(raw: string | null | undefined): string | null {
   return TWITCH_VIDEO_ID.test(id) ? id : null;
 }
 
+function twitchChannelId(raw: string | null | undefined): string | null {
+  if (
+    !raw ||
+    !TWITCH_CHANNEL.test(raw) ||
+    TWITCH_RESERVED_CHANNELS.has(raw.toLowerCase())
+  ) {
+    return null;
+  }
+  return raw.toLowerCase();
+}
+
 export function parseTwitchEmbed(raw: string): TwitchEmbedTarget | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -238,20 +249,17 @@ export function parseTwitchEmbed(raw: string): TwitchEmbedTarget | null {
           ? { kind: "clip", id: clip }
           : null;
       }
-      const slug = url.pathname.split("/").filter(Boolean)[0];
+      const parts = url.pathname.split("/").filter(Boolean);
+      const slug = parts.length === 1 ? parts[0] : undefined;
       return slug && TWITCH_CLIP_ID.test(slug)
         ? { kind: "clip", id: slug }
         : null;
     }
 
     if (host === "player.twitch.tv") {
-      const channel = url.searchParams.get("channel");
-      if (
-        channel &&
-        TWITCH_CHANNEL.test(channel) &&
-        !TWITCH_RESERVED_CHANNELS.has(channel.toLowerCase())
-      ) {
-        return { kind: "channel", id: channel.toLowerCase() };
+      const channel = twitchChannelId(url.searchParams.get("channel"));
+      if (channel) {
+        return { kind: "channel", id: channel };
       }
       const video = twitchVideoId(url.searchParams.get("video"));
       return video ? { kind: "video", id: video } : null;
@@ -267,34 +275,36 @@ export function parseTwitchEmbed(raw: string): TwitchEmbedTarget | null {
     }
 
     if (parts[0] === "videos" || parts[0] === "video" || parts[0] === "v") {
+      if (parts.length !== 2) {
+        return null;
+      }
       const id = twitchVideoId(parts[1]);
       return id ? { kind: "video", id } : null;
     }
 
     if (parts.length === 1) {
-      const channel = parts[0]!;
-      if (
-        !TWITCH_CHANNEL.test(channel) ||
-        TWITCH_RESERVED_CHANNELS.has(channel.toLowerCase())
-      ) {
-        return null;
-      }
-      return { kind: "channel", id: channel.toLowerCase() };
-    }
-
-    if (parts[1] === "clip" && parts[2] && TWITCH_CLIP_ID.test(parts[2])) {
-      if (!TWITCH_CHANNEL.test(parts[0]!)) {
-        return null;
-      }
-      return { kind: "clip", id: parts[2] };
+      const channel = twitchChannelId(parts[0]);
+      return channel ? { kind: "channel", id: channel } : null;
     }
 
     if (
+      parts.length === 3 &&
+      parts[1] === "clip" &&
+      parts[2] &&
+      TWITCH_CLIP_ID.test(parts[2])
+    ) {
+      const channel = twitchChannelId(parts[0]);
+      return channel ? { kind: "clip", id: parts[2] } : null;
+    }
+
+    if (
+      parts.length === 3 &&
       (parts[1] === "video" || parts[1] === "videos" || parts[1] === "v") &&
       parts[2]
     ) {
       const id = twitchVideoId(parts[2]);
-      if (id && TWITCH_CHANNEL.test(parts[0]!)) {
+      const channel = twitchChannelId(parts[0]);
+      if (id && channel) {
         return { kind: "video", id };
       }
     }

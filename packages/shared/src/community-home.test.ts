@@ -71,6 +71,38 @@ describe("parseTwitchEmbed", () => {
     expect(parseTwitchEmbed("javascript:alert(1)")).toBeNull();
     expect(parseTwitchEmbed("https://youtu.be/jNQXAC9IVRw")).toBeNull();
   });
+
+  it("refuses reserved or extra nested paths that cannot render as a player", () => {
+    expect(
+      parseTwitchEmbed(
+        "https://www.twitch.tv/directory/clip/AmazonianEncouragingLyrebirdDAESuppy",
+      ),
+    ).toBeNull();
+    expect(
+      parseTwitchEmbed("https://www.twitch.tv/settings/video/123456789"),
+    ).toBeNull();
+    expect(
+      parseTwitchEmbed(
+        "https://www.twitch.tv/moonkaselive/clip/ThisIsFine-abc123XYZ/extra",
+      ),
+    ).toBeNull();
+    expect(
+      parseTwitchEmbed("https://www.twitch.tv/videos/123456789/extra"),
+    ).toBeNull();
+    expect(
+      parseTwitchEmbed(
+        "https://clips.twitch.tv/embed/AmazonianEncouragingLyrebirdDAESuppy",
+      ),
+    ).toBeNull();
+    expect(
+      parseTwitchEmbed(
+        "https://clips.twitch.tv/AmazonianEncouragingLyrebirdDAESuppy/extra",
+      ),
+    ).toBeNull();
+    expect(
+      parseTwitchEmbed("https://player.twitch.tv/?channel=directory"),
+    ).toBeNull();
+  });
 });
 
 describe("twitchEmbedSrc", () => {
