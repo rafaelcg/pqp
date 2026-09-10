@@ -1100,7 +1100,10 @@ export async function connectLiveKit({
         if (
           pendingCaptureHeight !== null &&
           pendingCaptureHeight !== appliedScreenCaptureHeight &&
-          captureHeightStreak >= HLS_SOURCE_DROP_SAMPLES
+          captureHeightStreak >=
+            (pendingCaptureHeight > (appliedScreenCaptureHeight ?? 0)
+              ? HLS_SOURCE_RAISE_SAMPLES
+              : HLS_SOURCE_DROP_SAMPLES)
         ) {
           const want = pendingCaptureHeight;
           await constrainScreenCapture(track, want);
