@@ -33,7 +33,8 @@ export interface OutboxEntry {
 }
 
 const KEY_PREFIX = "pqp:outbox:";
-const MAX_ENTRIES = 200;
+/** The same bound the transport puts on its in-memory chat queue. */
+export const MAX_OUTBOX_ENTRIES = 200;
 /** A message older than this is stale enough that sending it would surprise. */
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
@@ -74,15 +75,32 @@ export function loadOutbox(userId: string, now = Date.now()): OutboxEntry[] {
   }
 }
 
-export function saveOutbox(userId: string, entries: OutboxEntry[]): void {
+/**
+ * Write this controller's entries without clobbering another tab's.
+ *
+ * Two offline tabs on one account each hold their own copy of the outbox,
+ * and a whole-array write from one would drop what the other had queued.
+ * So the write is a merge: rows in storage that this controller has never
+ * held (`ownedNonces`) are kept as they are, and only the rows it owns are
+ * replaced by `entries`. A removal is therefore an owned nonce missing from
+ * `entries`, which is exactly what answering a send leaves behind.
+ */
+export function saveOutbox(
+  userId: string,
+  entries: OutboxEntry[],
+  ownedNonces: ReadonlySet<string>,
+): void {
   try {
     const key = storageKey(userId);
-    if (entries.length === 0) {
+    const foreign = loadOutbox(userId).filter((entry) => !ownedNonces.has(entry.nonce));
+    const merged = [...foreign, ...entries]
+      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+      .slice(-MAX_OUTBOX_ENTRIES);
+    if (merged.length === 0) {
       localStorage.removeItem(key);
       return;
     }
-    const kept = entries.slice(-MAX_ENTRIES);
-    localStorage.setItem(key, JSON.stringify(kept));
+    localStorage.setItem(key, JSON.stringify(merged));
   } catch {
     // Storage full or blocked: the in-memory queue still carries the send.
   }

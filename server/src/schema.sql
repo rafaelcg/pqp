@@ -547,9 +547,11 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS chance JSONB;
 -- channel. The insert is `ON CONFLICT DO NOTHING` and the existing row is
 -- re-broadcast to that sender only. NULL for HTTP sends, webhooks and every
 -- message older than the column: the partial index keeps those free.
+-- The unique index is NOT built here: this file is one transaction and a
+-- plain CREATE INDEX on `messages` would hold a write lock for the whole
+-- build on a table with history. `ensureConcurrentIndexes` in db.ts builds
+-- it CONCURRENTLY right after this file runs, before the server listens.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS nonce TEXT;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_nonce
-  ON messages (channel_id, author_id, nonce) WHERE nonce IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS polls (
   message_id UUID PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,

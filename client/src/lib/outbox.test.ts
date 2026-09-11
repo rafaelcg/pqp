@@ -30,14 +30,14 @@ describe("outbox", () => {
 
   it("round-trips entries per account", () => {
     const one = entry();
-    saveOutbox("u1", [one]);
+    saveOutbox("u1", [one], new Set(["n1"]));
     expect(loadOutbox("u1")).toEqual([one]);
     expect(loadOutbox("u2")).toEqual([]);
   });
 
   it("removes the key when the outbox empties", () => {
-    saveOutbox("u1", [entry()]);
-    saveOutbox("u1", []);
+    saveOutbox("u1", [entry()], new Set(["n1"]));
+    saveOutbox("u1", [], new Set(["n1"]));
     expect(store.size).toBe(0);
   });
 
@@ -57,10 +57,22 @@ describe("outbox", () => {
 
   it("caps the store at 200 newest rows", () => {
     const many = Array.from({ length: 250 }, (_, i) => entry({ nonce: `n${i}` }));
-    saveOutbox("u1", many);
+    saveOutbox("u1", many, new Set(many.map((item) => item.nonce)));
     const kept = loadOutbox("u1");
     expect(kept).toHaveLength(200);
     expect(kept[0]!.nonce).toBe("n50");
+  });
+
+  it("keeps another tab's rows and only replaces its own", () => {
+    const a = entry({ nonce: "a", createdAt: new Date(Date.now() - 2000).toISOString() });
+    const b = entry({ nonce: "b", createdAt: new Date(Date.now() - 1000).toISOString() });
+    // Tab A writes its row, tab B (which never saw "a") writes its row.
+    saveOutbox("u1", [a], new Set(["a"]));
+    saveOutbox("u1", [b], new Set(["b"]));
+    expect(loadOutbox("u1").map((item) => item.nonce)).toEqual(["a", "b"]);
+    // Tab A's send is answered: it removes "a" and leaves "b" alone.
+    saveOutbox("u1", [], new Set(["a"]));
+    expect(loadOutbox("u1").map((item) => item.nonce)).toEqual(["b"]);
   });
 
   it("makes a nonce that does not repeat", () => {
