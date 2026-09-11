@@ -81,6 +81,50 @@ export async function closePool(): Promise<void> {
 export async function initDb(): Promise<void> {
   const schema = readFileSync(join(__dirname, "schema.sql"), "utf8");
   await getPool().query(schema);
+  await ensureConcurrentIndexes();
+}
+
+/**
+ * Indexes that must not be built inside schema.sql's transaction.
+ *
+ * A regular CREATE INDEX takes a lock that blocks writes to the table for
+ * the length of the build, and `messages` is the one table with real
+ * history behind it. CONCURRENTLY builds without that lock but cannot run
+ * inside a transaction block, so it runs here, one statement per query
+ * (autocommit), still before the server starts listening.
+ *
+ * A build that was interrupted leaves an INVALID index behind, which
+ * `IF NOT EXISTS` would happily keep; it is dropped and rebuilt instead.
+ */
+const CONCURRENT_INDEXES: ReadonlyArray<{ name: string; definition: string }> = [
+  {
+    // Idempotent sends: see the `messages.nonce` comment in schema.sql.
+    name: "idx_messages_nonce",
+    definition:
+      "ON messages (channel_id, author_id, nonce) WHERE nonce IS NOT NULL",
+  },
+];
+
+async function ensureConcurrentIndexes(): Promise<void> {
+  const pool = getPool();
+  for (const index of CONCURRENT_INDEXES) {
+    const state = await pool.query<{ indisvalid: boolean }>(
+      `SELECT i.indisvalid FROM pg_index i
+         JOIN pg_class c ON c.oid = i.indexrelid
+        WHERE c.relname = $1`,
+      [index.name],
+    );
+    const row = state.rows[0];
+    if (row?.indisvalid) {
+      continue;
+    }
+    if (row) {
+      await pool.query(`DROP INDEX CONCURRENTLY IF EXISTS ${index.name}`);
+    }
+    await pool.query(
+      `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS ${index.name} ${index.definition}`,
+    );
+  }
 }
 
 export interface DbUser {

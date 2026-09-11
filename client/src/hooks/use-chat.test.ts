@@ -1740,3 +1740,103 @@ describe("offline outbox", () => {
     expect(chat.getMessages()[0]!.queued).toBeFalsy();
   });
 });
+
+describe("offline outbox, review follow-ups", () => {
+  const store = new Map<string, string>();
+
+  beforeEach(() => {
+    store.clear();
+    vi.stubGlobal("localStorage", {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => void store.set(key, value),
+      removeItem: (key: string) => void store.delete(key),
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("replays a send that was in flight when the socket dropped", () => {
+    const { chat, sent, transport } = setup();
+    chat.sendMessage("in flight");
+    const nonce = chat.getMessages()[0]!.nonce!;
+    const before = sent.length;
+
+    // The socket dropped and came back before the failure clock ran out.
+    transport.connected = false;
+    vi.advanceTimersByTime(3_000);
+    transport.connected = true;
+    chat.resubscribe();
+
+    const replayed = sent
+      .slice(before)
+      .filter((frame) => (frame as { type: string }).type === "message-create");
+    expect(replayed).toHaveLength(1);
+    expect((replayed[0] as { nonce: string }).nonce).toBe(nonce);
+    // The clock restarted with the replay: not failed at the old deadline.
+    vi.advanceTimersByTime(8_000);
+    expect(chat.getMessages()[0]!.failed).toBeFalsy();
+  });
+
+  it("does not replay a send the current socket already carries", () => {
+    const { chat, sent } = setup();
+    chat.sendMessage("once");
+    const before = sent.length;
+    chat.flushOutbox();
+    expect(sent.length).toBe(before);
+  });
+
+  it("drops the outbox from memory on sign-out and never flushes without an account", () => {
+    const { chat, sent, transport } = setup();
+    transport.connected = false;
+    chat.sendMessage("private");
+    expect(chat.getOutbox()).toHaveLength(1);
+
+    chat.setCurrentUser(null);
+    transport.connected = true;
+    const before = sent.length;
+    chat.flushOutbox();
+    chat.resubscribe();
+
+    expect(chat.getOutbox()).toHaveLength(0);
+    expect(
+      sent.slice(before).filter((f) => (f as { type: string }).type === "message-create"),
+    ).toHaveLength(0);
+    // Storage still has it for that person's next sign-in.
+    expect(store.get(`pqp:outbox:${ME.id}`)).toContain("private");
+  });
+
+  it("caps what it holds in memory and fails the oldest bubble", () => {
+    const { chat, transport } = setup();
+    transport.connected = false;
+    for (let i = 0; i < 201; i += 1) {
+      chat.sendMessage(`m${i}`);
+    }
+    expect(chat.getOutbox()).toHaveLength(200);
+    expect(chat.getOutbox()[0]!.body).toBe("m1");
+    const first = chat.getMessages().find((m) => m.body === "m0")!;
+    expect(first.failed).toBe(true);
+    expect(first.queued).toBeFalsy();
+  });
+
+  it("paces a large replay instead of sending it in one burst", () => {
+    const { chat, sent, transport } = setup();
+    transport.connected = false;
+    for (let i = 0; i < 50; i += 1) {
+      chat.sendMessage(`m${i}`);
+    }
+    const before = sent.length;
+    const creates = () =>
+      sent.slice(before).filter((f) => (f as { type: string }).type === "message-create")
+        .length;
+
+    transport.connected = true;
+    chat.flushOutbox();
+    expect(creates()).toBe(30);
+    vi.advanceTimersByTime(500);
+    expect(creates()).toBe(38);
+    vi.advanceTimersByTime(1_500);
+    expect(creates()).toBe(50);
+  });
+});

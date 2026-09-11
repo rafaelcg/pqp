@@ -29,6 +29,7 @@ import type { RealtimeTransport } from "@/lib/realtime";
 import {
   createSendNonce,
   loadOutbox,
+  MAX_OUTBOX_ENTRIES,
   saveOutbox,
   type OutboxEntry,
 } from "@/lib/outbox";
@@ -252,6 +253,15 @@ const TYPING_TTL_MS = 5_000;
 const TYPING_THROTTLE_MS = 2_500;
 /** A send with no broadcast back within this window is treated as failed. */
 const SEND_TIMEOUT_MS = 10_000;
+/**
+ * A reconnect replays the outbox in paced chunks, the way the transport
+ * drains its own queue: one burst, then a few frames every half second, so
+ * two hundred queued messages do not land on the server's per-connection
+ * budget and the database pool in one go.
+ */
+const OUTBOX_FLUSH_FIRST_BURST = 30;
+const OUTBOX_FLUSH_CHUNK = 8;
+const OUTBOX_FLUSH_INTERVAL_MS = 500;
 
 function applyReactionBroadcast(
   reactions: MessageReaction[],
@@ -369,6 +379,16 @@ export function createChatController(
    */
   const ownsOutbox = frames === PRIMARY_CHANNEL_FRAMES;
   let outbox: OutboxEntry[] = [];
+  /** Every nonce this controller has held, so a storage write can merge around other tabs' rows. */
+  const ownedNonces = new Set<string>();
+  /**
+   * Which socket a send went out on. Bumped by `resubscribe`, so a send
+   * that was in flight when the socket dropped is told apart from one the
+   * current socket already carries, and replayed rather than skipped.
+   */
+  let socketGeneration = 0;
+  const sentOnGeneration = new Map<string, number>();
+  let outboxFlushTimer: ReturnType<typeof setTimeout> | null = null;
   /**
    * The presence sequence this controller has applied up to for its channel.
    *
@@ -460,7 +480,7 @@ export function createChatController(
 
   function persistOutbox() {
     if (ownsOutbox && currentUserId) {
-      saveOutbox(currentUserId, outbox);
+      saveOutbox(currentUserId, outbox, ownedNonces);
     }
   }
 
@@ -468,8 +488,29 @@ export function createChatController(
     if (!ownsOutbox) {
       return;
     }
+    ownedNonces.add(entry.nonce);
     outbox = [...outbox.filter((item) => item.nonce !== entry.nonce), entry];
+    // The same cap storage applies, enforced here too so a long offline
+    // stretch does not hold every body in memory and replay them all. The
+    // oldest give way, and their bubbles say so rather than waiting forever.
+    if (outbox.length > MAX_OUTBOX_ENTRIES) {
+      const evicted = outbox.slice(0, outbox.length - MAX_OUTBOX_ENTRIES);
+      outbox = outbox.slice(-MAX_OUTBOX_ENTRIES);
+      const evictedNonces = new Set(evicted.map((item) => item.nonce));
+      messages = messages.map((message) =>
+        message.nonce && evictedNonces.has(message.nonce) && message.pending
+          ? { ...message, pending: false, queued: false, failed: true }
+          : message,
+      );
+    }
     persistOutbox();
+  }
+
+  function stopOutboxFlush() {
+    if (outboxFlushTimer) {
+      clearTimeout(outboxFlushTimer);
+      outboxFlushTimer = null;
+    }
   }
 
   function forgetInOutbox(nonce: string) {
@@ -477,6 +518,7 @@ export function createChatController(
       return;
     }
     outbox = outbox.filter((item) => item.nonce !== nonce);
+    sentOnGeneration.delete(nonce);
     persistOutbox();
   }
 
@@ -747,6 +789,7 @@ export function createChatController(
     // While offline the transport queues it and delivers it on reconnect, so
     // failing it here would invite a retry that sends the same message twice.
     if (transport.isConnected()) {
+      sentOnGeneration.set(nonce, socketGeneration);
       sendTimers.set(
         nonce,
         setTimeout(() => markFailed(nonce), SEND_TIMEOUT_MS),
@@ -865,15 +908,52 @@ export function createChatController(
    * it has already stored with the existing row, so a replay is harmless.
    */
   function flushOutbox() {
-    if (!ownsOutbox || !transport.isConnected() || outbox.length === 0) {
+    stopOutboxFlush();
+    // No account, no replay: a socket that comes up after a logout must not
+    // carry the previous person's rows under whoever signs in next.
+    if (!ownsOutbox || !currentUserId || !transport.isConnected()) {
       return;
     }
-    for (const entry of [...outbox]) {
-      if (sendTimers.has(entry.nonce)) {
-        continue;
+    const due = outbox.filter(
+      (entry) => sentOnGeneration.get(entry.nonce) !== socketGeneration,
+    );
+    if (due.length === 0) {
+      return;
+    }
+    const sendChunk = (limit: number) => {
+      const chunk = due.splice(0, limit);
+      for (const entry of chunk) {
+        // A send still waiting on the old socket is replayed on this one,
+        // with a fresh clock; the nonce keeps it from posting twice.
+        clearSendTimer(entry.nonce);
+        transmit(entry.nonce, entry.body, entry.channelId, entry.replyToId ?? undefined);
       }
-      setQueued(entry.nonce, false);
-      transmit(entry.nonce, entry.body, entry.channelId, entry.replyToId ?? undefined);
+      const nonces = new Set(chunk.map((entry) => entry.nonce));
+      let changed = false;
+      messages = messages.map((message) => {
+        if (!message.nonce || !nonces.has(message.nonce) || !message.queued) {
+          return message;
+        }
+        changed = true;
+        return { ...message, queued: false };
+      });
+      if (changed) {
+        emit();
+      }
+    };
+    sendChunk(OUTBOX_FLUSH_FIRST_BURST);
+    const tick = () => {
+      outboxFlushTimer = null;
+      if (!currentUserId || !transport.isConnected() || due.length === 0) {
+        return;
+      }
+      sendChunk(OUTBOX_FLUSH_CHUNK);
+      if (due.length > 0) {
+        outboxFlushTimer = setTimeout(tick, OUTBOX_FLUSH_INTERVAL_MS);
+      }
+    };
+    if (due.length > 0) {
+      outboxFlushTimer = setTimeout(tick, OUTBOX_FLUSH_INTERVAL_MS);
     }
   }
 
@@ -892,8 +972,17 @@ export function createChatController(
       const previousUserId = currentUserId;
       currentUserId = user?.id ?? null;
       currentUsername = user?.username ?? null;
-      if (ownsOutbox && currentUserId && currentUserId !== previousUserId) {
-        outbox = loadOutbox(currentUserId);
+      if (ownsOutbox && currentUserId !== previousUserId) {
+        // The rows belong to an account, not to the tab. A sign-out drops
+        // them from memory (storage keeps them for that person's next
+        // sign-in) so nothing is replayed under whoever comes next.
+        stopOutboxFlush();
+        sentOnGeneration.clear();
+        ownedNonces.clear();
+        outbox = currentUserId ? loadOutbox(currentUserId) : [];
+        for (const entry of outbox) {
+          ownedNonces.add(entry.nonce);
+        }
       }
       currentUser = user
         ? {
@@ -1112,6 +1201,8 @@ export function createChatController(
       if (channelId) {
         transport.sendChat(frames.join(channelId));
       }
+      // A new socket: anything sent on the old one is due again.
+      socketGeneration += 1;
       flushOutbox();
     },
 
