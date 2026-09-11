@@ -42,6 +42,7 @@ import {
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { VideoQuality } from "@/lib/video-quality";
+import type { ScreenFrameRate } from "@/lib/hls-capture-rate";
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
 import { shareStreamHasAudio } from "@/lib/screen-capture-audio";
 import {
@@ -511,6 +512,7 @@ export interface CallStageProps {
   } | null;
   voiceState: VoiceState;
   videoQuality: VideoQuality;
+  screenFrameRate?: ScreenFrameRate;
   /** Faces shown while ringing out. Server voice omits this. */
   ringFaces?: CallStagePerson[];
   declinedNames?: string[];
@@ -519,6 +521,7 @@ export interface CallStageProps {
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
+  onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
   onStartScreenShare?: (
     intent?: { preferBrowserTab?: boolean },
   ) => void | Promise<void>;
@@ -583,6 +586,7 @@ export function CallStage({
   currentUser,
   voiceState,
   videoQuality,
+  screenFrameRate,
   ringFaces = [],
   declinedNames = [],
   playOutgoingRingtone = false,
@@ -590,6 +594,7 @@ export function CallStage({
   onToggleMute,
   onToggleCamera,
   onVideoQualityChange,
+  onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
   onStopScreenShare,
@@ -636,6 +641,7 @@ export function CallStage({
       currentUser={currentUser}
       voiceState={voiceState}
       videoQuality={videoQuality}
+      screenFrameRate={screenFrameRate}
       ringFaces={ringFaces}
       declinedNames={declinedNames}
       playOutgoingRingtone={playOutgoingRingtone}
@@ -649,6 +655,7 @@ export function CallStage({
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
+      onScreenFrameRateChange={onScreenFrameRateChange}
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
       onStopScreenShare={onStopScreenShare}
@@ -681,6 +688,7 @@ function ActiveCall({
   currentUser,
   voiceState,
   videoQuality,
+  screenFrameRate,
   ringFaces,
   declinedNames,
   playOutgoingRingtone,
@@ -691,6 +699,7 @@ function ActiveCall({
   onToggleMute,
   onToggleCamera,
   onVideoQualityChange,
+  onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
   onStopScreenShare,
@@ -719,6 +728,7 @@ function ActiveCall({
   currentUser: CallStageProps["currentUser"];
   voiceState: VoiceState;
   videoQuality: VideoQuality;
+  screenFrameRate?: ScreenFrameRate;
   ringFaces: CallStagePerson[];
   declinedNames: string[];
   playOutgoingRingtone: boolean;
@@ -729,6 +739,7 @@ function ActiveCall({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
+  onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
   onStartScreenShare?: (
     intent?: { preferBrowserTab?: boolean },
   ) => void | Promise<void>;
@@ -1275,7 +1286,9 @@ function ActiveCall({
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
       videoQuality={videoQuality}
+      screenFrameRate={screenFrameRate}
       onVideoQualityChange={onVideoQualityChange}
+      onScreenFrameRateChange={onScreenFrameRateChange}
       qualityMenuOpen={qualityMenuOpen}
       onQualityMenuOpenChange={setQualityMenuRequested}
       watchingHls={watchingHls}
@@ -1954,7 +1967,9 @@ export function CallControls({
   onToggleMute,
   onToggleCamera,
   videoQuality,
+  screenFrameRate,
   onVideoQualityChange,
+  onScreenFrameRateChange,
   qualityMenuOpen,
   onQualityMenuOpenChange,
   watchingHls = false,
@@ -1983,7 +1998,9 @@ export function CallControls({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   videoQuality: VideoQuality;
+  screenFrameRate?: ScreenFrameRate;
   onVideoQualityChange: (quality: VideoQuality) => void;
+  onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
   qualityMenuOpen: boolean;
   onQualityMenuOpenChange: (open: boolean) => void;
   watchingHls?: boolean;
@@ -2317,6 +2334,8 @@ export function CallControls({
           open={qualityMenuOpen}
           onOpenChange={onQualityMenuOpenChange}
           onChange={onVideoQualityChange}
+          screenFrameRate={screenFrameRate}
+          onScreenFrameRateChange={onScreenFrameRateChange}
           isSendingVideo={voiceState.isCameraOn || voiceState.isSharingScreen}
           isSharingScreen={voiceState.isSharingScreen}
           usingSfu={voiceState.usingSfu}

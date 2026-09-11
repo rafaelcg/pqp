@@ -18,6 +18,11 @@ import {
   screenSimulcastPlan,
   type VideoQuality,
 } from "@/lib/video-quality";
+import {
+  DEFAULT_SCREEN_FRAME_RATE,
+  SCREEN_FRAME_RATES,
+  type ScreenFrameRate,
+} from "@/lib/hls-capture-rate";
 import { cn } from "@/lib/utils";
 
 /**
@@ -82,6 +87,12 @@ const LABELS: Record<VideoQuality, MessageKey> = {
   "360p": "settings.voice.videoQuality.360p",
 };
 
+const FRAME_RATE_LABELS: Record<ScreenFrameRate, MessageKey> = {
+  auto: "settings.voice.screenFrameRate.auto",
+  "30": "settings.voice.screenFrameRate.30",
+  "60": "settings.voice.screenFrameRate.60",
+};
+
 const RECEIVE_LABELS: Record<ReceiveQuality, MessageKey> = {
   auto: "settings.voice.videoQuality.auto",
   "1080p": "settings.voice.videoQuality.1080p",
@@ -99,6 +110,8 @@ export function VideoQualityMenu({
   onChange,
   isSendingVideo,
   isSharingScreen = false,
+  screenFrameRate = DEFAULT_SCREEN_FRAME_RATE,
+  onScreenFrameRateChange,
   usingSfu = false,
   watchingHls = false,
   hlsLive = false,
@@ -123,6 +136,9 @@ export function VideoQualityMenu({
   isSendingVideo: boolean;
   /** Whether the share, specifically, is this machine's. The cap is about it. */
   isSharingScreen?: boolean;
+  /** Capture cadence for the share. Auto follows the watch-party ladder. */
+  screenFrameRate?: ScreenFrameRate;
+  onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
   /** Media on the SFU: the receive list exists, the mesh sentence does not. */
   usingSfu?: boolean;
   /**
@@ -241,6 +257,43 @@ export function VideoQualityMenu({
               {t("call.quality.send.largeRoomCap")}
             </p>
           )}
+          {isSharingScreen && onScreenFrameRateChange && (
+            <>
+              <p className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
+                {t("call.quality.send.frameRate")}
+              </p>
+              {SCREEN_FRAME_RATES.map((rate) => {
+                const selected = rate === screenFrameRate;
+                return (
+                  <button
+                    key={rate}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={selected}
+                    className={ITEM_CLASS}
+                    onClick={() => {
+                      onScreenFrameRateChange(rate);
+                      onOpenChange(false);
+                    }}
+                  >
+                    <Check
+                      className={cn(
+                        "h-3.5 w-3.5 shrink-0 text-signal",
+                        !selected && "invisible",
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span className="min-w-0 flex-1 truncate">
+                      {t(FRAME_RATE_LABELS[rate])}
+                    </span>
+                  </button>
+                );
+              })}
+              <p className="px-2.5 pb-1 pt-0.5 text-xs text-paper-muted">
+                {t("call.quality.send.frameRateHint")}
+              </p>
+            </>
+          )}
           {/* The reason the control is on the call rather than only in a
               dialog: the size actually leaving this machine, updating while
               you look at it. Changing the choice above re-shapes the track
@@ -345,7 +398,8 @@ export function VideoQualityMenu({
           // A viewer's button is never tinted: the stored size is not governing
           // anything they can see, and tinting it would be the same claim the
           // old label made.
-          isSendingVideo && value !== "auto"
+          isSendingVideo &&
+          (value !== "auto" || screenFrameRate !== "auto")
             ? "bg-signal/20 text-signal"
             : "bg-ink-3 text-paper hover:bg-ink-4",
         )}

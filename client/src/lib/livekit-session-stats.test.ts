@@ -396,7 +396,7 @@ describe("what an SFU presenter is sending", () => {
           frameHeight: 720,
           framesPerSecond: 30,
           framesSent: 900,
-          targetBitrate: 2_200_000,
+          targetBitrate: 3_700_000,
           qualityLimitationReason: "bandwidth",
           rid: "q",
         },
@@ -407,8 +407,8 @@ describe("what an SFU presenter is sending", () => {
     expect(snapshot.senders[0]).toMatchObject({
       role: "screen",
       height: 720,
-      targetKbps: 2200,
-      ceilingKbps: 2250,
+      targetKbps: 3700,
+      ceilingKbps: 4000,
       limitedBy: "bandwidth",
     });
     expect(describeLimitation(snapshot.senders[0]!)).toBe("setting");

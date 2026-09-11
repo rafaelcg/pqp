@@ -723,7 +723,7 @@ describe("the screen goes up as simulcast layers", () => {
     expect(options?.screenShareSimulcastLayers?.map((l) => l.height)).toEqual([
       360,
     ]);
-    expect(options?.screenShareEncoding?.maxBitrate).toBe(2_000_000);
+    expect(options?.screenShareEncoding?.maxBitrate).toBe(3_500_000);
     expect(constrained).toEqual([720]);
   });
 });
@@ -764,7 +764,7 @@ describe("the large-room cap", () => {
 
     const options = encodingFor(Track.Source.ScreenShare);
     expect(constrained).toEqual([1080]);
-    expect(options?.screenShareEncoding?.maxBitrate).toBe(4_000_000);
+    expect(options?.screenShareEncoding?.maxBitrate).toBe(8_000_000);
     expect(options?.screenShareSimulcastLayers?.map((l) => l.height)).toEqual([
       360, 720,
     ]);
@@ -803,7 +803,7 @@ describe("the large-room cap", () => {
 
     expect(constrained).toEqual([720, 1080]);
     expect(lastScreenPublish()?.screenShareEncoding?.maxBitrate).toBe(
-      4_000_000,
+      8_000_000,
     );
     expect(lastScreenPublish()?.screenShareSimulcastLayers).toHaveLength(2);
   });

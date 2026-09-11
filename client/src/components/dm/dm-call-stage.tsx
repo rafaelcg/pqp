@@ -3,6 +3,7 @@ import type { DmSummary } from "@pqp/shared";
 import type { VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
 import type { VideoQuality } from "@/lib/video-quality";
+import type { ScreenFrameRate } from "@/lib/hls-capture-rate";
 import { useTranslation } from "@/lib/i18n";
 import { conversationTitle } from "@/lib/conversations";
 import {
@@ -24,11 +25,13 @@ export function DmCallStage({
   currentUser,
   voiceState,
   videoQuality,
+  screenFrameRate,
   onJoinCall,
   onLeave,
   onToggleMute,
   onToggleCamera,
   onVideoQualityChange,
+  onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
   onStopScreenShare,
@@ -46,11 +49,13 @@ export function DmCallStage({
   } | null;
   voiceState: VoiceState;
   videoQuality: VideoQuality;
+  screenFrameRate?: ScreenFrameRate;
   onJoinCall: () => void;
   onLeave: () => void;
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
+  onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
   onStartScreenShare?: (
     intent?: { preferBrowserTab?: boolean },
   ) => void | Promise<void>;
@@ -117,6 +122,7 @@ export function DmCallStage({
       currentUser={currentUser}
       voiceState={voiceState}
       videoQuality={videoQuality}
+      screenFrameRate={screenFrameRate}
       ringFaces={conversation.participants.map((person) => ({
         id: person.id,
         displayName: person.displayName,
@@ -128,6 +134,7 @@ export function DmCallStage({
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
+      onScreenFrameRateChange={onScreenFrameRateChange}
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
       onStopScreenShare={onStopScreenShare}

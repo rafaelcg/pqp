@@ -48,6 +48,40 @@ describe("loadLocalSettings vadThreshold", () => {
   });
 });
 
+describe("loadLocalSettings screenFrameRate", () => {
+  afterEach(() => {
+    store.clear();
+  });
+
+  it("defaults to auto and keeps a stored 30 or 60", async () => {
+    const { parseScreenFrameRate } = await import("@/lib/hls-capture-rate");
+    expect(parseScreenFrameRate(loadLocalSettings().screenFrameRate)).toBe(
+      "auto",
+    );
+    expect(defaultLocalSettings.screenFrameRate).toBe("auto");
+
+    store.set(
+      "pqp-local-settings",
+      JSON.stringify({ screenFrameRate: "60" }),
+    );
+    expect(loadLocalSettings().screenFrameRate).toBe("60");
+
+    store.set(
+      "pqp-local-settings",
+      JSON.stringify({ screenFrameRate: "30" }),
+    );
+    expect(loadLocalSettings().screenFrameRate).toBe("30");
+  });
+
+  it("falls back to auto for junk", () => {
+    store.set(
+      "pqp-local-settings",
+      JSON.stringify({ screenFrameRate: "120" }),
+    );
+    expect(loadLocalSettings().screenFrameRate).toBe("auto");
+  });
+});
+
 describe("mic meter slider scale", () => {
   it("round-trips a slider percent onto the same displayed line", () => {
     const volume = 1;

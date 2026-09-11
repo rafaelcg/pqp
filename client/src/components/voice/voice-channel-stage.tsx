@@ -1,6 +1,7 @@
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
 import type { VideoQuality } from "@/lib/video-quality";
+import type { ScreenFrameRate } from "@/lib/hls-capture-rate";
 import { CallStage } from "@/components/voice/call-stage";
 
 /**
@@ -17,10 +18,12 @@ export function VoiceChannelStage({
   currentUser,
   voiceState,
   videoQuality,
+  screenFrameRate,
   onLeave,
   onToggleMute,
   onToggleCamera,
   onVideoQualityChange,
+  onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
   onStopScreenShare,
@@ -52,10 +55,12 @@ export function VoiceChannelStage({
   } | null;
   voiceState: VoiceState;
   videoQuality: VideoQuality;
+  screenFrameRate?: ScreenFrameRate;
   onLeave: () => void;
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
+  onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
   onStartScreenShare?: (
     intent?: { preferBrowserTab?: boolean },
   ) => void | Promise<void>;
@@ -96,10 +101,12 @@ export function VoiceChannelStage({
       currentUser={currentUser}
       voiceState={voiceState}
       videoQuality={videoQuality}
+      screenFrameRate={screenFrameRate}
       onLeave={onLeave}
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
+      onScreenFrameRateChange={onScreenFrameRateChange}
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
       onStopScreenShare={onStopScreenShare}

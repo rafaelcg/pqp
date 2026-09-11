@@ -310,7 +310,7 @@ describe("the quality menu reaches the screen encoder of every peer", () => {
     await voice.setVideoQuality("360p");
     await settle();
 
-    expect(screenCeilings()).toEqual([600_000]);
+    expect(screenCeilings()).toEqual([800_000]);
     // The size too, not just the bits. See `scaleOf`.
     expect(screenScales()).toEqual([3]);
   });
@@ -324,7 +324,7 @@ describe("the quality menu reaches the screen encoder of every peer", () => {
     await settle();
 
     // Every peer, not just the first: a mesh has one sender per person.
-    expect(screenCeilings()).toEqual([600_000, 600_000, 600_000]);
+    expect(screenCeilings()).toEqual([800_000, 800_000, 800_000]);
     // And the size reaches every one of them, which is the half that was
     // missing entirely until the divisor was written at all.
     expect(screenScales()).toEqual([3, 3, 3]);
@@ -341,7 +341,7 @@ describe("the quality menu reaches the screen encoder of every peer", () => {
     await settle();
 
     expect(screenCeilings()).toHaveLength(2);
-    expect(screenCeilings()).toEqual([600_000, 600_000]);
+    expect(screenCeilings()).toEqual([800_000, 800_000]);
   });
 
   it("gives a share started after the choice the chosen ceiling", async () => {
@@ -352,7 +352,7 @@ describe("the quality menu reaches the screen encoder of every peer", () => {
     await voice.startScreenShare();
     await settle();
 
-    expect(screenCeilings()).toEqual([1_000_000, 1_000_000]);
+    expect(screenCeilings()).toEqual([1_500_000, 1_500_000]);
   });
 
   it("raises a one-to-one share above what auto spends", async () => {
@@ -399,7 +399,7 @@ describe("a choice made outside a call still governs the call", () => {
     await voice.startScreenShare();
     await settle();
 
-    expect(screenCeilings()).toEqual([1_000_000, 1_000_000]);
+    expect(screenCeilings()).toEqual([1_500_000, 1_500_000]);
   });
 
   it("keeps the choice for the next call after leaving this one", async () => {
@@ -413,7 +413,7 @@ describe("a choice made outside a call still governs the call", () => {
     await voice.startScreenShare();
     await settle();
 
-    expect(screenCeilings()).toEqual([600_000]);
+    expect(screenCeilings()).toEqual([800_000]);
   });
 });
 

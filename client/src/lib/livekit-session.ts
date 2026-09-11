@@ -1039,15 +1039,27 @@ export async function connectLiveKit({
       // directly while the cap DID apply would silently keep it at
       // 1.5 Mbit/s. Only this branch: everywhere else `screenMaxBitrate`
       // stays exactly what a caller set, which is what it promises.
+      //
+      // Do not spend the 1080 ceiling while capture is still 720. Applying
+      // 8 Mbps the moment the raise is *allowed* made `canRaiseHlsTop`
+      // demand 10 Mbps on the next tick (1.25× that ceiling), so a 9 Mbps
+      // uplink that had cleared the 5 Mbps hold bar never finished restoring.
+      const captureHeight =
+        appliedScreenCaptureHeight ?? publishedScreenPlan?.topHeight ?? null;
+      const captureIsTop =
+        typeof captureHeight === "number" &&
+        captureHeight > LARGE_ROOM_SCREEN_HEIGHT;
       return {
         ...plan,
-        topBitrate: Math.max(plan.topBitrate, screenMaxBitrate),
+        topBitrate: captureIsTop
+          ? Math.max(plan.topBitrate, screenMaxBitrate)
+          : HLS_HELD_720_BITRATE,
       };
     }
     if (plan.heldForHls) {
       return {
         ...plan,
-        topBitrate: Math.min(screenMaxBitrate, HLS_HELD_720_BITRATE),
+        topBitrate: HLS_HELD_720_BITRATE,
       };
     }
     return {
@@ -1159,7 +1171,7 @@ export async function connectLiveKit({
             layer.width,
             layer.height,
             layer.maxBitrate,
-            layer.maxFramerate,
+            publishMaxFrameRateFromTrack(track),
           ),
       ),
       // The SFU half of the same argument as the mesh path: without these the

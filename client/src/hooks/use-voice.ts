@@ -4023,6 +4023,29 @@ export function createVoiceController(transport: RealtimeTransport) {
       emit();
     },
 
+    /**
+     * Push a capture fps onto a share that is already running.
+     *
+     * applyConstraints in place: no picker, no renegotiation, nobody's
+     * picture drops. A browser that refuses leaves the share as it was;
+     * the next share asks again. Mesh encodings re-read the track's
+     * delivered fps so a 60 capture is not still published at 30.
+     */
+    async applyScreenFrameRate(fps: 30 | 60) {
+      const track = screenCaptureStream?.getVideoTracks()[0];
+      if (!track || typeof track.applyConstraints !== "function") {
+        return;
+      }
+      try {
+        await track.applyConstraints({
+          frameRate: { ideal: fps, max: fps },
+        });
+      } catch {
+        return;
+      }
+      manager?.setScreenQuality(videoQuality);
+    },
+
     /** Promote a share to the large tile. No-op if they are not sharing. */
     focusScreenShare(peerId: string) {
       if (!state.screenSharePeerIds.includes(peerId)) {
