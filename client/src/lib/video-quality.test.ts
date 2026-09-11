@@ -22,6 +22,7 @@ import {
   screenScaleFactor,
   screenSimulcastPlan,
   clampScreenPlanToCapture,
+  screenShareSimulcastEnabled,
   VIDEO_QUALITIES,
   type ScreenSimulcastPlan,
 } from "./video-quality";
@@ -433,9 +434,17 @@ describe("the presenter as the ladder's source", () => {
     expect(plan.heldForHls).toBe(false);
   });
 
-  it("still declares the 720p encoding while HLS is live so shutdown can restore it", () => {
+  it("declares no sub-layers while HLS is transcoding the top", () => {
+    // One encoding. A 360p sub-layer still eats BWE bottom-up, and egress
+    // only ever takes the top: 2026-09-11 a host sent 240 + 360 + 1080 at
+    // once after "keep only 360" had shipped.
     const plan = screenSimulcastPlan("auto", 4, LIVE);
-    expect(plan.lowerLayers.map((layer) => layer.height)).toEqual([360, 720]);
+    expect(plan.lowerLayers).toEqual([]);
+    expect(screenShareSimulcastEnabled(LIVE)).toBe(false);
+    expect(screenShareSimulcastEnabled(null)).toBe(true);
+    expect(
+      screenShareSimulcastEnabled({ ladderTopHeight: null, uplinkBps: 10_000_000 }),
+    ).toBe(true);
   });
 
   it("leaves an ordinary large call alone", () => {
@@ -573,7 +582,7 @@ describe("the presenter as the ladder's source", () => {
     const clamped = clampScreenPlanToCapture(plan, 480);
     expect(clamped.topHeight).toBe(480);
     expect(clamped.topBitrate).toBe(1_500_000);
-    expect(clamped.lowerLayers.map((layer) => layer.height)).toEqual([360]);
+    expect(clamped.lowerLayers).toEqual([]);
   });
 
   it("does not invent rungs a live HLS plan already dropped", () => {

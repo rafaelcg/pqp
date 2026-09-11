@@ -22,6 +22,7 @@ import {
   LARGE_ROOM_SCREEN_HEIGHT,
   screenBitrateFor,
   screenSimulcastPlan,
+  screenShareSimulcastEnabled,
   clampScreenPlanToCapture,
   type CameraLayer,
   type HlsSourceInput,
@@ -998,14 +999,13 @@ export async function connectLiveKit({
         const encodings = params.encodings;
         const top = encodings[encodings.length - 1]!;
         top.maxBitrate = maxBitrate;
-        // HLS always takes the top layer. A 720p mid-rung sitting next to a
-        // 1080 top eats BWE bottom-up and the egress transcodes 480p. Keep
-        // 360p (first) for a seated phone; deactivate everything in between.
-        // When the ladder stops, turn those mids back on — the share may keep
-        // going as an ordinary SFU picture, and a later HLS session has to be
-        // allowed to trim again (Farol on PR 463).
-        if (source === Track.Source.ScreenShare && encodings.length > 2) {
-          for (let i = 1; i < encodings.length - 1; i += 1) {
+        // HLS always takes the top layer. Every sub-layer eats BWE
+        // bottom-up; "keep only 360" still left 360+1080+Chrome-scaled-240
+        // on the wire. Deactivate ALL but the last encoding. When the
+        // ladder stops, turn them back on without a new sid (Farol on
+        // PR 463 / #464).
+        if (source === Track.Source.ScreenShare && encodings.length > 1) {
+          for (let i = 0; i < encodings.length - 1; i += 1) {
             encodings[i]!.active = !feedingHls;
           }
         }
@@ -1200,27 +1200,31 @@ export async function connectLiveKit({
    * the menu said. That is the single-layer, full-rate stream a hundred phones
    * were each receiving on 5 Sep 2026.
    *
-   * The lower layers go up as `VideoPreset`s under `screenShareSimulcastLayers`;
-   * the library scales each from the capture size, keeps the top layer at the
-   * capture size with this ceiling, and declares all of them to the SFU.
+   * The lower layers go up as `VideoPreset`s under `screenShareSimulcastLayers`
+   * for ordinary SFU shares. A watch-party HLS source publishes one encoding
+   * (`simulcast: false`): egress has no layer picker, and sublayers starve
+   * the only copy it transcodes.
    */
   async function publishScreenVideo(
     track: MediaStreamTrack,
     plan: ScreenSimulcastPlan,
   ): Promise<boolean> {
     const epoch = screenShareEpoch;
+    const simulcast = screenShareSimulcastEnabled(hlsSource);
     const options = {
       source: Track.Source.ScreenShare,
-      simulcast: true,
-      screenShareSimulcastLayers: plan.lowerLayers.map(
-        (layer) =>
-          new VideoPreset(
-            layer.width,
-            layer.height,
-            layer.maxBitrate,
-            publishMaxFrameRateFromTrack(track),
-          ),
-      ),
+      simulcast,
+      screenShareSimulcastLayers: simulcast
+        ? plan.lowerLayers.map(
+            (layer) =>
+              new VideoPreset(
+                layer.width,
+                layer.height,
+                layer.maxBitrate,
+                publishMaxFrameRateFromTrack(track),
+              ),
+          )
+        : [],
       // The SFU half of the same argument as the mesh path: without these the
       // encoder holds resolution and spends framerate, which turns a film
       // into stills. `degradationPreference` is the lever; the encoding is a
@@ -1316,66 +1320,72 @@ export async function connectLiveKit({
       // encoder as a ceiling only. `force` used to republish; that is the
       // stall. Quality by name moves capture and bitrate in place.
       if (screenPlanPinned) {
-        // Same sid: shrink or restore capture without touching declared layers.
-        // Never ask the capture for more than the pinned layer set. Wait for a
-        // stable target before applyConstraints (uplink wobble). After every
+        const feedingHlsNow =
+          hlsSource !== null && hlsSource.ladderTopHeight !== null;
+        // Same sid: never retune capture height from BWE while this share
+        // is the HLS source. applyConstraints reconfigures the encoder
+        // (keyframes, rate-control reset) and is the 1080↔720↔240 hunt.
+        // Quality-by-name still moves bitrate in place below. After every
         // await, the epoch must still match: a stop mid-constrain must not
         // write onto the next share.
-        const captureTarget = Math.min(
-          plan.topHeight,
-          published.topHeight,
-          nativeScreenCaptureHeight ?? Number.POSITIVE_INFINITY,
-        );
-        if (captureTarget === appliedScreenCaptureHeight) {
-          pendingCaptureHeight = null;
-          captureHeightStreak = 0;
-        } else if (captureTarget === pendingCaptureHeight) {
-          captureHeightStreak += 1;
-        } else {
-          pendingCaptureHeight = captureTarget;
-          captureHeightStreak = 1;
-        }
-        const needed =
-          (pendingCaptureHeight ?? 0) > (appliedScreenCaptureHeight ?? 0)
-            ? HLS_SOURCE_RAISE_SAMPLES
-            : HLS_SOURCE_DROP_SAMPLES;
-        const dwellOk =
-          lastCaptureHeightChangeAt === 0 ||
-          Date.now() - lastCaptureHeightChangeAt >= HLS_SOURCE_HEIGHT_DWELL_MS;
-        if (
-          pendingCaptureHeight !== null &&
-          pendingCaptureHeight !== appliedScreenCaptureHeight &&
-          captureHeightStreak >= needed &&
-          dwellOk
-        ) {
-          const want = pendingCaptureHeight;
-          await constrainScreenCapture(track, want);
-          const liveAfterConstrain = screenShareStill(track, epoch);
-          if (!liveAfterConstrain) {
-            return;
-          }
-          // Uplink moved while we awaited: do not lock the superseded height.
-          const liveTarget = Math.min(
-            planForTrack(track).topHeight,
-            liveAfterConstrain.topHeight,
+        if (!feedingHlsNow) {
+          const captureTarget = Math.min(
+            plan.topHeight,
+            published.topHeight,
+            nativeScreenCaptureHeight ?? Number.POSITIVE_INFINITY,
           );
-          if (liveTarget !== want) {
-            pendingCaptureHeight = liveTarget;
-            captureHeightStreak = 1;
-          } else {
-            appliedScreenCaptureHeight = want;
+          if (captureTarget === appliedScreenCaptureHeight) {
             pendingCaptureHeight = null;
             captureHeightStreak = 0;
-            lastCaptureHeightChangeAt = Date.now();
+          } else if (captureTarget === pendingCaptureHeight) {
+            captureHeightStreak += 1;
+          } else {
+            pendingCaptureHeight = captureTarget;
+            captureHeightStreak = 1;
           }
+          const needed =
+            (pendingCaptureHeight ?? 0) > (appliedScreenCaptureHeight ?? 0)
+              ? HLS_SOURCE_RAISE_SAMPLES
+              : HLS_SOURCE_DROP_SAMPLES;
+          const dwellOk =
+            lastCaptureHeightChangeAt === 0 ||
+            Date.now() - lastCaptureHeightChangeAt >= HLS_SOURCE_HEIGHT_DWELL_MS;
+          if (
+            pendingCaptureHeight !== null &&
+            pendingCaptureHeight !== appliedScreenCaptureHeight &&
+            captureHeightStreak >= needed &&
+            dwellOk
+          ) {
+            const want = pendingCaptureHeight;
+            await constrainScreenCapture(track, want);
+            const liveAfterConstrain = screenShareStill(track, epoch);
+            if (!liveAfterConstrain) {
+              return;
+            }
+            const liveTarget = Math.min(
+              planForTrack(track).topHeight,
+              liveAfterConstrain.topHeight,
+            );
+            if (liveTarget !== want) {
+              pendingCaptureHeight = liveTarget;
+              captureHeightStreak = 1;
+            } else {
+              appliedScreenCaptureHeight = want;
+              pendingCaptureHeight = null;
+              captureHeightStreak = 0;
+              lastCaptureHeightChangeAt = Date.now();
+            }
+          }
+        } else {
+          pendingCaptureHeight = null;
+          captureHeightStreak = 0;
         }
         const livePublished = screenShareStill(track, epoch);
         if (!livePublished) {
           return;
         }
         const livePlan = currentScreenPlan();
-        const feedingHls =
-          hlsSource !== null && hlsSource.ladderTopHeight !== null;
+        const feedingHls = feedingHlsNow;
         const needsHlsLayerSync =
           (feedingHls && !hlsLayersTrimmed) ||
           (!feedingHls && hlsLayersTrimmed);
