@@ -421,13 +421,14 @@ export function AutomodSettingsSection({
   const [channels, setChannels] = useState<Channel[]>([]);
   const [editing, setEditing] = useState<AutomodRuleKind | null>(null);
   /**
-   * What the editor shows right now, for a save or delete that resolves
-   * after Back was pressed. Save rule A, go back, open B: A's response used
-   * to `setForm` over B. The response now checks the ref and, if the editor
-   * moved on, updates the list only.
+   * Which opening of the editor is on screen, for a save or delete that
+   * resolves after Back was pressed. Save rule A, go back, open B: A's
+   * response used to `setForm` over B. A session number rather than the
+   * rule kind, because going back and reopening A before the save lands is
+   * a new editor too, with its own unsaved edits. A response whose session
+   * has passed updates the rule list and reports its error, nothing else.
    */
-  const editingRef = useRef<AutomodRuleKind | null>(null);
-  editingRef.current = editing;
+  const editorSession = useRef(0);
   const [form, setForm] = useState<RuleForm | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -477,12 +478,14 @@ export function AutomodSettingsSection({
   }, [rules, sample]);
 
   function open(kind: AutomodRuleKind) {
+    editorSession.current += 1;
     setForm(formFromRule(ruleFor(kind)));
     setEditing(kind);
     setError(null);
   }
 
   function close() {
+    editorSession.current += 1;
     setEditing(null);
     setForm(null);
     setError(null);
@@ -522,6 +525,7 @@ export function AutomodSettingsSection({
   async function save() {
     if (!editing || !form) return;
     const kind = editing;
+    const session = editorSession.current;
     const existing = ruleFor(kind);
     setBusy(true);
     setError(null);
@@ -531,13 +535,13 @@ export function AutomodSettingsSection({
         ? await updateAutomodRule(serverId, existing.id, input)
         : await createAutomodRule(serverId, { kind, ...input });
       replaceRule(kind, rule);
-      if (editingRef.current === kind) {
+      if (editorSession.current === session) {
         setForm(formFromRule(rule));
       }
     } catch (err) {
-      if (editingRef.current === kind) {
-        setError(messageOf(err, t("automod.saveFailed")));
-      }
+      // Shown wherever the person is now: the list and the editor both
+      // render `error`, so a save that failed after Back is not lost.
+      setError(messageOf(err, t("automod.saveFailed")));
     } finally {
       setBusy(false);
     }
@@ -551,18 +555,17 @@ export function AutomodSettingsSection({
       return;
     }
     const kind = editing;
+    const session = editorSession.current;
     setBusy(true);
     setError(null);
     try {
       await deleteAutomodRule(serverId, existing.id);
       replaceRule(kind, null);
-      if (editingRef.current === kind) {
+      if (editorSession.current === session) {
         close();
       }
     } catch (err) {
-      if (editingRef.current === kind) {
-        setError(messageOf(err, t("automod.saveFailed")));
-      }
+      setError(messageOf(err, t("automod.saveFailed")));
     } finally {
       setBusy(false);
     }
