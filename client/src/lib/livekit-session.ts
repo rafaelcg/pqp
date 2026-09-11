@@ -394,6 +394,9 @@ export async function connectLiveKit({
   let captureHeightStreak = 0;
   let lastCaptureHeightChangeAt = 0;
   let hlsLayersTrimmed = false;
+  let hlsLayerRetries = 0;
+  let hlsLayerRetryAt: ReturnType<typeof setTimeout> | null = null;
+  let senderApplyGen = 0;
   /**
    * Bumped when the share stops or a new one is published. A reconcile that
    * awaited `applyConstraints` must not write height/bitrate onto the next
@@ -962,43 +965,87 @@ export async function connectLiveKit({
    * useful; a 360p layer given a 4 Mbps ceiling stops being a small copy.
    * `livekit-client` orders encodings smallest first, so the top is the last.
    */
+  /**
+   * `applied` — the browser took the encodings (trim flag may flip).
+   * `skipped` — no sender yet, or this write was superseded; retry later.
+   * `rejected` — `setParameters` threw; leave the published plan alone.
+   */
   async function setSourceMaxBitrate(
     source: Parameters<typeof room.localParticipant.getTrackPublication>[0],
     maxBitrate: number,
     label: string,
-  ): Promise<void> {
+  ): Promise<"applied" | "skipped" | "rejected"> {
     const publication = room.localParticipant.getTrackPublication(source);
     const sender = publication?.track?.sender;
     if (!sender) {
-      return;
+      return "skipped";
     }
+    const gen = ++senderApplyGen;
+    const feedingNow = (): boolean =>
+      source === Track.Source.ScreenShare &&
+      hlsSource !== null &&
+      hlsSource.ladderTopHeight !== null;
     try {
-      const params = sender.getParameters();
-      if (!params.encodings || params.encodings.length === 0) {
-        params.encodings = [{}];
-      }
-      const encodings = params.encodings;
-      const top = encodings[encodings.length - 1]!;
-      top.maxBitrate = maxBitrate;
-      // HLS always takes the top layer. A 720p mid-rung sitting next to a
-      // 1080 top eats BWE bottom-up and the egress transcodes 480p. Keep
-      // 360p (first) for a seated phone; deactivate everything in between.
-      const feedingHls =
-        source === Track.Source.ScreenShare &&
-        hlsSource !== null &&
-        hlsSource.ladderTopHeight !== null;
-      if (feedingHls && encodings.length > 2) {
-        for (let i = 1; i < encodings.length - 1; i += 1) {
-          encodings[i]!.active = false;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        if (gen !== senderApplyGen) {
+          return "skipped";
+        }
+        const feedingHls = feedingNow();
+        const params = sender.getParameters();
+        if (!params.encodings || params.encodings.length === 0) {
+          params.encodings = [{}];
+        }
+        const encodings = params.encodings;
+        const top = encodings[encodings.length - 1]!;
+        top.maxBitrate = maxBitrate;
+        // HLS always takes the top layer. A 720p mid-rung sitting next to a
+        // 1080 top eats BWE bottom-up and the egress transcodes 480p. Keep
+        // 360p (first) for a seated phone; deactivate everything in between.
+        // When the ladder stops, turn those mids back on — the share may keep
+        // going as an ordinary SFU picture, and a later HLS session has to be
+        // allowed to trim again (Farol on PR 463).
+        if (source === Track.Source.ScreenShare && encodings.length > 2) {
+          for (let i = 1; i < encodings.length - 1; i += 1) {
+            encodings[i]!.active = !feedingHls;
+          }
+        }
+        await sender.setParameters(params);
+        if (gen !== senderApplyGen) {
+          return "skipped";
+        }
+        if (feedingNow() === feedingHls) {
+          return "applied";
         }
       }
-      await sender.setParameters(params);
+      return "applied";
     } catch (err) {
       console.warn(
         `[pqp] SFU ${label} ceiling rejected; keeping the published one`,
         err,
       );
+      return gen !== senderApplyGen ? "skipped" : "rejected";
     }
+  }
+
+  const HLS_LAYER_RETRY_MS = 250;
+  const HLS_LAYER_RETRY_MAX = 3;
+
+  function clearHlsLayerRetry(): void {
+    if (hlsLayerRetryAt !== null) {
+      clearTimeout(hlsLayerRetryAt);
+      hlsLayerRetryAt = null;
+    }
+  }
+
+  function scheduleHlsLayerRetry(): void {
+    if (hlsLayerRetryAt !== null || hlsLayerRetries >= HLS_LAYER_RETRY_MAX) {
+      return;
+    }
+    hlsLayerRetries += 1;
+    hlsLayerRetryAt = setTimeout(() => {
+      hlsLayerRetryAt = null;
+      void reconcileScreenPlan();
+    }, HLS_LAYER_RETRY_MS);
   }
 
   /** Everybody in the room, this participant included. */
@@ -1329,18 +1376,27 @@ export async function connectLiveKit({
         const livePlan = currentScreenPlan();
         const feedingHls =
           hlsSource !== null && hlsSource.ladderTopHeight !== null;
+        const needsHlsLayerSync =
+          (feedingHls && !hlsLayersTrimmed) ||
+          (!feedingHls && hlsLayersTrimmed);
         if (
           livePlan.topBitrate !== livePublished.topBitrate ||
-          (feedingHls && !hlsLayersTrimmed)
+          needsHlsLayerSync
         ) {
-          await setSourceMaxBitrate(
+          const applied = await setSourceMaxBitrate(
             Track.Source.ScreenShare,
             livePlan.topBitrate,
             "screen",
           );
-          if (feedingHls) {
-            hlsLayersTrimmed = true;
+          if (applied !== "applied") {
+            if (needsHlsLayerSync) {
+              scheduleHlsLayerRetry();
+            }
+            return;
           }
+          clearHlsLayerRetry();
+          hlsLayerRetries = 0;
+          hlsLayersTrimmed = feedingHls;
           const liveAfterBitrate = screenShareStill(track, epoch);
           if (!liveAfterBitrate) {
             return;
@@ -1370,11 +1426,14 @@ export async function connectLiveKit({
         return;
       }
       if (plan.topBitrate !== published.topBitrate) {
-        await setSourceMaxBitrate(
+        const applied = await setSourceMaxBitrate(
           Track.Source.ScreenShare,
           plan.topBitrate,
           "screen",
         );
+        if (applied !== "applied") {
+          return;
+        }
         const liveAfterBitrate = screenShareStill(track, epoch);
         if (!liveAfterBitrate) {
           return;
@@ -1656,6 +1715,21 @@ export async function connectLiveKit({
       if (!kept) {
         return;
       }
+      if (
+        hlsSource !== null &&
+        hlsSource.ladderTopHeight !== null
+      ) {
+        const applied = await setSourceMaxBitrate(
+          Track.Source.ScreenShare,
+          publishPlan.topBitrate,
+          "screen",
+        );
+        if (applied === "applied") {
+          hlsLayersTrimmed = true;
+        } else {
+          scheduleHlsLayerRetry();
+        }
+      }
       if (replacing) {
         onScreenRepublished?.();
       }
@@ -1717,6 +1791,8 @@ export async function connectLiveKit({
         captureHeightStreak = 0;
         lastCaptureHeightChangeAt = 0;
         hlsLayersTrimmed = false;
+        hlsLayerRetries = 0;
+        clearHlsLayerRetry();
       });
     },
 
@@ -1745,10 +1821,19 @@ export async function connectLiveKit({
       // carry (a share started after the choice, or republished after a
       // reconnect), and the call is what the share already on the wire gets.
       screenMaxBitrate = maxBitrate;
-      await setSourceMaxBitrate(Track.Source.ScreenShare, maxBitrate, "screen");
-      if (publishedScreenPlan) {
-        publishedScreenPlan = { ...publishedScreenPlan, topBitrate: maxBitrate };
-      }
+      await enqueueScreenOp(async () => {
+        const applied = await setSourceMaxBitrate(
+          Track.Source.ScreenShare,
+          maxBitrate,
+          "screen",
+        );
+        if (applied === "applied" && publishedScreenPlan) {
+          publishedScreenPlan = {
+            ...publishedScreenPlan,
+            topBitrate: maxBitrate,
+          };
+        }
+      });
     },
 
     async setScreenQuality(quality: VideoQuality) {
@@ -1830,6 +1915,8 @@ export async function connectLiveKit({
       captureHeightStreak = 0;
       lastCaptureHeightChangeAt = 0;
       hlsLayersTrimmed = false;
+      hlsLayerRetries = 0;
+      clearHlsLayerRetry();
       publishedCameraTrack = null;
       publishedScreenAudioTrack = null;
       await room.disconnect();

@@ -23,6 +23,7 @@ import {
   screenSimulcastPlan,
   clampScreenPlanToCapture,
   VIDEO_QUALITIES,
+  type ScreenSimulcastPlan,
 } from "./video-quality";
 
 /**
@@ -432,9 +433,9 @@ describe("the presenter as the ladder's source", () => {
     expect(plan.heldForHls).toBe(false);
   });
 
-  it("does not spend a 720p sub-layer while HLS is transcoding the top", () => {
+  it("still declares the 720p encoding while HLS is live so shutdown can restore it", () => {
     const plan = screenSimulcastPlan("auto", 4, LIVE);
-    expect(plan.lowerLayers.map((layer) => layer.height)).toEqual([360]);
+    expect(plan.lowerLayers.map((layer) => layer.height)).toEqual([360, 720]);
   });
 
   it("leaves an ordinary large call alone", () => {
@@ -573,6 +574,21 @@ describe("the presenter as the ladder's source", () => {
     expect(clamped.topHeight).toBe(480);
     expect(clamped.topBitrate).toBe(1_500_000);
     expect(clamped.lowerLayers.map((layer) => layer.height)).toEqual([360]);
+  });
+
+  it("does not invent rungs a live HLS plan already dropped", () => {
+    // `heldForHls` is the 720 hold, not "HLS is transcoding". A successful
+    // 1080 source has heldForHls false and lowerLayers [360]. Rebuilding
+    // from SCREEN_SIMULCAST_RUNGS would put 720 back under a 1080 top, or
+    // invent a 360 the plan had stripped. Filter the plan's own list.
+    const plan: ScreenSimulcastPlan = {
+      topHeight: 1080,
+      topBitrate: 4_000_000,
+      lowerLayers: [],
+      capped: false,
+      heldForHls: false,
+    };
+    expect(clampScreenPlanToCapture(plan, 480).lowerLayers).toEqual([]);
   });
 
   it("keeps a near-1080 window as 1080", () => {
