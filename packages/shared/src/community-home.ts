@@ -63,6 +63,8 @@ export const communityHomeMediaKindSchema = z.enum([
   "video",
   "youtube",
   "twitch",
+  "tiktok",
+  "instagram",
   "file",
 ]);
 export type CommunityHomeMediaKind = z.infer<
@@ -152,6 +154,148 @@ export function parseYoutubeVideoId(raw: string): string | null {
 export function youtubeEmbedSrc(youtubeUrl: string): string | null {
   const id = parseYoutubeVideoId(youtubeUrl);
   return id ? `https://www.youtube-nocookie.com/embed/${id}` : null;
+}
+
+function parseHttpUrl(raw: string): URL | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+/** TikTok snowflake on `/@user/video/{id}`. Short `vm.` / `vt.` links need a redirect and are refused. */
+const TIKTOK_VIDEO_ID = /^\d{10,32}$/;
+
+/**
+ * Extract a TikTok video id from a canonical watch, embed, or player URL.
+ *
+ * Accepted: `tiktok.com/@user/video/{id}`, `m.tiktok.com/v/{id}`, and the
+ * embed/player URLs themselves. `vm.tiktok.com` / `vt.tiktok.com` / `/t/`
+ * short links only resolve after a redirect, so they are refused rather than
+ * fetched. Profiles, tags, and discover are not a player.
+ */
+export function parseTikTokVideoId(raw: string): string | null {
+  const url = parseHttpUrl(raw);
+  if (!url) {
+    return null;
+  }
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+  if (host !== "tiktok.com" && host !== "m.tiktok.com") {
+    return null;
+  }
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length === 0) {
+    return null;
+  }
+
+  const last = parts[parts.length - 1]!.replace(/\.html$/i, "");
+
+  if (parts[0] === "embed") {
+    const id = parts[1] === "v2" ? parts[2] : parts[1];
+    return id && TIKTOK_VIDEO_ID.test(id) ? id : null;
+  }
+  if (parts[0] === "player" && parts[1] === "v1") {
+    return parts[2] && TIKTOK_VIDEO_ID.test(parts[2]) ? parts[2] : null;
+  }
+  if (parts[0] === "v" && TIKTOK_VIDEO_ID.test(last)) {
+    return last;
+  }
+  if (parts[0]?.startsWith("@") && parts[1] === "video" && parts[2]) {
+    return TIKTOK_VIDEO_ID.test(parts[2]) ? parts[2] : null;
+  }
+  return null;
+}
+
+/**
+ * Official iframe as of TikTok's Embed Player docs (2026-08): player/v1.
+ * `embed/v2/{id}` is the older oEmbed iframe and 504s from some edges.
+ */
+export function tiktokEmbedSrc(tiktokUrl: string): string | null {
+  const id = parseTikTokVideoId(tiktokUrl);
+  return id ? `https://www.tiktok.com/player/v1/${id}` : null;
+}
+
+/** Canonical https watch URL from a parsed TikTok id — never the raw paste. */
+export function tiktokCanonicalUrl(raw: string): string | null {
+  const id = parseTikTokVideoId(raw);
+  return id ? `https://www.tiktok.com/video/${id}` : null;
+}
+
+/** Instagram shortcode on `/p/`, `/reel/`, `/reels/`. */
+const INSTAGRAM_SHORTCODE = /^[A-Za-z0-9_-]{5,32}$/;
+
+export type InstagramEmbedTarget = {
+  kind: "post" | "reel";
+  shortcode: string;
+};
+
+/**
+ * Extract an Instagram post or reel shortcode. Stories, profiles, and
+ * explore are refused. Share /s/ and login-wall URLs that need a redirect
+ * are refused too.
+ */
+export function parseInstagramEmbed(raw: string): InstagramEmbedTarget | null {
+  const url = parseHttpUrl(raw);
+  if (!url) {
+    return null;
+  }
+  const host = url.hostname.replace(/^www\./, "").toLowerCase();
+  if (
+    host !== "instagram.com" &&
+    host !== "m.instagram.com" &&
+    host !== "instagr.am"
+  ) {
+    return null;
+  }
+  const parts = url.pathname.split("/").filter(Boolean);
+  if (parts.length < 2) {
+    return null;
+  }
+  const head = parts[0]!.toLowerCase();
+  const shortcode = parts[1]!;
+  if (!INSTAGRAM_SHORTCODE.test(shortcode)) {
+    return null;
+  }
+  if (head === "p") {
+    return { kind: "post", shortcode };
+  }
+  if (head === "reel" || head === "reels") {
+    return { kind: "reel", shortcode };
+  }
+  return null;
+}
+
+/**
+ * Instagram's `/p/{code}/embed/` (and `/reel/…/embed/`) answers 200 with no
+ * X-Frame-Options, unlike the watch page which sends DENY. That is the
+ * official iframe path embed.js uses.
+ */
+export function instagramEmbedSrc(instagramUrl: string): string | null {
+  const target = parseInstagramEmbed(instagramUrl);
+  if (!target) {
+    return null;
+  }
+  const path = target.kind === "reel" ? "reel" : "p";
+  return `https://www.instagram.com/${path}/${target.shortcode}/embed/`;
+}
+
+/** Canonical https watch URL from a parsed Instagram target — never the raw paste. */
+export function instagramCanonicalUrl(raw: string): string | null {
+  const target = parseInstagramEmbed(raw);
+  if (!target) {
+    return null;
+  }
+  const path = target.kind === "reel" ? "reel" : "p";
+  return `https://www.instagram.com/${path}/${target.shortcode}/`;
 }
 
 /**
@@ -354,17 +498,40 @@ function isSafeTwitchParent(host: string): boolean {
   );
 }
 
-/** YouTube watch/shorts/live, or a Twitch channel / VOD / clip. */
+export type CommunityHomeEmbedKind =
+  | "youtube"
+  | "twitch"
+  | "tiktok"
+  | "instagram";
+
+/** YouTube, Twitch, TikTok, or Instagram watch URL. */
 export function parseCommunityHomeEmbed(
   raw: string,
-): "youtube" | "twitch" | null {
+): CommunityHomeEmbedKind | null {
   if (parseYoutubeVideoId(raw)) {
     return "youtube";
   }
   if (parseTwitchEmbed(raw)) {
     return "twitch";
   }
+  if (parseTikTokVideoId(raw)) {
+    return "tiktok";
+  }
+  if (parseInstagramEmbed(raw)) {
+    return "instagram";
+  }
   return null;
+}
+
+export function isCommunityHomeEmbedKind(
+  kind: string | null | undefined,
+): kind is CommunityHomeEmbedKind {
+  return (
+    kind === "youtube" ||
+    kind === "twitch" ||
+    kind === "tiktok" ||
+    kind === "instagram"
+  );
 }
 
 export const communityHomeYoutubeUrlSchema = z
@@ -381,7 +548,7 @@ export const communityHomeEmbedUrlSchema = z
   .max(500)
   .refine(
     (value) => parseCommunityHomeEmbed(value) != null,
-    "Invalid YouTube or Twitch URL",
+    "Invalid YouTube, Twitch, TikTok or Instagram URL",
   );
 
 /** Media as returned to a viewer who may see it. Locked viewers get null. */
@@ -390,8 +557,9 @@ export const communityHomeMediaSchema = z.object({
   name: z.string(),
   contentType: z.string().nullable(),
   byteSize: z.number().int().nonnegative().nullable(),
-  /** Presigned GET when storage-backed; null for YouTube / Twitch. */
+  /** Presigned GET when storage-backed; null for YouTube / Twitch / TikTok / Instagram. */
   url: z.string().nullable(),
+  /** Original paste URL for YouTube, TikTok, and Instagram. Twitch uses twitchUrl. */
   youtubeUrl: z.string().nullable(),
   /**
    * Absent on an older API during a rolling deploy. Treat missing as null
@@ -407,11 +575,11 @@ export const communityHomeMediaSchema = z.object({
 
 export type CommunityHomeMedia = z.infer<typeof communityHomeMediaSchema>;
 
-/** Original paste URL when the media is a YouTube or Twitch embed. */
+/** Original paste URL when the media is a YouTube, Twitch, TikTok, or Instagram embed. */
 export function communityHomeEmbedUrl(
   media: CommunityHomeMedia,
 ): string | null {
-  if (media.kind === "youtube") {
+  if (media.kind === "youtube" || media.kind === "tiktok" || media.kind === "instagram") {
     return media.youtubeUrl;
   }
   if (media.kind === "twitch") {
@@ -496,12 +664,11 @@ export const createCommunityHomePostSchema = z.object({
   teaser: z.string().max(COMMUNITY_HOME_TEASER_MAX).optional().nullable(),
   visibility: communityHomeVisibilitySchema.default("free"),
   commentsEnabled: z.boolean().optional(),
-  /** Claimed media upload id, or omit / null for text-only / YouTube / Twitch. */
+  /** Claimed media upload id, or omit / null for text-only / a paste URL. */
   mediaUploadId: z.string().uuid().optional().nullable(),
   /**
-   * A YouTube watch / youtu.be / shorts / live URL, or a Twitch channel /
-   * VOD / clip URL. The service classifies which; one field so the composer
-   * stays one paste box.
+   * A YouTube, Twitch, TikTok, or Instagram watch URL. The service
+   * classifies which; one field so the composer stays one paste box.
    */
   youtubeUrl: z.string().max(500).optional().nullable(),
   /**
@@ -525,7 +692,7 @@ export const updateCommunityHomePostSchema = z.object({
   commentsEnabled: z.boolean().optional(),
   mediaUploadId: z.string().uuid().optional().nullable(),
   youtubeUrl: z.string().max(500).optional().nullable(),
-  /** Pass null to clear media (including YouTube / Twitch). */
+  /** Pass null to clear media (including a paste-URL embed). */
   clearMedia: z.boolean().optional(),
 });
 
@@ -657,7 +824,7 @@ export type CommunityHomeLikeResponse = z.infer<
  * (`COMMUNITY_HOME_ENABLED`); `vipEnabled` the separate VIP switch
  * (`COMMUNITY_HOME_VIP_ENABLED`, meaningless without the first);
  * `mediaEnabled` whether object storage is configured, so the composer can
- * hide the file picker and offer YouTube / Twitch only.
+ * hide the file picker and offer YouTube / Twitch / TikTok / Instagram only.
  */
 export const communityHomeConfigSchema = z.object({
   enabled: z.boolean(),

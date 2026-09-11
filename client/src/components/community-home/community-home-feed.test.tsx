@@ -258,6 +258,93 @@ describe("PostCard", () => {
     expect(plain).toContain(elsewhere);
   });
 
+  it("embeds a TikTok watch URL in the player iframe", () => {
+    const html = render(
+      <PostCard
+        post={post({
+          media: {
+            kind: "tiktok",
+            name: "TikTok",
+            contentType: null,
+            byteSize: null,
+            url: null,
+            youtubeUrl: "https://www.tiktok.com/@scout2015/video/6718335390845095173",
+            twitchUrl: null,
+          },
+        })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+      />,
+    );
+    expect(html).toContain('data-home-media="tiktok"');
+    expect(html).toContain(
+      'src="https://www.tiktok.com/player/v1/6718335390845095173"',
+    );
+    expect(html).toContain('loading="lazy"');
+    expect(html).not.toContain("data-home-media-open");
+  });
+
+  it("embeds an Instagram reel in the official embed iframe", () => {
+    const html = render(
+      <PostCard
+        post={post({
+          media: {
+            kind: "instagram",
+            name: "Instagram",
+            contentType: null,
+            byteSize: null,
+            url: null,
+            youtubeUrl: "https://www.instagram.com/reel/CqK2e0_JXkA/",
+            twitchUrl: null,
+          },
+        })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+      />,
+    );
+    expect(html).toContain('data-home-media="instagram"');
+    expect(html).toContain(
+      'src="https://www.instagram.com/reel/CqK2e0_JXkA/embed/"',
+    );
+    expect(html).toContain('loading="lazy"');
+    expect(html).not.toContain("data-home-media-open");
+  });
+
+  it.each([
+    ["tiktok", "javascript:alert(1)"],
+    ["instagram", "https://evil.example/reel/CqK2e0_JXkA/"],
+  ] as const)(
+    "does not render an anchor for an unvalidated %s URL",
+    (kind, youtubeUrl) => {
+      const html = render(
+        <PostCard
+          post={post({
+            media: {
+              kind,
+              name: kind,
+              contentType: null,
+              byteSize: null,
+              url: null,
+              youtubeUrl,
+              twitchUrl: null,
+            },
+          })}
+          me={me}
+          locked={false}
+          canManageServer={false}
+          vipEnabled={false}
+        />,
+      );
+      expect(html).not.toContain("data-home-media-open");
+      expect(html).not.toContain("<a ");
+      expect(html).not.toContain("href=");
+    },
+  );
+
   it("offers emoji and GIF on the comment box", () => {
     const html = render(
       <PostCard

@@ -116,6 +116,8 @@
     <string name="bau_media_video">Ver vídeo</string>
     <string name="bau_media_youtube">Ver no YouTube</string>
     <string name="bau_media_twitch">Ver na Twitch</string>
+    <string name="bau_media_tiktok">Ver no TikTok</string>
+    <string name="bau_media_instagram">Ver no Instagram</string>
     <string name="bau_media_unavailable">Mídia indisponível agora.</string>
 
     <!-- Anexos -->

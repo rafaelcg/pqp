@@ -4,11 +4,16 @@ import {
   COMMUNITY_HOME_MIME_ALLOWLIST,
   communityHomeEmbedUrl,
   communityHomeMediaKindFromContentType,
+  instagramCanonicalUrl,
+  instagramEmbedSrc,
+  isCommunityHomeEmbedKind,
   parseCommunityHomeEmbed,
   parseYoutubeVideoId,
+  tiktokCanonicalUrl,
+  tiktokEmbedSrc,
   twitchEmbedSrc,
-  youtubeEmbedSrc,
   type CommunityHomeContentType,
+  youtubeEmbedSrc,
 } from "@pqp/shared";
 import {
   claimCommunityHomeMediaUpload,
@@ -28,8 +33,13 @@ import {
 export {
   COMMUNITY_HOME_MAX_BYTES,
   communityHomeEmbedUrl,
+  instagramCanonicalUrl,
+  instagramEmbedSrc,
+  isCommunityHomeEmbedKind,
   parseCommunityHomeEmbed,
   parseYoutubeVideoId,
+  tiktokCanonicalUrl,
+  tiktokEmbedSrc,
   twitchEmbedSrc,
   youtubeEmbedSrc,
 };

@@ -379,10 +379,10 @@ private fun LockedBox() {
 
 /**
  * One post's media. Every kind opens *out*: the image in whatever handles it,
- * the video and the file in the browser or a viewer, YouTube or Twitch in
- * their apps. A phone has better players for all of those than a chat app does, and a card that
- * plays sound on scroll is the thing the web's `preload="none"` exists to
- * avoid.
+ * the video and the file in the browser or a viewer, YouTube / Twitch / TikTok /
+ * Instagram in their apps. A phone has better players for all of those than a
+ * chat app does, and a card that plays sound on scroll is the thing the web's
+ * `preload="none"` exists to avoid.
  */
 @Composable
 private fun MediaView(media: BauMedia) {
@@ -448,6 +448,32 @@ private fun MediaView(media: BauMedia) {
             contentAlignment = Alignment.Center,
         ) {
             PlayBadge(stringResource(R.string.bau_media_twitch))
+        }
+
+        media.isTiktok -> Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(9f / 16f)
+                .clip(MaterialTheme.shapes.medium)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .clickable(role = Role.Button, onClick = open)
+                .testTag("bau.media.tiktok"),
+            contentAlignment = Alignment.Center,
+        ) {
+            PlayBadge(stringResource(R.string.bau_media_tiktok))
+        }
+
+        media.isInstagram -> Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(4f / 5f)
+                .clip(MaterialTheme.shapes.medium)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .clickable(role = Role.Button, onClick = open)
+                .testTag("bau.media.instagram"),
+            contentAlignment = Alignment.Center,
+        ) {
+            PlayBadge(stringResource(R.string.bau_media_instagram))
         }
 
         media.isVideo -> Box(

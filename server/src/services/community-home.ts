@@ -5,6 +5,7 @@ import {
   COMMUNITY_HOME_MAX_BYTES,
   communityHomeMediaKindFromContentType,
   hasPermission,
+  isCommunityHomeEmbedKind,
   parseCommunityHomeEmbed,
   Permission,
   type CommunityHomeAuthorBadge,
@@ -112,7 +113,7 @@ interface PostRow {
   visibility: CommunityHomeVisibility;
   status: CommunityHomePostStatus;
   comments_enabled: boolean;
-  media_kind: "image" | "video" | "youtube" | "twitch" | "file" | null;
+  media_kind: "image" | "video" | "youtube" | "twitch" | "tiktok" | "instagram" | "file" | null;
   media_name: string | null;
   media_content_type: string | null;
   media_byte_size: string | null;
@@ -257,17 +258,6 @@ function buildMedia(
   if (!unlocked || !row.media_kind) {
     return null;
   }
-  if (row.media_kind === "youtube") {
-    return {
-      kind: "youtube",
-      name: row.media_name ?? "YouTube",
-      contentType: null,
-      byteSize: null,
-      url: null,
-      youtubeUrl: row.media_youtube_url,
-      twitchUrl: null,
-    };
-  }
   if (row.media_kind === "twitch") {
     return {
       kind: "twitch",
@@ -277,6 +267,23 @@ function buildMedia(
       url: null,
       youtubeUrl: null,
       twitchUrl: row.media_youtube_url,
+    };
+  }
+  if (isCommunityHomeEmbedKind(row.media_kind)) {
+    const label =
+      row.media_kind === "tiktok"
+        ? "TikTok"
+        : row.media_kind === "instagram"
+          ? "Instagram"
+          : "YouTube";
+    return {
+      kind: row.media_kind,
+      name: row.media_name ?? label,
+      contentType: null,
+      byteSize: null,
+      url: null,
+      youtubeUrl: row.media_youtube_url,
+      twitchUrl: null,
     };
   }
   let url: string | null = null;
@@ -624,7 +631,7 @@ export async function getCommunityHomePost(
 }
 
 type MediaFields = {
-  media_kind: "image" | "video" | "youtube" | "twitch" | "file" | null;
+  media_kind: "image" | "video" | "youtube" | "twitch" | "tiktok" | "instagram" | "file" | null;
   media_name: string | null;
   media_content_type: string | null;
   media_byte_size: number | null;
@@ -696,6 +703,26 @@ function embedMedia(url: string): MediaFields {
       media_youtube_url: trimmed,
     };
   }
+  if (provider === "tiktok") {
+    return {
+      media_kind: "tiktok",
+      media_name: "TikTok",
+      media_content_type: null,
+      media_byte_size: null,
+      media_storage_key: null,
+      media_youtube_url: trimmed,
+    };
+  }
+  if (provider === "instagram") {
+    return {
+      media_kind: "instagram",
+      media_name: "Instagram",
+      media_content_type: null,
+      media_byte_size: null,
+      media_storage_key: null,
+      media_youtube_url: trimmed,
+    };
+  }
   if (provider === "twitch") {
     return {
       media_kind: "twitch",
@@ -708,7 +735,7 @@ function embedMedia(url: string): MediaFields {
   }
   throw new CommunityHomeError(
     "bad_embed",
-    "Invalid YouTube or Twitch URL",
+    "Invalid YouTube, Twitch, TikTok or Instagram URL",
   );
 }
 

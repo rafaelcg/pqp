@@ -54,14 +54,17 @@ import {
   COMMUNITY_HOME_MAX_BYTES,
   COMMUNITY_HOME_TEASER_MAX,
   COMMUNITY_HOME_TITLE_MAX,
+  communityHomeEmbedUrl,
   formatHomeBytes,
   isHomeVideoFile,
+  isCommunityHomeEmbedKind,
   isPostLockedForViewer,
+  instagramEmbedSrc,
   loadCommunityHomeViewerMode,
   lockedPostSummary,
   parseCommunityHomeEmbed,
-  communityHomeEmbedUrl,
   saveCommunityHomeViewerMode,
+  tiktokEmbedSrc,
   twitchEmbedSrc,
   uploadHomeMedia,
   youtubeEmbedSrc,
@@ -277,6 +280,50 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
           className="aspect-video w-full"
           loading="lazy"
           allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+          allowFullScreen
+        />
+      </div>
+    );
+  }
+
+  if (media.kind === "tiktok") {
+    const src = media.youtubeUrl ? tiktokEmbedSrc(media.youtubeUrl) : null;
+    if (!src) {
+      return null;
+    }
+    return (
+      <div
+        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
+        data-home-media="tiktok"
+      >
+        <iframe
+          title={t("communityHome.media.openTikTok")}
+          src={src}
+          className="mx-auto aspect-[9/16] w-full max-w-[325px]"
+          loading="lazy"
+          allow="encrypted-media; fullscreen; picture-in-picture"
+          allowFullScreen
+        />
+      </div>
+    );
+  }
+
+  if (media.kind === "instagram") {
+    const src = media.youtubeUrl ? instagramEmbedSrc(media.youtubeUrl) : null;
+    if (!src) {
+      return null;
+    }
+    return (
+      <div
+        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
+        data-home-media="instagram"
+      >
+        <iframe
+          title={t("communityHome.media.openInstagram")}
+          src={src}
+          className="mx-auto min-h-[540px] w-full max-w-[540px]"
+          loading="lazy"
+          allow="encrypted-media; clipboard-write; picture-in-picture"
           allowFullScreen
         />
       </div>
@@ -1051,11 +1098,9 @@ function composeFromPost(post: CommunityHomePost): ComposeState {
     teaser: post.teaser ?? "",
     visibility: post.visibility,
     commentsEnabled: post.commentsEnabled,
-    youtubeUrl: post.media ? (communityHomeEmbedUrl(post.media) ?? "") : "",
+    youtubeUrl: (post.media && communityHomeEmbedUrl(post.media)) || "",
     existingMedia:
-      post.media && post.media.kind !== "youtube" && post.media.kind !== "twitch"
-        ? post.media
-        : null,
+      post.media && !isCommunityHomeEmbedKind(post.media.kind) ? post.media : null,
   };
 }
 
@@ -1063,25 +1108,21 @@ function composeFromPost(post: CommunityHomePost): ComposeState {
 function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOwner: boolean): CommunityHomePost {
   let media: CommunityHomeMedia | null = null;
   const embedKind = parseCommunityHomeEmbed(state.youtubeUrl);
-  if (embedKind === "youtube") {
+  if (embedKind) {
+    const name = {
+      youtube: "YouTube",
+      twitch: "Twitch",
+      tiktok: "TikTok",
+      instagram: "Instagram",
+    }[embedKind];
     media = {
-      kind: "youtube",
-      name: "YouTube",
+      kind: embedKind,
+      name,
       contentType: null,
       byteSize: null,
       url: null,
-      youtubeUrl: state.youtubeUrl.trim(),
-      twitchUrl: null,
-    };
-  } else if (embedKind === "twitch") {
-    media = {
-      kind: "twitch",
-      name: "Twitch",
-      contentType: null,
-      byteSize: null,
-      url: null,
-      youtubeUrl: null,
-      twitchUrl: state.youtubeUrl.trim(),
+      youtubeUrl: embedKind === "twitch" ? null : state.youtubeUrl.trim(),
+      twitchUrl: embedKind === "twitch" ? state.youtubeUrl.trim() : null,
     };
   } else if (state.upload) {
     media = {
@@ -1415,7 +1456,7 @@ function ComposeCard({
           )}
         </div>
 
-        {/* Media: one of file (when storage is on) or YouTube / Twitch. */}
+        {/* Media: one file (when storage is on) or a provider URL. */}
         <div className="mb-2 grid gap-2 sm:grid-cols-2">
           {mediaEnabled ? (
             <label className="block text-xs text-paper-muted">

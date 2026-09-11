@@ -33,13 +33,13 @@ data class CommunityHomeConfig(
 
 /**
  * One post's media, as the viewer may see it. `url` is a presigned GET for
- * storage-backed kinds and null for YouTube / Twitch; a locked viewer gets no media at
- * all (the whole object is null on the post), never a media with the URL
- * stripped, so nothing here has to guess at a lock.
+ * storage-backed kinds and null for YouTube / Twitch / TikTok / Instagram; a
+ * locked viewer gets no media at all (the whole object is null on the post),
+ * never a media with the URL stripped, so nothing here has to guess at a lock.
  */
 @Serializable
 data class BauMedia(
-    /** `image` / `video` / `youtube` / `twitch` / `file`. */
+    /** `image` / `video` / `youtube` / `twitch` / `tiktok` / `instagram` / `file`. */
     val kind: String,
     val name: String = "",
     val contentType: String? = null,
@@ -52,11 +52,13 @@ data class BauMedia(
     val isVideo: Boolean get() = kind == "video"
     val isYoutube: Boolean get() = kind == "youtube"
     val isTwitch: Boolean get() = kind == "twitch"
+    val isTiktok: Boolean get() = kind == "tiktok"
+    val isInstagram: Boolean get() = kind == "instagram"
     val isFile: Boolean get() = kind == "file"
 
-    /** What a tap opens: the object for storage kinds, the watch page for YouTube / Twitch. */
+    /** What a tap opens: the object for storage kinds, the watch page for paste URLs. */
     val openUrl: String? get() = when {
-        isYoutube -> youtubeUrl
+        isYoutube || isTiktok || isInstagram -> youtubeUrl
         isTwitch -> twitchUrl
         else -> url
     }

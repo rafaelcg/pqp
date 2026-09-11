@@ -4951,6 +4951,26 @@
         }
       }
     },
+    "Watch on TikTok" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver no TikTok"
+          }
+        }
+      }
+    },
+    "Watch on Instagram" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver no Instagram"
+          }
+        }
+      }
+    },
     "Watch on YouTube" : {
       "localizations" : {
         "pt-BR" : {

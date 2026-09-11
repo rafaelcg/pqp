@@ -321,9 +321,10 @@ private struct LockedBox: View {
 }
 
 /// One post's media. Every kind opens *out*: the image in the browser, the
-/// video and the file in Safari or a viewer, YouTube or Twitch in their apps. A phone has
-/// better players for all of those than a chat app does, and a card that plays
-/// sound on scroll is the thing the web's `preload="none"` exists to avoid.
+/// video and the file in Safari or a viewer, YouTube / Twitch / TikTok /
+/// Instagram in their apps. A phone has better players for all of those than
+/// a chat app does, and a card that plays sound on scroll is the thing the
+/// web's `preload="none"` exists to avoid.
 private struct MediaView: View {
     @Environment(\.openURL) private var openURL
     let media: CommunityHomeMedia
@@ -389,6 +390,26 @@ private struct MediaView: View {
             .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
             .accessibilityLabel(Text("Watch on Twitch"))
             .accessibilityIdentifier("bau.media.twitch")
+        } else if media.isTiktok {
+            ZStack {
+                Palette.surfaceRaised
+                PlayBadge(label: String(localized: "Watch on TikTok"))
+            }
+            .frame(maxWidth: .infinity)
+            .aspectRatio(9 / 16, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+            .accessibilityLabel(Text("Watch on TikTok"))
+            .accessibilityIdentifier("bau.media.tiktok")
+        } else if media.isInstagram {
+            ZStack {
+                Palette.surfaceRaised
+                PlayBadge(label: String(localized: "Watch on Instagram"))
+            }
+            .frame(maxWidth: .infinity)
+            .aspectRatio(4 / 5, contentMode: .fit)
+            .clipShape(RoundedRectangle(cornerRadius: Metrics.cornerRadiusSmall, style: .continuous))
+            .accessibilityLabel(Text("Watch on Instagram"))
+            .accessibilityIdentifier("bau.media.instagram")
         } else if media.isVideo {
             ZStack {
                 Palette.surfaceRaised

@@ -40,11 +40,11 @@ struct CommunityHomeConfig: Codable, Sendable, Hashable {
 }
 
 /// One post's media, as the viewer may see it. `url` is a presigned GET for
-/// storage-backed kinds and nil for YouTube / Twitch; a locked viewer gets no media at
-/// all (the whole object is nil on the post), never a media with the URL
-/// stripped, so nothing here has to guess at a lock.
+/// storage-backed kinds and nil for YouTube / Twitch / TikTok / Instagram; a
+/// locked viewer gets no media at all (the whole object is nil on the post),
+/// never a media with the URL stripped, so nothing here has to guess at a lock.
 struct CommunityHomeMedia: Codable, Sendable, Hashable {
-    /// `image` / `video` / `youtube` / `twitch` / `file`.
+    /// `image` / `video` / `youtube` / `twitch` / `tiktok` / `instagram` / `file`.
     let kind: String
     let name: String
     let contentType: String?
@@ -57,12 +57,14 @@ struct CommunityHomeMedia: Codable, Sendable, Hashable {
     var isVideo: Bool { kind == "video" }
     var isYoutube: Bool { kind == "youtube" }
     var isTwitch: Bool { kind == "twitch" }
+    var isTiktok: Bool { kind == "tiktok" }
+    var isInstagram: Bool { kind == "instagram" }
     var isFile: Bool { kind == "file" }
     var isGif: Bool { contentType?.lowercased() == "image/gif" }
 
-    /// What a tap opens: the object for storage kinds, the watch page for YouTube / Twitch.
+    /// What a tap opens: the object for storage kinds, the watch page for paste URLs.
     var openURL: URL? {
-        if isYoutube { return URL(string: youtubeUrl ?? "") }
+        if isYoutube || isTiktok || isInstagram { return URL(string: youtubeUrl ?? "") }
         if isTwitch { return URL(string: twitchUrl ?? "") }
         return URL(string: url ?? "")
     }

@@ -123,6 +123,8 @@
     <string name="bau_media_video">Play video</string>
     <string name="bau_media_youtube">Watch on YouTube</string>
     <string name="bau_media_twitch">Watch on Twitch</string>
+    <string name="bau_media_tiktok">Watch on TikTok</string>
+    <string name="bau_media_instagram">Watch on Instagram</string>
     <string name="bau_media_unavailable">Media unavailable right now.</string>
 
     <!-- Attachments -->
