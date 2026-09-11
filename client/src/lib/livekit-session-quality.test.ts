@@ -1040,6 +1040,7 @@ describe("the presenter as a live ladder's source", () => {
     expect(restored!.encodings[1]?.active).not.toBe(false);
     expect(restored!.encodings[2]?.active).not.toBe(false);
     expect(restored!.degradationPreference).toBe("maintain-framerate");
+    expect(restored!.encodings[2]?.scaleResolutionDownBy).toBeUndefined();
 
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
     const retrimmed = [...senderWrites]

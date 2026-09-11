@@ -967,15 +967,21 @@ export async function connectLiveKit({
     if (!sender) {
       return false;
     }
-    const params = sender.getParameters();
-    const encodings = params.encodings ?? [];
-    const top = encodings[encodings.length - 1];
-    return (
-      params.degradationPreference !==
-        screenShareDegradationPreference(hlsSource) ||
-      top?.scaleResolutionDownBy !==
-        screenShareScaleResolutionDownBy(hlsSource)
-    );
+    try {
+      const params = sender.getParameters();
+      const encodings = params.encodings ?? [];
+      const top = encodings[encodings.length - 1];
+      return (
+        params.degradationPreference !==
+          screenShareDegradationPreference(hlsSource) ||
+        top?.scaleResolutionDownBy !==
+          screenShareScaleResolutionDownBy(hlsSource)
+      );
+    } catch {
+      // Sender teardown: do not treat a dead getParameters as a pin miss
+      // or the 2 s tick will keep retrying a track that is already gone.
+      return false;
+    }
   }
 
   /**
@@ -1040,6 +1046,12 @@ export async function connectLiveKit({
             // encoding. Pin the divisor so pixels cannot drop; fps/bitrate
             // still can, and the strain banner still says so.
             top.scaleResolutionDownBy = scale;
+          } else {
+            // Ordinary SFU top layer is the capture size. LiveKit solves
+            // the lower-rung divisors; an explicit 1 left over from HLS
+            // ingest is the pin, not the large-room cap. Delete it so
+            // maintain-framerate can spend resolution again.
+            delete top.scaleResolutionDownBy;
           }
           if (encodings.length > 1) {
             for (let i = 0; i < encodings.length - 1; i += 1) {
