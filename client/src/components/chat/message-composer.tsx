@@ -74,6 +74,7 @@ import {
   type AcceptedFile,
   type OutgoingAttachment,
 } from "@/lib/attachments";
+import { readDraft, writeDraft } from "@/lib/composer-drafts";
 import { createGifAttachment } from "@/lib/api";
 import {
   applyEmojiShortcode,
@@ -336,8 +337,11 @@ export function MessageComposer({
 }: MessageComposerProps) {
   const { t } = useTranslation();
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
-  const [body, setBody] = useState("");
-  const [caret, setCaret] = useState(0);
+  // The draft outlives the mount: App remounts this component per channel,
+  // so what was typed here is read back when the channel is reopened and
+  // written on every change. See `composer-drafts.ts`.
+  const [body, setBody] = useState(() => (channelId ? readDraft(channelId) : ""));
+  const [caret, setCaret] = useState(() => (channelId ? readDraft(channelId).length : 0));
   const [composerBox, setComposerBox] = useState({
     height: COMPOSER_CONTROL_PX,
     lineHeight: COMPOSER_CONTROL_PX,
@@ -393,6 +397,12 @@ export function MessageComposer({
   }, [slowModeUntil]);
 
   const slowModeRemaining = remainingWaitSeconds(slowModeUntil, now);
+
+  useEffect(() => {
+    if (channelId) {
+      writeDraft(channelId, body);
+    }
+  }, [channelId, body]);
 
   useEffect(() => {
     if (isFormatBarOpen) {

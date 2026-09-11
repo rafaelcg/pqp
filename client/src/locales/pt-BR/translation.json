@@ -2606,6 +2606,7 @@
   "userPanel.openSettings": "Abrir configurações",
   "userPanel.joinToUse": "Entra numa call primeiro",
   "chrome.categories": "Categorias",
+  "chrome.draftSr": "(rascunho)",
   "chrome.unreadSr": "(não lidas)",
   "chrome.mutedSr": "(silenciado)",
   "timeout.expiring": "expirando agora",

@@ -2606,6 +2606,7 @@
   "userPanel.openSettings": "Open settings",
   "userPanel.joinToUse": "Join a voice channel first",
   "chrome.categories": "Categories",
+  "chrome.draftSr": "(draft)",
   "chrome.unreadSr": "(unread)",
   "chrome.mutedSr": "(muted)",
   "timeout.expiring": "expiring now",

@@ -94,6 +94,7 @@ import {
   removeFavorite,
   visibleFavoriteChannels,
 } from "@/lib/channel-favorites";
+import { useDraftChannelIds } from "@/lib/composer-drafts";
 import {
   loadCollapsedCategories,
   toggleCollapsedCategory,
@@ -2023,6 +2024,24 @@ export function ChannelRailItem({
   );
 }
 
+/**
+ * The pencil beside a channel you left something typed in. Not on the
+ * selected row: the draft is right there in the composer.
+ */
+export function DraftMark() {
+  const { t } = useTranslation();
+  return (
+    <>
+      <Pencil
+        className="h-3 w-3 shrink-0 text-paper-muted"
+        aria-hidden
+        data-draft-mark=""
+      />
+      <span className="sr-only">{t("chrome.draftSr")}</span>
+    </>
+  );
+}
+
 function ChannelRow({
   channel,
   selected,
@@ -2241,6 +2260,8 @@ function ChannelRow({
 
   const muted = notifications.level === "none";
   const hasUnread = !selected && unread.count > 0;
+  const draftIds = useDraftChannelIds();
+  const hasDraft = !selected && draftIds.includes(channel.id);
   // A muted channel keeps counting for the read cursor, but nothing about it
   // should pull the eye — that is the whole point of muting it.
   const mentions = selected || muted ? 0 : unread.mentions;
@@ -2387,6 +2408,7 @@ function ChannelRow({
           {channel.name}
         </span>
       )}
+      {hasDraft && <DraftMark />}
       {!watchParty && sessionHint && (
         <ChannelSessionHint startsAt={sessionHint} now={new Date()} />
       )}
