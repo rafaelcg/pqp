@@ -29,7 +29,58 @@ A full staging environment: real Clerk auth, real Postgres, real Fly and Pages, 
 - **Object storage is its own R2 bucket, `pqp-attachments-staging`** (created 2026-09-01, private, CORS for `https://staging.pqp-3yr.pages.dev` and `http://localhost:5173`). `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION=auto` and `S3_FORCE_PATH_STYLE=false` are set on `pqp-api-staging`; the two credentials come from an R2 API token scoped to that bucket (Dashboard → R2 → Manage R2 API Tokens → Object Read & Write). `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` are set from the account token `pqp-staging` (Object Read & Write, that bucket only), verified with a signed PUT / HEAD / DELETE round trip on 2026-09-01. Attachments and Baú media both work on staging. Never point staging at the production bucket; to rotate, create a new token in the dashboard, `fly secrets set` the pair, then delete the old token.
 - **No TURN.** Cross-NAT voice may fail on staging; same-network voice works. This is the known STUN-only limitation (CLAUDE.md pitfall 1), accepted here to keep staging cheap.
 - **No analytics or ads tags.** The build omits Umami, Google Ads and the APK click beacon on purpose; staging traffic must not pollute production numbers.
-- **Scales to zero.** `fly.staging.toml` sets `auto_stop_machines = "stop"` and `min_machines_running = 0`, so the machine parks when idle and the first request after an idle period takes a few seconds while it boots. Production deliberately keeps min 1 because a stop drops every live WebSocket; staging accepts that trade.
+- **Scales to zero.** `fly.staging.toml` sets `auto_stop_machines = "stop"` and `min_machines_running = 0`, so the machine parks when idle and the first request after an idle period takes a few seconds while it boots. Production deliberately keeps min 1 because a stop drops every live WebSocket; staging accepts that trade. While the pair is parked (next section), turn autostart off on the API machine or a stray request boots a process that cannot reach Postgres.
+
+## Parked (how to start)
+
+As of 2026-09-11 the Fly half of staging is **stopped, not destroyed**: apps, volumes, IPs and secrets are still there. Compute is off; the 1 GB volume on `pqp-db-staging-lite` (`vol_rnzewwq0dmxn7qer`) keeps billing. Pages (`https://staging.pqp-3yr.pages.dev`) is untouched and still serves the static SPA; `/app` will not work until the API is back.
+
+| App | Machine | State |
+|---|---|---|
+| `pqp-api-staging` | `7811d002a0d648` (`young-brook-8027`) | stopped. Autostart was turned off so the proxy cannot wake it. |
+| `pqp-db-staging-lite` | `7817922cd30438` (`icy-haze-2047`) | stopped. Volume still attached. |
+
+Do **not** `fly apps destroy`. `fly machine list` if the ids ever change.
+
+**Start, database first:**
+
+```bash
+fly machine start 7817922cd30438 -a pqp-db-staging-lite
+fly machine list -a pqp-db-staging-lite    # started, checks recovering toward 3/3
+
+fly machine update 7811d002a0d648 -a pqp-api-staging --autostart=true -y
+# If that update left it stopped:
+fly machine start 7811d002a0d648 -a pqp-api-staging
+
+curl -sS https://pqp-api-staging.fly.dev/health
+```
+
+**Park again:** turn API autostart off first, then stop the database.
+
+```bash
+fly machine update 7811d002a0d648 -a pqp-api-staging --autostart=false -y
+fly machine stop 7817922cd30438 -a pqp-db-staging-lite
+```
+
+A `deploy-staging.yml` run also starts the API (and puts autostart back from `fly.staging.toml`). Start the database before that job.
+
+## Watch-party HLS box (not sfu-pqp)
+
+Staging watch parties talk to a dedicated LiveKit on Vultr, **not** production `sfu-pqp` (`sfu.pqp.gg`). Hostnames, derived from the box IP:
+
+| Role | Host |
+|---|---|
+| Signal / RoomService | `wss://216-238-108-42.sslip.io` |
+| TURN (cert only) | `turn-216-238-108-42.sslip.io` |
+
+Set these on **`pqp-api-staging` only** (`fly secrets set -a pqp-api-staging`). Never `fly secrets` on `pqp-api`.
+
+| Env | What |
+|---|---|
+| `LIVEKIT_URL` / `_API_KEY` / `_API_SECRET` | Ordinary voice on this staging API. May point at the same box while staging has no second SFU. |
+| `LIVEKIT_HLS_URL` / `_API_KEY` / `_API_SECRET` | Watch-party joins and HLS egress. When set, `POST /api/voice/token` for a `watch_party` channel returns this URL; the client dials it. Unset, watch parties use `LIVEKIT_URL` like today. |
+
+The box runs its own LiveKit + Caddy + Redis + egress, Redis bound to localhost. Production `sfu-pqp` is not in this path.
 
 ## How to deploy
 

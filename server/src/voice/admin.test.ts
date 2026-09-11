@@ -68,6 +68,9 @@ function unconfigureLiveKit() {
   delete process.env.LIVEKIT_URL;
   delete process.env.LIVEKIT_API_KEY;
   delete process.env.LIVEKIT_API_SECRET;
+  delete process.env.LIVEKIT_HLS_URL;
+  delete process.env.LIVEKIT_HLS_API_KEY;
+  delete process.env.LIVEKIT_HLS_API_SECRET;
   resetSfuAdminClient();
 }
 
@@ -396,6 +399,30 @@ describe("SFU eviction", () => {
 
         expect(removedIdentities().sort()).toEqual(["peer-1", "peer-2"]);
       });
+    });
+  });
+
+  describe("when an HLS cluster is configured beside voice", () => {
+    beforeEach(() => {
+      configureLiveKit();
+      process.env.LIVEKIT_HLS_URL = "wss://hls.example.test";
+      process.env.LIVEKIT_HLS_API_KEY = "hls-key";
+      process.env.LIVEKIT_HLS_API_SECRET = "hls-secret";
+      resetSfuAdminClient();
+    });
+
+    it("fans a room eviction out to both LiveKits", async () => {
+      lk.listParticipants.mockResolvedValue([participant("peer-1", "user-1")]);
+
+      await evictSfuRoom("party-a");
+      await settleSfuEvictions();
+
+      expect(lk.hosts.sort()).toEqual([
+        "wss://hls.example.test",
+        "wss://sfu.example.test",
+      ]);
+      expect(lk.listParticipants).toHaveBeenCalledTimes(2);
+      expect(removedIdentities()).toEqual(["peer-1", "peer-1"]);
     });
   });
 });

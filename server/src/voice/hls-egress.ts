@@ -8,7 +8,7 @@ import {
   TrackSource,
 } from "livekit-server-sdk";
 import { playlistLooksLive, type LiveHlsStream } from "@pqp/shared";
-import { isLiveKitConfigured } from "./backends.js";
+import { isLiveKitConfigured, liveKitCredsForHls } from "./backends.js";
 import { promotionBudgetMbps } from "./promotion.js";
 import {
   decideLadder,
@@ -1351,8 +1351,7 @@ export function stopLiveHlsMonitor(): void {
   }
 }
 
-function liveKitHttpUrl(): string {
-  const url = process.env.LIVEKIT_URL!;
+function liveKitHttpUrl(url: string): string {
   return url.replace(/^ws:/, "http:").replace(/^wss:/, "https:");
 }
 
@@ -1360,13 +1359,14 @@ function getEgress(): LiveHlsEgressApi | null {
   if (injectedEgress) {
     return injectedEgress;
   }
-  if (!isLiveKitConfigured()) {
+  const creds = liveKitCredsForHls();
+  if (!creds) {
     return null;
   }
   const client = new EgressClient(
-    liveKitHttpUrl(),
-    process.env.LIVEKIT_API_KEY,
-    process.env.LIVEKIT_API_SECRET,
+    liveKitHttpUrl(creds.url),
+    creds.apiKey,
+    creds.apiSecret,
   );
   return {
     startTrackCompositeEgress: async (roomName, output, opts) => {
@@ -1622,13 +1622,14 @@ async function defaultFindTracks(
   logInventory: boolean,
   presenterIdentity?: string,
 ): Promise<LiveHlsScreenTracks | null> {
-  if (!isLiveKitConfigured()) {
+  const creds = liveKitCredsForHls();
+  if (!creds) {
     return null;
   }
   const client = new RoomServiceClient(
-    process.env.LIVEKIT_URL!,
-    process.env.LIVEKIT_API_KEY,
-    process.env.LIVEKIT_API_SECRET,
+    creds.url,
+    creds.apiKey,
+    creds.apiSecret,
   );
   const participants = await client.listParticipants(roomName);
   const picked = pickScreenTracks(participants, presenterIdentity);

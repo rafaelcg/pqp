@@ -50,6 +50,7 @@ vi.mock("../auth/clerk.js", () => ({
 const { handleApi, resetApiRateLimits } = await import("./index.js");
 const { getPool, initDb, closePool } = await import("../db.js");
 const { upsertUser } = await import("../services/users.js");
+const { createChannel } = await import("../services/servers.js");
 const { resetVoicePeers, resetVoiceRoomTransports } = await import(
   "../ws/voice.js"
 );
@@ -106,6 +107,9 @@ describeDb("POST /api/voice/token with an empty peer map", () => {
     delete process.env.LIVEKIT_URL;
     delete process.env.LIVEKIT_API_KEY;
     delete process.env.LIVEKIT_API_SECRET;
+    delete process.env.LIVEKIT_HLS_URL;
+    delete process.env.LIVEKIT_HLS_API_KEY;
+    delete process.env.LIVEKIT_HLS_API_SECRET;
   });
 
   beforeEach(async () => {
@@ -157,6 +161,9 @@ describeDb("POST /api/voice/token with an empty peer map", () => {
 
   afterEach(() => {
     process.env.VOICE_REGISTRY = previousFlag;
+    delete process.env.LIVEKIT_HLS_URL;
+    delete process.env.LIVEKIT_HLS_API_KEY;
+    delete process.env.LIVEKIT_HLS_API_SECRET;
     vi.restoreAllMocks();
   });
 
@@ -246,5 +253,52 @@ describeDb("POST /api/voice/token with an empty peer map", () => {
       resumeToken: tokenFor(member.id, peerId),
     });
     expect(refused.status).toBe(409);
+  });
+
+  it("returns LIVEKIT_HLS_URL for a watch_party join when the HLS cluster is set", async () => {
+    process.env.LIVEKIT_HLS_URL = "wss://hls.example.test";
+    process.env.LIVEKIT_HLS_API_KEY = "hls-key";
+    process.env.LIVEKIT_HLS_API_SECRET = "hls-secret";
+
+    const created = await call<{ server: { id: string } }>(
+      owner,
+      "POST",
+      "/api/servers",
+      { name: "Party hall" },
+    );
+    expect(created.status).toBe(201);
+    const party = await createChannel(
+      created.body.server.id,
+      "cinema",
+      "watch_party",
+    );
+    await getPool().query(
+      `UPDATE channels SET voice_transport = 'livekit' WHERE id = $1`,
+      [party.id],
+    );
+    const peerId = randomUUID();
+    const minted = await call<{ url: string; room: string }>(
+      owner,
+      "POST",
+      "/api/voice/token",
+      {
+        voiceChannelId: party.id,
+        peerId,
+        resumeToken: tokenFor(owner.id, peerId, party.id),
+      },
+    );
+
+    expect(minted.status).toBe(200);
+    expect(minted.body.url).toBe("wss://hls.example.test");
+    expect(minted.body.room).toBe(party.id);
+
+    const voicePeer = randomUUID();
+    const voice = await call<{ url: string }>(member, "POST", "/api/voice/token", {
+      voiceChannelId,
+      peerId: voicePeer,
+      resumeToken: tokenFor(member.id, voicePeer),
+    });
+    expect(voice.status).toBe(200);
+    expect(voice.body.url).toBe("wss://sfu.example.test");
   });
 });

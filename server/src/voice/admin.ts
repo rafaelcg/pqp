@@ -2,11 +2,12 @@ import { RoomServiceClient, TrackSource, TrackType, type Room } from "livekit-se
 import { z } from "zod";
 import { logEvent } from "../lib/log.js";
 import {
-  isLiveKitConfigured,
+  liveKitCreds,
   liveKitPublishGrant,
   mintedAtFromParticipantMetadata,
   TOKEN_TTL_SECONDS,
   userIdFromParticipantMetadata,
+  type LiveKitCluster,
 } from "./backends.js";
 import {
   claimVoiceResweeps,
@@ -59,51 +60,55 @@ import {
  * pre-eviction token could still be replayed.
  */
 
-interface LiveKitConfig {
-  url: string;
-  apiKey: string;
-  apiSecret: string;
-}
-
-function liveKitConfig(): LiveKitConfig | null {
-  if (!isLiveKitConfigured()) {
-    return null;
-  }
-  return {
-    url: process.env.LIVEKIT_URL!,
-    apiKey: process.env.LIVEKIT_API_KEY!,
-    apiSecret: process.env.LIVEKIT_API_SECRET!,
-  };
-}
-
 /**
- * Cached per credential set rather than per process: env is read at call time
- * (not at import time) so a deployment that gains LiveKit config on restart —
- * and a test that sets it mid-run — both pick it up without a stale client.
+ * Cached per cluster and credential set rather than per process: env is read
+ * at call time so a test that flips `LIVEKIT_HLS_*` mid-run picks it up.
+ * Dashboard occupancy (`listSfuRooms`) stays on the voice cluster; mute,
+ * kick and a ban fan out to both so a watch-party seat on the HLS box is
+ * not left talking after the signalling peer is gone.
  */
-let cached: { key: string; client: RoomServiceClient } | null = null;
+const cached = new Map<
+  LiveKitCluster,
+  { key: string; client: RoomServiceClient }
+>();
 
-function getRoomService(): RoomServiceClient | null {
-  const config = liveKitConfig();
+function getRoomService(
+  cluster: LiveKitCluster = "voice",
+): RoomServiceClient | null {
+  const config = liveKitCreds(cluster);
   if (!config) {
     return null;
   }
   const key = [config.url, config.apiKey, config.apiSecret].join("\u0000");
-  if (!cached || cached.key !== key) {
+  const hit = cached.get(cluster);
+  if (!hit || hit.key !== key) {
     // RoomServiceClient rewrites a ws(s):// host to http(s):// itself, so
-    // LIVEKIT_URL is handed over unchanged — no second env var, no drift
-    // between the URL the client dials and the one we administer.
-    cached = {
+    // the URL is handed over unchanged — no third env var, no drift between
+    // the URL the client dials and the one we administer.
+    cached.set(cluster, {
       key,
       client: new RoomServiceClient(config.url, config.apiKey, config.apiSecret),
-    };
+    });
   }
-  return cached.client;
+  return cached.get(cluster)!.client;
 }
 
-/** Drop the cached admin client. Tests use this after changing LiveKit env. */
+function eachRoomService(): RoomServiceClient[] {
+  const clients: RoomServiceClient[] = [];
+  const voice = getRoomService("voice");
+  if (voice) {
+    clients.push(voice);
+  }
+  const hls = getRoomService("hls");
+  if (hls) {
+    clients.push(hls);
+  }
+  return clients;
+}
+
+/** Drop the cached admin clients. Tests use this after changing LiveKit env. */
 export function resetSfuAdminClient(): void {
-  cached = null;
+  cached.clear();
 }
 
 /**
@@ -384,8 +389,8 @@ function scheduleResweep(
       resweeps.delete(key);
       return;
     }
-    const client = getRoomService();
-    if (client) {
+    const clients = eachRoomService();
+    for (const client of clients) {
       void runSweep(client, spec, "resweep", evictedAt);
     }
   }, RESWEEP_INTERVAL_MS);
@@ -438,8 +443,8 @@ export function tickSfuResweeps(): Promise<number> {
   if (claimInFlight) {
     return claimInFlight;
   }
-  const client = isVoiceRegistryEnabled() ? getRoomService() : null;
-  if (!client) {
+  const clients = isVoiceRegistryEnabled() ? eachRoomService() : [];
+  if (clients.length === 0) {
     return Promise.resolve(0);
   }
   const work = (async () => {
@@ -451,16 +456,14 @@ export function tickSfuResweeps(): Promise<number> {
       return 0;
     }
     await Promise.all(
-      rows.map((row) => {
+      rows.flatMap((row) => {
         const spec = specFrom(row.key, row.scope);
         if (!spec) {
-          return Promise.resolve();
+          return [];
         }
-        return runSweep(
-          client,
-          spec,
-          "resweep",
-          Math.floor(row.evictedAt.getTime() / 1000),
+        const evictedAt = Math.floor(row.evictedAt.getTime() / 1000);
+        return clients.map((client) =>
+          runSweep(client, spec, "resweep", evictedAt),
         );
       }),
     );
@@ -568,14 +571,19 @@ async function sweepRoom(
 
 /** The first pass now, the repeats scheduled; one tracked promise for both. */
 function evict(
-  client: RoomServiceClient,
   key: string,
   spec: ResweepSpec,
 ): Promise<void> {
+  const clients = eachRoomService();
+  if (clients.length === 0) {
+    return Promise.resolve();
+  }
   const evictedAt = nowSeconds();
   return track(
     Promise.all([
-      runSweep(client, spec, "first", evictedAt),
+      Promise.all(
+        clients.map((client) => runSweep(client, spec, "first", evictedAt)),
+      ),
       scheduleResweep(key, spec, evictedAt),
     ]).then(() => undefined),
   );
@@ -591,11 +599,7 @@ function evict(
  * An emptied room is reaped by LiveKit's own `emptyTimeout` anyway.
  */
 export function evictSfuRoom(room: string): Promise<void> {
-  const client = getRoomService();
-  if (!client) {
-    return Promise.resolve();
-  }
-  return evict(client, `room:${room}`, { kind: "room", room });
+  return evict(`room:${room}`, { kind: "room", room });
 }
 
 /**
@@ -611,11 +615,7 @@ export function evictSfuUsersExcept(
   allowedUserIds: ReadonlySet<string>,
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<void> {
-  const client = getRoomService();
-  if (!client) {
-    return Promise.resolve();
-  }
-  return evict(client, `private:${room}`, {
+  return evict(`private:${room}`, {
     kind: "private",
     room,
     allowedUserIds: [...allowedUserIds],
@@ -641,10 +641,6 @@ export function evictSfuUser(
   rooms: readonly string[] | null,
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<void> {
-  const client = getRoomService();
-  if (!client) {
-    return Promise.resolve();
-  }
   // An explicit empty scope means "no rooms", but `listRooms([])` means "all
   // rooms" to the SDK. Without this guard a server with zero channels would
   // sweep every room on the deployment.
@@ -654,7 +650,7 @@ export function evictSfuUser(
   // Keyed on the user rather than a room: the scope is "wherever they are", and
   // a second ban of the same person should restart one window, not open a
   // second one beside it.
-  return evict(client, `user:${userId}`, {
+  return evict(`user:${userId}`, {
     kind: "user",
     userId,
     rooms: rooms === null ? null : [...rooms],
@@ -688,11 +684,25 @@ export async function setSfuUserMuted(
   muted: boolean,
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<boolean> {
-  const client = getRoomService();
-  if (!client) {
+  const clients = eachRoomService();
+  if (clients.length === 0) {
     return false;
   }
+  const results = await Promise.all(
+    clients.map((client) =>
+      muteOnClient(client, room, userId, muted, knownIdentities),
+    ),
+  );
+  return results.some(Boolean);
+}
 
+async function muteOnClient(
+  client: RoomServiceClient,
+  room: string,
+  userId: string,
+  muted: boolean,
+  knownIdentities: ReadonlyMap<string, string>,
+): Promise<boolean> {
   let participants;
   try {
     participants = await client.listParticipants(room);
@@ -776,10 +786,25 @@ export async function setSfuUserCanPublish(
   grant: { canSpeak: boolean; canStream: boolean },
   knownIdentities: ReadonlyMap<string, string>,
 ): Promise<boolean> {
-  const client = getRoomService();
-  if (!client) {
+  const clients = eachRoomService();
+  if (clients.length === 0) {
     return false;
   }
+  const results = await Promise.all(
+    clients.map((client) =>
+      publishOnClient(client, room, userId, grant, knownIdentities),
+    ),
+  );
+  return results.some(Boolean);
+}
+
+async function publishOnClient(
+  client: RoomServiceClient,
+  room: string,
+  userId: string,
+  grant: { canSpeak: boolean; canStream: boolean },
+  knownIdentities: ReadonlyMap<string, string>,
+): Promise<boolean> {
   const publish = liveKitPublishGrant(grant);
 
   let participants;

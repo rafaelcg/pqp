@@ -70,6 +70,12 @@ export const INSTANCE_TTL_MS = 45_000;
  * this hash makes it *visible*, in `voice_instances.config_hash` and on the
  * `voice.hello` bus frame. The secret itself never leaves the process: only
  * the URL and the key id are hashed, and the digest is truncated.
+ *
+ * When `LIVEKIT_HLS_*` is set, that URL and key id are in the digest too:
+ * watch-party rooms pin to a different box, and two instances that disagree
+ * about it would split a party the same way they would split a voice room.
+ * Unset, the string hashed is exactly what it was before this existed, so a
+ * rolling deploy that does not set the HLS cluster does not look like drift.
  */
 export function voiceConfigHash(): string {
   const url = process.env.LIVEKIT_URL ?? "";
@@ -77,10 +83,13 @@ export function voiceConfigHash(): string {
   if (!url || !key) {
     return "mesh";
   }
-  return createHash("sha256")
-    .update(`${url}\n${key}`)
-    .digest("hex")
-    .slice(0, 16);
+  const hlsUrl = process.env.LIVEKIT_HLS_URL ?? "";
+  const hlsKey = process.env.LIVEKIT_HLS_API_KEY ?? "";
+  const material =
+    hlsUrl && hlsKey
+      ? `${url}\n${key}\n${hlsUrl}\n${hlsKey}`
+      : `${url}\n${key}`;
+  return createHash("sha256").update(material).digest("hex").slice(0, 16);
 }
 
 // --- in-flight tracking -----------------------------------------------------

@@ -89,6 +89,9 @@ function disableHls() {
   delete process.env.LIVEKIT_URL;
   delete process.env.LIVEKIT_API_KEY;
   delete process.env.LIVEKIT_API_SECRET;
+  delete process.env.LIVEKIT_HLS_URL;
+  delete process.env.LIVEKIT_HLS_API_KEY;
+  delete process.env.LIVEKIT_HLS_API_SECRET;
   delete process.env.LIVE_HLS_PUBLIC_BASE_URL;
   delete process.env.LIVE_HLS_S3_BUCKET;
   delete process.env.LIVE_HLS_S3_ACCESS_KEY_ID;

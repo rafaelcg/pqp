@@ -53,6 +53,9 @@ function unconfigureLiveKit() {
   delete process.env.LIVEKIT_URL;
   delete process.env.LIVEKIT_API_KEY;
   delete process.env.LIVEKIT_API_SECRET;
+  delete process.env.LIVEKIT_HLS_URL;
+  delete process.env.LIVEKIT_HLS_API_KEY;
+  delete process.env.LIVEKIT_HLS_API_SECRET;
   resetSfuAdminClient();
 }
 

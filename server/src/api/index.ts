@@ -129,6 +129,7 @@ import {
   createLiveKitSession,
   getServerVoiceBackend,
   isLiveKitConfigured,
+  liveKitClusterForChannelType,
 } from "../voice/backends.js";
 import { liveHlsConfigForServer } from "../voice/hls-egress.js";
 import {
@@ -2536,7 +2537,11 @@ router.post("/api/voice/token", async ({ req, user }) => {
       body.peerId,
       displayName,
       user.id,
-      { canSpeak, canStream },
+      {
+        canSpeak,
+        canStream,
+        cluster: liveKitClusterForChannelType(channel.type),
+      },
     );
   } catch (error) {
     console.error("[voice] token minting failed:", error);

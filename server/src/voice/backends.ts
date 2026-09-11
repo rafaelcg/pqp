@@ -1,5 +1,9 @@
 import { AccessToken, TrackSource, type VideoGrant } from "livekit-server-sdk";
-import type { VoiceBackendType, VoiceSessionInfo } from "@pqp/shared";
+import {
+  isWatchPartyChannelType,
+  type VoiceBackendType,
+  type VoiceSessionInfo,
+} from "@pqp/shared";
 
 export interface LiveKitPublishOptions {
   canSpeak: boolean;
@@ -58,6 +62,73 @@ export function isLiveKitConfigured(): boolean {
       process.env.LIVEKIT_API_KEY &&
       process.env.LIVEKIT_API_SECRET,
   );
+}
+
+/**
+ * A second LiveKit, used only by `watch_party` rooms and HLS egress.
+ *
+ * Unset is today's single-cluster deployment: watch parties mint against
+ * `LIVEKIT_URL` and egress talks to the same box. Set all three and a
+ * watch-party join is a different host than ordinary voice — production
+ * voice stays on `sfu.pqp.gg`, the transcode on the dedicated HLS box.
+ * Partial config is treated as unset, so a missing secret cannot mint a
+ * token the box will refuse.
+ */
+export function isHlsLiveKitConfigured(): boolean {
+  return Boolean(
+    process.env.LIVEKIT_HLS_URL &&
+      process.env.LIVEKIT_HLS_API_KEY &&
+      process.env.LIVEKIT_HLS_API_SECRET,
+  );
+}
+
+export type LiveKitCluster = "voice" | "hls";
+
+export interface LiveKitCreds {
+  url: string;
+  apiKey: string;
+  apiSecret: string;
+}
+
+/**
+ * Credentials for one cluster. `hls` is null unless all three `LIVEKIT_HLS_*`
+ * are set — callers that want "HLS if split, else the voice SFU" use
+ * `liveKitCredsForHls`.
+ */
+export function liveKitCreds(cluster: LiveKitCluster): LiveKitCreds | null {
+  if (cluster === "hls") {
+    if (!isHlsLiveKitConfigured()) {
+      return null;
+    }
+    return {
+      url: process.env.LIVEKIT_HLS_URL!,
+      apiKey: process.env.LIVEKIT_HLS_API_KEY!,
+      apiSecret: process.env.LIVEKIT_HLS_API_SECRET!,
+    };
+  }
+  if (!isLiveKitConfigured()) {
+    return null;
+  }
+  return {
+    url: process.env.LIVEKIT_URL!,
+    apiKey: process.env.LIVEKIT_API_KEY!,
+    apiSecret: process.env.LIVEKIT_API_SECRET!,
+  };
+}
+
+/**
+ * Where HLS egress and a `watch_party` token go. The dedicated cluster when
+ * it is configured, otherwise the same `LIVEKIT_*` voice already uses.
+ */
+export function liveKitCredsForHls(): LiveKitCreds | null {
+  return liveKitCreds("hls") ?? liveKitCreds("voice");
+}
+
+/** `watch_party` → HLS cluster when split; every other channel stays on voice. */
+export function liveKitClusterForChannelType(channelType: string): LiveKitCluster {
+  return isHlsLiveKitConfigured() && isWatchPartyChannelType(channelType)
+    ? "hls"
+    : "voice";
 }
 
 /**
@@ -178,19 +249,27 @@ export async function createLiveKitSession(
   peerId: string,
   displayName: string,
   userId: string,
-  options: { canSpeak?: boolean; canStream?: boolean } = {},
+  options: {
+    canSpeak?: boolean;
+    canStream?: boolean;
+    /** Defaults to the voice SFU. Pass `hls` for a `watch_party` join. */
+    cluster?: LiveKitCluster;
+  } = {},
 ): Promise<VoiceSessionInfo> {
   const canSpeak = options.canSpeak ?? true;
   const canStream = options.canStream ?? canSpeak;
-  const url = process.env.LIVEKIT_URL;
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  const creds =
+    options.cluster === "hls"
+      ? liveKitCredsForHls()
+      : liveKitCreds("voice");
 
-  if (!url || !apiKey || !apiSecret) {
+  if (!creds) {
     throw new Error(
       "LiveKit not configured — set LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET",
     );
   }
+
+  const { url, apiKey, apiSecret } = creds;
 
   const at = new AccessToken(apiKey, apiSecret, {
     identity: peerId,

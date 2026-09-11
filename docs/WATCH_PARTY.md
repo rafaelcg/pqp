@@ -1983,6 +1983,23 @@ Two halves to closing it, and both are needed:
   media server to ask, and every caller treats null as leave-it-alone, so the
   half-configured worker now refuses instead of deleting. It is safe; it is
   just not sweeping, and `uncleaned` will say so.
+- **A second LiveKit (`LIVEKIT_HLS_*`)**: when those three are set, `listActiveEgresses` talks to that cluster, not `LIVEKIT_URL`. The worker then needs `LIVEKIT_HLS_*` as well, or it would ask the voice SFU, see nothing, and treat a live party as finished.
+
+## Two LiveKits
+
+Watch-party media can run on a different LiveKit than ordinary voice.
+
+Production voice stays `LIVEKIT_URL` = `wss://sfu.pqp.gg` (`sfu-pqp`). Watch parties and HLS egress use a dedicated box when these three are set on the API (and on `pqp-worker`, for the retention sweep):
+
+| Env | What |
+|---|---|
+| `LIVEKIT_HLS_URL` | Signal URL, e.g. `wss://216-238-108-42.sslip.io` |
+| `LIVEKIT_HLS_API_KEY` | Key id on that box's `livekit.yaml` |
+| `LIVEKIT_HLS_API_SECRET` | Matching secret. Never commit it. |
+
+Unset, behaviour is today's single cluster: watch-party tokens and Start/List/Stop egress use `LIVEKIT_URL`. Set, a `watch_party` join mints against the HLS cluster and `POST /api/voice/token` returns that URL; the web client already dials `session.url` from that response (no `VITE_` host). Ordinary voice and communities stay on `LIVEKIT_URL`. Mute, kick and a ban fan out to both boxes so a seat on the HLS cluster is not left talking.
+
+Do **not** point this at `sfu-pqp`. The dedicated box is its own LiveKit (Caddy + Redis on localhost + egress). Staging notes: `docs/STAGING.md` §"Watch-party HLS box".
 
 ## Turning it on in production
 

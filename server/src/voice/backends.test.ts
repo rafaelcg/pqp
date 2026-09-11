@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createLiveKitSession,
+  isHlsLiveKitConfigured,
   isLiveKitConfigured,
+  liveKitClusterForChannelType,
+  liveKitCredsForHls,
   participantMetadataFor,
   userIdFromParticipantMetadata,
 } from "./backends.js";
+import { voiceConfigHash } from "./registry.js";
 
 /**
  * These run against the real `AccessToken`, so what is asserted is the token a
@@ -12,6 +16,7 @@ import {
  */
 interface TokenClaims {
   sub: string;
+  iss?: string;
   exp: number;
   nbf: number;
   metadata?: string;
@@ -42,6 +47,9 @@ describe("LiveKit token minting", () => {
     delete process.env.LIVEKIT_URL;
     delete process.env.LIVEKIT_API_KEY;
     delete process.env.LIVEKIT_API_SECRET;
+    delete process.env.LIVEKIT_HLS_URL;
+    delete process.env.LIVEKIT_HLS_API_KEY;
+    delete process.env.LIVEKIT_HLS_API_SECRET;
   });
 
   it("scopes the token to one room and one peer identity", async () => {
@@ -165,6 +173,78 @@ describe("LiveKit token minting", () => {
     await expect(
       createLiveKitSession("voice-a", "peer-1", "Alice", "user-1"),
     ).rejects.toThrow(/not configured/i);
+  });
+
+  it("hands LIVEKIT_HLS_URL to a watch-party token when the HLS cluster is set", async () => {
+    process.env.LIVEKIT_HLS_URL = "wss://hls.example.test";
+    process.env.LIVEKIT_HLS_API_KEY = "hls-key";
+    process.env.LIVEKIT_HLS_API_SECRET = "hls-secret";
+
+    expect(isHlsLiveKitConfigured()).toBe(true);
+    expect(liveKitClusterForChannelType("watch_party")).toBe("hls");
+    expect(liveKitClusterForChannelType("voice")).toBe("voice");
+    expect(liveKitCredsForHls()?.url).toBe("wss://hls.example.test");
+
+    const party = await createLiveKitSession(
+      "party-a",
+      "peer-1",
+      "Alice",
+      "user-1",
+      { cluster: "hls" },
+    );
+    const voice = await createLiveKitSession(
+      "voice-a",
+      "peer-2",
+      "Bob",
+      "user-2",
+    );
+
+    expect(party.url).toBe("wss://hls.example.test");
+    expect(voice.url).toBe("wss://sfu.example.test");
+    expect(decodeClaims(party.token).iss).toBe("hls-key");
+    expect(decodeClaims(voice.token).iss).toBe("key");
+  });
+
+  it("keeps watch-party tokens on LIVEKIT_URL when the HLS cluster is unset", async () => {
+    expect(isHlsLiveKitConfigured()).toBe(false);
+    expect(liveKitClusterForChannelType("watch_party")).toBe("voice");
+    expect(liveKitCredsForHls()?.url).toBe("wss://sfu.example.test");
+
+    const party = await createLiveKitSession(
+      "party-a",
+      "peer-1",
+      "Alice",
+      "user-1",
+      { cluster: "hls" },
+    );
+    expect(party.url).toBe("wss://sfu.example.test");
+  });
+});
+
+describe("voiceConfigHash with an HLS cluster", () => {
+  afterEach(() => {
+    delete process.env.LIVEKIT_URL;
+    delete process.env.LIVEKIT_API_KEY;
+    delete process.env.LIVEKIT_HLS_URL;
+    delete process.env.LIVEKIT_HLS_API_KEY;
+  });
+
+  it("is unchanged when LIVEKIT_HLS_* is unset, so a rolling deploy is not drift", () => {
+    process.env.LIVEKIT_URL = "wss://sfu.example.test";
+    process.env.LIVEKIT_API_KEY = "key";
+    const without = voiceConfigHash();
+    process.env.LIVEKIT_HLS_URL = "";
+    process.env.LIVEKIT_HLS_API_KEY = "";
+    expect(voiceConfigHash()).toBe(without);
+  });
+
+  it("changes when the HLS URL is set, because watch parties pin to a different box", () => {
+    process.env.LIVEKIT_URL = "wss://sfu.example.test";
+    process.env.LIVEKIT_API_KEY = "key";
+    const voiceOnly = voiceConfigHash();
+    process.env.LIVEKIT_HLS_URL = "wss://hls.example.test";
+    process.env.LIVEKIT_HLS_API_KEY = "hls-key";
+    expect(voiceConfigHash()).not.toBe(voiceOnly);
   });
 });
 
