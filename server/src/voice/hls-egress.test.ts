@@ -678,6 +678,25 @@ describe("live HLS egress", () => {
       expect(heights).toEqual(["480", "720"]);
     });
 
+    it("prefers the capture height the host announced over LiveKit's declared layer", async () => {
+      // PR 460 froze declared layers at 1080 while the window was 480.
+      // LiveKit then reported track.height = 1080 and the ladder started
+      // 1080/720 rungs that upscaled. The host's getSettings() is the pixels.
+      resetLiveHlsForTests();
+      enableHls();
+      delete process.env.LIVE_HLS_LADDER;
+      const heights: string[] = [];
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: fakeEgress(heights),
+          stopEgress: vi.fn(),
+        },
+        findTracks: async () => ({ videoTrackId: "TR_V", sourceHeight: 1080 }),
+      });
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER, 480);
+      expect(heights).toEqual(["480"]);
+    });
+
     it("stops a leftover egress from a previous session on the same channel", async () => {
       resetLiveHlsForTests();
       enableHls();
