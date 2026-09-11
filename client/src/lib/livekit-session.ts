@@ -1003,7 +1003,7 @@ export async function connectLiveKit({
         // bottom-up; "keep only 360" still left 360+1080+Chrome-scaled-240
         // on the wire. Deactivate ALL but the last encoding. When the
         // ladder stops, turn them back on without a new sid (Farol on
-        // PR 463 / #464).
+        // PR 463 / PR 464).
         if (source === Track.Source.ScreenShare && encodings.length > 1) {
           for (let i = 0; i < encodings.length - 1; i += 1) {
             encodings[i]!.active = !feedingHls;
