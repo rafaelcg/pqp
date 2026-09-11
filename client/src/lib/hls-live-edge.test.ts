@@ -15,11 +15,15 @@ import {
 } from "./hls-live-edge";
 
 describe("hlsLivePlayerConfig", () => {
-  it("sits a little further from the edge than the old 3 segments, still inside the 10 s window", () => {
+  it("sits 2–3 segments behind live, with max latency inside the 10 s playlist", () => {
     const config = hlsLivePlayerConfig();
-    expect(config.liveSyncDurationCount).toBeGreaterThan(3);
+    expect(config.liveSyncDurationCount).toBeGreaterThanOrEqual(2);
+    expect(config.liveSyncDurationCount).toBeLessThanOrEqual(3);
+    expect(config.liveMaxLatencyDurationCount).toBeGreaterThan(
+      config.liveSyncDurationCount,
+    );
     expect(
-      config.liveSyncDurationCount * HLS_LIVE_SEGMENT_SECONDS,
+      config.liveMaxLatencyDurationCount * HLS_LIVE_SEGMENT_SECONDS,
     ).toBeLessThan(HLS_LIVE_WINDOW_SECONDS);
     expect(hlsLiveSyncFitsWindow(config)).toBe(true);
     expect(config.startLevel).toBe(-1);
@@ -27,6 +31,15 @@ describe("hlsLivePlayerConfig", () => {
   });
 
   it("refuses a sync that would join on the oldest segment of the window", () => {
+    expect(
+      hlsLiveSyncFitsWindow({
+        liveSyncDurationCount: 4,
+        liveMaxLatencyDurationCount: 5,
+        maxBufferLength: 8,
+        maxMaxBufferLength: 10,
+        startLevel: 0,
+      }),
+    ).toBe(false);
     expect(
       hlsLiveSyncFitsWindow({
         liveSyncDurationCount: 5,
