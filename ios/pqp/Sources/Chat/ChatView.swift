@@ -75,6 +75,10 @@ struct ChatView: View {
     @State private var openedConversation: OpenedConversation?
     @State private var pickerItem: PhotosPickerItem?
     @FocusState private var composerFocused: Bool
+    /// A live watch-party picture is the hero: hide the nav bar fill so the
+    /// film sits under the island, and keep chat as the column below it
+    /// until native fullscreen takes the screen.
+    @State private var watchHero = false
 
     var body: some View {
         ZStack {
@@ -138,6 +142,8 @@ struct ChatView: View {
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(watchHero ? .hidden : .automatic, for: .navigationBar)
+        .onPreferenceChange(WatchHeroPreference.self) { watchHero = $0 }
         .animation(Motion.standard, value: model.replyingTo?.id)
         .animation(Motion.standard, value: model.editing?.id)
         .animation(Motion.standard, value: model.error)
@@ -226,7 +232,7 @@ struct ChatView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             if let voiceChannel {
                 WatchStageView(channel: voiceChannel)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .ignoresSafeArea(edges: .horizontal)
             }
         }
         .animation(Motion.standard, value: call.isCollapsed)

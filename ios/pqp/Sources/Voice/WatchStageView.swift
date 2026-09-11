@@ -20,7 +20,8 @@ import SwiftUI
  `WatchOverlay` is the cinema chrome on top of it. There is no system
  transport bar and no scrubber, because a live window that offers to seek
  is a control that lies. Tap the film to see the bars, tap again to put
- them away. Fullscreen is the same overlay in a cover, not a second player.
+ them away. Fullscreen is a real `AVPlayerViewController` (native AVKit),
+ not a SwiftUI cover over the transcript.
  */
 struct WatchStageView: View {
     @Environment(SessionStore.self) private var session
@@ -84,6 +85,10 @@ struct WatchStageView: View {
                 stage
             }
         }
+        .preference(
+            key: WatchHeroPreference.self,
+            value: model.phase == .live && !isMinimised && !isSeated
+        )
         .task(id: channel.id) { await model.open(channelId: channel.id, session: session) }
         .task { await watchdog() }
         .onDisappear {
@@ -116,6 +121,24 @@ struct WatchStageView: View {
                 for: AVAudioSession.interruptionNotification
             )
         ) { note in handleInterruption(note) }
+        // THE PLAYS-THEN-STOPS SIGNAL. `AVPlayer` posts this when the
+        // playhead has media behind it and none in front, which is the
+        // live-edge stall: a few 2 s segments play, then silence. The
+        // web recovers with `jumpToLiveTime` (one segment behind the
+        // edge). Waiting for the 12 s starve clock is how the film
+        // stays frozen in front of somebody.
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: .AVPlayerItemPlaybackStalled
+            )
+        ) { note in handlePlaybackStalled(note) }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: UIDevice.orientationDidChangeNotification
+            )
+        ) { _ in
+            chromeInsets = WatchOrientation.safeInsets
+        }
     }
 
     /**
@@ -265,16 +288,19 @@ struct WatchStageView: View {
     /// of collapsing it: listen to the film and read the chat.
     ///
     /// Fullscreen keeps the 16:9 hole so the transcript does not jump the
-    /// moment the theater opens. The layer itself moves into the cover:
-    /// one `AVPlayer`, one picture, never two.
+    /// moment the theater opens. The picture itself is an `AVPlayerViewController`
+    /// presented from `WatchTheaterPresenter`, which is the native film:
+    /// chat is not in that layout at all.
     private var picture: some View {
         VStack(spacing: 0) {
             if !isMinimised {
                 if isFullscreen {
                     Color.black
+                        .frame(maxWidth: .infinity)
                         .aspectRatio(16 / 9, contentMode: .fit)
                 } else {
                     pane(isTheater: false)
+                        .frame(maxWidth: .infinity)
                         .aspectRatio(16 / 9, contentMode: .fit)
                 }
             }
@@ -283,34 +309,18 @@ struct WatchStageView: View {
             }
         }
         .background(Palette.inkDeep)
-        .fullScreenCover(isPresented: $isFullscreen) {
-            theater
-        }
-    }
-
-    private var theater: some View {
-        ZStack {
-            Palette.inkDeep.ignoresSafeArea()
-            pane(isTheater: true)
-                .ignoresSafeArea()
-        }
-        .statusBarHidden()
-        .persistentSystemOverlays(.hidden)
-        .onAppear {
-            chrome.reveal(at: Date())
-            WatchOrientation.enterTheater()
-            chromeInsets = WatchOrientation.safeInsets
-        }
-        .onDisappear {
-            WatchOrientation.leaveTheater()
-            chromeInsets = .init()
-        }
-        .onReceive(
-            NotificationCenter.default.publisher(
-                for: UIDevice.orientationDidChangeNotification
+        .background {
+            WatchTheaterPresenter(
+                presented: isFullscreen,
+                player: player,
+                overlay: overlay(isTheater: true)
+                    .contentShape(Rectangle())
+                    .onTapGesture { chrome.tap(at: Date()) },
+                onDismiss: {
+                    isFullscreen = false
+                    WatchOrientation.leaveTheater()
+                }
             )
-        ) { _ in
-            chromeInsets = WatchOrientation.safeInsets
         }
     }
 
@@ -323,36 +333,33 @@ struct WatchStageView: View {
                     surfacePixels = pixels
                 }
                 .onTapGesture { chrome.tap(at: Date()) }
-                WatchOverlay(
-                    chromeVisible: chrome.visible,
-                    isPlaying: isPlaying,
-                    isTheater: isTheater,
-                    behindLive: behindLive,
-                    delaySeconds: delaySeconds ?? model.stream?.delaySeconds,
-                    audienceCount: model.audienceCount,
-                    audienceLabel: viewerLabel,
-                    pipAvailable: pip.canStart,
-                    chromeInsets: isTheater ? chromeInsets : .init(),
-                    onTogglePlay: togglePlay,
-                    onJumpToLive: jumpToLive,
-                    onToggleFullscreen: toggleFullscreen,
-                    onStartPip: { pip.start() },
-                    onCollapse: isTheater ? nil : { isMinimised = true },
-                    qualityMenu: {
-                        if ladder.isWorthOffering { qualityMenu }
-                    }
-                )
+                overlay(isTheater: isTheater)
             } else {
                 connecting
             }
         }
-        .overlay {
-            if !isTheater {
-                Rectangle()
-                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
-                    .allowsHitTesting(false)
+    }
+
+    private func overlay(isTheater: Bool) -> some View {
+        WatchOverlay(
+            chromeVisible: chrome.visible,
+            isPlaying: isPlaying,
+            isTheater: isTheater,
+            behindLive: behindLive,
+            delaySeconds: delaySeconds ?? model.stream?.delaySeconds,
+            audienceCount: model.audienceCount,
+            audienceLabel: viewerLabel,
+                    pipAvailable: isTheater ? false : pip.canStart,
+            chromeInsets: isTheater ? chromeInsets : .init(),
+            onTogglePlay: togglePlay,
+            onJumpToLive: jumpToLive,
+            onToggleFullscreen: toggleFullscreen,
+            onStartPip: { pip.start() },
+            onCollapse: isTheater ? nil : { isMinimised = true },
+            qualityMenu: {
+                if ladder.isWorthOffering { qualityMenu }
             }
-        }
+        )
     }
 
     private var connecting: some View {
@@ -571,6 +578,7 @@ struct WatchStageView: View {
         // master again for nothing.
         let asset = AVURLAsset(url: url)
         let item = AVPlayerItem(asset: asset)
+        WatchPlayerItemTuning.apply(item)
         let next = AVPlayer(playerItem: item)
         // Without this the picture is suspended the moment the app leaves the
         // screen, which is most of a watch party: a phone in a pocket, a phone
@@ -582,9 +590,10 @@ struct WatchStageView: View {
         // second playlist cannot grow. Combined with an immediate settle
         // seek it decoded one frame and sat. Waiting is what a live
         // playlist is for; `WatchLiveEdge` only seeks if the playhead
-        // falls out of the window.
+        // falls out of the window. The forward buffer on the item is what
+        // stops that wait from being "a 30 s buffer this playlist cannot
+        // grow".
         next.automaticallyWaitsToMinimizeStalling = true
-        player = next
         attached = AttachedStream(startedAt: stream.startedAt, attachedAt: Date())
         stall = WatchStallWatch()
         edge = WatchLiveEdge()
@@ -592,9 +601,7 @@ struct WatchStageView: View {
         delaySeconds = nil
         effectiveLines = nil
         ladder = .empty
-        next.play()
         userWantsPlayback = true
-        isPlaying = true
         chrome.reveal(at: Date())
         WatchNowPlaying.begin(
             title: channel.name,
@@ -602,14 +609,17 @@ struct WatchStageView: View {
             onPlay: { playFromUser() },
             onPause: { pauseFromUser() }
         )
-        Task {
+        // Parse the master, write the Auto ceiling, THEN play. Playing
+        // first and applying the cap when `status == .readyToPlay` is the
+        // stall: ABR climbs, the rendition switch freezes a 10 s window.
+        Task { @MainActor in
             let published = await WatchVariants.load(from: asset)
-            // A frame that arrived while the master was being parsed may have
-            // replaced the player already. Applying this ladder to a different
-            // broadcast would offer rungs it does not serve.
-            guard player === next else { return }
+            guard attached?.startedAt == stream.startedAt else { return }
             ladder = published
+            player = next
             applyQuality(trigger: .variants)
+            next.play()
+            isPlaying = true
         }
     }
 
@@ -624,8 +634,9 @@ struct WatchStageView: View {
     /// change.
     private func applyQuality(trigger: WatchQualityRetune.Trigger) {
         guard let player, let item = player.currentItem else { return }
-        let alreadyPlaying = item.status == .readyToPlay || player.rate > 0
-            || player.timeControlStatus != .paused
+        let alreadyPlaying = WatchQualityRetune.hasStartedPlayback(
+            rate: player.rate, timeControlStatus: player.timeControlStatus
+        )
         guard WatchQualityRetune.shouldWrite(
             alreadyPlaying: alreadyPlaying, trigger: trigger
         ) else { return }
@@ -693,7 +704,7 @@ struct WatchStageView: View {
             if position.isFinite,
                position < window.start
                 || WatchLiveEdge.isBehindLive(position: position, window: window) {
-                seek(to: WatchLiveEdge.target(in: window))
+                seek(to: WatchLiveEdge.jumpTarget(in: window))
                 return
             }
         }
@@ -716,7 +727,7 @@ struct WatchStageView: View {
         else { return }
         userWantsPlayback = true
         isPlaying = true
-        seek(to: WatchLiveEdge.target(in: window))
+        seek(to: WatchLiveEdge.jumpTarget(in: window))
         chrome.reveal(at: Date())
     }
 
@@ -738,6 +749,20 @@ struct WatchStageView: View {
             toleranceAfter: CMTime(seconds: 2, preferredTimescale: 600)
         )
         if userWantsPlayback { player.play() }
+    }
+
+    /// `AVPlayerItemPlaybackStalled`: media behind, nothing in front.
+    /// Same recover as the web: jump one segment behind live, then play.
+    private func handlePlaybackStalled(_ note: Notification) {
+        guard userWantsPlayback else { return }
+        guard let stalled = note.object as? AVPlayerItem,
+              stalled === player?.currentItem
+        else { return }
+        guard let window = Self.liveWindow(of: stalled) else {
+            player?.play()
+            return
+        }
+        seek(to: WatchLiveEdge.jumpTarget(in: window))
     }
 
     /// Resume after the session came back, and only if we were playing when it
@@ -773,6 +798,7 @@ struct WatchStageView: View {
     }
 
     private func tearDown() {
+        isFullscreen = false
         player?.pause()
         player = nil
         attached = nil
@@ -784,7 +810,6 @@ struct WatchStageView: View {
         effectiveLines = nil
         surfacePixels = .zero
         wasPlayingBeforeInterruption = false
-        isFullscreen = false
         isPlaying = false
         userWantsPlayback = true
         seekingUntil = .distantPast

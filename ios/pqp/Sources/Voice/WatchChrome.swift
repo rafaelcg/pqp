@@ -331,12 +331,21 @@ struct WatchControlStyle: ButtonStyle {
     }
 }
 
+/// Live picture is up, not minimised, no seat. ChatView hides the nav bar
+/// chrome so the film sits under the island rather than under a bar.
+struct WatchHeroPreference: PreferenceKey {
+    static var defaultValue = false
+    static func reduce(value: inout Bool, nextValue: () -> Bool) {
+        value = value || nextValue()
+    }
+}
+
 /**
  Portrait everywhere, landscape in the watch theater.
 
  Info.plist lists landscape so iOS will rotate that cover at all. This lock
  is what stops the rest of the app going with it. iPad already rotates
- and is left alone.
+ and is left alone. `PushDelegate` is the object UIKit asks.
  */
 @MainActor
 enum WatchOrientation {

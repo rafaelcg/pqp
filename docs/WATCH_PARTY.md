@@ -2364,18 +2364,32 @@ later, per app:
     app taking the session stops `AVPlayer` and leaves it stopped. Nothing was
     listening, so the film never came back.
 
-  The picture is now `AVPlayerViewController` (`WatchVideoSurface`) rather
-  than SwiftUI's `VideoPlayer`, which wraps the same class and exposes none of
-  it. That is where fullscreen in landscape comes from, along with AirPlay,
-  Picture in Picture and a transport bar that fades while you watch. pqp draws
-  the strip underneath: live or how far behind, the headcount, and a quality
-  menu built from `AVAsset.variants` (Auto plus whatever the master actually
-  advertises, never a hard coded list) labelled with the rung
-  `presentationSize` says is being decoded. Collapsing now REMOVES the
-  surface rather than squashing it to zero height, which used to leave a
-  decoder running to fill a rectangle nobody could see.
+  **Build 27 still played for a few seconds and then stopped.** The Auto
+  ceiling above was written when `item.status == .readyToPlay`, and that
+  flag means the master parsed, not that the picture is moving. Treating it
+  as "already playing" skipped the write; `AVPlayer` ABR-climbed from the
+  first rung to 1080 a few seconds in; the rendition switch on a ~10 s live
+  window is a freeze. `WatchQualityRetune.hasStartedPlayback` now keys off
+  `rate` and `timeControlStatus` only, the cap is applied *before* the first
+  `play()`, Auto with no surface yet caps to the shortest published rung,
+  and the item is tuned like the web player (`preferredForwardBufferDuration`
+  8 s, `configuredTimeOffsetFromLive` 8 s, matching
+  `client/src/lib/hls-live-edge.ts`). Jump to live and
+  `AVPlayerItemPlaybackStalled` land one 2 s segment behind the edge, same
+  as `jumpToLiveTime`. Token TTL is still one hour; "X seconds" was never
+  expiry.
 
-  Tests: `ios/pqp/Tests/WatchLivePlayerTests.swift`.
+  Inline the picture is an `AVPlayerLayer` with our cinema chrome
+  (`WatchOverlay`). Fullscreen is a real `AVPlayerViewController` presented
+  `.fullScreen` (`WatchTheater.swift`), the iOS equivalent of the web's
+  `webkitEnterFullscreen` path: the film fills the screen, chat is not a
+  column in that layout, controls autohide. A SwiftUI `.fullScreenCover`
+  from the chat inset was leaving the transcript in the hierarchy. PiP and
+  AirPlay stay on the overlay; collapsing still REMOVES the surface rather
+  than squashing it to zero height.
+
+  Tests: `ios/pqp/Tests/WatchLivePlayerTests.swift`,
+  `ios/pqp/Tests/WatchPartyTests.swift`.
 
   Still to do on iOS: the party OBJECT (`watch-party-update`, the host,
   cohosts, the stage, raise hand), the presenter side, hiding the share

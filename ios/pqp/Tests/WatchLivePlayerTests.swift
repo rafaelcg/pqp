@@ -629,10 +629,15 @@ final class WatchLivePlayerTests: XCTestCase {
         )
     }
 
-    /// A view that has not been laid out reports nothing, and capping to zero
-    /// would be capping to nothing at all.
-    func testASurfaceWithNoAreaIsNotACeiling() {
-        XCTAssertEqual(ladder.resolutionCap(surfacePixels: .zero, choice: .auto), .zero)
+    /// A view that has not been laid out reports nothing. Returning "no
+    /// ceiling" here is how Auto starts at 1080, ABR climbs a few seconds
+    /// later, and the ten second live window stalls. Cap to the shortest
+    /// published rung instead, which is the inline default.
+    func testASurfaceWithNoAreaCapsToTheShortestRungRatherThanNoCeiling() {
+        XCTAssertEqual(
+            ladder.resolutionCap(surfacePixels: .zero, choice: .auto),
+            CGSize(width: 1280, height: 720)
+        )
     }
 
     // MARK: - What the control says out loud
@@ -730,5 +735,110 @@ final class WatchLivePlayerTests: XCTestCase {
         XCTAssertLessThan(WatchLiveEdge.tipStarveAfter, 4)
         XCTAssertLessThan(WatchLiveEdge.tipBehind, WatchLiveEdge.liveTargetOffset)
         XCTAssertLessThan(WatchLiveEdge.tipStarveAfter, WatchLiveEdge.starvedAfter)
+    }
+
+    // MARK: - The stall that plays for a few seconds and then stops
+
+    /**
+     THE iOS "PLAYS, THEN STOPS" STALL, pinned as a predicate.
+
+     `item.status == .readyToPlay` means the master parsed, not that the
+     picture is moving. Build 26 treated that as "already playing" and
+     skipped the Auto ceiling; `AVPlayer` then ABR-climbed from the first
+     rung to 1080 a few seconds in; the rendition switch on a ~10 s live
+     window is a freeze. `rate` and `timeControlStatus` are the playback
+     session; ready-to-play is the moment TO write the ceiling, before
+     `play()`.
+     */
+    func testReadyToPlayIsNotAPlaybackSession() {
+        XCTAssertFalse(
+            WatchQualityRetune.hasStartedPlayback(rate: 0, timeControlStatus: .paused),
+            "an item that has loaded but not been asked to play must still take a ceiling"
+        )
+        XCTAssertTrue(
+            WatchQualityRetune.hasStartedPlayback(rate: 1, timeControlStatus: .paused),
+            "rate > 0 is already moving, even if status lags"
+        )
+        XCTAssertTrue(
+            WatchQualityRetune.hasStartedPlayback(rate: 0, timeControlStatus: .playing)
+        )
+        XCTAssertTrue(
+            WatchQualityRetune.hasStartedPlayback(
+                rate: 0, timeControlStatus: .waitingToPlayAtSpecifiedRate
+            ),
+            "waiting is a playback session; rewriting the ceiling there is the freeze"
+        )
+    }
+
+    /// Jump to live matches the web: one 2 s segment behind the edge, so
+    /// the playhead is not sitting inside a segment that has not been
+    /// written yet. On a ten second window the min runway still wins, or
+    /// this is the one-frame stall again.
+    func testJumpToLiveLandsOneSegmentBehindTheEdgeOnAWideWindow() {
+        let wide = WatchLiveWindow(start: 100, end: 130)
+        XCTAssertEqual(WatchLiveEdge.jumpTarget(in: wide), 128)
+        XCTAssertEqual(
+            WatchLiveEdge.jumpOffset, 2,
+            "web `jumpToLiveTime` subtracts one HLS_LIVE_SEGMENT_SECONDS"
+        )
+    }
+
+    func testJumpToLiveStillLeavesRunwayOnAShortWindow() {
+        XCTAssertEqual(WatchLiveEdge.jumpTarget(in: window), 104)
+        XCTAssertGreaterThanOrEqual(
+            WatchLiveEdge.jumpTarget(in: window) - window.start,
+            WatchLiveEdge.minRunway
+        )
+    }
+
+    /// Asking AVPlayer for a 30 s buffer on a 10 s playlist is how it
+    /// waits forever after the first few segments. Cap the forward buffer
+    /// to the web's `HLS_MAX_BUFFER_LENGTH_SECONDS`.
+    func testTheForwardBufferFitsInsideTheLiveWindow() {
+        XCTAssertEqual(WatchPlayerItemTuning.forwardBuffer, 8)
+        XCTAssertLessThanOrEqual(WatchPlayerItemTuning.forwardBuffer, 10)
+        XCTAssertEqual(
+            WatchPlayerItemTuning.timeOffsetFromLive,
+            WatchLiveEdge.liveTargetOffset,
+            "initial join matches the web live-sync, not the live tip"
+        )
+        XCTAssertLessThan(
+            WatchPlayerItemTuning.timeOffsetFromLive,
+            10,
+            "an offset as wide as the window sits on the last listed segment"
+        )
+    }
+
+    func testTheStageTunesTheItemBeforeTheFirstPlay() throws {
+        let stage = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent()
+                .appending(path: "Sources/Voice/WatchStageView.swift"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(
+            stage.contains("WatchPlayerItemTuning.apply("),
+            "the live offset and forward buffer have to be on the item, not hoped for"
+        )
+        XCTAssertTrue(
+            stage.contains("AVPlayerItemPlaybackStalled"),
+            "the OS stall notification is the plays-then-stops signal"
+        )
+        XCTAssertTrue(
+            stage.contains("WatchQualityRetune.hasStartedPlayback("),
+            "readyToPlay must not be the thing that skips the Auto ceiling"
+        )
+        XCTAssertTrue(
+            stage.contains("WatchTheaterPresenter"),
+            "fullscreen has to be a real AVKit presentation, not a cover over chat"
+        )
+        XCTAssertTrue(
+            stage.contains("WatchLiveEdge.jumpTarget("),
+            "stall recovery and jump-to-live must land one segment behind the edge"
+        )
+        XCTAssertFalse(
+            stage.contains(".fullScreenCover(isPresented: $isFullscreen)"),
+            "a cover from the chat inset leaves the transcript in the layout"
+        )
     }
 }

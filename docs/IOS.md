@@ -453,6 +453,19 @@ leave now **reconnects instead of returning quietly**. This connection is the
 only way the app can say anything, so a swallowed frame is a client that looks
 online and does nothing.
 
+### Watch party (audience)
+
+Seatless HLS, not a LiveKit viewer. Open a `watch_party` channel; the film
+plays above the transcript. Tap the picture for chrome (quality, jump to
+live, collapse). The expand control presents a real `AVPlayerViewController`
+fullscreen — landscape, film fills the screen, chat is not a column there.
+
+If it plays for a few seconds and stops, that was Auto writing a 720 cap
+*after* `play()` because `readyToPlay` was treated as already playing, so
+ABR climbed and the short live window froze. The cap is applied before the
+first `play()` now; see `docs/WATCH_PARTY.md` Native apps and
+`WatchQualityRetune.hasStartedPlayback`.
+
 ## Screen sharing
 
 Receiving works and is verified. Receiving is the mesh's ordinary video path;
