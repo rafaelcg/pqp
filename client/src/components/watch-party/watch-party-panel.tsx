@@ -1045,20 +1045,27 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   }, []);
   const [reminding, setReminding] = useState(party.reminding);
   const [reminderBusy, setReminderBusy] = useState(false);
+  const displayedPartyId = useRef(party.id);
+  displayedPartyId.current = party.id;
   useEffect(() => setReminding(party.reminding), [party.id, party.reminding]);
   const toggleReminder = async () => {
     if (!props.onToggleReminder) {
       return;
     }
+    const partyId = party.id;
     const next = !reminding;
     setReminding(next);
     setReminderBusy(true);
     try {
       await props.onToggleReminder(next);
     } catch {
-      setReminding(!next);
+      if (displayedPartyId.current === partyId) {
+        setReminding(!next);
+      }
     } finally {
-      setReminderBusy(false);
+      if (displayedPartyId.current === partyId) {
+        setReminderBusy(false);
+      }
     }
   };
   const when = formatSessionRelativeTime(

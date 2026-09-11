@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Clapperboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
@@ -52,9 +52,12 @@ export function CreateWatchPartyDialog({
   const [startsAt, setStartsAt] = useState(defaultSessionScheduleValue());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const wasOpen = useRef(false);
 
   useEffect(() => {
-    if (!open) {
+    const opened = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (!opened) {
       return;
     }
     setName(suggestedWatchPartyName(new Date(), locale));

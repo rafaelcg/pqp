@@ -3987,7 +3987,7 @@ function MainAppContent({
       return;
     }
     await setChannelSessionReminder(party.id, wants);
-    watchParties.put({ ...party, reminding: wants });
+    watchParties.patch(party.id, { reminding: wants });
   }
 
   /**

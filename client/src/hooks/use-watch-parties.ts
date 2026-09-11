@@ -38,6 +38,8 @@ export interface WatchPartiesState {
   apply: (channelId: string, party: WatchParty | null) => void;
   /** After a mutation whose broadcast this client may not be in scope for. */
   put: (party: WatchParty) => void;
+  /** Patch a party only while this cache still holds that exact session. */
+  patch: (id: string, partial: Partial<WatchParty>) => void;
   refresh: () => void;
 }
 
@@ -99,6 +101,10 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
     [apply],
   );
 
+  const patch = useCallback((id: string, partial: Partial<WatchParty>) => {
+    setByChannel((prev) => patchWatchParty(prev, id, partial));
+  }, []);
+
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
   // The sidebar block is the OPEN server's; the rail wants every server.
@@ -111,7 +117,7 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
     [byChannel],
   );
 
-  return { byChannel, live, liveServerIds, apply, put, refresh };
+  return { byChannel, live, liveServerIds, apply, put, patch, refresh };
 }
 
 
@@ -156,6 +162,20 @@ export function applyWatchPartyFrame(
   // server it is looking at; nothing is dropped for it.
   void openServerId;
   return { ...prev, [channelId]: party };
+}
+
+/** Patch by session id so a late mutation cannot restore a replaced session. */
+export function patchWatchParty(
+  prev: Record<string, WatchParty>,
+  id: string,
+  partial: Partial<WatchParty>,
+): Record<string, WatchParty> {
+  for (const [channelId, party] of Object.entries(prev)) {
+    if (party.id === id) {
+      return { ...prev, [channelId]: { ...party, ...partial } };
+    }
+  }
+  return prev;
 }
 
 /** Every server with a party on air, for the rail's dot. */

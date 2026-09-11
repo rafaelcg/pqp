@@ -4,6 +4,7 @@ import {
   applyWatchPartyFrame,
   liveWatchParties,
   liveWatchPartyServerIds,
+  patchWatchParty,
 } from "./use-watch-parties";
 
 /**
@@ -135,6 +136,23 @@ describe("applyWatchPartyFrame", () => {
       "55555555-5555-4555-8555-555555555555",
     );
     expect(next[PARTY.channelId]).toBeUndefined();
+  });
+});
+
+describe("patchWatchParty", () => {
+  it("updates only the current party with the matching id", () => {
+    const replaced = { ...PARTY, id: "replaced", reminding: false };
+    const next = patchWatchParty(
+      { [PARTY.channelId]: replaced },
+      PARTY.id,
+      { reminding: true },
+    );
+    expect(next).toEqual({ [PARTY.channelId]: replaced });
+  });
+
+  it("does nothing when the party has gone away", () => {
+    const held = { [PARTY.channelId]: PARTY };
+    expect(patchWatchParty(held, "gone", { reminding: true })).toBe(held);
   });
 });
 

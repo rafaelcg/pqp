@@ -560,6 +560,7 @@ export function HlsWatchPlayer({
     const video: HTMLVideoElement = el;
     let cancelled = false;
     let hls: HlsHandle | null = null;
+    let hlsFragmentLoaded = false;
 
     // `xhrSetup` runs synchronously (hls.js calls it, then `xhr.send()`,
     // with no await in between), so the token has to already be in hand --
@@ -765,6 +766,9 @@ export function HlsWatchPlayer({
         // watchdog tells that apart from a slow network.
         watch.onMediaSequence(data.details.startSN, Date.now());
       });
+      player.on(Hls.Events.FRAG_LOADED, () => {
+        hlsFragmentLoaded = true;
+      });
       player.loadSource(activeSrc);
       player.attachMedia(video);
       player.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
@@ -802,6 +806,7 @@ export function HlsWatchPlayer({
       video.removeEventListener("error", onMediaError);
       video.removeEventListener("loadedmetadata", reportSize);
       if (
+        hlsFragmentLoaded &&
         hls &&
         typeof hls.bandwidthEstimate === "number" &&
         hls.bandwidthEstimate > 0
