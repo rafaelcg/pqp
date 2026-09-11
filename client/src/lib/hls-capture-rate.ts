@@ -45,9 +45,9 @@ export function hlsCaptureMaxFrameRate(
 /**
  * What getDisplayMedia should ask for.
  *
- * Auto follows `hlsLadderMax` (60 on the default 1080p60 ladder, 30 when
- * the operator has a 30-only ladder). An explicit 30 or 60 is the presenter
- * saying so, even if that disagrees with the ladder.
+ * Auto follows `hlsLadderMax` (30 on the default 720p30 ladder, 60 when
+ * any rung is 60 fps). An explicit 30 or 60 is the presenter saying so,
+ * even if that disagrees with the ladder.
  */
 export function screenCaptureMaxFrameRate(input: {
   preference: ScreenFrameRate;

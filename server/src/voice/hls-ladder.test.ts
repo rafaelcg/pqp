@@ -27,16 +27,12 @@ function names(rungs: readonly LadderRung[]): string[] {
 }
 
 describe("parseLadder", () => {
-  it("defaults to 1080p60 + 720p60 + 480p30, lowest first", () => {
+  it("defaults to a single 720p30 rung", () => {
     const rungs = parseLadder({}).rungs;
-    expect(names(rungs)).toEqual(["480p30", "720p60", "1080p60"]);
-    expect(names(rungs)).not.toContain("720p30");
-    expect(names(rungs)).not.toContain("1080p30");
-    // Same 3200 as 720p30 so hls.js keeps a ≥2.5× gap under 1080p60, but
-    // 60 fps so a viewer who lands here still matches the host display.
-    const mid = rungs.find((rung) => rung.name === "720p60");
-    expect(mid?.framerate).toBe(60);
-    expect(mid?.videoKbps).toBe(3200);
+    expect(names(rungs)).toEqual(["720p30"]);
+    expect(rungs[0]?.framerate).toBe(30);
+    expect(rungs[0]?.videoKbps).toBe(3200);
+    expect(rungs[0]?.height).toBe(720);
   });
 
   it("1080p60 is a named rung with a 60 fps encode", () => {
@@ -53,7 +49,7 @@ describe("parseLadder", () => {
     ]);
     expect(LADDER_RUNGS["720p60"]?.framerate).toBe(60);
     expect(LADDER_RUNGS["720p60"]?.height).toBe(720);
-    expect(ladderMaxFramerate(parseLadder({}).rungs)).toBe(60);
+    expect(ladderMaxFramerate(parseLadder({}).rungs)).toBe(30);
     expect(
       ladderMaxFramerate(parseLadder({ ladder: "1080p30,720p60" }).rungs),
     ).toBe(60);
@@ -98,7 +94,7 @@ describe("parseLadder", () => {
 
   it("a list with nothing valid in it falls back to the default", () => {
     const parsed = parseLadder({ ladder: "4k,potato" });
-    expect(names(parsed.rungs)).toEqual(["480p30", "720p60", "1080p60"]);
+    expect(names(parsed.rungs)).toEqual(["720p30"]);
     expect(parsed.invalid).toEqual(["4k", "potato"]);
   });
 
@@ -118,15 +114,15 @@ describe("parseLadder", () => {
     ]);
   });
 
-  it("the gap between the two default rungs is wide enough for hls.js", () => {
+  it("the gap between stacked 720p30 and 1080p30 is wide enough for hls.js", () => {
     // hls.js switches UP when estimate * abrBandWidthUpFactor (0.7) clears
     // the next level, and DOWN when estimate * abrBandWidthFactor (0.95)
     // falls under the current one. A narrow band between those two is where
     // a viewer oscillates. LiveKit's own presets (3000 and 4500) leave about
     // 1.10x; these leave about 1.36x.
-    const rungs = parseLadder({}).rungs;
-    const low = rungs.find((rung) => rung.name === "720p60");
-    const high = rungs.find((rung) => rung.name === "1080p60");
+    const rungs = parseLadder({ ladder: "1080p30,720p30" }).rungs;
+    const low = rungs.find((rung) => rung.name === "720p30");
+    const high = rungs.find((rung) => rung.name === "1080p30");
     const up = high!.videoKbps / 0.7;
     const down = high!.videoKbps / 0.95;
     expect(up / down).toBeGreaterThan(1.3);
@@ -203,13 +199,14 @@ describe("decideLadder", () => {
   };
   const twoRung = [LADDER_RUNGS["720p30"]!, LADDER_RUNGS["1080p30"]!];
   const defaultRungs = parseLadder({}).rungs;
+  const threeRung = parseLadder({
+    ladder: "1080p60,720p60@3200,480p30",
+  }).rungs;
 
   it("starts every rung when the box is idle", () => {
     const decisions = decideLadder({ ...base, rungs: defaultRungs });
     expect(decisions.map((d) => [d.rung.name, d.start])).toEqual([
-      ["480p30", true],
-      ["720p60", true],
-      ["1080p60", true],
+      ["720p30", true],
     ]);
   });
 
@@ -303,7 +300,7 @@ describe("decideLadder", () => {
   it("refuses a rung taller than the published source", () => {
     const decisions = decideLadder({
       ...base,
-      rungs: defaultRungs,
+      rungs: threeRung,
       sourceHeight: 720,
     });
     expect(decisions.map((d) => [d.rung.name, d.start, d.refusal])).toEqual([
@@ -316,7 +313,7 @@ describe("decideLadder", () => {
   it("a 1078-line window is still a 1080p source", () => {
     const decisions = decideLadder({
       ...base,
-      rungs: defaultRungs,
+      rungs: threeRung,
       sourceHeight: 1078,
     });
     expect(decisions.every((d) => d.start)).toBe(true);

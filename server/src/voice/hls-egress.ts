@@ -240,12 +240,11 @@ let warnedLadder: string | null = null;
 
 /**
  * `LIVE_HLS_LADDER`: the renditions this deployment encodes, lowest first.
- * A comma-separated list of rung names (`1080p60,720p60@3200,480p30`, the
- * default), each optionally carrying a bitrate override (`1080p30@3500`).
- * `1080p60` and `720p60` so a 24 fps film on a 60 Hz display stays as
- * smooth as the host's screen at both 1080 and 720. `LIVE_HLS_PRESET`
- * is still read as the name of a ONE-RUNG ladder, so a deployment that
- * already sets it keeps exactly the behaviour it has.
+ * A comma-separated list of rung names (`720p30`, the default), each
+ * optionally carrying a bitrate override (`1080p30@3500`). Named 1080 and
+ * 60 fps rungs stay available for an operator who wants them.
+ * `LIVE_HLS_PRESET` is still read as the name of a ONE-RUNG ladder, so a
+ * deployment that already sets it keeps exactly the behaviour it has.
  *
  * Entries that name nothing log `voice.hlsLadderInvalid` once per distinct
  * value; a list with no valid entry at all falls back to the default rather
