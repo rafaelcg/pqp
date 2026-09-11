@@ -379,7 +379,11 @@ export function createChatController(
    */
   const ownsOutbox = frames === PRIMARY_CHANNEL_FRAMES;
   let outbox: OutboxEntry[] = [];
-  /** Every nonce this controller has held, so a storage write can merge around other tabs' rows. */
+  /**
+   * The nonces this controller currently holds, so a storage write can merge
+   * around other tabs' rows. A nonce leaves the set on the write that removes
+   * its row, so the set is never larger than the outbox itself.
+   */
   const ownedNonces = new Set<string>();
   /**
    * Which socket a send went out on. Bumped by `resubscribe`, so a send
@@ -493,17 +497,28 @@ export function createChatController(
     // The same cap storage applies, enforced here too so a long offline
     // stretch does not hold every body in memory and replay them all. The
     // oldest give way, and their bubbles say so rather than waiting forever.
+    let evictedNonces: Set<string> | null = null;
     if (outbox.length > MAX_OUTBOX_ENTRIES) {
       const evicted = outbox.slice(0, outbox.length - MAX_OUTBOX_ENTRIES);
       outbox = outbox.slice(-MAX_OUTBOX_ENTRIES);
-      const evictedNonces = new Set(evicted.map((item) => item.nonce));
+      evictedNonces = new Set(evicted.map((item) => item.nonce));
+      for (const nonce of evictedNonces) {
+        clearSendTimer(nonce);
+        sentOnGeneration.delete(nonce);
+      }
       messages = messages.map((message) =>
-        message.nonce && evictedNonces.has(message.nonce) && message.pending
+        message.nonce && evictedNonces!.has(message.nonce) && message.pending
           ? { ...message, pending: false, queued: false, failed: true }
           : message,
       );
     }
     persistOutbox();
+    if (evictedNonces) {
+      // Owned through the write above, so their rows left storage too.
+      for (const nonce of evictedNonces) {
+        ownedNonces.delete(nonce);
+      }
+    }
   }
 
   function stopOutboxFlush() {
@@ -520,6 +535,7 @@ export function createChatController(
     outbox = outbox.filter((item) => item.nonce !== nonce);
     sentOnGeneration.delete(nonce);
     persistOutbox();
+    ownedNonces.delete(nonce);
   }
 
   function setQueued(nonce: string, queued: boolean) {
@@ -923,8 +939,9 @@ export function createChatController(
     const sendChunk = (limit: number) => {
       const chunk = due.splice(0, limit);
       for (const entry of chunk) {
-        // A send still waiting on the old socket is replayed on this one,
-        // with a fresh clock; the nonce keeps it from posting twice.
+        // A send still waiting on the old socket is replayed on this one;
+        // the nonce keeps it from posting twice. `transmit` starts the
+        // failure clock afresh, since the socket is connected here.
         clearSendTimer(entry.nonce);
         transmit(entry.nonce, entry.body, entry.channelId, entry.replyToId ?? undefined);
       }
@@ -1214,6 +1231,14 @@ export function createChatController(
     /** What is still waiting to go out, for tests and the connection check. */
     getOutbox(): readonly OutboxEntry[] {
       return outbox;
+    },
+
+    /** Test seams: the bookkeeping must stay bounded by the outbox. */
+    getOwnedNonceCount(): number {
+      return ownedNonces.size;
+    },
+    getTrackedSendCount(): number {
+      return sentOnGeneration.size;
     },
 
     leaveChannel() {
