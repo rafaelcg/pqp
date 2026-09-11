@@ -1811,6 +1811,12 @@ html[data-immersive-stage] [data-immersive-hide] {
   top: 0;
   right: 0;
   bottom: 0;
+  /*
+   * Below the player chrome (`[data-watch-chrome]` is Tailwind z-50). The
+   * overlay covers the right edge of the film on purpose; covering Leave
+   * fullscreen / volume is not. The chrome wrapper is pointer-events-none
+   * with auto on the bars, so the transcript still gets clicks in between.
+   */
   z-index: 40;
   width: min(22rem, 80vw);
   min-width: 0;

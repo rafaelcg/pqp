@@ -890,7 +890,10 @@ export function HlsWatchPlayer({
         data-watch-chrome=""
         data-call-chrome=""
         className={cn(
-          "pointer-events-none absolute inset-0 z-20 flex flex-col justify-between",
+          // z-50 beats the chat overlay's z-index: 40 on the pane
+          // (`index.css`). z-20 sat under it, so Leave fullscreen could not
+          // be clicked once chat was open.
+          "pointer-events-none absolute inset-0 z-50 flex flex-col justify-between",
           chromeClass,
         )}
         onFocusCapture={() => setBarFocused(true)}

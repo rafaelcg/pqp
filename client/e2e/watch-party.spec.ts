@@ -1566,8 +1566,18 @@ test("a viewer can put the film on the whole screen", async ({
       const chat = document.querySelector<HTMLElement>(
         "[data-call-split-chat]",
       )!;
+      const exit = document.querySelector<HTMLElement>(
+        "[data-testid='watch-stage-fullscreen']",
+      );
       const filmRect = film.getBoundingClientRect();
       const chatRect = chat.getBoundingClientRect();
+      const exitRect = exit?.getBoundingClientRect();
+      const hit =
+        exitRect &&
+        document.elementFromPoint(
+          exitRect.left + exitRect.width / 2,
+          exitRect.top + exitRect.height / 2,
+        );
       return {
         filmWidth: Math.round(filmRect.width),
         viewportWidth: window.innerWidth,
@@ -1575,14 +1585,20 @@ test("a viewer can put the film on the whole screen", async ({
           getComputedStyle(chat).display !== "none" && chatRect.width > 8,
         chatOverlapsFilm:
           chatRect.left < filmRect.right && chatRect.right > filmRect.left,
+        exitHitsControl: !!exit && !!hit && exit.contains(hit),
       };
     });
     expect(withChat.filmWidth).toBe(withChat.viewportWidth);
     expect(withChat.chatVisible).toBe(true);
     expect(withChat.chatOverlapsFilm).toBe(true);
+    expect(
+      withChat.exitHitsControl,
+      "chat overlay must not cover Leave fullscreen",
+    ).toBe(true);
 
     await expect(control).toHaveAttribute("aria-pressed", "true");
-    await control.click();
+    await viewer.getByTestId("watch-stage").hover();
+    await control.click({ timeout: 10_000 });
     await expect
       .poll(() =>
         viewer.evaluate(() => document.fullscreenElement !== null),
