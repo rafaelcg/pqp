@@ -1774,9 +1774,30 @@ describe("offline outbox, review follow-ups", () => {
       .filter((frame) => (frame as { type: string }).type === "message-create");
     expect(replayed).toHaveLength(1);
     expect((replayed[0] as { nonce: string }).nonce).toBe(nonce);
-    // The clock restarted with the replay: not failed at the old deadline.
+    // The clock restarted with the replay: not failed at the old deadline,
+    // failed at the new one when nothing answers.
     vi.advanceTimersByTime(8_000);
     expect(chat.getMessages()[0]!.failed).toBeFalsy();
+    vi.advanceTimersByTime(3_000);
+    expect(chat.getMessages()[0]!.failed).toBe(true);
+    expect(chat.getOutbox()).toHaveLength(0);
+  });
+
+  it("keeps its bookkeeping no larger than the outbox", () => {
+    const { chat, transport } = setup();
+    transport.connected = false;
+    for (let i = 0; i < 260; i += 1) {
+      chat.sendMessage(`m${i}`);
+    }
+    expect(chat.getOutbox()).toHaveLength(200);
+    expect(chat.getOwnedNonceCount()).toBe(200);
+    transport.connected = true;
+    chat.flushOutbox();
+    vi.advanceTimersByTime(60_000);
+    // Everything timed out: rows, owners and generations all gone.
+    expect(chat.getOutbox()).toHaveLength(0);
+    expect(chat.getOwnedNonceCount()).toBe(0);
+    expect(chat.getTrackedSendCount()).toBe(0);
   });
 
   it("does not replay a send the current socket already carries", () => {
