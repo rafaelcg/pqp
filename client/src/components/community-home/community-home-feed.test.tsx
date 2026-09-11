@@ -152,6 +152,7 @@ describe("PostCard", () => {
             byteSize: null,
             url: null,
             youtubeUrl: "https://youtu.be/jNQXAC9IVRw",
+            twitchUrl: null,
           },
         })}
         me={me}
