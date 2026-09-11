@@ -22,6 +22,8 @@ import {
   screenScaleFactor,
   screenSimulcastPlan,
   clampScreenPlanToCapture,
+  screenShareDegradationPreference,
+  screenShareScaleResolutionDownBy,
   screenShareSimulcastEnabled,
   VIDEO_QUALITIES,
   type ScreenSimulcastPlan,
@@ -445,6 +447,28 @@ describe("the presenter as the ladder's source", () => {
     expect(
       screenShareSimulcastEnabled({ ladderTopHeight: null, uplinkBps: 10_000_000 }),
     ).toBe(true);
+  });
+
+  it("holds HLS ingest pixels: maintain-resolution and scale 1", () => {
+    // Mesh DMs and ordinary SFU shares still spend resolution first.
+    // HLS ingest cannot: egress transcodes whatever pixels arrive, and
+    // Chrome's maintain-framerate walk 1080 → 180 is what every viewer gets.
+    expect(screenShareDegradationPreference(LIVE)).toBe("maintain-resolution");
+    expect(screenShareScaleResolutionDownBy(LIVE)).toBe(1);
+    expect(screenShareDegradationPreference(null)).toBe("maintain-framerate");
+    expect(screenShareScaleResolutionDownBy(null)).toBeUndefined();
+    expect(
+      screenShareDegradationPreference({
+        ladderTopHeight: null,
+        uplinkBps: 10_000_000,
+      }),
+    ).toBe("maintain-framerate");
+    expect(
+      screenShareScaleResolutionDownBy({
+        ladderTopHeight: null,
+        uplinkBps: 10_000_000,
+      }),
+    ).toBeUndefined();
   });
 
   it("leaves an ordinary large call alone", () => {

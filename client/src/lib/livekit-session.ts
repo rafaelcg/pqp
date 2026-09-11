@@ -23,6 +23,8 @@ import {
   screenBitrateFor,
   screenSimulcastPlan,
   screenShareSimulcastEnabled,
+  screenShareDegradationPreference,
+  screenShareScaleResolutionDownBy,
   clampScreenPlanToCapture,
   type CameraLayer,
   type HlsSourceInput,
@@ -952,6 +954,37 @@ export async function connectLiveKit({
   const unregisterStats = registerVoiceStatsSource(sampleRoom);
 
   /**
+   * True when the live HLS encoding has drifted off the ingest pin
+   * (`maintain-resolution` + `scaleResolutionDownBy: 1`). Chrome's GCC
+   * walks 1080 → 180 under `maintain-framerate`; the 2 s `setHlsSource`
+   * tick writes the pin back without a new sid.
+   */
+  function screenHlsEncoderUnpinned(): boolean {
+    const publication = room.localParticipant.getTrackPublication(
+      Track.Source.ScreenShare,
+    );
+    const sender = publication?.track?.sender;
+    if (!sender) {
+      return false;
+    }
+    try {
+      const params = sender.getParameters();
+      const encodings = params.encodings ?? [];
+      const top = encodings[encodings.length - 1];
+      return (
+        params.degradationPreference !==
+          screenShareDegradationPreference(hlsSource) ||
+        top?.scaleResolutionDownBy !==
+          screenShareScaleResolutionDownBy(hlsSource)
+      );
+    } catch {
+      // Sender teardown: do not treat a dead getParameters as a pin miss
+      // or the 2 s tick will keep retrying a track that is already gone.
+      return false;
+    }
+  }
+
+  /**
    * Move one published source's ceiling without republishing it.
    *
    * Shared by the camera and the screen because they are the same six lines and
@@ -965,8 +998,7 @@ export async function connectLiveKit({
    * are the small copies a phone asks for and their cost is what makes them
    * useful; a 360p layer given a 4 Mbps ceiling stops being a small copy.
    * `livekit-client` orders encodings smallest first, so the top is the last.
-   */
-  /**
+   *
    * `applied` — the browser took the encodings (trim flag may flip).
    * `skipped` — no sender yet, or this write was superseded; retry later.
    * `rejected` — `setParameters` threw; leave the published plan alone.
@@ -1004,9 +1036,27 @@ export async function connectLiveKit({
         // on the wire. Deactivate ALL but the last encoding. When the
         // ladder stops, turn them back on without a new sid (Farol on
         // PR 463 / PR 464).
-        if (source === Track.Source.ScreenShare && encodings.length > 1) {
-          for (let i = 0; i < encodings.length - 1; i += 1) {
-            encodings[i]!.active = !feedingHls;
+        if (source === Track.Source.ScreenShare) {
+          const ingest = feedingHls ? hlsSource : null;
+          params.degradationPreference =
+            screenShareDegradationPreference(ingest);
+          const scale = screenShareScaleResolutionDownBy(ingest);
+          if (scale === 1) {
+            // GCC's maintain-framerate walk invents 180p on the remaining
+            // encoding. Pin the divisor so pixels cannot drop; fps/bitrate
+            // still can, and the strain banner still says so.
+            top.scaleResolutionDownBy = scale;
+          } else {
+            // Ordinary SFU top layer is the capture size. LiveKit solves
+            // the lower-rung divisors; an explicit 1 left over from HLS
+            // ingest is the pin, not the large-room cap. Delete it so
+            // maintain-framerate can spend resolution again.
+            delete top.scaleResolutionDownBy;
+          }
+          if (encodings.length > 1) {
+            for (let i = 0; i < encodings.length - 1; i += 1) {
+              encodings[i]!.active = !feedingHls;
+            }
           }
         }
         await sender.setParameters(params);
@@ -1225,14 +1275,17 @@ export async function connectLiveKit({
               ),
           )
         : [],
-      // The SFU half of the same argument as the mesh path: without these the
-      // encoder holds resolution and spends framerate, which turns a film
-      // into stills. `degradationPreference` is the lever; the encoding is a
-      // ceiling, not a target, so a still screen still costs almost nothing.
-      degradationPreference: "maintain-framerate" as const,
+      // Ordinary SFU / mesh: hold fps, spend resolution (a film must not
+      // become stills). HLS ingest: hold pixels. Egress transcodes whatever
+      // size arrives, and Chrome's maintain-framerate walk 1080 → 180 is
+      // what every playlist viewer then gets. fps/bitrate can still drop.
+      degradationPreference: screenShareDegradationPreference(hlsSource),
       screenShareEncoding: {
         maxBitrate: plan.topBitrate,
         maxFramerate: publishMaxFrameRateFromTrack(track),
+        ...(screenShareScaleResolutionDownBy(hlsSource) === 1
+          ? { scaleResolutionDownBy: 1 as const }
+          : {}),
       },
     };
     // VP8 software encode is what we measured sawtoothing on Chromium. H.264
@@ -1389,9 +1442,12 @@ export async function connectLiveKit({
         const needsHlsLayerSync =
           (feedingHls && !hlsLayersTrimmed) ||
           (!feedingHls && hlsLayersTrimmed);
+        const needsHlsEncoderPin =
+          feedingHls && screenHlsEncoderUnpinned();
         if (
           livePlan.topBitrate !== livePublished.topBitrate ||
-          needsHlsLayerSync
+          needsHlsLayerSync ||
+          needsHlsEncoderPin
         ) {
           const applied = await setSourceMaxBitrate(
             Track.Source.ScreenShare,
@@ -1399,7 +1455,7 @@ export async function connectLiveKit({
             "screen",
           );
           if (applied !== "applied") {
-            if (needsHlsLayerSync) {
+            if (needsHlsLayerSync || needsHlsEncoderPin) {
               scheduleHlsLayerRetry();
             }
             return;
