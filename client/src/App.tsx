@@ -28,7 +28,6 @@ import {
   validateHandle,
   buildReplyExcerpt,
   isVoiceRoomChannelType,
-  isWatchPartyChannelType,
   withProfileUpdate,
   type WatchParty,
   type WatchPartyOptions,
@@ -158,6 +157,7 @@ import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
 import { CreateWatchPartyDialog } from "@/components/watch-party/create-watch-party-dialog";
 import {
   canOfferWatchPartyCreate,
+  isWatchPartyChannelType,
   isWatchPartyChannelsEnabled,
 } from "@/lib/watch-party-channels";
 import { shouldReleaseAudienceWatchSeat } from "@/lib/watch-party-seat";
