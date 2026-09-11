@@ -2112,7 +2112,7 @@ const MessageRow = memo(function MessageRow({
    * learn "you already reacted with this one" short of leaving the menu and
    * cross-referencing the reaction bar.
    */
-  const quickReactions = isReal
+  const quickReactions = isReal && !stream
     ? QUICK_REACTIONS.map((emoji) => {
         const mine = reactions.some((r) => r.emoji === emoji && r.me);
         return {
@@ -2142,7 +2142,7 @@ const MessageRow = memo(function MessageRow({
         reactions={quickReactions}
         reactionsLabel={t("reactions.quick")}
         onMoreReactions={
-          isReal ? selectAndClose(onOpenPicker, false) : undefined
+          isReal && !stream ? selectAndClose(onOpenPicker, false) : undefined
         }
         moreReactionsLabel={t("reactions.more")}
         // While picking a set, the row's one job is to be picked. A menu
@@ -2426,7 +2426,7 @@ const MessageRow = memo(function MessageRow({
               />
             )}
 
-            {isReal && (
+            {isReal && !stream && (
               <ReactionBar
                 reactions={reactions}
                 currentUserId={currentUserId}
@@ -2475,7 +2475,11 @@ const MessageRow = memo(function MessageRow({
                   the keyboard and screen-reader path to every one of these
                   actions is the row's context menu, which names them in a
                   list. */}
-              {HOVER_QUICK_REACTIONS.map((emoji) => {
+              {/* NO REACTIONS IN STREAM CHAT. Twitch, YouTube and Kick chat
+                  have none: the hover row is reply and the mod actions, and
+                  a message is never decorated after the fact. Emotes go in
+                  the words, through the composer. */}
+              {!stream && HOVER_QUICK_REACTIONS.map((emoji) => {
                 const mine = reactions.some((r) => r.emoji === emoji && r.me);
                 return (
                   <Tooltip
@@ -2499,18 +2503,20 @@ const MessageRow = memo(function MessageRow({
                   </Tooltip>
                 );
               })}
-              <Tooltip label={t("chat.addReaction")}>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  tabIndex={-1}
-                  className="h-6 w-6"
-                  onClick={onOpenPicker}
-                >
-                  <SmilePlus className="h-3.5 w-3.5" />
-                </Button>
-              </Tooltip>
+              {!stream && (
+                <Tooltip label={t("chat.addReaction")}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    tabIndex={-1}
+                    className="h-6 w-6"
+                    onClick={onOpenPicker}
+                  >
+                    <SmilePlus className="h-3.5 w-3.5" />
+                  </Button>
+                </Tooltip>
+              )}
               {canReply && (
                 <Tooltip label={t("chat.reply")}>
                   <Button

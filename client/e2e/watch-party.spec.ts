@@ -1753,4 +1753,7 @@ test("a watch party puts the chat beside the film, and cinema mode clears the re
     .last();
   await expect(row).toBeVisible({ timeout: 20_000 });
   await expect(row.locator("img")).toHaveCount(0);
+  // No reactions in stream chat: hovering the row offers reply, not emoji.
+  await row.hover();
+  await expect(row.getByRole("button", { name: "Add reaction" })).toHaveCount(0);
 });
