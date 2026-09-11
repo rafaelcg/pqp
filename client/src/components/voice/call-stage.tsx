@@ -96,6 +96,7 @@ import {
 } from "@/components/voice/screen-fullscreen";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { CinemaStage } from "@/components/voice/cinema-stage";
+import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
 import { shouldShowCinema } from "@/lib/cinema-layout";
 import {
   collectScreenTiles,
@@ -1067,6 +1068,8 @@ function ActiveCall({
 
   // --- fullscreen ---------------------------------------------------------
   const stageRef = useRef<HTMLDivElement>(null);
+  const cinemaStageRef = useRef<HTMLDivElement>(null);
+  const watchFullscreen = useWatchFullscreen(cinemaStageRef);
   const primaryVideoRef = useRef<WebkitFullscreenVideo>(null);
   // Any large picture at all, which since the stage became a grid of
   // publishers is exactly "is anybody publishing". The iPhone native-player
@@ -1085,11 +1088,12 @@ function ActiveCall({
   // worth dragging, and only the stage knows whether it is one: `collapsed`
   // folds in a collapse this person toggled in here. `CallSplit` reads it to
   // decide whether to draw a divider at all.
-  const shape: CallStageShape = fullscreen.isFullscreen
-    ? "fullscreen"
-    : collapsed
-      ? "compact"
-      : "expanded";
+  const shape: CallStageShape =
+    fullscreen.isFullscreen || watchFullscreen.active
+      ? "fullscreen"
+      : collapsed
+        ? "compact"
+        : "expanded";
   useEffect(() => {
     onShapeChange?.(shape);
   }, [shape, onShapeChange]);
@@ -1098,6 +1102,11 @@ function ActiveCall({
     // height for a stage that is gone is a gap where the transcript should be.
     return () => onShapeChange?.("none");
   }, [onShapeChange]);
+  useEffect(() => {
+    if (!showCinema && watchFullscreen.active) {
+      watchFullscreen.exit();
+    }
+  }, [showCinema, watchFullscreen]);
   // Phone held sideways with a share on: the shell's columns step aside.
   // Everything but the flag lives in the hook (`use-immersive-stage.ts`).
   const immersive = useImmersiveStage({
@@ -1312,10 +1321,13 @@ function ActiveCall({
   if (showCinema && cinemaTile?.hlsUrl) {
     return (
       <div
+        ref={cinemaStageRef}
         data-testid="call-stage-cinema"
         className={cn(
-          "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink",
-          fill ? "h-full min-h-0" : "h-[68svh] min-h-[280px]",
+          "relative shrink-0 overflow-hidden bg-black",
+          fill || watchFullscreen.active
+            ? "h-full min-h-0"
+            : "h-[68svh] min-h-[280px]",
         )}
       >
         <CinemaStage
@@ -1333,6 +1345,12 @@ function ActiveCall({
           stagePeople={cinemaStagePeople}
           canJoin
           onJoin={() => setAudienceMode(false)}
+          fullscreen={{
+            active: watchFullscreen.active,
+            toggle: watchFullscreen.toggle,
+            chatOverlay: watchFullscreen.chatOverlay,
+            toggleChatOverlay: watchFullscreen.toggleChatOverlay,
+          }}
         />
       </div>
     );

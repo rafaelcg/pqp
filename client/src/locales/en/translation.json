@@ -933,6 +933,8 @@
   "voice.watch.leave": "Stop watching",
   "voice.watch.fullscreen": "Fullscreen",
   "voice.watch.exitFullscreen": "Leave fullscreen",
+  "voice.watch.showChat": "Show chat",
+  "voice.watch.hideChat": "Hide chat",
   "voice.watch.audience_zero": "nobody watching yet",
   "voice.watch.audience_one": "{count} person watching",
   "voice.watch.audience_other": "{count} people watching",

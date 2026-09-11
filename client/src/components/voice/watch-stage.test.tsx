@@ -116,6 +116,38 @@ describe("WatchStage draws only the controls it was given", () => {
     expect(html).toContain('data-testid="watch-stage-fullscreen"');
     expect(html).toContain('aria-pressed="false"');
   });
+
+  it("offers a chat overlay only while the film is fullscreen", () => {
+    expect(
+      render({ fullscreen: { active: false, toggle: () => {} } }),
+    ).not.toContain('data-testid="watch-stage-chat-overlay"');
+    const html = render({
+      fullscreen: {
+        active: true,
+        toggle: () => {},
+        chatOverlay: false,
+        toggleChatOverlay: () => {},
+      },
+    });
+    expect(html).toContain('data-testid="watch-stage-chat-overlay"');
+    expect(html).toContain('aria-pressed="false"');
+  });
+
+  it("stacks cinema chrome above the chat overlay", () => {
+    // Overlay is z-index 40 on the pane. Chrome at z-20 was covered, and
+    // Playwright waited 120s to click Leave fullscreen.
+    const html = render({
+      fullscreen: {
+        active: true,
+        toggle: () => {},
+        chatOverlay: true,
+        toggleChatOverlay: () => {},
+      },
+    });
+    expect(html).toContain("data-watch-chrome");
+    expect(html).toMatch(/data-watch-chrome=""[^>]*\bz-50\b/);
+    expect(html).toContain('data-testid="watch-stage-fullscreen"');
+  });
 });
 
 describe("watchAudienceCount", () => {

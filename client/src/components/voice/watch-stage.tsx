@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Maximize2, Minimize2, Phone, Radio } from "lucide-react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Phone } from "lucide-react";
 import { liveStateFromStream } from "@pqp/shared";
 import type { ChannelLive, VoiceState } from "@/hooks/use-voice";
 import type { CallStageShape } from "@/lib/call-split";
@@ -66,7 +66,12 @@ export function WatchStage({
    */
   onJoin?: () => void;
   /** The film taking the screen, and the way back out. */
-  fullscreen?: { active: boolean; toggle: () => void };
+  fullscreen?: {
+    active: boolean;
+    toggle: () => void;
+    chatOverlay?: boolean;
+    toggleChatOverlay?: () => void;
+  };
   /** How to stop watching, when leaving the room is a thing this person can do. */
   onLeaveParty?: () => void;
   mediaTitle?: string;
@@ -76,144 +81,111 @@ export function WatchStage({
 }) {
   const { t } = useTranslation();
   const live = hlsUrl !== null;
+  const overlayActions = (
+    <>
+      {onLeaveParty ? (
+        <button
+          type="button"
+          data-testid="watch-stage-leave"
+          className="flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] px-2.5 py-1.5 text-xs font-medium text-paper/80 hover:bg-paper/15 hover:text-paper"
+          onClick={onLeaveParty}
+        >
+          {t("voice.watch.leave")}
+        </button>
+      ) : null}
+      {onJoin ? (
+        <button
+          type="button"
+          data-testid="watch-stage-join"
+          title={t("voice.watch.joinHint")}
+          className="flex shrink-0 items-center gap-1.5 rounded-[var(--radius-control)] border border-paper/20 px-2.5 py-1.5 text-xs font-medium text-paper/80 hover:bg-paper/15 hover:text-paper"
+          onClick={onJoin}
+        >
+          <Phone className="h-3.5 w-3.5" aria-hidden="true" />
+          {t("voice.watch.join")}
+        </button>
+      ) : null}
+    </>
+  );
+  const audienceMeta = (
+    <p
+      data-testid="watch-stage-state"
+      className="truncate text-[11px] font-medium text-paper/80"
+    >
+      {t("voice.watch.audience", { count: audienceCount })}
+    </p>
+  );
 
   return (
     <div
       data-testid="watch-stage"
-      className={cn("flex h-full w-full flex-col bg-ink", className)}
+      className={cn("relative h-full w-full bg-black", className)}
     >
-      <div className="relative min-h-0 w-full flex-1 bg-black">
-        {live ? (
-          <HlsWatchPlayer
-            src={hlsUrl}
-            delaySeconds={delaySeconds}
-            mediaTitle={mediaTitle}
-            communityName={communityName}
-            coverUrl={coverUrl}
-            className="group h-full w-full"
-          />
-        ) : (
-          <div
-            data-testid="watch-stage-ended"
-            className="flex h-full w-full flex-col items-center justify-center gap-1 px-6 text-center"
-          >
-            <p className="text-sm font-semibold text-paper">
-              {ended ? t("voice.watch.ended") : t("voice.hls.buffering")}
-            </p>
-            {ended && (
-              <p className="text-xs text-paper-muted">
-                {t("voice.watch.endedHint")}
-              </p>
-            )}
-          </div>
+      {live ? (
+        <HlsWatchPlayer
+          src={hlsUrl}
+          delaySeconds={delaySeconds}
+          mediaTitle={mediaTitle}
+          communityName={communityName}
+          coverUrl={coverUrl}
+          className="h-full w-full"
+          layout="cinema"
+          onDoubleClick={fullscreen?.toggle}
+          fullscreen={
+            fullscreen
+              ? { active: fullscreen.active, toggle: fullscreen.toggle }
+              : undefined
+          }
+          chatOverlay={
+            fullscreen?.active && fullscreen.toggleChatOverlay
+              ? {
+                  active: Boolean(fullscreen.chatOverlay),
+                  toggle: fullscreen.toggleChatOverlay,
+                }
+              : undefined
+          }
+          meta={audienceMeta}
+          actions={overlayActions}
+        />
+      ) : (
+        <EndedWatchStage
+          ended={ended}
+          audienceMeta={audienceMeta}
+          actions={overlayActions}
+        />
+      )}
+    </div>
+  );
+}
+
+function EndedWatchStage({
+  ended,
+  audienceMeta,
+  actions,
+}: {
+  ended: boolean;
+  audienceMeta: ReactNode;
+  actions: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex h-full w-full flex-col bg-black">
+      <div
+        data-testid="watch-stage-ended"
+        className="flex min-h-0 w-full flex-1 flex-col items-center justify-center gap-1 px-6 text-center"
+      >
+        <p className="text-sm font-semibold text-paper">
+          {ended ? t("voice.watch.ended") : t("voice.hls.buffering")}
+        </p>
+        {ended && (
+          <p className="text-xs text-paper-muted">
+            {t("voice.watch.endedHint")}
+          </p>
         )}
       </div>
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-ink-4/60 px-3 py-2">
-        <div className="flex min-w-0 flex-col gap-0.5">
-          <div className="flex min-w-0 items-center gap-2">
-            {live && (
-              <span
-                data-testid="watch-stage-live"
-                className="flex shrink-0 items-center gap-1 rounded bg-danger/15 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-danger"
-              >
-                <Radio className="h-3 w-3" aria-hidden="true" />
-                {t("voice.hls.live")}
-              </span>
-            )}
-            {/* THE LABEL IS GONE, AND NOTHING REPLACED IT.
-
-                It said "Assistindo sem entrar na call", and Rafael's reply is
-                the whole argument: "'Watching without joining the call' how's
-                that even a thing in watch party lol." He is right. That
-                sentence describes the IMPLEMENTATION, which is a voice room
-                with an HLS audience attached, and it frames the thing
-                everybody came for as an abstention from the thing almost
-                nobody wants. Nobody arriving at a film thinks of themselves
-                as being in a call they have declined to join.
-
-                A playing film is unusually good evidence that somebody is
-                watching a film, so the state does not need announcing. What
-                is left on this row is two things that are true and useful on
-                their own: how many people are here, and how far behind live
-                they are. */}
-          </div>
-          <p
-            data-testid="watch-stage-state"
-            className="truncate text-xs text-paper-muted"
-          >
-            {t("voice.watch.audience", { count: audienceCount })}
-            {live && delaySeconds !== undefined
-              ? ` · ${t("voice.hls.delay", { seconds: delaySeconds })}`
-              : ""}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {/* A WAY TO STOP. Watching starts by itself when the channel is
-              opened, and that is the right default: it is the cheap path and
-              the one almost everyone should be on, so putting a click in
-              front of it while three buttons offered the expensive one would
-              be exactly backwards. What was missing is the other half. The
-              state line to the left says what this person is doing; this says
-              how to stop, and it is honest about what stopping is, which is
-              leaving the room. */}
-          {onLeaveParty ? (
-            <button
-              type="button"
-              data-testid="watch-stage-leave"
-              className="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium text-text-tertiary hover:bg-surface-2 hover:text-text"
-              onClick={onLeaveParty}
-            >
-              {t("voice.watch.leave")}
-            </button>
-          ) : null}
-          {/* DEMOTED, AND ONLY WHERE IT IS THE ONLY ONE. It was `bg-success`,
-              the app's primary fill, which made joining a call the loudest
-              thing on a screen whose whole point is that you do not have to.
-              Watching is the default and the correct state for almost
-              everybody, so the button that leaves it is a quiet one. */}
-          {onJoin ? (
-            <button
-              type="button"
-              data-testid="watch-stage-join"
-              title={t("voice.watch.joinHint")}
-              className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-text-secondary hover:bg-surface-2 hover:text-text"
-              onClick={onJoin}
-            >
-              <Phone className="h-3.5 w-3.5" aria-hidden="true" />
-              {t("voice.watch.join")}
-            </button>
-          ) : null}
-          {/* THE ONE CONTROL THIS PLAYER NEVER HAD. A watch party is a film,
-              and a film in a pane between a sidebar and a chat column is not
-              what anybody came for. It takes the whole SPLIT PANE rather than
-              the video, so the chat comes with it; see
-              `voice/watch-fullscreen.ts`. */}
-          {fullscreen ? (
-            <button
-              type="button"
-              data-testid="watch-stage-fullscreen"
-              aria-pressed={fullscreen.active}
-              aria-label={
-                fullscreen.active
-                  ? t("voice.watch.exitFullscreen")
-                  : t("voice.watch.fullscreen")
-              }
-              title={
-                fullscreen.active
-                  ? t("voice.watch.exitFullscreen")
-                  : t("voice.watch.fullscreen")
-              }
-              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-secondary hover:bg-surface-2 hover:text-text"
-              onClick={fullscreen.toggle}
-            >
-              {fullscreen.active ? (
-                <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
-              ) : (
-                <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
-              )}
-            </button>
-          ) : null}
-        </div>
+      <div className="flex shrink-0 items-center justify-between gap-3 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">{audienceMeta}</div>
+        <div className="flex shrink-0 items-center gap-1.5">{actions}</div>
       </div>
     </div>
   );
@@ -353,17 +325,20 @@ export function WatchChannelStage({
   // the person is in the call, and this mount stays alive (rendering
   // nothing) through that, so an unconditional "none" here would fight it.
   const wasVisibleRef = useRef(false);
+  const stageShape: CallStageShape = fullscreen.active
+    ? "fullscreen"
+    : "expanded";
   useEffect(() => {
     if (visible) {
       wasVisibleRef.current = true;
-      onShapeChange?.("expanded");
+      onShapeChange?.(stageShape);
       return;
     }
     if (wasVisibleRef.current) {
       wasVisibleRef.current = false;
       onShapeChange?.("none");
     }
-  }, [visible, onShapeChange]);
+  }, [visible, stageShape, onShapeChange]);
   useEffect(() => {
     return () => {
       if (wasVisibleRef.current) {
@@ -382,15 +357,11 @@ export function WatchChannelStage({
       ref={stageRef}
       data-testid="watch-channel-stage"
       className={cn(
-        "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink",
-        // FULLSCREEN NEEDS NOTHING HERE, and that is the point of taking the
-        // pane rather than the video. `svh` is the viewport, and in element
-        // fullscreen the viewport IS the screen, so the same `68svh` rule
-        // that gives the film two thirds of a window gives it two thirds of a
-        // screen, with the chat in the third the person already had. The
-        // divider still drags inside it, and putting the chat away still
-        // gives the film everything. One layout, two sizes of viewport.
-        fill ? "h-full min-h-0" : "h-[68svh] min-h-[280px]",
+        "relative shrink-0 overflow-hidden bg-black",
+        // Cinema fullscreen fills whatever box it is in: native fullscreen
+        // makes that box the screen, expand pins the pane to the window.
+        // `fill` is the divider owning the height in the ordinary split.
+        fill || fullscreen.active ? "h-full min-h-0" : "h-[68svh] min-h-[280px]",
       )}
     >
       <WatchStage
@@ -403,7 +374,12 @@ export function WatchChannelStage({
         ended={ended}
         onJoin={onJoin}
         onLeaveParty={onLeaveParty}
-        fullscreen={{ active: fullscreen.active, toggle: fullscreen.toggle }}
+        fullscreen={{
+          active: fullscreen.active,
+          toggle: fullscreen.toggle,
+          chatOverlay: fullscreen.chatOverlay,
+          toggleChatOverlay: fullscreen.toggleChatOverlay,
+        }}
         mediaTitle={channelName}
         communityName={serverName}
         coverUrl={serverIconUrl}

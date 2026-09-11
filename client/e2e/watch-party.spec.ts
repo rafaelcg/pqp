@@ -1354,7 +1354,7 @@ test("a viewer can tell they are watching, and can stop", async ({
     const state = viewer.getByTestId("watch-stage-state");
     await expect(state).toBeVisible({ timeout: 20_000 });
     await expect(state).toContainText("watching");
-    await expect(state).toContainText("delay");
+    await expect(viewer.getByTestId("watch-stage")).toContainText("delay");
     await expect(viewer.getByText("without joining the call")).toHaveCount(0);
 
     // And the way out is beside the statement, which is honest about what
@@ -1426,7 +1426,14 @@ test("the film still fills the window on a platform with no element fullscreen",
       .toBe(true);
     const filled = await viewer.evaluate(() => {
       const pane = document.querySelector<HTMLElement>("[data-call-split]")!;
+      const film = document.querySelector<HTMLElement>(
+        "[data-testid='watch-stage'] video",
+      );
+      const chat = document.querySelector<HTMLElement>(
+        "[data-call-split-chat]",
+      );
       const rect = pane.getBoundingClientRect();
+      const filmRect = film?.getBoundingClientRect();
       return {
         fullscreenElement: document.fullscreenElement !== null,
         top: Math.round(rect.top),
@@ -1434,6 +1441,9 @@ test("the film still fills the window on a platform with no element fullscreen",
         height: Math.round(rect.height),
         width: Math.round(rect.width),
         viewport: { w: window.innerWidth, h: window.innerHeight },
+        cinema: pane.hasAttribute("data-watch-cinema"),
+        filmWidth: filmRect ? Math.round(filmRect.width) : 0,
+        chatDisplay: chat ? getComputedStyle(chat).display : "missing",
       };
     });
     expect(filled.fullscreenElement).toBe(false);
@@ -1441,6 +1451,9 @@ test("the film still fills the window on a platform with no element fullscreen",
     expect(filled.left).toBe(0);
     expect(filled.height).toBe(filled.viewport.h);
     expect(filled.width).toBe(filled.viewport.w);
+    expect(filled.cinema).toBe(true);
+    expect(filled.filmWidth).toBe(filled.viewport.w);
+    expect(filled.chatDisplay).toBe("none");
 
     // AND ESCAPE WORKS HERE TOO. In element fullscreen the browser owns it
     // and never tells the page; in this mode nothing does, so the hook binds
@@ -1462,7 +1475,7 @@ test("the film still fills the window on a platform with no element fullscreen",
   }
 });
 
-test("a viewer can put the film on the whole screen, with the chat", async ({
+test("a viewer can put the film on the whole screen", async ({
   browser,
 }) => {
   /**
@@ -1471,11 +1484,11 @@ test("a viewer can put the film on the whole screen, with the chat", async ({
    * Picture-in-Picture, and no fullscreen control at all. A watch party is a
    * film and people watch films fullscreen for two hours.
    *
-   * IT TAKES THE PANE, NOT THE VIDEO, and this is the assertion that says so.
-   * A fullscreen `<video>` renders only its own subtree, so it would be a
-   * film with no chat and no way to reach one. The pane already holds the
-   * stage, the divider and the transcript in the arrangement this person
-   * chose, so fullscreen means "the film and my chat take the screen".
+   * NATIVE FULLSCREEN, PICTURE FIRST. The request still goes to the split
+   * pane so a hover overlay can show the existing transcript, but cinema
+   * layout means the film fills the screen and chat does not own a column.
+   * A composer that still takes a third of the monitor is the bug this
+   * asserts against.
    */
   const shared = await seedServer("wp-fs", "wp-fs-guest");
   const party = await createParty("wp-fs", shared.serverId, "Cinemoon");
@@ -1510,27 +1523,82 @@ test("a viewer can put the film on the whole screen, with the chat", async ({
       )
       .toBe(true);
 
-    // The film fills the screen and the chat came with it.
     const box = await viewer.evaluate(() => {
       const pane = document.querySelector<HTMLElement>("[data-call-split]")!;
-      const rect = pane.getBoundingClientRect();
-      const composer = document.querySelector<HTMLElement>(
-        "[contenteditable], textarea",
+      const stage = document.querySelector<HTMLElement>(
+        "[data-testid='watch-stage']",
+      )!;
+      const film = stage.querySelector("video")!;
+      const chat = document.querySelector<HTMLElement>(
+        "[data-call-split-chat]",
       );
+      const paneRect = pane.getBoundingClientRect();
+      const filmRect = film.getBoundingClientRect();
+      const chatRect = chat?.getBoundingClientRect();
+      const chatVisible =
+        !!chat &&
+        getComputedStyle(chat).display !== "none" &&
+        (chatRect?.width ?? 0) > 8 &&
+        (chatRect?.height ?? 0) > 8;
       return {
-        paneHeight: Math.round(rect.height),
+        paneHeight: Math.round(paneRect.height),
         viewportHeight: window.innerHeight,
-        composerVisible:
-          !!composer && composer.getBoundingClientRect().height > 0,
+        filmWidth: Math.round(filmRect.width),
+        viewportWidth: window.innerWidth,
+        cinema: pane.hasAttribute("data-watch-cinema"),
+        chatVisible,
       };
     });
     expect(box.paneHeight).toBe(box.viewportHeight);
-    expect(box.composerVisible, "the chat did not come along").toBe(true);
+    expect(box.cinema).toBe(true);
+    expect(box.filmWidth).toBe(box.viewportWidth);
+    expect(box.chatVisible, "chat must not own a column of the film").toBe(
+      false,
+    );
 
-    // AND THE WAY OUT IS OBVIOUS. The same control, now saying the opposite,
-    // plus Escape, which the browser owns in this mode.
+    const overlay = viewer.getByTestId("watch-stage-chat-overlay");
+    await expect(overlay).toBeVisible();
+    await overlay.click();
+    const withChat = await viewer.evaluate(() => {
+      const film = document.querySelector<HTMLElement>(
+        "[data-testid='watch-stage'] video",
+      )!;
+      const chat = document.querySelector<HTMLElement>(
+        "[data-call-split-chat]",
+      )!;
+      const exit = document.querySelector<HTMLElement>(
+        "[data-testid='watch-stage-fullscreen']",
+      );
+      const filmRect = film.getBoundingClientRect();
+      const chatRect = chat.getBoundingClientRect();
+      const exitRect = exit?.getBoundingClientRect();
+      const hit =
+        exitRect &&
+        document.elementFromPoint(
+          exitRect.left + exitRect.width / 2,
+          exitRect.top + exitRect.height / 2,
+        );
+      return {
+        filmWidth: Math.round(filmRect.width),
+        viewportWidth: window.innerWidth,
+        chatVisible:
+          getComputedStyle(chat).display !== "none" && chatRect.width > 8,
+        chatOverlapsFilm:
+          chatRect.left < filmRect.right && chatRect.right > filmRect.left,
+        exitHitsControl: !!exit && !!hit && exit.contains(hit),
+      };
+    });
+    expect(withChat.filmWidth).toBe(withChat.viewportWidth);
+    expect(withChat.chatVisible).toBe(true);
+    expect(withChat.chatOverlapsFilm).toBe(true);
+    expect(
+      withChat.exitHitsControl,
+      "chat overlay must not cover Leave fullscreen",
+    ).toBe(true);
+
     await expect(control).toHaveAttribute("aria-pressed", "true");
-    await control.click();
+    await viewer.getByTestId("watch-stage").hover();
+    await control.click({ timeout: 10_000 });
     await expect
       .poll(() =>
         viewer.evaluate(() => document.fullscreenElement !== null),
