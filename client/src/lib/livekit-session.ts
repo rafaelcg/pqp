@@ -1003,7 +1003,7 @@ export async function connectLiveKit({
         // 360p (first) for a seated phone; deactivate everything in between.
         // When the ladder stops, turn those mids back on — the share may keep
         // going as an ordinary SFU picture, and a later HLS session has to be
-        // allowed to trim again (Farol on #463).
+        // allowed to trim again (Farol on PR 463).
         if (source === Track.Source.ScreenShare && encodings.length > 2) {
           for (let i = 1; i < encodings.length - 1; i += 1) {
             encodings[i]!.active = !feedingHls;
