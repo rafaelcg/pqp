@@ -1334,7 +1334,7 @@ function ComposeCard({
           </label>
         </div>
 
-        {!composeHasFileMedia(state) && (
+        {!showPreview && !composeHasFileMedia(state) && (
           <div className="mb-2" aria-live="polite">
             <CommunityHomeComposeEmbed url={composeEmbedUrl(state)} />
           </div>

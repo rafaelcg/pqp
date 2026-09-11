@@ -11,6 +11,7 @@ const youtube = "https://youtu.be/jNQXAC9IVRw";
 const watch = "https://www.youtube.com/watch?v=jNQXAC9IVRw";
 const tiktok = "https://www.tiktok.com/@scout2015/video/6718335390845095173";
 const instagram = "https://www.instagram.com/reel/CqK2e0_JXkA/";
+const twitch = "https://www.twitch.tv/moonkaselive";
 
 describe("parseCommunityHomeEmbed", () => {
   it("classifies YouTube, TikTok and Instagram watch URLs", () => {
@@ -21,6 +22,7 @@ describe("parseCommunityHomeEmbed", () => {
     ).toBe("youtube");
     expect(parseCommunityHomeEmbed(tiktok)).toBe("tiktok");
     expect(parseCommunityHomeEmbed(instagram)).toBe("instagram");
+    expect(parseCommunityHomeEmbed(twitch)).toBe("twitch");
   });
 
   it("rejects empty, junk, and hosts we do not embed", () => {
@@ -111,6 +113,15 @@ describe("communityHomeEmbedMedia", () => {
     });
     expect(communityHomeEmbedMedia(tiktok)?.kind).toBe("tiktok");
     expect(communityHomeEmbedMedia(instagram)?.kind).toBe("instagram");
+    expect(communityHomeEmbedMedia(twitch)).toEqual({
+      kind: "twitch",
+      name: "Twitch",
+      contentType: null,
+      byteSize: null,
+      url: null,
+      youtubeUrl: null,
+      twitchUrl: twitch,
+    });
     expect(communityHomeEmbedMedia("https://example.com/x")).toBeNull();
   });
 });
