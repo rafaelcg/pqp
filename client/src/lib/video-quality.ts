@@ -93,13 +93,11 @@ export function cameraProfileFor(quality: VideoQuality): CameraProfile {
  * 1080p30 costs roughly twice as much. Handing the screen the camera's ladder
  * would keep the label honest and the picture blurry, which is the bug.
  *
- * WHY CAPTURE SIZE IS STILL NOT ON THIS LADDER. The screen is always captured
- * at 1080p30 (`SCREEN_CAPTURE_OPTIONS` in `use-voice.ts`) whatever is chosen
- * here, and that is deliberate. Capture size is a floor you cannot climb back
- * up: a screen grabbed at 640x360 has lost the pixels that made the text
- * legible, permanently, even in the moments when the link has room to spare.
- * The *encoder* is where the size is chosen, which is what `screenScaleFactor`
- * below is for, and it is revisable in both directions at any moment.
+ * CAPTURE SIZE FOLLOWS THE MENU. A 4K panel with no cap is 3840×2160, and a
+ * laptop cannot encode that: fps collapses and HLS transcodes the slideshow.
+ * Auto and 1080p cap at 1920×1080; 720p at 1280×720. Display capture can climb
+ * back when the cap is raised (`applyConstraints`). The encoder still names a
+ * size (`screenScaleFactor`); capture must not start larger than the pick.
  *
  * THE BITRATE CEILING WAS ONCE THE WHOLE ANSWER, AND IT WAS NOT ENOUGH. This
  * file used to argue that a tight ceiling plus
@@ -171,6 +169,91 @@ const SCREEN_HEIGHTS: Record<Exclude<VideoQuality, "auto">, number> = {
  * cycle; the two must agree, and `video-quality.test.ts` says so out loud.
  */
 export const SCREEN_CAPTURE_HEIGHT = 1080;
+
+/**
+ * Pixel ceiling `getDisplayMedia` / `applyConstraints` ask for.
+ *
+ * Height matches `SCREEN_HEIGHTS`. Width is 16:9 of that height (480p uses
+ * 854, same as the camera profile). Auto is 1080, not 4K: an unconstrained
+ * display capture on a 4K laptop is 3840×2160 and the machine cannot encode it.
+ */
+const SCREEN_CAPTURE_SIZES: Record<
+  Exclude<VideoQuality, "auto">,
+  { width: number; height: number }
+> = {
+  "1080p": { width: 1920, height: 1080 },
+  "720p": { width: 1280, height: 720 },
+  "480p": { width: 854, height: 480 },
+  "360p": { width: 640, height: 360 },
+};
+
+export function screenCaptureSizeFor(quality: VideoQuality): {
+  width: number;
+  height: number;
+} {
+  return quality === "auto"
+    ? SCREEN_CAPTURE_SIZES["1080p"]
+    : SCREEN_CAPTURE_SIZES[quality];
+}
+
+/**
+ * What the picker means as capture constraints.
+ *
+ * `max` is the contract: 1080p must not be 4K. `resizeMode: crop-and-scale`
+ * is what makes Chrome honour that on a display track — without it,
+ * getDisplayMedia ignores width/height and hands over the native panel.
+ */
+export function screenCaptureConstraintsFor(
+  quality: VideoQuality,
+  maxFrameRate: 30 | 60,
+): MediaTrackConstraints & { resizeMode?: string } {
+  const { width, height } = screenCaptureSizeFor(quality);
+  return {
+    width: { max: width },
+    height: { max: height },
+    frameRate: { ideal: maxFrameRate, max: maxFrameRate },
+    resizeMode: "crop-and-scale",
+  };
+}
+
+/**
+ * Re-shape a live screen capture without reopening the picker.
+ *
+ * Never rejects: a browser that refuses `resizeMode` is retried without it,
+ * and a browser that refuses the size keeps the share running.
+ */
+export async function applyScreenCaptureQuality(
+  track: MediaStreamTrack,
+  quality: VideoQuality,
+  maxFrameRate: 30 | 60,
+): Promise<boolean> {
+  if (typeof track.applyConstraints !== "function") {
+    return false;
+  }
+  const constraints = screenCaptureConstraintsFor(quality, maxFrameRate);
+  try {
+    await track.applyConstraints(
+      constraints as MediaTrackConstraints,
+    );
+    return true;
+  } catch (err) {
+    const withoutResize: MediaTrackConstraints = {
+      width: constraints.width,
+      height: constraints.height,
+      frameRate: constraints.frameRate,
+    };
+    try {
+      await track.applyConstraints(withoutResize);
+      return true;
+    } catch {
+      console.warn(
+        "[pqp] screen capture refused the requested size; keeping the current one",
+        err,
+      );
+      return false;
+    }
+  }
+}
 
 /**
  * How much to divide the captured picture by so it arrives at the size the menu

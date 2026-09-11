@@ -78,9 +78,11 @@ import { beaconVoiceLeave } from "@/lib/voice-leave-beacon";
 import { resolveHlsUrl } from "@/lib/hls-playback";
 import {
   applyCameraQuality,
+  applyScreenCaptureQuality,
   cameraBitrateFor,
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
+  screenCaptureSizeFor,
   type VideoQuality,
 } from "@/lib/video-quality";
 import {
@@ -1041,6 +1043,8 @@ export function createVoiceController(transport: RealtimeTransport) {
    * `toggleCamera` will ask the hardware for.
    */
   let videoQuality: VideoQuality = DEFAULT_VIDEO_QUALITY;
+  /** Last fps asked of a live screen capture; Qualidade mid-share reuses it. */
+  let screenCaptureFps: 30 | 60 = 30;
   /** Webcam id for the next capture. Empty means the browser default. */
   let cameraDeviceId = "";
   let state: VoiceState = {
@@ -3946,6 +3950,9 @@ export function createVoiceController(transport: RealtimeTransport) {
       // person: `lib/screen-capture-cursor.ts`). An explicit `hideCursor` on
       // the intent still wins, so a caller can override it for one share.
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
+      const captureSize = screenCaptureSizeFor(videoQuality);
+      const captureFps = intent.maxFrameRate === 60 ? 60 : 30;
+      screenCaptureFps = captureFps;
       const options = screenCaptureOptions(
         shareSystemAudio,
         screenCaptureEnvironment(
@@ -3956,7 +3963,13 @@ export function createVoiceController(transport: RealtimeTransport) {
               getDesktop()?.sharePickerOffersAudio === true,
           },
         ),
-        { ...intent, hideCursor },
+        {
+          ...intent,
+          hideCursor,
+          maxFrameRate: captureFps,
+          maxWidth: captureSize.width,
+          maxHeight: captureSize.height,
+        },
       );
       // What was actually asked for, not what was ticked. In a browser this is
       // true even unticked, because a tab share carries the tab's own sound and
@@ -4001,7 +4014,15 @@ export function createVoiceController(transport: RealtimeTransport) {
           return;
         }
         try {
-          stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+          // Size still capped. `{ video: true }` is how a 4K panel stayed
+          // 3840×2160 after the picker constraints were refused.
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: {
+              width: { max: captureSize.width },
+              height: { max: captureSize.height },
+              frameRate: { max: captureFps },
+            },
+          });
         } catch {
           state.error = screenShareErrorMessage(err);
           emit();
@@ -4016,6 +4037,9 @@ export function createVoiceController(transport: RealtimeTransport) {
         emit();
         return;
       }
+      // getDisplayMedia often ignores width/height on a display surface.
+      // applyConstraints is what actually caps a 4K panel at the pick.
+      await applyScreenCaptureQuality(track, videoQuality, captureFps);
       // The single most effective line in this feature. A capture track carries
       // no content hint by default and the encoder then optimises a screen for
       // sharpness, holding resolution and dropping frames the moment bandwidth
@@ -4175,17 +4199,14 @@ export function createVoiceController(transport: RealtimeTransport) {
      * delivered fps so a 60 capture is not still published at 30.
      */
     async applyScreenFrameRate(fps: 30 | 60) {
-      const track = screenCaptureStream?.getVideoTracks()[0];
-      if (!track || typeof track.applyConstraints !== "function") {
+      screenCaptureFps = fps;
+      const track =
+        screenCaptureSource?.getVideoTracks()[0] ??
+        screenCaptureStream?.getVideoTracks()[0];
+      if (!track) {
         return;
       }
-      try {
-        await track.applyConstraints({
-          frameRate: { ideal: fps, max: fps },
-        });
-      } catch {
-        return;
-      }
+      await applyScreenCaptureQuality(track, videoQuality, fps);
       manager?.setScreenQuality(videoQuality);
     },
 
@@ -4414,6 +4435,12 @@ export function createVoiceController(transport: RealtimeTransport) {
       // not started yet, so this is not only about the sender on the wire.
       manager?.setScreenQuality(next);
       await sfu?.setScreenQuality(next);
+      const screenTrack =
+        screenCaptureSource?.getVideoTracks()[0] ??
+        screenCaptureStream?.getVideoTracks()[0];
+      if (screenTrack) {
+        await applyScreenCaptureQuality(screenTrack, next, screenCaptureFps);
+      }
       const track = cameraCaptureStream?.getVideoTracks()[0];
       if (track) {
         await applyCameraQuality(track, next);

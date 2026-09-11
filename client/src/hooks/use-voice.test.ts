@@ -547,7 +547,13 @@ describe("screen share audio", () => {
     await voice.startScreenShare();
 
     expect(displayMediaCalls).toHaveLength(2);
-    expect(displayMediaCalls[1]).toEqual({ video: true });
+    expect(displayMediaCalls[1]).toEqual({
+      video: {
+        width: { max: 1920 },
+        height: { max: 1080 },
+        frameRate: { max: 30 },
+      },
+    });
     expect(voice.getState().isSharingScreen).toBe(true);
   });
 

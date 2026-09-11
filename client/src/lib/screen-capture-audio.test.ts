@@ -165,6 +165,32 @@ describe("screenCaptureOptions", () => {
       frameRate: { ideal: 30, max: 30 },
       width: { max: 1920 },
       height: { max: 1080 },
+      resizeMode: "crop-and-scale",
+    });
+  });
+
+  it("caps capture at the picker's size, not 4K", () => {
+    expect(
+      screenCaptureOptions(false, browser, {
+        maxWidth: 1280,
+        maxHeight: 720,
+        maxFrameRate: 30,
+      }).video,
+    ).toMatchObject({
+      width: { max: 1280 },
+      height: { max: 720 },
+      frameRate: { ideal: 30, max: 30 },
+    });
+    expect(
+      screenCaptureOptions(false, browser, {
+        maxWidth: 1920,
+        maxHeight: 1080,
+        maxFrameRate: 60,
+      }).video,
+    ).toMatchObject({
+      width: { max: 1920 },
+      height: { max: 1080 },
+      frameRate: { ideal: 60, max: 60 },
     });
   });
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyCameraQuality,
+  applyScreenCaptureQuality,
   availableVideoQualities,
   coerceVideoQuality,
   HUGE_ROOM_1080P_LIMIT,
@@ -19,6 +20,8 @@ import {
   LARGE_ROOM_PARTICIPANTS,
   parseVideoQuality,
   screenBitrateFor,
+  screenCaptureConstraintsFor,
+  screenCaptureSizeFor,
   screenScaleFactor,
   screenSimulcastPlan,
   clampScreenPlanToCapture,
@@ -241,6 +244,74 @@ describe("applyCameraQuality", () => {
       Promise.reject(named("OverconstrainedError")),
     );
     await expect(applyCameraQuality(track, "360p")).resolves.toBe(false);
+  });
+});
+
+describe("screenCaptureConstraintsFor", () => {
+  it("caps 1080p at 1920x1080, 720p at 1280x720, Auto at 1080 not 4K", () => {
+    expect(screenCaptureSizeFor("1080p")).toEqual({ width: 1920, height: 1080 });
+    expect(screenCaptureSizeFor("720p")).toEqual({ width: 1280, height: 720 });
+    expect(screenCaptureSizeFor("auto")).toEqual({ width: 1920, height: 1080 });
+    expect(screenCaptureConstraintsFor("1080p", 30)).toMatchObject({
+      width: { max: 1920 },
+      height: { max: 1080 },
+      frameRate: { ideal: 30, max: 30 },
+      resizeMode: "crop-and-scale",
+    });
+    expect(screenCaptureConstraintsFor("720p", 30)).toMatchObject({
+      width: { max: 1280 },
+      height: { max: 720 },
+      frameRate: { ideal: 30, max: 30 },
+    });
+    expect(screenCaptureConstraintsFor("auto", 60)).toMatchObject({
+      width: { max: 1920 },
+      height: { max: 1080 },
+      frameRate: { ideal: 60, max: 60 },
+    });
+  });
+
+  it("asks 30 or 60 fps as a max", () => {
+    expect(screenCaptureConstraintsFor("1080p", 30).frameRate).toEqual({
+      ideal: 30,
+      max: 30,
+    });
+    expect(screenCaptureConstraintsFor("720p", 60).frameRate).toEqual({
+      ideal: 60,
+      max: 60,
+    });
+  });
+});
+
+describe("applyScreenCaptureQuality", () => {
+  it("applies the picker size to a live track", async () => {
+    const applyConstraints = vi.fn().mockResolvedValue(undefined);
+    const track = { applyConstraints } as unknown as MediaStreamTrack;
+    await expect(
+      applyScreenCaptureQuality(track, "720p", 30),
+    ).resolves.toBe(true);
+    expect(applyConstraints).toHaveBeenCalledWith(
+      screenCaptureConstraintsFor("720p", 30),
+    );
+  });
+
+  it("retries without resizeMode when the engine refuses it", async () => {
+    const applyConstraints = vi
+      .fn()
+      .mockRejectedValueOnce(named("OverconstrainedError"))
+      .mockResolvedValueOnce(undefined);
+    const track = { applyConstraints } as unknown as MediaStreamTrack;
+    await expect(
+      applyScreenCaptureQuality(track, "1080p", 60),
+    ).resolves.toBe(true);
+    expect(applyConstraints).toHaveBeenNthCalledWith(
+      2,
+      expect.not.objectContaining({ resizeMode: "crop-and-scale" }),
+    );
+    expect(applyConstraints.mock.calls[1][0]).toMatchObject({
+      width: { max: 1920 },
+      height: { max: 1080 },
+      frameRate: { ideal: 60, max: 60 },
+    });
   });
 });
 

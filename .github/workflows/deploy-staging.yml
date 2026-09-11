@@ -19,6 +19,11 @@ on:
   push:
     branches: [staging]
   workflow_dispatch:
+    inputs:
+      web_only:
+        description: "Pages only — do not restart pqp-api-staging"
+        type: boolean
+        default: false
 
 concurrency:
   group: deploy-staging
@@ -126,6 +131,7 @@ jobs:
 
   api:
     name: Build & deploy API (Fly, pqp-api-staging)
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.web_only != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 

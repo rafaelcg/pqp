@@ -62,6 +62,10 @@ import {
   screenCaptureEnvironment,
   screenCaptureOptions,
 } from "@/lib/screen-capture-audio";
+import {
+  applyScreenCaptureQuality,
+  screenCaptureSizeFor,
+} from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 
 /**
@@ -798,15 +802,27 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       // Same builder every ordinary share uses. `preferBrowserTab` is the
       // watch-party product: the player tab and its sound, never the machine
       // mixer that contains the call. See `lib/screen-capture-audio.ts`.
+      const quality = props.videoQuality ?? "auto";
+      const fps = props.hlsMaxFrameRate === 60 ? 60 : 30;
+      const size = screenCaptureSizeFor(quality);
       const options = screenCaptureOptions(
         false,
         screenCaptureEnvironment(
           isDesktopApp(),
           getDesktop()?.platform ?? null,
         ),
-        { preferBrowserTab: true, maxFrameRate: props.hlsMaxFrameRate },
+        {
+          preferBrowserTab: true,
+          maxFrameRate: fps,
+          maxWidth: size.width,
+          maxHeight: size.height,
+        },
       );
       const picked = await navigator.mediaDevices.getDisplayMedia(options);
+      const videoTrack = picked.getVideoTracks()[0];
+      if (videoTrack) {
+        await applyScreenCaptureQuality(videoTrack, quality, fps);
+      }
       stream?.getTracks().forEach((track) => track.stop());
       // The host stopping the share from the browser's own bar during setup
       // must clear the preview, not leave a frozen last frame that they then

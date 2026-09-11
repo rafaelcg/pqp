@@ -474,6 +474,8 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
     );
     expect(source).toContain("screenCaptureOptions(");
     expect(source).toContain("preferBrowserTab: true");
+    expect(source).toContain("screenCaptureSizeFor");
+    expect(source).toContain("applyScreenCaptureQuality");
     // The bare shape that caused the echo. A video-only fallback elsewhere is
     // fine; `{ audio: true }` next to getDisplayMedia is not.
     expect(source).not.toMatch(

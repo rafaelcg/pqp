@@ -123,6 +123,12 @@ export interface ScreenCaptureIntent {
   /** 60 to match the host display; 30 when the presenter or ladder says so. */
   maxFrameRate?: 30 | 60;
   /**
+   * Capture ceiling, from `screenCaptureSizeFor(videoQuality)`. Default
+   * 1920×1080. Without this a 4K panel is captured at 3840×2160.
+   */
+  maxWidth?: number;
+  maxHeight?: number;
+  /**
    * A display stream the caller already has, to publish instead of opening
    * the picker again.
    *
@@ -151,6 +157,11 @@ type ScreenAudioConstraints = MediaTrackConstraints & {
 type ScreenVideoConstraints = MediaTrackConstraints & {
   /** Screen Capture spec: whether the pointer is drawn into the capture. */
   cursor?: CursorCaptureConstraint;
+  /**
+   * Without this, Chrome's display capture stays `resizeMode: "none"` and
+   * ignores width/height max (a 4K panel stays 3840×2160).
+   */
+  resizeMode?: ConstrainDOMString;
 };
 
 export interface ScreenCaptureEnvironment {
@@ -329,20 +340,24 @@ export function screenCaptureOptions(
     !intent.preferBrowserTab;
   const carriesAudio = browserOffersCheckbox || shellWantsAudio;
   const maxFrameRate = intent.maxFrameRate === 60 ? 60 : 30;
+  const maxWidth = intent.maxWidth && intent.maxWidth > 0 ? intent.maxWidth : 1920;
+  const maxHeight =
+    intent.maxHeight && intent.maxHeight > 0 ? intent.maxHeight : 1080;
   return {
     // `video: true` used to be the whole of this, and it is why a share arrived
     // as a slideshow. With no frameRate asked for, a capture of a large surface
     // is handed over at whatever rate the browser feels like, and with no
     // ceiling on size a 4K or Retina display is captured at its full pixel count
-    // and then has to be scaled down inside the encoder every frame. 1080p30 is
-    // the size people actually share. 60 fps is the cadence of the host's
-    // display, which is what keeps a 24 fps film looking like it does on
-    // their screen. Pin 30 via `maxFrameRate` when the machine or a 30-only
-    // HLS ladder cannot spend it.
+    // and then has to be scaled down inside the encoder every frame. Width and
+    // height follow the Qualidade pick (1080 → 1920×1080, 720 → 1280×720);
+    // Auto stays 1080, never 4K. Chrome ignores those maxes unless resizeMode
+    // is crop-and-scale, which is why it is asked for here and again via
+    // applyConstraints after the picker closes.
     video: {
       frameRate: { ideal: maxFrameRate, max: maxFrameRate },
-      width: { max: 1920 },
-      height: { max: 1080 },
+      width: { max: maxWidth },
+      height: { max: maxHeight },
+      resizeMode: "crop-and-scale",
       // Asked for unconditionally, not feature-detected like `restrictOwnAudio`
       // above, and the difference is deliberate. An audio constraint an engine
       // cannot honour can fail the whole capture, so that one is only sent
