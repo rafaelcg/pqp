@@ -1,12 +1,20 @@
 # SFU box monitoring
 
-Everything that watches the self-hosted LiveKit box (Vultr, São Paulo,
-`216.238.114.79`, serving `sfu.pqp.gg` and `turn.pqp.gg`). The prose version,
-including the thresholds and why each choice was made, is in
+Everything that watches the self-hosted LiveKit boxes:
+
+| Box | IP | Alloy `instance` / `box` | Role |
+|---|---|---|---|
+| Production `sfu-pqp` | `216.238.114.79` (`sfu.pqp.gg` / `turn.pqp.gg`) | `sfu-pqp` | Ordinary voice |
+| Dedicated HLS `pqp-sfu-staging-1c` | `216.238.108.42` | `sfu-hls` | Watch-party LiveKit + egress |
+
+The prose version, including the thresholds and why each choice was made, is in
 [`docs/MONITORING.md`](../../docs/MONITORING.md) under "The SFU box". The box
 itself, every config file on it and the installer that rebuilds it from a fresh
 Ubuntu image, is next door in [`tools/sfu/`](../sfu/); that installer calls this
 one at the end, so a rebuild comes up already monitored.
+
+A second box is another scrape target with its own labels. Never reuse
+`instance="sfu-pqp"` on the HLS box — that would overwrite prod series.
 
 | File | Role |
 |---|---|
@@ -22,12 +30,24 @@ scp -r tools/sfu-monitoring root@216.238.114.79:/opt/
 ssh root@216.238.114.79 'bash /opt/sfu-monitoring/install.sh'
 ```
 
+Dedicated HLS box (2 vCPU / 4 GB). Labels `sfu-hls`, and the textfile
+collector also watches the egress and Redis containers:
+
+```bash
+scp -r tools/sfu-monitoring root@216.238.108.42:/opt/
+ssh root@216.238.108.42 'GC_PROM_USER=3563744 GC_PROM_TOKEN=<metrics:write token> \
+  PQP_SFU_INSTANCE=sfu-hls \
+  PQP_METRICS_CONTAINERS=livekit-livekit-1,livekit-caddy-1,livekit-egress-1,livekit-redis-1 \
+  bash /opt/sfu-monitoring/install.sh'
+```
+
 First run only (or to rotate the credential), prefix the remote command with
 `GC_PROM_USER=3563744 GC_PROM_TOKEN=<metrics:write token>`. The token is the
 grafana.com Access Policy token stored locally as `GRAFANA_LOGS_WRITE_TOKEN`
 in `~/.config/pqp/grafana.env`; it carries both `logs:write` and
 `metrics:write`. It is written to `/etc/alloy/credentials.env` (0600, root)
-and is never in this repo.
+and is never in this repo. `PQP_SFU_INSTANCE` defaults to `sfu-pqp`; set it
+only on a second box.
 
 ## Check it is working
 
@@ -39,6 +59,10 @@ ssh root@216.238.114.79 'curl -s localhost:12345/metrics | grep remote_storage_s
 
 Then look for the numbers in Grafana rather than trusting the config:
 https://smallkestrel237.grafana.net/d/pqp-sfu-box
+
+The dashboard keeps the original prod panels (`instance="sfu-pqp"`) and adds
+a **Dedicated HLS box** row for `sfu-hls` (CPU, load with 2-vCPU thresholds,
+LiveKit rooms/participants, egress containers). Scroll to that row.
 
 ## Changing the transfer allowance
 
@@ -61,5 +85,6 @@ Vultr actually measures an overage against, so it is the lower and stricter of
 the two early in a month.
 
 The dashboard's load-average thresholds also assume a core count. They are set
-for the 4 vCPU plan: orange at 4 means fully busy, red at 6 means work is
-queueing. Halve them on a 2-core box.
+for the 4 vCPU plan on the prod panels: orange at 4 means fully busy, red at 6
+means work is queueing. The HLS row (`sfu-hls`, 2 vCPU) uses orange at 2 and
+red at 3.

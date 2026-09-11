@@ -813,6 +813,14 @@ list, so the port is local only. Nothing had to be restarted to turn this on.
 **pqp SFU box**, folder `pqp`, uid `pqp-sfu-box`:
 https://smallkestrel237.grafana.net/d/pqp-sfu-box
 
+Two scrape instances share this dashboard. Production `sfu-pqp`
+(`216.238.114.79`) keeps the original panels. The dedicated HLS box
+`pqp-sfu-staging-1c` (`216.238.108.42`) ships as `instance="sfu-hls"` /
+`box="sfu-hls"` — a second row (CPU, load at 2-vCPU thresholds, LiveKit
+rooms/participants, egress containers), not a replacement of the prod
+labels. `PQP_SFU_INSTANCE` on the installer is how a third box would
+join.
+
 Allowance used and egress against the plan allowance, network throughput, CPU,
 memory, load, disk, LiveKit rooms and participants, packet loss, and the two
 containers' up/down.
@@ -898,7 +906,8 @@ same grafana.com Access Policy token the log shipper uses, which carries both
 
 ### Useful PromQL
 
-Series carry `box="sfu-pqp"` and `instance="sfu-pqp"`. The node exporter's job
+Series carry `box` and `instance`, both `sfu-pqp` on production and
+`sfu-hls` on the dedicated HLS box. The node exporter's job
 label is **`integrations/unix`**, which is Alloy's own default and overrides
 anything set in `job_name`; LiveKit's is `livekit`.
 
