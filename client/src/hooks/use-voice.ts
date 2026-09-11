@@ -83,7 +83,7 @@ import {
 } from "@/lib/video-quality";
 import {
   hlsSourceFor,
-  readPresenterUplinkBps,
+  readPresenterHlsFeed,
 } from "@/lib/hls-source-quality";
 import {
   createSpeakingTracker,
@@ -918,9 +918,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         void refreshHlsSource();
       }, HLS_SOURCE_SAMPLE_MS);
     }
+    const feed = await readPresenterHlsFeed();
     await sfu?.setHlsSource({
       ...wanted,
-      uplinkBps: await readPresenterUplinkBps(),
+      uplinkBps: feed.uplinkBps,
+      limitedBy: feed.limitedBy,
     });
   }
   let sessionProvider: VoiceSessionProvider | null = null;
@@ -4019,6 +4021,29 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       state.isShareCursorVisible = false;
       emit();
+    },
+
+    /**
+     * Push a capture fps onto a share that is already running.
+     *
+     * applyConstraints in place: no picker, no renegotiation, nobody's
+     * picture drops. A browser that refuses leaves the share as it was;
+     * the next share asks again. Mesh encodings re-read the track's
+     * delivered fps so a 60 capture is not still published at 30.
+     */
+    async applyScreenFrameRate(fps: 30 | 60) {
+      const track = screenCaptureStream?.getVideoTracks()[0];
+      if (!track || typeof track.applyConstraints !== "function") {
+        return;
+      }
+      try {
+        await track.applyConstraints({
+          frameRate: { ideal: fps, max: fps },
+        });
+      } catch {
+        return;
+      }
+      manager?.setScreenQuality(videoQuality);
     },
 
     /** Promote a share to the large tile. No-op if they are not sharing. */

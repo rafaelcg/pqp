@@ -44,6 +44,52 @@
   }
 
   /**
+   * How many recent probes it takes before we trust a 30-minute mean more
+   * than the live peek. Ten is a few minutes of the once-a-minute sampler,
+   * enough that a single cold `listRooms` cannot pull the average into the
+   * slow cluster of a bimodal probe.
+   */
+  var RECENT_MIN_SAMPLES = 10;
+
+  /**
+   * Mean latency of the newest *contiguous* buckets that together hold
+   * `RECENT_MIN_SAMPLES` probes. Null when the history has no points (tests,
+   * an API older than this field), when the newest bucket is empty, or when
+   * the sampler has not written enough yet — the caller then falls back to
+   * the live peek.
+   *
+   * `points` are oldest-first, one per 30 minutes, with gaps filled as
+   * `{ ms: null, samples: 0 }`. An empty newest bucket is what a stopped
+   * sampler looks like, and walking past it into yesterday's healthy
+   * buckets would hide a live slowdown. Skip nothing: a gap ends the
+   * window. `ms` is already the mean of that bucket, so this re-weights
+   * by `samples`.
+   */
+  function recentMeanMs(componentHistory) {
+    if (!componentHistory || !Array.isArray(componentHistory.points)) {
+      return null;
+    }
+    var points = componentHistory.points;
+    if (points.length === 0) {
+      return null;
+    }
+    var weighted = 0;
+    var samples = 0;
+    for (var i = points.length - 1; i >= 0; i--) {
+      var point = points[i];
+      if (!point || typeof point.ms !== "number" || !(point.samples > 0)) {
+        break;
+      }
+      weighted += point.ms * point.samples;
+      samples += point.samples;
+      if (samples >= RECENT_MIN_SAMPLES) {
+        return Math.round(weighted / samples);
+      }
+    }
+    return null;
+  }
+
+  /**
    * Latency against each component's own normal.
    *
    * `components` is `/status.json`'s array; `history` is `statusHistory` from
@@ -78,10 +124,20 @@
       .map(function (c) {
         var h = byKey[c.key];
         var p50 = h && typeof h.p50 === "number" && h.p50 > 0 ? h.p50 : null;
+        var p95 = h && typeof h.p95 === "number" ? h.p95 : null;
+        var live = c.latencyMs;
+        var recent = recentMeanMs(h);
+        // Judge the last half hour when we have it. The live peek is one
+        // `listRooms` (or one HEAD, or one SELECT 1); for the SFU that number
+        // is bimodal — warm ~20 ms, cold TLS ~170 ms — and pinning a verdict
+        // to whichever the last probe happened to be is how this card spent
+        // an evening saying voz was at 7,9× while /ready's own listRooms
+        // was answering in 10 ms on the same process.
+        var compared = recent !== null ? recent : live;
         return {
-          name: nameOf(c), now: c.latencyMs, p50: p50,
-          p95: h && typeof h.p95 === "number" ? h.p95 : null,
-          ratio: p50 === null ? null : c.latencyMs / p50
+          name: nameOf(c), live: live, compared: compared, recent: recent,
+          p50: p50, p95: p95,
+          ratio: p50 === null ? null : compared / p50
         };
       });
     var comparable = rated.filter(function (r) { return r.ratio !== null; });
@@ -90,30 +146,31 @@
     // /metrics and the page may be reading before it, or the API may be older
     // than this field. Say what is known and stop there.
     if (!comparable.length) {
-      var slowestRaw = rated.slice().sort(function (a, b) { return b.now - a.now; })[0];
+      var slowestRaw = rated.slice().sort(function (a, b) { return b.live - a.live; })[0];
       return {
         key: "latency", state: "raw", source: "status.json",
         head: "sem histórico para comparar, só a leitura de agora",
-        body: "o mais lento nesta leitura é " + slowestRaw.name + ", com " + slowestRaw.now +
+        body: "o mais lento nesta leitura é " + slowestRaw.name + ", com " + slowestRaw.live +
           " ms. isso sozinho não diz nada: um número só vira sintoma quando comparado com o normal do próprio componente, e o p50 de 24 h ainda não chegou nesta página.",
-        figs: [["mais lento agora", slowestRaw.now + " ms"]]
+        figs: [["mais lento agora", slowestRaw.live + " ms"]]
       };
     }
 
     var worst = comparable.slice().sort(function (a, b) { return b.ratio - a.ratio; })[0];
     var figsFor = function (c) {
-      return [["agora", c.now + " ms"], ["p50 24 h", c.p50 + " ms"]]
+      return [["agora", c.live + " ms"]]
+        .concat(c.recent === null ? [] : [["últimos 30 min", c.recent + " ms"]])
+        .concat([["p50 24 h", c.p50 + " ms"]])
         .concat(c.p95 === null ? [] : [["p95 24 h", c.p95 + " ms"]]);
     };
 
     /*
-     * TWO CONDITIONS, NOT ONE, and the second was learned from the first
-     * reading this card ever took against production.
+     * TWO CONDITIONS, NOT ONE, and a third lesson from watching the card
+     * against production.
      *
-     * The SFU probe's own p50 was 33 ms and its p95 was 235 ms, because it is
-     * a bimodal thing: mostly fast, occasionally a full cold round trip. A
-     * reading of 220 ms is 6,7x the median and would have gone red — while
-     * sitting *below* the p95, meaning the component had already spent a
+     * The SFU probe is bimodal: p50 ~20 ms (warm HTTP), p95 ~170 ms (cold
+     * TLS). A reading of 220 ms is 6,7x the median and would have gone red
+     * while sitting *below* the p95 — the component had already spent a
      * chunk of the day up there. That is a false alarm, and a strip that
      * cries wolf on day one is worse than no strip.
      *
@@ -121,15 +178,36 @@
      * own median AND above its own p95. The ratio says "unusual for the
      * middle of the distribution"; the p95 says "unusual for the whole of
      * it", and only the pair is worth waking somebody for.
+     *
+     * THE THIRD LESSON (2026-09-10). p95 of a bimodal probe *is* the slow
+     * cluster. 173 ms against a p50 of 22 and a p95 of 171 is 7,9× and 2 ms
+     * over the p95 — red by the pair above — while /ready's own listRooms
+     * on the same process was answering in 10 ms. The live peek is one
+     * probe; the slow mode of this probe *is* a cold handshake, not voz
+     * falling over. Two refinements:
+     *
+     *  1. Judge the newest ~30 min mean when `statusHistory` has enough
+     *     samples. A cold trip lasts one probe; a real slowdown lasts a
+     *     bucket.
+     *  2. When we only have the live peek, a skewed probe (p95 ≥ 3× p50)
+     *     has to clear 1,5× its own p95, not 1 ms. The slow cluster lives
+     *     around p95; 2 ms over it is rounding, not an incident.
      */
-    var overBand = worst.p95 === null || worst.now > worst.p95;
+    var skewed = worst.p50 > 0 && worst.p95 !== null && worst.p95 / worst.p50 >= 3;
+    var overBand = worst.p95 === null || (skewed && worst.recent === null
+      ? worst.compared > worst.p95 * 1.5
+      : worst.compared > worst.p95);
     if (worst.ratio >= 1.4 && overBand) {
       var bad = worst.ratio >= 2;
+      var alarmLead = worst.recent === null
+        ? worst.live + " ms agora"
+        : "média de " + worst.recent + " ms nos últimos 30 min";
       return {
         key: "latency", state: bad ? "bad" : "warn", source: "statusHistory",
         head: worst.name + " está respondendo a " + times(worst.ratio) + " o normal dele",
-        body: worst.now + " ms agora, contra um p50 de " + worst.p50 + " ms nas últimas 24 h" +
-          (worst.p95 === null ? "" : " e um p95 de " + worst.p95 + " ms, ou seja, acima de tudo que ele mostrou hoje") +
+        body: alarmLead + ", contra um p50 de " + worst.p50 + " ms nas últimas 24 h" +
+          (worst.p95 === null ? "" : " e um p95 de " + worst.p95 + " ms") +
+          (worst.recent === null ? "" : ". a leitura de agora é " + worst.live + " ms") +
           ". o que importa aqui não é ele ser o mais lento do painel, é ele estar lento em relação a si mesmo.",
         figs: figsFor(worst)
       };
@@ -141,23 +219,26 @@
       return {
         key: "latency", state: "ok", source: "statusHistory",
         head: worst.name + " está bem acima da mediana, mas dentro da faixa dele",
-        body: worst.now + " ms agora contra um p50 de " + worst.p50 +
+        body: worst.live + " ms agora contra um p50 de " + worst.p50 +
           " ms, o que parece muito. mas o p95 das últimas 24 h é " + worst.p95 +
-          " ms, então este valor está dentro da faixa que o próprio componente já mostrou hoje. uma mediana muito abaixo do p95 quer dizer distribuição torta, não incidente.",
+          " ms" +
+          (worst.recent === null ? "" : " e a média dos últimos 30 min é " + worst.recent + " ms") +
+          ", então este valor está dentro da faixa que o próprio componente já mostrou hoje. uma mediana muito abaixo do p95 quer dizer distribuição torta, não incidente.",
         figs: figsFor(worst)
       };
     }
 
     // Nothing is off its own band, so the useful sentence is the opposite one:
     // the slowest component on the page is slow on purpose and can be ignored.
-    var slowest = comparable.slice().sort(function (a, b) { return b.now - a.now; })[0];
-    var fastest = rated.slice().sort(function (a, b) { return a.now - b.now; })[0];
+    var slowest = comparable.slice().sort(function (a, b) { return b.live - a.live; })[0];
+    var fastest = rated.slice().sort(function (a, b) { return a.live - b.live; })[0];
     return {
       key: "latency", state: "ok", source: "statusHistory",
       head: slowest.name + " é o mais lento e isso é o normal dele",
-      body: slowest.now + " ms agora, contra " + fastest.now + " ms de " + fastest.name +
+      body: slowest.live + " ms agora, contra " + fastest.live + " ms de " + fastest.name +
         ". mas o p50 do próprio " + slowest.name + " nas últimas 24 h é " + slowest.p50 + " ms" +
         (slowest.p95 === null ? "" : " e o p95 é " + slowest.p95 + " ms") +
+        (slowest.recent === null ? "" : "; a média dos últimos 30 min é " + slowest.recent + " ms") +
         ", então esse número não é sintoma de nada. o alarme é ele dobrar em relação a si mesmo, não ficar acima dos outros.",
       figs: figsFor(slowest)
     };

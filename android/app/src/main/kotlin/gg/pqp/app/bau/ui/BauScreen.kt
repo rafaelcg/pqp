@@ -379,8 +379,8 @@ private fun LockedBox() {
 
 /**
  * One post's media. Every kind opens *out*: the image in whatever handles it,
- * the video and the file in the browser or a viewer, YouTube in YouTube. A
- * phone has better players for all four than a chat app does, and a card that
+ * the video and the file in the browser or a viewer, YouTube or Twitch in
+ * their apps. A phone has better players for all of those than a chat app does, and a card that
  * plays sound on scroll is the thing the web's `preload="none"` exists to
  * avoid.
  */
@@ -435,6 +435,19 @@ private fun MediaView(media: BauMedia) {
                 )
             }
             PlayBadge(stringResource(R.string.bau_media_youtube))
+        }
+
+        media.isTwitch -> Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(16f / 9f)
+                .clip(MaterialTheme.shapes.medium)
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                .clickable(role = Role.Button, onClick = open)
+                .testTag("bau.media.twitch"),
+            contentAlignment = Alignment.Center,
+        ) {
+            PlayBadge(stringResource(R.string.bau_media_twitch))
         }
 
         media.isVideo -> Box(

@@ -5,7 +5,7 @@ import {
   COMMUNITY_HOME_MAX_BYTES,
   communityHomeMediaKindFromContentType,
   hasPermission,
-  parseYoutubeVideoId,
+  parseCommunityHomeEmbed,
   Permission,
   type CommunityHomeAuthorBadge,
   type CommunityHomeComment,
@@ -91,6 +91,7 @@ export class CommunityHomeError extends Error {
       | "over_limit"
       | "storage_off"
       | "bad_youtube"
+      | "bad_embed"
       | "needs_content"
       | "needs_title"
       | "not_verified",
@@ -111,7 +112,7 @@ interface PostRow {
   visibility: CommunityHomeVisibility;
   status: CommunityHomePostStatus;
   comments_enabled: boolean;
-  media_kind: "image" | "video" | "youtube" | "file" | null;
+  media_kind: "image" | "video" | "youtube" | "twitch" | "file" | null;
   media_name: string | null;
   media_content_type: string | null;
   media_byte_size: string | null;
@@ -264,6 +265,18 @@ function buildMedia(
       byteSize: null,
       url: null,
       youtubeUrl: row.media_youtube_url,
+      twitchUrl: null,
+    };
+  }
+  if (row.media_kind === "twitch") {
+    return {
+      kind: "twitch",
+      name: row.media_name ?? "Twitch",
+      contentType: null,
+      byteSize: null,
+      url: null,
+      youtubeUrl: null,
+      twitchUrl: row.media_youtube_url,
     };
   }
   let url: string | null = null;
@@ -289,6 +302,7 @@ function buildMedia(
     byteSize: row.media_byte_size ? Number(row.media_byte_size) : null,
     url,
     youtubeUrl: null,
+    twitchUrl: null,
   };
 }
 
@@ -610,7 +624,7 @@ export async function getCommunityHomePost(
 }
 
 type MediaFields = {
-  media_kind: "image" | "video" | "youtube" | "file" | null;
+  media_kind: "image" | "video" | "youtube" | "twitch" | "file" | null;
   media_name: string | null;
   media_content_type: string | null;
   media_byte_size: number | null;
@@ -669,18 +683,33 @@ async function claimUploadOntoPost(
   };
 }
 
-function youtubeMedia(url: string): MediaFields {
-  if (!parseYoutubeVideoId(url)) {
-    throw new CommunityHomeError("bad_youtube", "Invalid YouTube URL");
+function embedMedia(url: string): MediaFields {
+  const trimmed = url.trim();
+  const provider = parseCommunityHomeEmbed(trimmed);
+  if (provider === "youtube") {
+    return {
+      media_kind: "youtube",
+      media_name: "YouTube",
+      media_content_type: null,
+      media_byte_size: null,
+      media_storage_key: null,
+      media_youtube_url: trimmed,
+    };
   }
-  return {
-    media_kind: "youtube",
-    media_name: "YouTube",
-    media_content_type: null,
-    media_byte_size: null,
-    media_storage_key: null,
-    media_youtube_url: url.trim(),
-  };
+  if (provider === "twitch") {
+    return {
+      media_kind: "twitch",
+      media_name: "Twitch",
+      media_content_type: null,
+      media_byte_size: null,
+      media_storage_key: null,
+      media_youtube_url: trimmed,
+    };
+  }
+  throw new CommunityHomeError(
+    "bad_embed",
+    "Invalid YouTube or Twitch URL",
+  );
 }
 
 function emptyMedia(): MediaFields {
@@ -810,7 +839,7 @@ export async function createCommunityHomePost(
         postId,
       );
     } else if (input.youtubeUrl) {
-      media = youtubeMedia(input.youtubeUrl);
+      media = embedMedia(input.youtubeUrl);
     }
 
     assertPublishable({
@@ -933,7 +962,7 @@ export async function updateCommunityHomePost(
         postId,
       );
     } else if (input.youtubeUrl) {
-      media = youtubeMedia(input.youtubeUrl);
+      media = embedMedia(input.youtubeUrl);
     } else if (input.youtubeUrl === null && input.mediaUploadId === null) {
       // explicit clear via nullable fields when clearMedia not set — leave
     }

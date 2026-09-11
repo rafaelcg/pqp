@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_SCREEN_FRAME_RATE,
   hlsCaptureMaxFrameRate,
+  parseScreenFrameRate,
   publishMaxFrameRateFromTrack,
+  screenCaptureMaxFrameRate,
 } from "./hls-capture-rate";
 
 describe("hlsCaptureMaxFrameRate", () => {
-  it("stays at 30 for the default 30 fps ladder", () => {
+  it("stays at 30 for a 30 fps ladder", () => {
     expect(
       hlsCaptureMaxFrameRate(
         [{ framerate: 30 }, { framerate: 30 }, { framerate: 30 }],
@@ -27,6 +30,36 @@ describe("hlsCaptureMaxFrameRate", () => {
     expect(hlsCaptureMaxFrameRate(null, true)).toBe(30);
     expect(hlsCaptureMaxFrameRate(undefined, true)).toBe(30);
     expect(hlsCaptureMaxFrameRate([], true)).toBe(30);
+  });
+});
+
+describe("screenCaptureMaxFrameRate", () => {
+  it("defaults to auto, which follows the ladder", () => {
+    expect(DEFAULT_SCREEN_FRAME_RATE).toBe("auto");
+    expect(
+      screenCaptureMaxFrameRate({ preference: "auto", hlsLadderMax: 60 }),
+    ).toBe(60);
+    expect(
+      screenCaptureMaxFrameRate({ preference: "auto", hlsLadderMax: 30 }),
+    ).toBe(30);
+  });
+
+  it("lets the presenter pin 30 or 60 regardless of the ladder", () => {
+    expect(
+      screenCaptureMaxFrameRate({ preference: "30", hlsLadderMax: 60 }),
+    ).toBe(30);
+    expect(
+      screenCaptureMaxFrameRate({ preference: "60", hlsLadderMax: 30 }),
+    ).toBe(60);
+  });
+
+  it("falls back to auto for anything storage cannot name", () => {
+    expect(parseScreenFrameRate("60")).toBe("60");
+    expect(parseScreenFrameRate("30")).toBe("30");
+    expect(parseScreenFrameRate("auto")).toBe("auto");
+    for (const junk of ["120", "", null, undefined, 60, {}]) {
+      expect(parseScreenFrameRate(junk)).toBe("auto");
+    }
   });
 });
 

@@ -525,11 +525,12 @@ describe("the quality choice reaches the screen sender", () => {
     // choice moved the camera and nothing else, and the screen sender ran on a
     // constant no setting could reach.
     expect(meshScreenBitrate(1, "1080p")).toBe(4_000_000);
+    expect(screenBitrateFor("1080p")).toBe(8_000_000);
     expect(meshScreenBitrate(1, "1080p")).toBeGreaterThan(2_500_000);
   });
 
   it("orders the five settings, and separates every one of them", () => {
-    const rungs = ["360p", "480p", "720p", "auto", "1080p"] as const;
+    const rungs = ["360p", "480p", "auto", "720p", "1080p"] as const;
     const rates = rungs.map((rung) => meshScreenBitrate(1, rung));
     expect(rates).toEqual([...rates].sort((a, b) => a - b));
     expect(new Set(rates).size).toBe(rungs.length);
@@ -538,7 +539,7 @@ describe("the quality choice reaches the screen sender", () => {
   it("lets the chosen ceiling win over an empty room's budget", () => {
     // The room has bandwidth going spare and the user still said 480p. A
     // budget that could overrule that would make the control a suggestion.
-    expect(meshScreenBitrate(1, "480p")).toBe(1_000_000);
+    expect(meshScreenBitrate(1, "480p")).toBe(1_500_000);
     expect(meshScreenBitrate(1, "480p")).toBeLessThan(
       meshScreenBitrate(1, "auto"),
     );
@@ -594,11 +595,12 @@ describe("the quality choice reaches the screen sender", () => {
     expect(meshScreenBitrate(4)).toBe(meshScreenBitrate(4, "auto"));
   });
 
-  it("keeps the mesh cap and the ladder's top rung agreed", () => {
-    // Two constants in two modules that must not drift: the mesh's own hard cap
-    // and the most any quality may ask for. If they part company, one of them
-    // silently stops doing anything.
-    expect(screenBitrateFor("1080p")).toBe(4_000_000);
+  it("keeps the mesh cap below the SFU 1080p ceiling", () => {
+    // Mesh 1:1 still hard-caps at 4 Mbps so a domestic uplink is not
+    // saturated. The SFU/HLS 1080p ceiling is 8 Mbps: one copy to the
+    // media box, not one copy per peer.
+    expect(screenBitrateFor("1080p")).toBe(8_000_000);
+    expect(meshScreenBitrate(1, "1080p")).toBe(4_000_000);
   });
 
   it("moves a live share's ceiling without touching the capture", async () => {

@@ -6,6 +6,7 @@ import {
   screenScaleFactor,
   type VideoQuality,
 } from "./video-quality";
+import { publishMaxFrameRateFromTrack } from "./hls-capture-rate";
 import type { VoiceLinkQuality } from "./voice-link-quality";
 import {
   DEFAULT_SCREEN_UPLOAD_BUDGET_BPS,
@@ -333,7 +334,6 @@ const SCREEN_UPLOAD_BUDGET_BPS = DEFAULT_SCREEN_UPLOAD_BUDGET_BPS;
  * costs the picture for everybody who was not at risk.
  */
 const SCREEN_MAX_BITRATE_BPS = 4_000_000;
-const SCREEN_MAX_FRAMERATE = 30;
 
 /**
  * What one screen sender is allowed, given the room and the chosen quality.
@@ -595,7 +595,7 @@ async function tuneScreenSender(
         budgetBps,
         cameraChosenBps,
       );
-      encoding.maxFramerate = SCREEN_MAX_FRAMERATE;
+      encoding.maxFramerate = publishMaxFrameRateFromTrack(sender.track ?? {});
       // Written on every rung including 1080p, where it is 1: a divisor only
       // ever set on the way down would make the menu a one-way trip, leaving a
       // 3x scale in place after somebody chose 1080p again.

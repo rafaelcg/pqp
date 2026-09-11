@@ -38,4 +38,21 @@ describe("winningCornerHint", () => {
       "update",
     );
   });
+
+  it("a live Baú post beats first-run cards and still yields to a waiting build", () => {
+    expect(
+      winningCornerHint({
+        communityHomePost: true,
+        qg: true,
+        cargos: true,
+      }),
+    ).toBe("communityHomePost");
+    expect(
+      winningCornerHint({
+        update: true,
+        communityHomePost: true,
+        qg: true,
+      }),
+    ).toBe("update");
+  });
 });

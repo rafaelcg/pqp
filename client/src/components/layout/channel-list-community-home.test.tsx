@@ -149,4 +149,48 @@ describe("ChannelList Community Home row", () => {
     );
     expect(html).toContain(">Community<");
   });
+
+  it("unread count outranks the New chip", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        communityHomeEnabled
+        communityHomeShowNew
+        communityHomeUnread={3}
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    expect(html).toContain("data-community-home-unread");
+    expect(html).toContain(">3<");
+    expect(html).not.toContain(">New<");
+  });
+
+  it("New chip shows when there is nothing unread", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        communityHomeEnabled
+        communityHomeShowNew
+        communityHomeUnread={0}
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    expect(html).not.toContain("data-community-home-unread");
+    expect(html).toContain(">New<");
+  });
+
+  it("icons-only rail still draws the unread number", () => {
+    const html = renderList(
+      <ChannelList
+        {...baseProps}
+        communityHomeEnabled
+        communityHomeUnread={2}
+        iconsOnly
+        onExpand={() => {}}
+        onSelectCommunityHome={() => {}}
+      />,
+    );
+    expect(html).toContain("data-community-home-unread");
+    expect(html).toContain(">2<");
+  });
 });
