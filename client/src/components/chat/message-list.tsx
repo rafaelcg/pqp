@@ -1152,6 +1152,7 @@ export function MessageList({
               mentionJoinBottom={joinBottom}
               stream={variant === "stream"}
               streamBadges={streamBadges}
+              zebra={variant === "stream" && index % 2 === 1}
               currentUserId={currentUserId}
               currentUsername={currentUsername}
               serverId={serverId}
@@ -1372,9 +1373,18 @@ export function MessageList({
           className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-ink-4 bg-ink-2/95 px-3 py-1.5 text-xs font-medium text-paper shadow-lg backdrop-blur transition-colors hover:border-signal/60 hover:text-signal"
         >
           <ArrowDown className="h-3.5 w-3.5" />
+          {/* In stream chat the pill says what Twitch's says: the chat is
+              paused because you scrolled, and how much has come in since. */}
           {missedCount > 0 && !hasNewer
-            ? t("chat.jump.missed", { count: missedCount })
-            : t("chat.jump.present")}
+            ? t(
+                variant === "stream"
+                  ? "chat.jump.pausedMissed"
+                  : "chat.jump.missed",
+                { count: missedCount },
+              )
+            : variant === "stream" && !hasNewer
+              ? t("chat.jump.paused")
+              : t("chat.jump.present")}
         </button>
       )}
     </div>
@@ -1678,6 +1688,8 @@ interface MessageRowProps {
   mentionJoinBottom?: boolean;
   /** See `MessageListProps.variant`. */
   stream?: boolean;
+  /** Every other stream row gets a faint wash, Twitch's alternating background. */
+  zebra?: boolean;
   streamBadges?: { hostUserId: string; cohostIds: ReadonlySet<string> } | null;
 }
 
@@ -1736,6 +1748,7 @@ const MessageRow = memo(function MessageRow({
   mentionJoinBottom = false,
   stream = false,
   streamBadges = null,
+  zebra = false,
 }: MessageRowProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
@@ -2169,6 +2182,7 @@ const MessageRow = memo(function MessageRow({
           className={cn(
             "group relative flex items-start gap-0 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
             stream ? "px-3" : "px-5",
+            zebra && "bg-surface-1/60",
             stream ? "py-0.5" : startsGroup ? "mt-[var(--chat-group-gap)] pt-1" : "pt-px",
             mentionJoinTop ? "pt-0" : null,
             stream ? null : mentionJoinBottom ? "pb-0" : startsGroup ? "pb-1" : "pb-px",

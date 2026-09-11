@@ -160,6 +160,12 @@ interface MessageComposerProps {
    * Return true when a message was opened so the key is consumed.
    */
   onEditLastOwn?: () => boolean;
+  /**
+   * STREAM CHAT: one line of words, an emote picker and Send. The attach menu
+   * and the formatting bar are what a transcript wants; beside a film they
+   * are furniture. Twitch's composer is exactly this shape.
+   */
+  variant?: "default" | "stream";
 }
 
 /**
@@ -326,6 +332,7 @@ export function MessageComposer({
   slowModeUntil = null,
   placeholder,
   onEditLastOwn,
+  variant = "default",
 }: MessageComposerProps) {
   const { t } = useTranslation();
   const inputPlaceholder = placeholder ?? t("composer.placeholderFallback");
@@ -1605,7 +1612,7 @@ export function MessageComposer({
         <div className="flex items-center gap-0.5 px-1.5 pb-1.5">
           {/* Hidden rather than empty: a self-host without attachments in a
               panel without slash commands has nothing for the + to add. */}
-          {insertItems.length > 0 && (
+          {insertItems.length > 0 && variant !== "stream" && (
           <div ref={insertMenuRef} className="relative">
             <Tooltip label={t("composer.insert")}>
               <Button
@@ -1639,6 +1646,7 @@ export function MessageComposer({
             )}
           </div>
           )}
+          {variant !== "stream" && (
           <Tooltip label={t("composer.format")}>
             <Button
               type="button"
@@ -1661,6 +1669,7 @@ export function MessageComposer({
               <ALargeSmall className="h-4.5 w-4.5" />
             </Button>
           </Tooltip>
+          )}
           <Tooltip label={t("composer.addEmoji")}>
             <Button
               type="button"

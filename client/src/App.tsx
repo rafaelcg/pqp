@@ -6314,6 +6314,7 @@ function MainAppContent({
         />
       )}
       <MessageComposer
+        variant={splitKind === "watch" ? "stream" : "default"}
         // Remount per channel: the draft is component state, so without this a
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.
