@@ -3987,6 +3987,8 @@ function MainAppContent({
       return;
     }
     await setChannelSessionReminder(party.id, wants);
+    // Patch, do not put: the party may have gone live or been renamed while
+    // the request was out, and the snapshot captured above would undo that.
     watchParties.patch(party.id, { reminding: wants });
   }
 
@@ -4001,10 +4003,26 @@ function MainAppContent({
     if (!party) {
       return;
     }
-    if (voice.getState().voiceChannelId !== party.channelId) {
-      await handleJoinVoice(party.channelId);
+    try {
+      if (voice.getState().voiceChannelId !== party.channelId) {
+        await handleJoinVoice(party.channelId);
+      }
+      if (!(await waitForVoiceConnected())) {
+        return;
+      }
+    } catch (error) {
+      setAppError(
+        error instanceof Error ? error.message : "Could not share the screen",
+      );
+      return;
     }
-    if (!(await waitForVoiceConnected())) {
+    // The room can change under those awaits. A host who moved to another
+    // channel or another call meanwhile gets no picker for a party they are
+    // no longer in; the share would land in whatever room is current.
+    if (
+      voice.getState().voiceChannelId !== party.channelId ||
+      selectedChannelIdRef.current !== party.channelId
+    ) {
       return;
     }
     startScreenShareGated(false, { preferBrowserTab: true, watchParty: true });
@@ -6013,7 +6031,7 @@ function MainAppContent({
             canSpeak={voiceState.canSpeak}
             micState={
               voiceState.voiceChannelId === selectedChannel.id &&
-              voiceState.status !== "idle"
+              voiceState.status === "connected"
                 ? voiceState.isMuted
                   ? "muted"
                   : voiceState.isSharingMic
@@ -6128,7 +6146,7 @@ function MainAppContent({
             canSpeak={voiceState.canSpeak}
             micState={
               voiceState.voiceChannelId === selectedChannel.id &&
-              voiceState.status !== "idle"
+              voiceState.status === "connected"
                 ? voiceState.isMuted
                   ? "muted"
                   : voiceState.isSharingMic

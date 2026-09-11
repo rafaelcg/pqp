@@ -128,6 +128,23 @@ describe("applyWatchPartyFrame", () => {
     );
   });
 
+  it("drops a frame from another server that is not live: the rail has no use for it", () => {
+    const open = "server-open";
+    const foreign = {
+      ...PARTY,
+      id: "party-foreign",
+      channelId: "channel-foreign",
+      serverId: "server-elsewhere",
+      state: "live" as const,
+    };
+    const held = applyWatchPartyFrame({}, foreign.channelId, foreign, open);
+    expect(held[foreign.channelId]).toEqual(foreign);
+    const ended = { ...foreign, state: "ended" as const };
+    const next = applyWatchPartyFrame(held, ended.channelId, ended, open);
+    expect(next[ended.channelId]).toBeUndefined();
+    expect(liveWatchPartyServerIds(next)).toEqual(new Set());
+  });
+
   it("still drops a stale entry on a null frame, even while looking at another server", () => {
     const next = applyWatchPartyFrame(
       held,

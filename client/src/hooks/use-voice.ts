@@ -1695,9 +1695,6 @@ export function createVoiceController(transport: RealtimeTransport) {
       // Carries mute, deafen and the push-to-talk gate onto the new track: a
       // swap must never be a way to end up transmitting when you were not.
       applyMuteToPipeline();
-      if (screenMix && state.isSharingMic) {
-        screenMix.setMic(pipeline.processedStream);
-      }
 
       if (manager) {
         await manager.replaceLocalTrack(pipeline.processedStream);
@@ -1707,9 +1704,18 @@ export function createVoiceController(transport: RealtimeTransport) {
         sfuPublicationMuted = null;
         await applyPublicationMute();
       }
+      // The stream mix follows the room, not the other way round: only once
+      // the room is on the new microphone does the audience get it too, so
+      // a failed replacement never leaves the two on different devices.
+      if (screenMix && state.isSharingMic) {
+        screenMix.setMic(pipeline.processedStream);
+      }
       emit();
     } catch (err) {
       state.error = err instanceof Error ? err.message : failureMessage;
+      if (screenMix && state.isSharingMic && pipeline) {
+        screenMix.setMic(pipeline.processedStream);
+      }
       emit();
     }
   }

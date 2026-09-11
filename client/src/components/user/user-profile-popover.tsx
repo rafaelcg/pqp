@@ -927,7 +927,9 @@ function UserProfileCard({
                 cohostAction === "promote"
                   ? watchParty.onPromote(subject.id)
                   : watchParty.onDemote(subject.id);
-              void run.catch(() => {}).finally(() => setBusy(false));
+              void run
+                .catch(() => setNotice(t("profile.cohost.failed")))
+                .finally(() => setBusy(false));
             },
           },
         ]

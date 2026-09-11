@@ -1179,6 +1179,7 @@
   "profile.more": "More",
   "profile.mod.section": "This community",
   "profile.cohost.promote": "Make co-host of {name}",
+  "profile.cohost.failed": "Could not change the co-host. Try again.",
   "profile.cohost.demote": "Remove co-host",
   "profile.about.accounts": "Accounts",
   "profile.about.tabs": "About",
