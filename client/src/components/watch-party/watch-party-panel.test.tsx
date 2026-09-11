@@ -597,6 +597,36 @@ describe("the share controls on the live bar", () => {
   });
 });
 
+/**
+ * THE CALL STRIP USED TO CARRY THIS. Section 10 hid that strip and moved
+ * mute / share / Encerrar onto the party bar, but not the encode picker, so
+ * a host presenting had no 720 vs 1080 control except Settings. The real
+ * `VideoQualityMenu` needs a browser store this suite does not have, so
+ * this pins the wiring in the source the way the capture-echo scan does.
+ */
+describe("the host quality picker on the live bar", () => {
+  const source = readFileSync(
+    new URL("./watch-party-panel.tsx", import.meta.url),
+    "utf8",
+  );
+
+  it("puts the same VideoQualityMenu the call strip used on the live bar", () => {
+    expect(source).toContain('testId="watch-party-quality"');
+    expect(source).toContain('layout="bar"');
+    expect(source).toContain("onVideoQualityChange");
+    expect(source).toContain("onScreenFrameRateChange");
+  });
+
+  it("is gated on running the show, not on a viewer", () => {
+    const picker = source.slice(
+      source.indexOf("THE HOST ENCODE PICKER"),
+      source.indexOf("THE SEAT'S OWN EXIT"),
+    );
+    expect(picker).toContain("runsTheShow && props.onVideoQualityChange");
+    expect(picker).not.toContain("viewerRole === \"viewer\"");
+  });
+});
+
 /** The seat's exit is on the bar, for the seated guest, never for the host. */
 describe("Sair do palco", () => {
   const seated = (viewerRole: WatchParty["viewerRole"]) =>

@@ -18,16 +18,22 @@ import {
   Square,
   Undo2,
 } from "lucide-react";
-import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
-import type { VideoQuality } from "@/lib/video-quality";
 import {
   canPerformWatchPartyAction,
   mayTakeWatchPartySeat,
   watchPartySpeakAffordance,
   watchPartySurface,
+  type LiveHlsStream,
+  type VoiceRoomTransport,
   type WatchParty,
   type WatchPartyOptions,
 } from "@pqp/shared";
+import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
+import {
+  DEFAULT_SCREEN_FRAME_RATE,
+  type ScreenFrameRate,
+} from "@/lib/hls-capture-rate";
+import type { VideoQuality } from "@/lib/video-quality";
 import {
   OptionGroup,
   WatchPartyOptionsPanel,
@@ -158,6 +164,14 @@ export interface WatchPartyPanelProps {
   liveStream?: LiveHlsStream | null;
   /** The host's chosen rung, and the room size, for the outbound readout. */
   videoQuality?: VideoQuality;
+  /**
+   * Capture cadence for the share. Device-local with videoQuality; Auto
+   * follows this server's HLS ladder. The same value Settings writes.
+   */
+  screenFrameRate?: ScreenFrameRate;
+  /** The call strip used to own this; the live bar is the only bar now. */
+  onVideoQualityChange?: (quality: VideoQuality) => void;
+  onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
   roomViewers?: number;
   transport?: VoiceRoomTransport | null;
   /** This seat was taken as audience: no microphone was ever asked for. */
@@ -1176,6 +1190,7 @@ function LiveSurface(
   const { party } = props;
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
   const canEnd = canPerformWatchPartyAction({
     action: "end",
     role: party.viewerRole,
@@ -1465,6 +1480,34 @@ function LiveSurface(
             <Square className="mr-1.5 h-3 w-3" aria-hidden />
             {t("watchParty.live.stopShare")}
           </Button>
+        )}
+        {/* THE HOST ENCODE PICKER. The call strip used to carry
+            `VideoQualityMenu` next to the share button; section 10 of the
+            setup plan hid that strip and moved mute / share / Encerrar here,
+            but not this. A host presenting with no webcam then had no way to
+            pick 720 vs 1080 except Settings → Voice. Same menu, same stored
+            value, labelled for this bar so it is not a round leftover icon. */}
+        {runsTheShow && props.onVideoQualityChange && (
+          <VideoQualityMenu
+            layout="bar"
+            testId="watch-party-quality"
+            value={props.videoQuality ?? "auto"}
+            open={qualityMenuOpen}
+            onOpenChange={setQualityMenuOpen}
+            onChange={props.onVideoQualityChange}
+            screenFrameRate={
+              props.screenFrameRate ?? DEFAULT_SCREEN_FRAME_RATE
+            }
+            onScreenFrameRateChange={props.onScreenFrameRateChange}
+            isSendingVideo
+            isSharingScreen
+            usingSfu={props.transport === "livekit"}
+            watchingHls
+            hlsLive={props.liveStream != null}
+            hlsDelaySeconds={props.liveStream?.delaySeconds ?? 10}
+            participantCount={Math.max(1, (props.roomViewers ?? 0) + 1)}
+            buttonLabel={t("watchParty.live.quality")}
+          />
         )}
         {/* THE SEAT'S OWN EXIT, in the party's words. The call strip's red
             Sair is gone from watch party channels (section 10): a seated

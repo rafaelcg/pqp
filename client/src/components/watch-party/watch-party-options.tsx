@@ -31,10 +31,12 @@ import { cn } from "@/lib/utils";
  * second permission system over them would be two places to get a private
  * party wrong, both of which have to agree. The panel says so in words.
  *
- * QUALITY IS ABSENT ON PURPOSE. The HLS quality ladder is a separate branch
- * and owns what a host may pick; when it lands it adds one control here rather
- * than growing a parallel one. A dropdown that changes nothing would be worse
- * than its absence.
+ * QUALITY IS NOT AN OPTION HERE. Encode size and fps are the host's device
+ * setting (`LocalSettings.videoQuality` / `screenFrameRate`), the same ones
+ * the old call-strip menu wrote, and they live on the live bar as
+ * `VideoQualityMenu`. They are not a party row: a ladder choice is per laptop,
+ * not per event, and stuffing it into `watchPartyOptionsSchema` would store a
+ * number the transcode does not read.
  *
  * NONE OF THIS IS ENFORCEMENT. Every option is applied by the server when the
  * party goes live and re-applied on every edit

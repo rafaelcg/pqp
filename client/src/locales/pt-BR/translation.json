@@ -2944,6 +2944,7 @@
   "watchParty.live.leaveStage": "Sair do palco",
   "watchParty.live.replaceShare": "Trocar",
   "watchParty.live.stopShare": "Parar de compartilhar",
+  "watchParty.live.quality": "Qualidade",
   "watchParty.live.hostGone": "O host caiu",
   "watchParty.live.hostGoneBody": "Se {name} não voltar em alguns minutos, a watch party encerra sozinha.",
   "watchParty.live.claim": "Assumir",

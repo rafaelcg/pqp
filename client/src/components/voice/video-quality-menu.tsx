@@ -119,6 +119,9 @@ export function VideoQualityMenu({
   participantCount = 1,
   buttonClassName,
   iconClassName,
+  layout = "call",
+  testId,
+  buttonLabel,
 }: {
   value: VideoQuality;
   open: boolean;
@@ -153,6 +156,15 @@ export function VideoQualityMenu({
   participantCount?: number;
   buttonClassName?: string;
   iconClassName?: string;
+  /**
+   * `call` is the round icon on the voice bar, menu opening upward.
+   * `bar` is the labelled control on the watch-party live bar, menu opening
+   * downward so it is not clipped off the top of the chrome.
+   */
+  layout?: "call" | "bar";
+  testId?: string;
+  /** Visible name on the `bar` trigger. The call trigger is icon-only. */
+  buttonLabel?: string;
 }) {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
@@ -194,6 +206,9 @@ export function VideoQualityMenu({
     ? t("call.quality.open", { quality: t(LABELS[value]) })
     : t("call.quality.openReceiving");
 
+  const bar = layout === "bar";
+  const pinned =
+    isSendingVideo && (value !== "auto" || screenFrameRate !== "auto");
   const largeRoomCap =
     usingSfu &&
     isSharingScreen &&
@@ -208,13 +223,59 @@ export function VideoQualityMenu({
   const receiveLargeRoomCap =
     usingSfu && !isSharingScreen && participantCount > LARGE_ROOM_PARTICIPANTS;
 
+  const trigger = (
+    <button
+      type="button"
+      data-testid={testId}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      aria-label={label}
+      className={
+        bar
+          ? cn(
+              "flex h-[var(--control-sm)] items-center gap-1.5 rounded-[var(--radius-control)] px-3 text-xs font-medium",
+              pinned
+                ? "bg-signal/20 text-signal hover:bg-signal/25"
+                : "text-text-tertiary hover:bg-surface-2 hover:text-text",
+              buttonClassName,
+            )
+          : cn(
+              "flex items-center justify-center rounded-full",
+              buttonClassName,
+              pinned
+                ? "bg-signal/20 text-signal"
+                : "bg-ink-3 text-paper hover:bg-ink-4",
+            )
+      }
+      onClick={() => onOpenChange(!open)}
+    >
+      <SlidersHorizontal
+        className={iconClassName ?? (bar ? "h-3 w-3" : undefined)}
+        aria-hidden
+      />
+      {bar ? (
+        <span className="truncate">
+          {buttonLabel ?? t(LABELS[value])}
+          {buttonLabel ? (
+            <span className="ml-1 text-text-tertiary">{t(LABELS[value])}</span>
+          ) : null}
+        </span>
+      ) : null}
+    </button>
+  );
+
   return (
     <div ref={rootRef} className="relative">
       {open && (
         <div
           role="menu"
           aria-label={label}
-          className="absolute bottom-full left-1/2 z-50 mb-2 w-64 max-w-[80vw] -translate-x-1/2 rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in"
+          className={cn(
+            "absolute z-50 w-64 max-w-[80vw] rounded-lg border border-ink-4 bg-ink-2 p-1 shadow-[var(--shadow-popover)] animate-fade-in",
+            bar
+              ? "top-full right-0 mt-2"
+              : "bottom-full left-1/2 mb-2 -translate-x-1/2",
+          )}
         >
           {isSendingVideo && (
             <p className="px-2.5 pb-1 pt-1.5 text-xs uppercase tracking-wide text-paper-muted">
@@ -384,30 +445,9 @@ export function VideoQualityMenu({
       )}
       {/* The tooltip carries the same sentence the old `title` did, minus the
           one-second wait and plus keyboard focus. It closes on the press that
-          opens the menu, so the two never stack on top of each other. */}
-      <Tooltip label={label}>
-      <button
-        type="button"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className={cn(
-          "flex items-center justify-center rounded-full",
-          buttonClassName,
-          // Pinned reads as "on", exactly like the camera and share buttons.
-          // Auto is the default everybody has, so it stays a resting control.
-          // A viewer's button is never tinted: the stored size is not governing
-          // anything they can see, and tinting it would be the same claim the
-          // old label made.
-          isSendingVideo &&
-          (value !== "auto" || screenFrameRate !== "auto")
-            ? "bg-signal/20 text-signal"
-            : "bg-ink-3 text-paper hover:bg-ink-4",
-        )}
-        onClick={() => onOpenChange(!open)}
-      >
-        <SlidersHorizontal className={iconClassName} />
-      </button>
-      </Tooltip>
+          opens the menu, so the two never stack on top of each other. The
+          labelled bar trigger already says the name, so it does not need one. */}
+      {bar ? trigger : <Tooltip label={label}>{trigger}</Tooltip>}
     </div>
   );
 }

@@ -1246,9 +1246,10 @@ silence.
   door on the party's own row instead, so it goes when the party goes.
 - **Turning voice off mid-show does not evict the seated.** New joins are
   refused and existing seats stay. Deliberate, argued above.
-- **No quality control yet.** The HLS ladder branch owns what a host may pick;
-  when it lands it adds one key to `watchPartyOptionsSchema` and one control to
-  `WatchPartyOptionsPanel`. A dropdown that changes nothing would be worse.
+- **Encode quality is on the live bar.** The host picks 1080p / 720p / fps
+  from `VideoQualityMenu` on the party bar (the same device-local setting
+  the old call strip wrote). It is not a `watchPartyOptionsSchema` key;
+  the transcode ladder is still deployment config (`LIVE_HLS_LADDER`).
 - **A change to the options is not written into the chat.** See above.
 - **Slow mode is the general chat feature** (`channels.slowmode_seconds`).
   The party only carries the value the host picked so one press applies it.

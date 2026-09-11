@@ -6048,6 +6048,9 @@ function MainAppContent({
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }
             videoQuality={localSettings.videoQuality}
+            screenFrameRate={localSettings.screenFrameRate}
+            onVideoQualityChange={handleVideoQualityChange}
+            onScreenFrameRateChange={handleScreenFrameRateChange}
             roomViewers={
               (voiceState.occupancy[selectedChannel.id] ?? []).length
             }
@@ -6163,6 +6166,9 @@ function MainAppContent({
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }
             videoQuality={localSettings.videoQuality}
+            screenFrameRate={localSettings.screenFrameRate}
+            onVideoQualityChange={handleVideoQualityChange}
+            onScreenFrameRateChange={handleScreenFrameRateChange}
             roomViewers={
               (voiceState.occupancy[selectedChannel.id] ?? []).length
             }
