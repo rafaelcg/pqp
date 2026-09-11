@@ -33,6 +33,25 @@ export type VideoQuality = (typeof VIDEO_QUALITIES)[number];
 
 export const DEFAULT_VIDEO_QUALITY: VideoQuality = "auto";
 
+/**
+ * Host Qualidade on a watch party: 480p / 720p / 1080p, plus Auto.
+ * 360p stays on the call-strip menu; 60 fps is not offered here.
+ */
+export const WATCH_PARTY_HOST_QUALITIES: readonly VideoQuality[] = [
+  "auto",
+  "1080p",
+  "720p",
+  "480p",
+];
+
+/**
+ * A stored 360p is the call-strip floor, not a watch-party offer. Capture
+ * then uses 480p so the live-bar menu and getDisplayMedia agree.
+ */
+export function watchPartyHostQuality(quality: VideoQuality): VideoQuality {
+  return quality === "360p" ? "480p" : quality;
+}
+
 /** The two things a quality actually controls, and nothing else. */
 export interface CameraProfile {
   width: number;

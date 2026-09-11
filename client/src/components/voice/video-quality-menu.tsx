@@ -122,6 +122,7 @@ export function VideoQualityMenu({
   layout = "call",
   testId,
   buttonLabel,
+  qualities: qualitiesProp,
 }: {
   value: VideoQuality;
   open: boolean;
@@ -165,12 +166,20 @@ export function VideoQualityMenu({
   testId?: string;
   /** Visible name on the `bar` trigger. The call trigger is icon-only. */
   buttonLabel?: string;
+  /**
+   * Rungs this surface offers. Watch party's live bar passes 480/720/1080
+   * (and Auto), never 360p. The call strip omits this and keeps the full list.
+   */
+  qualities?: readonly VideoQuality[];
 }) {
   const { t } = useTranslation();
   const rootRef = useRef<HTMLDivElement>(null);
   const receiveQuality = useReceiveQuality();
   const receiveReason = useReceiveQualityReason();
-  const qualities = availableVideoQualities({ participantCount, hlsLive });
+  const roomQualities = availableVideoQualities({ participantCount, hlsLive });
+  const qualities = qualitiesProp
+    ? qualitiesProp.filter((quality) => roomQualities.includes(quality))
+    : roomQualities;
   const value = coerceVideoQuality(rawValue, qualities);
 
   // Same dismissal contract as the user-panel popover: a press anywhere else,

@@ -29,11 +29,12 @@ import {
   type WatchPartyOptions,
 } from "@pqp/shared";
 import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
+import { type ScreenFrameRate } from "@/lib/hls-capture-rate";
 import {
-  DEFAULT_SCREEN_FRAME_RATE,
-  type ScreenFrameRate,
-} from "@/lib/hls-capture-rate";
-import type { VideoQuality } from "@/lib/video-quality";
+  WATCH_PARTY_HOST_QUALITIES,
+  watchPartyHostQuality,
+  type VideoQuality,
+} from "@/lib/video-quality";
 import {
   OptionGroup,
   WatchPartyOptionsPanel,
@@ -802,8 +803,10 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       // Same builder every ordinary share uses. `preferBrowserTab` is the
       // watch-party product: the player tab and its sound, never the machine
       // mixer that contains the call. See `lib/screen-capture-audio.ts`.
-      const quality = props.videoQuality ?? "auto";
-      const fps = props.hlsMaxFrameRate === 60 ? 60 : 30;
+      const quality = watchPartyHostQuality(props.videoQuality ?? "auto");
+      // Watch-party Qualidade is 30 fps only. A stored 60 from the call
+      // strip, or a leftover 60 ladder, must not capture 60 into a 30 encode.
+      const fps = 30 as const;
       const size = screenCaptureSizeFor(quality);
       const options = screenCaptureOptions(
         false,
@@ -1511,10 +1514,7 @@ function LiveSurface(
             open={qualityMenuOpen}
             onOpenChange={setQualityMenuOpen}
             onChange={props.onVideoQualityChange}
-            screenFrameRate={
-              props.screenFrameRate ?? DEFAULT_SCREEN_FRAME_RATE
-            }
-            onScreenFrameRateChange={props.onScreenFrameRateChange}
+            qualities={WATCH_PARTY_HOST_QUALITIES}
             isSendingVideo
             isSharingScreen
             usingSfu={props.transport === "livekit"}

@@ -464,6 +464,24 @@ describe("screen share audio", () => {
     expect(displayMediaCalls[0]).not.toHaveProperty("preferCurrentTab");
   });
 
+  it("caps a watch-party share at Qualidade 720p30, not 4K or 60 fps", async () => {
+    const { voice } = await connectedMesh();
+    await voice.setVideoQuality("720p");
+    await voice.startScreenShare(false, {
+      watchParty: true,
+      preferBrowserTab: true,
+      maxFrameRate: 60,
+    });
+
+    expect(displayMediaCalls[0]).toMatchObject({
+      video: {
+        width: { max: 1280 },
+        height: { max: 720 },
+        frameRate: { ideal: 30, max: 30 },
+      },
+    });
+  });
+
   it("flags a whole-screen share that carries sound", async () => {
     // The only surface that can be carrying everybody's voices, and the one
     // the UI says so about while it is live.

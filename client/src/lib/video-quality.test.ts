@@ -22,6 +22,8 @@ import {
   screenBitrateFor,
   screenCaptureConstraintsFor,
   screenCaptureSizeFor,
+  WATCH_PARTY_HOST_QUALITIES,
+  watchPartyHostQuality,
   screenScaleFactor,
   screenSimulcastPlan,
   clampScreenPlanToCapture,
@@ -128,6 +130,24 @@ describe("coerceVideoQuality", () => {
     expect(coerceVideoQuality("1080p", noTop)).toBe("auto");
     expect(coerceVideoQuality("720p", noTop)).toBe("720p");
     expect(coerceVideoQuality("1080p", VIDEO_QUALITIES)).toBe("1080p");
+  });
+});
+
+describe("WATCH_PARTY_HOST_QUALITIES", () => {
+  it("is 480p / 720p / 1080p plus Auto, never 360p", () => {
+    expect([...WATCH_PARTY_HOST_QUALITIES]).toEqual([
+      "auto",
+      "1080p",
+      "720p",
+      "480p",
+    ]);
+    expect(WATCH_PARTY_HOST_QUALITIES).not.toContain("360p");
+  });
+
+  it("lifts a stored 360p to 480p so capture matches the menu", () => {
+    expect(watchPartyHostQuality("360p")).toBe("480p");
+    expect(watchPartyHostQuality("720p")).toBe("720p");
+    expect(watchPartyHostQuality("auto")).toBe("auto");
   });
 });
 
@@ -248,9 +268,10 @@ describe("applyCameraQuality", () => {
 });
 
 describe("screenCaptureConstraintsFor", () => {
-  it("caps 1080p at 1920x1080, 720p at 1280x720, Auto at 1080 not 4K", () => {
+  it("caps 1080p at 1920x1080, 720p at 1280x720, 480p at 854x480, Auto at 1080 not 4K", () => {
     expect(screenCaptureSizeFor("1080p")).toEqual({ width: 1920, height: 1080 });
     expect(screenCaptureSizeFor("720p")).toEqual({ width: 1280, height: 720 });
+    expect(screenCaptureSizeFor("480p")).toEqual({ width: 854, height: 480 });
     expect(screenCaptureSizeFor("auto")).toEqual({ width: 1920, height: 1080 });
     expect(screenCaptureConstraintsFor("1080p", 30)).toMatchObject({
       width: { max: 1920 },
@@ -261,6 +282,11 @@ describe("screenCaptureConstraintsFor", () => {
     expect(screenCaptureConstraintsFor("720p", 30)).toMatchObject({
       width: { max: 1280 },
       height: { max: 720 },
+      frameRate: { ideal: 30, max: 30 },
+    });
+    expect(screenCaptureConstraintsFor("480p", 30)).toMatchObject({
+      width: { max: 854 },
+      height: { max: 480 },
       frameRate: { ideal: 30, max: 30 },
     });
     expect(screenCaptureConstraintsFor("auto", 60)).toMatchObject({

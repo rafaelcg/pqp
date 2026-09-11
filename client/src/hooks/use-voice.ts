@@ -83,6 +83,7 @@ import {
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
   screenCaptureSizeFor,
+  watchPartyHostQuality,
   type VideoQuality,
 } from "@/lib/video-quality";
 import {
@@ -3950,8 +3951,17 @@ export function createVoiceController(transport: RealtimeTransport) {
       // person: `lib/screen-capture-cursor.ts`). An explicit `hideCursor` on
       // the intent still wins, so a caller can override it for one share.
       const hideCursor = intent.hideCursor ?? getShareCursor() === "hide";
-      const captureSize = screenCaptureSizeFor(videoQuality);
-      const captureFps = intent.maxFrameRate === 60 ? 60 : 30;
+      const captureQuality =
+        intent.watchParty === true
+          ? watchPartyHostQuality(videoQuality)
+          : videoQuality;
+      const captureSize = screenCaptureSizeFor(captureQuality);
+      const captureFps =
+        intent.watchParty === true
+          ? 30
+          : intent.maxFrameRate === 60
+            ? 60
+            : 30;
       screenCaptureFps = captureFps;
       const options = screenCaptureOptions(
         shareSystemAudio,
@@ -4039,7 +4049,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       // getDisplayMedia often ignores width/height on a display surface.
       // applyConstraints is what actually caps a 4K panel at the pick.
-      await applyScreenCaptureQuality(track, videoQuality, captureFps);
+      await applyScreenCaptureQuality(track, captureQuality, captureFps);
       // The single most effective line in this feature. A capture track carries
       // no content hint by default and the encoder then optimises a screen for
       // sharpness, holding resolution and dropping frames the moment bandwidth
@@ -4199,14 +4209,19 @@ export function createVoiceController(transport: RealtimeTransport) {
      * delivered fps so a 60 capture is not still published at 30.
      */
     async applyScreenFrameRate(fps: 30 | 60) {
-      screenCaptureFps = fps;
+      const next = screenCaptureIsWatchParty ? 30 : fps;
+      screenCaptureFps = next;
       const track =
         screenCaptureSource?.getVideoTracks()[0] ??
         screenCaptureStream?.getVideoTracks()[0];
       if (!track) {
         return;
       }
-      await applyScreenCaptureQuality(track, videoQuality, fps);
+      await applyScreenCaptureQuality(
+        track,
+        screenCaptureIsWatchParty ? watchPartyHostQuality(videoQuality) : videoQuality,
+        next,
+      );
       manager?.setScreenQuality(videoQuality);
     },
 
@@ -4439,7 +4454,11 @@ export function createVoiceController(transport: RealtimeTransport) {
         screenCaptureSource?.getVideoTracks()[0] ??
         screenCaptureStream?.getVideoTracks()[0];
       if (screenTrack) {
-        await applyScreenCaptureQuality(screenTrack, next, screenCaptureFps);
+        await applyScreenCaptureQuality(
+          screenTrack,
+          screenCaptureIsWatchParty ? watchPartyHostQuality(next) : next,
+          screenCaptureFps,
+        );
       }
       const track = cameraCaptureStream?.getVideoTracks()[0];
       if (track) {
