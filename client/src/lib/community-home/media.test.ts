@@ -2,13 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   COMMUNITY_HOME_MAX_BYTES,
   formatHomeBytes,
-  parseCommunityHomeEmbed,
-  parseYoutubeVideoId,
-  twitchEmbedSrc,
-  youtubeEmbedSrc,
-  tiktokEmbedSrc,
   instagramEmbedSrc,
   parseCommunityHomeEmbed,
+  parseYoutubeVideoId,
+  tiktokEmbedSrc,
+  twitchEmbedSrc,
+  youtubeEmbedSrc,
 } from "./media";
 
 describe("community home media helpers", () => {
