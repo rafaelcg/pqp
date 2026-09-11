@@ -4041,6 +4041,11 @@ export function createVoiceController(transport: RealtimeTransport) {
       // and a mixed track always has audio in it whether or not the tab did.
       const hasAudio = stream.getAudioTracks().length > 0;
       screenCaptureIsWatchParty = intent.watchParty === true;
+      if (screenCaptureIsWatchParty && state.micInStream && !pipeline) {
+        // Listen-only seat (no mic could be opened): the switch is on and
+        // there is nothing to mix. The pill will say muted; this says why.
+        console.warn("[watch-party] mic mix skipped: no microphone pipeline");
+      }
       if (
         screenCaptureIsWatchParty &&
         state.roomTransport === "livekit" &&
@@ -4056,10 +4061,15 @@ export function createVoiceController(transport: RealtimeTransport) {
           // at once, not on the next mute toggle.
           sfuPublicationMuted = null;
           void applyPublicationMute();
-        } catch {
-          // No WebAudio here: the share goes out as it is, room-only mic.
+        } catch (err) {
+          // No WebAudio here, or the graph refused: the share goes out as it
+          // is, room-only mic. Said out loud, because a pill reading "só a
+          // sala ouve" on a host who expected to be heard is a bug report
+          // with no diagnosis attached.
+          console.warn("[watch-party] mic mix failed, sharing without it", err);
           screenMix = null;
           screenCaptureSource = null;
+          state.notice = translateMessage("voice.notice.micMixFailed");
         }
       }
       watchScreenCapture(stream);
