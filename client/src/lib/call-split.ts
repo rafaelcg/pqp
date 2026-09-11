@@ -61,6 +61,15 @@ export type CallStageShape = "none" | "compact" | "expanded" | "fullscreen";
 export interface CallSplitPreference {
   orientation: CallSplitOrientation;
   /**
+   * The watch party's own orientation, or NULL for "side by side, unless the
+   * pane cannot": a film wants the chat beside it, an ordinary call does not,
+   * and one stored choice for both would have the film night undoing the
+   * work call's layout every time. Null rather than a default written on
+   * first load, so a person who never touched it follows the product's
+   * answer as it changes.
+   */
+  watchOrientation: CallSplitOrientation | null;
+  /**
    * The stage's share of the pane's HEIGHT while stacked, 0..1, or NULL for
    * "nobody has moved it".
    *
@@ -97,10 +106,33 @@ export interface CallSplitPreference {
 
 export const CALL_SPLIT_DEFAULT: CallSplitPreference = {
   orientation: "stacked",
+  watchOrientation: null,
   stacked: null,
   side: 0.62,
   collapsed: "none",
 };
+
+/**
+ * Which kind of room the split is arranging.
+ *
+ * A watch party is a film with a chat beside it, which is how Twitch, YouTube
+ * and Kick all draw a stream: video wide on the left, a narrow chat column
+ * on the right. An ordinary call is a transcript with a picture over it.
+ * The two want different defaults and different minimums, and the kind is
+ * how the same component tells them apart.
+ */
+export type CallSplitKind = "call" | "watch";
+
+/** The orientation a room of this kind starts in, unless the person chose. */
+export function effectiveOrientation(
+  preference: Pick<CallSplitPreference, "orientation" | "watchOrientation">,
+  kind: CallSplitKind,
+): CallSplitOrientation {
+  if (kind === "watch") {
+    return preference.watchOrientation ?? "side-by-side";
+  }
+  return preference.orientation;
+}
 
 /** A stage shorter than this is a letterbox, not a picture. */
 export const MIN_STAGE_HEIGHT_PX = 160;
@@ -132,8 +164,24 @@ export const MIN_STAGE_WIDTH_PX = 320;
  */
 export const MIN_CHAT_WIDTH_PX = 560;
 
-/** The divider's own thickness, counted against the pane before splitting. */
-export const CALL_SPLIT_DIVIDER_PX = 8;
+/**
+ * The chat column beside a watch party. Twitch's is about 340; a watch party
+ * chat is short lines while a film plays, not a transcript, and the composer
+ * wraps its toolbar in a narrow column. 560 was the number that kept side
+ * by side from ever appearing on a laptop with the roster open.
+ */
+export const MIN_WATCH_CHAT_WIDTH_PX = 340;
+
+/**
+ * The divider's own thickness, counted against the pane before splitting.
+ *
+ * 20, up from 8. The 8px bar was a fine line and a poor control: the grip was
+ * a hair, the two collapse chevrons were 8px tall, and a host running a show
+ * said the line to adjust the call and chat was too small to find. Every
+ * clamp below is computed against this number, so the bar's CSS height and
+ * this constant must agree; `call-split.tsx` uses `h-5` / `w-5` for it.
+ */
+export const CALL_SPLIT_DIVIDER_PX = 20;
 
 /** One arrow-key press. Shift multiplies it; see `CALL_SPLIT_STEP_COARSE_PX`. */
 export const CALL_SPLIT_STEP_PX = 16;
@@ -144,9 +192,15 @@ export interface SplitBounds {
   minChat: number;
 }
 
-export function splitBounds(orientation: CallSplitOrientation): SplitBounds {
+export function splitBounds(
+  orientation: CallSplitOrientation,
+  kind: CallSplitKind = "call",
+): SplitBounds {
   return orientation === "side-by-side"
-    ? { minStage: MIN_STAGE_WIDTH_PX, minChat: MIN_CHAT_WIDTH_PX }
+    ? {
+        minStage: MIN_STAGE_WIDTH_PX,
+        minChat: kind === "watch" ? MIN_WATCH_CHAT_WIDTH_PX : MIN_CHAT_WIDTH_PX,
+      }
     : { minStage: MIN_STAGE_HEIGHT_PX, minChat: MIN_CHAT_HEIGHT_PX };
 }
 
@@ -161,8 +215,9 @@ export function splitBounds(orientation: CallSplitOrientation): SplitBounds {
 export function splitAvailable(
   container: number,
   orientation: CallSplitOrientation,
+  kind: CallSplitKind = "call",
 ): boolean {
-  const { minStage, minChat } = splitBounds(orientation);
+  const { minStage, minChat } = splitBounds(orientation, kind);
   return (
     Number.isFinite(container) &&
     container >= minStage + minChat + CALL_SPLIT_DIVIDER_PX
@@ -266,11 +321,14 @@ export function resolveOrientation(
   preferred: CallSplitOrientation,
   paneWidth: number,
   shape: CallStageShape,
+  kind: CallSplitKind = "call",
 ): CallSplitOrientation {
   if (preferred !== "side-by-side" || shape !== "expanded") {
     return "stacked";
   }
-  return splitAvailable(paneWidth, "side-by-side") ? "side-by-side" : "stacked";
+  return splitAvailable(paneWidth, "side-by-side", kind)
+    ? "side-by-side"
+    : "stacked";
 }
 
 /**
@@ -315,6 +373,11 @@ export function loadCallSplit(): CallSplitPreference {
     return {
       orientation:
         value.orientation === "side-by-side" ? "side-by-side" : "stacked",
+      watchOrientation:
+        value.watchOrientation === "side-by-side" ||
+        value.watchOrientation === "stacked"
+          ? value.watchOrientation
+          : null,
       stacked:
         typeof value.stacked === "number" && Number.isFinite(value.stacked)
           ? clamp01(value.stacked)

@@ -20,6 +20,8 @@
 
 import { isDevAuthBypassEnabled } from "@/lib/dev-auth";
 
+export { isWatchPartyChannelType } from "@pqp/shared";
+
 export const WATCH_PARTY_CHANNELS_STORAGE_KEY = "pqp:watch-party-channels";
 export const WATCH_PARTY_CHANNELS_QUERY_PARAM = "watchParty";
 

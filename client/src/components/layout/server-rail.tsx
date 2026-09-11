@@ -106,6 +106,8 @@ interface ServerRailProps {
   selectedPinnedId?: string | null;
   onSelectPinned?: (channelId: string) => void;
   onUnpinConversation?: (channelId: string) => void;
+  /** Servers with a watch party on air right now: a red dot on the bubble. */
+  liveServerIds?: ReadonlySet<string>;
   onSelectHome: () => void;
   onSelectServer: (serverId: string) => void;
   onCreateServer: () => void;
@@ -123,6 +125,7 @@ interface ServerRailProps {
 }
 
 export function ServerRail({
+  liveServerIds,
   servers,
   selectedServerId,
   serverUnread,
@@ -323,6 +326,21 @@ export function ServerRail({
               </span>
               {mentions > 0 && (
                 <RailCountBadge count={mentions} tone="danger" />
+              )}
+              {/* A SHOW IS ON IN HERE. The one thing a rail bubble did not
+                  say: a member sitting in another server had no way to
+                  know a watch party had started. A red dot, bottom right,
+                  in the live vocabulary the sidebar block uses, and the
+                  pulse only under motion-safe. A mention count wins the
+                  corner: a number is more specific than a dot. */}
+              {liveServerIds?.has(server.id) && mentions === 0 && (
+                <span
+                  data-server-live=""
+                  className="absolute -bottom-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-rail"
+                >
+                  <span className="h-2.5 w-2.5 rounded-full bg-danger motion-safe:animate-pulse" />
+                  <span className="sr-only">{t("chrome.livePartySr")}</span>
+                </span>
               )}
               {hasUnread && (
                 <span className="sr-only">

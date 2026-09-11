@@ -30,6 +30,8 @@ import {
   Reply,
   ShieldCheck,
   SmilePlus,
+  Star,
+  Crown,
   Trash2,
   type LucideIcon,
 } from "lucide-react";
@@ -80,7 +82,13 @@ import { messageRoutePath } from "@/lib/app-route";
 import { QUICK_REACTIONS } from "@/lib/emoji-shortcodes";
 import { messageMentionsYou } from "@/lib/message-mentions-you";
 import { findFirstUnreadMessageId } from "@/lib/unread-divider";
-import { highestRoleColor, identityMarks, rankBadges, usernameFromTag } from "@/lib/author-display";
+import {
+  highestRoleColor,
+  identityMarks,
+  rankBadges,
+  streamNameHue,
+  usernameFromTag,
+} from "@/lib/author-display";
 import { gifMessageMedia, type GifMedia } from "@/lib/gif-media";
 import {
   ANCHORED_PANEL_PAD,
@@ -252,6 +260,17 @@ interface MessageListProps {
   /** Composer ArrowUp: start editing this id, then call `onEditMessageHandled`. */
   editMessageId?: string | null;
   onEditMessageHandled?: () => void;
+  /**
+   * STREAM CHAT, the shape Twitch, YouTube and Kick all use beside a film: no
+   * avatars, every message carries its name, `name: message` on one line,
+   * names always coloured, no timestamps, a badge before the people running
+   * the show. The room decides it (a watch party channel), not a setting.
+   * Anything that is not plain text (attachments, polls, embeds, replies)
+   * keeps its ordinary block under the line, so nothing is lost.
+   */
+  variant?: "default" | "stream";
+  /** Who is running the party, for the badges before their names. */
+  streamBadges?: { hostUserId: string; cohostIds: ReadonlySet<string> } | null;
 }
 
 interface Row {
@@ -369,6 +388,8 @@ export function MessageList({
   unreadSince = null,
   editMessageId = null,
   onEditMessageHandled,
+  variant = "default",
+  streamBadges = null,
 }: MessageListProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1129,6 +1150,9 @@ export function MessageList({
               row={row}
               mentionJoinTop={joinTop}
               mentionJoinBottom={joinBottom}
+              stream={variant === "stream"}
+              streamBadges={streamBadges}
+              zebra={variant === "stream" && index % 2 === 1}
               currentUserId={currentUserId}
               currentUsername={currentUsername}
               serverId={serverId}
@@ -1349,9 +1373,18 @@ export function MessageList({
           className="absolute bottom-4 right-4 z-10 flex items-center gap-1.5 rounded-full border border-ink-4 bg-ink-2/95 px-3 py-1.5 text-xs font-medium text-paper shadow-lg backdrop-blur transition-colors hover:border-signal/60 hover:text-signal"
         >
           <ArrowDown className="h-3.5 w-3.5" />
+          {/* In stream chat the pill says what Twitch's says: the chat is
+              paused because you scrolled, and how much has come in since. */}
           {missedCount > 0 && !hasNewer
-            ? t("chat.jump.missed", { count: missedCount })
-            : t("chat.jump.present")}
+            ? t(
+                variant === "stream"
+                  ? "chat.jump.pausedMissed"
+                  : "chat.jump.missed",
+                { count: missedCount },
+              )
+            : variant === "stream" && !hasNewer
+              ? t("chat.jump.paused")
+              : t("chat.jump.present")}
         </button>
       )}
     </div>
@@ -1653,6 +1686,11 @@ interface MessageRowProps {
   mentionJoinTop?: boolean;
   /** This ping sits against the next row's wash. */
   mentionJoinBottom?: boolean;
+  /** See `MessageListProps.variant`. */
+  stream?: boolean;
+  /** Every other stream row gets a faint wash, Twitch's alternating background. */
+  zebra?: boolean;
+  streamBadges?: { hostUserId: string; cohostIds: ReadonlySet<string> } | null;
 }
 
 const MessageRow = memo(function MessageRow({
@@ -1708,6 +1746,9 @@ const MessageRow = memo(function MessageRow({
   unreadDividerRef,
   mentionJoinTop = false,
   mentionJoinBottom = false,
+  stream = false,
+  streamBadges = null,
+  zebra = false,
 }: MessageRowProps) {
   const { t } = useTranslation();
   const openProfile = useProfilePopover();
@@ -1777,6 +1818,79 @@ const MessageRow = memo(function MessageRow({
   const roleColor = message.isWebhook
     ? null
     : highestRoleColor(authorInfo?.roleIds, roles);
+  // Stream chat: everybody has a colour, role colour first. The hashed one
+  // is a hue on a CSS variable; the colour itself is the `--stream-name`
+  // token, so no literal lives here.
+  const hashedName = stream && !roleColor && !message.isWebhook;
+  const streamHueStyle: CSSProperties | undefined = hashedName
+    ? ({ "--stream-name-hue": String(streamNameHue(message.authorId)) } as CSSProperties)
+    : undefined;
+  const nameStyle: CSSProperties | undefined = roleColor
+    ? { color: roleColor }
+    : hashedName
+      ? { color: "var(--stream-name)" }
+      : undefined;
+  const partyBadge = streamBadges
+    ? streamBadges.hostUserId === message.authorId
+      ? "host"
+      : streamBadges.cohostIds.has(message.authorId)
+        ? "cohost"
+        : null
+    : null;
+  // THE STREAM ROW'S AUTHOR, once, for every kind of message. Inline before
+  // the words when there are words; its own line above an attachment, a
+  // GIF, a poll or a chance card, which used to render with no name at all
+  // in stream mode (the avatar and the header are both gone there).
+  //
+  // The hashed colour is declared ON THIS SPAN: a custom property resolves
+  // its var() on the element that declares it, so `--stream-name` on :root
+  // computed once with the fallback hue and every name came out the same
+  // blue. `[data-stream-name]` in index.css declares it here, where the hue
+  // is set, and the button reads it.
+  const streamAuthor = stream ? (
+    <span
+      className="mr-1 inline-flex items-baseline gap-1 align-baseline"
+      data-stream-name=""
+      style={streamHueStyle}
+    >
+      {/* One badge, not two: the party's badge says the thing that matters
+          in this room, and the host is usually the owner as well, so the
+          rank crown would sit right beside it. */}
+      {partyBadge === "host" ? (
+        <Crown
+          className="h-3 w-3 shrink-0 self-center text-accent"
+          aria-label={t("chat.stream.host")}
+        />
+      ) : partyBadge === "cohost" ? (
+        <Star
+          className="h-3 w-3 shrink-0 self-center text-accent"
+          aria-label={t("chat.stream.cohost")}
+        />
+      ) : (
+        <RankMarks
+          marks={identityMarks({
+            rank: authorInfo?.rank,
+            isWebhook: message.isWebhook,
+            isCharacter: authorInfo?.isCharacter,
+            ...rankBadges(authorInfo?.roleIds, roles),
+          })}
+        />
+      )}
+      <span className="inline-flex items-baseline">
+        <AuthorButton
+          message={message}
+          author={authorInfo}
+          tabIndex={controlTabIndex}
+          onOpenProfile={openProfile}
+          className="rounded font-bold"
+          style={nameStyle}
+        >
+          {message.authorName}
+        </AuthorButton>
+        <span className="text-paper-muted">:</span>
+      </span>
+    </span>
+  ) : null;
 
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -2011,7 +2125,7 @@ const MessageRow = memo(function MessageRow({
    * learn "you already reacted with this one" short of leaving the menu and
    * cross-referencing the reaction bar.
    */
-  const quickReactions = isReal
+  const quickReactions = isReal && !stream
     ? QUICK_REACTIONS.map((emoji) => {
         const mine = reactions.some((r) => r.emoji === emoji && r.me);
         return {
@@ -2041,7 +2155,7 @@ const MessageRow = memo(function MessageRow({
         reactions={quickReactions}
         reactionsLabel={t("reactions.quick")}
         onMoreReactions={
-          isReal ? selectAndClose(onOpenPicker, false) : undefined
+          isReal && !stream ? selectAndClose(onOpenPicker, false) : undefined
         }
         moreReactionsLabel={t("reactions.more")}
         // While picking a set, the row's one job is to be picked. A menu
@@ -2064,11 +2178,14 @@ const MessageRow = memo(function MessageRow({
           // long-press, or the native contextmenu event a focused element
           // gets from the keyboard Menu key / Shift+F10.
           onContextMenu={onMenuOpenRow}
+          data-message-stream={stream ? "" : undefined}
           className={cn(
-            "group relative flex items-start gap-0 px-5 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
-            startsGroup ? "mt-[var(--chat-group-gap)] pt-1" : "pt-px",
+            "group relative flex items-start gap-0 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-signal/60",
+            stream ? "px-3" : "px-5",
+            zebra && "bg-surface-1/60",
+            stream ? "py-0.5" : startsGroup ? "mt-[var(--chat-group-gap)] pt-1" : "pt-px",
             mentionJoinTop ? "pt-0" : null,
-            mentionJoinBottom ? "pb-0" : startsGroup ? "pb-1" : "pb-px",
+            stream ? null : mentionJoinBottom ? "pb-0" : startsGroup ? "pb-1" : "pb-px",
             mentionsYou && !isFlashing
               ? mentionRowRadius(mentionJoinTop, mentionJoinBottom)
               : null,
@@ -2108,7 +2225,7 @@ const MessageRow = memo(function MessageRow({
               </span>
             </button>
           )}
-          {startsGroup && !compact ? (
+          {stream ? null : startsGroup && !compact ? (
             <div className="flex w-14 shrink-0 items-start justify-end pr-2">
               <div className="relative h-9 w-9 shrink-0">
                 <AuthorButton
@@ -2158,6 +2275,11 @@ const MessageRow = memo(function MessageRow({
           )}
 
           <div className="min-w-0 flex-1">
+            {stream && !message.body && !isEditing && (
+              <div className="text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)]">
+                {streamAuthor}
+              </div>
+            )}
             {message.replyTo && (
               <ReplyQuote
                 replyTo={message.replyTo}
@@ -2165,7 +2287,7 @@ const MessageRow = memo(function MessageRow({
                 tabIndex={controlTabIndex}
               />
             )}
-            {startsGroup && (
+            {startsGroup && !stream && (
               <div className="flex flex-wrap items-baseline gap-x-2">
                 <span className="inline-flex items-baseline gap-1">
                   <AuthorButton
@@ -2263,7 +2385,13 @@ const MessageRow = memo(function MessageRow({
                     onClose={() => onClosePoll?.(message.id)}
                   />
                 ) : message.body ? (
-                  <div className="markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90">
+                  <div
+                    className={cn(
+                      "markdown-body text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)] text-paper/90",
+                      stream && "[&>p]:inline",
+                    )}
+                  >
+                    {streamAuthor}
                     <MessageBody
                       body={message.body}
                       currentUsername={currentUsername}
@@ -2312,7 +2440,7 @@ const MessageRow = memo(function MessageRow({
               />
             )}
 
-            {isReal && (
+            {isReal && !stream && (
               <ReactionBar
                 reactions={reactions}
                 currentUserId={currentUserId}
@@ -2361,7 +2489,11 @@ const MessageRow = memo(function MessageRow({
                   the keyboard and screen-reader path to every one of these
                   actions is the row's context menu, which names them in a
                   list. */}
-              {HOVER_QUICK_REACTIONS.map((emoji) => {
+              {/* NO REACTIONS IN STREAM CHAT. Twitch, YouTube and Kick chat
+                  have none: the hover row is reply and the mod actions, and
+                  a message is never decorated after the fact. Emotes go in
+                  the words, through the composer. */}
+              {!stream && HOVER_QUICK_REACTIONS.map((emoji) => {
                 const mine = reactions.some((r) => r.emoji === emoji && r.me);
                 return (
                   <Tooltip
@@ -2385,18 +2517,20 @@ const MessageRow = memo(function MessageRow({
                   </Tooltip>
                 );
               })}
-              <Tooltip label={t("chat.addReaction")}>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  tabIndex={-1}
-                  className="h-6 w-6"
-                  onClick={onOpenPicker}
-                >
-                  <SmilePlus className="h-3.5 w-3.5" />
-                </Button>
-              </Tooltip>
+              {!stream && (
+                <Tooltip label={t("chat.addReaction")}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    tabIndex={-1}
+                    className="h-6 w-6"
+                    onClick={onOpenPicker}
+                  >
+                    <SmilePlus className="h-3.5 w-3.5" />
+                  </Button>
+                </Tooltip>
+              )}
               {canReply && (
                 <Tooltip label={t("chat.reply")}>
                   <Button

@@ -140,3 +140,21 @@ export function usernameFromTag(
   const username = tag.slice(0, hash).trim();
   return username.length > 0 ? username : null;
 }
+
+/**
+ * The hue for a name with no role colour, in stream chat.
+ *
+ * Twitch hashes the username to a hue so everybody has a colour and the
+ * same person keeps it; a stream chat with half the names in the default
+ * grey reads as a wall. This is only the number: the colour itself is the
+ * `--stream-name` token in `index.css`, which reads `--stream-name-hue`,
+ * so the literal lives in the token layer and the theme can retune it.
+ * Role colour wins where there is one: that is a decision somebody made.
+ */
+export function streamNameHue(authorId: string): number {
+  let hash = 0;
+  for (let i = 0; i < authorId.length; i += 1) {
+    hash = (hash * 31 + authorId.charCodeAt(i)) | 0;
+  }
+  return ((hash % 360) + 360) % 360;
+}

@@ -38,6 +38,11 @@ const WEEKDAYS_EN = [
   "Saturday",
 ];
 
+/** The weekday's name in the locale's own casing ("sábado", "Saturday"). */
+export function weekdayName(date: Date, locale: SessionScheduleLocale): string {
+  return (locale === "pt-BR" ? WEEKDAYS_PT : WEEKDAYS_EN)[date.getDay()]!;
+}
+
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }

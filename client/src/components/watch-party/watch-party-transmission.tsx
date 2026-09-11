@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
@@ -46,6 +46,7 @@ export function WatchPartyTransmission({
   isPresenting,
   quality,
   roomViewers,
+  micInStream = false,
   transport,
   now,
   className,
@@ -59,6 +60,8 @@ export function WatchPartyTransmission({
   quality: VideoQuality;
   /** People in the room, for the outbound readout's room-vs-link reasoning. */
   roomViewers: number;
+  /** The share's audio track carries the host's microphone (`screen-mix`). */
+  micInStream?: boolean;
   transport: VoiceRoomTransport | null;
   /** Injected so the minutes tick on the caller's clock and a test can fix it. */
   now: Date;
@@ -162,76 +165,61 @@ export function WatchPartyTransmission({
       </button>
 
       {open && (
-        <dl className="mt-2 flex flex-col gap-1.5 text-[11px]">
-          <div className="flex gap-2">
-            <dt className="w-28 shrink-0 text-paper-muted">
-              {t("watchParty.tx.sending")}
-            </dt>
-            <dd className="min-w-0 flex-1 text-paper">
+        <div className="mt-2 flex flex-col gap-2">
+          {/* STAT TILES, NOT A DEFINITION LIST. The rows read as a form's
+              output, and "this server does not report it" three times over
+              is a paragraph nobody should have to read. Each tile is a
+              label and one value; a value the server did not give is a
+              quiet n/d, not a sentence. Twitch's Stream Health and YouTube's
+              stream stats are this shape. */}
+          <dl className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+            <TxTile label={t("watchParty.tx.sending")}>
               {/* The component that already knows how to say this, including
-                  which of the room and the link is holding it back. */}
-              {/* `call.quality.unmeasured` rather than the Settings default:
-                  a host reading this is mid-share, so "turn your camera on
-                  during a call" would be a flat contradiction. Same key the
-                  in-call quality menu passes, for the same reason. */}
+                  which of the room and the link is holding it back.
+                  `call.quality.unmeasured` rather than the Settings default:
+                  a host reading this is mid-share. */}
               <OutboundVideoReadout
                 idleKey="call.quality.unmeasured"
                 quality={quality}
                 viewers={roomViewers}
               />
-            </dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="w-28 shrink-0 text-paper-muted">
-              {t("watchParty.tx.receiving")}
-            </dt>
-            <dd className="min-w-0 flex-1 text-paper">
+            </TxTile>
+            <TxTile
+              label={t("watchParty.tx.receiving")}
+              muted={height === null}
+            >
               {height === null
-                ? t("watchParty.tx.receivingUnknown")
+                ? t("watchParty.tx.na")
                 : t("watchParty.tx.receivingRung", {
                     height,
                     seconds: stream?.delaySeconds ?? 10,
                   })}
-            </dd>
-          </div>
-          {/* The audio the AUDIENCE gets, which is a different question from
-              the audio the room gets and has a different answer. */}
-          <div className="flex gap-2">
-            <dt className="w-28 shrink-0 text-paper-muted">
-              {t("watchParty.tx.audio")}
-            </dt>
-            <dd
-              data-testid="watch-party-tx-audio"
-              className={cn(
-                "min-w-0 flex-1",
-                silent ? "text-warning" : "text-paper",
-              )}
+            </TxTile>
+            {/* The audio the AUDIENCE gets, which is a different question from
+                the audio the room gets and has a different answer. */}
+            <TxTile
+              label={t("watchParty.tx.audio")}
+              muted={audioState === "unknown"}
+              tone={silent ? "warning" : undefined}
+              testId="watch-party-tx-audio"
             >
               {audioState === "unknown"
-                ? t("watchParty.tx.audioUnknown")
+                ? t("watchParty.tx.na")
                 : audioState === "none"
                   ? t("watchParty.tx.audioNone")
-                  : t("watchParty.tx.audioScreen")}
-            </dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="w-28 shrink-0 text-paper-muted">
-              {t("watchParty.tx.audience")}
-            </dt>
-            <dd className="min-w-0 flex-1 text-paper">{audienceCount}</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="w-28 shrink-0 text-paper-muted">
-              {t("watchParty.tx.uptime")}
-            </dt>
-            <dd className="min-w-0 flex-1 text-paper">
+                  : micInStream
+                    ? t("watchParty.tx.audioScreenAndMic")
+                    : t("watchParty.tx.audioScreen")}
+            </TxTile>
+            <TxTile label={t("watchParty.tx.audience")}>{audienceCount}</TxTile>
+            <TxTile label={t("watchParty.tx.uptime")}>
               {t("watchParty.tx.uptimeValue", { minutes })}
-            </dd>
-          </div>
+            </TxTile>
+          </dl>
           {strained && (
             <p
               data-testid="watch-party-tx-strained"
-              className="flex items-start gap-1.5 text-warning"
+              className="flex items-start gap-1.5 text-[11px] text-warning"
             >
               <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
               {t("watchParty.tx.strained")}
@@ -240,29 +228,26 @@ export function WatchPartyTransmission({
           {silent && (
             <p
               data-testid="watch-party-tx-silent"
-              className="flex items-start gap-1.5 text-warning"
+              className="flex items-start gap-1.5 text-[11px] text-warning"
             >
               <TriangleAlert className="mt-0.5 h-3 w-3 shrink-0" aria-hidden />
               {t("watchParty.tx.silentFix")}
             </p>
           )}
-          {/* STATED WHETHER OR NOT ANYTHING IS WRONG. The two audiences are on
-              two different paths and the seated one is strictly richer; a host
-              who never learns that assumes the stream carries whatever they
-              can hear. This is the sentence that stops that assumption, and it
-              costs one line whether or not the audio is fine. */}
+          {/* One footnote, stated whether or not anything is wrong: the two
+              audiences are on two different paths and the seated one is
+              strictly richer. A host who never learns that assumes the
+              stream carries whatever they can hear. */}
           <p
             data-testid="watch-party-tx-carries"
-            className="text-paper-muted"
+            className="text-[11px] text-text-tertiary"
           >
-            {t("watchParty.tx.carries")}
+            {micInStream
+              ? t("watchParty.tx.carriesWithMic")
+              : t("watchParty.tx.carries")}{" "}
+            {t("watchParty.tx.behind", { seconds: stream?.delaySeconds ?? 10 })}
           </p>
-          <p className="text-paper-muted">
-            {t("watchParty.tx.behind", {
-              seconds: stream?.delaySeconds ?? 10,
-            })}
-          </p>
-        </dl>
+        </div>
       )}
     </div>
   );
@@ -295,4 +280,41 @@ export function streamAudioState(
     return "unknown";
   }
   return stream.hasAudio ? "screen" : "none";
+}
+
+/** One stat: a small label over one value. */
+function TxTile({
+  label,
+  children,
+  muted = false,
+  tone,
+  testId,
+}: {
+  label: string;
+  children: ReactNode;
+  /** The server did not give this one; draw it quiet, not as a warning. */
+  muted?: boolean;
+  tone?: "warning";
+  testId?: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-lg border border-border bg-surface-0 px-2.5 py-1.5">
+      <dt className="truncate text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
+        {label}
+      </dt>
+      <dd
+        data-testid={testId}
+        className={cn(
+          "mt-0.5 truncate text-xs",
+          tone === "warning"
+            ? "text-warning"
+            : muted
+              ? "text-text-tertiary"
+              : "text-text",
+        )}
+      >
+        {children}
+      </dd>
+    </div>
+  );
 }

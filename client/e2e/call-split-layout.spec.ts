@@ -198,7 +198,7 @@ test("the divider resizes the call, remembers it, and never starves a pane", asy
   expect(stored).not.toBeNull();
   expect(stored!.orientation).toBe("stacked");
   expect(stored!.stacked as number).toBeCloseTo(
-    dragged.stageHeight / (dragged.paneHeight - 8),
+    dragged.stageHeight / (dragged.paneHeight - 20),
     1,
   );
 
@@ -335,7 +335,7 @@ test("a stored split is what the next call opens with", async ({ page }) => {
 
   const geometry = await paneGeometry(page);
   // 30% of the pane, not the 68% the stage used to take on its own.
-  expect(geometry.stageHeight / (geometry.paneHeight - 8)).toBeCloseTo(0.3, 1);
+  expect(geometry.stageHeight / (geometry.paneHeight - 20)).toBeCloseTo(0.3, 1);
   await leaveVoiceIfConnected(page);
 });
 
@@ -737,9 +737,9 @@ test("the collapse controls are visible and clickable without hunting", async ({
       await control.evaluate((el) => Number(getComputedStyle(el).opacity)),
     ).toBe(1);
     const box = (await control.boundingBox())!;
-    // 48 along the boundary. The 8px cross axis is `CALL_SPLIT_DIVIDER_PX`
-    // and must not grow: every clamp in `lib/call-split.ts` is computed
-    // against it.
+    // 56 along the boundary. The 20px cross axis is `CALL_SPLIT_DIVIDER_PX`
+    // and the CSS must move with it: every clamp in `lib/call-split.ts` is
+    // computed against it.
     expect(Math.max(box.width, box.height)).toBeGreaterThanOrEqual(40);
   }
 

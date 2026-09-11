@@ -4,7 +4,10 @@ import {
   type WatchPartyOptions,
   type WatchPartyStageMode,
 } from "@pqp/shared";
+import { useId, type ReactNode } from "react";
+import { Switch } from "@/components/ui/switch";
 import { useTranslation, type MessageKey } from "@/lib/i18n";
+import { cn } from "@/lib/utils";
 
 /**
  * The host's controls, in the setup surface before going live and again as an
@@ -54,7 +57,7 @@ const SLOWMODE_KEYS: Record<number, MessageKey> = {
   21600: "channelMeta.slowMode.6h",
 };
 
-function slowModeKey(seconds: number): MessageKey {
+export function slowModeKey(seconds: number): MessageKey {
   return SLOWMODE_KEYS[seconds] ?? "channelMeta.slowMode.custom";
 }
 
@@ -97,8 +100,77 @@ function voicePatch(value: string): Partial<WatchPartyOptions> {
   return { voiceEnabled: true, stageMode: value as WatchPartyStageMode };
 }
 
-const fieldClass =
-  "w-full rounded-md border border-ink-4 bg-ink-3 px-2 py-1.5 text-sm text-paper";
+/**
+ * A settings row: the name and its one-line reason on the left, the control
+ * on the right, in a grouped list. The shape every settings screen on a phone
+ * or in Discord uses, and the one this dialog did not: it was a stack of
+ * form fields with helper text under each, which reads as a form to fill in
+ * rather than switches to flip.
+ */
+export function OptionRow({
+  label,
+  description,
+  tone = "muted",
+  htmlFor,
+  children,
+  className,
+  ...rest
+}: {
+  label: string;
+  description?: string;
+  tone?: "muted" | "warning";
+  htmlFor?: string;
+  children?: ReactNode;
+  className?: string;
+} & Record<`data-${string}`, string | number | boolean | undefined>) {
+  const Label = htmlFor ? "label" : "span";
+  return (
+    <div
+      className={cn("flex items-center justify-between gap-4 px-3 py-2.5", className)}
+      {...rest}
+    >
+      <Label htmlFor={htmlFor} className="min-w-0">
+        <span className="block text-sm text-text">{label}</span>
+        {description && (
+          <span
+            className={cn(
+              "mt-0.5 block text-xs",
+              tone === "warning" ? "text-warning" : "text-text-tertiary",
+            )}
+          >
+            {description}
+          </span>
+        )}
+      </Label>
+      {children && <span className="shrink-0">{children}</span>}
+    </div>
+  );
+}
+
+/** The grouped list a settings screen is made of. */
+export function OptionGroup({
+  title,
+  children,
+}: {
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-1.5">
+      {title && (
+        <p className="px-3 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+          {title}
+        </p>
+      )}
+      <div className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface-0">
+        {children}
+      </div>
+    </section>
+  );
+}
+
+const selectClass =
+  "h-[var(--control-sm)] max-w-[11rem] rounded-[var(--radius-control)] border border-border bg-surface-2 pl-2.5 pr-7 text-sm text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-ring-offset focus-visible:ring-focus-ring disabled:cursor-not-allowed disabled:opacity-50";
 
 export function WatchPartyOptionsPanel({
   options,
@@ -117,108 +189,103 @@ export function WatchPartyOptionsPanel({
   // 2026-09-05 spike put 212 people in a room in twenty minutes, so the nudge
   // wants to appear well before that rather than at it.
   const busy = audienceCount >= 20;
+  const voiceId = useId();
+  const slowId = useId();
+
+  const voiceNote = !options.voiceEnabled
+    ? t("watchParty.options.voiceOffBody")
+    : options.stageMode === "everyone" && busy
+      ? t("watchParty.options.stageWarnEveryone")
+      : undefined;
 
   return (
-    <div className="flex flex-col gap-3" data-watch-party-options>
-      {/* VOICE IS OFF UNTIL A HOST SAYS OTHERWISE, and this is the control
-          that says it. First in the panel because it is the decision the rest
-          depend on: with voice off there is no floor, no queue and no
-          microphone, and the server writes no permission rule on the channel
-          at all (`watchPartyFloorIsClosed`). See docs/WATCH_PARTY.md. */}
-      <label className="block text-xs text-paper-muted">
-        <span className="mb-1 block">{t("watchParty.options.voice")}</span>
-        <select
-          className={fieldClass}
-          value={voiceValue(options)}
-          disabled={disabled}
-          onChange={(event) => onChange(voicePatch(event.target.value))}
-          data-watch-party-voice
+    <div className="flex flex-col gap-4" data-watch-party-options>
+      <OptionGroup>
+        {/* VOICE IS OFF UNTIL A HOST SAYS OTHERWISE, and this is the control
+            that says it. First because it is the decision the rest depend
+            on: with voice off there is no floor, no queue and no microphone,
+            and the server writes no permission rule on the channel at all
+            (`watchPartyFloorIsClosed`). See docs/WATCH_PARTY.md. */}
+        <OptionRow
+          label={t("watchParty.options.voice")}
+          description={voiceNote}
+          tone={options.voiceEnabled && busy ? "warning" : "muted"}
+          htmlFor={voiceId}
         >
-          <option value={VOICE_OFF}>{t("watchParty.options.voiceOff")}</option>
-          {WATCH_PARTY_STAGE_MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              {t(STAGE_KEYS[mode])}
-            </option>
-          ))}
-        </select>
-        {!options.voiceEnabled && (
-          <span className="mt-1 block text-[11px] text-paper-muted">
-            {t("watchParty.options.voiceOffBody")}
-          </span>
-        )}
-        {options.voiceEnabled && options.stageMode === "everyone" && busy && (
-          <span className="mt-1 block text-[11px] text-warning">
-            {t("watchParty.options.stageWarnEveryone")}
-          </span>
-        )}
-      </label>
-
-      {/* Only for the invitation mode, and only with voice on at all.
-          Meaningless when everyone may already speak, pointless when only the
-          hosts ever will, and nonsense when nobody speaks. */}
-      {options.voiceEnabled && options.stageMode === "invited" && (
-        <label className="flex items-center gap-2 text-xs text-paper-muted">
-          <input
-            type="checkbox"
-            className="h-3.5 w-3.5 accent-signal"
-            checked={options.raiseHand}
+          <select
+            id={voiceId}
+            className={selectClass}
+            value={voiceValue(options)}
             disabled={disabled}
-            onChange={(event) => onChange({ raiseHand: event.target.checked })}
-            data-watch-party-raise-hand
-          />
-          {t("watchParty.options.raiseHand")}
-        </label>
-      )}
+            onChange={(event) => onChange(voicePatch(event.target.value))}
+            data-watch-party-voice
+          >
+            <option value={VOICE_OFF}>{t("watchParty.options.voiceOff")}</option>
+            {WATCH_PARTY_STAGE_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {t(STAGE_KEYS[mode])}
+              </option>
+            ))}
+          </select>
+        </OptionRow>
 
-      <label className="block text-xs text-paper-muted">
-        <span className="mb-1 block">{t("watchParty.options.slowMode")}</span>
-        <select
-          className={fieldClass}
-          value={String(options.slowModeSeconds)}
-          disabled={disabled}
-          onChange={(event) =>
-            onChange({ slowModeSeconds: Number(event.target.value) })
-          }
-          data-watch-party-slow-mode
-        >
-          {SLOWMODE_SECONDS_PRESETS.map((seconds) => (
-            <option key={seconds} value={seconds}>
-              {t(slowModeKey(seconds), { seconds })}
-            </option>
-          ))}
-        </select>
-        {busy && options.slowModeSeconds === 0 && (
-          <span className="mt-1 block text-[11px] text-paper-muted">
-            {t("watchParty.options.slowModeBusy")}
-          </span>
+        {/* Only for the invitation mode, and only with voice on at all.
+            Meaningless when everyone may already speak, pointless when only
+            the hosts ever will, and nonsense when nobody speaks. */}
+        {options.voiceEnabled && options.stageMode === "invited" && (
+          <div data-watch-party-raise-hand className="px-1 py-0.5">
+            <Switch
+              label={t("watchParty.options.raiseHand")}
+              checked={options.raiseHand}
+              disabled={disabled}
+              onCheckedChange={(checked) => onChange({ raiseHand: checked })}
+            />
+          </div>
         )}
-      </label>
 
-      <label className="flex items-center gap-2 text-xs text-paper-muted">
-        <input
-          type="checkbox"
-          className="h-3.5 w-3.5 accent-signal"
-          checked={options.reactionsEnabled}
-          disabled={disabled}
-          onChange={(event) =>
-            onChange({ reactionsEnabled: event.target.checked })
+        <OptionRow
+          label={t("watchParty.options.slowMode")}
+          description={
+            busy && options.slowModeSeconds === 0
+              ? t("watchParty.options.slowModeBusy")
+              : undefined
           }
-          data-watch-party-reactions
-        />
-        {t("watchParty.options.reactions")}
-      </label>
+          htmlFor={slowId}
+        >
+          <select
+            id={slowId}
+            className={selectClass}
+            value={String(options.slowModeSeconds)}
+            disabled={disabled}
+            onChange={(event) =>
+              onChange({ slowModeSeconds: Number(event.target.value) })
+            }
+            data-watch-party-slow-mode
+          >
+            {SLOWMODE_SECONDS_PRESETS.map((seconds) => (
+              <option key={seconds} value={seconds}>
+                {t(slowModeKey(seconds), { seconds })}
+              </option>
+            ))}
+          </select>
+        </OptionRow>
 
-      {/* FREQUENCY IS NOT PROMINENCE. Everything above is a lever a host
-          pulls mid-event; this is a fact they read once, ever, and it used to
-          be a filled card with a heading, sitting between the controls and
-          the co-host list at the same visual weight as the controls. It is a
-          disclosure now: one quiet line, the answer one press away. */}
-      <details className="text-[11px] text-paper-muted">
-        <summary className="cursor-pointer select-none text-text-tertiary hover:text-text">
-          {t("watchParty.options.whoCanWatch")}
-        </summary>
-        <p className="mt-1.5">{t("watchParty.options.whoCanWatchBody")}</p>
-      </details>
+        <div data-watch-party-reactions className="px-1 py-0.5">
+          <Switch
+            label={t("watchParty.options.reactions")}
+            checked={options.reactionsEnabled}
+            disabled={disabled}
+            onCheckedChange={(checked) => onChange({ reactionsEnabled: checked })}
+          />
+        </div>
+
+        {/* A fact, not a lever: who can watch follows the channel. One quiet
+            row at the end of the group, with the answer under the name. */}
+        <OptionRow
+          label={t("watchParty.options.whoCanWatch")}
+          description={t("watchParty.options.whoCanWatchBody")}
+        />
+      </OptionGroup>
     </div>
   );
 }

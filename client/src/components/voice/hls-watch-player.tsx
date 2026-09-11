@@ -16,7 +16,9 @@ import {
   Maximize2,
   MessageSquare,
   Minimize2,
+  Pause,
   PictureInPicture2,
+  Play,
   Radio,
   Scan,
   Settings2,
@@ -51,6 +53,7 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { useVideoFit } from "@/hooks/use-video-fit";
 import { videoFitClass } from "@/lib/video-fit";
 import { HlsStallWatch, channelIdFromHlsUrl } from "@/lib/hls-stall";
+import { browserConnection, hlsStartPlan } from "@/lib/hls-slow-start";
 import {
   AUTO_HLS_QUALITY,
   applyHlsQualityLevel,
@@ -82,6 +85,8 @@ const STALL_TICK_MS = 1_000;
 
 /** Survives a teardown so the next instance does not reseed ABR at 500 kbit/s. */
 let lastHlsBandwidthEstimate = HLS_ABR_DEFAULT_ESTIMATE_BPS;
+/** True once a stream in this tab has actually measured the link. */
+let hlsBandwidthMeasured = false;
 
 type StreamPhase = "playing" | "reconnecting" | "dead";
 
@@ -178,9 +183,22 @@ export function HlsWatchPlayer({
   // Autoplay with sound was refused (a tab that resumed the call without a
   // click, Safari's default). The picture runs muted and one tap fixes it.
   const [needsUnmute, setNeedsUnmute] = useState(false);
+  // "Começou em 480p pra não travar": shown once per attach on a slow link,
+  // gone on its own, and never again for the session once dismissed.
+  const [slowStartNotice, setSlowStartNotice] = useState(false);
+  useEffect(() => {
+    if (!slowStartNotice) {
+      return;
+    }
+    const timer = window.setTimeout(() => setSlowStartNotice(false), 8_000);
+    return () => window.clearTimeout(timer);
+  }, [slowStartNotice]);
   const [pipAvailable, setPipAvailable] = useState(false);
   const [isPip, setIsPip] = useState(false);
   const [behindLive, setBehindLive] = useState(false);
+  // Mirrors the element's own paused flag so the bar's play/pause button
+  // agrees with hardware media keys, the lock screen and a tap on the frame.
+  const [paused, setPaused] = useState(false);
   // Stall handling (`lib/hls-stall.ts`). `activeSrc` is what is actually
   // attached: the prop until a reconnect fetches a fresher URL from
   // `GET /api/channels/:id/live` (a restarted egress has a new playlist),
@@ -368,6 +386,38 @@ export function HlsWatchPlayer({
     }
   }, [getVideo]);
 
+  useEffect(() => {
+    const video = getVideo();
+    if (!video) {
+      return;
+    }
+    const sync = () => setPaused(video.paused);
+    video.addEventListener("play", sync);
+    video.addEventListener("pause", sync);
+    sync();
+    return () => {
+      video.removeEventListener("play", sync);
+      video.removeEventListener("pause", sync);
+    };
+  }, [getVideo, src]);
+
+  // Twitch's rule: pausing a live stream is fine, resuming it puts you back
+  // at the edge. The window behind the playhead is ten seconds, so there is
+  // nothing to catch up on and a resumed stream that trails by a minute is
+  // just a stalled one.
+  const togglePlay = useCallback(() => {
+    const video = getVideo();
+    if (!video) {
+      return;
+    }
+    if (video.paused) {
+      jumpToLive();
+      void video.play();
+      return;
+    }
+    video.pause();
+  }, [getVideo, jumpToLive]);
+
   // Behind-live polling. `timeupdate` fires roughly 4x/s, which is plenty
   // for a badge nobody needs to the millisecond.
   useEffect(() => {
@@ -510,6 +560,7 @@ export function HlsWatchPlayer({
     const video: HTMLVideoElement = el;
     let cancelled = false;
     let hls: HlsHandle | null = null;
+    let hlsFragmentLoaded = false;
 
     // `xhrSetup` runs synchronously (hls.js calls it, then `xhr.send()`,
     // with no await in between), so the token has to already be in hand --
@@ -636,12 +687,23 @@ export function HlsWatchPlayer({
       if (engine === "none") {
         return;
       }
+      // On a link the browser calls slow, start on the lowest rung rather
+      // than on the 720p guess. See `lib/hls-slow-start.ts`.
+      const start = hlsStartPlan({
+        connection: browserConnection(),
+        rememberedEstimateBps: lastHlsBandwidthEstimate,
+        measuredBefore: hlsBandwidthMeasured,
+      });
+      if (start.slowStart && !cancelled) {
+        setSlowStartNotice(true);
+      }
       const player = new Hls({
         ...hlsLivePlayerConfig(),
         enableWorker: true,
         capLevelToPlayerSize: true,
         maxLiveSyncPlaybackRate: 1.5,
-        abrEwmaDefaultEstimate: lastHlsBandwidthEstimate,
+        startLevel: start.startLevel,
+        abrEwmaDefaultEstimate: start.abrEwmaDefaultEstimate,
         // Playlist is written after the first 2 s segment. Retry the
         // initial 404 instead of giving up while egress is still starting.
         manifestLoadingMaxRetry: 12,
@@ -704,6 +766,9 @@ export function HlsWatchPlayer({
         // watchdog tells that apart from a slow network.
         watch.onMediaSequence(data.details.startSN, Date.now());
       });
+      player.on(Hls.Events.FRAG_LOADED, () => {
+        hlsFragmentLoaded = true;
+      });
       player.loadSource(activeSrc);
       player.attachMedia(video);
       player.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
@@ -741,11 +806,13 @@ export function HlsWatchPlayer({
       video.removeEventListener("error", onMediaError);
       video.removeEventListener("loadedmetadata", reportSize);
       if (
+        hlsFragmentLoaded &&
         hls &&
         typeof hls.bandwidthEstimate === "number" &&
         hls.bandwidthEstimate > 0
       ) {
         lastHlsBandwidthEstimate = hls.bandwidthEstimate;
+        hlsBandwidthMeasured = true;
       }
       hls?.destroy();
       hlsRef.current = null;
@@ -806,7 +873,7 @@ export function HlsWatchPlayer({
     }
   };
   const iconBtn =
-    "flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal";
+    "flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal";
 
   const cinema = layout === "cinema";
 
@@ -906,29 +973,20 @@ export function HlsWatchPlayer({
           onPointerLeave={() => setBarHovered(false)}
         >
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            {behindLive ? (
-              <button
-                type="button"
-                className="flex items-center gap-1 rounded-[var(--radius-control)] bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-paper hover:bg-black/70"
-                onClick={jumpToLive}
-              >
-                <Radio className="h-3 w-3" />
-                {t("voice.hls.jumpToLive")}
-              </button>
-            ) : (
-              <span
-                data-testid="watch-stage-live"
-                className="flex items-center gap-1 rounded-[var(--radius-control)] bg-black/50 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-paper"
-              >
-                <Radio className="h-3 w-3 text-danger" />
-                {t("voice.hls.live")}
-              </span>
-            )}
-            <span className="rounded-[var(--radius-control)] bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-paper">
-              {t("voice.hls.delay", { seconds: delaySeconds })}
-            </span>
             {meta}
           </div>
+      {slowStartNotice && hasFrame ? (
+        <p
+          data-testid="hls-slow-start"
+          className="pointer-events-none absolute left-2 top-9 max-w-[85%] rounded bg-black/70 px-1.5 py-0.5 text-[11px] text-paper"
+        >
+          {t("voice.hls.slowStart", {
+            quality: describeHlsLevel(
+              offered.length > 0 ? offered[offered.length - 1].height : 480,
+            ),
+          })}
+        </p>
+      ) : null}
           {actions ? (
             <div className="flex shrink-0 items-center gap-1.5">{actions}</div>
           ) : null}
@@ -940,10 +998,25 @@ export function HlsWatchPlayer({
           onPointerEnter={() => setBarHovered(true)}
           onPointerLeave={() => setBarHovered(false)}
         >
-          <div
-            data-testid="hls-volume"
-            className="flex min-w-0 items-center gap-1.5"
-          >
+          <div className="flex min-w-0 items-center gap-1.5">
+            <button
+              type="button"
+              data-testid="hls-play"
+              aria-label={paused ? t("voice.hls.play") : t("voice.hls.pause")}
+              title={paused ? t("voice.hls.play") : t("voice.hls.pause")}
+              className={iconBtn}
+              onClick={togglePlay}
+            >
+              {paused ? (
+                <Play className="h-4 w-4" aria-hidden="true" />
+              ) : (
+                <Pause className="h-4 w-4" aria-hidden="true" />
+              )}
+            </button>
+            <div
+              data-testid="hls-volume"
+              className="flex min-w-0 items-center gap-1.5"
+            >
             <button
               type="button"
               aria-pressed={silenced}
@@ -980,6 +1053,35 @@ export function HlsWatchPlayer({
               }}
               className="h-1 w-20 cursor-pointer accent-signal sm:w-24"
             />
+            </div>
+            {behindLive || (paused && hasFrame) ? (
+              <button
+                type="button"
+                data-testid="watch-stage-jump-live"
+                className="flex h-8 items-center gap-1.5 rounded-[var(--radius-control)] px-2 text-[11px] font-semibold uppercase tracking-wide text-paper/80 hover:bg-paper/15 hover:text-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+                onClick={paused ? togglePlay : jumpToLive}
+              >
+                <span
+                  aria-hidden="true"
+                  className="h-2 w-2 rounded-full bg-paper/50"
+                />
+                {t("voice.hls.jumpToLive")}
+              </button>
+            ) : (
+              <span
+                data-testid="watch-stage-live"
+                className="flex h-8 items-center gap-1.5 px-2 text-[11px] font-semibold uppercase tracking-wide text-paper"
+              >
+                <span
+                  aria-hidden="true"
+                  className="h-2 w-2 rounded-full bg-danger"
+                />
+                {t("voice.hls.live")}
+              </span>
+            )}
+            <span className="hidden text-[11px] font-medium text-paper/70 sm:inline">
+              {t("voice.hls.delay", { seconds: delaySeconds })}
+            </span>
           </div>
           <div className="flex shrink-0 items-center gap-0.5">
             {hasFrame ? (
@@ -998,9 +1100,9 @@ export function HlsWatchPlayer({
                   onClick={fit.toggle}
                 >
                   {whole ? (
-                    <Crop className="h-3.5 w-3.5" aria-hidden="true" />
+                    <Crop className="h-4 w-4" aria-hidden="true" />
                   ) : (
-                    <Scan className="h-3.5 w-3.5" aria-hidden="true" />
+                    <Scan className="h-4 w-4" aria-hidden="true" />
                   )}
                 </button>
               </Tooltip>
@@ -1013,7 +1115,7 @@ export function HlsWatchPlayer({
                 className={iconBtn}
                 onClick={() => void togglePip()}
               >
-                <PictureInPicture2 className="h-3.5 w-3.5" />
+                <PictureInPicture2 className="h-4 w-4" />
               </button>
             ) : null}
             {offered.length > 1 ? (
@@ -1027,7 +1129,7 @@ export function HlsWatchPlayer({
                   className="flex h-8 items-center gap-1 rounded-[var(--radius-control)] px-1.5 text-[11px] font-medium text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
                   onClick={() => setQualityOpen((open) => !open)}
                 >
-                  <Settings2 className="h-3.5 w-3.5" />
+                  <Settings2 className="h-4 w-4" />
                   {qualityPref.height === null
                     ? autoHeight === null
                       ? t("voice.hls.qualityAuto")
@@ -1110,7 +1212,7 @@ export function HlsWatchPlayer({
                 className={cn(iconBtn, chatOverlay.active && "text-signal")}
                 onClick={chatOverlay.toggle}
               >
-                <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+                <MessageSquare className="h-4 w-4" aria-hidden="true" />
               </button>
             ) : null}
             {fullscreen ? (
@@ -1132,9 +1234,9 @@ export function HlsWatchPlayer({
                 onClick={fullscreen.toggle}
               >
                 {fullscreen.active ? (
-                  <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  <Minimize2 className="h-4 w-4" aria-hidden="true" />
                 ) : (
-                  <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  <Maximize2 className="h-4 w-4" aria-hidden="true" />
                 )}
               </button>
             ) : null}

@@ -1,8 +1,10 @@
-import { Clapperboard } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Clapperboard, Eye } from "lucide-react";
 import type { WatchParty } from "@pqp/shared";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { LivePill } from "@/components/watch-party/live-pill";
 import { useTranslation } from "@/lib/i18n";
+import { formatLiveFor } from "@/lib/live-party-card";
 import { cn } from "@/lib/utils";
 
 /**
@@ -34,11 +36,22 @@ import { cn } from "@/lib/utils";
  * the same action, and red in this app means destructive (Encerrar, Banir).
  * The bordered card that lights up on hover is the affordance, and the
  * accessible name says what a click does.
+ *
+ * THE SECOND LINE IS THE NUMBERS. The card used to say only that a show was
+ * on and who was hosting; the two things that tell a person whether to bother
+ * (Twitch's channel card, YouTube's live tile) are how many are watching and
+ * how long it has been going, and the header comment above promised a viewer
+ * count from the first day. Both come from state the sidebar already holds:
+ * the audience from `channel-live` and the roster, the uptime from the
+ * party's own `wentLiveAt`, ticked once a minute here so a card looked at
+ * for hours stays true.
  */
 export function LivePartyBlock({
   parties,
   selectedChannelId,
   canStart = false,
+  pending = null,
+  audience,
   onWatch,
   onCreate,
 }: {
@@ -47,10 +60,32 @@ export function LivePartyBlock({
   selectedChannelId: string | null;
   /** This person holds `START_WATCH_PARTY` somewhere in this server. */
   canStart?: boolean;
+  /**
+   * A draft or scheduled party in this server that this person runs. A
+   * draft is private and lives only on its channel, so the sidebar used to
+   * keep offering "Criar" over one that already existed, and the API then
+   * refused. The control becomes the way back to it instead.
+   */
+  pending?: WatchParty | null;
+  /** People watching, by channel id. Absent means "do not show a number". */
+  audience?: Readonly<Record<string, number>>;
   onWatch: (channelId: string) => void;
   onCreate?: () => void;
 }) {
   const { t } = useTranslation();
+  // The uptime ticks once a minute while a party is on, and not at all
+  // otherwise: an interval on an empty sidebar is a battery cost for nothing.
+  const [now, setNow] = useState(() => new Date());
+  const anyLive = parties.length > 0;
+  useEffect(() => {
+    if (!anyLive) {
+      return;
+    }
+    setNow(new Date());
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, [anyLive]);
+
   if (parties.length === 0) {
     /**
      * NOTHING, OR ONE BUTTON. A member with no permission and no party
@@ -59,6 +94,31 @@ export function LivePartyBlock({
      * who may start one gets a single control, and it reads as an action
      * rather than as a channel type, which is the whole point of the change.
      */
+    if (pending) {
+      const scheduled = pending.state === "scheduled";
+      return (
+        <div className="mb-3 px-1" data-testid="live-party-pending">
+          <button
+            type="button"
+            data-live-party-pending={pending.state}
+            className="flex w-full items-center gap-2 rounded-lg border border-warning/40 bg-warning/10 px-2.5 py-2 text-left transition-colors hover:bg-warning/15"
+            onClick={() => onWatch(pending.channelId)}
+          >
+            <Clapperboard className="h-4 w-4 shrink-0 text-warning" aria-hidden />
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate text-sm font-medium text-paper">
+                {pending.name}
+              </span>
+              <span className="text-[11px] text-warning">
+                {scheduled
+                  ? t("watchParty.block.pendingScheduled")
+                  : t("watchParty.block.pendingDraft")}
+              </span>
+            </span>
+          </button>
+        </div>
+      );
+    }
     if (!canStart || !onCreate) {
       return null;
     }
@@ -86,6 +146,8 @@ export function LivePartyBlock({
       <ul className="flex flex-col gap-1.5">
         {parties.map((party) => {
           const selected = selectedChannelId === party.channelId;
+          const watching = audience?.[party.channelId];
+          const liveFor = formatLiveFor(party.wentLiveAt, now);
           return (
             <li key={party.id}>
               <button
@@ -103,68 +165,52 @@ export function LivePartyBlock({
                     : "border-ink-4/70 bg-ink-2 hover:border-danger/40 hover:bg-ink-3",
                 )}
               >
-                {/* TWO ROWS, AND THAT IS WHAT MAKES IT A CARD RATHER THAN A
-                    ROW WITH THINGS BOLTED ON.
-
-                    The first attempt put the name, the AO VIVO pill and the
-                    Assistir chip on one line beside a 32px avatar. On a real
-                    256px rail that left about 60px for the name, so
-                    "Cinemoon: sessão coruja" rendered as "Cin…": the block
-                    announced that something was live without saying what,
-                    which is the one job it has. Splitting it gives the name
-                    the whole first line, with only the avatar beside it. AO
-                    VIVO and the host drop to the second line, where the thing
-                    that truncates is a name people already know rather than
-                    the title of the show. Same lesson as the PRIVADO pill on the channel
-                    row (PR 368): the pixels belong to the name. */}
-                <span className="flex min-w-0 items-center gap-2.5">
-                  <span className="relative shrink-0">
-                    <UserAvatar
-                      name={party.hostDisplayName}
-                      avatarUrl={party.hostAvatarUrl}
-                      rounded="full"
-                      className="h-7 w-7"
-                    />
-                    {/* Static. `LivePill` below is the one thing that
-                        moves; two heartbeats out of step in a card this size
-                        is noise, not life. */}
-                    <span
-                      aria-hidden="true"
-                      className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-ink-2 bg-danger"
-                    />
-                  </span>
-                  {/* WRAPS TO TWO LINES RATHER THAN TRUNCATING, because the
-                      name is the content. "Cinemoon: sessão coruja" rendered
-                      as "Cinemoon: sessão cor..." on a real rail, which is
-                      most of a name people chose and the one thing this block
-                      exists to say. Two lines of 14px in a block that is
-                      already two rows costs nothing; a third would, so the
-                      clamp is still there behind them. */}
-                  <span className="line-clamp-2 break-words text-sm font-semibold leading-snug text-paper">
-                    {party.name}
-                  </span>
+                {/* THE ANATOMY EVERY LIVE PRODUCT CONVERGES ON (Twitch's
+                    sidebar row, YouTube's live tile, Kick's card, Discord's
+                    Go Live card): the badge alone in the top-right, the name
+                    as the one loud element, and the host and the numbers on
+                    one muted line under it. The first cut of this card put
+                    the badge, the count and the clock on one row with icons
+                    and it read as busy; three lines, each with one job, is
+                    what a 230px rail can carry. Red is reserved for the
+                    badge: the avatar has no dot, nothing else competes. */}
+                <span className="flex items-start justify-between gap-2">
+                  <UserAvatar
+                    name={party.hostDisplayName}
+                    avatarUrl={party.hostAvatarUrl}
+                    rounded="full"
+                    className="h-8 w-8 shrink-0"
+                  />
+                  <LivePill className="mt-0.5" />
                 </span>
-                {/* THE LINE IS THE LIVE BADGE AND WHO IS HOSTING. NOTHING ELSE.
-                    It used to carry an "Assistir" chip as well, in red, and
-                    Rafael's objection was right twice over. The whole block is
-                    already the button, so a button inside it is a second
-                    target for the same action and it was eating the width the
-                    host's name needed. And red in this app means destructive:
-                    Encerrar is red, Banir is red. The primary action of a
-                    watch party is not in that family, and dressing it that
-                    way teaches the wrong thing about the colour.
-
-                    The affordance is the block: a bordered card that lights
-                    up on hover, with the live badge and a `title` saying what
-                    a click does. No chevron either, which would be one more
-                    thing to draw and would say less than the border does. */}
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <LivePill />
-                  <span className="min-w-0 truncate text-[11px] text-paper-muted">
+                <span className="line-clamp-2 break-words text-sm font-semibold leading-snug text-paper">
+                  {party.name}
+                </span>
+                <span className="flex min-w-0 items-baseline justify-between gap-2 text-[11px] text-paper-muted">
+                  <span className="min-w-0 truncate">
                     {t("watchParty.live.hostedBy", {
                       name: party.hostDisplayName,
                     })}
                   </span>
+                  {typeof watching === "number" && (
+                    <span
+                      className="flex shrink-0 items-center gap-1 tabular-nums"
+                      data-live-party-audience={watching}
+                      data-live-party-uptime={liveFor ?? undefined}
+                    >
+                      <Eye className="h-3 w-3 shrink-0" aria-hidden />
+                      <span className="sr-only">
+                        {t("watchParty.live.viewers", { count: watching })}
+                      </span>
+                      <span aria-hidden>{watching}</span>
+                      {liveFor && (
+                        <span className="text-paper-muted/70" aria-hidden>
+                          {" · "}
+                          {liveFor}
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </span>
               </button>
             </li>

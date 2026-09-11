@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { WatchParty } from "@pqp/shared";
-import { applyWatchPartyFrame, liveWatchParties } from "./use-watch-parties";
+import {
+  applyWatchPartyFrame,
+  liveWatchParties,
+  liveWatchPartyServerIds,
+  patchWatchParty,
+} from "./use-watch-parties";
 
 /**
  * The one rule this hook has: a `watch-party-update` frame is authoritative
@@ -104,17 +109,40 @@ describe("applyWatchPartyFrame", () => {
     expect(applyWatchPartyFrame(held, "nothing-here", null, open)).toBe(held);
   });
 
-  it("ignores a frame whose serverId is not the open server", () => {
+  it("keeps a frame from another server, for the rail, and out of this server's list", () => {
+    // The rail's dot on a server you are not looking at is fed by exactly
+    // these frames; the sidebar block stays this server's because
+    // `liveWatchParties` filters on read.
     const foreign = {
       ...PARTY,
+      channelId: "77777777-7777-4777-8777-777777777777",
       serverId: "55555555-5555-4555-8555-555555555555",
     };
-    expect(applyWatchPartyFrame(held, foreign.channelId, foreign, open)).toBe(
-      held,
+    const next = applyWatchPartyFrame(held, foreign.channelId, foreign, open);
+    expect(next[foreign.channelId]).toEqual(foreign);
+    expect(liveWatchParties(next, open).map((p) => p.serverId)).not.toContain(
+      foreign.serverId,
     );
-    expect(applyWatchPartyFrame({}, foreign.channelId, foreign, open)).toEqual(
-      {},
+    expect(liveWatchPartyServerIds(next)).toEqual(
+      new Set([PARTY.serverId, foreign.serverId]),
     );
+  });
+
+  it("drops a frame from another server that is not live: the rail has no use for it", () => {
+    const open = "server-open";
+    const foreign = {
+      ...PARTY,
+      id: "party-foreign",
+      channelId: "channel-foreign",
+      serverId: "server-elsewhere",
+      state: "live" as const,
+    };
+    const held = applyWatchPartyFrame({}, foreign.channelId, foreign, open);
+    expect(held[foreign.channelId]).toEqual(foreign);
+    const ended = { ...foreign, state: "ended" as const };
+    const next = applyWatchPartyFrame(held, ended.channelId, ended, open);
+    expect(next[ended.channelId]).toBeUndefined();
+    expect(liveWatchPartyServerIds(next)).toEqual(new Set());
   });
 
   it("still drops a stale entry on a null frame, even while looking at another server", () => {
@@ -125,6 +153,23 @@ describe("applyWatchPartyFrame", () => {
       "55555555-5555-4555-8555-555555555555",
     );
     expect(next[PARTY.channelId]).toBeUndefined();
+  });
+});
+
+describe("patchWatchParty", () => {
+  it("updates only the current party with the matching id", () => {
+    const replaced = { ...PARTY, id: "replaced", reminding: false };
+    const next = patchWatchParty(
+      { [PARTY.channelId]: replaced },
+      PARTY.id,
+      { reminding: true },
+    );
+    expect(next).toEqual({ [PARTY.channelId]: replaced });
+  });
+
+  it("does nothing when the party has gone away", () => {
+    const held = { [PARTY.channelId]: PARTY };
+    expect(patchWatchParty(held, "gone", { reminding: true })).toBe(held);
   });
 });
 

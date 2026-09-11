@@ -1,8 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Clapperboard } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import {
+  OptionGroup,
+  OptionRow,
+} from "@/components/watch-party/watch-party-options";
+import { suggestedWatchPartyName } from "@/lib/watch-party-name";
 import { ApiError } from "@/lib/api";
 import {
   browserTimezone,
@@ -38,23 +44,28 @@ export function CreateWatchPartyDialog({
     startsAt: string | null;
   }) => Promise<void>;
 }) {
-  const { t } = useTranslation();
-  const [name, setName] = useState("");
+  const { t, locale } = useTranslation();
+  const [name, setName] = useState(() =>
+    suggestedWatchPartyName(new Date(), locale),
+  );
   const [scheduling, setScheduling] = useState(false);
   const [startsAt, setStartsAt] = useState(defaultSessionScheduleValue());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const wasOpen = useRef(false);
 
   useEffect(() => {
-    if (!open) {
+    const opened = open && !wasOpen.current;
+    wasOpen.current = open;
+    if (!opened) {
       return;
     }
-    setName("");
+    setName(suggestedWatchPartyName(new Date(), locale));
     setScheduling(false);
     setStartsAt(defaultSessionScheduleValue());
     setBusy(false);
     setError(null);
-  }, [open]);
+  }, [open, locale]);
 
   const canSubmit = name.trim().length > 0 && !busy;
 
@@ -99,14 +110,22 @@ export function CreateWatchPartyDialog({
         </div>
       }
     >
-      <DialogBody className="flex flex-col gap-3">
-        <label className="block text-xs text-paper-muted">
-          <span className="mb-1 block">{t("watchParty.create.nameLabel")}</span>
+      <DialogBody className="flex flex-col gap-4">
+        {/* THE NAME IS ALREADY THERE. A weekday ("Sessão de sábado"),
+            selected, so Enter on an empty head works and anything typed
+            replaces it. The old hint under the field ("this is the name at
+            the top of the sidebar, not the channel's") is gone: the setup
+            surface shows the name on the picture, which says it better. */}
+        <label className="block">
+          <span className="mb-1.5 block text-xs text-text-tertiary">
+            {t("watchParty.create.nameLabel")}
+          </span>
           <Input
             type="text"
             autoFocus
             maxLength={120}
             value={name}
+            onFocus={(event) => event.currentTarget.select()}
             onChange={(event) => setName(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && canSubmit) {
@@ -117,38 +136,42 @@ export function CreateWatchPartyDialog({
             placeholder={t("watchParty.create.namePlaceholder")}
             data-create-watch-party-name
           />
-          <span className="mt-1 block text-[11px] text-paper-muted">
-            {t("watchParty.create.nameHint")}
-          </span>
         </label>
-        <label className="flex items-center gap-2 text-xs text-paper-muted">
-          <input
-            type="checkbox"
-            className="h-3.5 w-3.5 accent-signal"
-            checked={scheduling}
-            onChange={(event) => setScheduling(event.target.checked)}
-            data-create-watch-party-schedule
-          />
-          {t("watchParty.create.scheduleToggle")}
-        </label>
-        {scheduling && (
-          <label className="block text-xs text-paper-muted">
-            <span className="mb-1 block">
-              {t("watchParty.create.whenLabel", {
-                timezone: browserTimezone(),
-              })}
+        {/* One switch, and the time only once it is on. Same grouped rows
+            as the options dialog, so the two read as one product. */}
+        <OptionGroup>
+          <OptionRow
+            label={t("watchParty.create.scheduleToggle")}
+            description={t("watchParty.create.scheduleHint")}
+          >
+            <span data-create-watch-party-schedule>
+              <Switch
+                hideLabel
+                label={t("watchParty.create.scheduleToggle")}
+                checked={scheduling}
+                onCheckedChange={setScheduling}
+                className="px-0 py-0 hover:bg-transparent"
+              />
             </span>
-            <Input
-              type="datetime-local"
-              value={startsAt}
-              min={toLocalInputValue(new Date())}
-              onChange={(event) => setStartsAt(event.target.value)}
-            />
-          </label>
-        )}
-        <p className="text-[11px] text-paper-muted">
-          {t("watchParty.setup.goLiveHint")}
-        </p>
+          </OptionRow>
+          {scheduling && (
+            <OptionRow
+              label={t("watchParty.create.whenLabelShort")}
+              description={browserTimezone()}
+              htmlFor="create-watch-party-when"
+            >
+              <Input
+                id="create-watch-party-when"
+                type="datetime-local"
+                className="h-[var(--control-sm)] w-auto bg-surface-2"
+                value={startsAt}
+                min={toLocalInputValue(new Date())}
+                onChange={(event) => setStartsAt(event.target.value)}
+                data-create-watch-party-when
+              />
+            </OptionRow>
+          )}
+        </OptionGroup>
         {error && <p className="text-xs text-danger">{error}</p>}
       </DialogBody>
     </Dialog>

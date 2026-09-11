@@ -23,7 +23,9 @@ const {
   MIN_STAGE_HEIGHT_PX,
   MIN_STAGE_WIDTH_PX,
   clampSplit,
+  effectiveOrientation,
   loadCallSplit,
+  MIN_WATCH_CHAT_WIDTH_PX,
   nudgeSplit,
   resolveCollapsed,
   resolveOrientation,
@@ -38,25 +40,25 @@ const STACKED = splitBounds("stacked");
 
 describe("clampSplit", () => {
   it("gives the stage the stored fraction of the usable pane", () => {
-    // 908 of pane, 8 of divider: 900 usable, 60% of it to the stage.
-    expect(clampSplit({ fraction: 0.6, container: 908, ...STACKED })).toBe(540);
+    // 900 usable plus the divider: 60% of the usable to the stage.
+    expect(clampSplit({ fraction: 0.6, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED })).toBe(540);
   });
 
   it("refuses to drag the stage below its minimum", () => {
-    expect(clampSplit({ fraction: 0, container: 908, ...STACKED })).toBe(
+    expect(clampSplit({ fraction: 0, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED })).toBe(
       MIN_STAGE_HEIGHT_PX,
     );
-    expect(clampSplit({ fraction: 0.01, container: 908, ...STACKED })).toBe(
+    expect(clampSplit({ fraction: 0.01, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED })).toBe(
       MIN_STAGE_HEIGHT_PX,
     );
   });
 
   it("refuses to drag the transcript below its minimum", () => {
-    expect(clampSplit({ fraction: 1, container: 908, ...STACKED })).toBe(
+    expect(clampSplit({ fraction: 1, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED })).toBe(
       900 - MIN_CHAT_HEIGHT_PX,
     );
     // And that really does leave the transcript its minimum, divider included.
-    expect(908 - (900 - MIN_CHAT_HEIGHT_PX) - CALL_SPLIT_DIVIDER_PX).toBe(
+    expect(900 + CALL_SPLIT_DIVIDER_PX - (900 - MIN_CHAT_HEIGHT_PX) - CALL_SPLIT_DIVIDER_PX).toBe(
       MIN_CHAT_HEIGHT_PX,
     );
   });
@@ -79,7 +81,7 @@ describe("clampSplit", () => {
 
   it("treats a corrupt fraction as the middle rather than throwing", () => {
     expect(
-      clampSplit({ fraction: Number.NaN, container: 908, ...STACKED }),
+      clampSplit({ fraction: Number.NaN, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED }),
     ).toBe(450);
   });
 
@@ -89,7 +91,7 @@ describe("clampSplit", () => {
       minStage: MIN_STAGE_WIDTH_PX,
       minChat: MIN_CHAT_WIDTH_PX,
     });
-    expect(clampSplit({ fraction: 1, container: 1008, ...side })).toBe(
+    expect(clampSplit({ fraction: 1, container: 1000 + CALL_SPLIT_DIVIDER_PX, ...side })).toBe(
       1000 - MIN_CHAT_WIDTH_PX,
     );
   });
@@ -119,13 +121,13 @@ describe("splitAvailable", () => {
 
 describe("splitFraction", () => {
   it("round-trips a clamped pixel size", () => {
-    const px = clampSplit({ fraction: 0.42, container: 908, ...STACKED });
-    expect(splitFraction(px, 908)).toBeCloseTo(0.42, 2);
+    const px = clampSplit({ fraction: 0.42, container: 900 + CALL_SPLIT_DIVIDER_PX, ...STACKED });
+    expect(splitFraction(px, 900 + CALL_SPLIT_DIVIDER_PX)).toBeCloseTo(0.42, 2);
   });
 
   it("never leaves 0..1, whatever it is handed", () => {
-    expect(splitFraction(5000, 908)).toBe(1);
-    expect(splitFraction(-40, 908)).toBe(0);
+    expect(splitFraction(5000, 900 + CALL_SPLIT_DIVIDER_PX)).toBe(1);
+    expect(splitFraction(-40, 900 + CALL_SPLIT_DIVIDER_PX)).toBe(0);
     expect(splitFraction(100, 0)).toBe(0.5);
   });
 });
@@ -134,7 +136,7 @@ describe("nudgeSplit", () => {
   it("moves by the pixels asked for", () => {
     const next = nudgeSplit({
       fraction: 0.5,
-      container: 908,
+      container: 900 + CALL_SPLIT_DIVIDER_PX,
       orientation: "stacked",
       deltaPx: 16,
     });
@@ -144,7 +146,7 @@ describe("nudgeSplit", () => {
   it("stops at the same ends the pointer stops at", () => {
     const top = nudgeSplit({
       fraction: 1,
-      container: 908,
+      container: 900 + CALL_SPLIT_DIVIDER_PX,
       orientation: "stacked",
       deltaPx: 400,
     });
@@ -152,7 +154,7 @@ describe("nudgeSplit", () => {
 
     const bottom = nudgeSplit({
       fraction: 0,
-      container: 908,
+      container: 900 + CALL_SPLIT_DIVIDER_PX,
       orientation: "stacked",
       deltaPx: -400,
     });
@@ -205,12 +207,14 @@ describe("stored preference", () => {
   it("survives a reload", () => {
     saveCallSplit({
       orientation: "side-by-side",
+      watchOrientation: "stacked",
       stacked: 0.4,
       side: 0.55,
       collapsed: "none",
     });
     expect(loadCallSplit()).toEqual({
       orientation: "side-by-side",
+      watchOrientation: "stacked",
       stacked: 0.4,
       side: 0.55,
       collapsed: "none",
@@ -220,6 +224,7 @@ describe("stored preference", () => {
   it("keeps the two orientations' fractions apart", () => {
     saveCallSplit({
       orientation: "stacked",
+      watchOrientation: null,
       stacked: 0.3,
       side: 0.8,
       collapsed: "none",
@@ -239,6 +244,7 @@ describe("stored preference", () => {
     );
     expect(loadCallSplit()).toEqual({
       orientation: "stacked",
+      watchOrientation: null,
       stacked: CALL_SPLIT_DEFAULT.stacked,
       side: 1,
       collapsed: "none",
@@ -257,6 +263,7 @@ describe("collapsing a pane", () => {
     // as the app forgetting.
     saveCallSplit({
       orientation: "stacked",
+      watchOrientation: null,
       stacked: 0.5,
       side: 0.6,
       collapsed: "chat",
@@ -362,6 +369,7 @@ describe("collapsing a pane", () => {
     // as the app forgetting.
     saveCallSplit({
       orientation: "stacked",
+      watchOrientation: null,
       stacked: 0.5,
       side: 0.6,
       collapsed: "chat",
@@ -412,5 +420,32 @@ describe("collapsing does not undo itself", () => {
     // the collapse is dropped rather than leaving somebody with two hidden
     // panes and no divider to restore from.
     expect(resolveCollapsed("stage", "none")).toBe("none");
+  });
+});
+
+/**
+ * A watch party is a film with a chat beside it. It starts side by side
+ * unless the person chose otherwise, and its chat column may be narrower
+ * than a call's transcript, which is what let side by side never appear on
+ * a laptop with the roster open.
+ */
+describe("a watch party's own layout", () => {
+  it("starts side by side, and follows its own choice, not the call's", () => {
+    const base = { ...CALL_SPLIT_DEFAULT, orientation: "stacked" as const };
+    expect(effectiveOrientation(base, "watch")).toBe("side-by-side");
+    expect(effectiveOrientation(base, "call")).toBe("stacked");
+    expect(
+      effectiveOrientation({ ...base, watchOrientation: "stacked" }, "watch"),
+    ).toBe("stacked");
+  });
+
+  it("asks less width of the chat than a call does", () => {
+    expect(MIN_WATCH_CHAT_WIDTH_PX).toBeLessThan(MIN_CHAT_WIDTH_PX);
+    const tight = MIN_STAGE_WIDTH_PX + MIN_WATCH_CHAT_WIDTH_PX + CALL_SPLIT_DIVIDER_PX;
+    expect(splitAvailable(tight, "side-by-side", "watch")).toBe(true);
+    expect(splitAvailable(tight, "side-by-side", "call")).toBe(false);
+    expect(resolveOrientation("side-by-side", tight, "expanded", "watch")).toBe(
+      "side-by-side",
+    );
   });
 });

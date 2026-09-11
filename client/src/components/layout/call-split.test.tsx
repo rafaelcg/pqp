@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   CALL_SPLIT_DEFAULT,
+  CALL_SPLIT_DIVIDER_PX,
   MIN_CHAT_HEIGHT_PX,
   MIN_STAGE_HEIGHT_PX,
   type CallSplitPreference,
@@ -285,7 +286,7 @@ describe("CallSplit's divider", () => {
   });
 
   it("reports the ends it will actually stop at", () => {
-    const html = split({ paneSize: { width: 1400, height: 908 } });
+    const html = split({ paneSize: { width: 1400, height: 900 + CALL_SPLIT_DIVIDER_PX } });
     const min = Math.round((MIN_STAGE_HEIGHT_PX / 900) * 100);
     const max = Math.round(((900 - MIN_CHAT_HEIGHT_PX) / 900) * 100);
     expect(html).toContain(`aria-valuemin="${min}"`);
@@ -295,7 +296,7 @@ describe("CallSplit's divider", () => {
   it("clamps a stored fraction that would starve the transcript", () => {
     const html = split({
       preference: { ...CALL_SPLIT_DEFAULT, stacked: 1 },
-      paneSize: { width: 1400, height: 908 },
+      paneSize: { width: 1400, height: 900 + CALL_SPLIT_DIVIDER_PX },
     });
     expect(html).toMatch(
       new RegExp(`style="height:\\s*${900 - MIN_CHAT_HEIGHT_PX}px`),
@@ -379,7 +380,7 @@ describe("CallSplit puts a pane away without unmounting it", () => {
     // collapse cleared: the minimum is enforced exactly as before.
     const html = split({
       preference: { ...CALL_SPLIT_DEFAULT, stacked: 1, collapsed: "none" },
-      paneSize: { width: 1400, height: 908 },
+      paneSize: { width: 1400, height: 900 + CALL_SPLIT_DIVIDER_PX },
     });
     expect(html).toMatch(
       new RegExp(`style="height:\\s*${900 - MIN_CHAT_HEIGHT_PX}px`),
@@ -476,11 +477,10 @@ describe("the collapse controls are findable without hovering", () => {
 
     it(`gives the ${toward} control a target rather than a sliver`, () => {
       const tag = collapseTag(split(), toward);
-      // 48px along the boundary, and a hit area that reaches 8px into each
-      // neighbouring pane. The 8px cross axis is not negotiable: it is
-      // `CALL_SPLIT_DIVIDER_PX`, which every clamp in `lib/call-split.ts` is
-      // computed against.
-      expect(tag).toMatch(/w-12|h-12/);
+      // 56px along the boundary, and a hit area that reaches 8px into each
+      // neighbouring pane. The cross axis is `CALL_SPLIT_DIVIDER_PX`, which
+      // every clamp in `lib/call-split.ts` is computed against.
+      expect(tag).toMatch(/w-14|h-14/);
       expect(tag).toMatch(/before:-inset-[xy]-2/);
     });
   }

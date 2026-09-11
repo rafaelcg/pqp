@@ -27,7 +27,12 @@ import {
   type ProfileAchievement,
   type ProfileCommunityList,
   type VisibleConnection,
+  type WatchParty,
 } from "@pqp/shared";
+import {
+  cohostActionFor,
+  type ProfileCohostAction,
+} from "@/lib/profile-cohost";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { StatusDot } from "@/components/user/status-dot";
@@ -139,8 +144,21 @@ export function useProfilePopover(): ProfilePopoverContextValue["open"] {
   );
 }
 
+/**
+ * The watch party on the open channel, when there is one, so the card can
+ * offer "Promover a co-host" on the person being looked at. The card decides
+ * whether to draw it (`cohostActionFor`); the app only says which party.
+ */
+export interface ProfileWatchPartyContext {
+  party: WatchParty;
+  onPromote: (userId: string) => Promise<void>;
+  onDemote: (userId: string) => Promise<void>;
+}
+
 interface ProfilePopoverProviderProps {
   currentUserId: string | null;
+  /** See `ProfileWatchPartyContext`. Null outside a party channel. */
+  watchParty?: ProfileWatchPartyContext | null;
   /** The app already holds this list; the card must not fetch a second copy. */
   blockedUserIds: ReadonlySet<string>;
   /**
@@ -193,6 +211,7 @@ interface OpenState {
 
 export function ProfilePopoverProvider({
   currentUserId,
+  watchParty,
   blockedUserIds,
   moderation,
   onOpenConversation,
@@ -233,6 +252,7 @@ export function ProfilePopoverProvider({
           currentUserId={currentUserId}
           blockedUserIds={blockedUserIds}
           moderation={moderation}
+          watchParty={watchParty ?? null}
           onClose={() => setState(null)}
           onOpenConversation={onOpenConversation}
           onStartCall={onStartCall}
@@ -307,6 +327,7 @@ interface UserProfileCardProps {
   currentUserId: string | null;
   blockedUserIds: ReadonlySet<string>;
   moderation: ProfileModerationContext | null;
+  watchParty: ProfileWatchPartyContext | null;
   onClose: () => void;
   onOpenConversation: (conversation: DmSummary) => void;
   onStartCall?: (conversation: DmSummary) => void;
@@ -324,6 +345,7 @@ function UserProfileCard({
   currentUserId,
   blockedUserIds,
   moderation,
+  watchParty,
   onClose,
   onOpenConversation,
   onStartCall,
@@ -873,13 +895,45 @@ function UserProfileCard({
       : []),
   ];
 
+  const cohostAction = cohostActionFor({
+    party: watchParty?.party,
+    subjectId: subject.id,
+    currentUserId,
+  });
   const manageItems: {
     id: string;
     label: string;
     danger?: boolean;
     moderation?: ProfileModerationAction;
+    /** Set on the watch party rung, so a test can find it. */
+    cohost?: ProfileCohostAction;
     onSelect: () => void;
   }[] = [
+    // THE WATCH PARTY, FIRST. While a party is on, the thing a host most
+    // wants to do to a person is hand them the backup badge, and every
+    // product we looked at does it from the person rather than from a list.
+    ...(cohostAction && watchParty
+      ? [
+          {
+            id: `cohost-${cohostAction}`,
+            label:
+              cohostAction === "promote"
+                ? t("profile.cohost.promote", { name: watchParty.party.name })
+                : t("profile.cohost.demote"),
+            cohost: cohostAction,
+            onSelect: () => {
+              setBusy(true);
+              const run =
+                cohostAction === "promote"
+                  ? watchParty.onPromote(subject.id)
+                  : watchParty.onDemote(subject.id);
+              void run
+                .catch(() => setNotice(t("profile.cohost.failed")))
+                .finally(() => setBusy(false));
+            },
+          },
+        ]
+      : []),
     ...(moderation &&
     (moderation.bits ? moderation.bits.nicknames : true)
       ? [
@@ -1034,6 +1088,7 @@ function UserProfileCard({
               key={item.id}
               type="button"
               data-profile-mod={item.moderation}
+              data-profile-cohost={item.cohost}
               disabled={busy}
               className={cn(
                 "flex w-full items-center px-3 py-2.5 text-left text-sm transition-colors hover:bg-ink-3 focus-visible:bg-ink-3 focus-visible:outline-none disabled:opacity-40",

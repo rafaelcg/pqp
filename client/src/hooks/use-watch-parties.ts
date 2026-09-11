@@ -30,12 +30,16 @@ import { isWatchPartyChannelsEnabled } from "@/lib/watch-party-channels";
 export interface WatchPartiesState {
   /** channelId -> the party there, as this person may see it. */
   byChannel: Record<string, WatchParty>;
-  /** The live ones, newest first. What the sidebar block draws. */
+  /** The live ones in the open server, newest first. What the sidebar block draws. */
   live: WatchParty[];
+  /** Every server with a live party, for the rail's dot. */
+  liveServerIds: ReadonlySet<string>;
   /** Apply a `watch-party-update` frame. */
   apply: (channelId: string, party: WatchParty | null) => void;
   /** After a mutation whose broadcast this client may not be in scope for. */
   put: (party: WatchParty) => void;
+  /** Patch a party only while this cache still holds that exact session. */
+  patch: (id: string, partial: Partial<WatchParty>) => void;
   refresh: () => void;
 }
 
@@ -46,7 +50,6 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
 
   useEffect(() => {
     serverRef.current = serverId;
-    setByChannel({});
     if (!serverId || !isWatchPartyChannelsEnabled()) {
       return;
     }
@@ -60,16 +63,41 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
         if (cancelled || serverRef.current !== serverId) {
           return;
         }
-        const next: Record<string, WatchParty> = {};
-        for (const party of answer.parties) {
-          next[party.channelId] = party;
-        }
-        setByChannel(next);
+        // Authoritative for THIS server only. Other servers' parties stay:
+        // they arrived on the socket (`catchUpWatchParties` sends every
+        // server's live ones on connect, and updates follow), and they are
+        // what lights the rail's dot on a server you are not looking at.
+        setByChannel((prev) => {
+          const next: Record<string, WatchParty> = {};
+          for (const party of Object.values(prev)) {
+            if (keepForeignParty(party, serverId)) {
+              next[party.channelId] = party;
+            }
+          }
+          for (const party of answer.parties) {
+            next[party.channelId] = party;
+          }
+          return next;
+        });
       })
       .catch(() => {
-        // No answer reads as no parties. A frame will say otherwise the
-        // moment anything happens, and a sidebar block that failed to load
+        // No answer reads as no parties: what this server had cached goes,
+        // so a party that ended during an outage does not stay on the
+        // sidebar, and the rail's dot, until the next frame. Other servers'
+        // entries are untouched, and a sidebar block that failed to load
         // must not become an error the room has to look at.
+        if (cancelled || serverRef.current !== serverId) {
+          return;
+        }
+        setByChannel((prev) => {
+          const next: Record<string, WatchParty> = {};
+          for (const party of Object.values(prev)) {
+            if (keepForeignParty(party, serverId)) {
+              next[party.channelId] = party;
+            }
+          }
+          return next;
+        });
       });
     return () => {
       cancelled = true;
@@ -87,14 +115,33 @@ export function useWatchParties(serverId: string | null): WatchPartiesState {
     [apply],
   );
 
+  const patch = useCallback((id: string, partial: Partial<WatchParty>) => {
+    setByChannel((prev) => patchWatchParty(prev, id, partial));
+  }, []);
+
   const refresh = useCallback(() => setReloadToken((n) => n + 1), []);
 
+  // One pass over the map for both readers: the sidebar block wants the
+  // OPEN server's live parties, the rail wants every server with one.
+  const allLive = useMemo(
+    () => Object.values(byChannel).filter((party) => party.state === "live"),
+    [byChannel],
+  );
   const live = useMemo(
-    () => liveWatchParties(byChannel, serverId),
-    [byChannel, serverId],
+    () => sortNewestFirst(allLive.filter((p) => p.serverId === serverId)),
+    [allLive, serverId],
+  );
+  const liveServerIds = useMemo<ReadonlySet<string>>(
+    () =>
+      new Set(
+        allLive
+          .map((party) => party.serverId)
+          .filter((id): id is string => id !== null),
+      ),
+    [allLive],
   );
 
-  return { byChannel, live, apply, put, refresh };
+  return { byChannel, live, liveServerIds, apply, put, patch, refresh };
 }
 
 
@@ -130,13 +177,63 @@ export function applyWatchPartyFrame(
     delete next[channelId];
     return next;
   }
-  // A frame for another server must not land in this map. `party: null`
-  // still deletes above: a stale entry has to be able to clear, and a
-  // null has no serverId to compare.
-  if (party.serverId !== openServerId) {
-    return prev;
+  // A LIVE frame for another server DOES land in this map, and it is the
+  // rail's dot that needs it: the socket sends every server's live parties
+  // on connect and on change, and a member sitting elsewhere learns a show
+  // started only through that. What PR 455 fixed, a foreign party in THIS
+  // server's sidebar, is kept by `liveWatchParties` filtering on read.
+  // Anything else about another server (a draft, a schedule, an ending) is
+  // of no use here and is dropped, so the map holds the open server's
+  // parties plus one entry per show on air elsewhere, never every party of
+  // every server the person belongs to.
+  if (!keepForeignParty(party, openServerId)) {
+    if (!(channelId in prev)) {
+      return prev;
+    }
+    const next = { ...prev };
+    delete next[channelId];
+    return next;
   }
   return { ...prev, [channelId]: party };
+}
+
+/** Patch by session id so a late mutation cannot restore a replaced session. */
+export function patchWatchParty(
+  prev: Record<string, WatchParty>,
+  id: string,
+  partial: Partial<WatchParty>,
+): Record<string, WatchParty> {
+  for (const [channelId, party] of Object.entries(prev)) {
+    if (party.id === id) {
+      return { ...prev, [channelId]: { ...party, ...partial } };
+    }
+  }
+  return prev;
+}
+
+/** The open server keeps every party; other servers keep only live ones. */
+export function keepForeignParty(
+  party: WatchParty,
+  openServerId: string | null,
+): boolean {
+  return party.serverId === openServerId || party.state === "live";
+}
+
+function sortNewestFirst(parties: WatchParty[]): WatchParty[] {
+  return parties.sort((a, b) =>
+    (b.wentLiveAt ?? "").localeCompare(a.wentLiveAt ?? ""),
+  );
+}
+
+/** Every server with a party on air, for the rail's dot. */
+export function liveWatchPartyServerIds(
+  byChannel: Record<string, WatchParty>,
+): ReadonlySet<string> {
+  return new Set(
+    Object.values(byChannel)
+      .filter((party) => party.state === "live" && party.serverId !== null)
+      .map((party) => party.serverId as string),
+  );
 }
 
 /** The live ones, newest first. What the sidebar block draws. */
@@ -144,9 +241,9 @@ export function liveWatchParties(
   byChannel: Record<string, WatchParty>,
   serverId: string | null,
 ): WatchParty[] {
-  return Object.values(byChannel)
-    .filter(
+  return sortNewestFirst(
+    Object.values(byChannel).filter(
       (party) => party.state === "live" && party.serverId === serverId,
-    )
-    .sort((a, b) => (b.wentLiveAt ?? "").localeCompare(a.wentLiveAt ?? ""));
+    ),
+  );
 }

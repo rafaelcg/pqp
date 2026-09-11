@@ -1824,3 +1824,16 @@ html[data-immersive-stage] [data-immersive-hide] {
   border-left: 1px solid var(--color-border);
   box-shadow: var(--shadow-2);
 }
+
+/* A stream chat name with no role colour: the row sets --stream-name-hue
+   (hashed from the author id, see `streamNameHue`) and the literal lives
+   here. DECLARED ON THE ROW'S SPAN, NOT ON :root: a custom property resolves
+   its var() references on the element that declares it, so a :root
+   declaration computed once with the fallback hue and every name came out
+   the same colour. Light enough to read on ink; the light theme retunes it. */
+[data-stream-name] {
+  --stream-name: oklch(0.78 0.14 var(--stream-name-hue, 200));
+}
+:root[data-theme="light"] [data-stream-name] {
+  --stream-name: oklch(0.52 0.16 var(--stream-name-hue, 200));
+}

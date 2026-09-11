@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { WatchParty } from "@pqp/shared";
 import { WatchPartyPanel } from "./watch-party-panel";
 
@@ -112,6 +112,22 @@ describe("the surface never contradicts itself", () => {
   it("offers to create one only when nothing is live", () => {
     const html = render({ party: null, hasStream: false, canStart: true });
     expect(html).toContain("watch-party-empty");
+  });
+
+  it("tells somebody without the permission what it is called, instead of nothing", () => {
+    const html = render({ party: null, hasStream: false, canStart: false });
+    expect(html).toContain("watch-party-no-permission");
+    expect(html).toContain("Start watch party");
+    expect(html).not.toContain("data-watch-party-create");
+  });
+
+  it("stays out of the way in a call and under a picture", () => {
+    expect(
+      render({ party: null, hasStream: false, canStart: false, inCall: true }),
+    ).not.toContain("watch-party-no-permission");
+    expect(
+      render({ party: null, hasStream: true, canStart: false }),
+    ).not.toContain("watch-party-no-permission");
   });
 });
 
@@ -303,6 +319,22 @@ describe("a host can tell they are not live", () => {
     party: { ...PARTY, state: "draft", viewerRole: "host" },
   };
 
+  // Node has a `navigator` with no `mediaDevices`, which is exactly what an
+  // iPhone looks like to `supportsScreenShare`. These tests are about a
+  // computer, so give it the API; the phone case has its own test below.
+  beforeEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: { getDisplayMedia: () => Promise.reject(new Error("test")) },
+      configurable: true,
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(navigator, "mediaDevices", {
+      value: undefined,
+      configurable: true,
+    });
+  });
+
   it("says it in a sentence, not in a 10px watermark", () => {
     /**
      * On 12 Sep 2026 a host on production announced "im live" to a room while
@@ -313,9 +345,9 @@ describe("a host can tell they are not live", () => {
      */
     const html = render(draft);
     expect(html).toContain("watch-party-not-live");
-    expect(html).toContain("Not live yet");
-    // And the badge on the preview is a status light now, not a caption.
-    expect(html).toContain("watch-party-preview-state");
+    expect(html).toContain("Only you can see this");
+    // One warning: the pill that used to sit on the preview is gone.
+    expect(html).not.toContain("watch-party-preview-state");
   });
 
   it("keeps Go live in the row pinned to the bottom of the surface", () => {
@@ -327,6 +359,25 @@ describe("a host can tell they are not live", () => {
     const bar = html.slice(html.indexOf("watch-party-not-live"));
     expect(bar).toContain("data-watch-party-go-live");
     expect(bar).toContain("data-watch-party-discard");
+  });
+});
+
+describe("a host on a phone", () => {
+  const draft: Partial<Parameters<typeof WatchPartyPanel>[0]> = {
+    party: { ...PARTY, state: "draft", viewerRole: "host" },
+  };
+
+  it("is told to open a computer, and is not offered a picker or Go live", () => {
+    // `getDisplayMedia` does not exist on iOS Safari at all. A button that
+    // opens nothing and a Go live that can never enable are worse than a
+    // sentence; the name, the options, the link and Discard still work.
+    const html = render(draft);
+    expect(html).toContain("watch-party-phone-host");
+    expect(html).not.toContain("Pick what to share");
+    expect(html).not.toContain("data-watch-party-go-live");
+    expect(html).toContain("data-watch-party-discard");
+    expect(html).toContain("data-watch-party-share");
+    expect(html).toContain("data-watch-party-options-toggle");
   });
 });
 
@@ -354,9 +405,22 @@ describe("the way into the room", () => {
     expect(inBar()).not.toContain(joinControl);
   });
 
-  it("offers it to the people running the show, voice or no voice", () => {
+  it("offers it to the people running the show only once the party has voice", () => {
+    // A WATCH PARTY IS NOT A LOBBY. With voice off the host is seated by
+    // going live or sharing, and a co-host by Assumir; a seat button for
+    // them here would make the room read as a call. With voice on, the floor
+    // is a thing and the door stays.
     for (const viewerRole of ["host", "cohost"] as const) {
-      expect(inBar({ party: { ...PARTY, viewerRole } })).toContain(joinControl);
+      expect(inBar({ party: { ...PARTY, viewerRole } })).not.toContain(joinControl);
+      expect(
+        inBar({
+          party: {
+            ...PARTY,
+            viewerRole,
+            options: { ...PARTY.options, voiceEnabled: true },
+          },
+        }),
+      ).toContain(joinControl);
     }
   });
 
@@ -427,10 +491,123 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
       source.indexOf("async function handleWatchPartyEnd"),
     );
     expect(goLive).toContain(
-      "startScreenShareGated(false, { preferBrowserTab: true, stream })",
+      "startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream })",
     );
     expect(goLive).toContain("startMuted: true");
     expect(goLive).not.toContain("getAudioTracks().length > 0");
 
+  });
+});
+
+/**
+ * THE GATHERING SCREEN. A scheduled party is a place to arrive at before there
+ * is a picture: a countdown, a bell, the link, and for the host the way to
+ * start early. A member gets everything but the button.
+ */
+describe("a scheduled party gathers people", () => {
+  const scheduled = (viewerRole: WatchParty["viewerRole"]) => ({
+    party: {
+      ...PARTY,
+      state: "scheduled" as const,
+      viewerRole,
+      startsAt: new Date(Date.now() + 3 * 3_600_000).toISOString(),
+    },
+    onToggleReminder: async () => {},
+  });
+
+  it("offers a viewer the bell and the link, and no way to start it", () => {
+    const html = render(scheduled("viewer"));
+    expect(html).toContain("watch-party-scheduled-when");
+    expect(html).toContain("data-watch-party-remind");
+    expect(html).toContain("data-watch-party-share");
+    expect(html).not.toContain("data-watch-party-go-live");
+  });
+
+  it("offers the host the same, plus Go live now", () => {
+    const html = render(scheduled("host"));
+    expect(html).toContain("data-watch-party-remind");
+    expect(html).toContain("data-watch-party-go-live");
+  });
+
+  it("reads the bell from the party", () => {
+    const on = render({
+      ...scheduled("viewer"),
+      party: { ...scheduled("viewer").party, reminding: true },
+    });
+    expect(on).toContain('aria-pressed="true"');
+  });
+});
+
+/**
+ * THE MIC PILL IS THE MUTE BUTTON. The thing that says whether you are heard
+ * is the thing you press to stop being heard; a label three panes away from
+ * the control it describes is how a host asked "is my mic on?" in the first
+ * place.
+ */
+describe("the mic pill on the live bar", () => {
+  const live = (micState: "off" | "muted" | "room" | "everyone") =>
+    render({
+      slot: "chrome",
+      party: { ...PARTY, state: "live", viewerRole: "host" },
+      micState,
+      onToggleMute: () => {},
+    });
+
+  it("is a button while seated, and says everyone hears you when they do", () => {
+    const html = live("everyone");
+    expect(html).toMatch(/<button[^>]*data-watch-party-mic="everyone"/);
+    expect(html).toContain("Everyone can hear you");
+  });
+
+  it("is only a label when not in the call", () => {
+    const html = live("off");
+    expect(html).toMatch(/<span[^>]*data-watch-party-mic="off"/);
+    expect(html).not.toMatch(/<button[^>]*data-watch-party-mic/);
+  });
+});
+
+/** The share lives on the bar, in the party's words, for the people running it. */
+describe("the share controls on the live bar", () => {
+  const live = (isPresenting: boolean, viewerRole: WatchParty["viewerRole"] = "host") =>
+    render({
+      slot: "chrome",
+      party: { ...PARTY, state: "live", viewerRole },
+      isPresenting,
+      onShareScreen: async () => {},
+      onStopShare: async () => {},
+      onReplaceShare: async () => {},
+    });
+
+  it("offers Compartilhar tela while nothing of theirs is going out", () => {
+    const html = live(false);
+    expect(html).toContain("data-watch-party-bar-share");
+    expect(html).not.toContain("data-watch-party-bar-stop-share");
+  });
+
+  it("offers Trocar and Parar while they present", () => {
+    const html = live(true);
+    expect(html).toContain("data-watch-party-bar-replace-share");
+    expect(html).toContain("data-watch-party-bar-stop-share");
+    expect(html).not.toContain("data-watch-party-bar-share");
+  });
+
+  it("offers none of it to a viewer", () => {
+    const html = live(false, "viewer");
+    expect(html).not.toContain("data-watch-party-bar-share");
+  });
+});
+
+/** The seat's exit is on the bar, for the seated guest, never for the host. */
+describe("Sair do palco", () => {
+  const seated = (viewerRole: WatchParty["viewerRole"]) =>
+    render({
+      slot: "chrome",
+      party: { ...PARTY, state: "live", viewerRole },
+      inCall: true,
+      onLeaveSeat: () => {},
+    });
+  it("is offered to a seated guest and not to the host", () => {
+    expect(seated("viewer")).toContain("data-watch-party-leave-stage");
+    expect(seated("host")).not.toContain("data-watch-party-leave-stage");
   });
 });

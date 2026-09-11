@@ -1404,9 +1404,22 @@ about, so it is written out rather than left to be inferred from
 |---|---|---|
 | the presenter's screen | yes | yes |
 | the screen's own audio | yes | **only if the capture had it** |
-| every microphone, host included | yes | **no** |
+| the host's microphone | yes | **yes, since "Meu mic vai no stream"** (on by default; see below) |
+| every other microphone | yes | **no** |
 | every camera | yes | **no** |
 | delay | sub-second | about ten seconds |
+
+**The host's voice, since 2026-09-10.** The transcode is still bound to the
+share's two tracks; what changed is what the share's audio track *is*. On the
+SFU, a watch party share (the tab picker, `preferBrowserTab`) mixes the host's
+processed microphone into the display audio in the browser before publishing
+(`client/src/lib/screen-mix.ts`), so the egress carries it without knowing. The
+separately published microphone is muted while the mix is live, or seated
+listeners would hear the host twice. The host's mute button gates the mix too
+(it taps the pipeline's output, after the mute gate). The switch is per
+computer ("Meu mic vai no stream", Opções), on by default, and the live bar
+says which of the four states the mic is in: not in the call, muted, room only,
+or everyone. Option 1 of `docs/plans/WATCH_PARTY_STREAM_AUDIO.md`, built.
 
 The transcode is a **Track Composite** egress, and
 `TrackCompositeEgressRequest` carries one video track sid and one audio track

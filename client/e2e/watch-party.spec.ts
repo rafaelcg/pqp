@@ -66,9 +66,13 @@ test.use({
       // `Join the call` from the watch stage is the ORDINARY join, which opens
       // a microphone. Without a fake device it falls back to listen-only,
       // which still works but adds a banner and a real permission timeout to
-      // every run. Nothing here captures a display.
+      // every run.
       "--use-fake-device-for-media-stream",
       "--use-fake-ui-for-media-stream",
+      // The setup surface will not go live without a picture, so the host
+      // journey picks one. These answer getDisplayMedia without a picker.
+      "--auto-select-desktop-capture-source=Entire screen",
+      "--auto-accept-this-tab-capture",
     ],
   },
   permissions: ["microphone"],
@@ -430,10 +434,17 @@ test("a host creates a watch party from the sidebar, names it, and goes live", a
   await ack.getByRole("button", { name: "Got it", exact: true }).click();
   await expect(ack).toBeHidden({ timeout: 20_000 });
 
-  // Step three: Ir ao vivo. Deliberately with nothing picked, which is the
-  // documented order (the party goes live first, the picture second) and the
-  // case a host hits when the share fails. The room must still be told.
-  await page.locator("[data-watch-party-go-live]").click();
+  // Step three: pick, then Ir ao vivo. The button refuses with nothing
+  // picked (a host went live to a black pane once); the party still goes
+  // live BEFORE the picture reaches anyone, which is the documented order.
+  const goLive = page.locator("[data-watch-party-go-live]");
+  await expect(goLive).toBeDisabled();
+  await setup.getByRole("button", { name: "Pick what to share" }).click();
+  await expect(page.getByTestId("watch-party-preview")).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(goLive).toBeEnabled();
+  await goLive.click();
 
   const bar = page.getByTestId("watch-party-bar");
   await expect(bar).toBeVisible({ timeout: 20_000 });
@@ -588,9 +599,7 @@ test("a member opens the party from the sidebar, gets the audience surface witho
     // NOBODY WATCHING IS ASKED FOR A MICROPHONE, and nobody watching takes a
     // seat. Both are the same rule and both are asserted: no leave button
     // means no seat, and zero `getUserMedia` calls means no prompt.
-    await expect(
-      viewer.getByRole("button", { name: "Leave", exact: true }),
-    ).toHaveCount(0);
+    await expect(viewer.locator("[data-watch-party-leave-stage]")).toHaveCount(0);
     // -1 would mean the counter itself never installed, so a passing 0 here
     // is a real zero rather than a missing hook.
     expect(await gumCalls(viewer)).toBe(0);
@@ -642,7 +651,11 @@ test("an invited guest takes a seat and does not get the player twice", async ({
     await openAs(viewer, here, "wp-seat");
 
     await viewer.getByTestId("live-party-block").waitFor({ timeout: 20_000 });
-    await viewer.locator("[data-live-party-row]").click();
+    // By channel: this account is a member of every server the suite has
+    // ever seeded it into, and the block lists every live party across them.
+    await viewer
+      .locator(`[data-live-party-row][data-channel-id="${party.channelId}"]`)
+      .click();
 
     // THE PICTURE, WITHOUT A SEAT. The stage mounts on the selection alone.
     const stage = viewer.getByTestId("watch-channel-stage");
@@ -659,7 +672,10 @@ test("an invited guest takes a seat and does not get the player twice", async ({
     await expect(stage).toHaveCount(0, { timeout: 20_000 });
     await expect(viewer.getByTestId("watch-stage-live")).toHaveCount(0);
 
-    const leave = viewer.getByRole("button", { name: "Leave", exact: true });
+    // The seat's exit is on the party bar, in the party's words; the call
+    // strip and its Leave are not drawn in a watch party channel.
+    await expect(viewer.getByTestId("call-stage-collapsed")).toHaveCount(0);
+    const leave = viewer.locator("[data-watch-party-leave-stage]");
     await expect(leave).toBeVisible({ timeout: 20_000 });
     // AND STILL NO MICROPHONE, EVEN SEATED. A live party's default
     // `stageMode` is `hosts_only`, which denies SPEAK to @everyone on the
@@ -822,7 +838,7 @@ test("the three states a real event produces read differently", async ({
   // with a countdown and a way to start early, never a live bar.
   await page.locator("[data-live-party-create]").click();
   await page.locator("[data-create-watch-party-name]").fill("Sessão coruja");
-  await page.locator("[data-create-watch-party-schedule]").check();
+  await page.locator("[data-create-watch-party-schedule]").click();
   await page.locator("[data-create-watch-party-submit]").click();
 
   await expect(page.getByTestId("watch-party-scheduled")).toBeVisible({
@@ -835,7 +851,13 @@ test("the three states a real event produces read differently", async ({
   // create button being back in its place is the same fact from the other
   // side, and catches a block that renders for every state.
   await expect(page.getByTestId("live-party-block")).toHaveCount(0);
-  await expect(page.locator("[data-live-party-create]")).toBeVisible();
+  // And the create control is not offered over a party that already exists:
+  // the host gets the way back to the one they scheduled instead. The API
+  // refuses a second one, and a button that leads to a refusal is a bug.
+  await expect(page.locator("[data-live-party-create]")).toHaveCount(0);
+  await expect(
+    page.locator('[data-live-party-pending="scheduled"]'),
+  ).toBeVisible();
 
   const second = await secondClient(browser);
   try {
@@ -1033,7 +1055,7 @@ test("a host who has not gone live is told so, in words", async ({ page }) => {
 
   const notLive = page.getByTestId("watch-party-not-live");
   await expect(notLive).toBeVisible({ timeout: 20_000 });
-  await expect(notLive.getByText("Not live yet")).toBeVisible();
+  await expect(notLive.getByText("Only you can see this")).toBeVisible();
   // The state and the control that changes it are the same row, so reading
   // one puts the other under the pointer.
   await expect(notLive.locator("[data-watch-party-go-live]")).toBeVisible();
@@ -1045,7 +1067,12 @@ test("a host who has not gone live is told so, in words", async ({ page }) => {
   }
 
   // And it goes the moment it stops being true, which is the half that makes
-  // it a state rather than decoration.
+  // it a state rather than decoration. A picture first: the row says so.
+  await expect(notLive.getByText("Pick what to share first.")).toBeVisible();
+  await page.getByRole("button", { name: "Pick what to share" }).click();
+  await expect(page.getByTestId("watch-party-preview")).toBeVisible({
+    timeout: 20_000,
+  });
   await page.locator("[data-watch-party-go-live]").click();
   await expect(page.getByTestId("watch-party-bar")).toBeVisible({
     timeout: 20_000,
@@ -1316,7 +1343,11 @@ test("the people running the party keep their way into the room", async ({
   await expect(page.getByTestId("watch-party-bar")).toBeVisible({
     timeout: 20_000,
   });
-  await expect(page.locator("[data-watch-party-join-call]")).toBeVisible();
+  // A WATCH PARTY IS NOT A LOBBY. With voice off the host is not offered a
+  // seat as such: the way back into their own room is putting a picture up,
+  // which seats them, and that control is on the waiting surface.
+  await expect(page.locator("[data-watch-party-join-call]")).toHaveCount(0);
+  await expect(page.locator("[data-watch-party-share-screen]")).toBeVisible();
 });
 
 test("a viewer can tell they are watching, and can stop", async ({
@@ -1697,4 +1728,89 @@ test("a party has no voice until the host turns it on, and the audience follows 
   } finally {
     await hostClient.context.close();
   }
+});
+
+test("the host promotes a co-host from the member card", async ({
+  page,
+  browser,
+}) => {
+  /**
+   * The options dialog keeps its list; this is the same action where a host
+   * is already looking at somebody, which is how Twitch adds a moderator.
+   * The rung reads the party from the store, so the same card offers the
+   * demotion once the promotion has landed.
+   */
+  const shared = await seedServer("wp-card-host", "wp-card-guest");
+  const guestId = await materialiseAccount("wp-card-guest");
+  const party = await createParty("wp-card-host", shared.serverId, "Cinemoon 5");
+  await setPartyState("wp-card-host", party.partyId, "live");
+  const here = `/app/server/${shared.serverId}/channel/${party.channelId}`;
+
+  // The guest is in the sidebar once they have been seen: open their client.
+  const second = await secondClient(browser);
+  try {
+    await openAs(second.page, here, "wp-card-guest");
+    await openAs(page, here, "wp-card-host");
+    await expect(page.getByTestId("watch-party-bar")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    const trigger = page.locator(`[data-member-sidebar-trigger="${guestId}"]`);
+    await expect(trigger).toBeVisible({ timeout: 20_000 });
+    await trigger.click();
+    const card = page.locator("[data-profile-card]");
+    await expect(card).toBeVisible();
+    await card.locator('[data-profile-cohost="promote"]').click();
+    await expect(card.locator('[data-profile-cohost="demote"]')).toBeVisible({
+      timeout: 20_000,
+    });
+
+    // And the promotion reached the guest's running client on the socket:
+    // Encerrar is a co-host's control.
+    await expect(second.page.locator("[data-watch-party-end]")).toBeVisible({
+      timeout: 20_000,
+    });
+  } finally {
+    await second.context.close();
+  }
+});
+
+test("a watch party puts the chat beside the film, in stream shape", async ({
+  page,
+}) => {
+  /**
+   * Twitch, YouTube and Kick all draw a stream the same way: video wide on
+   * the left, a narrow chat column on the right. A watch party room starts
+   * that way on its own (an ordinary call still stacks), and the chat beside
+   * the film takes a stream's shape. Theatre mode is the native fullscreen
+   * with the chat overlay, pinned by the fullscreen tests above.
+   */
+  const shared = await seedServer("wp-cinema-host", "wp-cinema-guest");
+  const party = await createParty("wp-cinema-host", shared.serverId, "Cinemoon 9");
+  await setPartyState("wp-cinema-host", party.partyId, "live");
+  await withFakeLiveStream(page, party.channelId);
+  await openAs(
+    page,
+    `/app/server/${shared.serverId}/channel/${party.channelId}`,
+    "wp-cinema-guest",
+  );
+
+  const stage = page.getByTestId("watch-channel-stage");
+  await expect(stage).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('[data-call-split="side-by-side"]')).toBeVisible();
+
+  // STREAM CHAT. Beside a film the transcript takes the shape every stream
+  // has: no avatar, the name coloured and inline before the words.
+  const composer = page.getByPlaceholder(/^Message /);
+  await composer.click();
+  await composer.fill("que filme é esse");
+  await composer.press("Enter");
+  const row = page
+    .locator("[data-message-stream]", { hasText: "que filme é esse" })
+    .last();
+  await expect(row).toBeVisible({ timeout: 20_000 });
+  await expect(row.locator("img")).toHaveCount(0);
+  // No reactions in stream chat: hovering the row offers reply, not emoji.
+  await row.hover();
+  await expect(row.getByRole("button", { name: "Add reaction" })).toHaveCount(0);
 });

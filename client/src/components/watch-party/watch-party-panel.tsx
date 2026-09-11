@@ -1,13 +1,19 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import {
+  Bell,
+  BellOff,
+  Check,
   Clapperboard,
+  Lock,
   Crown,
   Hand,
   Mic,
+  MicOff,
   MonitorPlay,
   Pencil,
   Phone,
   Radio,
+  Share2,
   SlidersHorizontal,
   Square,
   Undo2,
@@ -22,21 +28,28 @@ import {
   type WatchParty,
   type WatchPartyOptions,
 } from "@pqp/shared";
-import { WatchPartyOptionsPanel } from "@/components/watch-party/watch-party-options";
+import {
+  OptionGroup,
+  WatchPartyOptionsPanel,
+  slowModeKey,
+} from "@/components/watch-party/watch-party-options";
 import {
   canAppointCohosts,
   WatchPartyCohosts,
   type CohostCandidate,
 } from "@/components/watch-party/watch-party-cohosts";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Dialog, DialogBody } from "@/components/ui/dialog";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { UserAvatar } from "@/components/user/user-avatar";
 import { FeatureHint } from "@/components/layout/feature-hint";
 import { LivePill } from "@/components/watch-party/live-pill";
+import { browserShareCapabilities, type ShareOutcome } from "@/lib/share-handle";
+import { shareWatchParty, watchPartyShareUrl } from "@/lib/share-watch-party";
 import { WatchPartyTransmission } from "@/components/watch-party/watch-party-transmission";
 import { formatSessionRelativeTime } from "@/lib/channel-session-schedule";
+import { supportsScreenShare } from "@/components/voice/capabilities";
 import { getDesktop, isDesktopApp } from "@/lib/desktop";
 import { useTranslation } from "@/lib/i18n";
 import {
@@ -91,11 +104,23 @@ export interface WatchPartyPanelProps {
   audienceCount: number;
   onCreate: () => void;
   onGoLive: (stream: MediaStream | null) => Promise<void>;
+  /**
+   * The host putting a picture up on a party that is already live: join the
+   * room if needed and open the picker. Without it the waiting screen told
+   * a host who had stopped sharing to share again, with no control that did.
+   */
+  onShareScreen?: () => Promise<void>;
   onEnd: () => Promise<void>;
   onDiscard: () => Promise<void>;
   onOptionsChange: (options: Partial<WatchPartyOptions>) => Promise<void>;
   onRename: (name: string) => Promise<void>;
   onClaimHost: () => Promise<void>;
+  /**
+   * "Me avisa quando começar" on the scheduled screen, bound to the party's
+   * own reminder (a party IS a channel session, so `party.reminding` is the
+   * same row the session card toggles). Absent means the toggle is not drawn.
+   */
+  onToggleReminder?: (wants: boolean) => Promise<void>;
   /**
    * Everybody the host may hand a co-host badge to: this server's members.
    *
@@ -137,6 +162,24 @@ export interface WatchPartyPanelProps {
   transport?: VoiceRoomTransport | null;
   /** This seat was taken as audience: no microphone was ever asked for. */
   isAudienceSeat?: boolean;
+  /**
+   * The host's own microphone, for the pill on the bar: nothing on the live
+   * screen said whether it was open. `off` is not in the call at all;
+   * `muted` is in the call with the mic closed; `open` means the room can
+   * hear it (the audience never can: the stream carries the window's audio).
+   */
+  micState?: "off" | "muted" | "room" | "everyone";
+  /** "Meu mic vai no stream", the standing preference, and the switch for it. */
+  micInStream?: boolean;
+  onMicInStreamChange?: (on: boolean) => void;
+  /** The pill on the bar mutes and unmutes when this is given. */
+  onToggleMute?: () => void;
+  /** Give the seat back, in the party's words: Sair do palco. */
+  onLeaveSeat?: () => void;
+  /** Stop this person's share; the party stays live. */
+  onStopShare?: () => Promise<void>;
+  /** Pick a different window or tab; the old share stops first. */
+  onReplaceShare?: () => Promise<void>;
   /** 60 when this server's HLS ladder names a 60 fps rung. */
   hlsMaxFrameRate?: 30 | 60;
   onShapeChange?: (shape: "expanded" | "none") => void;
@@ -175,8 +218,6 @@ export interface WatchPartyPanelProps {
    * other two stages in the same slot always have.
    */
   fill?: boolean;
-  /** First time this host has reached a setup surface. */
-  showHostHint?: boolean;
   /** First time this person has watched a live party. */
   showViewerHint?: boolean;
 }
@@ -266,7 +307,17 @@ export function WatchPartyPanel(props: WatchPartyPanelProps) {
       // `WatchChannelStage`) and never the create button.
       return null;
     case "none":
-      return null;
+      // A quiet watch party channel, seen by somebody who may not start one.
+      // Say why the button is missing rather than showing an empty pane:
+      // the permission has a name in the roles menu, and the person who can
+      // grant it is one ask away. Not in a call (the call stage owns that
+      // space) and not while a picture is up (`liveUntitled` covers it).
+      return slot === "surface" &&
+        !props.canStart &&
+        !props.inCall &&
+        !props.hasStream ? (
+        <NoPermissionStage {...props} />
+      ) : null;
   }
 }
 
@@ -309,6 +360,293 @@ function cohostSection(
   );
 }
 
+// ------------------------------------------------------------------- share
+
+/**
+ * "Copiar link", on the draft and on the live bar. The label says what the
+ * device did (a phone opened a sheet, a desktop copied), the way the handle
+ * share does. A party in a conversation has no server and no shareable
+ * address, so the button is absent there rather than dead.
+ */
+function WatchPartyShareButton({
+  party,
+  size = "sm",
+}: {
+  party: WatchParty;
+  size?: "sm" | "default";
+}) {
+  const { t, locale } = useTranslation();
+  const [outcome, setOutcome] = useState<ShareOutcome | null>(null);
+
+  useEffect(() => {
+    if (outcome !== "copied" && outcome !== "failed") {
+      return;
+    }
+    const timer = window.setTimeout(() => setOutcome(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [outcome]);
+
+  if (!party.serverId) {
+    return null;
+  }
+  const serverId = party.serverId;
+  const label =
+    outcome === "copied"
+      ? t("watchParty.share.copied")
+      : outcome === "failed"
+        ? t("watchParty.share.failed")
+        : t("watchParty.share.cta");
+
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size={size}
+      onClick={() => {
+        const url = watchPartyShareUrl(
+          window.location.origin,
+          serverId,
+          party.channelId,
+        );
+        void shareWatchParty(
+          { name: party.name, url, locale },
+          browserShareCapabilities(),
+        ).then((result) => {
+          if (result !== "dismissed") {
+            setOutcome(result);
+          }
+        });
+      }}
+      data-watch-party-share
+    >
+      {outcome === "copied" ? (
+        <Check className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+      ) : (
+        <Share2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+      )}
+      {label}
+    </Button>
+  );
+}
+
+// ------------------------------------------------- options: one dialog, one row
+
+/**
+ * THE SAME DIALOG BEFORE AND DURING THE SHOW. The setup surface used to carry
+ * a 72-unit column of every option plus the co-host list beside the preview,
+ * and the live bar opened a dialog with the same controls. Two surfaces for
+ * one set of switches, and the bigger one sat on the screen where a host has
+ * the least reason to touch any of them: every default is already right for a
+ * film night (voice off, reactions on, chat unthrottled). Twitch, YouTube and
+ * TikTok all put the options a click away and keep the picture and the one
+ * button in front. So the draft gets the live dialog, opened from a summary
+ * row, and the column is gone.
+ *
+ * `stage` is the hands queue, which only exists once there is a room with
+ * people in it; a draft has none by construction.
+ */
+function WatchPartyOptionsDialog({
+  props,
+  party,
+  open,
+  onClose,
+  stage,
+}: {
+  props: WatchPartyPanelProps;
+  party: WatchParty;
+  open: boolean;
+  onClose: () => void;
+  stage: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title={t("watchParty.options.title")}
+      eyebrow={party.name}
+      description={
+        party.state === "live" ? t("watchParty.options.liveNote") : undefined
+      }
+      size="md"
+    >
+      <DialogBody className="flex flex-col gap-4" data-testid="watch-party-options-drawer">
+        <WatchPartyOptionsPanel
+          options={party.options}
+          audienceCount={props.audienceCount}
+          onChange={(patch) => void props.onOptionsChange(patch)}
+        />
+        {/* THIS COMPUTER'S SWITCH, not the party's: whether the share carries
+            the host's own voice to the people watching from outside. Off,
+            the stream carries the window's audio only and the mic stays with
+            the seated room, which is what a host who wants to chat with
+            friends in a separate lobby while the film plays wants. */}
+        {props.onMicInStreamChange && (
+          <OptionGroup title={t("watchParty.options.streamTitle")}>
+            <div className="px-1 py-0.5" data-watch-party-mic-in-stream>
+              <Switch
+                label={t("watchParty.options.micInStream")}
+                description={t("watchParty.options.micInStreamBody")}
+                checked={props.micInStream !== false}
+                onCheckedChange={(on) => props.onMicInStreamChange?.(on)}
+              />
+            </div>
+          </OptionGroup>
+        )}
+        {/* Mid-show, and it is the same control the setup surface had. A
+            co-host promoted here is granted SPEAK on the spot by the server
+            when the party's floor is closed, so somebody brought in to help
+            can actually talk to the room. */}
+        {cohostSection(props, party, "border-t border-border pt-4")}
+        {/* The queue is a moderation surface and only the people running the
+            party see it: an audience that can watch who asked and was passed
+            over is an audience having a worse time. It is also nonsense in a
+            party with no voice, where nobody is asking for anything, so it
+            follows the Voz control rather than the stored stage mode. */}
+        {stage &&
+          party.options.voiceEnabled &&
+          party.options.stageMode === "invited" && (
+            <div className="border-t border-border pt-4">
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                {t("watchParty.stage.hands")}
+              </p>
+              {party.stage.hands.length === 0 ? (
+                <p className="text-[11px] text-paper-muted">
+                  {t("watchParty.stage.noHands")}
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-1">
+                  {party.stage.hands.map((person) => (
+                    <li
+                      key={person.userId}
+                      className="flex items-center gap-2"
+                      data-watch-party-hand
+                    >
+                      <UserAvatar
+                        name={person.displayName}
+                        avatarUrl={person.avatarUrl}
+                        rounded="full"
+                        className="h-6 w-6 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1 truncate text-xs text-paper">
+                        {person.displayName}
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() =>
+                          void props.onStageAction?.("invite", person.userId)
+                        }
+                        data-watch-party-invite
+                      >
+                        {t("watchParty.stage.invite")}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {party.stage.invited.length > 0 && (
+                <>
+                  <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
+                    {t("watchParty.stage.title")}
+                  </p>
+                  <ul className="flex flex-col gap-1">
+                    {party.stage.invited.map((person) => (
+                      <li key={person.userId} className="flex items-center gap-2">
+                        <UserAvatar
+                          name={person.displayName}
+                          avatarUrl={person.avatarUrl}
+                          rounded="full"
+                          className="h-6 w-6 shrink-0"
+                        />
+                        <span className="min-w-0 flex-1 truncate text-xs text-paper">
+                          {person.displayName}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            void props.onStageAction?.("remove", person.userId)
+                          }
+                          data-watch-party-stage-remove
+                        >
+                          {t("watchParty.stage.remove")}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          )}
+      </DialogBody>
+    </Dialog>
+  );
+}
+
+/**
+ * One line that says what the switches are set to, with the one control that
+ * changes them. Reads as a sentence ("Voz desligada · Reações ligadas · Chat
+ * normal · Sem co-host") so a host can confirm the defaults at a glance
+ * without opening anything, which is what most of them will do.
+ */
+function WatchPartyOptionsSummary({
+  party,
+  micInStream,
+  onOpen,
+}: {
+  party: WatchParty;
+  micInStream?: boolean;
+  onOpen: () => void;
+}) {
+  const { t } = useTranslation();
+  const { options } = party;
+  const parts = [
+    options.voiceEnabled
+      ? t("watchParty.summary.voiceOn")
+      : t("watchParty.summary.voiceOff"),
+    options.reactionsEnabled
+      ? t("watchParty.summary.reactionsOn")
+      : t("watchParty.summary.reactionsOff"),
+    options.slowModeSeconds > 0
+      ? t("watchParty.summary.slow", {
+          value: t(slowModeKey(options.slowModeSeconds)),
+        })
+      : t("watchParty.summary.chatNormal"),
+    party.cohosts.length > 0
+      ? t("watchParty.summary.cohosts", { count: party.cohosts.length })
+      : t("watchParty.summary.noCohost"),
+    ...(micInStream === undefined
+      ? []
+      : [
+          micInStream
+            ? t("watchParty.summary.micInStream")
+            : t("watchParty.summary.micRoomOnly"),
+        ]),
+  ];
+  return (
+    <div
+      data-testid="watch-party-options-summary"
+      className="flex shrink-0 items-center gap-2 border-t border-ink-4/60 bg-ink px-3 py-1.5"
+    >
+      <p className="min-w-0 flex-1 truncate text-xs text-paper-muted">
+        {parts.join(" · ")}
+      </p>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={onOpen}
+        data-watch-party-options-toggle
+      >
+        <SlidersHorizontal className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+        {t("watchParty.summary.adjust")}
+      </Button>
+    </div>
+  );
+}
+
 // ------------------------------------------------------------- no party yet
 
 function EmptyStage(props: WatchPartyPanelProps) {
@@ -339,6 +677,36 @@ function EmptyStage(props: WatchPartyPanelProps) {
         <Clapperboard className="mr-1.5 h-3.5 w-3.5" aria-hidden />
         {t("watchParty.create.button")}
       </Button>
+    </div>
+  );
+}
+
+/**
+ * The same pane, for somebody without START_WATCH_PARTY. "Nothing" was the
+ * previous answer, and nothing teaches nobody: the permission exists, it has
+ * a name in Cargos, and a moderator can tick it in one click if asked.
+ */
+function NoPermissionStage(props: WatchPartyPanelProps) {
+  const { t } = useTranslation();
+  return (
+    <div
+      data-testid="watch-party-no-permission"
+      className={cn(
+        "flex flex-col items-center justify-center gap-2 overflow-hidden border-b border-ink-4/60 bg-ink px-6 py-8 text-center",
+        surfaceHeight(props.fill, "min-h-0"),
+      )}
+    >
+      <span className="flex h-11 w-11 items-center justify-center rounded-full bg-ink-3 text-paper-muted">
+        <Lock className="h-5 w-5" aria-hidden />
+      </span>
+      <p className="text-sm font-semibold text-paper">
+        {t("watchParty.empty.title")}
+      </p>
+      <p className="max-w-sm text-xs text-paper-muted">
+        {t("watchParty.empty.noPermission", {
+          permission: t("roles.perm.START_WATCH_PARTY"),
+        })}
+      </p>
     </div>
   );
 }
@@ -375,6 +743,18 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const [busy, setBusy] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  // A PHONE CANNOT PUT A PICTURE UP. `getDisplayMedia` does not exist on iOS
+  // Safari at all and is refused on Android Chrome, so the empty state says
+  // where to go instead of offering a button that opens nothing, and the
+  // Ir ao vivo it could never enable is not drawn. Everything else on this
+  // surface (the name, the options, the link, discarding) still works from
+  // the phone, which is where a host is when they set a time on the bus.
+  const canPutPictureUp = supportsScreenShare();
+  // The most common "it doesn't work" from the QA runbook (step 3): the host
+  // picked the tab and left "share tab audio" unticked, and nobody hears the
+  // film. Say so under the preview, before anyone is watching.
+  const silentPick = stream !== null && stream.getAudioTracks().length === 0;
 
   useEffect(() => setName(party.name), [party.id, party.name]);
 
@@ -468,108 +848,74 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
                 className="h-7 w-7 text-paper-muted"
                 aria-hidden
               />
-              <p className="text-sm text-paper-muted">
-                {t("watchParty.setup.noSource")}
-              </p>
-              <Button type="button" variant="secondary" onClick={() => void pick()}>
-                {t("watchParty.setup.pick")}
-              </Button>
-              {pickError && (
-                <p className="text-xs text-danger">{pickError}</p>
+              {canPutPictureUp ? (
+                <>
+                  <p className="text-sm text-paper-muted">
+                    {t("watchParty.setup.noSource")}
+                  </p>
+                  <Button type="button" variant="secondary" onClick={() => void pick()}>
+                    {t("watchParty.setup.pick")}
+                  </Button>
+                  {pickError && (
+                    <p className="text-xs text-danger">{pickError}</p>
+                  )}
+                </>
+              ) : (
+                <p
+                  className="max-w-xs text-sm text-paper-muted"
+                  data-testid="watch-party-phone-host"
+                >
+                  {t("watchParty.setup.phoneHost")}
+                </p>
               )}
             </div>
           )}
-          {/* NOT A CAPTION. A HOST READ THE OLD ONE AND SAID "im live".
-              This used to be 10px uppercase grey in the corner of the
-              preview, which is the visual language of a watermark, and on
-              12 Sep 2026 a host on production announced he was live to a
-              room while the server reported `sharingScreen: 0` and no
-              transcode running. He had picked a window, he could see his own
-              picture, and the only thing telling him it was going nowhere
-              was that badge.
-              So it says what state this is, in a sentence, in the warning
-              tone this app uses for "careful", with a dot that reads as a
-              status light and never as decoration. It is deliberately the
-              same shape as the LIVE pill it is the opposite of. */}
-          <span
-            data-testid="watch-party-preview-state"
-            className="pointer-events-none absolute left-3 top-3 flex items-center gap-1.5 rounded-full border border-warning/40 bg-surface-0/90 px-2.5 py-1 text-xs font-semibold text-warning"
-          >
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" />
-            {t("watchParty.setup.heading")}
-          </span>
-          {stream && (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              className="absolute right-2 top-2"
-              onClick={() => void pick()}
+          {/* The name sits on the picture, where the live bar will show it,
+              rather than at the top of a form. Same input the e2e reads. */}
+          <div className="absolute right-2 top-2 flex items-center gap-2">
+            <input
+              type="text"
+              maxLength={120}
+              aria-label={t("watchParty.setup.nameLabel")}
+              className="w-32 rounded-md border border-ink-4/60 sm:w-44 bg-surface-0/90 px-2 py-1 text-right text-sm font-semibold text-paper focus:border-ink-4"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              onBlur={() => {
+                const next = name.trim();
+                if (next.length > 0 && next !== party.name) {
+                  void props.onRename(next);
+                }
+              }}
+              data-watch-party-name
+            />
+            {stream && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => void pick()}
+              >
+                {t("watchParty.setup.repick")}
+              </Button>
+            )}
+          </div>
+          {silentPick && (
+            <p
+              data-testid="watch-party-no-audio"
+              className="pointer-events-none absolute bottom-3 left-3 right-3 rounded-md border border-warning/40 bg-surface-0/90 px-2.5 py-1.5 text-xs text-warning"
             >
-              {t("watchParty.setup.repick")}
-            </Button>
+              {t("watchParty.setup.noAudio")}
+            </p>
           )}
         </div>
 
-        {/* THE INTRO PARAGRAPH IS GONE. It said "pick what you are going to
-            share, check it here and go live when it looks right", which is
-            what the not-live bar below now says with the button that does it
-            attached. Two instructional paragraphs on one screen is one too
-            many, and the one that cost the column 44px was the one nobody
-            was reading: it pushed the co-host list past the bottom of the
-            aside, which is where the host's screenshot showed it cut off
-            mid-row. */}
-        <aside className="hidden w-72 shrink-0 border-l border-ink-4/60 sm:block">
-          {/* A REAL SCROLLBAR, because this column scrolls and macOS draws
-              overlay scrollbars, so it showed a row cut in half and nothing
-              at all to say why. `ScrollArea` with `type="always"` is the
-              primitive `docs/DESIGN.md` names for exactly this: a native
-              scrollbar here draws OS chrome over the design, and no
-              scrollbar reads as a broken list. */}
-          <ScrollArea
-            type="always"
-            // The thumb's default `surface-2` is nearly invisible against
-            // this surface's `surface-0`, and an invisible scrollbar is the
-            // thing being fixed. Local, so no other scroller moves.
-            className="h-full [&_[data-radix-scroll-area-thumb]]:bg-surface-3"
-          >
-            <div className="flex flex-col gap-3 p-3">
-              <label className="block text-xs text-paper-muted">
-                <span className="mb-1 block">{t("watchParty.setup.nameLabel")}</span>
-                <input
-                  type="text"
-                  maxLength={120}
-                  className="w-full rounded-md border border-ink-4 bg-ink-3 px-2 py-1.5 text-sm text-paper"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  onBlur={() => {
-                    const next = name.trim();
-                    if (next.length > 0 && next !== party.name) {
-                      void props.onRename(next);
-                    }
-                  }}
-                  data-watch-party-name
-                />
-              </label>
-
-              <p className="mt-1 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-                {t("watchParty.options.title")}
-              </p>
-              <WatchPartyOptionsPanel
-                options={party.options}
-                audienceCount={props.audienceCount}
-                onChange={(patch) => void props.onOptionsChange(patch)}
-              />
-
-              {/* BEFORE Ir ao vivo is where this belongs. A host who names a
-                  backup here has one for the whole show; a host who only finds
-                  this control after their own connection has already died has
-                  nothing. */}
-              {cohostSection(props, party, "mt-1 border-t border-ink-4/60 pt-3")}
-            </div>
-          </ScrollArea>
-        </aside>
       </div>
+
+      <WatchPartyOptionsSummary
+        party={party}
+        micInStream={props.onMicInStreamChange ? props.micInStream !== false : undefined}
+        onOpen={() => setOptionsOpen(true)}
+      />
 
       {/* A STATE BAR, NOT A FOOTER, and that is the whole of the third fix.
           A host on production picked a window, watched his own preview and
@@ -593,15 +939,27 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <span className="h-2 w-2 shrink-0 rounded-full bg-warning" />
           <p className="min-w-0 text-xs">
+            {/* ONE WARNING, NOT TWO. The preview used to carry a pill ("Só
+                você tá vendo isso") and this row said "Ainda não tá no ar"
+                with the next step after it: the same fact in two places, in
+                two tones. The row says it once: whose eyes are on this, then
+                what to do about it. The bar is why a host on production once
+                announced "im live" to a room with nothing going out; it
+                stays the sentence, and the pill goes. */}
             <span className="font-semibold text-warning">
-              {t("watchParty.setup.notLive")}
+              {t("watchParty.setup.heading")}
             </span>{" "}
             <span className="text-text-tertiary">
-              {t("watchParty.setup.goLiveHint")}
+              {stream
+                ? t("watchParty.setup.goLiveHint")
+                : canPutPictureUp
+                  ? t("watchParty.setup.pickFirst")
+                  : t("watchParty.setup.phoneHint")}
             </span>
           </p>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <WatchPartyShareButton party={party} size="default" />
           <Button
             type="button"
             variant="ghost"
@@ -611,30 +969,37 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
             <Undo2 className="mr-1.5 h-3.5 w-3.5" aria-hidden />
             {t("watchParty.setup.discard")}
           </Button>
-          <Button
-            type="button"
-            disabled={busy}
-            onClick={() => void goLive()}
-            data-watch-party-go-live
-            className="bg-danger text-paper hover:bg-danger/85"
-          >
-            <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            {t("watchParty.setup.goLive")}
-          </Button>
+          {/* NO PICTURE, NO BUTTON. Discord's Go Live and YouTube's "Ready to
+              go live?" both refuse to start until there is a source, and the
+              one production incident this surface has had was a host going
+              live to a black pane. The party and the picture stay separable
+              on the server (a share that dies mid-show does not end the
+              party); the setup surface just will not START one without a
+              picture. The scheduled card keeps its own unconditional button
+              for the host who set a time and shares once they are in. */}
+          {canPutPictureUp && (
+            <Button
+              type="button"
+              disabled={busy || !stream}
+              title={stream ? undefined : t("watchParty.setup.pickFirst")}
+              onClick={() => void goLive()}
+              data-watch-party-go-live
+              className="bg-danger text-paper hover:bg-danger/85"
+            >
+              <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {t("watchParty.setup.goLive")}
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* The one sentence a first-time host needs, on the surface where it
-          is true. `lib/hints.ts` remembers it; `docs/ONBOARDING.md` has the
-          row. */}
-      <div className="pointer-events-none absolute bottom-16 right-3 z-10 [&>*]:pointer-events-auto">
-        <FeatureHint
-          id="watchPartyHost"
-          enabled={props.showHostHint === true}
-          title={t("watchParty.create.title")}
-          body={t("featureHint.watchPartyHost.body")}
-        />
-      </div>
+      <WatchPartyOptionsDialog
+        props={props}
+        party={party}
+        open={optionsOpen}
+        onClose={() => setOptionsOpen(false)}
+        stage={false}
+      />
 
       <ConfirmDialog
         open={confirmDiscard}
@@ -652,42 +1017,146 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
 
 // --------------------------------------------------------------- scheduled
 
+/**
+ * THE GATHERING SCREEN. A scheduled party used to be a name, a time and, for
+ * the host, a button. YouTube's scheduled watch page is the model instead: a
+ * place people arrive at before there is a picture, with a countdown, a
+ * reminder bell and the chat already open, so the audience is there when the
+ * host presses the button rather than trickling in ten minutes after. The
+ * chat is the other pane of the split, so this half only has to give them a
+ * reason to stay.
+ *
+ * The clock ticks every 30 s so "em 3 min" is never stale by more than that,
+ * and "ao vivo agora" appears on its own when the time passes even though
+ * the state has not moved (the host has not pressed anything yet).
+ */
 function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { party } = props;
   const canGoLive = canPerformWatchPartyAction({
     action: "goLive",
     role: party.viewerRole,
     state: party.state,
   });
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const [reminding, setReminding] = useState(party.reminding);
+  const [reminderBusy, setReminderBusy] = useState(false);
+  const displayedPartyId = useRef(party.id);
+  displayedPartyId.current = party.id;
+  useEffect(() => setReminding(party.reminding), [party.id, party.reminding]);
+  // Same instance can show party B while A's toggle is still in flight. The
+  // finally guard below must not clear B's busy; reset it when the party changes.
+  useEffect(() => {
+    setReminderBusy(false);
+  }, [party.id]);
+  const toggleReminder = async () => {
+    if (!props.onToggleReminder) {
+      return;
+    }
+    const partyId = party.id;
+    const next = !reminding;
+    setReminding(next);
+    setReminderBusy(true);
+    try {
+      await props.onToggleReminder(next);
+    } catch {
+      if (displayedPartyId.current === partyId) {
+        setReminding(!next);
+      }
+    } finally {
+      if (displayedPartyId.current === partyId) {
+        setReminderBusy(false);
+      }
+    }
+  };
+  const when = formatSessionRelativeTime(
+    party.startsAt ?? "",
+    now,
+    locale === "pt-BR" ? "pt-BR" : "en",
+  );
+
   return (
     <div
       data-testid="watch-party-scheduled"
       className={cn(
-        "flex flex-col items-center justify-center gap-2 overflow-hidden border-b border-ink-4/60 bg-ink px-6 py-8 text-center",
+        "flex flex-col items-center justify-center overflow-hidden border-b border-ink-4/60 bg-ink px-4 py-6",
         surfaceHeight(props.fill, "min-h-0"),
       )}
     >
-      <PartyIdentity party={party} onRename={props.onRename} />
-      <p className="text-xs text-paper-muted">
-        {formatSessionRelativeTime(party.startsAt ?? "", new Date(), "pt-BR")}
-      </p>
-      {canGoLive && (
-        <>
-          <Button
-            type="button"
-            className="mt-1 bg-danger text-paper hover:bg-danger/85"
-            onClick={() => void props.onGoLive(null)}
-            data-watch-party-go-live
+      {/* A CARD, NOT A VOID. The first cut floated the identity, the time and
+          three buttons of three different weights in the middle of a black
+          pane. The time is what a person came to read, so it is the
+          headline; who and what sit under it; the two quiet actions share
+          a row; and the host's one loud action has a row of its own with
+          the honest sentence beside it (viewers are looking at this screen,
+          so "nobody sees anything" was false). */}
+      <div className="flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-surface-0 px-6 py-6 text-center">
+        <div>
+          <p
+            className="text-[11px] font-semibold uppercase tracking-wider text-text-tertiary"
           >
-            <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            {t("watchParty.scheduled.goLiveNow")}
-          </Button>
-          <p className="text-[11px] text-paper-muted">
-            {t("watchParty.scheduled.hostNote")}
+            {t("watchParty.scheduled.eyebrow")}
           </p>
-        </>
-      )}
+          <p
+            className="mt-1 text-xl font-semibold text-paper"
+            data-testid="watch-party-scheduled-when"
+          >
+            {t("watchParty.scheduled.startsAt", { when })}
+          </p>
+        </div>
+        <PartyIdentity
+          party={party}
+          onRename={props.onRename}
+          className="flex-none justify-center"
+        />
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          {props.onToggleReminder && (
+            <Button
+              type="button"
+              variant={reminding ? "default" : "secondary"}
+              size="sm"
+              disabled={reminderBusy}
+              aria-pressed={reminding}
+              onClick={() => void toggleReminder()}
+              data-watch-party-remind
+            >
+              {reminding ? (
+                <Bell className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              ) : (
+                <BellOff className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              )}
+              {reminding
+                ? t("watchParty.scheduled.reminding")
+                : t("watchParty.scheduled.remind")}
+            </Button>
+          )}
+          <WatchPartyShareButton party={party} />
+        </div>
+        {canGoLive ? (
+          <div className="flex w-full flex-col items-center gap-2 border-t border-border pt-4">
+            <Button
+              type="button"
+              className="w-full bg-danger text-paper hover:bg-danger/85 sm:w-auto"
+              onClick={() => void props.onGoLive(null)}
+              data-watch-party-go-live
+            >
+              <Radio className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {t("watchParty.scheduled.goLiveNow")}
+            </Button>
+            <p className="text-xs text-text-tertiary">
+              {t("watchParty.scheduled.hostNote")}
+            </p>
+          </div>
+        ) : (
+          <p className="text-xs text-text-tertiary">
+            {t("watchParty.scheduled.viewerNote")}
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -796,6 +1265,70 @@ function LiveSurface(
         meta={t("watchParty.live.viewers", { count: props.audienceCount })}
         onRename={props.onRename}
       />
+      {/* WHETHER YOUR MICROPHONE IS OPEN, in words, on the bar. A host live
+          in front of a room asked exactly that and nothing here answered:
+          the only hint was the mute icon at the bottom of the sidebar. And
+          the answer has a second half people get wrong, so it is stated:
+          the room can hear an open mic, the audience outside never can. */}
+      {(runsTheShow || props.inCall) && props.micState && (() => {
+        const mic = props.micState;
+        const inCall = mic !== "off";
+        const label =
+          mic === "everyone"
+            ? t("watchParty.live.micEveryone")
+            : mic === "room"
+              ? t("watchParty.live.micRoom")
+              : mic === "muted"
+                ? t("watchParty.live.micMuted")
+                : t("watchParty.live.micOff");
+        const hint =
+          mic === "everyone"
+            ? t("watchParty.live.micEveryoneHint")
+            : mic === "room"
+              ? t("watchParty.live.micRoomHint")
+              : undefined;
+        const className = cn(
+          "flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold transition-colors",
+          mic === "everyone"
+            ? "border-success/40 bg-success/15 text-success"
+            : mic === "room"
+              ? "border-warning/40 bg-warning/10 text-warning"
+              : "border-border bg-surface-0 font-normal text-text-tertiary",
+          inCall && props.onToggleMute && "hover:bg-surface-2",
+        );
+        const icon =
+          mic === "everyone" || mic === "room" ? (
+            <Mic className="h-3 w-3" aria-hidden />
+          ) : (
+            <MicOff className="h-3 w-3" aria-hidden />
+          );
+        // THE PILL IS THE MUTE BUTTON. It used to be a label beside a mute
+        // control three panes away; the thing that says whether you are
+        // heard is the thing you press to stop being heard.
+        return inCall && props.onToggleMute ? (
+          <button
+            type="button"
+            data-watch-party-mic={mic}
+            aria-pressed={mic === "muted"}
+            aria-label={
+              mic === "muted"
+                ? t("voice.control.unmute")
+                : t("voice.control.mute")
+            }
+            title={hint ?? (mic === "muted" ? t("voice.control.unmute") : t("voice.control.mute"))}
+            className={className}
+            onClick={props.onToggleMute}
+          >
+            {icon}
+            {label}
+          </button>
+        ) : (
+          <span data-watch-party-mic={mic} title={hint} className={className}>
+            {icon}
+            {label}
+          </span>
+        );
+      })()}
       {/* No `shrink-0`: in a narrow column the buttons wrap onto their own
           line rather than running past the divider, which is how "Encerrar"
           ended up half off the screen the first time. */}
@@ -874,7 +1407,15 @@ function LiveSurface(
             The listen-only label went with the control. Everybody who can
             still see this button can speak once they are in, so a warning
             about a seat that cannot would now be false. */}
-        {!props.inCall && mayTakeASeat && (
+        {/* A WATCH PARTY IS NOT A LOBBY. The host is seated by going live
+            or sharing, never by this button, and a co-host takes over with
+            Assumir and shares. So with voice off, nobody running the show
+            is offered a seat here; a host who wants to chat with friends
+            while the film plays uses a voice channel. With voice on, the
+            floor is a thing and the door stays. */}
+        {!props.inCall &&
+          mayTakeASeat &&
+          (party.options.voiceEnabled || !runsTheShow) && (
           <Button
             type="button"
             variant="ghost"
@@ -887,6 +1428,61 @@ function LiveSurface(
             {t("watchParty.live.joinCall")}
           </Button>
         )}
+        {/* THE SHARE, IN ONE PLACE, IN THE PARTY'S WORDS. The call strip's
+            share icons are gone for the host (section 10 of the plan);
+            this is where a picture goes up, changes, or comes down. */}
+        {runsTheShow && props.onShareScreen && !props.isPresenting && (
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void props.onShareScreen?.()}
+            data-watch-party-bar-share
+          >
+            <MonitorPlay className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.live.shareScreen")}
+          </Button>
+        )}
+        {runsTheShow && props.isPresenting && props.onReplaceShare && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => void props.onReplaceShare?.()}
+            data-watch-party-bar-replace-share
+          >
+            <MonitorPlay className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.live.replaceShare")}
+          </Button>
+        )}
+        {runsTheShow && props.isPresenting && props.onStopShare && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => void props.onStopShare?.()}
+            data-watch-party-bar-stop-share
+          >
+            <Square className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.live.stopShare")}
+          </Button>
+        )}
+        {/* THE SEAT'S OWN EXIT, in the party's words. The call strip's red
+            Sair is gone from watch party channels (section 10): a seated
+            guest gives the seat back here, and a host does not leave a seat
+            on purpose, they stop sharing or end the party. */}
+        {props.inCall && !runsTheShow && props.onLeaveSeat && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={props.onLeaveSeat}
+            data-watch-party-leave-stage
+          >
+            <Undo2 className="mr-1.5 h-3 w-3" aria-hidden />
+            {t("watchParty.live.leaveStage")}
+          </Button>
+        )}
+        <WatchPartyShareButton party={party} />
         {runsTheShow && (
           <Button
             type="button"
@@ -947,6 +1543,7 @@ function LiveSurface(
      presenter's encoder. */
   const transmission = runsTheShow && (
     <WatchPartyTransmission
+      micInStream={props.micState === "everyone"}
       stream={props.liveStream ?? null}
       wentLiveAt={party.wentLiveAt}
       audienceCount={props.audienceCount}
@@ -977,107 +1574,13 @@ function LiveSurface(
    * where they were.
    */
   const optionsDialog = runsTheShow && (
-    <Dialog
+    <WatchPartyOptionsDialog
+      props={props}
+      party={party}
       open={optionsOpen}
       onClose={() => setOptionsOpen(false)}
-      title={t("watchParty.options.title")}
-      eyebrow={party.name}
-      description={t("watchParty.options.liveNote")}
-      size="md"
-    >
-      <DialogBody className="flex flex-col gap-4" data-testid="watch-party-options-drawer">
-        <WatchPartyOptionsPanel
-          options={party.options}
-          audienceCount={props.audienceCount}
-          onChange={(patch) => void props.onOptionsChange(patch)}
-        />
-        {/* Mid-show, and it is the same control the setup surface had. A
-            co-host promoted here is granted SPEAK on the spot by the server
-            when the party's floor is closed, so somebody brought in to help
-            can actually talk to the room. */}
-        {cohostSection(props, party, "border-t border-border pt-4")}
-        {/* The queue is a moderation surface and only the people running the
-            party see it: an audience that can watch who asked and was passed
-            over is an audience having a worse time. It is also nonsense in a
-            party with no voice, where nobody is asking for anything, so it
-            follows the Voz control rather than the stored stage mode. */}
-        {party.options.voiceEnabled && party.options.stageMode === "invited" && (
-          <div className="border-t border-border pt-4">
-          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-            {t("watchParty.stage.hands")}
-          </p>
-          {party.stage.hands.length === 0 ? (
-            <p className="text-[11px] text-paper-muted">
-              {t("watchParty.stage.noHands")}
-            </p>
-          ) : (
-            <ul className="flex flex-col gap-1">
-              {party.stage.hands.map((person) => (
-                <li
-                  key={person.userId}
-                  className="flex items-center gap-2"
-                  data-watch-party-hand
-                >
-                  <UserAvatar
-                    name={person.displayName}
-                    avatarUrl={person.avatarUrl}
-                    rounded="full"
-                    className="h-6 w-6 shrink-0"
-                  />
-                  <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                    {person.displayName}
-                  </span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() =>
-                      void props.onStageAction?.("invite", person.userId)
-                    }
-                    data-watch-party-invite
-                  >
-                    {t("watchParty.stage.invite")}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {party.stage.invited.length > 0 && (
-            <>
-              <p className="mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-paper-muted">
-                {t("watchParty.stage.title")}
-              </p>
-              <ul className="flex flex-col gap-1">
-                {party.stage.invited.map((person) => (
-                  <li key={person.userId} className="flex items-center gap-2">
-                    <UserAvatar
-                      name={person.displayName}
-                      avatarUrl={person.avatarUrl}
-                      rounded="full"
-                      className="h-6 w-6 shrink-0"
-                    />
-                    <span className="min-w-0 flex-1 truncate text-xs text-paper">
-                      {person.displayName}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() =>
-                        void props.onStageAction?.("remove", person.userId)
-                      }
-                      data-watch-party-stage-remove
-                    >
-                      {t("watchParty.stage.remove")}
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-            </>
-            )}
-          </div>
-        )}
-      </DialogBody>
-    </Dialog>
+      stage
+    />
   );
 
   const hostGone = party.hostDisconnectedAt !== null && (
@@ -1151,6 +1654,17 @@ function LiveSurface(
                     name: party.hostDisplayName,
                   })}
           </p>
+          {hostSide && !preparing && props.onShareScreen && (
+            <Button
+              type="button"
+              className="mt-2"
+              onClick={() => void props.onShareScreen?.()}
+              data-watch-party-share-screen
+            >
+              <MonitorPlay className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+              {t("watchParty.live.shareScreen")}
+            </Button>
+          )}
         </div>
       </div>
     );

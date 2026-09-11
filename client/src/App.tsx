@@ -10,8 +10,6 @@ import {
   Columns2,
   Lock,
   Menu,
-  PanelLeftClose,
-  PanelLeftOpen,
   Phone,
   Pin,
   Rows2,
@@ -30,7 +28,6 @@ import {
   validateHandle,
   buildReplyExcerpt,
   isVoiceRoomChannelType,
-  isWatchPartyChannelType,
   withProfileUpdate,
   type WatchParty,
   type WatchPartyOptions,
@@ -88,7 +85,10 @@ import {
 import { InvitePanel } from "@/components/layout/invite-panel";
 import { MemberSidebar } from "@/components/layout/member-sidebar";
 import { MembersPanel } from "@/components/layout/members-panel";
-import { ProfilePopoverProvider } from "@/components/user/user-profile-popover";
+import {
+  ProfilePopoverProvider,
+  type ProfileWatchPartyContext,
+} from "@/components/user/user-profile-popover";
 import type { ProfileModerationContext } from "@/components/user/profile-relations";
 import { PinnedMessagesPanel } from "@/components/chat/pinned-messages-panel";
 import { ServerRail } from "@/components/layout/server-rail";
@@ -106,8 +106,7 @@ import { isDesktopApp } from "@/lib/desktop";
 import { useShareCursor } from "@/lib/screen-capture-cursor";
 import {
   featureHintEligible,
-  shouldOfferWatchPartyHostHint,
-  shouldOfferWatchPartyViewerHint,
+    shouldOfferWatchPartyViewerHint,
   winningFeatureHint,
 } from "@/lib/feature-hints";
 import { canActOnMemberClient } from "@/lib/role-hierarchy";
@@ -158,6 +157,7 @@ import { VoiceChannelStage } from "@/components/voice/voice-channel-stage";
 import { CreateWatchPartyDialog } from "@/components/watch-party/create-watch-party-dialog";
 import {
   canOfferWatchPartyCreate,
+  isWatchPartyChannelType,
   isWatchPartyChannelsEnabled,
 } from "@/lib/watch-party-channels";
 import { shouldReleaseAudienceWatchSeat } from "@/lib/watch-party-seat";
@@ -190,7 +190,9 @@ import {
   CALL_SPLIT_DEFAULT,
   loadCallSplit,
   saveCallSplit,
+  effectiveOrientation,
   strongestStageShape,
+  type CallSplitKind,
   type CallSplitPreference,
   type CallStageShape,
 } from "@/lib/call-split";
@@ -1145,13 +1147,18 @@ function MainAppContent({
     },
     [],
   );
-  const toggleSplitOrientation = useCallback(() => {
+  const toggleSplitOrientation = useCallback((kind: CallSplitKind) => {
     setCallSplit((previous) => {
-      const next: CallSplitPreference = {
-        ...previous,
-        orientation:
-          previous.orientation === "side-by-side" ? "stacked" : "side-by-side",
-      };
+      const flipped =
+        effectiveOrientation(previous, kind) === "side-by-side"
+          ? "stacked"
+          : "side-by-side";
+      // A watch party keeps its own answer: flipping the film night's layout
+      // must not rearrange tomorrow's work call, and the other way round.
+      const next: CallSplitPreference =
+        kind === "watch"
+          ? { ...previous, watchOrientation: flipped }
+          : { ...previous, orientation: flipped };
       saveCallSplit(next);
       return next;
     });
@@ -1463,6 +1470,27 @@ function MainAppContent({
   );
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
+  /**
+   * Somebody watching a live party without a seat is looking at a film. The
+   * member column is the thing that eats the width the chat needs beside it,
+   * and a viewer never needs the roster during a show, so it steps aside on
+   * its own (not written: their preference is untouched, and the toggle
+   * brings it straight back). The channel list is deliberately NOT folded
+   * for this: the live party block lives in it.
+   */
+  const watchingAParty =
+    selectedChannelId !== null &&
+    watchParties.byChannel[selectedChannelId]?.state === "live" &&
+    voiceState.channelLive[selectedChannelId]?.stream != null &&
+    !(
+      voiceState.voiceChannelId === selectedChannelId &&
+      voiceState.status !== "idle"
+    );
+  useEffect(() => {
+    memberSidebar.suspend(watchingAParty);
+    // `memberSidebar.suspend` is a stable callback from the hook.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchingAParty]);
   const [pendingVoiceMoves, setPendingVoiceMoves] = useState<string[]>([]);
   /**
    * Audio consent for a Windows desktop shell whose picker cannot ask yet.
@@ -2215,6 +2243,45 @@ function MainAppContent({
    * account holds none of the staff bits, which is why the bits are checked
    * here rather than inside the card.
    */
+  // The party on the open channel, for the member card's co-host rung. The
+  // card itself decides whether the viewer may promote this person.
+  // The stream chat's badges, memoised on the party's host and co-hosts:
+  // a fresh object here reaches every memo'd message row and re-renders the
+  // whole list on every voice frame.
+  const selectedParty = selectedChannelId
+    ? (watchParties.byChannel[selectedChannelId] ?? null)
+    : null;
+  const selectedPartyHostId = selectedParty?.hostUserId ?? null;
+  const selectedPartyCohostKey =
+    selectedParty?.cohosts.map((cohost) => cohost.userId).join(",") ?? "";
+  const streamBadges = useMemo(
+    () =>
+      selectedPartyHostId
+        ? {
+            hostUserId: selectedPartyHostId,
+            cohostIds: new Set(
+              selectedPartyCohostKey ? selectedPartyCohostKey.split(",") : [],
+            ),
+          }
+        : null,
+    [selectedPartyHostId, selectedPartyCohostKey],
+  );
+  const cardWatchParty = useMemo<ProfileWatchPartyContext | null>(() => {
+    const party = selectedChannelId
+      ? (watchParties.byChannel[selectedChannelId] ?? null)
+      : null;
+    if (!party) {
+      return null;
+    }
+    return {
+      party,
+      onPromote: (userId) => handleWatchPartyCohost(userId, true),
+      onDemote: (userId) => handleWatchPartyCohost(userId, false),
+    };
+    // `handleWatchPartyCohost` is a function declaration on this component
+    // and reads its party at call time; listing it would rebuild on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedChannelId, watchParties.byChannel]);
   const cardModeration = useMemo<ProfileModerationContext | null>(
     () =>
       canStaff && manageableServer && selection.kind === "server"
@@ -3906,7 +3973,69 @@ function MainAppContent({
     // used to look like an opt-in to whole-computer sound. `preferBrowserTab`
     // matches the setup picker so a retry without a handed stream stays on
     // the echo-safe path.
-    startScreenShareGated(false, { preferBrowserTab: true, stream });
+    startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream });
+  }
+
+  /**
+   * The bell on the scheduled screen. A party IS a channel session, so this
+   * is the same row the session card toggles; the store is patched so the
+   * button reads right on the next render without a refetch.
+   */
+  async function handleWatchPartyReminder(wants: boolean) {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    await setChannelSessionReminder(party.id, wants);
+    // Patch, do not put: the party may have gone live or been renamed while
+    // the request was out, and the snapshot captured above would undo that.
+    watchParties.patch(party.id, { reminding: wants });
+  }
+
+  /**
+   * A live party with nothing on screen, and the host pressing the button
+   * that puts something there. Same road as going live minus the state
+   * change: join the room if needed, wait for it, open the picker through
+   * the gate every share uses.
+   */
+  async function handleWatchPartyShareScreen() {
+    const party = currentWatchParty();
+    if (!party) {
+      return;
+    }
+    try {
+      if (voice.getState().voiceChannelId !== party.channelId) {
+        await handleJoinVoice(party.channelId);
+      }
+      if (!(await waitForVoiceConnected())) {
+        return;
+      }
+    } catch (error) {
+      setAppError(
+        error instanceof Error ? error.message : "Could not share the screen",
+      );
+      return;
+    }
+    // The room can change under those awaits. A host who moved to another
+    // channel or another call meanwhile gets no picker for a party they are
+    // no longer in; the share would land in whatever room is current.
+    if (
+      voice.getState().voiceChannelId !== party.channelId ||
+      selectedChannelIdRef.current !== party.channelId
+    ) {
+      return;
+    }
+    startScreenShareGated(false, { preferBrowserTab: true, watchParty: true });
+  }
+
+  async function handleWatchPartyStopShare() {
+    await voice.stopScreenShare();
+  }
+
+  /** Trocar: the old share comes down first, then the picker. */
+  async function handleWatchPartyReplaceShare() {
+    await voice.stopScreenShare();
+    await handleWatchPartyShareScreen();
   }
 
   async function handleWatchPartyEnd() {
@@ -5242,6 +5371,13 @@ function MainAppContent({
       ? channels.find((c) => c.id === selectedChannelId)
       : undefined;
   const selectedServer = servers.find((s) => s.id === selectedServerId);
+  /** A watch party room arranges its panes like a stream; a call does not. */
+  const splitKind: CallSplitKind =
+    selectedChannel?.kind === "server" &&
+    isWatchPartyChannelType(selectedChannel.type) &&
+    isWatchPartyChannelsEnabled()
+      ? "watch"
+      : "call";
   // Baú gating is computed above the early returns (it owns a hook); see
   // `communityHomeEnabled` / `communityHomeOpen` near `settleCommunityHomeIntro`.
   const meMember = serverMembers.find((member) => member.id === user?.id);
@@ -5345,6 +5481,8 @@ function MainAppContent({
       (peerId) => peerId !== voiceState.peerId,
     );
   const sidebarIconsOnly = channelSidebarIconsOnly(channelSidebar, {
+    // A party's stream alone does NOT fold the list: the live party block
+    // lives in it, and it is the way back to the show for everybody else.
     watchingAShare,
     columnLayout,
   });
@@ -5537,58 +5675,9 @@ function MainAppContent({
         >
           <Menu className="h-5 w-5" />
         </button>
-        {/* THE CHANNEL LIST'S SWITCH, and the first thing in the header on
-            purpose.
-            It used to live at the other end of this row, among the call's
-            controls, and only while a stage was up. The only way to a narrower
-            channel list with no call on was therefore to wait for somebody to
-            share and let the automation do it, which is a preference you can
-            only express by getting lucky. Wanting the width back in a plain
-            text channel makes this window furniture, not a call control.
-            LEFT, because that is where the thing it controls is: the column
-            immediately to its left, and this header is the first row to the
-            right of it. It also lands in the slot the drawer's hamburger holds
-            below `md`, which already means "the navigation column", and it
-            mirrors the roster toggle at the far right of this same row, which
-            hides the column on THAT side. Left switch, left column; right
-            switch, right column.
-            Not in the channel list's own header: that row is 256px holding a
-            server icon, the name, and three buttons, and a fourth is what
-            turned "QG do pqp" into "QG..." the last time (see `channel-list`).
-            The strip keeps its own expand button, so this control disappearing
-            with the column can strand nobody. Desktop only: under `md` the
-            list is a drawer that is already fully hidden. */}
-        {columnLayout && selection.kind === "server" && (
-          <Tooltip
-            label={
-              sidebarIconsOnly
-                ? t("chrome.expandChannelList")
-                : t("chrome.collapseChannelList")
-            }
-            detail={t("chrome.collapseChannelListHint")}
-          >
-            <button
-              type="button"
-              data-channel-sidebar-toggle=""
-              aria-pressed={sidebarIconsOnly}
-              className={cn(
-                // The same tile as the roster toggle at the other end of this
-                // row: they are a pair, and a pair that is two sizes reads as
-                // two unrelated buttons.
-                HEADER_ACTION_TILE,
-                "mr-2 hidden md:flex",
-                sidebarIconsOnly && "text-paper",
-              )}
-              onClick={toggleChannelSidebar}
-            >
-              {sidebarIconsOnly ? (
-                <PanelLeftOpen className="h-4 w-4" />
-              ) : (
-                <PanelLeftClose className="h-4 w-4" />
-              )}
-            </button>
-          </Tooltip>
-        )}
+        {/* The channel list's own fold control lives in ITS header now,
+            beside settings, members and invite (see `channelSidebarToggle`
+            on `ChannelList`). */}
         <div className="min-w-0">
           <p className="flex items-center gap-1.5 truncate font-display text-base font-bold">
             {selectedChannel.imageUrl ? (
@@ -5610,13 +5699,18 @@ function MainAppContent({
               : ""}
             {selectedChannel.name}
           </p>
-          <p className="truncate text-[11px] text-paper-muted">
-            {activeConversation
-              ? conversationSubtitle(activeConversation)
-              : selectedChannel.topic
-                ? selectedChannel.topic
-                : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
-          </p>
+          {/* A watch party channel with a party on it has its own count on
+              the bar ("N assistindo"); a second one here, of the seated
+              room, says a different number about the same show. */}
+          {!(splitKind === "watch" && watchParties.byChannel[selectedChannel.id]) && (
+            <p className="truncate text-[11px] text-paper-muted">
+              {activeConversation
+                ? conversationSubtitle(activeConversation)
+                : selectedChannel.topic
+                  ? selectedChannel.topic
+                  : `${selectedChannel.isPrivate ? t("chrome.privatePrefix") : ""}${t("chrome.peopleHere", { count: chat.getPresence().length })}`}
+            </p>
+          )}
         </div>
         <div className="ml-auto flex items-center gap-0.5 sm:gap-1">
           {/* The call entry points live here, always visible — the sidebar's
@@ -5713,7 +5807,7 @@ function MainAppContent({
           {splitState.canSideBySide && (
             <Tooltip
               label={
-                callSplit.orientation === "side-by-side"
+                effectiveOrientation(callSplit, splitKind) === "side-by-side"
                   ? t("call.split.stack")
                   : t("call.split.sideBySide")
               }
@@ -5722,14 +5816,17 @@ function MainAppContent({
               <button
                 type="button"
                 data-call-split-toggle=""
-                aria-pressed={callSplit.orientation === "side-by-side"}
+                aria-pressed={
+                  effectiveOrientation(callSplit, splitKind) === "side-by-side"
+                }
                 className={cn(
                   HEADER_ACTION_TILE,
-                  callSplit.orientation === "side-by-side" && "text-paper",
+                  effectiveOrientation(callSplit, splitKind) === "side-by-side" &&
+                    "text-paper",
                 )}
-                onClick={toggleSplitOrientation}
+                onClick={() => toggleSplitOrientation(splitKind)}
               >
-                {callSplit.orientation === "side-by-side" ? (
+                {effectiveOrientation(callSplit, splitKind) === "side-by-side" ? (
                   <Rows2 className="h-4 w-4" />
                 ) : (
                   <Columns2 className="h-4 w-4" />
@@ -5892,12 +5989,6 @@ function MainAppContent({
               voiceState.channelLive[selectedChannel.id],
               voiceState.occupancy[selectedChannel.id],
             )}
-            showHostHint={shouldOfferWatchPartyHostHint({
-              seen: false,
-              automated: false,
-              settingUp:
-                watchParties.byChannel[selectedChannel.id]?.state === "draft",
-            })}
             showViewerHint={shouldOfferWatchPartyViewerHint({
               seen: false,
               automated: false,
@@ -5911,11 +6002,16 @@ function MainAppContent({
             })}
             onCreate={() => setCreateWatchPartyOpen(true)}
             onGoLive={handleWatchPartyGoLive}
+            onShareScreen={handleWatchPartyShareScreen}
+            onStopShare={handleWatchPartyStopShare}
+            onLeaveSeat={() => voice.leave()}
+            onReplaceShare={handleWatchPartyReplaceShare}
             onEnd={handleWatchPartyEnd}
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
             onClaimHost={handleWatchPartyClaimHost}
+            onToggleReminder={handleWatchPartyReminder}
             cohostCandidates={cohostCandidates}
             onPromoteCohost={(userId) =>
               handleWatchPartyCohost(userId, true)
@@ -5933,6 +6029,19 @@ function MainAppContent({
             onStageAction={handleWatchPartyStage}
             currentUserId={user.id}
             canSpeak={voiceState.canSpeak}
+            micState={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.status === "connected"
+                ? voiceState.isMuted
+                  ? "muted"
+                  : voiceState.isSharingMic
+                    ? "everyone"
+                    : "room"
+                : "off"
+            }
+            micInStream={voiceState.micInStream}
+            onMicInStreamChange={(on) => voice.setMicInStream(on)}
+            onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={shareMaxFrameRate()}
             liveStream={
@@ -5948,6 +6057,7 @@ function MainAppContent({
         )}
       <CallSplit
         shape={stageShape}
+        kind={splitKind}
         preference={callSplit}
         onPreferenceChange={handleCallSplitChange}
         onSplitStateChange={handleSplitState}
@@ -5994,12 +6104,6 @@ function MainAppContent({
               voiceState.channelLive[selectedChannel.id],
               voiceState.occupancy[selectedChannel.id],
             )}
-            showHostHint={shouldOfferWatchPartyHostHint({
-              seen: false,
-              automated: false,
-              settingUp:
-                watchParties.byChannel[selectedChannel.id]?.state === "draft",
-            })}
             showViewerHint={shouldOfferWatchPartyViewerHint({
               seen: false,
               automated: false,
@@ -6013,11 +6117,16 @@ function MainAppContent({
             })}
             onCreate={() => setCreateWatchPartyOpen(true)}
             onGoLive={handleWatchPartyGoLive}
+            onShareScreen={handleWatchPartyShareScreen}
+            onStopShare={handleWatchPartyStopShare}
+            onLeaveSeat={() => voice.leave()}
+            onReplaceShare={handleWatchPartyReplaceShare}
             onEnd={handleWatchPartyEnd}
             onDiscard={handleWatchPartyDiscard}
             onOptionsChange={handleWatchPartyOptions}
             onRename={handleWatchPartyRename}
             onClaimHost={handleWatchPartyClaimHost}
+            onToggleReminder={handleWatchPartyReminder}
             cohostCandidates={cohostCandidates}
             onPromoteCohost={(userId) =>
               handleWatchPartyCohost(userId, true)
@@ -6035,6 +6144,19 @@ function MainAppContent({
             onStageAction={handleWatchPartyStage}
             currentUserId={user.id}
             canSpeak={voiceState.canSpeak}
+            micState={
+              voiceState.voiceChannelId === selectedChannel.id &&
+              voiceState.status === "connected"
+                ? voiceState.isMuted
+                  ? "muted"
+                  : voiceState.isSharingMic
+                    ? "everyone"
+                    : "room"
+                : "off"
+            }
+            micInStream={voiceState.micInStream}
+            onMicInStreamChange={(on) => voice.setMicInStream(on)}
+            onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
             hlsMaxFrameRate={shareMaxFrameRate()}
             liveStream={
@@ -6106,6 +6228,15 @@ function MainAppContent({
           <VoiceChannelStage
             fill={splitState.active}
             onShapeChange={handleStageShape}
+            // Section 10 of docs/plans/WATCH_PARTY_SETUP_UX.md: in a channel
+            // with a party on it, the party bar is the only bar. Mute, the
+            // hand, Sair do palco, the share and Encerrar all live there in
+            // the party's words; the strip's camera and cursor do not apply
+            // to a stream that never carries them.
+            watchPartyChrome={
+              splitKind === "watch" &&
+              watchParties.byChannel[selectedChannel.id]?.state === "live"
+            }
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
@@ -6197,6 +6328,8 @@ function MainAppContent({
         currentUsername={user?.username ?? null}
         serverId={selectedServerId}
         channelId={selectedChannel.id}
+        variant={splitKind === "watch" ? "stream" : "default"}
+        streamBadges={splitKind === "watch" ? streamBadges : null}
         isLoading={messagesLoading}
         hasMore={chat.hasMoreHistory()}
         hasNewer={chat.hasNewerHistory()}
@@ -6273,6 +6406,7 @@ function MainAppContent({
         />
       )}
       <MessageComposer
+        variant={splitKind === "watch" ? "stream" : "default"}
         // Remount per channel: the draft is component state, so without this a
         // half-typed message follows you into the next channel, one Enter away
         // from the wrong audience.
@@ -6343,6 +6477,7 @@ function MainAppContent({
       currentUserId={user?.id ?? null}
       blockedUserIds={blockedUserIds}
       moderation={cardModeration}
+      watchParty={cardWatchParty}
       onOpenConversation={(conversation) => {
         setConversations((prev) => upsertConversation(prev, conversation));
         void selectConversation(conversation.channelId);
@@ -6497,6 +6632,7 @@ function MainAppContent({
       )}
 
       <ServerRail
+        liveServerIds={watchParties.liveServerIds}
         servers={servers}
         selectedServerId={whatsNewOpen ? null : selectedServerId}
         serverUnread={serverUnread}
@@ -6596,6 +6732,11 @@ function MainAppContent({
         />
       ) : (
         <ChannelList
+          channelSidebarToggle={
+            columnLayout
+              ? { iconsOnly: sidebarIconsOnly, onToggle: toggleChannelSidebar }
+              : undefined
+          }
           server={selectedServer ?? null}
           channels={channels}
           selectedChannelId={selectedChannelId}
@@ -6622,6 +6763,14 @@ function MainAppContent({
           onSelectChannel={(id) => void selectChannel(id)}
           onJoinVoice={handleJoinVoiceFromList}
           liveParties={watchParties.live}
+          pendingParty={
+            Object.values(watchParties.byChannel).find(
+              (party) =>
+                party.serverId === selectedServerId &&
+                (party.state === "draft" || party.state === "scheduled") &&
+                (party.viewerRole === "host" || party.viewerRole === "cohost"),
+            ) ?? null
+          }
           onWatchLiveParty={(channelId) => void handleWatchLiveParty(channelId)}
           canStartWatchParty={canOfferWatchPartyCreate({
             // The rollout gate, not a capability check. See
