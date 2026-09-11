@@ -1808,13 +1808,14 @@ const MessageRow = memo(function MessageRow({
   // Stream chat: everybody has a colour, role colour first. The hashed one
   // is a hue on a CSS variable; the colour itself is the `--stream-name`
   // token, so no literal lives here.
+  const hashedName = stream && !roleColor && !message.isWebhook;
+  const streamHueStyle: CSSProperties | undefined = hashedName
+    ? ({ "--stream-name-hue": String(streamNameHue(message.authorId)) } as CSSProperties)
+    : undefined;
   const nameStyle: CSSProperties | undefined = roleColor
     ? { color: roleColor }
-    : stream && !message.isWebhook
-      ? ({
-          "--stream-name-hue": String(streamNameHue(message.authorId)),
-          color: "var(--stream-name)",
-        } as CSSProperties)
+    : hashedName
+      ? { color: "var(--stream-name)" }
       : undefined;
   const partyBadge = streamBadges
     ? streamBadges.hostUserId === message.authorId
@@ -1823,6 +1824,60 @@ const MessageRow = memo(function MessageRow({
         ? "cohost"
         : null
     : null;
+  // THE STREAM ROW'S AUTHOR, once, for every kind of message. Inline before
+  // the words when there are words; its own line above an attachment, a
+  // GIF, a poll or a chance card, which used to render with no name at all
+  // in stream mode (the avatar and the header are both gone there).
+  //
+  // The hashed colour is declared ON THIS SPAN: a custom property resolves
+  // its var() on the element that declares it, so `--stream-name` on :root
+  // computed once with the fallback hue and every name came out the same
+  // blue. `[data-stream-name]` in index.css declares it here, where the hue
+  // is set, and the button reads it.
+  const streamAuthor = stream ? (
+    <span
+      className="mr-1 inline-flex items-baseline gap-1 align-baseline"
+      data-stream-name=""
+      style={streamHueStyle}
+    >
+      {/* One badge, not two: the party's badge says the thing that matters
+          in this room, and the host is usually the owner as well, so the
+          rank crown would sit right beside it. */}
+      {partyBadge === "host" ? (
+        <Crown
+          className="h-3 w-3 shrink-0 self-center text-accent"
+          aria-label={t("chat.stream.host")}
+        />
+      ) : partyBadge === "cohost" ? (
+        <Star
+          className="h-3 w-3 shrink-0 self-center text-accent"
+          aria-label={t("chat.stream.cohost")}
+        />
+      ) : (
+        <RankMarks
+          marks={identityMarks({
+            rank: authorInfo?.rank,
+            isWebhook: message.isWebhook,
+            isCharacter: authorInfo?.isCharacter,
+            ...rankBadges(authorInfo?.roleIds, roles),
+          })}
+        />
+      )}
+      <span className="inline-flex items-baseline">
+        <AuthorButton
+          message={message}
+          author={authorInfo}
+          tabIndex={controlTabIndex}
+          onOpenProfile={openProfile}
+          className="rounded font-bold"
+          style={nameStyle}
+        >
+          {message.authorName}
+        </AuthorButton>
+        <span className="text-paper-muted">:</span>
+      </span>
+    </span>
+  ) : null;
 
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -2206,6 +2261,11 @@ const MessageRow = memo(function MessageRow({
           )}
 
           <div className="min-w-0 flex-1">
+            {stream && !message.body && !isEditing && (
+              <div className="text-[length:var(--chat-font-size)] leading-[var(--chat-line-height)]">
+                {streamAuthor}
+              </div>
+            )}
             {message.replyTo && (
               <ReplyQuote
                 replyTo={message.replyTo}
@@ -2317,47 +2377,7 @@ const MessageRow = memo(function MessageRow({
                       stream && "[&>p]:inline",
                     )}
                   >
-                    {stream && (
-                      <span className="mr-1 inline-flex items-baseline gap-1 align-baseline">
-                        {/* One badge, not two: the party's badge says the
-                            thing that matters in this room, and the host is
-                            usually the owner as well, so the rank crown
-                            would sit right beside it. */}
-                        {partyBadge === "host" ? (
-                          <Crown
-                            className="h-3 w-3 shrink-0 self-center text-accent"
-                            aria-label={t("chat.stream.host")}
-                          />
-                        ) : partyBadge === "cohost" ? (
-                          <Star
-                            className="h-3 w-3 shrink-0 self-center text-accent"
-                            aria-label={t("chat.stream.cohost")}
-                          />
-                        ) : (
-                          <RankMarks
-                            marks={identityMarks({
-                              rank: authorInfo?.rank,
-                              isWebhook: message.isWebhook,
-                              isCharacter: authorInfo?.isCharacter,
-                              ...rankBadges(authorInfo?.roleIds, roles),
-                            })}
-                          />
-                        )}
-                        <span className="inline-flex items-baseline">
-                          <AuthorButton
-                            message={message}
-                            author={authorInfo}
-                            tabIndex={controlTabIndex}
-                            onOpenProfile={openProfile}
-                            className="rounded font-bold"
-                            style={nameStyle}
-                          >
-                            {message.authorName}
-                          </AuthorButton>
-                          <span className="text-paper-muted">:</span>
-                        </span>
-                      </span>
-                    )}
+                    {streamAuthor}
                     <MessageBody
                       body={message.body}
                       currentUsername={currentUsername}

@@ -111,6 +111,14 @@ export interface ScreenCaptureOptions
  */
 export interface ScreenCaptureIntent {
   preferBrowserTab?: boolean;
+  /**
+   * This share feeds a watch party's stream. The one fact the mic-into-share
+   * mix (`lib/screen-mix.ts`) keys on. Deliberately NOT `preferBrowserTab`:
+   * that is a picker hint the ordinary call strip's Watch party button also
+   * sends in a plain voice call, where folding somebody's mic into a track
+   * other people's volume sliders control would be wrong.
+   */
+  watchParty?: boolean;
   hideCursor?: boolean;
   /** 60 when a 60 fps HLS rung is configured; 30 otherwise. */
   maxFrameRate?: 30 | 60;

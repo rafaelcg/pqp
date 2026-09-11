@@ -2243,6 +2243,27 @@ function MainAppContent({
    */
   // The party on the open channel, for the member card's co-host rung. The
   // card itself decides whether the viewer may promote this person.
+  // The stream chat's badges, memoised on the party's host and co-hosts:
+  // a fresh object here reaches every memo'd message row and re-renders the
+  // whole list on every voice frame.
+  const selectedParty = selectedChannelId
+    ? (watchParties.byChannel[selectedChannelId] ?? null)
+    : null;
+  const selectedPartyHostId = selectedParty?.hostUserId ?? null;
+  const selectedPartyCohostKey =
+    selectedParty?.cohosts.map((cohost) => cohost.userId).join(",") ?? "";
+  const streamBadges = useMemo(
+    () =>
+      selectedPartyHostId
+        ? {
+            hostUserId: selectedPartyHostId,
+            cohostIds: new Set(
+              selectedPartyCohostKey ? selectedPartyCohostKey.split(",") : [],
+            ),
+          }
+        : null,
+    [selectedPartyHostId, selectedPartyCohostKey],
+  );
   const cardWatchParty = useMemo<ProfileWatchPartyContext | null>(() => {
     const party = selectedChannelId
       ? (watchParties.byChannel[selectedChannelId] ?? null)
@@ -3954,7 +3975,7 @@ function MainAppContent({
     // used to look like an opt-in to whole-computer sound. `preferBrowserTab`
     // matches the setup picker so a retry without a handed stream stays on
     // the echo-safe path.
-    startScreenShareGated(false, { preferBrowserTab: true, stream });
+    startScreenShareGated(false, { preferBrowserTab: true, watchParty: true, stream });
   }
 
   /**
@@ -3988,7 +4009,7 @@ function MainAppContent({
     if (!(await waitForVoiceConnected())) {
       return;
     }
-    startScreenShareGated(false, { preferBrowserTab: true });
+    startScreenShareGated(false, { preferBrowserTab: true, watchParty: true });
   }
 
   async function handleWatchPartyStopShare() {
@@ -6126,7 +6147,7 @@ function MainAppContent({
             // to a stream that never carries them.
             watchPartyChrome={
               splitKind === "watch" &&
-              watchParties.byChannel[selectedChannel.id] !== undefined
+              watchParties.byChannel[selectedChannel.id]?.state === "live"
             }
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
@@ -6216,18 +6237,7 @@ function MainAppContent({
         serverId={selectedServerId}
         channelId={selectedChannel.id}
         variant={splitKind === "watch" ? "stream" : "default"}
-        streamBadges={
-          splitKind === "watch" && watchParties.byChannel[selectedChannel.id]
-            ? {
-                hostUserId: watchParties.byChannel[selectedChannel.id]!.hostUserId,
-                cohostIds: new Set(
-                  watchParties.byChannel[selectedChannel.id]!.cohosts.map(
-                    (cohost) => cohost.userId,
-                  ),
-                ),
-              }
-            : null
-        }
+        streamBadges={splitKind === "watch" ? streamBadges : null}
         isLoading={messagesLoading}
         hasMore={chat.hasMoreHistory()}
         hasNewer={chat.hasNewerHistory()}

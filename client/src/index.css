@@ -285,10 +285,6 @@
      the hue math lives with the card. */
   --community-tint-near: color-mix(in oklab, oklch(0.72 0.17 var(--community-hue, 140)) var(--community-tint-strength, 30%), var(--color-surface-2));
   --community-tint-far: color-mix(in oklab, oklch(0.62 0.16 var(--community-hue-far, 188)) var(--community-tint-strength-far, 18%), var(--color-surface-1));
-  /* A stream chat name with no role colour: the row sets --stream-name-hue
-     (hashed from the author id, see `streamNameHue`), the literal lives
-     here. Light enough to read on ink; the light theme overrides it. */
-  --stream-name: oklch(0.78 0.14 var(--stream-name-hue, 200));
   --scrim-media: rgba(0, 0, 0, 0.42);
 
   /*
@@ -410,7 +406,6 @@
  * it in both themes, so a light scrim would be a bug rather than a theme.
  */
 :root[data-theme="light"] {
-  --stream-name: oklch(0.52 0.16 var(--stream-name-hue, 200));
   color-scheme: light;
 
   --color-surface-0: oklch(0.98 0.005 95);
@@ -1767,4 +1762,17 @@ html[data-immersive-stage] [data-immersive-hide] {
   max-width: 100%;
   max-height: 100%;
   z-index: 50;
+}
+
+/* A stream chat name with no role colour: the row sets --stream-name-hue
+   (hashed from the author id, see `streamNameHue`) and the literal lives
+   here. DECLARED ON THE ROW'S SPAN, NOT ON :root: a custom property resolves
+   its var() references on the element that declares it, so a :root
+   declaration computed once with the fallback hue and every name came out
+   the same colour. Light enough to read on ink; the light theme retunes it. */
+[data-stream-name] {
+  --stream-name: oklch(0.78 0.14 var(--stream-name-hue, 200));
+}
+:root[data-theme="light"] [data-stream-name] {
+  --stream-name: oklch(0.52 0.16 var(--stream-name-hue, 200));
 }

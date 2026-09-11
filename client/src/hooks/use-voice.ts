@@ -2027,6 +2027,8 @@ export function createVoiceController(transport: RealtimeTransport) {
   let screenMix: ScreenMix | null = null;
   /** The raw display capture behind `screenMix`, stopped with it. */
   let screenCaptureSource: MediaStream | null = null;
+  /** The running share was started for a watch party (`intent.watchParty`). */
+  let screenCaptureIsWatchParty = false;
 
   function releaseScreenCapture() {
     if (!screenCaptureStream) {
@@ -2041,11 +2043,19 @@ export function createVoiceController(transport: RealtimeTransport) {
       }
       screenCaptureSource = null;
     }
+    const hadMix = screenMix !== null;
     screenMix?.close();
     screenMix = null;
+    screenCaptureIsWatchParty = false;
     screenCaptureStream = null;
     state.isSharingScreen = false;
     state.isSharingMic = false;
+    if (hadMix) {
+      // The mic left the share with it: the separate publication comes back
+      // now, or the room hears nothing while the pill shows an open mic.
+      sfuPublicationMuted = null;
+      void applyPublicationMute();
+    }
     state.localScreenStream = null;
     state.isSharingScreenAudio = false;
     state.isSharingSystemAudio = false;
@@ -3754,10 +3764,41 @@ export function createVoiceController(transport: RealtimeTransport) {
       saveMicInStream(on);
       state.micInStream = on;
       if (screenMix && pipeline) {
+        // A mix is up: connect or drop the mic branch in place.
         screenMix.setMic(on ? pipeline.processedStream : null);
         state.isSharingMic = on;
         sfuPublicationMuted = null;
         void applyPublicationMute();
+      } else if (
+        on &&
+        pipeline &&
+        screenCaptureStream &&
+        screenCaptureIsWatchParty &&
+        state.roomTransport === "livekit"
+      ) {
+        // The share started with the switch off: build the mix now and put
+        // the mixed stream on the wire. The SFU republishes the share when
+        // audio appears, which a running HLS egress rebinds to; a few
+        // seconds of picture, and then the host is heard.
+        try {
+          const source = screenCaptureStream;
+          screenMix = createScreenMix(source, pipeline.processedStream);
+          screenCaptureSource = source;
+          screenCaptureStream = screenMix.stream;
+          state.localScreenStream = screenMix.stream;
+          state.isSharingMic = true;
+          sfuPublicationMuted = null;
+          void applyPublicationMute();
+          void (async () => {
+            await manager?.setLocalScreenStream(screenMix!.stream);
+            if (sfu) {
+              await sfu.publishScreen(screenMix!.stream);
+            }
+          })();
+        } catch {
+          screenMix = null;
+          screenCaptureSource = null;
+        }
       }
       emit();
     },
@@ -3993,8 +4034,13 @@ export function createVoiceController(transport: RealtimeTransport) {
       // a mesh room hands the share's audio to each peer separately and
       // has no seatless audience to reach. The processed mic stream is
       // tapped, so mute stays mute. `lib/screen-mix.ts`.
+      // WHAT THE CAPTURE ITSELF CARRIES, read before any mixing: this is the
+      // number the silent-film warning and `capturesSystemAudio` are about,
+      // and a mixed track always has audio in it whether or not the tab did.
+      const hasAudio = stream.getAudioTracks().length > 0;
+      screenCaptureIsWatchParty = intent.watchParty === true;
       if (
-        intent.preferBrowserTab &&
+        screenCaptureIsWatchParty &&
         state.roomTransport === "livekit" &&
         pipeline &&
         state.micInStream
@@ -4004,13 +4050,16 @@ export function createVoiceController(transport: RealtimeTransport) {
           screenCaptureSource = stream;
           stream = screenMix.stream;
           state.isSharingMic = true;
+          // The mic is in the share now: the separate publication goes quiet
+          // at once, not on the next mute toggle.
+          sfuPublicationMuted = null;
+          void applyPublicationMute();
         } catch {
           // No WebAudio here: the share goes out as it is, room-only mic.
           screenMix = null;
           screenCaptureSource = null;
         }
       }
-      const hasAudio = stream.getAudioTracks().length > 0;
       watchScreenCapture(stream);
       screenCaptureStream = stream;
       // The red strip is ours and it is now answering a question that has been
