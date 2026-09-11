@@ -94,7 +94,7 @@ import {
   removeFavorite,
   visibleFavoriteChannels,
 } from "@/lib/channel-favorites";
-import { useDraftChannelIds } from "@/lib/composer-drafts";
+import { useHasDraft } from "@/lib/composer-drafts";
 import {
   loadCollapsedCategories,
   toggleCollapsedCategory,
@@ -2260,8 +2260,7 @@ function ChannelRow({
 
   const muted = notifications.level === "none";
   const hasUnread = !selected && unread.count > 0;
-  const draftIds = useDraftChannelIds();
-  const hasDraft = !selected && draftIds.includes(channel.id);
+  const hasDraft = useHasDraft(channel.id) && !selected;
   // A muted channel keeps counting for the read cursor, but nothing about it
   // should pull the eye — that is the whole point of muting it.
   const mentions = selected || muted ? 0 : unread.mentions;

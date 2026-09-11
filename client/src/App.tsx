@@ -383,6 +383,7 @@ import { mergeMemberStatuses } from "@/lib/member-roster";
 import { useChannelNotifications } from "@/hooks/use-notifications";
 import { useCustomStatus } from "@/hooks/use-custom-status";
 import { useUserStatus } from "@/hooks/use-status";
+import { setDraftsAccount } from "@/lib/composer-drafts";
 import { createRealtimeTransport, type RealtimeStatus } from "@/lib/realtime";
 import { adoptAccentHuePreference } from "@/lib/accent";
 import { adoptAppearancePreference, getAppearance } from "@/lib/appearance";
@@ -902,6 +903,10 @@ function MainAppContent({
 }: MainAppContentProps) {
   const { t } = useTranslation();
   const [user, setUser] = useState<User | null>(null);
+  // Composer drafts are kept per account; a sign-out reads as no drafts.
+  useEffect(() => {
+    setDraftsAccount(user?.id ?? null);
+  }, [user?.id]);
   const [servers, setServers] = useState<Server[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   /**

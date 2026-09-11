@@ -75,6 +75,9 @@ import {
   type OutgoingAttachment,
 } from "@/lib/attachments";
 import { readDraft, writeDraft } from "@/lib/composer-drafts";
+
+/** How long typing pauses before the draft is written to storage. */
+const DRAFT_WRITE_DELAY_MS = 300;
 import { createGifAttachment } from "@/lib/api";
 import {
   applyEmojiShortcode,
@@ -398,11 +401,25 @@ export function MessageComposer({
 
   const slowModeRemaining = remainingWaitSeconds(slowModeUntil, now);
 
+  // Coalesced: a write per keystroke would serialise every draft on the
+  // input hot path. The draft lands a moment after typing pauses, and the
+  // unmount (a channel switch, since App keys this component by channel)
+  // writes whatever is in the box right away.
   useEffect(() => {
-    if (channelId) {
-      writeDraft(channelId, body);
+    if (!channelId) {
+      return;
     }
+    const id = setTimeout(() => writeDraft(channelId, body), DRAFT_WRITE_DELAY_MS);
+    return () => clearTimeout(id);
   }, [channelId, body]);
+  useEffect(() => {
+    if (!channelId) {
+      return;
+    }
+    return () => {
+      writeDraft(channelId, bodyRef.current);
+    };
+  }, [channelId]);
 
   useEffect(() => {
     if (isFormatBarOpen) {
