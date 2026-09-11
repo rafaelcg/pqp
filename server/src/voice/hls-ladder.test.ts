@@ -114,15 +114,17 @@ describe("parseLadder", () => {
     ]);
   });
 
-  it("the gap between stacked 720p30 and 1080p30 is wide enough for hls.js", () => {
+  it("the gap between stacked 1080p60 and 720p60@3200 is wide enough for hls.js", () => {
     // hls.js switches UP when estimate * abrBandWidthUpFactor (0.7) clears
     // the next level, and DOWN when estimate * abrBandWidthFactor (0.95)
     // falls under the current one. A narrow band between those two is where
     // a viewer oscillates. LiveKit's own presets (3000 and 4500) leave about
     // 1.10x; these leave about 1.36x.
-    const rungs = parseLadder({ ladder: "1080p30,720p30" }).rungs;
-    const low = rungs.find((rung) => rung.name === "720p30");
-    const high = rungs.find((rung) => rung.name === "1080p30");
+    const rungs = parseLadder({
+      ladder: "1080p60,720p60@3200,480p30",
+    }).rungs;
+    const low = rungs.find((rung) => rung.name === "720p60");
+    const high = rungs.find((rung) => rung.name === "1080p60");
     const up = high!.videoKbps / 0.7;
     const down = high!.videoKbps / 0.95;
     expect(up / down).toBeGreaterThan(1.3);
