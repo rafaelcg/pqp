@@ -87,6 +87,15 @@ final class CommunityHomeDecodingTests: XCTestCase {
         )
     }
 
+    func testTwitchMediaOpensTheChannelPageRatherThanAStorageURL() throws {
+        let media = try Coding.decoder.decode(CommunityHomeMedia.self, from: Data("""
+            {"kind":"twitch","name":"Twitch","contentType":null,"byteSize":null,"url":null,
+             "youtubeUrl":null,"twitchUrl":"https://www.twitch.tv/moonkaselive"}
+            """.utf8))
+        XCTAssertTrue(media.isTwitch)
+        XCTAssertEqual(media.openURL?.absoluteString, "https://www.twitch.tv/moonkaselive")
+    }
+
     func testTikTokMediaOpensTheWatchPage() throws {
         let media = try Coding.decoder.decode(CommunityHomeMedia.self, from: Data("""
             {"kind":"tiktok","name":"TikTok","contentType":null,"byteSize":null,"url":null,

@@ -18,8 +18,11 @@ Client + a small egress encode/ops change. Remaining: correlate box CPU
 3. Raise is 1.25× the *current* ceiling, not 6 Mbps against 1080. Drop on
    honest `bandwidth`/`cpu`, unmeasured, or uplink below 2.25 Mbps. 30 s dwell
    between capture-height changes.
-4. HLS publish keeps only the 360p sub-layer. A 1080 share already on the
-   wire deactivates the 720 mid-rung in place (no new sid).
+4. HLS publish is **one screen encoding** (`simulcast: false`). A share that
+   already had a ladder deactivates every sub-layer in place (no new sid).
+   Capture height is not retuned from BWE while the ladder is live. "Keep
+   only 360" shipped earlier and still left 360 + 1080 + Chrome-scaled 240
+   hunting on the same uplink.
 5. SFU `sampleRoom` fills `paths` from the publisher sender's `getStats()`.
    The gate used to see `uplinkBps === null` on every LiveKit party.
 6. ABR seed 2.5 Mbps, `startLevel: -1` (auto).
@@ -35,7 +38,8 @@ As of `origin/main` 2026-09-10:
 
 - Height never republishes while the HLS pin is on (`screenPlanPinned` in
   [`client/src/lib/livekit-session.ts`](../../client/src/lib/livekit-session.ts);
-  #457–#460). Capture height can still change via `applyConstraints`.
+  #457–#460). Capture height is not retuned from BWE while HLS is live
+  (single-layer ingest); bitrate ceiling still moves in place.
 - [`clampScreenPlanToCapture`](../../client/src/lib/video-quality.ts): do not
   declare layers taller than the actual capture (480p window advertising 1080).
 - Viewer: `capLevelToPlayerSize: true`, `maxLiveSyncPlaybackRate: 1.5`, ABR
@@ -162,9 +166,10 @@ Covered in `WATCH_PARTY_HLS_PERFORMANCE.md` §3.
    capture-height changes. Alternative worth measuring: start at ladder top
    and only drop.
 4. **While `hlsSource.ladderTopHeight !== null`:** publish the screen
-   single-layer (`simulcast: false`) or keep only the 360p sub-layer. Verify
-   iOS/Android seated viewers use `hlsUrl` before removing all sub-layers.
-   Requires a republish (blink) once at party start; keep the pin afterwards.
+   single-layer (`simulcast: false`). Landed. Do not retune capture height
+   from BWE. Verify iOS/Android seated viewers use `hlsUrl` (they do:
+   `WatchStageView` / `WatchPane`). Requires no republish at party start if
+   the share is already up — sublayers go `active: false` in place.
 5. Consider `degradationPreference: "balanced"` for the HLS source; measure
    against `maintain-framerate` with `ffprobe -count_frames` on segments.
 6. **Telemetry:** while presenting to an egress, sample every 2 s and log (or

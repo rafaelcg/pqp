@@ -22,7 +22,9 @@ import {
   screenScaleFactor,
   screenSimulcastPlan,
   clampScreenPlanToCapture,
+  screenShareSimulcastEnabled,
   VIDEO_QUALITIES,
+  type ScreenSimulcastPlan,
 } from "./video-quality";
 
 /**
@@ -242,9 +244,9 @@ describe("applyCameraQuality", () => {
 
 describe("screenBitrateFor", () => {
   it("gives a bigger choice a bigger ceiling, in order, with no ties", () => {
-    // `auto` sits between 720p and 1080p on purpose: better than the 2.5 Mbps
-    // every share used to get, cheaper than the most the product can spend.
-    const rungs = ["360p", "480p", "720p", "auto", "1080p"] as const;
+    // `auto` sits between 480p and 720p: better than a named 480p, cheaper
+    // than a named 720p, and 1080p is the deliberate spend.
+    const rungs = ["360p", "480p", "auto", "720p", "1080p"] as const;
     const rates = rungs.map((rung) => screenBitrateFor(rung));
     expect(rates).toEqual([...rates].sort((a, b) => a - b));
     expect(new Set(rates).size).toBe(rungs.length);
@@ -277,10 +279,13 @@ describe("screenBitrateFor", () => {
     }
   });
 
-  it("stays inside a modest Brazilian uplink even at its most expensive", () => {
-    // The ceiling exists to be reachable, not to saturate a 5 to 10 Mbps home
-    // upload and starve the audio riding on the same link.
-    expect(screenBitrateFor("1080p")).toBeLessThanOrEqual(4_000_000);
+  it("stays inside a fibre-class uplink even at its most expensive", () => {
+    // 1080p on a watch-party source is the ladder's top rung. 8 Mbps is
+    // what a 1080p60 film actually costs; the mesh path still clamps this
+    // at 4 Mbps (`SCREEN_MAX_BITRATE_BPS`) so a 1:1 call does not saturate
+    // a 5–10 Mbps home upload.
+    expect(screenBitrateFor("1080p")).toBe(8_000_000);
+    expect(screenBitrateFor("1080p")).toBeGreaterThan(4_000_000);
   });
 });
 
@@ -316,7 +321,7 @@ describe("screenSimulcastPlan", () => {
   it("steps aside for an explicit 1080p", () => {
     const plan = screenSimulcastPlan("1080p", 100);
     expect(plan.topHeight).toBe(1080);
-    expect(plan.topBitrate).toBe(4_000_000);
+    expect(plan.topBitrate).toBe(8_000_000);
     expect(plan.lowerLayers).toHaveLength(2);
     expect(plan.capped).toBe(false);
   });
@@ -424,14 +429,22 @@ describe("the presenter as the ladder's source", () => {
     // the playlist, and a 720p source cannot produce a 1080p rendition.
     const plan = screenSimulcastPlan("auto", 100, LIVE);
     expect(plan.topHeight).toBe(1080);
-    expect(plan.topBitrate).toBe(4_000_000);
+    expect(plan.topBitrate).toBe(8_000_000);
     expect(plan.capped).toBe(false);
     expect(plan.heldForHls).toBe(false);
   });
 
-  it("does not spend a 720p sub-layer while HLS is transcoding the top", () => {
+  it("declares no sub-layers while HLS is transcoding the top", () => {
+    // One encoding. A 360p sub-layer still eats BWE bottom-up, and egress
+    // only ever takes the top: 2026-09-11 a host sent 240 + 360 + 1080 at
+    // once after "keep only 360" had shipped.
     const plan = screenSimulcastPlan("auto", 4, LIVE);
-    expect(plan.lowerLayers.map((layer) => layer.height)).toEqual([360]);
+    expect(plan.lowerLayers).toEqual([]);
+    expect(screenShareSimulcastEnabled(LIVE)).toBe(false);
+    expect(screenShareSimulcastEnabled(null)).toBe(true);
+    expect(
+      screenShareSimulcastEnabled({ ladderTopHeight: null, uplinkBps: 10_000_000 }),
+    ).toBe(true);
   });
 
   it("leaves an ordinary large call alone", () => {
@@ -444,7 +457,7 @@ describe("the presenter as the ladder's source", () => {
   });
 
   it("does not raise when the measured uplink cannot carry it", () => {
-    // Raise is 1.25× the 720 hold ceiling (~2.81 Mbps), not 1.25× 4 Mbps.
+    // Raise is 1.25× the 720 hold ceiling (4 Mbps → 5 Mbps), not 1.25× 8 Mbps.
     const plan = screenSimulcastPlan("auto", 100, {
       ladderTopHeight: 1080,
       uplinkBps: 2_000_000,
@@ -483,7 +496,7 @@ describe("the presenter as the ladder's source", () => {
 
   it("still raises on a measured uplink that clears the bar", () => {
     expect(HLS_SOURCE_UPLINK_HEADROOM).toBe(1.25);
-    expect(HLS_HELD_720_BITRATE).toBe(2_250_000);
+    expect(HLS_HELD_720_BITRATE).toBe(4_000_000);
     expect(
       screenSimulcastPlan("auto", 100, {
         ladderTopHeight: 1080,
@@ -493,7 +506,13 @@ describe("the presenter as the ladder's source", () => {
     expect(
       screenSimulcastPlan("auto", 100, {
         ladderTopHeight: 1080,
-        uplinkBps: 3_000_000,
+        uplinkBps: 4_000_000,
+      }).topHeight,
+    ).toBe(720);
+    expect(
+      screenSimulcastPlan("auto", 100, {
+        ladderTopHeight: 1080,
+        uplinkBps: 5_000_000,
       }).topHeight,
     ).toBe(1080);
   });
@@ -562,8 +581,23 @@ describe("the presenter as the ladder's source", () => {
     expect(plan.topHeight).toBe(1080);
     const clamped = clampScreenPlanToCapture(plan, 480);
     expect(clamped.topHeight).toBe(480);
-    expect(clamped.topBitrate).toBe(1_000_000);
-    expect(clamped.lowerLayers.map((layer) => layer.height)).toEqual([360]);
+    expect(clamped.topBitrate).toBe(1_500_000);
+    expect(clamped.lowerLayers).toEqual([]);
+  });
+
+  it("does not invent rungs a live HLS plan already dropped", () => {
+    // `heldForHls` is the 720 hold, not "HLS is transcoding". A successful
+    // 1080 source has heldForHls false and lowerLayers [360]. Rebuilding
+    // from SCREEN_SIMULCAST_RUNGS would put 720 back under a 1080 top, or
+    // invent a 360 the plan had stripped. Filter the plan's own list.
+    const plan: ScreenSimulcastPlan = {
+      topHeight: 1080,
+      topBitrate: 4_000_000,
+      lowerLayers: [],
+      capped: false,
+      heldForHls: false,
+    };
+    expect(clampScreenPlanToCapture(plan, 480).lowerLayers).toEqual([]);
   });
 
   it("keeps a near-1080 window as 1080", () => {

@@ -65,6 +65,12 @@ import {
   type VideoQuality,
 } from "@/lib/video-quality";
 import {
+  DEFAULT_SCREEN_FRAME_RATE,
+  parseScreenFrameRate,
+  SCREEN_FRAME_RATES,
+  type ScreenFrameRate,
+} from "@/lib/hls-capture-rate";
+import {
   defaultPushToTalkBinding,
   formatBinding,
   parseBinding,
@@ -185,6 +191,11 @@ export interface LocalSettings {
    * syncing it to a phone would be meaningless.
    */
   videoQuality: VideoQuality;
+  /**
+   * Capture cadence for a screen share. Device-local with videoQuality: it
+   * describes this display's refresh and this machine's encoder.
+   */
+  screenFrameRate: ScreenFrameRate;
 }
 
 /** Option labels, so the select and the catalogue cannot drift apart. */
@@ -194,6 +205,12 @@ const VIDEO_QUALITY_LABELS: Record<VideoQuality, MessageKey> = {
   "720p": "settings.voice.videoQuality.720p",
   "480p": "settings.voice.videoQuality.480p",
   "360p": "settings.voice.videoQuality.360p",
+};
+
+const SCREEN_FRAME_RATE_LABELS: Record<ScreenFrameRate, MessageKey> = {
+  auto: "settings.voice.screenFrameRate.auto",
+  "30": "settings.voice.screenFrameRate.30",
+  "60": "settings.voice.screenFrameRate.60",
 };
 
 const STORAGE_KEY = "pqp-local-settings";
@@ -217,6 +234,7 @@ export const defaultLocalSettings: LocalSettings = {
   // Auto, always. A default that pins a size would be a default that is wrong
   // on somebody's uplink.
   videoQuality: DEFAULT_VIDEO_QUALITY,
+  screenFrameRate: DEFAULT_SCREEN_FRAME_RATE,
 };
 
 export function loadLocalSettings(): LocalSettings {
@@ -266,6 +284,7 @@ export function loadLocalSettings(): LocalSettings {
       // Hand-edited storage, or a level a later build stopped offering, falls
       // back to auto rather than to a size nothing knows how to ask for.
       videoQuality: parseVideoQuality(parsed.videoQuality),
+      screenFrameRate: parseScreenFrameRate(parsed.screenFrameRate),
     };
   } catch {
     return defaultLocalSettings;
@@ -1137,6 +1156,32 @@ function VoiceSection({
         <OutboundVideoReadout />
         <p className="mt-1 text-xs text-paper-muted">
           {t("settings.voice.videoQuality.hint")}
+        </p>
+      </div>
+
+      <div>
+        <label className="block">
+          <span className="mb-2 block text-xs uppercase tracking-wide text-paper-muted">
+            {t("settings.voice.screenFrameRate")}
+          </span>
+          <select
+            value={draftLocal.screenFrameRate}
+            onChange={(e) =>
+              patchLocal({
+                screenFrameRate: parseScreenFrameRate(e.target.value),
+              })
+            }
+            className={selectClass}
+          >
+            {SCREEN_FRAME_RATES.map((rate) => (
+              <option key={rate} value={rate}>
+                {t(SCREEN_FRAME_RATE_LABELS[rate])}
+              </option>
+            ))}
+          </select>
+        </label>
+        <p className="mt-1 text-xs text-paper-muted">
+          {t("settings.voice.screenFrameRate.hint")}
         </p>
       </div>
 

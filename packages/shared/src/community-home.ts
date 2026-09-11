@@ -62,6 +62,7 @@ export const communityHomeMediaKindSchema = z.enum([
   "image",
   "video",
   "youtube",
+  "twitch",
   "tiktok",
   "instagram",
   "file",
@@ -155,9 +156,6 @@ export function youtubeEmbedSrc(youtubeUrl: string): string | null {
   return id ? `https://www.youtube-nocookie.com/embed/${id}` : null;
 }
 
-/** TikTok snowflake on `/@user/video/{id}`. Short `vm.` / `vt.` links need a redirect and are refused. */
-const TIKTOK_VIDEO_ID = /^\d{10,32}$/;
-
 function parseHttpUrl(raw: string): URL | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -173,6 +171,9 @@ function parseHttpUrl(raw: string): URL | null {
     return null;
   }
 }
+
+/** TikTok snowflake on `/@user/video/{id}`. Short `vm.` / `vt.` links need a redirect and are refused. */
+const TIKTOK_VIDEO_ID = /^\d{10,32}$/;
 
 /**
  * Extract a TikTok video id from a canonical watch, embed, or player URL.
@@ -223,6 +224,12 @@ export function tiktokEmbedSrc(tiktokUrl: string): string | null {
   return id ? `https://www.tiktok.com/player/v1/${id}` : null;
 }
 
+/** Canonical https watch URL from a parsed TikTok id — never the raw paste. */
+export function tiktokCanonicalUrl(raw: string): string | null {
+  const id = parseTikTokVideoId(raw);
+  return id ? `https://www.tiktok.com/video/${id}` : null;
+}
+
 /** Instagram shortcode on `/p/`, `/reel/`, `/reels/`. */
 const INSTAGRAM_SHORTCODE = /^[A-Za-z0-9_-]{5,32}$/;
 
@@ -242,7 +249,11 @@ export function parseInstagramEmbed(raw: string): InstagramEmbedTarget | null {
     return null;
   }
   const host = url.hostname.replace(/^www\./, "").toLowerCase();
-  if (host !== "instagram.com" && host !== "m.instagram.com" && host !== "instagr.am") {
+  if (
+    host !== "instagram.com" &&
+    host !== "m.instagram.com" &&
+    host !== "instagr.am"
+  ) {
     return null;
   }
   const parts = url.pathname.split("/").filter(Boolean);
@@ -277,13 +288,231 @@ export function instagramEmbedSrc(instagramUrl: string): string | null {
   return `https://www.instagram.com/${path}/${target.shortcode}/embed/`;
 }
 
-export type CommunityHomeEmbedKind = "youtube" | "tiktok" | "instagram";
+/** Canonical https watch URL from a parsed Instagram target — never the raw paste. */
+export function instagramCanonicalUrl(raw: string): string | null {
+  const target = parseInstagramEmbed(raw);
+  if (!target) {
+    return null;
+  }
+  const path = target.kind === "reel" ? "reel" : "p";
+  return `https://www.instagram.com/${path}/${target.shortcode}/`;
+}
 
+/**
+ * Twitch player target extracted from a channel, VOD, or clip URL.
+ * Directory / search / settings paths are refused — those are not a player.
+ */
+export type TwitchEmbedTarget =
+  | { kind: "channel"; id: string }
+  | { kind: "video"; id: string }
+  | { kind: "clip"; id: string };
+
+const TWITCH_CHANNEL = /^[a-zA-Z0-9_]{3,25}$/;
+const TWITCH_VIDEO_ID = /^\d{1,15}$/;
+const TWITCH_CLIP_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{1,99}$/;
+
+/** First path segments on twitch.tv that are site chrome, not a channel. */
+const TWITCH_RESERVED_CHANNELS = new Set([
+  "about",
+  "ads",
+  "bits",
+  "blog",
+  "broadcast",
+  "clips",
+  "communities",
+  "creatorcamp",
+  "dashboard",
+  "directory",
+  "downloads",
+  "drops",
+  "embed",
+  "following",
+  "friends",
+  "inventory",
+  "jobs",
+  "login",
+  "messages",
+  "moderation",
+  "notifications",
+  "p",
+  "partners",
+  "popout",
+  "prime",
+  "search",
+  "settings",
+  "signup",
+  "store",
+  "stream",
+  "streammanager",
+  "subs",
+  "subscriptions",
+  "team",
+  "teams",
+  "turbo",
+  "v",
+  "video",
+  "videos",
+  "wallet",
+]);
+
+function twitchVideoId(raw: string | null | undefined): string | null {
+  if (!raw) {
+    return null;
+  }
+  const id = raw.replace(/^v/i, "");
+  return TWITCH_VIDEO_ID.test(id) ? id : null;
+}
+
+function twitchChannelId(raw: string | null | undefined): string | null {
+  if (
+    !raw ||
+    !TWITCH_CHANNEL.test(raw) ||
+    TWITCH_RESERVED_CHANNELS.has(raw.toLowerCase())
+  ) {
+    return null;
+  }
+  return raw.toLowerCase();
+}
+
+export function parseTwitchEmbed(raw: string): TwitchEmbedTarget | null {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    const host = url.hostname.replace(/^www\./, "").toLowerCase();
+
+    if (host === "clips.twitch.tv") {
+      if (url.pathname === "/embed") {
+        const clip = url.searchParams.get("clip");
+        return clip && TWITCH_CLIP_ID.test(clip)
+          ? { kind: "clip", id: clip }
+          : null;
+      }
+      const parts = url.pathname.split("/").filter(Boolean);
+      const slug = parts.length === 1 ? parts[0] : undefined;
+      return slug && TWITCH_CLIP_ID.test(slug)
+        ? { kind: "clip", id: slug }
+        : null;
+    }
+
+    if (host === "player.twitch.tv") {
+      const channel = twitchChannelId(url.searchParams.get("channel"));
+      if (channel) {
+        return { kind: "channel", id: channel };
+      }
+      const video = twitchVideoId(url.searchParams.get("video"));
+      return video ? { kind: "video", id: video } : null;
+    }
+
+    if (host !== "twitch.tv" && host !== "m.twitch.tv") {
+      return null;
+    }
+
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length === 0) {
+      return null;
+    }
+
+    if (parts[0] === "videos" || parts[0] === "video" || parts[0] === "v") {
+      if (parts.length !== 2) {
+        return null;
+      }
+      const id = twitchVideoId(parts[1]);
+      return id ? { kind: "video", id } : null;
+    }
+
+    if (parts.length === 1) {
+      const channel = twitchChannelId(parts[0]);
+      return channel ? { kind: "channel", id: channel } : null;
+    }
+
+    if (
+      parts.length === 3 &&
+      parts[1] === "clip" &&
+      parts[2] &&
+      TWITCH_CLIP_ID.test(parts[2])
+    ) {
+      const channel = twitchChannelId(parts[0]);
+      return channel ? { kind: "clip", id: parts[2] } : null;
+    }
+
+    if (
+      parts.length === 3 &&
+      (parts[1] === "video" || parts[1] === "videos" || parts[1] === "v") &&
+      parts[2]
+    ) {
+      const id = twitchVideoId(parts[2]);
+      const channel = twitchChannelId(parts[0]);
+      if (id && channel) {
+        return { kind: "video", id };
+      }
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/**
+ * Twitch's player refuses to render unless `parent` is the embedding page's
+ * hostname. The original URL is stored; this is built at render time so a
+ * post written on localhost still plays on pqp.gg.
+ */
+export function twitchEmbedSrc(
+  twitchUrl: string,
+  parentHost: string,
+): string | null {
+  const target = parseTwitchEmbed(twitchUrl);
+  if (!target) {
+    return null;
+  }
+  const parent = parentHost.trim().toLowerCase();
+  if (!isSafeTwitchParent(parent)) {
+    return null;
+  }
+  const parentQuery = `parent=${encodeURIComponent(parent)}&autoplay=false`;
+  if (target.kind === "channel") {
+    return `https://player.twitch.tv/?channel=${encodeURIComponent(target.id)}&${parentQuery}`;
+  }
+  if (target.kind === "video") {
+    return `https://player.twitch.tv/?video=${encodeURIComponent(target.id)}&${parentQuery}`;
+  }
+  return `https://clips.twitch.tv/embed?clip=${encodeURIComponent(target.id)}&${parentQuery}`;
+}
+
+function isSafeTwitchParent(host: string): boolean {
+  if (host === "localhost") {
+    return true;
+  }
+  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host)) {
+    return true;
+  }
+  return (
+    /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i.test(host) ||
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(host)
+  );
+}
+
+export type CommunityHomeEmbedKind =
+  | "youtube"
+  | "twitch"
+  | "tiktok"
+  | "instagram";
+
+/** YouTube, Twitch, TikTok, or Instagram watch URL. */
 export function parseCommunityHomeEmbed(
   raw: string,
 ): CommunityHomeEmbedKind | null {
   if (parseYoutubeVideoId(raw)) {
     return "youtube";
+  }
+  if (parseTwitchEmbed(raw)) {
+    return "twitch";
   }
   if (parseTikTokVideoId(raw)) {
     return "tiktok";
@@ -297,7 +526,12 @@ export function parseCommunityHomeEmbed(
 export function isCommunityHomeEmbedKind(
   kind: string | null | undefined,
 ): kind is CommunityHomeEmbedKind {
-  return kind === "youtube" || kind === "tiktok" || kind === "instagram";
+  return (
+    kind === "youtube" ||
+    kind === "twitch" ||
+    kind === "tiktok" ||
+    kind === "instagram"
+  );
 }
 
 export const communityHomeYoutubeUrlSchema = z
@@ -314,7 +548,7 @@ export const communityHomeEmbedUrlSchema = z
   .max(500)
   .refine(
     (value) => parseCommunityHomeEmbed(value) != null,
-    "Invalid YouTube, TikTok or Instagram URL",
+    "Invalid YouTube, Twitch, TikTok or Instagram URL",
   );
 
 /** Media as returned to a viewer who may see it. Locked viewers get null. */
@@ -323,19 +557,35 @@ export const communityHomeMediaSchema = z.object({
   name: z.string(),
   contentType: z.string().nullable(),
   byteSize: z.number().int().nonnegative().nullable(),
-  /** Presigned GET when storage-backed; null for YouTube / TikTok / Instagram. */
+  /** Presigned GET when storage-backed; null for YouTube / Twitch / TikTok / Instagram. */
   url: z.string().nullable(),
-  /** Original paste URL for YouTube, TikTok, and Instagram. */
+  /** Original paste URL for YouTube, TikTok, and Instagram. Twitch uses twitchUrl. */
   youtubeUrl: z.string().nullable(),
+  /**
+   * Absent on an older API during a rolling deploy. Treat missing as null
+   * so a YouTube or file card still parses instead of taking the whole feed
+   * down.
+   */
+  twitchUrl: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((value) => value ?? null),
 });
 
 export type CommunityHomeMedia = z.infer<typeof communityHomeMediaSchema>;
 
-/** Original paste URL when the media is a YouTube / TikTok / Instagram embed. */
+/** Original paste URL when the media is a YouTube, Twitch, TikTok, or Instagram embed. */
 export function communityHomeEmbedUrl(
   media: CommunityHomeMedia,
 ): string | null {
-  return isCommunityHomeEmbedKind(media.kind) ? media.youtubeUrl : null;
+  if (media.kind === "youtube" || media.kind === "tiktok" || media.kind === "instagram") {
+    return media.youtubeUrl;
+  }
+  if (media.kind === "twitch") {
+    return media.twitchUrl;
+  }
+  return null;
 }
 
 export const communityHomeCommentSchema = z.object({
@@ -416,7 +666,10 @@ export const createCommunityHomePostSchema = z.object({
   commentsEnabled: z.boolean().optional(),
   /** Claimed media upload id, or omit / null for text-only / a paste URL. */
   mediaUploadId: z.string().uuid().optional().nullable(),
-  /** YouTube, TikTok, or Instagram watch URL. Server classifies the kind. */
+  /**
+   * A YouTube, Twitch, TikTok, or Instagram watch URL. The service
+   * classifies which; one field so the composer stays one paste box.
+   */
   youtubeUrl: z.string().max(500).optional().nullable(),
   /**
    * Intent on create. `published` / `scheduled` require title + (body|media).
@@ -571,7 +824,7 @@ export type CommunityHomeLikeResponse = z.infer<
  * (`COMMUNITY_HOME_ENABLED`); `vipEnabled` the separate VIP switch
  * (`COMMUNITY_HOME_VIP_ENABLED`, meaningless without the first);
  * `mediaEnabled` whether object storage is configured, so the composer can
- * hide the file picker and offer YouTube / TikTok / Instagram only.
+ * hide the file picker and offer YouTube / Twitch / TikTok / Instagram only.
  */
 export const communityHomeConfigSchema = z.object({
   enabled: z.boolean(),

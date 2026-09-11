@@ -4941,12 +4941,12 @@
         }
       }
     },
-    "Watch on Instagram" : {
+    "Watch on Twitch" : {
       "localizations" : {
         "pt-BR" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Ver no Instagram"
+            "value" : "Ver na Twitch"
           }
         }
       }
@@ -4957,6 +4957,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ver no TikTok"
+          }
+        }
+      }
+    },
+    "Watch on Instagram" : {
+      "localizations" : {
+        "pt-BR" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver no Instagram"
           }
         }
       }

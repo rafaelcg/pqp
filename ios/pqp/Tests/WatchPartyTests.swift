@@ -425,14 +425,37 @@ final class WatchPartyTests: XCTestCase {
             stage.contains("automaticallyWaitsToMinimizeStalling = true"),
             "waiting off is the one-frame freeze: decode, sit, never recover"
         )
+        let theater = try String(
+            contentsOf: sources.appending(path: "Voice/WatchTheater.swift"), encoding: .utf8
+        )
         XCTAssertTrue(
-            stage.contains("WatchOrientation.enterTheater()"),
+            theater.contains("WatchOrientation.enterTheater()"),
             "fullscreen has to unlock landscape; the app is portrait everywhere else"
+        )
+        XCTAssertTrue(
+            theater.contains("AVPlayerViewController"),
+            "theater is AVKit fullscreen, not a SwiftUI cover over the chat"
+        )
+        XCTAssertTrue(
+            theater.contains("showsPlaybackControls = false"),
+            "the system transport bar is the chrome this replaced"
         )
         XCTAssertTrue(
             stage.contains("chromeInsets: isTheater ? chromeInsets"),
             "theater chrome has to clear the island, not sit under it"
         )
+        XCTAssertTrue(
+            stage.contains("WatchTheaterPresenter"),
+            "the cover from the chat inset left the transcript in the layout"
+        )
+        let push = try String(
+            contentsOf: sources.appending(path: "Core/PushNotifications.swift"), encoding: .utf8
+        )
+        XCTAssertTrue(
+            push.contains("supportedInterfaceOrientationsFor"),
+            "UIKit never asks WatchOrientation unless the app delegate answers"
+        )
+        XCTAssertTrue(push.contains("WatchOrientation.allowed"))
     }
 
     // MARK: - Telling a watch party apart from a voice channel
@@ -565,6 +588,10 @@ final class WatchPartyTests: XCTestCase {
         XCTAssertTrue(
             source.contains("if let voiceChannel, !voiceChannel.isWatchParty {"),
             "watching is seatless, and a green phone button is how that stops being true"
+        )
+        XCTAssertTrue(
+            source.contains("WatchHeroPreference"),
+            "a live picture is the hero; the nav bar fill has to get out of the way"
         )
     }
 

@@ -113,7 +113,7 @@ interface PostRow {
   visibility: CommunityHomeVisibility;
   status: CommunityHomePostStatus;
   comments_enabled: boolean;
-  media_kind: "image" | "video" | "youtube" | "tiktok" | "instagram" | "file" | null;
+  media_kind: "image" | "video" | "youtube" | "twitch" | "tiktok" | "instagram" | "file" | null;
   media_name: string | null;
   media_content_type: string | null;
   media_byte_size: string | null;
@@ -258,6 +258,17 @@ function buildMedia(
   if (!unlocked || !row.media_kind) {
     return null;
   }
+  if (row.media_kind === "twitch") {
+    return {
+      kind: "twitch",
+      name: row.media_name ?? "Twitch",
+      contentType: null,
+      byteSize: null,
+      url: null,
+      youtubeUrl: null,
+      twitchUrl: row.media_youtube_url,
+    };
+  }
   if (isCommunityHomeEmbedKind(row.media_kind)) {
     const label =
       row.media_kind === "tiktok"
@@ -272,6 +283,7 @@ function buildMedia(
       byteSize: null,
       url: null,
       youtubeUrl: row.media_youtube_url,
+      twitchUrl: null,
     };
   }
   let url: string | null = null;
@@ -297,6 +309,7 @@ function buildMedia(
     byteSize: row.media_byte_size ? Number(row.media_byte_size) : null,
     url,
     youtubeUrl: null,
+    twitchUrl: null,
   };
 }
 
@@ -618,7 +631,7 @@ export async function getCommunityHomePost(
 }
 
 type MediaFields = {
-  media_kind: "image" | "video" | "youtube" | "tiktok" | "instagram" | "file" | null;
+  media_kind: "image" | "video" | "youtube" | "twitch" | "tiktok" | "instagram" | "file" | null;
   media_name: string | null;
   media_content_type: string | null;
   media_byte_size: number | null;
@@ -710,9 +723,19 @@ function embedMedia(url: string): MediaFields {
       media_youtube_url: trimmed,
     };
   }
+  if (provider === "twitch") {
+    return {
+      media_kind: "twitch",
+      media_name: "Twitch",
+      media_content_type: null,
+      media_byte_size: null,
+      media_storage_key: null,
+      media_youtube_url: trimmed,
+    };
+  }
   throw new CommunityHomeError(
     "bad_embed",
-    "Invalid YouTube, TikTok or Instagram URL",
+    "Invalid YouTube, Twitch, TikTok or Instagram URL",
   );
 }
 

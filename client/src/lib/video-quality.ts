@@ -112,21 +112,23 @@ export function cameraProfileFor(quality: VideoQuality): CameraProfile {
  * `scaleResolutionDownBy`.
  */
 const SCREEN_BITRATES: Record<Exclude<VideoQuality, "auto">, number> = {
-  "1080p": 4_000_000,
-  "720p": 2_000_000,
-  "480p": 1_000_000,
-  "360p": 600_000,
+  "1080p": 8_000_000,
+  "720p": 3_500_000,
+  "480p": 1_500_000,
+  "360p": 800_000,
 };
 
 /**
  * What `auto` spends on a screen.
  *
  * 3 Mbps, which is above the 2.5 Mbps every share used to get and below the
- * 4 Mbps a deliberate 1080p now asks for. Auto has to be the number that is
+ * 8 Mbps a deliberate 1080p now asks for. Auto has to be the number that is
  * right for somebody who has never opened this menu and never will, on an
  * uplink nobody has measured, so it buys a visibly better share than today
  * without being the most expensive thing the product can do behind their back.
- * Choosing 1080p is how you say "I have the upload, spend it".
+ * Choosing 1080p is how you say "I have the upload, spend it". A watch-party
+ * HLS source uses `max(auto, 1080p)` so the ladder is not starved by this
+ * compromise.
  */
 const AUTO_SCREEN_BITRATE = 3_000_000;
 
@@ -383,17 +385,19 @@ export interface HlsSourceInput {
 export const HLS_SOURCE_UPLINK_HEADROOM = 1.25;
 
 /**
- * 720p30 HLS rung (1800 kbps) × headroom, floored at the 720p screen
+ * 720 HLS rung (3200 kbps) × headroom, floored at the 720p screen
  * ceiling. Never `LARGE_ROOM_SCREEN_BITRATE` (1.5 Mbps): that number is
  * what a large *WebRTC* room spends per viewer, and using it as the HLS
  * source made every playlist rung an upscale of a starved 720p.
  *
- * Lockstep with `LADDER_RUNGS["720p30"].videoKbps` in
+ * Lockstep with the default mid-rung override (`720p60@3200`) in
  * `server/src/voice/hls-ladder.ts`.
  */
+export const HLS_720P30_VIDEO_BPS = 3_200_000;
+
 export const HLS_HELD_720_BITRATE = Math.max(
   SCREEN_BITRATES["720p"],
-  Math.round(1_800_000 * HLS_SOURCE_UPLINK_HEADROOM),
+  Math.round(HLS_720P30_VIDEO_BPS * HLS_SOURCE_UPLINK_HEADROOM),
 );
 
 /**
@@ -485,7 +489,7 @@ export function screenSimulcastPlan(
       ? Math.min(chosenHeight, LARGE_ROOM_SCREEN_HEIGHT)
       : chosenHeight;
   const topBitrate = holdAt720
-    ? Math.min(screenBitrateFor(quality), HLS_HELD_720_BITRATE)
+    ? HLS_HELD_720_BITRATE
     : largeRoomCapped
       ? Math.min(screenBitrateFor(quality), LARGE_ROOM_SCREEN_BITRATE)
       : hlsTop !== null
@@ -493,28 +497,33 @@ export function screenSimulcastPlan(
           // ceiling rather than Auto's compromise 3 Mbit/s.
           Math.max(screenBitrateFor(quality), SCREEN_BITRATES["1080p"])
         : screenBitrateFor(quality);
-  const hlsLive = hls !== null && hls.ladderTopHeight !== null;
   return {
     topHeight,
     topBitrate,
-    lowerLayers: SCREEN_SIMULCAST_RUNGS.filter((layer) => {
-      if (layer.height >= topHeight) {
-        return false;
-      }
-      // HLS viewers play the playlist. Sub-layers only starve the top layer
-      // the egress actually subscribes to. Keep 360p for a seated phone that
-      // still takes the LiveKit track; drop the 720p mid-rung.
-      if (hlsLive && layer.height > 360) {
-        return false;
-      }
-      return true;
-    }),
+    lowerLayers: screenShareSimulcastEnabled(hls)
+      ? SCREEN_SIMULCAST_RUNGS.filter((layer) => layer.height < topHeight)
+      : [],
     // Only "the room decided" counts. Somebody who chose 720p in a big room
     // is sending what they asked for, and the menu must not tell them the
     // room made them do it. HLS hold is `heldForHls`, not this.
     capped: largeRoomCapped && topHeight < chosenHeight,
     heldForHls: holdAt720 && topHeight < chosenHeight,
   };
+}
+
+/**
+ * Watch-party HLS ingest is one encoding. Simulcast sublayers starve the
+ * only layer egress uses (`SetSubscribed(true)`, no layer preference):
+ * libwebrtc feeds BWE bottom-up, so 360p and 720p eat the budget the
+ * 1080 top needs, Chrome scales the remainder (427×240 is not a published
+ * rung), and every playlist viewer transcodes that hunting source.
+ *
+ * Ordinary SFU screen share and mesh DM calls keep the ladder.
+ */
+export function screenShareSimulcastEnabled(
+  hls: HlsSourceInput | null,
+): boolean {
+  return hls === null || hls.ladderTopHeight === null;
 }
 
 /**
@@ -564,9 +573,10 @@ export function clampScreenPlanToCapture(
   return {
     topHeight,
     topBitrate: Math.min(plan.topBitrate, topBitrate),
-    lowerLayers: SCREEN_SIMULCAST_RUNGS.filter(
-      (layer) => layer.height < topHeight && (!plan.heldForHls || layer.height <= 360),
-    ),
+    // Keep the plan's own rungs. Rebuilding from SCREEN_SIMULCAST_RUNGS
+    // reintroduces the 720 mid-layer a live HLS plan already dropped
+    // (`heldForHls` is only the 720 hold, not "HLS is transcoding").
+    lowerLayers: plan.lowerLayers.filter((layer) => layer.height < topHeight),
     capped: plan.capped,
     heldForHls: plan.heldForHls,
   };

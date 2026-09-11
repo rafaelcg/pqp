@@ -267,6 +267,21 @@ Nothing in App Store Connect changes: same bundle id, same entitlements, and
 the demo account below still works for a reviewer, who will land in a LiveKit
 room on production.
 
+## Watch party on a TestFlight build
+
+Client-only. No API restart. After this build is on a phone:
+
+1. Sign in on production.
+2. Open a server that has a live Watch party (clapperboard section, AO VIVO
+   pill). Opening the channel is watching; do not tap a green phone.
+3. The film should keep playing past the first few seconds. If it stalls,
+   tap the picture and **Pular pro ao vivo**.
+4. Expand is native fullscreen (landscape, film fills the screen, chat is
+   gone). Quality, jump to live, AirPlay and collapse stay on the overlay.
+
+Simulator: `cd ios && xcodegen generate`, then the pqp scheme. Needs a live
+playlist; there is no physical iPhone in CI.
+
 ## Related
 
 - `docs/IOS.md` — run the app, APNs, universal links

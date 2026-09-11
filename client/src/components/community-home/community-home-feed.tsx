@@ -54,19 +54,20 @@ import {
   COMMUNITY_HOME_MAX_BYTES,
   COMMUNITY_HOME_TEASER_MAX,
   COMMUNITY_HOME_TITLE_MAX,
+  communityHomeEmbedUrl,
   formatHomeBytes,
   isHomeVideoFile,
+  isCommunityHomeEmbedKind,
   isPostLockedForViewer,
+  instagramEmbedSrc,
   loadCommunityHomeViewerMode,
   lockedPostSummary,
+  parseCommunityHomeEmbed,
   saveCommunityHomeViewerMode,
+  tiktokEmbedSrc,
+  twitchEmbedSrc,
   uploadHomeMedia,
   youtubeEmbedSrc,
-  tiktokEmbedSrc,
-  instagramEmbedSrc,
-  parseCommunityHomeEmbed,
-  isCommunityHomeEmbedKind,
-  communityHomeEmbedUrl,
   type CommunityHomeComment,
   type CommunityHomeMedia,
   type CommunityHomePost,
@@ -230,6 +231,13 @@ function MediaCaption({ media }: { media: CommunityHomeMedia }) {
   );
 }
 
+function twitchPlayerParent(): string {
+  if (typeof window !== "undefined" && window.location.hostname) {
+    return window.location.hostname;
+  }
+  return "localhost";
+}
+
 function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
   const { t } = useTranslation();
   if (media.kind === "youtube") {
@@ -254,10 +262,33 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
     );
   }
 
+  if (media.kind === "twitch") {
+    const src = media.twitchUrl
+      ? twitchEmbedSrc(media.twitchUrl, twitchPlayerParent())
+      : null;
+    if (!src) {
+      return null;
+    }
+    return (
+      <div
+        className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
+        data-home-media="twitch"
+      >
+        <iframe
+          title={media.name}
+          src={src}
+          className="aspect-video w-full"
+          loading="lazy"
+          allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+          allowFullScreen
+        />
+      </div>
+    );
+  }
+
   if (media.kind === "tiktok") {
-    const watchUrl = media.youtubeUrl;
-    const src = watchUrl ? tiktokEmbedSrc(watchUrl) : null;
-    if (!src && !watchUrl) {
+    const src = media.youtubeUrl ? tiktokEmbedSrc(media.youtubeUrl) : null;
+    if (!src) {
       return null;
     }
     return (
@@ -265,35 +296,21 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
         className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
         data-home-media="tiktok"
       >
-        {src ? (
-          <iframe
-            title={t("communityHome.media.openTikTok")}
-            src={src}
-            className="mx-auto aspect-[9/16] w-full max-w-[325px]"
-            loading="lazy"
-            allow="encrypted-media; fullscreen; picture-in-picture"
-            allowFullScreen
-          />
-        ) : null}
-        {watchUrl ? (
-          <a
-            className="block border-t border-ink-4 px-3 py-1.5 text-center text-[11px] text-signal hover:underline"
-            href={watchUrl}
-            target="_blank"
-            rel="noreferrer noopener"
-            data-home-media-open
-          >
-            {t("communityHome.media.openTikTok")}
-          </a>
-        ) : null}
+        <iframe
+          title={t("communityHome.media.openTikTok")}
+          src={src}
+          className="mx-auto aspect-[9/16] w-full max-w-[325px]"
+          loading="lazy"
+          allow="encrypted-media; fullscreen; picture-in-picture"
+          allowFullScreen
+        />
       </div>
     );
   }
 
   if (media.kind === "instagram") {
-    const watchUrl = media.youtubeUrl;
-    const src = watchUrl ? instagramEmbedSrc(watchUrl) : null;
-    if (!src && !watchUrl) {
+    const src = media.youtubeUrl ? instagramEmbedSrc(media.youtubeUrl) : null;
+    if (!src) {
       return null;
     }
     return (
@@ -301,27 +318,14 @@ function UnlockedMedia({ media }: { media: CommunityHomeMedia }) {
         className="overflow-hidden rounded-lg border border-ink-4 bg-ink"
         data-home-media="instagram"
       >
-        {src ? (
-          <iframe
-            title={t("communityHome.media.openInstagram")}
-            src={src}
-            className="mx-auto min-h-[540px] w-full max-w-[540px]"
-            loading="lazy"
-            allow="encrypted-media; clipboard-write; picture-in-picture"
-            allowFullScreen
-          />
-        ) : null}
-        {watchUrl ? (
-          <a
-            className="block border-t border-ink-4 px-3 py-1.5 text-center text-[11px] text-signal hover:underline"
-            href={watchUrl}
-            target="_blank"
-            rel="noreferrer noopener"
-            data-home-media-open
-          >
-            {t("communityHome.media.openInstagram")}
-          </a>
-        ) : null}
+        <iframe
+          title={t("communityHome.media.openInstagram")}
+          src={src}
+          className="mx-auto min-h-[540px] w-full max-w-[540px]"
+          loading="lazy"
+          allow="encrypted-media; clipboard-write; picture-in-picture"
+          allowFullScreen
+        />
       </div>
     );
   }
@@ -1105,19 +1109,20 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
   let media: CommunityHomeMedia | null = null;
   const embedKind = parseCommunityHomeEmbed(state.youtubeUrl);
   if (embedKind) {
-    const name =
-      embedKind === "tiktok"
-        ? "TikTok"
-        : embedKind === "instagram"
-          ? "Instagram"
-          : "YouTube";
+    const name = {
+      youtube: "YouTube",
+      twitch: "Twitch",
+      tiktok: "TikTok",
+      instagram: "Instagram",
+    }[embedKind];
     media = {
       kind: embedKind,
       name,
       contentType: null,
       byteSize: null,
       url: null,
-      youtubeUrl: state.youtubeUrl.trim(),
+      youtubeUrl: embedKind === "twitch" ? null : state.youtubeUrl.trim(),
+      twitchUrl: embedKind === "twitch" ? state.youtubeUrl.trim() : null,
     };
   } else if (state.upload) {
     media = {
@@ -1127,6 +1132,7 @@ function previewPost(state: ComposeState, me: PublicUser, serverId: string, isOw
       byteSize: state.upload.byteSize,
       url: state.uploadPreviewUrl,
       youtubeUrl: null,
+      twitchUrl: null,
     };
   } else if (state.existingMedia && !state.clearMedia) {
     media = state.existingMedia;
@@ -1450,7 +1456,7 @@ function ComposeCard({
           )}
         </div>
 
-        {/* Media: one of file (when storage is on) or a YouTube / TikTok / Instagram URL. */}
+        {/* Media: one file (when storage is on) or a provider URL. */}
         <div className="mb-2 grid gap-2 sm:grid-cols-2">
           {mediaEnabled ? (
             <label className="block text-xs text-paper-muted">

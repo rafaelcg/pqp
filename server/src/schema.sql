@@ -3465,7 +3465,8 @@ $$;
 -- visibility strips body/media on the wire unless the viewer has MANAGE_SERVER
 -- or the VIP cargo. Likes are a unique (post_id, user_id) pair, never a counter
 -- column. Media bytes live in object storage under community-home/{serverId}/;
--- YouTube is URL-only. Schedule is first-class: scheduled_at + IANA timezone,
+-- YouTube, TikTok, Instagram, and Twitch are URL-only. Schedule is first-class:
+-- scheduled_at + IANA timezone,
 -- published by an in-process catch-up on the single Node process (no worker).
 
 CREATE TABLE IF NOT EXISTS community_home_posts (
@@ -3513,15 +3514,15 @@ END $$;
 
 DO $$
 BEGIN
-  -- DROP first so an existing install replaces the old enum (no tiktok /
-  -- instagram) instead of hitting a duplicate-name error that this handler
-  -- would swallow.
+  -- DROP first so an existing install replaces the old enum (no twitch,
+  -- tiktok, or instagram) instead of hitting a duplicate-name error that this
+  -- handler would swallow.
   ALTER TABLE community_home_posts DROP CONSTRAINT IF EXISTS community_home_posts_media_kind_check;
   ALTER TABLE community_home_posts
     ADD CONSTRAINT community_home_posts_media_kind_check
     CHECK (
       media_kind IS NULL
-      OR media_kind IN ('image', 'video', 'youtube', 'tiktok', 'instagram', 'file')
+      OR media_kind IN ('image', 'video', 'youtube', 'twitch', 'tiktok', 'instagram', 'file')
     );
 EXCEPTION
   WHEN duplicate_object THEN NULL;

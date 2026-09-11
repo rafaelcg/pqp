@@ -1048,38 +1048,38 @@ control on the whole document, names each of the three surfaces individually
 so a regression says which one came back, and checks the party surfaces that
 SHOULD be there so a zero is never "nothing rendered".
 
-### Fullscreen, and why it takes the pane
+### Fullscreen, cinema not a chat column
 
 A watch party is a film, and people watch films fullscreen for two hours. The
-player had a fit toggle, a quality menu, a volume slider and
-Picture-in-Picture, and no fullscreen control at all. Rafael: *"i dont think i
-can make it full screen as a viewer"*.
+player used to keep the split: native `requestFullscreen()` on the pane, but
+chat still owned a column of the screen. That is fake fullscreen. Rafael
+again: the film should look like Twitch — the picture fills the monitor, and
+chat is a hover/hotkey overlay if you want it, not a layout.
 
-**The obvious fix is the wrong one.** `video.requestFullscreen()` renders only
-that element's subtree, so a fullscreen `<video>` is a film with no chat, no
-reactions and no way to reach either. In a watch party what would be left
-behind is the room talking about the film.
+`components/voice/watch-fullscreen.ts` still takes the **split pane**
+(`[data-call-split]`). Element fullscreen only paints that element's subtree,
+so the transcript has to stay in the tree for the overlay to work. Taking the
+`<video>` would be a film with no way back to chat without leaving.
 
-So `components/voice/watch-fullscreen.ts` takes the **split pane**
-(`[data-call-split]`), which already holds the stage, the divider and the
-transcript in whatever arrangement this person chose. Fullscreen then means
-"the film and my chat take the screen": `68svh` is a fraction of the VIEWPORT
-and in element fullscreen the viewport is the screen, so the same rule that
-gives the film two thirds of a window gives it two thirds of a screen. The
-divider still drags inside it, and somebody who wants nothing but the film
-puts the chat away and gets exactly that. One layout, two sizes of viewport,
-nothing new to learn.
+Cinema restyles the pane (`data-watch-cinema` in `index.css`): the stage is
+`position: absolute; inset: 0` on a black letterbox (`object-fit: contain` on
+the film), the divider is gone, and `[data-call-split-chat]` is `display:
+none` until the overlay toggle (or `c`, while not typing). Overlaying chat
+does not shrink the video.
 
-The refusal path is the one `element-fullscreen.ts` was written for: an
-Electron shell can answer neither way and leave the promise pending, so a
-`false` still owes the person a filled viewport. The fallback is an in-page
-`expand`, a `data-watch-expanded` attribute on the pane and one rule in
-`index.css`, with Escape wired up by hand because in that mode the browser is
-not the one holding it.
+The refusal path is unchanged: an Electron shell can answer neither way, so a
+`false` still owes a filled viewport. The fallback is in-page `expand`
+(`data-watch-expanded`) plus the same cinema layout, with Escape wired by
+hand because in that mode the browser is not holding it. iPhone still uses
+the native HLS player.
 
-**One honest gap.** The party's chrome (the bar with Encerrar, the options, the
-join) is drawn ABOVE the split, so it is not inside the fullscreen element and
-is not visible while fullscreen. Escape or the same control brings it back.
+Seated viewers on the cinema stage (`CinemaStage`) take the same path. The
+control bar autohides after the pointer rests, the way the call stage's
+share chrome already does (`useIdleChrome`).
+
+**One honest gap.** The party's chrome (the bar with Encerrar, the options)
+is drawn ABOVE the split, so it is not inside the fullscreen element and is
+not visible while fullscreen. Escape or the same control brings it back.
 That is the correct trade for a viewer and worth revisiting for a host who
 wants to end a party without leaving fullscreen.
 
@@ -2364,18 +2364,32 @@ later, per app:
     app taking the session stops `AVPlayer` and leaves it stopped. Nothing was
     listening, so the film never came back.
 
-  The picture is now `AVPlayerViewController` (`WatchVideoSurface`) rather
-  than SwiftUI's `VideoPlayer`, which wraps the same class and exposes none of
-  it. That is where fullscreen in landscape comes from, along with AirPlay,
-  Picture in Picture and a transport bar that fades while you watch. pqp draws
-  the strip underneath: live or how far behind, the headcount, and a quality
-  menu built from `AVAsset.variants` (Auto plus whatever the master actually
-  advertises, never a hard coded list) labelled with the rung
-  `presentationSize` says is being decoded. Collapsing now REMOVES the
-  surface rather than squashing it to zero height, which used to leave a
-  decoder running to fill a rectangle nobody could see.
+  **Build 27 still played for a few seconds and then stopped.** The Auto
+  ceiling above was written when `item.status == .readyToPlay`, and that
+  flag means the master parsed, not that the picture is moving. Treating it
+  as "already playing" skipped the write; `AVPlayer` ABR-climbed from the
+  first rung to 1080 a few seconds in; the rendition switch on a ~10 s live
+  window is a freeze. `WatchQualityRetune.hasStartedPlayback` now keys off
+  `rate` and `timeControlStatus` only, the cap is applied *before* the first
+  `play()`, Auto with no surface yet caps to the shortest published rung,
+  and the item is tuned like the web player (`preferredForwardBufferDuration`
+  8 s, `configuredTimeOffsetFromLive` 8 s, matching
+  `client/src/lib/hls-live-edge.ts`). Jump to live and
+  `AVPlayerItemPlaybackStalled` land one 2 s segment behind the edge, same
+  as `jumpToLiveTime`. Token TTL is still one hour; "X seconds" was never
+  expiry.
 
-  Tests: `ios/pqp/Tests/WatchLivePlayerTests.swift`.
+  Inline the picture is an `AVPlayerLayer` with our cinema chrome
+  (`WatchOverlay`). Fullscreen is a real `AVPlayerViewController` presented
+  `.fullScreen` (`WatchTheater.swift`), the iOS equivalent of the web's
+  `webkitEnterFullscreen` path: the film fills the screen, chat is not a
+  column in that layout, controls autohide. A SwiftUI `.fullScreenCover`
+  from the chat inset was leaving the transcript in the hierarchy. PiP and
+  AirPlay stay on the overlay; collapsing still REMOVES the surface rather
+  than squashing it to zero height.
+
+  Tests: `ios/pqp/Tests/WatchLivePlayerTests.swift`,
+  `ios/pqp/Tests/WatchPartyTests.swift`.
 
   Still to do on iOS: the party OBJECT (`watch-party-update`, the host,
   cohosts, the stage, raise hand), the presenter side, hiding the share

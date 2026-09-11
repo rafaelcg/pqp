@@ -61,7 +61,16 @@ class FakeRoom {
   remoteParticipants = new Map<string, FakeRemoteParticipant>();
   localPublications = new Map<
     string,
-    { videoTrack?: { getSenderStats: () => Promise<unknown[]> } }
+    {
+      videoTrack?: { getSenderStats: () => Promise<unknown[]> };
+      track?: {
+        sender: {
+          getParameters: () => RTCRtpSendParameters;
+          setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+          getStats?: () => Promise<unknown>;
+        };
+      };
+    }
   >();
   localParticipant = {
     publishTrack: async (
@@ -69,7 +78,23 @@ class FakeRoom {
       options: { source?: string } = {},
     ) => {
       if (options.source) {
-        this.localPublications.set(options.source, {});
+        let params: RTCRtpSendParameters = {
+          encodings: [{}, {}, {}],
+          transactionId: "t",
+          codecs: [],
+          headerExtensions: [],
+          rtcp: {},
+        } as unknown as RTCRtpSendParameters;
+        this.localPublications.set(options.source, {
+          track: {
+            sender: {
+              getParameters: () => params,
+              setParameters: async (next: RTCRtpSendParameters) => {
+                params = next;
+              },
+            },
+          },
+        });
       }
     },
     unpublishTrack: async () => {},
@@ -396,7 +421,7 @@ describe("what an SFU presenter is sending", () => {
           frameHeight: 720,
           framesPerSecond: 30,
           framesSent: 900,
-          targetBitrate: 2_200_000,
+          targetBitrate: 3_700_000,
           qualityLimitationReason: "bandwidth",
           rid: "q",
         },
@@ -407,8 +432,8 @@ describe("what an SFU presenter is sending", () => {
     expect(snapshot.senders[0]).toMatchObject({
       role: "screen",
       height: 720,
-      targetKbps: 2200,
-      ceilingKbps: 2250,
+      targetKbps: 3700,
+      ceilingKbps: 4000,
       limitedBy: "bandwidth",
     });
     expect(describeLimitation(snapshot.senders[0]!)).toBe("setting");
@@ -447,9 +472,13 @@ describe("what an SFU presenter is sending", () => {
     )!;
     publication.videoTrack = {
       getSenderStats: async () => [],
-      sender: { getStats: async () => report },
-    } as typeof publication.videoTrack & {
-      sender: { getStats: () => Promise<unknown> };
+    };
+    publication.track = {
+      sender: {
+        getParameters: publication.track!.sender.getParameters,
+        setParameters: publication.track!.sender.setParameters,
+        getStats: async () => report,
+      },
     };
 
     const snapshot = await sampleVoiceStats();

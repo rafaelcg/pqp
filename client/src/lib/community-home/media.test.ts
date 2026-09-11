@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   COMMUNITY_HOME_MAX_BYTES,
   formatHomeBytes,
+  parseCommunityHomeEmbed,
   parseYoutubeVideoId,
+  twitchEmbedSrc,
   youtubeEmbedSrc,
   tiktokEmbedSrc,
   instagramEmbedSrc,
@@ -51,5 +53,16 @@ describe("community home media helpers", () => {
   it("formats bytes and keeps the 100 MiB ceiling", () => {
     expect(formatHomeBytes(420 * 1024)).toBe("420 KiB");
     expect(COMMUNITY_HOME_MAX_BYTES).toBe(100 * 1024 * 1024);
+  });
+
+  it("classifies a Twitch channel URL and builds a parented player src", () => {
+    expect(parseCommunityHomeEmbed("https://www.twitch.tv/moonkaselive")).toBe(
+      "twitch",
+    );
+    expect(
+      twitchEmbedSrc("https://www.twitch.tv/moonkaselive", "pqp.gg"),
+    ).toBe(
+      "https://player.twitch.tv/?channel=moonkaselive&parent=pqp.gg&autoplay=false",
+    );
   });
 });

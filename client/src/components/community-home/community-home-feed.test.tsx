@@ -122,6 +122,7 @@ describe("PostCard", () => {
       byteSize: 1024,
       url: "https://bucket.example/sessao-11-clip.webm?sig=1",
       youtubeUrl: null,
+      twitchUrl: null,
     };
     const open = render(
       <PostCard post={post({ media })} me={me} locked={false} canManageServer={false} vipEnabled={false} />,
@@ -268,6 +269,7 @@ describe("PostCard", () => {
             byteSize: null,
             url: null,
             youtubeUrl: "https://www.tiktok.com/@scout2015/video/6718335390845095173",
+            twitchUrl: null,
           },
         })}
         me={me}
@@ -281,10 +283,7 @@ describe("PostCard", () => {
       'src="https://www.tiktok.com/player/v1/6718335390845095173"',
     );
     expect(html).toContain('loading="lazy"');
-    expect(html).toContain('data-home-media-open');
-    expect(html).toContain(
-      'href="https://www.tiktok.com/@scout2015/video/6718335390845095173"',
-    );
+    expect(html).not.toContain("data-home-media-open");
   });
 
   it("embeds an Instagram reel in the official embed iframe", () => {
@@ -298,6 +297,7 @@ describe("PostCard", () => {
             byteSize: null,
             url: null,
             youtubeUrl: "https://www.instagram.com/reel/CqK2e0_JXkA/",
+            twitchUrl: null,
           },
         })}
         me={me}
@@ -311,9 +311,39 @@ describe("PostCard", () => {
       'src="https://www.instagram.com/reel/CqK2e0_JXkA/embed/"',
     );
     expect(html).toContain('loading="lazy"');
-    expect(html).toContain('data-home-media-open');
-    expect(html).toContain('href="https://www.instagram.com/reel/CqK2e0_JXkA/"');
+    expect(html).not.toContain("data-home-media-open");
   });
+
+  it.each([
+    ["tiktok", "javascript:alert(1)"],
+    ["instagram", "https://evil.example/reel/CqK2e0_JXkA/"],
+  ] as const)(
+    "does not render an anchor for an unvalidated %s URL",
+    (kind, youtubeUrl) => {
+      const html = render(
+        <PostCard
+          post={post({
+            media: {
+              kind,
+              name: kind,
+              contentType: null,
+              byteSize: null,
+              url: null,
+              youtubeUrl,
+              twitchUrl: null,
+            },
+          })}
+          me={me}
+          locked={false}
+          canManageServer={false}
+          vipEnabled={false}
+        />,
+      );
+      expect(html).not.toContain("data-home-media-open");
+      expect(html).not.toContain("<a ");
+      expect(html).not.toContain("href=");
+    },
+  );
 
   it("offers emoji and GIF on the comment box", () => {
     const html = render(
@@ -348,5 +378,32 @@ describe("PostCard", () => {
       <PostCard post={post()} me={me} locked={false} canManageServer={false} vipEnabled={false} />,
     );
     expect(member).not.toContain("data-home-edit");
+  });
+
+  it("a Twitch post embeds the player with the page host as parent", () => {
+    const html = render(
+      <PostCard
+        post={post({
+          media: {
+            kind: "twitch",
+            name: "Twitch",
+            contentType: null,
+            byteSize: null,
+            url: null,
+            youtubeUrl: null,
+            twitchUrl: "https://www.twitch.tv/moonkaselive",
+          },
+        })}
+        me={me}
+        locked={false}
+        canManageServer={false}
+        vipEnabled={false}
+      />,
+    );
+    expect(html).toContain('data-home-media="twitch"');
+    expect(html).toContain("player.twitch.tv/?channel=moonkaselive");
+    expect(html).toContain("parent=localhost");
+    expect(html).toContain("autoplay=false");
+    expect(html).toContain('loading="lazy"');
   });
 });
