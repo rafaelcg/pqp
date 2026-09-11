@@ -500,21 +500,30 @@ export function screenSimulcastPlan(
   return {
     topHeight,
     topBitrate,
-    lowerLayers: SCREEN_SIMULCAST_RUNGS.filter((layer) => {
-      if (layer.height >= topHeight) {
-        return false;
-      }
-      // Keep the 720p encoding even while HLS is live, so shutting the
-      // ladder down can turn it back on without a new sid. BWE cost is
-      // `active: false` on the sender, not omitting the encoding.
-      return true;
-    }),
+    lowerLayers: screenShareSimulcastEnabled(hls)
+      ? SCREEN_SIMULCAST_RUNGS.filter((layer) => layer.height < topHeight)
+      : [],
     // Only "the room decided" counts. Somebody who chose 720p in a big room
     // is sending what they asked for, and the menu must not tell them the
     // room made them do it. HLS hold is `heldForHls`, not this.
     capped: largeRoomCapped && topHeight < chosenHeight,
     heldForHls: holdAt720 && topHeight < chosenHeight,
   };
+}
+
+/**
+ * Watch-party HLS ingest is one encoding. Simulcast sublayers starve the
+ * only layer egress uses (`SetSubscribed(true)`, no layer preference):
+ * libwebrtc feeds BWE bottom-up, so 360p and 720p eat the budget the
+ * 1080 top needs, Chrome scales the remainder (427×240 is not a published
+ * rung), and every playlist viewer transcodes that hunting source.
+ *
+ * Ordinary SFU screen share and mesh DM calls keep the ladder.
+ */
+export function screenShareSimulcastEnabled(
+  hls: HlsSourceInput | null,
+): boolean {
+  return hls === null || hls.ladderTopHeight === null;
 }
 
 /**
