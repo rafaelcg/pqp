@@ -96,12 +96,12 @@ struct WatchLiveEdge: Equatable {
 
     /// How far back from the LIVE EDGE to land, in seconds.
     ///
-    /// Four two second segments, matching the web player's live sync. Fine
-    /// once the playlist holds ~30 s. On a ten second window (five segments,
-    /// what production still published when this was written) `end - 8` is
-    /// only two seconds from the back: one late segment and the playhead is
-    /// gone. `target(in:)` therefore also honours `minRunway`.
-    static let liveTargetOffset: Double = 8
+    /// Three two-second segments (6 s). Four segments (8 s) on a ten second
+    /// playlist is two seconds from the back: the segment the next playlist
+    /// update expires. That is the stall the web player just left
+    /// (`HLS_LIVE_SYNC_DURATION_COUNT = 3`). `target(in:)` still honours
+    /// `minRunway` so a short window cannot land on the last two seconds.
+    static let liveTargetOffset: Double = 6
 
     /// Jump-to-live and stall recovery, matching web `jumpToLiveTime`:
     /// one 2 s segment behind the edge, not onto it.

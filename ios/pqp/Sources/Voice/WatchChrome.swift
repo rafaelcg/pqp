@@ -334,7 +334,7 @@ struct WatchControlStyle: ButtonStyle {
 /// Live picture is up, not minimised, no seat. ChatView hides the nav bar
 /// chrome so the film sits under the island rather than under a bar.
 struct WatchHeroPreference: PreferenceKey {
-    static var defaultValue = false
+    nonisolated(unsafe) static var defaultValue = false
     static func reduce(value: inout Bool, nextValue: () -> Bool) {
         value = value || nextValue()
     }

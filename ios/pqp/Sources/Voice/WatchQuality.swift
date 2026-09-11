@@ -243,10 +243,11 @@ enum WatchQualityRetune {
  window; this is the same numbers on the item.
  */
 enum WatchPlayerItemTuning {
-    /// `HLS_MAX_BUFFER_LENGTH_SECONDS`.
-    static let forwardBuffer: TimeInterval = 8
-    /// `HLS_LIVE_SYNC_DURATION_COUNT * HLS_LIVE_SEGMENT_SECONDS`.
-    static let timeOffsetFromLive: TimeInterval = 8
+    /// Sit in the middle of the five-segment window, not on the segment
+    /// that expires next. Same 6 s as `WatchLiveEdge.liveTargetOffset`.
+    static let forwardBuffer: TimeInterval = 6
+    /// Three 2 s segments behind live. Eight sat on the last listed segment.
+    static let timeOffsetFromLive: TimeInterval = 6
 
     static func apply(_ item: AVPlayerItem) {
         item.preferredForwardBufferDuration = forwardBuffer
