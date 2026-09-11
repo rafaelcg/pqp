@@ -2,8 +2,11 @@ import {
   attachmentFilenameSchema,
   COMMUNITY_HOME_MAX_BYTES,
   COMMUNITY_HOME_MIME_ALLOWLIST,
+  communityHomeEmbedUrl,
   communityHomeMediaKindFromContentType,
+  parseCommunityHomeEmbed,
   parseYoutubeVideoId,
+  twitchEmbedSrc,
   youtubeEmbedSrc,
   type CommunityHomeContentType,
 } from "@pqp/shared";
@@ -22,7 +25,14 @@ import {
  * but it is never a production media representation.
  */
 
-export { COMMUNITY_HOME_MAX_BYTES, parseYoutubeVideoId, youtubeEmbedSrc };
+export {
+  COMMUNITY_HOME_MAX_BYTES,
+  communityHomeEmbedUrl,
+  parseCommunityHomeEmbed,
+  parseYoutubeVideoId,
+  twitchEmbedSrc,
+  youtubeEmbedSrc,
+};
 export type {
   CommunityHomeMedia,
   CommunityHomeMediaKind,

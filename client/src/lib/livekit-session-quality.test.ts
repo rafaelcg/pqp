@@ -306,7 +306,9 @@ const {
   connectLiveKit,
   HLS_SOURCE_DROP_SAMPLES,
   HLS_SOURCE_RAISE_SAMPLES,
+  HLS_SOURCE_HEIGHT_DWELL_MS,
 } = await import("./livekit-session");
+const { HLS_HELD_720_BITRATE } = await import("./video-quality");
 
 function fakeTrack(kind: "audio" | "video", id: string, height = 720, frameRate = 30) {
   const nativeHeight = height;
@@ -721,7 +723,7 @@ describe("the screen goes up as simulcast layers", () => {
     expect(options?.screenShareSimulcastLayers?.map((l) => l.height)).toEqual([
       360,
     ]);
-    expect(options?.screenShareEncoding?.maxBitrate).toBe(2_000_000);
+    expect(options?.screenShareEncoding?.maxBitrate).toBe(3_500_000);
     expect(constrained).toEqual([720]);
   });
 });
@@ -762,7 +764,7 @@ describe("the large-room cap", () => {
 
     const options = encodingFor(Track.Source.ScreenShare);
     expect(constrained).toEqual([1080]);
-    expect(options?.screenShareEncoding?.maxBitrate).toBe(4_000_000);
+    expect(options?.screenShareEncoding?.maxBitrate).toBe(8_000_000);
     expect(options?.screenShareSimulcastLayers?.map((l) => l.height)).toEqual([
       360, 720,
     ]);
@@ -801,7 +803,7 @@ describe("the large-room cap", () => {
 
     expect(constrained).toEqual([720, 1080]);
     expect(lastScreenPublish()?.screenShareEncoding?.maxBitrate).toBe(
-      4_000_000,
+      8_000_000,
     );
     expect(lastScreenPublish()?.screenShareSimulcastLayers).toHaveLength(2);
   });
@@ -877,40 +879,36 @@ describe("the presenter as a live ladder's source", () => {
     expect(constrained).toEqual([720]);
   });
 
-  it("never drops a small-room 1080 for a weak uplink while pinned", async () => {
+  it("does not retune capture height from BWE while HLS is on", async () => {
+    // applyConstraints on a live HLS source reconfigures the encoder
+    // (keyframes, rate-control reset) and is what made the TRANSMISSION
+    // line hunt 1080 ↔ 720 ↔ 240. Capture stays at the size we published.
     const sfu = await session();
     await sfu.publishScreen(fakeStream("video", "screen"));
     expect(constrained).toEqual([1080]);
     const publishesBefore = published.length;
 
-    // Two weak ticks: not enough streak to touch capture.
-    await setHlsUplink(sfu, 1_000_000, HLS_SOURCE_DROP_SAMPLES - 1);
-    expect(constrained).toEqual([1080]);
-
-    await setHlsUplink(sfu, 1_000_000);
+    await setHlsUplink(sfu, 1_000_000, HLS_SOURCE_DROP_SAMPLES + 5);
     expect(published).toHaveLength(publishesBefore);
     expect(unpublished).toHaveLength(0);
-    expect(constrained).toEqual([1080, 720]);
+    expect(constrained).toEqual([1080]);
 
-    // Further weak ticks must not re-constrain.
-    await setHlsUplink(sfu, 1_000_000, 5);
-    expect(constrained).toEqual([1080, 720]);
+    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES + 5);
+    expect(constrained).toEqual([1080]);
   });
 
-  it("restores capture height when the uplink recovers, without a new sid", async () => {
+  it("does not change capture height again inside the dwell window", async () => {
+    const now = vi.spyOn(Date, "now");
+    now.mockReturnValue(1_000_000);
     const sfu = await session();
     await sfu.publishScreen(fakeStream("video", "screen"));
     await setHlsUplink(sfu, 1_000_000, HLS_SOURCE_DROP_SAMPLES);
-    expect(constrained).toEqual([1080, 720]);
-    const publishesBefore = published.length;
+    expect(constrained).toEqual([1080]);
 
-    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES - 1);
-    expect(constrained).toEqual([1080, 720]);
-
-    await setHlsUplink(sfu, 9_000_000);
-    expect(published).toHaveLength(publishesBefore);
-    expect(unpublished).toHaveLength(0);
-    expect(constrained).toEqual([1080, 720, 1080]);
+    now.mockReturnValue(1_000_000 + HLS_SOURCE_HEIGHT_DWELL_MS - 1);
+    await setHlsUplink(sfu, 9_000_000, HLS_SOURCE_RAISE_SAMPLES + 2);
+    expect(constrained).toEqual([1080]);
+    now.mockRestore();
   });
 
   it("does not thrash capture when the uplink keeps crossing the line", async () => {
@@ -940,6 +938,148 @@ describe("the presenter as a live ladder's source", () => {
     expect(published).toHaveLength(publishesBefore);
   });
 
+  it("publishes a watch-party HLS share as one encoding, not simulcast", async () => {
+    const sfu = await session();
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    const options = lastPublish(Track.Source.ScreenShare);
+    expect(options?.simulcast).toBe(false);
+    expect(options?.screenShareSimulcastLayers ?? []).toEqual([]);
+  });
+
+  it("still publishes ordinary SFU screen share as simulcast", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    const options = lastPublish(Track.Source.ScreenShare);
+    expect(options?.simulcast).toBe(true);
+    expect(options?.screenShareSimulcastLayers?.map((layer) => layer.height)).toEqual(
+      [360, 720],
+    );
+  });
+
+  it("deactivates every sub-layer in place when HLS pins a 1080 publish", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    expect(
+      lastPublish(Track.Source.ScreenShare)?.screenShareSimulcastLayers?.map(
+        (layer) => layer.height,
+      ),
+    ).toEqual([360, 720]);
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const last = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(last).toBeTruthy();
+    expect(last!.encodings).toHaveLength(3);
+    expect(last!.encodings[0]?.active).toBe(false);
+    expect(last!.encodings[1]?.active).toBe(false);
+    expect(last!.encodings[2]?.active).not.toBe(false);
+  });
+
+  it("restores every sub-layer when the ladder stops and the share continues", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const writesBefore = senderWrites.length;
+
+    await sfu.setHlsSource(null);
+
+    const restored = senderWrites
+      .slice(writesBefore)
+      .filter((write) => write.source === Track.Source.ScreenShare)
+      .at(-1);
+    expect(restored).toBeTruthy();
+    expect(restored!.encodings[0]?.active).not.toBe(false);
+    expect(restored!.encodings[1]?.active).not.toBe(false);
+    expect(restored!.encodings[2]?.active).not.toBe(false);
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const retrimmed = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(retrimmed!.encodings[0]?.active).toBe(false);
+    expect(retrimmed!.encodings[1]?.active).toBe(false);
+    expect(retrimmed!.encodings[2]?.active).not.toBe(false);
+  });
+
+  it("retries restoring the 720p layer if shutdown setParameters fails", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    const original = publication.track.sender as {
+      getParameters: () => RTCRtpSendParameters;
+      setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+    };
+    let failsLeft = 1;
+    publication.track.sender = {
+      getParameters: () => original.getParameters(),
+      setParameters: async (next: RTCRtpSendParameters) => {
+        if (failsLeft > 0) {
+          failsLeft -= 1;
+          throw new Error("nope");
+        }
+        return original.setParameters(next);
+      },
+    };
+    const writesBefore = senderWrites.length;
+
+    await sfu.setHlsSource(null);
+    expect(
+      senderWrites.slice(writesBefore).filter(
+        (write) => write.source === Track.Source.ScreenShare,
+      ),
+    ).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(250);
+    const restored = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(restored?.encodings[0]?.active).not.toBe(false);
+    expect(restored?.encodings[1]?.active).not.toBe(false);
+    warn.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("retries the HLS trim if the browser refuses the first setParameters", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    const original = publication.track.sender as {
+      getParameters: () => RTCRtpSendParameters;
+      setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+    };
+    let failsLeft = 1;
+    publication.track.sender = {
+      getParameters: () => original.getParameters(),
+      setParameters: async (next: RTCRtpSendParameters) => {
+        if (failsLeft > 0) {
+          failsLeft -= 1;
+          throw new Error("nope");
+        }
+        return original.setParameters(next);
+      },
+    };
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    expect(
+      senderWrites.filter((write) => write.source === Track.Source.ScreenShare),
+    ).toHaveLength(0);
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    const last = [...senderWrites]
+      .reverse()
+      .find((write) => write.source === Track.Source.ScreenShare);
+    expect(last).toBeTruthy();
+    expect(last!.encodings[0]?.active).toBe(false);
+    expect(last!.encodings[1]?.active).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   /**
    * THE STALL, and it is the whole of it.
    *
@@ -967,7 +1107,7 @@ describe("the presenter as a live ladder's source", () => {
 
   it("still lowers the ceiling in place while the layers are held", async () => {
     // Small room: Auto publishes 1080, pin, then weak uplink drops ceiling
-    // to the large-room bitrate without a new sid.
+    // to the HLS 720 hold bitrate without a new sid.
     const sfu = await session();
     await sfu.publishScreen(fakeStream("video", "screen"));
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
@@ -982,7 +1122,7 @@ describe("the presenter as a live ladder's source", () => {
       .slice(writesBefore)
       .filter((write) => write.source === Track.Source.ScreenShare);
     expect(moved.length).toBeGreaterThan(0);
-    expect(moved[moved.length - 1]!.maxBitrate).toBe(1_500_000);
+    expect(moved[moved.length - 1]!.maxBitrate).toBe(HLS_HELD_720_BITRATE);
   });
 
   /**

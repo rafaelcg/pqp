@@ -667,10 +667,10 @@ test("a DM call's screen encoder follows the quality menu", async ({
     await expectTargetBitrate(page, "screen", 4_000_000, "1080p");
 
     await chooseQuality(page, "360p");
-    const low = await senderFor(page, "screen", 600_000);
+    const low = await senderFor(page, "screen", 800_000);
     // eslint-disable-next-line no-console
     console.log("[quality] screen 360p:", JSON.stringify(low));
-    expect(low.maxBitrate, "360p: screen ceiling").toBe(600_000);
+    expect(low.maxBitrate, "360p: screen ceiling").toBe(800_000);
     // CAPTURE size is deliberately NOT on this ladder: a screen grabbed small
     // has lost the pixels permanently, and the encoder cannot invent them back
     // in the moments when the link has room to spare.
@@ -687,7 +687,7 @@ test("a DM call's screen encoder follows the quality menu", async ({
       auto.scaleResolutionDownBy,
       "auto: 1080 lines divided to 720",
     ).toBeCloseTo(1.5, 2);
-    await expectTargetBitrate(page, "screen", 600_000, "360p");
+    await expectTargetBitrate(page, "screen", 800_000, "360p");
   } finally {
     await watcher.context.close();
   }
@@ -870,14 +870,14 @@ test("a camera in a server voice channel reaches the other member", async ({
     // ---- the control this channel never had -----------------------------
     await chooseChannelQuality(page, "360p");
     const camera = await senderFor(page, "camera", 400_000);
-    const screen = await senderFor(page, "screen", 600_000);
+    const screen = await senderFor(page, "screen", 800_000);
     // eslint-disable-next-line no-console
     console.log(
       "[quality] channel senders:",
       JSON.stringify({ camera, screen }),
     );
     expect(camera.maxBitrate, "360p: channel camera ceiling").toBe(400_000);
-    expect(screen.maxBitrate, "360p: channel screen ceiling").toBe(600_000);
+    expect(screen.maxBitrate, "360p: channel screen ceiling").toBe(800_000);
     expect(camera.width, "360p: channel camera capture shrank").toBe(640);
 
     // Still a picture at the other end after the change: the whole promise of

@@ -411,6 +411,7 @@ export function CallSplit({
       {/* Same reasoning for the transcript: unmounting it would lose the
           scroll position and re-fetch the page on every restore. */}
       <div
+        data-call-split-chat=""
         hidden={collapsed === "chat"}
         className="flex min-h-0 min-w-0 flex-1 flex-col"
       >

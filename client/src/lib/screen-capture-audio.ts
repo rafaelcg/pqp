@@ -104,10 +104,10 @@ export interface ScreenCaptureOptions
  * own parameter because it is the same kind of thing: a steer on the capture
  * we are about to ask for, decided before the picker opens.
  *
- * `maxFrameRate` is 60 only when the HLS ladder names a 60 fps rung. Capture
- * and publish stay at 30 otherwise: a 60 fps getDisplayMedia of a 1080p
- * tab with a 30 fps ladder just makes the egress drop frames, and the
- * presenter's uplink pays for motion nobody transcodes.
+ * `maxFrameRate` is 60 so a 24 fps film on a 60 Hz display is captured the
+ * way the host sees it. Capture at 30 is what made that film judder for
+ * the audience. 30 remains available when the presenter pins it, or when
+ * the HLS ladder is 30-only.
  */
 export interface ScreenCaptureIntent {
   preferBrowserTab?: boolean;
@@ -120,7 +120,7 @@ export interface ScreenCaptureIntent {
    */
   watchParty?: boolean;
   hideCursor?: boolean;
-  /** 60 when a 60 fps HLS rung is configured; 30 otherwise. */
+  /** 60 to match the host display; 30 when the presenter or ladder says so. */
   maxFrameRate?: 30 | 60;
   /**
    * A display stream the caller already has, to publish instead of opening
@@ -335,9 +335,10 @@ export function screenCaptureOptions(
     // is handed over at whatever rate the browser feels like, and with no
     // ceiling on size a 4K or Retina display is captured at its full pixel count
     // and then has to be scaled down inside the encoder every frame. 1080p30 is
-    // the shape of the thing people actually share, and asking for it is cheaper
-    // than paying for pixels nobody in the call can see. 60 fps is opt-in via
-    // `maxFrameRate` when the HLS ladder names a 60 rung.
+    // the size people actually share. 60 fps is the cadence of the host's
+    // display, which is what keeps a 24 fps film looking like it does on
+    // their screen. Pin 30 via `maxFrameRate` when the machine or a 30-only
+    // HLS ladder cannot spend it.
     video: {
       frameRate: { ideal: maxFrameRate, max: maxFrameRate },
       width: { max: 1920 },

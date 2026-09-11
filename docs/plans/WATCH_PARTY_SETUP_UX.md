@@ -178,8 +178,9 @@ Mostly as is. Two changes:
   340px chat minimum instead of the transcript's 560, which is what kept
   side by side from ever appearing on a laptop. A live stream steps the
   member column aside without writing the preference; the channel list
-  stays, because the live party block lives in it. **Modo cinema** on the
-  player folds the channel list to icons as well; Escape undoes it. Shipped.
+  stays, because the live party block lives in it. Theatre mode is main's
+  native fullscreen with the chat overlay (#467), which superseded the
+  cinema button this branch first shipped. Shipped.
 - **Stream chat.** Beside a film the transcript takes the shape every
   stream has: no avatars, every message carries its name, `name: message`
   on one line, names always coloured (role colour first, a hue hashed from

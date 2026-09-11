@@ -129,7 +129,7 @@ describe("live HLS egress", () => {
       // The presenter's client reads the top of this to decide whether to
       // publish past the large-room cap.
       ladder: [
-        { name: "720p30", width: 1280, height: 720, framerate: 30, videoKbps: 1800 },
+        { name: "720p30", width: 1280, height: 720, framerate: 30, videoKbps: 3200 },
       ],
       allowlisted: false,
     });
@@ -233,7 +233,7 @@ describe("live HLS egress", () => {
         encodingOptions: expect.objectContaining({
           width: 1280,
           height: 720,
-          videoBitrate: 1800,
+          videoBitrate: 3200,
         }),
       }),
     );
@@ -649,7 +649,7 @@ describe("live HLS egress", () => {
       return { stream, heights, start };
     }
 
-    it("defaults to 480p30 + 720p30 + 1080p30, started lowest rung first", async () => {
+    it("defaults to 480p30 + 720p60 + 1080p60, started lowest rung first", async () => {
       const { stream, heights } = await startLadder(undefined);
       expect(stream).not.toBeNull();
       // Lowest first: a viewer is never left with nothing while the
@@ -657,8 +657,8 @@ describe("live HLS egress", () => {
       expect(heights).toEqual(["480", "720", "1080"]);
       expect(liveHlsRungsFor(CHANNEL).map((rung) => rung.name)).toEqual([
         "480p30",
-        "720p30",
-        "1080p30",
+        "720p60",
+        "1080p60",
       ]);
     });
 
@@ -676,6 +676,25 @@ describe("live HLS egress", () => {
       });
       await reconcileLiveHls(CHANNEL, "peer-1", SERVER);
       expect(heights).toEqual(["480", "720"]);
+    });
+
+    it("prefers the capture height the host announced over LiveKit's declared layer", async () => {
+      // PR 460 froze declared layers at 1080 while the window was 480.
+      // LiveKit then reported track.height = 1080 and the ladder started
+      // 1080/720 rungs that upscaled. The host's getSettings() is the pixels.
+      resetLiveHlsForTests();
+      enableHls();
+      delete process.env.LIVE_HLS_LADDER;
+      const heights: string[] = [];
+      setLiveHlsTestHooks({
+        egress: {
+          startTrackCompositeEgress: fakeEgress(heights),
+          stopEgress: vi.fn(),
+        },
+        findTracks: async () => ({ videoTrackId: "TR_V", sourceHeight: 1080 }),
+      });
+      await reconcileLiveHls(CHANNEL, "peer-1", SERVER, 480);
+      expect(heights).toEqual(["480"]);
     });
 
     it("stops a leftover egress from a previous session on the same channel", async () => {

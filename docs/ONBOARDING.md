@@ -12,6 +12,7 @@ Adding one means adding a row here.
 | First-run checklist | `components/onboarding/first-run-card.tsx` | Inline card in the hub, rows land staggered | not dismissed and one of server / friend / avatar still open | `firstRunDismissedAt` (preference), or auto-stamped when all three are done |
 | Arrival banner | `components/onboarding/arrival-banner.tsx` | Strip under the channel header | first visit to a server just joined | Session; `pqp:arrived-servers` remembers the join |
 | Baú intro | `components/community-home/community-home-onboarding.tsx` (staging) | Inline card in the feed | member's first Baú | `communityHomeIntroDismissedAt` (preference) |
+| Baú post | `components/community-home/community-home-post-hint.tsx` | Corner card | a publish in the open server while looking at another channel (unread went up; not the author) | CTA opens Baú; X / Escape / 8 s. Not a campaign: no `lib/hints.ts` key |
 | Update ready | `components/layout/update-prompt.tsx` | Corner card, and a rail icon while a build waits | a new build is waiting | Reload. Later snoozes 20 min; Escape does not touch it |
 | QG invite | `components/layout/qg-hint.tsx` | Corner card with hero | QG is listed and not joined | `pqp:qg-hint-…` (impression) |
 | Mobile beta | `components/layout/mobile-beta-hint.tsx` | Corner card | phone browser, not the native app | `pqp:mobile-beta-hint-…` (impression) |
@@ -31,7 +32,7 @@ Adding one means adding a row here.
 
 **One corner at a time.** Every corner card renders through
 `components/layout/corner-card.tsx` and is arbitrated by
-`lib/corner-hints.ts` (`CORNER_HINT_ORDER`: update, qg, mobileBeta, whatsNew,
+`lib/corner-hints.ts` (`CORNER_HINT_ORDER`: update, communityHomePost, qg, mobileBeta, whatsNew,
 cargos, shortcuts). The update prompt is mounted in `main.tsx` outside `App`;
 it reports through `lib/update-prompt-state.ts` so the queue in `App` yields
 to it. Two cards in the same corner is a stack, and the one underneath records

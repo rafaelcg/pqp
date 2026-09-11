@@ -3465,7 +3465,7 @@ $$;
 -- visibility strips body/media on the wire unless the viewer has MANAGE_SERVER
 -- or the VIP cargo. Likes are a unique (post_id, user_id) pair, never a counter
 -- column. Media bytes live in object storage under community-home/{serverId}/;
--- YouTube is URL-only. Schedule is first-class: scheduled_at + IANA timezone,
+-- YouTube / Twitch are URL-only. Schedule is first-class: scheduled_at + IANA timezone,
 -- published by an in-process catch-up on the single Node process (no worker).
 
 CREATE TABLE IF NOT EXISTS community_home_posts (
@@ -3513,15 +3513,17 @@ END $$;
 
 DO $$
 BEGIN
+  -- DROP first so an existing install replaces the old enum (no twitch)
+  -- instead of hitting a duplicate-name error that this handler would swallow.
   ALTER TABLE community_home_posts DROP CONSTRAINT IF EXISTS community_home_posts_media_kind_check;
   ALTER TABLE community_home_posts
     ADD CONSTRAINT community_home_posts_media_kind_check
     CHECK (
       media_kind IS NULL
-      OR media_kind IN ('image', 'video', 'youtube', 'file')
+      OR media_kind IN ('image', 'video', 'youtube', 'twitch', 'file')
     );
 EXCEPTION
-  WHEN others THEN NULL;
+  WHEN duplicate_object THEN NULL;
 END $$;
 
 -- Feed: published newest-first per server. Partial so drafts/scheduled stay

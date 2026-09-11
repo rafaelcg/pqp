@@ -3,7 +3,7 @@ import { chooseWatchFullscreenPath } from "./watch-fullscreen";
 import { detectFullscreenMode } from "./capabilities";
 
 describe("chooseWatchFullscreenPath", () => {
-  it("takes the pane on desktop, Android and iPad, where element fullscreen exists", () => {
+  it("takes native element fullscreen on desktop, Android and iPad", () => {
     expect(
       chooseWatchFullscreenPath({
         elementFullscreen: true,

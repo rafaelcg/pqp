@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   BEHIND_LIVE_THRESHOLD_SECONDS,
+  HLS_ABR_DEFAULT_ESTIMATE_BPS,
   HLS_LIVE_SEGMENT_SECONDS,
   HLS_LIVE_WINDOW_SECONDS,
   buildMediaSessionMetadata,
@@ -21,7 +22,8 @@ describe("hlsLivePlayerConfig", () => {
       config.liveSyncDurationCount * HLS_LIVE_SEGMENT_SECONDS,
     ).toBeLessThan(HLS_LIVE_WINDOW_SECONDS);
     expect(hlsLiveSyncFitsWindow(config)).toBe(true);
-    expect(config.startLevel).toBe(0);
+    expect(config.startLevel).toBe(-1);
+    expect(HLS_ABR_DEFAULT_ESTIMATE_BPS).toBeGreaterThanOrEqual(2_500_000);
   });
 
   it("refuses a sync that would join on the oldest segment of the window", () => {

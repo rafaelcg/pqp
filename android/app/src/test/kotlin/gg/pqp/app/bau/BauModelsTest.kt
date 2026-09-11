@@ -93,11 +93,22 @@ class BauModelsTest {
         val media = PqpJson.decodeFromString(
             BauMedia.serializer(),
             """{"kind":"youtube","name":"","contentType":null,"byteSize":null,"url":null,
-                "youtubeUrl":"https://www.youtube.com/watch?v=dQw4w9WgXcQ"}""",
+                "youtubeUrl":"https://www.youtube.com/watch?v=dQw4w9WgXcQ","twitchUrl":null}""",
         )
         assertTrue(media.isYoutube)
         assertEquals("https://www.youtube.com/watch?v=dQw4w9WgXcQ", media.openUrl)
         assertEquals("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg", YoutubeLinks.thumbnailUrl(media.youtubeUrl))
+    }
+
+    @Test
+    fun `Twitch media opens the channel page rather than a storage URL`() {
+        val media = PqpJson.decodeFromString(
+            BauMedia.serializer(),
+            """{"kind":"twitch","name":"Twitch","contentType":null,"byteSize":null,"url":null,
+                "youtubeUrl":null,"twitchUrl":"https://www.twitch.tv/moonkaselive"}""",
+        )
+        assertTrue(media.isTwitch)
+        assertEquals("https://www.twitch.tv/moonkaselive", media.openUrl)
     }
 
     @Test

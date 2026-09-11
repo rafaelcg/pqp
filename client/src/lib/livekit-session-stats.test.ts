@@ -61,7 +61,16 @@ class FakeRoom {
   remoteParticipants = new Map<string, FakeRemoteParticipant>();
   localPublications = new Map<
     string,
-    { videoTrack?: { getSenderStats: () => Promise<unknown[]> } }
+    {
+      videoTrack?: { getSenderStats: () => Promise<unknown[]> };
+      track?: {
+        sender: {
+          getParameters: () => RTCRtpSendParameters;
+          setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+          getStats?: () => Promise<unknown>;
+        };
+      };
+    }
   >();
   localParticipant = {
     publishTrack: async (
@@ -69,7 +78,23 @@ class FakeRoom {
       options: { source?: string } = {},
     ) => {
       if (options.source) {
-        this.localPublications.set(options.source, {});
+        let params: RTCRtpSendParameters = {
+          encodings: [{}, {}, {}],
+          transactionId: "t",
+          codecs: [],
+          headerExtensions: [],
+          rtcp: {},
+        } as unknown as RTCRtpSendParameters;
+        this.localPublications.set(options.source, {
+          track: {
+            sender: {
+              getParameters: () => params,
+              setParameters: async (next: RTCRtpSendParameters) => {
+                params = next;
+              },
+            },
+          },
+        });
       }
     },
     unpublishTrack: async () => {},
@@ -112,7 +137,9 @@ vi.mock("livekit-client", () => {
 });
 
 const { connectLiveKit } = await import("./livekit-session");
-const { sampleVoiceStats } = await import("./voice-stats-probe");
+const { describeLimitation, sampleVoiceStats } = await import(
+  "./voice-stats-probe"
+);
 
 const SESSION: VoiceSessionInfo = {
   backend: "livekit",
@@ -184,6 +211,7 @@ function screenPublication(
 
 beforeEach(() => {
   rooms.length = 0;
+  vi.spyOn(console, "debug").mockImplementation(() => {});
 });
 
 afterEach(async () => {
@@ -377,6 +405,84 @@ describe("what an SFU presenter is sending", () => {
       limitedBy: "bandwidth",
       framesSent: 900,
     });
+  });
+
+  it("reports the applied HLS hold ceiling, not the uncapped Auto setting", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream());
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: null });
+    newestRoom().localPublications.get(Track.Source.ScreenShare)!.videoTrack = {
+      getSenderStats: async () => [
+        {
+          type: "video",
+          timestamp: 1_000,
+          bytesSent: 500_000,
+          frameWidth: 1280,
+          frameHeight: 720,
+          framesPerSecond: 30,
+          framesSent: 900,
+          targetBitrate: 3_700_000,
+          qualityLimitationReason: "bandwidth",
+          rid: "q",
+        },
+      ],
+    };
+
+    const snapshot = await sampleVoiceStats();
+    expect(snapshot.senders[0]).toMatchObject({
+      role: "screen",
+      height: 720,
+      targetKbps: 3700,
+      ceilingKbps: 4000,
+      limitedBy: "bandwidth",
+    });
+    expect(describeLimitation(snapshot.senders[0]!)).toBe("setting");
+  });
+
+  it("fills the publisher path so the HLS gate can read availableOutgoingBitrate", async () => {
+    const sfu = await session();
+    await sfu.publishScreen(fakeStream());
+    const rows = [
+      {
+        type: "transport",
+        id: "t",
+        selectedCandidatePairId: "cp",
+      },
+      {
+        type: "candidate-pair",
+        id: "cp",
+        availableOutgoingBitrate: 3_500_000,
+        nominated: true,
+        state: "succeeded",
+        localCandidateId: "l",
+        remoteCandidateId: "r",
+      },
+      { type: "local-candidate", id: "l", candidateType: "host" },
+      { type: "remote-candidate", id: "r", candidateType: "srflx" },
+    ];
+    const report = {
+      forEach: (fn: (stat: unknown) => void) => {
+        for (const row of rows) {
+          fn(row);
+        }
+      },
+    };
+    const publication = newestRoom().localPublications.get(
+      Track.Source.ScreenShare,
+    )!;
+    publication.videoTrack = {
+      getSenderStats: async () => [],
+    };
+    publication.track = {
+      sender: {
+        getParameters: publication.track!.sender.getParameters,
+        setParameters: publication.track!.sender.setParameters,
+        getStats: async () => report,
+      },
+    };
+
+    const snapshot = await sampleVoiceStats();
+    expect(snapshot.paths[0]?.availableOutgoingKbps).toBe(3500);
   });
 
   it("reports the layer that is encoding, not the paused 1080p leftover", async () => {

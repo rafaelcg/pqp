@@ -353,8 +353,10 @@ import {
   loadCommunityHomeConfig,
   markCommunityHomeRowSeen,
   pickServerLandingTarget,
+  shouldOfferCommunityHomePostToast,
 } from "@/lib/community-home";
 import { CommunityHomeFeed } from "@/components/community-home/community-home-feed";
+import { CommunityHomePostHint } from "@/components/community-home/community-home-post-hint";
 import {
   applyDesktopAuthStart,
   completeDesktopSecondFactor,
@@ -406,7 +408,11 @@ import {
   screenCaptureEnvironment,
   type ScreenCaptureIntent,
 } from "@/lib/screen-capture-audio";
-import { hlsCaptureMaxFrameRate } from "@/lib/hls-capture-rate";
+import {
+  hlsCaptureMaxFrameRate,
+  screenCaptureMaxFrameRate,
+  type ScreenFrameRate,
+} from "@/lib/hls-capture-rate";
 import {
   gateScreenShareStart,
   type ScreenShareStart,
@@ -1190,6 +1196,18 @@ function MainAppContent({
   const [communityHomeRowNew, setCommunityHomeRowNew] = useState(false);
   /** Unread Baú posts for the open server, for the sidebar row's badge. */
   const [communityHomeUnread, setCommunityHomeUnread] = useState(0);
+  const communityHomeUnreadRef = useRef(0);
+  const communityHomeUnreadServerRef = useRef<string | null>(null);
+  const communityHomeUpdateNudgeRef = useRef(0);
+  /** A successful unread read for `communityHomeUnreadServerRef`. */
+  const communityHomeUnreadBaselineRef = useRef(false);
+  /** Live corner card for a publish in the open server, not the author. */
+  const [communityHomePostToast, setCommunityHomePostToast] = useState<{
+    serverId: string;
+    serverName: string;
+  } | null>(null);
+  const communityHomePostToastRef = useRef(communityHomePostToast);
+  communityHomePostToastRef.current = communityHomePostToast;
   const communityHomeOn = useCallback(
     () =>
       isCommunityHomeEnabled({
@@ -1453,28 +1471,6 @@ function MainAppContent({
   const voice = useMemo(() => createVoiceController(transport), [transport]);
   const [voiceState, setVoiceState] = useState(voice.getState());
   /**
-   * MODO CINEMA: the film and the chat and nothing else. Twitch's theatre
-   * mode, YouTube's theater mode. The channel list folds to icons and the
-   * member column goes away; Escape, or the button again, brings them back.
-   * Per channel, never stored: leaving the room leaves the mode.
-   */
-  const [cinema, setCinema] = useState(false);
-  useEffect(() => {
-    setCinema(false);
-  }, [selectedChannelId]);
-  useEffect(() => {
-    if (!cinema) {
-      return;
-    }
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setCinema(false);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [cinema]);
-  /**
    * Somebody watching a live party without a seat is looking at a film. The
    * member column is the thing that eats the width the chat needs beside it,
    * and a viewer never needs the roster during a show, so it steps aside on
@@ -1491,10 +1487,10 @@ function MainAppContent({
       voiceState.status !== "idle"
     );
   useEffect(() => {
-    memberSidebar.suspend(cinema || watchingAParty);
+    memberSidebar.suspend(watchingAParty);
     // `memberSidebar.suspend` is a stable callback from the hook.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cinema, watchingAParty]);
+  }, [watchingAParty]);
   const [pendingVoiceMoves, setPendingVoiceMoves] = useState<string[]>([]);
   /**
    * Audio consent for a Windows desktop shell whose picker cannot ask yet.
@@ -1641,20 +1637,26 @@ function MainAppContent({
   const liveHlsConfig = useLiveHlsConfig(selectedServerId);
   const liveHlsConfigRef = useRef(liveHlsConfig);
   liveHlsConfigRef.current = liveHlsConfig;
+  const screenFrameRateRef = useRef(localSettings.screenFrameRate);
+  screenFrameRateRef.current = localSettings.screenFrameRate;
+
+  function shareMaxFrameRate(): 30 | 60 {
+    const config = liveHlsConfigRef.current;
+    return screenCaptureMaxFrameRate({
+      preference: screenFrameRateRef.current,
+      hlsLadderMax:
+        config?.enabled === true
+          ? hlsCaptureMaxFrameRate(config.ladder, true)
+          : 60,
+    });
+  }
+
   const startScreenShareGated = useCallback(
     (audio: boolean, intent?: ScreenCaptureIntent) => {
-      const withFps =
-        intent?.preferBrowserTab
-          ? {
-              ...intent,
-              maxFrameRate:
-                intent.maxFrameRate ??
-                hlsCaptureMaxFrameRate(
-                  liveHlsConfigRef.current?.ladder,
-                  liveHlsConfigRef.current?.enabled,
-                ),
-            }
-          : intent;
+      const withFps = {
+        ...intent,
+        maxFrameRate: intent?.maxFrameRate ?? shareMaxFrameRate(),
+      };
       // Every share start in this file goes through here: the sidebar
       // button, the call stage, the "share without sound" retry, and the DM
       // stage. `screen-share-gate.test.ts` scans this file to keep it so.
@@ -2703,8 +2705,6 @@ function MainAppContent({
               : pickServerLandingTarget(
                   channelList,
                   communityHomeOn() && first.communityHomeEnabled === true,
-                  Boolean(first.isCommunity),
-                  isCommunityHomeRowNew(first.id),
                 );
             initialChannelId = land?.id ?? null;
             void loadUnread(first.id);
@@ -2919,10 +2919,10 @@ function MainAppContent({
             return;
           }
 
-          // Baú changed on some server — a publish, an unpublish, a like, a
-          // comment. The frame carries only the serverId (no post id, no
-          // diff), so the only thing to do with it is nudge a refetch, and
-          // only if that server's Baú is the one currently open.
+          // Baú changed on the open server — a publish, pin, unpublish or
+          // delete. Likes and new comments do not fan out. The frame carries
+          // only the serverId, so the client refetches; a member sitting in
+          // DMs or another server is not "in" this one and is left alone.
           if (message.type === "community-home-update") {
             if (message.serverId === selectedServerIdRef.current) {
               setCommunityHomeUpdateNudge((n) => n + 1);
@@ -3348,8 +3348,6 @@ function MainAppContent({
         const land = pickServerLandingTarget(
           list,
           communityHomeOn() && server?.communityHomeEnabled === true,
-          Boolean(server?.isCommunity),
-          isCommunityHomeRowNew(serverId),
         );
         if (land) {
           await selectChannel(land.id, serverId);
@@ -4382,6 +4380,10 @@ function MainAppContent({
     // the encoder's ceiling. Safe mid-call by construction, and a no-op when
     // the camera is off, where the next `toggleCamera` reads the new value.
     void voice.setVideoQuality(next.videoQuality);
+    if (next.screenFrameRate !== localSettings.screenFrameRate) {
+      screenFrameRateRef.current = next.screenFrameRate;
+      void voice.applyScreenFrameRate(shareMaxFrameRate());
+    }
   }
 
   /**
@@ -4401,6 +4403,14 @@ function MainAppContent({
     setLocalSettings(next);
     saveLocalSettings(next);
     void voice.setVideoQuality(quality);
+  }
+
+  function handleScreenFrameRateChange(rate: ScreenFrameRate) {
+    const next = { ...localSettings, screenFrameRate: rate };
+    setLocalSettings(next);
+    saveLocalSettings(next);
+    screenFrameRateRef.current = rate;
+    void voice.applyScreenFrameRate(shareMaxFrameRate());
   }
 
   const refreshAfterJoin = useCallback(
@@ -4456,8 +4466,6 @@ function MainAppContent({
           const land = pickServerLandingTarget(
             list,
             communityHomeOn() && targetServer?.communityHomeEnabled === true,
-            Boolean(targetServer?.isCommunity),
-            isCommunityHomeRowNew(targetServerId),
           );
           if (land) {
             await selectChannel(land.id, targetServerId);
@@ -4536,8 +4544,8 @@ function MainAppContent({
   }, []);
 
   // Two switches gate the Baú row + feed: the instance flag (config probe,
-  // dev override) and this server's own opt-in from Server settings. Landing
-  // stays community-only on top (pickServerLandingTarget requires isCommunity).
+  // dev override) and this server's own opt-in from Server settings. Opening
+  // the server lands on the feed whenever both are on.
   // Computed here, above every early return, because the "New" chip below is
   // a hook.
   const communityHomeFeatureOn = isCommunityHomeEnabled({
@@ -4566,35 +4574,105 @@ function MainAppContent({
   }, [communityHomeEnabled, communityHomeOpen, selectedServerId]);
 
   /**
-   * The Baú badge for the open server.
+   * The Baú badge for the open server, and the live corner card.
    *
    * Looking at the feed IS reading it: the count goes to zero and the read
    * mark is stamped on the API, so it stays zero on the next device. Looking
    * elsewhere refetches the count. `communityHomeUpdateNudge` is in the deps
    * so a post published while this tab is open lands in whichever of the two
    * halves applies, rather than waiting for a navigation.
+   *
+   * The toast only fires when that refetch is caused by a WS nudge AND the
+   * unread count went up: own posts never count, so the author does not get
+   * a card for their own publish, and pin/delete/unpublish stay quiet.
    */
+  const dismissCommunityHomePostToast = useCallback(() => {
+    setCommunityHomePostToast(null);
+  }, []);
+  const openCommunityHomePostToast = useCallback(() => {
+    const current = communityHomePostToastRef.current;
+    setCommunityHomePostToast(null);
+    if (current && current.serverId === selectedServerIdRef.current) {
+      void selectChannel(COMMUNITY_HOME_CHANNEL_ID, current.serverId);
+    }
+  }, [selectChannel]);
   useEffect(() => {
+    const fromNudge =
+      communityHomeUpdateNudge !== communityHomeUpdateNudgeRef.current;
+    communityHomeUpdateNudgeRef.current = communityHomeUpdateNudge;
+
     if (!communityHomeEnabled || !selectedServerId) {
       setCommunityHomeUnread(0);
+      communityHomeUnreadRef.current = 0;
+      communityHomeUnreadServerRef.current = null;
+      communityHomeUnreadBaselineRef.current = false;
+      setCommunityHomePostToast(null);
       return;
+    }
+    if (communityHomeUnreadServerRef.current !== selectedServerId) {
+      communityHomeUnreadServerRef.current = selectedServerId;
+      communityHomeUnreadRef.current = 0;
+      communityHomeUnreadBaselineRef.current = false;
+      setCommunityHomePostToast((current) =>
+        current?.serverId === selectedServerId ? current : null,
+      );
     }
     if (communityHomeOpen) {
       setCommunityHomeUnread(0);
-      void markCommunityHomeRead(selectedServerId).catch(() => {
-        // A failed mark costs one repeated badge, never a wrong feed.
-      });
-      return;
+      communityHomeUnreadRef.current = 0;
+      // Do not treat "opened the feed" as a successful unread read. A failed
+      // stamp leaving baseline=true and count=0 would toast the backlog the
+      // next time a nudge compared against that zero.
+      communityHomeUnreadBaselineRef.current = false;
+      setCommunityHomePostToast(null);
+      const serverId = selectedServerId;
+      let cancelled = false;
+      void markCommunityHomeRead(serverId)
+        .then(() => {
+          if (cancelled || communityHomeUnreadServerRef.current !== serverId) {
+            return;
+          }
+          communityHomeUnreadBaselineRef.current = true;
+          communityHomeUnreadRef.current = 0;
+        })
+        .catch(() => {
+          // Leave the baseline unset so a later nudge cannot toast against 0.
+        });
+      return () => {
+        cancelled = true;
+      };
     }
+    const previous = communityHomeUnreadRef.current;
+    const hadBaseline = communityHomeUnreadBaselineRef.current;
     let cancelled = false;
     void fetchCommunityHomeUnread(selectedServerId)
       .then(({ count }) => {
         if (!cancelled) {
           setCommunityHomeUnread(count);
+          communityHomeUnreadRef.current = count;
+          communityHomeUnreadBaselineRef.current = true;
+          if (
+            shouldOfferCommunityHomePostToast({
+              lookingAtFeed: false,
+              hasUnreadBaseline: hadBaseline,
+              fromNudge,
+              unreadBefore: previous,
+              unreadAfter: count,
+            })
+          ) {
+            const name =
+              serversRef.current.find((row) => row.id === selectedServerId)
+                ?.name ?? "";
+            setCommunityHomePostToast({
+              serverId: selectedServerId,
+              serverName: name,
+            });
+          }
         }
       })
       .catch(() => {
         // Flag off, or a blip: no badge is better than a wrong one.
+        // Leave the baseline unset so a later nudge cannot toast against 0.
       });
     return () => {
       cancelled = true;
@@ -5320,6 +5398,10 @@ function MainAppContent({
   });
   const cornerHint = winningCornerHint({
     update: updatePromptShowing,
+    communityHomePost: Boolean(
+      communityHomePostToast &&
+        communityHomePostToast.serverId === selectedServerId,
+    ),
     qg: qgHintWanted,
     mobileBeta: wantsMobileBeta,
     whatsNew: wantsWhatsNew,
@@ -5381,10 +5463,9 @@ function MainAppContent({
       (peerId) => peerId !== voiceState.peerId,
     );
   const sidebarIconsOnly = channelSidebarIconsOnly(channelSidebar, {
-    // Cinema mode asks for the fold outright. A party's stream alone does
-    // NOT fold it: the live party block lives in that list, and it is the
-    // way back to the show for everybody else in the server.
-    watchingAShare: watchingAShare || cinema,
+    // A party's stream alone does NOT fold the list: the live party block
+    // lives in it, and it is the way back to the show for everybody else.
+    watchingAShare,
     columnLayout,
   });
   // A plain function, not a `useCallback`: it is read below the early returns
@@ -5392,7 +5473,7 @@ function MainAppContent({
   const toggleChannelSidebar = () => {
     setChannelSidebar((previous) => {
       const iconsNow = channelSidebarIconsOnly(previous, {
-        watchingAShare: watchingAShare || cinema,
+        watchingAShare,
         columnLayout,
       });
       // Whichever way it is now, the click makes the opposite explicit, so the
@@ -5944,10 +6025,7 @@ function MainAppContent({
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
             onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
-            hlsMaxFrameRate={hlsCaptureMaxFrameRate(
-              liveHlsConfig?.ladder,
-              liveHlsConfig?.enabled,
-            )}
+            hlsMaxFrameRate={shareMaxFrameRate()}
             liveStream={
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }
@@ -6062,10 +6140,7 @@ function MainAppContent({
             onMicInStreamChange={(on) => voice.setMicInStream(on)}
             onToggleMute={() => voice.toggleMute()}
             isAudienceSeat={voiceState.isAudienceSeat}
-            hlsMaxFrameRate={hlsCaptureMaxFrameRate(
-              liveHlsConfig?.ladder,
-              liveHlsConfig?.enabled,
-            )}
+            hlsMaxFrameRate={shareMaxFrameRate()}
             liveStream={
               voiceState.channelLive[selectedChannel.id]?.stream ?? null
             }
@@ -6090,11 +6165,6 @@ function MainAppContent({
           <WatchChannelStage
             fill={splitState.active}
             onShapeChange={handleWatchStageShape}
-            cinema={
-              splitKind === "watch"
-                ? { active: cinema, toggle: () => setCinema((on) => !on) }
-                : undefined
-            }
             channelId={selectedChannel.id}
             channelName={selectedChannel.name}
             serverName={selectedServer?.name ?? null}
@@ -6160,10 +6230,12 @@ function MainAppContent({
             }}
             voiceState={voiceState}
             videoQuality={localSettings.videoQuality}
+            screenFrameRate={localSettings.screenFrameRate}
             onLeave={() => voice.leave()}
             onToggleMute={() => voice.toggleMute()}
             onToggleCamera={() => void voice.toggleCamera()}
             onVideoQualityChange={handleVideoQualityChange}
+            onScreenFrameRateChange={handleScreenFrameRateChange}
             onStartScreenShare={requestScreenShare}
             onShareWithoutSound={() => {
               startScreenShareGated(false);
@@ -6210,6 +6282,7 @@ function MainAppContent({
           }}
           voiceState={voiceState}
           videoQuality={localSettings.videoQuality}
+          screenFrameRate={localSettings.screenFrameRate}
           onJoinCall={() =>
             void handleConversationCall(activeConversation.channelId, false)
           }
@@ -6217,6 +6290,7 @@ function MainAppContent({
           onToggleMute={() => voice.toggleMute()}
           onToggleCamera={() => void voice.toggleCamera()}
           onVideoQualityChange={handleVideoQualityChange}
+          onScreenFrameRateChange={handleScreenFrameRateChange}
           onStartScreenShare={requestScreenShare}
           onShareWithoutSound={() => {
             startScreenShareGated(false);
@@ -7184,8 +7258,6 @@ function MainAppContent({
           const land = pickServerLandingTarget(
             newChannels,
             communityHomeOn() && server.communityHomeEnabled === true,
-            Boolean(server.isCommunity),
-            isCommunityHomeRowNew(server.id),
           );
           if (land) {
             await selectChannel(land.id, server.id);
@@ -7424,6 +7496,12 @@ function MainAppContent({
           setServerSettingsSection("roles");
           setServerSettingsOpen(true);
         }}
+      />
+      <CommunityHomePostHint
+        enabled={cornerHint === "communityHomePost"}
+        serverName={communityHomePostToast?.serverName ?? ""}
+        onOpen={openCommunityHomePostToast}
+        onDismiss={dismissCommunityHomePostToast}
       />
       <ShortcutsHint
         enabled={cornerHint === "shortcuts"}

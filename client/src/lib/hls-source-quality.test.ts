@@ -13,6 +13,7 @@ describe("hlsSourceFor", () => {
     expect(hlsSourceFor(live)).toEqual({
       ladderTopHeight: 1080,
       uplinkBps: 9_000_000,
+      limitedBy: null,
     });
   });
 
@@ -38,6 +39,7 @@ describe("hlsSourceFor", () => {
     expect(hlsSourceFor({ ...live, uplinkBps: null })).toEqual({
       ladderTopHeight: 1080,
       uplinkBps: null,
+      limitedBy: null,
     });
   });
 

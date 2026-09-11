@@ -13,38 +13,32 @@ import {
   exitNativeVideoFullscreen,
   videoSupportsNativeFullscreen,
 } from "@/lib/fullscreen";
+import {
+  isWatchCinemaMode,
+  shouldToggleWatchChatOverlay,
+  watchCinemaChatOverlay,
+} from "@/lib/watch-cinema";
 
 /**
- * Fullscreen for a watch party, and the reason it is the PANE rather than the
- * video on desktop.
+ * Fullscreen for a watch party: native, picture-first, Twitch-like.
  *
  * A watch party is a film. People watch films fullscreen, on a laptop, for two
- * hours, and until now there was no way to: the HLS player carried a fit
- * toggle, a quality menu, a volume slider and Picture-in-Picture, and no
- * fullscreen control at all. A viewer's only option was a pane between a
- * sidebar and a chat column. Rafael, watching one: "i dont think i can make it
- * full screen as a viewer".
+ * hours. The request still goes to the SPLIT PANE (`[data-call-split]`), not
+ * the `<video>`: element fullscreen only paints that element's subtree, and
+ * the transcript has to stay in the tree if a hover/hotkey overlay is going
+ * to show it. Taking the video would be a film with no way back to chat
+ * without leaving.
  *
- * THE OBVIOUS FIX IS THE WRONG ONE ON DESKTOP. `video.requestFullscreen()`
- * takes the screen and leaves everything else behind, and in a watch party
- * what is left behind is the room talking about the film. Element fullscreen
- * renders only the fullscreen element's subtree, so a fullscreen `<video>` is
- * a film with no chat, no reactions and no way to reach either without
- * leaving.
+ * THE PANE IS NOT A LAYOUT. Cinema restyles it: the film is `position:
+ * absolute; inset: 0` on a black stage, the divider is gone, and chat is
+ * `display: none` until the overlay toggle. That is the difference from the
+ * first cut, which kept the split (chat owning a column of the screen) and
+ * called it fullscreen. Fake fullscreen. This one uses
+ * `Element.requestFullscreen()` and does not let chat take layout space.
  *
- * So the target is the SPLIT PANE (`[data-call-split]`), which already holds
- * the stage, the divider and the transcript in the arrangement this person
- * chose. Fullscreen then means "the film and my chat take the screen": the
- * divider still drags, the side-by-side toggle still applies, and somebody who
- * wants nothing but the film puts the chat away and gets exactly that. Nothing
- * new to learn, and one less layout to maintain.
- *
- * IPHONE HAS NO ELEMENT FULLSCREEN. The in-page `expand` fallback is what the
- * call stage uses because `webkitEnterFullscreen` on a MediaStream showed
- * black. A watch party is HLS, not a MediaStream: the native player can
- * actually show this picture, and a working film-only fullscreen beats a
- * broken expand that never covers the Safari viewport. Desktop and Electron
- * still take the pane.
+ * IPHONE HAS NO ELEMENT FULLSCREEN. The native player can actually show HLS
+ * (the call stage refuses `webkitEnterFullscreen` on a MediaStream because
+ * PR #48 showed black). Desktop and Electron still take the pane.
  */
 
 export type WatchFullscreenMode = "off" | "element" | "expand" | "video";
@@ -56,6 +50,9 @@ export interface WatchFullscreen {
   active: boolean;
   toggle: () => void;
   exit: () => void;
+  /** Chat as an overlay on the film. False while cinema is off. */
+  chatOverlay: boolean;
+  toggleChatOverlay: () => void;
 }
 
 /**
@@ -63,10 +60,10 @@ export interface WatchFullscreen {
  * laptop can be reproduced in a Node test rather than only on the device.
  *
  * Element fullscreen wins wherever it exists (desktop, Android, iPad,
- * Electron that honours the permission): that is the pane, with the chat.
- * iPhone has none, and there the native player is the one path that hides
- * Safari's chrome. Expand is the floor: Electron after a silent refusal,
- * or a browser with neither API.
+ * Electron that honours the permission): that is the pane, restyled as
+ * cinema so the film fills the screen. iPhone has none, and there the
+ * native player is the one path that hides Safari's chrome. Expand is the
+ * floor: Electron after a silent refusal, or a browser with neither API.
  */
 export function chooseWatchFullscreenPath(probe: {
   elementFullscreen: boolean;
@@ -95,6 +92,7 @@ export function useWatchFullscreen(
   targetRef: React.RefObject<HTMLElement | null>,
 ): WatchFullscreen {
   const [mode, setMode] = useState<WatchFullscreenMode>("off");
+  const [chatOverlay, setChatOverlay] = useState(false);
   /**
    * A platform that refused once will refuse again, and asking again would
    * cost the grace period every press. More importantly, leaving the mode on
@@ -164,6 +162,7 @@ export function useWatchFullscreen(
     }
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        setChatOverlay(false);
         setMode("off");
       }
     };
@@ -171,7 +170,26 @@ export function useWatchFullscreen(
     return () => window.removeEventListener("keydown", onKey);
   }, [mode]);
 
+  // `c` toggles the chat overlay while cinema is on the pane, the way Twitch
+  // does. Default is picture-first: the overlay starts off.
+  useEffect(() => {
+    if (!isWatchCinemaMode(mode)) {
+      setChatOverlay(false);
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (!shouldToggleWatchChatOverlay(event)) {
+        return;
+      }
+      event.preventDefault();
+      setChatOverlay((was) => !was);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [mode]);
+
   const exit = useCallback(() => {
+    setChatOverlay(false);
     if (mode === "element") {
       void exitDocumentFullscreen().catch((error: unknown) => {
         console.warn("[watch] fullscreen exit refused", error);
@@ -190,6 +208,13 @@ export function useWatchFullscreen(
     }
     setMode("off");
   }, [filmOf, mode]);
+
+  const toggleChatOverlay = useCallback(() => {
+    if (!isWatchCinemaMode(mode)) {
+      return;
+    }
+    setChatOverlay((was) => !was);
+  }, [mode]);
 
   const toggle = useCallback(() => {
     if (mode !== "off") {
@@ -274,18 +299,45 @@ export function useWatchFullscreen(
   // is only which of the two is doing it. The cleanup runs on every exit and
   // on unmount, so a pane can never be left pinned to the window by a
   // component that has gone.
+  //
+  // `data-watch-cinema` is the picture-first layout (film fills, chat is not
+  // a column). It is set for both element and expand. The overlay flag is a
+  // second attribute so hiding chat is the default, not a class we forget.
   useEffect(() => {
     const pane = paneOf();
     if (!pane) {
       return;
     }
+    const cinema = isWatchCinemaMode(mode);
+    const overlay = watchCinemaChatOverlay(mode, chatOverlay);
     if (mode === "expand") {
       pane.setAttribute("data-watch-expanded", "");
-      return () => pane.removeAttribute("data-watch-expanded");
+    } else {
+      pane.removeAttribute("data-watch-expanded");
     }
-    pane.removeAttribute("data-watch-expanded");
-    return undefined;
-  }, [mode, paneOf]);
+    if (cinema) {
+      pane.setAttribute("data-watch-cinema", "");
+    } else {
+      pane.removeAttribute("data-watch-cinema");
+    }
+    if (overlay) {
+      pane.setAttribute("data-watch-chat-overlay", "");
+    } else {
+      pane.removeAttribute("data-watch-chat-overlay");
+    }
+    return () => {
+      pane.removeAttribute("data-watch-expanded");
+      pane.removeAttribute("data-watch-cinema");
+      pane.removeAttribute("data-watch-chat-overlay");
+    };
+  }, [chatOverlay, mode, paneOf]);
 
-  return { mode, active: mode !== "off", toggle, exit };
+  return {
+    mode,
+    active: mode !== "off",
+    toggle,
+    exit,
+    chatOverlay: watchCinemaChatOverlay(mode, chatOverlay),
+    toggleChatOverlay,
+  };
 }

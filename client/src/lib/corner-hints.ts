@@ -9,15 +9,18 @@
  * Order is product, not recency:
  *  1. update — a waiting build beats every campaign (it is also mounted
  *     outside App; see `lib/update-prompt-state.ts` for how it reports in)
- *  2. qg — the house, first-run
- *  3. mobileBeta — phone browsers only; the campaign for the native apps
- *  4. whatsNew — Novidades now lives on the rail
- *  5. cargos — staff who can manage roles
- *  6. shortcuts — Cmd+/ map; last, and skipped while an attached feature
+ *  2. communityHomePost — a live Baú publish in the open server; not a
+ *     campaign, so it beats the first-run cards and yields only to update
+ *  3. qg — the house, first-run
+ *  4. mobileBeta — phone browsers only; the campaign for the native apps
+ *  5. whatsNew — Novidades now lives on the rail
+ *  6. cargos — staff who can manage roles
+ *  7. shortcuts — Cmd+/ map; last, and skipped while an attached feature
  *     hint is up (see `lib/feature-hints.ts`)
  */
 export const CORNER_HINT_ORDER = [
   "update",
+  "communityHomePost",
   "qg",
   "mobileBeta",
   "whatsNew",

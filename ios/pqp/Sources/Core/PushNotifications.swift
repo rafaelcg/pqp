@@ -131,6 +131,16 @@ final class PushDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
+    /// Portrait everywhere, landscape while a watch-party theater is open.
+    /// Info.plist lists landscape so iOS will rotate that cover at all;
+    /// this is what stops the rest of the app going with it.
+    func application(
+        _ application: UIApplication,
+        supportedInterfaceOrientationsFor window: UIWindow?
+    ) -> UIInterfaceOrientationMask {
+        WatchOrientation.allowed
+    }
+
     /// Wires the delegate to the session, and hands over anything that arrived
     /// before there was one.
     ///

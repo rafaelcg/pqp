@@ -42,6 +42,7 @@ import {
 } from "@pqp/shared";
 import type { VoiceInputMode, VoiceState } from "@/hooks/use-voice";
 import type { VideoQuality } from "@/lib/video-quality";
+import type { ScreenFrameRate } from "@/lib/hls-capture-rate";
 import { desktopContext, isDesktopApp } from "@/lib/desktop";
 import { shareStreamHasAudio } from "@/lib/screen-capture-audio";
 import {
@@ -95,6 +96,7 @@ import {
 } from "@/components/voice/screen-fullscreen";
 import { HlsWatchPlayer } from "@/components/voice/hls-watch-player";
 import { CinemaStage } from "@/components/voice/cinema-stage";
+import { useWatchFullscreen } from "@/components/voice/watch-fullscreen";
 import { shouldShowCinema } from "@/lib/cinema-layout";
 import {
   collectScreenTiles,
@@ -511,6 +513,7 @@ export interface CallStageProps {
   } | null;
   voiceState: VoiceState;
   videoQuality: VideoQuality;
+  screenFrameRate?: ScreenFrameRate;
   /** Faces shown while ringing out. Server voice omits this. */
   ringFaces?: CallStagePerson[];
   declinedNames?: string[];
@@ -519,6 +522,7 @@ export interface CallStageProps {
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
+  onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
   onStartScreenShare?: (
     intent?: { preferBrowserTab?: boolean },
   ) => void | Promise<void>;
@@ -594,6 +598,7 @@ export function CallStage({
   currentUser,
   voiceState,
   videoQuality,
+  screenFrameRate,
   ringFaces = [],
   declinedNames = [],
   playOutgoingRingtone = false,
@@ -601,6 +606,7 @@ export function CallStage({
   onToggleMute,
   onToggleCamera,
   onVideoQualityChange,
+  onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
   onStopScreenShare,
@@ -648,6 +654,7 @@ export function CallStage({
       currentUser={currentUser}
       voiceState={voiceState}
       videoQuality={videoQuality}
+      screenFrameRate={screenFrameRate}
       ringFaces={ringFaces}
       declinedNames={declinedNames}
       playOutgoingRingtone={playOutgoingRingtone}
@@ -661,6 +668,7 @@ export function CallStage({
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
       onVideoQualityChange={onVideoQualityChange}
+      onScreenFrameRateChange={onScreenFrameRateChange}
       onStartScreenShare={onStartScreenShare}
       onShareWithoutSound={onShareWithoutSound}
       onStopScreenShare={onStopScreenShare}
@@ -694,6 +702,7 @@ function ActiveCall({
   currentUser,
   voiceState,
   videoQuality,
+  screenFrameRate,
   ringFaces,
   declinedNames,
   playOutgoingRingtone,
@@ -704,6 +713,7 @@ function ActiveCall({
   onToggleMute,
   onToggleCamera,
   onVideoQualityChange,
+  onScreenFrameRateChange,
   onStartScreenShare,
   onShareWithoutSound,
   onStopScreenShare,
@@ -733,6 +743,7 @@ function ActiveCall({
   currentUser: CallStageProps["currentUser"];
   voiceState: VoiceState;
   videoQuality: VideoQuality;
+  screenFrameRate?: ScreenFrameRate;
   ringFaces: CallStagePerson[];
   declinedNames: string[];
   playOutgoingRingtone: boolean;
@@ -743,6 +754,7 @@ function ActiveCall({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onVideoQualityChange: (quality: VideoQuality) => void;
+  onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
   onStartScreenShare?: (
     intent?: { preferBrowserTab?: boolean },
   ) => void | Promise<void>;
@@ -1070,6 +1082,8 @@ function ActiveCall({
 
   // --- fullscreen ---------------------------------------------------------
   const stageRef = useRef<HTMLDivElement>(null);
+  const cinemaStageRef = useRef<HTMLDivElement>(null);
+  const watchFullscreen = useWatchFullscreen(cinemaStageRef);
   const primaryVideoRef = useRef<WebkitFullscreenVideo>(null);
   // Any large picture at all, which since the stage became a grid of
   // publishers is exactly "is anybody publishing". The iPhone native-player
@@ -1088,11 +1102,12 @@ function ActiveCall({
   // worth dragging, and only the stage knows whether it is one: `collapsed`
   // folds in a collapse this person toggled in here. `CallSplit` reads it to
   // decide whether to draw a divider at all.
-  const shape: CallStageShape = fullscreen.isFullscreen
-    ? "fullscreen"
-    : collapsed
-      ? "compact"
-      : "expanded";
+  const shape: CallStageShape =
+    fullscreen.isFullscreen || watchFullscreen.active
+      ? "fullscreen"
+      : collapsed
+        ? "compact"
+        : "expanded";
   useEffect(() => {
     onShapeChange?.(shape);
   }, [shape, onShapeChange]);
@@ -1101,6 +1116,11 @@ function ActiveCall({
     // height for a stage that is gone is a gap where the transcript should be.
     return () => onShapeChange?.("none");
   }, [onShapeChange]);
+  useEffect(() => {
+    if (!showCinema && watchFullscreen.active) {
+      watchFullscreen.exit();
+    }
+  }, [showCinema, watchFullscreen]);
   // Phone held sideways with a share on: the shell's columns step aside.
   // Everything but the flag lives in the hook (`use-immersive-stage.ts`).
   const immersive = useImmersiveStage({
@@ -1289,7 +1309,9 @@ function ActiveCall({
       onToggleMute={onToggleMute}
       onToggleCamera={onToggleCamera}
       videoQuality={videoQuality}
+      screenFrameRate={screenFrameRate}
       onVideoQualityChange={onVideoQualityChange}
+      onScreenFrameRateChange={onScreenFrameRateChange}
       qualityMenuOpen={qualityMenuOpen}
       onQualityMenuOpenChange={setQualityMenuRequested}
       watchingHls={watchingHls}
@@ -1313,10 +1335,13 @@ function ActiveCall({
   if (showCinema && cinemaTile?.hlsUrl) {
     return (
       <div
+        ref={cinemaStageRef}
         data-testid="call-stage-cinema"
         className={cn(
-          "relative shrink-0 overflow-hidden border-b border-ink-4/60 bg-ink",
-          fill ? "h-full min-h-0" : "h-[68svh] min-h-[280px]",
+          "relative shrink-0 overflow-hidden bg-black",
+          fill || watchFullscreen.active
+            ? "h-full min-h-0"
+            : "h-[68svh] min-h-[280px]",
         )}
       >
         <CinemaStage
@@ -1334,6 +1359,12 @@ function ActiveCall({
           stagePeople={cinemaStagePeople}
           canJoin
           onJoin={() => setAudienceMode(false)}
+          fullscreen={{
+            active: watchFullscreen.active,
+            toggle: watchFullscreen.toggle,
+            chatOverlay: watchFullscreen.chatOverlay,
+            toggleChatOverlay: watchFullscreen.toggleChatOverlay,
+          }}
         />
       </div>
     );
@@ -1971,7 +2002,9 @@ export function CallControls({
   onToggleMute,
   onToggleCamera,
   videoQuality,
+  screenFrameRate,
   onVideoQualityChange,
+  onScreenFrameRateChange,
   qualityMenuOpen,
   onQualityMenuOpenChange,
   watchingHls = false,
@@ -2000,7 +2033,9 @@ export function CallControls({
   onToggleMute: () => void;
   onToggleCamera: () => void;
   videoQuality: VideoQuality;
+  screenFrameRate?: ScreenFrameRate;
   onVideoQualityChange: (quality: VideoQuality) => void;
+  onScreenFrameRateChange?: (rate: ScreenFrameRate) => void;
   qualityMenuOpen: boolean;
   onQualityMenuOpenChange: (open: boolean) => void;
   watchingHls?: boolean;
@@ -2334,6 +2369,8 @@ export function CallControls({
           open={qualityMenuOpen}
           onOpenChange={onQualityMenuOpenChange}
           onChange={onVideoQualityChange}
+          screenFrameRate={screenFrameRate}
+          onScreenFrameRateChange={onScreenFrameRateChange}
           isSendingVideo={voiceState.isCameraOn || voiceState.isSharingScreen}
           isSharingScreen={voiceState.isSharingScreen}
           usingSfu={voiceState.usingSfu}

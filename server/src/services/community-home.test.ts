@@ -88,7 +88,7 @@ interface PostBody {
   teaser: string | null;
   visibility: "free" | "members";
   status: "draft" | "published" | "scheduled";
-  media: { kind: string; youtubeUrl: string | null } | null;
+  media: { kind: string; youtubeUrl: string | null; twitchUrl: string | null } | null;
   locked: boolean;
   commentCount: number;
   commentTeaser: { body: string }[];
@@ -574,6 +574,27 @@ describeDb("community home (Baú)", () => {
       body: "y",
       status: "published",
       youtubeUrl: "https://example.com/not-youtube",
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("a Twitch channel URL publishes as twitch media", async () => {
+    const post = await publish({
+      title: "live da moon",
+      body: "cola o link",
+      youtubeUrl: "https://www.twitch.tv/moonkaselive",
+    });
+    expect(post.media?.kind).toBe("twitch");
+    expect(post.media?.twitchUrl).toBe("https://www.twitch.tv/moonkaselive");
+    expect(post.media?.youtubeUrl).toBeNull();
+  });
+
+  it("a Twitch directory URL is a 400, not a post", async () => {
+    const res = await call(owner, "POST", `${base()}/posts`, {
+      title: "x",
+      body: "y",
+      status: "published",
+      youtubeUrl: "https://www.twitch.tv/directory",
     });
     expect(res.status).toBe(400);
   });

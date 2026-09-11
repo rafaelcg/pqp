@@ -30,7 +30,7 @@ feed. There is no `VITE_` flag: the client asks `GET /api/community-home/config`
 (`{ enabled, vipEnabled, mediaEnabled }`, always 200) and follows it, the way
 it follows the attachments and communities configs. `mediaEnabled` is the
 `S3_*` probe folded in, so a deployment without storage still gets the feed
-with YouTube links and text.
+with YouTube / Twitch links and text.
 
 **Local override, dev bypass only.** With `DEV_AUTH_BYPASS=true`,
 `?communityHome=1|0` on `/app` forces the answer for that tab and latches it
@@ -79,11 +79,21 @@ See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
   matches the feed so the badge cannot promise a post the feed will not
   show). Opening the feed stamps `community_home_reads` and clears it. The
   count outranks the "New" chip: a number says more.
-  Landing (`client/src/lib/community-home/landing.ts`): a community opens on
-  the feed every time; any other server with Baú on opens on it **once**, the
-  first time that person has never opened its Baú (the same localStorage mark
-  that drives the "New" chip), then goes back to the first text channel. That
-  first landing is what makes a new member meet the pinned post.
+  Landing (`client/src/lib/community-home/landing.ts`): if Baú is on for this
+  server, opening it (no channel in the URL, clicking the server in the rail,
+  first load) lands on the feed every time — community or private hall. A
+  URL that already names a channel still opens that channel. The unread
+  stamp and the "New" chip are unchanged: opening the feed still writes
+  `community_home_reads` and still clears the discovery chip.
+- **Live corner card** when a post is published while you are in that
+  server, looking at another channel (`community-home-update` plus unread
+  going up). Not the author: own posts never count as unread. Not if you
+  are already on the feed (the feed is the notice). Not if you are in DMs
+  or another server — the badge is waiting when you open this one, and
+  opening it lands on Baú. Same `CornerCard` shell as the other corner
+  hints, after the update notice in `CORNER_HINT_ORDER`. Click **Abrir o
+  Baú**, or wait 8 s / hit Escape. See
+  [`ONBOARDING.md`](./ONBOARDING.md).
 - **Intro card** for members, once per account
   (`preferences.communityHomeIntroDismissedAt`, not `localStorage`, so a new
   browser does not re-offer it). Says what the Baú is, that likes and comments
@@ -98,7 +108,7 @@ See [`BAU_VIP_STRATEGY.md`](./BAU_VIP_STRATEGY.md) for what would replace it.
   the file) whenever the card design changes. The compose tab repeats the
   rows, small, until the first post exists.
 - **Composer** (staff tab "Write"): title, body, one media (file when
-  `mediaEnabled`, else YouTube only), comments on/off, VIP toggle + teaser
+  `mediaEnabled`, else YouTube / Twitch only), comments on/off, VIP toggle + teaser
   when `vipEnabled`. **Preview** renders the card as members will see it, and
   the locked version too for a VIP post. **Publish**, **Save draft**, or
   **Schedule** (a `datetime-local` in the browser's timezone; the API stores
@@ -160,7 +170,10 @@ Image, native video (`mp4`/`webm`), PDF, up to 100 MiB each (`COMMUNITY_HOME_MAX
 mint / PUT / claim dance as attachments (`client/src/lib/community-home/media.ts`,
 `POST …/home/media`, `POST …/home/media/claim`). Bytes never pass through the
 Node process. YouTube is URL only (`watch`, `youtu.be`, `shorts`, `embed`,
-`live`), embedded from `youtube-nocookie.com`. Over-limit video is refused
+`live`), embedded from `youtube-nocookie.com`. Twitch is the same paste box
+(`twitch.tv/<channel>`, `/videos/<id>`, `/clip/<slug>`, `clips.twitch.tv`),
+embedded from `player.twitch.tv` / `clips.twitch.tv` with `parent` set to the
+viewing hostname and autoplay off. Over-limit video is refused
 with "upload it to YouTube". Files are signed as downloads, never inline.
 
 Orphans (minted, never claimed onto a post) are swept after an hour; deleting
@@ -179,7 +192,7 @@ relay) and clients refetch. Likes deliberately do **not** fan out.
 `fly secrets set COMMUNITY_HOME_ENABLED=true COMMUNITY_HOME_VIP_ENABLED=true -a pqp-api-staging`
 then push to `staging`. Media needs the staging R2 credentials on the app
 (see `docs/STAGING.md`); without them `mediaEnabled` is false and the
-composer offers YouTube and text only, which is the expected shape of a
+composer offers YouTube / Twitch and text only, which is the expected shape of a
 self-host without storage, not a bug.
 
 ## Tests
@@ -193,10 +206,12 @@ self-host without storage, not a bug.
 - `client/src/components/community-home/community-home-feed.test.tsx`: the
   card's contract (no free chip, locked leaks nothing, two comments max).
 - `client/src/lib/community-home/*.test.ts`: flag resolution, landing,
-  visibility helpers, media helpers.
+  visibility helpers, media helpers, live-post toast gating.
+- `client/src/components/layout/channel-list-community-home.test.tsx`: the
+  row, the unread number, the New chip yielding to it.
 - `client/e2e/community-home.spec.ts`: forced-off chrome, owner write →
-  preview → publish → like, member intro + lock + comments, private-hall
-  landing.
+  preview → publish → like, member intro + lock + comments, unread badge +
+  live corner card, private-hall landing.
 
 ## Not here yet (see the strategy doc)
 

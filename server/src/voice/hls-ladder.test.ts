@@ -27,13 +27,23 @@ function names(rungs: readonly LadderRung[]): string[] {
 }
 
 describe("parseLadder", () => {
-  it("defaults to 1080p30 + 720p30 + 480p30, lowest first", () => {
-    expect(names(parseLadder({}).rungs)).toEqual([
-      "480p30",
-      "720p30",
-      "1080p30",
-    ]);
-    expect(names(parseLadder({}).rungs)).not.toContain("720p60");
+  it("defaults to 1080p60 + 720p60 + 480p30, lowest first", () => {
+    const rungs = parseLadder({}).rungs;
+    expect(names(rungs)).toEqual(["480p30", "720p60", "1080p60"]);
+    expect(names(rungs)).not.toContain("720p30");
+    expect(names(rungs)).not.toContain("1080p30");
+    // Same 3200 as 720p30 so hls.js keeps a ≥2.5× gap under 1080p60, but
+    // 60 fps so a viewer who lands here still matches the host display.
+    const mid = rungs.find((rung) => rung.name === "720p60");
+    expect(mid?.framerate).toBe(60);
+    expect(mid?.videoKbps).toBe(3200);
+  });
+
+  it("1080p60 is a named rung with a 60 fps encode", () => {
+    expect(LADDER_RUNGS["1080p60"]?.framerate).toBe(60);
+    expect(LADDER_RUNGS["1080p60"]?.height).toBe(1080);
+    expect(LADDER_RUNGS["1080p60"]?.videoKbps).toBe(8000);
+    expect(LADDER_RUNGS["1080p60"]?.codecs).toContain("avc1.4d002a");
   });
 
   it("720p60 is a named option an operator can turn on without a deploy", () => {
@@ -43,10 +53,13 @@ describe("parseLadder", () => {
     ]);
     expect(LADDER_RUNGS["720p60"]?.framerate).toBe(60);
     expect(LADDER_RUNGS["720p60"]?.height).toBe(720);
-    expect(ladderMaxFramerate(parseLadder({}).rungs)).toBe(30);
+    expect(ladderMaxFramerate(parseLadder({}).rungs)).toBe(60);
     expect(
       ladderMaxFramerate(parseLadder({ ladder: "1080p30,720p60" }).rungs),
     ).toBe(60);
+    expect(
+      ladderMaxFramerate(parseLadder({ ladder: "1080p30,720p30" }).rungs),
+    ).toBe(30);
   });
 
   it("sorts by bitrate whatever order the operator wrote", () => {
@@ -85,13 +98,13 @@ describe("parseLadder", () => {
 
   it("a list with nothing valid in it falls back to the default", () => {
     const parsed = parseLadder({ ladder: "4k,potato" });
-    expect(names(parsed.rungs)).toEqual(["480p30", "720p30", "1080p30"]);
+    expect(names(parsed.rungs)).toEqual(["480p30", "720p60", "1080p60"]);
     expect(parsed.invalid).toEqual(["4k", "potato"]);
   });
 
   it("a rung can carry a bitrate override", () => {
-    const parsed = parseLadder({ ladder: "1080p30@3000,720p30" });
-    expect(parsed.rungs.map((rung) => rung.videoKbps)).toEqual([1800, 3000]);
+    const parsed = parseLadder({ ladder: "1080p30@4000,720p30" });
+    expect(parsed.rungs.map((rung) => rung.videoKbps)).toEqual([3200, 4000]);
     // The override changes the ORDER when it crosses another rung, because
     // the ladder is sorted by what it actually costs, not by its name.
     expect(
@@ -112,8 +125,8 @@ describe("parseLadder", () => {
     // a viewer oscillates. LiveKit's own presets (3000 and 4500) leave about
     // 1.10x; these leave about 1.36x.
     const rungs = parseLadder({}).rungs;
-    const low = rungs.find((rung) => rung.name === "720p30");
-    const high = rungs.find((rung) => rung.name === "1080p30");
+    const low = rungs.find((rung) => rung.name === "720p60");
+    const high = rungs.find((rung) => rung.name === "1080p60");
     const up = high!.videoKbps / 0.7;
     const down = high!.videoKbps / 0.95;
     expect(up / down).toBeGreaterThan(1.3);
@@ -127,7 +140,7 @@ describe("rungEncodingOptions", () => {
     expect(options.width).toBe(1920);
     expect(options.height).toBe(1080);
     expect(options.framerate).toBe(30);
-    expect(options.videoBitrate).toBe(4500);
+    expect(options.videoBitrate).toBe(6500);
   });
 
   it("720p60 asks the egress for 60 fps", () => {
@@ -135,15 +148,21 @@ describe("rungEncodingOptions", () => {
     expect(options.width).toBe(1280);
     expect(options.height).toBe(720);
     expect(options.framerate).toBe(60);
-    expect(options.videoBitrate).toBe(3200);
+    expect(options.videoBitrate).toBe(5500);
   });
 
-  it("leaves the keyframe interval to the egress", () => {
-    // Zero means "the segment duration" for a segmented output, which is
-    // what puts every rung's segment boundaries on a keyframe and lets a
-    // player switch between them.
+  it("1080p60 asks the egress for 1080 at 60 fps", () => {
+    const options = rungEncodingOptions(LADDER_RUNGS["1080p60"]!);
+    expect(options.width).toBe(1920);
+    expect(options.height).toBe(1080);
+    expect(options.framerate).toBe(60);
+    expect(options.videoBitrate).toBe(8000);
+    expect(options.keyFrameInterval).toBe(2);
+  });
+
+  it("aligns keyframes with the 2 s segment duration", () => {
     expect(rungEncodingOptions(LADDER_RUNGS["720p30"]!).keyFrameInterval).toBe(
-      0,
+      2,
     );
   });
 });
@@ -189,8 +208,8 @@ describe("decideLadder", () => {
     const decisions = decideLadder({ ...base, rungs: defaultRungs });
     expect(decisions.map((d) => [d.rung.name, d.start])).toEqual([
       ["480p30", true],
-      ["720p30", true],
-      ["1080p30", true],
+      ["720p60", true],
+      ["1080p60", true],
     ]);
   });
 
@@ -289,8 +308,8 @@ describe("decideLadder", () => {
     });
     expect(decisions.map((d) => [d.rung.name, d.start, d.refusal])).toEqual([
       ["480p30", true, null],
-      ["720p30", true, null],
-      ["1080p30", false, "source-height"],
+      ["720p60", true, null],
+      ["1080p60", false, "source-height"],
     ]);
   });
 
@@ -334,13 +353,18 @@ describe("buildMasterPlaylist", () => {
     const body = buildMasterPlaylist([variants[0]!]);
     // BANDWIDTH is the PEAK, above the nominal average, so a player sizing
     // its buffer from it is not caught out by a busy two seconds.
-    expect(body).toContain("BANDWIDTH=5322200");
-    expect(body).toContain("AVERAGE-BANDWIDTH=4628000");
+    expect(body).toContain("BANDWIDTH=7622200");
+    expect(body).toContain("AVERAGE-BANDWIDTH=6628000");
     expect(body).toContain("RESOLUTION=1920x1080");
     expect(body).toContain("FRAME-RATE=30.000");
     expect(
       buildMasterPlaylist([
         { rung: LADDER_RUNGS["720p60"]!, uri: "/sixty?t=abc" },
+      ]),
+    ).toContain("FRAME-RATE=60.000");
+    expect(
+      buildMasterPlaylist([
+        { rung: LADDER_RUNGS["1080p60"]!, uri: "/film?t=abc" },
       ]),
     ).toContain("FRAME-RATE=60.000");
     expect(body).toContain('CODECS="avc1.4d0028,mp4a.40.2"');

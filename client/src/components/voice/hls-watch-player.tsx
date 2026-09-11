@@ -3,12 +3,19 @@ import {
   useEffect,
   useRef,
   useState,
+  type FocusEvent as ReactFocusEvent,
   type MutableRefObject,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   type RefObject,
+  type SyntheticEvent,
 } from "react";
 import {
   Check,
   Crop,
+  Maximize2,
+  MessageSquare,
+  Minimize2,
   PictureInPicture2,
   Radio,
   Scan,
@@ -64,6 +71,12 @@ import {
   writeHlsVolume,
   type HlsVolumePref,
 } from "@/lib/hls-volume";
+import {
+  idleChromeClassName,
+  tapIsOnStage,
+  useIdleChrome,
+} from "@/hooks/use-idle-chrome";
+import { usePrefersReducedMotion } from "@/hooks/use-reduced-motion";
 import { cn } from "@/lib/utils";
 
 const STALL_TICK_MS = 1_000;
@@ -124,6 +137,11 @@ export function HlsWatchPlayer({
   mediaTitle,
   communityName,
   coverUrl,
+  fullscreen,
+  chatOverlay,
+  meta,
+  actions,
+  layout = "tile",
 }: {
   src: string;
   delaySeconds?: number;
@@ -136,6 +154,23 @@ export function HlsWatchPlayer({
   communityName?: string | null;
   /** Server icon, used as lock-screen artwork when nothing better exists. */
   coverUrl?: string | null;
+  /** Native fullscreen of the watch pane. Omitted where the player is preview-only. */
+  fullscreen?: { active: boolean; toggle: () => void };
+  /**
+   * Chat overlay while cinema fullscreen is on. Hidden in the ordinary split:
+   * chat already has a column there.
+   */
+  chatOverlay?: { active: boolean; toggle: () => void };
+  /** Audience count and similar, drawn on the film rather than below it. */
+  meta?: ReactNode;
+  /** Leave / join / host extras, same overlay as the player chrome. */
+  actions?: ReactNode;
+  /**
+   * `cinema` is the watch-party viewer: full-bleed film, Twitch-like bar that
+   * autohides. `tile` is a share in the call grid, where that bar would eat
+   * the picture.
+   */
+  layout?: "cinema" | "tile";
 }) {
   const { t } = useTranslation();
   const fit = useVideoFit("watch");
@@ -745,8 +780,90 @@ export function HlsWatchPlayer({
     };
   }, [activeSrc, attempt]);
 
+  // Twitch-style chrome: sits on the picture, fades after the pointer rests,
+  // comes back on move / tap. Same controller the call stage uses, so the
+  // timing and the "first press wakes, does not hang up" rule stay one place.
+  const reducedMotion = usePrefersReducedMotion();
+  const [barHovered, setBarHovered] = useState(false);
+  const [barFocused, setBarFocused] = useState(false);
+  const chrome = useIdleChrome(
+    layout === "cinema" && hasFrame,
+    qualityOpen || barHovered || barFocused,
+  );
+  const chromeClass = idleChromeClassName({
+    hidden: chrome.hidden,
+    reducedMotion,
+  });
+  const touchDownRef = useRef<{ x: number; y: number } | null>(null);
+  const onStagePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === "touch") {
+      touchDownRef.current = { x: event.clientX, y: event.clientY };
+      return;
+    }
+    chrome.wake();
+  };
+  const onStagePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType !== "touch") {
+      return;
+    }
+    const down = touchDownRef.current;
+    touchDownRef.current = null;
+    const travelled =
+      down === null ||
+      Math.hypot(event.clientX - down.x, event.clientY - down.y) > 10;
+    if (!travelled && tapIsOnStage(event.target)) {
+      chrome.toggle();
+      return;
+    }
+    chrome.wake();
+  };
+  const swallowPressWhileHidden = (event: SyntheticEvent<HTMLDivElement>) => {
+    if (!chrome.isHidden()) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    chrome.wake();
+  };
+  const onBarBlur = (event: ReactFocusEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setBarFocused(false);
+    }
+  };
+  const iconBtn =
+    "flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-control)] text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal";
+
+  const cinema = layout === "cinema";
+
   return (
-    <div className={cn("relative h-full w-full bg-black", className)}>
+    <div
+      className={cn(
+        "relative h-full w-full bg-black",
+        cinema && fullscreen?.active && chrome.hidden && "cursor-none",
+        !cinema && "group",
+        className,
+      )}
+      onPointerMove={
+        cinema
+          ? (event) => {
+              if (event.pointerType !== "touch") {
+                chrome.wake();
+              }
+            }
+          : undefined
+      }
+      onPointerDown={cinema ? onStagePointerDown : undefined}
+      onPointerUp={cinema ? onStagePointerUp : undefined}
+      onPointerCancel={
+        cinema
+          ? () => {
+              touchDownRef.current = null;
+            }
+          : undefined
+      }
+      onKeyDownCapture={cinema ? chrome.wake : undefined}
+      onFocusCapture={cinema ? chrome.wake : undefined}
+    >
       <video
         ref={(node) => {
           innerRef.current = node;
@@ -767,55 +884,10 @@ export function HlsWatchPlayer({
         playsInline
         onDoubleClick={onDoubleClick}
       />
-      <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-1.5">
-        {behindLive ? (
-          <button
-            type="button"
-            className="pointer-events-auto flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-paper hover:bg-black/90"
-            onClick={jumpToLive}
-          >
-            <Radio className="h-3 w-3" />
-            {t("voice.hls.jumpToLive")}
-          </button>
-        ) : (
-          <span className="flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-paper">
-            <Radio className="h-3 w-3 text-red-400" />
-            {t("voice.hls.live")}
-          </span>
-        )}
-        <span className="rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-paper">
-          {t("voice.hls.delay", { seconds: delaySeconds })}
-        </span>
-      </div>
-      {slowStartNotice && hasFrame ? (
-        <p
-          data-testid="hls-slow-start"
-          className="pointer-events-none absolute left-2 top-9 max-w-[85%] rounded bg-black/70 px-1.5 py-0.5 text-[11px] text-paper"
-        >
-          {t("voice.hls.slowStart", {
-            quality: describeHlsLevel(
-              offered.length > 0
-                ? offered[offered.length - 1].height
-                : 480,
-            ),
-          })}
-        </p>
-      ) : null}
-      {pipAvailable && hasFrame ? (
-        <button
-          type="button"
-          aria-label={t("voice.hls.pip")}
-          aria-pressed={isPip}
-          className="absolute right-2 top-2 rounded bg-black/70 p-1 text-paper opacity-0 transition-opacity hover:bg-black/90 focus-visible:opacity-100 group-hover:opacity-100 motion-reduce:transition-none"
-          onClick={() => void togglePip()}
-        >
-          <PictureInPicture2 className="h-3.5 w-3.5" />
-        </button>
-      ) : null}
       {phase === "dead" ? (
         <div
           data-testid="hls-dead"
-          className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 text-sm text-paper"
+          className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/70 text-sm text-paper"
         >
           <span>{t("voice.hls.dead")}</span>
           <button
@@ -831,171 +903,466 @@ export function HlsWatchPlayer({
           data-testid={
             phase === "reconnecting" ? "hls-reconnecting" : "hls-buffering"
           }
-          className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40 text-sm text-paper-muted"
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-black/40 text-sm text-paper-muted"
         >
           {phase === "reconnecting"
             ? t("voice.hls.stalled")
             : t("voice.hls.buffering")}
         </div>
       ) : null}
-      {hasFrame ? (
+      {cinema ? (
+      <div
+        data-watch-chrome=""
+        data-call-chrome=""
+        className={cn(
+          // z-50 beats the chat overlay's z-index: 40 on the pane
+          // (`index.css`). z-20 sat under it, so Leave fullscreen could not
+          // be clicked once chat was open.
+          "pointer-events-none absolute inset-0 z-50 flex flex-col justify-between",
+          chromeClass,
+        )}
+        onFocusCapture={() => setBarFocused(true)}
+        onBlurCapture={onBarBlur}
+      >
         <div
-          data-testid="hls-volume"
-          // Bottom RIGHT on purpose. Every other corner is taken: the live and
-          // delay badges are top-left, Picture-in-Picture is top-right, the
-          // "Toca pra ligar o som" button is bottom-centre, and the cinema
-          // stage draws its own presence strip at bottom-left, which sat on
-          // top of this control and swallowed the click (caught in QA, the
-          // button was visible and unclickable).
-          className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/70 px-1.5 py-1"
+          className="pointer-events-auto flex items-start justify-between gap-2 bg-gradient-to-b from-black/70 to-transparent px-3 pb-8 pt-3"
+          onPointerDown={swallowPressWhileHidden}
+          onPointerEnter={() => setBarHovered(true)}
+          onPointerLeave={() => setBarHovered(false)}
         >
-          {/* Beside the quality menu and the volume, in the one cluster this
-              player already has: the wish ("I want the bars gone") happens
-              while looking at the picture, not in a settings page. */}
-          <Tooltip
-            label={whole ? t("call.fit.fill") : t("call.fit.whole")}
-            detail={t("voice.hls.fitHint")}
-            side="top"
-            align="end"
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+            {behindLive ? (
+              <button
+                type="button"
+                className="flex items-center gap-1 rounded-[var(--radius-control)] bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-paper hover:bg-black/70"
+                onClick={jumpToLive}
+              >
+                <Radio className="h-3 w-3" />
+                {t("voice.hls.jumpToLive")}
+              </button>
+            ) : (
+              <span
+                data-testid="watch-stage-live"
+                className="flex items-center gap-1 rounded-[var(--radius-control)] bg-black/50 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-paper"
+              >
+                <Radio className="h-3 w-3 text-danger" />
+                {t("voice.hls.live")}
+              </span>
+            )}
+            <span className="rounded-[var(--radius-control)] bg-black/50 px-1.5 py-0.5 text-[11px] font-medium text-paper">
+              {t("voice.hls.delay", { seconds: delaySeconds })}
+            </span>
+            {meta}
+          </div>
+      {slowStartNotice && hasFrame ? (
+        <p
+          data-testid="hls-slow-start"
+          className="pointer-events-none absolute left-2 top-9 max-w-[85%] rounded bg-black/70 px-1.5 py-0.5 text-[11px] text-paper"
+        >
+          {t("voice.hls.slowStart", {
+            quality: describeHlsLevel(
+              offered.length > 0 ? offered[offered.length - 1].height : 480,
+            ),
+          })}
+        </p>
+      ) : null}
+          {actions ? (
+            <div className="flex shrink-0 items-center gap-1.5">{actions}</div>
+          ) : null}
+        </div>
+        <div
+          data-testid="watch-player-bar"
+          className="pointer-events-auto flex items-center justify-between gap-2 bg-gradient-to-t from-black/80 via-black/50 to-transparent px-3 pb-3 pt-10"
+          onPointerDown={swallowPressWhileHidden}
+          onPointerEnter={() => setBarHovered(true)}
+          onPointerLeave={() => setBarHovered(false)}
+        >
+          <div
+            data-testid="hls-volume"
+            className="flex min-w-0 items-center gap-1.5"
           >
             <button
               type="button"
-              data-testid="hls-fit"
-              data-hls-fit={fit.fit}
-              aria-pressed={whole}
-              className={cn(
-                "flex h-6 w-6 items-center justify-center rounded-full text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal",
-                whole && "text-signal",
-              )}
-              onClick={fit.toggle}
+              aria-pressed={silenced}
+              aria-label={
+                silenced ? t("voice.hls.unmuteControl") : t("voice.hls.mute")
+              }
+              className={iconBtn}
+              onClick={() => {
+                if (silenced) {
+                  restoreSound();
+                  return;
+                }
+                updateVolume(applyMuteToggle(volumePref, restoreRef.current));
+              }}
             >
-              {whole ? (
-                <Crop className="h-3.5 w-3.5" aria-hidden="true" />
-              ) : (
-                <Scan className="h-3.5 w-3.5" aria-hidden="true" />
-              )}
+              <VolumeGlyph volume={volumePref.volume} muted={silenced} />
             </button>
-          </Tooltip>
-          {offered.length > 1 ? (
-            <div className="relative">
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={silenced ? 0 : volumePref.volume}
+              aria-label={t("voice.hls.volume")}
+              aria-valuetext={t("voice.tile.volumePercent", {
+                percent: Math.round((silenced ? 0 : volumePref.volume) * 100),
+              })}
+              onChange={(event) => {
+                const next = applySliderChange(Number(event.target.value));
+                if (!next.muted) {
+                  setNeedsUnmute(false);
+                }
+                updateVolume(next);
+              }}
+              className="h-1 w-20 cursor-pointer accent-signal sm:w-24"
+            />
+          </div>
+          <div className="flex shrink-0 items-center gap-0.5">
+            {hasFrame ? (
+              <Tooltip
+                label={whole ? t("call.fit.fill") : t("call.fit.whole")}
+                detail={t("voice.hls.fitHint")}
+                side="top"
+                align="end"
+              >
+                <button
+                  type="button"
+                  data-testid="hls-fit"
+                  data-hls-fit={fit.fit}
+                  aria-pressed={whole}
+                  className={cn(iconBtn, whole && "text-signal")}
+                  onClick={fit.toggle}
+                >
+                  {whole ? (
+                    <Crop className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <Scan className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                </button>
+              </Tooltip>
+            ) : null}
+            {pipAvailable && hasFrame ? (
               <button
                 type="button"
-                data-testid="hls-quality-button"
-                aria-label={t("voice.hls.quality")}
-                aria-expanded={qualityOpen}
-                aria-haspopup="menu"
-                className="flex h-6 items-center gap-1 rounded-full px-1.5 text-[11px] font-medium text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
-                onClick={() => setQualityOpen((open) => !open)}
+                aria-label={t("voice.hls.pip")}
+                aria-pressed={isPip}
+                className={iconBtn}
+                onClick={() => void togglePip()}
               >
-                <Settings2 className="h-3.5 w-3.5" />
-                {qualityPref.height === null
-                  ? autoHeight === null
-                    ? t("voice.hls.qualityAuto")
-                    : t("voice.hls.qualityAutoAt", {
-                        quality: describeHlsLevel(
-                          autoHeight,
-                          levels.find((level) => level.height === autoHeight)
-                            ?.frameRate,
-                        ),
-                      })
-                  : describeHlsLevel(
-                      qualityPref.height,
-                      levels.find((level) => level.height === qualityPref.height)
-                        ?.frameRate,
-                    )}
+                <PictureInPicture2 className="h-3.5 w-3.5" />
               </button>
-              {qualityOpen ? (
-                <div
-                  role="menu"
-                  data-testid="hls-quality-menu"
-                  className="absolute bottom-8 right-0 min-w-32 overflow-hidden rounded-lg bg-black/90 py-1 text-[12px] text-paper shadow-lg"
+            ) : null}
+            {offered.length > 1 ? (
+              <div className="relative">
+                <button
+                  type="button"
+                  data-testid="hls-quality-button"
+                  aria-label={t("voice.hls.quality")}
+                  aria-expanded={qualityOpen}
+                  aria-haspopup="menu"
+                  className="flex h-8 items-center gap-1 rounded-[var(--radius-control)] px-1.5 text-[11px] font-medium text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+                  onClick={() => setQualityOpen((open) => !open)}
                 >
-                  <button
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={qualityPref.height === null}
-                    className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-paper/15"
-                    onClick={() => pickQuality(AUTO_HLS_QUALITY)}
-                  >
-                    <Check
-                      className={cn(
-                        "h-3 w-3",
-                        qualityPref.height === null
-                          ? "opacity-100"
-                          : "opacity-0",
+                  <Settings2 className="h-3.5 w-3.5" />
+                  {qualityPref.height === null
+                    ? autoHeight === null
+                      ? t("voice.hls.qualityAuto")
+                      : t("voice.hls.qualityAutoAt", {
+                          quality: describeHlsLevel(
+                            autoHeight,
+                            levels.find((level) => level.height === autoHeight)
+                              ?.frameRate,
+                          ),
+                        })
+                    : describeHlsLevel(
+                        qualityPref.height,
+                        levels.find(
+                          (level) => level.height === qualityPref.height,
+                        )?.frameRate,
                       )}
-                    />
-                    {t("voice.hls.qualityAuto")}
-                  </button>
-                  {offered.map((level) => (
+                </button>
+                {qualityOpen ? (
+                  <div
+                    role="menu"
+                    data-testid="hls-quality-menu"
+                    className="absolute bottom-10 right-0 min-w-32 overflow-hidden rounded-[var(--radius-card)] bg-black/90 py-1 text-[12px] text-paper shadow-lg"
+                  >
                     <button
-                      key={level.height}
                       type="button"
                       role="menuitemradio"
-                      aria-checked={qualityPref.height === level.height}
+                      aria-checked={qualityPref.height === null}
                       className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-paper/15"
-                      onClick={() => pickQuality({ height: level.height })}
+                      onClick={() => pickQuality(AUTO_HLS_QUALITY)}
                     >
                       <Check
                         className={cn(
                           "h-3 w-3",
-                          qualityPref.height === level.height
+                          qualityPref.height === null
                             ? "opacity-100"
                             : "opacity-0",
                         )}
                       />
-                      {describeHlsLevel(level.height, level.frameRate)}
+                      {t("voice.hls.qualityAuto")}
                     </button>
-                  ))}
+                    {offered.map((level) => (
+                      <button
+                        key={level.height}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={qualityPref.height === level.height}
+                        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-paper/15"
+                        onClick={() => pickQuality({ height: level.height })}
+                      >
+                        <Check
+                          className={cn(
+                            "h-3 w-3",
+                            qualityPref.height === level.height
+                              ? "opacity-100"
+                              : "opacity-0",
+                          )}
+                        />
+                        {describeHlsLevel(level.height, level.frameRate)}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+            {chatOverlay ? (
+              <button
+                type="button"
+                data-testid="watch-stage-chat-overlay"
+                aria-pressed={chatOverlay.active}
+                aria-label={
+                  chatOverlay.active
+                    ? t("voice.watch.hideChat")
+                    : t("voice.watch.showChat")
+                }
+                title={
+                  chatOverlay.active
+                    ? t("voice.watch.hideChat")
+                    : t("voice.watch.showChat")
+                }
+                className={cn(iconBtn, chatOverlay.active && "text-signal")}
+                onClick={chatOverlay.toggle}
+              >
+                <MessageSquare className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            ) : null}
+            {fullscreen ? (
+              <button
+                type="button"
+                data-testid="watch-stage-fullscreen"
+                aria-pressed={fullscreen.active}
+                aria-label={
+                  fullscreen.active
+                    ? t("voice.watch.exitFullscreen")
+                    : t("voice.watch.fullscreen")
+                }
+                title={
+                  fullscreen.active
+                    ? t("voice.watch.exitFullscreen")
+                    : t("voice.watch.fullscreen")
+                }
+                className={iconBtn}
+                onClick={fullscreen.toggle}
+              >
+                {fullscreen.active ? (
+                  <Minimize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+      ) : (
+        <>
+          <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-1.5">
+            {behindLive ? (
+              <button
+                type="button"
+                className="pointer-events-auto flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-paper hover:bg-black/90"
+                onClick={jumpToLive}
+              >
+                <Radio className="h-3 w-3" />
+                {t("voice.hls.jumpToLive")}
+              </button>
+            ) : (
+              <span className="flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-paper">
+                <Radio className="h-3 w-3 text-danger" />
+                {t("voice.hls.live")}
+              </span>
+            )}
+            <span className="rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-medium text-paper">
+              {t("voice.hls.delay", { seconds: delaySeconds })}
+            </span>
+          </div>
+          {pipAvailable && hasFrame ? (
+            <button
+              type="button"
+              aria-label={t("voice.hls.pip")}
+              aria-pressed={isPip}
+              className="absolute right-2 top-2 rounded bg-black/70 p-1 text-paper opacity-0 transition-opacity hover:bg-black/90 focus-visible:opacity-100 group-hover:opacity-100 motion-reduce:transition-none"
+              onClick={() => void togglePip()}
+            >
+              <PictureInPicture2 className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
+          {hasFrame ? (
+            <div
+              data-testid="hls-volume"
+              className="absolute bottom-2 right-2 flex items-center gap-1.5 rounded-full bg-black/70 px-1.5 py-1"
+            >
+              <Tooltip
+                label={whole ? t("call.fit.fill") : t("call.fit.whole")}
+                detail={t("voice.hls.fitHint")}
+                side="top"
+                align="end"
+              >
+                <button
+                  type="button"
+                  data-testid="hls-fit"
+                  data-hls-fit={fit.fit}
+                  aria-pressed={whole}
+                  className={cn(
+                    "flex h-6 w-6 items-center justify-center rounded-full text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal",
+                    whole && "text-signal",
+                  )}
+                  onClick={fit.toggle}
+                >
+                  {whole ? (
+                    <Crop className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <Scan className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                </button>
+              </Tooltip>
+              {offered.length > 1 ? (
+                <div className="relative">
+                  <button
+                    type="button"
+                    data-testid="hls-quality-button"
+                    aria-label={t("voice.hls.quality")}
+                    aria-expanded={qualityOpen}
+                    aria-haspopup="menu"
+                    className="flex h-6 items-center gap-1 rounded-full px-1.5 text-[11px] font-medium text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+                    onClick={() => setQualityOpen((open) => !open)}
+                  >
+                    <Settings2 className="h-3.5 w-3.5" />
+                    {qualityPref.height === null
+                      ? autoHeight === null
+                        ? t("voice.hls.qualityAuto")
+                        : t("voice.hls.qualityAutoAt", {
+                            quality: describeHlsLevel(
+                              autoHeight,
+                              levels.find((level) => level.height === autoHeight)
+                                ?.frameRate,
+                            ),
+                          })
+                      : describeHlsLevel(
+                          qualityPref.height,
+                          levels.find(
+                            (level) => level.height === qualityPref.height,
+                          )?.frameRate,
+                        )}
+                  </button>
+                  {qualityOpen ? (
+                    <div
+                      role="menu"
+                      data-testid="hls-quality-menu"
+                      className="absolute bottom-8 right-0 min-w-32 overflow-hidden rounded-lg bg-black/90 py-1 text-[12px] text-paper shadow-lg"
+                    >
+                      <button
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={qualityPref.height === null}
+                        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-paper/15"
+                        onClick={() => pickQuality(AUTO_HLS_QUALITY)}
+                      >
+                        <Check
+                          className={cn(
+                            "h-3 w-3",
+                            qualityPref.height === null
+                              ? "opacity-100"
+                              : "opacity-0",
+                          )}
+                        />
+                        {t("voice.hls.qualityAuto")}
+                      </button>
+                      {offered.map((level) => (
+                        <button
+                          key={level.height}
+                          type="button"
+                          role="menuitemradio"
+                          aria-checked={qualityPref.height === level.height}
+                          className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left hover:bg-paper/15"
+                          onClick={() => pickQuality({ height: level.height })}
+                        >
+                          <Check
+                            className={cn(
+                              "h-3 w-3",
+                              qualityPref.height === level.height
+                                ? "opacity-100"
+                                : "opacity-0",
+                            )}
+                          />
+                          {describeHlsLevel(level.height, level.frameRate)}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
+              <button
+                type="button"
+                aria-pressed={silenced}
+                aria-label={
+                  silenced ? t("voice.hls.unmuteControl") : t("voice.hls.mute")
+                }
+                className="flex h-6 w-6 items-center justify-center rounded-full text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
+                onClick={() => {
+                  if (silenced) {
+                    restoreSound();
+                    return;
+                  }
+                  updateVolume(applyMuteToggle(volumePref, restoreRef.current));
+                }}
+              >
+                <VolumeGlyph volume={volumePref.volume} muted={silenced} />
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={silenced ? 0 : volumePref.volume}
+                aria-label={t("voice.hls.volume")}
+                aria-valuetext={t("voice.tile.volumePercent", {
+                  percent: Math.round((silenced ? 0 : volumePref.volume) * 100),
+                })}
+                onChange={(event) => {
+                  const next = applySliderChange(Number(event.target.value));
+                  if (!next.muted) {
+                    setNeedsUnmute(false);
+                  }
+                  updateVolume(next);
+                }}
+                className="h-1 w-20 cursor-pointer accent-signal"
+              />
             </div>
           ) : null}
-          <button
-            type="button"
-            aria-pressed={silenced}
-            aria-label={
-              silenced ? t("voice.hls.unmuteControl") : t("voice.hls.mute")
-            }
-            className="flex h-6 w-6 items-center justify-center rounded-full text-paper hover:bg-paper/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-signal"
-            onClick={() => {
-              if (silenced) {
-                restoreSound();
-                return;
-              }
-              updateVolume(applyMuteToggle(volumePref, restoreRef.current));
-            }}
-          >
-            <VolumeGlyph volume={volumePref.volume} muted={silenced} />
-          </button>
-          <input
-            type="range"
-            min={0}
-            max={1}
-            step={0.05}
-            value={silenced ? 0 : volumePref.volume}
-            aria-label={t("voice.hls.volume")}
-            aria-valuetext={t("voice.tile.volumePercent", {
-              percent: Math.round((silenced ? 0 : volumePref.volume) * 100),
-            })}
-            onChange={(event) => {
-              const next = applySliderChange(Number(event.target.value));
-              // Dragging up off zero is itself a request for sound, so it
-              // clears the autoplay refusal too rather than moving a slider
-              // that stays silent.
-              if (!next.muted) {
-                setNeedsUnmute(false);
-              }
-              updateVolume(next);
-            }}
-            className="h-1 w-20 cursor-pointer accent-signal"
-          />
-        </div>
-      ) : null}
+        </>
+      )}
       {hasFrame && needsUnmute ? (
         <button
           type="button"
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1.5 text-sm font-medium text-paper hover:bg-black/90"
+          className={cn(
+            "absolute left-1/2 z-30 -translate-x-1/2 rounded-full bg-black/75 px-3 py-1.5 text-sm font-medium text-paper hover:bg-black/90",
+            cinema ? "bottom-16" : "bottom-3",
+          )}
           onClick={restoreSound}
         >
           {t("voice.hls.unmute")}
