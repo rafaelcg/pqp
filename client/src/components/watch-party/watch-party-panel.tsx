@@ -1048,6 +1048,11 @@ function ScheduledStage(props: WatchPartyPanelProps & { party: WatchParty }) {
   const displayedPartyId = useRef(party.id);
   displayedPartyId.current = party.id;
   useEffect(() => setReminding(party.reminding), [party.id, party.reminding]);
+  // Same instance can show party B while A's toggle is still in flight. The
+  // finally guard below must not clear B's busy; reset it when the party changes.
+  useEffect(() => {
+    setReminderBusy(false);
+  }, [party.id]);
   const toggleReminder = async () => {
     if (!props.onToggleReminder) {
       return;
