@@ -527,7 +527,7 @@ export function screenShareSimulcastEnabled(
 }
 
 /**
- * HLS ingest must not drop pixels. After #474 Chrome still
+ * HLS ingest must not drop pixels. After PR 474 Chrome still
  * `maintain-framerate`s the one encoding 1080 → 540 → 360 → 180 while
  * bitrate stays hundreds of kbps; egress transcodes that 180p for
  * everyone. Viewers ABR via the HLS ladder, so fps/bitrate can still
