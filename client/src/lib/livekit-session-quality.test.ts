@@ -51,7 +51,11 @@ interface PublishedTrack {
     source?: string;
     simulcast?: boolean;
     videoEncoding?: { maxBitrate?: number; maxFramerate?: number };
-    screenShareEncoding?: { maxBitrate?: number; maxFramerate?: number };
+    screenShareEncoding?: {
+      maxBitrate?: number;
+      maxFramerate?: number;
+      scaleResolutionDownBy?: number;
+    };
     screenShareSimulcastLayers?: FakePreset[];
     videoSimulcastLayers?: FakePreset[];
     degradationPreference?: string;
@@ -73,6 +77,7 @@ const senderWrites: {
   source: string;
   maxBitrate: number | undefined;
   encodings: RTCRtpEncodingParameters[];
+  degradationPreference?: RTCDegradationPreference;
 }[] = [];
 const published: PublishedTrack[] = [];
 const unpublished: { track: unknown; stop: boolean | undefined }[] = [];
@@ -97,6 +102,7 @@ function fakeSender(source: string, layers: number) {
         source,
         maxBitrate: next.encodings?.[next.encodings.length - 1]?.maxBitrate,
         encodings: next.encodings ?? [],
+        degradationPreference: next.degradationPreference,
       });
     },
   };
@@ -461,6 +467,7 @@ describe("a quality chosen before the track exists", () => {
     // share goes up with no ceiling while every test stays green.
     expect(options?.videoEncoding).toBeUndefined();
     expect(options?.degradationPreference).toBe("maintain-framerate");
+    expect(options?.screenShareEncoding?.scaleResolutionDownBy).toBeUndefined();
     // VP8 software encode sawtoothed on Chromium; H.264 can use hardware on
     // many Macs and is what egress already re-encodes toward for HLS.
     expect(options?.videoCodec).toBe("h264");
@@ -945,6 +952,10 @@ describe("the presenter as a live ladder's source", () => {
     const options = lastPublish(Track.Source.ScreenShare);
     expect(options?.simulcast).toBe(false);
     expect(options?.screenShareSimulcastLayers ?? []).toEqual([]);
+    // After #474 Chrome still maintain-framerate'd the one encoding
+    // 1080 → 180. Viewers ABR on the HLS ladder; pixels must not drop.
+    expect(options?.degradationPreference).toBe("maintain-resolution");
+    expect(options?.screenShareEncoding?.scaleResolutionDownBy).toBe(1);
   });
 
   it("still publishes ordinary SFU screen share as simulcast", async () => {
@@ -955,6 +966,40 @@ describe("the presenter as a live ladder's source", () => {
     expect(options?.screenShareSimulcastLayers?.map((layer) => layer.height)).toEqual(
       [360, 720],
     );
+    expect(options?.degradationPreference).toBe("maintain-framerate");
+    expect(options?.screenShareEncoding?.scaleResolutionDownBy).toBeUndefined();
+  });
+
+  it("re-pins HLS ingest scale to 1 if GCC drifted the encoding", async () => {
+    // 14 min party: Chrome walked 1080 → 540 → 360 → 320×180 while bitrate
+    // stayed hundreds of kbps. Publish-time scale 1 is not enough if the
+    // next setHlsSource tick does not write it back.
+    const sfu = await session();
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+    await sfu.publishScreen(fakeStream("video", "screen", 1080));
+    const publication = publications.get(Track.Source.ScreenShare)!;
+    const sender = publication.track.sender as {
+      getParameters: () => RTCRtpSendParameters;
+      setParameters: (next: RTCRtpSendParameters) => Promise<void>;
+    };
+    const drifted = sender.getParameters();
+    const encodings = (drifted.encodings ?? [{}]).map((encoding, at, all) =>
+      at === all.length - 1
+        ? { ...encoding, scaleResolutionDownBy: 6 }
+        : encoding,
+    );
+    await sender.setParameters({ ...drifted, encodings });
+    const writesBefore = senderWrites.length;
+
+    await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
+
+    const pinned = senderWrites
+      .slice(writesBefore)
+      .filter((write) => write.source === Track.Source.ScreenShare)
+      .at(-1);
+    expect(pinned).toBeTruthy();
+    expect(pinned!.encodings.at(-1)?.scaleResolutionDownBy).toBe(1);
+    expect(pinned!.degradationPreference).toBe("maintain-resolution");
   });
 
   it("deactivates every sub-layer in place when HLS pins a 1080 publish", async () => {
@@ -974,6 +1019,8 @@ describe("the presenter as a live ladder's source", () => {
     expect(last!.encodings[0]?.active).toBe(false);
     expect(last!.encodings[1]?.active).toBe(false);
     expect(last!.encodings[2]?.active).not.toBe(false);
+    expect(last!.encodings[2]?.scaleResolutionDownBy).toBe(1);
+    expect(last!.degradationPreference).toBe("maintain-resolution");
   });
 
   it("restores every sub-layer when the ladder stops and the share continues", async () => {
@@ -992,6 +1039,7 @@ describe("the presenter as a live ladder's source", () => {
     expect(restored!.encodings[0]?.active).not.toBe(false);
     expect(restored!.encodings[1]?.active).not.toBe(false);
     expect(restored!.encodings[2]?.active).not.toBe(false);
+    expect(restored!.degradationPreference).toBe("maintain-framerate");
 
     await sfu.setHlsSource({ ladderTopHeight: 1080, uplinkBps: 9_000_000 });
     const retrimmed = [...senderWrites]

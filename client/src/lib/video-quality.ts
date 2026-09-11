@@ -527,6 +527,35 @@ export function screenShareSimulcastEnabled(
 }
 
 /**
+ * HLS ingest must not drop pixels. After #474 Chrome still
+ * `maintain-framerate`s the one encoding 1080 → 540 → 360 → 180 while
+ * bitrate stays hundreds of kbps; egress transcodes that 180p for
+ * everyone. Viewers ABR via the HLS ladder, so fps/bitrate can still
+ * drop — pixels must not.
+ *
+ * Mesh DMs and ordinary SFU shares keep `maintain-framerate`.
+ */
+export function screenShareDegradationPreference(
+  hls: HlsSourceInput | null,
+): "maintain-framerate" | "maintain-resolution" {
+  return screenShareSimulcastEnabled(hls)
+    ? "maintain-framerate"
+    : "maintain-resolution";
+}
+
+/**
+ * Pin the HLS encoding at capture size so GCC cannot invent 180p
+ * (`scaleResolutionDownBy` is a divisor; 1 is "the capture as captured").
+ * Ordinary SFU shares leave this unset so LiveKit can solve the simulcast
+ * ladder.
+ */
+export function screenShareScaleResolutionDownBy(
+  hls: HlsSourceInput | null,
+): 1 | undefined {
+  return screenShareSimulcastEnabled(hls) ? undefined : 1;
+}
+
+/**
  * Same slack as the server's `SOURCE_HEIGHT_SLACK`: a 1078-line window is a
  * 1080p share, not a reason to drop the top rung.
  */
