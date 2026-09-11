@@ -65,6 +65,13 @@ export {
   type UploadedHomeMedia,
 } from "./media";
 export {
+  COMPOSE_EMBED_DEBOUNCE_MS,
+  communityHomeEmbedMedia,
+  composeSubmitEmbedUrl,
+  loneSupportedEmbedUrl,
+  resolveComposeEmbedUrl,
+} from "./embed-preview";
+export {
   COMMUNITY_HOME_BODY_MAX,
   COMMUNITY_HOME_COMMENT_MAX,
   COMMUNITY_HOME_TEASER_MAX,
