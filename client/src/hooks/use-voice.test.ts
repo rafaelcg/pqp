@@ -464,7 +464,7 @@ describe("screen share audio", () => {
     expect(displayMediaCalls[0]).not.toHaveProperty("preferCurrentTab");
   });
 
-  it("caps a watch-party share at Qualidade 720p30, not 4K or 60 fps", async () => {
+  it("caps a watch-party share at Qualidade 720p60, not 4K", async () => {
     const { voice } = await connectedMesh();
     await voice.setVideoQuality("720p");
     await voice.startScreenShare(false, {
@@ -477,7 +477,43 @@ describe("screen share audio", () => {
       video: {
         width: { max: 1280 },
         height: { max: 720 },
-        frameRate: { ideal: 30, max: 30 },
+        frameRate: { ideal: 60, max: 60 },
+      },
+    });
+  });
+
+  it("caps a watch-party 1080p60 share at 1920x1080, not 4K", async () => {
+    const { voice } = await connectedMesh();
+    await voice.setVideoQuality("1080p");
+    await voice.startScreenShare(false, {
+      watchParty: true,
+      preferBrowserTab: true,
+      maxFrameRate: 60,
+    });
+
+    expect(displayMediaCalls[0]).toMatchObject({
+      video: {
+        width: { max: 1920 },
+        height: { max: 1080 },
+        frameRate: { ideal: 60, max: 60 },
+      },
+    });
+  });
+
+  it("lifts a leftover 480p watch-party pick to 720p, still capped off 4K", async () => {
+    const { voice } = await connectedMesh();
+    await voice.setVideoQuality("480p");
+    await voice.startScreenShare(false, {
+      watchParty: true,
+      preferBrowserTab: true,
+      maxFrameRate: 60,
+    });
+
+    expect(displayMediaCalls[0]).toMatchObject({
+      video: {
+        width: { max: 1280 },
+        height: { max: 720 },
+        frameRate: { ideal: 60, max: 60 },
       },
     });
   });

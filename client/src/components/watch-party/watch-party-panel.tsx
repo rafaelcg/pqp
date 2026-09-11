@@ -29,9 +29,15 @@ import {
   type WatchPartyOptions,
 } from "@pqp/shared";
 import { VideoQualityMenu } from "@/components/voice/video-quality-menu";
-import { type ScreenFrameRate } from "@/lib/hls-capture-rate";
 import {
+  screenCaptureMaxFrameRate,
+  type ScreenFrameRate,
+} from "@/lib/hls-capture-rate";
+import {
+  applyScreenCaptureQuality,
+  screenCaptureSizeFor,
   WATCH_PARTY_HOST_QUALITIES,
+  watchPartyHostFrameRate,
   watchPartyHostQuality,
   type VideoQuality,
 } from "@/lib/video-quality";
@@ -63,10 +69,6 @@ import {
   screenCaptureEnvironment,
   screenCaptureOptions,
 } from "@/lib/screen-capture-audio";
-import {
-  applyScreenCaptureQuality,
-  screenCaptureSizeFor,
-} from "@/lib/video-quality";
 import { cn } from "@/lib/utils";
 
 /**
@@ -804,9 +806,13 @@ function SetupStage(props: WatchPartyPanelProps & { party: WatchParty }) {
       // watch-party product: the player tab and its sound, never the machine
       // mixer that contains the call. See `lib/screen-capture-audio.ts`.
       const quality = watchPartyHostQuality(props.videoQuality ?? "auto");
-      // Watch-party Qualidade is 30 fps only. A stored 60 from the call
-      // strip, or a leftover 60 ladder, must not capture 60 into a 30 encode.
-      const fps = 30 as const;
+      const fps = watchPartyHostFrameRate(
+        quality,
+        screenCaptureMaxFrameRate({
+          preference: props.screenFrameRate ?? "auto",
+          hlsLadderMax: props.hlsMaxFrameRate ?? 30,
+        }),
+      );
       const size = screenCaptureSizeFor(quality);
       const options = screenCaptureOptions(
         false,
@@ -1517,6 +1523,8 @@ function LiveSurface(
             qualities={WATCH_PARTY_HOST_QUALITIES}
             isSendingVideo
             isSharingScreen
+            screenFrameRate={props.screenFrameRate}
+            onScreenFrameRateChange={props.onScreenFrameRateChange}
             usingSfu={props.transport === "livekit"}
             watchingHls
             hlsLive={props.liveStream != null}

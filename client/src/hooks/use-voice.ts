@@ -83,6 +83,7 @@ import {
   captureCamera,
   DEFAULT_VIDEO_QUALITY,
   screenCaptureSizeFor,
+  watchPartyHostFrameRate,
   watchPartyHostQuality,
   type VideoQuality,
 } from "@/lib/video-quality";
@@ -3956,12 +3957,11 @@ export function createVoiceController(transport: RealtimeTransport) {
           ? watchPartyHostQuality(videoQuality)
           : videoQuality;
       const captureSize = screenCaptureSizeFor(captureQuality);
+      const requestedFps = intent.maxFrameRate === 60 ? 60 : 30;
       const captureFps =
         intent.watchParty === true
-          ? 30
-          : intent.maxFrameRate === 60
-            ? 60
-            : 30;
+          ? watchPartyHostFrameRate(captureQuality, requestedFps)
+          : requestedFps;
       screenCaptureFps = captureFps;
       const options = screenCaptureOptions(
         shareSystemAudio,
@@ -4209,7 +4209,12 @@ export function createVoiceController(transport: RealtimeTransport) {
      * delivered fps so a 60 capture is not still published at 30.
      */
     async applyScreenFrameRate(fps: 30 | 60) {
-      const next = screenCaptureIsWatchParty ? 30 : fps;
+      const quality = screenCaptureIsWatchParty
+        ? watchPartyHostQuality(videoQuality)
+        : videoQuality;
+      const next = screenCaptureIsWatchParty
+        ? watchPartyHostFrameRate(quality, fps)
+        : fps;
       screenCaptureFps = next;
       const track =
         screenCaptureSource?.getVideoTracks()[0] ??
@@ -4217,11 +4222,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (!track) {
         return;
       }
-      await applyScreenCaptureQuality(
-        track,
-        screenCaptureIsWatchParty ? watchPartyHostQuality(videoQuality) : videoQuality,
-        next,
-      );
+      await applyScreenCaptureQuality(track, quality, next);
       manager?.setScreenQuality(videoQuality);
     },
 
@@ -4454,11 +4455,14 @@ export function createVoiceController(transport: RealtimeTransport) {
         screenCaptureSource?.getVideoTracks()[0] ??
         screenCaptureStream?.getVideoTracks()[0];
       if (screenTrack) {
-        await applyScreenCaptureQuality(
-          screenTrack,
-          screenCaptureIsWatchParty ? watchPartyHostQuality(next) : next,
-          screenCaptureFps,
-        );
+        const screenQuality = screenCaptureIsWatchParty
+          ? watchPartyHostQuality(next)
+          : next;
+        const screenFps = screenCaptureIsWatchParty
+          ? watchPartyHostFrameRate(screenQuality, screenCaptureFps)
+          : screenCaptureFps;
+        screenCaptureFps = screenFps;
+        await applyScreenCaptureQuality(screenTrack, screenQuality, screenFps);
       }
       const track = cameraCaptureStream?.getVideoTracks()[0];
       if (track) {

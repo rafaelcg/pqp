@@ -167,8 +167,8 @@ export function VideoQualityMenu({
   /** Visible name on the `bar` trigger. The call trigger is icon-only. */
   buttonLabel?: string;
   /**
-   * Rungs this surface offers. Watch party's live bar passes 480/720/1080
-   * (and Auto), never 360p. The call strip omits this and keeps the full list.
+   * Rungs this surface offers. Watch party's live bar passes 720/1080
+   * (and Auto), never 360p or 480p. The call strip omits this and keeps the full list.
    */
   qualities?: readonly VideoQuality[];
 }) {

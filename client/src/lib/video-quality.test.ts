@@ -23,6 +23,7 @@ import {
   screenCaptureConstraintsFor,
   screenCaptureSizeFor,
   WATCH_PARTY_HOST_QUALITIES,
+  watchPartyHostFrameRate,
   watchPartyHostQuality,
   screenScaleFactor,
   screenSimulcastPlan,
@@ -134,20 +135,30 @@ describe("coerceVideoQuality", () => {
 });
 
 describe("WATCH_PARTY_HOST_QUALITIES", () => {
-  it("is 480p / 720p / 1080p plus Auto, never 360p", () => {
+  it("is 720p / 1080p plus Auto, never 360p or 480p", () => {
     expect([...WATCH_PARTY_HOST_QUALITIES]).toEqual([
       "auto",
       "1080p",
       "720p",
-      "480p",
     ]);
     expect(WATCH_PARTY_HOST_QUALITIES).not.toContain("360p");
+    expect(WATCH_PARTY_HOST_QUALITIES).not.toContain("480p");
   });
 
-  it("lifts a stored 360p to 480p so capture matches the menu", () => {
-    expect(watchPartyHostQuality("360p")).toBe("480p");
+  it("lifts a stored 360p or 480p to 720p so capture matches the menu", () => {
+    expect(watchPartyHostQuality("360p")).toBe("720p");
+    expect(watchPartyHostQuality("480p")).toBe("720p");
     expect(watchPartyHostQuality("720p")).toBe("720p");
     expect(watchPartyHostQuality("auto")).toBe("auto");
+  });
+
+  it("lets 1080p and 720p capture at 60, and holds 480 at 30", () => {
+    expect(watchPartyHostFrameRate("1080p", 60)).toBe(60);
+    expect(watchPartyHostFrameRate("720p", 60)).toBe(60);
+    expect(watchPartyHostFrameRate("auto", 60)).toBe(60);
+    expect(watchPartyHostFrameRate("480p", 60)).toBe(30);
+    expect(watchPartyHostFrameRate("360p", 60)).toBe(30);
+    expect(watchPartyHostFrameRate("1080p", 30)).toBe(30);
   });
 });
 

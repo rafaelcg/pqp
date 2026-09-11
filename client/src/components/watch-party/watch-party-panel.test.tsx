@@ -477,7 +477,7 @@ describe("watch party setup capture cannot re-broadcast the call", () => {
     expect(source).toContain("screenCaptureSizeFor");
     expect(source).toContain("applyScreenCaptureQuality");
     expect(source).toContain("watchPartyHostQuality");
-    expect(source).toContain("const fps = 30 as const");
+    expect(source).toContain("watchPartyHostFrameRate");
     // The bare shape that caused the echo. A video-only fallback elsewhere is
     // fine; `{ audio: true }` next to getDisplayMedia is not.
     expect(source).not.toMatch(
@@ -614,11 +614,12 @@ describe("the host quality picker on the live bar", () => {
     "utf8",
   );
 
-  it("puts VideoQualityMenu on the live bar with 480/720/1080, no fps picker", () => {
+  it("puts VideoQualityMenu on the live bar with 720/1080 and a fps picker", () => {
     expect(source).toContain('testId="watch-party-quality"');
     expect(source).toContain('layout="bar"');
     expect(source).toContain("onVideoQualityChange");
     expect(source).toContain("WATCH_PARTY_HOST_QUALITIES");
+    expect(source).toContain("onScreenFrameRateChange");
   });
 
   it("is gated on running the show, not on a viewer", () => {
@@ -630,13 +631,13 @@ describe("the host quality picker on the live bar", () => {
     expect(picker).not.toContain('viewerRole === "viewer"');
   });
 
-  it("does not offer 360p or a fps picker on this menu", () => {
+  it("offers 60 fps on this menu, not 360p", () => {
     const picker = source.slice(
       source.indexOf("THE HOST ENCODE PICKER"),
       source.indexOf("THE SEAT'S OWN EXIT"),
     );
     expect(picker).toContain("WATCH_PARTY_HOST_QUALITIES");
-    expect(picker).not.toContain("onScreenFrameRateChange");
+    expect(picker).toContain("onScreenFrameRateChange");
     expect(picker).not.toContain("360p");
   });
 });

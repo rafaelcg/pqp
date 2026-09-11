@@ -34,22 +34,36 @@ export type VideoQuality = (typeof VIDEO_QUALITIES)[number];
 export const DEFAULT_VIDEO_QUALITY: VideoQuality = "auto";
 
 /**
- * Host Qualidade on a watch party: 480p / 720p / 1080p, plus Auto.
- * 360p stays on the call-strip menu; 60 fps is not offered here.
+ * Host Qualidade on a watch party: 720p / 1080p, plus Auto.
+ * 360p stays on the call-strip menu. 480p is hidden here: the limits-test
+ * ladder is 1080p60 + 720p60, and a 480 capture would starve both rungs.
  */
 export const WATCH_PARTY_HOST_QUALITIES: readonly VideoQuality[] = [
   "auto",
   "1080p",
   "720p",
-  "480p",
 ];
 
 /**
- * A stored 360p is the call-strip floor, not a watch-party offer. Capture
- * then uses 480p so the live-bar menu and getDisplayMedia agree.
+ * A stored 360p/480p is the call-strip floor, not a watch-party offer.
+ * Capture then uses 720p so the live-bar menu and getDisplayMedia agree.
  */
 export function watchPartyHostQuality(quality: VideoQuality): VideoQuality {
-  return quality === "360p" ? "480p" : quality;
+  return quality === "360p" || quality === "480p" ? "720p" : quality;
+}
+
+/**
+ * Host capture fps. 1080p / 720p / Auto may be 60. A leftover 480p or 360p
+ * stays 30 so a 60 fps pick on the call strip cannot leak into that size.
+ */
+export function watchPartyHostFrameRate(
+  quality: VideoQuality,
+  maxFrameRate: 30 | 60,
+): 30 | 60 {
+  if (quality === "480p" || quality === "360p") {
+    return 30;
+  }
+  return maxFrameRate;
 }
 
 /** The two things a quality actually controls, and nothing else. */
