@@ -541,6 +541,16 @@ CREATE INDEX IF NOT EXISTS idx_messages_reply_to
 -- than a JSON blob: votes need a real unique constraint per option and user.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS chance JSONB;
 
+-- Idempotent sends. A client that queued a message offline may deliver the
+-- same frame twice (a reconnect flush and a reload both replay it), so the
+-- nonce it already put on the wire is stored and made unique per author and
+-- channel. The insert is `ON CONFLICT DO NOTHING` and the existing row is
+-- re-broadcast to that sender only. NULL for HTTP sends, webhooks and every
+-- message older than the column: the partial index keeps those free.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS nonce TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_nonce
+  ON messages (channel_id, author_id, nonce) WHERE nonce IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS polls (
   message_id UUID PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
   question TEXT NOT NULL,

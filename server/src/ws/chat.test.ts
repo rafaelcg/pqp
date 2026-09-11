@@ -709,6 +709,33 @@ describe("message-rejected", () => {
     ]);
   });
 
+  /**
+   * The client replays its outbox on every ready socket, so the same send
+   * can arrive twice. The store answers the second with the first row and
+   * `duplicate: true`; the sender's bubble must settle, and nobody else in
+   * the channel may see the message a second time.
+   */
+  it("answers a repeated nonce to the sender only", async () => {
+    const channelId = nextChannelId();
+    const sender = recordingSocket();
+    const viewer = recordingSocket();
+    await join(viewer, "user-b", channelId);
+
+    vi.mocked(createMessage).mockResolvedValueOnce({
+      id: "message-1",
+      duplicate: true,
+    } as Awaited<ReturnType<typeof createMessage>>);
+    await post(sender, "user-a", channelId, { nonce: "replayed" });
+
+    const toSender = framesOfType(sender.received, "message-broadcast") as Array<{
+      nonce?: string;
+    }>;
+    expect(toSender).toHaveLength(1);
+    expect(toSender[0]!.nonce).toBe("replayed");
+    expect(framesOfType(viewer.received, "message-broadcast")).toHaveLength(0);
+    expect(framesOfType(sender.received, "message-rejected")).toHaveLength(0);
+  });
+
   it("lets MANAGE_MESSAGES bypass slow mode", async () => {
     const serverId = "33333333-3333-4333-8333-333333333333";
     vi.mocked(getChannel).mockResolvedValue({

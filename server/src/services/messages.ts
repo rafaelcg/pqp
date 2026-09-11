@@ -554,6 +554,13 @@ async function recordMentions(
  * this is the same rule re-checked once the answer is in — and the insert is
  * rolled back rather than leaving a blank message in the channel.
  */
+/**
+ * `duplicate` is true when the nonce had already been stored and the row is
+ * the earlier message: the caller must not fan it out, only answer the
+ * sender who asked twice.
+ */
+export type CreateMessageResult = HydratedMessage & { duplicate: boolean };
+
 export async function createMessage(
   channelId: string,
   author: DbUser,
@@ -562,10 +569,42 @@ export async function createMessage(
   attachmentIds?: string[],
   mentions?: MentionWrite,
   interactive?: MessageInteractive,
-): Promise<HydratedMessage | null> {
+  nonce?: string | null,
+): Promise<CreateMessageResult | null> {
   if (interactive?.chance && interactive.poll) {
     return null;
   }
+  let nonceAlreadyStored = false;
+  const created = await insertMessage(
+    channelId,
+    author,
+    body,
+    replyToId,
+    attachmentIds,
+    mentions,
+    interactive,
+    nonce ?? null,
+    () => {
+      nonceAlreadyStored = true;
+    },
+  );
+  if (created || !nonceAlreadyStored || !nonce) {
+    return created;
+  }
+  return findMessageByNonce(channelId, author.id, nonce);
+}
+
+async function insertMessage(
+  channelId: string,
+  author: DbUser,
+  body: string,
+  replyToId: string | null | undefined,
+  attachmentIds: string[] | undefined,
+  mentions: MentionWrite | undefined,
+  interactive: MessageInteractive | undefined,
+  nonce: string | null,
+  onNonceConflict: () => void,
+): Promise<CreateMessageResult | null> {
   let storedBody = clampChatNewlines(body);
   let chance: ChanceResult | null = null;
   const deckAction =
@@ -611,8 +650,9 @@ export async function createMessage(
     // parent lookup hangs off.
     const result = await client.query<DbMessage>(
       `WITH inserted AS (
-         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         INSERT INTO messages (channel_id, author_id, body, reply_to_id, mention_everyone, mention_here, chance, nonce)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (channel_id, author_id, nonce) WHERE nonce IS NOT NULL DO NOTHING
          RETURNING id, channel_id, author_id, body, created_at, edited_at, reply_to_id,
                    mention_everyone, mention_here, chance
        )
@@ -630,11 +670,21 @@ export async function createMessage(
         mentions?.mentionEveryone === true,
         mentions?.mentionHere === true,
         chance ? JSON.stringify(chance) : null,
+        nonce ?? null,
       ],
     );
     // A message is never born pinned, so the columns above are left out rather
     // than joined for nothing — mapMessage already treats them as optional.
-    const message = result.rows[0]!;
+    const message = result.rows[0];
+    if (!message) {
+      // The nonce is already stored: this is the same send arriving again
+      // (an offline queue replayed after a reload). Nothing else in this
+      // transaction happened, so roll back; the first row is looked up once
+      // the connection is back in the pool.
+      await client.query("ROLLBACK");
+      onNonceConflict();
+      return null;
+    }
 
     const claimed = await claimAttachments(client, message.id, verified);
 
@@ -677,6 +727,7 @@ export async function createMessage(
       embeds: [],
       chance,
       poll: polls.get(message.id) ?? null,
+      duplicate: false,
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -684,6 +735,21 @@ export async function createMessage(
   } finally {
     client.release();
   }
+}
+
+async function findMessageByNonce(
+  channelId: string,
+  authorId: string,
+  nonce: string,
+): Promise<CreateMessageResult | null> {
+  const existing = await getPool().query<{ id: string }>(
+    `SELECT id FROM messages
+      WHERE channel_id = $1 AND author_id = $2 AND nonce = $3`,
+    [channelId, authorId, nonce],
+  );
+  const id = existing.rows[0]?.id;
+  const hydrated = id ? await getHydratedMessage(id) : null;
+  return hydrated ? { ...hydrated, duplicate: true } : null;
 }
 
 export async function updateMessageBody(
