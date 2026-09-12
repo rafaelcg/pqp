@@ -4101,7 +4101,7 @@ export function createVoiceController(transport: RealtimeTransport) {
       if (videoToPin && intent.maxFrameRate === 30) {
         await tryPinDisplayFrameRate(videoToPin, 30);
       }
-      screenFrameLock = applyScreenFrameLock(stream, intent.maxFrameRate);
+      screenFrameLock = await applyScreenFrameLock(stream, intent.maxFrameRate);
       watchScreenCapture(stream);
       screenCaptureStream = stream;
       // The red strip is ours and it is now answering a question that has been

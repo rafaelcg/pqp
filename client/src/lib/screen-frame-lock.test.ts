@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyScreenFrameLock,
   lockScreenStreamToFps,
+  mediaStreamSize,
+  publishLockSize,
   shouldLockScreenFrameRate,
   tryPinDisplayFrameRate,
   type ScreenFrameLockDom,
@@ -73,7 +75,11 @@ class FakeStream {
   }
 }
 
-function fakeDom(locked: FakeTrack, capturedFps: number[]): ScreenFrameLockDom {
+function fakeDom(
+  locked: FakeTrack,
+  capturedFps: number[],
+  videoSize: { width: number; height: number } = { width: 1280, height: 720 },
+): { dom: ScreenFrameLockDom; canvas: ScreenLockCanvas } {
   const canvas: ScreenLockCanvas = {
     width: 0,
     height: 0,
@@ -87,14 +93,17 @@ function fakeDom(locked: FakeTrack, capturedFps: number[]): ScreenFrameLockDom {
     muted: false,
     playsInline: false,
     srcObject: null,
-    videoWidth: 1280,
-    videoHeight: 720,
+    videoWidth: videoSize.width,
+    videoHeight: videoSize.height,
     readyState: 2,
     play: async () => {},
     pause: () => {},
   };
   return {
-    createElement: (tag) => (tag === "canvas" ? canvas : video),
+    canvas,
+    dom: {
+      createElement: (tag) => (tag === "canvas" ? canvas : video),
+    },
   };
 }
 
@@ -121,8 +130,36 @@ describe("tryPinDisplayFrameRate", () => {
   });
 });
 
+describe("mediaStreamSize", () => {
+  it("prefers decoded videoWidth over track settings (MediaStream, not CSS)", () => {
+    expect(
+      mediaStreamSize(
+        { videoWidth: 1920, videoHeight: 1080 },
+        { width: 1114, height: 626 },
+      ),
+    ).toEqual({ width: 1920, height: 1080 });
+  });
+
+  it("falls back to track getSettings when the video has no frame yet", () => {
+    expect(
+      mediaStreamSize({ videoWidth: 0, videoHeight: 0 }, { width: 1280, height: 720 }),
+    ).toEqual({ width: 1280, height: 720 });
+  });
+});
+
+describe("publishLockSize", () => {
+  it("scales a tab CSS box (1114x626) up to 1280x720", () => {
+    expect(publishLockSize(1114, 626)).toEqual({ width: 1280, height: 720 });
+  });
+
+  it("keeps a real 1280x720 or 1920x1080 capture", () => {
+    expect(publishLockSize(1280, 720)).toEqual({ width: 1280, height: 720 });
+    expect(publishLockSize(1920, 1080)).toEqual({ width: 1920, height: 1080 });
+  });
+});
+
 describe("lockScreenStreamToFps", () => {
-  it("keeps audio and clocks the published video at 30", () => {
+  it("keeps audio and clocks the published video at 30", async () => {
     const capturedFps: number[] = [];
     const locked = new FakeTrack("video", "locked", { frameRate: 0 });
     const source = new FakeTrack("video", "source", {
@@ -133,20 +170,48 @@ describe("lockScreenStreamToFps", () => {
     });
     const audio = new FakeTrack("audio", "tab-audio");
     const stream = new FakeStream([source, audio]);
+    const { dom, canvas } = fakeDom(locked, capturedFps);
 
-    const lock = lockScreenStreamToFps(
+    const lock = await lockScreenStreamToFps(
       stream as unknown as MediaStream,
       30,
-      fakeDom(locked, capturedFps),
+      dom,
     );
 
     expect(lock).not.toBeNull();
     expect(capturedFps).toEqual([30]);
+    expect(canvas.width).toBe(1280);
+    expect(canvas.height).toBe(720);
     expect(stream.getVideoTracks()).toEqual([locked]);
     expect(stream.getAudioTracks()).toEqual([audio]);
     expect(locked.getSettings().frameRate).toBe(30);
     expect(locked.getSettings().displaySurface).toBe("browser");
+    expect(locked.getSettings().width).toBe(1280);
+    expect(locked.getSettings().height).toBe(720);
     expect(locked.contentHint).toBe("motion");
+    lock?.stop();
+  });
+
+  it("does not publish a 1114x626 preview box", async () => {
+    const locked = new FakeTrack("video", "locked");
+    const source = new FakeTrack("video", "source", {
+      width: 1114,
+      height: 626,
+    });
+    const stream = new FakeStream([source]);
+    const { dom, canvas } = fakeDom(locked, [], { width: 1114, height: 626 });
+
+    const lock = await lockScreenStreamToFps(
+      stream as unknown as MediaStream,
+      30,
+      dom,
+    );
+
+    expect(lock).not.toBeNull();
+    expect(canvas.width).toBe(1280);
+    expect(canvas.height).toBe(720);
+    expect(locked.getSettings().width).toBe(1280);
+    expect(locked.getSettings().height).toBe(720);
     lock?.stop();
   });
 
@@ -154,10 +219,11 @@ describe("lockScreenStreamToFps", () => {
     const locked = new FakeTrack("video", "locked");
     const source = new FakeTrack("video", "source", { frameRate: 22, height: 720 });
     const stream = new FakeStream([source]);
-    const lock = lockScreenStreamToFps(
+    const { dom } = fakeDom(locked, []);
+    const lock = await lockScreenStreamToFps(
       stream as unknown as MediaStream,
       30,
-      fakeDom(locked, []),
+      dom,
     );
     expect(lock).not.toBeNull();
 
@@ -166,25 +232,25 @@ describe("lockScreenStreamToFps", () => {
     lock?.stop();
   });
 
-  it("stops the locked track when the capture ends (Chrome Stop sharing)", () => {
+  it("stops the locked track when the capture ends (Chrome Stop sharing)", async () => {
     const locked = new FakeTrack("video", "locked");
     const source = new FakeTrack("video", "source");
     const stream = new FakeStream([source]);
-    lockScreenStreamToFps(
+    await lockScreenStreamToFps(
       stream as unknown as MediaStream,
       30,
-      fakeDom(locked, []),
+      fakeDom(locked, []).dom,
     );
 
     source.stop();
     expect(locked.stopped).toBe(true);
   });
 
-  it("leaves the stream alone when this engine cannot captureStream", () => {
+  it("leaves the stream alone when this engine cannot captureStream", async () => {
     const source = new FakeTrack("video", "source");
     const audio = new FakeTrack("audio", "tab-audio");
     const stream = new FakeStream([source, audio]);
-    const lock = lockScreenStreamToFps(stream as unknown as MediaStream, 30, {
+    const lock = await lockScreenStreamToFps(stream as unknown as MediaStream, 30, {
       createElement: () =>
         ({
           width: 0,
@@ -200,27 +266,27 @@ describe("lockScreenStreamToFps", () => {
 });
 
 describe("applyScreenFrameLock", () => {
-  it("does nothing for a 60 fps gaming share", () => {
+  it("does nothing for a 60 fps gaming share", async () => {
     const source = new FakeTrack("video", "game");
     const stream = new FakeStream([source]);
-    const lock = applyScreenFrameLock(
+    const lock = await applyScreenFrameLock(
       stream as unknown as MediaStream,
       60,
-      fakeDom(new FakeTrack("video", "locked"), []),
+      fakeDom(new FakeTrack("video", "locked"), []).dom,
     );
     expect(lock).toBeNull();
     expect(stream.getVideoTracks()).toEqual([source]);
   });
 
-  it("locks when auto-follows-ladder asked for 30", () => {
+  it("locks when auto-follows-ladder asked for 30", async () => {
     const capturedFps: number[] = [];
     const locked = new FakeTrack("video", "locked");
     const source = new FakeTrack("video", "film", { frameRate: 27 });
     const stream = new FakeStream([source]);
-    const lock = applyScreenFrameLock(
+    const lock = await applyScreenFrameLock(
       stream as unknown as MediaStream,
       30,
-      fakeDom(locked, capturedFps),
+      fakeDom(locked, capturedFps).dom,
     );
     expect(lock).not.toBeNull();
     expect(capturedFps).toEqual([30]);

@@ -11,6 +11,14 @@
  * Only when the caller asked for 30 (auto-follows a 30-only ladder, or
  * the presenter pinned 30). A 60 fps gaming share is left alone.
  * Audio tracks are never replaced.
+ *
+ * Size the canvas from the MediaStream (decoded `videoWidth` / track
+ * `getSettings`), never from a preview tile's CSS box. A detached video
+ * often never decodes — Chrome then reports the tab's CSS viewport
+ * (e.g. 1114×626) and `captureStream` publishes a black frame. The
+ * playback element is mounted off-screen and we wait for a real frame
+ * before opening the capture. Sub-720 captures are scaled to 1280×720
+ * so a 720p ladder is not fed a preview-sized box.
  */
 
 export function shouldLockScreenFrameRate(
@@ -43,7 +51,13 @@ export interface ScreenLockCanvas {
 }
 
 export interface ScreenLockCanvasContext {
-  drawImage(image: CanvasImageSource, dx: number, dy: number): void;
+  drawImage(
+    image: CanvasImageSource,
+    dx: number,
+    dy: number,
+    dw?: number,
+    dh?: number,
+  ): void;
 }
 
 export interface ScreenLockVideo {
@@ -56,6 +70,12 @@ export interface ScreenLockVideo {
   play(): Promise<void>;
   pause(): void;
 }
+
+/** HLS 720p30 source. Do not publish a CSS-box capture under this. */
+export const SCREEN_LOCK_MIN_WIDTH = 1280;
+export const SCREEN_LOCK_MIN_HEIGHT = 720;
+
+const FRAME_WAIT_MS = 400;
 
 function browserDom(): ScreenFrameLockDom | null {
   if (typeof document === "undefined" || typeof document.createElement !== "function") {
@@ -124,17 +144,128 @@ function startFrameClock(fps: 30, draw: () => void): () => void {
   return () => cancelAnimationFrame(raf);
 }
 
+function positiveInt(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.round(value)
+    : 0;
+}
+
+/**
+ * Intrinsic MediaStream size. `videoWidth` is the decoded frame (only
+ * trustworthy after a frame). Track settings are next. Never `clientWidth`.
+ */
+export function mediaStreamSize(
+  video: Pick<ScreenLockVideo, "videoWidth" | "videoHeight">,
+  settings: Pick<MediaTrackSettings, "width" | "height">,
+): { width: number; height: number } {
+  const width =
+    positiveInt(video.videoWidth) ||
+    positiveInt(settings.width) ||
+    SCREEN_LOCK_MIN_WIDTH;
+  const height =
+    positiveInt(video.videoHeight) ||
+    positiveInt(settings.height) ||
+    SCREEN_LOCK_MIN_HEIGHT;
+  return { width, height };
+}
+
+/**
+ * Publish at the MediaStream size, but never a sub-720 CSS box.
+ * 1114×626 (a YouTube tab's viewport) becomes 1280×720; 1920×1080 stays.
+ */
+export function publishLockSize(
+  width: number,
+  height: number,
+): { width: number; height: number } {
+  if (width >= SCREEN_LOCK_MIN_WIDTH || height >= SCREEN_LOCK_MIN_HEIGHT) {
+    return { width, height };
+  }
+  return { width: SCREEN_LOCK_MIN_WIDTH, height: SCREEN_LOCK_MIN_HEIGHT };
+}
+
+function mountHiddenVideo(video: ScreenLockVideo): () => void {
+  const el = video as unknown as HTMLVideoElement;
+  if (typeof document === "undefined" || !document.body || !el.style) {
+    return () => {};
+  }
+  el.muted = true;
+  el.defaultMuted = true;
+  el.playsInline = true;
+  el.autoplay = true;
+  el.setAttribute("playsinline", "");
+  el.setAttribute("muted", "");
+  el.setAttribute("autoplay", "");
+  el.setAttribute("aria-hidden", "true");
+  Object.assign(el.style, {
+    position: "fixed",
+    left: "-10000px",
+    top: "0px",
+    width: "64px",
+    height: "36px",
+    opacity: "0",
+    pointerEvents: "none",
+  });
+  document.body.appendChild(el);
+  return () => {
+    try {
+      el.remove();
+    } catch {
+      // Already detached.
+    }
+  };
+}
+
+function waitForVideoFrame(video: ScreenLockVideo): Promise<void> {
+  if (video.videoWidth > 0 && video.readyState >= 2) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => {
+    const el = video as unknown as HTMLVideoElement;
+    let settled = false;
+    const done = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      if (typeof el.removeEventListener === "function") {
+        el.removeEventListener("loadedmetadata", done);
+        el.removeEventListener("loadeddata", done);
+      }
+      resolve();
+    };
+    const timer = setTimeout(done, FRAME_WAIT_MS);
+    if (typeof el.addEventListener === "function") {
+      el.addEventListener("loadedmetadata", done);
+      el.addEventListener("loadeddata", done);
+    }
+    const rvfc = (
+      el as HTMLVideoElement & {
+        requestVideoFrameCallback?: (cb: () => void) => number;
+      }
+    ).requestVideoFrameCallback;
+    if (typeof rvfc === "function") {
+      rvfc.call(el, done);
+    }
+    void video.play().then(() => {
+      if (video.videoWidth > 0) {
+        done();
+      }
+    }).catch(done);
+  });
+}
+
 /**
  * Sample-and-hold `source` onto a locked `fps` Hz grid.
  *
  * Returns null when this engine cannot (no canvas.captureStream). The
  * share then goes out as Chrome delivered it; do not fail the picker.
  */
-export function lockScreenVideoToFps(
+export async function lockScreenVideoToFps(
   source: MediaStreamTrack,
   fps: 30,
   dom: ScreenFrameLockDom | null = browserDom(),
-): ScreenFrameLock | null {
+): Promise<ScreenFrameLock | null> {
   if (!dom) {
     return null;
   }
@@ -163,39 +294,46 @@ export function lockScreenVideoToFps(
   };
 
   const syncSize = () => {
-    const settings = sourceSettings();
-    const width =
-      video.videoWidth ||
-      (typeof settings.width === "number" && settings.width > 0 ? settings.width : 0) ||
-      1280;
-    const height =
-      video.videoHeight ||
-      (typeof settings.height === "number" && settings.height > 0 ? settings.height : 0) ||
-      720;
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
+    const raw = mediaStreamSize(video, sourceSettings());
+    const next = publishLockSize(raw.width, raw.height);
+    if (canvas.width !== next.width || canvas.height !== next.height) {
+      canvas.width = next.width;
+      canvas.height = next.height;
     }
   };
-
-  syncSize();
 
   const draw = () => {
     if (!running || source.readyState === "ended") {
       return;
     }
-    syncSize();
+    if (video.videoWidth > 0) {
+      syncSize();
+    }
     if (video.readyState >= 2 && canvas.width > 0 && canvas.height > 0) {
-      ctx.drawImage(video as unknown as CanvasImageSource, 0, 0);
+      ctx.drawImage(
+        video as unknown as CanvasImageSource,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      );
     }
   };
 
   let running = true;
+  const unmount = mountHiddenVideo(video);
 
   video.muted = true;
   video.playsInline = true;
   video.srcObject = playbackStream(source);
-  void video.play().then(draw).catch(draw);
+  await waitForVideoFrame(video);
+  if (!running) {
+    unmount();
+    video.srcObject = null;
+    return null;
+  }
+  syncSize();
+  draw();
 
   let lockedStream: { getVideoTracks(): MediaStreamTrack[] };
   try {
@@ -203,12 +341,14 @@ export function lockScreenVideoToFps(
   } catch {
     running = false;
     video.srcObject = null;
+    unmount();
     return null;
   }
   const track = lockedStream.getVideoTracks()[0];
   if (!track) {
     running = false;
     video.srcObject = null;
+    unmount();
     return null;
   }
 
@@ -216,11 +356,18 @@ export function lockScreenVideoToFps(
 
   const nativeGetSettings =
     typeof track.getSettings === "function" ? track.getSettings.bind(track) : () => ({});
-  track.getSettings = () => ({
-    ...nativeGetSettings(),
-    ...sourceSettings(),
-    frameRate: fps,
-  });
+  track.getSettings = () => {
+    const sourceNow = sourceSettings();
+    return {
+      ...nativeGetSettings(),
+      displaySurface: sourceNow.displaySurface,
+      cursor: sourceNow.cursor,
+      logicalSurface: sourceNow.logicalSurface,
+      width: canvas.width,
+      height: canvas.height,
+      frameRate: fps,
+    };
+  };
 
   const nativeApply =
     typeof track.applyConstraints === "function"
@@ -272,6 +419,7 @@ export function lockScreenVideoToFps(
       // Already ended.
     }
     video.srcObject = null;
+    unmount();
     try {
       video.pause();
     } catch {
@@ -285,11 +433,11 @@ export function lockScreenVideoToFps(
 /**
  * Swap the stream's video for a locked 30 Hz track. Audio is untouched.
  */
-export function lockScreenStreamToFps(
+export async function lockScreenStreamToFps(
   stream: MediaStream,
   fps: 30,
   dom: ScreenFrameLockDom | null = browserDom(),
-): ScreenFrameLock | null {
+): Promise<ScreenFrameLock | null> {
   if (
     typeof stream.getVideoTracks !== "function" ||
     typeof stream.addTrack !== "function" ||
@@ -301,7 +449,7 @@ export function lockScreenStreamToFps(
   if (!source) {
     return null;
   }
-  const lock = lockScreenVideoToFps(source, fps, dom);
+  const lock = await lockScreenVideoToFps(source, fps, dom);
   if (!lock) {
     return null;
   }
@@ -310,11 +458,11 @@ export function lockScreenStreamToFps(
   return lock;
 }
 
-export function applyScreenFrameLock(
+export async function applyScreenFrameLock(
   stream: MediaStream,
   maxFrameRate: 30 | 60 | undefined,
   dom: ScreenFrameLockDom | null = browserDom(),
-): ScreenFrameLock | null {
+): Promise<ScreenFrameLock | null> {
   if (!shouldLockScreenFrameRate(maxFrameRate)) {
     return null;
   }
