@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, TriangleAlert } from "lucide-react";
 import type { LiveHlsStream, VoiceRoomTransport } from "@pqp/shared";
 import { OutboundVideoReadout } from "@/components/voice/outbound-video-readout";
+import { endToEndDelaySeconds } from "@/lib/hls-live-edge";
 import { useShareUplinkStrain } from "@/hooks/use-share-uplink-strain";
 import { useTranslation } from "@/lib/i18n";
 import type { VideoQuality } from "@/lib/video-quality";
@@ -192,7 +193,10 @@ export function WatchPartyTransmission({
                 ? t("watchParty.tx.na")
                 : t("watchParty.tx.receivingRung", {
                     height,
-                    seconds: stream?.delaySeconds ?? 20,
+                    // Pipeline delay the server reports PLUS the player's own
+                    // ~20 s cushion: the wire value alone under-reported how
+                    // far behind the audience actually sits.
+                    seconds: endToEndDelaySeconds(stream?.delaySeconds),
                   })}
             </TxTile>
             {/* The audio the AUDIENCE gets, which is a different question from
@@ -245,7 +249,9 @@ export function WatchPartyTransmission({
             {micInStream
               ? t("watchParty.tx.carriesWithMic")
               : t("watchParty.tx.carries")}{" "}
-            {t("watchParty.tx.behind", { seconds: stream?.delaySeconds ?? 20 })}
+            {t("watchParty.tx.behind", {
+              seconds: endToEndDelaySeconds(stream?.delaySeconds),
+            })}
           </p>
         </div>
       )}

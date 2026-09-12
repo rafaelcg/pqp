@@ -3,9 +3,14 @@ import {
   BEHIND_LIVE_THRESHOLD_SECONDS,
   HLS_ABR_DEFAULT_ESTIMATE_BPS,
   HLS_BACK_BUFFER_LENGTH_SECONDS,
+  HLS_EGRESS_WINDOW_SEGMENTS,
   HLS_LIVE_SEGMENT_SECONDS,
+  HLS_LIVE_SYNC_DURATION_COUNT,
   HLS_LIVE_WINDOW_SECONDS,
+  HLS_PLAYER_CUSHION_SECONDS,
   buildMediaSessionMetadata,
+  effectiveLiveSyncDurationCount,
+  endToEndDelaySeconds,
   hasSafariPresentationMode,
   hlsLivePlayerConfig,
   hlsLiveSyncFitsWindow,
@@ -33,16 +38,15 @@ describe("hlsLivePlayerConfig", () => {
     expect(HLS_ABR_DEFAULT_ESTIMATE_BPS).toBeGreaterThanOrEqual(2_500_000);
   });
 
-  it("still lands on the oldest listed segment, not past it, on an API that serves only the egress's native window", () => {
+  it("leaves a segment of slack on the egress's native five-segment window", () => {
     // The egress itself always keeps five segments (LiveKit's fixed
-    // `defaultLivePlaylistWindow`), which at 4 s is a 20 s window — the
-    // same 20 s the player now sits behind live by design. An older API
-    // that predates the proxy's 60 s widening still lists exactly enough
-    // to cover the sync point; it is tight (no slack for a slow poll) but
-    // not negative, which is what would force an immediate re-sync.
-    const config = hlsLivePlayerConfig();
-    const egressWindowSegments = 5;
-    expect(egressWindowSegments - config.liveSyncDurationCount).toBe(0);
+    // `defaultLivePlaylistWindow`), which at 4 s is a 20 s window. The raw
+    // 5-count sync point would land on its OLDEST entry with zero slack, so
+    // a slow poll ages it out and hls.js re-syncs or stalls; the effective
+    // count caps it to leave one listed segment behind the sync point.
+    const effective = effectiveLiveSyncDurationCount(HLS_EGRESS_WINDOW_SEGMENTS);
+    expect(effective).toBe(HLS_EGRESS_WINDOW_SEGMENTS - 1);
+    expect(HLS_EGRESS_WINDOW_SEGMENTS - effective).toBeGreaterThanOrEqual(1);
   });
 
   it("refuses a sync that would join on the oldest segment of the window", () => {
@@ -63,6 +67,49 @@ describe("hlsLivePlayerConfig", () => {
     expect(
       hlsLiveSyncFitsWindow({ ...config, backBufferLength: Number.POSITIVE_INFINITY }),
     ).toBe(false);
+  });
+});
+
+describe("effectiveLiveSyncDurationCount", () => {
+  it("is a no-op on the production 15-segment window", () => {
+    expect(effectiveLiveSyncDurationCount(15)).toBe(HLS_LIVE_SYNC_DURATION_COUNT);
+  });
+
+  it("caps to one segment of slack on the legacy five-segment window", () => {
+    expect(effectiveLiveSyncDurationCount(HLS_EGRESS_WINDOW_SEGMENTS)).toBe(4);
+  });
+
+  it("never exceeds the listed depth minus one", () => {
+    expect(effectiveLiveSyncDurationCount(3)).toBe(2);
+    expect(effectiveLiveSyncDurationCount(6)).toBe(HLS_LIVE_SYNC_DURATION_COUNT);
+  });
+
+  it("keeps the configured count when the playlist is too short to offer slack", () => {
+    // A just-started egress (one segment) or an unreadable count: hls.js
+    // clamps to what exists rather than us subtracting below 1.
+    expect(effectiveLiveSyncDurationCount(1)).toBe(HLS_LIVE_SYNC_DURATION_COUNT);
+    expect(effectiveLiveSyncDurationCount(Number.NaN)).toBe(
+      HLS_LIVE_SYNC_DURATION_COUNT,
+    );
+  });
+});
+
+describe("endToEndDelaySeconds", () => {
+  it("adds the player cushion to the pipeline delay the server reports", () => {
+    expect(endToEndDelaySeconds(10)).toBe(10 + HLS_PLAYER_CUSHION_SECONDS);
+  });
+
+  it("is the cushion alone when no wire value is present", () => {
+    // The floor: pipeline unknown, but the player still sits ~20 s back.
+    expect(endToEndDelaySeconds(undefined)).toBe(HLS_PLAYER_CUSHION_SECONDS);
+    expect(endToEndDelaySeconds(null)).toBe(HLS_PLAYER_CUSHION_SECONDS);
+    expect(endToEndDelaySeconds(0)).toBe(HLS_PLAYER_CUSHION_SECONDS);
+  });
+
+  it("reflects the cushion rather than under-reporting the pipeline alone", () => {
+    // The bug: a 10 s pipeline was shown as 10 s even though viewers are
+    // ~30 s behind. The total must exceed the pipeline figure.
+    expect(endToEndDelaySeconds(10)).toBeGreaterThan(10);
   });
 });
 
