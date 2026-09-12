@@ -134,13 +134,18 @@ export const CAMERA_PIP_STAGE_CLASS = "absolute inset-0 h-full w-full";
  * Percentages with a floor and a ceiling: 24 % of a 1440px pane is a 345px
  * webcam, which is about right, and the same 24 % of a phone-width pane is
  * 96px, which is a smudge. `min-w` and `max-w` are what keep it a face at
- * both ends. `z-20` puts it over the film and under the chrome (z-50), so the
- * control bar is never behind a webcam.
+ * both ends.
  */
 const CAMERA_PIP_FRAME_CLASS =
   "absolute aspect-video w-[24%] min-w-[128px] max-w-[280px]";
 
-/** The look, which only the picture wants and the click target must not have. */
+/**
+ * The look, which only the picture wants and the click target must not have.
+ *
+ * `z-20` puts the picture over the film and under the chrome (z-50), so the
+ * control bar is never behind a webcam. The click target is given z-30 by its
+ * caller, between the two.
+ */
 const CAMERA_PIP_SKIN_CLASS =
   "z-20 overflow-hidden rounded-[var(--radius-card)] border border-paper/25 bg-black shadow-lg";
 
