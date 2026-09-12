@@ -8,8 +8,10 @@ import {
   SkipForward,
   Square,
   Volume2,
+  X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import type { MusicTrack } from "@pqp/shared";
 import { MarqueeText } from "@/components/ui/marquee-text";
 import { Tooltip } from "@/components/ui/tooltip";
 import { MusicAddForm } from "@/components/voice/music-add-form";
@@ -17,6 +19,8 @@ import { useTranslation } from "@/lib/i18n";
 import {
   advance,
   expectedPositionMs,
+  moveInQueue,
+  removeFromQueue,
   reportPosition,
   setPlaying,
   setPositionProbe,
@@ -60,6 +64,7 @@ const DRIFT_MS = 2_500;
 const REPORT_MS = 10_000;
 const VOLUME_KEY = "pqp:music-volume";
 const VIDEO_KEY = "pqp:music-video";
+const QUEUE_SHOWN = 6;
 
 function readStored(key: string): string | null {
   try {
@@ -99,8 +104,24 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
   const isActor = state?.actorId === voiceState.peerId;
   const playing = state?.status === "playing";
 
-  if (!inCall || !current) {
+  if (!inCall) {
     return null;
+  }
+
+  // In a call with nothing on: just the way to put something on.
+  if (!current) {
+    return (
+      <div
+        data-music-mini-player="empty"
+        className="border-t border-ink-4/60 bg-ink px-2 pb-2 pt-2 text-xs"
+      >
+        <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-paper-muted">
+          <Music className="h-3 w-3" aria-hidden="true" />
+          {t("music.title")}
+        </p>
+        <MusicAddForm compact />
+      </div>
+    );
   }
 
   const toggleVideo = () => {
@@ -187,16 +208,6 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
             <SkipForward className="h-4 w-4" aria-hidden="true" />
           </button>
         </Tooltip>
-        <Tooltip label={t("music.open")}>
-          <button
-            type="button"
-            className={cn(controlClass, music.open && "bg-signal/20 text-signal")}
-            aria-pressed={music.open}
-            onClick={() => toggleMusicOpen()}
-          >
-            <ListMusic className="h-4 w-4" aria-hidden="true" />
-          </button>
-        </Tooltip>
         <Tooltip label={showVideo ? t("music.video.hide") : t("music.video.show")}>
           <button
             type="button"
@@ -243,7 +254,104 @@ export function MusicMiniPlayer({ voiceState }: { voiceState: VoiceState }) {
       <div className="mt-2">
         <MusicAddForm compact />
       </div>
+
+      {state && state.queue.length > 0 && (
+        <div className="mt-2">
+          <button
+            type="button"
+            className="flex w-full items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-paper-muted hover:text-paper"
+            aria-expanded={music.open}
+            onClick={() => toggleMusicOpen()}
+          >
+            <ListMusic className="h-3 w-3" aria-hidden="true" />
+            {t("music.queue")}
+            <span className="tabular-nums">({state.queue.length})</span>
+            {music.open ? (
+              <ChevronDown className="ml-auto h-3 w-3" aria-hidden="true" />
+            ) : (
+              <ChevronUp className="ml-auto h-3 w-3" aria-hidden="true" />
+            )}
+          </button>
+          {music.open && (
+            <ol className="mt-1 space-y-0.5">
+              {state.queue.slice(0, QUEUE_SHOWN).map((track, index) => (
+                <QueueRow
+                  key={track.id}
+                  track={track}
+                  index={index}
+                  last={index === state.queue.length - 1}
+                  mine={track.addedByUserId === voiceState.self?.userId}
+                />
+              ))}
+              {state.queue.length > QUEUE_SHOWN && (
+                <li className="text-[11px] text-paper-muted">
+                  {t("music.more", { count: state.queue.length - QUEUE_SHOWN })}
+                </li>
+              )}
+            </ol>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+function QueueRow({
+  track,
+  index,
+  last,
+  mine,
+}: {
+  track: MusicTrack;
+  index: number;
+  last: boolean;
+  mine: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <li
+      className={cn(
+        "flex items-center gap-1.5 rounded-md px-1 py-0.5",
+        mine && "bg-ink-3/40",
+      )}
+    >
+      <span className="w-4 shrink-0 text-right tabular-nums text-paper-muted">
+        {index + 1}
+      </span>
+      <span className="min-w-0 flex-1 truncate" title={track.title}>
+        {track.title}
+        <span className="ml-1 text-paper-muted">{track.addedByName}</span>
+      </span>
+      <Tooltip label={t("music.moveUp")}>
+        <button
+          type="button"
+          disabled={index === 0}
+          onClick={() => moveInQueue(track.id, -1)}
+          className="rounded p-0.5 text-paper-muted hover:bg-ink-3/70 hover:text-paper disabled:opacity-30"
+        >
+          <ChevronUp className="h-3 w-3" aria-hidden="true" />
+        </button>
+      </Tooltip>
+      <Tooltip label={t("music.moveDown")}>
+        <button
+          type="button"
+          disabled={last}
+          onClick={() => moveInQueue(track.id, 1)}
+          className="rounded p-0.5 text-paper-muted hover:bg-ink-3/70 hover:text-paper disabled:opacity-30"
+        >
+          <ChevronDown className="h-3 w-3" aria-hidden="true" />
+        </button>
+      </Tooltip>
+      <Tooltip label={t("music.remove")}>
+        <button
+          type="button"
+          onClick={() => removeFromQueue(track.id)}
+          className="rounded p-0.5 text-paper-muted hover:bg-ink-3/70 hover:text-paper"
+        >
+          <X className="h-3 w-3" aria-hidden="true" />
+        </button>
+      </Tooltip>
+    </li>
   );
 }
 

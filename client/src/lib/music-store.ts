@@ -36,12 +36,12 @@ export interface MusicSnapshot {
   state: MusicState | null;
   /** This machine's clock when `state` arrived. Drift is measured from here. */
   receivedAt: number;
-  /** Whether the panel is open. Here so the bar button and the dock agree. */
+  /** Whether the queue list in the sidebar player is unfolded. Shared so the call-bar button and the player agree. */
   open: boolean;
 }
 
 let session: MusicSession | null = null;
-let snapshot: MusicSnapshot = { channelId: null, state: null, receivedAt: 0, open: false };
+let snapshot: MusicSnapshot = { channelId: null, state: null, receivedAt: 0, open: true };
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -105,7 +105,7 @@ export function useMusic(): MusicSnapshot {
 export function resetMusicStoreForTests(): void {
   session = null;
   positionProbe = null;
-  snapshot = { channelId: null, state: null, receivedAt: 0, open: false };
+  snapshot = { channelId: null, state: null, receivedAt: 0, open: true };
   listeners.clear();
 }
 
